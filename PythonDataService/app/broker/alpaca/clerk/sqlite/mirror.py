@@ -10,6 +10,7 @@ the repository's job at reset time, not this module's).
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,11 @@ from typing import Any
 from app.broker.alpaca.clerk.sqlite.hashchain import GENESIS, compute_row_hash
 from app.broker.alpaca.paths import fsync_directory
 from app.utils.timestamps import Clock
+
+logger = logging.getLogger(__name__)
+
+# One read is enough for the usual record; a longer one is read back a block at a time.
+_TAIL_BLOCK_BYTES = 64 * 1024
 
 
 class MirrorChainBroken(Exception):
@@ -119,27 +125,57 @@ class MirrorFile:
         }
         self._append_fsynced(line)
 
-    def _require_whole_last_line(self) -> None:
-        """Refuse to append onto bytes that are not a whole record.
-
-        A write that died part-way leaves a tail with no newline. Appending
-        would glue the next record onto it: the append succeeds, and the line
-        that results is no record at all. The tail is custody evidence, so it
-        is neither trimmed nor repaired here — recovery is the offline
-        ceremony (ADR 0047).
-        """
+    def _unterminated_tail(self) -> bytes:
+        """The bytes after the file's last newline; empty when it ends in one, or is empty or absent."""
         try:
             with self._path.open("rb") as handle:
-                handle.seek(0, os.SEEK_END)
-                if handle.tell() == 0:
-                    return
-                handle.seek(-1, os.SEEK_END)
-                if handle.read(1) == b"\n":
-                    return
+                end = handle.seek(0, os.SEEK_END)
+                tail = b""
+                while end > 0:
+                    start = max(0, end - _TAIL_BLOCK_BYTES)
+                    handle.seek(start)
+                    tail = handle.read(end - start) + tail
+                    newline = tail.rfind(b"\n")
+                    if newline != -1:
+                        return tail[newline + 1 :]
+                    end = start
+                return tail
         except FileNotFoundError:
+            return b""
+
+    def _require_whole_last_line(self) -> None:
+        """Never append onto bytes that are not a whole record.
+
+        A write that died part-way leaves a tail with no newline, and the next
+        append would glue its record onto it: the append succeeds, and the
+        line that results is no record at all.
+
+        - A tail that is a complete record and lacks only its newline loses
+          nothing by being terminated, so the newline is written (and logged).
+        - Any other tail is custody evidence and is neither trimmed nor
+          repaired here: the append raises ``MirrorChainBroken``. No tool
+          trims a partial tail yet, and ``open`` and ``rebuild`` fail on it
+          too (#3205), so the account stays failed closed with the file kept
+          as it is until one does.
+        """
+        tail = self._unterminated_tail()
+        if not tail:
             return
-        raise MirrorChainBroken(
-            f"mirror {self._path} ends in a partial line; refusing to append onto it"
+        try:
+            complete = isinstance(json.loads(tail), dict)
+        except ValueError:
+            complete = False
+        if not complete:
+            raise MirrorChainBroken(
+                f"mirror {self._path} ends in a partial record; refusing to append onto it"
+            )
+        with self._path.open("ab") as handle:
+            handle.write(b"\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        logger.warning(
+            "the mirror ended in a complete record with no newline; the newline was written",
+            extra={"action": "mirror_tail_newline_restored", "mirror_path": str(self._path)},
         )
 
     def _append_fsynced(self, record: dict[str, Any]) -> None:

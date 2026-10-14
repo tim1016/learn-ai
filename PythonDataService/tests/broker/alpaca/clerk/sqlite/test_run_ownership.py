@@ -196,14 +196,14 @@ class _TwoRunsRepo:
         return self.runs[strategy_instance_id]
 
 
-def _retire_with_stop_failing_for_bot_a(
-    monkeypatch: pytest.MonkeyPatch, failure: Exception
-) -> list[str]:
-    stopped: list[str] = []
+def _retire_with_stops_failing(
+    monkeypatch: pytest.MonkeyPatch, failing: dict[str, Exception], stopped: list[str]
+) -> None:
+    """Retire both runs; each id in ``failing`` raises its error from its STOP."""
 
     def stop(repo: object, *, strategy_instance_id: str, **_: object) -> None:
-        if strategy_instance_id == "bot-a":
-            raise failure
+        if strategy_instance_id in failing:
+            raise failing[strategy_instance_id]
         stopped.append(strategy_instance_id)
 
     monkeypatch.setattr(run_ownership, "submit_stop_run", stop)
@@ -213,25 +213,43 @@ def _retire_with_stop_failing_for_bot_a(
             strategy_instance_id=sid, lifecycle_run_id=run.lifecycle_run_id, owner=_GONE_OWNER
         )
     run_ownership.retire_runs_whose_runner_is_gone(_TwoRunsRepo(), ownership)  # type: ignore[arg-type]
-    return stopped
+
+
+def test_one_runs_failing_stop_is_logged_and_the_pass_still_fails_after_the_rest_are_retired(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The failure is not swallowed: a runner-gone run left ACTIVE leaves the pass incomplete."""
+    stopped: list[str] = []
+    failing = {"bot-a": ValueError("corrupt budget row"), "bot-b": KeyError("second failure")}
+
+    with caplog.at_level(logging.ERROR), pytest.raises(ValueError, match="corrupt budget row"):
+        _retire_with_stops_failing(monkeypatch, failing, stopped)
+
+    failed = [r for r in caplog.records if getattr(r, "action", None) == "run_retire_runner_gone_failed"]
+    assert [r.strategy_instance_id for r in failed] == ["bot-a", "bot-b"]
+    assert stopped == []
 
 
 def test_one_runs_failing_stop_does_not_starve_the_next_run(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    with caplog.at_level(logging.ERROR):
-        stopped = _retire_with_stop_failing_for_bot_a(monkeypatch, ValueError("corrupt budget row"))
-
-    assert stopped == ["bot-b"]
-    failed = [r for r in caplog.records if getattr(r, "action", None) == "run_retire_runner_gone_failed"]
-    assert [r.strategy_instance_id for r in failed] == ["bot-a"]
-
-
-def test_a_lost_execution_lease_still_ends_the_retirement_pass(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    stopped: list[str] = []
+
+    with pytest.raises(ValueError, match="corrupt budget row"):
+        _retire_with_stops_failing(monkeypatch, {"bot-a": ValueError("corrupt budget row")}, stopped)
+
+    assert stopped == ["bot-b"]
+
+
+def test_a_lost_execution_lease_still_ends_the_retirement_pass_at_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stopped: list[str] = []
+
     with pytest.raises(ExecutionLeaseLost):
-        _retire_with_stop_failing_for_bot_a(monkeypatch, ExecutionLeaseLost("lease lost"))
+        _retire_with_stops_failing(monkeypatch, {"bot-a": ExecutionLeaseLost("lease lost")}, stopped)
+
+    assert stopped == []
 
 
 async def test_an_owner_registered_during_the_grace_pass_keeps_the_run(

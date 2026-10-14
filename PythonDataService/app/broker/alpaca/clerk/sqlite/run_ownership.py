@@ -108,8 +108,11 @@ def retire_runs_whose_runner_is_gone(
 
     Runs under the account intake fence, as one step of the reconciliation
     pass, before the #2362 step that cancels a non-ACTIVE run's ENTERs. One
-    run's failing STOP is logged and the others are still retired; a lost
-    execution lease fails the pass, as it fails every other write.
+    run's failing STOP does not keep the others from being retired: each is
+    logged, every run is tried, and the first failure is raised after the
+    last, so the pass reports itself incomplete while a runner-gone run is
+    still ACTIVE. A lost execution lease fails the pass at once, as it fails
+    every other write.
     """
     active = {
         (run.strategy_instance_id, run.lifecycle_run_id)
@@ -119,6 +122,7 @@ def retire_runs_whose_runner_is_gone(
         )
         if run is not None
     }
+    first_failure: Exception | None = None
     for (strategy_instance_id, lifecycle_run_id), reason in ownership.runs_to_retire(active):
         try:
             submit_stop_run(
@@ -131,7 +135,7 @@ def retire_runs_whose_runner_is_gone(
             )
         except ExecutionLeaseLost:
             raise
-        except Exception:
+        except Exception as failure:
             logger.exception(
                 "an ACTIVE run whose in-process runner is gone could not be retired; a later pass tries again",
                 extra={
@@ -142,6 +146,7 @@ def retire_runs_whose_runner_is_gone(
                     "reason": reason,
                 },
             )
+            first_failure = first_failure or failure
             continue
         logger.warning(
             "retired an ACTIVE run whose in-process runner is gone",
@@ -153,6 +158,8 @@ def retire_runs_whose_runner_is_gone(
                 "reason": reason,
             },
         )
+    if first_failure is not None:
+        raise first_failure
 
 
 __all__ = [

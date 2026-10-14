@@ -12,6 +12,7 @@ meaningfully exercise, plus the mirror-fence and hash-chain mechanics from
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import sqlite3
 from pathlib import Path
@@ -847,6 +848,47 @@ def test_an_append_after_a_torn_mirror_tail_is_refused_not_glued_on(tmp_path: Pa
     assert repo.mirror_path.read_bytes() == torn
     assert [row["sequence"] for row in repo.custody_transitions()] == [1]
     repo.close()
+
+
+def test_an_append_after_a_complete_record_that_lost_only_its_newline_restores_it(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A write that died between the record and its newline lost nothing but the newline."""
+    clock = _clock_seq()
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    repo.register_strategy_instance(strategy_instance_id="spy-bot", symbol="SPY", config_hash="h1")
+    intact = repo.mirror_path.read_bytes()
+    assert intact.endswith(b"\n")
+    repo.mirror_path.write_bytes(intact[:-1])
+
+    with caplog.at_level(logging.WARNING):
+        repo.register_strategy_instance(strategy_instance_id="qqq-bot", symbol="QQQ", config_hash="h2")
+
+    restored = repo.mirror_path.read_bytes()
+    assert restored.startswith(intact)
+    assert [json.loads(line)["phase"] for line in restored.splitlines()] == [
+        "IDENTITY",
+        "PREPARE",
+        "FINALIZE",
+        "PREPARE",
+        "FINALIZE",
+    ]
+    assert [r.action for r in caplog.records if getattr(r, "action", None) == "mirror_tail_newline_restored"]
+    repo.close()
+    reopened = ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    assert len(reopened.custody_transitions()) == 2
+    reopened.close()
+
+
+def test_an_unterminated_record_longer_than_one_read_block_is_still_found_whole(tmp_path: Path) -> None:
+    mirror_path = tmp_path / "custody_transitions.mirror"
+    long_record = json.dumps({"phase": "PREPARE", "sequence": 1, "payload_canonical": "x" * 200_000})
+    mirror_path.write_text('{"phase":"IDENTITY"}\n' + long_record, encoding="utf-8")
+
+    MirrorFile(mirror_path).finalize(sequence=1, authority_generation=1, row_hash="h", recorded_at_ms=1)
+
+    lines = mirror_path.read_text(encoding="utf-8").splitlines()
+    assert [json.loads(line)["phase"] for line in lines] == ["IDENTITY", "PREPARE", "FINALIZE"]
 
 
 def test_mirror_prepare_without_finalize_is_excluded_not_imported(tmp_path: Path) -> None:
