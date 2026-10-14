@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -272,6 +273,25 @@ async def test_shared_status_read_failure_immediately_invalidates_prior_proof(
             route.respond(403)
         await consumer.refresh_shared_status()
         assert store.fact("SPY", now_ms=_NOW).state == "UNKNOWN"
+
+
+async def test_a_failing_shared_status_read_logs_why_it_failed(caplog: pytest.LogCaptureFixture) -> None:
+    """The line repeats every second of an outage; without the cause it names no remedy."""
+
+    async def snapshot_source() -> MarketStatusSnapshot:
+        raise httpx.ReadTimeout("the status owner did not answer")
+
+    consumer = AlpacaMarketLivenessConsumer(
+        read=_Read(), frame_source=lambda: None,  # type: ignore[arg-type]
+        status_snapshot_source=snapshot_source, store=MarketLivenessStore(), clock=lambda: _NOW,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="app.broker.alpaca.market_liveness"):
+        await consumer.refresh_shared_status()
+
+    [record] = [r for r in caplog.records if getattr(r, "action", None) == "market_liveness_shared_source_unavailable"]
+    assert record.error == "the status owner did not answer"
+    assert record.exc_info is not None and record.exc_info[0] is httpx.ReadTimeout
 
 
 async def test_shared_status_endpoint_requires_auth_and_preserves_evidence(

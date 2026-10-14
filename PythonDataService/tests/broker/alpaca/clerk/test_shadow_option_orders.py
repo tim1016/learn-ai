@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 
 from app.broker.alpaca.broker import ALPACA_LIVE_CAPABILITIES
+from app.broker.alpaca.clerk.account_authority import shadow_evidence_account_id_for_strategy
 from app.broker.alpaca.clerk.kept_option_quotes import KEPT_OPTION_QUOTES_FILENAME, KeptOptionQuotes
 from app.broker.alpaca.clerk.shadow_broker import ShadowPorts, compose_shadow_ports
 from app.broker.alpaca.clerk.simulated_option_settlement import OwnersWord
@@ -28,10 +29,12 @@ from app.broker.alpaca.clerk.synthesized_orders import SYNTHESIZED_ORDER_LEDGER_
 from app.broker.contract.errors import BrokerOrderRejected, BrokerUnavailable
 from app.broker.contract.models import OrderSide, OrderType
 from app.broker.contract.options import OptionPositionIntent, SingleOptionOrderRequest
+from app.marketdata.feed import MarketDataBar
 from app.options.contract import OptionContract
 from app.options.deadlines import last_session_close_ms
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
 from app.options.simulated_fill import SimulatedFillModel
+from app.services.source_bar_ledger import SourceBarLedger
 
 LIVE_ACCOUNT = "9LIVE0001"
 SHADOW_ACCOUNT = f"shadow:{LIVE_ACCOUNT}"
@@ -130,6 +133,64 @@ async def test_a_missing_shadow_market_ledger_reports_no_price_and_the_owner_can
     )
     assert len(ended.settled) == 1 and await shadow.read.list_positions() == []
     assert live.read == []
+
+
+async def test_a_corrupt_ledger_is_never_priced_around_by_the_others_and_stops_no_other_root(
+    tmp_path: Path, live: _LiveRead,
+) -> None:
+    """Two bots hold one contract in one shadow book. The corrupt ledger may hold the very bar that
+    ends at the close, so the healthy one's older bar is a partial view: nothing is booked from it
+    -- and the corrupt ledger does not stop another root from settling."""
+    clock = [NOW]
+    shadow = compose_shadow_ports(
+        live_read=live, live_account_id=LIVE_ACCOUNT, artifacts_root=tmp_path, clock=lambda: clock[0],
+    )
+    other_ref = "learn-ai/also-buys-a-call/v1:enter-1"
+    qqq_ref = "learn-ai/buys-a-qqq-call/v1:enter-1"
+    qqq_call = OptionContract.from_occ_symbol("QQQ260918C00500000")
+    await _holds_two(shadow)
+    _bind_entry(shadow, other_ref)
+    await shadow.trade.submit_option_order(_buy(quantity=1), client_order_id=other_ref)
+    shadow.trade.bind_option_entry_quote(
+        qqq_ref, symbol=qqq_call.occ_symbol, quote=_quote("1.90", "1.94"), multiplier=100
+    )
+    await shadow.trade.submit_option_order(
+        SingleOptionOrderRequest(
+            contract=qqq_call, side=OrderSide.BUY, intent=OptionPositionIntent.OPEN, quantity=1,
+            order_type=OrderType.LIMIT, limit_price=Decimal("1.94"),
+        ),
+        client_order_id=qqq_ref,
+    )
+    close_ms = last_session_close_ms(CALL.expiry_date)
+
+    def retain(strategy: str, symbol: str, *, close: str, end_ms: int) -> SourceBarLedger:
+        ledger = SourceBarLedger(
+            artifacts_root=tmp_path, account_id=shadow_evidence_account_id_for_strategy(strategy)
+        )
+        price = Decimal(close)
+        ledger.append(
+            MarketDataBar(
+                feed_id="ibkr", symbol=symbol, start_ms=end_ms - 60_000, end_ms=end_ms, open=price, high=price,
+                low=price, close=price, volume=100, fetched_at_ms=end_ms, session_phase="RTH",
+            ),
+            run_id="run-1",
+        )
+        return ledger
+
+    corrupt = retain("buys-a-call", "SPY", close="600", end_ms=close_ms)  # the closing bar: in the money
+    retain("also-buys-a-call", "SPY", close="500", end_ms=close_ms - 600_000).close()  # ten minutes old: out
+    retain("buys-a-qqq-call", "QQQ", close="510", end_ms=close_ms).close()
+    corrupt.close()
+    corrupt.path.write_bytes(b"this is not a sqlite database " * 64)
+    for sidecar in ("-wal", "-shm"):
+        corrupt.path.with_name(corrupt.path.name + sidecar).unlink(missing_ok=True)
+    clock[0] = close_ms + 180_000
+
+    settled = shadow.trade.settle_expired_options(after_ms=0)
+
+    assert [s.record.contract.occ_symbol for s in settled.settled] == [qqq_call.occ_symbol]
+    assert SYMBOL in settled.not_settled
+    assert {p.symbol: p.quantity for p in await shadow.read.list_positions()} == {SYMBOL: 3}
 
 
 async def test_an_opening_order_is_filled_in_full_at_the_ask_of_the_quote_bound_to_it(shadow: ShadowPorts) -> None:

@@ -593,7 +593,7 @@ class SyntheticBroker:
                 (row for row in self._ledger.latest_records_from(records).values() if row.order.order_id == order_id),
                 None,
             )
-            if record is None or record.order.status == "filled":
+            if record is None or _is_terminal_order(record.order):
                 return
             now = self._clock()
             self._ledger.append_locked(

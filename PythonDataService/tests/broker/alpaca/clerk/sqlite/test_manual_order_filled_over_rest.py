@@ -44,7 +44,6 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     RECONCILIATION_INCOMPLETE_REASON_CODE,
 )
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
-from app.broker.alpaca.trade_updates import _opt_ms_to_rfc3339
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerActivityEvidence, BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 from app.utils.session_anchors import et_date_at_ms
@@ -57,6 +56,7 @@ from tests.broker.alpaca.clerk.sqlite.test_manual_order_replaced_at_alpaca impor
     _buy_limit,
     _guarded,
     _manual_endings,
+    _opt_ms_to_rfc3339,
     _replace_at_alpaca,
     _replacement_of,
     _unexplained_hold_active,
