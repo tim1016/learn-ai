@@ -52240,13 +52240,20 @@
         "type": "object"
       },
       "SetupDescriptionResponse": {
-        "description": "A setup in plain sentences, and the setup as the server read it.\n\nEach block is a list of whole sentences, one to an item, built as a list: the page shows them as they are and never\nsplits or rebuilds them. ``setup`` is the setup normalised, with every default filled, as a run would be given it.",
+        "description": "A setup in plain sentences, and the setup as the server read it.\n\nEach block is a list of whole sentences, one to an item, built as a list: the page shows them as they are and never\nsplits or rebuilds them. ``setup`` is the setup normalised, with every default filled, as a run would be given it.\n``window`` is what the setup sets; ``fills`` is how the engine fills an order, which no setting changes.",
         "properties": {
           "costs": {
             "items": {
               "type": "string"
             },
             "title": "Costs",
+            "type": "array"
+          },
+          "fills": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fills",
             "type": "array"
           },
           "legs": {
@@ -52284,6 +52291,7 @@
         "required": [
           "setup",
           "window",
+          "fills",
           "legs",
           "square_off",
           "costs",

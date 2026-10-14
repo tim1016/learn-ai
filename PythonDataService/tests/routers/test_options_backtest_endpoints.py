@@ -100,7 +100,7 @@ async def test_a_setup_is_described_against_that_clock(client) -> None:
     assert described["square_off"] and "10,000.00" in " ".join(described["costs"])
     assert described["notices"] == []
     # Every block is a list of strings, not one string.
-    for block in ("window", "square_off", "costs", "notices"):
+    for block in ("window", "fills", "square_off", "costs", "notices"):
         assert isinstance(described[block], list) and all(isinstance(each, str) for each in described[block])
     assert all(isinstance(each, list) for each in (part["sentences"] for part in described["legs"]))
 
@@ -160,18 +160,21 @@ async def test_a_setup_using_every_rule_is_described_in_the_order_the_owner_read
     def starts(sentences: list[str]) -> list[str]:
         return [" ".join(sentence.split()[:4]) for sentence in sentences]
 
-    # The order is the order of the setup: the window opens with the market, then the entry, the exit, how an order
-    # fills, what happens at the exit, and last the re-entry cutoff with the sentence that spares first entries.
+    # The order is the order of the setup: the window opens with the market, then the entry, the exit, and last the
+    # re-entry cutoff with the sentence that spares first entries. How an order fills is a block of its own: a day that
+    # closes early, when an order fills, what is dropped and what is tried again, and what happens at the exit.
     assert starts(described["window"]) == [
         "Trades SPY.",
         "The entry is read",
         "The exit is read",
+        "A stop hit later",
+        "First entries are not",
+    ]
+    assert starts(described["fills"]) == [
         "On a day that",
         "An order fills at",
         "A buy is dropped",
         "At the exit, whatever",
-        "A stop hit later",
-        "First entries are not",
     ]
     # A leg: what it buys, when it buys, when it sells, and what it does after a sell.
     for leg_description in described["legs"]:

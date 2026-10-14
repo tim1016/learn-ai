@@ -1,12 +1,16 @@
 """A setup in plain sentences, for the owner to read before pressing Start (#3030).
 
-One list of sentences for the window, one for each leg, one for square-off and
-one for costs, each built a sentence at a time (never one string cut up), and the
-page shows every sentence as it is. A rule that is switched off is not mentioned. Each time is said
-as a distance from the open or the close and as the New York clock time on a
-full session, so a setup that holds its distance on a half day is read for the
-usual day. The entry and exit times are when a rule is read: an order fills at
-the next minute's opening trade, and the window says so. A rule that triggers
+One list of sentences for the window, one for how orders fill, one for each leg,
+one for square-off and one for costs, each built a sentence at a time (never one
+string cut up), and the page shows every sentence as it is. A rule that is
+switched off is not mentioned. Each time is said as a distance from the open or
+the close and as the New York clock time on a full session, so a setup that
+holds its distance on a half day is read for the usual day. The entry and exit
+times are when a rule is read: an order fills at the next minute's opening
+trade, and the fills block says so. That block is how the engine fills an
+order: no setting of the setup changes it, only whether the setup sells changes
+its words, so the page can fold it away and keep the window to what the setup
+sets. A rule that triggers
 on a premium is reached only by a minute's close. Whether the times fit a full
 day is the setup's own rule (``window_fits``), the one the replay applies to
 skip a session. The words are written here and the page shows them as they are.
@@ -31,9 +35,14 @@ class LegDescription:
 
 @dataclass(frozen=True)
 class SetupDescription:
-    """A setup in sentences. ``notices`` holds what the owner should read first, and is empty for a setup that looks sound."""
+    """A setup in sentences. ``notices`` holds what the owner should read first, and is empty for a setup that looks sound.
+
+    ``window`` is what the setup sets: the market, the entry, the exit and the re-entry cutoff. ``fills`` is how the
+    engine fills an order, which no setting of the setup changes.
+    """
 
     window: tuple[str, ...]
+    fills: tuple[str, ...]
     legs: tuple[LegDescription, ...]
     square_off: tuple[str, ...]
     costs: tuple[str, ...]
@@ -44,6 +53,7 @@ def describe_setup(setup: OptionsBacktestSetup, *, full_session: SessionClock) -
     """``setup`` in sentences, with its times read against the clock of a full session."""
     return SetupDescription(
         window=_window(setup, full_session),
+        fills=_fills(setup),
         legs=tuple(LegDescription(leg_id=leg.leg_id, sentences=leg_sentences(leg)) for leg in setup.legs),
         square_off=_square_off(setup),
         costs=_costs(setup),
@@ -56,15 +66,22 @@ def _window(setup: OptionsBacktestSetup, clock: SessionClock) -> tuple[str, ...]
         f"Trades {setup.underlying}.",
         f"The entry is read {_time(setup.entry, clock)}.",
         f"The exit is read {_time(setup.exit, clock)}.",
-        "On a day that closes early both times keep their distance from the open and the close, "
-        "and a day they no longer fit is skipped.",
-        "An order fills at the next minute's opening trade, never at the minute or the price that set it off.",
-        *_what_happens_to_orders(setup),
     ]
     if setup.no_reentry_after is not None:
         sentences.append(f"A stop hit later than {_time(setup.no_reentry_after, clock, at='')} earns no re-entry.")
         sentences.append("First entries are not affected.")
     return tuple(sentences)
+
+
+def _fills(setup: OptionsBacktestSetup) -> tuple[str, ...]:
+    """How an order fills, which no setting of the setup changes: what a day that closes early does to the times, when
+    an order fills, which orders are dropped and which are tried again, and what the exit does."""
+    return (
+        "On a day that closes early both times keep their distance from the open and the close, "
+        "and a day they no longer fit is skipped.",
+        "An order fills at the next minute's opening trade, never at the minute or the price that set it off.",
+        *_what_happens_to_orders(setup),
+    )
 
 
 def _what_happens_to_orders(setup: OptionsBacktestSetup) -> tuple[str, str]:

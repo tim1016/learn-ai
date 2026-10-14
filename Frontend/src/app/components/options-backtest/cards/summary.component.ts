@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, input, output, signal } from '@angular/core';
 
 import type { SummaryState } from '../setup-summary-checker';
 import { SetupSentencesComponent } from './setup-sentences.component';
@@ -18,6 +18,8 @@ import { SetupSentencesComponent } from './setup-sentences.component';
 export class SummaryComponent {
   readonly state = input.required<SummaryState>();
   readonly retry = output();
+  /** The sentences are gone while the setup is being read back again; the fold of how orders fill is kept here. */
+  protected readonly fillsOpen = signal(false);
 
   protected readonly summary = computed(() => {
     const state = this.state();

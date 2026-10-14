@@ -35,6 +35,7 @@ describe('the plain-words summary', () => {
 
   it('puts every sentence on a line of its own, as served and in order, and each leg’s sentences in a box of its own', async () => {
     const window = ['Trades SPY.', 'Each fill is moved 0.3% against you, then rounded.', 'A stop later than 15:00 earns no re-entry.'];
+    const fills = ['An order fills at the next minute.', 'An order to open is dropped.'];
     const costs = ['Cash is 10000.', 'Fees are not charged.'];
     const service = fakeService(vi, {
       describe: vi.fn(async (body: unknown) => {
@@ -42,6 +43,7 @@ describe('the plain-words summary', () => {
         return {
           ...read,
           window,
+          fills,
           costs,
           legs: read.legs.map((leg) => ({ leg_id: leg.leg_id, sentences: [`First of ${leg.leg_id}.`, `Second of ${leg.leg_id}.`] })),
         };
@@ -53,14 +55,36 @@ describe('the plain-words summary', () => {
     addLeg('Put');
 
     const summary = await screen.findByRole('region', { name: 'In plain words' });
-    for (const sentence of [...window, ...costs]) expect((await within(summary).findByText(sentence)).tagName).toBe('P');
+    for (const sentence of [...window, ...fills, ...costs]) expect((await within(summary).findByText(sentence)).tagName).toBe('P');
     const lines = [...summary.querySelectorAll('p.sentence')].map((line) => line.textContent);
-    expect(lines).toEqual([...window, 'First of call.', 'Second of call.', 'First of put.', 'Second of put.', 'Square off is partial.', ...costs]);
+    expect(lines).toEqual([...window, ...fills, 'First of call.', 'Second of call.', 'First of put.', 'Second of put.', 'Square off is partial.', ...costs]);
     const legs = within(summary).getAllByRole('listitem');
     expect(legs.map((leg) => [...leg.querySelectorAll('p')].map((line) => line.textContent))).toEqual([
       ['First of call.', 'Second of call.'],
       ['First of put.', 'Second of put.'],
     ]);
+  });
+
+  it('folds how orders fill under the window, closed, says how many rules it holds, and stays as it was left across a re-reading', async () => {
+    await renderPage(fakeService(vi));
+    addLeg();
+    const summary = await screen.findByRole('region', { name: 'In plain words' });
+    const fold = await waitFor(() => {
+      const found = summary.querySelector('details');
+      if (found === null) throw new Error('no fold yet');
+      return found;
+    });
+
+    expect(fold.open).toBe(false);
+    expect(within(fold).getByText('How orders fill').closest('summary')?.textContent).toMatch(/2 rules/);
+    expect(summary.querySelector('.block')?.textContent).not.toMatch(/Orders fill a minute on/);
+
+    fold.open = true;
+    // The element says it has toggled in a task of its own, as a browser does.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    typeInto('Slippage (percent)', '0.5');
+    await waitFor(() => expect(summary.querySelector('details')?.open).toBe(true));
+    expect(within(summary).getByText('Orders fill a minute on.')).toBeTruthy();
   });
 
   it('says the setup is not complete while it has no legs, and the legs card says to add one without an alarm', async () => {
