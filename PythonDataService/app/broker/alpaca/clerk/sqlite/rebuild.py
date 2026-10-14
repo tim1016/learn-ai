@@ -12,6 +12,8 @@ from app.broker.alpaca.clerk.sqlite.mirror import MirrorFile, MirrorIdentity
 from app.broker.alpaca.clerk.sqlite.registry import EstablishedAccountsRegistry
 from app.broker.alpaca.clerk.sqlite.repository_lifecycle import (
     assert_wal_filesystem_supported,
+    create_database_file,
+    remove_database_file_created_here,
 )
 from app.broker.alpaca.clerk.sqlite.simulated_execution_schema import (
     SHADOW_SIMULATED_EXECUTION_RETAG_SQL,
@@ -72,13 +74,17 @@ def rebuild_repository_from_mirror(
     assert_wal_filesystem_supported(account_dir)
     account_dir.mkdir(parents=True, exist_ok=True)
     fsync_directory_chain(account_dir, artifacts_root)
+    try:
+        create_database_file(db_path)
+    except FileExistsError as exc:
+        raise AlreadyInitialized(f"{db_path} exists — move it aside before rebuild_from_mirror()") from exc
     conn = sqlite3.connect(db_path, isolation_level=None, check_same_thread=False)
     try:
         schema.configure_connection(conn)
     except Exception:
         # Nothing was written: an empty file left here would block the next rebuild.
         conn.close()
-        db_path.unlink(missing_ok=True)
+        remove_database_file_created_here(db_path)
         raise
     schema.apply_schema(conn)
     conn.row_factory = sqlite3.Row
@@ -130,7 +136,7 @@ def rebuild_repository_from_mirror(
     except Exception:
         conn.rollback()
         conn.close()
-        db_path.unlink(missing_ok=True)
+        remove_database_file_created_here(db_path)
         raise
 
     return repository_type.open(

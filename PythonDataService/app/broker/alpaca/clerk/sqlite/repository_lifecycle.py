@@ -198,6 +198,23 @@ def wal_filesystem_type(path: Path) -> str | None:
     return _linux_filesystem_type(path)
 
 
+def create_database_file(db_path: Path) -> None:
+    """Create ``db_path`` empty, or raise ``FileExistsError``.
+
+    The one create that proves this call made the file: the ``is_file()``
+    checks that precede it run under a shared fence, so two initializers of a
+    new account can both pass them. Only a file made here may be removed by
+    :func:`remove_database_file_created_here`.
+    """
+    os.close(os.open(db_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644))
+
+
+def remove_database_file_created_here(db_path: Path) -> None:
+    """Remove a database file :func:`create_database_file` made, and SQLite's side files for it."""
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        Path(f"{db_path}{suffix}").unlink(missing_ok=True)
+
+
 def initialize_repository(
     *,
     repository_type: type[ClerkSqliteRepository],
@@ -268,17 +285,22 @@ def _initialize_repository_unfenced(
     assert_wal_filesystem_supported(account_dir)
     account_dir.mkdir(parents=True, exist_ok=True)
     fsync_directory_chain(account_dir, artifacts_root)
+    try:
+        create_database_file(db_path)
+    except FileExistsError as exc:
+        # Another initializer made it after the check above: its file is not ours to touch.
+        raise AlreadyInitialized(f"{db_path} already exists; use open()") from exc
     conn = sqlite3.connect(db_path, isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     try:
         schema.configure_connection(conn)
-    except Exception:
-        # Nothing was written, and the registry has no entry yet: an empty file left
-        # here would turn the next initialize() into AlreadyInitialized.
+        schema.apply_schema(conn)
+    except BaseException:
+        # Ours, and the registry has no entry for it yet: left behind it would turn the
+        # next initialize() into AlreadyInitialized.
         conn.close()
-        db_path.unlink(missing_ok=True)
+        remove_database_file_created_here(db_path)
         raise
-    schema.apply_schema(conn)
 
     now = clock()
     db_identity_token = secrets.token_hex(16)

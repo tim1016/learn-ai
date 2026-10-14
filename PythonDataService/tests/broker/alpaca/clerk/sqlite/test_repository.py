@@ -210,8 +210,12 @@ def test_initialize_that_cannot_configure_its_connection_strands_no_database_fil
 ) -> None:
     clock = _clock_seq()
     real_configure = schema.configure_connection
+    db_path = tmp_path / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db"
 
     def refuse(_conn: sqlite3.Connection) -> None:
+        # SQLite can leave its own side files beside a database it could not put in WAL.
+        for suffix in ("-wal", "-shm", "-journal"):
+            Path(f"{db_path}{suffix}").write_bytes(b"")
         raise UnsupportedWalFilesystem("retained 'delete'")
 
     monkeypatch.setattr(schema, "configure_connection", refuse)
@@ -221,11 +225,53 @@ def test_initialize_that_cannot_configure_its_connection_strands_no_database_fil
 
     assert len(opened) == 1
     _assert_closed(opened[0])
-    assert not (tmp_path / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db").exists()
+    assert sorted(path.name for path in db_path.parent.glob("clerk.db*")) == []
 
     # The refusal was the filesystem's, so the next initialize is a first one, not AlreadyInitialized.
     monkeypatch.setattr(schema, "configure_connection", real_configure)
     ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock).close()
+
+
+def test_a_losing_initialize_never_removes_the_winners_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``initialize`` holds the startup fence shared, so two initializers of a new account can
+    both pass the "no database yet" check. The one that creates the file second must stop there:
+    a refusal of its own must never unlink the file the winner established."""
+    clock = _clock_seq()
+    real_assert = repository_lifecycle.assert_wal_filesystem_supported
+    real_configure = schema.configure_connection
+    winner_slipped_in = False
+    configure_calls = 0
+
+    def winner_slips_in_after_the_loser_passed_its_check(path: Path) -> None:
+        nonlocal winner_slipped_in
+        real_assert(path)
+        if not winner_slipped_in:
+            winner_slipped_in = True
+            ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock).close()
+
+    def winner_configures_loser_is_refused(conn: sqlite3.Connection) -> None:
+        nonlocal configure_calls
+        configure_calls += 1
+        if configure_calls == 1:
+            real_configure(conn)
+            return
+        raise UnsupportedWalFilesystem("the loser's own refusal")
+
+    monkeypatch.setattr(
+        repository_lifecycle, "assert_wal_filesystem_supported", winner_slips_in_after_the_loser_passed_its_check
+    )
+    monkeypatch.setattr(schema, "configure_connection", winner_configures_loser_is_refused)
+
+    with pytest.raises(AlreadyInitialized):
+        ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+
+    assert winner_slipped_in
+    monkeypatch.undo()
+    reopened = ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    assert reopened.control_meta_snapshot().authority_generation == 1
+    reopened.close()
 
 
 def test_open_refuses_existing_wal_authority_on_virtiofs(
@@ -746,6 +792,32 @@ def test_rebuild_from_mirror_reconstructs_identical_state(tmp_path: Path) -> Non
     rebuilt = ClerkSqliteRepository.rebuild_from_mirror(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
     assert rebuilt.custody_transitions() == original_transitions
     assert rebuilt.strategy_instances() == original_instances
+    rebuilt.close()
+
+
+def test_rebuild_that_cannot_configure_its_connection_leaves_no_database_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = _clock_seq()
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    repo.register_strategy_instance(strategy_instance_id="spy-bot", symbol="SPY", config_hash="h1")
+    db_path = repo.db_path
+    repo.close()
+    db_path.rename(db_path.with_suffix(".db.corrupt"))
+    real_configure = schema.configure_connection
+
+    def refuse(_conn: sqlite3.Connection) -> None:
+        raise UnsupportedWalFilesystem("retained 'delete'")
+
+    monkeypatch.setattr(schema, "configure_connection", refuse)
+    with pytest.raises(UnsupportedWalFilesystem):
+        ClerkSqliteRepository.rebuild_from_mirror(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+
+    assert not db_path.exists()
+    # Nothing was left to refuse the next rebuild as "already exists".
+    monkeypatch.setattr(schema, "configure_connection", real_configure)
+    rebuilt = ClerkSqliteRepository.rebuild_from_mirror(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    assert len(rebuilt.custody_transitions()) == 1
     rebuilt.close()
 
 
