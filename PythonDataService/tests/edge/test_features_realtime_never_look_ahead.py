@@ -1,4 +1,4 @@
-"""``features_realtime`` is the half of the edge package a decision may read; it must not look ahead (G-12).
+"""``features_realtime`` is the half of the edge package a decision may read; it must not look ahead.
 
 Three docstrings (``edge/__init__.py``, ``labels_oracle/forward_rv.py``,
 ``labels_oracle/hf_forward_rv.py``) say a guard keeps the oracle labels out of

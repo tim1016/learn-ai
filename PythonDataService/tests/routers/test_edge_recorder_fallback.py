@@ -384,7 +384,7 @@ class TestHealthScoreImputedPrior:
 
 
 class TestTheUnrealizedForwardTailIsNotASignal:
-    """G-1: the last window's forward RV is unrealized; a z-score built over a filled tail read as SHORT/LONG VOL."""
+    """The last window's forward RV is unrealized; a z-score built over a filled tail read as SHORT/LONG VOL."""
 
     async def test_vrp_z_is_null_wherever_the_forward_rv_is(self, client, recorder_store):
         bars = _bars(400)
