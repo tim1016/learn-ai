@@ -8,7 +8,7 @@ import pytest
 from pydantic import BaseModel
 
 from app.services import surface_hub
-from app.services.broker_v2_panel import live_projection
+from app.services.broker_v2_panel import live_projection, panel_data_source
 from app.services.surface_hub import (
     SnapshotStalledError,
     SnapshotUnavailableError,
@@ -336,6 +336,112 @@ async def test_hung_assembly_stalls_the_snapshot_by_the_producer_stamp(
 
 
 @pytest.mark.asyncio
+async def test_a_hung_first_assembly_is_cut_off_so_start_returns_and_the_hub_recovers() -> None:
+    """#3217: the first assembly never returned, so ``start()`` never did, and
+    the hub stayed registered with a producer nothing could recycle. The
+    assembly is cancelled once it outlives the stall budget, the producer
+    retries, and the hub serves the retry."""
+    calls = 0
+    cancelled = asyncio.Event()
+
+    async def assemble() -> _Snapshot:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+        return _snapshot(generated_at_ms=1_700_000_000_100)
+
+    hub = SurfaceHub(
+        strategy_instance_id="bot-a",
+        assemble=assemble,
+        refresh_interval_seconds=0.05,
+    )
+    try:
+        await asyncio.wait_for(hub.start(), timeout=3.0)
+
+        assert cancelled.is_set()
+        assert hub.is_running is True
+        with pytest.raises(SnapshotUnavailableError):
+            await hub.snapshot()
+        for _ in range(100):
+            if hub.is_available:
+                break
+            await asyncio.sleep(0.02)
+        assert (await hub.snapshot()).surface_version == 1
+        assert calls >= 2
+    finally:
+        await hub.stop(timeout_seconds=0.1)
+
+
+@pytest.mark.asyncio
+async def test_a_source_that_keeps_hanging_is_retried_and_the_hub_stays_stalled() -> None:
+    """#3217: a hung cycle on a hub that already served used to be flagged
+    stalled and then sit there for ever. Each hung cycle is now cancelled (not
+    abandoned beside the next one) and the producer tries again; meanwhile the
+    hub is stalled, not failed, so its last snapshot is still served as stale
+    (#2353), and the first cycle that completes republishes."""
+    release = asyncio.Event()
+    calls = 0
+    cancelled = 0
+    running = 0
+    overlapped = False
+
+    async def assemble() -> _Snapshot:
+        nonlocal calls, cancelled, running, overlapped
+        calls += 1
+        running += 1
+        overlapped = overlapped or running > 1
+        try:
+            if calls > 1:
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    cancelled += 1
+                    raise
+            return _snapshot(
+                generated_at_ms=1_700_000_000_000 + calls,
+                source_state=f"cycle-{calls}",
+            )
+        finally:
+            running -= 1
+
+    hub = SurfaceHub(
+        strategy_instance_id="bot-a",
+        assemble=assemble,
+        refresh_interval_seconds=0.02,
+    )
+    try:
+        await hub.start()
+        queue = hub.subscribe()
+        first = await queue.get()
+        assert first.source_state == "cycle-1"
+
+        for _ in range(200):
+            if cancelled >= 2:
+                break
+            await asyncio.sleep(0.02)
+        assert cancelled >= 2
+        assert hub.is_available is True
+        with pytest.raises(SnapshotStalledError):
+            await hub.snapshot()
+        assert hub.latest == first
+        assert queue.empty()
+
+        release.set()
+        recovered = await asyncio.wait_for(queue.get(), timeout=3.0)
+
+        assert recovered.source_state != "cycle-1"
+        assert hub.stall() is None
+        assert overlapped is False
+    finally:
+        await hub.stop(timeout_seconds=0.1)
+
+
+@pytest.mark.asyncio
 async def test_wall_clock_steps_neither_fake_nor_hide_a_stall(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -501,7 +607,7 @@ async def test_live_projection_hub_retires_after_last_client_leaves(
     await live_projection.stop_live_projection_hubs()
     live_projection.reset_live_projection_hubs_for_testing()
     monkeypatch.setattr(live_projection, "_HUB_IDLE_SECONDS", 0)
-    key = "alpaca:PA-1:sid-1:5s"
+    key = live_projection._hub_key("alpaca", "PA-1", "sid-1", "5s")
     hub = live_projection._HUBS.get_or_create(
         key,
         assemble=lambda: asyncio.sleep(
@@ -542,6 +648,79 @@ async def test_live_projection_hub_retires_after_last_client_leaves(
 
 
 @pytest.mark.asyncio
+async def test_a_caller_that_gives_up_on_a_hung_first_assembly_still_retires_the_hub(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#3217: the retirement timer used to be armed only after ``start()``
+    returned, so a first assembly that hung past the caller's deadline left a
+    registered hub with a live producer and no timer, wedged until restart."""
+    await live_projection.stop_live_projection_hubs()
+    live_projection.reset_live_projection_hubs_for_testing()
+    monkeypatch.setattr(live_projection, "_HUB_IDLE_SECONDS", 0.3)
+
+    async def hung(*_args: object, **_kwargs: object) -> None:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(panel_data_source, "get_live_snapshot_parts", hung)
+    key = live_projection._hub_key("alpaca", "PA-1", "sid-1", "5s")
+
+    try:
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(
+                live_projection.get_or_start_live_projection_hub(
+                    "alpaca", "PA-1", "sid-1", resolution="5s"
+                ),
+                timeout=0.1,
+            )
+        hub = live_projection._HUBS.get(key)
+        assert hub is not None
+        retirement = live_projection._HUB_RETIREMENT_TASKS.get(key)
+        assert retirement is not None
+
+        await asyncio.wait_for(retirement, timeout=3.0)
+
+        assert live_projection._HUBS.get(key) is None
+        assert hub.is_running is False
+    finally:
+        await live_projection.stop_live_projection_hubs()
+
+
+@pytest.mark.asyncio
+async def test_every_spelling_of_an_account_shares_one_live_projection_producer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#3217: hubs keyed on the raw path ``account_id`` gave each spelling the
+    account validation accepts (``PA3``, ``pa3``, ``Pa3``, `` PA3``) its own
+    producer, and a post-action prompt for one spelling missed the others."""
+    await live_projection.stop_live_projection_hubs()
+    live_projection.reset_live_projection_hubs_for_testing()
+    assemblies = 0
+
+    async def failing(*_args: object, **_kwargs: object) -> None:
+        nonlocal assemblies
+        assemblies += 1
+        raise RuntimeError("source unavailable")
+
+    monkeypatch.setattr(panel_data_source, "get_live_snapshot_parts", failing)
+    try:
+        hubs = [
+            await live_projection.get_or_start_live_projection_hub(
+                "alpaca", spelling, "sid-1", resolution="5s"
+            )
+            for spelling in ("PA3", "pa3", "Pa3", " PA3")
+        ]
+
+        assert all(hub is hubs[0] for hub in hubs)
+        assert assemblies == 1
+        assert len(live_projection._HUB_RETIREMENT_TASKS) == 1
+
+        await live_projection.refresh_live_projection_hubs("alpaca", "pa3", "sid-1")
+        assert assemblies == 2
+    finally:
+        await live_projection.stop_live_projection_hubs()
+
+
+@pytest.mark.asyncio
 async def test_control_action_prompt_refresh_publishes_only_changed_semantics() -> None:
     await live_projection.stop_live_projection_hubs()
     live_projection.reset_live_projection_hubs_for_testing()
@@ -553,7 +732,7 @@ async def test_control_action_prompt_refresh_publishes_only_changed_semantics() 
             source_state=source_state,
         )
 
-    key = "alpaca:PA-1:sid-1:5s"
+    key = live_projection._hub_key("alpaca", "PA-1", "sid-1", "5s")
     hub = live_projection._HUBS.get_or_create(key, assemble=assemble)
     first = await hub.refresh()
     queue = hub.subscribe()

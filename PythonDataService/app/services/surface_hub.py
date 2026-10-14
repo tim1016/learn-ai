@@ -49,7 +49,9 @@ _EVALUATION_RECEIPT_LABELS = frozenset(
 )
 _CLIENT_QUEUE_MAXSIZE = 1
 #: A producer that has not completed an assembly for this many refresh
-#: intervals is stalled: its stored snapshot is no longer the live state.
+#: intervals is stalled: its stored snapshot is no longer the live state. An
+#: assembly that itself runs this long is cancelled and retried, so a hung
+#: source can neither wedge ``start()`` nor the producer.
 _STALL_AFTER_REFRESH_INTERVALS = 4
 
 
@@ -71,6 +73,10 @@ class SurfaceHubStall:
     last_produced_at_ms: int
     observed_at_ms: int
     stall_after_ms: int
+
+
+class _AssemblyTimedOutError(TimeoutError):
+    """One assembly outlived the stall budget and was cancelled."""
 
 
 class SnapshotStalledError(SnapshotUnavailableError):
@@ -206,7 +212,8 @@ class SurfaceHub(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runtime; PEP 
 
         The producer owns retries. Startup waits only for the first attempt so
         callers can observe a ready snapshot when the sources are available;
-        an unavailable source never prevents the producer task from existing.
+        an unavailable source never prevents the producer task from existing,
+        and a source that never answers ends the attempt at the stall budget.
         """
 
         async with self._lifecycle_guard:
@@ -337,10 +344,38 @@ class SurfaceHub(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runtime; PEP 
     def _new_stream_epoch(self) -> str:
         return f"{self._process_epoch}:{uuid4().hex}"
 
+    async def _assemble_within_stall_budget(self) -> SnapshotT:
+        """One assembly, cancelled when it outlives the producer's stall budget.
+
+        A source that never returns would otherwise hold the first cycle open
+        for ever (``start()`` never returns) and, on a later cycle, be the very
+        task every ``refresh()`` coalesces onto, so the producer could neither
+        fail nor retry. The assembly runs inside the calling task, so a
+        timed-out one is finished before the next cycle starts and cannot
+        write over it.
+        """
+
+        budget = asyncio.timeout(self._stall_after_seconds)
+        try:
+            async with budget:
+                return await self._assemble()
+        except TimeoutError as error:
+            if not budget.expired():
+                raise
+            raise _AssemblyTimedOutError(
+                f"assembly for {self.strategy_instance_id} did not complete "
+                f"within {self._stall_after_seconds:g} s"
+            ) from error
+
     async def _assemble_and_store(self, *, generation: int, epoch: str) -> SnapshotT:
         try:
-            candidate = await self._assemble()
+            candidate = await self._assemble_within_stall_budget()
         except asyncio.CancelledError:
+            raise
+        except _AssemblyTimedOutError:
+            # A hung source is a stalled producer, which ``stall()`` already
+            # reports with the last snapshot kept as stale: not a failed
+            # refresh. The producer simply tries again on its cadence.
             raise
         except Exception:
             if generation == self._generation and epoch == self.stream_epoch:
