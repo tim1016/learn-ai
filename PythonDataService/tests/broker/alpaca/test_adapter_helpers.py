@@ -70,6 +70,26 @@ def test_numeric_helpers_refuse_a_number_too_large_for_a_float_as_unreadable(
         parser(10**400)
 
 
+@pytest.mark.parametrize("parser", [to_float, opt_float])
+@pytest.mark.parametrize(
+    "value", ["NaN", "nan", "Infinity", "-inf", "1e999", float("nan"), float("inf"), float("-inf")], ids=repr
+)
+def test_numeric_helpers_refuse_a_number_that_is_not_finite(
+    parser: Callable[[Any], float | None], value: object
+) -> None:
+    # ``float("NaN")`` parses, and every comparison made of a NaN is False (#3216).
+    with pytest.raises(ValueError, match="must be finite"):
+        parser(value)
+
+
+@pytest.mark.parametrize("parser", [to_float, opt_float])
+@pytest.mark.parametrize(("value", "expected"), [("0", 0.0), (-3, -3.0), ("1.25", 1.25), (1e300, 1e300)], ids=repr)
+def test_numeric_helpers_keep_every_finite_number_including_zero_and_negatives(
+    parser: Callable[[Any], float | None], value: object, expected: float
+) -> None:
+    assert parser(value) == expected
+
+
 @pytest.mark.parametrize(
     "value",
     [

@@ -1174,6 +1174,8 @@ async def test_a_live_order_with_unreadable_values_is_contained_and_the_stream_k
 
 _UNREADABLE_OWN_ORDER_VALUES = [
     pytest.param({"filled_qty": True}, id="boolean-fill-count"),
+    # The frame's order is partially filled and states no fill count (#3216).
+    pytest.param({"filled_qty": None}, id="absent-fill-count-on-a-fill-state"),
     pytest.param({"submitted_at": "yesterday"}, id="unparseable-timestamp"),
     pytest.param({"extended_hours": "false"}, id="non-boolean-extended-hours"),
 ]
@@ -1375,6 +1377,77 @@ async def test_a_live_sideless_fill_for_our_own_order_is_withheld_not_a_reconnec
         assert order is not None and order.broker_order_id is None
         effect = repo.effect_operation(order.effect_operation_id)
         assert effect is not None and effect.state == "unknown"
+    finally:
+        repo.close()
+
+
+@pytest.mark.parametrize(
+    "slice_figures",
+    [
+        {"qty": "5"},
+        {"price": "101.0"},
+        {},
+        {"qty": "0", "price": "101.0"},
+        {"qty": "5", "price": "0"},
+        {"qty": "-5", "price": "101.0"},
+    ],
+    ids=["no-price", "no-qty", "no-price-and-no-qty", "zero-qty", "zero-price", "negative-qty"],
+)
+async def test_a_fill_frame_naming_an_execution_but_no_usable_slice_is_a_parse_error_and_the_stream_goes_on(
+    tmp_path: Path,
+    slice_figures: dict[str, str],
+) -> None:
+    """A fill that names its execution and states no usable slice once ended the stream (#3216).
+
+    The adapter took it, the evidence sink's append refused it (no quantity or
+    price, or one that is not positive), and that refusal raised out of the
+    sink -- outside the parse guard -- so the stream reconnected and was fed
+    the same frame again, for good, with ``parse_errors`` at zero and every
+    later frame unread. It is a parse error now: the frame is counted and
+    dropped, and the next frame folds.
+    """
+
+    class _Reconciler:
+        async def reconcile_account(self, *, trigger: str) -> SimpleNamespace:
+            return SimpleNamespace(verdict="clean")
+
+    repo, order_ref = _initialize_owned_order(tmp_path)
+    base = load_alpaca_fixture_file("trade_updates", "trade_updates.json")[2]["data"]["order"]
+    owned = {
+        **base,
+        "id": "broker-order-1",
+        "client_order_id": order_ref,
+        "qty": "5",
+        "filled_qty": "5",
+        "filled_avg_price": "101.0",
+        "status": "filled",
+    }
+
+    def _frames() -> AsyncIterator[bytes | str]:
+        async def _live() -> AsyncIterator[bytes | str]:
+            yield '{"stream":"authorization","data":{"status":"authorized"}}'
+            yield _trade_update_frame("fill", owned, execution_id="exec-no-slice", **slice_figures)
+            yield _trade_update_frame("fill", owned, execution_id="exec-readable", price="101.0", qty="5")
+
+        return _live()
+
+    consumer = TradeUpdatesConsumer(
+        evidence_sink=SqliteTradeUpdateEvidenceSink(
+            repo=repo, intake=ReentrantAsyncLock(), reconciler=_Reconciler()
+        ),
+        read=cast(BrokerReadPort, _ClosedOrderRead()),
+        frame_source=_frames,
+        journal=cast(CaptureJournal, _Capture()),
+        backoff=lambda _attempt: _no_backoff(),
+        max_reconnects=0,
+    )
+    try:
+        await consumer.run()
+
+        assert consumer.counters.parse_errors == 1
+        assert consumer.counters.events_applied == 1
+        assert [fill["execution_id"] for fill in repo.fills_for_order(order_ref)] == ["exec-readable"]
+        assert repo.position(STRATEGY_INSTANCE_ID, "SPY") == 5.0
     finally:
         repo.close()
 

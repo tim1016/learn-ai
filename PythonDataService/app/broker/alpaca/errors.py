@@ -31,6 +31,7 @@ do. Alpaca's error message is surfaced (it carries no secret), never our keys.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -94,16 +95,25 @@ def _error_body(exc: APIError) -> _AlpacaErrorBody:
 
 
 def _retry_after_ms(exc: APIError) -> int | None:
-    """Parse a Retry-After header (seconds) into ms, when present and numeric."""
+    """Parse a Retry-After header (seconds) into ms, when present and a finite non-negative number.
+
+    Anything else is no hint (``None``), as an absent header is: ``inf``, a
+    value too large to be milliseconds, a negative one, text and an HTTP date.
+    ``inf`` and ``1e999`` once raised ``OverflowError`` out of
+    :func:`map_api_error`, and ``-5`` was echoed as ``-5000`` ms (#3216).
+    """
     response = getattr(exc, "response", None)
     header = getattr(response, "headers", {}) if response is not None else {}
     raw = header.get("Retry-After") if hasattr(header, "get") else None
     if raw is None:
         return None
     try:
-        return int(float(raw) * 1000)
-    except (TypeError, ValueError):
+        milliseconds = float(raw) * 1000
+    except (TypeError, ValueError, OverflowError):
         return None
+    if not math.isfinite(milliseconds) or milliseconds < 0:
+        return None
+    return int(milliseconds)
 
 
 def map_api_error(

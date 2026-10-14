@@ -97,6 +97,15 @@ def test_missing_created_at_is_none(load_alpaca_fixture: AlpacaFixtureLoader) ->
         pytest.param("last_equity", True, TypeError, "not a boolean", id="boolean-last-equity"),
         pytest.param("cash", "not-a-number", ValueError, "'not-a-number'", id="unparseable-cash"),
         pytest.param("equity", None, TypeError, "NoneType", id="null-equity"),
+        # A number that is not finite is no figure at all (#3216): ``float("NaN")``
+        # parses, and nothing downstream of the adapter can tell it from a value.
+        pytest.param("cash", "NaN", ValueError, "must be finite", id="nan-cash"),
+        pytest.param("equity", "Infinity", ValueError, "must be finite", id="infinite-equity"),
+        pytest.param("buying_power", "nan", ValueError, "must be finite", id="nan-buying-power"),
+        pytest.param("portfolio_value", "-inf", ValueError, "must be finite", id="negative-infinite-portfolio-value"),
+        pytest.param("long_market_value", float("inf"), ValueError, "must be finite", id="infinite-long-market-value"),
+        pytest.param("last_equity", "NaN", ValueError, "must be finite", id="nan-last-equity"),
+        pytest.param("maintenance_margin", "inf", ValueError, "must be finite", id="infinite-maintenance-margin"),
     ],
 )
 async def test_broker_names_a_malformed_account_response_as_unavailable_evidence(

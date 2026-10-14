@@ -77,19 +77,25 @@ now_ms = now_ms_utc
 
 
 def to_float(value: Any) -> float:
-    """Parse a required Alpaca numeric (string or number) to ``float``.
+    """Parse a required Alpaca numeric (string or number) to a finite ``float``.
 
     A JSON boolean is refused: ``float(True) == 1.0``, so a corrupt money field
     would otherwise become $1 or $0 of broker evidence. A JSON integer too
     large for a float is a ``ValueError`` like any other unreadable numeric,
     never a raw ``OverflowError`` no caller is written to catch (#2627, #2648).
+    So is a number that is not finite: ``float("NaN")`` and ``float("inf")``
+    parse, and a figure that is not a number makes every comparison made
+    downstream of the adapter come out ``False`` (#3216).
     """
     if isinstance(value, bool):
         raise TypeError("Expected an Alpaca numeric, not a boolean")
     try:
-        return float(value)
+        number = float(value)
     except OverflowError as exc:
         raise ValueError("Alpaca numeric is too large to read as a number") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"Alpaca numeric must be finite, got {number!r}")
+    return number
 
 
 def opt_float(value: Any) -> float | None:
@@ -390,24 +396,20 @@ def to_alpaca_order_request(leg: BrokerOrderLeg, *, client_order_id: str) -> dic
     return body
 
 
-def _finite_float(value: Any) -> float | None:
-    """Parse an optional order numeric that must be a finite number when present (#2648)."""
-    number = opt_float(value)
-    if number is not None and not math.isfinite(number):
-        raise ValueError(f"Alpaca numeric must be finite, got {number!r}")
-    return number
-
-
 def _order_quantity(value: Any) -> float | None:
     """Parse an optional share count: finite and non-negative when present (#2648).
 
     Prices keep their sign -- a multi-leg order's net price may be negative --
     so only quantities are held to it.
     """
-    quantity = _finite_float(value)
+    quantity = opt_float(value)
     if quantity is not None and quantity < 0:
         raise ValueError(f"Alpaca quantity must be non-negative, got {quantity!r}")
     return quantity
+
+
+# An order in either state has filled shares, so it must say how many (#3216).
+_FILL_STATUSES: frozenset[str] = frozenset({"filled", "partially_filled"})
 
 
 def parse_order_link_id(value: Any) -> str | None:
@@ -470,7 +472,10 @@ def from_alpaca_order(
     a non-finite or out-of-range number, a negative quantity, an unparseable
     time, a non-boolean flag, a link id that is not a UUID string) reads
     absent and is named in ``unreadable_fields``, so an unreadable link is
-    never followed (#2656). The broker's own status is kept, so the
+    never followed (#2656). A ``filled`` or ``partially_filled`` order that
+    states no ``filled_qty`` is unreadable in that field too: it has filled
+    shares, and an absent count must not read as the zero of an order that
+    filled none (#3216). The broker's own status is kept, so the
     order's lifecycle stays visible and a change in it is still activity.
     The Clerk contains such a row, or one missing its text, on its own: a
     foreign order is recorded unfoldable (#2363/#2643), and an answer about
@@ -485,11 +490,17 @@ def from_alpaca_order(
         raise TypeError(f"Alpaca order payload must be an object, got {type(payload).__name__}")
     unreadable: dict[str, str] = {}
     read = functools.partial(_read_or_absent, payload, unreadable)
+    status = str_or_blank(payload.get("status"))
     quantity = read("qty", _order_quantity)
-    filled_quantity = read("filled_qty", _order_quantity) or 0.0
-    limit_price = read("limit_price", _finite_float)
-    stop_price = read("stop_price", _finite_float)
-    filled_avg_price = read("filled_avg_price", _finite_float)
+    stated_filled_quantity = read("filled_qty", _order_quantity)
+    if stated_filled_quantity is None and status in _FILL_STATUSES:
+        # A filled order that states no count has filled some shares, not none: read as zero it would
+        # be folded as a readable order that filled nothing (#3216).
+        unreadable.setdefault("filled_qty", f"ValueError: the order is {status} and states no filled_qty")
+    filled_quantity = stated_filled_quantity or 0.0
+    limit_price = read("limit_price", opt_float)
+    stop_price = read("stop_price", opt_float)
+    filled_avg_price = read("filled_avg_price", opt_float)
     extended_hours = read("extended_hours", functools.partial(opt_bool, field="extended_hours")) or False
     submitted_at_ms = read("submitted_at", opt_rfc3339_to_ms)
     created_at_ms = read("created_at", opt_rfc3339_to_ms)
@@ -524,7 +535,7 @@ def from_alpaca_order(
         stop_price=stop_price,
         extended_hours=extended_hours,
         filled_avg_price=filled_avg_price,
-        status=str_or_blank(payload.get("status")),
+        status=status,
         submitted_at_ms=submitted_at_ms,
         created_at_ms=created_at_ms,
         updated_at_ms=updated_at_ms,
@@ -608,7 +619,10 @@ def from_alpaca_trade_update(payload: Mapping[str, Any]) -> BrokerOrderEvent:
     they carry the top-level ``price``/``qty`` when present (fills) and are
     ``None`` otherwise (``new``/``canceled``/``rejected`` carry no execution).
     A multi-leg parent's fill is the exception: its top-level figures are the
-    order's net, not an execution, so it carries none (#3103).
+    order's net, not an execution, so it carries none (#3103). Any other fill
+    must state both figures, finite and positive: one that names its
+    execution without them is refused here, as a parse error, rather than
+    raised out of the evidence sink (#3216).
     The order's cumulative fill totals live on the ``BrokerOrder`` the caller
     maps separately from the embedded ``order`` object — they are deliberately
     NOT folded in here, which would mislabel a cumulative figure as a slice.
@@ -635,11 +649,20 @@ def from_alpaca_trade_update(payload: Mapping[str, Any]) -> BrokerOrderEvent:
                 event_type=event, occurred_at_ms=occurred_at_ms, price=None, quantity=None, execution_id=None
             )
         raise ValueError(f"Alpaca {event} trade_updates event is missing its execution_id.")
+    price = opt_float(payload.get("price"))
+    quantity = opt_float(payload.get("qty"))
+    if event in {"fill", "partial_fill"} and (price is None or quantity is None or price <= 0 or quantity <= 0):
+        # The Clerk's exact-execution append takes only a slice with a positive quantity and price. Raised
+        # out of the evidence sink its refusal ends the stream, which reconnects into the same frame for good
+        # (#3216).
+        raise ValueError(
+            f"Alpaca {event} trade_updates event {execution_id!r} must state its quantity and price, both positive."
+        )
     return BrokerOrderEvent(
         event_type=event,
         occurred_at_ms=occurred_at_ms,
-        price=opt_float(payload.get("price")),
-        quantity=opt_float(payload.get("qty")),
+        price=price,
+        quantity=quantity,
         execution_id=(execution_id if event in {"fill", "partial_fill"} else None),
     )
 

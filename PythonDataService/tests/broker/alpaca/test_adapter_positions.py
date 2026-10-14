@@ -89,11 +89,26 @@ def _malformed_rows(long_position: dict) -> dict[str, object]:
         "boolean-quantity": [{**long_position, "qty": True}],
         "unparseable-quantity": [{**long_position, "qty": "one"}],
         "non-object-row": [long_position, None],
+        # A figure that is not finite is no figure (#3216).
+        "nan-quantity": [{**long_position, "qty": "NaN"}],
+        "infinite-market-value": [{**long_position, "market_value": "Infinity"}],
+        "nan-average-entry-price": [{**long_position, "avg_entry_price": float("nan")}],
+        "infinite-optional-current-price": [{**long_position, "current_price": "-inf"}],
     }
 
 
 @pytest.mark.parametrize(
-    "shape", ["missing-field", "boolean-quantity", "unparseable-quantity", "non-object-row"]
+    "shape",
+    [
+        "missing-field",
+        "boolean-quantity",
+        "unparseable-quantity",
+        "non-object-row",
+        "nan-quantity",
+        "infinite-market-value",
+        "nan-average-entry-price",
+        "infinite-optional-current-price",
+    ],
 )
 async def test_broker_names_a_malformed_position_as_unavailable_evidence(
     load_alpaca_fixture: AlpacaFixtureLoader,

@@ -188,3 +188,72 @@ def test_a_fill_that_lists_legs_but_is_not_a_multi_leg_order_still_fails_fast() 
                 "order": {"order_class": "", "symbol": "SPY261016C00771000"},
             }
         )
+
+
+@pytest.mark.parametrize("event", ["fill", "partial_fill"])
+@pytest.mark.parametrize(
+    "slice_figures",
+    [
+        {"qty": "1"},
+        {"price": "100.25"},
+        {},
+        {"qty": None, "price": "100.25"},
+        {"qty": "", "price": ""},
+        {"qty": "0", "price": "100.25"},
+        {"qty": "-1", "price": "100.25"},
+        {"qty": "1", "price": "0"},
+        {"qty": "1", "price": "-100.25"},
+    ],
+    ids=[
+        "no-price",
+        "no-qty",
+        "neither",
+        "null-qty",
+        "blank-figures",
+        "zero-qty",
+        "negative-qty",
+        "zero-price",
+        "negative-price",
+    ],
+)
+def test_a_fill_naming_an_execution_must_state_its_slice(event: str, slice_figures: dict[str, Any]) -> None:
+    """The Clerk's exact-execution append takes no slice without a positive quantity and price (#3216).
+
+    Raised out of the evidence sink that refusal ends the stream, which
+    reconnects and is fed the same frame again. The adapter refuses the frame
+    first, so the consumer counts it as a parse error and carries on.
+    """
+    with pytest.raises(ValueError, match="must state its quantity and price"):
+        from_alpaca_trade_update(
+            {
+                "event": event,
+                "timestamp": "2026-07-24T14:42:50.129256359Z",
+                "execution_id": "exec-no-slice",
+                **slice_figures,
+            }
+        )
+
+
+@pytest.mark.parametrize("figure", ["NaN", "Infinity", "-inf", float("nan"), float("inf")])
+@pytest.mark.parametrize("field", ["price", "qty"])
+def test_a_fill_slice_that_is_not_a_finite_number_is_refused(field: str, figure: object) -> None:
+    """``float("NaN")`` parses; a slice carrying one would be credited as a fill (#3216)."""
+    payload = {
+        "event": "partial_fill",
+        "timestamp": "2026-07-24T14:42:50.129256359Z",
+        "execution_id": "exec-not-finite",
+        "price": "100.25",
+        "qty": "1",
+        field: figure,
+    }
+
+    with pytest.raises(ValueError, match="must be finite"):
+        from_alpaca_trade_update(payload)
+
+
+@pytest.mark.parametrize("event", ["new", "canceled", "rejected", "pending_new"])
+def test_an_event_that_is_not_a_fill_still_carries_no_slice(event: str) -> None:
+    """The slice rule is a fill's: every other lifecycle event maps with no execution figures (#3216)."""
+    mapped = from_alpaca_trade_update({"event": event, "timestamp": "2026-07-24T14:42:50Z"})
+
+    assert (mapped.price, mapped.quantity, mapped.execution_id) == (None, None, None)
