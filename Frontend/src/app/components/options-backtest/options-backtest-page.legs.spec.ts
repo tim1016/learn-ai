@@ -234,6 +234,8 @@ describe('copying and deleting legs', () => {
     expect(screen.queryByRole('article', { name: 'Leg 2' })).toBeNull();
   });
 
+  // Eight adds through the real page take 4.2 s on a CI runner and failed two PRs at 5.1 s (#3123): the
+  // default 5 s timeout is the margin of a faster machine, not of this test's work.
   it('holds at most as many legs as the server allows: Add leg and Copy stop there, and a deletion frees them', async () => {
     const service = fakeService(vi);
     await renderPage(service);
@@ -249,7 +251,7 @@ describe('copying and deleting legs', () => {
 
     expect(isDisabled(screen.getByRole('button', { name: 'Add leg' }))).toBe(false);
     expect(isDisabled(screen.getByRole('button', { name: 'Copy Leg 1' }))).toBe(false);
-  });
+  }, 15_000);
 
   it('will not add a leg whose contract is out of range, and says so at the builder', async () => {
     const service = fakeService(vi);
