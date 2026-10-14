@@ -12,7 +12,6 @@ export type ServedLeg = Schemas['LegSetup-Output'];
 export type SavedSetup = Schemas['SavedSetupResponse'];
 export type SetupSummary = Schemas['SetupDescriptionResponse'];
 export type SessionClock = Schemas['SessionClockResponse'];
-export type Refusal = Schemas['OptionsBacktestRefusal'];
 /** What the server holds a setup, a name and a range to (`GET /limits`). */
 export type SetupLimits = Schemas['OptionsBacktestLimitsResponse'];
 
@@ -26,7 +25,6 @@ export type TestableStretch = Schemas['OptionsBacktestTestableStretchResponse'];
 export type RunListItem = Schemas['OptionsBacktestRunListItemResponse'];
 export type RunDetail = Schemas['OptionsBacktestRunDetailResponse'];
 export type RunStatus = RunListItem['status'];
-export type RunHeadline = Schemas['OptionsBacktestRunHeadlineResponse'];
 export type RunFailure = Schemas['OptionsBacktestRunFailureResponse'];
 export type RunBanner = Schemas['OptionsBacktestFillsBannerResponse'];
 export type RunFigures = Schemas['OptionsBacktestRunFiguresResponse'];
