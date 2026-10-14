@@ -289,11 +289,6 @@ class SyntheticBroker(UnsupportedOptionOrderRefusal):
         del after_ms, resume
         return BrokerOptionEventEvidence(events=(), share_trades=(), history_complete=True)
 
-
-
-
-
-
     def settle_expired_options(
         self, *, after_ms: int, at_the_owners_word: Mapping[str, OwnersWord] | None = None
     ) -> SimulatedOptionSettlements:
@@ -580,7 +575,6 @@ class SyntheticBroker(UnsupportedOptionOrderRefusal):
         leg: BrokerOrderLeg,
         *,
         client_order_id: str,
-        retained_bar: RetainedSourceBar | None = None,
     ) -> BrokerOrder:
         if self._ledger is None:
             raise SimulatedPriceUnavailableError(
@@ -594,7 +588,6 @@ class SyntheticBroker(UnsupportedOptionOrderRefusal):
             priced_by = self._submission_bar(
                 client_order_id=client_order_id,
                 symbol=leg.symbol,
-                retained_bar=retained_bar,
             )
             bar = priced_by.bar
             order = self._resolved_order(leg, client_order_id=client_order_id, priced_by=priced_by)
@@ -690,7 +683,6 @@ class SyntheticBroker(UnsupportedOptionOrderRefusal):
         *,
         client_order_id: str,
         symbol: str,
-        retained_bar: RetainedSourceBar | None,
     ) -> BoundBar:
         """The bar this order fills at, with the fill instant and re-stated price's time it was bound with."""
         if self._ledger is None or self._source_bars is None:
@@ -698,8 +690,6 @@ class SyntheticBroker(UnsupportedOptionOrderRefusal):
                 "Synthetic execution requires an authority-scoped retained-bar ledger."
             )
         bound = self._ledger.consume_binding(client_order_id)
-        if retained_bar is not None:
-            bound = BoundBar(retained_bar, None, None)
         if bound is not None:
             return bound._replace(bar=self._ledger.verified_retained_bar(bound.bar, symbol=symbol))
         # The last price the market delivered: a no-submit world's own fill
@@ -726,22 +716,6 @@ class SyntheticBroker(UnsupportedOptionOrderRefusal):
             observed_at_ms=self._clock(),
             fill_at_ms=priced_by.older_fill_at_ms,
         )
-
-
-
-
-
-
-# What each outcome is handed over as, where a broker's activity carries the broker's own code.
-
-
-
-
-
-
-
-
-
 
 
 

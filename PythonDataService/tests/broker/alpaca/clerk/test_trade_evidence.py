@@ -60,17 +60,6 @@ STRATEGY_INSTANCE_ID = "spy-bot"
 RUN_ID = "run-1"
 
 
-class _NoBrokerMutation:
-    async def submit(self, *_args: Any, **_kwargs: Any) -> None:
-        raise AssertionError("evidence recovery must not submit")
-
-    async def cancel(self, _order_id: str) -> None:
-        raise AssertionError("evidence recovery must not cancel")
-
-    async def get_order_by_client_order_id(self, _client_order_id: str) -> None:
-        return None
-
-
 class _NoReconciler:
     async def reconcile_account(self, *, trigger: str) -> SimpleNamespace:
         raise AssertionError(f"unexpected reconciliation trigger: {trigger}")
