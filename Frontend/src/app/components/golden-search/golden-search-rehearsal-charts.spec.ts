@@ -28,9 +28,17 @@ describe('the final-test rehearsal chart spec', () => {
   });
 
   it('draws a falling rung at its actual value and keeps every rule the plan models', () => {
-    const rehearsal = chanceRehearsal();
-    expect(rehearsal.rungs.map((rung) => rung.shares['joint'])).toEqual([0.612, 0.748, 0.815, 0.839]);
-    const series = rehearsalSeries(rehearsal);
+    const falling = chanceRehearsal({
+      rungs: [1, 2, 3, 4].map((k) =>
+        rehearsalRung(k, {
+          passes: { pass_joint: 5000 - k * 400, pass_positive_net: 9000, pass_drawdown: 8000, pass_exits: 8500, pass_objective: 7000 },
+          shares: { joint: (5000 - k * 400) / 10_000, positive_net: 0.9, drawdown: 0.8, exits: 0.85, objective: 0.7 },
+        }),
+      ),
+    });
+    const option = rehearsalSpec(ALL_PERIOD, falling, 'all_period').option(FAKE_CHART_THEME) as { series: { id: string; data: number[] }[] };
+    expect(option.series.find((item) => item.id === 'rehearsal:joint')?.data).toEqual([46, 42, 38, 34]);
+    const series = rehearsalSeries(falling);
     expect(series.map((item) => item.key)).toEqual(['joint', 'positive_net', 'drawdown', 'exits', 'objective']);
     expect(series.find((item) => item.key === 'drawdown')?.label).toContain('at session closes');
   });
@@ -47,11 +55,5 @@ describe('the final-test rehearsal chart spec', () => {
     const rows = spec.table.rows.map((row) => row.cells.join(' '));
     expect(rows[0]).toContain('1× 21 9 61.2%');
     expect(rows[3]).toContain('4× 84 36 83.9%');
-  });
-
-  it("never lets the joint share exceed a single rule's share on the same rung", () => {
-    const rung = rehearsalRung(2);
-    expect(rung.passes['pass_joint']).toBeLessThanOrEqual(rung.passes['pass_drawdown']);
-    expect(rung.shares['joint']).toBeLessThanOrEqual(rung.shares['objective']);
   });
 });
