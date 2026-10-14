@@ -80,7 +80,11 @@
 
       @if (reductionPlan(); as plan) {
         <div #flattenTicket class="flatten-ticket" tabindex="-1" aria-label="Prepared sale">
-          <app-safe-flatten-plan [plan]="plan" [pricing]="reductionPricing()" />
+          <app-safe-flatten-plan
+            [plan]="plan"
+            [pricing]="reductionPricing()"
+            [sendOutcomeUnknown]="sendOutcomeUnknown()"
+          />
           @if (extendedFlattenTicket(); as ticket) {
             <app-extended-flatten-ticket
               [pricing]="ticket.pricing"

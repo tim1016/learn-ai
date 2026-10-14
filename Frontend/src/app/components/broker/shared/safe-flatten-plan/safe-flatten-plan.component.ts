@@ -14,6 +14,12 @@ import type {
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp';
 
+/** What the card says about orders: the plan alone sends nothing, but a send of it that got no answer may have. */
+const NOTHING_SUBMITTED = 'No order has been submitted.';
+const SEND_UNANSWERED =
+  'No answer came back from the send, so whether an order was submitted is not known. '
+  + 'Check the position with Alpaca before another order.';
+
 /**
  * Pure presentation for one backend-authored, read-only reduction plan.
  *
@@ -24,6 +30,10 @@ import { TimestampDisplayComponent } from '../../../../shared/timestamp';
  * `pricing` says how the plan's flatten would go out now (#2007): a market
  * order inside the regular session, or why none can be sent. The priced
  * extended-hours ticket is the host's to render — it is interactive.
+ *
+ * `sendOutcomeUnknown` is the host's word that a send of this plan came back
+ * with no typed answer (#3178): the Clerk may hold the order, so the card
+ * stops saying none was submitted.
  */
 @Component({
   selector: 'app-safe-flatten-plan',
@@ -41,6 +51,9 @@ import { TimestampDisplayComponent } from '../../../../shared/timestamp';
 export class SafeFlattenPlanComponent {
   readonly plan = input.required<SqliteSafeFlattenPlan>();
   readonly pricing = input<SqliteSafeFlattenPricing | null>(null);
+  readonly sendOutcomeUnknown = input(false);
+  protected readonly submission = computed(() =>
+    this.sendOutcomeUnknown() ? SEND_UNANSWERED : NOTHING_SUBMITTED);
   protected readonly regularSession = computed(() => this.pricing()?.kind === 'regular_session');
   protected readonly refusal = computed<SqliteRefusedFlattenPricing | null>(() => {
     const pricing = this.pricing();

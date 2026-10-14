@@ -81,6 +81,7 @@ import {
   actionOutcomeToast,
   deriveActionRejection,
   extractActionErrorDetail,
+  sendMayHaveBeenApplied,
   type ActionRejection,
 } from '../lib/panel-action-outcome';
 import { BotPageHeaderComponent } from '../bot-page/bot-page-header.component';
@@ -161,6 +162,9 @@ interface PreparedSafeFlatten {
   readonly sid: string;
   /** Why the last quote refresh failed; the quote then ages until it cannot be sent. */
   readonly quoteError: string | null;
+  /** A send of this plan came back with no typed answer (#3178): the Clerk may
+   * hold the order, so the plan stops saying none was submitted. */
+  readonly sendOutcomeUnknown: boolean;
 }
 
 /** The open ticket that settles the bot's uncertain closing order (#2854).
@@ -400,6 +404,7 @@ export class BotPanelShellComponent {
   });
   protected readonly reductionPlan = computed(() => this.preparedFlatten()?.plan ?? null);
   protected readonly reductionPricing = computed(() => this.preparedFlatten()?.pricing ?? null);
+  protected readonly sendOutcomeUnknown = computed(() => this.preparedFlatten()?.sendOutcomeUnknown ?? false);
   /** The priced extended-hours ticket, present only for a single-leg plan in PRE/POST. */
   protected readonly extendedFlattenTicket = computed<
     {
@@ -1183,6 +1188,7 @@ export class BotPanelShellComponent {
         if (!ownership.stillOwns()) return;
         this.preparedFlatten.set({
           plan: outcome.plan, pricing: outcome.pricing, receivedAtMs: Date.now(), target, sid, quoteError: null,
+          sendOutcomeUnknown: false,
         });
         afterNextRender(() => this.flattenTicketView()?.nativeElement.focus(), { injector: this.injector });
         return;
@@ -1341,6 +1347,7 @@ export class BotPanelShellComponent {
       return;
     }
     const ownership = this.beginActionOwnership();
+    let requestSent = false;
     this.actionPending.set(true);
     this.actionReceipt.set(null);
     try {
@@ -1351,12 +1358,15 @@ export class BotPanelShellComponent {
       if (execute === undefined) {
         throw new Error('This bot no longer presents a safe flatten; refresh and prepare again.');
       }
-      const result = await this.panelSvc.executeExtendedSafeFlatten(
+      const sending = this.panelSvc.executeExtendedSafeFlatten(
         this.commandTarget(prepared.target),
         prepared.sid,
         execute.concurrency_token,
         confirmation,
       );
+      // A request that could not even be built threw above, with nothing sent.
+      requestSent = true;
+      const result = await sending;
       this.preparedFlatten.set(null);
       const price = formatLimitPrice(confirmation.limit_price);
       // "Sent" is a claim about the broker, so it is only made on the broker's
@@ -1385,7 +1395,14 @@ export class BotPanelShellComponent {
       await this.liveStore.refresh();
     } catch (error) {
       const rejection = deriveActionRejection(error, 'Action "Execute safe flatten" failed.');
-      if (ownership.stillOwns()) this.settleFlattenStep('sell', 'failed', rejection.message);
+      if (ownership.stillOwns()) {
+        this.settleFlattenStep('sell', 'failed', rejection.message);
+        // No typed answer to a request that went out: the Clerk may hold the
+        // order, so the plan card must not go on saying none was submitted.
+        if (requestSent && sendMayHaveBeenApplied(error)) {
+          this.preparedFlatten.update((current) => current && { ...current, sendOutcomeUnknown: true });
+        }
+      }
       ownership.deliverOutcome(this.refusalReceipt('execute_safe_flatten', rejection));
       await this.liveStore.refresh();
     } finally {
