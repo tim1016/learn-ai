@@ -2,6 +2,7 @@ import type { ChartBar } from '../lib/broker-v2-panel.types';
 import { toCandle } from '../lib/chart-bar-mapping';
 import type { UTCTimestamp } from 'lightweight-charts';
 import type { components } from '../../../../api/broker.types';
+import { extractServerMessage } from '../../operation-error';
 import {
   CHART_INDICATOR_FALLBACK_COLOR,
   CHART_INDICATOR_SERIES_COLORS,
@@ -181,4 +182,11 @@ function seriesPlan(
 function indicatorLabel(entry: ChartIndicatorEntry): string {
   const values = Object.values(entry.params).join('/');
   return values ? `${entry.name.toUpperCase()} ${values}` : entry.name.toUpperCase();
+}
+
+/** Why a calculation failed: the data plane's own sentence when it sent one, never a bare "could not". */
+export function indicatorFailureMessage(error: unknown, window: string): string {
+  const reason = extractServerMessage(error, '');
+  const base = `Indicators could not be calculated ${window}`;
+  return reason === '' ? `${base}.` : `${base}: ${reason}`;
 }

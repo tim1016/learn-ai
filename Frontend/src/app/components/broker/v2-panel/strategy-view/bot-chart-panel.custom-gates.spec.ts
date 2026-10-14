@@ -6,7 +6,7 @@ import { ChangeDetectionStrategy, Component, signal } from '@angular/core';
 import { render, screen, waitFor, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
-import { NEVER, of } from 'rxjs';
+import { NEVER, of, throwError } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { fakeStrategyChartFactory, type FakeSeries } from '../../../../testing/strategy-chart-fake';
@@ -327,6 +327,24 @@ describe('BotChartPanelComponent — custom gates and catalogue indicators (#263
 
     await user.click(within(indicators).getByRole('button', { name: 'Remove VWAP' }));
     expect(charts.current().chart.removeSeries).toHaveBeenCalledWith(computedLine);
+  });
+
+  it('says why a catalogue indicator could not be calculated, with the data plane’s own reason', async () => {
+    const user = userEvent.setup();
+    dataPlane.indicators.calculateBars.mockReturnValue(throwError(() => new HttpErrorResponse({
+      status: 422, error: { detail: 'VWAP needs a volume on every candle.' },
+    })));
+    await renderPanel();
+    const indicators = screen.getByRole('dialog', { name: 'Indicators' });
+
+    await user.type(within(indicators).getByRole('combobox', { name: 'Search indicators' }), 'vwap');
+    const row = within(indicators).getAllByRole('option', { hidden: true }).find((option) => option.dataset['name'] === 'vwap');
+    if (row === undefined) throw new Error('The catalogue lists no VWAP.');
+    await user.click(within(row).getByRole('button', { name: 'Add', hidden: true }));
+
+    expect(await within(indicators).findByText(
+      'Indicators could not be calculated on these candles: VWAP needs a volume on every candle.',
+    )).toBeTruthy();
   });
 
   it('computes a catalogue indicator on the view’s lead-in bars then its candles, and draws no lead-in point (#2800)', async () => {
