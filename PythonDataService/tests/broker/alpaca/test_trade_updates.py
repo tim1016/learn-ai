@@ -1029,71 +1029,6 @@ async def test_reconnect_gap_reconcile_pulls_missed_orders(tmp_path: Path) -> No
 
 
 @responses.activate
-async def test_gap_reconcile_dedups_already_seen_event(tmp_path: Path) -> None:
-    # If the socket already delivered the fill, the gap-reconcile's re-observed
-    # fill must dedup on the stable key — not journal a second fill.
-    # Load the fill first so we can derive the order_id for the REST mock.
-    fill = _load_frames()[2]
-    # The socket's fill has an execution_id key; the gap-reconcile synthesizes an
-    # order-derived event WITHOUT an execution_id, so their keys differ. To prove
-    # the reconcile is idempotent for the SAME event, feed a socket fill that
-    # keys the same way the reconcile will: strip its execution_id so both key on
-    # order_id|fill|timestamp.
-    fill["data"].pop("execution_id", None)
-    fill["data"]["timestamp"] = "2021-03-16T18:38:02.123456Z"
-    # Also align the embedded order's filled_at so the terminal fingerprint
-    # (_terminal_state_fingerprint uses filled_at_ms) matches the REST response.
-    fill["data"]["order"]["filled_at"] = "2021-03-16T18:38:02.123456Z"
-    order_id = fill["data"]["order"]["id"]  # must match REST response for dedup
-    filled_order = {
-        "id": order_id,
-        "client_order_id": _OWNED_COID,
-        "updated_at": "2021-03-16T18:38:02.123456Z",
-        "submitted_at": "2021-03-16T18:38:01.937734Z",
-        "filled_at": "2021-03-16T18:38:02.123456Z",
-        "symbol": "SPY",
-        "asset_class": "us_equity",
-        "qty": "1",
-        "filled_qty": "1",
-        "filled_avg_price": "737.91",
-        "order_type": "market",
-        "type": "market",
-        "side": "buy",
-        "time_in_force": "day",
-        "status": "filled",
-    }
-    responses.add(responses.GET, f"{_BASE}/v2/account", json=_ACCOUNT_JSON, status=200)
-    responses.add(responses.POST, f"{_BASE}/v2/orders", json=_ACCEPTED_ORDER_JSON, status=200)
-    responses.add(responses.GET, f"{_BASE}/v2/orders", json=[filled_order], status=200)
-
-    broker = _real_broker_with_responses([filled_order])
-    clerk = _EvidenceSink(read=broker, trade=broker)
-    await _warm(clerk)
-
-    journal = _capture_journal(tmp_path)
-    consumer = TradeUpdatesConsumer(
-        evidence_sink=clerk,
-        read=broker,
-        frame_source=_frame_source([fill]),
-        journal=journal,
-        clock=lambda: _FIXED_MS,
-        backoff=_no_backoff,
-        max_reconnects=1,
-    )
-
-    await consumer.run()
-
-    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
-    fills = [
-        e
-        for e in entries
-        if e.kind is ClerkEntryKind.ORDER_EVENT and e.event is not None and e.event.event_type == "fill"
-    ]
-    # Delivered once on the socket, re-observed once on reconcile → journaled once.
-    assert len(fills) == 1
-
-
-@responses.activate
 async def test_gap_reconcile_dedups_socket_fill_by_terminal_order(tmp_path: Path) -> None:
     # PRODUCTION shape: the socket delivered the fill WITH its execution_id (key
     # ``exec:...``); a reconnect re-pulls the now-terminal order via REST, which
@@ -1155,6 +1090,44 @@ async def test_gap_reconcile_dedups_socket_fill_by_terminal_order(tmp_path: Path
     assert len(fills) == 1
     assert consumer.counters.stale_terminal >= 1
     assert consumer.counters.gap_reconciled >= 1
+
+
+async def test_gap_reconcile_dedups_a_socket_cancel_against_its_rest_repull(tmp_path: Path) -> None:
+    # A non-fill terminal event carries no execution id: the socket and the REST
+    # re-pull both key it on ``order_id|canceled|instant``. The socket delivered
+    # the cancel; the reconnect's REST pull returns the same closed order. The
+    # Clerk must see the cancel once, and the re-pull is counted as stale.
+    canceled = _load_frames()[3]
+    assert canceled["data"]["event"] == "canceled"
+    authorization = {"stream": "authorization", "data": {"status": "authorized"}}
+    connections = iter([[canceled], [authorization]])
+    broker = _FakeBroker()
+    broker.orders = [from_alpaca_order(canceled["data"]["order"], observed_at_ms=_FIXED_MS)]
+    clerk = _EvidenceSink(read=broker, trade=broker)
+    await _warm(clerk)
+    consumer = TradeUpdatesConsumer(
+        evidence_sink=clerk,
+        read=broker,
+        frame_source=lambda: _frame_source(next(connections))(),
+        journal=_capture_journal(tmp_path),
+        clock=lambda: _FIXED_MS,
+        backoff=_no_backoff,
+        max_reconnects=1,
+    )
+
+    await consumer.run()
+
+    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
+    cancels = [
+        e
+        for e in entries
+        if e.kind is ClerkEntryKind.ORDER_EVENT and e.event is not None and e.event.event_type == "canceled"
+    ]
+    assert len(cancels) == 1
+    assert consumer.counters.gap_reconciled == 1
+    assert consumer.counters.stale_terminal == 1
+    assert consumer.counters.events_applied == 1
+    assert consumer.counters.parse_errors == 0
 
 
 async def test_gap_reconcile_pulls_closed_orders_no_submission_time_filter(
