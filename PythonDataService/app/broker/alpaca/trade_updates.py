@@ -146,6 +146,9 @@ class TradeUpdateCounters:
       id, status, symbol or side, or naming values the adapter could not
       read; withheld like a lost response (#2643, #2648).
     - ``parse_errors`` — frames that captured but would not parse.
+    - ``leg_executions_unmapped`` — a several-leg parent's fill named a leg
+      execution whose leg order it did not carry; the next lookup credits the
+      leg cumulatively (#3103).
     - ``capture_failures`` — frames refused because verbatim capture failed.
     - ``event_key_collisions`` — changed payloads that reused an event key.
     - ``reconnects`` — reconnect cycles performed.
@@ -160,6 +163,7 @@ class TradeUpdateCounters:
     unfoldable_orders: int = 0
     withheld_orders: int = 0
     parse_errors: int = 0
+    leg_executions_unmapped: int = 0
     reconnects: int = 0
     connects: int = 0
     gap_reconciled: int = 0
@@ -734,8 +738,8 @@ class TradeUpdatesConsumer:
         for execution in executions:
             leg_order = leg_orders.get(str(execution.get("order_id"))) if isinstance(execution, dict) else None
             if leg_order is None:
-                self._counters.parse_errors += 1
-                self._mark_evidence_health(False)
+                # Not a parse error: the parent was applied and the next lookup credits the leg cumulatively.
+                self._counters.leg_executions_unmapped += 1
                 logger.warning(
                     "alpaca trade_updates parent fill names a leg execution with no leg order",
                     extra={"action": "trade_updates_leg_execution_unmapped"},
@@ -749,7 +753,8 @@ class TradeUpdatesConsumer:
                     "execution_id": execution.get("execution_id"),
                     "price": execution.get("price"),
                     "qty": execution.get("qty"),
-                    "order": leg_order,
+                    # A leg's client order id holds no Clerk identity: it resolves by its broker order id.
+                    "order": {**leg_order, "client_order_id": None},
                 }
             )
 

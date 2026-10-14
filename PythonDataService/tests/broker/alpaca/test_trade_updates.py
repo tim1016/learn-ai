@@ -838,7 +838,7 @@ async def test_a_multi_leg_parents_fill_credits_each_leg_its_own_exact_execution
     assert consumer.evidence_health.healthy is True
 
 
-async def test_a_leg_execution_that_names_no_leg_order_is_a_parse_error_not_a_credit(tmp_path: Path) -> None:
+async def test_a_leg_execution_that_names_no_leg_order_is_counted_and_credits_nothing(tmp_path: Path) -> None:
     frame = _load_frames()[2]
     frame["data"].pop("execution_id", None)
     frame["data"]["order"]["order_class"] = "mleg"
@@ -850,8 +850,10 @@ async def test_a_leg_execution_that_names_no_leg_order_is_a_parse_error_not_a_cr
 
     await consumer.run()
 
-    assert consumer.counters.parse_errors == 1
-    assert consumer.evidence_health.healthy is False
+    assert consumer.counters.leg_executions_unmapped == 1
+    assert consumer.counters.parse_errors == 0
+    # The parent was applied; an orphan leg must not hold every reduction on the account.
+    assert consumer.evidence_health.healthy is True
 
 
 async def test_unmappable_frame_degrades_gate_health_until_valid_frame(

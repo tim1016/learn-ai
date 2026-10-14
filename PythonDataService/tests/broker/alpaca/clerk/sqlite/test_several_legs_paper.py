@@ -274,40 +274,49 @@ async def test_a_parent_fill_frame_with_no_execution_books_nothing_and_the_next_
     assert multi_paper.repo.active_uncertainties() == []
 
 
-async def test_each_leg_credited_by_its_execution_is_not_credited_again_by_the_lookup_and_the_fee_population_is_complete(
+async def test_a_parents_fill_frame_credits_each_leg_exactly_through_the_real_consumer_and_sink(
     multi_paper: SeveralLegsPaper,
 ) -> None:
-    """#3103: the legs of a filled parent hold exact executions, so no cumulative is left to explain."""
+    """#3103: stream frame first, then the sweep's pass: no cumulative is left, the fee population is explained."""
+    from copy import deepcopy
+
     from app.broker.alpaca.clerk.sqlite import fee_evidence
+    from app.broker.alpaca.trade_updates import TradeUpdatesConsumer
 
     parent = await multi_paper.resting(units=1)
-    multi_paper.venue.legs_fill(parent, (1, 1))
-    children = multi_paper.venue.option_orders[parent]["legs"]
+    multi_paper.venue.legs_fill(parent, (1, 1), state="filled")
     sink = SqliteTradeUpdateEvidenceSink(repo=multi_paper.repo, intake=multi_paper.clerk.intake, reconciler=multi_paper.clerk)
-    for number, child in enumerate(children, start=1):
-        disposition = await sink.record_lifecycle_event(
-            client_order_id=child["client_order_id"],
-            event=adapter.from_alpaca_trade_update(
-                {
-                    "event": "fill", "timestamp_ms": multi_paper.clock(), "execution_id": f"leg-{number}-execution",
-                    "price": "1.5", "qty": "1", "order": child,
-                }
-            ),
-            event_key=f"exec:leg-{number}-execution",
-            order=adapter.from_alpaca_order(child),
-            recovery_source=None,
-            recovery_window_limit=None,
-        )
-        assert disposition == "order_event"
 
+    def _no_frames() -> None:
+        raise AssertionError("the frame is handed in, not read from a socket")
+
+    consumer = TradeUpdatesConsumer(
+        read=multi_paper.account, frame_source=_no_frames, evidence_sink=sink, clock=multi_paper.clock
+    )
+    order = deepcopy(multi_paper.venue.option_orders[parent])
+    timestamp = "2026-09-18T16:00:00.500Z"
+    frame = {
+        "event": "fill",
+        "timestamp": timestamp,
+        "price": "6.28",
+        "qty": order["filled_qty"],
+        "legs": [
+            {"execution_id": f"leg-{number}-execution", "qty": "1", "price": leg["filled_avg_price"],
+             "order_id": leg["id"], "symbol": leg["symbol"], "timestamp": timestamp}
+            for number, leg in enumerate(order["legs"], start=1)
+        ],
+        "order": order,
+    }
+
+    await consumer._handle_trade_update(frame)
     await multi_paper.pass_()
 
-    sources = {
-        fill["evidence_source"]
-        for leg in multi_paper.repo.order_legs(parent)
-        for fill in multi_paper.repo.fills_for_order(leg.order_ref)
-    }
-    assert "cumulative_recovery" not in sources
-    assert len([f for leg in multi_paper.repo.order_legs(parent) for f in multi_paper.repo.fills_for_order(leg.order_ref)]) == 2
+    fills = [fill for leg in multi_paper.repo.order_legs(parent) for fill in multi_paper.repo.fills_for_order(leg.order_ref)]
+    assert len(fills) == 2
+    assert {fill["evidence_source"] for fill in fills} != {"cumulative_recovery"}
+    assert "cumulative_recovery" not in {fill["evidence_source"] for fill in fills}
+    assert consumer.counters.parse_errors == 0 and consumer.evidence_health.healthy is True
     _, explained = fee_evidence._witnessed_executions(multi_paper.repo._conn)
     assert explained is True
+    assert multi_paper.repo.active_uncertainties() == []
+
