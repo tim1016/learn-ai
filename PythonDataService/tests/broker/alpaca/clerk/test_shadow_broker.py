@@ -6,6 +6,9 @@ import inspect
 import json
 import logging
 import sqlite3
+import sys
+import threading
+from collections.abc import Callable
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -686,6 +689,44 @@ async def test_an_unreadable_evidence_ledger_is_traced_once_until_it_reads_well_
         _damage_evidence_ledger(SourceBarLedger(artifacts_root=tmp_path, account_id=other_id), "corrupt")
         await ports.read.list_orders()
         assert [(r.failed_reads, r.exc_info is not None) for r in unreadable()][-1] == (1, True)
+
+
+def test_the_unreadable_ledger_count_survives_concurrent_failures_and_recoveries(
+    world: tuple[ShadowPorts, SourceBarLedger, _LiveRead, _Clock], caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The book is read on worker threads as well as the loop: the helper that says a ledger is
+    unreadable must never be what fails a read."""
+    book = world[0].book
+    caplog.set_level(logging.CRITICAL)
+    failures: list[BaseException] = []
+
+    def hammer(step: Callable[[], None]) -> None:
+        try:
+            for _ in range(20_000):
+                step()
+        except BaseException as error:  # collected, and asserted empty below
+            failures.append(error)
+
+    def fail() -> None:
+        book.ledger_unreadable(
+            EVIDENCE, OSError("gone"), action="shadow_settlement_ledger_unreadable", message="unreadable"
+        )
+
+    def recover() -> None:
+        book.ledger_readable(EVIDENCE)
+
+    switch_interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        threads = [threading.Thread(target=hammer, args=(step,)) for step in (fail, recover, recover, recover, fail)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+    finally:
+        sys.setswitchinterval(switch_interval)
+
+    assert failures == []
 
 
 @pytest.mark.parametrize("damage", ["missing", "corrupt"])

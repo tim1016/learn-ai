@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import threading
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -278,7 +279,9 @@ class ShadowOrderBook:
         # The book's option orders of one leg: filled from a quote into this same ledger (ADR 0076).
         self.option_orders = option_orders
         # Failed reads of an instance's evidence ledger since it last read well, by (instance, error type).
+        # Reads of the book run on the loop and on worker threads alike, so the count has its own lock.
         self._unreadable_ledgers: dict[tuple[str, str], int] = {}
+        self._unreadable_ledgers_lock = threading.Lock()
 
     def ledger_unreadable(
         self, account_id: str, error: BaseException, *, action: str, message: str, **context: object
@@ -290,7 +293,8 @@ class ShadowOrderBook:
         ledger reads well again.
         """
         key = (account_id, type(error).__name__)
-        failed_reads = self._unreadable_ledgers[key] = self._unreadable_ledgers.get(key, 0) + 1
+        with self._unreadable_ledgers_lock:
+            failed_reads = self._unreadable_ledgers[key] = self._unreadable_ledgers.get(key, 0) + 1
         logger.warning(
             message,
             extra={"action": action, "account_id": account_id, "error": str(error), "failed_reads": failed_reads, **context},
@@ -299,14 +303,20 @@ class ShadowOrderBook:
 
     def ledger_readable(self, account_id: str) -> None:
         """An instance's evidence ledger read well: one line for what it had failed, then it is traced afresh."""
-        for key in [key for key in self._unreadable_ledgers if key[0] == account_id]:
+        with self._unreadable_ledgers_lock:
+            recovered = [
+                (key[1], self._unreadable_ledgers.pop(key))
+                for key in list(self._unreadable_ledgers)
+                if key[0] == account_id
+            ]
+        for error_type, failed_reads in recovered:
             logger.info(
                 "shadow evidence ledger is readable again",
                 extra={
                     "action": "shadow_evidence_ledger_readable",
                     "account_id": account_id,
-                    "error_type": key[1],
-                    "failed_reads": self._unreadable_ledgers.pop(key),
+                    "error_type": error_type,
+                    "failed_reads": failed_reads,
                 },
             )
 
@@ -720,12 +730,22 @@ class _ShadowSettlementBars:
             try:
                 with self._book._evidence.open(account_id) as ledger:
                     bar = ledger.latest_for_symbol(symbol, market_only=market_only, at_or_before_ms=at_or_before_ms)
-            except _EVIDENCE_LEDGER_UNREADABLE as error:
+            except (FileNotFoundError, SourceBarLedgerMissingError) as error:
+                # An instance that retained nothing leaves the others' view of the symbol whole.
                 self._book.ledger_unreadable(
-                    account_id, error, action="shadow_settlement_ledger_unreadable", symbol=symbol,
-                    message="shadow settlement cannot read a retained market ledger",
+                    account_id, error, action="shadow_settlement_ledger_missing", symbol=symbol,
+                    message="shadow settlement has no retained market ledger",
                 )
                 continue
+            except _EVIDENCE_LEDGER_UNREADABLE as error:
+                # A ledger that exists and cannot be read may hold the very bar that ends at the close, so
+                # a price taken from the others would be a partial view. No price for this symbol alone:
+                # nothing of it settles, every other root still does.
+                self._book.ledger_unreadable(
+                    account_id, error, action="shadow_settlement_ledger_unreadable", symbol=symbol,
+                    message="shadow settlement cannot read a retained market ledger; no price is taken for the symbol",
+                )
+                return None
             self._book.ledger_readable(account_id)
             if bar is not None:
                 bars.append(bar)
