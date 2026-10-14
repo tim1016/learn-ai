@@ -107,7 +107,7 @@ def _envelope_invalid(error: CommandEnvelopeInvalid) -> Response:
 @router.get(
     "/broker-clerks",
     dependencies=[Depends(require_data_plane_control_secret_always)],
-    summary="Broker-neutral clerk fleet directory (§10.1)",
+    summary="Broker-neutral clerk fleet directory",
 )
 async def list_broker_clerks(request: Request) -> Response:
     """Every lane across production providers, from the registry projection."""
@@ -117,7 +117,7 @@ async def list_broker_clerks(request: Request) -> Response:
 @router.get(
     "/brokers/{broker}/clerks",
     dependencies=[Depends(require_data_plane_control_secret_always)],
-    summary="One broker's clerk lanes (§10.2)",
+    summary="One broker's clerk lanes",
 )
 async def list_broker_clerks_for_broker(broker: str, request: Request) -> Response:
     """The same projection filtered to one provider."""
@@ -219,10 +219,8 @@ async def aggregate_broker_clerks_attention(request: Request) -> Response:
             )
         return dict(json.loads(delivered.body))
 
-    # Only lanes whose provider serves attention today. Another provider
-    # joins this poll by declaring an ``attention_read`` operation — not by
-    # this route learning its name; a fake/test provider's lanes are simply
-    # not read, not failed.
+    # This aggregate reads Alpaca lanes only; other providers need an
+    # explicit reader here before their lanes join the poll.
     lane_reads = [
         (
             "alpaca",

@@ -61924,7 +61924,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Broker-neutral clerk fleet directory (\u00a710.1)",
+        "summary": "Broker-neutral clerk fleet directory",
         "tags": [
           "broker-clerks"
         ]
@@ -68068,7 +68068,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "One broker's clerk lanes (\u00a710.2)",
+        "summary": "One broker's clerk lanes",
         "tags": [
           "broker-clerks"
         ]
