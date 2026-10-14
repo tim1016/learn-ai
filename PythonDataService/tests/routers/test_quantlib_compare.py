@@ -158,10 +158,12 @@ async def test_python_bs_agrees_with_quantlib_bs_at_a_dividend_yield(client: Asy
 
 # ── The binomial and finite-difference engines report vega and rho ─────────────────────────────────────────
 
-# Worst |engine - closed form| over the 360-case parity grid (spot 80/100/120, 7-365 days, vol 10-40%, rate 0-5%,
-# dividend 0-2%, call and put) on the 201-step tree / 201x200 grid /compare prices at, doubled. The trees' own
-# discretisation error is what is left: Jarrow-Rudd's is the largest, Leisen-Reimer's the smallest. A bump of the
-# engine's own price is that engine's sensitivity, so the error is the engine's, not the bump's.
+# Each bound is the worst |engine - closed form| measured over the 360-case parity grid (spot 80/100/120, 7-365 days,
+# vol 10-40%, rate 0-5%, dividend 0-2%, call and put) on the 201-step tree / 201x200 grid /compare prices at, rounded
+# up with 2x-12x headroom (measured worst: CRR vega 7.95e-3 rho 8.1e-4; JR vega 1.29e-2 rho 2.55e-2; LR vega 6.1e-4
+# rho 8.3e-7; FD vega 6.8e-4 rho 2.0e-4). The trees' own discretisation error is what is left: Jarrow-Rudd's is the
+# largest, Leisen-Reimer's the smallest. A bump of the engine's own price is that engine's sensitivity, so the error
+# is the engine's, not the bump's. Any plausible bump bug (scale, sign, a missing factor) misses by 0.1 or more.
 LATTICE_GREEK_ATOL = {
     "quantlib_crr": {"vega": 2e-2, "rho": 2e-3},
     "quantlib_jr": {"vega": 3e-2, "rho": 5e-2},

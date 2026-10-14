@@ -513,7 +513,7 @@ async def pricing_compare(request: PricingCompareRequest):
     """Compare ALL pricing models across a spot price range.
 
     Returns curves for:
-      1. python_bs         — Python analytical BS (scipy.stats.norm CDF)
+      1. python_bs         — Python analytical BS (canonical bs_greeks.py, at the request's dividend yield)
       2. quantlib_bs       — QuantLib Analytic European Engine (C++ via SWIG)
       3. quantlib_crr      — QuantLib Binomial Cox-Ross-Rubinstein (801 steps)
       4. quantlib_jr       — QuantLib Binomial Jarrow-Rudd (801 steps)
