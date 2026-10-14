@@ -94,6 +94,8 @@ async def test_the_export_is_a_csv_download_named_for_the_run_with_a_row_for_eve
         "exit_kind": "sale",
         "entry_fee_usd": D("0.65"),
         "exit_fee_usd": D("0.65"),
+        # The scene's setup only buys, so every trade's entry fill is a purchase (#3109).
+        "side": "buy",
     }
     assert [_worked(row) for row in _table(response)] == [
         {

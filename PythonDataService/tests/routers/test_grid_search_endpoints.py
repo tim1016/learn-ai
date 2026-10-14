@@ -310,12 +310,12 @@ async def test_a_dead_redelivery_is_refused_never_replayed_under_its_old_id(clie
     monkeypatch.setattr(grid_search_router, "run_in_thread", lambda job_id, work, **kwargs: None)
     monkeypatch.setattr(lifecycle, "job_is_live", lambda job_id: True)
 
+    # One `async with`: a closed httpx client cannot be reopened.
     async with client as c:
         first = await c.post("/api/jobs-internal/grid-search", json={**_body(), "jobId": job})
         assert first.status_code == 202, first.text
 
-    monkeypatch.setattr(lifecycle, "job_is_live", lambda job_id: False)
-    async with client as c:
+        monkeypatch.setattr(lifecycle, "job_is_live", lambda job_id: False)
         replay = await c.post("/api/jobs-internal/grid-search", json={**_body(), "jobId": job})
 
     assert replay.status_code == 409
@@ -337,29 +337,41 @@ async def test_a_runtime_dispatch_runs_cells_through_the_gated_worker(client, la
     built: dict[str, object] = {}
     fake_redis = _FakeRedis()
 
+    async def no_stamp(*, job_id, kind, record_id):
+        # The stamp needs a real authority connection; test_ownership owns it.
+        return None
+
     monkeypatch.setattr(progress_module, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(lifecycle, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(ownership, "process_authority", lambda: SimpleNamespace(boot_generation=1, connected=True))
+    monkeypatch.setattr(grid_search_router.records, "stamp_research_dispatch", no_stamp)
     monkeypatch.setenv("RESEARCH_RUNTIME", "1")
 
-    def fake_runtime_cell_dispatch(row, spec, *, attempt, job_id, on_checkpoint, cancel_check, on_log=None, pool=None):
+    def fake_runtime_cell_dispatch(row, spec, *, attempt, job_id, on_checkpoint, cancel_check, on_log=None, on_waiting=None, pool=None):
         built["attempt"] = attempt
         built["cancel_check"] = cancel_check
 
-        def run(cells):
-            # One child-shaped checkpoint rides the relay the gate trusts,
-            # then each cell completes.
-            on_checkpoint({"phase": "search", "cursor_kind": "durable_completions", "cursor": 1})
-            for candidate in cells:
-                yield candidate, CellResult(
-                    params_hash=candidate.params_hash,
-                    params=dict(candidate.params),
-                    status="completed",
-                    total_trades=2,
-                    sharpe_ratio=float(candidate.params["short_window"]),
-                )
+        class _Dispatch:
+            def __call__(self, cells):
+                # One child-shaped checkpoint rides the relay the gate trusts,
+                # then each cell completes.
+                on_checkpoint({"phase": "search", "cursor_kind": "durable_completions", "cursor": 1})
+                for candidate in cells:
+                    yield candidate, CellResult(
+                        params_hash=candidate.params_hash,
+                        params=dict(candidate.params),
+                        status="completed",
+                        total_trades=2,
+                        sharpe_ratio=float(candidate.params["short_window"]),
+                    )
 
-        return run
+            def cancel(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        return _Dispatch()
 
     monkeypatch.setattr(dispatch_module, "runtime_cell_dispatch", fake_runtime_cell_dispatch)
 
@@ -411,8 +423,9 @@ async def test_a_live_resume_redelivery_joins_the_first_worker_before_any_refusa
         first = await c.post("/api/jobs-internal/grid-search", json={**_body(), "jobId": job})
         search_id = first.json()["search_id"]
 
+        # A Finish carries the stored spec beside the id, as the Frontend sends it.
         redelivered = await c.post(
-            "/api/jobs-internal/grid-search", json={"jobId": job, "resumeSearchId": search_id}
+            "/api/jobs-internal/grid-search", json={**_body(), "jobId": job, "resumeSearchId": search_id}
         )
 
     assert redelivered.status_code == 202, redelivered.text
