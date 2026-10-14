@@ -1,4 +1,4 @@
-"""Failure-injection coverage for the shared durable append primitive (B-15)."""
+"""Failure-injection coverage for the shared durable append primitive."""
 
 from __future__ import annotations
 

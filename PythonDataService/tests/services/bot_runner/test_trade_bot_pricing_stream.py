@@ -493,7 +493,7 @@ def _signal_round_trip() -> list[_Step]:
 
 
 async def test_a_stopped_bot_observes_the_decision_bar_and_sends_nothing_to_the_clerk(run: Any) -> None:
-    """C-1: Stop's fence closed while the decision bar was on its way; the candidate is blocked, never sent."""
+    """Stop's fence closed while the decision bar was on its way; the candidate is blocked, never sent."""
     gate = asyncio.Event()
     gate.set()
     ran = await run(
@@ -509,7 +509,7 @@ async def test_a_stopped_bot_observes_the_decision_bar_and_sends_nothing_to_the_
 async def test_an_exit_reaches_the_clerk_with_the_market_liveness_unknown(
     run: Any, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """C-2: the liveness gate is for ENTER only (#1671 AC3); an EXIT never waits on liveness evidence."""
+    """The liveness gate is for ENTER only (#1671 AC3); an EXIT never waits on liveness evidence."""
     reads: list[str] = []
 
     def _liveness(symbol: str, observed_at_ms: int) -> Any:
@@ -645,7 +645,7 @@ async def _a_dry_run_on_its_synthetic_clerk(tmp_path: Path) -> AsyncIterator[tup
 async def test_a_stopped_dry_run_observes_the_decision_bar_and_sends_nothing_to_its_clerk(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """C-1: the Dry Run runner's own Stop fence branch; no simulated fill, no journal row."""
+    """The Dry Run runner's own Stop fence branch; no simulated fill, no journal row."""
     gate = asyncio.Event()
     gate.set()
     async with _a_dry_run_on_its_synthetic_clerk(tmp_path) as (binding, clerk, journal, bars):
@@ -679,7 +679,7 @@ async def test_a_stopped_dry_run_observes_the_decision_bar_and_sends_nothing_to_
 async def test_a_dry_run_discards_an_entry_its_clerk_rejected_and_journals_no_fill(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """C-3: a REJECTED receipt is final; the staged candidate is discarded, never committed as a fill."""
+    """A REJECTED receipt is final; the staged candidate is discarded, never committed as a fill."""
     from app.broker.alpaca.clerk.models import EffectOperationState
 
     async with _a_dry_run_on_its_synthetic_clerk(tmp_path) as (binding, clerk, journal, bars):
