@@ -35,9 +35,9 @@ from app.jobs.progress import JobCancelled
 from app.jobs.runner import run_in_thread as run_the_job
 from app.lean_sidecar.trading_calendar import expected_sessions, session_window_for_date
 from app.main import app
-from app.options_backtest import service
+from app.options_backtest import run_json, service
 from app.options_backtest.fetching import ensure_run_data
-from app.options_backtest.run import RunResult, run_sessions
+from app.options_backtest.run import RunResult, SlippageTolerance, run_sessions
 from app.options_backtest.saved_runs import (
     DuplicateJob,
     FailureItem,
@@ -49,6 +49,7 @@ from app.options_backtest.saved_runs import (
 )
 from app.options_backtest.saved_setups import EXAMPLE_SETUPS, SavedSetup, save_setup
 from app.options_backtest.setup import OptionsBacktestSetup
+from app.options_backtest.statistics import summarize_run
 from app.research.persistence import lifecycle
 from app.routers import options_backtest_runs as runs_router
 from app.utils.background_loop import CallerStoppedWaitingError
@@ -1157,6 +1158,42 @@ async def test_a_run_that_is_not_stored_as_running_and_a_run_that_is_not_there_a
 
     assert (got.status_code, removed.status_code) == (opened, deleted)
     assert asked == []
+
+
+def _a_complete_row(summary: dict[str, Any]) -> dict[str, Any]:
+    """A complete run's row as ``get_run`` reads it, its stored summary being ``summary`` and its ladder empty."""
+    tolerance = SlippageTolerance(highest_profitable_percent=None, first_unprofitable_percent=None, nothing_traded=True)
+    return {
+        **_a_stored_row("complete"),
+        "sessions_tested": 0,
+        "sessions_traded": 0,
+        "trades": 0,
+        "trades_won": 0,
+        "net_profit_usd": D("0"),
+        "ending_cash_usd": D("10000"),
+        "summary_json": json.dumps(summary),
+        "slippage_json": json.dumps(run_json.slippage_to_json(())),
+        "tolerance_json": json.dumps(run_json.tolerance_to_json(tolerance)),
+    }
+
+
+async def test_a_complete_run_whose_stored_summary_lacks_a_key_is_a_coded_500_and_not_a_bare_one(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    written = run_json.summary_to_json(summarize_run([], starting_cash_usd=D("10000")))
+    without_it = {key: value for key, value in written.items() if key != "sessions_traded"}
+    async with client as c:
+        _a_run_whose_job_answers(monkeypatch, _a_complete_row(written), None)
+        whole = await c.get(f"{PREFIX}/runs/1")
+        _a_run_whose_job_answers(monkeypatch, _a_complete_row(without_it), None)
+        response = await c.get(f"{PREFIX}/runs/1")
+
+    # The same run with every key opens, so the 500 is about the missing key.
+    assert whole.status_code == 200, whole.text
+    assert response.status_code == 500, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "OPTIONS_BACKTEST_STORED_RUN_FIGURES_UNREADABLE"
+    assert "run 1" in detail["message"] and "'sessions_traded'" in detail["message"]
 
 
 # ── The history, one run, delete: on a real database ─────────────────────
