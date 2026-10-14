@@ -854,6 +854,8 @@ async def test_a_leg_execution_that_names_no_leg_order_is_counted_and_credits_no
     assert consumer.counters.parse_errors == 0
     # The parent was applied; an orphan leg must not hold every reduction on the account.
     assert consumer.evidence_health.healthy is True
+    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
+    assert [e for e in entries if getattr(getattr(e, "event", None), "execution_id", None) is not None] == []
 
 
 async def test_unmappable_frame_degrades_gate_health_until_valid_frame(
