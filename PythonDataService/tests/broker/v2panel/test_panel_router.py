@@ -7,6 +7,7 @@ import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -43,6 +44,9 @@ from app.broker.contract.registry import (
     get_broker_registry,
     reset_broker_registry_for_testing,
 )
+from app.broker.fleet.agent_identity import _FrameInjector
+from app.broker.fleet.internal_http import DEFAULT_MAX_EVENT_BYTES, SseEvent, iter_sse_events
+from app.broker.ibkr.bar_models import IbkrMinuteBar
 from app.routers import alpaca_clerk_sqlite, broker_v2_gallery, broker_v2_panel
 from app.routers.broker_v2_panel import router
 from app.schemas.alpaca_clerk_sqlite import RecoveryActionCheckRequest, RecoveryActionExecuteRequest
@@ -50,8 +54,11 @@ from app.schemas.bot_end import BotEnd, BotEndView, RecordedEnd
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
     BotPanelLiveSnapshot,
+    BotPanelView,
     ChartLiveResponse,
     LiveSnapshotUnavailableDetail,
+    RunFillView,
+    SimulatedFillView,
 )
 from app.schemas.decision_explanation import DecisionBarRecord, DecisionExplanationRecord, ExplainedCheckRecord
 from app.schemas.live_runs import BotDutyOutcomeView
@@ -68,8 +75,14 @@ from app.services.broker_v2_panel import (
 from app.services.broker_v2_panel.action_execution_service import (
     reset_idempotency_store_for_testing,
 )
-from app.services.broker_v2_panel.chart_projection_service import chart_feed_view
-from app.services.live_chart_window import CHART_FEED_NOT_EXPECTED
+from app.services.broker_v2_panel.bot_page_projection import RUN_FILL_LIMIT
+from app.services.broker_v2_panel.chart_projection_service import (
+    build_live_chart,
+    chart_feed_view,
+    live_window,
+    position_pane,
+)
+from app.services.live_chart_window import CHART_FEED_NOT_EXPECTED, ChartWindowResult
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     FIXTURE_RTH_MS,
@@ -1062,6 +1075,178 @@ async def test_live_stream_announces_a_stall_whose_deadline_passed_mid_yield(
     finally:
         await stream.aclose()
         await hub.stop()
+
+
+# ── #3217: no live frame leaves the lane over the coordinator's per-event cap ──
+
+_FIVE_SECOND_SESSION_DAY_MS = 1_790_170_200_000 + 1  # Wednesday 2026-09-23, a regular NYSE session
+
+
+def _five_second_session(symbol: str) -> tuple[ChartWindowResult, tuple[int, int]]:
+    """Every 5 s bar of one regular session, priced like a four-digit stock
+    quoted to the cent: the widest price strings a ``ChartBar`` realistically carries."""
+    open_ms, close_ms = live_window(_FIVE_SECOND_SESSION_DAY_MS)
+    bars = [
+        IbkrMinuteBar(
+            symbol=symbol,
+            start_ms=start_ms,
+            end_ms=start_ms + 5_000,
+            open=Decimal("1234.56"),
+            high=Decimal("1234.91"),
+            low=Decimal("1233.87"),
+            close=Decimal("1234.65"),
+            volume=12_345,
+            fetched_at_ms=start_ms + 5_000,
+        )
+        for start_ms in range(open_ms, close_ms, 5_000)
+    ]
+    result = ChartWindowResult(bars=bars, timeframe="5s", resolution="5s", feed=CHART_FEED_NOT_EXPECTED)
+    return result, (open_ms, close_ms)
+
+
+def _full_session_snapshot(panel: dict, *, panel_notice_bytes: int = 0) -> BotPanelLiveSnapshot:
+    """A bot that listens to one asset and trades another (so its chart carries
+    a position pane), over a whole session of 5 s bars, with the busiest panel
+    its bounded lists allow: ``RUN_FILL_LIMIT`` fills, each simulated-priced.
+    ``panel_notice_bytes`` pads the panel's own notice, to model a panel that
+    has grown."""
+    listened, window = _five_second_session("SPY")
+    traded, _ = _five_second_session("QQQ")
+    chart = build_live_chart(listened, [], strategy_instance_id=SID, symbol="SPY", window=window, now_ms=window[1])
+    traded_chart = build_live_chart(traded, [], strategy_instance_id=SID, symbol="QQQ", window=window, now_ms=window[1])
+    chart = chart.model_copy(update={"position": position_pane(chart, traded_chart)})
+    fills = [
+        RunFillView(
+            filled_at_ms=window[0] + index * 60_000,
+            side="buy" if index % 2 == 0 else "sell",
+            quantity=10.0,
+            price=512.34,
+            symbol="SPY",
+            order_ref=f"learn-ai/{SID}/v1:intent-{index:04d}",
+            event_key=f"evt-{index:08d}-abcdef012345",
+            simulated=SimulatedFillView(
+                kind="bar_close",
+                label="Priced at the minute's close",
+                sentence="A Dry Run fill, priced at the closing price of the order's own minute.",
+                price_age_ms=None,
+                caution=False,
+            ),
+        )
+        for index in range(RUN_FILL_LIMIT)
+    ]
+    view = BotPanelView.model_validate(panel).model_copy(
+        update={"run_fills": fills, "experimental_notice": "x" * panel_notice_bytes or None}
+    )
+    return BotPanelLiveSnapshot(
+        stream_epoch=f"{'a' * 32}:{'b' * 32}", surface_version=42, panel=view, live_chart=chart
+    )
+
+
+class _ReplayHub:
+    """The producer side of one live stream: its one snapshot, then the end."""
+
+    strategy_instance_id = SID
+    is_available = True
+
+    def __init__(self, snapshot: BotPanelLiveSnapshot) -> None:
+        self._snapshot = snapshot
+        self.stream_epoch = snapshot.stream_epoch
+        self.surface_version = snapshot.surface_version
+
+    def stall(self) -> None:
+        return None
+
+    def seconds_until_stall(self) -> None:
+        return None
+
+    def subscribe(self) -> asyncio.Queue[BotPanelLiveSnapshot | None]:
+        queue: asyncio.Queue[BotPanelLiveSnapshot | None] = asyncio.Queue(maxsize=2)
+        queue.put_nowait(self._snapshot)
+        queue.put_nowait(None)
+        return queue
+
+    def unsubscribe(self, _queue: asyncio.Queue[BotPanelLiveSnapshot | None]) -> None:
+        return None
+
+
+async def _live_stream_through_the_coordinator(
+    monkeypatch: pytest.MonkeyPatch, snapshot: BotPanelLiveSnapshot
+) -> list[SseEvent]:
+    """The router's real live stream for ``snapshot``, relayed as production
+    relays it: through the lane's provenance injector, then the coordinator's
+    own SSE parser at its production cap. A frame the parser refuses raises."""
+
+    async def get_hub(*_args: object, **_kwargs: object) -> _ReplayHub:
+        return _ReplayHub(snapshot)
+
+    monkeypatch.setattr(broker_v2_panel, "get_or_start_live_projection_hub", get_hub)
+    monkeypatch.setattr(broker_v2_panel, "retain_live_projection_hub", lambda *_a, **_k: None)
+    monkeypatch.setattr(broker_v2_panel, "release_live_projection_hub", lambda *_a, **_k: None)
+    response = await broker_v2_panel.stream_live_snapshot_scoped("alpaca", ACCT, SID, "5s", None)
+    injector = _FrameInjector(
+        lambda: {
+            "broker": "alpaca",
+            "clerk_id": "clrk_0123456789abcdef",
+            "routing_epoch": 1_234,
+            "binding_generation": 56,
+        }
+    )
+
+    async def chunks() -> AsyncIterator[bytes]:
+        async for frame in response.body_iterator:
+            for injected in injector.push(frame.encode()):
+                yield injected
+
+    return [event async for event in iter_sse_events(chunks())]
+
+
+async def _panel_json(app: FastAPI) -> dict:
+    async with _client(app) as client:
+        return (await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")).json()
+
+
+async def test_a_full_sessions_five_second_frame_reaches_the_coordinator_whole(
+    api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The widest frame the bounded panel and a whole session of 5 s bars
+    produce (with a position pane) fits the coordinator's parser as it is, so
+    nothing is trimmed from the chart the operator reads."""
+    app, _repo = api
+    snapshot = _full_session_snapshot(await _panel_json(app))
+
+    events = await asyncio.wait_for(
+        _live_stream_through_the_coordinator(monkeypatch, snapshot), timeout=30.0
+    )
+
+    assert [event.event for event in events] == ["snapshot", "end"]
+    document = json.loads(events[0].data)
+    assert len(document["live_chart"]["bars"]) == len(snapshot.live_chart.bars) > 4_000
+    assert len(document["live_chart"]["position"]["points"]) == len(snapshot.live_chart.bars)
+
+
+async def test_a_live_frame_over_the_coordinators_cap_ends_the_stream_by_name(
+    api, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A frame over the coordinator's per-event cap used to go out whole, and
+    the coordinator's parser killed the stream after the 200 with no reason
+    (the fault #2328 closed for the gallery). The frame is now sized before it
+    is sent: the stream ends with a named ``error`` event the client already
+    understands, and the lane logs why."""
+    app, _repo = api
+    # A panel that has grown a quarter megabyte past a full session's frame.
+    snapshot = _full_session_snapshot(await _panel_json(app), panel_notice_bytes=250_000)
+    assert len(snapshot.model_dump_json().encode()) > DEFAULT_MAX_EVENT_BYTES
+
+    with caplog.at_level(logging.ERROR, logger=broker_v2_panel.__name__):
+        events = await asyncio.wait_for(
+            _live_stream_through_the_coordinator(monkeypatch, snapshot), timeout=30.0
+        )
+
+    assert [event.event for event in events] == ["error"]
+    assert isinstance(json.loads(events[0].data)["error"], str)
+    assert any(
+        getattr(record, "action", None) == "live_stream_frame_over_cap" for record in caplog.records
+    )
 
 
 async def test_presented_action_executes_and_repost_replays_as_noop(api) -> None:
