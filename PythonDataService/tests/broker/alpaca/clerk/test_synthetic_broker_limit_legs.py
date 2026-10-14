@@ -111,3 +111,30 @@ async def test_list_orders_speaks_the_vendors_query_category(tmp_path: Path) -> 
     ]
     with pytest.raises(ValueError, match="unknown order query category"):
         await broker.list_orders(status="filled")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("limit_price", "status"),
+    [(99.50, "canceled"), (100.10, "filled")],
+    ids=["canceled-unfilled-limit", "filled-limit"],
+)
+async def test_cancel_leaves_a_terminal_order_exactly_as_it_was(
+    tmp_path: Path, limit_price: float, status: str
+) -> None:
+    """A terminal order is never re-stamped, as the shadow book's own ``cancel`` leaves it (F33)."""
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
+    retained = ledger.append(_bar(), run_id="run-a")
+    now_ms = [retained.end_ms]
+    broker = SyntheticBroker(account_id="sim:ema-1", source_bars=ledger, clock=lambda: now_ms[0])
+    broker.bind_evaluated_bar("bot:ema:enter", retained)
+    submitted = await broker.submit(
+        BrokerOrderLeg(symbol="SPY", side="buy", quantity=1, order_type="limit", limit_price=limit_price),
+        client_order_id="bot:ema:enter",
+    )
+    assert submitted.status == status
+
+    now_ms[0] = retained.end_ms + 540_000
+    await broker.cancel(submitted.order_id)
+
+    assert await broker.get_order_by_broker_order_id(submitted.order_id) == submitted
