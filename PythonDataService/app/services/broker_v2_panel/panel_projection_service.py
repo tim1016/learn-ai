@@ -1,16 +1,11 @@
 """Panel projection — the full 5s-poll bot control panel view.
 
-``build_panel`` composes the bot-health card, the account/clerk card, the six-
-station transaction rail, the journal-tail reference, and the panel-state
-``revision``. It is a pure function over its inputs so the router seam test
-drives it with journal fixtures — no live clerk/registry required. Its
+``build_panel`` composes the bot-health card, the account/clerk card and the
+panel's market, feed and decision facts. It is a pure function over its inputs
+so the router seam test drives it with fixtures — no live clerk/registry
+required. The transaction rail, ``revision``, working orders, fills and
 presented actions are ``sqlite_panel_adapter.adapt_sqlite_panel``'s, which
 every served panel passes through (#2635).
-
-The ``revision`` is a deterministic function of the durable panel state
-(journal length + lifecycle transition + desired state + hold state). A POST
-against a stale revision is a 409; the same revision surviving a no-op re-poll
-lets the idempotency key make double-clicks safe.
 """
 
 from __future__ import annotations
@@ -20,8 +15,7 @@ from decimal import Decimal
 from typing import Final, Literal
 
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
-from app.broker.alpaca.clerk.fills import project_instance_fills
-from app.broker.alpaca.clerk.models import ClerkEntryKind, ClerkStatus, OrderJournalEntry
+from app.broker.alpaca.clerk.models import ClerkStatus
 from app.broker.alpaca.clerk.money import display_cents, dollars
 from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionReceipt
 from app.broker.v2panel.vocabulary import (
@@ -49,7 +43,6 @@ from app.schemas.broker_v2_panel import (
     TradedFeedLaneEvent,
     TradedFeedLaneView,
     TransactionRail,
-    WorkingOrderView,
 )
 from app.schemas.decision_explanation import DecisionExplanationRecord
 from app.schemas.run_admission import (
@@ -76,11 +69,6 @@ from app.services.broker_v2_panel.panel_authority_guard import (
     default_authority_account_id,
     reject_mixed_authority,
 )
-from app.services.broker_v2_panel.station_derivation import (
-    STALE_THRESHOLD_MS,
-    derive_stations,
-    transaction_refs_for_bot,
-)
 from app.services.pricing_bar_stream import (
     PRICING_BAR_CONFLICT,
     PRICING_BAR_LATE,
@@ -93,43 +81,10 @@ from app.services.source_bar_ledger import (
     RetainedWarmupJoin,
 )
 
-
-def compute_revision(
-    *,
-    journal_len: int,
-    last_transition_at_ms: int | None,
-    desired_state: str,
-    hold_active: bool,
-    last_decision_at_ms: int | None,
-) -> int:
-    """Deterministic panel-state revision.
-
-    Any durable change (a new journal line, a lifecycle transition, a desired-
-    state flip, a hold set/cleared, a new decision receipt) advances it. A
-    stable panel state re-polls to the same revision, so an idempotent re-post
-    of the same action against the same revision is a safe no-op.
-    """
-    parts = (
-        journal_len,
-        last_transition_at_ms or 0,
-        1 if desired_state == "RUNNING" else 0,
-        1 if hold_active else 0,
-        last_decision_at_ms or 0,
-    )
-    # A stable, non-cryptographic mix; the value only needs to change when any
-    # durable input changes and to be reproducible for the same inputs.
-    revision = 0
-    for part in parts:
-        revision = (revision * 1_000_003 + int(part)) & 0x7FFF_FFFF_FFFF_FFFF
-    return revision
-
-
-def _latest_reconciliation_entry(entries: list[OrderJournalEntry]) -> OrderJournalEntry | None:
-    latest: OrderJournalEntry | None = None
-    for entry in entries:
-        if entry.kind is ClerkEntryKind.RECONCILIATION and entry.verdict is not None:
-            latest = entry
-    return latest
+# A decision older than this is rendered ``decision_stale``. One trading day
+# in ms — a decision older than the current session cannot be trusted to
+# describe the live pipeline.
+STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000
 
 
 def _duty_outcome_view(status: BotStatusView) -> DutyOutcomeView | None:
@@ -222,48 +177,10 @@ def build_clerk_card(clerk_status: ClerkStatus, now_ms: int) -> ClerkCard:
     )
 
 
-_TERMINAL_ORDER_EVENTS = frozenset({"fill", "canceled", "rejected", "expired"})
-
 # Words one recorded decision explanation for the owner: the bot's strategy
 # view bound to its deployed settings (``app.services.strategy_view``).
 # ``None`` for a row the renderer cannot word ("values not shown").
 ExplanationRenderer = Callable[[DecisionExplanationRecord], DecisionExplanationView | None]
-
-
-def _working_orders(sid: str, entries: list[OrderJournalEntry]) -> list[WorkingOrderView]:
-    """Return Clerk-owned submitted orders without a terminal lifecycle event."""
-    owned_refs = set(transaction_refs_for_bot(sid, entries))
-    terminal_refs = {
-        entry.order_ref
-        for entry in entries
-        if entry.order_ref in owned_refs
-        and entry.kind is ClerkEntryKind.ORDER_EVENT
-        and entry.event is not None
-        and entry.event.event_type in _TERMINAL_ORDER_EVENTS
-    }
-    latest_by_ref: dict[str, OrderJournalEntry] = {}
-    for entry in entries:
-        if (
-            entry.order_ref in owned_refs
-            and entry.order_ref not in terminal_refs
-            and entry.order is not None
-            and entry.kind in {ClerkEntryKind.SUBMIT_ACKED, ClerkEntryKind.ORDER_EVENT}
-        ):
-            latest_by_ref[entry.order_ref] = entry
-    return [
-        WorkingOrderView(
-            order_ref=entry.order_ref,
-            broker_order_id=entry.order.order_id,
-            symbol=entry.order.symbol,
-            side=entry.order.side,
-            quantity=entry.order.quantity,
-            filled_quantity=entry.order.filled_quantity,
-            status=entry.order.status,
-            observed_at_ms=entry.order.observed_at_ms,
-        )
-        for entry in latest_by_ref.values()
-        if entry.order is not None
-    ]
 
 
 _TRADED_FEED_LANE_STATES: Final[dict[str, Literal["no_trade", "late", "unhealthy", "conflict"]]] = {
@@ -332,32 +249,6 @@ def _recent_decision_views(
             refusal_reason=receipt.refusal_reason,
         )
         for receipt in reversed(receipts[-limit:])
-    ]
-
-
-def _recent_fill_views(
-    sid: str,
-    entries: list[OrderJournalEntry],
-    *,
-    limit: int = 8,
-    simulated: bool = False,
-    authority_account_id: str | None = None,
-    authority_kind: AuthorityKind | None = None,
-) -> list[RecentFillView]:
-    fills = project_instance_fills(sid, entries)
-    return [
-        RecentFillView(
-            order_ref=fill.order_ref,
-            symbol=fill.symbol,
-            side=fill.side.value,
-            quantity=fill.quantity,
-            price=fill.fill_price,
-            filled_at_ms=fill.filled_at_ms,
-            simulated=simulated,
-            authority_account_id=authority_account_id,
-            authority_kind=authority_kind,
-        )
-        for fill in reversed(fills[-limit:])
     ]
 
 
@@ -483,7 +374,6 @@ def _execution_policy(mode: str) -> str:
 
 def _recent_activity_views(
     status: BotStatusView,
-    entries: list[OrderJournalEntry],
     decision_receipts: list[DecisionReceipt],
     dry_run_activity: list[DryRunActivity],
     *,
@@ -545,6 +435,7 @@ def _recent_activity_views(
         # kind decides, and the two worlds that synthesize are named once in
         # ``SIMULATED_AUTHORITY_KINDS``.
         simulated = authority_kind in SIMULATED_AUTHORITY_KINDS
+        # Fills of a Clerk authority are the SQLite adapter's economics.
         decision_views, fill_views = (
             _recent_decision_views(
                 decision_receipts,
@@ -553,13 +444,7 @@ def _recent_activity_views(
                 authority_kind=authority_kind,
                 render_explanation=render_explanation,
             ),
-            _recent_fill_views(
-                status.strategy_instance_id,
-                entries,
-                simulated=simulated,
-                authority_account_id=authority_account_id,
-                authority_kind=authority_kind,
-            ),
+            [],
         )
     reject_mixed_authority(
         authority_account_id=authority_account_id,
@@ -705,7 +590,6 @@ def open_pnl_fields(exact_open_pnl: Decimal | None) -> dict[str, object]:
 def build_panel(
     status: BotStatusView,
     clerk_status: ClerkStatus,
-    entries: list[OrderJournalEntry],
     *,
     account_id: str,
     exposure: dict[str, float],
@@ -736,8 +620,8 @@ def build_panel(
 ) -> BotPanelView:
     """Build the full panel view for one bot.
 
-    ``entries`` is the account order journal (read once). ``selected_transaction_ref``
-    defaults to the bot's most recent transaction.
+    ``selected_transaction_ref`` is the transaction the rail renders; the
+    adapter resolves it.
 
     ``authority_account_id`` names the exact Clerk account authority this
     evidence cut (``recent_decisions``/``recent_fills``) was actually read
@@ -770,22 +654,8 @@ def build_panel(
     must pass the honest ``state="UNPROVEN"`` fact instead — never omit the
     argument to get a fabricated "not applicable" reading.
     """
-    refs = transaction_refs_for_bot(status.strategy_instance_id, entries)
-    transaction_ref = selected_transaction_ref or (refs[-1] if refs else None)
-    latest_reconciliation = _latest_reconciliation_entry(entries)
-    # Ascending by seq (oldest first); `derive_stations` reads its own
-    # transaction-linked match out of this bounded window, and
-    # `_recent_activity_views` below reuses the identical fallback.
+    # Ascending by seq (oldest first).
     decision_receipts = recent_decisions or ([latest_decision] if latest_decision else [])
-
-    stations = derive_stations(
-        sid=status.strategy_instance_id,
-        transaction_ref=transaction_ref,
-        all_entries=entries,
-        decisions=decision_receipts,
-        latest_reconciliation=latest_reconciliation,
-        now_ms=now_ms,
-    )
 
     activity = dry_run_activity or []
     health_last_decision_at_ms = (
@@ -809,22 +679,12 @@ def build_panel(
         now_ms=now_ms,
     )
 
-    revision = compute_revision(
-        journal_len=len(entries),
-        last_transition_at_ms=status.last_transition_at_ms,
-        desired_state=status.desired_state,
-        hold_active=clerk_status.hold.active,
-        last_decision_at_ms=health.last_decision_at_ms,
-    )
-
-    working_orders = _working_orders(status.strategy_instance_id, entries)
     channel_health = evaluate_channel_health(clerk_status.channel_healths, now_ms)
     resolved_authority_account_id = authority_account_id or default_authority_account_id(
         status, account_id
     )
     decision_views, fill_views = _recent_activity_views(
         status,
-        entries,
         decision_receipts,
         activity,
         authority_account_id=resolved_authority_account_id,
@@ -856,7 +716,7 @@ def build_panel(
         sealed_program=sealed_program,
         program_build=program_build,
         updated_at_ms=now_ms,
-        revision=revision,
+        revision=0,
         market_pulse=market_pulse,
         traded_market_pulse=traded_market_pulse,
         traded_feed_lane=traded_feed_lane(status.traded, decision_views),
@@ -881,7 +741,9 @@ def build_panel(
         execution_policy=_execution_policy(status.mode),
         health=health,
         clerk=clerk,
-        rail=TransactionRail(transaction_ref=transaction_ref, stations=stations),
+        # The rail's stations, the revision and the working orders are the
+        # SQLite adapter's too (``adapt_sqlite_panel``).
+        rail=TransactionRail(transaction_ref=selected_transaction_ref, stations=[]),
         journal_tail_ref=journal_tail_ref,
         journal_tail_seq=journal_tail_seq,
         # Commands are the SQLite adapter's (``adapt_sqlite_panel``), which
@@ -895,7 +757,7 @@ def build_panel(
         status=bot_status,
         end=end,
         exposure=exposure,
-        working_orders=working_orders,
+        working_orders=[],
         recent_decisions=decision_views,
         recent_fills=fill_views,
         fills_today=fills_today,

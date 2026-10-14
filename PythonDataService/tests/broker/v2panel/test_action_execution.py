@@ -26,13 +26,13 @@ from app.broker.v2panel.vocabulary import RetiredActionId
 from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult, PanelQuiesceActionRequest
 from app.services.broker_v2_panel import panel_data_source
 from app.services.broker_v2_panel.action_execution_service import (
+    ActionExecutionError,
     ActionNotAvailableError,
     ActionOutcomeUnknownError,
     ActivationFailedError,
     DurableIdempotencyStore,
     IdempotencyStore,
     StaleRevisionError,
-    UnknownActionError,
     durable_idempotency_store_for,
     execute_action,
 )
@@ -192,13 +192,13 @@ async def test_performer_raised_action_execution_error_burns_key_not_released(
     Only ``StaleRevisionError``/``ActionNotAvailableError`` raised BEFORE the
     performer runs are pre-execution rejections. A performer that starts real
     work and then raises some other ``ActionExecutionError`` subclass (here
-    ``UnknownActionError``, standing in for any future performer-raised type)
+    the base class itself, standing in for any future performer-raised type)
     must be treated like any other performer failure: the key is failed (not
     released) and no ``panel_action_rejected`` pre-execution log fires.
     """
 
     async def _perform(_operator: str, _reason: str | None) -> str:
-        raise UnknownActionError("performer rejected mid-flight")
+        raise ActionExecutionError("performer rejected mid-flight")
 
     store = IdempotencyStore()
     with caplog.at_level(logging.INFO), pytest.raises(ActionOutcomeUnknownError):

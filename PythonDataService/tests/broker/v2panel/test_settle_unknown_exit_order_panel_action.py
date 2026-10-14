@@ -369,7 +369,7 @@ def _bot_page(repo: ClerkSqliteRepository, *, running: bool) -> tuple[BotPanelVi
     """The bot's panel as it is served from this ledger, and the toolbar its page draws from it."""
     projection = _projection(repo)
     served = adapt_sqlite_panel(
-        _panel(_status(running=running, mode="trade"), _clerk_status(), []), projection, account_mode="paper"
+        _panel(_status(running=running, mode="trade"), _clerk_status()), projection, account_mode="paper"
     )
     status = bot_own_status(
         served,

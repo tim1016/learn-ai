@@ -1,8 +1,7 @@
 """Tests for the panel projection (S1).
 
-Composes the health/clerk cards + six-station rail from journal fixtures and
-the presented actions through the SQLite adapter, and pins the revision
-determinism and the narrowed desired_state (never PAUSED).
+Composes the health/clerk cards and the presented actions through the SQLite
+adapter, and pins the narrowed desired_state (never PAUSED).
 """
 
 from __future__ import annotations
@@ -85,7 +84,6 @@ from app.services.broker_v2_panel.feed_continuity_projection import build_feed_c
 from app.services.broker_v2_panel.panel_authority_guard import MixedAuthorityAggregateError
 from app.services.broker_v2_panel.panel_projection_service import (
     build_panel,
-    compute_revision,
     open_pnl_fields,
     program_build_view_from_run_evidence,
     select_primary_action,
@@ -103,11 +101,8 @@ from tests.broker.v2panel.fixtures import (
     ACCT,
     SID,
     decision_receipt,
-    fill_entry,
     home_facts,
-    intent_entry,
-    reconciliation_entry,
-    submit_acked_entry,
+    order_ref,
 )
 
 _NOW = 1_700_000_000_000
@@ -371,9 +366,9 @@ def _default_program_build(strategy_key: str) -> ProgramBuildAdmissionFact:
 def _panel(
     status: BotStatusView,
     clerk: ClerkStatus,
-    entries: list,
     decision=None,
     *,
+    selected_transaction_ref: str | None = None,
     exposure: dict[str, float] | None = None,
     resume_allowed: bool | None = None,
     dry_run_activity: list[DryRunActivity] | None = None,
@@ -389,7 +384,7 @@ def _panel(
     return build_panel(
         status,
         clerk,
-        entries,
+        selected_transaction_ref=selected_transaction_ref,
         account_id=ACCT,
         authority_account_id=authority_account_id,
         account_mode=account_mode,
@@ -639,7 +634,7 @@ def test_sqlite_adapter_replaces_legacy_custody_with_fold_projection() -> None:
     base = _panel(
         _status(),
         _clerk_status(),
-        [fill_entry(sid=SID, intent="legacy", ts_ms=_NOW - 1_000)],
+        selected_transaction_ref=order_ref(SID, "legacy"),
     )
     command = ProjectedCommand(
         command_id="command:enter",
@@ -833,7 +828,7 @@ def test_transaction_rail_resolves_old_transaction_outside_bounded_window(
         assert windowed_projection is not None
         assert [op.effect_operation_id for op in windowed_projection.operations] == [newest_ref]
 
-        base = _panel(_status(), _clerk_status(), [])
+        base = _panel(_status(), _clerk_status())
         base = base.model_copy(
             update={"rail": base.rail.model_copy(update={"transaction_ref": old_ref})}
         )
@@ -862,8 +857,8 @@ def test_sqlite_adapter_carries_the_bots_sealed_exit_terms(tmp_path: Path) -> No
             reader.close()
         assert projection is not None
 
-        adapted = adapt_sqlite_panel(_panel(_status(), _clerk_status(), []), projection, repository=repo)
-        unsealed = adapt_sqlite_panel(_panel(_status(), _clerk_status(), []), projection)
+        adapted = adapt_sqlite_panel(_panel(_status(), _clerk_status()), projection, repository=repo)
+        unsealed = adapt_sqlite_panel(_panel(_status(), _clerk_status()), projection)
     finally:
         repo.close()
 
@@ -887,7 +882,7 @@ def test_transaction_rail_reports_explicit_absence_for_a_ref_that_does_not_exist
             reader.close()
         assert projection is not None
 
-        base = _panel(_status(), _clerk_status(), [])
+        base = _panel(_status(), _clerk_status())
         base = base.model_copy(
             update={
                 "rail": base.rail.model_copy(update={"transaction_ref": "effect:never-existed"})
@@ -931,7 +926,7 @@ def test_transaction_rail_never_leaks_a_real_ref_from_a_different_bot(
         assert projection is not None
         assert projection.operations == ()
 
-        base = _panel(_status(), _clerk_status(), [])
+        base = _panel(_status(), _clerk_status())
         base = base.model_copy(
             update={
                 "rail": base.rail.model_copy(
@@ -950,7 +945,7 @@ def test_transaction_rail_never_leaks_a_real_ref_from_a_different_bot(
 
 def test_sqlite_adapter_projects_execution_economics_and_durable_working_order_details() -> None:
     """The active SQLite panel renders its one authoritative economic cut."""
-    base = _panel(_status(), _clerk_status(), [])
+    base = _panel(_status(), _clerk_status())
     projected_order = ProjectedOrder(
         order_ref="order:googl",
         client_order_id="order:googl",
@@ -1092,7 +1087,7 @@ def test_adapt_sqlite_panel_authors_the_open_pnl_the_owner_reads(
         last_activity_at_ms=_NOW,
     )
 
-    adapted = adapt_sqlite_panel(_panel(_status(running=False), _clerk_status(), []), projection, economics=economics)
+    adapted = adapt_sqlite_panel(_panel(_status(running=False), _clerk_status()), projection, economics=economics)
 
     assert (adapted.open_pnl, adapted.open_pnl_usd, adapted.open_pnl_direction) == (
         float(exact_open_pnl), expected_usd, expected_direction,
@@ -1132,7 +1127,7 @@ def test_bot_page_open_pnl_is_exact_fifo_at_a_whole_cent_boundary(tmp_path: Path
             economic.close()
         assert projection is not None and economics is not None
 
-        adapted = adapt_sqlite_panel(_panel(_status(running=False), _clerk_status(), []), projection, economics=economics)
+        adapted = adapt_sqlite_panel(_panel(_status(running=False), _clerk_status()), projection, economics=economics)
     finally:
         repo.close()
 
@@ -1140,14 +1135,14 @@ def test_bot_page_open_pnl_is_exact_fifo_at_a_whole_cent_boundary(tmp_path: Path
 
 
 def test_open_pnl_without_a_price_has_no_words_either() -> None:
-    base = _panel(_status(running=True), _clerk_status(), [])
+    base = _panel(_status(running=True), _clerk_status())
 
     assert (base.open_pnl, base.open_pnl_usd, base.open_pnl_direction) == (None, None, None)
     assert adapt_sqlite_panel(base, _rail_projection(orders=())).open_pnl_usd is None
 
 
 def test_open_pnl_words_cannot_drift_from_the_figure() -> None:
-    payload = _panel(_status(running=True), _clerk_status(), []).model_dump()
+    payload = _panel(_status(running=True), _clerk_status()).model_dump()
     payload.update(open_pnl=4.5)
 
     with pytest.raises(ValidationError, match="open_pnl_usd"):
@@ -1170,7 +1165,7 @@ def test_adapt_sqlite_panel_omits_sub_epsilon_exposure() -> None:
     )
 
     adapted = adapt_sqlite_panel(
-        _panel(_status(running=False), _clerk_status(), [], exposure={"SPY": 1e-12}),
+        _panel(_status(running=False), _clerk_status(), exposure={"SPY": 1e-12}),
         projection,
     )
 
@@ -1397,7 +1392,6 @@ def test_trade_health_uses_decision_bar_reference_for_last_evaluated_bar() -> No
     panel = _panel(
         _status(mode="trade"),
         _clerk_status(),
-        [],
         decision,
         last_bar_at_ms=None,
     )
@@ -1418,7 +1412,6 @@ def test_trade_health_does_not_relabel_a_later_fill_as_a_evaluated_bar() -> None
     panel = _panel(
         _status(mode="trade"),
         _clerk_status(),
-        [],
         decision,
         last_bar_at_ms=_NOW - 1,
     )
@@ -1454,7 +1447,7 @@ def test_sqlite_adapter_keeps_unavailable_custody_subject_blockers_on_bot_scope(
         recovery_actions=(capability,),
     )
 
-    adapted = adapt_sqlite_panel(_panel(_status(), _clerk_status(), []), projection)
+    adapted = adapt_sqlite_panel(_panel(_status(), _clerk_status()), projection)
 
     action = _action(adapted, "reconcile_now")
     assert action.blockers[0].condition.scope == "bot"
@@ -1500,7 +1493,7 @@ def test_the_mission_verdict_carries_retry_eligibility(offset_ms: int) -> None:
         ),
     )
 
-    verdict = adapt_sqlite_panel(_panel(_status(), _clerk_status(), []), projection).mission_verdict
+    verdict = adapt_sqlite_panel(_panel(_status(), _clerk_status()), projection).mission_verdict
 
     assert verdict.state == "blocked"
     assert verdict.next_action == episode.next_step
@@ -1527,7 +1520,7 @@ def test_the_mission_verdict_says_an_exit_is_working_or_its_next_try_is_unknown(
         ),
     )
 
-    verdict = adapt_sqlite_panel(_panel(_status(), _clerk_status(), []), projection).mission_verdict
+    verdict = adapt_sqlite_panel(_panel(_status(), _clerk_status()), projection).mission_verdict
 
     assert verdict.recovery_status.kind == ("working" if exit_working else "unknown")
     assert verdict.recovery_status.allowed_from_ms is None
@@ -1537,7 +1530,7 @@ def test_reconciled_station_requires_resolved_success_outcome() -> None:
     """#1396 P1: a matching reconciliation row must not close the custody
     chain unless its outcome is RESOLVED_SUCCESS — STILL_UNKNOWN and
     RESOLVED_FAILURE attempts must not present as satisfied."""
-    base = _panel(_status(), _clerk_status(), [])
+    base = _panel(_status(), _clerk_status())
     orders = (
         ProjectedOrder(
             order_ref="order:enter",
@@ -1577,7 +1570,7 @@ def test_fill_station_requires_actual_fill_not_a_terminal_broker_state() -> None
     """#1396 P2: canceled/expired/rejected orders and failed operations
     definitively received zero fill and must not satisfy FILL — only an
     actual `filled`/`partially_filled` broker state does."""
-    base = _panel(_status(), _clerk_status(), [])
+    base = _panel(_status(), _clerk_status())
     canceled_orders = (
         ProjectedOrder(
             order_ref="order:enter",
@@ -1613,15 +1606,9 @@ def test_fill_station_requires_actual_fill_not_a_terminal_broker_state() -> None
     assert _station_states(filled)["FILL"] == "satisfied"
 
 
-def test_panel_composes_cards_and_rail() -> None:
-    entries = [
-        intent_entry(sid=SID, intent="i1", ts_ms=_NOW - 1000),
-        submit_acked_entry(sid=SID, intent="i1", ts_ms=_NOW - 900),
-        fill_entry(sid=SID, intent="i1", ts_ms=_NOW - 800),
-        reconciliation_entry(verdict="clean", ts_ms=_NOW - 700),
-    ]
+def test_panel_composes_cards() -> None:
     decision = decision_receipt(seq=3, ts_ms=_NOW - 500, outcome="entered", reason_code="CROSS_UP")
-    panel = _panel(_status(), _clerk_status(), entries, decision)
+    panel = _panel(_status(), _clerk_status(), decision)
 
     assert panel.strategy_instance_id == SID
     assert panel.account_id == ACCT
@@ -1630,8 +1617,6 @@ def test_panel_composes_cards_and_rail() -> None:
     assert panel.health.last_decision_at_ms == _NOW - 500
     assert panel.clerk.account_id == ACCT
     assert panel.clerk.hold_active is False
-    assert panel.rail.transaction_ref is not None
-    assert len(panel.rail.stations) == 6
     # Commands are the SQLite adapter's (#2635): Clear's archive and the
     # Clerk's recovery catalog, with their readiness checks and primary.
     assert panel.actions == []
@@ -1652,9 +1637,9 @@ def test_build_panel_carries_the_strategys_registry_warning() -> None:
         explanation="No build receipt was read for this test.",
     )
     dv_panel = _panel(
-        _status(strategy_key="deployment_validation"), _clerk_status(), [], program_build=unproven,
+        _status(strategy_key="deployment_validation"), _clerk_status(), program_build=unproven,
     )
-    other_panel = _panel(_status(), _clerk_status(), [])
+    other_panel = _panel(_status(), _clerk_status())
 
     assert dv_panel.experimental_notice == "Experimental validation only — not a trading strategy"
     assert other_panel.experimental_notice is None
@@ -1847,7 +1832,6 @@ def test_panel_exposes_sealed_program_build_proof_and_decision_causal_links() ->
     panel = _panel(
         _status(mode="trade"),
         _clerk_status(),
-        [],
         decision,
         sealed_program=seal,
         program_build=program_build,
@@ -1887,7 +1871,6 @@ def test_build_panel_requires_program_build_evidence() -> None:
         build_panel(
             status,
             _clerk_status(),
-            [],
             account_id=ACCT,
             account_mode="paper",
             exposure={"SPY": 100.0},
@@ -1923,7 +1906,7 @@ def test_panel_surfaces_unproven_for_a_registered_signal_program_with_no_evidenc
         ),
     )
 
-    panel = _panel(status, _clerk_status(), [], program_build=program_build)
+    panel = _panel(status, _clerk_status(), program_build=program_build)
 
     assert panel.strategy_key == "ema_crossover_signal"
     assert panel.program_build.state == "UNPROVEN"
@@ -1932,7 +1915,7 @@ def test_panel_surfaces_unproven_for_a_registered_signal_program_with_no_evidenc
 def test_panel_renders_explicit_absence_when_no_seal_or_causal_links_supplied() -> None:
     """An absent link/seal is an explicit state, never inferred."""
     decision = decision_receipt(seq=4, ts_ms=_NOW - 500, outcome="no_action", reason_code="NO_SIGNAL")
-    panel = _panel(_status(mode="trade"), _clerk_status(), [], decision)
+    panel = _panel(_status(mode="trade"), _clerk_status(), decision)
 
     assert panel.sealed_program is None
     assert panel.program_build.state == "NOT_APPLICABLE"
@@ -1946,7 +1929,6 @@ def test_disabled_action_explains_backend_blocker_and_safe_next_step() -> None:
         _panel(
             _status(running=False),
             _clerk_status(hold=True, hold_code="STREAM_HEALTH_HOLD"),
-            [],
             exposure={"SPY": 1.0},
         ),
         _rail_projection(orders=()),
@@ -2110,7 +2092,7 @@ def test_the_served_archive_is_the_one_the_registry_presented(
     before the move, and the stopped-flat token is the one every lane served
     on 2026-09-30."""
     served = adapt_sqlite_panel(
-        _panel(status, clerk, [], exposure=exposure),
+        _panel(status, clerk, exposure=exposure),
         _rail_projection(orders=(), working_order_refs=working_order_refs),
     )
 
@@ -2121,7 +2103,7 @@ def test_the_served_archive_is_the_one_the_registry_presented(
 
 def test_a_stopped_bots_archive_leads_its_recovery_commands() -> None:
     served = adapt_sqlite_panel(
-        _panel(_status(running=False), _clerk_status(), [], exposure={}),
+        _panel(_status(running=False), _clerk_status(), exposure={}),
         replace(
             _rail_projection(orders=()),
             recovery_actions=(_recovery_capability("reconcile_now", primary=False),),
@@ -2137,7 +2119,7 @@ def test_served_readiness_counts_partition_the_recovery_checks() -> None:
     the adapter counts its recovery checks once, exactly (``atol=0, rtol=0``),
     and Angular renders the two numbers verbatim."""
     served = adapt_sqlite_panel(
-        _panel(_status(running=False), _clerk_status(), [], exposure={}),
+        _panel(_status(running=False), _clerk_status(), exposure={}),
         replace(
             _rail_projection(orders=()),
             recovery_actions=(
@@ -2154,45 +2136,6 @@ def test_served_readiness_counts_partition_the_recovery_checks() -> None:
         ("open_custody_timeline", True),
     ]
     assert (served.readiness_ready_count, served.readiness_blocked_count) == (2, 1)
-
-
-def test_working_orders_and_fills_are_bounded_clerk_attributed_projections() -> None:
-    open_entries = [
-        intent_entry(sid=SID, intent="open", ts_ms=_NOW - 1_000),
-        submit_acked_entry(sid=SID, intent="open", ts_ms=_NOW - 900),
-    ]
-    working = _panel(_status(), _clerk_status(), open_entries)
-    assert len(working.working_orders) == 1
-    assert working.working_orders[0].order_ref == working.rail.transaction_ref
-
-    filled = _panel(
-        _status(),
-        _clerk_status(),
-        [*open_entries, fill_entry(sid=SID, intent="open", ts_ms=_NOW - 800)],
-    )
-    assert filled.working_orders == []
-    assert len(filled.recent_fills) == 1
-    assert filled.recent_fills[0].symbol == "SPY"
-
-
-def test_recent_fills_reuse_canonical_fill_deduplication() -> None:
-    first = fill_entry(
-        sid=SID,
-        intent="open",
-        ts_ms=_NOW - 800,
-        event_key="exec:redelivered",
-    )
-    redelivery = fill_entry(
-        sid=SID,
-        intent="open",
-        ts_ms=_NOW - 700,
-        event_key="exec:redelivered",
-    )
-
-    panel = _panel(_status(), _clerk_status(), [first, redelivery])
-
-    assert len(panel.recent_fills) == 1
-    assert panel.recent_fills[0].filled_at_ms == _NOW - 800
 
 
 def test_evaluate_channel_health_required_streams_narrows_to_market_data() -> None:
@@ -2225,7 +2168,6 @@ def test_unhealthy_required_channel_blocks_trade_mode_mission() -> None:
     panel = _panel(
         _status(mode="trade"),
         _clerk_status(healthy=False),
-        [],
     )
 
     assert panel.mission_verdict.state == "blocked"
@@ -2249,7 +2191,7 @@ def test_refused_warmup_crash_carries_its_own_backend_copy() -> None:
         }
     )
 
-    panel = _panel(status, _clerk_status(), [])
+    panel = _panel(status, _clerk_status())
 
     assert panel.health.duty_outcome is not None
     assert panel.health.duty_outcome.reason_code == "WARMUP_HISTORY_UNAVAILABLE"
@@ -2285,7 +2227,6 @@ def test_dry_run_activity_is_structurally_labelled_simulated() -> None:
     panel = _panel(
         _status(running=True, mode="dry_run"),
         _clerk_status(),
-        [],
         dry_run_activity=[activity],
     )
 
@@ -2334,7 +2275,6 @@ def test_dry_run_decisions_use_sqlite_causal_links_when_evidence_exists() -> Non
     panel = _panel(
         _status(running=True, mode="dry_run"),
         _clerk_status(),
-        [],
         decision,
         dry_run_activity=[activity],
     )
@@ -2362,28 +2302,21 @@ def test_dry_run_decisions_use_sqlite_causal_links_when_evidence_exists() -> Non
     assert panel.health.last_bar_at_ms == 1_699_999_999_900
 
 
-def test_real_paper_decisions_and_fills_carry_real_paper_account_authority() -> None:
+def test_real_paper_decisions_carry_real_paper_account_authority() -> None:
     """Issue #1729 AC #8: ``authority_kind`` must survive to every panel row,
     not only the Dry Run rows the pre-existing tests already covered. Before
-    this fix, ``recent_decisions``/``recent_fills`` for a real Paper (mode
-    ``trade``) bot carried ``authority_account_id=None``/``authority_kind=
-    None`` — the field existed on the contract but was never populated for
-    the real-money-adjacent path.
+    this fix, ``recent_decisions`` for a real Paper (mode ``trade``) bot
+    carried ``authority_account_id=None``/``authority_kind=None`` — the field
+    existed on the contract but was never populated for the real-money-adjacent
+    path. Fills carry theirs from the adapter (``recent_fill_view``).
     """
     decision = decision_receipt(seq=1, ts_ms=_NOW, outcome="entered", reason_code="CROSS_UP")
-    entries = [
-        intent_entry(sid=SID, intent="open", ts_ms=_NOW - 1_000),
-        submit_acked_entry(sid=SID, intent="open", ts_ms=_NOW - 900),
-        fill_entry(sid=SID, intent="open", ts_ms=_NOW - 800),
-    ]
 
-    panel = _panel(_status(mode="trade"), _clerk_status(), entries, decision)
+    panel = _panel(_status(mode="trade"), _clerk_status(), decision)
 
     assert panel.recent_decisions[0].authority_account_id == ACCT
     assert panel.recent_decisions[0].authority_kind == "real_paper"
     assert panel.recent_decisions[0].simulated is False
-    assert panel.recent_fills[0].authority_account_id == ACCT
-    assert panel.recent_fills[0].authority_kind == "real_paper"
 
 
 def test_live_account_decisions_and_fills_carry_real_live_account_authority() -> None:
@@ -2393,18 +2326,10 @@ def test_live_account_decisions_and_fills_carry_real_live_account_authority() ->
     fill on a real-money account read ``real_paper``.
     """
     decision = decision_receipt(seq=1, ts_ms=_NOW, outcome="entered", reason_code="CROSS_UP")
-    entries = [
-        intent_entry(sid=SID, intent="open", ts_ms=_NOW - 1_000),
-        submit_acked_entry(sid=SID, intent="open", ts_ms=_NOW - 900),
-        fill_entry(sid=SID, intent="open", ts_ms=_NOW - 800),
-    ]
 
-    panel = _panel(_status(mode="trade"), _clerk_status(), entries, decision, account_mode="live")
+    panel = _panel(_status(mode="trade"), _clerk_status(), decision, account_mode="live")
 
     assert [(row.authority_account_id, row.authority_kind, row.simulated) for row in panel.recent_decisions] == [
-        (ACCT, "real_live", False)
-    ]
-    assert [(row.authority_account_id, row.authority_kind, row.simulated) for row in panel.recent_fills] == [
         (ACCT, "real_live", False)
     ]
 
@@ -2456,7 +2381,6 @@ def test_build_panel_honors_the_explicit_authority_account_id_from_the_selected_
     panel = _panel(
         _status(running=True, mode="dry_run"),
         _clerk_status(),
-        [],
         decision,
         dry_run_activity=[activity],
         authority_account_id=f"sim:{SID}",
@@ -2496,7 +2420,6 @@ def test_build_panel_rejects_dry_run_activity_from_a_different_synthetic_authori
         _panel(
             _status(running=True, mode="dry_run"),  # SID == "bot-alpha"
             _clerk_status(),
-            [],
             dry_run_activity=[foreign_activity],
         )
 
@@ -2513,7 +2436,6 @@ def test_account_freeze_surfaces_its_authored_copy() -> None:
                 observed_at_ms=_NOW,
             )
         ),
-        [],
         exposure={"SPY": 1.0},
     )
 
@@ -2522,32 +2444,6 @@ def test_account_freeze_surfaces_its_authored_copy() -> None:
     assert frozen.clerk.freeze_label == "Account state unprovable"
     assert frozen.clerk.freeze_explanation == "Fresh account truth is unavailable."
     assert frozen.clerk.freeze_next_step == "Restore broker observation and reconcile."
-
-
-def test_revision_is_deterministic_and_changes_on_state_change() -> None:
-    base = compute_revision(
-        journal_len=3,
-        last_transition_at_ms=100,
-        desired_state="RUNNING",
-        hold_active=False,
-        last_decision_at_ms=200,
-    )
-    same = compute_revision(
-        journal_len=3,
-        last_transition_at_ms=100,
-        desired_state="RUNNING",
-        hold_active=False,
-        last_decision_at_ms=200,
-    )
-    changed = compute_revision(
-        journal_len=4,
-        last_transition_at_ms=100,
-        desired_state="RUNNING",
-        hold_active=False,
-        last_decision_at_ms=200,
-    )
-    assert base == same
-    assert base != changed
 
 
 def _action(panel, action_id):
@@ -2641,7 +2537,7 @@ def test_sqlite_adapter_recovery_cure_is_the_primary_action() -> None:
     primary capability is the page's primary command, and the retained
     ``readiness_checks[].evidence['primary']`` marker names the same action,
     since both derive from the one ``RecoveryCapability.primary`` flag."""
-    base = _panel(_status(running=True), _clerk_status(), [])
+    base = _panel(_status(running=True), _clerk_status())
     projection = replace(
         _rail_projection(orders=()),
         recovery_actions=(
@@ -2663,7 +2559,7 @@ def test_sqlite_adapter_running_bot_without_a_cure_primaries_its_stop() -> None:
     """An always-available Reconcile wins the policy's priority on a healthy
     running bot, but it is not this bot's cure: the page's primary command is
     the bot's stop, never a routine refresh."""
-    base = _panel(_status(running=True), _clerk_status(), [])
+    base = _panel(_status(running=True), _clerk_status())
     projection = replace(
         _rail_projection(orders=()),
         recovery_actions=(
@@ -2678,7 +2574,7 @@ def test_sqlite_adapter_running_bot_without_a_cure_primaries_its_stop() -> None:
 
 
 def test_sqlite_adapter_stopped_bot_without_a_cure_has_no_primary_action() -> None:
-    base = _panel(_status(running=False), _clerk_status(), [], exposure={})
+    base = _panel(_status(running=False), _clerk_status(), exposure={})
     projection = replace(
         _rail_projection(orders=()),
         recovery_actions=(_recovery_capability("reconcile_now", primary=True),),
@@ -2711,7 +2607,7 @@ def test_sqlite_adapter_stopped_bot_still_holding_shares_has_no_primary_action()
         evidence_age_ms=1_000,
         evidence_refs=(),
     )
-    base = _panel(_status(running=False), _clerk_status(), [], exposure={})
+    base = _panel(_status(running=False), _clerk_status(), exposure={})
     holding = replace(
         _rail_projection(orders=()),
         positions=_held(1.0),
@@ -2729,7 +2625,7 @@ def test_sqlite_adapter_stopped_bot_still_holding_shares_has_no_primary_action()
 
 
 def test_primary_action_rejects_a_dangling_reference() -> None:
-    base = _panel(_status(running=True), _clerk_status(), [])
+    base = _panel(_status(running=True), _clerk_status())
     payload = base.model_dump()
     payload["primary_action"] = "resolve_execution_coverage"
 
@@ -2823,7 +2719,7 @@ def _refused_panel(reason_code: str = "RESUME_HOLE_UNFILLED", kind: str = "CRASH
             )
         }
     )
-    return _panel(status, _clerk_status(), [], exposure={})
+    return _panel(status, _clerk_status(), exposure={})
 
 
 def _entry_order(broker_state: str = "new") -> ProjectedOrder:

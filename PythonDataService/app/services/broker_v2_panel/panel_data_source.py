@@ -537,7 +537,6 @@ async def _get_panel_with_entries_from_authority(
     panel = build_panel(
         status,
         clerk,
-        entries,
         bot_status=custody_bot_status(facade.repository, sid, running=status.running),
         account_id=resolved,
         authority_account_id=authority_account_id,
