@@ -1,48 +1,21 @@
 /**
- * @deprecated [LEGACY-OK — RENDER-HELPER ONLY, NO NEW CALLERS]
+ * Browser Black-Scholes pricing and Greeks, for the Strategy Builder's live curves.
  *
- * Client-side Black-Scholes pricing and Greeks. Uses the Abramowitz & Stegun
- * (1964) rational approximation for the normal CDF (|error| < 1.5e-7).
+ * Formula: C = S·N(d1) − K·e^(−rT)·N(d2); P = K·e^(−rT)·N(−d2) − S·N(−d1);
+ *   d1 = [ln(S/K) + (r + σ²/2)T] / (σ√T); d2 = d1 − σ√T. Theta is per calendar day,
+ *   vega and rho per 1 point. The dividend yield is 0, as on the server. At T ≤ 0 or σ ≤ 0
+ *   an option is worth its intrinsic value, as `strategy_engine.py` prices a leg.
+ * Reference: Hull, Options Futures and Other Derivatives (10e), §15.8 and §19; the normal
+ *   CDF is Abramowitz & Stegun 7.1.26 (|error| < 1.5e-7).
+ * Canonical implementation: PythonDataService/app/services/bs_greeks.py (price, Greeks) and
+ *   PythonDataService/app/services/strategy_engine.py (strategy P&L and Greek curves). This copy
+ *   is ADR 0068 exception 1: the builder re-prices a 1,200-point grid on every leg edit.
+ * Validated against: Frontend/src/app/utils/black-scholes.parity.spec.ts, against
+ *   Frontend/src/testing/bs-parity/grid.json, which
+ *   PythonDataService/scripts/fixture_generators/bs_browser_parity.py writes from the canonical
+ *   and PythonDataService/tests/fixtures/test_bs_browser_parity_fixture.py re-checks (BS-008).
  *
- * ADR 0068 names this module as exception 1 (Strategy Builder latency):
- * this module is **not a math authority**. Python owns the canonical
- * math; canonical Black-Scholes pricing and Greeks live in
- * `PythonDataService/app/services/bs_greeks.py` (closed-form) and
- * `app/services/quantlib_pricer.py` (QuantLib). Cross-engine parity at
- * `atol=1e-10` is pinned by `PythonDataService/tests/services/test_bs_cross_engine_parity.py`
- * (Phase 1.4 shipped 2026-04-26, 361/361 cases pass).
- *
- * Status of callers (as of 2026-04-27):
- *
- * 1. `OptionsStrategyLabComponent` — **MIGRATED** in Phase 1.2; sources
- *    curves and per-leg diagnostics from the server's `analyzeOptionsStrategy`
- *    payload (commit `451394d`). No client-side BS.
- *
- * 2. `pricing-lab.component.ts` — **LEGACY-OK** (intentional). The component's
- *    explicit purpose is to compare pricing engines side-by-side: the TS
- *    pricer, the server BS, and the QuantLib path. Removing TS from here
- *    would defeat the comparison. Numbers users compare against another
- *    number live in the SERVER columns; the TS column is one of the things
- *    being compared, not the authority.
- *
- * 3. `strategy-builder.component.ts` — **LEGACY-OK** (interactive UI tradeoff).
- *    Strategy Builder evaluates BS over a 1200-point price grid for every
- *    leg edit (strike, premium, qty, expiration, IV). Server round-trip on
- *    every parameter change creates UI lag that defeats the "live builder"
- *    feature. The numbers shown here are exploratory feedback, not numbers
- *    users compare against another number. Server-side migration is feasible
- *    (mirror OptionsStrategyLab's debounced-fetch + parallel-what-if pattern)
- *    but deferred until UX impact can be measured.
- *
- * 4. `black-scholes.spec.ts` — self-test; retires with this file if it's
- *    ever deleted.
- *
- * **Hard rule: do not add new callers of any export in this module.** New
- * UI features that need BS math must go through the server. The two
- * legacy-ok exceptions above are explicitly limited to existing components
- * and are not a precedent.
- *
- * @module legacy-black-scholes
+ * Do not add callers: a new surface that needs Black-Scholes goes through the server.
  */
 
 export interface LegParams {
@@ -133,13 +106,14 @@ export function bsPrice(
   t: number,
   optionType: 'call' | 'put',
 ): number {
-  if (t <= 0) {
-    // At expiration — intrinsic value
+  if (t <= 0 || sigma <= 0) {
+    // Expired, or no volatility to price with (a chain row without an IV):
+    // intrinsic value, which is what the server values such a leg at.
     return optionType === 'call'
       ? Math.max(spot - strike, 0)
       : Math.max(strike - spot, 0);
   }
-  if (sigma <= 0 || spot <= 0 || strike <= 0) return 0;
+  if (spot <= 0 || strike <= 0) return 0;
 
   const d1 = bsD1(spot, strike, r, sigma, t);
   const d2 = d1 - sigma * Math.sqrt(t);
@@ -252,12 +226,17 @@ export function bsRho(
 // Composite: full-strategy P&L and Greeks at a given underlying price
 // ---------------------------------------------------------------------------
 
-/** BS-priced P&L for the entire strategy at a given (underlyingPrice, timeToExpiry). */
+/**
+ * BS-priced P&L for the entire strategy at a given (underlyingPrice, timeToExpiry).
+ * A what-if's `ivShift` is added to every leg's IV and floored at zero, as the
+ * server's `compute_current_curve` floors it.
+ */
 export function strategyPnlAtPrice(
   legs: LegParams[],
   underlyingPrice: number,
   t: number,
   r: number,
+  ivShift = 0,
 ): number {
   let total = 0;
   for (const leg of legs) {
@@ -265,7 +244,7 @@ export function strategyPnlAtPrice(
       underlyingPrice,
       leg.strike,
       r,
-      leg.iv,
+      Math.max(leg.iv + ivShift, 0),
       t,
       leg.optionType,
     );

@@ -1,32 +1,37 @@
 /**
- * Frontend Black-Scholes parity test.
+ * Browser Black-Scholes parity test (ADR 0068 exception 1).
  *
- * Pins agreement between `Frontend/src/app/utils/black-scholes.ts::bsPrice`
- * and the canonical Python pricer
- * (`PythonDataService/app/services/bs_greeks.py::bs_european_price`),
- * which itself is pinned at `atol=1e-10` against py_vollib.
+ * Holds `Frontend/src/app/utils/black-scholes.ts` and `strategy-payoff.ts` to the
+ * canonical Python: `PythonDataService/app/services/bs_greeks.py` for one option's
+ * price and Greeks, `app/services/strategy_engine.py` for a strategy's expiry
+ * payoff, current-time P&L under the page's what-ifs, and aggregate Greeks.
  *
- * Fixture: `Frontend/src/testing/bs-parity/grid.json` (360 cases).
- * Regenerable via `Frontend/scripts/generate-bs-parity-fixture.py`.
+ * Fixture: `Frontend/src/testing/bs-parity/grid.json`, golden fixture BS-008.
+ * `PythonDataService/scripts/fixture_generators/bs_browser_parity.py` writes it
+ * from the canonical, and `tests/fixtures/test_bs_browser_parity_fixture.py`
+ * re-checks it against the canonical on every Python run. Each quantity has its
+ * own tolerance in the file, with the reason: the browser's normal CDF is
+ * Abramowitz & Stegun 7.1.26 (|error| < 1.5e-7), the canonical's is exact.
  *
- * Tolerance (`atol=1e-4`) is bounded by the frontend's Abramowitz & Stegun
- * 7.1.26 normal-CDF approximation (|error| < 1.5e-7), which propagates to
- * up to ~1.5e-5 in BS price units. The test fails loudly if drift
- * exceeds this — that would indicate a real bug in the frontend pricer,
- * not a precision artifact.
- *
- * Until this test exists, the legacy frontend BS module has a single
- * audit point (the cross-engine parity test on the Python side that
- * pins all server-canonical pricing) but no automatic check that the
- * client-side mirror agrees with it. This test closes that gap.
+ * Max profit, max loss and breakevens are held by `strategy-payoff.parity.spec.ts`.
  */
 
 import { describe, expect, it } from 'vitest';
 
 import bsParityGrid from '../../testing/bs-parity/grid.json';
-import { bsPrice } from './black-scholes';
+import {
+  bsDelta, bsGamma, bsPrice, bsRho, bsTheta, bsVega,
+  strategyGreekAtPrice, strategyPnlAtPrice, LegParams,
+} from './black-scholes';
+import { payoffAtExpiry } from './strategy-payoff';
 
-interface BsParityCase {
+interface Tolerance {
+  atol: number;
+  rtol: number;
+  why: string;
+}
+
+interface OptionCase {
   spot: number;
   strike: number;
   ttm_days: number;
@@ -36,69 +41,134 @@ interface BsParityCase {
   dividend: number;
   option_type: 'call' | 'put';
   expected_price: number;
+  // Only where the dividend is 0: the browser copy takes no dividend yield.
+  expected_greeks?: { delta: number; gamma: number; theta: number; vega: number; rho: number };
 }
 
-interface BsParityFixture {
+interface StrategyCase {
+  name: string;
+  rate: number;
+  ttm_years: number;
+  legs: {
+    strike: number;
+    option_type: 'call' | 'put';
+    position: 'long' | 'short';
+    premium: number;
+    iv: number;
+    quantity: number;
+  }[];
+  prices: number[];
+  expected: {
+    expiry_payoff: number[];
+    pnl: Record<string, number[]>;
+    greeks: { delta: number[]; gamma: number[]; theta: number[]; vega: number[] };
+  };
+}
+
+interface ParityFixture {
   schema_version: number;
-  source: string;
-  tolerance: { atol: number; rtol: number; rationale: string };
+  tolerance: Record<string, Tolerance>;
+  scenarios: { name: string; iv_shift: number; time_shift_days: number }[];
   n_cases: number;
-  cases: BsParityCase[];
+  cases: OptionCase[];
+  strategies: StrategyCase[];
 }
 
-describe('black-scholes.ts — frontend ↔ Python BS parity', () => {
-  const fixture = bsParityGrid as unknown as BsParityFixture;
-  const { atol, rtol } = fixture.tolerance;
+const fixture = bsParityGrid as unknown as ParityFixture;
 
-  it('loads the fixture with the expected shape', () => {
-    expect(fixture.schema_version).toBe(1);
-    expect(fixture.cases.length).toBe(360);
-    expect(fixture.n_cases).toBe(fixture.cases.length);
-    expect(rtol).toBe(0);
+/** The difference of `got` from `want`, as a failure message, or null when it is within the quantity's tolerance. */
+function miss(got: number, want: number, quantity: string, where: string): string | null {
+  const { atol, rtol } = fixture.tolerance[quantity];
+  const error = Math.abs(got - want);
+  return error <= atol + rtol * Math.abs(want)
+    ? null
+    : `${quantity} ${where}: got ${got}, canonical ${want}, off by ${error.toExponential(2)} (atol ${atol})`;
+}
+
+function missesOf(checks: (string | null)[]): string[] {
+  return checks.filter((message): message is string => message !== null);
+}
+
+describe('black-scholes.ts — frontend ↔ Python parity', () => {
+  it('holds every quantity to a tolerance that is absolute', () => {
+    expect(fixture.schema_version).toBe(2);
+    expect(fixture.cases.length).toBe(fixture.n_cases);
+    for (const [quantity, tolerance] of Object.entries(fixture.tolerance)) {
+      expect(tolerance.rtol, quantity).toBe(0);
+      expect(tolerance.why.length, quantity).toBeGreaterThan(0);
+    }
   });
 
-  it('every case agrees with the canonical Python pricer within atol', () => {
-    // Frontend BS doesn't take dividend yield; we mimic q via spot
-    // pre-discount (S' = S·e^(-qT), use r as carry). This produces the
-    // same d1 / d2 as the Python `bs_european_price(dividend=q)`:
-    //   d1' = (ln(S'/K) + (r + 0.5σ²)T) / (σ√T)
-    //       = (ln(S/K) + (r - q + 0.5σ²)T) / (σ√T) = BS-Merton d1.
-    //   price' = S'·N(d1) - K·e^(-rT)·N(d2)
-    //          = S·e^(-qT)·N(d1) - K·e^(-rT)·N(d2) = BS-Merton call.
+  it('prices every case of the grid like the canonical', () => {
+    // The browser pricer takes no dividend yield. Pricing at S·e^(−qT) with the
+    // same rate gives the same d1 and d2 and the same price as the canonical at q.
+    const misses = missesOf(fixture.cases.map(c => {
+      const got = bsPrice(c.spot * Math.exp(-c.dividend * c.ttm_years), c.strike, c.rate, c.volatility, c.ttm_years, c.option_type);
+      return miss(got, c.expected_price, 'price', JSON.stringify(c));
+    }));
 
-    let maxErr = 0;
-    let worstCase: BsParityCase | null = null;
-    let mismatchCount = 0;
+    expect(misses).toEqual([]);
+  });
 
-    for (const c of fixture.cases) {
-      const spotAdjusted = c.spot * Math.exp(-c.dividend * c.ttm_years);
-      const got = bsPrice(
-        spotAdjusted,
-        c.strike,
-        c.rate,
-        c.volatility,
-        c.ttm_years,
-        c.option_type,
-      );
-      const err = Math.abs(got - c.expected_price);
-      const tol = atol + rtol * Math.abs(c.expected_price);
-      if (err > tol) {
-        mismatchCount += 1;
-      }
-      if (err > maxErr) {
-        maxErr = err;
-        worstCase = c;
-      }
-    }
+  it('gives every case the canonical delta, gamma, theta, vega and rho', () => {
+    expect(fixture.cases.some(c => c.expected_greeks !== undefined)).toBe(true);
 
-    if (mismatchCount > 0 || maxErr > atol) {
-      console.error(
-        `BS parity: ${mismatchCount}/${fixture.cases.length} cases over tolerance; ` +
-          `max error ${maxErr.toExponential(3)} > atol=${atol}\n` +
-          `Worst case: ${JSON.stringify(worstCase, null, 2)}`,
-      );
-    }
-    expect(mismatchCount).toBe(0);
-    expect(maxErr).toBeLessThanOrEqual(atol);
+    const misses = missesOf(fixture.cases.flatMap(c => {
+      const want = c.expected_greeks;
+      if (want === undefined) return [];
+      const args = [c.spot, c.strike, c.rate, c.volatility, c.ttm_years] as const;
+      const where = JSON.stringify(c);
+      return [
+        miss(bsDelta(...args, c.option_type), want.delta, 'delta', where),
+        miss(bsGamma(...args), want.gamma, 'gamma', where),
+        miss(bsTheta(...args, c.option_type), want.theta, 'theta', where),
+        miss(bsVega(...args), want.vega, 'vega', where),
+        miss(bsRho(...args, c.option_type), want.rho, 'rho', where),
+      ];
+    }));
+
+    expect(misses).toEqual([]);
+  });
+
+  describe('a strategy', () => {
+    it.each(fixture.strategies.map(s => [s.name, s] as const))(
+      '%s: expiry payoff, P&L under every what-if and aggregate Greeks agree with the canonical',
+      (_name, strategy) => {
+        const legs: LegParams[] = strategy.legs.map(l => ({
+          strike: l.strike,
+          optionType: l.option_type,
+          position: l.position,
+          premium: l.premium,
+          iv: l.iv,
+          quantity: l.quantity,
+        }));
+        const { expected, rate, ttm_years: t } = strategy;
+        const misses: (string | null)[] = [];
+
+        strategy.prices.forEach((price, i) => {
+          const where = `${strategy.name} @ ${price}`;
+          misses.push(miss(payoffAtExpiry(legs, price), expected.expiry_payoff[i], 'strategy_expiry_payoff', where));
+          for (const scenario of fixture.scenarios) {
+            const timeLeft = Math.max(t - scenario.time_shift_days / 365, 0);
+            misses.push(miss(
+              strategyPnlAtPrice(legs, price, timeLeft, rate, scenario.iv_shift),
+              expected.pnl[scenario.name][i],
+              'strategy_pnl',
+              `${where} (${scenario.name})`,
+            ));
+          }
+          for (const greek of ['delta', 'gamma', 'theta', 'vega'] as const) {
+            misses.push(miss(
+              strategyGreekAtPrice(legs, price, t, rate, greek),
+              expected.greeks[greek][i],
+              `strategy_${greek}`,
+              where,
+            ));
+          }
+        });
+
+        expect(missesOf(misses)).toEqual([]);
+      },
+    );
   });
 });

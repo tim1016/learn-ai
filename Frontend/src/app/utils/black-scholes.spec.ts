@@ -140,8 +140,10 @@ describe('bsPrice', () => {
     expect(bsPrice(110, 100, 0.05, 0.20, 0, 'put')).toBe(0);
   });
 
-  it('should return 0 for zero sigma (OTM)', () => {
+  it('should return intrinsic value for zero sigma', () => {
     expect(bsPrice(90, 100, 0.05, 0, 1.0, 'call')).toBe(0);
+    expect(bsPrice(110, 100, 0.05, 0, 1.0, 'call')).toBe(10);
+    expect(bsPrice(90, 100, 0.05, 0, 1.0, 'put')).toBe(10);
   });
 
   it('should return 0 for zero spot', () => {

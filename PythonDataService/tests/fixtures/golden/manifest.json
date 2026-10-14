@@ -2527,6 +2527,56 @@
       "validated_by": [
         "tests/options_backtest/test_golden_spy_2026_10_09_sold_spread.py"
       ]
+    },
+    {
+      "id": "BS-008",
+      "name": "Strategy Builder browser Black-Scholes parity",
+      "category": "options-pricing",
+      "canonical_module": "PythonDataService/app/services/bs_greeks.py",
+      "canonical_callable": "black_scholes_greeks",
+      "reference": {
+        "kind": "cross_engine",
+        "oracle": "the Python canonical (bs_greeks.py, strategy_engine.py) evaluated at generation time, against the browser copy Frontend/src/app/utils/black-scholes.ts",
+        "citation": "ADR 0068 exception 1; Hull, Options Futures and Other Derivatives (10e), §15.8 and §19. The canonical itself is pinned by BS-001..BS-007 and test_bs_cross_engine_parity.py."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "PythonDataService/scripts/fixture_generators/bs_browser_parity.py"
+      },
+      "units": {
+        "theta": "per_day",
+        "vega": "per_vol_point",
+        "rho": "per_rate_point"
+      },
+      "tolerance": {
+        "atol": 1e-09,
+        "rtol": 0.0,
+        "note": "The canonical re-evaluated against the stored values: strict float, 1e-9. The browser copy is held looser, per quantity, to its Abramowitz & Stegun CDF (|error| < 1.5e-7) and to the canonical's own 4 dp / 6 dp rounding of strategy figures: price 2e-5, delta and rho 1e-7, theta 2e-9, gamma and vega 1e-12, strategy P&L 1e-4. Each is in output.json with its reason."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "generated": "2026-10-14",
+          "justification": "Initial fixture. Replaces Frontend/scripts/generate-bs-parity-fixture.py, which carried its own inline Black-Scholes copy; this one imports bs_greeks.py and strategy_engine.py, and adds Greeks, strategy P&L, what-if shifts and the expiry payoff to the 360-case price grid (#3221).",
+          "content_sha256": {
+            "input.json": "2e472a5aa8509305bfa1bedc5319c219742850be89dbcb220bd5dc51fd60292a",
+            "output.json": "0820767c0587fbcea5da186d5d1e143d8195b9181425d1f0487de9a1564965e1"
+          },
+          "file_sha256": {
+            "input.json": "a4ecd0d329d19c00457e051d55f8ef1160e58480021495d3c5da688ea7a1714d",
+            "output.json": "4384b02b953f9e5ee047ac0ebab918b738c104208fdf3d232ca519ca0226e1a4",
+            "attribution.md": "fa6f18030231e169cfb897c7e52a069f6a760bc9102f55758f406439eff45da4"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/fixtures/test_bs_browser_parity_fixture.py"
+      ]
     }
   ]
 }

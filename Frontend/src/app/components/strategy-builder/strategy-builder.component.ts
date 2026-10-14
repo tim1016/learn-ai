@@ -728,13 +728,10 @@ export class StrategyBuilderComponent implements OnDestroy {
       .map(scenario => {
         const newDte = Math.max(dte - scenario.timeDeltaDays, 0);
         const newT = newDte / 365;
-        const shiftedParams = scenario.ivShift !== 0
-          ? params.map(l => ({ ...l, iv: Math.max(l.iv + scenario.ivShift, 0.01) }))
-          : params;
 
         const points: PayoffPoint[] = grid.map(price => ({
           price,
-          pnl: strategyPnlAtPrice(shiftedParams, price, newT, r),
+          pnl: strategyPnlAtPrice(params, price, newT, r, scenario.ivShift),
         }));
 
         return { label: scenario.label, points, color: scenario.color, borderDash: [6, 3] };
