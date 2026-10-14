@@ -870,6 +870,34 @@ async def test_boot_sweep_refuses_corrupt_binding_for_sqlite_active_run(
     assert _lifecycle_json(_artifacts_root(tmp_path), _SID)["phase"] == "ON_DUTY"
 
 
+async def test_one_bots_corrupt_desired_state_is_left_as_it_is_and_the_lane_still_boots(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Owner ruling 7 of #3159: the corrupt file refuses that bot only; the bot sorted after it is still repaired."""
+    from app.engine.live.desired_state import stable_desired_state_path
+
+    feed = _FakeFeed([], mode="hold")
+    registry = _registry(tmp_path, feed)
+    await registry.run_boot_recovery()
+    corrupt, healthy = f"{_SID}-a", f"{_SID}-b"
+    for sid in (corrupt, healthy):
+        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=sid, symbol="SPY")
+        registry._bots[sid].finalized = True
+        registry._bots[sid].task.cancel()
+    await asyncio.sleep(0)
+    stable_desired_state_path(_artifacts_root(tmp_path), corrupt).write_text("{not-json", encoding="utf-8")
+
+    rebooted = _registry(tmp_path, feed)
+    with caplog.at_level("WARNING", logger="app.services.bot_boot_recovery"):
+        report = await rebooted.run_boot_recovery()
+
+    assert report.interrupted_instances == (healthy,)
+    assert report.unreadable_instances == (corrupt,)
+    assert _lifecycle_json(_artifacts_root(tmp_path), healthy)["phase"] == "OFF_DUTY"
+    assert _lifecycle_json(_artifacts_root(tmp_path), corrupt)["phase"] == "ON_DUTY"
+    assert [r.strategy_instance_id for r in caplog.records if getattr(r, "action", "") == "boot_sweep_corrupt_desired_state"] == [corrupt]
+
+
 # ── ADR 0050: terminal-evidence preservation and revival provenance ──────────
 
 
