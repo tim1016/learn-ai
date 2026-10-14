@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -23,6 +24,7 @@ from app.broker.alpaca.paths import (
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 ACTIVATION_FILENAME = "_authority_activations.jsonl"
+_LOWERCASE_HEX = re.compile(r"[0-9a-f]+")
 _RECORD_FIELDS = frozenset(
     {
         "activation_id",
@@ -86,10 +88,7 @@ class ActivationRecord:
     def from_payload(cls, payload: dict[str, Any]) -> ActivationRecord:
         if frozenset(payload) != _RECORD_FIELDS:
             raise ActivationRecordInvalid("activation record fields do not match schema version 1")
-        try:
-            record = cls(**payload)
-        except TypeError as exc:
-            raise ActivationRecordInvalid("activation record has invalid field types") from exc
+        record = cls(**payload)
         try:
             record._validate_shape()
         except ValueError as exc:
@@ -135,13 +134,7 @@ class ActivationRecord:
             value = getattr(self, name)
             if not isinstance(value, str) or len(value) != 64:
                 raise ActivationRecordInvalid(f"activation {name} must be a SHA-256 digest")
-            try:
-                bytes.fromhex(value)
-            except ValueError as exc:
-                raise ActivationRecordInvalid(
-                    f"activation {name} must be lowercase hexadecimal"
-                ) from exc
-            if value != value.lower():
+            if _LOWERCASE_HEX.fullmatch(value) is None:
                 raise ActivationRecordInvalid(
                     f"activation {name} must be lowercase hexadecimal"
                 )
@@ -183,7 +176,7 @@ class ActivationStore:
         account_id: str,
         authority_generation: int,
         db_identity_token: str,
-        artifacts_root: Path | None = None,
+        artifacts_root: Path,
     ) -> ActivationRecord | None:
         """Return the active matching fence, ``None`` when never activated."""
         record = self.latest(account_id)
@@ -194,8 +187,7 @@ class ActivationStore:
             observed_generation=authority_generation,
             observed_db_identity=db_identity_token,
         )
-        if artifacts_root is not None:
-            self.validate_artifacts(record, artifacts_root=artifacts_root)
+        self.validate_artifacts(record, artifacts_root=artifacts_root)
         return record
 
     @staticmethod

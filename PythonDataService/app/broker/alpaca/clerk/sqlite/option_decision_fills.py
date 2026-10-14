@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
+from app.broker.alpaca.clerk.sqlite.enter import enter_command_id
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -64,7 +65,7 @@ def option_fills_of_decision(
     order for it yet (an EXIT held for the session's open), or the order has
     not filled. A decision in shares has no option fill.
     """
-    command = repo.get_command(f"cmd:{strategy_instance_id}:{durable_decision_id}")
+    command = repo.get_command(enter_command_id(strategy_instance_id, durable_decision_id))
     role = None if command is None else _OWN_ORDER_ROLE.get(command.action)
     if command is None or role is None or command.effect_operation_id is None:
         return ()

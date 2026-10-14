@@ -682,7 +682,7 @@ class SqliteClerkProjectionReader:
         cursor: str | None = None,
         page_size: int = DEFAULT_TIMELINE_PAGE_SIZE,
     ) -> TimelinePage:
-        page_size = min(max(page_size, 1), MAX_TIMELINE_PAGE_SIZE)
+        page_size = projection_helpers.bounded_limit(page_size, maximum=MAX_TIMELINE_PAGE_SIZE)
         with self._read_transaction():
             self._verify_identity()
             meta = self._meta()
@@ -714,7 +714,7 @@ class SqliteClerkProjectionReader:
         page_size: int = DEFAULT_TIMELINE_PAGE_SIZE,
     ) -> OperationPage:
         """Read one keyset page from the materialized operation fold."""
-        page_size = min(max(page_size, 1), MAX_TIMELINE_PAGE_SIZE)
+        page_size = projection_helpers.bounded_limit(page_size, maximum=MAX_TIMELINE_PAGE_SIZE)
         with self._read_transaction():
             self._verify_identity()
             meta = self._meta()

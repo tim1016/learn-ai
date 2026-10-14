@@ -93,6 +93,7 @@ from app.broker.alpaca.clerk.sqlite.option_event_folds import (
     fold_option_position_ended,
 )
 from app.broker.alpaca.clerk.sqlite.option_order_legs import record_order_legs
+from app.broker.alpaca.clerk.sqlite.order_projection import ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import normalized_hold_reason_code
 from app.broker.alpaca.clerk.sqlite.uncertainty_folds import (
     account_hold_envelope,
@@ -156,8 +157,6 @@ class FoldRegistry:
 
 
 def _fold_strategy_instance_registered(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
-    import json
-
     facts = json.loads(payload["facts_json"])
     conn.execute(
         "INSERT INTO strategy_instances "
@@ -640,8 +639,6 @@ def _fold_exit_reducing_order_created(conn: sqlite3.Connection, payload: dict[st
     from app.broker.contract.options import MultiLegOptionOrderRequest
 
     if isinstance(request, MultiLegOptionOrderRequest):
-        from app.broker.alpaca.clerk.sqlite.option_order_legs import record_order_legs
-
         assert closing is not None and closing.option_leg_ids is not None
         terms = [contract_terms(conn, leg.contract.occ_symbol) for leg in request.legs]
         if any(term is None for term in terms):
@@ -665,7 +662,6 @@ def _fold_exit_reducing_order_created(conn: sqlite3.Connection, payload: dict[st
     )
 
 
-_TERMINAL_ORDER_STATES = frozenset({"filled", "canceled", "expired", "rejected", "replaced"})
 _ORDER_STATE_PRECEDENCE = {
     "new": 10,
     "accepted": 10,
@@ -690,10 +686,10 @@ def order_observation_advances(
     """Apply the canonical timestamp/state ordering to one broker snapshot."""
     current = (current_state or "").lower()
     incoming = (incoming_state or "").lower()
-    if current in _TERMINAL_ORDER_STATES:
+    if current in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES:
         return False
     if incoming_source_time is None:
-        return incoming in _TERMINAL_ORDER_STATES or not current
+        return incoming in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES or not current
     if prior_source_time is None or incoming_source_time > prior_source_time:
         return True
     if incoming_source_time < prior_source_time:

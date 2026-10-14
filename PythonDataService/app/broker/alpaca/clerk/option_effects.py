@@ -206,7 +206,7 @@ class TakenOptionPlan:
     underlying: str
 
 
-def option_plan_taken(action_plan: ActionPlan, *, real_account: bool, live_shadow: bool = False) -> TakenOptionPlan:
+def option_plan_taken(action_plan: ActionPlan, *, real_account: bool) -> TakenOptionPlan:
     """The option plan as the Clerk takes it; refuses every plan it does not take by what it is.
 
     The one rule, asked at registration, at the entry, at the contract

@@ -72,7 +72,7 @@ logger = logging.getLogger(__name__)
 _ACTIVITY_MAX_PAGES = 3
 # Alpaca's reference allows an activity page of 1 to 100 rows.
 _ACTIVITY_PAGE_SIZE = 100
-_CASH_TRANSFER_ACTIVITY_FILTER = "TRANS"
+CASH_TRANSFER_ACTIVITY_FILTER = "TRANS"
 
 
 def _mapped_evidence[T](evidence: str, mapping: Callable[[], T]) -> T:
@@ -569,7 +569,7 @@ class AlpacaBroker:
             payloads = await self._client.list_activities(limit=limit, **activity_filter)
             return _mapped_activities(payloads)
 
-        if activity_type == _CASH_TRANSFER_ACTIVITY_FILTER:
+        if activity_type == CASH_TRANSFER_ACTIVITY_FILTER:
             # The loss gate may call this history complete only after reaching
             # the prior-close boundary. Unlike generic activity recovery, a
             # fixed page cap would silently turn omitted transfers into P&L.

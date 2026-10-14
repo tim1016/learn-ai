@@ -514,11 +514,9 @@ class ClerkCustodySnapshot(BaseModel):
     journal_sequence: int = Field(ge=0)
     reconciliation_state: ReconciliationVerdict
     reconciliation_fresh: bool
-    reconciled_at_ms: EpochMs
     exposure: CustodyExposureFact
     working_orders: CustodyCountFact
     pending_orders: CustodyCountFact
-    terminal_orders: CustodyCountFact
     unresolved_effects: CustodyCountFact
     hold: HoldState
     freeze: AccountFreezeState

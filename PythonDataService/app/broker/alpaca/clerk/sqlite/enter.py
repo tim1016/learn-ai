@@ -144,6 +144,7 @@ __all__ = [
     "OptionEntryProofWindowClosed",
     "accept_enter",
     "accept_option_enter",
+    "enter_command_id",
     "fold_order_evidence",
     "resolve_enter_submission",
     "submit_accepted_enter",
@@ -183,13 +184,25 @@ class EntrySubmissionRefusal:
     why: str
 
 
+def enter_command_id(strategy_instance_id: str, decision_id: str) -> str:
+    """The command id one ENTER decision commits under: ``cmd:`` and its idempotency key.
+
+    The one spelling, for the writer and for every reader that looks an entry
+    up by the decision that made it. A reader that asked for any other key
+    would find no command for an entry the Clerk accepted. ``decision_id`` is
+    the decision's durable id. An EXIT's command is keyed the same way
+    (``exit._exit_identity``), so a reader of either asks here.
+    """
+    return f"cmd:{strategy_instance_id}:{decision_id}"
+
+
 def _enter_identity(
     *, account_id: str, strategy_instance_id: str, decision_id: str, leg: BrokerOrderLeg
 ) -> tuple[str, str, str, str]:
     """The (idempotency_key, payload_hash, command_id, effect_idempotency_key)
     quadruple one ENTER decision commits under."""
     idempotency_key = f"{strategy_instance_id}:{decision_id}"
-    command_id = f"cmd:{idempotency_key}"
+    command_id = enter_command_id(strategy_instance_id, decision_id)
     effect_idempotency_key = f"enter:{idempotency_key}"
     payload_hash = hashlib.sha256(
         canonicalize(
@@ -400,7 +413,7 @@ def _option_enter_identity(
             }
         ).encode("utf-8")
     ).hexdigest()
-    return idempotency_key, payload_hash, f"cmd:{idempotency_key}", f"enter:{idempotency_key}"
+    return idempotency_key, payload_hash, enter_command_id(strategy_instance_id, decision_id), f"enter:{idempotency_key}"
 
 
 def accept_option_enter(

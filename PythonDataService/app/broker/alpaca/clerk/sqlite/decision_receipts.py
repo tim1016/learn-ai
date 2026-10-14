@@ -12,7 +12,7 @@ import logging
 import sqlite3
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, TypeAlias
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -32,10 +32,8 @@ logger = logging.getLogger(__name__)
 MAX_DECISION_RECEIPT_READ = 500
 MAX_DECISION_RECEIPTS_PER_STRATEGY = 1_000
 
-JsonScalar: TypeAlias = str | int | float | bool | None  # noqa: UP040 (Python 3.11)
-JsonValue: TypeAlias = (  # noqa: UP040 (Python 3.11)
-    JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
-)
+type JsonScalar = str | int | float | bool | None
+type JsonValue = JsonScalar | list[JsonValue] | dict[str, JsonValue]
 DecisionOutcome = Literal[
     "enter_intent",
     "exit_intent",

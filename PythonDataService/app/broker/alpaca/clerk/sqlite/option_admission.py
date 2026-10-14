@@ -301,7 +301,6 @@ def _leg_refusal(
 
 def work_out_option_entry(
     action_plan: ActionPlan, *, evidence: OptionEntryEvidence | None, units: int, now_ms: int, real_account: bool = True,
-    live_shadow: bool = False,
 ) -> OptionEntry | OptionEntryRefused:
     """The entry ``action_plan`` makes of the facts handed over, at the Clerk's clock ``now_ms``, or why it makes none.
 
@@ -310,7 +309,7 @@ def work_out_option_entry(
     several legs needs the deployment's setting for.
     """
     try:
-        taken = option_plan_taken(action_plan, real_account=real_account, live_shadow=live_shadow)
+        taken = option_plan_taken(action_plan, real_account=real_account)
     except OptionPlanRefused as exc:
         return OptionEntryRefused(exc.reason.value, exc.detail)
     if evidence is None:
