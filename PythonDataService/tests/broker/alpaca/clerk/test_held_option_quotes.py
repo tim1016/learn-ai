@@ -717,6 +717,25 @@ def _said(caplog: pytest.LogCaptureFixture, action: str) -> list[logging.LogReco
     return [record for record in caplog.records if record.name == LOGGER and getattr(record, "action", None) == action]
 
 
+class _Latch(threading.Event):
+    """A lock nothing can break, whose wait is told apart by how it ended.
+
+    ``timed_out`` is set only if a waiter gave up with nobody having released
+    it, so "returned while the thread was still stuck" is read from what
+    happened, not from how long a call took on a loaded machine.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.timed_out = False
+
+    def wait(self, timeout: float | None = None) -> bool:
+        released = super().wait(timeout)
+        if not released:
+            self.timed_out = True
+        return released
+
+
 async def _eventually(true: object, *, within_s: float = 5.0) -> None:
     """Wait until ``true()`` holds, without waiting for work that is blocked."""
     deadline = time.monotonic() + within_s
@@ -770,25 +789,28 @@ async def test_books_that_do_not_answer_hold_up_no_pass_and_no_mark_and_are_not_
     holder.holds = [CALL.occ_symbol]
     await held.read_books()
     ibkr.quotes[CALL.occ_symbol] = _quote("4.08", "4.12", NOW - 300)
-    stuck.blocked = threading.Event()
+    latch = stuck.blocked = _Latch()
     reads_before = stuck.reads
     try:
-        longest_pass_s = 0.0
+        read_inside_a_pass = False
         for _ in range(6):
-            began = time.monotonic()
+            reads_at_the_call = stuck.reads
             held.drive(ibkr)
-            longest_pass_s = max(longest_pass_s, time.monotonic() - began)
+            read_inside_a_pass = read_inside_a_pass or stuck.reads != reads_at_the_call
             await asyncio.sleep(0.03)
         await _eventually(lambda: holder.last_handed_over(CALL, clock.value) is not None)
         reads_while_stuck = stuck.reads - reads_before
+        waited_out_by_a_pass = latch.timed_out
     finally:
-        stuck.blocked.set()
+        latch.set()
     await held.settled()
     stuck.blocked = None
     held.drive(ibkr)
     await held.settled()
 
-    assert longest_pass_s < 0.25, "a pass waited on the books"
+    # Every pass returned while the read was still stuck, and none read the books itself.
+    assert not read_inside_a_pass, "a pass waited on the books"
+    assert not waited_out_by_a_pass, "a pass waited on the books"
     assert reads_while_stuck == 1
     assert holder.last_handed_over(CALL, clock.value) == (Decimal("4.08"), Decimal("4.12"), NOW)
     assert stuck.reads - reads_before == 2, "once the stuck read answered, the next round read the books again"
@@ -802,7 +824,7 @@ async def test_a_file_that_cannot_be_written_in_time_holds_up_no_pass_and_is_not
     account.holds = [CALL.occ_symbol]
     await held.read_books()
     ibkr.quotes[CALL.occ_symbol] = _quote("4.08", "4.12", NOW - 300)
-    slow_disk, writes, write = threading.Event(), [], account.kept.keep_all
+    slow_disk, writes, write = _Latch(), [], account.kept.keep_all
 
     def slowly(quotes: object, *, kept_at_ms: int) -> None:
         writes.append(kept_at_ms)
@@ -811,18 +833,21 @@ async def test_a_file_that_cannot_be_written_in_time_holds_up_no_pass_and_is_not
 
     monkeypatch.setattr(account.kept, "keep_all", slowly)
     try:
-        longest_pass_s = 0.0
+        wrote_inside_a_pass = False
         for _ in range(6):
-            began = time.monotonic()
+            writes_at_the_call = len(writes)
             held.drive(ibkr)
-            longest_pass_s = max(longest_pass_s, time.monotonic() - began)
+            wrote_inside_a_pass = wrote_inside_a_pass or len(writes) != writes_at_the_call
             await asyncio.sleep(0.03)
         begun_while_slow = len(writes)
+        waited_out_by_a_pass = slow_disk.timed_out
     finally:
         slow_disk.set()
     await held.settled()
 
-    assert longest_pass_s < 0.25, "a pass waited on the file"
+    # Every pass returned while the write was still stuck, and none wrote the file itself.
+    assert not wrote_inside_a_pass, "a pass waited on the file"
+    assert not waited_out_by_a_pass, "a pass waited on the file"
     assert begun_while_slow == 1
     assert account.last_handed_over(CALL, clock.value) == (Decimal("4.08"), Decimal("4.12"), NOW)
     # The late write is noted as the hand-over it was: the next is due fifteen seconds after it, not at once.
@@ -1002,7 +1027,7 @@ async def test_stopping_ends_the_round_under_way_at_once_though_a_thread_is_stuc
     account.holds = [CALL.occ_symbol]
     await held.read_books()
     ibkr.quotes[CALL.occ_symbol] = _quote("4.08", "4.12", NOW - 300)
-    stuck, write = threading.Event(), account.kept.keep_all
+    stuck, write = _Latch(), account.kept.keep_all
 
     def a_write_that_is_stuck(quotes: object, *, kept_at_ms: int) -> None:
         stuck.wait(30)
@@ -1015,17 +1040,15 @@ async def test_stopping_ends_the_round_under_way_at_once_though_a_thread_is_stuc
     try:
         held.drive(ibkr)
         await asyncio.sleep(0.05)
-        began = time.monotonic()
         await held.stop()
-        took_s = time.monotonic() - began
         # Nothing is left under way on the loop: this returns at once, with the thread still stuck.
-        await asyncio.wait_for(held.settled(), timeout=1)
-        still_stuck = not stuck.is_set()
+        await held.settled()
+        still_stuck = not stuck.is_set() and not stuck.timed_out
     finally:
         stuck.set()
     account.blocked = None
 
-    assert still_stuck and took_s < 1.0, "stopping waited for a thread nothing can stop"
+    assert still_stuck, "stopping waited for a thread nothing can stop"
     assert [request.held for request in held.requests()] == [(CALL,)]
     # A supervisor that opens again drives the same keeping, and it works.
     monkeypatch.setattr(account.kept, "keep_all", write)

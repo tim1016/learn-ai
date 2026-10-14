@@ -70,8 +70,12 @@ def test_from_settings_reads_every_live_value_and_names_the_missing_ones() -> No
 
 
 def test_the_loss_limit_is_the_tighter_of_fraction_and_usd() -> None:
-    assert loss_limit_usd(TEST_ENVELOPE_VALUES, last_equity_usd=100_000.0) == pytest.approx(5_000.0)
-    assert loss_limit_usd(TEST_ENVELOPE_VALUES, last_equity_usd=40_000.0) == pytest.approx(2_000.0)
+    assert loss_limit_usd(TEST_ENVELOPE_VALUES, last_equity_usd=100_000.0) == pytest.approx(
+        5_000.0, abs=1e-9, rel=0
+    )
+    assert loss_limit_usd(TEST_ENVELOPE_VALUES, last_equity_usd=40_000.0) == pytest.approx(
+        2_000.0, abs=1e-9, rel=0
+    )
     assert loss_breached(day_pnl_usd=-2_000.0, loss_limit_usd=2_000.0)
     assert not loss_breached(day_pnl_usd=-1_999.99, loss_limit_usd=2_000.0)
 

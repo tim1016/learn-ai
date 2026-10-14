@@ -885,13 +885,50 @@ async def test_hung_sdk_call_maps_to_broker_unavailable() -> None:
     assert isinstance(excinfo.value, BrokerUnreachable)
 
 
-def test_order_send_claim_outlasts_every_bounded_submit_attempt() -> None:
-    worst_send_ms = int(
-        ((_MAX_RATE_LIMIT_RETRIES + 1) * _DEFAULT_TIMEOUT_S
-         + _MAX_RATE_LIMIT_RETRIES * _RATE_LIMIT_RETRY_CAP_S) * 1000
-    )
+async def test_order_send_claim_outlasts_the_real_submit_retry_loop_at_its_worst(
+    make_api_error: ApiErrorFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The initial claim covers the longest send the real loop can take, on a fake clock.
 
-    assert DEFAULT_CLAIM_TTL_MS - worst_send_ms >= 13_000
+    Every attempt runs out the whole per-attempt bound it was given and ends in
+    a 429 that asks for an hour; every backoff sleeps what the loop asks of it.
+    """
+    elapsed_s = 0.0
+    calls = {"n": 0}
+
+    class _FullAttempt:
+        """``anyio.fail_after``: the attempt consumes its entire bound."""
+
+        def __init__(self, delay: float) -> None:
+            self._delay = delay
+
+        def __enter__(self) -> _FullAttempt:
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            nonlocal elapsed_s
+            elapsed_s += self._delay
+
+    async def advance_clock(seconds: float) -> None:
+        nonlocal elapsed_s
+        elapsed_s += seconds
+
+    fake = _FakeAlpaca()
+
+    def always_throttle(path: str, data: Any = None) -> dict[str, Any]:
+        calls["n"] += 1
+        raise make_api_error(429, headers={"Retry-After": "3600"})
+
+    fake.post = always_throttle  # type: ignore[method-assign]
+    monkeypatch.setattr("app.broker.alpaca.client.anyio.fail_after", _FullAttempt)
+    monkeypatch.setattr("app.broker.alpaca.client.anyio.sleep", advance_clock)
+
+    with pytest.raises(BrokerRateLimited):
+        await _client(fake).submit_order(_ORDER_BODY)
+
+    # Three attempts is the loop's whole budget: the measured time is its worst case.
+    assert calls["n"] == _MAX_RATE_LIMIT_RETRIES + 1
+    assert DEFAULT_CLAIM_TTL_MS > round(elapsed_s * 1000)
 
 
 def test_client_rejects_timeout_above_the_claimed_send_bound() -> None:
