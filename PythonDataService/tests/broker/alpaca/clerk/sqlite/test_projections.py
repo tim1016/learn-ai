@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from collections.abc import Iterator
@@ -20,6 +21,7 @@ from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.exit_recovery import RecoveryResult, record_exit_recovery
 from app.broker.alpaca.clerk.sqlite.facts import ExitReducingOrderCreatedFacts
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
+from app.broker.alpaca.clerk.sqlite.projection_errors import InvalidTimelineCursor
 from app.broker.alpaca.clerk.sqlite.projections import (
     SqliteClerkProjectionReader,
     timeline_sequences,
@@ -787,6 +789,59 @@ def test_operation_page_does_not_drop_an_operation_whose_updated_at_ms_advances_
         f"effect:{SID}:decision-2",
         f"effect:{SID}:decision-3",
     }
+
+
+def _reissued_cursor(cursor: str, **changes: object) -> str:
+    """The same operation cursor with the named payload keys replaced; a ``None`` value drops the key."""
+    payload = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+    for key, value in changes.items():
+        if value is None:
+            payload.pop(key)
+        else:
+            payload[key] = value
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(encoded).decode("ascii").rstrip("=")
+
+
+def test_an_operation_cursor_of_another_kind_is_refused_and_a_valid_one_still_pages(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """The cursor names its own kind; one of another kind, or of none, is not an operation cursor (#3216).
+
+    The check compared the literal ``"operation_page"`` with itself, so a
+    cursor whose ``kind`` said anything else decoded as a valid one.
+    """
+    monkeypatch.setattr("app.broker.alpaca.clerk.sqlite.enter.require_admission", lambda *a, **kw: None)
+    clock = _Clock()
+    repo = _repository(tmp_path, clock)
+    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="run-1", clock=clock)
+    leg = BrokerOrderLeg(symbol="SPY", side="buy", quantity=1)
+    for decision_id in ("decision-1", "decision-2"):
+        accept_enter(
+            repo,
+            account_id=ACCOUNT_ID,
+            strategy_instance_id=SID,
+            decision_id=decision_id,
+            lifecycle_run_id="run-1",
+            leg=leg,
+        )
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock)
+    try:
+        first = reader.operation_page(strategy_instance_id=SID, page_size=1)
+        assert first.next_cursor is not None
+        for tampered in (
+            _reissued_cursor(first.next_cursor, kind="timeline_page"),
+            _reissued_cursor(first.next_cursor, kind=None),
+        ):
+            with pytest.raises(InvalidTimelineCursor):
+                reader.operation_page(strategy_instance_id=SID, cursor=tampered, page_size=1)
+        second = reader.operation_page(strategy_instance_id=SID, cursor=first.next_cursor, page_size=1)
+    finally:
+        reader.close()
+        repo.close()
+
+    assert [operation.effect_operation_id for operation in second.operations] == [f"effect:{SID}:decision-1"]
 
 
 def test_recovery_policy_reads_working_orders_outside_the_operation_page(

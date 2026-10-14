@@ -1051,10 +1051,15 @@ def _custody_timeline(
         for entry in timeline
         if entry.source_event_at_ms is not None
     ]
-    terminal = (
-        timeline[-1]
-        if timeline and operation.state in {"failed", "succeeded"}
-        else None
+    # The operation's own record of when its state last changed. Every fold
+    # that moves an effect's state stamps ``updated_at_ms`` with that
+    # transition's recorded time, and none touches a terminal effect again.
+    # Neither the newest transition (a failed order is looked up again by
+    # later reconciliation passes) nor the first one labelled with the
+    # terminal state will do: some producers write ``succeeded`` on a
+    # transition of an operation still in flight.
+    terminal_recorded_at_ms = (
+        operation.updated_at_ms if operation.state in {"failed", "succeeded"} else None
     )
     return ClerkCustodyTimeline(
         intent_created_at_ms=operation.created_at_ms,
@@ -1076,9 +1081,7 @@ def _custody_timeline(
         first_callback_recorded_at_ms=(
             first.recorded_at_ms if first is not None else None
         ),
-        economic_terminal_recorded_at_ms=(
-            terminal.recorded_at_ms if terminal is not None else None
-        ),
+        economic_terminal_recorded_at_ms=terminal_recorded_at_ms,
     )
 
 
