@@ -64,6 +64,89 @@ async def test_local_stream_failure_before_headers_returns_the_app_error() -> No
         await asyncio.wait_for(handler(request), timeout=1)
 
 
+def _pending_local_stream_tasks() -> set[asyncio.Task[object]]:
+    return {
+        task for task in asyncio.all_tasks()
+        if not task.done() and (
+            task.get_name() == "fleet-local-stream"
+            or getattr(task.get_coro(), "__qualname__", "") == "Queue.get"
+        )
+    }
+
+
+async def test_cancelling_idle_local_stream_leaves_no_queue_getter_or_app_task() -> None:
+    closed = asyncio.Event()
+
+    async def idle_app(scope, receive, send) -> None:
+        try:
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await receive()
+            await receive()
+        finally:
+            closed.set()
+
+    operation = dataclasses.replace(
+        next(iter(ALPACA_OPERATIONS)), method="GET", stream=OperationStream.SSE,
+        agent_path_template="/idle",
+    )
+    request = DeliveryRequest(broker="alpaca", clerk_id="clerk", operation=operation, path_params={})
+    result = await _LocalAsgiHandler(idle_app)(request)
+    consumer = asyncio.create_task(result.events.__anext__())
+    try:
+        for _ in range(20):
+            if any(getattr(task.get_coro(), "__qualname__", "") == "Queue.get" for task in _pending_local_stream_tasks()):
+                break
+            await asyncio.sleep(0)
+        assert any(getattr(task.get_coro(), "__qualname__", "") == "Queue.get" for task in _pending_local_stream_tasks())
+        consumer.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await consumer
+        await asyncio.wait_for(closed.wait(), timeout=1)
+        assert not _pending_local_stream_tasks()
+    finally:
+        consumer.cancel()
+        tasks = _pending_local_stream_tasks()
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(consumer, *tasks, return_exceptions=True)
+
+
+async def test_cancelling_local_refusal_read_leaves_no_queue_getter_or_app_task() -> None:
+    closed = asyncio.Event()
+
+    async def refusing_app(scope, receive, send) -> None:
+        try:
+            await send({"type": "http.response.start", "status": 404, "headers": []})
+            await receive()
+            await receive()
+        finally:
+            closed.set()
+
+    operation = dataclasses.replace(
+        next(iter(ALPACA_OPERATIONS)), method="GET", stream=OperationStream.SSE,
+        agent_path_template="/refused",
+    )
+    request = DeliveryRequest(broker="alpaca", clerk_id="clerk", operation=operation, path_params={})
+    opening = asyncio.create_task(_LocalAsgiHandler(refusing_app)(request))
+    try:
+        for _ in range(20):
+            if any(getattr(task.get_coro(), "__qualname__", "") == "Queue.get" for task in _pending_local_stream_tasks()):
+                break
+            await asyncio.sleep(0)
+        assert any(getattr(task.get_coro(), "__qualname__", "") == "Queue.get" for task in _pending_local_stream_tasks())
+        opening.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await opening
+        await asyncio.wait_for(closed.wait(), timeout=1)
+        assert not _pending_local_stream_tasks()
+    finally:
+        opening.cancel()
+        tasks = _pending_local_stream_tasks()
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(opening, *tasks, return_exceptions=True)
+
+
 async def test_http_stream_open_is_bounded_and_releases_the_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

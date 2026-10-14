@@ -1007,33 +1007,44 @@ class _LocalAsgiHandler:
 
         task.add_done_callback(finish)
 
+        async def next_chunk(*, missing_final_body: str) -> bytes | None:
+            item_task = asyncio.create_task(queue.get())
+            try:
+                done, _ = await asyncio.wait(
+                    {item_task, task}, return_when=asyncio.FIRST_COMPLETED
+                )
+                if task in done and item_task not in done:
+                    await task
+                    raise RuntimeError(missing_final_body)
+                return item_task.result()
+            finally:
+                if not item_task.done():
+                    item_task.cancel()
+                await asyncio.gather(item_task, return_exceptions=True)
+
+        async def close_app() -> None:
+            connection_open.set()
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
         async def chunks() -> AsyncIterator[bytes]:
             try:
                 while True:
-                    item_task = asyncio.create_task(queue.get())
-                    done, _ = await asyncio.wait({item_task, task}, return_when=asyncio.FIRST_COMPLETED)
-                    if task in done and item_task not in done:
-                        item_task.cancel()
-                        await asyncio.gather(item_task, return_exceptions=True)
-                        await task
-                        raise RuntimeError("local stream ended without a final body")
-                    item = item_task.result()
+                    item = await next_chunk(
+                        missing_final_body="local stream ended without a final body"
+                    )
                     if item is None:
                         break
                     yield item
                 await task
             finally:
-                connection_open.set()
-                if not task.done():
-                    task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
+                await close_app()
 
         try:
             start = await asyncio.wait_for(started, timeout=10.0)
         except BaseException:
-            connection_open.set()
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+            await close_app()
             raise
         if start["status"] >= 400:
             # A refused stream-open is that refusal — the same rule the HTTP
@@ -1041,26 +1052,23 @@ class _LocalAsgiHandler:
             # the error page away from the SSE parser. The collected body is
             # what stream_read's refusal excerpt logs (#2164).
             refused_body: list[bytes] = []
-            while True:
-                item_task = asyncio.create_task(queue.get())
-                done, _ = await asyncio.wait({item_task, task}, return_when=asyncio.FIRST_COMPLETED)
-                if task in done and item_task not in done:
-                    item_task.cancel()
-                    await asyncio.gather(item_task, return_exceptions=True)
-                    await task
-                    raise RuntimeError("local refusal ended without a final body")
-                item = item_task.result()
-                if item is None:
-                    break
-                refused_body.append(item)
-            await task
-            connection_open.set()
-            return StreamDeliveryResult(
-                status_code=start["status"],
-                headers=_decoded_headers(start),
-                events=_no_stream_events(),
-                error_body=b"".join(refused_body),
-            )
+            try:
+                while True:
+                    item = await next_chunk(
+                        missing_final_body="local refusal ended without a final body"
+                    )
+                    if item is None:
+                        break
+                    refused_body.append(item)
+                await task
+                return StreamDeliveryResult(
+                    status_code=start["status"],
+                    headers=_decoded_headers(start),
+                    events=_no_stream_events(),
+                    error_body=b"".join(refused_body),
+                )
+            finally:
+                await close_app()
         events = iter_sse_events(chunks())
         weakref.finalize(events, task.cancel)
         return StreamDeliveryResult(
