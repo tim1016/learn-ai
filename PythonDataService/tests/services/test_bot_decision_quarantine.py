@@ -84,8 +84,8 @@ def test_the_receipt_carries_no_evaluation_identity() -> None:
     """A quarantined bucket never became an evaluation, so it has none to claim.
 
     Inventing one would make the row look like a decision to every consumer
-    keyed on ``evaluation_id`` -- above all ``run_replay_proof``, which would
-    then hunt for a replayed bucket that cannot exist.
+    keyed on ``evaluation_id``, which would then hunt for a bucket that cannot
+    exist.
     """
     receipts = _RecordingReceipts()
 
