@@ -76,6 +76,7 @@ IDENTITY_SOURCE_PATHS: tuple[str, ...] = (
     *(
         f"app/research/golden_search/{module}.py"
         for module in (
+            "activity",
             "budget",
             "declarations",
             "evaluator",

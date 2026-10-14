@@ -10,6 +10,7 @@ from app.research.golden_search import service
 from app.research.golden_search.chance_approval import (
     CHANCE_UNAVAILABLE,
     CHANCE_WITHIN_NOISE,
+    approval_weakness,
     chance_weakness_items,
     enrollment_policy,
 )
@@ -193,6 +194,18 @@ def test_the_words_an_approval_refusal_quotes_are_the_acknowledgements_own_and_n
     assert words.startswith("not enough final-test evidence and the previously used test interval and support against the current settings")
     assert "EXAM_" not in words and "EXPOSURE_" not in words and "CHANCE_" not in words
     assert words.count("inside the resampling model's noise") == 2
+
+
+def test_the_approval_weakness_lists_the_research_codes_then_each_chance_code_once() -> None:
+    fit = {"key": "all_period", "point_hash": "h-all", "outcome": "does_not_meet_rules", "checks": []}
+    exam = {"claim": "exploratory", "exposure_state": "previously_used", "fits": [fit]}
+
+    weakness = approval_weakness(protocol_from_request(plan_request("SPY")), exam, fit, POLICY)
+
+    # An enrolled fit that stored no chance record leaves all three required readings unavailable: one code, three reasons.
+    assert weakness.codes == ["EXAM_DOES_NOT_MEET_RULES", "EXPOSURE_PREVIOUSLY_USED", CHANCE_UNAVAILABLE]
+    assert _codes(weakness.items) == [CHANCE_UNAVAILABLE]
+    assert {"comparison", "profitability", "carry_over"} <= set(weakness.chance)
 
 
 # ── The approval intent's refusal, without a database ───────────────────────────────────────────────────────

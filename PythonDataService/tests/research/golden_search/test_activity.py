@@ -159,7 +159,7 @@ def test_stages_use_each_windows_floor_and_the_verdict_uses_all_forward_time(mon
     declaration = declaration_for(protocol.strategy_key)
     assert declaration is not None
     row = cast(StudyRow, SimpleNamespace(id="frequency-study", receipt={"activity": activity_plan(protocol)}))
-    ctx = StageContext(row, 0, protocol, declaration, FakeEngine(), [], lambda: None, lambda _: None, lambda *_: None, lambda _: None)
+    ctx = StageContext(row, 0, protocol, declaration, FakeEngine(), [], lambda: None, lambda _: None, lambda *_: None)
 
     tests = {(fold.test_start_ms, fold.test_end_ms) for fold in fold_windows(protocol)}
 
@@ -196,6 +196,6 @@ def test_a_frequency_plan_without_its_receipt_refuses_instead_of_falling_back() 
     declaration = declaration_for(protocol.strategy_key)
     assert declaration is not None
     row = cast(StudyRow, SimpleNamespace(id="frequency-study", receipt={}))
-    ctx = StageContext(row, 0, protocol, declaration, FakeEngine(), [], lambda: None, lambda _: None, lambda *_: None, lambda _: None)
+    ctx = StageContext(row, 0, protocol, declaration, FakeEngine(), [], lambda: None, lambda _: None, lambda *_: None)
     with pytest.raises(ValueError, match="missing its expected trade frequency"):
         ctx.floors.at(ctx.development)

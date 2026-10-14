@@ -407,7 +407,6 @@ def _stage_work(req: GoldenSearchJobRequest):
             cancel_check=cancel.raise_if_cancelled,
             on_phase=emit.phase,
             on_progress=lambda done, total: emit.progress(done, total, unit="evaluations"),
-            on_log=emit.log,
         )
         return outcome.as_dict()
 
@@ -445,7 +444,6 @@ def _gated_stage_work(req: GoldenSearchJobRequest):
                 emit.progress(done, total, unit="evaluations"),
                 lease.completion(done, total),
             ),
-            on_log=emit.log,
             dispatch_factory=_runtime_dispatch_factory(
                 on_checkpoint=lease.child_checkpoint, cancel_check=lease.fenced_cancel, emit=emit
             ),

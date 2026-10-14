@@ -1608,7 +1608,6 @@ async def test_a_stage_under_the_checkpoint_contract_renews_only_on_accepted_che
         cancel_check=jobs_progress.CancellationCheck(job, renews_lease=False).raise_if_cancelled,
         on_phase=phase_checkpoint,
         on_progress=completion_checkpoint,
-        on_log=lambda message: None,
         execute=driver.engine,
         approval=driver.approval.binding(),
         roots=driver.roots,

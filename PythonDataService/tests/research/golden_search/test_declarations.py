@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from decimal import Decimal
 
 import pytest
@@ -182,6 +183,22 @@ def test_canonical_point_refuses_out_of_domain_and_unknown_inputs() -> None:
         canonical_point(EMA, "SPY", {"gap": "wide"})
     with pytest.raises(ValueError):
         canonical_point(EMA, "SPY", {"rsi_min": 80})  # the model refuses rsi_min >= rsi_max
+
+
+@pytest.mark.parametrize(("name", "value"), [("gap", -0.004), ("gap", 2.004), ("rsi_min", -0.4), ("gap_bps", 100.2)])
+def test_canonical_point_refuses_a_value_less_than_half_a_quantum_outside_the_domain(name: str, value: float) -> None:
+    # The raw value is outside the domain: rounding it onto the boundary would move it, not refuse it.
+    with pytest.raises(ValueError, match="outside its domain"):
+        canonical_point(EMA, "SPY", {name: value})
+
+
+def test_a_zero_has_one_sign_and_so_one_hash() -> None:
+    negative = canonical_point(EMA, "SPY", {"gap": -0.0, "gap_bps": -0.0})
+    positive = canonical_point(EMA, "SPY", {"gap": 0.0, "gap_bps": 0.0})
+
+    assert negative == positive
+    assert math.copysign(1.0, negative["gap"]) == 1.0 and math.copysign(1.0, negative["gap_bps"]) == 1.0
+    assert point_hash(EMA, negative) == point_hash(EMA, positive)
 
 
 def test_point_hash_ignores_key_order() -> None:

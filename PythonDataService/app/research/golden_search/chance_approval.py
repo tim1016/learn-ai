@@ -38,9 +38,12 @@ inferred from dates on read.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, NamedTuple
 
 from app.research.golden_search.chance_compare import _at_least
+from app.research.golden_search.chance_final import FinalChanceScope, stored_final_chance
+from app.research.golden_search.guidance import research_weakness
+from app.research.golden_search.protocol import GoldenSearchProtocol
 
 #: What the enrollment marker (and the approval gate it names) call themselves.
 SCHEMA = "golden-search-chance-approval/v1"
@@ -230,3 +233,24 @@ def _one_item_per_code(items: list[dict[str, str]]) -> list[dict[str, str]]:
     for item in items:
         texts.setdefault(item["code"], []).append(item["text"])
     return [{"code": code, "text": " and ".join(parts)} for code, parts in texts.items()]
+
+
+class ApprovalWeakness(NamedTuple):
+    chance: dict[str, Any]
+    items: list[dict[str, str]]
+    codes: list[str]
+
+
+def approval_weakness(
+    protocol: GoldenSearchProtocol, exam: Mapping[str, Any], chosen: Mapping[str, Any], policy: Mapping[str, Any] | None
+) -> ApprovalWeakness:
+    """What approving ``chosen`` must acknowledge: its stored final components, the chance items and every weakness code.
+
+    The approval intent and the qualification payload both read this, so the record the acknowledgement was
+    given against is the record the qualification retains. The scope is the frozen protocol plus the fit's point
+    identity, so a stored record that belongs to another fit, window, capital or objective never counts (#3024).
+    """
+    chance = stored_final_chance(chosen, FinalChanceScope.for_protocol(protocol, point_hash=chosen["point_hash"]))
+    items = chance_weakness_items(policy, chance, positive_net_required=bool(protocol.policy.require_positive_net))
+    codes = research_weakness(chosen["outcome"], exam["claim"], exam["exposure_state"]) + [item["code"] for item in items]
+    return ApprovalWeakness(chance, items, codes)

@@ -433,7 +433,7 @@ def validate_protocol(p: GoldenSearchProtocol, declaration: SearchDeclaration) -
         refusals.add("METHOD_INVALID", "method", f"The search method must be zoom or grid, not {p.method!r}.")
     _validate_knobs(p, declaration, refusals)
     _validate_seed(p, declaration, refusals)
-    _validate_incumbent(p, refusals)
+    _validate_incumbent(p, declaration, refusals)
     _validate_zoom(p, refusals)
     _validate_intervals(p, refusals)
     _validate_policy(p, refusals)
@@ -618,7 +618,7 @@ def _validate_seed(p: GoldenSearchProtocol, declaration: SearchDeclaration, refu
             )
 
 
-def _validate_incumbent(p: GoldenSearchProtocol, refusals: _Refusals) -> None:
+def _validate_incumbent(p: GoldenSearchProtocol, declaration: SearchDeclaration, refusals: _Refusals) -> None:
     source = p.incumbent.source
     if source not in get_args(IncumbentSource):
         refusals.add("INCUMBENT_INVALID", "incumbent.source", f"The incumbent must come from the registry or a qualification, not {source!r}.")
@@ -630,6 +630,20 @@ def _validate_incumbent(p: GoldenSearchProtocol, refusals: _Refusals) -> None:
         )
     if p.incumbent.params.get("symbol") != p.symbol:
         refusals.add("INCUMBENT_INVALID", "incumbent.params", f"The incumbent's parameters are not for {p.symbol!r}.")
+    declared = {knob.name: knob for knob in declaration.knobs}
+    unknown = sorted(name for name in p.incumbent.params if name != "symbol" and name not in declared)
+    if unknown:
+        refusals.add("INCUMBENT_INVALID", "incumbent.params", f"The incumbent sets undeclared parameters: {', '.join(unknown)}.")
+    # Only that each value is a number is checked: a qualification minted under an older declaration may sit
+    # outside today's domain or off its quantum, and stays the incumbent it was approved as (#2696).
+    for name, knob in declared.items():
+        if name not in p.incumbent.params:
+            continue
+        raw = p.incumbent.params[name]
+        try:
+            to_decimal(raw)
+        except ValueError:
+            refusals.add("INCUMBENT_INVALID", f"incumbent.params.{name}", f"{knob.label}: the incumbent's {raw!r} is not a finite number.")
 
 
 def _validate_zoom(p: GoldenSearchProtocol, refusals: _Refusals) -> None:

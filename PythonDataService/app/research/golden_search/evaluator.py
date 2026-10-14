@@ -564,10 +564,10 @@ class StudyEvaluator:
     execute: ExecuteBacktest
     cancel_check: Callable[[], object] = lambda: None
     on_evaluated: Callable[[int], None] = lambda done: None
-    # The ready-batch adapter (#3040). None — every production caller today —
-    # runs the serial adapter; tests inject ``reordered_dispatch`` to prove
-    # order independence. Production dispatch stays serial until the worker
-    # runtime exists; the gate contract is untouched by this seam.
+    # The ready-batch adapter (#3040). None runs the serial adapter (local
+    # execution mode); the research runtime passes a spawned-worker dispatch
+    # (#3044, #3046); tests inject ``reordered_dispatch`` to prove order
+    # independence. The gate contract is untouched by this seam.
     dispatch: BatchDispatch | None = None
     new_runs: int = 0
     cache_hits: int = 0
