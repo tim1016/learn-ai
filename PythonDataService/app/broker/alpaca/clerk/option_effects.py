@@ -195,10 +195,6 @@ class OptionExitEvidence:
     generation: int
     read_at_ms: int
 
-    def for_other_contracts_than(self, symbol: str) -> tuple[str, ...]:
-        """The contracts quoted here that are not ``symbol``, in order."""
-        return tuple(sorted(quoted for quoted in self.quotes if quoted != symbol))
-
 
 @dataclass(frozen=True, slots=True)
 class TakenOptionPlan:

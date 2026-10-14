@@ -2228,7 +2228,7 @@ def _why_a_simulation_did_not_let_go(settled: SimulatedOptionSettlements | None,
 
 
 def _why_a_real_account_cannot_end(
-    conn: sqlite3.Connection, read: OptionEventRead, request: OwnerEndingRequest, contract: OptionContract,
+    read: OptionEventRead, request: OwnerEndingRequest, contract: OptionContract,
     *, held_now: float, now_ms: int, rows_in_the_way: Sequence[str],
 ) -> OwnerEndingOutcome | None:
     """Why this read does not prove a real account's contract has no settlement, or None when it does.
@@ -2420,7 +2420,7 @@ def _end_at_the_owners_word(
     now_ms = repo.clock()
     in_the_way, set_aside = _rows_that_may_end(read, contract, rows_aside)
     refused = _why_a_real_account_cannot_end(
-        conn, read, request, contract, held_now=held_now, now_ms=now_ms, rows_in_the_way=in_the_way
+        read, request, contract, held_now=held_now, now_ms=now_ms, rows_in_the_way=in_the_way
     )
     if refused is not None:
         return refused, None
