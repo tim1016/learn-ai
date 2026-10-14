@@ -381,3 +381,24 @@ class TestHealthScoreImputedPrior:
         # Imputed-ness flag still fires regardless of the numeric match.
         assert body_imputed["explanation"]["health_imputed_now"] is True
         assert body_explicit["explanation"]["health_imputed_now"] is False
+
+
+class TestTheUnrealizedForwardTailIsNotASignal:
+    """G-1: the last window's forward RV is unrealized; a z-score built over a filled tail read as SHORT/LONG VOL."""
+
+    async def test_vrp_z_is_null_wherever_the_forward_rv_is(self, client, recorder_store):
+        bars = _bars(400)
+        iv_series = [{"ts": bar["ts"], "iv30": 0.20 + 0.01 * ((i * 7) % 5)} for i, bar in enumerate(bars)]
+
+        resp = await client.post(
+            "/api/edge/realized-vs-iv/series",
+            json={"symbol": "SPY", "bars": bars, "iv_series": iv_series, "windows": [5], "estimators": ["ctc"]},
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        blind = [i for i, rv in enumerate(body["rv_hf_forward"]) if rv is None]
+        assert blind, "the forward RV has an unrealized tail"
+        assert blind[-1] == len(bars) - 1
+        assert all(body["vrp_z"][i] is None for i in blind)
+        assert any(z is not None for z in body["vrp_z"]), "earlier bars keep their z-score"

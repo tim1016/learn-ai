@@ -159,9 +159,12 @@ async def realized_vs_iv_series(req: RealizedVsIvSeriesRequest) -> RealizedVsIvS
     iv_trd252 = _convert_iv_to_trd252(iv, req.tenor_days)
 
     vrp_fwd = compute_vrp(iv_trd252.fillna(np.nan), rv_hf_fwd)
+    # The forward RV of the last window's bars is not realized yet, so ``rv``
+    # is never filled: a z-score of an unrealized tail would read as a signal.
+    # ``vrp_z`` is NaN wherever the forward RV is, and the page shows "—".
     sig = vrp_signal(
         iv=iv_trd252.ffill(),
-        rv=rv_hf_fwd.ffill(),
+        rv=rv_hf_fwd,
         lookback=min(252, len(bars) - 1),
         confidence=confidence,
         confidence_floor=req.confidence_floor,
