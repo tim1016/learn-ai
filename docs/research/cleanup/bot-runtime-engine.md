@@ -17,7 +17,7 @@
 - **G-1 / G-2:** the edge page's SHORT VOL / LONG VOL readout is built on a forward-filled unrealized forward-RV tail, and the "past-only" HF RV feature is not causal intraday. Research page, no order path.
 - **C-1 / C-2 / C-3:** three money-path gates are unproven — a mutant of each survives 1,231+ tests (Stop-fence OBSERVE_ONLY branch in both runners; the ENTER-only liveness gate; the Dry Run REJECTED discard). Test gaps, not defects.
 
-**One cut PR** ([#TBD](https://github.com/tim1016/learn-ai/pulls)): delete-only, 12 files, +6 −69, 14 dead-machinery rows (listed below). Project-scope `ruff check` is clean; 1,562 quick tests and 1,863 more including the slow sealed-program tier (`tests/engine/strategy`, `tests/broker/v2panel`, `tests/contracts`) pass. It touches no sealed program source, golden fixture, clerk store, money trail, OpenAPI snapshot or generated type. One independent reviewer (a fresh subagent, the repo's thermo skill plus a falsification pass over every deletion): **PASS, no majors**; it re-ran the callers by its own greps and AST scans and about 22,000 tests (3,303 on the 182 files that name a touched module). Its minors: the commit moves the research-study code-identity digest (any edit under `app/engine` does), and `BotTaskRegistry.list_bots` is now visibly test-only.
+**One cut PR** ([#3172](https://github.com/tim1016/learn-ai/pull/3172)): delete-only, 12 files, +6 −69, 14 dead-machinery rows (listed below). Project-scope `ruff check` is clean; 1,562 quick tests and 1,863 more including the slow sealed-program tier (`tests/engine/strategy`, `tests/broker/v2panel`, `tests/contracts`) pass. It touches no sealed program source, golden fixture, clerk store, money trail, OpenAPI snapshot or generated type. One independent reviewer (a fresh subagent, the repo's thermo skill plus a falsification pass over every deletion): **PASS, no majors**; it re-ran the callers by its own greps and AST scans and about 22,000 tests (3,303 on the 182 files that name a touched module). Its minors: the commit moves the research-study code-identity digest (any edit under `app/engine` does), and `BotTaskRegistry.list_bots` is now visibly test-only.
 
 The module is otherwise in good shape. The symbol-level caller search over 3,001 names finds almost nothing dead outside the cut (3 names with no mention anywhere; 15 test-only seams, left under the owner's 2026-09-30 ruling). The largest dead item, `algorithm_pseudocode` + `gotchas` (448 lines of registry prose, F1-C1), cannot go without regenerating the OpenAPI snapshot and Frontend types, so it is a handoff slice. No row from kill lists #2703, #2704, #2724, #2725 or #2727 that this ticket may cut is still on master; the rows that remain are the ones the owner's ◇ addenda ruled to stay.
 
@@ -51,7 +51,7 @@ Of the rest: 149 finding rows across the eight slices, 34 tests that fail the ba
 
 ## What went into the cut, and what did not
 
-In the cut ([#TBD](https://github.com/tim1016/learn-ai/pulls)), one commit on `chore/3157-bot-runtime-engine-dead-machinery`:
+In the cut ([#3172](https://github.com/tim1016/learn-ai/pull/3172)), one commit on `chore/3157-bot-runtime-engine-dead-machinery`:
 
 | Row | Piece | Why it is dead (the grep) |
 |---|---|---|
