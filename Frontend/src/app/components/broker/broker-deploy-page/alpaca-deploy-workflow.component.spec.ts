@@ -230,11 +230,18 @@ const UNREADABLE_READS: readonly { kind: string; status?: number; error: unknown
   // The same words the route's own answer uses: no code, so no proof.
   { kind: 'the old never-claimed string with no code', error: { detail: NEVER_CLAIMED_MESSAGE }, message: NEVER_CLAIMED_MESSAGE },
   { kind: 'no body', error: null, message: 'The deployment result could not be read.' },
-  // The shape a typed panel refusal (`_raise_alpaca_deploy_error`) has: a code of its own, not this one.
+  // The shape a typed panel refusal (`_raise_alpaca_deploy_error`) has: a settled one, with a code of its own.
   {
-    kind: 'a typed refusal that does not name the never-claimed code',
-    error: { detail: { outcome: 'blocked', message: 'No bot with this sid.', reason_code: null, submission_settled: false } },
-    message: 'No bot with this sid.',
+    kind: 'a settled refusal that names another code',
+    error: {
+      detail: {
+        outcome: 'blocked',
+        message: 'No valid name can be authored for the bot.',
+        reason_code: 'deploy_bot_name_unavailable',
+        submission_settled: true,
+      },
+    },
+    message: 'No valid name can be authored for the bot.',
   },
   // Only a 404 is the never-claimed answer: the code on any other status settles nothing.
   {
