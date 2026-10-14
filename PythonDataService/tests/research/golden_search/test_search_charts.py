@@ -146,7 +146,7 @@ class _Budget:
 
 @pytest.mark.parametrize("limit", [1, 4, 9])
 def test_a_budget_stop_mid_search_still_rebuilds_the_winner(limit: int) -> None:
-    protocol = _protocol_with_floor()
+    protocol = protocol_from_request(plan_request("SPY"))
     landscape = Landscape(_score)
     result = run_zoom(declaration=EMA, protocol=protocol, seed=protocol.seed, evaluate=_Budget(landscape, limit), policy=_policy(protocol))
     charts = _charts(protocol, result, landscape)
@@ -171,7 +171,7 @@ class _PrefixBudget:
 
 
 def test_a_budget_stop_partway_through_a_round_draws_no_path_short_of_the_points_it_scored() -> None:
-    protocol = _protocol_with_floor()
+    protocol = protocol_from_request(plan_request("SPY"))
     landscape = Landscape(_score)
     # The seed, then three points of the first round's batch: stored, but no round records them.
     result = run_zoom(declaration=EMA, protocol=protocol, seed=protocol.seed, evaluate=_PrefixBudget(landscape, 4), policy=_policy(protocol))
@@ -184,7 +184,7 @@ def test_a_budget_stop_partway_through_a_round_draws_no_path_short_of_the_points
 
 
 def test_with_nothing_eligible_the_winner_is_the_seed_and_the_path_has_no_best() -> None:
-    protocol = _protocol_with_floor()
+    protocol = protocol_from_request(plan_request("SPY"))
     def too_few(point: Mapping[str, Any]) -> Metrics:
         return metrics(1.0, trades=5)
 
@@ -197,7 +197,7 @@ def test_with_nothing_eligible_the_winner_is_the_seed_and_the_path_has_no_best()
 
 
 def test_a_failed_run_has_no_numbers_only_its_rule() -> None:
-    protocol = _protocol_with_floor()
+    protocol = protocol_from_request(plan_request("SPY"))
     failed = metrics(None, net=None, total_return=None, status="failed")
     landscape = Landscape(lambda point: failed if float(point["gap"]) == 0.0 else _score(point))
     result = run_zoom(declaration=EMA, protocol=protocol, seed=protocol.seed, evaluate=landscape, policy=_policy(protocol))
@@ -208,7 +208,3 @@ def test_a_failed_run_has_no_numbers_only_its_rule() -> None:
 
     gap_zero = [point for point in points if float(point["point"]["gap"]) == 0.0]
     assert gap_zero and all(point["total_trades"] is None and point["ineligibility"] == "FAILED" for point in gap_zero)
-
-
-def _protocol_with_floor() -> GoldenSearchProtocol:
-    return protocol_from_request(plan_request("SPY"))

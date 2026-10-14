@@ -10,8 +10,10 @@ import numpy as np
 import pytest
 
 from app.lean_sidecar.trading_calendar import expected_sessions, session_close_ms_utc
+from app.research.golden_search.chance import MEAN_BLOCK_SESSIONS, REPLICATIONS
 from app.research.golden_search.chance_drawdown import NOT_MEASURED, count_falls, drawdown_reading, stored_drawdown
 from app.research.golden_search.selection import Metrics
+from app.research.monte_carlo.stationary import stationary_index_chunks
 from app.utils.session_anchors import et_midnight_ms
 
 CAPITAL = 100_000.0
@@ -78,13 +80,6 @@ def test_a_positive_only_series_falls_not_at_all() -> None:
     assert reading["percentiles"]["p95"] == 0.0
 
 
-def test_quantiles_interpolate_linearly_and_carry_their_finite_count() -> None:
-    reading = _reading(_smooth(60, 1))
-    assert reading["percentiles"]["finite"] == 10_000
-    assert 0.0 <= reading["percentiles"]["p50"] <= reading["percentiles"]["p95"] < 1.0
-    assert reading["counts"]["beyond_ceiling"] + reading["counts"]["within_ceiling"] + reading["counts"]["undefined"] == 10_000
-
-
 def test_the_percentiles_interpolate_by_hand_computed_positions() -> None:
     from app.research.golden_search.chance_drawdown import _percentiles
 
@@ -113,14 +108,19 @@ def test_ceiling_equality_is_within_a_strict_breach_is_a_concern() -> None:
     assert "research concern" in breaching["sentence"]
 
 
-def test_a_deterministic_alternating_series_states_its_actual_outcomes_not_a_promise() -> None:
+def test_one_losing_session_puts_exactly_the_paths_that_draw_it_beyond_the_ceiling() -> None:
     # Exactly one losing session of -10% among flat ones: a path's fall is 0.1 iff it draws that session.
-    alternating = [0.0] * 59
-    alternating[30] = -0.10
-    reading = _reading(alternating, ceiling=0.05)
-    assert reading["counts"]["beyond_ceiling"] + reading["counts"]["within_ceiling"] == 10_000
-    drawn_beyond = reading["counts"]["beyond_ceiling"]
-    assert 0 < drawn_beyond < 10_000, "the share is whatever the deterministic fixture actually draws, never an assumed 1-in-20"
+    losing_session = 30
+    returns = [0.0] * 59
+    returns[losing_session] = -0.10
+    reading = _reading(returns, ceiling=0.05)
+    # The expected count is read off the reading's own stored seed: the paths that include the losing session.
+    rng = np.random.default_rng(reading["basis"]["seed"]["value"])
+    chunks = stationary_index_chunks(len(returns), size=len(returns), mean_block=MEAN_BLOCK_SESSIONS, replications=REPLICATIONS, rng=rng)
+    drawn = sum(int(np.count_nonzero((chunk == losing_session).any(axis=1))) for chunk in chunks)
+    # Never an assumed one-in-twenty: the share is whatever the stored draw actually reaches.
+    assert 0 < drawn < REPLICATIONS
+    assert reading["counts"] == {"beyond_ceiling": drawn, "within_ceiling": REPLICATIONS - drawn, "undefined": 0}
 
 
 def test_the_engine_figure_is_carried_verbatim_and_a_missing_one_is_named() -> None:

@@ -24,7 +24,8 @@ EMA = "ema_crossover_signal"
 EMA_PREVIOUS = "ema_previous_crossover"
 _EMA_DECLARATION = declaration_for(EMA)
 assert _EMA_DECLARATION is not None
-_EMA_SCHEMA = public_params_schema(_STRATEGY_REGISTRY[EMA])["properties"]
+_EMA_PREVIOUS_DECLARATION = declaration_for(EMA_PREVIOUS)
+assert _EMA_PREVIOUS_DECLARATION is not None
 
 
 def test_ema_declaration_follows_the_owner_order_and_table() -> None:
@@ -63,9 +64,13 @@ def test_ema_declaration_follows_the_owner_order_and_table() -> None:
     assert _EMA_DECLARATION.default_pair_audits == (("fast_period", "slow_period"), ("rsi_min", "rsi_max"))
 
 
-@pytest.mark.parametrize("knob", _EMA_DECLARATION.knobs, ids=lambda k: k.name)
-def test_ema_knob_agrees_with_the_registered_parameter_model(knob: SearchKnob) -> None:
-    schema = _EMA_SCHEMA[knob.name]
+@pytest.mark.parametrize(
+    ("strategy_key", "knob"),
+    [(declaration.strategy_key, knob) for declaration in (_EMA_DECLARATION, _EMA_PREVIOUS_DECLARATION) for knob in declaration.knobs],
+    ids=lambda value: value if isinstance(value, str) else value.name,
+)
+def test_each_declared_knob_agrees_with_the_registered_parameter_model(strategy_key: str, knob: SearchKnob) -> None:
+    schema = public_params_schema(_STRATEGY_REGISTRY[strategy_key])["properties"][knob.name]
 
     assert schema["type"] == ("integer" if knob.kind == "integer" else "number")
     assert Decimal(str(schema["default"])) == knob.default_value

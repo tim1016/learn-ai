@@ -110,7 +110,7 @@ async def test_lifecycle_runs_from_lock_to_an_approved_golden_configuration(conn
     assert detail["state"] == "awaiting_validation"
     search = detail["results"]["search"]
     assert [summary["knob"] for summary in search["knob_summary"]] == ["gap", "hold_bars"]
-    assert search["winner"]["gap"] == pytest.approx(0.3, abs=1e-12) and search["winner"]["hold_bars"] == 7
+    assert search["winner"]["gap"] == pytest.approx(0.3, abs=1e-12, rel=0) and search["winner"]["hold_bars"] == 7
     assert search["counts"]["evaluated"] == search["evaluations"]
     assert search["pair_maps"][0]["x_knob"] == "hold_bars" and len(search["pair_maps"][0]["cells"]) == 25
     # The Search charts replay the recorded path over the stored evaluations and end at the winner.
@@ -118,14 +118,14 @@ async def test_lifecycle_runs_from_lock_to_an_approved_golden_configuration(conn
     tried = searched["convergence"]["tried"]
     assert searched["key"] == "search" and searched["convergence"]["status"] == "measured" and tried[0]["knob"] is None
     assert tried[-1]["best_so_far"] == pytest.approx(search["winner_metrics"]["sharpe_ratio"], abs=1e-9, rel=0)
-    assert [(move["name"], move["retained"]) for move in searched["moves"]] == [("gap", pytest.approx(0.3, abs=1e-12)), ("hold_bars", 7)]
+    assert [(move["name"], move["retained"]) for move in searched["moves"]] == [("gap", pytest.approx(0.3, abs=1e-12, rel=0)), ("hold_bars", 7)]
     assert sum(point["winner"] for point in searched["points"]) == 1 and len(searched["points"]) >= search["evaluations"]
     # Before testing over time runs, its charts show the receipt's planned folds and the search's winner.
     planned = await service.test_over_time_charts(row.id)
     assert planned["planned"] and [fold["status"] for fold in planned["folds"]] == ["planned", "planned"]
     assert [(fold["train_start_ms"], fold["test_end_ms"]) for fold in planned["folds"]] == [(fold["train_start_ms"], fold["test_end_ms"]) for fold in row.receipt["folds"]]
     assert planned["test_trades_total"] is None and planned["forward_minimum"] == row.protocol["policy"]["min_trades"]
-    assert [(knob["name"], knob["all_period"], knob["folds"]) for knob in planned["drift"]] == [("gap", pytest.approx(0.3, abs=1e-12), [None, None]), ("hold_bars", 7, [None, None])]
+    assert [(knob["name"], knob["all_period"], knob["folds"]) for knob in planned["drift"]] == [("gap", pytest.approx(0.3, abs=1e-12, rel=0), [None, None]), ("hold_bars", 7, [None, None])]
 
     row = await driver.advance(row, "continue")
     detail = await driver.detail(row)
@@ -254,6 +254,31 @@ async def test_an_unclaimed_stage_reads_queued_cannot_be_finished_and_cancel_the
     assert taken.value.code == "NOTHING_PENDING"
 
 
+async def test_a_binding_is_released_only_while_its_stage_is_queued_and_still_held_by_that_job(
+    conn: asyncpg.Connection, driver: Driver, symbol: str
+) -> None:
+    row = await driver.lock(symbol)
+    outcome = await driver.command(row, "continue")
+    token = outcome.dispatch["payload"]["stage_token"]
+    assert await service.bind_dispatch(row.id, stage_token=token, job_id="job-a") == "bound"
+
+    # A release names the job that holds the binding: another job's, or a study that is not there, changes nothing.
+    assert await repo.unbind_dispatch(conn, row.id, job_id="job-other") == "taken"
+    assert await repo.unbind_dispatch(conn, "no-such-study", job_id="job-a") == "not_found"
+    assert await service.study_job_binding(row.id) == "job-a"
+
+    await service.release_dispatch_binding(row.id, job_id="job-a")
+    assert await service.study_job_binding(row.id) is None
+    # The stage waits for a worker again, so the retry's job binds it.
+    assert await service.bind_dispatch(row.id, stage_token=token, job_id="job-b") == "bound"
+
+    # A stage a worker has claimed keeps its binding, whoever asks to release it.
+    await repo.claim_stage(conn, row.id, stage_token=token, job_id="job-b")
+    assert await repo.unbind_dispatch(conn, row.id, job_id="job-b") == "not_pending"
+    await service.release_dispatch_binding(row.id, job_id="job-b")
+    assert await service.study_job_binding(row.id) == "job-b"
+
+
 async def test_cancelling_a_bound_stage_asks_its_worker_and_an_unreachable_job_store_records_nothing(
     conn: asyncpg.Connection, driver: Driver, symbol: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -335,13 +360,6 @@ async def test_a_run_whose_job_never_started_is_authorized_again_and_the_lost_to
     assert withdrawn.value.code == "STAGE_TOKEN_MISMATCH"
     await driver.run(again)
     assert (await service.get_row(lost.study.id)).state == "awaiting_candidate"
-
-
-def test_the_run_a_lock_starts_is_keyed_apart_from_every_lock_key() -> None:
-    # Lock keys are global, so this is checked on the derivation rather than by locking a fixed key twice.
-    for key in ("run-research-at-lock", "k-1", "x" * 200):
-        derived = service._run_at_lock_key(key)
-        assert derived != key and derived.startswith("run-research:") and derived == service._run_at_lock_key(key)
 
 
 async def test_a_cancel_that_lands_before_the_search_closes_leaves_the_study_paused(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:

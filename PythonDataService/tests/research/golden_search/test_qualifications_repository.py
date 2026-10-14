@@ -15,14 +15,8 @@ from datetime import date
 import asyncpg
 import pytest
 
-from app.engine.strategy.registry import _STRATEGY_REGISTRY
-from app.research.backtest_runs import repository as backtest_repo
-from app.research.backtest_runs.records import record_from_payload
 from app.research.golden_search.proof import ProofRecord, ProofWindow
 from app.research.golden_search.qualifications import (
-    QUALIFICATION_COVERED,
-    QUALIFICATION_REVOKED,
-    QUALIFICATION_UNVERIFIABLE,
     DefaultChangedError,
     QualificationEventConflictError,
     QualificationRow,
@@ -40,14 +34,11 @@ from app.research.golden_search.qualifications import (
     resolve_coverage,
     set_default_cas,
 )
-from app.research.golden_validation import service as golden_validation
+from app.schemas.run_admission import QUALIFICATION_COVERED, QUALIFICATION_REVOKED, QUALIFICATION_UNVERIFIABLE
 from app.schemas.signal_program_seal import semantic_payload_hash
 from app.utils.session_anchors import et_midnight_ms
-from tests.research.backtest_runs.payloads import engine_payload
+from tests._helpers.golden_qualification import CONTRACT, PROGRAM, accepted_golden_review
 
-PROGRAM = "ema_crossover_signal"
-CONTRACT = _STRATEGY_REGISTRY[PROGRAM].signal_program_contract
-assert CONTRACT is not None
 RUNNING = "1" * 64
 
 
@@ -59,28 +50,7 @@ def symbol(unique: str) -> str:
 @pytest.fixture
 async def golden_review(conn: asyncpg.Connection, unique: str) -> tuple[int, int]:
     """One accepted Golden Validation review: the (golden_run_id, golden_review_id) a qualification cites."""
-    run_id = (await backtest_repo.insert_run(conn, record_from_payload(engine_payload(symbol=unique)))).run_id
-    designated = await golden_validation.designate(
-        conn,
-        source_run_id=run_id,
-        command_id=f"gs-designate-{unique}",
-        label=f"Golden Search study {unique[:8]}",
-        rationale="Approved after the final test.",
-        actor="local:owner",
-    )
-    reviewed = await golden_validation.review(
-        conn,
-        golden_run_id=designated.golden_run.id,
-        command_id=f"gs-review-{unique}",
-        expected_evidence_revision=designated.evidence.revision,
-        decision="accept",
-        reason="Approved after the final test.",
-        quantconnect_backtest_id=None,
-        authorized_program_version=None,
-        actor="local:owner",
-    )
-    assert reviewed.latest_review is not None
-    return reviewed.golden_run.id, reviewed.latest_review.id
+    return await accepted_golden_review(conn, unique, unique)
 
 
 def _point(symbol: str, **overrides: float) -> dict:

@@ -287,7 +287,9 @@ async def test_two_fits_get_one_shared_fit_to_fit_draw_and_each_keeps_its_own_ev
     recent = by_key["recent"]["chance"]["fit_to_fit"]
     assert all_period["counts"]["better"] == recent["counts"]["worse"]
     assert all_period["counts"]["tied"] == recent["counts"]["tied"]
-    assert all_period["at_least_as_good"]["count"] + recent["counts"]["undefined"] - recent["counts"]["tied"] == 10_000 - recent["counts"]["tied"]  # tied support both, undefined neither
+    # One shared draw read both ways: tied paths support both fits, undefined paths neither, and no direction is a complement.
+    assert all_period["at_least_as_good"]["count"] == recent["counts"]["worse"] + recent["counts"]["tied"]
+    assert recent["at_least_as_good"]["count"] == all_period["counts"]["worse"] + all_period["counts"]["tied"]
     # Each fit's own readings stand beside the shared one, whatever the other fit did.
     for fit in exam["fits"]:
         assert fit["chance"]["comparison"]["status"] == "measured"

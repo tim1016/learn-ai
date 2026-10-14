@@ -186,30 +186,37 @@ def test_a_warm_lane_is_preferred_and_never_idles_a_sibling(monkeypatch: pytest.
 def test_duplicate_residency_across_lanes_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
     """The same artifact warm on two lanes is honest duplicate residency, not global reuse (#3048 AC 3)."""
     shared_manifest = {"p/day.zip": "d" * 64}
+    lane_zero_busy = threading.Event()
+    release_first = threading.Event()
 
     def execute(task: dict[str, Any]) -> dict[str, Any]:
+        if float(task["point"]["gap"]) == 0.1:
+            # Lane 0 stays mid-run, so the next item can only take the cold lane.
+            lane_zero_busy.set()
+            assert release_first.wait(timeout=5.0), "the first item was never released"
         message = _gap_message(task)
         message["decoded"] = [{"relative_path": "p/day.zip", "content_digest": "d" * 64, "estimated_bytes": 100}]
         return message
 
-    pool, _ = _pool(monkeypatch, workers=2, execute=execute)
+    pool, children = _pool(monkeypatch, workers=2, execute=execute)
     first = _register(pool, manifest=shared_manifest)
     second = _register(pool, manifest=shared_manifest)
     try:
-        for gap, owner in ((0.1, first), (0.2, first)):
-            assert owner.offer(1, _crafted_item(gap))
-            outcome = owner.arrived.get(timeout=5.0)
-            owner.consume(outcome[0], outcome[1])
-        # The second owner's item lands on the other lane (the first is warm
-        # only for the first owner's manifest — identical here, so affinity
-        # prefers lane 0; force the duplicate by giving the second owner its
-        # own item after lane 0 is busy).
+        assert first.offer(1, _crafted_item(0.1))
+        assert lane_zero_busy.wait(timeout=5.0), "the first item began on lane 0"
         assert second.offer(1, _crafted_item(0.9))
         outcome = second.arrived.get(timeout=5.0)
         second.consume(outcome[0], outcome[1])
+        release_first.set()
+        outcome = first.arrived.get(timeout=5.0)
+        first.consume(outcome[0], outcome[1])
+
+        assert len(children) == 2, "the second item decoded on a lane of its own"
         facts = pool.facts()
-        assert facts["resident_paths"] >= 1
+        assert facts["resident_paths"] == 1, "one artifact, two lanes"
+        assert facts["duplicate_resident_paths"] == 1, "the second copy is reported, not hidden as global reuse"
     finally:
+        release_first.set()
         first.close()
         second.close()
         pool.close()

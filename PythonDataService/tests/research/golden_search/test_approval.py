@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 from collections.abc import Callable
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +29,8 @@ from app.lean_sidecar.trading_calendar import expected_sessions
 from app.research.backtest_runs import repository as backtest_repo
 from app.research.backtest_runs.records import record_from_payload
 from app.research.golden_search import approval as approval_module
+from app.research.golden_search import repository as study_repo
+from app.research.golden_search import service as study_service
 from app.research.golden_search.approval import (
     PROOF_EVALUATIONS,
     RUN_EVALUATIONS,
@@ -50,6 +52,7 @@ from app.research.golden_search.qualifications import (
 from app.research.golden_search.zoom import BudgetExhausted, RetryAllowanceExhausted
 from app.research.golden_validation import repository as golden_repo
 from app.research.golden_validation import service as golden_validation
+from app.research.persistence import lifecycle
 from app.research.persistence.db import run_sync, with_connection
 from app.research.sweep.snapshot import DataSnapshot, capture_data_snapshot
 from app.schemas.engine_backtest import EngineBacktestRequest, EngineBacktestResponse
@@ -58,10 +61,10 @@ from app.services import engine_backtest_service
 from app.services import signal_program_admission as admission_module
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.utils.session_anchors import et_midnight_ms
-from tests._helpers.golden_qualification import canonical_point, seed_qualification
+from tests._helpers.golden_qualification import canonical_point, copied_source_tree, seed_qualification
+from tests._helpers.golden_search_study import FINAL, LAKE_FROM, Driver
 from tests._helpers.lean_store import seed_store_day
 from tests.research.backtest_runs.payloads import engine_payload
-from tests.services.test_signal_program_admission import _copied_source_tree
 
 pytestmark = pytest.mark.usefixtures("seeded_lake_catalog")
 
@@ -400,6 +403,55 @@ async def test_approve_study_after_a_lost_response_answers_with_the_published_ve
     assert len(caller.commits) == 1
 
 
+async def test_a_study_reaches_approved_through_the_real_stage_and_the_real_approval(
+    conn: asyncpg.Connection, symbol: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The lifecycle suite swaps the approval for a fake and the tests above hand-insert the study row, so
+    # this is the one place the stage's own request, checkpoint, budget draw and fenced commit meet approve_study.
+    # The persisted final-interval run stays this module's one stand-in (``_Engine``); the proof replays are real.
+    lake = tmp_path / "writer-root" / lake_subpath("polygon_split_adjusted")
+    lake.mkdir(parents=True)
+    # Whole sessions, not the study suite's thin ones: the real proof must prime the program before the final interval.
+    for day in expected_sessions(LAKE_FROM, FINAL[1] - timedelta(days=1)):
+        seed_store_day(lake, symbol, day)
+    monkeypatch.setattr(lifecycle, "roots_for", lambda row: [lake])
+    engine = _Engine()
+    monkeypatch.setattr(approval_module, "execute_engine_backtest", engine)
+    driver = Driver(roots=[lake])
+    row = await driver.to_candidate(symbol)
+    row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
+    approve = {
+        "candidate_key": "all_period",
+        "note": NOTE,
+        "acknowledge_missing_parity": True,
+        "acknowledge_research_weakness": True,
+        "expected_default_qualification_id": None,
+    }
+    outcome = await driver.command(row, "approve", approve)
+
+    stage = await driver.run(outcome, approval=None, blob_store=BlobStore(tmp_path / "blobs"))
+
+    study = await study_service.get_row(row.id)
+    assert stage.state == "approved", study.results.get("qualification")
+    qualification_id = qualification_id_for(row.id)
+    assert study.state == "approved" and study.results["qualification"]["qualification_id"] == qualification_id
+    published = await get_qualification(conn, qualification_id)
+    assert published is not None and published.study_id == row.id
+    # The version holds the winner the study's own exam named, and the evidence the request carried from the stored fit.
+    winner = next(fit for fit in study.results["exam"]["fits"] if fit["key"] == "all_period")
+    assert {name: published.params[name] for name in winner["point"]} == winner["point"]
+    assert published.research["candidate_key"] == "all_period"
+    assert published.research["exam_outcome"] == winner["outcome"]
+    assert {"comparison", "profitability"} <= set(published.research["chance"]["components"])
+    pointer = await get_default(conn, PROGRAM, symbol)
+    assert pointer is not None and pointer.qualification_id == qualification_id
+    # The reservation drew once per step under the study's ledger: two proof replays, one persisted run.
+    assert await study_repo.consumed_outside_evaluator(conn, row.id, "proof") == 3
+    ((engine_request, manifest),) = engine.requests
+    assert engine_request.params == published.params
+    assert manifest == DataSnapshot.from_dict(study.receipt["data_snapshot"]).artifacts
+
+
 # ---------------------------------------------------------------------------
 # Technical failures publish nothing and keep the prior default
 # ---------------------------------------------------------------------------
@@ -565,7 +617,7 @@ async def test_restart_needed_refuses_before_any_work(
     engine = _Engine()
     monkeypatch.setattr(approval_module, "execute_engine_backtest", engine)
     # A pull landed on disk after this process imported the program.
-    monkeypatch.setattr(admission_module, "_SERVICE_ROOT", _copied_source_tree(tmp_path / "src", drift_artifact=True))
+    monkeypatch.setattr(admission_module, "_SERVICE_ROOT", copied_source_tree(tmp_path / "src", drift_artifact=True))
     caller = _Caller(study_id)
 
     outcome = await _approve(_request(study_id, symbol, snapshot, lake), caller, blobs)
