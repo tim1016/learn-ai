@@ -505,6 +505,41 @@ describe('CohortFlattenDrawerComponent', () => {
     expect(screen.queryByRole('button', { name: 'Retry this batch' })).toBeNull();
   });
 
+  it('tells the host to read again when every leg’s outcome is unknown, though none is known to have applied', async () => {
+    const flattened = vi.fn();
+    const service = fakeService(
+      [QQQ_COHORT],
+      result([
+        refused('qqq-1', { message: 'No answer.', reason_code: 'CLERK_UNREACHABLE' }, 'unknown'),
+        refused('qqq-2', { message: 'No answer.', reason_code: 'CLERK_UNREACHABLE' }, 'unknown'),
+      ]),
+    );
+    await open(service, { on: { flattened } });
+    const user = userEvent.setup();
+    await screen.findAllByRole('checkbox');
+
+    await confirmWave(user, 2);
+
+    await vi.waitFor(() => expect(flattened).toHaveBeenCalledTimes(1));
+  });
+
+  it('tells the host to read again when a wave closed over never got an answer, since it may have run', async () => {
+    const answer = deferred<CohortActionResult>();
+    const service = fakeService([QQQ_COHORT]);
+    service.runCohortFlatten = vi.fn(() => answer.promise);
+    const flattened = vi.fn();
+    await open(service, { on: { flattened } });
+    const user = userEvent.setup();
+    await screen.findAllByRole('checkbox');
+
+    await confirmWave(user, 2);
+    await vi.waitFor(() => expect(service.runCohortFlatten).toHaveBeenCalledOnce());
+    await user.click(screen.getByRole('button', { name: 'Close flatten a cohort' }));
+    answer.reject(new Error('network down'));
+
+    await vi.waitFor(() => expect(flattened).toHaveBeenCalledTimes(1));
+  });
+
   it('says an unknown outcome as unknown in the summary, not as a failure', async () => {
     const service = fakeService(
       [QQQ_COHORT],
