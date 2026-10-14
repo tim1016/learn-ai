@@ -660,6 +660,10 @@ shown.
 | An entry's comparison reads *unknown* for a reason other than judgment off | The pair was not clean (another order moved, cash moved, a reading failed or was stale, the outcome was not proven) | It stays unknown with its reason in the bundle. Repeat the step on a quieter account; never promote an unknown. |
 | A notice that Alpaca took more than the bot set aside | Judgment is on for this Clerk (it must not be) and a pair judged *under-reserved* | Read section 3 step 4. The bot's own page has the owner's review; do not review it until the cause is classified. |
 | Fees unresolved: every bot on the account waits | The first posted fee row of an option day cannot be attributed yet | Read the account's Home line for it. This is why the account is set aside. Record it as a finding. |
+| Deploy says *Outcome unknown* (HTTP 503 `clerk_routing_outcome_unknown`), or 409 *Deployment budget is unavailable: Account reconciliation is proving fresh broker truth* | The lane's event loop was too busy to answer inside the coordinator's read, or its account reconciliation had not reached a verdict. Open bot pages poll `/evidence` and `/money` every few seconds on the same loop (1 to 5 s gaps, 10+ per minute, 2026-10-14) | Close the bot pages and the Deploy tab you are not using, wait a minute, then look at the roster before pressing Deploy again: the create may have reached the lane and the bot may exist (the lane's log has `POST .../bots 201`). Pressing Deploy again never starts a second bot. |
+| Deploy says *Deployment is blocked until Clerk channels are installed and healthy*, or admission refuses `CLERK_CUSTODY_BROKER_UNREACHABLE` | A channel sample or one Alpaca read failed (a restart in the last two minutes, a network blip, one timed-out read) | Wait a minute and refresh money. It cleared on its own every time on 2026-10-14. |
+| After a Clerk restart every bot is *Needs attention - ended without a clean exit* and a held position shows *No bot is managing* | A restart ends every bot run; nothing resumes the strategy. The position and its holding are found unchanged; only the end time's sale is still owed | Reload the bot page (a command opened before the restart is refused with *lane was rebound*), then **Flatten**: one closing order. Deploy again for a new bot. |
+| `reduce blocked: STREAM_HEALTH_HOLD` with a several-leg position held | A several-leg parent's `fill` frame could not be mapped (fixed in #3173) and marked the stream's evidence unhealthy | Pull the fix and restart the lane; the hold is re-sampled. |
 
 ## Repair record: 2026-10-13
 
@@ -715,4 +719,40 @@ close). What it settled and what it did not:
 - **Not run.** The overlapping pass of shape A, every lifecycle row but *filled
   and closed*, shapes B to D, the hand-placed sign check and the buy-back of one
   sold leg. None of them is stated as shown.
+
+## Run record: 2026-10-14, shape A with the fix, the overlapping pass and shape B (#3103)
+
+The second day, on the same flat Paper account (option level 3), after #3137 and #3171.
+
+- **Settled.** The first entry after #3171 has a complete pair (`A4-long-call-flat-fix-landed`, read by
+  `tests/broker/alpaca/test_paper_option_recordings.py`): a resting limit order holds its limit price
+  (and a cent) out of option buying power with cash untouched; the fill moves cash and option buying
+  power together by the premium and a $0.03 clearing fee. Offline the pair judges *over-reserved*
+  by exactly the difference between the limit and the fill plus the unspent half of the fee
+  provision. Overlapping long calls net nothing (a bought contract holds no requirement), and the
+  Clerk refuses to judge either entry (*another order moved*). A restart with a position held keeps
+  the position and ends the run (see Troubleshooting). One closing order closed a one-leg structure
+  by Flatten. A bull call spread was sent as one `mleg` order with a **positive** net limit (a
+  debit), filled as one order, and the account fell by the debit alone with a requirement of $0.
+- **Not observable here.** An entry that rests until the deadline's cancel: Paper filled a limit at
+  the ask 0.5 s after accepting it, even with the shortest 1 s wait (and its stream answer reached
+  the Clerk 1.7 s later). A cancel that races a fill, a part fill, a restart with an entry resting.
+- **Fees.** Paper does post regulatory and clearing fees for option fills, the morning after the
+  trading day, as non-trade `FEE` activities dated the trading day: for eight option orders, eight
+  `OCC Clearing Fee` rows of -$0.03 plus ORF -$0.12, OPT REG -$0.03, OPT TAF -$0.02 and CAT -$0.01
+  (-$0.42). The $0.03 clearing fee also leaves cash at the fill.
+- **A figure that lags.** After a sell to close Alpaca's option buying power stayed under cash
+  ($2.95, $8.93 and $5.88 on three occasions) until the next order restated it. The next entry's
+  *before* reading is that much low and its fall reads smaller than its cost: the pair judges
+  *over-reserved* for a reason that is not the entry's (section 8, a figure that had not moved).
+- **Found, fixed.** The spread's parent `fill` frame carries no top-level `execution_id` (its legs
+  carry theirs), so the adapter refused it, the stream's evidence went unhealthy and the account's
+  stream-health hold blocked the spread's exit (#3173). A follow-up (#3174) covers the parent's
+  frames opening an outcome-unknown episode until the next pass.
+- **Procedure facts.** Bot pages poll heavily and slow the lane (see Troubleshooting); watch a step
+  from the capture journal's `orders` file instead (`option_orders` in the bundle) with the pages
+  closed. Each deploy needs a fresh money review inside about a minute and the acknowledgement ticked
+  again after any refused attempt.
+- **Not run.** Shapes C and D and the hand-placed sign check of a *received* price (it is the owner's,
+  at Alpaca's dashboard); the buy-back of one sold leg.
 

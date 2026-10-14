@@ -41,8 +41,8 @@ capture journal, not by this script, and sanitised by the same rules
 recordings`, run on a bundle the qualification runbook
 (`docs/runbooks/qualify-option-orders-on-paper.md`) tells how to make. They sit
 here beside `tests/fixtures/alpaca_documented/`, whose examples stay. The first
-set, `option_paper_recordings/` (two runs of one bought SPY call, 2026-10-13,
-#3103), is read by `tests/broker/alpaca/test_paper_option_recordings.py`; its
+set, `option_paper_recordings/` (runs of one bought SPY call: two on 2026-10-13
+and two on 2026-10-14, #3103), is read by `tests/broker/alpaca/test_paper_option_recordings.py`; its
 `attribution.md` files say which polls and which families were left out.
 
 The `fill_visibility/` subdirectory is a different capture: the measured
