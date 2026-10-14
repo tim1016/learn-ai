@@ -2,11 +2,13 @@
 
 The recordings (``tests/fixtures/alpaca/option_paper_recordings``) are the
 capture journal of the first option orders ever sent from this system, made on
-2026-10-13 under the qualification runbook and sanitised by the kit. They sit
-beside the documented examples and replace none of them: each shows one
-account on one day, for **one bought contract, filled inside its wait**. A
-spread, a credit, a resting or part-filled order, a cancel, an exercise and a
-regulatory fee are not in them.
+2026-10-13 and 2026-10-14 under the qualification runbook and sanitised by the
+kit. They sit beside the documented examples and replace none of them: each
+shows one account on one day, for **one bought contract, filled inside its
+wait**. A spread, a credit, a resting or part-filled order, a cancel and an
+exercise are not in them. Regulatory and clearing fees are: Alpaca Paper posts
+them the morning after the fills, and the 2026-10-14 steps' activity feed
+carries 2026-10-13's.
 
 What these tests prove is that what Alpaca really answered is read whole by
 the readers the Clerk uses, and that the body the Clerk sent is the body the
@@ -40,13 +42,18 @@ from app.options.contract import OptionContract
 from app.options.expiry import option_expiry_anchor_ms
 
 _RECORDINGS = Path(__file__).resolve().parents[2] / "fixtures" / "alpaca" / "option_paper_recordings"
-_SYMBOL = "SPY261016C00778000"
 
-# step -> (the limit price each entry was sent at, the price each order filled at as Alpaca states it).
-# Entries and exits alternate, entry first, in both.
-_STEPS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
-    "A1-long-call-flat": (("3.47",), ("3.47", "3.4")),
-    "A2-long-call-flat-repeat": (("3.34", "3.46", "3.60"), ("3.34", "3.45", "3.46", "3.41", "3.6", "3.67")),
+# step -> (the contract, its strike, the limit price each entry was sent at, the price each order filled at as
+# Alpaca states it). Entries and exits alternate, entry first, in every step.
+_STEPS: dict[str, tuple[str, str, tuple[str, ...], tuple[str, ...]]] = {
+    "A1-long-call-flat": ("SPY261016C00778000", "778", ("3.47",), ("3.47", "3.4")),
+    "A2-long-call-flat-repeat": (
+        "SPY261016C00778000", "778", ("3.34", "3.46", "3.60"), ("3.34", "3.45", "3.46", "3.41", "3.6", "3.67"),
+    ),
+    # The first entry after #3136's fix: limit 3.37, filled at 3.36 (a cent better), exited at 3.52.
+    "A4-long-call-flat-fix-landed": ("SPY261016C00772000", "772", ("3.37",), ("3.36", "3.52")),
+    # One entry with the shortest wait, then a Clerk restart with it held, then the bot page's Flatten at 3.16.
+    "A5-1s-wait-restart-held-flatten": ("SPY261016C00772000", "772", ("3.04",), ("3.04", "3.16")),
 }
 _STEP = pytest.mark.parametrize("step", sorted(_STEPS))
 
@@ -61,12 +68,13 @@ def _body(line: dict[str, Any]) -> Any:
 
 
 def _frames(step: str) -> list[dict[str, Any]]:
-    return [_body(line)["data"] for line in _lines(step, "stream")]
+    """The order events of the stream: its authorization and listening acknowledgements are not events."""
+    return [data for line in _lines(step, "stream") if "event" in (data := _body(line).get("data", {}))]
 
 
 @_STEP
 def test_each_order_the_bot_sent_is_the_body_the_writer_produces_and_its_answer_reads_as_sent(step: str) -> None:
-    entry_prices, _ = _STEPS[step]
+    _, _, entry_prices, _ = _STEPS[step]
     sent_and_answered = [
         (json.loads(line["request_body"]), from_alpaca_option_order(_body(line)))
         for line in _lines(step, "orders")
@@ -101,7 +109,7 @@ def test_each_order_the_bot_sent_is_the_body_the_writer_produces_and_its_answer_
 
 @_STEP
 def test_each_order_goes_pending_new_then_new_then_a_fill_at_the_price_its_own_order_states(step: str) -> None:
-    _, filled_at = _STEPS[step]
+    _, _, _, filled_at = _STEPS[step]
     events_by_order: dict[str, list[str]] = {}
     fills: list[tuple[OrderSide, Decimal, str]] = []
 
@@ -125,10 +133,11 @@ def test_each_order_goes_pending_new_then_new_then_a_fill_at_the_price_its_own_o
 
 @_STEP
 def test_each_fill_on_the_stream_is_in_the_activity_feed_under_the_same_execution_and_order(step: str) -> None:
+    symbol = _STEPS[step][0]
     rows: dict[str, Any] = {}
     for line in _lines(step, "activities"):
         for row in _body(line):
-            if row.get("symbol") == _SYMBOL and row["activity_type"] == "FILL":
+            if row.get("symbol") == symbol and row["activity_type"] == "FILL":
                 rows[row["id"]] = row
     in_the_feed = {
         (execution_id_from_activity_id(activity.activity_id), activity.native_order_id, activity.price, activity.quantity)
@@ -147,19 +156,93 @@ def test_each_fill_on_the_stream_is_in_the_activity_feed_under_the_same_executio
 
 @_STEP
 def test_the_contract_the_account_and_the_position_read_as_a_standard_call_held_and_then_flat(step: str) -> None:
-    contract = from_alpaca_option_contract(_body(_lines(step, "option_contracts")[0]))
+    symbol, strike, _, _ = _STEPS[step]
+    # The contract the bot traded: a step's journal also holds the listings of contracts only previewed.
+    contract = next(
+        read
+        for read in (from_alpaca_option_contract(_body(line)) for line in _lines(step, "option_contracts"))
+        if read.symbol == symbol
+    )
     account = from_alpaca_option_account(_body(_lines(step, "account")[0]), account_mode="paper")
     held = [from_alpaca_position(position) for line in _lines(step, "positions") for position in _body(line)]
     polls_flat = [not _body(line) for line in _lines(step, "positions")]
 
-    assert (contract.symbol, contract.tradable, contract.status) == (_SYMBOL, True, "active")
-    assert (contract.right, contract.strike_price, contract.multiplier) == ("call", Decimal("778"), Decimal("100"))
+    assert (contract.symbol, contract.tradable, contract.status) == (symbol, True, "active")
+    assert (contract.right, contract.strike_price, contract.multiplier) == ("call", Decimal(strike), Decimal("100"))
     assert [(d.kind, d.symbol, d.amount) for d in contract.deliverables] == [("equity", "SPY", Decimal("100"))]
     assert contract.expiry_ms == option_expiry_anchor_ms(date(2026, 10, 16))
     assert (account.account_mode, account.options_approved_level, account.options_trading_level) == ("paper", 3, 3)
     assert account.options_buying_power is not None and account.options_buying_power > 0
     assert held and {(p.symbol, p.asset_class, p.side, p.quantity) for p in held} == {
-        (_SYMBOL, "us_option", "long", 1.0)
+        (symbol, "us_option", "long", 1.0)
     }
     # The account is flat when the run starts and when it ends.
     assert polls_flat[0] and polls_flat[-1]
+
+
+def _account_figures(step: str) -> list[tuple[Decimal, Decimal]]:
+    """The account's (cash, option buying power) as each distinct answer stated them, in order."""
+    figures: list[tuple[Decimal, Decimal]] = []
+    for line in _lines(step, "account"):
+        body = _body(line)
+        read = from_alpaca_option_account(body, account_mode="paper")
+        assert read.options_buying_power is not None
+        figure = (Decimal(body["cash"]), read.options_buying_power)
+        if not figures or figures[-1] != figure:
+            figures.append(figure)
+    return figures
+
+
+def test_a_resting_limit_holds_option_buying_power_and_the_fill_takes_the_premium_and_the_clearing_fee_from_cash() -> None:
+    """2026-10-14, the first entry after #3136's fix: how Alpaca moved the figure the Clerk compares.
+
+    Before the order cash and option buying power were one number. While the limit order rested Alpaca held its
+    limit (3.37 x 100) plus a cent out of option buying power and left cash alone. Once it filled at 3.36 both
+    were cash less the premium ($336.00) and Alpaca's $0.03 clearing fee: $336.03 below where they began.
+    """
+    figures = _account_figures("A4-long-call-flat-fix-landed")
+
+    before = figures[0]
+    assert before[0] == before[1]
+    holding = (before[0], before[1] - Decimal("337.01"))
+    settled = (before[0] - Decimal("336.03"), before[1] - Decimal("336.03"))
+    assert holding in figures and settled in figures
+    assert figures.index(before) < figures.index(holding) < figures.index(settled)
+
+
+def test_option_buying_power_can_sit_below_cash_after_a_sale_until_the_next_order_moves_it() -> None:
+    """2026-10-14, the second entry: the figure the Clerk read before it was already $2.95 under cash.
+
+    After the earlier step's sell to close, cash rose by the whole sale and option buying power by $2.95 less,
+    and the two stayed apart until this entry's order made Alpaca state them again. The entry did not cause the
+    $2.95; a comparison that expects the fall to equal the premium reads it as an entry that cost less.
+    """
+    figures = _account_figures("A5-1s-wait-restart-held-flatten")
+
+    cash, buying_power = figures[0]
+    assert cash - buying_power == Decimal("2.95")
+    # The order rests (its limit 3.04 x 100 and a cent held), then the fill brings the two figures together again.
+    assert (cash, buying_power - Decimal("304.01")) in figures
+    settled = cash - Decimal("304.03")
+    assert (settled, settled) in figures
+
+
+@pytest.mark.parametrize("step", ["A4-long-call-flat-fix-landed", "A5-1s-wait-restart-held-flatten"])
+def test_the_morning_after_alpaca_paper_posts_the_options_fees_of_the_day_as_fee_activities(step: str) -> None:
+    """The 2026-10-13 option orders' regulatory and clearing fees, in the 2026-10-14 steps' activity feed.
+
+    Paper does charge them, but not on the day: they are non-trade activities of type FEE dated the trading
+    day, one per clearing fee and one each for ORF, OPT REG, OPT TAF and CAT, $0.42 for eight option orders.
+    """
+    fees: dict[str, Any] = {}
+    for line in _lines(step, "activities"):
+        for row in _body(line):
+            if row["activity_type"] == "FEE" and row.get("date") == "2026-10-13":
+                fees[row["id"]] = row
+
+    read = [from_alpaca_activity(row) for row in fees.values()]
+
+    assert read and all(a.category == "non_trade_activity" and a.symbol is None for a in read)
+    assert sum(Decimal(str(a.net_amount)) for a in read) == Decimal("-0.42")
+    descriptions = sorted(row["description"].split(" fee")[0].split(" for ")[0] for row in fees.values())
+    assert descriptions == sorted(["CAT"] + ["OCC Clearing Fee"] * 8 + ["OPT REG", "OPT TAF", "ORF"])
