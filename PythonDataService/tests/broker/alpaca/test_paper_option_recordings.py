@@ -4,11 +4,12 @@ The recordings (``tests/fixtures/alpaca/option_paper_recordings``) are the
 capture journal of the first option orders ever sent from this system, made on
 2026-10-13 and 2026-10-14 under the qualification runbook and sanitised by the
 kit. They sit beside the documented examples and replace none of them: each
-shows one account on one day, for **one bought contract, filled inside its
-wait**. A spread, a credit, a resting or part-filled order, a cancel and an
-exercise are not in them. Regulatory and clearing fees are: Alpaca Paper posts
-them the morning after the fills, and the 2026-10-14 steps' activity feed
-carries 2026-10-13's.
+shows one account on one day, for **one bought contract, or one bull call
+spread bought and closed (alone, and twice at once by two bots), every order
+filled inside its wait**. A credit placed by hand, a resting or part-filled
+order, a cancel and an exercise are not in them. Regulatory and clearing fees
+are: Alpaca Paper posts them the morning after the fills, and the 2026-10-14
+steps' activity feed carries 2026-10-13's.
 
 What these tests prove is that what Alpaca really answered is read whole by
 the readers the Clerk uses, and that the body the Clerk sent is the body the
@@ -335,3 +336,135 @@ def test_a_spreads_debit_moves_cash_and_option_buying_power_together_and_the_acc
         for position in map(from_alpaca_position, _body(line))
     }
     assert held == {_LONG_LEG: ("long", 1.0), _SHORT_LEG: ("short", -1.0)}
+
+
+# ── The spread closed, and two bots' spreads held at once, 2026-10-14 ────────
+
+_CLEAN_PASS = "B2-bull-call-spread-clean-pass"
+_OVERLAP = "B3-overlap-spread"
+# step -> (long leg, short leg, the net limit each order was sent at (None: a market order), the net price each
+# order filled at as Alpaca states it). Entries and exits are in the order they were sent.
+_SPREAD_PASSES: dict[str, tuple[str, str, tuple[str | None, ...], tuple[str, ...]]] = {
+    _CLEAN_PASS: ("SPY261016C00769000", "SPY261016C00774000", ("2.13", None), ("2.12", "-2.07")),
+    # Two bots, the same two contracts: the second entered a minute after the first, and left a minute after it.
+    _OVERLAP: (
+        "SPY261016C00768000", "SPY261016C00773000", ("2.20", "2.24", None, None), ("2.19", "2.23", "-2.26", "-2.28"),
+    ),
+}
+_SPREAD_PASS = pytest.mark.parametrize("step", sorted(_SPREAD_PASSES))
+
+
+def _fill_frames(step: str) -> list[dict[str, Any]]:
+    return [data for data in _frames(step) if data["event"] == "fill"]
+
+
+@_SPREAD_PASS
+def test_each_spread_order_sent_is_the_body_the_writer_produces_a_limit_debit_in_and_a_market_order_out(step: str) -> None:
+    long_leg, short_leg, limits, _ = _SPREAD_PASSES[step]
+    posts = [line for line in _lines(step, "orders") if line["method"] == "POST"]
+    assert len(posts) == len(limits)
+
+    for post, limit in zip(posts, limits, strict=True):
+        sent = json.loads(post["request_body"])
+        request = MultiLegOptionOrderRequest(
+            legs=tuple(_leg_request(leg) for leg in sent["legs"]),
+            quantity=int(sent["qty"]),
+            order_type=OrderType(sent["type"]),
+            net_limit_price=None if limit is None else Decimal(limit),
+        )
+
+        assert to_alpaca_option_order_request(request, client_order_id=sent["client_order_id"]) == sent
+        assert sent.get("limit_price") == limit
+        # The exit is the same two legs, each the other way round, as ONE order.
+        entry = [(long_leg, "buy", "buy_to_open"), (short_leg, "sell", "sell_to_open")]
+        exit_ = [(long_leg, "sell", "sell_to_close"), (short_leg, "buy", "buy_to_close")]
+        assert [(leg["symbol"], leg["side"], leg["position_intent"]) for leg in sent["legs"]] == (
+            entry if limit is not None else exit_
+        )
+        answer = from_alpaca_option_order(_body(post))
+        assert (answer.status, answer.filled_quantity, answer.time_in_force) == ("pending_new", 0, "day")
+
+
+@_SPREAD_PASS
+def test_a_spread_fill_states_what_it_paid_as_positive_and_what_it_received_as_negative_whatever_its_parents_side(
+    step: str,
+) -> None:
+    _, _, _, nets = _SPREAD_PASSES[step]
+    fills = _fill_frames(step)
+
+    assert [Decimal(data["price"]) for data in fills] == [Decimal(net) for net in nets]
+    for data in fills:
+        sides = {leg["symbol"]: leg["side"] for leg in data["order"]["legs"]}
+        bought = sum(Decimal(leg["price"]) for leg in data["legs"] if sides[leg["symbol"]] == "buy")
+        sold = sum(Decimal(leg["price"]) for leg in data["legs"] if sides[leg["symbol"]] == "sell")
+        # The net is what the legs bought less what they sold, and the order carries the same figure.
+        assert bought - sold == Decimal(data["price"]) == Decimal(data["order"]["filled_avg_price"])
+        # The stream's parent states ``side: buy`` on an exit as well as an entry (the REST parent states none), so
+        # the direction of a spread is its legs' and its net's sign, never the parent's side.
+        assert data["order"]["side"] == "buy"
+        assert data["order"]["order_class"] == "mleg" and "execution_id" not in data
+
+
+@_SPREAD_PASS
+def test_each_leg_execution_names_its_own_leg_order_and_is_in_the_activity_feed_as_that_legs_fill(step: str) -> None:
+    long_leg, short_leg, _, _ = _SPREAD_PASSES[step]
+    fills = _fill_frames(step)
+    on_the_frames: list[tuple[str, str, str, Decimal]] = []
+    for data in fills:
+        # The leg executions name the legs of the parent they came on, and no other order.
+        assert {leg["order_id"] for leg in data["legs"]} == {leg["id"] for leg in data["order"]["legs"]}
+        on_the_frames += [(leg["execution_id"], leg["order_id"], leg["symbol"], Decimal(leg["price"])) for leg in data["legs"]]
+
+    assert len({execution_id for execution_id, *_ in on_the_frames}) == len(on_the_frames) == 2 * len(fills)
+    assert {symbol for _, _, symbol, _ in on_the_frames} == {long_leg, short_leg}
+    in_the_feed: set[tuple[str, str | None, str | None, Decimal]] = set()
+    for line in _lines(step, "activities"):
+        for row in _body(line):
+            if row["activity_type"] == "FILL" and row.get("symbol") in {long_leg, short_leg}:
+                activity = from_alpaca_activity(row)
+                in_the_feed.add(
+                    (
+                        execution_id_from_activity_id(activity.activity_id),
+                        activity.native_order_id,
+                        activity.symbol,
+                        Decimal(str(activity.price)),
+                    )
+                )
+
+    assert set(on_the_frames) <= in_the_feed
+
+
+@pytest.mark.parametrize(
+    ("step", "moves"),
+    [
+        # Entry: the premium and $0.05 of fees leave cash. Exit: the credit less $0.05 comes back.
+        (_CLEAN_PASS, ("-212.05", "206.95")),
+        # The second entry took its own premium and $0.05 exactly, with the first spread held: no requirement added.
+        (_OVERLAP, ("-219.05", "-223.05", "225.95", "227.95")),
+    ],
+)
+def test_a_spreads_debit_and_credit_move_cash_and_option_buying_power_together_by_premium_and_fees_alone(
+    step: str, moves: tuple[str, ...]
+) -> None:
+    figures = _account_figures(step)
+
+    assert all(cash == buying_power for cash, buying_power in figures)
+    assert [later[0] - earlier[0] for earlier, later in zip(figures, figures[1:], strict=False)] == [
+        Decimal(move) for move in moves
+    ]
+
+
+def test_two_bots_spreads_held_at_once_are_one_account_position_of_two_of_each_leg() -> None:
+    long_leg, short_leg, _, _ = _SPREAD_PASSES[_OVERLAP]
+    held_over_time = [
+        {position.symbol: position.quantity for position in map(from_alpaca_position, _body(line))}
+        for line in _lines(_OVERLAP, "positions")
+    ]
+
+    assert held_over_time[0] == {} and held_over_time[-1] == {}
+    # One structure, then both, then the first one's exit leaves the second: the account does not say whose.
+    assert {(held.get(long_leg), held.get(short_leg)) for held in held_over_time} == {
+        (None, None),
+        (1.0, -1.0),
+        (2.0, -2.0),
+    }
