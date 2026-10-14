@@ -570,30 +570,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/broker/option-contracts/{symbol}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Option Contracts Endpoint
-         * @description Slice 1F — IBKR ``reqContractDetails`` qualification for the
-         *     cockpit's option leg picker. Returns the rich ``OptionContractMatch``
-         *     (with ``con_id``, ``local_symbol``, etc.) that the picker persists
-         *     alongside the declared leg. ``conId`` is the broker-canonical
-         *     identity the Slice 4 resolver will key against.
-         */
-        get: operations["option_contracts_endpoint_api_broker_option_contracts__symbol__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/broker/option-surface/{symbol}": {
         parameters: {
             query?: never;
@@ -19205,6 +19181,16 @@ export interface components {
             unreachable_since_ms?: number | null;
         };
         /**
+         * IbkrExpirationsResponse
+         * @description Listed option expiries for one equity symbol, anchored in UTC milliseconds.
+         */
+        IbkrExpirationsResponse: {
+            /** Expirations Ms */
+            expirations_ms: number[];
+            /** Symbol */
+            symbol: string;
+        };
+        /**
          * IbkrStrikeList
          * @description Strikes IBKR has actually instantiated for one (symbol, expiry).
          *
@@ -31556,7 +31542,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": components["schemas"]["IbkrExpirationsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -31627,46 +31613,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    option_contracts_endpoint_api_broker_option_contracts__symbol__get: {
-        parameters: {
-            query: {
-                /** @description An option expiry: 16:00 New York time on the expiry date, as int64 ms UTC. */
-                expiry_ms: number;
-                /** @description Option strike. */
-                strike: number;
-                /** @description C for call, P for put. */
-                right: string;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                symbol: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
                 };
             };
             /** @description Validation Error */

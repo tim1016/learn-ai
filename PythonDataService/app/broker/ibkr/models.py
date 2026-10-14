@@ -23,6 +23,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, computed_field
 
 from app.broker.ibkr.recovery_state_machine import RecoveryState
+from app.options.expiry import OptionExpiryMs
 
 OptionRight = Literal["C", "P"]
 
@@ -310,6 +311,15 @@ class IbkrOptionQuote(BaseModel):
     # Stamp of when this snapshot was assembled. Sourced from
     # ``Ticker.time`` if present, else process clock at conversion time.
     ts_ms: int
+
+
+class IbkrExpirationsResponse(BaseModel):
+    """Listed option expiries for one equity symbol, anchored in UTC milliseconds."""
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    expirations_ms: list[OptionExpiryMs]
 
 
 class IbkrStrikeList(BaseModel):

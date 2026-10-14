@@ -1,11 +1,4 @@
-"""In-process TTL cache used by the broker option-contracts endpoint.
-
-``TtlCache`` short-circuits a repeated option-contract drill-down within
-its TTL so the router never re-qualifies the same contract.
-
-The companion ``TokenBucket`` retired with ``/api/broker/symbols/search``
-(PR-B of #1813, 2026-08-27) — the option-contract path it guarded is not
-rate-limited upstream, so nothing was left to pace.
+"""In-process TTL cache for bounded private HTTP target decisions.
 
 Accepts a ``now`` callable so the suite can drive it with a fake clock;
 defaults to ``time.monotonic``.

@@ -770,17 +770,15 @@ async def _service_lifespan(
     if _ROLE_RUNS_CLERK and ibkr_settings.broker_enabled:
         ibkr_client = IbkrClient()
         # Install the client immediately so /health reports the
-        # disconnected-but-available state and POST /api/broker/connect can
-        # drive the lifecycle from the Status page. Without this, a soft-fail
-        # auto-connect leaves _client=None and the only fix is restarting
-        # the container.
+        # disconnected-but-available state and the monitor can retry after
+        # a soft-fail auto-connect without replacing the process-local client.
         set_client(ibkr_client)
         # The operator-intended state is set BEFORE the connect attempt so
         # the monitor (started further down) knows whether to retry on
         # initial-connect failure: when ``connect_on_startup`` is True the
         # operator wants a live link and a soft-fail should auto-retry;
-        # when False the operator wants the client idle until they click
-        # Connect — the monitor must NOT auto-connect against that intent.
+        # when False the client stays idle until the lane is restarted with
+        # auto-connect enabled — the monitor must not override that intent.
         ibkr_client.set_desired_connected(ibkr_settings.connect_on_startup)
         if ibkr_settings.connect_on_startup:
             try:
@@ -792,17 +790,17 @@ async def _service_lifespan(
                 raise
             except (BrokerError, OSError) as exc:
                 # Soft fail — Gateway is probably not running locally. Broker
-                # endpoints will return 503 until POST /api/broker/connect.
+                # data reads return 503 until Gateway reconnects.
                 # The auto-reconnect monitor below picks it up on the next tick.
                 logger.warning(
                     "IBKR client could not connect (%s). Auto-reconnect monitor will retry; "
-                    "POST /api/broker/connect or the Status page will also drive a manual attempt.",
+                    "check Gateway reachability, mode, and the lane's distinct client ID.",
                     exc,
                 )
         else:
             logger.info(
                 "IBKR auto-connect disabled (IBKR_CONNECT_ON_STARTUP=false). "
-                "Use POST /api/broker/connect or the Status page to establish the connection."
+                "Set IBKR_CONNECT_ON_STARTUP=true and restart this lane to establish the connection."
             )
         # The monitor is started even when initial connect failed — it will
         # observe the disconnected state and retry per the backoff policy.
