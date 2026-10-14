@@ -47,14 +47,6 @@ class ClerkSqliteRepositoryExternalOrderApi:
         with self._write_lock:
             return reads.unfoldable_broker_order_acknowledgements(self._conn)
 
-    def unfoldable_broker_orders_active_since(
-        self: ClerkSqliteRepository, *, reason_code: str, since_ms: int
-    ) -> int:
-        with self._write_lock:
-            return reads.unfoldable_broker_orders_active_since(
-                self._conn, reason_code=reason_code, since_ms=since_ms
-            )
-
     def append_external_order_observation_if_changed(
         self: ClerkSqliteRepository,
         *,

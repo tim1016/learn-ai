@@ -561,34 +561,6 @@ def unfoldable_broker_order_acknowledgements(
     return reviewed
 
 
-def unfoldable_broker_orders_active_since(
-    conn: sqlite3.Connection, *, reason_code: str, since_ms: int
-) -> int:
-    """How many distinct unfoldable broker orders showed activity at or after ``since_ms``.
-
-    The day-P&L fact reads it because an order the Clerk could not record
-    has no journaled fills.
-    Activity is the first observation or any later change of the order's
-    broker state, so an order first seen yesterday that fills today counts
-    today. Every episode row is read, resolved or not, so an acknowledged
-    (released) order still counts for the day it was active; each row holds
-    its episode's final cause, and the latest activity only ever grows. The
-    v16 ``reason_code`` index keeps this off a full ``uncertainties`` scan.
-    """
-    latest_activity: dict[str, int] = {}
-    for row in conn.execute(
-        "SELECT facts_json FROM uncertainties WHERE reason_code = ?",
-        (reason_code,),
-    ):
-        for order in json.loads(row["facts_json"])["cause_facts"]["orders"]:
-            broker_order_id = order["broker_order_id"]
-            latest_activity[broker_order_id] = max(
-                order["last_activity_at_ms"],
-                latest_activity.get(broker_order_id, order["last_activity_at_ms"]),
-            )
-    return sum(1 for active_at_ms in latest_activity.values() if active_at_ms >= since_ms)
-
-
 def command(conn: sqlite3.Connection, command_id: str) -> CommandResource | None:
     row = conn.execute(
         f"SELECT {', '.join(_COMMAND_COLUMNS)} FROM commands WHERE command_id = ?",
