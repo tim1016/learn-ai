@@ -16,6 +16,7 @@ from app.research.golden_search.run_curves import (
     named_points,
     runs_page,
 )
+from app.research.golden_search.selection import Metrics
 
 EMA = declaration_for("ema_crossover_signal")
 assert EMA is not None
@@ -35,6 +36,16 @@ def _run(key: str, stage: str, point: dict[str, Any] = WINNER, **overrides: Any)
         created_at_ms=0, completed_at_ms=1, has_curve=True,
     )
     return EvaluationRecord(**{**base, **overrides})
+
+
+def _failed_run(key: str, stage: str, point: dict[str, Any] = WINNER, **overrides: Any) -> EvaluationRecord:
+    """A run the engine refused, in the shape the store writes it: ``Metrics.failed``'s zero trades and no numbers."""
+    failed = Metrics.failed("engine refused the window")
+    return _run(
+        key, stage, point, status=failed.status, total_trades=failed.total_trades, net_profit=failed.net_profit,
+        total_return_pct=failed.total_return_pct, sharpe_ratio=failed.sharpe_ratio, max_drawdown_pct=failed.max_drawdown_pct,
+        win_rate=failed.win_rate, error=failed.error, has_curve=False, **overrides,
+    )
 
 
 def _study(**results: Any) -> StudyRow:
@@ -117,6 +128,16 @@ def test_the_page_lists_one_group_sorted_with_unmeasured_runs_last_beside_every_
     assert (second["total"], [row["evaluation_key"] for row in second["rows"]]) == (6, ["x1", "f1"])
     with pytest.raises(ValueError, match="page"):
         _page(records, page=0)
+
+
+def test_a_failed_run_lists_no_trade_count_and_sorts_last_by_trades_whichever_way_the_sort_runs() -> None:
+    records = [_run("ok-40", "search", total_trades=40), _failed_run("failed", "search", INCUMBENT), _run("ok-10", "search", total_trades=10)]
+
+    ascending = _page(records, group="search", sort="total_trades")
+    assert [row["evaluation_key"] for row in ascending["rows"]] == ["ok-10", "ok-40", "failed"]
+    assert [row["evaluation_key"] for row in _page(records, group="search", sort="total_trades", descending=True)["rows"]] == ["ok-40", "ok-10", "failed"]
+    failed = ascending["rows"][-1]
+    assert (failed["status"], failed["total_trades"], failed["error"]) == ("failed", None, "engine refused the window")
 
 
 def test_one_fold_of_a_group_can_be_listed_alone_and_two_runs_never_read_the_same() -> None:

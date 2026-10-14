@@ -135,6 +135,10 @@ def named_points(row: StudyRow) -> NamedPoints:
 
 
 def _metric(record: EvaluationRecord, key: str) -> float | None:
+    # A run that did not complete has no measurement: a failed run is stored with zero trades, and that zero is
+    # a placeholder the page must not list or sort as a result.
+    if record.status != "completed":
+        return None
     value = getattr(record, key)
     return None if value is None or not math.isfinite(value) else float(value)
 
@@ -163,7 +167,7 @@ def run_view(
         "window_start_ms": record.window_start_ms,
         "window_end_ms": record.window_end_ms,
         "status": record.status,
-        "total_trades": record.total_trades,
+        "total_trades": record.total_trades if record.status == "completed" else None,
         "total_return_pct": _metric(record, "total_return_pct"),
         "sharpe_ratio": _metric(record, "sharpe_ratio"),
         "max_drawdown_pct": _metric(record, "max_drawdown_pct"),
