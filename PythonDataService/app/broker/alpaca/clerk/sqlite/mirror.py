@@ -119,8 +119,32 @@ class MirrorFile:
         }
         self._append_fsynced(line)
 
+    def _require_whole_last_line(self) -> None:
+        """Refuse to append onto bytes that are not a whole record.
+
+        A write that died part-way leaves a tail with no newline. Appending
+        would glue the next record onto it: the append succeeds, and the line
+        that results is no record at all. The tail is custody evidence, so it
+        is neither trimmed nor repaired here — recovery is the offline
+        ceremony (ADR 0047).
+        """
+        try:
+            with self._path.open("rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                if handle.tell() == 0:
+                    return
+                handle.seek(-1, os.SEEK_END)
+                if handle.read(1) == b"\n":
+                    return
+        except FileNotFoundError:
+            return
+        raise MirrorChainBroken(
+            f"mirror {self._path} ends in a partial line; refusing to append onto it"
+        )
+
     def _append_fsynced(self, record: dict[str, Any]) -> None:
         existed = self._path.is_file()
+        self._require_whole_last_line()
         line = json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
         with self._path.open("a", encoding="utf-8") as handle:
             handle.write(line)
@@ -183,17 +207,18 @@ class MirrorFile:
             if "sequence" not in record:
                 raise MirrorChainBroken("mirror transition record has no sequence")
             sequence = record["sequence"]
-            if record["phase"] == "PREPARE":
+            phase = record.get("phase")
+            if phase == "PREPARE":
                 prepares_by_sequence.setdefault(sequence, []).append(record)
-            elif record["phase"] == "FINALIZE":
+            elif phase == "FINALIZE":
                 existing = finalize_by_sequence.get(sequence)
                 if existing is not None and existing["row_hash"] != record["row_hash"]:
                     raise MirrorChainBroken(
                         f"sequence {sequence} has conflicting FINALIZE records"
                     )
                 finalize_by_sequence[sequence] = record
-            else:  # pragma: no cover - defensive, format is pinned
-                raise MirrorChainBroken(f"unknown mirror record phase: {record['phase']!r}")
+            else:
+                raise MirrorChainBroken(f"unknown mirror record phase: {phase!r}")
         return prepares_by_sequence, finalize_by_sequence
 
     def reconcile(self, committed_rows: list[dict[str, Any]], *, clock: Clock) -> frozenset[int]:

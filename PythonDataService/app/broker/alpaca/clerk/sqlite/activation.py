@@ -352,7 +352,10 @@ def _verified_referenced_json(
         current /= part
         if current.is_symlink():
             raise ActivationRecordInvalid(f"activation {label} path contains a symbolic link")
-    candidate = resolve_contained_path(artifacts_root, *relative.parts)
+    try:
+        candidate = resolve_contained_path(artifacts_root, *relative.parts)
+    except ValueError as exc:
+        raise ActivationRecordInvalid(f"activation {label} path is not a contained path: {exc}") from exc
     try:
         encoded = candidate.read_bytes()
     except OSError as exc:

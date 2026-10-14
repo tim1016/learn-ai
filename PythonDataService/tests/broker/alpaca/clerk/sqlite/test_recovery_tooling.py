@@ -129,6 +129,26 @@ def test_activation_requires_matching_database_and_referenced_artifacts(tmp_path
         store.resolve(ACCOUNT_ID, 2, "db-token", artifacts_root=tmp_path)
 
 
+@pytest.mark.parametrize("reference", ["../outside.json", "a\0b.json"])
+def test_an_activation_artifact_reference_that_escapes_the_root_is_an_invalid_record(
+    tmp_path: Path, reference: str
+) -> None:
+    """The startup classifier keys on ``ActivationRecordInvalid``; a bare ``ValueError`` would not."""
+    record = ActivationRecord.create(
+        account_id=ACCOUNT_ID,
+        authority_generation=2,
+        db_identity_token="db-token",
+        broker_proof_reference=reference,
+        broker_proof_sha256="0" * 64,
+        legacy_quarantine_manifest="accounts/alpaca/PA-RECOVERY/cutover/manifest.json",
+        legacy_quarantine_manifest_sha256="0" * 64,
+        activated_at_ms=NOW_MS,
+    )
+
+    with pytest.raises(ActivationRecordInvalid, match="broker proof"):
+        ActivationStore.validate_artifacts(record, artifacts_root=tmp_path)
+
+
 def test_activation_ledger_rejects_symbolic_link_substitution(tmp_path: Path) -> None:
     accounts_root = tmp_path / "accounts" / "alpaca"
     accounts_root.mkdir(parents=True)

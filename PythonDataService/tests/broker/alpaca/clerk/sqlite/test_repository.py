@@ -815,6 +815,40 @@ def test_mirror_sequence_gap_fails_closed_on_rebuild(tmp_path: Path) -> None:
         ClerkSqliteRepository.rebuild_from_mirror(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
 
 
+@pytest.mark.parametrize(
+    "record",
+    [{"sequence": 1, "row_hash": "h"}, {"phase": "BOGUS", "sequence": 1, "row_hash": "h"}],
+    ids=["no_phase", "unknown_phase"],
+)
+def test_a_mirror_record_with_no_known_phase_is_a_chain_break(tmp_path: Path, record: dict) -> None:
+    mirror_path = tmp_path / "custody_transitions.mirror"
+    mirror_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    with pytest.raises(MirrorChainBroken, match="unknown mirror record phase"):
+        MirrorFile(mirror_path).rebuild()
+
+
+def test_an_append_after_a_torn_mirror_tail_is_refused_not_glued_on(tmp_path: Path) -> None:
+    """A write that died part-way leaves bytes with no newline.
+
+    The next append used to land on those bytes and succeed, and the open
+    after it failed on a line that was never one record. The mirror is
+    custody evidence: it refuses, and it does not trim the tail itself.
+    """
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
+    repo.register_strategy_instance(strategy_instance_id="spy-bot", symbol="SPY", config_hash="h1")
+    with repo.mirror_path.open("ab") as handle:
+        handle.write(b'{"phase":"PREPARE","seq')
+    torn = repo.mirror_path.read_bytes()
+
+    with pytest.raises(MirrorChainBroken, match="partial"):
+        repo.register_strategy_instance(strategy_instance_id="qqq-bot", symbol="QQQ", config_hash="h2")
+
+    assert repo.mirror_path.read_bytes() == torn
+    assert [row["sequence"] for row in repo.custody_transitions()] == [1]
+    repo.close()
+
+
 def test_mirror_prepare_without_finalize_is_excluded_not_imported(tmp_path: Path) -> None:
     """A PREPARE with no matching FINALIZE is an aborted preparation — dropped
     silently from rebuild, not an error by itself, because the fence

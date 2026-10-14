@@ -157,6 +157,65 @@ def test_read_only_verification_reports_a_malformed_schema_version_as_verificati
         verify_database(database, expected_account_id=ACCOUNT_ID)
 
 
+def _database_with_two_transitions(tmp_path: Path) -> Path:
+    repository = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=_clock_seq(),
+    )
+    repository.register_strategy_instance(strategy_instance_id=SID_A, symbol="SPY", config_hash="h1")
+    repository.register_strategy_instance(strategy_instance_id=SID_B, symbol="QQQ", config_hash="h2")
+    repository.close()
+    return tmp_path / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db"
+
+
+@pytest.mark.parametrize(
+    ("tamper_sql", "expected_message"),
+    [
+        (
+            "UPDATE custody_transitions SET operation_state = 'in_progress' WHERE sequence = 1",
+            "hash-chain mismatch at sequence 1",
+        ),
+        (
+            "UPDATE custody_transitions SET sequence = 3 WHERE sequence = 2",
+            "transition sequence gap: expected 2, found 3",
+        ),
+        (
+            "UPDATE custody_transitions SET authority_generation = 9 WHERE sequence = 2",
+            "transition 2 belongs to a different generation",
+        ),
+    ],
+    ids=["hash_chain", "sequence_gap", "generation"],
+)
+def test_read_only_verification_names_how_a_transition_stream_is_broken(
+    tmp_path: Path, tamper_sql: str, expected_message: str
+) -> None:
+    database = _database_with_two_transitions(tmp_path)
+    assert verify_database(database, expected_account_id=ACCOUNT_ID).transition_count == 2
+    conn = sqlite3.connect(database)
+    try:
+        # Out-of-band tampering would not go through the append-only trigger.
+        conn.execute("DROP TRIGGER trg_custody_transitions_immutable_update")
+        conn.execute(tamper_sql)
+        conn.commit()
+    finally:
+        conn.close()
+
+    with pytest.raises(DatabaseVerificationFailed, match=expected_message):
+        verify_database(database, expected_account_id=ACCOUNT_ID)
+
+
+def test_read_only_verification_refuses_a_database_bound_to_another_authority(tmp_path: Path) -> None:
+    database = _database_with_two_transitions(tmp_path)
+
+    with pytest.raises(DatabaseVerificationFailed, match="database identity does not match expected identity"):
+        verify_database(database, expected_account_id=ACCOUNT_ID, expected_db_identity="another-database")
+    with pytest.raises(DatabaseVerificationFailed, match="authority generation does not match expected generation"):
+        verify_database(database, expected_account_id=ACCOUNT_ID, expected_generation=2)
+    with pytest.raises(DatabaseVerificationFailed, match="account_id='PA-TEST', expected 'PA-OTHER'"):
+        verify_database(database, expected_account_id="PA-OTHER")
+
+
 def test_is_upgradable_to_current_reflects_the_registered_migration_chain() -> None:
     assert schema.is_upgradable_to_current(schema.SCHEMA_VERSION) is True
     assert schema.is_upgradable_to_current(13) is True
