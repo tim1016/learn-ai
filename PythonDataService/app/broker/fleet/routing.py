@@ -19,7 +19,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator, Callable, Mapping
+import weakref
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -31,9 +32,11 @@ from app.broker.fleet.delivery import (
     HttpLaneDelivery,
     LocalLaneDelivery,
     StreamDeliveryResult,
+    bind_path_template,
 )
 from app.broker.fleet.errors import (
     BrokerClerkCapabilityUnavailable,
+    BrokerNotSupported,
     ClerkBindingGenerationConflict,
     ClerkIdentityMismatch,
     ClerkRoutingAttemptConflict,
@@ -42,6 +45,7 @@ from app.broker.fleet.errors import (
     FleetControlError,
 )
 from app.broker.fleet.identity import new_correlation_id
+from app.broker.fleet.internal_http import FleetTransportRefused
 from app.broker.fleet.provider import (
     OperationIdempotency,
     OperationReadiness,
@@ -50,6 +54,7 @@ from app.broker.fleet.provider import (
 )
 from app.broker.fleet.records import (
     AccountAssignmentRecord,
+    ClerkRecord,
     ClerkSessionRecord,
     ProviderSummaryObservation,
     RoutingReceiptState,
@@ -235,7 +240,7 @@ class LaneRouter:
         clerk_id: str,
         operation: ProviderOperation,
         path_params: Mapping[str, str],
-        query: Mapping[str, str],
+        query: Mapping[str, str] | Sequence[tuple[str, str]],
         body: object | None = None,
     ) -> RoutedDelivery:
         """Deliver one read-idempotent operation; no effect, no attempt row."""
@@ -330,7 +335,7 @@ class LaneRouter:
         clerk_id: str,
         operation: ProviderOperation,
         path_params: Mapping[str, str],
-        query: Mapping[str, str],
+        query: Mapping[str, str] | Sequence[tuple[str, str]],
     ) -> RoutedStream:
         """Open one routed stream; every event is provenance-verified.
 
@@ -424,7 +429,7 @@ class LaneRouter:
         clerk_id: str,
         operation: ProviderOperation,
         path_params: Mapping[str, str],
-        query: Mapping[str, str],
+        query: Mapping[str, str] | Sequence[tuple[str, str]],
         body: object,
         envelope: CommandEnvelope | None,
     ) -> RoutedDelivery:
@@ -474,6 +479,15 @@ class LaneRouter:
             session=session,
             assignment=assignment,
         )
+        delivery = self._delivery_for(broker, session)
+        if isinstance(delivery, HttpLaneDelivery):
+            try:
+                await delivery.validate_target()
+            except FleetTransportRefused as exc:
+                raise ClerkUnreachable(
+                    f"Clerk {clerk_id}'s destination cannot be verified as private.",
+                    next_step="Repair the lane endpoint or its private DNS before retrying.",
+                ) from exc
         nonsecret_target = "/".join(
             f"{name}={path_params[name]}" for name in sorted(path_params)
         )
@@ -509,7 +523,6 @@ class LaneRouter:
                 next_step="Read the command's outcome by its durable identity; "
                 "never resubmit the same key.",
             )
-        delivery = self._delivery_for(broker, session)
         # Dispatch is one-way from here: whatever happens next, the attempt
         # can never present as definitively un-sent (ADR 0062 addendum, item 7). The claim is
         # exclusive — a same-key attempt already dispatched but unsettled
@@ -632,10 +645,8 @@ class LaneRouter:
         operation: ProviderOperation,
         path_params: Mapping[str, str],
         expected_binding_generation: int | None,
-    ):
+    ) -> tuple[ClerkRecord, ClerkSessionRecord, AccountAssignmentRecord | None]:
         if broker not in self._service.adapters():
-            from app.broker.fleet.errors import BrokerNotSupported
-
             raise BrokerNotSupported(f"No production adapter serves {broker!r}.")
         expected_account = (
             path_params.get("account_id")
@@ -711,17 +722,21 @@ class LaneRouter:
         clerk_id: str,
         operation: ProviderOperation,
         path_params: Mapping[str, str],
-        query: Mapping[str, str],
+        query: Mapping[str, str] | Sequence[tuple[str, str]],
         body: object | None,
         session: ClerkSessionRecord,
-        assignment,
+        assignment: AccountAssignmentRecord | None,
     ) -> DeliveryRequest:
+        try:
+            bind_path_template(operation.agent_path_template, path_params)
+        except ValueError as exc:
+            raise CommandEnvelopeInvalid(str(exc)) from exc
         return DeliveryRequest(
             broker=broker,
             clerk_id=clerk_id,
             operation=operation,
             path_params=dict(path_params),
-            query=dict(query),
+            query=tuple(query.items()) if isinstance(query, Mapping) else tuple(query),
             json_body=body,
             routing_epoch=session.routing_epoch,
             binding_generation=(
@@ -887,7 +902,7 @@ class _LocalAsgiHandler:
         self._app = app
 
     async def __call__(self, request: DeliveryRequest) -> Any:
-        from urllib.parse import urlencode
+        from urllib.parse import unquote, urlencode
 
         from app.broker.fleet.delivery import COORDINATOR_TOKEN_HEADER
         from app.broker.fleet.internal_http import iter_sse_events
@@ -921,9 +936,9 @@ class _LocalAsgiHandler:
             "http_version": "1.1",
             "method": request.operation.method,
             "scheme": "http",
-            "path": request.agent_path(),
+            "path": unquote(request.agent_path()),
             "raw_path": request.agent_path().encode(),
-            "query_string": urlencode(dict(request.query)).encode(),
+            "query_string": urlencode(request.query).encode(),
             "root_path": "",
             "headers": headers,
             "app": self._app,
@@ -963,7 +978,7 @@ class _LocalAsgiHandler:
                 body=payload,
             )
 
-        queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=16)
         started: asyncio.Future[dict[str, Any]] = (
             asyncio.get_running_loop().create_future()
         )
@@ -981,11 +996,28 @@ class _LocalAsgiHandler:
         task = asyncio.create_task(
             self._app(scope, receive, bridge), name="fleet-local-stream"
         )
+        def finish(done: asyncio.Task[None]) -> None:
+            if not started.done():
+                if done.cancelled():
+                    started.cancel()
+                elif exc := done.exception():
+                    started.set_exception(exc)
+                else:
+                    started.set_exception(RuntimeError("local stream ended before response start"))
+
+        task.add_done_callback(finish)
 
         async def chunks() -> AsyncIterator[bytes]:
             try:
                 while True:
-                    item = await queue.get()
+                    item_task = asyncio.create_task(queue.get())
+                    done, _ = await asyncio.wait({item_task, task}, return_when=asyncio.FIRST_COMPLETED)
+                    if task in done and item_task not in done:
+                        item_task.cancel()
+                        await asyncio.gather(item_task, return_exceptions=True)
+                        await task
+                        raise RuntimeError("local stream ended without a final body")
+                    item = item_task.result()
                     if item is None:
                         break
                     yield item
@@ -994,8 +1026,15 @@ class _LocalAsgiHandler:
                 connection_open.set()
                 if not task.done():
                     task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
 
-        start = await started
+        try:
+            start = await asyncio.wait_for(started, timeout=10.0)
+        except BaseException:
+            connection_open.set()
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            raise
         if start["status"] >= 400:
             # A refused stream-open is that refusal — the same rule the HTTP
             # adapter applies: collect the body, deliver no events, and keep
@@ -1003,7 +1042,14 @@ class _LocalAsgiHandler:
             # what stream_read's refusal excerpt logs (#2164).
             refused_body: list[bytes] = []
             while True:
-                item = await queue.get()
+                item_task = asyncio.create_task(queue.get())
+                done, _ = await asyncio.wait({item_task, task}, return_when=asyncio.FIRST_COMPLETED)
+                if task in done and item_task not in done:
+                    item_task.cancel()
+                    await asyncio.gather(item_task, return_exceptions=True)
+                    await task
+                    raise RuntimeError("local refusal ended without a final body")
+                item = item_task.result()
                 if item is None:
                     break
                 refused_body.append(item)
@@ -1015,10 +1061,12 @@ class _LocalAsgiHandler:
                 events=_no_stream_events(),
                 error_body=b"".join(refused_body),
             )
+        events = iter_sse_events(chunks())
+        weakref.finalize(events, task.cancel)
         return StreamDeliveryResult(
             status_code=start["status"],
             headers=_decoded_headers(start),
-            events=iter_sse_events(chunks()),
+            events=events,
         )
 
 

@@ -25,6 +25,7 @@ token (ADR 0062 addendum, item 5).
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -43,6 +44,7 @@ from app.broker.fleet.errors import (
     FleetProtocolIncompatible,
 )
 from app.broker.fleet.internal_http import (
+    FleetTransportRefused,
     build_internal_client,
     enforce_private_http_target,
 )
@@ -423,7 +425,6 @@ class RemotePresence:
 
     def __init__(self, *, base_url: str, agent_service_token: str) -> None:
         """Bind the internal destination and this agent's transport token."""
-        enforce_private_http_target(base_url)
         self._base_url = base_url.rstrip("/")
         self._token = agent_service_token
 
@@ -434,10 +435,21 @@ class RemotePresence:
             "X-Fleet-Agent-Token": self._token,
         }
 
+    async def _validate_target(self) -> None:
+        """Keep DNS checks off the event loop and refuse public rebinding."""
+        try:
+            await asyncio.to_thread(enforce_private_http_target, self._base_url)
+        except FleetTransportRefused as exc:
+            raise FleetPresenceError(
+                "The fleet coordinator destination is no longer private.",
+                next_step="Repair the private coordinator address before reconnecting.",
+            ) from exc
+
     async def _post(self, path: str, *, clerk_id: str, payload: dict[str, object]) -> dict[str, object]:
         """One authenticated internal POST, refusing redirects and proxies."""
         import httpx
 
+        await self._validate_target()
         client = build_internal_client()
         try:
             response = await client.post(
@@ -479,6 +491,7 @@ class RemotePresence:
         """Fetch the registry-served expectation over the internal surface."""
         import httpx
 
+        await self._validate_target()
         client = build_internal_client()
         try:
             response = await client.get(
