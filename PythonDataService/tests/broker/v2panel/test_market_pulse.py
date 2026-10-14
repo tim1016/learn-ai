@@ -49,17 +49,13 @@ def _fresh_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(market_pulse, "market_liveness_fact", resolve)
 
 
+# The scheduled session the faked admission fact reports; ``_session`` sets it
+# for one test.
+_SESSION = SimpleNamespace(phase="RTH", source="nyse_calendar", extended_phase_proven=False)
+
+
 def _session(monkeypatch: pytest.MonkeyPatch, phase: str) -> None:
-    monkeypatch.setattr(
-        market_pulse,
-        "session_state_at_ms",
-        lambda **_kwargs: SimpleNamespace(
-            phase=phase,
-            source="nyse_calendar",
-            extended_phase_proven=False,
-        ),
-        raising=False,
-    )
+    monkeypatch.setattr(_SESSION, "phase", phase)
 
 
 def _admission_fact(
@@ -73,7 +69,6 @@ def _admission_fact(
     active_subscription_count: int = 1,
 ) -> None:
     def fact(*args: object, **_kwargs: object) -> SimpleNamespace:
-        session = market_pulse.session_state_at_ms(now_ms=args[1])
         return SimpleNamespace(
             state=state,
             feed_id="test-feed" if state != "UNAVAILABLE" else None,
@@ -85,9 +80,9 @@ def _admission_fact(
             # reconciliation reads them together (ADR 0059 D5 / #1671).
             connected=state != "UNAVAILABLE" if connected is None else connected,
             active_subscription_count=active_subscription_count,
-            scheduled_phase=session.phase,
-            session_authority_source=session.source,
-            extended_phase_proven=session.extended_phase_proven,
+            scheduled_phase=_SESSION.phase,
+            session_authority_source=_SESSION.source,
+            extended_phase_proven=_SESSION.extended_phase_proven,
         )
 
     monkeypatch.setattr(market_pulse, "market_data_admission_fact", fact)

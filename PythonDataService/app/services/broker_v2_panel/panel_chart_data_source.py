@@ -163,7 +163,7 @@ async def get_live_snapshot_parts(
 ) -> tuple[BotPanelView, ChartLiveResponse]:
     """Build panel and chart from the exact same authority-bound fill cut."""
     observed_at_ms = now_ms_utc()
-    panel, _entries, fills = await get_panel_with_chart_fills(
+    panel, fills = await get_panel_with_chart_fills(
         broker,
         account_id,
         sid,

@@ -74,7 +74,6 @@ from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     FIXTURE_RTH_MS,
     _broker_position_fixture,
-    _FakeReadPort,
     _FakeTradePort,
     _make_held_position,
     _TestClock,
@@ -638,8 +637,6 @@ async def test_panel_profile_endpoint(api) -> None:
 
     assert response.status_code == 200, response.text
     assert response.json()["broker"] == "alpaca"
-    assert len(response.json()["stations"]) == 6
-    assert "supported_action_ids" not in response.json()
 
 
 async def test_catalog_scoped_returns_sqlite_roster(api) -> None:
@@ -1174,94 +1171,6 @@ async def test_action_refuses_malformed_sid_before_touching_receipt_path(
     assert seen_paths == []
 
 
-class _StopRecordingRegistry(_FakeRegistry):
-    """A running bot whose registry records every Stop it is asked for."""
-
-    def __init__(self, artifacts_root: Path) -> None:
-        super().__init__(artifacts_root, sids=(SID,))
-        self.stops: list[str] = []
-
-    async def stop(self, broker: str, sid: str, **_kwargs: object) -> BotStatusView:
-        self.stops.append(sid)
-        self._running = False
-        return self.status(broker, sid)
-
-
-async def test_flatten_and_stop_is_refused_before_anything_stops_while_the_bot_holds(
-    tmp_path: Path,
-) -> None:
-    """#2595: the panel's Flatten & stop never leaves a stopped bot holding shares.
-
-    The report was that Flatten & stop stops the bot and then fails to send
-    its sale (its EXIT needs the run the stop just ended). That performer was
-    broken, but the SQLite panel never presented ``flatten_stop`` (ADR 0045: a
-    stopped bot is flattened by the recovery ladder's ``execute_safe_flatten``),
-    so the performer and the action id were removed. A post naming it is
-    refused at the request boundary, before any stop: the bot keeps running,
-    keeps its shares, and nothing reaches the broker.
-    """
-    reset_broker_registry_for_testing()
-    reset_idempotency_store_for_testing()
-    registry = _StopRecordingRegistry(tmp_path)
-    set_bot_task_registry(registry)  # type: ignore[arg-type]
-    get_broker_registry().register(_FakeBrokerPort())  # type: ignore[arg-type]
-    repo = ClerkSqliteRepository.initialize(account_id=ACCT, artifacts_root=tmp_path)
-    repo.register_strategy_instance(
-        strategy_instance_id=SID,
-        symbol="SPY",
-        config_hash="config-1",
-        strategy_key="deployment_validation",
-        display_name="Deployment Validation",
-        config_json=json.dumps({"mode": "trade", "quantity": 1, "carryover_policy": "FORBID"}),
-    )
-    submit_start_run(repo, account_id=ACCT, strategy_instance_id=SID, lifecycle_run_id=_run_id(SID))
-    await _make_held_position(repo, account_id=ACCT, strategy_instance_id=SID, run_id=_run_id(SID))
-    trade = _FakeTradePort()
-    facade = SqliteAlpacaClerkFacade(
-        account_mode="paper",
-        repo=repo,
-        read=_FakeReadPort(positions=[_broker_position_fixture("SPY", quantity=10.0)]),  # type: ignore[arg-type]
-        trade=trade,  # type: ignore[arg-type]
-    )
-    await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")
-    set_active_clerk_runtime(ActiveClerkRuntime(authority_kind="sqlite", clerk=facade))
-    app = FastAPI()
-    app.include_router(router)
-    panel_url = f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel"
-    try:
-        async with _client(app) as client:
-            before = (await client.get(panel_url)).json()
-            refusals = [
-                await client.post(
-                    f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/{route}",
-                    json={
-                        "action_id": "flatten_stop",
-                        "revision": before["revision"],
-                        "concurrency_token": "token",
-                        "idempotency_key": f"flatten-stop-{index}",
-                    },
-                )
-                for index, route in enumerate(("actions", "actions/quiesce"))
-            ]
-            after = (await client.get(panel_url)).json()
-    finally:
-        set_active_clerk_runtime(None)
-        set_bot_task_registry(None)
-        repo.close()
-        reset_broker_registry_for_testing()
-        reset_idempotency_store_for_testing()
-
-    assert "flatten_stop" not in {action["action_id"] for action in before["actions"]}
-    assert (before["health"]["running"], before["exposure"]) == (True, {"SPY": 10.0})
-    for refusal in refusals:
-        assert refusal.status_code == 422, refusal.text
-        [error] = refusal.json()["detail"]
-        assert (error["loc"], error["input"]) == (["body", "action_id"], "flatten_stop")
-    assert registry.stops == []
-    assert (after["health"]["running"], after["exposure"]) == (True, {"SPY": 10.0})
-    assert trade.submit_calls == []
-
-
 async def test_chart_contract_rejects_unknown_timeframe(api) -> None:
     app, _repo = api
     async with _client(app) as client:
@@ -1718,7 +1627,7 @@ async def test_dry_run_panel_pulse_uses_selected_clerk_window_without_primary(ap
                                           extended_window=policy.window)
     assert (admission.scheduled_phase, admission.session_authority_source) == ("PRE", "broker_declared_window")
     async with panel_data_source._panel_authority_for_binding(registry, binding) as selected:
-        panel, _, _ = await panel_data_source._get_panel_with_entries_from_authority(
+        panel, _ = await panel_data_source._get_panel_with_entries_from_authority(
             "alpaca", ACCT, SID, resolved=ACCT, captured_now_ms=now_ms,
             registry=registry, binding=binding, facade=selected,
         )

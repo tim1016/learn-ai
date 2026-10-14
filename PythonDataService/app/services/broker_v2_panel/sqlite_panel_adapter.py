@@ -76,6 +76,7 @@ from app.services.broker_v2_panel.catalog_projection_service import (
     require_sqlite_catalog_identity,
     sqlite_catalog_rollup,
 )
+from app.services.broker_v2_panel.panel_authority_guard import reject_mixed_authority
 from app.services.broker_v2_panel.panel_projection_service import open_pnl_fields, select_primary_action
 from app.services.session_authority import SessionAuthorityState
 
@@ -144,6 +145,29 @@ def adapt_sqlite_panel(
     checks = [_readiness_check(item, projection.generated_at_ms) for item in projection.recovery_actions]
     ready_count = sum(check.ready for check in checks)
     recovery_cure = _recovery_cure(projection, bot_owns_problem=has_bot_scoped_custody_problem(projection))
+    # The fills the page serves, each carrying the account it was recorded in.
+    # They and the decisions are judged as one aggregate of the Clerk authority
+    # the fold was read from, so a simulated fill never sits beside a real
+    # account's panel (#1729 AC #8).
+    fills = (
+        []
+        if economics is None
+        else [
+            recent_fill_view(
+                fill,
+                authority_account_id=fill.account_id,
+                account_mode=account_mode,
+                repository=repository,
+            )
+            for fill in economics.recent_fills
+        ]
+    )
+    reject_mixed_authority(
+        authority_account_id=projection.account_id,
+        authority_kind=authority_kind_for_account(projection.account_id, account_mode=account_mode),
+        decision_views=panel.recent_decisions,
+        fill_views=fills,
+    )
     exposure = {
         position.symbol: position.attributed_qty
         for position in projection.positions
@@ -184,19 +208,7 @@ def adapt_sqlite_panel(
             ),
             # SQLite is the sole custody projection after activation.  Legacy
             # JSONL fill/P&L rollups must not be mixed into this evidence cut.
-            "recent_fills": (
-                []
-                if economics is None
-                else [
-                    recent_fill_view(
-                        fill,
-                        authority_account_id=projection.account_id,
-                        account_mode=account_mode,
-                        repository=repository,
-                    )
-                    for fill in economics.recent_fills
-                ]
-            ),
+            "recent_fills": fills,
             "fills_today": None if economics is None else economics.fills_today,
             "realized_pnl_today": (
                 None if economics is None else economics.realized_pnl_today
@@ -1095,10 +1107,10 @@ def recent_fill_view(
     """Adapt one S2 fill record to the existing panel wire contract.
 
     Stamps the authority the fill was actually read from (#1729 AC #8). This
-    adapter overwrites whatever ``recent_fills`` the projector produced, so
-    without the stamp here a production fill row reaches the panel carrying no
-    authority at all while its sibling decision row carries one — the exact
-    asymmetry the single-authority guard exists to make impossible.
+    is the only writer of a served panel's fills, so without the stamp here a
+    production fill row reaches the panel carrying no authority at all while
+    its sibling decision row carries one — the exact asymmetry the
+    single-authority guard exists to make impossible.
 
     A fill of a priced reducing leg — an operator's confirmed extended-hours
     flatten (#2007), or a limit the Clerk priced itself (#2229, #2440) — also

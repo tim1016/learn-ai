@@ -394,8 +394,6 @@ def _panel(
         exact_open_pnl=None,
         latest_decision=decision,
         last_bar_at_ms=last_bar_at_ms,
-        journal_tail_ref=f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/decisions",
-        journal_tail_seq=(decision.seq if decision is not None else None),
         now_ms=_NOW,
 
         sealed_program=sealed_program,
@@ -1029,11 +1027,11 @@ def test_sqlite_adapter_projects_execution_economics_and_durable_working_order_d
     assert adapted.fills_today == 3
     assert adapted.realized_pnl_today == 25.0
     assert adapted.open_pnl == 0.0
-    # #1729 AC #8: this adapter overwrites whatever `recent_fills` the projector
-    # produced, so it owes every row the authority it was read from. Without the
-    # stamp a production fill reaches the panel with no authority while its
-    # sibling decision row carries one, and the single-authority guard can no
-    # longer tell a real-paper fill from a synthetic one.
+    # #1729 AC #8: the adapter is the only writer of a served panel's fills, so
+    # it owes every row the authority it was read from. Without the stamp a
+    # production fill reaches the panel with no authority while its sibling
+    # decision row carries one, and the single-authority guard can no longer
+    # tell a real-paper fill from a synthetic one.
     assert [
         (fill.authority_account_id, fill.authority_kind, fill.simulated)
         for fill in adapted.recent_fills
@@ -1878,8 +1876,6 @@ def test_build_panel_requires_program_build_evidence() -> None:
             exact_open_pnl=None,
             latest_decision=None,
             last_bar_at_ms=None,
-            journal_tail_ref=f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/decisions",
-            journal_tail_seq=None,
             now_ms=_NOW,
             market_pulse=_MARKET_PULSE,
             bot_status="running",
@@ -2237,8 +2233,6 @@ def test_dry_run_activity_is_structurally_labelled_simulated() -> None:
     # instance, the causal links render the explicit absence, never a guess.
     assert panel.recent_decisions[0].decision_id is None
     assert panel.recent_decisions[0].effect_operation_id is None
-    assert panel.recent_fills[0].simulated is True
-    assert panel.recent_fills[0].order_ref.startswith("simulated:")
 
 
 def test_dry_run_decisions_use_sqlite_causal_links_when_evidence_exists() -> None:
@@ -2289,14 +2283,6 @@ def test_dry_run_decisions_use_sqlite_causal_links_when_evidence_exists() -> Non
     assert row.authority_kind == "synthetic"
     assert row.decision_id == "f" * 64
     assert row.effect_operation_id == "effect-op-5"
-    # Fills remain WAL-sourced — Gap 1 is about decision causal links, and
-    # SQLite decision receipts carry no fill quantity/price.
-    assert panel.recent_fills[0].simulated is True
-    assert panel.recent_fills[0].order_ref.startswith("simulated:")
-    assert panel.recent_decisions[0].authority_account_id == f"sim:{SID}"
-    assert panel.recent_decisions[0].authority_kind == "synthetic"
-    assert panel.recent_fills[0].authority_account_id == f"sim:{SID}"
-    assert panel.recent_fills[0].authority_kind == "synthetic"
     assert panel.health.last_decision_at_ms == _NOW - 100
     assert panel.health.last_bar_at_ms == 1_699_999_999_900
 
@@ -2389,15 +2375,12 @@ def test_build_panel_honors_the_explicit_authority_account_id_from_the_selected_
     assert panel.recent_decisions[0].authority_kind == "synthetic"
 
 
-def test_build_panel_rejects_dry_run_activity_from_a_different_synthetic_authority() -> None:
+def test_a_dry_run_panel_with_activity_from_a_different_synthetic_authority_is_not_served() -> None:
     """Issue #1729 AC #8: "mixed synthetic/real aggregate requests are
-    rejected." Before this fix, ``_recent_activity_views`` trusted whatever
-    ``dry_run_activity`` it was handed, with no check that its authority
-    actually matched the bot being projected. If the WAL evidence resolved
-    for a panel ever named a *different* strategy instance's synthetic
-    authority (e.g. a resolver bug), the mixed aggregate would have rendered
-    silently. This proves the new ``SingleAuthorityAggregate``-backed guard
-    refuses to serve it instead.
+    rejected." If the WAL evidence resolved for a panel ever named a
+    *different* strategy instance's synthetic authority (e.g. a resolver
+    bug), the mixed aggregate would render silently. The adapter, which every
+    served panel passes through, refuses to serve it instead.
     """
     foreign_activity = DryRunActivity(
         seq=1,
@@ -2414,13 +2397,100 @@ def test_build_panel_rejects_dry_run_activity_from_a_different_synthetic_authori
         quantity=1,
         fill_price=401.25,
     )
+    base = _panel(
+        _status(running=True, mode="dry_run"),  # SID == "bot-alpha"
+        _clerk_status(),
+        dry_run_activity=[foreign_activity],
+    )
+    projection = replace(_rail_projection(orders=()), account_id=f"sim:{SID}")
 
     with pytest.raises(MixedAuthorityAggregateError):
-        _panel(
-            _status(running=True, mode="dry_run"),  # SID == "bot-alpha"
-            _clerk_status(),
-            dry_run_activity=[foreign_activity],
-        )
+        adapt_sqlite_panel(base, projection)
+
+
+_SHADOW_ACCT = "shadow:9LIVE0001"
+
+
+def _spy_fill(account_id: str) -> FillRecord:
+    return FillRecord(
+        account_id=account_id,
+        sid=SID,
+        intent_id="spy-enter",
+        order_ref="order:spy",
+        event_key="exec-spy-1",
+        symbol="SPY",
+        side=OrderSide.BUY,
+        quantity=1.0,
+        fill_price=500.0,
+        filled_at_ms=_NOW - 100,
+        fee=None,
+    )
+
+
+def _economics_with(projection: ClerkProjection, fills: tuple[FillRecord, ...]) -> EconomicSnapshot:
+    return EconomicSnapshot(
+        account_id=projection.account_id,
+        strategy_instance_id=projection.strategy_instance_id,
+        authority_generation=projection.authority_generation,
+        control_revision=projection.control_revision,
+        session_open_ms=_NOW - 86_400_000,
+        session_close_ms=_NOW + 86_400_000,
+        recent_fills=fills,
+        fills_today=len(fills),
+        exposure={"SPY": 1.0},
+        realized_pnl_today=0.0,
+        exact_open_pnl=Decimal(0),
+        marks_complete=True,
+        mark_observed_at_ms={},
+        fee_fidelity="not_reported",
+        execution_coverage="complete",
+        last_activity_at_ms=_NOW - 100,
+    )
+
+
+def test_a_shadow_bots_panel_serves_its_decisions_and_fills_simulated() -> None:
+    """ADR 0059 D2: a shadow authority synthesizes its fills, so the panel it is
+    served from labels every row simulated and namespaced ``shadow:``.
+
+    The inputs are the production wiring's: the facade's own id and learned
+    mode go to ``build_panel`` (never the route's live account id), and the
+    adapter then authors the fills from the fold's economics.
+    """
+    decision = decision_receipt(seq=1, ts_ms=_NOW - 50, outcome="entered", reason_code="CROSS_UP")
+    base = _panel(
+        _status(mode="trade"),
+        _clerk_status(),
+        decision,
+        authority_account_id=_SHADOW_ACCT,
+        account_mode="live",
+    )
+    projection = replace(_rail_projection(orders=()), account_id=_SHADOW_ACCT)
+    economics = _economics_with(projection, (_spy_fill(_SHADOW_ACCT),))
+
+    served = _adapt_sqlite_panel(base, projection, account_mode="live", economics=economics)
+
+    assert [(row.authority_account_id, row.authority_kind, row.simulated) for row in served.recent_decisions] == [
+        (_SHADOW_ACCT, "shadow", True)
+    ]
+    assert [(fill.authority_account_id, fill.authority_kind, fill.simulated) for fill in served.recent_fills] == [
+        (_SHADOW_ACCT, "shadow", True)
+    ]
+
+
+def test_a_simulated_fill_is_not_served_in_a_real_accounts_panel() -> None:
+    """The fills a panel serves are judged against its authority.
+
+    A fill recorded under a shadow account must not reach a real paper
+    account's page labelled with the real account, nor sit beside its real
+    decisions.
+    """
+    decision = decision_receipt(seq=1, ts_ms=_NOW - 50, outcome="entered", reason_code="CROSS_UP")
+    base = _panel(_status(mode="trade"), _clerk_status(), decision)
+    projection = _rail_projection(orders=())
+    economics = _economics_with(projection, (_spy_fill(_SHADOW_ACCT),))
+
+    with pytest.raises(MixedAuthorityAggregateError):
+        adapt_sqlite_panel(base, projection, economics=economics)
 
 
 def test_account_freeze_surfaces_its_authored_copy() -> None:

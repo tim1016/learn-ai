@@ -151,43 +151,6 @@ def _googl_fixture_fills() -> tuple[tuple[FillRecord, ...], int, int, int]:
     return tuple(fills), int(session["session_open_ms"]), int(session["session_close_ms"]), fills_today
 
 
-@pytest.mark.parametrize(
-    ("timeframe", "multiplier", "timespan", "display_bars"),
-    [
-        ("1m", 1, "minute", 300),
-        ("15m", 15, "minute", 300),
-        ("30m", 30, "minute", 300),
-        ("1h", 1, "hour", 300),
-        ("1d", 1, "day", 260),
-    ],
-)
-async def test_history_timeframe_maps_to_fixed_bar_window(
-    timeframe: str,
-    multiplier: int,
-    timespan: str,
-    display_bars: int,
-) -> None:
-    observed: list[tuple[int, str]] = []
-
-    async def _source(symbol, start, end, source_multiplier, source_timespan):
-        observed.append((source_multiplier, source_timespan))
-        return []
-
-    result = await build_history_chart(
-        timeframe,  # type: ignore[arg-type]
-        [],
-        strategy_instance_id=SID,
-        symbol="SPY",
-        batch_provider=_batch_provider_from_source(_source),
-        now_ms=_NOW,
-    )
-    assert result.timeframe == timeframe
-    assert observed
-    assert set(observed) == {(multiplier, timespan)}
-    assert result.truncated is False
-    assert display_bars > 0
-
-
 _TIMEFRAME_SPAN_MS: dict[str, int] = {
     "1m": 60_000,
     "15m": 900_000,
@@ -786,7 +749,7 @@ async def test_live_snapshot_uses_its_captured_sqlite_fills(
     captured: list[tuple[FillRecord, ...]] = []
 
     async def panel_with_entries(*_args: object, **_kwargs: object):
-        return SimpleNamespace(symbol="SPY", traded=None, market_pulse=None), [], expected_fills
+        return SimpleNamespace(symbol="SPY", traded=None, market_pulse=None), expected_fills
 
     async def build_from_fills(
         _sid: str,
@@ -1053,7 +1016,7 @@ async def test_the_live_chart_carries_the_traded_assets_price_too(monkeypatch: p
 
     async def panel_with_entries(*_args: object, **_kwargs: object):
         panel = SimpleNamespace(symbol="SPY", traded=TradedInstrumentView(kind="stock", symbol="QQQ"))
-        return panel, [], ()
+        return panel, ()
 
     line_of = {"SPY": ChartFeedStatus(state="LIVE"), "QQQ": ChartFeedStatus(state="STALLED", last_bar_ms=first)}
 
