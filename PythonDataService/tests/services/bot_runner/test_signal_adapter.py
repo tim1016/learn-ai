@@ -364,3 +364,30 @@ async def test_stop_fence_mode_is_captured_at_the_decision_bar() -> None:
 
     assert [evaluation.intents[0].kind for evaluation in fenced_enter] == [SignalIntentKind.ENTER]
     assert decided_intents == []
+
+
+@pytest.mark.parametrize(("gate_open", "expected"), [(True, EvaluationMode.DECIDE), (False, EvaluationMode.OBSERVE_ONLY)])
+def test_a_bar_the_feed_never_yielded_takes_the_fence_as_it_stands(gate_open: bool, expected: EvaluationMode) -> None:
+    """F-A-6: with Stop's fence closed, an unseen bar only observes; it is not read as DECIDE."""
+    gate = asyncio.Event()
+    if gate_open:
+        gate.set()
+    feed = DecisionFenceFeed(_FakeFeed([], mode="hold"), gate)
+
+    assert feed.evaluation_mode_for(_bar(_RTH_MS)) is expected
+
+
+def test_a_fence_that_raises_attribute_error_is_not_read_as_a_decide() -> None:
+    """C-6: only a feed with no fence decides by default; a fence that fails inside is not swallowed."""
+    from app.services.bot_trade_strategy import _evaluation_mode_for
+
+    class _FenceThatFails:
+        def evaluation_mode_for(self, bar: MarketDataBar) -> EvaluationMode:
+            raise AttributeError("the fence's own bug")
+
+    class _OrdinaryFeed:
+        pass
+
+    assert _evaluation_mode_for(_OrdinaryFeed(), _bar(_RTH_MS)) is EvaluationMode.DECIDE  # type: ignore[arg-type]
+    with pytest.raises(AttributeError, match="the fence's own bug"):
+        _evaluation_mode_for(_FenceThatFails(), _bar(_RTH_MS))  # type: ignore[arg-type]

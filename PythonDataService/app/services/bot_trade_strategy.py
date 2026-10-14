@@ -517,10 +517,11 @@ def _engine_bar(bar: MarketDataBar) -> TradeBar:
 
 def _evaluation_mode_for(feed: MarketDataFeed, bar: MarketDataBar) -> EvaluationMode:
     """Read a mode captured at feed yield; ordinary feeds always decide."""
-    try:
-        return feed.evaluation_mode_for(bar)  # type: ignore[attr-defined,no-any-return]
-    except AttributeError:
+    mode_for = getattr(feed, "evaluation_mode_for", None)
+    if mode_for is None:
         return EvaluationMode.DECIDE
+    mode: EvaluationMode = mode_for(bar)
+    return mode
 
 
 def _build_signal_strategy(

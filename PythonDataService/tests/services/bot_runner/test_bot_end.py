@@ -935,3 +935,68 @@ async def test_a_dry_run_its_owner_wants_running_keeps_its_end_for_its_run(tmp_p
     await registry.carry_out_due_ends()
 
     assert registry.pending_ends(["dry-bot"]) == [ScheduledEnd(strategy_instance_id="dry-bot", end=_END)]
+
+
+async def test_a_stopped_dry_runs_end_stays_a_candidate_when_its_record_cannot_be_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A write that failed is looked at again, and the look still reaches every other bot (F-A-21)."""
+    clock = _Clock()
+    registry = _registry(tmp_path, None, now_ms=clock)
+    _stopped_dry_run(registry, tmp_path, desired=DesiredState.STOPPED)
+    real_write = registry.record_end_carried_out
+    failures = {"left": 1}
+
+    def _write(end: ScheduledEnd, *, at_ms: int) -> None:
+        if failures["left"]:
+            failures["left"] -= 1
+            raise OSError("the desired state could not be written")
+        real_write(end, at_ms=at_ms)
+
+    monkeypatch.setattr(registry, "record_end_carried_out", _write)
+    clock.move_to(_END.end_at_ms + 1_000)
+
+    await registry.carry_out_due_ends()  # the write fails: the end stays pending, and the look does not raise
+    assert registry.pending_ends(["dry-bot"]) == [ScheduledEnd(strategy_instance_id="dry-bot", end=_END)]
+
+    await registry.carry_out_due_ends()  # looked at again, and written
+
+    assert registry.pending_ends(["dry-bot"]) == []
+
+
+class _PassThatLeavesTheRunActive:
+    """An authority whose end pass ran but stopped nothing: a swallowed per-bot STOP write."""
+
+    def __init__(self) -> None:
+        self.passes = 0
+
+    def lifecycle_projector(self) -> _PassThatLeavesTheRunActive:
+        return self
+
+    def run_is_active(self, *, strategy_instance_id: str, run_id: str) -> bool:
+        return True
+
+    async def reconcile_for_end(self) -> None:
+        self.passes += 1
+
+    async def release_after_run_end(self) -> None:
+        return
+
+
+@pytest.mark.parametrize(("mode", "passes"), [("dry_run", 2), ("trade", 1)])
+async def test_the_end_watch_asks_a_dry_run_again_while_its_run_is_still_active_after_a_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str, passes: int,
+) -> None:
+    """F-A-2: a Dry Run's Clerk has no periodic sweep to be the pass's "next pass tries again"."""
+    clock = _Clock()
+    registry = await _deployed(tmp_path, clock)
+    managed = registry._bots[_SID]
+    managed.binding = managed.binding.model_copy(update={"mode": mode})
+    authority = _PassThatLeavesTheRunActive()
+    monkeypatch.setattr(registry, "_authority_for", lambda _binding: authority)
+
+    clock.move_to(_END.end_at_ms)
+    await registry.carry_out_due_ends()
+    await registry.carry_out_due_ends()
+
+    assert authority.passes == passes

@@ -310,3 +310,56 @@ async def test_all_artifacts_are_written_under_the_container_root(tmp_path: Path
         f"live_state/{_SID}/sealed_program_v2.json",
         f"live_state/{_SID}/strategy_instance.json",
     ]
+
+
+class _YieldingStopClerk(_OrderingClerk):
+    """A Clerk whose STOP commit waits on a contended intake fence: it yields to the loop."""
+
+    async def stop_strategy_run(
+        self, *, strategy_instance_id: str, run_id: str, reason: str | None = None,
+    ) -> None:
+        await super().stop_strategy_run(strategy_instance_id=strategy_instance_id, run_id=run_id, reason=reason)
+        await asyncio.sleep(0.05)
+
+
+@pytest.mark.asyncio
+async def test_stop_all_stops_every_bot_when_a_cancelled_bots_task_reaps_itself_mid_shutdown(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F-A-1: the first bot's task unwinds and leaves the bot dict while the second bot's STOP awaits."""
+    clerk = _YieldingStopClerk(_custody_proof(exposure={}))
+    registry = _registry(tmp_path, _FakeFeed([_bar(_T0)], mode="hold"))
+    set_alpaca_clerk(clerk)
+    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
+    try:
+        first = await registry.deploy(
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade",
+        )
+        second = await registry.deploy(
+            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=f"{_SID}-2", symbol="SPY", mode="trade",
+        )
+
+        await registry.stop_all()
+
+        assert sorted(clerk.stopped_runs) == sorted([first.active_run_id, second.active_run_id])
+    finally:
+        set_alpaca_clerk(None)
+
+
+@pytest.mark.asyncio
+async def test_stop_all_cancels_a_stop_at_a_bots_end_that_outlives_its_wait(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F-A-3: a stop waiting out its custody proof is abandoned, not left pending past shutdown."""
+    from app.services import bot_runner
+
+    monkeypatch.setattr(bot_runner, "_STOP_TIMEOUT_S", 0.05)
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
+    waiting_for_proof = asyncio.get_running_loop().create_task(asyncio.sleep(3600), name="bot-end:straggler")
+    registry._end_stop_tasks["straggler"] = waiting_for_proof
+
+    await registry.stop_all()
+
+    assert waiting_for_proof.cancelled()
