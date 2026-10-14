@@ -1,8 +1,8 @@
 {
   "artifacts": {
     "attribution.md": {
-      "sha256": "a05871cddcf356020608f161c55fde0eda7d0af5bfd7d9cceb1d04cc70f8dc75",
-      "size_bytes": 4495
+      "sha256": "aeea763043f72bc6edbc794e23f1eb185bd2b5cdd4b3ddfb87b19da44825644b",
+      "size_bytes": 5736
     },
     "expected/pair.json": {
       "sha256": "57ac96dfd1a3d739b0714a5145966a53c2ea6ca374418652c1f480f4c387c4b6",

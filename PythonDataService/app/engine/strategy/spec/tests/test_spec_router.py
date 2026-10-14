@@ -206,10 +206,8 @@ async def test_backtest_rejects_unsupported_spec_feature_with_400() -> None:
     not as a 200 + ``success=false``. Otherwise API consumers cannot
     distinguish a client-side spec mistake from a transient run failure.
 
-    The unsupported feature surfaces from inside ``engine.run()`` (when
-    entry actually fires and ``_submit_entry`` is called), not from
-    ``SpecAlgorithm.__init__``, so the run-time exception path must
-    convert it to 4xx — which is what the route handler does.
+    The constructor refuses it (an entry that never fires used to
+    return a 200 with zero trades), and the route turns that into 4xx.
     """
     app.dependency_overrides[get_data_source_factory] = _make_synthetic_factory
 
@@ -221,7 +219,7 @@ async def test_backtest_rejects_unsupported_spec_feature_with_400() -> None:
             spec_payload["symbols"] = [SYMBOL]
             # Replace the SetHoldings sizing with a Phase-2 FixedContracts
             # value. The schema accepts it (forward-compat); the
-            # evaluator raises NotImplementedError when entry fires.
+            # evaluator's constructor raises NotImplementedError.
             spec_payload["entry"]["size"] = {"kind": "FixedContracts", "value": 1}
 
             resp = await client.post(

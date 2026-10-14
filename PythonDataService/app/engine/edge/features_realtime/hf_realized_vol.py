@@ -3,7 +3,7 @@
 Formula: RV²_d = Σ r²_i (intraday) + r²_overnight; σ²_TRD252 = RV²_window · 252 / W; two-component separation of continuous and jump variation
 Reference: Andersen, T.G., Bollerslev, T., Diebold, F.X., Labys, P. (2003) "Modeling and Forecasting Realized Volatility" Econometrica 71(2); Barndorff-Nielsen, O.E. & Shephard, N. (2002) two-component estimator
 Canonical implementation: app/engine/edge/features_realtime/hf_realized_vol.py
-Validated against: NONE — pending
+Validated against: PythonDataService/tests/fixtures/test_volatility_fixtures.py (golden RV-002, hashed in tests/fixtures/golden/manifest.json; it pins the day-level assignment described under "Realtime guarantee").
 
 Estimator
 ---------
@@ -13,8 +13,9 @@ For each trading day d:
 
 where ``r_i = ln(close_i / close_{i-1})`` for consecutive bars within the
 session (no return crosses a session boundary) and
-``r_overnight(d) = ln(open_first_d / close_last_{d-1})`` connects yesterday's
-last bar to today's first.
+``r_overnight(d) = ln(close_first_d / close_last_{d-1})`` connects yesterday's
+last bar to today's first (close to close: one price stream, no open prints).
+``open`` is a required column but is not read.
 
 Aggregated over a window of ``W`` trading days:
 
@@ -38,6 +39,13 @@ Realtime guarantee
 ------------------
 This module is in ``features_realtime/`` and never applies ``.shift(-N)``.
 The forward variant lives in ``labels_oracle/hf_forward_rv.py``.
+
+The guarantee is per *trading date*, not per bar: a date's RV² is the whole
+date's, and every bar of that date carries the same value (the ffill onto the
+bar grid in :func:`hf_realized_vol_trd252`). On an intraday index a bar at
+09:15 ET therefore holds a figure that includes the date's later bars; the
+value is valid as of the date's session close. A consumer deciding intraday
+must read the previous date's value (shift one session) instead (#3219).
 """
 
 from __future__ import annotations
@@ -130,8 +138,10 @@ def hf_realized_vol_trd252(
     """Trailing HF realized vol on TRD/252 basis, indexed by bar timestamp.
 
     Computes per-day RV², rolls a sum over ``window_trading_days``, annualizes
-    with the standard ``× 252 / W`` factor, and ffills onto the bar grid.
-    NaN for bars before the first complete window.
+    with the standard ``× 252 / W`` factor, and assigns each date's value to
+    every bar of that date. NaN for bars before the first complete window.
+    The value at a bar includes the rest of its own date: valid as of the
+    date's session close, not intraday (see "Realtime guarantee").
     """
     if window_trading_days <= 0:
         raise ValueError(f"window_trading_days must be positive: {window_trading_days}")

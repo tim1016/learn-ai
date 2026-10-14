@@ -1889,11 +1889,13 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         ),
         description=(
             "Minute-bar lifecycle validation strategy. Starting with the "
-            "09:45 ET minute close, it watches for two consecutive green "
+            "minute close 15 minutes after the session open (09:45 ET), it "
+            "watches for two consecutive green "
             "minute bars (close > open). After the second green bar it "
             "queues a long entry intended for next-bar-open execution, holds "
             "through the third, fourth, and fifth bars, submits a liquidation "
-            "on the fifth bar, resets the detector, and repeats. At 15:45 ET "
+            "on the fifth bar, resets the detector, and repeats. 15 minutes "
+            "before the session close (15:45 ET; 12:45 ET on an early close) "
             "it stops detecting new entries and flattens any open position. "
             "This is a deployment-validation primitive, not an alpha model."
         ),
@@ -1901,7 +1903,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "Universe\n"
             "    symbol     = configurable (default SPY)\n"
             "    resolution = 1-minute bars\n"
-            "    session    = regular session data; strategy starts at 09:45 ET\n"
+            "    session    = regular session data; strategy starts 15 minutes after the open\n"
             "\n"
             "Indicators\n"
             "    none — only bar.open and bar.close are inspected\n"
@@ -1922,7 +1924,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "    the open trade cannot seed the next entry pattern.\n"
             "\n"
             "Session barrier\n"
-            "    at 15:45 ET: stop detecting entries and liquidate any exposure\n"
+            "    15 minutes before the close (12:45 ET on an early close): stop detecting entries and liquidate any exposure\n"
             "\n"
             "Portfolio Construction\n"
             "    SetHoldings(symbol, 1.0) — one open position at a time\n"
@@ -2096,8 +2098,9 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "long if RSI is inside the [rsi_low_gate, rsi_high_gate] range AND "
             "(EMA_fast − EMA_slow) exceeds a threshold AND MACD line > 0. Exits "
             "when ADX drops below 15. Pyramiding=1 prevents re-entry while "
-            "holding. Validated against TradingView via trade-by-trade CSV "
-            "reconciliation."
+            "holding. No TradingView or LEAN reconciliation exists for this "
+            "program; it is qualified against its own deterministic replay "
+            "of committed bars."
         ),
         algorithm_pseudocode=(
             "Universe\n"

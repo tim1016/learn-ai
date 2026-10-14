@@ -99,3 +99,26 @@ other artifact's sha256/size is untouched. This does not require a new
 versioned fixture directory because the underlying Independent Oracle
 evidence (trades, native statistics, dimensions/sub-scores) is unchanged —
 only our own downstream signature-serialization code changed shape.
+
+## Amendment: the Python-side `native_statistics` pre-date the units fix (2026-10-14, #3219 E-1)
+
+`expected/pair.json` → `python.native_statistics` is run 95's persisted output
+of `compute_lean_statistics` **before** owner ruling 8 of #3159 (E-1): that
+computation read per-share points as dollars (`trade.total_profit_loss` the
+per-share sum, `runtime.net_profit` = `pnl_pct` x start capital, `fees` fixed
+at 0, `total_orders` = closed trades). Since the fix the panel reports dollar
+P&L, the run's fees and its filled orders.
+
+The file is unchanged and must not be read as a reference of the corrected
+computation:
+
+- The test asserts only the **LEAN** side (`lean.native_statistics`, the
+  independent oracle); no test reads `python.native_statistics`.
+- It cannot be regenerated from this fixture: the exporter, the resolver and
+  run 95's database row were deleted together (PR #1969, ADR 0058), and a
+  re-baseline is a new versioned fixture directory (see "Regeneration").
+- The corrected computation is pinned by closed-form cases in
+  `tests/engine/results/test_lean_statistics_units.py`.
+
+Only this attribution file changed; `manifest.json`'s receipt for it was
+recomputed from the new bytes, and no other artifact was touched.
