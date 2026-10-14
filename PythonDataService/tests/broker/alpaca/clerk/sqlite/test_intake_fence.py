@@ -399,6 +399,44 @@ async def test_off_loop_abandoned_fold_timeout_poisons_the_fence(
     fold_release.set()
 
 
+async def test_off_loop_poison_refuses_waiters_parked_before_it_was_set() -> None:
+    """Tasks queued behind a wedged fold must not be admitted by the release
+    that poisons the fence (#3160).
+
+    The poison flag was read once, on the way in, so a waiter that arrived
+    before the abandoned wait elapsed passed the check, parked in ``acquire()``
+    and ran its hold while the abandoned worker was still inside its fold.
+    """
+    fence = ReentrantAsyncLock(abandoned_hop_timeout_s=0.05)
+    fold_started = threading.Event()
+    fold_release = threading.Event()
+    admitted: list[str] = []
+
+    def stuck_fold() -> None:
+        fold_started.set()
+        fold_release.wait(timeout=10)
+
+    async def queued(name: str) -> None:
+        async with fence:
+            admitted.append(name)
+
+    task = asyncio.create_task(fence.off_loop(stuck_fold))
+    await asyncio.get_running_loop().run_in_executor(None, fold_started.wait, 10)
+    waiters = [asyncio.create_task(queued(name)) for name in ("first", "second")]
+    await asyncio.sleep(0)  # both waiters park in acquire() behind the wedged fold
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    results = await asyncio.wait_for(
+        asyncio.gather(*waiters, return_exceptions=True), timeout=5
+    )
+
+    fold_release.set()
+    assert admitted == []
+    assert all(isinstance(result, IntakeFencePoisonedError) for result in results)
+
+
 async def test_off_loop_abandoned_wait_recancellation_poisons_the_fence() -> None:
     """Shutdown cancelling the bounded wait releases with the worker live.
 
