@@ -29,7 +29,6 @@ from datetime import date
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
 
 from app.options.contract import OptionContract
 from app.options_backtest.cover_book import Held, Holding, collateral
@@ -105,7 +104,7 @@ def _jumped(rng: random.Random, bars: dict[int, tuple[str, ...]]) -> dict[int, t
     }
 
 
-def _a_scene(seed: int) -> _Scene | None:
+def _a_scene(seed: int) -> _Scene:
     rng = random.Random(seed)
     contracts = _contracts()
     count = rng.randint(2, 5)
@@ -133,10 +132,9 @@ def _a_scene(seed: int) -> _Scene | None:
     order = list(range(count))
     rng.shuffle(order)
     legs, picks = [legs[at_] for at_ in order], [picks[at_] for at_ in order]
-    try:
-        written_setup = setup(*legs, slippage=rng.choice(("0", "0.3", "1")))
-    except ValidationError:
-        return None  # not reached by construction: every sale is of what the legs before it bought
+    # Valid by construction: every sale is of what the legs before it bought. A generator that drifts from that raises
+    # the setup's own refusal here, and the seed with it, rather than leaving the family to skip.
+    written_setup = setup(*legs, slippage=rng.choice(("0", "0.3", "1")))
     options: dict[OptionContract, dict[int, tuple[str, ...]]] = {}
     for _, _, contract_picked in picks:
         if contract_picked in options:
@@ -301,8 +299,6 @@ def test_whatever_a_generated_session_does_it_is_never_uncovered_and_its_money_s
     seed: int,
 ) -> None:
     scene = _a_scene(seed)
-    if scene is None:
-        pytest.skip("the generated setup sells more of a kind than it buys")
 
     outcome = replay(scene.written, scene.market, cash=scene.cash, fee_for=fee_per_contract(scene.fee))
 
@@ -313,8 +309,6 @@ def test_the_generator_reaches_the_hard_cases_it_is_there_for() -> None:
     reached = defaultdict(int)
     for seed in SEEDS:
         scene = _a_scene(seed)
-        if scene is None:
-            continue
         outcome = replay(scene.written, scene.market, cash=scene.cash, fee_for=fee_per_contract(scene.fee))
         for event in outcome.events:
             reached[event.kind.value] += 1

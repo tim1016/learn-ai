@@ -363,6 +363,20 @@ describe('a run that is going', () => {
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy();
   });
 
+  it('says nothing of a run that could not be read once the panel is given another run, while that one is still being read', async () => {
+    const service = fakeService(vi);
+    service.run.mockImplementation((id: number) => (id === 7 ? Promise.reject(new Error('offline')) : new Promise<RunDetail>(() => undefined)));
+    const { view } = await renderRun(runItem({ id: 7, status: 'complete' }), { service });
+    expect(await screen.findByText(/could not be read/)).toBeTruthy();
+
+    view.fixture.componentRef.setInput('run', runItem({ id: 8, job_id: 'job-8', status: 'running' }));
+    await lettingGo();
+
+    await waitFor(() => expect(service.run).toHaveBeenCalledWith(8));
+    expect(screen.queryByText(/could not be read/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+  });
+
   it('reads a run that is over once, even when its job is still known to this tab and ended', async () => {
     const service = fakeService(vi);
     readsAs(service, runDetail());
@@ -525,6 +539,17 @@ describe('a run whose setup the server cannot open', () => {
     await lettingGo();
     expect(service.describe).not.toHaveBeenCalled();
     expect(used).toEqual([]);
+  });
+
+  it('says why the setup is not the form’s to take yet only when the run has a setup to take', async () => {
+    const service = fakeService(vi);
+    readsAs(service, runWithoutSetup());
+    const { view } = await renderRun(runItem({ status: 'complete' }), { service, showSetup: true });
+    view.fixture.componentRef.setInput('setupBlockedWhy', 'The form cannot take a setup until the session times have been read.');
+
+    const section = await screen.findByRole('region', { name: 'The setup this run used' });
+    expect(await within(section).findByText(SETUP_CANNOT_OPEN_REASON)).toBeTruthy();
+    expect(within(section).queryByText(/until the session times have been read/)).toBeNull();
   });
 
   it('says nothing about a setup, and offers none, until the run has been read', async () => {

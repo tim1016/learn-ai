@@ -54,6 +54,8 @@ export class RunPanelComponent {
   readonly run = input.required<RunListItem>();
   /** Show the sentences of the setup this run used, and offer Use this setup (a run opened from History). */
   readonly showSetup = input(false);
+  /** Why the form cannot take a setup just now, in words (the session clock is unread); null when it can. */
+  readonly setupBlockedWhy = input<string | null>(null);
   /** The run was read again and its status is not the one it was given. */
   readonly updated = output<RunDetail>();
   readonly useSetup = output<ServedSetup>();
@@ -83,7 +85,9 @@ export class RunPanelComponent {
     this.setupRead.error() === undefined ? null : 'The setup of this run could not be put into words. You can still use it.',
   );
 
-  protected readonly canUseSetup = computed(() => this.detail()?.setup != null);
+  protected readonly canUseSetup = computed(() => this.detail()?.setup != null && this.setupBlockedWhy() === null);
+  /** Why the form cannot take the setup of this run just now, for a run that has one to take; null otherwise. */
+  protected readonly setupWaitsWhy = computed(() => (this.detail()?.setup != null ? this.setupBlockedWhy() : null));
   /** Why a run that was read has no setup the page can open, in the server's words; null while the run has one or is not yet read. */
   protected readonly noSetupWhy = computed(() => {
     const detail = this.detail();
@@ -102,6 +106,7 @@ export class RunPanelComponent {
       untracked(() => {
         this.cancelling.set(false);
         this.cancelProblem.set(null);
+        this.readFailure.set(null);
         void this.load(id);
       });
     });

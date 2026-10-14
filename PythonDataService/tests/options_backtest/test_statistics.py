@@ -456,6 +456,18 @@ def test_a_refusal_event_with_no_reason_is_not_counted_by_a_guess() -> None:
         summarize_run([session], starting_cash_usd=STARTING)
 
 
+def test_a_pick_refused_event_with_no_reason_is_not_left_out_of_the_counts() -> None:
+    session = a_session(
+        SEP_29,
+        "10000.00",
+        status=SessionStatus.NO_TRADE,
+        events=(an_event(EventKind.PICK_REFUSED, "short"),),
+    )
+
+    with pytest.raises(ValueError, match="carries no reason"):
+        summarize_run([session], starting_cash_usd=STARTING)
+
+
 PUT_495, PUT_500 = contract("put", "495"), contract("put", "500")
 PUT_500_LATER = OptionContract.of(root="SPY", expiry_date=date(2026, 10, 16), right="put", strike=D("500"))
 

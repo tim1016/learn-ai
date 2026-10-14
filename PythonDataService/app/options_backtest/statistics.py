@@ -237,12 +237,12 @@ def _counts[E: StrEnum](members: Iterable[E], seen: Iterable[E]) -> tuple[tuple[
     return tuple((member, counter[member]) for member in members)
 
 
-def _refusal_of(event: Event) -> EntryRefusal:
-    """The reason an entry-refusal event carries. Each of them always has its refusal as its reason, so one without it
+def _reason_of(event: Event) -> str:
+    """The reason a refusal event carries. Each of them always has its refusal as its reason, so one without it
     is a fault in whatever wrote it and is not counted by a guess."""
     if event.reason is None:
         raise ValueError(f"the {event.kind.value} event of leg {event.leg_id!r} at {event.at_ms} carries no reason")
-    return EntryRefusal(event.reason)
+    return event.reason
 
 
 def _wins_losses_even(trades: Iterable[LegTrade]) -> tuple[int, int, int]:
@@ -412,7 +412,7 @@ def summarize_run(sessions: Sequence[SessionResult], *, starting_cash_usd: Decim
         entries_dropped=kinds[EventKind.ENTRY_DROPPED],
         picks_refused_by_reason=_counts(
             PickRefusal,
-            (PickRefusal(event.reason) for event in events if event.kind is EventKind.PICK_REFUSED and event.reason),
+            (PickRefusal(_reason_of(event)) for event in events if event.kind is EventKind.PICK_REFUSED),
         ),
         legs_without_a_starting_price=kinds[EventKind.NO_STARTING_PRICE],
         re_entries_lost=kinds[EventKind.RE_ENTRY_LOST],
@@ -420,6 +420,6 @@ def summarize_run(sessions: Sequence[SessionResult], *, starting_cash_usd: Decim
         by_month=_month_rows(sessions, days),
         entries_refused_by_reason=_counts(
             _ENTRY_REFUSALS_BY_REASON,
-            (_refusal_of(event) for event in events if event.kind in _ENTRY_REFUSAL_EVENT_KINDS),
+            (EntryRefusal(_reason_of(event)) for event in events if event.kind in _ENTRY_REFUSAL_EVENT_KINDS),
         ),
     )
