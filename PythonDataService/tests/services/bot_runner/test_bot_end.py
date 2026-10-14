@@ -889,6 +889,43 @@ async def test_a_stop_at_its_end_whose_registration_is_gone_says_its_outcome_sta
     assert "stays provisional" in said.getMessage()
 
 
+async def test_the_end_watch_loop_carries_a_due_end_forward_and_survives_a_look_that_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The loop itself, not one look. A look that raised outside the per-bot guard is logged and the watch keeps running (and the bot is fenced)."""
+    from app.services import bot_runner
+
+    monkeypatch.setattr(bot_runner, "_END_WATCH_INTERVAL_S", 0.01)
+    clock = _Clock()
+    registry = _registry(tmp_path, _FakeFeed([_bar(_T0)], mode="hold"), now_ms=clock)
+    clerk = _end_clerk(registry)
+    await _deploy(registry)
+    real_record = registry._record_ends_of_stopped_dry_runs
+    raised: list[bool] = []
+
+    def _raises_once(now_ms: int) -> None:
+        if not raised:
+            raised.append(True)
+            raise RuntimeError("a look failed outside the per-bot guard")
+        real_record(now_ms)
+
+    monkeypatch.setattr(registry, "_record_ends_of_stopped_dry_runs", _raises_once)
+    watch = registry.start_end_watch()
+    try:
+        assert registry.start_end_watch() is watch, "a second start is the same watch"
+        with caplog.at_level(logging.ERROR, logger="app.services.bot_runner"):
+            clock.move_to(_END.end_at_ms)
+            await _wait_for(lambda: not registry.status("alpaca", _SID).running)
+
+        assert raised == [True]
+        assert any(getattr(r, "action", None) == "bot_end_watch_failed" for r in caplog.records)
+        assert clerk.passes == 1, "the pass that fenced the bot"
+        assert not watch.done()
+    finally:
+        await registry.stop_all()
+    assert watch.done(), "service shutdown ends the watch"
+
+
 # ── a stopped Dry Run's end ──────────────────────────────────────────────────
 
 
