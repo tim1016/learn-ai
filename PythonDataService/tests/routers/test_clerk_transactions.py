@@ -9,6 +9,7 @@ from httpx import ASGITransport, AsyncClient, Response
 
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
+    ClerkStartupFailure,
     set_active_clerk_runtime,
 )
 from app.broker.alpaca.clerk.sqlite.external_orders import (
@@ -183,6 +184,34 @@ async def test_external_order_acknowledgement_reports_unavailable_authority(
             "/api/accounts/PA-TEST/transactions/external-orders/external-1/acknowledge",
             json={"operator": "operator-1"},
         )
+    assert response.status_code == 503
+    assert response.json()["detail"]["reason"] == "sqlite_authority_unavailable"
+
+
+async def test_external_order_acknowledgement_reports_selected_clerk_startup_failure() -> None:
+    set_active_clerk_runtime(ActiveClerkRuntime(
+        authority_kind="unavailable",
+        startup_failure=ClerkStartupFailure(
+            reason_code="SQLITE_CLERK_STARTUP_FAILED",
+            account_id="PA-TEST",
+            scope="ACCOUNT_CLERK",
+            impact="Broker-mutating Alpaca Clerk capability is not installed.",
+            recovery="The activated database failed integrity verification.",
+            observed_at_ms=1_700_000_000_000,
+            activation_detected=True,
+        ),
+    ))
+    app = FastAPI()
+    app.include_router(router)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test") as client:
+            response = await client.post(
+                "/api/accounts/pa-test/transactions/external-orders/external-1/acknowledge",
+                json={"operator": "operator-1"},
+            )
+    finally:
+        set_active_clerk_runtime(None)
+
     assert response.status_code == 503
     assert response.json()["detail"]["reason"] == "sqlite_authority_unavailable"
 

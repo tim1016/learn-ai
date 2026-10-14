@@ -64,7 +64,7 @@ async def acknowledge_external_order_endpoint(
         ) from exc
     except ClerkTransactionAccountNotActive as exc:
         raise _account_not_active() from exc
-    except (ExecutionLeaseLost, RepositoryPoisoned) as exc:
+    except (ClerkTransactionProjectionUnavailable, ExecutionLeaseLost, RepositoryPoisoned) as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"reason": "sqlite_authority_unavailable", "message": str(exc)},
