@@ -89,11 +89,24 @@ def _malformed_rows(long_position: dict) -> dict[str, object]:
         "boolean-quantity": [{**long_position, "qty": True}],
         "unparseable-quantity": [{**long_position, "qty": "one"}],
         "non-object-row": [long_position, None],
+        # A figure that is not finite is no figure (#3216).
+        "nan-quantity": [{**long_position, "qty": "NaN"}],
+        "infinite-market-value": [{**long_position, "market_value": "Infinity"}],
+        "nan-average-entry-price": [{**long_position, "avg_entry_price": float("nan")}],
     }
 
 
 @pytest.mark.parametrize(
-    "shape", ["missing-field", "boolean-quantity", "unparseable-quantity", "non-object-row"]
+    "shape",
+    [
+        "missing-field",
+        "boolean-quantity",
+        "unparseable-quantity",
+        "non-object-row",
+        "nan-quantity",
+        "infinite-market-value",
+        "nan-average-entry-price",
+    ],
 )
 async def test_broker_names_a_malformed_position_as_unavailable_evidence(
     load_alpaca_fixture: AlpacaFixtureLoader,
@@ -111,6 +124,44 @@ async def test_broker_names_a_malformed_position_as_unavailable_evidence(
     assert info.value.detail is not None
     assert type(info.value.__cause__).__name__ not in info.value.detail
     assert isinstance(info.value.__cause__, KeyError | TypeError | ValueError)
+
+
+@pytest.mark.parametrize(
+    ("field", "attribute"),
+    [
+        ("current_price", "current_price"),
+        ("unrealized_plpc", "unrealized_plpc"),
+        ("lastday_price", "prior_close_price"),
+    ],
+)
+@pytest.mark.parametrize("figure", ["NaN", "-inf", float("inf")], ids=repr)
+async def test_a_non_finite_optional_position_figure_reads_absent_and_never_refuses_the_positions(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+    caplog: pytest.LogCaptureFixture,
+    field: str,
+    attribute: str,
+    figure: object,
+) -> None:
+    """One position's optional figure once refused every position (#3216).
+
+    The read is all or nothing, and what reads it -- the Clerk's install, a
+    flatten's cover proof -- has no other place to take the broker's
+    positions from. The figure is refused, never passed on as a number: it
+    reads absent, which a consumer already takes as "unmarked", and one
+    structured warning names the field.
+    """
+    positions = load_alpaca_fixture("positions", "positions.json")
+    broker = AlpacaBroker(client=_PositionsClient([{**positions[0], field: figure}, positions[1]]))  # type: ignore[arg-type]
+
+    with caplog.at_level(logging.WARNING, logger="app.broker.alpaca.adapter"):
+        mapped = await broker.list_positions()
+
+    assert [position.symbol for position in mapped] == [positions[0]["symbol"], positions[1]["symbol"]]
+    assert getattr(mapped[0], attribute) is None
+    assert mapped[0].quantity == float(positions[0]["qty"])
+    (record,) = [r for r in caplog.records if r.name == "app.broker.alpaca.adapter"]
+    assert (record.action, record.field) == ("alpaca_optional_figure_not_finite", field)
+    assert record.levelno == logging.WARNING
 
 
 @pytest.mark.parametrize("field", ["symbol", "side"])

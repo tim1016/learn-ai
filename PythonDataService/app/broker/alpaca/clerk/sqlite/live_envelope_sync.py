@@ -170,8 +170,9 @@ def _non_finite_risk_fields(
 ) -> tuple[str, ...]:
     """Which risk inputs the broker reported as NaN or infinity.
 
-    ``adapter.opt_float`` refuses only booleans before ``float(value)``, so an
-    Alpaca string like ``"NaN"`` arrives here as a genuine non-finite float.
+    The Alpaca adapter refuses a non-finite ``cash`` or ``equity`` and reads a
+    non-finite ``last_equity`` as absent (#3216), so a non-finite float reaches
+    here only from another source; this guard is defence in depth.
     A NaN makes every loss comparison ``False``, which is indistinguishable from "nothing
     breached" — so a non-finite input is unjudgeable in exactly the way a
     missing ``last_equity`` is, and rides the same withdrawal.

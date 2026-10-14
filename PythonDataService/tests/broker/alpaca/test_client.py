@@ -38,6 +38,7 @@ from app.broker.alpaca.config import AlpacaSettings, reset_alpaca_settings_for_t
 from app.broker.capture.journal import CaptureJournal
 from app.broker.contract.errors import (
     BrokerAuthError,
+    BrokerOrderAnswerUnreadable,
     BrokerOrderNotPermitted,
     BrokerOrderRejected,
     BrokerRateLimited,
@@ -105,6 +106,10 @@ class _FakeAlpaca:
 
 def _client(fake: _FakeAlpaca) -> AlpacaTradingClient:
     return AlpacaTradingClient(client_factory=lambda: fake)
+
+
+# An Alpaca order id is a UUID; a cancel is refused for anything else (#3216).
+_BROKER_ORDER_ID = "00000000-0000-0000-0000-0000000000a1"
 
 
 def test_client_can_be_constructed_outside_async_context() -> None:
@@ -251,13 +256,213 @@ async def test_empty_successful_reference_and_submit_answers_stay_unknown(body: 
     assert client._submission_may_become_visible(_ORDER_BODY["client_order_id"])
 
 
+# A 2xx whose JSON is not an order object: a list, a string, a number, a boolean.
+_NON_OBJECT_ANSWERS = ["[]", '[{"id": "o1"}]', '"accepted"', "7", "true"]
+
+
+@pytest.mark.parametrize("body", _NON_OBJECT_ANSWERS)
+@responses.activate
+async def test_a_non_object_2xx_answer_to_an_order_submission_stays_unknown_inside_the_window(body: str) -> None:
+    """The order may well have been placed, so the answer is unknown (#3216).
+
+    It was handed on as an order and reached the adapter, which raised a raw
+    ``TypeError`` after this client had already closed the visibility window
+    on the 200: neither a rejection the Clerk could fold nor an unknown one.
+    """
+    sdk = TradingClient(api_key="test-key", secret_key="test-secret", paper=True, raw_data=True)
+    client = AlpacaTradingClient(client_factory=lambda: sdk)
+    responses.add(responses.POST, "https://paper-api.alpaca.markets/v2/orders", body=body, status=200)
+
+    with pytest.raises(BrokerOrderAnswerUnreadable) as raised:
+        await client.submit_order(_ORDER_BODY)
+
+    # The order is sent once, and the answer is the unreadable-answer kind the port's contract names:
+    # a ``BrokerUnavailable`` every catch arm already holds, with no broker order id to hand on.
+    assert len(responses.calls) == 1
+    assert isinstance(raised.value, BrokerUnavailable)
+    assert not isinstance(raised.value, BrokerUnreachable)
+    assert raised.value.broker_order_id is None
+    assert client._submission_may_become_visible(_ORDER_BODY["client_order_id"])
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {},
+        {"client_order_id": "manual/inkant/v1:someone-else"},
+        {"client_order_id": None},
+        {"code": 40010001, "message": "qty must be > 0"},
+        {"id": " ", "status": "accepted"},
+    ],
+    ids=[
+        "empty-object",
+        "another-client-order-id",
+        "null-client-order-id",
+        "error-shaped-body",
+        "blank-order-id",
+    ],
+)
+async def test_a_2xx_submission_answer_that_does_not_name_the_order_sent_keeps_the_window_open(
+    make_api_error: ApiErrorFactory, answer: dict[str, Any]
+) -> None:
+    """Only an answer that names the order closes the visibility window (#3216).
+
+    The Clerk folds such an answer as unknown and looks the order up at
+    once; a lookup index still catching up answers that with a 404, which
+    must not read as "absent".
+    """
+    fake = _FakeAlpaca()
+    fake.post = lambda path, data=None: answer  # type: ignore[method-assign]
+
+    def lookup(client_id: str) -> dict[str, Any]:
+        raise make_api_error(404, message="order not found")
+
+    fake.get_order_by_client_id = lookup  # type: ignore[method-assign]
+    client = _client(fake)
+
+    returned = await client.submit_order(_ORDER_BODY)
+
+    # Handed on for the caller to judge, as it was: the Clerk's own fold of another id's answer reads it.
+    assert returned == answer
+    assert client._submission_may_become_visible(_ORDER_BODY["client_order_id"])
+    with pytest.raises(BrokerUnavailable, match="still become visible"):
+        await client.get_order_by_client_order_id(_ORDER_BODY["client_order_id"])
+
+
+@pytest.mark.parametrize(
+    "shape",
+    ["id-and-client-order-id", "client-order-id-only", "id-only"],
+)
+async def test_a_2xx_submission_answer_that_names_the_order_sent_closes_the_window(shape: str) -> None:
+    """Alpaca's answer carries both; an answer that names the order by either one is that order's."""
+    answer: dict[str, Any] = {"status": "accepted"}
+    if shape != "client-order-id-only":
+        answer["id"] = "broker-order-1"
+    if shape != "id-only":
+        answer["client_order_id"] = _ORDER_BODY["client_order_id"]
+    fake = _FakeAlpaca()
+    fake.post = lambda path, data=None: answer  # type: ignore[method-assign]
+    client = _client(fake)
+    client.hold_submission_uncertain(_ORDER_BODY["client_order_id"])
+
+    await client.submit_order(_ORDER_BODY)
+
+    assert not client._submission_may_become_visible(_ORDER_BODY["client_order_id"])
+
+
+@pytest.mark.parametrize("body", _NON_OBJECT_ANSWERS)
+@responses.activate
+async def test_a_non_object_2xx_answer_to_an_order_lookup_is_unknown_not_absent(body: str) -> None:
+    sdk = TradingClient(api_key="test-key", secret_key="test-secret", paper=True, raw_data=True)
+    client = AlpacaTradingClient(client_factory=lambda: sdk)
+    base = "https://paper-api.alpaca.markets/v2"
+    responses.add(responses.GET, f"{base}/orders:by_client_order_id", body=body, status=200)
+    responses.add(responses.GET, f"{base}/orders/{_BROKER_ORDER_ID}", body=body, status=200)
+
+    for lookup in (
+        client.get_order_by_client_order_id("manual/inkant/v1:abc"),
+        client.get_order_by_broker_order_id(_BROKER_ORDER_ID),
+        client.get_nested_order_by_broker_order_id(_BROKER_ORDER_ID),
+    ):
+        with pytest.raises(BrokerOrderAnswerUnreadable, match="could not be read") as unreadable:
+            await lookup
+        assert unreadable.value.broker_order_id is None
+
+
+async def test_a_not_found_after_a_non_object_lookup_answer_is_still_not_absent(
+    make_api_error: ApiErrorFactory,
+) -> None:
+    """Alpaca answered for the order; its not-found a moment later proves nothing (#2913, #3216)."""
+    fake = _FakeAlpaca()
+    answers: list[object] = []
+
+    def answer(*_args: object, **_kwargs: object) -> object:
+        if answers:
+            return answers.pop()
+        raise make_api_error(404, message="order not found")
+
+    fake.get_order_by_client_id = answer  # type: ignore[method-assign]
+    fake.get_order_by_id = answer  # type: ignore[method-assign]
+    client = _client(fake)
+
+    answers.append([])
+    with pytest.raises(BrokerUnavailable, match="could not be read"):
+        await client.get_order_by_client_order_id("manual/inkant/v1:abc")
+    with pytest.raises(BrokerUnavailable, match="still become visible"):
+        await client.get_order_by_client_order_id("manual/inkant/v1:abc")
+
+    answers.append("accepted")
+    with pytest.raises(BrokerUnavailable, match="could not be read"):
+        await client.get_order_by_broker_order_id(_BROKER_ORDER_ID)
+    with pytest.raises(BrokerUnavailable, match="a moment ago"):
+        await client.get_order_by_broker_order_id(_BROKER_ORDER_ID)
+
+
 async def test_cancel_order_deletes_by_id_and_returns_none() -> None:
     fake = _FakeAlpaca()
 
-    result = await _client(fake).cancel_order("broker-order-1")
+    result = await _client(fake).cancel_order(_BROKER_ORDER_ID)
 
-    assert fake.delete_call == ("/orders/broker-order-1", None)
+    assert fake.delete_call == (f"/orders/{_BROKER_ORDER_ID}", None)
     assert result is None
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        _BROKER_ORDER_ID.upper(),
+        _BROKER_ORDER_ID.replace("-", ""),
+        "{" + _BROKER_ORDER_ID + "}",
+        "urn:uuid:" + _BROKER_ORDER_ID,
+    ],
+    ids=["upper-case", "no-hyphens", "braces", "urn"],
+)
+async def test_cancel_order_sends_the_canonical_spelling_of_the_id(spelling: str) -> None:
+    """The id goes into the URL path, so every spelling of one UUID is sent as its one canonical form (#3216)."""
+    fake = _FakeAlpaca()
+
+    await _client(fake).cancel_order(spelling)
+
+    assert fake.delete_call == (f"/orders/{_BROKER_ORDER_ID}", None)
+
+
+@pytest.mark.parametrize(
+    "not_an_order_id",
+    [
+        "../positions",
+        "order-xyz",
+        "",
+        "00000000-0000-0000-0000-00000000000",
+        _BROKER_ORDER_ID + "/../../positions",
+    ],
+    ids=["dot-segments", "not-a-uuid", "empty", "one-digit-short", "uuid-then-dot-segments"],
+)
+async def test_cancel_order_refuses_an_id_that_is_not_a_uuid_before_any_request(not_an_order_id: str) -> None:
+    """``requests`` resolves dot-segments, so ``../positions`` was ``DELETE /v2/positions`` (#3216).
+
+    That is Alpaca's close-every-position request. The cancel is held to the
+    same UUID gate the order reads are (#2854): refused as a request Alpaca
+    could not take, with nothing asked of it.
+    """
+    fake = _FakeAlpaca()
+
+    with pytest.raises(BrokerRequestInvalid, match="is not an Alpaca order id"):
+        await _client(fake).cancel_order(not_an_order_id)
+
+    assert fake.delete_call is None
+
+
+@responses.activate
+async def test_a_cancel_of_a_path_like_id_sends_no_request_through_the_real_sdk() -> None:
+    """Over the real SDK and ``requests``: nothing reaches the network, least of all ``DELETE /v2/positions``."""
+    sdk = TradingClient(api_key="test-key", secret_key="test-secret", paper=True, raw_data=True)
+    base = "https://paper-api.alpaca.markets/v2"
+    responses.add(responses.DELETE, f"{base}/positions", json=[], status=207)
+
+    with pytest.raises(BrokerRequestInvalid):
+        await AlpacaTradingClient(client_factory=lambda: sdk).cancel_order("../positions")
+
+    assert len(responses.calls) == 0
 
 
 async def test_cancel_order_non_cancelable_maps_to_contract_error(
@@ -271,7 +476,7 @@ async def test_cancel_order_non_cancelable_maps_to_contract_error(
     fake.delete = raise_unprocessable  # type: ignore[method-assign]
 
     with pytest.raises(BrokerRequestInvalid) as excinfo:
-        await _client(fake).cancel_order("broker-order-1")
+        await _client(fake).cancel_order(_BROKER_ORDER_ID)
     assert "not cancelable" in excinfo.value.message
 
 
@@ -303,7 +508,7 @@ async def test_a_403_on_order_cancel_stays_a_credentials_failure(
     fake.delete = forbid  # type: ignore[method-assign]
 
     with pytest.raises(BrokerAuthError):
-        await _client(fake).cancel_order("broker-order-1")
+        await _client(fake).cancel_order(_BROKER_ORDER_ID)
 
 
 async def test_get_order_by_client_order_id_returns_raw_payload() -> None:
@@ -618,7 +823,7 @@ async def test_cancel_retries_on_rate_limit_then_succeeds(
     fake.delete = flaky_delete  # type: ignore[method-assign]
     monkeypatch.setattr("app.broker.alpaca.client.anyio.sleep", _noop_sleep)
 
-    result = await _client(fake).cancel_order("broker-order-1")
+    result = await _client(fake).cancel_order(_BROKER_ORDER_ID)
 
     assert result is None
     assert calls["n"] == 2
@@ -860,13 +1065,13 @@ async def test_injected_fault_targets_only_matching_bot(permit_write_injection) 
 
 async def test_injected_cancel_fault_short_circuits_delete(permit_write_injection) -> None:
     permit_write_injection.get_fault_injection_registry().arm(
-        permit_write_injection.WriteFaultKind.REJECT_422, target="order-xyz"
+        permit_write_injection.WriteFaultKind.REJECT_422, target=_BROKER_ORDER_ID
     )
     fake = _FakeAlpaca()
     client = _client(fake)
 
     with pytest.raises(BrokerRequestInvalid):
-        await client.cancel_order("order-xyz")
+        await client.cancel_order(_BROKER_ORDER_ID)
 
     assert fake.delete_call is None
 
@@ -874,14 +1079,14 @@ async def test_injected_cancel_fault_short_circuits_delete(permit_write_injectio
 async def test_injected_post_sdk_cancel_hides_landed_response(permit_write_injection) -> None:
     permit_write_injection.get_fault_injection_registry().arm(
         permit_write_injection.WriteFaultKind.POST_SDK_TIMEOUT,
-        target="order-xyz",
+        target=_BROKER_ORDER_ID,
     )
     fake = _FakeAlpaca()
 
     with pytest.raises(BrokerUnavailable, match="timed out"):
-        await _client(fake).cancel_order("order-xyz")
+        await _client(fake).cancel_order(_BROKER_ORDER_ID)
 
-    assert fake.delete_call == ("/orders/order-xyz", None)
+    assert fake.delete_call == (f"/orders/{_BROKER_ORDER_ID}", None)
 
 
 async def test_seam_off_does_not_inject(monkeypatch: pytest.MonkeyPatch) -> None:

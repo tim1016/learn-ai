@@ -606,6 +606,79 @@ async def test_an_accepted_order_whose_answer_cannot_be_read_still_names_the_ord
     assert by_its_own_id.value.broker_order_id == _PARENT_ID
 
 
+# A 2xx whose JSON is no order object at all: a list, a string, a number, a boolean.
+_NON_OBJECT_ANSWERS = [
+    pytest.param([], id="empty list"),
+    pytest.param([{"id": _PARENT_ID}], id="list of an order"),
+    pytest.param("accepted", id="string"),
+    pytest.param(7, id="number"),
+    pytest.param(True, id="boolean"),
+]
+
+
+@pytest.mark.parametrize("answer", _NON_OBJECT_ANSWERS)
+@responses.activate
+async def test_an_option_order_answered_with_no_object_is_unknown_and_not_called_absent_a_moment_later(
+    broker: AlpacaBroker, monkeypatch: pytest.MonkeyPatch, answer: object
+) -> None:
+    """The order may well be placed (#3216): the answer is an unreadable one, never a refusal and never "absent".
+
+    The port's contract names ``BrokerOrderAnswerUnreadable`` for an answer that cannot be read; it has
+    no broker order id to hand on here. One POST is sent, and the lookup's 404 stays unknown for the grace.
+    """
+    now = [1_000.0]
+    monkeypatch.setattr("app.broker.alpaca.client.monotonic", lambda: now[0])
+    responses.add(responses.POST, _ORDERS, json=answer)
+    responses.add(responses.GET, _BY_CLIENT_ID, status=404, json=_NOT_FOUND)
+
+    with pytest.raises(BrokerOrderAnswerUnreadable) as on_submit:
+        await broker.submit_option_order(_ratio_spread(), client_order_id=_REF)
+
+    assert isinstance(on_submit.value, BrokerUnavailable)
+    assert on_submit.value.broker_order_id is None
+    assert _methods_and_paths() == [("POST", "/v2/orders")]
+    now[0] += 1
+    with pytest.raises(BrokerUnavailable):
+        await broker.get_option_order_by_client_order_id(_REF)
+    now[0] += _SUBMIT_VISIBILITY_GRACE_S
+    assert await broker.get_option_order_by_client_order_id(_REF) is None
+
+
+@pytest.mark.parametrize("answer", _NON_OBJECT_ANSWERS)
+@responses.activate
+async def test_an_option_order_lookup_answered_with_no_object_is_unreadable_and_starts_the_grace(
+    broker: AlpacaBroker, monkeypatch: pytest.MonkeyPatch, answer: object
+) -> None:
+    now = [1_000.0]
+    monkeypatch.setattr("app.broker.alpaca.client.monotonic", lambda: now[0])
+    responses.add(responses.GET, _BY_CLIENT_ID, json=answer)
+    responses.add(responses.GET, _BY_CLIENT_ID, status=404, json=_NOT_FOUND)
+
+    with pytest.raises(BrokerOrderAnswerUnreadable) as on_lookup:
+        await broker.get_option_order_by_client_order_id(_REF)
+
+    assert on_lookup.value.broker_order_id is None
+    # Alpaca answered for this order a moment ago: its 404 now is its index catching up, not "absent".
+    now[0] += 1
+    with pytest.raises(BrokerUnavailable):
+        await broker.get_option_order_by_client_order_id(_REF)
+    now[0] += _SUBMIT_VISIBILITY_GRACE_S
+    assert await broker.get_option_order_by_client_order_id(_REF) is None
+
+
+@pytest.mark.parametrize("answer", _NON_OBJECT_ANSWERS)
+@responses.activate
+async def test_an_option_order_read_by_its_id_and_answered_with_no_object_is_unreadable(
+    broker: AlpacaBroker, answer: object
+) -> None:
+    responses.add(responses.GET, f"{_ORDERS}/{_PARENT_ID}", json=answer)
+
+    with pytest.raises(BrokerOrderAnswerUnreadable) as by_its_own_id:
+        await broker.get_option_order_by_broker_order_id(_PARENT_ID)
+
+    assert by_its_own_id.value.broker_order_id is None
+
+
 @pytest.mark.parametrize("spelling", [_PARENT_ID, _PARENT_ID.upper()], ids=["as given", "upper case"])
 @responses.activate
 async def test_the_order_id_an_unreadable_answer_names_is_not_called_absent_a_moment_later(
