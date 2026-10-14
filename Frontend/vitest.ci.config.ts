@@ -6,10 +6,13 @@ import { BaseSequencer, type TestSpecification } from "vitest/node";
 // comes through `getBuiltinModule` (Node 22.3+) for the same reason.
 declare const process: {
   env: Record<string, string | undefined>;
-  getBuiltinModule(id: "node:fs"): { statSync(path: string): { size: number } };
+  getBuiltinModule(id: "node:fs"): {
+    statSync(path: string): { size: number };
+    readFileSync(path: URL, encoding: "utf8"): string;
+  };
 };
 
-const { statSync } = process.getBuiltinModule("node:fs");
+const { statSync, readFileSync } = process.getBuiltinModule("node:fs");
 
 function positiveInteger(name: string): number {
   const value = Number.parseInt(process.env[name] ?? "", 10);
@@ -27,15 +30,51 @@ if (shardIndex > shardCount) {
 }
 
 /**
- * How much of a shard's time a spec is expected to take, from its size: the
- * best predictor a cold CI runner has. The exponent is measured, not derived.
- * In CI run 37268445501 a spec's size explained its run time well
- * (correlation 0.84), but the largest specs ran longer than their size alone
- * says: the two largest, 113 and 133 KB, took 32 s and 27 s of the suite's
- * 276 s. Dealt in turn by plain size, the six shards carried 32 s to 62 s of
- * tests; dealt by this weight, the same timings come to 42 s to 53 s (#2882).
+ * What a shard is dealt by: the seconds each spec took in CI, from
+ * `ci-spec-durations.json`, which `scripts/update-ci-spec-durations.cjs`
+ * regenerates from shard logs. A missing or unreadable file fails the run
+ * loudly: reading it as empty would quietly deal by size again.
+ *
+ * The file replaced a deal by file size (#2882), whose predictor weakened as
+ * page specs outgrew it. Over run 38494475556 size explained a spec's time
+ * with correlation 0.69, and the options-backtest page specs ran 5 to 10 times
+ * longer per byte than the rest. That deal left Frontend shard 3/6 at 117 s of
+ * tests beside shard 2/6 at 59 s; the same run's durations, dealt from another
+ * run's timings, score 83 s to 98 s (#3123).
+ */
+interface CiSpecDurations {
+  /** Seconds per unit of size weight: the estimate for a spec the file has not measured yet. */
+  secondsPerSizeWeight: number;
+  /** Seconds a spec took, keyed by its path from `Frontend/`. */
+  specs: Record<string, number>;
+}
+
+function loadCiSpecDurations(): CiSpecDurations {
+  const url = new URL("./ci-spec-durations.json", import.meta.url);
+  try {
+    return JSON.parse(readFileSync(url, "utf8")) as CiSpecDurations;
+  } catch (cause) {
+    throw new Error(
+      `ci-spec-durations.json could not be read (${String(cause)}); regenerate it with scripts/update-ci-spec-durations.cjs`,
+    );
+  }
+}
+
+const durations = loadCiSpecDurations();
+
+/**
+ * The exponent that turns a size into an estimate of time, for a spec the
+ * durations file has not measured: a new spec is dealt by its size until the
+ * file is regenerated, and still runs in exactly one shard. Measured in #2882.
  */
 const SIZE_WEIGHT_EXPONENT = 1.5;
+
+/** How much of a shard's time a spec is expected to take, in seconds. */
+export function specWeight(moduleId: string): number {
+  const path = moduleId.replaceAll("\\", "/");
+  const measured = durations.specs[path.slice(path.lastIndexOf("/src/app/") + 1)];
+  return measured ?? statSync(moduleId).size ** SIZE_WEIGHT_EXPONENT * durations.secondsPerSizeWeight;
+}
 
 /**
  * Deals spec files to shards heaviest first, each to the shard that is
@@ -46,11 +85,11 @@ const SIZE_WEIGHT_EXPONENT = 1.5;
  * out of the 120 s budget (#2592). Every shard computes the same deal from the
  * same files, so each spec runs in exactly one of them.
  */
-class SizeBalancedSequencer extends BaseSequencer {
+class DurationBalancedSequencer extends BaseSequencer {
   override async shard(files: TestSpecification[]): Promise<TestSpecification[]> {
     const loads = new Array<number>(shardCount).fill(0);
     return files
-      .map((spec) => ({ spec, weight: statSync(spec.moduleId).size ** SIZE_WEIGHT_EXPONENT }))
+      .map((spec) => ({ spec, weight: specWeight(spec.moduleId) }))
       .sort((a, b) => b.weight - a.weight || (a.spec.moduleId < b.spec.moduleId ? -1 : 1))
       .filter(({ weight }) => {
         const lightest = loads.indexOf(Math.min(...loads));
@@ -78,7 +117,7 @@ const testConfig = {
   pool: "vmThreads",
   vmMemoryLimit: "1GB",
   shard: `${shardIndex}/${shardCount}`,
-  sequence: { sequencer: SizeBalancedSequencer },
+  sequence: { sequencer: DurationBalancedSequencer },
 };
 
 export default defineConfig({
