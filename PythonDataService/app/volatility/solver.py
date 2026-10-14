@@ -4,8 +4,8 @@ Implied Volatility Solver
 
 Formula: Find σ such that BS(S, K, T, r, q, σ) = market_premium. Three-stage cascade: (1) pure-Python Newton-Raphson with vega step (primary — quadratic convergence, warm-start friendly); (2) QuantLib's ``VanillaOption.impliedVolatility()`` for T ≥ 1 calendar day when NR fails (QuantLib day-count arithmetic cannot resolve sub-day TTM); (3) scipy.optimize.brentq fallback for sub-day TTM or QuantLib non-convergence. Brenner-Subrahmanyam closed-form approximation seeds the initial guess (σ₀ ≈ √(2π/T) · price/S for ATM).
 Reference: Hull §19.11 (implied volatility); Brent (1973) "Algorithms for Minimization Without Derivatives" §4 for Brent's method; Brenner-Subrahmanyam (1988) Financial Analysts Journal for the seed approximation.
-Canonical implementation: this file (the canonical IV solver). Companion: `app/services/quantlib_pricer.py::implied_volatility` (QuantLib bisection — second path for callers wanting the QuantLib pricer in the loop). Cross-engine parity is pending-fixture.
-Validated against: NONE — pending cross-engine parity fixture between this file and the quantlib_pricer.py companion. Behavior tests exist; equivalence proof does not.
+Canonical implementation: this file (the canonical IV solver). Companion: `app/services/quantlib_pricer.py::implied_volatility` (QuantLib bisection — second path for callers wanting the QuantLib pricer in the loop). Cross-engine parity with that companion is pending-fixture.
+Validated against: golden IV-001 (tests/fixtures/test_volatility_fixtures.py::TestIV001SolverRoundTrip, atol 1e-6, rtol 0; BSM round trip); golden OPT-IB-002 (tests/fixtures/test_ibkr_iv_fixtures.py; price-space inversion of IBKR modelGreeks.optPrice, not IBKR-IV parity); py_vollib (tests/volatility/test_solver_parity_pyvollib.py::TestIvSolverParity, IV diff < 5e-5 on 1,043 grid points, 15 sub-$0.001 premiums refused by design).
 
 Solver order: Newton-Raphson (custom Python) → QuantLib ``impliedVolatility``
 (T ≥ 1 day only) → scipy Brent. QuantLib's date arithmetic cannot resolve
@@ -160,6 +160,17 @@ def implied_volatility(
         Dataclass with ``iv``, ``status``, and diagnostics.
     """
     # ── Input guards ─────────────────────────────────────────────────────
+    # `<=` / `<` comparisons below are False for NaN, so finiteness is checked first.
+    if not all(math.isfinite(x) for x in (option_price, spot, strike, ttm, rate, dividend)):
+        return ImpliedVolResult(
+            iv=None,
+            status=SolveStatus.INPUT_ERROR,
+            message=(
+                f"non-finite input: option_price={option_price}, spot={spot}, strike={strike}, "
+                f"ttm={ttm}, rate={rate}, dividend={dividend}"
+            ),
+        )
+
     if spot <= 0 or strike <= 0:
         return ImpliedVolResult(
             iv=None,

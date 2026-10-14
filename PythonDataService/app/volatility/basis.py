@@ -3,7 +3,7 @@
 Formula: σ_TRD252 = σ_ACT365 · √((D · 252) / (365 · N)) where D = calendar tenor days, N = NYSE trading sessions in [asof, asof+D).
 Reference: Practitioner convention — variance accrues only on trading days. NYSE calendar via pandas_market_calendars.
 Canonical implementation: app/volatility/basis.py
-Validated against: NONE — pending (no golden fixture; pending-fixture per registry)
+Validated against: golden RV-003 (tests/fixtures/test_volatility_fixtures.py::TestRV003BasisConversion, atol 1e-9, rtol 0; the oracle repeats the formula and pins N per row) and tests/volatility/test_basis.py (NYSE session counts, round trip abs 1e-12).
 
 Our IV solver returns ``σ`` on ACT/365 basis (``TTM = calendar_days / 365``,
 the market-screen / QuantLib convention). Our realized-vol pipeline annualizes
@@ -29,6 +29,7 @@ constant would be wrong in both directions.
 from __future__ import annotations
 
 import math
+import numbers
 
 import pandas as pd
 
@@ -64,13 +65,16 @@ def nyse_trading_days_in_window(
     sessions on 03-04, 03-05, …, up to but not including 04-03. The expiry
     day itself does not contribute forward variance.
 
-    ``asof`` may be a ``pd.Timestamp`` (naive treated as UTC) or an int64
-    millisecond-since-epoch UTC integer (the repo's wire format).
+    ``asof`` may be a ``pd.Timestamp`` (naive = an ET calendar date, tz-aware
+    converted to ET; see :func:`_et_date`) or an int64 millisecond-since-epoch
+    UTC integer (the repo's wire format; ``np.int64`` included, ``bool`` not).
     """
-    if isinstance(asof, int):
-        ts = pd.Timestamp(asof, unit="ms", tz="UTC")
-    else:
+    if isinstance(asof, numbers.Integral) and not isinstance(asof, bool):
+        ts = pd.Timestamp(int(asof), unit="ms", tz="UTC")
+    elif isinstance(asof, pd.Timestamp):
         ts = asof
+    else:
+        raise TypeError(f"asof must be a pd.Timestamp or int64 ms UTC, got {type(asof).__name__}")
     start_date = _et_date(ts).date()
     end_date_inclusive = (pd.Timestamp(start_date) + pd.Timedelta(days=calendar_days - 1)).date()
     return trading_session_count(start_date, end_date_inclusive)

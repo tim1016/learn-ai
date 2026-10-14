@@ -117,6 +117,19 @@ class TestImpliedVolatility:
         result = implied_volatility(5.0, -100, 100, ttm=0.5, rate=0.05)
         assert result.status == SolveStatus.INPUT_ERROR
 
+    @pytest.mark.parametrize("value", [float("nan"), float("inf")], ids=["nan", "inf"])
+    @pytest.mark.parametrize("field", ["option_price", "spot", "strike", "ttm", "rate", "dividend"])
+    def test_non_finite_input_returns_input_error(self, field: str, value: float) -> None:
+        """Every `<` guard below is False for NaN, so a non-finite input used
+        to fall through to the solvers and read as CONVERGENCE_FAILURE."""
+        inputs = {"option_price": 5.0, "spot": 100.0, "strike": 100.0, "ttm": 0.5, "rate": 0.05, "dividend": 0.0}
+        inputs[field] = value
+
+        result = implied_volatility(**inputs)
+
+        assert result.status == SolveStatus.INPUT_ERROR
+        assert result.iv is None
+
     def test_intrinsic_violation(self, spot: float, rate: float) -> None:
         """Price below intrinsic should return INTRINSIC_VIOLATION."""
         strike = 80.0  # deep ITM call

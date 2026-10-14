@@ -7,7 +7,9 @@ Tests health scores, skew metrics, delta strikes, and put-call parity.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 
+import numpy as np
 import pytest
 
 from app.volatility.analytics import (
@@ -16,7 +18,21 @@ from app.volatility.analytics import (
     compute_skew_metrics,
     find_delta_strike,
 )
-from app.volatility.surface import SurfaceMethod, VolSurface, VolSurfaceBuilder
+from app.volatility.fitting import (
+    ArbitrageReport,
+    FitMethod,
+    FitResult,
+    SmileSlice,
+    check_smile_arbitrage,
+    fit_variance_interp,
+)
+from app.volatility.surface import (
+    SliceDiagnostics,
+    SurfaceDiagnostics,
+    SurfaceMethod,
+    VolSurface,
+    VolSurfaceBuilder,
+)
 from tests.volatility.conftest import bs_price
 
 
@@ -58,6 +74,50 @@ class TestHealthScore:
         score = compute_health_score(built_surface)
 
         assert score.total > 0
+
+
+class TestHealthScoreArbitrageCoverage:
+    """A smile the arbitrage check could not test must not score as arbitrage-free."""
+
+    @staticmethod
+    def _checked_report() -> ArbitrageReport:
+        strikes = np.array([90.0, 95.0, 100.0, 105.0, 110.0])
+        smile = SmileSlice(strikes=strikes, ivs=np.full(5, 0.25), ttm=0.25, forward=100.0)
+        report = check_smile_arbitrage(fit_variance_interp(smile), strikes, 100.0)
+        assert report.passed
+        return report
+
+    @staticmethod
+    def _unchecked_report() -> ArbitrageReport:
+        return ArbitrageReport(total_checks=5, unevaluable=5)
+
+    def _arbitrage_score(self, reports: list[ArbitrageReport | None]) -> float:
+        slices = [
+            SliceDiagnostics(
+                ttm=0.1 * (i + 1), n_contracts=5, n_solved=5, n_failed=0, fit_method="variance", fit_rmse=0.0, arbitrage=r
+            )
+            for i, r in enumerate(reports)
+        ]
+        diagnostics = SurfaceDiagnostics(
+            n_expiries=len(slices), n_total_contracts=5 * len(slices), n_total_solved=5 * len(slices), slices=slices
+        )
+        surface = VolSurface(method=SurfaceMethod.VARIANCE, spot=100.0, rate=0.0, dividend=0.0, diagnostics=diagnostics)
+        return compute_health_score(surface).arbitrage_score
+
+    def test_all_checked_slices_score_full(self) -> None:
+        assert self._arbitrage_score([self._checked_report()] * 2) == pytest.approx(100.0, abs=1e-9)
+
+    def test_score_is_the_checked_share_of_slices(self) -> None:
+        score = self._arbitrage_score([self._checked_report(), self._unchecked_report()])
+
+        assert score == pytest.approx(50.0, abs=1e-9)
+
+    def test_all_unchecked_slices_score_zero(self) -> None:
+        assert self._arbitrage_score([self._unchecked_report()] * 2) == pytest.approx(0.0, abs=1e-9)
+
+    def test_a_slice_with_no_arbitrage_report_counts_as_unchecked(self) -> None:
+        assert self._arbitrage_score([self._checked_report(), None]) == pytest.approx(50.0, abs=1e-9)
+        assert self._arbitrage_score([None, None]) == pytest.approx(0.0, abs=1e-9)
 
 
 class TestSkewMetrics:
@@ -110,6 +170,31 @@ class TestSkewMetrics:
                 metrics = compute_skew_metrics(built_surface, fit.ttm)
 
                 assert metrics.call_25d is not None
+
+
+class TestSkewSlope:
+    """``skew_slope`` separates a measured flat skew from an unmeasurable one."""
+
+    @staticmethod
+    def _surface(vol_fn: Callable[[float], float]) -> VolSurface:
+        fit = FitResult(method=FitMethod.VARIANCE, ttm=0.25, _vol_fn=vol_fn)
+        return VolSurface(method=SurfaceMethod.VARIANCE, spot=100.0, rate=0.0, dividend=0.0, fits=[fit])
+
+    def test_flat_surface_has_zero_slope(self) -> None:
+        metrics = compute_skew_metrics(self._surface(lambda strike: 0.20), 0.25)
+
+        assert metrics.skew_slope == pytest.approx(0.0, abs=1e-12)
+
+    def test_slope_is_unknown_when_the_surface_fails_off_the_forward(self) -> None:
+        def vol_only_at_the_forward(strike: float) -> float:
+            if strike != 100.0:
+                raise ValueError(f"no vol at {strike}")
+            return 0.20
+
+        metrics = compute_skew_metrics(self._surface(vol_only_at_the_forward), 0.25)
+
+        assert metrics.atm_iv == pytest.approx(0.20, abs=1e-12)
+        assert metrics.skew_slope is None
 
 
 class TestFindDeltaStrike:

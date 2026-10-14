@@ -10,6 +10,7 @@ fail, not skip, when it is missing.
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 import pytest
 
@@ -26,6 +27,7 @@ from app.volatility.vix_replication import (
     replicate_expiry_variance_with_provenance,
     vix_style_iv30,
     vix_style_iv30_with_provenance,
+    wrap_legacy_as_opra_mid,
 )
 from tests.fixtures.golden_support.registry import default as registry
 
@@ -144,6 +146,66 @@ class TestReplicateExpiry:
         assert rep.n_strikes_used < len(strikes)
         # And keep enough strikes near the money to compute meaningful variance.
         assert rep.n_strikes_used >= 5
+
+
+class TestLegacyAndNormalizedMidsDiffer:
+    """The legacy ``OptionQuote`` mid and the production ``from_snapshot_quote``
+    mid are the same number only on a two-sided, uncrossed quote. The
+    ``from_snapshot_quote`` docstring states the difference; this pins it."""
+
+    @pytest.mark.parametrize(
+        ("bid", "ask", "legacy_mid", "normalized_mid"),
+        [
+            (1.20, 1.30, 1.25, 1.25),
+            (0.0, 0.50, 0.25, 0.0),
+            (0.60, 0.50, 0.55, 0.0),
+            (0.50, 0.0, 0.0, 0.0),
+            (0.0, 0.0, 0.0, 0.0),
+        ],
+        ids=["two_sided", "empty_bid", "crossed", "no_ask", "no_quote"],
+    )
+    def test_mid(self, bid: float, ask: float, legacy_mid: float, normalized_mid: float) -> None:
+        legacy = OptionQuote(strike=100.0, call_bid=bid, call_ask=ask, put_bid=bid, put_ask=ask)
+
+        assert legacy.call_mid == pytest.approx(legacy_mid, abs=1e-12)
+        assert from_snapshot_quote(bid, ask).mid == pytest.approx(normalized_mid, abs=1e-12)
+
+    def test_strike_with_a_bid_and_no_ask_is_kept_by_legacy_and_dropped_by_the_production_path(self) -> None:
+        """Both mids are 0.0 there, but legacy truncation only tests ``bid <= 0``:
+        the strike stays in the integral as a Q = 0 point and narrows its
+        neighbours' dK. The production path treats it as zero-bid."""
+        T, rate = 30 / 365.0, 0.05
+        chain = _bs_chain(spot=100.0, strikes=[80.0, 90.0, 95.0, 100.0, 105.0, 110.0, 120.0], T_years=T, rate=rate, sigma=0.20)
+        no_ask = [replace(q, call_bid=0.50, call_ask=0.0) if q.strike == 105.0 else q for q in chain]
+
+        def n_used(quotes: list[OptionQuote]) -> tuple[int, int]:
+            legacy = replicate_expiry_variance(quotes, rate=rate, T_years=T)
+            production, _ = replicate_expiry_variance_with_provenance(
+                [wrap_legacy_as_opra_mid(q) for q in quotes], rate=rate, T_years=T
+            )
+            return legacy.n_strikes_used, production.n_strikes_used
+
+        clean_legacy, clean_production = n_used(chain)
+        legacy_n, production_n = n_used(no_ask)
+
+        assert clean_legacy == clean_production
+        assert legacy_n == production_n + 1
+
+    def test_strike_with_no_bid_is_not_an_atm_candidate_on_the_production_path(self) -> None:
+        """A strike whose legs have asks but no bids ties at call_mid == put_mid
+        on the legacy path and becomes the forward; the production path skips it."""
+        spot, T, rate = 100.0, 30 / 365.0, 0.05
+        chain = _bs_chain(spot=spot, strikes=[80.0, 90.0, 95.0, 100.0, 105.0, 110.0, 120.0], T_years=T, rate=rate, sigma=0.20)
+        empty_bid = OptionQuote(strike=102.0, call_bid=0.0, call_ask=0.50, put_bid=0.0, put_ask=0.50)
+        quotes = [*chain, empty_bid]
+
+        legacy = replicate_expiry_variance(quotes, rate=rate, T_years=T)
+        production, _ = replicate_expiry_variance_with_provenance(
+            [wrap_legacy_as_opra_mid(q) for q in quotes], rate=rate, T_years=T
+        )
+
+        assert legacy.forward == pytest.approx(102.0, abs=1e-9)
+        assert production.forward == pytest.approx(spot * math.exp(rate * T), abs=1e-9)
 
 
 class TestVixStyleIv30:
@@ -408,7 +470,7 @@ class TestReplicateExpiryWithProvenance:
         # Provenance is right for an all-opra chain.
         assert prov.iv_source == "internal_solver"
         assert prov.variance_contribution_synthetic == 0.0
-        assert prov.price_source_mix.get("opra_mid", 0.0) == pytest.approx(1.0)
+        assert prov.price_source_mix.get("opra_mid", 0.0) == pytest.approx(1.0, abs=1e-9)
         # Strike coverage reflects post-truncation surviving wings, not the
         # input range — a BS-synthesized chain at σ=0.20 truncates deep
         # OTM aggressively, so this is < 1.0 even with 21 input strikes.
@@ -428,8 +490,8 @@ class TestReplicateExpiryWithProvenance:
         _, prov = replicate_expiry_variance_with_provenance(
             chain, rate=rate, T_years=T_years
         )
-        assert prov.variance_contribution_synthetic == pytest.approx(1.0)
-        assert prov.price_source_mix.get("synthetic_close_proxy", 0.0) == pytest.approx(1.0)
+        assert prov.variance_contribution_synthetic == pytest.approx(1.0, abs=1e-9)
+        assert prov.price_source_mix.get("synthetic_close_proxy", 0.0) == pytest.approx(1.0, abs=1e-9)
 
     def test_mixed_atm_opra_wings_synthetic_yields_intermediate_share(self):
         """Round 3 issue #2: variance-contribution-weighted synthetic share.
@@ -470,7 +532,7 @@ class TestReplicateExpiryWithProvenance:
         assert "opra_mid" in prov.price_source_mix
         assert "synthetic_close_proxy" in prov.price_source_mix
         # Sanity: the count-based mix should sum to ~1.
-        assert sum(prov.price_source_mix.values()) == pytest.approx(1.0)
+        assert sum(prov.price_source_mix.values()) == pytest.approx(1.0, abs=1e-9)
 
     def test_debug_payload_lists_per_strike_contributions(self):
         spot = 100.0
@@ -747,7 +809,7 @@ class TestVixStyleIv30WithProvenance:
         # Both sources show up in the combined mix.
         assert "opra_mid" in prov.price_source_mix
         assert "synthetic_close_proxy" in prov.price_source_mix
-        assert sum(prov.price_source_mix.values()) == pytest.approx(1.0)
+        assert sum(prov.price_source_mix.values()) == pytest.approx(1.0, abs=1e-9)
 
     def test_combined_max_strike_share_is_max_of_two(self):
         """Worst-case domination across the two expiries surfaces in the
@@ -799,7 +861,7 @@ class TestVixStyleIv30WithProvenance:
             dominance_gate_threshold=None,
         )
         assert combined.max_single_strike_share == pytest.approx(
-            max(prov1.max_single_strike_share, prov2.max_single_strike_share)
+            max(prov1.max_single_strike_share, prov2.max_single_strike_share), abs=1e-9
         )
 
     def test_combined_strike_coverage_is_minimum_of_two(self):
@@ -831,7 +893,7 @@ class TestVixStyleIv30WithProvenance:
             rate2=rate, T2_calendar_days=T2_d,
         )
         # Combined coverage = min — the narrow expiry drags the IV30 down.
-        assert combined_prov.strike_coverage_score == pytest.approx(prov_narrow.strike_coverage_score)
+        assert combined_prov.strike_coverage_score == pytest.approx(prov_narrow.strike_coverage_score, abs=1e-9)
 
 
 class TestSpyGoldenFixtureWithProvenance:
@@ -862,8 +924,8 @@ class TestSpyGoldenFixtureWithProvenance:
         assert abs(sigma_vix - float(meta["vix_style_iv30_act365"])) < 1e-9
 
         # Provenance: end-to-end synthetic.
-        assert prov.variance_contribution_synthetic == pytest.approx(1.0)
-        assert prov.price_source_mix.get("synthetic_close_proxy", 0.0) == pytest.approx(1.0)
+        assert prov.variance_contribution_synthetic == pytest.approx(1.0, abs=1e-9)
+        assert prov.price_source_mix.get("synthetic_close_proxy", 0.0) == pytest.approx(1.0, abs=1e-9)
         # SPY 2024-12-20 surviving chain extends ~2.5σ each side after the
         # per-strike-rule wing truncation kills small far-OTM legs that share
         # a strike with deep-ITM legs. Score lands ~0.50.

@@ -5,7 +5,7 @@ Volatility Surface Builder
 Formula: Per-expiry IV solve (solver.py) → smile fit (fitting.py, choice of variance/SABR/SVI) → cross-expiry variance-time interpolation (σ²(T) · T linear in T, preserving no-calendar-arbitrage).
 Reference: Internal orchestration of app/volatility/solver.py + fitting.py; variance-time interpolation is industry standard.
 Canonical implementation: app/volatility/surface.py
-Validated against: NONE — pending (no golden fixture; pending-fixture per registry)
+Validated against: NONE — pending fixture. Behaviour tests only (tests/volatility/test_surface.py); its solve and fit stages carry their own receipts (solver.py, fitting.py::fit_svi).
 
 Assembles per-expiry smile fits into a full implied volatility surface
 that can be queried at any (strike, expiry) pair.
@@ -239,6 +239,7 @@ class VolSurfaceBuilder:
 
         # ── Step 2: Solve IV for each contract ───────────────────────────
         solved_groups: dict[float, SmileSlice] = {}
+        failed_by_ttm: dict[float, int] = {}
         total_solved = 0
         total_failed = 0
 
@@ -269,6 +270,7 @@ class VolSurfaceBuilder:
 
             total_solved += len(strikes)
             total_failed += failed
+            failed_by_ttm[ttm] = failed
 
             if len(strikes) < self.min_contracts_per_slice:
                 diag.warnings.append(
@@ -307,11 +309,12 @@ class VolSurfaceBuilder:
 
             arb = check_smile_arbitrage(fit, smile.strikes, smile.forward)
 
+            n_failed = failed_by_ttm[ttm]
             slice_diag = SliceDiagnostics(
                 ttm=ttm,
-                n_contracts=len(smile.strikes),
+                n_contracts=len(smile.strikes) + n_failed,
                 n_solved=len(smile.strikes),
-                n_failed=0,
+                n_failed=n_failed,
                 fit_method=method.value,
                 fit_rmse=fit.residual_rmse,
                 arbitrage=arb,
@@ -319,7 +322,11 @@ class VolSurfaceBuilder:
             diag.slices.append(slice_diag)
 
             if not arb.passed:
-                diag.warnings.append(f"Expiry T={ttm:.4f}: {arb.butterfly_violations} butterfly violations")
+                diag.warnings.append(
+                    f"Expiry T={ttm:.4f}: arbitrage check failed — {arb.butterfly_violations} butterfly violations "
+                    f"in {arb.butterfly_triples_tested} triples tested, {arb.negative_variance} negative variance, "
+                    f"{arb.unevaluable} unevaluable strikes"
+                )
 
         logger.info(
             "[IV Surface] Built %s surface: %d expiries, %d/%d contracts solved",
