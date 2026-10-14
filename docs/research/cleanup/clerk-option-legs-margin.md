@@ -102,7 +102,7 @@ Importers per module (all 40 have a live importer in `app/`):
 | Model inputs: the rate and declared dividends a preview prices with, asked of the coordinator on a fleet Clerk (`option_model_inputs.py`, `option_model_inputs_client.py`) | ADR 0076; #2913 | `internal_fleet.py`, `fleet_option_model_inputs.py`, the preview | yes | ✓ / ✓ / ✓ | **implemented** (neighbour tests) | `tests/services/test_option_model_inputs.py`, `test_option_model_inputs_client.py`; `tests/broker/fleet/test_option_model_inputs_operation.py` |
 | Option orders on Paper through their whole life, with the evidence kept | PRD #3095 D2, D3 | `qualify-option-orders-on-paper.md` runbook; the qualification kit | the kit: yes; the run: owner-driven | recordings ✓; the run itself is open | **partial by design** | `test_paper_option_recordings.py::test_each_order_goes_pending_new_then_new_then_a_fill_at_the_price_its_own_order_states`; D2 [#3102](https://github.com/tim1016/learn-ai/issues/3102) closed, D3 [#3103](https://github.com/tim1016/learn-ai/issues/3103) open |
 
-One feature is *unverified on a real account* (the several-leg order), and one is *partial by design* (judging, and the Paper run). None is *missing*.
+Fifteen features: 12 *implemented*; one *implemented on simulations and unverified on a real account* (the several-leg order); two *partial by design* (judging the buying-power comparison, whose recording is implemented, and the Paper run itself). None is *missing*.
 
 ## Findings
 
