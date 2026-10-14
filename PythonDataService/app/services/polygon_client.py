@@ -675,7 +675,13 @@ class PolygonClientService:
                         time.sleep(delay)
                         continue
 
-                    resp.raise_for_status()
+                    if not resp.ok:
+                        # ``raise_for_status`` words its message with the full request URL,
+                        # ``apiKey`` included, and every caller logs or returns it (#3188).
+                        raise _requests.exceptions.HTTPError(
+                            f"Polygon answered HTTP {resp.status_code} {resp.reason} "
+                            f"for expirations window {w_start_str}..{w_end_str}"
+                        )
                     data = resp.json()
                     for r in data.get("results", []):
                         exp = r.get("expiration_date")
