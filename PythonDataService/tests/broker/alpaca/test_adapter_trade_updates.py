@@ -176,3 +176,15 @@ def test_a_multi_leg_parents_fill_has_no_execution_of_its_own_and_maps_as_the_pa
     # No execution identity, and none of the parent's net figures offered as an execution slice.
     assert (event.event_type, event.execution_id, event.price, event.quantity) == ("fill", None, None, None)
     assert event.occurred_at_ms > 0
+
+
+def test_a_fill_that_lists_legs_but_is_not_a_multi_leg_order_still_fails_fast() -> None:
+    with pytest.raises(ValueError, match="missing its execution_id"):
+        from_alpaca_trade_update(
+            {
+                "event": "fill",
+                "timestamp": "2026-10-14T15:59:03.721579799Z",
+                "legs": [{"execution_id": "stray", "qty": "1", "price": "1"}],
+                "order": {"order_class": "", "symbol": "SPY261016C00771000"},
+            }
+        )

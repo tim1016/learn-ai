@@ -237,3 +237,30 @@ async def test_a_cancel_answer_with_no_exact_read_stays_unknown_until_a_later_pa
     await multi_paper.pass_()
     assert multi_paper.outcome(parent).standing is EntryStanding.PART_FILLED
     assert len(multi_paper.venue.cancel_calls) == 1
+
+
+async def test_a_parent_fill_frame_with_no_execution_books_nothing_and_the_next_pass_proves_the_legs(
+    multi_paper: SeveralLegsPaper,
+) -> None:
+    """#3103: Alpaca's frame for a several-leg parent's fill has its legs' executions, none of its own."""
+    parent = await multi_paper.resting(units=1)
+    multi_paper.venue.legs_fill(parent, (1, 1))
+    order = multi_paper.venue.option_orders[parent]
+    sink = SqliteTradeUpdateEvidenceSink(repo=multi_paper.repo, intake=multi_paper.clerk.intake, reconciler=multi_paper.clerk)
+
+    disposition = await sink.record_lifecycle_event(
+        client_order_id=order["client_order_id"],
+        event=BrokerOrderEvent(
+            event_type="fill", occurred_at_ms=multi_paper.clock(), price=None, quantity=None, execution_id=None
+        ),
+        event_key="parent-fill-frame",
+        order=adapter.from_alpaca_order(order),
+        recovery_source=None,
+        recovery_window_limit=None,
+    )
+
+    assert disposition == "withheld_order"
+    assert multi_paper.repo.fills_for_order(parent) == []
+    await multi_paper.pass_()
+    assert multi_paper.outcome(parent).standing is EntryStanding.FILLED
+    assert sorted(multi_paper.held().values()) == [1.0, 1.0]

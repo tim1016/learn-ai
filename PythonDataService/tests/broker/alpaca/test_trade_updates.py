@@ -800,7 +800,7 @@ async def test_malformed_embedded_order_is_parse_error_not_stream_abort(tmp_path
     assert len(events) == 1
 
 
-async def test_a_multi_leg_parents_fill_is_applied_and_leaves_the_evidence_healthy(tmp_path: Path) -> None:
+async def test_a_multi_leg_parents_fill_is_not_a_parse_error_and_leaves_the_evidence_healthy(tmp_path: Path) -> None:
     """The first several-leg order on Paper (#3103): its parent's ``fill`` has legs, not an execution of its own.
 
     It was refused as a fill without an execution_id, counted a parse error and marked the stream's evidence
@@ -821,7 +821,7 @@ async def test_a_multi_leg_parents_fill_is_applied_and_leaves_the_evidence_healt
     await consumer.run()
 
     assert consumer.counters.parse_errors == 0
-    assert consumer.counters.events_applied == 1
+    assert consumer.evidence_health.healthy is True
 
 
 async def test_unmappable_frame_degrades_gate_health_until_valid_frame(
