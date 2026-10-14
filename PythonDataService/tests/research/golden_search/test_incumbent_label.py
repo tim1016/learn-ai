@@ -8,13 +8,14 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.research.golden_search import qualifications, service
-from app.research.golden_search.models import GoldenSearchRefusal
+from app.research.golden_search.models import GoldenSearchRefusal, StudyRow
 from app.research.golden_search.planning import protocol_from_request, registry_incumbent
 from app.research.golden_search.qualifications import GoldenDefault, QualificationRow, params_sha256
 from tests._helpers.golden_search_study import plan_request
@@ -128,3 +129,42 @@ async def test_the_incumbent_the_defaults_echo_passes_the_check(store: Qualifica
         await service._require_verified_incumbent(protocol)
 
         assert protocol.seed == REGISTRY  # a qualified incumbent starts its searches at the registry point
+
+
+@pytest.mark.parametrize(
+    ("incumbent", "field"),
+    [
+        (_incumbent("qualification", "gq-does-not-exist", TUNED), "incumbent.qualification_id"),
+        (_incumbent("registry", None, TUNED), "incumbent.params"),
+    ],
+    ids=["unknown-qualification", "registry-label-over-the-qualified-tuple"],
+)
+async def test_a_revision_refuses_a_relabelled_incumbent_before_it_forks(
+    store: QualificationRow, monkeypatch: pytest.MonkeyPatch, incumbent: dict[str, Any], field: str
+) -> None:
+    # The revise command reads its plan through the same lock checks: the page's revise form sends the old study's frozen incumbent.
+    study = StudyRow(
+        id="s1", parent_study_id=None, strategy_key=PROGRAM, symbol=SYMBOL, state="locked", revision=1, status="idle",
+        attempt=0, job_id=None, pending_stage=None, stage_token=None, created_at_ms=0, updated_at_ms=0, finished_at_ms=None,
+        protocol=protocol_from_request(plan_request(SYMBOL)).as_dict(), protocol_hash="h", receipt={}, results={},
+        candidate_key=None, exam_locked=False, decision=None, budget_cap=5000, consumed_evaluations=0, cache_hits=0,
+        invalid_points=0, incomplete=False, failure_reason=None, hidden=False,
+    )
+
+    async def not_replayed(study_id: str, key: str, digest: str) -> None:
+        return None
+
+    async def get_row(study_id: str) -> StudyRow:
+        return study
+
+    monkeypatch.setattr(service, "_replayed", not_replayed)
+    monkeypatch.setattr(service, "get_row", get_row)
+    monkeypatch.setattr(service, "_present", lambda row, **_kwargs: SimpleNamespace(refusals={"revise": None}))
+
+    with pytest.raises(GoldenSearchRefusal) as refused:
+        await service.run_command(
+            study.id, command="revise", expected_revision=1, idempotency_key="revise-1",
+            payload={"protocol": plan_request(SYMBOL, incumbent=incumbent)}, roots=[],
+        )
+
+    assert (refused.value.code, refused.value.field) == ("INCUMBENT_INVALID", field)
