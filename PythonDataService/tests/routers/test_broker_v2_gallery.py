@@ -17,6 +17,7 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
+from app.broker.contract.registry import get_broker_registry, reset_broker_registry_for_testing
 from app.broker.fleet.agent_identity import _FrameInjector
 from app.broker.fleet.internal_http import SseEvent, iter_sse_events
 from app.broker.ibkr.bar_models import IbkrMinuteBar
@@ -30,6 +31,7 @@ from app.schemas.broker_v2_gallery import (
     GalleryLiveSnapshot,
     GallerySymbolBars,
 )
+from app.services.broker_account_snapshot import clear_broker_account_snapshot_cache_for_testing
 from app.services.broker_v2_panel import panel_chart_data_source
 from app.services.broker_v2_panel.chart_projection_service import aggregator_bars_to_chart_bars
 from app.services.broker_v2_panel.gallery_hub import GalleryHub
@@ -347,6 +349,64 @@ async def test_gallery_stream_matching_cursor_skips_reset() -> None:
 
     assert "event: reset" not in frame
     assert "event: snapshot" in frame
+
+
+class _ServedAccountPort:
+    """A broker port serving the one account ``_ACCOUNT_ID``."""
+
+    broker_id = _BROKER
+
+    async def get_account(self) -> object:
+        class _Account:
+            account_id = _ACCOUNT_ID
+
+        return _Account()
+
+
+@pytest.fixture
+def served_account(monkeypatch: pytest.MonkeyPatch):
+    """The real ``get_gallery_hub`` dependency's world: a registered broker
+    serving ``PA3`` and an empty hub cache, which is yielded."""
+    reset_broker_registry_for_testing()
+    clear_broker_account_snapshot_cache_for_testing()
+    get_broker_registry().register(_ServedAccountPort())  # type: ignore[arg-type]
+    cache: dict = {}
+    monkeypatch.setattr(broker_v2_gallery, "_HUB_CACHE", cache)
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "")
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", True)
+    try:
+        yield cache
+    finally:
+        clear_broker_account_snapshot_cache_for_testing()
+        reset_broker_registry_for_testing()
+
+
+async def test_every_spelling_of_the_account_is_one_gallery_hub(served_account) -> None:
+    """#3217: the cache was keyed on the raw path ``account_id``, so each
+    spelling account validation accepts built its own hub, with its own
+    ``surface_version`` and roster baseline."""
+    hubs = [
+        await broker_v2_gallery.get_gallery_hub(_BROKER, spelling)
+        for spelling in ("PA3", "pa3", "Pa3", " PA3")
+    ]
+
+    assert all(hub is hubs[0] for hub in hubs)
+    assert len(served_account) == 1
+
+
+@pytest.mark.parametrize(("broker", "account_id"), [("alpaca", "nosuch"), ("nosuch", "x")])
+async def test_a_gallery_request_for_an_unknown_account_is_refused_and_caches_no_hub(
+    served_account, broker: str, account_id: str
+) -> None:
+    """#3217: the dependency inserted a hub before validating anything, and a
+    hub is never evicted, so every made-up path grew the cache for good."""
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        snapshot = await client.get(f"/api/brokers/{broker}/accounts/{account_id}/gallery/snapshot")
+        stream = await client.get(f"/api/brokers/{broker}/accounts/{account_id}/gallery/stream")
+
+    assert snapshot.status_code == stream.status_code == 404
+    assert set(snapshot.json()["detail"]) == {"message", "why", "next_action"}
+    assert served_account == {}
 
 
 @pytest.mark.parametrize("error", [PanelUnavailableError("clerk unavailable"), UnknownBotError("no such bot")])

@@ -6,6 +6,7 @@ import asyncio
 import logging
 from typing import Literal
 
+from app.broker.alpaca.clerk.account_authority import canonical_alpaca_account_id
 from app.schemas.broker_v2_panel import BotPanelLiveSnapshot
 from app.services.broker_v2_panel import panel_data_source
 from app.services.surface_hub import SurfaceHub, SurfaceHubRegistry
@@ -23,7 +24,9 @@ def _hub_key(
     sid: str,
     resolution: Literal["5s", "1m"],
 ) -> str:
-    return ":".join((broker, account_id, sid, resolution))
+    # Account validation accepts any case and surrounding whitespace, so every
+    # spelling it accepts must reach the one hub for that account.
+    return ":".join((broker, canonical_alpaca_account_id(account_id), sid, resolution))
 
 
 async def get_or_start_live_projection_hub(
@@ -55,7 +58,8 @@ async def get_or_start_live_projection_hub(
         assemble=assemble,
         refresh_interval_seconds=5.0,
     )
-    await hub.start()
+    # Armed before the first assembly is awaited: a caller that gives up on a
+    # slow start must not leave a producer that no timer will ever retire.
     release_live_projection_hub(
         broker,
         account_id,
@@ -63,6 +67,7 @@ async def get_or_start_live_projection_hub(
         resolution=resolution,
         hub=hub,
     )
+    await hub.start()
     return hub
 
 

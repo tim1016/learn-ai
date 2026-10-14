@@ -17,10 +17,11 @@ singleton — the same production seams ``broker_v2_panel.py`` and
 ``live_bar_aggregator.py`` already expose.
 
 KNOWN LIMITATION: the module-level ``_HUB_CACHE`` dict is a simple
-per-``(broker, account_id)`` cache with no ref-counting or teardown — a hub,
-once built, lives for the process lifetime. Full lifecycle management
-(eviction, ref-counted subscriber teardown like ``live_projection.py``'s hub
-cache) is out of scope for this task.
+per-``(broker, canonical account id)`` cache with no ref-counting or teardown
+— a hub, once built, lives for the process lifetime. It is filled only for an
+account the broker validated, so it holds at most one hub per broker. Full
+lifecycle management (eviction, ref-counted subscriber teardown like
+``live_projection.py``'s hub cache) is out of scope for this task.
 
 The stream is poll-driven (``GalleryHub`` has no pub/sub producer): each
 iteration calls ``build_update`` against the last-emitted bar per symbol.
@@ -50,9 +51,10 @@ import logging
 import time
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+from app.broker.alpaca.clerk.account_authority import canonical_alpaca_account_id
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.fleet.internal_http import DEFAULT_MAX_EVENT_BYTES
 from app.schemas.broker_v2_gallery import (
@@ -62,7 +64,7 @@ from app.schemas.broker_v2_gallery import (
     GallerySymbolBars,
 )
 from app.schemas.broker_v2_panel import ChartFillMarker
-from app.services.broker_v2_panel import panel_chart_data_source, panel_data_source
+from app.services.broker_v2_panel import panel_chart_data_source, panel_data_source, panel_errors, panel_scope
 from app.services.broker_v2_panel.gallery_hub import (
     GalleryFillSource,
     GalleryHub,
@@ -129,7 +131,12 @@ _FILL_SOURCE: GalleryFillSource = _PanelChartFillSource()
 
 
 async def get_gallery_hub(broker: str, account_id: str) -> GalleryHub:
-    """Return the per-``(broker, account_id)`` cached ``GalleryHub``.
+    """Return the cached ``GalleryHub`` for the broker's validated account.
+
+    The path ``account_id`` is validated first and the cache is keyed on the
+    account's canonical id, so every spelling the validation accepts shares
+    one hub and a path that names no real account refuses (the panel router's
+    404/503 body) without inserting anything.
 
     See the module docstring for the cache's known limitation (no
     ref-counting/eviction). A FastAPI dependency so tests can override it via
@@ -138,8 +145,9 @@ async def get_gallery_hub(broker: str, account_id: str) -> GalleryHub:
     ``async def`` (not a plain sync helper) so FastAPI awaits this directly
     on the event loop instead of running it in a threadpool
     (``run_in_threadpool``) — the get-or-create check-then-set below has no
-    ``await`` in it, so keeping it on the event loop makes it atomic. A
-    sync ``def`` here would let two concurrent requests for the same
+    ``await`` in it (the one validation ``await`` comes first), so keeping it
+    on the event loop makes it atomic. A sync ``def`` here would let two
+    concurrent requests for the same
     ``(broker, account_id)`` (e.g. a gallery page firing ``/snapshot`` and
     ``/stream`` at once) race on separate threads, each missing the cache
     and constructing its own ``GalleryHub`` with an independent
@@ -147,12 +155,19 @@ async def get_gallery_hub(broker: str, account_id: str) -> GalleryHub:
     ``get_or_start_live_projection_hub`` (``live_projection.py``) already
     avoids the same way.
     """
-    key = (broker, account_id)
+    try:
+        real_account_id = await panel_scope.validate_account(broker, account_id)
+    except panel_errors.PanelDataError as error:
+        raise HTTPException(
+            status_code=error.http_status,
+            detail={"message": str(error), "why": error.detail, "next_action": error.next_action},
+        ) from error
+    key = (broker, canonical_alpaca_account_id(real_account_id))
     hub = _HUB_CACHE.get(key)
     if hub is None:
         hub = GalleryHub(
             broker=broker,
-            account_id=account_id,
+            account_id=real_account_id,
             catalog_source=panel_data_source,
             aggregator=LIVE_BAR_AGGREGATOR,
             resolution="5s",
