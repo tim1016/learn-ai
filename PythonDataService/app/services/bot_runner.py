@@ -1676,11 +1676,12 @@ class BotTaskRegistry:
             await self._authority_for(managed.binding).release_after_run_end()
 
     async def _abandon_end_stops(self, late: set[asyncio.Task[None]]) -> None:
-        """Cancel and await the stops at a bot's end that outlived shutdown's wait for them.
+        """Cancel the stops at a bot's end that outlived shutdown's wait for them, and wait for them to end.
 
         Their run is already stopped at the Clerk and fenced here; what they
-        still owed is the process stop's custody proof, which the next boot's
-        duty settle takes over.
+        still owed is the process stop's custody proof. The run keeps its
+        provisional outcome, which says in plain words that the proof is
+        pending.
         """
         for task in late:
             logger.warning(
@@ -1689,7 +1690,12 @@ class BotTaskRegistry:
             )
             task.cancel()
         if late:
-            await asyncio.gather(*late, return_exceptions=True)
+            _done, unwound = await asyncio.wait(late, timeout=_STOP_TIMEOUT_S)
+            for task in unwound:
+                logger.warning(
+                    "A bot's stop at its end did not unwind within the shutdown timeout",
+                    extra={"action": "service_shutdown_end_stop_not_unwound", "task": task.get_name()},
+                )
 
     # ── the owner-set end (#2607) ─────────────────────────────────────
     #
@@ -2111,19 +2117,21 @@ class BotTaskRegistry:
                 continue
             if pending.end_at_ms > now_ms or record.desired_state is not DesiredState.STOPPED:
                 continue
-            binding = self._read_binding(sid)
-            if binding is None or binding.mode != "dry_run":
-                self._stopped_end_candidates.discard(sid)
-                continue  # a trading bot's end is its account Clerk's to carry out
             try:
+                binding = self._read_binding(sid)
+                if binding is None or binding.mode != "dry_run":
+                    self._stopped_end_candidates.discard(sid)
+                    continue  # a trading bot's end is its account Clerk's to carry out
                 self.record_end_carried_out(ScheduledEnd(strategy_instance_id=sid, end=pending), at_ms=now_ms)
             except Exception as exc:
                 # Deliberately broad, as in ``carry_out_due_ends``: one bot's
-                # unwritable record is that bot's. It stays a candidate, so
-                # the next look writes it again, and the rest are still read.
+                # unreadable binding or unwritable record is that bot's. It
+                # stays a candidate, so the next look tries again, and the
+                # rest are still read.
                 self._end_watch_failed(sid, exc)
                 continue
             self._stopped_end_candidates.discard(sid)
+            self._end_watch_failures.pop(sid, None)
             logger.info(
                 "Recorded a stopped Dry Run's end carried out: its simulation closed what it held when its run ended",
                 extra={"action": "dry_run_end_recorded", "strategy_instance_id": sid, "end_at_ms": pending.end_at_ms},

@@ -28,7 +28,7 @@ def _binding() -> BrokerBotBinding:
     )
 
 
-def _recorder(status: ProjectionStatus, tmp_path: Path) -> BotRunTerminalRecorder:
+def _recorder(status: ProjectionStatus) -> BotRunTerminalRecorder:
     refusal = "VERSION_MISMATCH" if status is ProjectionStatus.FILE_CAS_REFUSED else None
     result = AlpacaLifecycleProjectionResult(
         status=status, record=None, terminal_outcome_attached=False, refusal_reason=refusal,
@@ -47,10 +47,21 @@ def test_a_refused_terminal_projection_is_logged(
     tmp_path: Path, caplog: pytest.LogCaptureFixture, status: ProjectionStatus,
 ) -> None:
     with caplog.at_level(logging.WARNING, logger="app.services.bot_run_terminal"):
-        _recorder(status, tmp_path).replace_provisional_stop(_binding(), kind="STOPPED", reason_code="OPERATOR_STOP")
+        _recorder(status).replace_provisional_stop(_binding(), kind="STOPPED", reason_code="OPERATOR_STOP")
 
     (record,) = [r for r in caplog.records if getattr(r, "action", None) == "bot_terminal_projection_not_recorded"]
     assert (record.strategy_instance_id, record.run_id, record.projection_status) == (_SID, "run-1", status.value)
+
+
+def test_a_refused_projection_of_a_finalized_run_is_logged_too(caplog: pytest.LogCaptureFixture) -> None:
+    desired = SimpleNamespace(set=lambda *_args, **_kwargs: None)
+    recorder = _recorder(ProjectionStatus.AUTHORITY_CHANGED)
+    recorder._desired_repo_for = lambda _sid: desired  # type: ignore[assignment, return-value]
+
+    with caplog.at_level(logging.WARNING, logger="app.services.bot_run_terminal"):
+        recorder.finalize(_binding(), kind="CRASHED", reason_code="ValueError")
+
+    assert [getattr(r, "action", None) for r in caplog.records].count("bot_terminal_projection_not_recorded") == 1
 
 
 @pytest.mark.parametrize("status", [ProjectionStatus.RECORDED, ProjectionStatus.AUTHORITY_EXPECTATION_SUPERSEDED])
@@ -58,6 +69,6 @@ def test_a_projection_that_answered_is_not_logged_as_refused(
     tmp_path: Path, caplog: pytest.LogCaptureFixture, status: ProjectionStatus,
 ) -> None:
     with caplog.at_level(logging.WARNING, logger="app.services.bot_run_terminal"):
-        _recorder(status, tmp_path).replace_provisional_stop(_binding(), kind="STOPPED", reason_code="OPERATOR_STOP")
+        _recorder(status).replace_provisional_stop(_binding(), kind="STOPPED", reason_code="OPERATOR_STOP")
 
     assert not [r for r in caplog.records if getattr(r, "action", None) == "bot_terminal_projection_not_recorded"]

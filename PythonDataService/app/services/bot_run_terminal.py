@@ -69,7 +69,11 @@ def _say_projection_not_recorded(
     kind: str,
     reason_code: str,
 ) -> None:
-    """Log a terminal the lifecycle projection refused; the receipt stands and the duty settle projects it later."""
+    """Say that a terminal outcome could not be projected onto the bot's lifecycle file.
+
+    The authority's own record of the run stands; the next projection that
+    reaches the bot (boot recovery's refresh) derives the file from it again.
+    """
     if projected.status in _PROJECTION_SETTLED:
         return
     logger.warning(

@@ -162,8 +162,7 @@ async def test_a_run_is_not_registered_without_its_admission_snapshot_on_a_clerk
     """F-A-5: dropping the snapshot would register the run outside the custody cut it was admitted under."""
     from types import SimpleNamespace
 
-    from app.broker.alpaca.clerk import set_alpaca_clerk
-    from app.services.bot_clerk_lifecycle import ActiveClerkUnavailableError, register_alpaca_duty_run
+    from app.services.bot_clerk_lifecycle import register_alpaca_duty_run
 
     registered: list[str] = []
 

@@ -964,6 +964,31 @@ async def test_a_stopped_dry_runs_end_stays_a_candidate_when_its_record_cannot_b
     assert registry.pending_ends(["dry-bot"]) == []
 
 
+async def test_a_stopped_dry_run_whose_binding_cannot_be_read_does_not_hold_back_the_others(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The look reaches every candidate: one bot's unreadable binding is that bot's alone."""
+    clock = _Clock()
+    registry = _registry(tmp_path, None, now_ms=clock)
+    _stopped_dry_run(registry, tmp_path, desired=DesiredState.STOPPED)
+    DesiredStateRepo(stable_desired_state_path(tmp_path, "aa-bot")).set(
+        DesiredState.STOPPED, updated_by="bot_runner", now_ms=_T0, reason="terminal_outcome:CRASHED", end=_END,
+    )
+    real_read = registry._read_binding
+
+    def _read(sid: str) -> BrokerBotBinding | None:
+        if sid == "aa-bot":
+            raise ValueError("the binding is unreadable")
+        return real_read(sid)
+
+    monkeypatch.setattr(registry, "_read_binding", _read)
+    clock.move_to(_END.end_at_ms + 1_000)
+
+    await registry.carry_out_due_ends()
+
+    assert registry.pending_ends(["dry-bot"]) == []
+
+
 class _PassThatLeavesTheRunActive:
     """An authority whose end pass ran but stopped nothing: a swallowed per-bot STOP write."""
 
