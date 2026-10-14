@@ -38,15 +38,15 @@
             } @else {
               <span class="badge badge--neutral">Complete</span>
             }
-            @if (row.goldenValidationState; as goldenState) {
+            @if (row.goldenValidationState) {
               <button
                 type="button"
                 class="badge badge--golden golden-action"
                 (click)="requestGolden(row, $event)"
                 [attr.aria-label]="'Review Validation Golden Run for run ' + row.id">
-                Golden · {{ goldenState | receiptLabel }}
+                Golden · {{ goldenLabel(row) }}
               </button>
-            } @else if (row.source === 'engine') {
+            } @else if (row.source === 'engine' && goldenCatalogReadable()) {
               <button
                 type="button"
                 class="golden-action"

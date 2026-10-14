@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { FAKE_CHART_THEME } from './testing/fake-charts';
-import { chanceComparison, chanceProfitability } from './testing/fixtures';
-import { chanceComparisonSpec, objectiveTexts, profitabilityText, shareSegments, shareStripText } from './golden-search-chance-charts';
+import { chanceComparison } from './testing/fixtures';
+import { chanceComparisonSpec, objectiveTexts, shareSegments, shareStripText } from './golden-search-chance-charts';
 import type { CandidateRef } from './golden-search.types';
 
 /** Falsifiability: rename a strip segment, drop the zero reference, relabel the middle 90%, or let a tie read as improvement on one side only, and a spec here names it. */
@@ -54,9 +54,5 @@ describe('the chance comparison chart spec', () => {
     expect(shareSegments(comparison).map((segment) => segment.key)).toEqual(['better', 'tied', 'worse', 'undefined']);
     expect(shareStripText(comparison)).toContain('better 93.5%');
     expect(shareStripText(comparison)).toContain('undefined 0%');
-  });
-
-  it('words the profitability line from its stored shares', () => {
-    expect(profitabilityText(chanceProfitability())).toContain('positive in 97.4% of 10,000 paths');
   });
 });

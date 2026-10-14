@@ -1,3 +1,5 @@
+import type { CustomSeriesOption } from 'echarts/charts';
+
 import type { ChartSpec } from './charts/golden-search-chart-spec';
 import { dataIndexOf, NOT_RECORDED, tooltipFrame, tooltipHtml, type ChartTheme, type TooltipRow } from './charts/golden-search-chart-theme';
 import type { ChartOption } from './charts/golden-search-echarts';
@@ -23,8 +25,7 @@ const DIFFERENCE_ROW = 'Difference from the current settings';
 const RANGE_ROW = 'Resampled objective, middle 90%';
 const NET_RETURN_ROW = 'Compounded net return, middle 90%';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- echarts' series union through ComposeOption cannot be indexed here.
-type FinalSeries = any;
+type RenderApi = Parameters<NonNullable<CustomSeriesOption['renderItem']>>[1];
 
 interface IntervalRow {
   readonly row: string;
@@ -41,7 +42,7 @@ function objectiveZero(measure: string): string {
   return 'zero net profit';
 }
 
-function rangeBand(rowIndex: number, { row, range, zero }: IntervalRow, theme: ChartTheme): FinalSeries[] {
+function rangeBand(rowIndex: number, { row, range, zero }: IntervalRow, theme: ChartTheme): CustomSeriesOption[] {
   const has = range.p5 !== null && range.p50 !== null && range.p95 !== null;
   return [
     {
@@ -52,8 +53,7 @@ function rangeBand(rowIndex: number, { row, range, zero }: IntervalRow, theme: C
       // full [value, row] pair, so both axes of every drawn point are finite — a bare api.coord([value]) asks
       // for a category by accident and renders NaN (#3028).
       data: has ? [rowIndex] : [],
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- echarts' custom-series graphic children are a union the limited ComposeOption types cannot name.
-      renderItem: (_params: unknown, api: { value: (dimension: number) => number; coord: (data: number[]) => number[] }): any => {
+      renderItem: (_params: unknown, api: RenderApi) => {
         const at = (value: number): number[] => api.coord([value, api.value(0)]);
         const lowX = at(range.p5 as number)[0];
         const highX = at(range.p95 as number)[0];
@@ -247,7 +247,15 @@ export function carryOverSpec(candidate: CandidateRef, carry: MeasuredChanceCarr
       columns: ['Quantity', 'Value'],
       rows: [
         { key: 'recorded', cells: ['Recorded final objective', texts.cell(carry.recorded_objective)] },
-        { key: 'rank', cells: ['Rank among rehearsals', `${countText(carry.below)} of ${countText(carry.finite)} defined paths strictly below (${Math.round(carry.rank * 1000) / 10}%)`] },
+        {
+          key: 'rank',
+          cells: [
+            'Rank among rehearsals',
+            carry.finite === 0
+              ? 'No rehearsal path was defined, so the recorded result has no rank'
+              : `${countText(carry.below)} of ${countText(carry.finite)} defined paths strictly below (${Math.round(carry.rank * 1000) / 10}%)`,
+          ],
+        },
         { key: 'undefined', cells: ['Undefined rehearsal paths', countText(carry.undefined)] },
         { key: 'label', cells: ['Reading', carry.sentence] },
       ],

@@ -24,7 +24,7 @@ it('opens the recorded approved fit and keeps its identity when comparing anothe
   expect(service.command).not.toHaveBeenCalled();
 });
 
-it('shows all final fits and their failures while chart selection remains read-only', async () => {
+it('shows all final fits, the Sharpe rehearsal rank and their failures while chart selection remains read-only', async () => {
   const base = studyDetail('awaiting_review');
   const carry = chanceCarryOver();
   const sharpe = { ...carry, basis: { ...carry.basis, objective: { measure: 'sharpe_ratio' as const, label: 'Sharpe', units: 'ratio' } } };
@@ -32,8 +32,8 @@ it('shows all final fits and their failures while chart selection remains read-o
   const service = { testOverTimeCharts: async () => testOverTimeCharts(), curveSet: async (_id: string, set: CurveSetKey) => curveSet(set), candidate: vi.fn(async (_id: string, key: CandidateKey) => candidateDetail(key)), command: vi.fn() };
   const view = await render(GoldenSearchReportComponent, { inputs: { study: { ...base, results: { ...base.results, exam } }, capability: emaCapability() }, providers: [provideRouter([]), { provide: GoldenSearchService, useValue: service }, ...fakeCharts().providers] });
   expect(screen.getByText(/Exploratory research/)).not.toBeNull();
-  expect(screen.getByText(/The rehearsal rank is excluded/)).not.toBeNull();
-  expect(screen.queryByRole('region', { name: 'Development rehearsal comparison' })).toBeNull();
+  expect(screen.queryByText(/different return conventions/)).toBeNull();
+  expect(screen.getByRole('region', { name: 'Development rehearsal comparison' }).textContent).toContain('Where the recorded result sits among its own rehearsals');
   const final = screen.getByRole('region', { name: 'What survived the final test?' });
   expect(within(final).getByText('No result recorded')).not.toBeNull();
   fireEvent.click(within(screen.getByRole('navigation', { name: 'Fit shown in final charts' })).getByRole('button', { name: 'Recent fit' }));

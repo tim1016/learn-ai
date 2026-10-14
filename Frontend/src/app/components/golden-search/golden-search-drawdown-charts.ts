@@ -2,7 +2,7 @@ import type { ChartSpec } from './charts/golden-search-chart-spec';
 import { NOT_RECORDED, tooltipFrame, tooltipHtml, type ChartTheme, type TooltipRow } from './charts/golden-search-chart-theme';
 import type { ChartOption } from './charts/golden-search-echarts';
 import { percentText } from './golden-search-display';
-import { shareText } from './golden-search-chance-charts';
+import { countText, shareText } from './golden-search-chance-charts';
 import type { CandidateRef, MeasuredChanceDrawdown } from './golden-search.types';
 
 /**
@@ -40,7 +40,7 @@ function drawdownTableRows(drawdown: MeasuredChanceDrawdown, ceiling: number): {
   const rows = [
     { key: 'p50', cells: ['Resampled fall, median', drawdown.percentiles['p50'] === null ? NOT_RECORDED : percentText(drawdown.percentiles['p50'] as number)] },
     { key: 'p95', cells: ['Resampled fall, 95th percentile', drawdown.percentiles['p95'] === null ? NOT_RECORDED : percentText(drawdown.percentiles['p95'] as number)] },
-    { key: 'finite', cells: ['Resamples behind the range', `${Number(drawdown.percentiles['finite']).toLocaleString('en-US')} of 10,000`] },
+    { key: 'finite', cells: ['Resamples behind the range', `${countText(drawdown.percentiles['finite'])} of ${countText(drawdown.basis.replications)}`] },
     { key: 'close', cells: ['Recorded fall at session closes', percentText(drawdown.recorded_close_only)] },
     { key: 'engine', cells: ["Recorded fall, engine's every bar", drawdown.recorded_engine_per_bar === null ? NOT_RECORDED : percentText(drawdown.recorded_engine_per_bar)] },
     { key: 'ceiling', cells: ['Frozen ceiling', percentText(ceiling)] },
@@ -92,8 +92,7 @@ function drawdownOption(drawdown: MeasuredChanceDrawdown, hasRange: boolean, the
         type: 'custom',
         // One datum always draws: without a range the band collapses to zero width, but the recorded markers and the ceiling stay visible.
         data: [0],
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- echarts' custom-series graphic children are a union the limited ComposeOption types cannot name.
-        renderItem: (_params: unknown, api: { coord: (data: number[]) => number[] }): any => {
+        renderItem: (_params: unknown, api: { coord: (data: number[]) => number[] }) => {
           const zeroX = api.coord([0])[0];
           const p95X = api.coord([hasRange ? (p95 as number) : 0])[0];
           const medianX = api.coord([hasRange ? (p50 as number) : 0])[0];
@@ -102,17 +101,17 @@ function drawdownOption(drawdown: MeasuredChanceDrawdown, hasRange: boolean, the
           const top = api.coord([0])[1] - 15;
           const height = 30;
           const band = hasRange
-            ? [{ type: 'rect', shape: { x: zeroX, y: top + 6, width: Math.max(1, p95X - zeroX), height: height - 12 }, style: { fill: theme.candidates.all_period, opacity: 0.28 } }]
+            ? [{ type: 'rect' as const, shape: { x: zeroX, y: top + 6, width: Math.max(1, p95X - zeroX), height: height - 12 }, style: { fill: theme.candidates.all_period, opacity: 0.28 } }]
             : [];
           return {
             type: 'group',
             children: [
               ...band,
-              ...(hasRange ? [{ type: 'rect', shape: { x: medianX - 1.5, y: top + 2, width: 3, height: height - 4 }, style: { fill: theme.text } }] : []),
-              { type: 'circle', shape: { cx: closeX, cy: top + height / 2, r: 5 }, style: { fill: 'transparent', stroke: theme.development, lineWidth: 2 } },
+              ...(hasRange ? [{ type: 'rect' as const, shape: { x: medianX - 1.5, y: top + 2, width: 3, height: height - 4 }, style: { fill: theme.text } }] : []),
+              { type: 'circle' as const, shape: { cx: closeX, cy: top + height / 2, r: 5 }, style: { fill: 'transparent', stroke: theme.development, lineWidth: 2 } },
               ...(drawdown.recorded_engine_per_bar === null
                 ? []
-                : [{ type: 'rect', shape: { x: engineX - 1.5, y: top + 8, width: 3, height: height - 16 }, style: { fill: theme.stressed } }]),
+                : [{ type: 'rect' as const, shape: { x: engineX - 1.5, y: top + 8, width: 3, height: height - 16 }, style: { fill: theme.stressed } }]),
             ],
           };
         },

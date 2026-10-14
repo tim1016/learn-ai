@@ -1,7 +1,7 @@
 import { provideZonelessChangeDetection, signal } from "@angular/core";
 import { ComponentFixture, TestBed } from "@angular/core/testing";
 import { Router } from "@angular/router";
-import { of, type Observable } from "rxjs";
+import { of, throwError, type Observable } from "rxjs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EngineLabRunHistoryComponent } from "./engine-lab-run-history.component";
 import { BacktestRunsService, HISTORY_PAGE_SIZE } from "../../../services/backtest-runs.service";
@@ -15,7 +15,7 @@ import { GoldenValidationService } from "../../../services/golden-validation.ser
 const fakeJobsSignal = signal<JobState[]>([]);
 const jobsServiceMock = { jobs: () => fakeJobsSignal() };
 const goldenValidationMock = {
-  list: vi.fn<() => Observable<{ source_run_id: number; state: string }[]>>(() => of([])),
+  list: vi.fn<() => Observable<{ source_run_id: number; state: string; review_is_current?: boolean | null }[]>>(() => of([])),
 };
 
 function installLocalStorage(): void {
@@ -193,6 +193,49 @@ describe("EngineLabRunHistoryComponent", () => {
     button.click();
 
     expect(requested).toHaveBeenCalledWith(30);
+  });
+
+  it("marks a Golden badge whose review no longer applies to the current evidence", async () => {
+    goldenValidationMock.list.mockReturnValue(of([
+      { source_run_id: 30, state: "accepted_engine_agreement", review_is_current: false },
+      { source_run_id: 31, state: "accepted_engine_agreement", review_is_current: true },
+    ]));
+    const fixture = await setup();
+    const badges = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>("button.badge--golden"));
+
+    expect(badges.map((badge) => badge.textContent?.trim())).toEqual([
+      "Golden · Accepted Engine Agreement · review no longer applies",
+      "Golden · Accepted Engine Agreement",
+    ]);
+  });
+
+  it("does not offer Mark golden, and says so, when the Golden catalog could not be read", async () => {
+    goldenValidationMock.list.mockReturnValue(throwError(() => new Error("catalog down")));
+    const fixture = await setup();
+    const element = fixture.nativeElement as HTMLElement;
+    const buttons = Array.from(element.querySelectorAll("button")).map((button) => button.textContent?.trim());
+
+    expect(buttons).not.toContain("Mark golden");
+    expect(element.textContent).toContain("Golden catalog could not be read");
+    expect(element.textContent).toContain("sma_crossover");
+  });
+
+  it("offers Mark golden for a Python run when the catalog was read and does not list it", async () => {
+    const fixture = await setup();
+    const element = fixture.nativeElement as HTMLElement;
+    const buttons = Array.from(element.querySelectorAll("button")).map((button) => button.textContent?.trim());
+
+    expect(buttons).toContain("Mark golden");
+    expect(element.textContent).not.toContain("Golden catalog could not be read");
+  });
+
+  it("says Golden badges stop at the newest 100 designated runs when the catalog is exactly that long", async () => {
+    goldenValidationMock.list.mockReturnValue(
+      of(Array.from({ length: 100 }, (_, index) => ({ source_run_id: 5000 + index, state: "candidate" }))),
+    );
+    const fixture = await setup();
+
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain("newest 100 Validation Golden Runs");
   });
 
   it("renders the empty state when no rows are returned", async () => {
