@@ -334,6 +334,47 @@ describe('AccountDeskTransactionHistoryComponent', () => {
     );
   });
 
+  /** #3180: after a recovery action the page re-reads the history. A failed
+   * re-read left the last good rows under the old "History is current" banner
+   * with no error — a stale read presented as current. */
+  it('says a failed refresh failed and stops calling the kept rows current', async () => {
+    let readFails = false;
+    const accountTransactions = vi.fn(() => readFails
+      ? Promise.reject({ error: { detail: 'Order history read timed out.' } })
+      : Promise.resolve({ ...historyPage(), rows: [transaction()] }));
+    const view = await render(AccountDeskTransactionHistoryComponent, {
+      inputs: {
+        accountId: 'PA1', target: TARGET, fence: FENCE, showScopeControl: false, fromMs: 1, toMs: 2,
+      },
+      providers: [
+        provideFleetDirectory(),
+        AccountDeskTransactionHistoryStore,
+        { provide: BrokersService, useValue: { accountTransactions } },
+      ],
+    });
+    await vi.waitFor(() => {
+      expect(screen.getByText('History is current')).toBeTruthy();
+      expect(screen.queryByText(/Refreshing the complete period/)).toBeNull();
+    });
+    expect(screen.getByText('No request details recorded')).toBeTruthy();
+
+    readFails = true;
+    view.fixture.componentRef.setInput('refreshVersion', 1);
+    view.fixture.detectChanges();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('Order history read timed out.');
+    expect(alert.textContent).toContain('last successful read');
+    expect(screen.queryByText('History is current')).toBeNull();
+    expect(screen.getByText('No request details recorded')).toBeTruthy();
+
+    readFails = false;
+    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByText('History is current')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('derives a local calendar day only while matching canonical timestamp values', () => {
     const selectedDay = new Date(2026, 7, 13);
     const startOfDayMs = selectedDay.getTime();
