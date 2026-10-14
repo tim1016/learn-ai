@@ -607,6 +607,8 @@ def from_alpaca_trade_update(payload: Mapping[str, Any]) -> BrokerOrderEvent:
     ``BrokerOrderEvent.price``/``quantity`` are the *per-execution* figures, so
     they carry the top-level ``price``/``qty`` when present (fills) and are
     ``None`` otherwise (``new``/``canceled``/``rejected`` carry no execution).
+    A multi-leg parent's fill is the exception: its top-level figures are the
+    order's net, not an execution, so it carries none (#3103).
     The order's cumulative fill totals live on the ``BrokerOrder`` the caller
     maps separately from the embedded ``order`` object — they are deliberately
     NOT folded in here, which would mislabel a cumulative figure as a slice.
@@ -625,6 +627,13 @@ def from_alpaca_trade_update(payload: Mapping[str, Any]) -> BrokerOrderEvent:
     if execution_id is not None:
         execution_id = execution_id.strip() or None
     if event in {"fill", "partial_fill"} and execution_id is None:
+        if _is_a_multi_leg_parents_fill(payload):
+            # A multi-leg parent has no execution of its own: its top-level price and quantity are the
+            # order's net, and each leg's execution is in ``legs``. The Clerk's exact option lookup
+            # supplies the legs; this frame says only that the parent moved (#3103).
+            return BrokerOrderEvent(
+                event_type=event, occurred_at_ms=occurred_at_ms, price=None, quantity=None, execution_id=None
+            )
         raise ValueError(f"Alpaca {event} trade_updates event is missing its execution_id.")
     return BrokerOrderEvent(
         event_type=event,
@@ -632,6 +641,18 @@ def from_alpaca_trade_update(payload: Mapping[str, Any]) -> BrokerOrderEvent:
         price=opt_float(payload.get("price")),
         quantity=opt_float(payload.get("qty")),
         execution_id=(execution_id if event in {"fill", "partial_fill"} else None),
+    )
+
+
+def _is_a_multi_leg_parents_fill(payload: Mapping[str, Any]) -> bool:
+    """Whether a trade update is a multi-leg parent's fill: an ``mleg`` order whose frame lists its legs' executions."""
+    order = payload.get("order")
+    legs = payload.get("legs")
+    return (
+        isinstance(order, Mapping)
+        and order.get("order_class") == "mleg"
+        and isinstance(legs, list)
+        and bool(legs)
     )
 
 
