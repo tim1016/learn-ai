@@ -7,7 +7,6 @@
 .rule { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3) var(--space-4); padding-top: var(--space-3); border-top: 1px solid var(--border-light); }
 .rule app-options-backtest-switch { min-width: 11rem; }
 .rule input[type='text'] { width: 6rem; }
-.rule--off .muted { opacity: 0.5; }
 .rule .hint, .rule .problem { flex-basis: 100%; }
 .muted { color: var(--text-secondary); font-size: var(--fs-sm); }
 // Two legs across: each card is narrower, so a rule packs tighter and shares a row between its controls where they fit.

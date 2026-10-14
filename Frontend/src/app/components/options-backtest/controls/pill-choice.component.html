@@ -1,7 +1,8 @@
-<fieldset class="pills" [disabled]="disabled()" [attr.aria-describedby]="describedBy()">
+<fieldset class="pills" [disabled]="disabled()" [attr.aria-describedby]="describedByIds()">
   <legend class="sr-only">{{ label() }}</legend>
+  @if (reason(); as why) { <span class="sr-only" [id]="reasonId">{{ why }}</span> }
   @for (option of options(); track option.value) {
-    <label class="pill" [class.pill--chosen]="option.value === value()" [class.pill--unavailable]="isUnavailable(option.value)">
+    <label class="pill" [class.pill--chosen]="option.value === value()" [class.pill--unavailable]="isUnavailable(option.value)" [attr.title]="isUnavailable(option.value) ? reason() : null">
       <input type="radio" [name]="group" [value]="option.value" [checked]="option.value === value()" [disabled]="isUnavailable(option.value)" (change)="value.set(option.value)" (blur)="touch.emit()" />
       <span>{{ option.label }}</span>
     </label>

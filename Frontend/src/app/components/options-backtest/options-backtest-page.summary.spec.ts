@@ -5,7 +5,7 @@ import { SetupInvalidError } from './options-backtest.service';
 import type { SetupRequest, SetupSummary } from './options-backtest.types';
 import { formatClockText } from './session-time';
 import { exampleBody, minutes, servedSaved, SESSION_CLOCK } from './testing/fixtures';
-import { addLeg, inLeg, typeInto } from './testing/page-actions';
+import { addLeg, inLeg, press, typeInto } from './testing/page-actions';
 import { fakeService, renderPage, sentencesFor } from './testing/render-page';
 
 const { open_minute_et: OPEN, close_minute_et: CLOSE } = SESSION_CLOCK;
@@ -387,5 +387,90 @@ describe('typed times', () => {
     expect(screen.getByLabelText('Entry time').getAttribute('aria-invalid')).toBe('false');
     typeInto('Entry time', '10:00');
     expect(within(screen.getByRole('region', { name: 'Entry settings' })).getByText(/10:01 or later/)).toBeTruthy();
+  });
+});
+
+describe('the read-back beside the leg cards', () => {
+  const blocks = (summary: HTMLElement) => [...summary.querySelectorAll<HTMLElement>('li[data-leg-id]')];
+  const numbered = (summary: HTMLElement) => blocks(summary).map((block) => [block.querySelector('.number')?.textContent, block.dataset['legId']]);
+
+  it('numbers each leg’s box as its card is numbered, and follows a leg that is deleted', async () => {
+    await renderPage(fakeService(vi));
+    addLeg('Call');
+    addLeg('Put');
+    const summary = await screen.findByRole('region', { name: 'In plain words' });
+    await waitFor(() => expect(blocks(summary)).toHaveLength(2));
+
+    expect(numbered(summary)).toEqual([['1', 'call'], ['2', 'put']]);
+
+    press('Delete Leg 1');
+
+    await waitFor(() => expect(blocks(summary)).toHaveLength(1));
+    expect(numbered(summary)).toEqual([['1', 'put']]);
+  });
+
+  it('shows where the server says a leg when the keyboard goes to its card, and moves only the rail', async () => {
+    await renderPage(fakeService(vi));
+    addLeg('Call');
+    addLeg('Put');
+    const summary = await screen.findByRole('region', { name: 'In plain words' });
+    await waitFor(() => expect(blocks(summary)).toHaveLength(2));
+    // jsdom has no layout: say that the read-back is 200px high, holds 1000px, and has the second leg below its edge.
+    const pane = summary.closest<HTMLElement>('.rail__read');
+    if (pane === null) throw new Error('the read-back has no scrolling pane');
+    Object.defineProperty(pane, 'scrollHeight', { value: 1000, configurable: true });
+    Object.defineProperty(pane, 'clientHeight', { value: 200, configurable: true });
+    pane.getBoundingClientRect = () => ({ top: 0, bottom: 200 }) as DOMRect;
+    const [, second] = blocks(summary);
+    if (second === undefined) throw new Error('no block for the second leg');
+    second.getBoundingClientRect = () => ({ top: 500, bottom: 560 }) as DOMRect;
+    const pageScroll = vi.spyOn(window, 'scrollTo');
+
+    fireEvent.focusIn(screen.getByRole('switch', { name: 'Leg 2 stop loss' }));
+
+    expect(pane.scrollTop).toBe(360);
+    expect(pageScroll).not.toHaveBeenCalled();
+  });
+
+  it('shows a leg that took the keyboard while the read-back was being refreshed once the refreshed sentences are there', async () => {
+    let hold = false;
+    const gate: { release: (() => void) | null } = { release: null };
+    const service = fakeService(vi, {
+      describe: vi.fn((body: unknown) =>
+        hold
+          ? new Promise<SetupSummary>((resolve) => {
+              gate.release = () => resolve(sentencesFor(body as SetupRequest));
+            })
+          : Promise.resolve(sentencesFor(body as SetupRequest)),
+      ),
+    });
+    await renderPage(service);
+    addLeg('Call');
+    addLeg('Put');
+    const summary = await screen.findByRole('region', { name: 'In plain words' });
+    await waitFor(() => expect(blocks(summary)).toHaveLength(2));
+    const pane = summary.closest<HTMLElement>('.rail__read');
+    if (pane === null) throw new Error('the read-back has no scrolling pane');
+    Object.defineProperty(pane, 'scrollHeight', { value: 1000, configurable: true });
+    Object.defineProperty(pane, 'clientHeight', { value: 200, configurable: true });
+    // jsdom has no layout: the pane is 200px high and the second leg's box lies below its edge.
+    const geometry = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      if (this === pane) return { top: 0, bottom: 200 } as DOMRect;
+      if (this instanceof HTMLElement && this.dataset['legId'] === 'put') return { top: 500, bottom: 560 } as DOMRect;
+      return { top: 0, bottom: 0 } as DOMRect;
+    });
+    try {
+      hold = true;
+      typeInto('Slippage (percent)', '0.5');
+      await waitFor(() => expect(blocks(summary)).toHaveLength(0));
+
+      fireEvent.focusIn(screen.getByRole('switch', { name: 'Leg 2 stop loss' }));
+      expect(pane.scrollTop).toBe(0);
+      gate.release?.();
+
+      await waitFor(() => expect(pane.scrollTop).toBe(360));
+    } finally {
+      geometry.mockRestore();
+    }
   });
 });

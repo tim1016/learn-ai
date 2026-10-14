@@ -14,6 +14,9 @@ p { margin: 0; }
 .rail { position: sticky; top: calc(var(--topbar-h) + var(--space-4)); display: grid; gap: var(--space-3); grid-template-rows: auto minmax(0, 1fr); max-height: calc(100dvh - var(--topbar-h) - var(--space-6)); min-width: 0; }
 // Read-back longer than the screen scrolls inside the rail, so Save and Start never leave it.
 .rail__read { min-height: 0; overflow: auto; }
+@media (prefers-reduced-motion: no-preference) {
+  .rail__read { scroll-behavior: smooth; }
+}
 .results { display: grid; gap: var(--space-4); min-width: 0; }
 .results:empty { display: none; }
 // The end of the page stays clear of the bar fixed to the window, where the rail is stacked under the form.

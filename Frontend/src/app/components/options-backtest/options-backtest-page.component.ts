@@ -1,4 +1,4 @@
-import { afterNextRender, ChangeDetectionStrategy, Component, computed, DestroyRef, effect, inject, Injector, input, linkedSignal, resource, signal, untracked, viewChild } from '@angular/core';
+import { afterNextRender, ChangeDetectionStrategy, Component, computed, DestroyRef, effect, ElementRef, inject, Injector, input, linkedSignal, resource, signal, untracked, viewChild } from '@angular/core';
 import { applyEach, disabled, form } from '@angular/forms/signals';
 import { ButtonModule } from 'primeng/button';
 import { Tab, TabList, TabPanel, TabPanels, Tabs } from 'primeng/tabs';
@@ -25,6 +25,7 @@ import { NO_DATES, rangeInstants, rangeOfStretch, type RangeChange } from './dur
 import { builderProblems, newLegBuilder, withLegAdded, withLegCopied, withLegRemoved } from './leg-draft';
 import { OptionsBacktestService, SetupInvalidError, SetupRefusedError } from './options-backtest.service';
 import type { SavedSetup, ServedSetup, SessionClock, SetupSummary, TestableStretch } from './options-backtest.types';
+import { bringIntoView, legBlock } from './read-back-scroll';
 import { RunLaunch } from './run-launch';
 import { RunNameTracker } from './run-name';
 import { RUN_POLL_MS } from './run-poll';
@@ -132,6 +133,9 @@ export class OptionsBacktestPageComponent {
     });
   });
   private readonly legsCard = viewChild(LegsCardComponent);
+  private readonly readBackPane = viewChild<ElementRef<HTMLElement>>('readBackPane');
+  /** The leg that took the keyboard while the read-back had no sentences. It is shown the once the read-back has them. */
+  private legAwaitingReadBack: string | null = null;
   protected readonly builder = signal(newLegBuilder());
   protected readonly builderForm = form(this.builder);
 
@@ -261,6 +265,14 @@ export class OptionsBacktestPageComponent {
     effect(() => {
       const body = this.body();
       untracked(() => this.checker.show(body));
+    });
+    effect(() => {
+      if (this.summary().kind !== 'ready') return;
+      untracked(() => {
+        const waiting = this.legAwaitingReadBack;
+        this.legAwaitingReadBack = null;
+        if (waiting !== null) this.afterRender(() => this.scrollReadBackTo(waiting));
+      });
     });
     inject(DestroyRef).onDestroy(() => this.checker.stop());
     // Coming back to the page while a backtest is going: show it, so that no second one is started.
@@ -395,6 +407,22 @@ export class OptionsBacktestPageComponent {
     const left = this.draft().legs.length;
     if (at < 0) return;
     this.afterRender(() => (left === 0 ? this.legsCard()?.focusAdd() : this.legsCard()?.focusDelete(Math.min(at, left - 1))));
+  }
+
+  /**
+   * A leg took the keyboard: the rail shows where the server says that leg, so a long read-back is not scrolled by hand.
+   * While the setup is being read back again there are no sentences to show, so the leg is shown once there are.
+   */
+  protected showInReadBack(legId: string): void {
+    this.legAwaitingReadBack = this.scrollReadBackTo(legId) ? null : legId;
+  }
+
+  private scrollReadBackTo(legId: string): boolean {
+    const pane = this.readBackPane()?.nativeElement;
+    const block = pane === undefined ? null : legBlock(pane, legId);
+    if (pane === undefined || block === null) return false;
+    bringIntoView(pane, block);
+    return true;
   }
 
   private afterRender(move: () => void): void {

@@ -1,4 +1,4 @@
-<article class="card leg" [attr.aria-label]="name()" [attr.aria-describedby]="contractProblem() === null ? null : problemId('contract')">
+<article class="card leg" [attr.aria-label]="name()" [attr.aria-describedby]="contractProblem() === null ? null : problemId('contract')" (focusin)="focused.emit()">
   <header class="leg__head">
     <span class="leg__number" aria-hidden="true">{{ position() + 1 }}</span>
     <div class="leg__title">
@@ -10,26 +10,31 @@
   </header>
   @if (contractProblem(); as message) { <p class="problem" role="alert" [id]="problemId('contract')">{{ message }}</p> }
 
-  <div class="rule" [class.rule--off]="!leg().stopLossOn">
+  <div class="rule">
     <app-options-backtest-switch [formField]="legForm().stopLossOn" label="Stop loss" [accessibleName]="name() + ' stop loss'" />
-    <input pInputText type="text" inputmode="decimal" autocomplete="off" [formField]="legForm().stopLossValue" [attr.aria-label]="name() + ' stop loss value'" [attr.aria-invalid]="problem('stopLossValue') !== null" [attr.aria-describedby]="describedByProblem('stop')" />
-    <app-options-backtest-pill-choice [formField]="legForm().stopLossKind" [options]="stopLossChoices" [label]="name() + ' stop loss unit'" [describedBy]="describedByProblem('stop')" />
+    @if (leg().stopLossOn) {
+      <input pInputText type="text" inputmode="decimal" autocomplete="off" [formField]="legForm().stopLossValue" [attr.aria-label]="name() + ' stop loss value'" [attr.aria-invalid]="problem('stopLossValue') !== null" [attr.aria-describedby]="describedByProblem('stop')" />
+      <app-options-backtest-pill-choice [formField]="legForm().stopLossKind" [options]="stopLossChoices" [label]="name() + ' stop loss unit'" [describedBy]="describedByProblem('stop')" />
+    }
     @if (stopLossProblem(); as message) { <p class="problem" role="alert" [id]="problemId('stop')">{{ message }}</p> }
   </div>
 
-  <div class="rule" [class.rule--off]="!leg().momentumOn">
+  <div class="rule">
     <app-options-backtest-switch [formField]="legForm().momentumOn" label="Simple momentum" [accessibleName]="name() + ' simple momentum'" />
-    <input pInputText type="text" inputmode="decimal" autocomplete="off" [formField]="legForm().momentumValue" [attr.aria-label]="name() + ' momentum value'" [attr.aria-invalid]="problem('momentumValue') !== null" [attr.aria-describedby]="describedByProblem('momentum')" />
-    <app-options-backtest-pill-choice [formField]="legForm().momentumKind" [options]="momentumChoices" [label]="name() + ' momentum direction'" [describedBy]="describedByProblem('momentum')" />
+    @if (leg().momentumOn) {
+      <input pInputText type="text" inputmode="decimal" autocomplete="off" [formField]="legForm().momentumValue" [attr.aria-label]="name() + ' momentum value'" [attr.aria-invalid]="problem('momentumValue') !== null" [attr.aria-describedby]="describedByProblem('momentum')" />
+      <app-options-backtest-pill-choice [formField]="legForm().momentumKind" [options]="momentumChoices" [label]="name() + ' momentum direction'" [describedBy]="describedByProblem('momentum')" />
+    }
     @if (momentumProblem(); as message) { <p class="problem" role="alert" [id]="problemId('momentum')">{{ message }}</p> }
   </div>
 
-  <div class="rule" [class.rule--off]="!leg().reentryOn">
+  <div class="rule">
     <app-options-backtest-switch [formField]="legForm().reentryOn" label="Re-entry on SL" [accessibleName]="name() + ' re-entry on SL'" />
-    <input pInputText type="text" inputmode="numeric" autocomplete="off" [formField]="legForm().reentryCount" [attr.aria-label]="name() + ' re-entries'" [attr.aria-invalid]="problem('reentryCount') !== null" [attr.aria-describedby]="describedByProblem('reentry')" />
-    <span class="muted">times</span>
-    <app-options-backtest-pill-choice [formField]="legForm().reentryKind" [options]="reentryChoices" [label]="name() + ' re-entry kind'" [unavailable]="unavailableReentry()" [describedBy]="reentryKindDescribedBy()" />
-    @if (!leg().momentumOn) { <p class="hint" [id]="reasonId()">On momentum can be chosen once Simple momentum is on: it asks the momentum rule again.</p> }
+    @if (leg().reentryOn) {
+      <input pInputText type="text" inputmode="numeric" autocomplete="off" [formField]="legForm().reentryCount" [attr.aria-label]="name() + ' re-entries'" [attr.aria-invalid]="problem('reentryCount') !== null" [attr.aria-describedby]="describedByProblem('reentry')" />
+      <span class="muted">times</span>
+      <app-options-backtest-pill-choice [formField]="legForm().reentryKind" [options]="reentryChoices" [label]="name() + ' re-entry kind'" [unavailable]="unavailableReentry()" [unavailableReason]="onMomentumReason" [describedBy]="describedByProblem('reentry')" />
+    }
     @if (leg().reentryOn && !leg().stopLossOn) {
       <p class="hint" role="status">
         @if (leg().side === 'sell') {

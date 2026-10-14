@@ -4,9 +4,12 @@
     @for (sentence of summary().window; track $index) { <p class="sentence">{{ sentence }}</p> }
   </div>
   <ul class="legs">
-    @for (leg of summary().legs; track leg.leg_id) {
-      <li class="block block--leg">
-        @for (sentence of leg.sentences; track $index) { <p class="sentence">{{ sentence }}</p> }
+    @for (leg of summary().legs; track leg.leg_id; let position = $index) {
+      <li class="block block--leg" [attr.data-leg-id]="leg.leg_id">
+        <span class="number" aria-hidden="true">{{ position + 1 }}</span>
+        <div class="sentences">
+          @for (sentence of leg.sentences; track $index) { <p class="sentence">{{ sentence }}</p> }
+        </div>
       </li>
     }
   </ul>

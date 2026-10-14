@@ -44,7 +44,7 @@
               <app-options-backtest-entry-card [form]="setupForm" [clock]="sessionClock" [problems]="fieldProblems()" />
               <app-options-backtest-legs-card
                 [form]="setupForm" [squareOff]="setupForm.squareOff" [squareOffProblem]="squareOffProblem()" [builderForm]="builderForm"
-                [problems]="fieldProblems()" [limits]="limits()" (add)="addLeg()" (legCopied)="copyLeg($event)" (legRemoved)="removeLeg($event)" />
+                [problems]="fieldProblems()" [limits]="limits()" (add)="addLeg()" (legCopied)="copyLeg($event)" (legRemoved)="removeLeg($event)" (legFocused)="showInReadBack($event)" />
               <app-options-backtest-costs-card [form]="setupForm" [problems]="fieldProblems()" />
             } @else if (clockProblem(); as problem) {
               <div class="notice notice--error" role="alert">
@@ -62,7 +62,7 @@
                 [hint]="saveHint()" [status]="saveStatus()" [canCheck]="canCheck()" [canStart]="canStart()" [runHint]="runHint()" (save)="save()" (check)="checkData()" (start)="start()" (height)="barHeight.set($event)" />
             }
             @if (clock() !== null) {
-              <div class="rail__read"><app-options-backtest-summary [state]="summary()" (retry)="retrySummary()" /></div>
+              <div #readBackPane class="rail__read"><app-options-backtest-summary [state]="summary()" (retry)="retrySummary()" /></div>
             }
           </div>
           <div class="results">
