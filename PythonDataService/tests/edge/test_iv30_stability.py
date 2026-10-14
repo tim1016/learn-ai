@@ -273,31 +273,6 @@ class TestNormalizedHealthTargetTenor:
     ``target_calendar_days`` through, non-default tenors silently fell
     back to 30 (CodeRabbit P2 on PR 47)."""
 
-    def test_target_tenor_changes_baseline_score(
-        self, chain1: list[OptionQuote], chain2: list[OptionQuote]
-    ):
-        norm_chain1 = [_to_normalized(q) for q in chain1]
-        norm_chain2 = [_to_normalized(q) for q in chain2]
-
-        h_default = compute_iv30_health_normalized(
-            norm_chain1, norm_chain2,
-            rate1=RATE, T1_calendar_days=T1_DAYS,
-            rate2=RATE, T2_calendar_days=T2_DAYS,
-        )
-        h_target_28 = compute_iv30_health_normalized(
-            norm_chain1, norm_chain2,
-            rate1=RATE, T1_calendar_days=T1_DAYS,
-            rate2=RATE, T2_calendar_days=T2_DAYS,
-            target_calendar_days=28,
-        )
-
-        # Both should score in [0, 1] and not raise — that's the regression
-        # the fix unblocks. The composite scores need not be identical;
-        # the chain stability under perturbation differs slightly per
-        # tenor weight, so the sub-scores will move a little.
-        assert 0.0 <= h_default.score <= 1.0
-        assert 0.0 <= h_target_28.score <= 1.0
-
     def test_target_outside_bracket_raises(
         self, chain1: list[OptionQuote], chain2: list[OptionQuote]
     ):

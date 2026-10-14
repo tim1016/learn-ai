@@ -7,32 +7,13 @@ from __future__ import annotations
 import math
 
 import pytest
-from scipy.stats import norm
 
 from app.volatility.solver import (
     SolveStatus,
     implied_volatility,
     solve_iv_chain,
 )
-
-
-def bs_price(
-    spot: float,
-    strike: float,
-    ttm: float,
-    rate: float,
-    vol: float,
-    is_call: bool,
-) -> float:
-    """Reference Black-Scholes price for test data generation."""
-    import math
-
-    d1 = (math.log(spot / strike) + (rate + 0.5 * vol**2) * ttm) / (vol * math.sqrt(ttm))
-    d2 = d1 - vol * math.sqrt(ttm)
-    df = math.exp(-rate * ttm)
-    if is_call:
-        return spot * norm.cdf(d1) - strike * df * norm.cdf(d2)
-    return strike * df * norm.cdf(-d2) - spot * norm.cdf(-d1)
+from tests.volatility.conftest import bs_price
 
 
 class TestImpliedVolatility:

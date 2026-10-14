@@ -8,18 +8,9 @@ import math
 
 import numpy as np
 import pytest
-from scipy.stats import norm as _norm
 
 from app.volatility.surface import SurfaceMethod, VolSurface, VolSurfaceBuilder
-
-
-def _bs_price(spot: float, strike: float, ttm: float, rate: float, vol: float, is_call: bool) -> float:
-    d1 = (math.log(spot / strike) + (rate + 0.5 * vol**2) * ttm) / (vol * math.sqrt(ttm))
-    d2 = d1 - vol * math.sqrt(ttm)
-    df = math.exp(-rate * ttm)
-    if is_call:
-        return spot * _norm.cdf(d1) - strike * df * _norm.cdf(d2)
-    return strike * df * _norm.cdf(-d2) - spot * _norm.cdf(-d1)
+from tests.volatility.conftest import bs_price
 
 
 class TestSurfaceBuilder:
@@ -104,13 +95,11 @@ class TestSurfaceQuery:
 
         mid_ttm = (ttms[0] + ttms[1]) / 2
         iv = surface.volatility(100.0, mid_ttm)
+        iv_first = surface.volatility(100.0, ttms[0])
+        iv_second = surface.volatility(100.0, ttms[1])
 
-        surface.volatility(100.0, ttms[0])
-        surface.volatility(100.0, ttms[1])
-
-        # Interpolated vol should be roughly between neighbors
-        assert iv > 0
-        assert math.isfinite(iv)
+        # Linear in total variance, so the interpolated vol lies between its two neighbors.
+        assert min(iv_first, iv_second) <= iv <= max(iv_first, iv_second)
 
     def test_extrapolation_flat(self, surface: VolSurface) -> None:
         """Query outside fitted range should extrapolate flat."""
@@ -163,7 +152,7 @@ class TestRegressionStability:
             k = spot * m
             forward = spot * math.exp(rate * ttm)
             is_call = k >= forward
-            price = _bs_price(spot, k, ttm, rate, base_vol, is_call)
+            price = bs_price(spot, k, ttm, rate, base_vol, is_call)
             if price < 0.01:
                 continue
             records.append({"strike": float(k), "ttm": ttm, "option_price": price, "is_call": is_call})

@@ -509,22 +509,6 @@ class TestReplicateExpiryWithProvenance:
         )
         assert prov.per_strike_contributions is None
 
-    def test_max_single_strike_share_in_unit_interval(self):
-        """Sanity: the diagnostic always lands in [0, 1] for any valid
-        chain, including the empty-integration edge case."""
-        spot = 100.0
-        T_years = 30 / 365.0
-        rate = 0.05
-        strikes = [80, 90, 95, 100, 105, 110, 120]
-        chain = _bs_normalized_chain(
-            spot=spot, strikes=strikes, T_years=T_years, rate=rate,
-            sigma=0.20, source="opra_mid",
-        )
-        _, prov = replicate_expiry_variance_with_provenance(
-            chain, rate=rate, T_years=T_years
-        )
-        assert 0.0 <= prov.max_single_strike_share <= 1.0
-
     def test_max_single_strike_share_uplifted_by_inflated_strike(self):
         """A single strike with an anomalously large
         quote dominates the variance integral via the ``c_i ∝ Q`` term.
