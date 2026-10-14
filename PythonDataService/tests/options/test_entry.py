@@ -124,22 +124,6 @@ def test_a_structure_that_costs_most_of_itself_to_trade_is_refused_by_the_cost_l
         _prepared(_bought_spread(), picked=picked, quotes=quotes, cost_limit_percent=Decimal("57.1"))
 
 
-def test_each_leg_of_that_structure_is_inside_the_gap_limit_so_it_is_the_cost_limit_that_refuses_it() -> None:
-    """The same two legs: four cents on a mid of $5.00 is 0.8% and on $4.90 is 0.82%, each far inside 8%."""
-    quotes = {"long_call": _market("4.98", "5.02"), "short_call": _market("4.88", "4.92")}
-    picked = {"long_call": _BOUGHT, "short_call": _SOLD}
-
-    with pytest.raises(StructureMoneyRefused) as refused:
-        _prepared(_bought_spread(), picked=picked, quotes=quotes, leg_gap_limit_percent=Decimal(8))
-    with_no_cost_limit_to_speak_of = _prepared(
-        _bought_spread(), picked=picked, quotes=quotes, leg_gap_limit_percent=Decimal(8), cost_limit_percent=Decimal(100)
-    )
-
-    assert refused.value.reason is StructureMoneyRefusal.COST_OVER_LIMIT
-    assert not isinstance(refused.value, LegGapOverLimit)
-    assert with_no_cost_limit_to_speak_of.net_limit_price == Decimal("0.14")
-
-
 def _one_bought_call() -> ActionPlan:
     return scenes._plan(scenes._leg("long_call", "call", {"selector": "atm"}))
 

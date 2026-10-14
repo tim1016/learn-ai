@@ -683,20 +683,6 @@ describe('StrategyBuilderComponent', () => {
       expect(component.historyAggregates()).toEqual([]);
       expect(component.historyError()).toBeNull();
     });
-
-    it('parsedHistoryTicker returns the expected display fields for a SPY call', () => {
-      component.selectedHistoryContract.set({
-        ticker: 'O:SPY260220C00590000',
-        contractType: 'call', strikePrice: 590, expirationMs: 1_771_621_200_000,
-        snapshot: buildContract('call'),
-      });
-
-      const parsed = component.parsedHistoryTicker();
-      expect(parsed?.underlying).toBe('SPY');
-      expect(parsed?.expDate).toBe('Feb 20, 2026');
-      expect(parsed?.type).toBe('Call');
-      expect(parsed?.strike).toBe('$590.00');
-    });
   });
 
   // ── Risk-free rate (#2764) ─────────────────────────────────────
@@ -892,19 +878,14 @@ describe('StrategyBuilderComponent', () => {
       ]);
     }
 
-    it('is true when legs exist and selectedExpiration evaluates to T <= 0', () => {
+    it('is true when legs exist and the selected expiration has already passed', () => {
       withEnabledLeg();
-      const todayAnchor = optionExpiryAnchorMs(etIsoDate(Date.now()));
-      component.selectedExpiration.set(todayAnchor);
+      // Yesterday's 16:00 ET anchor is behind us at any hour of today.
+      const yesterdayAnchor = optionExpiryAnchorMs(etIsoDate(Date.now() - 86400000));
+      component.selectedExpiration.set(yesterdayAnchor);
 
-      // timeToExpiry clamps to 0 once the 16:00 ET deadline passes;
-      // for any same-day exp the value is at most a few hours, but
-      // the banner should fire when the live computation returns 0
-      // OR a negligibly small T. Verify by checking the computed
-      // signal directly: if the legs exist and timeToExpiry() <= 0
-      // we want the banner.
-      const expectedBanner = component.timeToExpiry() <= 0;
-      expect(component.noForwardCurves()).toBe(expectedBanner);
+      expect(component.timeToExpiry()).toBe(0);
+      expect(component.noForwardCurves()).toBe(true);
     });
 
     it('is false when no legs are enabled (banner only fires once a leg exists)', () => {

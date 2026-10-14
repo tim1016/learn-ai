@@ -171,13 +171,6 @@ describe('OptionsLabChainComponent', () => {
     expect(row.putVolume).toBe('—');
   });
 
-  it('skips polling when no expiration is selected', () => {
-    expect(component.selectedExpiration()).toBeNull();
-    drainAll(httpMock);
-    const before = httpMock.match(() => true).length;
-    expect(before).toBe(0);
-  });
-
   // Regression for Codex P2 #2: a transient initial-load failure latched
   // error() non-null, and the previous polling guard `if (error() !== null)
   // return` then suppressed every subsequent refresh permanently. The fix

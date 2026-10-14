@@ -98,8 +98,9 @@ def test_variance_interpolated_iv_midpoint():
 def test_iv30_atm_50d_picks_straddling_expiries():
     iv_by_expiry = pd.Series({20: 0.20, 40: 0.30, 60: 0.32})
     iv30 = iv30_atm_50d(iv_by_expiry, target_days=30)
-    assert 0.20 < iv30 < 0.30
-    assert iv30 is not None
+    # Variance interpolated between the 20d and 40d points only; the 60d point never enters.
+    expected = np.sqrt((0.5 * 0.20**2 * 20 + 0.5 * 0.30**2 * 40) / 30)
+    np.testing.assert_allclose(iv30, expected, atol=1e-12, rtol=0)
 
 
 def test_iv30_atm_50d_extrapolates_when_no_straddle():

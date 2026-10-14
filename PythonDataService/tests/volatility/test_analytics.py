@@ -70,10 +70,11 @@ class TestHealthScore:
         assert abs(score.total - avg) < 1.0  # Allow rounding tolerance
 
     def test_health_score_good_surface(self, built_surface: VolSurface) -> None:
-        """Well-behaved surface scores > 0 (it should not be completely bad)."""
+        """Exact Black-Scholes prices off a smooth skew earn full marks: every contract solves, the fit RMSE is
+        under 0.005, none is rejected and there is no arbitrage."""
         score = compute_health_score(built_surface)
 
-        assert score.total > 0
+        assert score.total == 100
 
 
 class TestHealthScoreArbitrageCoverage:
