@@ -20,11 +20,12 @@ authors can write forward-compatible JSON without round-tripping it.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Annotated, Literal
+from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # ---------------------------------------------------------------------------
 # Operand AST — typed expression tree for the left/right side of comparisons.
@@ -32,6 +33,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 # No ``"expr": "ema5 - ema10"`` strings anywhere. Storage is the AST; UIs may
 # render the AST as text, but the serialized form is structural.
 # ---------------------------------------------------------------------------
+_HH_MM = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d")
+
 class _OperandBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -115,6 +118,17 @@ class IndicatorBlock(BaseModel):
     # SUPERTREND-only: ATR-band multiplier. Defaults to 3.0 if omitted.
     multiplier: float | None = Field(default=None, gt=0.0)
 
+    @model_validator(mode="after")
+    def _macd_fast_is_shorter_than_slow(self) -> IndicatorBlock:
+        """The engine's MACD refuses ``fast >= slow`` at ``initialize``, as a failed run with raw Python text."""
+        if self.kind == "MACD":
+            fast = 12 if self.fast_period is None else self.fast_period
+            if fast >= self.period:
+                raise ValueError(
+                    f"MACD {self.id!r}: fast_period ({fast}) must be less than period, the slow period ({self.period})"
+                )
+        return self
+
 
 # ---------------------------------------------------------------------------
 # Condition primitives. Each "kind" is a discriminator value for the union.
@@ -171,6 +185,23 @@ class TimeOfDay(_ConditionBase):
     after: str | None = None  # "HH:MM"
     before: str | None = None  # "HH:MM"
     tz: str = "America/New_York"
+
+    @field_validator("after", "before")
+    @classmethod
+    def _clock_time(cls, value: str | None) -> str | None:
+        """Refused here, not inside ``engine.run`` as a 200 ``success=false`` with ``invalid literal for int()``."""
+        if value is not None and not _HH_MM.fullmatch(value):
+            raise ValueError(f"{value!r} is not an HH:MM clock time (00:00 to 23:59)")
+        return value
+
+    @field_validator("tz")
+    @classmethod
+    def _known_zone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (KeyError, ValueError) as exc:
+            raise ValueError(f"{value!r} is not an IANA time zone") from exc
+        return value
 
 
 class PnLPercent(_ConditionBase):
