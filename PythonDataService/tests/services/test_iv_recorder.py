@@ -216,6 +216,174 @@ class TestRecorderService:
         assert rows[0].error is not None
         assert rows[0].health_score is None
 
+    def test_records_a_real_row_from_a_vendor_that_filters_expiries(self):
+        """The client's own expiry default ran against a mocked client method, so a live slot was always an error row (#3221)."""
+        from app.services.polygon_client import PolygonClientService
+        from app.services.rate_dividend_service import RateAndDividend
+        from tests._helpers.polygon_snapshot_sdk import VendorFilteringSnapshotSdk
+
+        store = InMemoryIvSnapshotStore()
+        asof = datetime(2026, 4, 28, 13, 35, tzinfo=UTC)
+        payload = _bs_chain_payload(
+            spot=591.0, sigma=0.20, rate=0.045, asof=asof,
+            expiry_days=[21, 28, 35, 42, 120],
+            strikes=[float(k) for k in range(540, 651, 5)],
+        )
+        polygon = PolygonClientService()
+        polygon.client = VendorFilteringSnapshotSdk(payload["contracts"], spot=591.0)
+
+        with patch(
+            "app.services.iv_recorder.get_rate_and_dividend",
+            return_value=RateAndDividend(
+                rate=0.045, dividend_yield=0.0, source_rate="FRED", source_dividend="Polygon TTM"
+            ),
+        ):
+            row = record_iv_snapshot(ticker="SPY", slot="09:35", store=store, polygon=polygon, asof=asof)
+
+        assert row.error is None
+        assert row.iv30_vix_style is not None
+        assert abs(row.iv30_vix_style - 0.20) < 0.01
+        assert store.read_series("SPY") == [row]
+
+    def test_a_snapshot_with_no_spot_persists_an_insufficient_snapshot_row(self):
+        store = InMemoryIvSnapshotStore()
+        polygon = MagicMock()
+        polygon.list_snapshot_options_chain.return_value = {"underlying": {"price": 0.0}, "contracts": []}
+
+        row = record_iv_snapshot(
+            ticker="SPY", slot="16:00", store=store, polygon=polygon,
+            asof=datetime(2026, 4, 28, 20, 0, tzinfo=UTC),
+        )
+
+        assert row.error is not None and row.error.startswith("insufficient_snapshot")
+        assert row.iv30_vix_style is None
+        assert store.read_series("SPY") == [row]
+
+    def test_a_chain_that_cannot_straddle_the_target_persists_a_replication_failed_row(self):
+        from app.services.rate_dividend_service import RateAndDividend
+
+        store = InMemoryIvSnapshotStore()
+        polygon = MagicMock()
+        asof = datetime(2026, 4, 28, 13, 35, tzinfo=UTC)
+        polygon.list_snapshot_options_chain.return_value = _bs_chain_payload(
+            spot=591.0, sigma=0.20, rate=0.045, asof=asof,
+            expiry_days=[7, 14],  # both inside 30 days: nothing above the target
+            strikes=[float(k) for k in range(540, 651, 5)],
+        )
+
+        with patch(
+            "app.services.iv_recorder.get_rate_and_dividend",
+            return_value=RateAndDividend(
+                rate=0.045, dividend_yield=0.0, source_rate="FRED", source_dividend="Polygon TTM"
+            ),
+        ):
+            row = record_iv_snapshot(ticker="SPY", slot="09:35", store=store, polygon=polygon, asof=asof)
+
+        assert row.error is not None and row.error.startswith("replication_failed")
+        assert row.iv30_vix_style is None
+        assert len(row.raw_chain) > 0  # the quotes are kept, so the slot can be re-derived
+        assert store.read_series("SPY") == [row]
+
+    def test_a_quote_that_is_not_a_quote_still_writes_the_audit_row(self):
+        """The grouping of quotes used to sit outside the try: a 500 and no row (#3221)."""
+        from app.services.rate_dividend_service import RateAndDividend
+
+        store = InMemoryIvSnapshotStore()
+        polygon = MagicMock()
+        asof = datetime(2026, 4, 28, 13, 35, tzinfo=UTC)
+        polygon.list_snapshot_options_chain.return_value = {
+            "underlying": {"ticker": "SPY", "price": 591.0},
+            "contracts": [
+                {
+                    "ticker": "O:SPY260520C00590000",
+                    "contract_type": "call",
+                    "strike_price": 590.0,
+                    "expiration_ms": option_expiry_anchor_ms(date(2026, 5, 20)),
+                    "last_quote": "n/a",
+                }
+            ],
+        }
+
+        with patch(
+            "app.services.iv_recorder.get_rate_and_dividend",
+            return_value=RateAndDividend(
+                rate=0.045, dividend_yield=0.0, source_rate="FRED", source_dividend="Polygon TTM"
+            ),
+        ):
+            row = record_iv_snapshot(ticker="SPY", slot="09:35", store=store, polygon=polygon, asof=asof)
+
+        assert row.error is not None and row.error.startswith("replication_failed")
+        assert store.read_series("SPY") == [row]
+
+    def test_the_dominance_gate_event_carries_only_what_the_replicator_reports(self, caplog):
+        import logging
+
+        from app.services.rate_dividend_service import RateAndDividend
+        from app.volatility.iv_provenance import IvProvenance
+
+        store = InMemoryIvSnapshotStore()
+        polygon = MagicMock()
+        asof = datetime(2026, 4, 28, 13, 35, tzinfo=UTC)
+        polygon.list_snapshot_options_chain.return_value = _bs_chain_payload(
+            spot=591.0, sigma=0.20, rate=0.045, asof=asof,
+            expiry_days=[21, 28, 35, 42],
+            strikes=[float(k) for k in range(540, 651, 5)],
+        )
+        gated = IvProvenance(
+            iv_source="internal_solver",
+            price_source_mix={"opra_mid": 1.0},
+            variance_contribution_synthetic=0.0,
+            strike_coverage_score=0.9,
+            max_single_strike_share=0.41,
+            single_strike_dropped=2,
+            single_strike_hard_failed=False,
+        )
+
+        with (
+            patch(
+                "app.services.iv_recorder.get_rate_and_dividend",
+                return_value=RateAndDividend(
+                    rate=0.045, dividend_yield=0.0, source_rate="FRED", source_dividend="Polygon TTM"
+                ),
+            ),
+            patch("app.services.iv_recorder.vix_style_iv30_with_provenance", return_value=(0.20, gated)),
+            caplog.at_level(logging.WARNING),
+        ):
+            record_iv_snapshot(ticker="SPY", slot="09:35", store=store, polygon=polygon, asof=asof)
+
+        (event,) = [r for r in caplog.records if getattr(r, "event", None) == "iv_dominance_gate"]
+        assert (event.max_share_after, event.iterations, event.hard_failed) == (0.41, 2, False)
+        # The replicator reports no pre-drop share and no strike count, so the event has none.
+        assert not hasattr(event, "max_share_before")
+        assert not hasattr(event, "strikes_remaining")
+
+
+class TestDefaultStorePath:
+    def test_the_default_store_writes_under_the_configured_directory(self, tmp_path: Path):
+        """``IV_RECORDER_STORE_PATH`` is read when the process starts, so this runs one."""
+        import os
+        import subprocess
+        import sys
+
+        code = (
+            "from app.services.iv_recorder import RecordedIvSnapshot, get_iv_store\n"
+            "get_iv_store().write(RecordedIvSnapshot(ticker='SPY', snapshot_ts_ms=1, slot='16:00', spot=0.0, "
+            "rate=0.0, dividend_yield=0.0, rate_source='x', dividend_source='x', iv30_vix_style=None, "
+            "iv30_parametric=None, iv_provenance={}, raw_chain=[]))\n"
+        )
+        env = {**os.environ, "IV_RECORDER_STORE_PATH": str(tmp_path), "POLYGON_API_KEY": "test"}
+
+        subprocess.run(
+            [sys.executable, "-W", "ignore", "-c", code],
+            cwd=Path(__file__).resolve().parents[2],
+            env=env,
+            check=True,
+            capture_output=True,
+            timeout=180,
+        )
+
+        assert (tmp_path / "SPY.jsonl").exists()
+
 
 @pytest.fixture
 def in_memory_store():
@@ -244,6 +412,26 @@ class TestRecorderRoutes:
             json={"ticker": "SPY", "slot": "10:00", "target_calendar_days": 30},
         )
         assert resp.status_code == 400
+
+    async def test_snapshot_route_files_a_lower_case_ticker_under_the_upper_case_one(self, client, in_memory_store):
+        from app.routers import iv_recorder as iv_recorder_router
+
+        with patch.object(
+            iv_recorder_router.polygon_client, "list_snapshot_options_chain",
+            return_value={"underlying": {"ticker": "SPY", "price": 0.0}, "contracts": []},
+        ):
+            resp = await client.post("/api/iv-recorder/snapshot", json={"ticker": " spy", "slot": "09:35"})
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["snapshot"]["ticker"] == "SPY"
+        assert len(in_memory_store.read_series("SPY")) == 1
+
+    @pytest.mark.parametrize("ticker", ["../SPY", "SPY/QQQ", "A" * 13])
+    async def test_snapshot_route_refuses_a_ticker_that_is_not_one(self, client, in_memory_store, ticker):
+        resp = await client.post("/api/iv-recorder/snapshot", json={"ticker": ticker, "slot": "09:35"})
+
+        assert resp.status_code == 422
+        assert in_memory_store.read_series(ticker) == []
 
     async def test_snapshot_route_records_a_slot(self, client, in_memory_store):
         from app.routers import iv_recorder as iv_recorder_router

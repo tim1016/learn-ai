@@ -34,11 +34,12 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.engine.edge.threshold_events import log_iv_dominance_gate
+from app.config import settings
 from app.engine.live.identity import confine_path_to_root
-from app.routers.iv30 import _normalized_quotes_by_expiry, _pick_straddle_pair
+from app.routers.iv30 import _normalized_quotes_by_expiry, _pick_straddle_pair, snapshot_around_target
 from app.services.polygon_client import PolygonClientService
 from app.services.rate_dividend_service import get_rate_and_dividend
+from app.utils.timestamps import to_ms_utc
 from app.volatility.iv30_health import compute_iv30_health_normalized
 from app.volatility.iv_provenance import IvProvenance
 from app.volatility.vix_replication import vix_style_iv30_with_provenance
@@ -200,7 +201,8 @@ class JsonlIvSnapshotStore(IvSnapshotStore):
 # ── Default store singleton ─────────────────────────────────────────────────
 
 
-_DEFAULT_STORE_PATH = Path("/var/lib/iv-recorder")
+# ``IV_RECORDER_STORE_PATH`` moves the store onto a mounted volume (ADR 0071 decision 8).
+_DEFAULT_STORE_PATH = Path(settings.IV_RECORDER_STORE_PATH)
 _default_store: IvSnapshotStore = JsonlIvSnapshotStore(_DEFAULT_STORE_PATH)
 
 
@@ -244,11 +246,11 @@ def record_iv_snapshot(
         raise ValueError(f"slot must be one of {SLOT_CHOICES}, got {slot!r}")
 
     asof = asof or datetime.now(tz=UTC)
-    snapshot_ts = int(asof.timestamp() * 1000)
+    snapshot_ts = to_ms_utc(asof)
 
     snapshot: dict = {}
     try:
-        snapshot = polygon.list_snapshot_options_chain(underlying_asset=ticker)
+        snapshot = snapshot_around_target(polygon, ticker, target_calendar_days, asof)
     except Exception as exc:
         logger.warning("[iv-recorder] %s slot=%s polygon error: %s", ticker, slot, exc)
         return _persist_error(
@@ -277,13 +279,13 @@ def record_iv_snapshot(
         ticker=ticker, spot_price=spot, polygon=polygon, dte_days=target_calendar_days
     )
 
-    by_expiry = _normalized_quotes_by_expiry(contracts, asof)
     iv_vix: float | None = None
     iv_parametric: float | None = None  # parametric path is a follow-up
     prov_dict: dict = {}
     error_msg: str | None = None
     health_score: float | None = None
     try:
+        by_expiry = _normalized_quotes_by_expiry(contracts, asof)
         t1, t2 = _pick_straddle_pair(by_expiry, target_calendar_days)
         sigma, prov = vix_style_iv30_with_provenance(
             by_expiry[t1], by_expiry[t2],
@@ -297,17 +299,25 @@ def record_iv_snapshot(
         # Single-strike dominance gate — emit a threshold-firing event
         # when the gate iterated or hard-failed so the operator can
         # grep for these across the recorder burn-in. The provenance
-        # already carries the post-gate values; this just surfaces the
-        # event so it isn't only visible by reading the JSONL.
+        # carries the post-gate share, the drop count and the hard-fail
+        # flag, and nothing else: the replicator reports no pre-drop share
+        # and no strike count, so none is logged (#3221).
         if prov.single_strike_dropped > 0 or prov.single_strike_hard_failed:
-            log_iv_dominance_gate(
-                ticker=ticker,
-                snapshot_ts_ms=snapshot_ts,
-                max_share_before=prov.max_single_strike_share,
-                max_share_after=prov.max_single_strike_share,
-                iterations=prov.single_strike_dropped,
-                hard_failed=prov.single_strike_hard_failed,
-                strikes_remaining=0,
+            logger.warning(
+                "[iv-threshold] dominance_gate ticker=%s ts=%d max_share_after=%.3f iter=%d hard_failed=%s",
+                ticker,
+                snapshot_ts,
+                prov.max_single_strike_share,
+                prov.single_strike_dropped,
+                prov.single_strike_hard_failed,
+                extra={
+                    "event": "iv_dominance_gate",
+                    "ticker": ticker,
+                    "snapshot_ts_ms": snapshot_ts,
+                    "max_share_after": prov.max_single_strike_share,
+                    "iterations": prov.single_strike_dropped,
+                    "hard_failed": prov.single_strike_hard_failed,
+                },
             )
 
         # Health score is computed off the same chain so the recorder
@@ -376,7 +386,9 @@ def _extract_raw_chain(contracts: list[dict]) -> list[dict]:
     IV from. Drops Polygon's IV field intentionally (sovereignty rule)."""
     out = []
     for c in contracts:
-        lq = c.get("last_quote") or {}
+        lq = c.get("last_quote")
+        if not isinstance(lq, dict):
+            lq = {}
         out.append(
             {
                 "ticker": c.get("ticker"),
