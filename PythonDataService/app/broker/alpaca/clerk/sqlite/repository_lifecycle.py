@@ -455,6 +455,28 @@ def _verified_chain_payloads(
     return chain_payloads
 
 
+def _require_every_finalized_sequence_committed(
+    conn: sqlite3.Connection, db_path: Path, finalized_sequences: frozenset[int]
+) -> None:
+    """Startup check 9 the other way round: the mirror must not be ahead of the database.
+
+    The database is read here, after the mirror was parsed. A FINALIZE follows
+    its SQLite commit, so a live holder that appended in between can only add
+    rows to this read; a finalized sequence still missing from it is a lost
+    tail (#3161).
+    """
+    from app.broker.alpaca.clerk.sqlite.repository import DatabaseBehindMirror
+
+    committed = {row[0] for row in conn.execute("SELECT sequence FROM custody_transitions")}
+    missing = sorted(finalized_sequences - committed)
+    if missing:
+        raise DatabaseBehindMirror(
+            f"{db_path} is behind its mirror: the mirror finalized {len(missing)} "
+            f"sequence(s) from {missing[0]} that the database does not hold; "
+            "recover with scripts/manage_alpaca_sqlite_clerk.py rebuild"
+        )
+
+
 def _acquire_execution_lease(
     *,
     conn: sqlite3.Connection,
@@ -547,7 +569,8 @@ def _open_repository_unfenced(
         ),
     )
     try:
-        mirror.reconcile(chain_payloads, clock=clock)
+        finalized_sequences = mirror.reconcile(chain_payloads, clock=clock)
+        _require_every_finalized_sequence_committed(conn, db_path, finalized_sequences)
     except Exception:
         conn.close()
         raise
