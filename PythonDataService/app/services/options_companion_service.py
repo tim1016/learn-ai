@@ -153,26 +153,31 @@ def _resolve_target_expiry(
     expiry is returned only if Polygon lists a chain on exactly that date.
     No tolerance — fuzzy matches would mix DTEs in the same row, which is
     not a meaningful comparison for time-decay analysis.
+
+    ``None`` means Polygon answered and lists no chain there. A lookup that
+    failed raises: an outage is not "no listed expiry" (#3221).
     """
     target = trading_day + timedelta(days=config.dte_distance)
     target_anchor = option_expiry_anchor_ms(target)
-    try:
-        # ``expired=True`` is critical: Polygon's /v3/reference/options/contracts
-        # filters out expired chains by default, so any historical trading day
-        # would otherwise look "no chain listed" and get incorrectly skipped.
-        expirations = polygon.list_options_expirations(
-            underlying_ticker=ticker,
-            expiration_ms_gte=target_anchor,
-            expiration_ms_lte=target_anchor,
-            expired=True,
-        )
-    except Exception as exc:
-        logger.warning(f"[OC] Expiration lookup failed for {ticker} on {trading_day}: {exc}")
-        return None
+    # ``expired=True`` is critical: Polygon's /v3/reference/options/contracts
+    # filters out expired chains by default, so any historical trading day
+    # would otherwise look "no chain listed" and get incorrectly skipped.
+    expirations = polygon.list_options_expirations(
+        underlying_ticker=ticker,
+        expiration_ms_gte=target_anchor,
+        expiration_ms_lte=target_anchor,
+        expired=True,
+    )
 
     if target_anchor in expirations:
         return target
     return None
+
+
+def _count_fetch_failure(counters: dict[str, Any], stage: str) -> None:
+    """Count a Polygon call that failed, so the report says "fetch failed", not "nothing listed"."""
+    failures = counters.setdefault("fetch_failures", {})
+    failures[stage] = failures.get(stage, 0) + 1
 
 
 def _fetch_contracts_for_expiry(
@@ -181,8 +186,9 @@ def _fetch_contracts_for_expiry(
     trading_day: date,
     expiry: date,
     contract_type: str,
+    counters: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """List contracts for a single underlying/expiry/type, tolerant of failures."""
+    """List contracts for a single underlying/expiry/type; a failure is counted and yields ``[]``."""
     try:
         return polygon.list_options_contracts(
             underlying_ticker=ticker,
@@ -194,6 +200,7 @@ def _fetch_contracts_for_expiry(
         )
     except Exception as exc:
         logger.warning(f"[OC] Contract list failed {ticker} {expiry} {contract_type}: {exc}")
+        _count_fetch_failure(counters, "contracts")
         return []
 
 
@@ -379,6 +386,7 @@ def _process_contract(
         )
     except Exception as exc:
         logger.warning(f"[OC] Bar fetch failed for {contract.ticker} on {trading_day}: {exc}")
+        _count_fetch_failure(counters, "bars")
         return [], counters
 
     if not bars:
@@ -507,6 +515,8 @@ def build_options_companion_csvs(
         "option_bars_raw": 0,
         "option_bars_dropped": 0,
         "iv_status": {},
+        # Polygon calls that failed, by stage ("expirations", "contracts", "bars").
+        "fetch_failures": {},
     }
     calls_done = 0
     puts_done = 0
@@ -578,7 +588,18 @@ def build_options_companion_csvs(
         _check_cancel()
         prior_close = first_day_close if i == 0 else prior_close_by_day[trading_days[i - 1]]
 
-        target_expiry = _resolve_target_expiry(polygon, ticker, day, config)
+        try:
+            target_expiry = _resolve_target_expiry(polygon, ticker, day, config)
+        except Exception as exc:
+            logger.warning(f"[OC] Expiration lookup failed for {ticker} on {day}: {exc}")
+            _count_fetch_failure(totals, "expirations")
+            skipped_days.append(
+                {
+                    "date": day.isoformat(),
+                    "reason": f"expiration lookup failed, so whether a chain is listed is unknown: {exc}",
+                }
+            )
+            continue
         if target_expiry is None:
             skipped_days.append(
                 {
@@ -600,13 +621,13 @@ def build_options_companion_csvs(
         }
 
         if config.include_calls:
-            calls = _fetch_contracts_for_expiry(polygon, ticker, day, target_expiry, "call")
+            calls = _fetch_contracts_for_expiry(polygon, ticker, day, target_expiry, "call", day_counters)
             day_report["calls_selected"] = _process_side(
                 "call", calls, prior_close, target_expiry, day, day_iso, expiry_iso, day_counters
             )
 
         if config.include_puts:
-            puts = _fetch_contracts_for_expiry(polygon, ticker, day, target_expiry, "put")
+            puts = _fetch_contracts_for_expiry(polygon, ticker, day, target_expiry, "put", day_counters)
             day_report["puts_selected"] = _process_side(
                 "put", puts, prior_close, target_expiry, day, day_iso, expiry_iso, day_counters
             )
@@ -648,6 +669,12 @@ def build_options_companion_csvs(
             totals["iv_status"],
             totals["option_bars_dropped"],
             totals["option_bars_raw"],
+        )
+
+    if any(totals["fetch_failures"].values()):
+        logger.warning(
+            "[OC] Polygon calls failed, so this export is missing data a retry may recover: %s",
+            totals["fetch_failures"],
         )
 
     report = {
