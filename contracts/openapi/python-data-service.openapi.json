@@ -53687,9 +53687,11 @@
         "type": "object"
       },
       "StopRunRequest": {
+        "additionalProperties": false,
         "description": "``lifecycle_run_id`` is required (corrective foundation slice): Stop\nis no longer resolved from the currently active run, since that made a\nlost response unrecoverable \u2014 see ADR 0035's binding annex \u00a73a.",
         "properties": {
           "lifecycle_run_id": {
+            "maxLength": 512,
             "minLength": 1,
             "title": "Lifecycle Run Id",
             "type": "string"
@@ -53697,6 +53699,7 @@
           "operator_reason": {
             "anyOf": [
               {
+                "maxLength": 512,
                 "type": "string"
               },
               {
