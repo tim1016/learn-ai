@@ -29,6 +29,7 @@ from app.broker.alpaca.clerk.sqlite.order_projection import (
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     ClerkProjection,
     ProjectedOperation,
+    ProjectedOrder,
 )
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
@@ -340,12 +341,21 @@ def _operation_requires_reconciliation(operation: ProjectedOperation) -> bool:
         return False
     if operation.state in {"accepted", "unknown"} or operation.kind == "EXIT":
         return True
-    return not operation.orders or any(
-        order.broker_state is None
-        or order.broker_state.lower() not in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
-        or (order.broker_state.lower() == "filled" and order.filled_quantity == 0)
-        for order in operation.orders
-    )
+    return not operation.orders or any(_order_is_unsettled(order, operation) for order in operation.orders)
+
+
+def _order_is_unsettled(order: ProjectedOrder, operation: ProjectedOperation) -> bool:
+    if order.broker_state is None or order.broker_state.lower() not in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES:
+        return True
+    if order.broker_state.lower() == "filled" and order.filled_quantity == 0:
+        # A several-leg parent has no execution of its own (no symbol, no side): its legs carry the fills,
+        # and it is settled once one of them shows a fill (#3103).
+        is_a_parent = order.symbol is None and order.side is None
+        return not (
+            is_a_parent
+            and any(leg.filled_quantity for leg in operation.orders if leg is not order)
+        )
+    return False
 
 
 def sqlite_custody_diagnosis(projection: ClerkProjection) -> CustodyDiagnosis:
