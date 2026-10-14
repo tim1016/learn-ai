@@ -23,7 +23,7 @@ from tests._helpers.canary_admission import admit_canary_pairing
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 
-@pytest.mark.parametrize('action_id', ['pause', 'continue', 'resume'])
+@pytest.mark.parametrize('action_id', ['pause', 'continue', 'resume', 'retire', 'flatten_stop', 'stop'])
 @pytest.mark.parametrize('suffix', ['actions', 'actions/quiesce'])
 async def test_removed_action_cannot_cross_the_command_boundary(
     action_id: str, suffix: str, monkeypatch: pytest.MonkeyPatch,

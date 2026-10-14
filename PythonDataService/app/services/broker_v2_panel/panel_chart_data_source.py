@@ -169,11 +169,6 @@ async def get_live_snapshot_parts(
         sid,
         now_ms=observed_at_ms,
     )
-    if fills is None:
-        raise PanelUnavailableError(
-            "The panel chart fill evidence is unavailable.",
-            detail="The active SQLite authority did not return an attributed fill set.",
-        )
     chart = await _build_live_chart_from_fills(
         sid,
         panel.symbol,

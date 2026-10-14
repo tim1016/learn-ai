@@ -9,32 +9,9 @@ from pydantic import BaseModel, ValidationError
 
 from app.schemas.broker_v2_gallery import (
     GalleryBarsPage,
-    GalleryFeedView,
     GalleryLiveSnapshot,
     GalleryLiveUpdate,
 )
-from app.schemas.broker_v2_panel import ChartBar
-
-_LIVE_FEED = GalleryFeedView(
-    state="LIVE",
-    headline="Feed live",
-    detail="IBKR bars are arriving on schedule.",
-    attention_required=False,
-    last_error=None,
-)
-
-
-def _bar() -> ChartBar:
-    return ChartBar(
-        start_ms=1_700_000_000_000,
-        end_ms=1_700_000_060_000,
-        open="1.0",
-        high="1.2",
-        low="0.9",
-        close="1.1",
-        volume=100,
-        source="ibkr",
-    )
 
 
 def test_snapshot_rejects_an_unsupported_bar_resolution() -> None:

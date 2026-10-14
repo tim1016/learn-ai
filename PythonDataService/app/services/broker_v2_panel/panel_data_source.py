@@ -457,7 +457,7 @@ async def _get_panel_with_entries_from_authority(
     binding: object,
     facade: SqliteAlpacaClerkFacade | None,
     transaction_ref: str | None = None,
-) -> tuple[BotPanelView, tuple[FillRecord, ...] | None]:
+) -> tuple[BotPanelView, tuple[FillRecord, ...]]:
     """Build one panel from its binding-selected SQLite authority."""
     if facade is None:
         raise PanelUnavailableError(
@@ -765,7 +765,7 @@ async def _get_panel_with_entries(
     *,
     transaction_ref: str | None = None,
     now_ms: int | None = None,
-) -> tuple[BotPanelView, tuple[FillRecord, ...] | None]:
+) -> tuple[BotPanelView, tuple[FillRecord, ...]]:
     """Build one SQLite-backed panel and return its exact chart fill set."""
     captured_now_ms = now_ms if now_ms is not None else now_ms_utc()
     async with selected_panel_authority(broker, account_id, sid) as (resolved, registry, binding, facade):
@@ -788,7 +788,7 @@ async def get_panel_with_chart_fills(
     sid: str,
     *,
     now_ms: int,
-) -> tuple[BotPanelView, tuple[FillRecord, ...] | None]:
+) -> tuple[BotPanelView, tuple[FillRecord, ...]]:
     return await _get_panel_with_entries(broker, account_id, sid, now_ms=now_ms)
 
 

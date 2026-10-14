@@ -159,6 +159,15 @@ _TIMEFRAME_SPAN_MS: dict[str, int] = {
     "1d": 86_400_000,
 }
 
+# What the vendor is asked for, per history timeframe: (multiplier, timespan).
+_TIMEFRAME_SOURCE_BARS: dict[str, tuple[int, str]] = {
+    "1m": (1, "minute"),
+    "15m": (15, "minute"),
+    "30m": (30, "minute"),
+    "1h": (1, "hour"),
+    "1d": (1, "day"),
+}
+
 
 def _complete_bars(*, span_ms: int, count: int, now_ms: int = _NOW) -> list[PolygonBar]:
     """Build ``count`` bars that have all fully closed by ``now_ms``.
@@ -234,8 +243,10 @@ async def test_history_truncates_at_each_configured_display_cap(
         if timeframe == "1d"
         else _complete_bars(span_ms=span_ms, count=display_bars + 1)
     )
+    asked: list[tuple[int, str]] = []
 
     async def _source(symbol, start, end, source_multiplier, source_timespan):
+        asked.append((source_multiplier, source_timespan))
         return list(supplied)
 
     result = await build_history_chart(
@@ -247,6 +258,7 @@ async def test_history_truncates_at_each_configured_display_cap(
         now_ms=_NOW,
     )
 
+    assert set(asked) == {_TIMEFRAME_SOURCE_BARS[timeframe]}
     assert result.truncated is True
     assert len(result.bars) == display_bars
     # The oldest supplied bar is the one dropped, so the retained window starts

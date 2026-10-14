@@ -397,7 +397,7 @@ async def test_disabled_presented_action_cannot_bypass_guard_via_post(
         return "account-1"
 
     async def _panel_from_authority(*_args, **_kwargs):
-        return await _panel(), None
+        return await _panel(), ()
 
     monkeypatch.setattr(
         "app.services.broker_v2_panel.panel_data_source._get_panel_with_entries_from_authority", _panel_from_authority,
@@ -457,6 +457,20 @@ async def test_idempotent_repost_survives_revision_advance() -> None:
         store=store,
     )
     assert result.applied is False
+
+
+async def test_unrelated_panel_revision_does_not_stale_an_action_token() -> None:
+    """A new receipt may refresh the panel while an unchanged STOP stays valid."""
+    result = await execute_action(
+        _request(revision=1),
+        sid=_SID,
+        current_revision=99,
+        current_concurrency_token="token",
+        performers={"archive": lambda _operator, _reason: _noop()},
+        operator_identity="op",
+        store=IdempotencyStore(),
+    )
+    assert result.applied is True
 
 
 async def test_durable_receipt_prevents_reexecution_after_store_restart(tmp_path: Path) -> None:
