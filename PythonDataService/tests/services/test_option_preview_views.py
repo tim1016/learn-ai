@@ -194,7 +194,7 @@ def _leg(bid: str, ask: str, *, over: bool | None) -> PickedLeg:
     quote = scenes._quote(bid, ask, received_ms=0)
     gap = (Fraction(ask) - Fraction(bid)) * 200 / (Fraction(bid) + Fraction(ask))
     return PickedLeg(
-        leg_id="only", position="long", ratio=1, contract=scenes._contract("call", 585), multiplier=100, quote=quote,
+        leg_id="only", position="long", ratio=1, contract=scenes._contract("call", 585), quote=quote,
         gap_percent_of_mid=gap, priced=None, vendor_delta=None, over_gap_limit=over,
     )
 

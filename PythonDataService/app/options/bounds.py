@@ -93,11 +93,10 @@ def _exact(bound: object) -> Decimal:
     return bound if isinstance(bound, Decimal) else Decimal(str(bound))
 
 
-def bounds_of(model: type[BaseModel], field: str, *, step: Decimal | None = None) -> Bounds:
+def bounds_of(model: type[BaseModel], field: str) -> Bounds:
     """The bounds ``model`` validates ``field`` to, read off the field itself.
 
-    A whole-number field is taken in steps of one. Any other step is the
-    caller's to say, where the field's own validator holds one.
+    A whole-number field is taken in steps of one.
     """
     info = model.model_fields[field]
     lowest: Decimal | None = None
@@ -108,6 +107,5 @@ def bounds_of(model: type[BaseModel], field: str, *, step: Decimal | None = None
             lowest, lowest_included = _exact(held.gt if isinstance(held, Gt) else held.ge), isinstance(held, Ge)
         elif isinstance(held, Lt | Le):
             highest, highest_included = _exact(held.lt if isinstance(held, Lt) else held.le), isinstance(held, Le)
-    if step is None and info.annotation is int:
-        step = Decimal(1)
+    step = Decimal(1) if info.annotation is int else None
     return Bounds(lowest, lowest_included, highest, highest_included, step)

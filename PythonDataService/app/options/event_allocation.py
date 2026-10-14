@@ -98,9 +98,6 @@ from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms
 # A strike is in thousandths of a dollar; ten of them make a cent.
 _THOUSANDTHS_PER_CENT = 10
 
-# What an event closes a lot at, in dollars a share. The premium stays in the lot's cost.
-EVENT_CLOSE_PRICE = Decimal(0)
-
 
 class OptionEventKind(StrEnum):
     """What ended the position."""
@@ -210,7 +207,7 @@ class LotAllocation:
     contracts: int
     # What the lot still holds, signed as the lot is. Zero when it was taken whole.
     remaining_quantity: int
-    # The change to the owner's position in the contract, closed at ``EVENT_CLOSE_PRICE``.
+    # The change to the owner's position in the contract, closed at a price of zero: the premium stays in the lot's cost.
     option_quantity_change: int
     # Shares the owner's books gain (positive) or give up (negative). Zero for an expiry.
     share_quantity_change: int

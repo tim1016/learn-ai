@@ -46,8 +46,6 @@ interface BuilderChainRow {
   callTheta: string;
   callGamma: string;
   callPrice: string;
-  callPriceNum: number;
-  callIv: number;
   callOi: string;
   callVolume: string;
   callVolumeBarWidth: number;
@@ -56,8 +54,6 @@ interface BuilderChainRow {
   putTheta: string;
   putGamma: string;
   putPrice: string;
-  putPriceNum: number;
-  putIv: number;
   putOi: string;
   putVolume: string;
   putVolumeBarWidth: number;
@@ -566,8 +562,6 @@ export class StrategyBuilderComponent implements OnDestroy {
         callTheta: this.fmtGreek(call?.greeks?.theta ?? null),
         callGamma: this.fmtGreek(call?.greeks?.gamma ?? null),
         callPrice: this.resolvePrice(call),
-        callPriceNum: this.resolvePremiumNum(call),
-        callIv: call?.impliedVolatility ?? 0,
         callOi: this.fmtNum(call?.openInterest ?? null),
         callVolume: this.fmtNum(call?.day?.volume ?? null),
         callVolumeBarWidth: this.barWidth(call?.day?.volume ?? null, maxCallVol),
@@ -576,8 +570,6 @@ export class StrategyBuilderComponent implements OnDestroy {
         putTheta: this.fmtGreek(put?.greeks?.theta ?? null),
         putGamma: this.fmtGreek(put?.greeks?.gamma ?? null),
         putPrice: this.resolvePrice(put),
-        putPriceNum: this.resolvePremiumNum(put),
-        putIv: put?.impliedVolatility ?? 0,
         putOi: this.fmtNum(put?.openInterest ?? null),
         putVolume: this.fmtNum(put?.day?.volume ?? null),
         putVolumeBarWidth: this.barWidth(put?.day?.volume ?? null, maxPutVol),

@@ -48,7 +48,6 @@ MIN_OPTION_PRICE: float = 0.001  # reject near-zero premiums
 
 
 class SolveStatus(StrEnum):
-    OK = "ok"
     QUANTLIB_OK = "quantlib_ok"
     BRENT_FALLBACK = "brent_fallback"
     NEWTON_OK = "newton_ok"
