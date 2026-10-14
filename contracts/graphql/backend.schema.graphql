@@ -246,6 +246,7 @@ type PricingCompareResult {
   timeToExpiryYears: Decimal!
   riskFreeRate: Decimal
   models: [PricingModelCurveResult!]!
+  unavailableModels: [PricingModelUnavailableResult!]!
   error: String
 }
 
@@ -254,14 +255,19 @@ type PricingModelCurveResult {
   points: [PricingPointGql!]!
 }
 
+type PricingModelUnavailableResult {
+  model: String!
+  reason: String!
+}
+
 type PricingPointGql {
   spot: Decimal!
   price: Decimal!
   delta: Decimal!
   gamma: Decimal!
-  theta: Decimal!
-  vega: Decimal!
-  rho: Decimal!
+  theta: Decimal
+  vega: Decimal
+  rho: Decimal
 }
 
 type QuantLibPriceResult {

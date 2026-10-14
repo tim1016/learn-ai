@@ -1,16 +1,19 @@
 """``/api/quantlib/compare`` and ``/price``: request bounds, the python_bs curve, the New York date, lattice Greeks (#3221).
 
-Four things Pricing Lab used to get wrong without saying so:
+Five things Pricing Lab used to get wrong without saying so:
 
 * a spot range of zero, a negative bound or a descending range answered 200 (a descending curve, or two surviving
   models after QuantLib raised on the rest), and a rate of 5 (meaning 5%) priced at 500%;
 * the ``python_bs`` curve ignored the dividend yield, so against ``quantlib_bs`` it disagreed by the dividend alone;
 * "today" was the container's UTC date, so after 20:00 ET an option expiring the next New York date read as expired;
-* the binomial and finite-difference engines reported ``vega`` and ``rho`` as a flat 0.0.
+* the binomial and finite-difference engines reported ``vega`` and ``rho`` as a flat 0.0;
+* an engine that raised, or QuantLib being absent, dropped models from the answer with only a log line, and Monte
+  Carlo's ``theta``, ``vega`` and ``rho`` read as a flat 0.0 where the engine provides none.
 """
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -187,6 +190,94 @@ async def test_lattice_engines_report_vega_and_rho_near_closed_form(client: Asyn
             assert any(v != 0.0 for v in values), f"{model} {greek} is a flat zero"
             for point, closed_form in zip(points, reference, strict=True):
                 assert point[greek] == pytest.approx(closed_form[greek], abs=tolerance, rel=0), (model, greek)
+
+
+# ── Which engines ran, and which Greeks an engine does not provide ─────────────────────────────────────────
+
+QUANTLIB_MODELS = ["quantlib_bs", "quantlib_crr", "quantlib_jr", "quantlib_lr", "quantlib_fd", "quantlib_mc"]
+# What a real engine failure can put in its text: a request URL with a key, and a traceback.
+HOSTILE_ENGINE_TEXT = (
+    "negative probability while pricing https://api.polygon.io/v3?apiKey=SECRET-KEY-123\n"
+    'Traceback (most recent call last):\n  File "/srv/app/pricer.py", line 9, in price\n'
+)
+
+
+def _fake_engines(monkeypatch: pytest.MonkeyPatch, *, failing: PricingEngine | None = None) -> None:
+    """Every QuantLib engine prices instantly, Monte Carlo without theta/vega/rho; `failing` raises instead."""
+
+    def price(**inputs: Any) -> quantlib_options._ComparePoint:
+        engine = inputs["engine"]
+        if engine is failing:
+            raise RuntimeError(HOSTILE_ENGINE_TEXT)
+        provided = engine is not PricingEngine.MONTE_CARLO
+        return quantlib_options._ComparePoint(
+            price=1.0,
+            delta=0.5,
+            gamma=0.01,
+            theta=-0.02 if provided else None,
+            vega=0.1 if provided else None,
+            rho=0.03 if provided else None,
+        )
+
+    monkeypatch.setattr(quantlib_options, "_QL_AVAILABLE", True)
+    monkeypatch.setattr(quantlib_options, "_price_option_for_compare", price)
+
+
+async def test_an_engine_that_raises_is_named_with_a_reason_and_the_others_still_answer(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fake_engines(monkeypatch, failing=PricingEngine.BINOMIAL_CRR)
+
+    body = await _compare(client)
+
+    assert [m["model"] for m in body["models"]] == ["python_bs", *(m for m in QUANTLIB_MODELS if m != "quantlib_crr")]
+    assert [u["model"] for u in body["unavailable_models"]] == ["quantlib_crr"]
+    reason = body["unavailable_models"][0]["reason"]
+    assert "RuntimeError" in reason
+    # The engine's own text stays in the service log: neither the key nor the traceback reaches the reply.
+    assert "SECRET-KEY-123" not in json.dumps(body)
+    assert "Traceback" not in json.dumps(body)
+    assert "\n" not in reason
+
+
+async def test_with_quantlib_absent_every_quantlib_model_is_named_as_not_run(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(quantlib_options, "_QL_AVAILABLE", False)
+
+    body = await _compare(client)
+
+    assert [m["model"] for m in body["models"]] == ["python_bs"]
+    assert [u["model"] for u in body["unavailable_models"]] == QUANTLIB_MODELS
+    assert all("QuantLib is not installed" in u["reason"] for u in body["unavailable_models"])
+
+
+async def test_when_every_engine_runs_nothing_is_listed_unavailable(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fake_engines(monkeypatch)
+
+    body = await _compare(client)
+
+    assert [m["model"] for m in body["models"]] == ["python_bs", *QUANTLIB_MODELS]
+    assert body["unavailable_models"] == []
+
+
+async def test_monte_carlo_theta_vega_and_rho_are_null_not_zero_and_no_other_engine_loses_a_greek(
+    client: AsyncClient,
+) -> None:
+    pytest.importorskip("QuantLib")
+
+    body = await _compare(client)
+
+    assert body["unavailable_models"] == []
+    for point in _curve(body, "quantlib_mc"):
+        assert point["delta"] is not None
+        assert point["gamma"] is not None
+        assert (point["theta"], point["vega"], point["rho"]) == (None, None, None)
+    for model in (m for m in QUANTLIB_MODELS if m != "quantlib_mc"):
+        for point in _curve(body, model):
+            assert None not in point.values(), model
 
 
 # ── "Today" is the New York date ────────────────────────────────────────────────────────────────────────────

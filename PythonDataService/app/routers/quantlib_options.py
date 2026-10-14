@@ -6,6 +6,7 @@ import asyncio
 import logging
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date
 
 from fastapi import APIRouter
@@ -221,9 +222,15 @@ class PricingPointResult(BaseModel):
     price: float
     delta: float
     gamma: float
-    theta: float
-    vega: float
-    rho: float
+    theta: float | None = Field(
+        ..., description="Per calendar day; null when the engine does not provide it (Monte Carlo has no theta)"
+    )
+    vega: float | None = Field(
+        ..., description="Per 1% IV move; null when the engine does not provide it (Monte Carlo has no vega)"
+    )
+    rho: float | None = Field(
+        ..., description="Per 1% rate move; null when the engine does not provide it (Monte Carlo has no rho)"
+    )
 
 
 class PricingModelCurve(BaseModel):
@@ -231,6 +238,13 @@ class PricingModelCurve(BaseModel):
 
     model: str
     points: list[PricingPointResult]
+
+
+class PricingModelUnavailable(BaseModel):
+    """A model the comparison asked for and has no curve for."""
+
+    model: str
+    reason: str = Field(..., description="Why in the service's own words; never the engine's error text")
 
 
 class PricingCompareResponse(BaseModel):
@@ -245,7 +259,35 @@ class PricingCompareResponse(BaseModel):
         ..., description="The rate every curve was priced at, so a client overlay can price at the same one"
     )
     models: list[PricingModelCurve]
+    unavailable_models: list[PricingModelUnavailable] = Field(
+        default_factory=list,
+        description="Each requested model that has no curve in `models`, with why; empty when every model ran",
+    )
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class _ComparePoint:
+    """One engine's price and Greeks at one spot. A Greek the engine does not provide is None, never 0.0."""
+
+    price: float
+    delta: float
+    gamma: float
+    theta: float | None
+    vega: float | None
+    rho: float | None
+
+
+_QUANTLIB_MISSING_REASON = "QuantLib is not installed on the data service"
+
+
+def _round_if_provided(greek: float | None) -> float | None:
+    return None if greek is None else round(greek, 6)
+
+
+def _engine_failure_reason(error: Exception) -> str:
+    # Our words plus the exception's class, never its text; the data service log holds the text in full.
+    return f"the engine raised {type(error).__name__} while pricing this contract (see the data service log)"
 
 
 def _price_option_for_compare(
@@ -258,7 +300,7 @@ def _price_option_for_compare(
     evaluation_date: date,
     dividend_yield: float,
     engine: PricingEngine,
-):
+) -> _ComparePoint:
     """Thin wrapper around price_option with lighter params for bulk comparison.
 
     For the single-point /price endpoint we use 801-step trees and 801×800 FD
@@ -276,7 +318,6 @@ def _price_option_for_compare(
     import QuantLib as ql
 
     from app.services.quantlib_pricer import (
-        GreeksResult,
         _build_process,
         _ensure_ql,
         _ql_date,
@@ -297,7 +338,7 @@ def _price_option_for_compare(
             if (option_type == "call" and spot > strike)
             else (-1.0 if option_type == "put" and spot < strike else 0.0)
         )
-        return GreeksResult(engine=engine.value, price=intrinsic, delta=d_val, gamma=0.0, theta=0.0, vega=0.0, rho=0.0)
+        return _ComparePoint(price=intrinsic, delta=d_val, gamma=0.0, theta=0.0, vega=0.0, rho=0.0)
 
     ql_type = ql.Option.Call if option_type == "call" else ql.Option.Put
     payoff = ql.PlainVanillaPayoff(ql_type, strike)
@@ -371,21 +412,23 @@ def _price_option_for_compare(
         )
 
     # Monte Carlo has no analytic theta/vega/rho, and a numeric one is a further MC reprice per Greek (seconds at index
-    # scale). The response cannot mark a Greek as not provided, so those three stay 0.0 for it (#3221).
+    # scale). Those three are not provided for it: None, which the response and the page show as a gap (#3221).
     is_monte_carlo = engine == PricingEngine.MONTE_CARLO
 
+    theta_v: float | None
     try:
         theta_annual = option.theta()
         theta_v = theta_annual / 365.0
     except RuntimeError:
-        theta_v = 0.0
+        theta_v = None
 
+    vega_v: float | None
     try:
         vega_raw = option.vega()
         vega_v = vega_raw / 100.0
     except RuntimeError:
         vega_v = (
-            0.0
+            None
             if is_monte_carlo
             else _quick_numeric_greek(
                 process,
@@ -402,12 +445,13 @@ def _price_option_for_compare(
             )
         )
 
+    rho_v: float | None
     try:
         rho_raw = option.rho()
         rho_v = rho_raw / 100.0
     except RuntimeError:
         rho_v = (
-            0.0
+            None
             if is_monte_carlo
             else _quick_numeric_greek(
                 process,
@@ -424,15 +468,7 @@ def _price_option_for_compare(
             )
         )
 
-    return GreeksResult(
-        engine=engine.value,
-        price=npv,
-        delta=delta_v,
-        gamma=gamma_v,
-        theta=theta_v,
-        vega=vega_v,
-        rho=rho_v,
-    )
+    return _ComparePoint(price=npv, delta=delta_v, gamma=gamma_v, theta=theta_v, vega=vega_v, rho=rho_v)
 
 
 def _quick_numeric_greek(
@@ -521,6 +557,9 @@ async def pricing_compare(request: PricingCompareRequest):
       6. quantlib_fd       — QuantLib Finite Differences (801×800 grid)
       7. quantlib_mc       — QuantLib Monte Carlo (tol=0.001, seed=42)
 
+    A model with no curve in `models` is named in `unavailable_models` with why (QuantLib not installed, or the
+    engine raised). A Greek an engine does not provide (Monte Carlo theta, vega, rho) is null, never 0.0.
+
     The frontend additionally computes "Legacy BS" (Abramowitz & Stegun normCdf
     approximation, |error| < 1.5e-7) client-side and overlays it.
     """
@@ -549,6 +588,7 @@ async def pricing_compare(request: PricingCompareRequest):
         spots = [round(spot_min + i * step, 4) for i in range(request.num_points)]
 
         models: list[PricingModelCurve] = []
+        unavailable: list[PricingModelUnavailable] = []
 
         # ── Model 1: Python analytical BS (the canonical closed form, bs_greeks.py) ──
         is_call = request.option_type == "call"
@@ -623,9 +663,9 @@ async def pricing_compare(request: PricingCompareRequest):
                                 price=round(result.price, 6),
                                 delta=round(result.delta, 6),
                                 gamma=round(result.gamma, 6),
-                                theta=round(result.theta, 6),
-                                vega=round(result.vega, 6),
-                                rho=round(result.rho, 6),
+                                theta=_round_if_provided(result.theta),
+                                vega=_round_if_provided(result.vega),
+                                rho=_round_if_provided(result.rho),
                             )
                         )
                     models.append(PricingModelCurve(model=model_name, points=engine_points))
@@ -636,7 +676,15 @@ async def pricing_compare(request: PricingCompareRequest):
                         model_name,
                         eng_err,
                     )
-                    # Skip this engine but continue with others
+                    # The other engines still run; this one is named in the response with why it has no curve.
+                    unavailable.append(
+                        PricingModelUnavailable(model=model_name, reason=_engine_failure_reason(eng_err))
+                    )
+        else:
+            unavailable.extend(
+                PricingModelUnavailable(model=model_name, reason=_QUANTLIB_MISSING_REASON)
+                for _, model_name in ql_engines
+            )
 
         return PricingCompareResponse(
             success=True,
@@ -646,6 +694,7 @@ async def pricing_compare(request: PricingCompareRequest):
             time_to_expiry_years=round(T, 6),
             risk_free_rate=request.risk_free_rate,
             models=models,
+            unavailable_models=unavailable,
         )
 
     except Exception as e:

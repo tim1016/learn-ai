@@ -255,14 +255,21 @@ export interface PricingPoint {
   price: number;
   delta: number;
   gamma: number;
-  theta: number;
-  vega: number;
-  rho: number;
+  /** null when the engine does not provide it (Monte Carlo has no theta, vega or rho). */
+  theta: number | null;
+  vega: number | null;
+  rho: number | null;
 }
 
 export interface PricingModelCurve {
   model: string;
   points: PricingPoint[];
+}
+
+/** A model the comparison asked for and has no curve for, with the service's reason. */
+export interface PricingModelUnavailable {
+  model: string;
+  reason: string;
 }
 
 export interface PricingCompareResult {
@@ -275,5 +282,7 @@ export interface PricingCompareResult {
   /** The rate Python priced every curve at; null only when the Backend call failed. */
   riskFreeRate: number | null;
   models: PricingModelCurve[];
+  /** Each requested model with no curve in `models`; empty when every model ran. */
+  unavailableModels: PricingModelUnavailable[];
   error: string | null;
 }

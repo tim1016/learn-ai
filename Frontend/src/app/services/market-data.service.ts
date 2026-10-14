@@ -210,6 +210,7 @@ const PRICING_MODEL_COMPARISON_QUERY = `
         model
         points { spot price delta gamma theta vega rho }
       }
+      unavailableModels { model reason }
       error
     }
   }
