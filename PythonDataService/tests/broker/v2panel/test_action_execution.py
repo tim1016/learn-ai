@@ -186,6 +186,47 @@ async def test_performer_failure_returns_unknown_and_burns_receipt_key() -> None
     assert store._records[(_SID, "archive", "unknown")].state == "failed"
 
 
+@pytest.mark.parametrize(
+    ("error", "logged_here"),
+    [
+        (RuntimeError("secret /var/db/path"), True),
+        (ExecutionLeaseLostAfterBrokerIO("secret /var/db/path", account_id="acct"), True),
+        # Raised on, raw: ``run_action`` is where its text is logged.
+        (RepositoryPoisoned("secret /var/db/path"), False),
+    ],
+    ids=["any-failure", "lease-lost-after-broker-io", "poisoned"],
+)
+async def test_a_replayed_burned_key_never_carries_the_performers_exception_text(
+    tmp_path: Path, error: Exception, logged_here: bool, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """What a burned key tells a replay is authored (#1865), in memory and in the ledger file.
+
+    The exception's own text (a database path, say) stays in the server's log.
+    """
+
+    async def _perform(_operator: str, _reason: str | None) -> str:
+        raise error
+
+    path = tmp_path / "panel_action_receipts.json"
+    arguments = {
+        "sid": _SID,
+        "current_revision": 42,
+        "current_concurrency_token": "token",
+        "performers": {"archive": _perform},
+        "operator_identity": "op",
+        "store": DurableIdempotencyStore(path),
+    }
+    with caplog.at_level(logging.ERROR), pytest.raises((ActionExecutionError, type(error))):
+        await execute_action(_request(key="burned"), **arguments)
+    with pytest.raises(ActionNotAvailableError) as replay:
+        await execute_action(_request(key="burned"), **arguments)
+
+    assert "secret" not in f"{replay.value} {replay.value.detail}"
+    assert "outcome is unknown" in (replay.value.detail or "")
+    assert "secret" not in path.read_text(encoding="utf-8")
+    assert ("secret /var/db/path" in caplog.text) is logged_here
+
+
 async def test_performer_raised_action_execution_error_burns_key_not_released(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

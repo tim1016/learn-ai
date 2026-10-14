@@ -24,6 +24,7 @@ from app.services.broker_v2_panel.action_execution_service import (
     StaleRevisionError,
 )
 from app.services.broker_v2_panel.sqlite_panel_source import (
+    SqlitePanelBotNotFound,
     execute_sqlite_panel_action,
 )
 
@@ -255,13 +256,15 @@ async def test_a_performer_failing_after_it_began_is_an_outcome_unknown_and_burn
     [
         (ExecutionLeaseLost("lease lost before any write"), None),
         (RepositoryPoisoned("mirror finalize unconfirmed"), "failed"),
+        (SqlitePanelBotNotFound.for_bot(_SID), "failed"),
     ],
-    ids=["lease-lost-releases-the-key", "poisoned-burns-the-key"],
+    ids=["lease-lost-releases-the-key", "poisoned-burns-the-key", "bot-not-found-burns-the-key"],
 )
-async def test_the_authority_conditions_the_adr_0050_revival_catches_stay_raw(
+async def test_the_conditions_run_action_answers_from_stay_raw(
     monkeypatch: pytest.MonkeyPatch, error: Exception, key_after: str | None,
 ) -> None:
-    """``run_action`` revives (or names the poison) only from the raw condition."""
+    """``run_action`` revives a lost lease, names the poison and answers a vanished bot 404
+    (``_run_action_under_live_authority``) only from the raw condition."""
     facade = _performer_that_raises(monkeypatch, error)
     store = IdempotencyStore(wait_timeout_s=0)
 
@@ -270,3 +273,26 @@ async def test_the_authority_conditions_the_adr_0050_revival_catches_stay_raw(
 
     record = store._records.get((_SID, "reconcile_now", "k1"))
     assert (None if record is None else record.state) == key_after
+
+
+async def test_a_replayed_burned_key_never_carries_the_performers_exception_text(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A burned key's reason is authored, not the exception's text (a database path, say, #1865).
+
+    The first attempt answers a fixed sentence; so does every replay of its
+    key. The exact text stays in the server's log, where an operator looks.
+    """
+    secret = "secret /var/db/path"
+    facade = _performer_that_raises(monkeypatch, RuntimeError(secret))
+    store = IdempotencyStore(wait_timeout_s=0)
+
+    with caplog.at_level("ERROR"), pytest.raises(ActionOutcomeUnknownError) as first:
+        await _post_reconcile(facade, store)
+    with pytest.raises(ActionNotAvailableError) as replay:
+        await _post_reconcile(facade, store)
+
+    for refused in (first.value, replay.value):
+        assert secret not in f"{refused} {refused.detail}"
+    assert "outcome is unknown" in (replay.value.detail or "")
+    assert secret in caplog.text

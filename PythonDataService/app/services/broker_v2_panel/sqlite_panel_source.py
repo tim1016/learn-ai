@@ -68,6 +68,7 @@ from app.schemas.broker_v2_panel import (
 )
 from app.schemas.decision_explanation import DecisionExplanationRecord
 from app.services.broker_v2_panel.action_execution_service import (
+    UNKNOWN_FIRST_ATTEMPT_DETAIL,
     ActionNotAvailableError,
     ActionOutcomeUnknownError,
     IdempotencyStore,
@@ -1137,7 +1138,7 @@ async def execute_sqlite_panel_action(
         # outcome unknown, key burned, no retry -- the release branch below
         # is only honest for a lease lost before any mutation.
         await ledger.fail(
-            strategy_instance_id, request.action_id, request.idempotency_key, str(exc)
+            strategy_instance_id, request.action_id, request.idempotency_key, UNKNOWN_FIRST_ATTEMPT_DETAIL
         )
         raise outcome_unknown_after_broker_io(exc) from exc
     except Exception as exc:
@@ -1170,7 +1171,7 @@ async def execute_sqlite_panel_action(
             # Other attempted actions/errors have no equivalent committed-command
             # replay contract, so a blind same-key retry remains unsafe.
             await ledger.fail(
-                strategy_instance_id, request.action_id, request.idempotency_key, str(exc)
+                strategy_instance_id, request.action_id, request.idempotency_key, UNKNOWN_FIRST_ATTEMPT_DETAIL
             )
         if isinstance(exc, RecoveryExecutionError):
             raise ActionNotAvailableError(str(exc)) from exc
@@ -1181,16 +1182,9 @@ async def execute_sqlite_panel_action(
             raise
         # Whatever else a started performer raised: the shared executor's
         # typed unknown outcome, never the exception's own text as a 500.
-        logger.error(
-            "A panel action's performer failed; its outcome is unknown",
-            exc_info=exc,
-            extra={
-                "action": "panel_action_performer_failed",
-                "action_id": request.action_id,
-                "strategy_instance_id": strategy_instance_id,
-            },
-        )
-        raise outcome_unknown_after_performer_failure() from exc
+        raise outcome_unknown_after_performer_failure(
+            exc, action_id=request.action_id, sid=strategy_instance_id
+        ) from exc
 
     outcome = PanelActionResult(
         action_id=request.action_id,

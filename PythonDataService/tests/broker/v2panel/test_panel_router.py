@@ -1298,6 +1298,41 @@ async def test_presented_action_executes_and_repost_replays_as_noop(api) -> None
     assert second.json()["receipt_id"] == first.json()["receipt_id"]
 
 
+async def test_a_performer_failure_and_its_replay_never_put_its_exception_text_on_the_wire(
+    api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1865: no exception text (a database path, say) in a response body, first attempt or replay.
+
+    The first attempt is the typed unknown outcome; the replay of its burned
+    key is a 409 that says the outcome is unknown, in the ledger's own words.
+    """
+    from app.services.broker_v2_panel import sqlite_panel_source
+
+    app, _repo = api
+
+    async def execute(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("secret /var/db/path")
+
+    monkeypatch.setattr(sqlite_panel_source, "execute_recovery_action", execute)
+    async with _client(app) as client:
+        panel = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")
+        action = next(item for item in panel.json()["actions"] if item["action_id"] == "reconcile_now")
+        request = {
+            "action_id": "reconcile_now",
+            "revision": panel.json()["revision"],
+            "concurrency_token": action["concurrency_token"],
+            "idempotency_key": "performer-fails",
+        }
+        first = await client.post(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/actions", json=request)
+        replay = await client.post(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/actions", json=request)
+
+    assert (first.status_code, first.json()["detail"]["outcome"]) == (500, "unknown")
+    assert replay.status_code == 409, replay.text
+    assert "outcome is unknown" in replay.json()["detail"]["why"]
+    for response in (first, replay):
+        assert "secret" not in response.text
+
+
 async def test_a_presented_action_reaches_the_clerk_as_the_routes_configured_operator(
     api, monkeypatch: pytest.MonkeyPatch
 ) -> None:

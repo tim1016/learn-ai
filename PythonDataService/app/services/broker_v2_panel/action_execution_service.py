@@ -311,6 +311,15 @@ class DryRunAuthorityLeaseLostError(ActionExecutionError):
         )
 
 
+#: What a burned key tells a replay of itself. Authored, never the failure's own
+#: text -- which can carry a database path (#1865) -- and the same wherever the
+#: ledger is read from. The exact text stays in the server's log.
+UNKNOWN_FIRST_ATTEMPT_DETAIL = (
+    "The first attempt of this command did not return a receipt; its outcome is unknown. "
+    "Inspect Clerk evidence."
+)
+
+
 def outcome_unknown_after_broker_io(
     error: ExecutionLeaseLostAfterBrokerIO | ClaimLostAfterBrokerIO,
 ) -> ActionOutcomeUnknownError:
@@ -326,6 +335,11 @@ def outcome_unknown_after_broker_io(
     else:
         lost = "The data plane's execution lease was found lost only after the broker acted"
         then = "on its next pass once the lease heartbeat has revived the lease"
+    logger.error(
+        "A panel command's authority was lost after the broker acted; its outcome is unknown",
+        exc_info=error,
+        extra={"action": "panel_action_authority_lost_after_broker_io", "error_class": type(error).__name__},
+    )
     return ActionOutcomeUnknownError(
         "The command reached the broker, but its result could not be recorded.",
         detail=(
@@ -338,12 +352,25 @@ def outcome_unknown_after_broker_io(
     )
 
 
-def outcome_unknown_after_performer_failure() -> ActionOutcomeUnknownError:
+def outcome_unknown_after_performer_failure(
+    error: BaseException, *, action_id: str, sid: str
+) -> ActionOutcomeUnknownError:
     """A performer began and failed outside every typed refusal: its outcome is unknown.
 
     Both executors answer it the same way, so the client never meets the
     performer's own exception text and the burned key says why it is burned.
+    The exception itself is logged here, with its traceback, and nowhere else.
     """
+    logger.error(
+        "A panel action's performer failed; its outcome is unknown",
+        exc_info=error,
+        extra={
+            "action": "panel_action_performer_failed",
+            "action_id": action_id,
+            "strategy_instance_id": sid,
+            "error_class": type(error).__name__,
+        },
+    )
     return ActionOutcomeUnknownError(
         "The command did not return a terminal receipt.",
         detail=("Its outcome is unknown. Inspect Clerk evidence before issuing another lifecycle command."),
@@ -803,7 +830,7 @@ async def execute_action(
         # outcome unknown, key burned, no retry offered -- the release below
         # is only honest for a lease lost before any mutation.
         if reserved_fresh:
-            await ledger.fail(sid, request.action_id, request.idempotency_key, str(err))
+            await ledger.fail(sid, request.action_id, request.idempotency_key, UNKNOWN_FIRST_ATTEMPT_DETAIL)
         raise outcome_unknown_after_broker_io(err) from err
     except ExecutionLeaseLost:
         # Archive dispatches through this executor rather than
@@ -833,21 +860,23 @@ async def execute_action(
         if reserved_fresh:
             await ledger.release(sid, request.action_id, request.idempotency_key)
         raise
-    except RepositoryPoisoned as err:
+    except RepositoryPoisoned:
         # Unlike a lost lease, a poison can be raised AFTER a transition's
         # SQLite commit already succeeded (append_transition's own
         # mirror-finalize failure, repository.py) -- so a mutation may really
         # have applied. Keep burning the key ``failed``: a blind same-key
         # retry must not re-fire a command that may have partially committed.
         if reserved_fresh:
-            await ledger.fail(sid, request.action_id, request.idempotency_key, str(err))
+            await ledger.fail(sid, request.action_id, request.idempotency_key, UNKNOWN_FIRST_ATTEMPT_DETAIL)
         raise
     except Exception as err:
         # The performer ran and failed: burn the key so a blind retry does not
         # re-fire an action that may have partially applied.
         if reserved_fresh:
-            await ledger.fail(sid, request.action_id, request.idempotency_key, str(err))
-        raise outcome_unknown_after_performer_failure() from err
+            await ledger.fail(sid, request.action_id, request.idempotency_key, UNKNOWN_FIRST_ATTEMPT_DETAIL)
+        raise outcome_unknown_after_performer_failure(
+            err, action_id=request.action_id, sid=sid
+        ) from err
 
     result = PanelActionResult(
         action_id=request.action_id,
