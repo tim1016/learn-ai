@@ -987,6 +987,7 @@ async def test_a_stopped_dry_run_whose_binding_cannot_be_read_does_not_hold_back
     await registry.carry_out_due_ends()
 
     assert registry.pending_ends(["dry-bot"]) == []
+    assert registry.pending_ends(["aa-bot"]) == [ScheduledEnd(strategy_instance_id="aa-bot", end=_END)]
 
 
 class _PassThatLeavesTheRunActive:

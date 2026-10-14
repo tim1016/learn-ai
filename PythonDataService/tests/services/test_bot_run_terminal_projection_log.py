@@ -8,7 +8,6 @@ was any sign that it had been refused.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -44,7 +43,7 @@ def _recorder(status: ProjectionStatus) -> BotRunTerminalRecorder:
 
 @pytest.mark.parametrize("status", [ProjectionStatus.FILE_CAS_REFUSED, ProjectionStatus.AUTHORITY_CHANGED])
 def test_a_refused_terminal_projection_is_logged(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture, status: ProjectionStatus,
+    caplog: pytest.LogCaptureFixture, status: ProjectionStatus,
 ) -> None:
     with caplog.at_level(logging.WARNING, logger="app.services.bot_run_terminal"):
         _recorder(status).replace_provisional_stop(_binding(), kind="STOPPED", reason_code="OPERATOR_STOP")
@@ -66,7 +65,7 @@ def test_a_refused_projection_of_a_finalized_run_is_logged_too(caplog: pytest.Lo
 
 @pytest.mark.parametrize("status", [ProjectionStatus.RECORDED, ProjectionStatus.AUTHORITY_EXPECTATION_SUPERSEDED])
 def test_a_projection_that_answered_is_not_logged_as_refused(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture, status: ProjectionStatus,
+    caplog: pytest.LogCaptureFixture, status: ProjectionStatus,
 ) -> None:
     with caplog.at_level(logging.WARNING, logger="app.services.bot_run_terminal"):
         _recorder(status).replace_provisional_stop(_binding(), kind="STOPPED", reason_code="OPERATOR_STOP")

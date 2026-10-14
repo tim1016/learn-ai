@@ -2121,6 +2121,7 @@ class BotTaskRegistry:
                 binding = self._read_binding(sid)
                 if binding is None or binding.mode != "dry_run":
                     self._stopped_end_candidates.discard(sid)
+                    self._end_watch_failures.pop(sid, None)
                     continue  # a trading bot's end is its account Clerk's to carry out
                 self.record_end_carried_out(ScheduledEnd(strategy_instance_id=sid, end=pending), at_ms=now_ms)
             except Exception as exc:
