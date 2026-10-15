@@ -556,12 +556,18 @@ def build_daily_equity(
     df: pd.DataFrame,
     trades: list[TradeRecord],
     start_capital: float = 100_000.0,
+    fees_per_trade: float = 0.0,
 ) -> list[tuple[datetime, float]]:
     """Build a daily equity curve by replaying trades over the bar timeline.
 
-    Strategy: Start with `start_capital`. For each closed trade, compound
-    the PnL. Between trades, equity stays flat (fully cash). This matches
-    LEAN's single-position, fully-invested model for our strategies.
+    Strategy: Start with `start_capital`. Each closed trade adds its dollar
+    ``pnl`` (shares x per-share P&L, ``TradeRecord.pnl``) less ``fees_per_trade``
+    on its exit date. Between trades, equity stays flat (fully cash). This
+    matches LEAN's single-position model for our strategies.
+
+    The run's fees are known in total, not per trade: the caller passes an
+    even share of them, so the curve's end reconciles to the engine's net
+    profit and only the day each fee lands on is approximate.
 
     Returns: sorted list of (date, equity_value).
     """
@@ -570,7 +576,7 @@ def build_daily_equity(
     for t in trades:
         exit_date = datetime.fromtimestamp(t.exit_timestamp / 1000, tz=UTC).strftime("%Y-%m-%d")
         trade_pnl_by_date.setdefault(exit_date, 0.0)
-        trade_pnl_by_date[exit_date] += t.pnl_pct * start_capital
+        trade_pnl_by_date[exit_date] += t.pnl - fees_per_trade
 
     # Get unique dates from the bar data
     dates_seen: dict[str, float] = {}
@@ -695,26 +701,36 @@ def compute_lean_statistics(
     start_capital: float = 100_000.0,
     risk_free_rate: float = 0.0,
     benchmark_returns: list[float] | None = None,
+    total_fees: float = 0.0,
+    total_orders: int | None = None,
 ) -> LeanStatistics:
     """Compute the full LEAN statistics suite from bar data and trades.
 
-    Formulas match Lean/Common/Statistics/ exactly — see verify.py for
-    reconciliation proof against actual LEAN output.
+    Formulas match Lean/Common/Statistics/ exactly — see the
+    ``lean-statistics-oracle-v1`` golden fixture for the reconciliation proof
+    against actual LEAN output.
 
     Args:
         df: OHLCV DataFrame with 'timestamp' and 'close' columns.
-        trades: list of TradeRecord from the strategy execution.
+        trades: list of TradeRecord from the strategy execution; ``pnl`` is
+            dollars (shares x per-share P&L), as LEAN's trade ledger is.
         start_capital: initial portfolio value (default $100k).
         risk_free_rate: annualized risk-free rate (default 0, LEAN uses ~5.43%).
         benchmark_returns: daily benchmark returns. None = zero benchmark
             (equivalent to LEAN's SetBenchmark(d => 0m)).
+        total_fees: the run's commissions in dollars. Shared evenly across the
+            trades on the equity curve; reported as ``runtime.fees``.
+        total_orders: orders the run filled. None counts an entry and an exit
+            per closed trade.
     """
     stats = LeanStatistics()
     port = stats.portfolio
     ts = stats.trade
 
     # ─── Build daily equity curve ───
-    equity_curve = build_daily_equity(df, trades, start_capital)
+    equity_curve = build_daily_equity(
+        df, trades, start_capital, fees_per_trade=(total_fees / len(trades) if trades else 0.0)
+    )
     if len(equity_curve) < 2:
         return stats
 
@@ -939,10 +955,12 @@ def compute_lean_statistics(
         ts.average_losing_trade_duration = _avg_duration(losses)
 
     # ═══ Runtime Statistics (BRH.cs) ═══
+    # From the run's starting capital, not the curve's first sample: a trade
+    # that exits on the first bar's date has already moved the first sample.
     stats.equity = port.end_equity
-    stats.fees = 0.0  # no fee model in our strategies
-    stats.net_profit = port.end_equity - port.start_equity
-    stats.total_return = port.total_net_profit
-    stats.total_orders = n_trades  # 1 order per trade in our model
+    stats.fees = total_fees
+    stats.net_profit = port.end_equity - start_capital
+    stats.total_return = stats.net_profit / start_capital if start_capital else 0.0
+    stats.total_orders = total_orders if total_orders is not None else 2 * n_trades  # an entry and an exit each
 
     return stats

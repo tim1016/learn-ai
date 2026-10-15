@@ -28,6 +28,7 @@ from app.services.broker_v2_panel.chart_projection_service import (
     build_run_window_chart,
     history_fill_window,
     live_window,
+    markers_in_window,
     position_pane,
     run_chart_window,
 )
@@ -40,6 +41,7 @@ from app.services.broker_v2_panel.panel_errors import (
 )
 from app.services.broker_v2_panel.panel_scope import validate_account
 from app.services.broker_v2_panel.sqlite_panel_source import (
+    SqliteChartEvidence,
     SqlitePanelBotNotFound,
     SqlitePanelEconomicUnavailable,
     read_sqlite_chart_evidence,
@@ -163,17 +165,12 @@ async def get_live_snapshot_parts(
 ) -> tuple[BotPanelView, ChartLiveResponse]:
     """Build panel and chart from the exact same authority-bound fill cut."""
     observed_at_ms = now_ms_utc()
-    panel, _entries, fills = await get_panel_with_chart_fills(
+    panel, fills = await get_panel_with_chart_fills(
         broker,
         account_id,
         sid,
         now_ms=observed_at_ms,
     )
-    if fills is None:
-        raise PanelUnavailableError(
-            "The panel chart fill evidence is unavailable.",
-            detail="The active SQLite authority did not return an attributed fill set.",
-        )
     chart = await _build_live_chart_from_fills(
         sid,
         panel.symbol,
@@ -190,7 +187,9 @@ async def get_live_snapshot_parts(
     return panel, chart
 
 
-def _within_latest_run(broker: str, sid: str, window: tuple[int, int], *, now_ms: int) -> tuple[int, int]:
+def _within_latest_run(
+    broker: str, sid: str, window: tuple[int, int], *, timeframe: ChartHistoryTimeframe, now_ms: int
+) -> tuple[int, int]:
     """The window held to the bot's latest run, as its run record dates it."""
     try:
         run = get_bot_task_registry().current_run(broker, sid)
@@ -199,10 +198,36 @@ def _within_latest_run(broker: str, sid: str, window: tuple[int, int], *, now_ms
     terminal = None if run is None else run.terminal_outcome
     return run_chart_window(
         *window,
+        timeframe=timeframe,
         run_started_at_ms=None if run is None else run.started_at_ms,
         run_ended_at_ms=None if terminal is None else terminal.recorded_at_ms,
         now_ms=now_ms,
     )
+
+
+async def _chart_evidence(
+    broker: str, custody_account_id: str, sid: str, *, from_ms: int, to_ms: int
+) -> SqliteChartEvidence:
+    """One revision-fenced read of the bot's identity and its fills in ``[from_ms, to_ms)``."""
+    try:
+        evidence = await read_sqlite_chart_evidence(
+            broker,
+            custody_account_id,
+            sid,
+            from_ms=from_ms,
+            to_ms=to_ms,
+        )
+    except SqlitePanelEconomicUnavailable as exc:
+        raise PanelUnavailableError(
+            "The activated SQLite history chart is unavailable.",
+            detail=str(exc),
+        ) from exc
+    if evidence is None:
+        raise PanelUnavailableError(
+            "The activated SQLite history-chart authority is unavailable.",
+            detail="Restore or reactivate the account-scoped SQLite authority.",
+        )
+    return evidence
 
 
 async def get_history_chart(
@@ -217,7 +242,7 @@ async def get_history_chart(
 
     With ``window`` (``from_ms``, ``to_ms``), the tape is that window of the
     bot's latest run instead of the newest bars (#2794); a window outside the
-    run raises ``ChartWindowError``.
+    run, or on a timeframe other than ``1m``, raises ``ChartWindowError``.
 
     ``asset`` chooses whose candles: the symbol the bot listens to, or the
     asset it trades (#2912). They are the same chart for a bot that trades
@@ -239,25 +264,9 @@ async def get_history_chart(
     if window is None:
         from_ms, to_ms = history_fill_window(timeframe, observed_at_ms)
     else:
-        from_ms, to_ms = _within_latest_run(broker, sid, window, now_ms=observed_at_ms)
-    try:
-        evidence = await read_sqlite_chart_evidence(
-            broker,
-            custody_account_id_for_route(broker, resolved),
-            sid,
-            from_ms=from_ms,
-            to_ms=to_ms,
-        )
-    except SqlitePanelEconomicUnavailable as exc:
-        raise PanelUnavailableError(
-            "The activated SQLite history chart is unavailable.",
-            detail=str(exc),
-        ) from exc
-    if evidence is None:
-        raise PanelUnavailableError(
-            "The activated SQLite history-chart authority is unavailable.",
-            detail="Restore or reactivate the account-scoped SQLite authority.",
-        )
+        from_ms, to_ms = _within_latest_run(broker, sid, window, timeframe=timeframe, now_ms=observed_at_ms)
+    custody_account_id = custody_account_id_for_route(broker, resolved)
+    evidence = await _chart_evidence(broker, custody_account_id, sid, from_ms=from_ms, to_ms=to_ms)
     status = evidence.status
     fills = evidence.fills.fills
     batch_provider = build_history_batch_provider()
@@ -273,13 +282,26 @@ async def get_history_chart(
                 window=(from_ms, to_ms),
                 now_ms=observed_at_ms,
             )
-        return await build_history_chart(
+        chart = await build_history_chart(
             timeframe,
             fills,
             strategy_instance_id=sid,
             symbol=symbol,
             batch_provider=batch_provider,
             now_ms=observed_at_ms,
+        )
+        if chart.from_ms >= from_ms:
+            return chart
+        # The candles start before the window the fills were read for: a sparse
+        # symbol needs more sessions to fill its bars than the plan counted, and
+        # a daily bar starts at midnight. Read the fills those candles stand on.
+        reached = await _chart_evidence(broker, custody_account_id, sid, from_ms=chart.from_ms, to_ms=to_ms)
+        return chart.model_copy(
+            update={
+                "fill_markers": markers_in_window(
+                    reached.fills.fills, from_ms=chart.from_ms, to_ms=chart.to_ms, charted_symbol=symbol
+                )
+            }
         )
 
     if asset == "trades":

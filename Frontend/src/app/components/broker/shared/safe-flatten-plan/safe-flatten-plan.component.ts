@@ -11,6 +11,7 @@ import type {
   SqliteSafeFlattenPlan,
   SqliteSafeFlattenPricing,
 } from '../../../../api/alpaca.types';
+import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp';
 
@@ -39,6 +40,7 @@ const SEND_UNANSWERED =
   selector: 'app-safe-flatten-plan',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
+    AssetIdentityComponent,
     CardModule,
     MessageModule,
     ReceiptLabelPipe,

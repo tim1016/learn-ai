@@ -71,6 +71,28 @@ describe('MarketDataService', () => {
     });
   });
 
+  describe('getOptionsExpirations', () => {
+    it('rejects with the vendor error when the lookup fails, instead of reading as no options', async () => {
+      const promise = firstValueFrom(service.getOptionsExpirations('SPY'));
+
+      httpMock.expectOne(GRAPHQL_URL).flush({
+        data: { getOptionsExpirations: { success: false, expirations: [], count: 0, error: 'Polygon rate limited' } },
+      });
+
+      await expect(promise).rejects.toThrow('Polygon rate limited');
+    });
+
+    it('resolves an empty list for a ticker with no listed options', async () => {
+      const promise = firstValueFrom(service.getOptionsExpirations('BRK.A'));
+
+      httpMock.expectOne(GRAPHQL_URL).flush({
+        data: { getOptionsExpirations: { success: true, expirations: [], count: 0, error: null } },
+      });
+
+      expect(await promise).toEqual([]);
+    });
+  });
+
   describe('getOptionsChainSnapshot', () => {
     it('should send correct variables', () => {
       service.getOptionsChainSnapshot('AAPL', 1_774_123_200_000).subscribe();

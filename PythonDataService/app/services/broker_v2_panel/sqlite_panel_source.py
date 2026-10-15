@@ -46,6 +46,7 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     build_recovery_catalog,
 )
 from app.broker.alpaca.clerk.sqlite.repository import (
+    ClaimLostAfterBrokerIO,
     ClerkSqliteRepository,
     ExecutionLeaseLost,
     ExecutionLeaseLostAfterBrokerIO,
@@ -1083,8 +1084,8 @@ async def execute_sqlite_panel_action(
             str(exc),
             detail=exc.capability.next_step,
         ) from exc
-    except ExecutionLeaseLostAfterBrokerIO as exc:
-        # The broker already acted (ClaimedBrokerIO's post-I/O renewal):
+    except (ExecutionLeaseLostAfterBrokerIO, ClaimLostAfterBrokerIO) as exc:
+        # A broker call was made (ClaimedBrokerIO's post-I/O renewal):
         # outcome unknown, key burned, no retry -- the release branch below
         # is only honest for a lease lost before any mutation.
         await ledger.fail(

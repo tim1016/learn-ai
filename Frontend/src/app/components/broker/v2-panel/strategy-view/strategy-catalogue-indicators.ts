@@ -7,6 +7,7 @@ import type { ChartIndicatorResult, TradingIndicatorChip } from '../../../../sha
 import { BotChartIndicatorService } from '../dual-pane-chart/bot-chart-indicator.service';
 import { chartIndicatorCatalog, type ChartIndicatorCatalog } from '../dual-pane-chart/chart-indicator-catalog';
 import {
+  indicatorFailureMessage,
   indicatorSeriesPlans,
   resultBelongsToIndicator,
   selectChartIndicator,
@@ -78,10 +79,10 @@ export function strategyCatalogueIndicators(view: Signal<StrategyViewResponse | 
         results: response.indicators,
         error: null,
       })),
-      catchError(() => of<CalculatedIndicators>({
+      catchError((error: unknown) => of<CalculatedIndicators>({
         strategyKey: params.view.strategy_key,
         results: [],
-        error: 'Indicators could not be calculated on these candles.',
+        error: indicatorFailureMessage(error, 'on these candles'),
       })),
     ),
   });

@@ -2,19 +2,18 @@
 
 .uncertainty-grid { @include page-grid.layout; }
 .uncertainty-grid > * { grid-column: span 6; }
-.uncertainty-grid--single > * { grid-column: span 12; }
 @container page-grid (max-width: 1100px) { .uncertainty-grid > * { grid-column: span 12; } }
 
 .sentence {
   margin: 0 0 0.75rem;
-  color: var(--text);
+  color: var(--text-primary);
   font-size: 0.875rem;
   line-height: 1.45;
 }
 
 .sub {
   margin: 1.1rem 0 0.5rem;
-  color: var(--text);
+  color: var(--text-primary);
   font-size: 0.8rem;
   font-weight: 600;
   letter-spacing: 0.02em;

@@ -74,8 +74,8 @@ class IvProvenance:
     max_single_strike_share : largest single-strike share of the
         VIX-replication variance integral (``max(c_i) / Σ c_j``). After
         any iterative drop-and-recompute, this reflects the **final**
-        share — not the pre-drop value (the pre-drop value goes to the
-        threshold-event log). Defaults to 0.0 for non-chain-replication
+        share — not the pre-drop value, which is not recorded anywhere
+        (#3221). Defaults to 0.0 for non-chain-replication
         paths (e.g. parametric ATM) where the metric is not meaningful.
     single_strike_dropped : number of iterations the dominance gate
         executed (drop dominant strike + recompute). 0 means the gate

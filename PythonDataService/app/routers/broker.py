@@ -13,9 +13,10 @@ import logging
 import math
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Path, Query, status
 from fastapi.responses import StreamingResponse
 
+from app.broker.contract.models import US_EQUITY_SYMBOL_PATTERN
 from app.broker.ibkr import contracts as ibkr_contracts
 from app.broker.ibkr.auto_reconnect_monitor import get_monitor
 from app.broker.ibkr.client import (
@@ -28,7 +29,7 @@ from app.broker.ibkr.client import (
     get_client_lifecycle_lock,
     set_client,
 )
-from app.broker.ibkr.contracts import search_option_contracts
+from app.broker.ibkr.contracts import OptionQualificationError
 from app.broker.ibkr.health import (
     build_broker_health,
     synthetic_disconnected_health,
@@ -37,6 +38,7 @@ from app.broker.ibkr.market_data import stream_option_chain
 from app.broker.ibkr.models import (
     IbkrChainSnapshot,
     IbkrConnectionHealth,
+    IbkrExpirationsResponse,
     IbkrStrikeList,
     IbkrSurfaceSnapshot,
 )
@@ -48,10 +50,10 @@ from app.broker.ibkr.surface import (
 )
 from app.options.expiry import OptionExpiryMs
 from app.routers.broker_dependencies import is_broker_disabled, require_connected_client
-from app.schemas.broker_search import OptionContractMatch
-from app.utils.throttle import TtlCache
+from app.utils.timestamps import now_ms_utc
 
 router = APIRouter(prefix="/api/broker", tags=["broker"])
+read_router = APIRouter(tags=["broker"])
 logger = logging.getLogger(__name__)
 
 # Serialises POST /connect | /disconnect | /reconnect against two concurrent
@@ -67,25 +69,10 @@ _lifecycle_lock = get_client_lifecycle_lock()
 _ibkr_client_factory: type[IbkrClient] = IbkrClient
 
 
-# Slice 1F — option-contracts drill-down 300s response cache. Cache key is
-# ``(symbol, expiry_ms, strike, right)`` (qualification is heavy but not
-# rate-limited upstream, unlike the retired symbol-search proxy).
-_OPTION_CONTRACTS_CACHE: TtlCache[
-    tuple[str, int, float, str], list[OptionContractMatch]
-] = TtlCache(ttl_seconds=300.0, max_size=512)
-
-
-def reset_option_contracts_cache_for_testing() -> None:
-    """Test-only hook — flush the TTL cache so an earlier test cannot leak
-    a cached response into the next assertion."""
-    global _OPTION_CONTRACTS_CACHE
-    _OPTION_CONTRACTS_CACHE = TtlCache(ttl_seconds=300.0, max_size=512)
-
-
 # ── /health ────────────────────────────────────────────────────────────
 
 
-@router.get("/health", response_model=IbkrConnectionHealth)
+@read_router.get("/health", response_model=IbkrConnectionHealth)
 async def broker_health() -> IbkrConnectionHealth:
     """Connection diagnostic. Never raises on disconnect."""
     if is_broker_disabled():
@@ -218,22 +205,24 @@ _EXPIRY_MS_DESCRIPTION = "An option expiry: 16:00 New York time on the expiry da
 # ── /expirations ───────────────────────────────────────────────────────
 
 
-@router.get("/expirations/{symbol}")
-async def list_expirations_endpoint(symbol: str) -> dict:
+@read_router.get("/expirations/{symbol}", response_model=IbkrExpirationsResponse)
+async def list_expirations_endpoint(
+    symbol: Annotated[str, Path(pattern=US_EQUITY_SYMBOL_PATTERN)],
+) -> IbkrExpirationsResponse:
     client = require_connected_client()
     try:
         expirations = await ibkr_contracts.list_expirations(client, symbol.upper())
-    except ValueError as exc:
+    except OptionQualificationError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
-    return {"symbol": symbol.upper(), "expirations_ms": expirations}
+    return IbkrExpirationsResponse(symbol=symbol.upper(), expirations_ms=expirations)
 
 
 # ── /strikes ───────────────────────────────────────────────────────────
 
 
-@router.get("/strikes/{symbol}", response_model=IbkrStrikeList)
+@read_router.get("/strikes/{symbol}", response_model=IbkrStrikeList)
 async def list_strikes_endpoint(
-    symbol: str,
+    symbol: Annotated[str, Path(pattern=US_EQUITY_SYMBOL_PATTERN)],
     expiry_ms: Annotated[OptionExpiryMs, Query(..., description=_EXPIRY_MS_DESCRIPTION)],
 ) -> IbkrStrikeList:
     """Strikes that IBKR can actually qualify for one (symbol, expiry).
@@ -243,73 +232,31 @@ async def list_strikes_endpoint(
     strikes the chain stream will accept without partial-qualification
     rejection.
     """
-    from datetime import UTC, datetime
-
     client = require_connected_client()
     sym = symbol.upper()
     try:
         strikes = await ibkr_contracts.list_qualified_strikes(client, sym, expiry_ms)
-    except ValueError as exc:
+    except OptionQualificationError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     return IbkrStrikeList(
         symbol=sym,
         expiry_ms=expiry_ms,
         strikes=strikes,
-        fetched_at_ms=int(datetime.now(tz=UTC).timestamp() * 1000),
+        fetched_at_ms=now_ms_utc(),
     )
-
-
-# ── /option-contracts/{symbol} ─────────────────────────────────────────
-
-
-@router.get("/option-contracts/{symbol}")
-async def option_contracts_endpoint(
-    symbol: str,
-    expiry_ms: Annotated[OptionExpiryMs, Query(description=_EXPIRY_MS_DESCRIPTION)],
-    strike: Annotated[float, Query(gt=0, description="Option strike.")],
-    right: Annotated[str, Query(pattern="^[CP]$", description="C for call, P for put.")],
-) -> dict:
-    """Slice 1F — IBKR ``reqContractDetails`` qualification for the
-    cockpit's option leg picker. Returns the rich ``OptionContractMatch``
-    (with ``con_id``, ``local_symbol``, etc.) that the picker persists
-    alongside the declared leg. ``conId`` is the broker-canonical
-    identity the Slice 4 resolver will key against.
-    """
-    client = require_connected_client()
-    sym = symbol.upper()
-    key = (sym, expiry_ms, float(strike), right)
-    cached = _OPTION_CONTRACTS_CACHE.get(key)
-    if cached is not None:
-        return {"matches": [m.model_dump() for m in cached]}
-
-    try:
-        matches = await search_option_contracts(
-            client,
-            symbol=sym,
-            expiry_ms=expiry_ms,
-            strike=float(strike),
-            right=right,  # type: ignore[arg-type]
-        )
-    except NotConnectedError as exc:
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "IBKR client not connected.",
-        ) from exc
-
-    _OPTION_CONTRACTS_CACHE.set(key, matches)
-    return {"matches": [m.model_dump() for m in matches]}
 
 
 # ── /option-chain (SSE) ────────────────────────────────────────────────
 
 
-@router.get("/option-chain/{symbol}")
+@read_router.get("/option-chain/{symbol}")
 async def option_chain_stream(
-    symbol: str,
+    symbol: Annotated[str, Path(pattern=US_EQUITY_SYMBOL_PATTERN)],
     expiry_ms: Annotated[OptionExpiryMs, Query(..., description=_EXPIRY_MS_DESCRIPTION)],
     strikes: Annotated[
         list[float] | None,
         Query(
+            max_length=SURFACE_DEFAULT_MAX_LINES // 2,
             description=(
                 "Strikes to subscribe. Pick from /api/broker/strikes/{symbol} "
                 "so every value is one IBKR can actually qualify."
@@ -329,10 +276,10 @@ async def option_chain_stream(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "strikes must be non-empty.",
         )
-    if any(k <= 0 for k in strikes):
+    if any((not math.isfinite(k)) or k <= 0 for k in strikes):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            "Strikes must be positive.",
+            "Strikes must be finite and positive.",
         )
 
     client = require_connected_client()
@@ -349,17 +296,14 @@ async def option_chain_stream(
         except asyncio.CancelledError:
             raise
         except BrokerError as exc:
-            logger.error("Broker error in option-chain stream: %s", exc)
+            logger.error("Broker error in option-chain stream: %s", exc, exc_info=True)
             yield _sse_error_frame(
                 "The option-chain stream stopped: the broker rejected or dropped the market-data request. The broker's "
                 "reason is in the service log."
             )
-        except ValueError as exc:
-            # Contract qualification (``qualify_underlying``) raises
-            # ValueError when IBKR cannot resolve a symbol/strike/right
-            # combination — surface those through the same SSE error path
-            # as broker errors.
-            logger.error("Invalid option-chain request: %s", exc)
+        except OptionQualificationError as exc:
+            # Only an expected qualification refusal becomes a client error.
+            logger.error("Invalid option-chain request: %s", exc, exc_info=True)
             yield _sse_error_frame(
                 "The option-chain request could not be qualified. Check the symbol, expiry, strike, and right."
             )
@@ -374,9 +318,9 @@ async def option_chain_stream(
 # ── /option-surface (SSE) ──────────────────────────────────────────────
 
 
-@router.get("/option-surface/{symbol}")
+@read_router.get("/option-surface/{symbol}")
 async def option_surface_stream(
-    symbol: str,
+    symbol: Annotated[str, Path(pattern=US_EQUITY_SYMBOL_PATTERN)],
     expiry_ms: Annotated[
         list[OptionExpiryMs] | None,
         Query(
@@ -458,13 +402,13 @@ async def option_surface_stream(
         except asyncio.CancelledError:
             raise
         except BrokerError as exc:
-            logger.error("Broker error in option-surface stream: %s", exc)
+            logger.error("Broker error in option-surface stream: %s", exc, exc_info=True)
             yield _sse_error_frame(
                 "The option-surface stream stopped: the broker rejected or dropped the market-data request. The "
                 "broker's reason is in the service log."
             )
-        except ValueError as exc:
-            logger.error("Invalid option-surface request: %s", exc)
+        except OptionQualificationError as exc:
+            logger.error("Invalid option-surface request: %s", exc, exc_info=True)
             yield _sse_error_frame(
                 "The option-surface request could not be qualified. Check the symbol, expiry, strike, and right."
             )
@@ -500,3 +444,7 @@ def _snapshot_to_json(snapshot: IbkrChainSnapshot) -> str:
 
 def _surface_snapshot_to_json(snapshot: IbkrSurfaceSnapshot) -> str:
     return snapshot.model_dump_json()
+
+
+# Combined posture serves the same read routes beside its manual lifecycle routes.
+router.include_router(read_router)

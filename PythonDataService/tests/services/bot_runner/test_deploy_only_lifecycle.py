@@ -23,7 +23,7 @@ from tests._helpers.canary_admission import admit_canary_pairing
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 
-@pytest.mark.parametrize('action_id', ['pause', 'continue', 'resume'])
+@pytest.mark.parametrize('action_id', ['pause', 'continue', 'resume', 'retire', 'flatten_stop', 'stop'])
 @pytest.mark.parametrize('suffix', ['actions', 'actions/quiesce'])
 async def test_removed_action_cannot_cross_the_command_boundary(
     action_id: str, suffix: str, monkeypatch: pytest.MonkeyPatch,
@@ -156,3 +156,32 @@ async def test_a_trade_run_records_who_ended_it_beside_its_custody_proof(
     finally:
         await registry.stop_all()
         set_alpaca_clerk(None)
+
+
+async def test_a_run_is_not_registered_without_its_admission_snapshot_on_a_clerk_that_cannot_bind_it() -> None:
+    """Dropping the snapshot would register the run outside the custody cut it was admitted under."""
+    from types import SimpleNamespace
+
+    from app.services.bot_clerk_lifecycle import register_alpaca_duty_run
+
+    registered: list[str] = []
+
+    class _ClerkWithoutTheCapability:
+        authority_kind = "sqlite"
+
+        async def register_strategy_run(self, binding: object, *, run_owner: object = None) -> None:
+            registered.append("registered")
+
+    binding = SimpleNamespace(mode="trade", broker="alpaca", strategy_instance_id="no-capability")
+    set_alpaca_clerk(_ClerkWithoutTheCapability())  # type: ignore[arg-type]
+    try:
+        with pytest.raises(ActiveClerkUnavailableError, match="admission snapshot"):
+            await register_alpaca_duty_run(
+                binding,  # type: ignore[arg-type]
+                admission_snapshot=object(),  # type: ignore[arg-type]
+                run_owner=None,  # type: ignore[arg-type]
+            )
+    finally:
+        set_alpaca_clerk(None)
+
+    assert registered == []

@@ -558,6 +558,11 @@ public class Query
                         Rho = p.Rho,
                     }).ToList(),
                 }).ToList(),
+                UnavailableModels = response.UnavailableModels.Select(u => new PricingModelUnavailableResult
+                {
+                    Model = u.Model,
+                    Reason = u.Reason,
+                }).ToList(),
                 Error = response.Error,
             };
         }
@@ -809,15 +814,21 @@ public class PricingPointGql
     public decimal Price { get; set; }
     public decimal Delta { get; set; }
     public decimal Gamma { get; set; }
-    public decimal Theta { get; set; }
-    public decimal Vega { get; set; }
-    public decimal Rho { get; set; }
+    public decimal? Theta { get; set; }
+    public decimal? Vega { get; set; }
+    public decimal? Rho { get; set; }
 }
 
 public class PricingModelCurveResult
 {
     public string Model { get; set; } = "";
     public List<PricingPointGql> Points { get; set; } = [];
+}
+
+public class PricingModelUnavailableResult
+{
+    public string Model { get; set; } = "";
+    public string Reason { get; set; } = "";
 }
 
 public class PricingCompareResult
@@ -829,5 +840,6 @@ public class PricingCompareResult
     public decimal TimeToExpiryYears { get; set; }
     public decimal? RiskFreeRate { get; set; }
     public List<PricingModelCurveResult> Models { get; set; } = [];
+    public List<PricingModelUnavailableResult> UnavailableModels { get; set; } = [];
     public string? Error { get; set; }
 }

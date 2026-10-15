@@ -5,7 +5,7 @@ Volatility Smile / Surface Fitting Models
 Formula: Three smile models — (1) variance interpolation (QuantLib BlackVarianceSurface, non-parametric); (2) SABR σ_B(K,T;α,β,ρ,ν) per Hagan et al. 2002 eq. (2.17b); (3) SVI w(k) = a + b(ρ(k−m) + √((k−m)²+σ²)) per Gatheral 2004.
 Reference: Hagan, Kumar, Lesniewski, Woodward (2002) "Managing Smile Risk" Wilmott Magazine; Gatheral (2004) "A parsimonious arbitrage-free implied volatility parameterization with application to the valuation of volatility derivatives"; QuantLib C++ reference (BlackVarianceSurface, SabrSmileSection).
 Canonical implementation: app/volatility/fitting.py
-Validated against: NONE — pending (reference verification and golden fixture owed per registry row)
+Validated against: ``fit_svi`` — golden IV-002 (tests/fixtures/test_volatility_fixtures.py::TestIV002SVISurface, atol 1e-6, rtol 0; Gatheral raw-SVI oracle). ``_sabr_vol`` — the ATM closed form in tests/volatility/test_fitting.py::TestSabrVol (near-ATM limit, abs 1e-9). ``fit_sabr``, ``fit_variance_interp``, ``check_smile_arbitrage`` — NONE, pending fixture (behaviour tests only).
 
 Three fitting approaches, each producing a callable smile for a single expiry:
 
@@ -54,9 +54,12 @@ class SmileSlice:
     forward: float  # forward price F = S * exp((r - q) * T)
 
     def __post_init__(self) -> None:
-        assert len(self.strikes) == len(self.ivs), "strikes/ivs length mismatch"
-        assert self.ttm > 0, "ttm must be positive"
-        assert self.forward > 0, "forward must be positive"
+        if len(self.strikes) != len(self.ivs):
+            raise ValueError(f"strikes/ivs length mismatch: {len(self.strikes)} vs {len(self.ivs)}")
+        if not self.ttm > 0:
+            raise ValueError(f"ttm must be positive, got {self.ttm}")
+        if not self.forward > 0:
+            raise ValueError(f"forward must be positive, got {self.forward}")
 
 
 @dataclass
@@ -116,8 +119,8 @@ def _sabr_vol(
     z = (nu / alpha) * fk_beta_mid * log_fk
     x_z = math.log((math.sqrt(1.0 - 2.0 * rho * z + z**2) + z - rho) / (1.0 - rho))
 
-    if abs(x_z) < eps:
-        x_z = 1.0
+    # z / x(z) -> 1 as z -> 0; x_z below eps is the limit, not a divisor.
+    ratio = 1.0 if abs(x_z) < eps else z / x_z
 
     prefix = alpha / (
         fk_beta_mid * (1.0 + (1.0 - beta) ** 2 / 24.0 * log_fk**2 + (1.0 - beta) ** 4 / 1920.0 * log_fk**4)
@@ -127,7 +130,7 @@ def _sabr_vol(
     b = 0.25 * rho * beta * nu * alpha / (fk_beta_mid)
     c = (2.0 - 3.0 * rho**2) / 24.0 * nu**2
 
-    return prefix * (z / x_z) * (1.0 + (a + b + c) * ttm)
+    return prefix * ratio * (1.0 + (a + b + c) * ttm)
 
 
 def fit_sabr(
@@ -344,8 +347,19 @@ class ArbitrageReport:
     calendar_violations: int = 0
     negative_variance: int = 0
     total_checks: int = 0
-    passed: bool = True
+    unevaluable: int = 0
+    butterfly_triples_tested: int = 0
     details: list[str] = field(default_factory=list)
+
+    @property
+    def passed(self) -> bool:
+        """True only if at least one butterfly triple was tested and nothing failed or went unchecked."""
+        return (
+            self.butterfly_triples_tested > 0
+            and self.unevaluable == 0
+            and self.negative_variance == 0
+            and self.butterfly_violations == 0
+        )
 
 
 def check_smile_arbitrage(
@@ -359,23 +373,34 @@ def check_smile_arbitrage(
     Checks:
     - No negative total variance
     - Butterfly arbitrage: d^2 w / dk^2 >= 0 (convexity of total variance in log-moneyness)
+
+    Strikes are de-duplicated and sorted first: the convexity test needs
+    strictly ascending log-moneyness, and a chain carries a call and a put at
+    every strike. A strike where the fit cannot produce a vol is counted in
+    ``unevaluable``; any such strike leaves part of the smile unchecked. A
+    report that tested no butterfly triple (fewer than three distinct
+    strikes) does not pass either.
     """
     report = ArbitrageReport()
     ttm = fit.ttm
+    strikes = np.unique(np.asarray(strikes, dtype=float))
     log_k = np.log(strikes / forward)
 
     # Compute total variance at each strike
     total_vars: list[float] = []
-    for _k_val, strike in zip(log_k, strikes, strict=False):
+    for strike in strikes:
         try:
             v = fit.volatility(strike)
             w = v * v * ttm
             total_vars.append(w)
         except (ValueError, RuntimeError):
+            report.unevaluable += 1
             total_vars.append(float("nan"))
 
     w_arr = np.array(total_vars)
     report.total_checks = len(strikes)
+    if report.unevaluable:
+        report.details.append(f"{report.unevaluable} of {len(strikes)} strikes have no evaluable vol")
 
     # Negative variance
     neg_mask = w_arr < -1e-10
@@ -389,9 +414,15 @@ def check_smile_arbitrage(
             if dk1 <= 0 or dk2 <= 0:
                 continue
             d2w = ((w_arr[i + 1] - w_arr[i]) / dk2 - (w_arr[i] - w_arr[i - 1]) / dk1) / (0.5 * (dk1 + dk2))
+            if not math.isfinite(d2w):
+                continue  # a neighbour has no vol; already counted in ``unevaluable``
+            report.butterfly_triples_tested += 1
             if d2w < -1e-6:
                 report.butterfly_violations += 1
                 report.details.append(f"Butterfly violation at K={strikes[i]:.2f}: d2w/dk2={d2w:.6f}")
 
-    report.passed = report.negative_variance == 0 and report.butterfly_violations == 0
+    if report.butterfly_triples_tested == 0:
+        report.details.append(
+            f"no butterfly triple could be tested ({len(strikes)} distinct strikes, {report.unevaluable} unevaluable)"
+        )
     return report

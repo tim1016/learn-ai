@@ -1,17 +1,19 @@
-import { fireEvent, render, screen, within } from '@testing-library/angular';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import { JobsService } from '../../services/jobs.service';
 import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
 import { OptionsBacktestPageComponent } from './options-backtest-page.component';
 import { OptionsBacktestService } from './options-backtest.service';
+import { RunDetailService } from './run-detail/run-detail.service';
+import { inertRunDetail } from './run-detail/testing/fake-run-detail';
 import { RUN_POLL_MS } from './run-poll';
 import type { SessionClock } from './options-backtest.types';
 import { SESSION_CLOCK } from './testing/fixtures';
 import { press } from './testing/page-actions';
 import { fakeJobs } from './testing/fake-jobs';
 import { fakeService } from './testing/render-page';
-import { runItem } from './testing/run-fixtures';
+import { runDetail, runItem } from './testing/run-fixtures';
 import { goingDetail } from './testing/run-script';
 
 describe('before the session clock is read', () => {
@@ -66,6 +68,42 @@ describe('before the session clock is read', () => {
     fireEvent.click(within(side).getByRole('button', { name: /^SPY premium momentum, no re-entry/ }));
 
     await screen.findByRole('article', { name: 'Leg 1' });
+  });
+
+  it('cannot put the setup of a run in History into the form until the clock is read: it says why, and then does it', async () => {
+    let release: (clock: SessionClock) => void = () => undefined;
+    const complete = runItem({ id: 30, job_id: 'job-30', status: 'complete' });
+    const service = fakeService(vi, {
+      sessionClock: vi.fn(() => new Promise<SessionClock>((resolve) => (release = resolve))),
+      runs: vi.fn(async () => [complete]),
+      run: vi.fn(async () => runDetail({ ...complete })),
+    });
+    await render(OptionsBacktestPageComponent, {
+      inputs: { describeDebounceMs: 0 },
+      providers: [
+        ...fakePickerWorld().providers,
+        { provide: OptionsBacktestService, useValue: service },
+        { provide: JobsService, useValue: fakeJobs().service },
+        { provide: RunDetailService, useValue: inertRunDetail() },
+        { provide: RUN_POLL_MS, useValue: 0 },
+      ],
+    });
+    fireEvent.click(screen.getByRole('tab', { name: 'History' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Open run 30' }));
+    const section = await screen.findByRole('region', { name: 'The setup this run used' });
+    await within(section).findByText('Window for SPY.');
+    const use = within(section).getByRole<HTMLButtonElement>('button', { name: 'Use this setup' });
+
+    expect(use.disabled).toBe(true);
+    expect(within(section).getByText(/until the session times have been read/)).toBeTruthy();
+
+    release(SESSION_CLOCK);
+    await waitFor(() => expect(use.disabled).toBe(false));
+    expect(within(section).queryByText(/until the session times have been read/)).toBeNull();
+    use.click();
+
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Backtest' }).getAttribute('aria-selected')).toBe('true'));
+    expect(screen.getByText('The setup of that run was loaded. The dates were not changed.')).toBeTruthy();
   });
 });
 

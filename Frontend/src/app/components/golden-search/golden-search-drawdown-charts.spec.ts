@@ -33,6 +33,14 @@ describe('the drawdown chart spec', () => {
     expect(cells).toContain('10,000');
   });
 
+  it('states the resample count the reading was drawn over, not a fixed 10,000', () => {
+    const base = chanceDrawdown();
+    const spec = drawdownSpec(ALL_PERIOD, chanceDrawdown({ basis: { ...base.basis, replications: 2_000 }, percentiles: { p50: 0.092, p95: 0.158, finite: 1_980 } }), 'all_period');
+    const finite = spec.table.rows.find((row) => row.key === 'finite')?.cells.join(' ') ?? '';
+    expect(finite).toContain('1,980 of 2,000');
+    expect(finite).not.toContain('10,000');
+  });
+
   it('never promises one path in twenty at the percentile depth', () => {
     const spec = drawdownSpec(ALL_PERIOD, chanceDrawdown(), 'all_period');
     expect(JSON.stringify(spec.option(FAKE_CHART_THEME))).not.toContain('confidence');

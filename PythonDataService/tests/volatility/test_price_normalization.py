@@ -88,12 +88,12 @@ class TestFromSnapshotQuote:
     def test_real_quote_records_real_spread(self):
         nop = from_snapshot_quote(bid=1.20, ask=1.30)
         assert nop.source == "opra_mid"
-        assert nop.mid == pytest.approx(1.25)
-        assert nop.spread_estimate == pytest.approx(0.05)
+        assert nop.mid == pytest.approx(1.25, abs=1e-9)
+        assert nop.spread_estimate == pytest.approx(0.05, abs=1e-9)
         assert nop.spread_synthetic is False
         assert nop.half_spread_rule is None
         # quality = 1 - 0.05/1.25 = 0.96
-        assert nop.quality_score == pytest.approx(0.96)
+        assert nop.quality_score == pytest.approx(0.96, abs=1e-9)
 
     def test_zero_ask_collapses_to_quality_zero(self):
         nop = from_snapshot_quote(bid=0.0, ask=0.0)
@@ -103,10 +103,11 @@ class TestFromSnapshotQuote:
         assert nop.spread_estimate is None
 
     def test_zero_bid_with_positive_ask_is_zero_bid(self):
-        # Matches legacy OptionQuote semantics: a leg with bid=0 is not a
-        # real quote, no matter what the ask side says. This makes the
-        # NormalizedOptionPrice.is_zero_bid check the right truncation
-        # trigger for VIX-style replication.
+        # A leg with bid=0 is not a real quote, no matter what the ask side
+        # says. This makes the NormalizedOptionPrice.is_zero_bid check the
+        # right truncation trigger for VIX-style replication. (The legacy
+        # OptionQuote mid is 0.25 here; see
+        # test_vix_replication.py::TestLegacyAndNormalizedMidsDiffer.)
         nop = from_snapshot_quote(bid=0.0, ask=0.50)
         assert nop.is_zero_bid
         assert nop.mid == 0.0
@@ -121,7 +122,7 @@ class TestFromRecordedSnapshot:
     def test_records_recorded_source_tag(self):
         nop = from_recorded_snapshot(bid=1.20, ask=1.30)
         assert nop.source == "opra_mid_recorded"
-        assert nop.mid == pytest.approx(1.25)
+        assert nop.mid == pytest.approx(1.25, abs=1e-9)
         assert nop.spread_synthetic is False
 
 
@@ -132,22 +133,22 @@ class TestFromEodClose:
         assert nop.spread_synthetic is True
         assert nop.half_spread_rule == DEFAULT_HALF_SPREAD_RULE
         # half = max(0.05, 0.005 * 10.0) = 0.05
-        assert nop.spread_estimate == pytest.approx(0.05)
+        assert nop.spread_estimate == pytest.approx(0.05, abs=1e-9)
         # quality = 1 - 0.05/10.0 = 0.995
-        assert nop.quality_score == pytest.approx(0.995)
+        assert nop.quality_score == pytest.approx(0.995, abs=1e-9)
 
     def test_large_close_uses_percentage_branch(self):
         nop = from_eod_close(close=100.0)
         # half = max(0.05, 0.005 * 100.0) = 0.5
-        assert nop.spread_estimate == pytest.approx(0.5)
-        assert nop.quality_score == pytest.approx(0.995)
+        assert nop.spread_estimate == pytest.approx(0.5, abs=1e-9)
+        assert nop.quality_score == pytest.approx(0.995, abs=1e-9)
 
     def test_small_close_uses_floor_branch(self):
         nop = from_eod_close(close=1.00)
         # half = max(0.05, 0.005 * 1.00) = 0.05
-        assert nop.spread_estimate == pytest.approx(0.05)
+        assert nop.spread_estimate == pytest.approx(0.05, abs=1e-9)
         # quality = 1 - 0.05/1.0 = 0.95
-        assert nop.quality_score == pytest.approx(0.95)
+        assert nop.quality_score == pytest.approx(0.95, abs=1e-9)
 
     def test_zero_bid_threshold(self):
         nop = from_eod_close(close=0.04)
@@ -177,24 +178,24 @@ class TestTieredMoneynessHalfSpread:
 
         # |K-S|/S = 0 → ATM tier (0.5% of spot).
         hs = tiered_moneyness_half_spread(close=5.0, strike=590.0, spot=590.0)
-        assert hs == pytest.approx(max(0.05, 0.005 * 590.0))
-        assert hs == pytest.approx(2.95)
+        assert hs == pytest.approx(max(0.05, 0.005 * 590.0), abs=1e-9)
+        assert hs == pytest.approx(2.95, abs=1e-9)
 
     def test_moderate_otm_uses_100bp_tier(self):
         from app.volatility.price_normalization import tiered_moneyness_half_spread
 
         # |K-S|/S = 0.10 → moderate tier (1.0% of spot).
         hs = tiered_moneyness_half_spread(close=2.0, strike=649.0, spot=590.0)
-        assert hs == pytest.approx(max(0.05, 0.010 * 590.0))
-        assert hs == pytest.approx(5.90)
+        assert hs == pytest.approx(max(0.05, 0.010 * 590.0), abs=1e-9)
+        assert hs == pytest.approx(5.90, abs=1e-9)
 
     def test_deep_otm_uses_200bp_tier(self):
         from app.volatility.price_normalization import tiered_moneyness_half_spread
 
         # |K-S|/S = 0.20 → deep tier (2.0% of spot).
         hs = tiered_moneyness_half_spread(close=0.50, strike=708.0, spot=590.0)
-        assert hs == pytest.approx(max(0.05, 0.020 * 590.0))
-        assert hs == pytest.approx(11.80)
+        assert hs == pytest.approx(max(0.05, 0.020 * 590.0), abs=1e-9)
+        assert hs == pytest.approx(11.80, abs=1e-9)
 
     def test_breakpoint_5pct_inclusive_lower_tier(self):
         # |K-S|/S = exactly 0.05 → upper (moderate) tier; 5% of spot.
@@ -204,19 +205,19 @@ class TestTieredMoneynessHalfSpread:
             close=2.0, strike=619.49, spot=590.0
         )
         # 619.49/590 - 1 = 0.04998... < 0.05 → ATM tier
-        assert hs_just_below == pytest.approx(2.95)
+        assert hs_just_below == pytest.approx(2.95, abs=1e-9)
         hs_at_breakpoint = tiered_moneyness_half_spread(
             close=2.0, strike=619.50, spot=590.0
         )
         # 619.5/590 - 1 = 0.05 (exactly) → moderate tier
-        assert hs_at_breakpoint == pytest.approx(5.90)
+        assert hs_at_breakpoint == pytest.approx(5.90, abs=1e-9)
 
     def test_below_low_priced_underlying_floor_dollar_minimum_holds(self):
         from app.volatility.price_normalization import tiered_moneyness_half_spread
 
         # Tiny spot — the $0.05 absolute floor should bind.
         hs = tiered_moneyness_half_spread(close=0.10, strike=1.0, spot=1.0)
-        assert hs == pytest.approx(0.05)
+        assert hs == pytest.approx(0.05, abs=1e-9)
 
     def test_negative_inputs_rejected(self):
         from app.volatility.price_normalization import tiered_moneyness_half_spread
@@ -246,8 +247,8 @@ class TestFromEodCloseTieredMoneyness:
         # 0.005·5 = 0.025; quality drops accordingly. Pin the exact value
         # so accidental swap to close-anchored doesn't slip through.
         nop = from_eod_close_tiered_moneyness(close=5.0, strike=590.0, spot=590.0)
-        assert nop.spread_estimate == pytest.approx(2.95)
-        assert nop.quality_score == pytest.approx(max(0.0, 1.0 - 2.95 / 5.0))
+        assert nop.spread_estimate == pytest.approx(2.95, abs=1e-9)
+        assert nop.quality_score == pytest.approx(max(0.0, 1.0 - 2.95 / 5.0), abs=1e-9)
 
     def test_deep_otm_uses_widest_tier(self):
         from app.volatility.price_normalization import (
@@ -257,7 +258,7 @@ class TestFromEodCloseTieredMoneyness:
         # |K-S|/S = 0.20 → 2% of spot.
         nop = from_eod_close_tiered_moneyness(close=0.50, strike=708.0, spot=590.0)
         # half = 11.8 > mid = 0.5 → quality clamps to 0.
-        assert nop.spread_estimate == pytest.approx(11.80)
+        assert nop.spread_estimate == pytest.approx(11.80, abs=1e-9)
         assert nop.quality_score == 0.0
 
     def test_zero_bid_below_floor(self):

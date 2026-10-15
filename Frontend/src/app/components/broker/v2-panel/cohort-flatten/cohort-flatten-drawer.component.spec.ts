@@ -141,7 +141,7 @@ function fakeService(cohorts: CohortFlattenCohort[], batch = result([applied('qq
 
 function open(
   service: ReturnType<typeof fakeService>,
-  overrides: { directory?: ReturnType<typeof provideFleetDirectory> } = {},
+  overrides: { directory?: ReturnType<typeof provideFleetDirectory>; on?: Record<string, (value: never) => void> } = {},
 ) {
   const directory =
     overrides.directory ??
@@ -151,6 +151,7 @@ function open(
     });
   return render(CohortFlattenDrawerComponent, {
     inputs: { clerkId: 'clrk_spec', visible: true, broker: 'alpaca', accountId: 'PA1' },
+    ...(overrides.on === undefined ? {} : { on: overrides.on }),
     providers: [
       { provide: directory.provide, useValue: directory.useValue },
       { provide: BrokerV2PanelService, useValue: service },
@@ -462,6 +463,97 @@ describe('CohortFlattenDrawerComponent', () => {
     const [, first] = service.runCohortFlatten.mock.calls[0];
     const [, retry] = service.runCohortFlatten.mock.calls[1];
     expect(retry.idempotency_key).toBe(first.idempotency_key);
+  });
+
+  it('shows no outcome in a drawer closed while its wave was in flight, and still tells the host what ran', async () => {
+    const answer = deferred<CohortActionResult>();
+    const service = fakeService([QQQ_COHORT]);
+    service.runCohortFlatten = vi.fn(() => answer.promise);
+    const flattened = vi.fn();
+    await open(service, { on: { flattened } });
+    const user = userEvent.setup();
+    await screen.findAllByRole('checkbox');
+
+    await confirmWave(user, 2);
+    await vi.waitFor(() => expect(service.runCohortFlatten).toHaveBeenCalledOnce());
+    await user.click(screen.getByRole('button', { name: 'Close flatten a cohort' }));
+    answer.resolve(result([applied('qqq-1'), applied('qqq-2')]));
+
+    // What ran ran: the roster is told to read again. The closed drawer draws none of it.
+    await vi.waitFor(() => expect(flattened).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('region', { name: 'Flatten outcome' })).toBeNull();
+    expect(screen.queryByText(/of 0 sent/)).toBeNull();
+  });
+
+  it('shows no failure in a drawer closed while its wave was in flight', async () => {
+    const answer = deferred<CohortActionResult>();
+    const service = fakeService([QQQ_COHORT]);
+    service.runCohortFlatten = vi.fn(() => answer.promise);
+    const { fixture } = await open(service);
+    const user = userEvent.setup();
+    await screen.findAllByRole('checkbox');
+
+    await confirmWave(user, 2);
+    await vi.waitFor(() => expect(service.runCohortFlatten).toHaveBeenCalledOnce());
+    await user.click(screen.getByRole('button', { name: 'Close flatten a cohort' }));
+    answer.reject(new Error('network down'));
+    // The wave has ended once its progress line is gone: only then can its failure have been drawn.
+    await vi.waitFor(() => expect(document.querySelector('.cohort-flatten__progress')).toBeNull());
+    await fixture.whenStable();
+
+    expect(screen.queryByText(/did not reach a result/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Retry this batch' })).toBeNull();
+  });
+
+  it('tells the host to read again when every leg’s outcome is unknown, though none is known to have applied', async () => {
+    const flattened = vi.fn();
+    const service = fakeService(
+      [QQQ_COHORT],
+      result([
+        refused('qqq-1', { message: 'No answer.', reason_code: 'CLERK_UNREACHABLE' }, 'unknown'),
+        refused('qqq-2', { message: 'No answer.', reason_code: 'CLERK_UNREACHABLE' }, 'unknown'),
+      ]),
+    );
+    await open(service, { on: { flattened } });
+    const user = userEvent.setup();
+    await screen.findAllByRole('checkbox');
+
+    await confirmWave(user, 2);
+
+    await vi.waitFor(() => expect(flattened).toHaveBeenCalledTimes(1));
+  });
+
+  it('tells the host to read again when a wave closed over never got an answer, since it may have run', async () => {
+    const answer = deferred<CohortActionResult>();
+    const service = fakeService([QQQ_COHORT]);
+    service.runCohortFlatten = vi.fn(() => answer.promise);
+    const flattened = vi.fn();
+    await open(service, { on: { flattened } });
+    const user = userEvent.setup();
+    await screen.findAllByRole('checkbox');
+
+    await confirmWave(user, 2);
+    await vi.waitFor(() => expect(service.runCohortFlatten).toHaveBeenCalledOnce());
+    await user.click(screen.getByRole('button', { name: 'Close flatten a cohort' }));
+    answer.reject(new Error('network down'));
+
+    await vi.waitFor(() => expect(flattened).toHaveBeenCalledTimes(1));
+  });
+
+  it('says an unknown outcome as unknown in the summary, not as a failure', async () => {
+    const service = fakeService(
+      [QQQ_COHORT],
+      result([applied('qqq-1'), refused('qqq-2', { message: 'No answer for this bot.', reason_code: 'CLERK_UNREACHABLE' }, 'unknown')]),
+    );
+    await open(service);
+    const user = userEvent.setup();
+    await screen.findAllByRole('checkbox');
+
+    await confirmWave(user, 2);
+
+    const outcome = await screen.findByRole('region', { name: 'Flatten outcome' });
+    expect(within(outcome).getByText('Applied 1, replayed 0, refused 0, failed 0, outcome unknown 1 of 2 sent.')).toBeTruthy();
+    expect(within(outcome).getByText('Outcome unknown')).toBeTruthy();
   });
 
   it('mints a new key for a genuinely new wave from the re-read presentation', async () => {

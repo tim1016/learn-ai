@@ -51,6 +51,14 @@ describe('the final uncertainty chart specs', () => {
     expect(spec.summary).toContain('never percentile bins');
   });
 
+  it('says no path was defined instead of printing a zero rank over zero paths', () => {
+    const carry = chanceCarryOver({ rank: 0, below: 0, finite: 0, undefined: 10_000, label: 'no_defined_paths', curve: { p: [], finite: 0 } });
+    const rank = carryOverSpec(ALL_PERIOD, carry, 'all_period').table.rows.find((row) => row.key === 'rank')?.cells.join(' ') ?? '';
+    expect(rank).toContain('No rehearsal path was defined');
+    expect(rank).not.toContain('0 of 0');
+    expect(rank).not.toContain('0%');
+  });
+
   it('formats the curve by the recorded objective measure, never by a magnitude guess', () => {
     const base = chanceCarryOver();
     const carry = chanceCarryOver({

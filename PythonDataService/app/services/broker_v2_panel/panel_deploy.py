@@ -102,6 +102,9 @@ from app.services.broker_v2_panel.panel_scope import (
     validate_account_scope,
 )
 from app.services.broker_v2_panel.paper_deploy_service import (
+    GOLDEN_EVIDENCE_UNREAD_EXPLANATION,
+    GOLDEN_EVIDENCE_UNREAD_GATE_ID,
+    GOLDEN_EVIDENCE_UNREAD_HEADLINE,
     GoldenDefaults,
     ResolvedDeployParams,
     broker_mode_for,
@@ -133,6 +136,14 @@ _RESEARCH_READ_ERRORS: tuple[type[BaseException], ...] = (
     TypeError,
     ValueError,
 )
+
+
+class GoldenValidationEvidenceUnreadable(Exception):
+    """The research store did not answer, so no Golden Validation scope can be offered.
+
+    Distinct from "there are none": the Deploy view says so, rather than
+    reading a failed read as an account that has never been validated.
+    """
 
 
 async def _ready_golden_defaults() -> GoldenDefaults:
@@ -191,6 +202,10 @@ async def _current_golden_validation_scopes(
 ) -> dict[str, tuple[GoldenValidationScope, ...]]:
     """Return every current, exact Golden scope whose program version is runnable.
 
+    Raises ``GoldenValidationEvidenceUnreadable`` when the research store
+    cannot be read: an empty answer means there are no scopes, never that
+    none could be read.
+
     The catalog applies its requested-symbol filter only after it knows which
     strategies have Golden evidence. Querying a symbol-filtered subset here
     would erase that fact and let a legacy strategy-wide validation fall back
@@ -203,8 +218,11 @@ async def _current_golden_validation_scopes(
             symbol=None,
         )
     except (*_RESEARCH_READ_ERRORS, golden_validation_service.GoldenValidationError) as exc:
-        logger.warning("Golden Validation catalog projection unavailable: %s", type(exc).__name__)
-        return {}
+        logger.warning(
+            "Golden Validation catalog projection unavailable",
+            extra={"action": "golden_validation_scopes_unavailable", "error": type(exc).__name__},
+        )
+        raise GoldenValidationEvidenceUnreadable from exc
 
     current: dict[str, list[GoldenValidationScope]] = {}
     for dossier in dossiers:
@@ -291,6 +309,11 @@ async def get_alpaca_paper_deploy_view(
         ) from exc
     context = get_active_alpaca_binding()
     golden_defaults = await _ready_golden_defaults()
+    try:
+        current_scopes = await _current_golden_validation_scopes(symbol)
+        golden_validation_unread = False
+    except GoldenValidationEvidenceUnreadable:
+        current_scopes, golden_validation_unread = {}, True
     return build_alpaca_paper_deploy_view(
         account,
         clerk,
@@ -298,10 +321,9 @@ async def get_alpaca_paper_deploy_view(
         default_exit_terms=exit_terms or (None if context is None else context.default_exit_terms),
         symbol=symbol,
         custody_world=custody_world,
-        golden_validation_scopes=_prefer_default_scopes(
-            await _current_golden_validation_scopes(symbol), golden_defaults
-        ),
+        golden_validation_scopes=_prefer_default_scopes(current_scopes, golden_defaults),
         golden_defaults=golden_defaults,
+        golden_validation_unread=golden_validation_unread,
     )
 
 
@@ -464,6 +486,7 @@ def _claim_bot_name(
     try:
         return ledger.claim(
             submission_key=request.submission_key,
+            account_id=account_id,
             symbol=request.symbol,
             strategy_key=request.strategy_key,
             request_fingerprint=_submission_fingerprint(account_id, request),
@@ -626,6 +649,27 @@ def _uncommitted(
     )
 
 
+def _require_claim_of_account(claim: DeploySubmission | None, account_id: str) -> None:
+    """A claim is answered only for the account it was claimed under (#3217).
+
+    Another account's custody holds no row for the bot, so reading it there
+    would answer ``not_committed`` for a Deploy that committed -- and the
+    client frees a key whose bot is on duty. A claim written before claims
+    named their account carries none, and is read under the route's own
+    account, exactly as it always was.
+    """
+    if claim is None or claim.account_id is None or claim.account_id == canonical_alpaca_account_id(account_id):
+        return
+    raise AccountMismatchError(
+        "This Deploy was sent under another account.",
+        detail=(
+            f"Its submission key was claimed under account {claim.account_id}; this is account {account_id}. "
+            "Nothing about it is read or settled here."
+        ),
+        next_action=f"Open account {claim.account_id} and check this Deploy's status there.",
+    )
+
+
 async def deploy_submission_status(
     account_id: str, submission_key: str,
 ) -> BudgetDeployCommandReceipt | DeploySubmissionUncommitted | None:
@@ -636,15 +680,26 @@ async def deploy_submission_status(
     tells a client that a Deploy still running started nothing. Otherwise the
     committed Deploy's receipt, or the name the key still holds after
     custody is read and never committed; ``None`` only for a key never
-    claimed and not being sent. With
-    no bot runner there is no ledger to read, so the read is refused (503)
-    rather than answered.
+    claimed and not being sent. With no bot runner there is no ledger to
+    read, so the read is refused (503) rather than answered.
+
+    A claim is answered only for the account it was claimed under (#3217):
+    another account's claimed key -- recorded, or named and in flight -- is
+    a typed 404 that frees nothing. Three kinds of key carry no account to
+    compare: a claim recorded before claims named their account, which is
+    read under the route's account as it always was; a key still being sent
+    that has not named its bot yet, which reads ``in_flight``; and a key
+    never claimed. The route's account is checked against the custody
+    authority by the receipt read itself, and the broker is never asked, so
+    a Deploy whose response was lost can be recovered while Alpaca's
+    account read is down.
     """
     ledger = DeploySubmissionLedger(_runner().artifacts_root)
     while submission_key not in _SENDING:
         claim = ledger.by_key(submission_key)
         if claim is None:
             return None
+        _require_claim_of_account(claim, account_id)
         receipt = await _committed_receipt(account_id, claim)
         if receipt is not None:
             return receipt
@@ -653,7 +708,9 @@ async def deploy_submission_status(
         # still holds is answered ``not_committed``; a renamed one is read again.
         if submission_key not in _SENDING and ledger.by_key(submission_key) == claim:
             return _uncommitted("not_committed", submission_key, claim)
-    return _uncommitted("in_flight", submission_key, _SENDING[submission_key])
+    sending = _SENDING[submission_key]
+    _require_claim_of_account(sending, account_id)
+    return _uncommitted("in_flight", submission_key, sending)
 
 
 async def preview_alpaca_paper_start_admission(
@@ -911,10 +968,19 @@ def _require_alpaca_deploy_request(
         None,
     )
     if strategy is None:
+        evidence_unread = any(check.gate_id == GOLDEN_EVIDENCE_UNREAD_GATE_ID for check in view.readiness_checks)
         raise PanelRunnerError(
             "The selected strategy is not currently accepted for Alpaca deployment.",
-            detail="Its latest validation evidence is missing, superseded, invalidated, or not accepted for deploy.",
-            next_action="Review the strategy in Strategy Validation, then refresh this page.",
+            detail=(
+                f"{GOLDEN_EVIDENCE_UNREAD_HEADLINE} {GOLDEN_EVIDENCE_UNREAD_EXPLANATION}"
+                if evidence_unread
+                else "Its latest validation evidence is missing, superseded, invalidated, or not accepted for deploy."
+            ),
+            next_action=(
+                "Restore the research store, then refresh this page."
+                if evidence_unread
+                else "Review the strategy in Strategy Validation, then refresh this page."
+            ),
             http_status=409,
         )
     offered = {mode.mode for mode in view.execution_modes if mode.availability == "available"}

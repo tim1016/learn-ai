@@ -3,7 +3,7 @@
 Formula: Same Black-Scholes-Merton math as bs_greeks.py (Hull §15.8 / §19), but routed through QuantLib's compiled C++ implementation. Uses analytic_bs engine for analytical pricing; alternate engines available for stress / sensitivity work.
 Reference: Hull §15.8, §19; QuantLib C++ source (quantlib.org). The Python bindings are SWIG-generated.
 Canonical implementation: this file (QuantLib variant). Companion canonical: app/services/bs_greeks.py (closed-form variant). Both are parity-pinned canonical. The frontend's app/utils/black-scholes.ts is a render-helper-only legacy path with two intentional callers (pricing-lab, strategy-builder) — not a math authority.
-Validated against: PythonDataService/tests/services/test_bs_cross_engine_parity.py — 360-case grid at atol=1e-10 between this file and bs_greeks.py (Phase 1.4 shipped 2026-04-26, precision-leak fix 69d2bfe). Greek-only cross-engine parity is pending-fixture.
+Validated against: PythonDataService/tests/services/test_bs_cross_engine_parity.py — 360-case grid between this file and bs_greeks.py: price at atol=1e-10 (Phase 1.4 shipped 2026-04-26, precision-leak fix 69d2bfe) and delta/gamma/theta/vega/rho at atol=1e-8 (price_option rounds its Greeks to 8 decimals).
 
 Uses the compiled QuantLib C++ library via SWIG Python bindings to compute
 theoretical prices and Greeks (delta, gamma, theta, vega, rho) for European
@@ -17,6 +17,9 @@ import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
 from enum import StrEnum
+
+from app.utils.session_anchors import et_date_at_ms
+from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +139,7 @@ def price_option(
         volatility: Annualized implied volatility (e.g. 0.20 for 20%)
         expiration_date: Option expiration date
         option_type: 'call' or 'put'
-        evaluation_date: Pricing date (defaults to today)
+        evaluation_date: Pricing date (defaults to today's New York date)
         dividend_yield: Annualized continuous dividend yield
         engine: Which QuantLib pricing engine to use
 
@@ -145,7 +148,7 @@ def price_option(
     """
     _ensure_ql()
 
-    eval_d = evaluation_date or date.today()
+    eval_d = evaluation_date or et_date_at_ms(now_ms_utc())
     ql_eval = _ql_date(eval_d)
     ql.Settings.instance().evaluationDate = ql_eval
 
@@ -333,7 +336,7 @@ def implied_volatility(
     """
     _ensure_ql()
 
-    eval_d = evaluation_date or date.today()
+    eval_d = evaluation_date or et_date_at_ms(now_ms_utc())
     ql_eval = _ql_date(eval_d)
     ql.Settings.instance().evaluationDate = ql_eval
     ql_expiry = _ql_date(expiration_date)

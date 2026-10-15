@@ -42,6 +42,7 @@ from app.broker.alpaca.clerk.sqlite.idempotency import (
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_uncertain
 from app.broker.alpaca.clerk.sqlite.repository import (
+    ClaimLostAfterBrokerIO,
     ClerkSqliteRepository,
     OperationClaimError,
 )
@@ -1515,7 +1516,10 @@ async def test_expired_submit_attempt_cannot_fold_its_late_broker_response(
         repo.clock.advance(2)  # type: ignore[attr-defined]
 
     trade = _FakeTrade(on_submit=expire_claim)
-    with pytest.raises(OperationClaimError):
+    # The broker had answered, so the claim loss is the after-I/O one, never "another owner
+    # holds it". It is still a claim error: ``submit_accepted_enter`` has no handler for
+    # either and the lease is healthy.
+    with pytest.raises(ClaimLostAfterBrokerIO):
         await submit_enter(
             repo,
             account_id=ACCOUNT_ID,

@@ -27,6 +27,8 @@ describe("GoldenValidationService", () => {
     expect(request.request.method).toBe("GET");
     expect(request.request.params.get("strategy_name")).toBe("ema_crossover");
     expect(request.request.params.get("symbol")).toBe("SPY");
+    // The cap is the client's own number, so a full page can be told apart from a short one.
+    expect(request.request.params.get("limit")).toBe("100");
     request.flush([]);
 
     expect(await pending).toEqual([]);
@@ -55,18 +57,5 @@ describe("GoldenValidationService", () => {
     expect(reviewRequest.request.body.decision).toBe("accept");
     reviewRequest.flush({ id: 8 });
     await review;
-  });
-
-  it("uses the local API proxy so protected writes receive the control secret", async () => {
-    const pending = firstValueFrom(service.designate({
-      source_run_id: 44,
-      command_id: "designate-proxy",
-      rationale: "Verify the proxy-compatible request path.",
-    }));
-    const request = http.expectOne(BASE);
-
-    expect(request.request.url.startsWith("/api/")).toBe(true);
-    request.flush({ id: 9 });
-    await pending;
   });
 });

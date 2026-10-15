@@ -447,7 +447,9 @@ export class BotPanelShellComponent {
     onCleanup(() => clearInterval(timer));
   });
   /** The price the Clerk is being asked to read, while it is being asked. */
-  private readonly flattenPriceCheck = signal<number | null>(null);
+  protected readonly flattenPriceCheck = signal<number | null>(null);
+  /** How many price checks have ended; the ticket tells a failed one by this moving with no answer. */
+  protected readonly flattenPriceChecksEnded = signal(0);
   protected readonly historicalRecoveryDraft = linkedSignal({
     source: this.routeIdentity,
     computation: (): HistoricalExecutionRecoveryDraft | null => null,
@@ -969,7 +971,7 @@ export class BotPanelShellComponent {
       return;
     }
     if (action.action_id === 'recover_exact_execution_evidence') {
-      await this.prepareHistoricalExecutionRecovery(action, this.commandTarget(target), sid);
+      await this.prepareHistoricalExecutionRecovery(action, target, sid);
       return;
     }
     this.actionPending.set(true);
@@ -1330,6 +1332,7 @@ export class BotPanelShellComponent {
       await this.refreshFlattenQuote(true, limitPrice, bandOverride);
     } finally {
       this.flattenPriceCheck.set(null);
+      this.flattenPriceChecksEnded.update((count) => count + 1);
     }
   }
 
@@ -1446,8 +1449,10 @@ export class BotPanelShellComponent {
     this.actionPending.set(true);
     this.actionReceipt.set(null);
     try {
+      // Prepare and confirm are two fleet operations and the routing ledger pins a key to one
+      // operation, so each step mints its own: the draft holds the target un-keyed.
       const receipt = await this.panelSvc.confirmHistoricalExecutionRecovery(
-        draft.target,
+        this.commandTarget(draft.target),
         draft.sid,
         draft.plan,
       );
@@ -1484,7 +1489,7 @@ export class BotPanelShellComponent {
     this.historicalRecoveryDraft.set(null);
     try {
       const plan = await this.panelSvc.prepareHistoricalExecutionRecovery(
-        target,
+        this.commandTarget(target),
         sid,
         action.concurrency_token,
       );

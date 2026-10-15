@@ -69,7 +69,8 @@ _FRONTEND_SNAPSHOT_PATH = (
 
 def test_the_declared_set_equals_the_live_subclass_closure() -> None:
     """Every FleetControlError subclass in app/ is declared, and vice versa."""
-    live = {cls.reason for cls in _subclass_closure(FleetControlError)}
+    live_classes = _subclass_closure(FleetControlError)
+    live = {cls.reason for cls in live_classes}
     declared = set(FLEET_REFUSAL_REASONS) - _MINTED_OUTSIDE_THE_CLOSURE
     missing_from_declared = sorted(live - declared)
     missing_from_live = sorted(declared - live)
@@ -80,6 +81,8 @@ def test_the_declared_set_equals_the_live_subclass_closure() -> None:
     assert not missing_from_live, (
         f"FLEET_REFUSAL_REASONS declares code(s) no live subclass raises: {missing_from_live}"
     )
+    for cls in live_classes:
+        assert FLEET_REFUSAL_REASONS[cls.reason].status_code == cls.status_code
 
 
 def test_every_minted_reason_literal_is_declared() -> None:

@@ -250,14 +250,6 @@ class Recommendation:
         return {"headline": self.headline, "findings": [finding.as_dict() for finding in self.findings]}
 
 
-def same_as(candidates: Sequence[CandidateEvidence]) -> dict[CandidateKey, list[CandidateKey]]:
-    """For each candidate, the other candidates with the identical point."""
-    return {
-        candidate.key: [other.key for other in candidates if other.key != candidate.key and other.point_hash == candidate.point_hash]
-        for candidate in candidates
-    }
-
-
 _OBJECTIVE_VERB = {
     "sharpe_ratio": "has the higher Sharpe ratio",
     "total_return_pct": "returns more",

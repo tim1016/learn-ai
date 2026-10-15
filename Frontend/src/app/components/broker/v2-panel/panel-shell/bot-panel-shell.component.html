@@ -91,6 +91,8 @@
               [quantity]="ticket.quantity"
               [quoteReceivedAtMs]="ticket.receivedAtMs"
               [pending]="actionPending()"
+              [checkInFlight]="flattenPriceCheck() !== null"
+              [checksEnded]="flattenPriceChecksEnded()"
               (send)="sendExtendedFlatten($event)"
               (priceCheck)="priceExtendedFlatten($event)"
               (overridePriceCheck)="priceExtendedFlatten($event, true)"

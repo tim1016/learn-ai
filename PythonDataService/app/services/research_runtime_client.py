@@ -19,6 +19,7 @@ moves with execution (#3042).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -54,7 +55,7 @@ def is_research_runtime() -> bool:
     return os.environ.get("RESEARCH_RUNTIME", "").strip() == "1"
 
 
-def _require_runtime_url() -> str:
+async def _require_runtime_url() -> str:
     url = settings.RESEARCH_RUNTIME_URL.strip().rstrip("/")
     if not url:
         raise HTTPException(
@@ -64,7 +65,7 @@ def _require_runtime_url() -> str:
     from app.broker.fleet.internal_http import FleetTransportRefused
 
     try:
-        enforce_private_http_target(url)
+        await asyncio.to_thread(enforce_private_http_target, url)
     except FleetTransportRefused as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -105,7 +106,7 @@ async def forward_grid_search_job(payload: dict[str, Any]) -> dict[str, Any]:
 
 async def _post_runtime_dispatch(path: str, payload: dict[str, Any]) -> httpx.Response:
     """One authenticated hop to the runtime's internal dispatch surface."""
-    base = _require_runtime_url()
+    base = await _require_runtime_url()
     secret = settings.DATA_PLANE_CONTROL_SECRET.strip()
     async with build_internal_client(timeout_s=FORWARD_TIMEOUT_S) as client:
         return await client.post(f"{base}{path}", json=payload, headers={CONTROL_SECRET_HEADER: secret})

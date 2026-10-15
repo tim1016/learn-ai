@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from datetime import date
+from datetime import date, timedelta
 
+import numpy as np
 import pytest
 
-from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open_ms_utc
+from app.engine.results.statistics import EquityPoint, summarize
+from app.lean_sidecar.trading_calendar import expected_sessions, session_close_ms_utc, session_open_ms_utc
+from app.research.golden_search.chance import SessionSeries, path_net_return, path_sharpe
+from app.research.golden_search.chance_compare import admit_run
 from app.research.golden_search.declarations import point_hash as hash_point
 from app.research.golden_search.evaluator import (
     EXIT_AT_WINDOW_END,
@@ -221,6 +225,46 @@ def test_a_failed_engine_run_is_a_failed_evaluation_with_its_reason() -> None:
     assert (result.metrics.status, result.metrics.error, result.detail, result.curve) == ("failed", "no bars", None, None)
 
 
+def test_a_projected_engine_run_is_admitted_and_resamples_to_the_sharpe_and_return_the_engine_reported() -> None:
+    # Nothing downstream of the engine's own statistics is hand-built: marked equity -> summarize -> the
+    # projected detail -> admission -> the resampled path statistics, each read back against what the engine said.
+    capital = 100_000.0
+    sessions = expected_sessions(date(2025, 1, 2), date(2025, 6, 30))[:60]
+    closes = capital * np.cumprod(1.0 + np.random.default_rng(7).normal(0.0005, 0.01, len(sessions)))
+    curve = []
+    for day, close in zip(sessions, closes, strict=True):
+        # Two marks a session; the later one is the session's last, so it is the daily equity.
+        curve.append({"timestamp": session_open_ms_utc(day) + 60_000, "equity": float(close) * 1.001, "cash": 0.0, "holdings_value": 0.0})
+        curve.append({"timestamp": session_close_ms_utc(day), "equity": float(close), "cash": 0.0, "holdings_value": 0.0})
+    window = (et_midnight_ms(sessions[0]), et_midnight_ms(sessions[-1] + timedelta(days=1)))
+    statistics = summarize(
+        initial_cash=capital,
+        final_equity=float(closes[-1]),
+        trades=[],
+        trading_days=len(sessions),
+        equity_curve=[EquityPoint(timestamp_ms=point["timestamp"], equity=point["equity"]) for point in curve],
+    )
+    response = _response(
+        statistics=statistics,
+        trades=[],
+        total_trades=0,
+        final_equity=float(closes[-1]),
+        net_profit=float(statistics["net_profit"]),
+        equity_curve=curve,
+        equity_day_ends=[{"timestamp": point["timestamp"], "equity": point["equity"]} for point in curve[1::2]],
+    )
+
+    result = project_response(_request(detail=True, window=window), response, strategy_key="ema_crossover_signal", initial_cash=capital)
+
+    admitted = admit_run(result.metrics, result.detail, window)
+    assert isinstance(admitted, SessionSeries), admitted
+    one_path = admitted.returns[np.newaxis, :]
+    assert result.metrics.sharpe_ratio is not None and result.metrics.total_return_pct is not None and result.metrics.net_profit is not None
+    assert path_sharpe(one_path)[0] == pytest.approx(result.metrics.sharpe_ratio, abs=1e-9, rel=0)
+    assert path_net_return(one_path)[0] == pytest.approx(result.metrics.total_return_pct, abs=1e-9, rel=0)
+    assert capital * path_net_return(one_path)[0] == pytest.approx(result.metrics.net_profit, abs=1e-6, rel=0)
+
+
 # ── Durable detail readback (#3039) ─────────────────────────────────────
 
 
@@ -395,6 +439,48 @@ def test_final_chance_propagates_a_durable_evidence_integrity_failure() -> None:
 
     with pytest.raises(EvidenceIntegrityError, match="no recorded detail payload"):
         _final_chance_for(ctx, _CorruptDetailEvaluator(), fit, completed, None)
+
+
+def test_run_exam_propagates_a_durable_evidence_integrity_failure_from_the_fit_to_fit_reading(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fit-to-fit reading resamples the same durable details the per-fit readings do, so corrupt bytes fail the exam too (#3039)."""
+    from types import SimpleNamespace
+
+    from app.research.golden_search import stages
+    from app.research.golden_search.protocol import SelectionPolicy
+    from app.research.golden_search.selection import Metrics
+
+    completed = Metrics(status="completed", total_trades=40, net_profit=1.0, total_return_pct=0.01, sharpe_ratio=1.0, max_drawdown_pct=0.01, win_rate=1.0)
+    incumbent_params = {"symbol": "SPY", "gap": 0.2}
+
+    class _Evaluator:
+        def evaluate(self, points, **_kwargs):
+            return [completed for _ in points]
+
+        def detail_of(self, point, *, window):
+            if point is incumbent_params:
+                return None
+            raise EvidenceIntegrityError("evaluation k: no recorded detail payload")
+
+    fits = [
+        {"key": "all_period", "same_as": [], "point": {"symbol": "SPY", "gap": 0.3}, "point_hash": "a"},
+        {"key": "recent", "same_as": [], "point": {"symbol": "SPY", "gap": 0.4}, "point_hash": "b"},
+    ]
+    ctx = SimpleNamespace(
+        results={"exam": {"fits": fits}},
+        row=SimpleNamespace(budget_cap=5000),
+        protocol=SimpleNamespace(policy=SelectionPolicy(objective="sharpe_ratio", min_trades=30, max_drawdown_ceiling=0.2), incumbent=SimpleNamespace(params=incumbent_params)),
+        final=(0, 1),
+        floors=SimpleNamespace(at=lambda window, final: 30, frequency_based=False),
+        evaluator=lambda **_kwargs: _Evaluator(),
+        on_phase=lambda phase: None,
+        cancel_check=lambda: None,
+    )
+    monkeypatch.setattr(stages, "stage_total", lambda row, stage: 0)
+    monkeypatch.setattr(stages, "_development_metrics", lambda ctx, point_digest: None)
+    monkeypatch.setattr(stages, "_final_chance_for", lambda *args: {})
+
+    with pytest.raises(EvidenceIntegrityError, match="no recorded detail payload"):
+        stages.run_exam(ctx)
 
 
 # ── The ordered ready-batch seam (#3040) ─────────────────────────────────

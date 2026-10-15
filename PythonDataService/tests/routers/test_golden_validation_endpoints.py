@@ -21,6 +21,25 @@ def _requires_ephemeral_db() -> None:
         pytest.skip("live-DB endpoint tests need an ephemeral POSTGRES_URL")
 
 
+async def test_an_id_past_the_integer_column_is_a_422_not_a_server_error() -> None:
+    past_the_column = 2**31
+    review = {
+        "command_id": "review-past-the-column",
+        "expected_evidence_revision": "0" * 64,
+        "decision": "accept",
+        "reason": "Paper observation may proceed.",
+    }
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        designated = await client.post(
+            "/api/research/golden-validations",
+            json={"source_run_id": past_the_column, "command_id": "designate-past-the-column", "rationale": "The source run is real."},
+        )
+        reviewed = await client.post(f"/api/research/golden-validations/{past_the_column}/reviews", json=review)
+
+    assert (designated.status_code, reviewed.status_code) == (422, 422), (designated.text, reviewed.text)
+
+
 async def test_designate_review_and_list_are_one_referenceable_workflow() -> None:
     _requires_ephemeral_db()
     symbol = f"G{uuid.uuid4().hex[:6].upper()}"

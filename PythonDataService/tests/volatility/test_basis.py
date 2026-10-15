@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -47,6 +48,16 @@ class TestNyseTradingDayCount:
         # 2024-03-04 14:30 UTC = 09:30 ET → ET date 03-04, same as naive 03-04.
         ts_ms = int(pd.Timestamp("2024-03-04 14:30", tz="UTC").value // 10**6)
         assert nyse_trading_days_in_window(ts_ms, 30) == 21
+
+    def test_numpy_int64_ms_utc_input(self):
+        # A timestamp read out of an int64 array is np.int64, which is not a
+        # Python int; it must take the same ms-UTC branch.
+        ts_ms = int(pd.Timestamp("2024-03-04 14:30", tz="UTC").value // 10**6)
+        assert nyse_trading_days_in_window(np.int64(ts_ms), 30) == 21
+
+    def test_bool_is_not_a_timestamp(self):
+        with pytest.raises(TypeError, match="asof"):
+            nyse_trading_days_in_window(True, 30)
 
     def test_late_utc_belongs_to_prior_et_date(self):
         # 2024-03-05 04:00 UTC = 2024-03-04 23:00 ET → ET date 03-04.

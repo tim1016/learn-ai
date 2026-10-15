@@ -32,6 +32,8 @@ export class DeployTradedAssetComponent {
   readonly warning = input<TradedAssetWarning | null>(null);
   /** Why the picked asset cannot be traded, from the backend. */
   readonly refusal = input<string | null>(null);
+  /** Said when the check on the picked asset could not be read, so silence is not read as "nothing to say". */
+  readonly checkFailure = input<string | null>(null);
 
   readonly tradedSymbolChange = output<string | null>();
   /** The owner chose Options, or left them. */

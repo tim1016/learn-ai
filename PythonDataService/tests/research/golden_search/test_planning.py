@@ -403,6 +403,26 @@ def test_a_strategy_without_a_declaration_is_named_unavailable() -> None:
     assert preflight_view(plan, None)["estimate"] is None
 
 
+def test_a_seed_equal_to_the_qualified_tuple_is_refused_and_the_registry_point_is_not(tmp_path: Path) -> None:
+    # The qualified tuple was chosen on data the folds test, so it may be the benchmark but never where they start (ADR 0074).
+    symbol = unique_symbol()
+    seed_lake(tmp_path, symbol)
+    registry = registry_incumbent(EMA, symbol).params
+    qualified = {**registry, "gap": 0.35}
+    request = plan_request(symbol, incumbent={"source": "qualification", "qualification_id": "gq-1", "params": qualified})
+
+    leaked = review_plan(protocol_from_request({**request, "seed": qualified}), roots=[tmp_path])
+    assert [(refusal.code, refusal.field) for refusal in leaked.refusals] == [("SEED_IS_QUALIFIED", "seed")]
+
+    assert review_plan(protocol_from_request({**request, "seed": registry}), roots=[tmp_path]).refusals == ()
+    # A plan that omits its seed starts at the registry point, never at the qualified tuple.
+    omitted = protocol_from_request({**request, "seed": None})
+    assert omitted.seed == registry and review_plan(omitted, roots=[tmp_path]).refusals == ()
+    # A qualified tuple that is the registry point itself leaks nothing the registry did not already fix.
+    same_point = plan_request(symbol, incumbent={"source": "qualification", "qualification_id": "gq-2", "params": registry})
+    assert review_plan(protocol_from_request(same_point), roots=[tmp_path]).refusals == ()
+
+
 # ── Default intervals ────────────────────────────────────────────────────
 
 
@@ -705,6 +725,18 @@ def test_interval_lengths_below_one_month_are_refused() -> None:
     with pytest.raises(GoldenSearchRefusal) as refused:
         _intervals(earliest_session=None, final_months=0)
     assert refused.value.code == "INTERVALS_INVALID"
+
+
+@pytest.mark.parametrize("params", [{"gap": "wide"}, {"gap": None}, {"gap": True}, {"gap": float("nan")}, {"bogus": 1}])
+def test_an_incumbent_that_is_not_numbers_for_declared_knobs_is_refused_not_raised(params: dict[str, object]) -> None:
+    request = plan_request("SPY")
+    request["seed"] = dict(request["incumbent"]["params"])  # a clean seed, so only the incumbent is wrong
+    request["incumbent"]["params"] = {**request["incumbent"]["params"], **params}
+
+    plan = review_plan(protocol_from_request(request), roots=[])
+
+    assert [refusal.code for refusal in plan.refusals] == ["INCUMBENT_INVALID"]
+    assert (plan.refusals[0].field or "").startswith("incumbent.params")
 
 
 def test_a_lock_refused_for_several_reasons_carries_every_refusal(tmp_path: Path) -> None:

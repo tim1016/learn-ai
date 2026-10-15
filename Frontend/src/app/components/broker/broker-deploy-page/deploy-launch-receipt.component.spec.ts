@@ -50,6 +50,31 @@ describe('DeployLaunchReceiptComponent', () => {
     expect(screen.queryByRole('link', { name: 'Open bot control' })).toBeNull();
   });
 
+  it('draws a launch that failed as failed: no money set aside, no first deploy', async () => {
+    await render(DeployLaunchReceiptComponent, {
+      providers: [provideRouter([])],
+      inputs: {
+        receipt: {
+          ...RECEIPT,
+          status: 'failed',
+          outcome: 'failure',
+          message: 'spy-ema-20260929-0931 did not launch',
+          explanation: 'Nothing is running. Its budget is released.',
+          next_action: 'Deploy again when the cause is fixed.',
+        },
+        botLink: null,
+      },
+    });
+
+    expect(screen.getByRole('heading', { name: 'spy-ema-20260929-0931 did not launch' })).toBeTruthy();
+    expect(screen.getByText('Failed')).toBeTruthy();
+    expect(screen.queryByText('Set aside')).toBeNull();
+    expect(screen.queryByText('First deployed')).toBeNull();
+    expect(screen.getByText('×')).toBeTruthy();
+    expect(screen.queryByText('✓')).toBeNull();
+    expect(screen.getByText('Deploy again when the cause is fixed.')).toBeTruthy();
+  });
+
   it('never names the real account for a Dry Run, whose cash is simulated (H18)', async () => {
     await render(DeployLaunchReceiptComponent, {
       providers: [provideRouter([])],

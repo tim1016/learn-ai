@@ -216,7 +216,8 @@ def _start_shared_worker_pool() -> None:
         result_bound_bytes=settings.RESEARCH_POOL_RESULT_BOUND_BYTES,
     )
     logger.info(
-        "research worker pool started: %s",
+        "research worker pool started with %d lanes under the %s",
+        count,
         worker_profile(count),
         extra={"action": "research_pool_started", **pool.facts()},
     )

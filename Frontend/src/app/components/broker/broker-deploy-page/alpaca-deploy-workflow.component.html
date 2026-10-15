@@ -118,6 +118,7 @@
             [summary]="view.action_plan_explanation"
             [warning]="tradedWarningAtWhat()"
             [refusal]="tradedRefusal()"
+            [checkFailure]="tradedCheckFailure()"
             (tradedSymbolChange)="setTradedSymbol($event)"
             (optionsChosenChange)="setOptionsChosen($event)"
           >

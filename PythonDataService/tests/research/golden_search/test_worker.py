@@ -18,6 +18,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 
 from app.config import settings
 from app.research.golden_search.evaluator import (
@@ -371,32 +372,111 @@ def test_task_progress_resets_both_clocks_and_the_outcome_wins() -> None:
         worker._verdicts.shutdown(wait=False)
 
 
-@pytest.mark.slow
-def test_cancellation_frees_the_execution_slot_within_ten_seconds(no_active_children) -> None:
-    """#3045's bound: cancelling with a write's fate uncertain still reaps the child promptly.
+class _StubPipe:
+    def __init__(self) -> None:
+        self.lines: list[str] = []
 
-    The durable reconciliation is separate and may be slow; the execution
-    slot — the child — must not wait for it.
-    """
-    manifest: dict[str, str] = {}
-    worker = ResearchWorker(WorkerDispatchContext(
-        strategy_key="sma_crossover",
-        execution=_assumptions(),
-        manifest=manifest,
-        identity=_runtime_identity(),
-        job_id="job-worker-test",
-        generation=1,
-    ))
-    pid = worker._child.pid
+    def write(self, data: str) -> None:
+        self.lines.append(data)
+
+    def flush(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+class _StubProcess:
+    """A ``Popen`` stand-in: alive until killed, recording what the parent writes to it."""
+
+    def __init__(self) -> None:
+        self.pid = 4242
+        self.killed = False
+        self.stdin = _StubPipe()
+        self.stdout = _StubPipe()
+
+    @property
+    def returncode(self) -> int | None:
+        return -9 if self.killed else None
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def kill(self) -> None:
+        self.killed = True
+
+    def wait(self, timeout: float | None = None) -> int:
+        return -9
+
+
+def test_cancel_kills_the_child_at_once() -> None:
+    """A running child reads no cancel message — the engine never looks — so a grace period only delayed the kill (#3045)."""
+    worker = _unspawned_worker()
+    child = _StubProcess()
+    worker._child = child
 
     started = time.monotonic()
     worker.cancel()
     elapsed = time.monotonic() - started
 
-    assert elapsed < 10.0, f"the slot took {elapsed:.1f}s to free; the bound is ten"
-    with pytest.raises(OSError):
-        os.kill(pid, 0)
-    assert worker._child is None
+    assert child.killed and worker._child is None, "the child was killed and forgotten"
+    assert elapsed < 0.5, f"the execution slot freed in {elapsed:.2f}s; nothing is waited for"
+
+
+def test_an_unencodable_task_fails_at_once_instead_of_waiting_out_the_silence_bound() -> None:
+    """A task wire the JSON framing refuses is a loud failure now, not a silent 30-minute wait (#3044)."""
+    worker = _unspawned_worker()
+    child = _StubProcess()
+    worker._child = child
+
+    with pytest.raises(ValueError, match="cannot encode"):
+        worker.run_task({"key": "k", "point": {"gap": float("nan")}}, silence_bound_s=0.6, task_silence_bound_s=0.6)
+
+    assert child.stdin.lines == [], "nothing half-written reached the child"
+    worker.close()
+
+
+class _CollectedOut:
+    """The child's stdout, as the messages the parent would read."""
+
+    def __init__(self) -> None:
+        self.messages: list[dict] = []
+
+    def write(self, message: dict) -> None:
+        self.messages.append(dict(message))
+
+
+class _ColdCache:
+    def take_residency_delta(self) -> tuple[list, list]:
+        return [], []
+
+
+@pytest.mark.parametrize(
+    ("raised", "wording"),
+    [
+        (HTTPException(status_code=400, detail="no bars in the window"), "engine refused the run: no bars in the window"),
+        (ValueError("boom"), "ValueError: boom"),
+    ],
+)
+def test_a_child_failure_reads_exactly_as_the_same_failure_in_local_mode(
+    monkeypatch: pytest.MonkeyPatch, raised: Exception, wording: str
+) -> None:
+    """The failure text reaches the user ("The winner's test run failed: ..."); the execution mode must not change it."""
+    import app.research.golden_search.worker as worker_module
+    from app.services import engine_backtest_service
+
+    def refuse(**kwargs):
+        raise raised
+
+    monkeypatch.setattr(engine_backtest_service, "execute_engine_backtest", refuse)
+    out = _CollectedOut()
+    task = task_wire(_serial_item(), strategy_key="sma_crossover", execution=_assumptions(), manifest={}, identity=IDENTITY)
+    state = {"identity": IDENTITY, "decoded_cache": _ColdCache()}
+
+    worker_module._run_one_task(task, out, lambda path: b"", threading.Event(), state)
+
+    failed = [message for message in out.messages if message["type"] == "failed"]
+    assert [message["error"] for message in failed] == [wording]
 
 
 # ── #3065 review regressions (fast: the pump's own machinery, no real child) ─

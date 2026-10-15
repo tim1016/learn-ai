@@ -56,7 +56,13 @@ def option_expiry_dte_days(expiry_ms: int, now_ms: int) -> float:
 
 
 def option_expiry_date(expiry_ms: int) -> date:
-    """The expiry date an anchor instant names; refuses an instant that is not an expiry anchor."""
+    """The expiry date an anchor instant names; refuses with ``ValueError`` an instant that is not an expiry
+    anchor, and one outside the range the domain admits (a vendor's integer may be anything)."""
+    if not 0 <= expiry_ms <= MAX_TIMESTAMP_MS:
+        raise ValueError(
+            f"{expiry_ms} is not an option expiry: an instant is a whole number of milliseconds "
+            f"from 0 to {MAX_TIMESTAMP_MS}."
+        )
     expiry_date = et_date_at_ms(expiry_ms)
     if option_expiry_anchor_ms(expiry_date) != expiry_ms:
         # Says what the instant is and proposes no date: one stored the old way,

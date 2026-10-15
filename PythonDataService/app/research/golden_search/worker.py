@@ -47,15 +47,12 @@ from app.research.golden_search.evaluator import (
     IdentityRefusalError,
     ReadyEvaluation,
     WorkerLost,
+    _failure_message,
     project_response,
 )
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
-
-# WorkerLost is re-exported for the tests that spawn children directly: #3045
-# moved the type to the evaluator, whose retry loop catches it, but its
-# historical home here is what those imports name.
 
 # The PRD's envelope: readiness/import bound, and the silence bound between
 # real signals. Work itself is unbounded — an evaluation runs as long as it
@@ -90,8 +87,6 @@ CHILD_ENV_FIXED = {"PYTHONHASHSEED": "0", "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_
 # parent -> child:
 #   {"type": "task", "task": {...}}            one evaluation to run
 #   {"type": "admission", "id": n, ...verdict} the answer to one read
-#   {"type": "cancel"}                         stop; the child exits after
-#                                              its in-flight run observes it
 # child -> parent:
 #   {"type": "ready", "pid": ..., "hash_seed": 0, "identity": {...}}
 #   {"type": "identity_refused", "reason": str}
@@ -193,6 +188,10 @@ def _child_main() -> int:
 
     pending_admissions: dict[int, threading.Event] = {}
     admission_answers: dict[int, Any] = {}
+    # A cancelled child is killed from the parent, never asked to stop: the
+    # coordinator sends no cancel message and nothing here sets this flag. It
+    # remains for the heartbeat's stop and for the sibling task runners (Grid
+    # Search, Recency, the benchmark), which take one and set it themselves.
     cancel_flag = threading.Event()
     from app.engine.data.decoded_cache import DecodedArtifactCache
 
@@ -243,7 +242,7 @@ def _child_main() -> int:
     heartbeat = threading.Thread(target=_heartbeat, args=(out, cancel_flag), daemon=True)
     heartbeat.start()
     # One slot: the lane stays serial, and the stdin loop stays free to
-    # answer admission requests and cancellation while a task runs (#3044).
+    # answer admission requests while a task runs (#3044).
     lane = ThreadPoolExecutor(max_workers=1, thread_name_prefix="worker-lane")
 
     for line in sys.stdin:
@@ -259,8 +258,6 @@ def _child_main() -> int:
             event = pending_admissions.pop(admission_id, None)
             if event is not None:
                 event.set()
-        elif kind == "cancel":
-            cancel_flag.set()
         elif kind == "task":
             lane.submit(_run_one_task, message["task"], out, ask_admission, cancel_flag, state)
     lane.shutdown(wait=True)
@@ -380,18 +377,11 @@ def _run_one_task(
         execution = ExecutionAssumptions(**task["execution"])
         manifest = dict(task["manifest"])
 
-        def raise_if_cancelled() -> None:
-            from app.jobs.progress import JobCancelled
-
-            if cancel_flag.is_set():
-                raise JobCancelled("cancelled by the coordinator")
-
         response = execute_engine_backtest(
             request=engine_request(request, strategy_key=strategy_key, execution=execution),
             on_phase=lambda phase: checkpoint(phase),
             on_log=lambda message: None,
             data_manifest=manifest,
-            while_waiting=raise_if_cancelled,
             decoded_cache=state["decoded_cache"],
             admission=ask_admission,
         )
@@ -418,17 +408,13 @@ def _run_one_task(
             }
         )
     except BaseException as exc:  # the child's terminal sink: every failure is a delivered answer
-        from app.jobs.progress import JobCancelled
-
-        if isinstance(exc, JobCancelled):
-            out.write({"type": "failed", "key": task.get("key", "?"), "error": "cancelled", **_residency_fields(state)})
-            cancel_flag.set()
-            return
+        # The text the in-process evaluator records for the same failure, so
+        # the execution mode never changes what the study shows.
         out.write(
             {
                 "type": "failed",
                 "key": str(task.get("key", "?")),
-                "error": f"{type(exc).__name__}: {exc}",
+                "error": _failure_message(exc),
                 **_residency_fields(state),
             }
         )
@@ -455,8 +441,10 @@ class _LockedStdout:
             sys.stdout.flush()
 
 
-# Parity with the serial baseline's cache bound (app.research.benchmark's
-# DECODED_CACHE_DEFAULT_BYTES): one worker holds what one serial process held.
+# A lone child's decoded-cache ceiling (#3044). Not the benchmark's serial
+# 1 GiB bound (app.research.benchmark's DECODED_CACHE_DEFAULT_BYTES), which
+# is half of the data-service container's 2 GiB cgroup; a child lives in the
+# research runtime's own envelope (ADR 0077).
 WORKER_DECODED_CACHE_BYTES = 2 * 1024**3
 # Every spawned child's decoded cache shares this budget inside ADR 0077's
 # runtime envelope, leaving the rest of the 16 GiB cgroup for interpreters,
@@ -468,10 +456,6 @@ WORKER_DECODED_CACHE_TOTAL_BYTES = 8 * 1024**3
 def pooled_cache_bytes(workers: int) -> int:
     """One lane's decoded-cache ceiling: the shared budget split, capped at the serial parity ceiling."""
     return min(WORKER_DECODED_CACHE_BYTES, WORKER_DECODED_CACHE_TOTAL_BYTES // max(workers, 1))
-
-
-if __name__ == "__main__":
-    raise SystemExit(_child_main())
 
 
 # ── The parent's side: one owned child, one task lane ─────────────────────
@@ -680,12 +664,19 @@ class ResearchWorker:
         self._send(verdict)
 
     def _send(self, message: Mapping[str, Any]) -> None:
+        # A message the framing cannot encode is this process's defect, never
+        # a dead child's: it fails the caller now instead of leaving a task
+        # nobody sent to wait out the silence bound.
+        try:
+            line = json.dumps(message, separators=(",", ":"), allow_nan=False) + "\n"
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"the research worker cannot encode a {message.get('type')!r} message: {exc}") from exc
         with self._lock:
             child = self._child
             if child is None or child.poll() is not None or child.stdin is None:
                 return
             try:
-                child.stdin.write(json.dumps(message, separators=(",", ":"), allow_nan=False) + "\n")
+                child.stdin.write(line)
                 child.stdin.flush()
             except (BrokenPipeError, ValueError, OSError):
                 pass  # a dead child is the pump's loss to report
@@ -793,10 +784,7 @@ class ResearchWorker:
                 )
 
     def cancel(self) -> None:
-        """Stop: the child observes the flag between reads; the slot is free once reaped."""
-        self._send({"type": "cancel"})
-        if self._child is not None and self._child.poll() is None:
-            time.sleep(1.0)
+        """Stop: a running child can be told nothing it would act on, so cancelling is killing."""
         self.close()
 
     def close(self) -> None:
@@ -834,25 +822,16 @@ def delivered_outcome(item: ReadyEvaluation, message: Mapping[str, Any]) -> Deli
     """One child answer as the evaluator consumes it — the wire contract in one place (#3044, #3046).
 
     The serial and pooled adapters translate identical child messages
-    identically: a cancelled run delivers the cancellation, a failure is
-    evidence like any engine failure, and a result carries its metrics,
-    detail and curve under the item's own fencing. A sibling caller's ready
-    item (#3049, Grid Search cells) owns its own wire, so it decodes its own
-    outcome; only the golden evaluation is translated here.
+    identically: a failure is evidence like any engine failure, and a result
+    carries its metrics, detail and curve under the item's own fencing. A
+    sibling caller's ready item (#3049, Grid Search cells) owns its own wire,
+    so it decodes its own outcome; only the golden evaluation is translated
+    here.
     """
-    from app.jobs.progress import JobCancelled
     from app.research.golden_search.selection import Metrics
 
     if not isinstance(item, ReadyEvaluation):
         return item.outcome_of(message)
-    if message["type"] == "failed" and message.get("error") == "cancelled":
-        return DeliveredOutcome(
-            key=item.key,
-            attempt=item.attempt,
-            task_gen=item.task_gen,
-            result=EvaluationResult(metrics=Metrics.failed("cancelled")),
-            cancelled_by=JobCancelled("cancelled in a research worker"),
-        )
     if message["type"] == "failed":
         return DeliveredOutcome(
             key=item.key,
@@ -908,7 +887,7 @@ class ChildOwnerDispatch:
             self._worker = None
 
     def _cancel(self) -> None:
-        """Stop the child promptly — cancel flag, then kill and reap (#3045)."""
+        """Stop the child promptly: kill and reap (#3045)."""
         if self._worker is not None:
             self._worker.cancel()
 
@@ -978,11 +957,7 @@ class WorkerDispatch(ChildOwnerDispatch):
                 # terminal paths; forget it so nothing reuses the corpse.
                 self._worker_lost(worker)
                 raise
-            outcome = delivered_outcome(item, message)
-            if outcome.cancelled_by is not None:
-                yield outcome
-                return
-            yield outcome
+            yield delivered_outcome(item, message)
 
 
 def worker_dispatch_factory(
@@ -1009,3 +984,7 @@ def worker_dispatch_factory(
         return WorkerDispatch(context)
 
     return build
+
+
+if __name__ == "__main__":
+    raise SystemExit(_child_main())

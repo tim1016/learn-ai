@@ -64,6 +64,7 @@ import { chartIndicatorCatalog } from './chart-indicator-catalog';
 import { positionRuns, type PositionRun } from './dual-pane-chart-position';
 import {
   type SelectedChartIndicator,
+  indicatorFailureMessage,
   resultBelongsToIndicator,
   selectChartIndicator,
   toActiveIndicatorChips,
@@ -82,8 +83,12 @@ interface IndicatorLoadState {
 const TIME_ZONE_STORAGE_KEY = 'broker-v2.chart-timezone.v1';
 
 function persistedChartTimeZone(): ChartTimeZone {
-  if (typeof localStorage === 'undefined') return 'local';
-  return localStorage.getItem(TIME_ZONE_STORAGE_KEY) === 'et' ? 'et' : 'local';
+  try {
+    return globalThis.localStorage?.getItem(TIME_ZONE_STORAGE_KEY) === 'et' ? 'et' : 'local';
+  } catch {
+    // Storage unreadable (blocked site data): the chart opens on the viewer's local clock.
+    return 'local';
+  }
 }
 
 /** Formats the chart-library's seconds-UTC boundary for the crosshair readout. */
@@ -434,9 +439,9 @@ export class DualPaneChartComponent implements AfterViewInit {
           error: null,
           viewKey: params.viewKey,
         })),
-        catchError(() => of<IndicatorLoadState>({
+        catchError((error: unknown) => of<IndicatorLoadState>({
           indicators: [],
-          error: 'Indicators could not be calculated for this candle window.',
+          error: indicatorFailureMessage(error, 'for this candle window'),
           viewKey: params.viewKey,
         })),
       );
@@ -499,6 +504,10 @@ export class DualPaneChartComponent implements AfterViewInit {
       } else if (loaded?.error === null && loaded.viewKey === this.indicatorViewKey()) {
         this.loadedIndicatorResults.set(loaded.indicators);
         this.loadedIndicatorViewKey.set(loaded.viewKey);
+      } else if (loaded?.error != null && loaded.viewKey === this.indicatorViewKey()) {
+        // A failed calculation is said (below, beside the chart): lines from the last one are not left drawn.
+        this.loadedIndicatorResults.set([]);
+        this.loadedIndicatorViewKey.set(null);
       }
     });
     effect(() => this.renderIndicators(
@@ -571,8 +580,10 @@ export class DualPaneChartComponent implements AfterViewInit {
 
   protected selectTimeZone(timeZone: ChartTimeZone): void {
     this.timeZone.set(timeZone);
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(TIME_ZONE_STORAGE_KEY, timeZone);
+    try {
+      globalThis.localStorage?.setItem(TIME_ZONE_STORAGE_KEY, timeZone);
+    } catch {
+      // Storage blocked: the choice applies for this visit only.
     }
   }
 

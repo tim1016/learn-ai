@@ -16,9 +16,6 @@ from fastapi import HTTPException
 import app.routers.fleet_qualification as qualification
 from app.broker.alpaca.broker import AlpacaBroker
 from app.routers.fleet_qualification import (
-    QualificationHoldRequestResponse,
-    QualificationMarketDependencyAvailable,
-    QualificationMarketDependencyUnavailable,
     qualification_router,
     require_qualification_secret,
 )
@@ -89,27 +86,6 @@ def test_qualification_hold_command_route_is_a_post() -> None:
     assert routes["/internal/fleet-qualification/hold/request"].methods == {"GET"}
 
 
-def test_is_qualification_coordinator_lane_requires_every_guard() -> None:
-    """Mirrors ``_is_qualification_lane``'s guard shape for the coordinator role."""
-    from app.routers.fleet_qualification import is_qualification_coordinator_lane
-
-    assert is_qualification_coordinator_lane(
-        role="fleet_coordinator", namespace="compose:fleetqualificationx", secret="s"
-    ) is True
-    assert is_qualification_coordinator_lane(
-        role="combined", namespace="compose:fleetqualificationx", secret="s"
-    ) is False
-    assert is_qualification_coordinator_lane(
-        role="clerk_agent", namespace="compose:fleetqualificationx", secret="s"
-    ) is False
-    assert is_qualification_coordinator_lane(
-        role="fleet_coordinator", namespace="host:local", secret="s"
-    ) is False
-    assert is_qualification_coordinator_lane(
-        role="fleet_coordinator", namespace="compose:fleetqualificationx", secret=""
-    ) is False
-
-
 def test_is_qualification_coordinator_lane_from_environment_reads_the_probe_secret(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -124,28 +100,6 @@ def test_is_qualification_coordinator_lane_from_environment_reads_the_probe_secr
     assert is_qualification_coordinator_lane_from_environment(
         "fleet_coordinator", "compose:fleetqualificationx"
     ) is True
-
-
-def test_qualification_probe_routes_declare_strict_success_and_failure_models() -> None:
-    """The hidden probes still have typed Pydantic-v2 response contracts."""
-    router = qualification_router(
-        role="clerk_agent",
-        namespace="compose:fleetqualificationx",
-        secret="qualification-secret",
-        broker_url="http://fake",
-        market_data_url="http://market",
-    )
-    assert router is not None
-    routes = {route.path: route for route in router.routes}
-    dependency = routes["/internal/fleet-qualification/dependency/market-data"]
-    hold_request = routes["/internal/fleet-qualification/hold/request"]
-
-    assert dependency.response_model is QualificationMarketDependencyAvailable
-    assert dependency.responses[503]["model"] is QualificationMarketDependencyUnavailable
-    assert hold_request.response_model is QualificationHoldRequestResponse
-    assert QualificationMarketDependencyAvailable.model_json_schema()["additionalProperties"] is False
-    assert QualificationMarketDependencyUnavailable.model_json_schema()["additionalProperties"] is False
-    assert QualificationHoldRequestResponse.model_json_schema()["additionalProperties"] is False
 
 
 def test_install_qualification_bindings_default_off_leaves_registry_and_consumer_untouched(

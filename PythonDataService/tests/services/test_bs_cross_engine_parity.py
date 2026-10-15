@@ -3,19 +3,26 @@
 Pins equivalence between the two in-repo BSM implementations on a 360-case
 input grid:
 
-- ``app/services/bs_greeks.py::bs_european_price`` — closed-form, continuous-time
+- ``app/services/bs_greeks.py`` — closed-form, continuous-time
+  (``bs_european_price``, ``black_scholes_greeks``)
 - ``app/services/quantlib_pricer.py::price_option`` with ``engine=ANALYTIC_BS``
 
-Both compute the same closed-form Black-Scholes-Merton price; they must agree
-to numerical roundoff. If they don't, one of them has drifted and the test
-identifies the bad case.
+Both compute the same closed-form Black-Scholes-Merton price and Greeks; they
+must agree to numerical roundoff. If they don't, one of them has drifted and
+the test identifies the bad case.
 
 Fixture: ``tests/fixtures/golden/bs-price-cross-engine/`` (input grid + tolerance).
 Why: ADR 0068 Decision 4 (a duplicate inside Python carries a parity test).
 
-Tolerance: ``atol=1e-10, rtol=0``. Both paths evaluate the same formula in
+Tolerance, price: ``atol=1e-10, rtol=0``. Both paths evaluate the same formula in
 single-evaluation closed-form math with no recursive accumulation; agreement
 should be at last-bit machine precision.
+
+Tolerance, Greeks: ``atol=1e-8, rtol=0``. ``price_option`` rounds delta, gamma,
+theta, vega and rho to 8 decimals, so a rounding of up to 5e-9 separates the
+engines on its own. The measured worst case over the grid is 5.0e-9 for each of
+the five; 1e-8 is that bound with a 2x margin, and still orders of magnitude
+under any difference a wrong sign convention or a dropped dividend term makes.
 """
 
 from __future__ import annotations
@@ -27,7 +34,7 @@ from pathlib import Path
 
 import pytest
 
-from app.services.bs_greeks import bs_european_price
+from app.services.bs_greeks import black_scholes_greeks, bs_european_price
 from app.services.quantlib_pricer import (
     PricingEngine,
     price_option,
@@ -65,6 +72,11 @@ def _id(case: tuple) -> str:
 @pytest.fixture(scope="module")
 def tolerance() -> dict:
     return _load_grid()["tolerance"]
+
+
+# Why 1e-8 and not the price tolerance: see the module docstring.
+GREEK_ATOL = 1e-8
+GREEK_NAMES = ("delta", "gamma", "theta", "vega", "rho")
 
 
 # Skip the whole module if QuantLib isn't installed in this environment.
@@ -117,6 +129,43 @@ def test_bs_price_cross_engine_parity(case: tuple, tolerance: dict) -> None:
         f"quantlib={ql_result.price!r}, diff={diff:.2e}, "
         f"atol={tolerance['atol']:.2e}, case={_id(case)}"
     )
+
+
+@pytest.mark.parametrize("case", _grid_cases(), ids=_id)
+def test_bs_greeks_cross_engine_parity(case: tuple) -> None:
+    """For every grid case, both engines must produce the same delta, gamma, theta, vega and rho."""
+    spot, strike, ttm_days, vol, rate, q, opt = case
+
+    closed_form = black_scholes_greeks(
+        spot=spot,
+        strike=strike,
+        ttm_years=ttm_days / 365.0,
+        volatility=vol,
+        rate=rate,
+        dividend=q,
+        is_call=opt == "call",
+    )
+
+    eval_date = date(2026, 1, 1)
+    ql_result = price_option(
+        spot=spot,
+        strike=strike,
+        risk_free_rate=rate,
+        volatility=vol,
+        expiration_date=eval_date + timedelta(days=ttm_days),
+        option_type=opt,
+        evaluation_date=eval_date,
+        dividend_yield=q,
+        engine=PricingEngine.ANALYTIC_BS,
+    )
+
+    for name in GREEK_NAMES:
+        ours, theirs = getattr(closed_form, name), getattr(ql_result, name)
+        diff = abs(ours - theirs)
+        assert diff <= GREEK_ATOL, (
+            f"BS {name} disagreement: closed_form={ours!r} vs quantlib={theirs!r}, "
+            f"diff={diff:.2e}, atol={GREEK_ATOL:.2e}, case={_id(case)}"
+        )
 
 
 def test_fixture_grid_size_is_pinned() -> None:

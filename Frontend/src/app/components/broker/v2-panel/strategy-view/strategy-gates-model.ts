@@ -115,11 +115,13 @@ export function withCustomGates(
       }
       return { ...candle, gates: { ...candle.gates, ...judged } };
     }),
-    notices: [
+    // A draft preview re-judges the saved gates, so a notice about an unjudgeable saved gate comes back in
+    // both answers: each sentence is said once.
+    notices: [...new Set([
       ...(view.notices ?? []),
       ...evaluations.flatMap((evaluation) => evaluation.response.notices ?? []),
       ...extraNotices,
-    ],
+    ])],
   };
 }
 

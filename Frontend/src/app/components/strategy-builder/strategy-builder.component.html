@@ -507,7 +507,7 @@
       <!-- Analysis Results -->
       @if (analysisResult(); as result) {
         <div class="panel-section">
-          <span class="section-label">Analysis Results</span>
+          <span class="section-label">Analysis Results · expected value, max profit and max loss in dollars per contract (100 shares)</span>
           <div class="stats-grid">
             <div class="stat-card pop-card">
               <span class="stat-label">Prob. of Profit</span>
@@ -515,7 +515,7 @@
             </div>
             <div class="stat-card ev-card" [class.positive]="result.expectedValue >= 0" [class.negative]="result.expectedValue < 0">
               <span class="stat-label">Expected Value</span>
-              <span class="stat-value">${{ result.expectedValue | number:'1.2-2' }}</span>
+              <span class="stat-value">{{ analysisExpectedValueDisplay() }}</span>
             </div>
             <div class="stat-card profit-card">
               <span class="stat-label">Max Profit</span>

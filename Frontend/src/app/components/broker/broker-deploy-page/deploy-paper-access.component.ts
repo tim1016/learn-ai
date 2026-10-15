@@ -1,4 +1,3 @@
-import { HttpErrorResponse } from "@angular/common/http";
 import {
   ChangeDetectionStrategy,
   Component,
@@ -18,6 +17,7 @@ import {
 } from "../v2-panel/lib/broker-v2-panel.service";
 import { type ResourceTarget, withCommand } from '../../../fleet/resource-target';
 import { laneFenceIsEnforceable, LANE_FENCE_UNENFORCEABLE_MESSAGE } from '../../../fleet/lane-fence';
+import { refusalProse } from '../../../shared/errors/refusal-body';
 
 const UI_ACTIVATION_ACTION = "from the Alpaca Deploy page.";
 
@@ -193,22 +193,9 @@ export class DeployPaperAccessComponent {
   }
 
   private toFailure(error: unknown): PaperAccessFailure {
-    if (error instanceof HttpErrorResponse) {
-      const detail = error.error?.detail as
-        | {
-            message?: string;
-            why?: string | null;
-            next_action?: string | null;
-          }
-        | undefined;
-      if (detail?.message) {
-        return {
-          message: detail.message,
-          explanation: detail.why ?? null,
-          nextAction: detail.next_action ?? null,
-        };
-      }
-    }
+    // The fleet's refusals are flat and a route's nest under `detail`: `refusalProse` reads both.
+    const prose = refusalProse(error);
+    if (prose !== null) return { message: prose.message, explanation: prose.why, nextAction: prose.nextAction };
     return {
       message: `The ${this.modeLabel()} permission could not be checked.`,
       explanation: "No answer came back, so nothing was allowed.",

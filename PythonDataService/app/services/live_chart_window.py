@@ -29,6 +29,7 @@ from app.lean_sidecar.trading_calendar import (
     session_windows_ms_utc,
 )
 from app.marketdata.feed import BarSessionPhase
+from app.services.bar_persistence import utc_dates_for_window
 from app.services.polygon_notice_classifier import (
     PolygonNotice,
     classify_polygon_exception,
@@ -222,7 +223,7 @@ def _recorded_bars(
     to_ms: int,
     live_aggregator: LiveChartAggregator,
 ) -> list[IbkrMinuteBar]:
-    days = _utc_dates_for_window(from_ms, to_ms)
+    days = utc_dates_for_window(from_ms, to_ms)
     by_start: dict[int, IbkrMinuteBar] = {}
     persistence = getattr(live_aggregator, "_persistence", None)
     if persistence is not None:
@@ -582,17 +583,6 @@ def _session_windows_for_ms_range(from_ms: int, to_ms: int) -> list[SessionWindo
     start = datetime.fromtimestamp(from_ms / 1000, tz=UTC).astimezone(_NY_TZ).date()
     end = datetime.fromtimestamp(max(from_ms, to_ms - 1) / 1000, tz=UTC).astimezone(_NY_TZ).date()
     return session_windows_ms_utc(start, end)
-
-
-def _utc_dates_for_window(from_ms: int, to_ms: int) -> list[date]:
-    start = datetime.fromtimestamp(from_ms / 1000, tz=UTC).date()
-    end = datetime.fromtimestamp(max(from_ms, to_ms - 1) / 1000, tz=UTC).date()
-    days: list[date] = []
-    current = start
-    while current <= end:
-        days.append(current)
-        current = date.fromordinal(current.toordinal() + 1)
-    return days
 
 
 def _bar_overlaps(bar: IbkrMinuteBar, from_ms: int, to_ms: int) -> bool:

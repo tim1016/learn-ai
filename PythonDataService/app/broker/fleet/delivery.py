@@ -17,17 +17,19 @@ blindly (ADR 0062 addendum, item 7).
 
 from __future__ import annotations
 
-import hmac
+import asyncio
 import logging
 import re
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from urllib.parse import quote, unquote
 
 import httpx
 from starlette.datastructures import Headers
 
+from app.broker.fleet.identity import same_secret
 from app.broker.fleet.internal_http import (
-    FleetStreamError,
+    DEFAULT_INTERNAL_TIMEOUT_S,
     SseEvent,
     build_internal_client,
     enforce_private_http_target,
@@ -40,6 +42,7 @@ logger = logging.getLogger(__name__)
 
 IDENTITY_HEADER_PREFIX = "X-Fleet-"
 COORDINATOR_TOKEN_HEADER = "X-Fleet-Coordinator-Token"
+DEFAULT_STREAM_OPEN_TIMEOUT_S = DEFAULT_INTERNAL_TIMEOUT_S
 
 
 def lane_forward_is_authorized(headers: Headers) -> bool:
@@ -58,7 +61,7 @@ def lane_forward_is_authorized(headers: Headers) -> bool:
         return False
     if "x-fleet-clerk-id" not in headers or "x-fleet-broker" not in headers:
         return False
-    return hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8"))
+    return same_secret(supplied, expected)
 
 
 class DeliveryIdentityMismatch(Exception):
@@ -86,14 +89,26 @@ class DeliveryContractViolation(Exception):
 #: Path parameters may carry Starlette-style converters (``{order_ref:path}``);
 #: binding substitutes the value and drops the converter, which is routing
 #: syntax the receiving agent's own router applies to its side of the path.
-_PATH_BINDING_PATTERN = re.compile(r"\{([a-z_][a-z0-9_]*)(?::[a-z]+)?\}")
+_PATH_BINDING_PATTERN = re.compile(r"\{([a-z_][a-z0-9_]*)(?::([a-z]+))?\}")
 
 
 def bind_path_template(template: str, params: Mapping[str, str]) -> str:
-    """Bind one path template's parameters, tolerating route converters."""
-    return _PATH_BINDING_PATTERN.sub(
-        lambda match: params[match.group(1)], template
-    )
+    """Bind path values without letting one value alter the route or query."""
+    def bind(match: re.Match[str]) -> str:
+        value = params[match.group(1)]
+        decoded = value
+        for _ in range(8):
+            expanded = unquote(decoded)
+            if expanded == decoded:
+                break
+            decoded = expanded
+        else:
+            raise ValueError(f"invalid path parameter {match.group(1)!r}")
+        if any(part in ("", ".", "..") for part in decoded.split("/")):
+            raise ValueError(f"invalid path parameter {match.group(1)!r}")
+        return quote(value, safe="/" if match.group(2) == "path" else "")
+
+    return _PATH_BINDING_PATTERN.sub(bind, template)
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,7 +119,7 @@ class DeliveryRequest:
     clerk_id: str
     operation: ProviderOperation
     path_params: Mapping[str, str]
-    query: Mapping[str, str] = field(default_factory=dict)
+    query: Mapping[str, str] | Sequence[tuple[str, str]] = field(default_factory=dict)
     json_body: object | None = None
     routing_epoch: int | None = None
     binding_generation: int | None = None
@@ -269,9 +284,15 @@ class HttpLaneDelivery:
 
     def __init__(self, *, base_url: str, coordinator_service_token: str) -> None:
         """Bind the approved agent destination and the coordinator token."""
-        enforce_private_http_target(base_url)
         self._base_url = base_url.rstrip("/")
         self._token = coordinator_service_token
+        self._target_validated = False
+
+    async def validate_target(self) -> None:
+        """Prove this destination private before any routed command is recorded."""
+        if not self._target_validated:
+            await asyncio.to_thread(enforce_private_http_target, self._base_url)
+            self._target_validated = True
 
     async def deliver(self, request: DeliveryRequest) -> DeliveryResult:
         """Forward one complete operation and verify the identity echo.
@@ -286,12 +307,13 @@ class HttpLaneDelivery:
         completed (see ``app.broker.fleet.history_batch`` for the paired
         inner bound).
         """
+        await self.validate_target()
         client = build_internal_client(read_timeout_s=request.operation.read_timeout_s)
         try:
             response = await client.request(
                 request.operation.method,
                 f"{self._base_url}{request.agent_path()}",
-                params=dict(request.query),
+                params=request.query,
                 json=request.json_body,
                 headers={
                     **request.pinned_headers(),
@@ -311,46 +333,52 @@ class HttpLaneDelivery:
 
     async def stream(self, request: DeliveryRequest) -> StreamDeliveryResult:
         """Forward one streaming operation; events parse as they arrive."""
+        await self.validate_target()
         client = build_internal_client(read_timeout_s=None)
-        response = await client.send(
-            client.build_request(
-                request.operation.method,
-                f"{self._base_url}{request.agent_path()}",
-                params=dict(request.query),
-                headers={
-                    **request.pinned_headers(),
-                    COORDINATOR_TOKEN_HEADER: self._token,
-                },
-            ),
-            stream=True,
-        )
+        response: httpx.Response | None = None
+        keep_open = False
         try:
+            response = await asyncio.wait_for(
+                client.send(
+                    client.build_request(
+                        request.operation.method,
+                        f"{self._base_url}{request.agent_path()}",
+                        params=request.query,
+                        headers={
+                            **request.pinned_headers(),
+                            COORDINATOR_TOKEN_HEADER: self._token,
+                        },
+                    ),
+                    stream=True,
+                ),
+                timeout=DEFAULT_STREAM_OPEN_TIMEOUT_S,
+            )
             verify_identity_echo(
                 response.headers, request, status_code=response.status_code
             )
-        except DeliveryIdentityMismatch:
-            # A refused echo still holds an open stream: release both ends
-            # before surfacing the uncertain outcome.
-            await response.aclose()
-            await client.aclose()
-            raise
-        if response.status_code >= 400:
-            error_body = await response.aread()
-            await response.aclose()
-            await client.aclose()
+            if response.status_code >= 400:
+                error_body = await asyncio.wait_for(
+                    response.aread(), timeout=DEFAULT_STREAM_OPEN_TIMEOUT_S
+                )
+                return StreamDeliveryResult(
+                    status_code=response.status_code,
+                    headers=dict(response.headers),
+                    events=_empty_events(),
+                    error_body=error_body,
+                )
+            keep_open = True
             return StreamDeliveryResult(
                 status_code=response.status_code,
                 headers=dict(response.headers),
-                events=_empty_events(),
-                error_body=error_body,
+                events=_identity_validated_events(
+                    _closing_event_iterator(response, client), request
+                ),
             )
-        return StreamDeliveryResult(
-            status_code=response.status_code,
-            headers=dict(response.headers),
-            events=_identity_validated_events(
-                _closing_event_iterator(response, client), request
-            ),
-        )
+        finally:
+            if not keep_open:
+                if response is not None:
+                    await response.aclose()
+                await client.aclose()
 
 
 async def _closing_event_iterator(
@@ -360,10 +388,6 @@ async def _closing_event_iterator(
     try:
         async for event in iter_sse_from_response(response):
             yield event
-    except FleetStreamError:
-        await response.aclose()
-        await client.aclose()
-        raise
     finally:
         await response.aclose()
         await client.aclose()

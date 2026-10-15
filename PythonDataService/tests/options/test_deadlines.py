@@ -248,6 +248,25 @@ def test_no_close_is_owed_on_a_day_with_no_session(day: date) -> None:
     assert close_owed_at(_structure(*_WITH_A_SOLD_LEG), _TERMS, at_ms=scenes._at(day, 12, 0)) is None
 
 
+@pytest.mark.parametrize(
+    ("legs", "day"),
+    [
+        pytest.param(_WITH_A_SOLD_LEG, _THANKSGIVING, id="a sold leg, on a holiday"),
+        pytest.param(_WITH_A_SOLD_LEG, _SATURDAY, id="a sold leg, on a weekend"),
+        pytest.param([("bought", "long", _SATURDAY)], _SATURDAY, id="a contract expiring on the weekend"),
+    ],
+)
+def test_a_structure_is_asked_no_close_and_no_entry_cutoff_on_a_day_with_no_session(
+    legs: list[tuple[str, str, date]], day: date
+) -> None:
+    """The Clerk asks with the date of its own clock, which need not be a session's: no close is owed that day
+    (ADR 0076 decision 20), so there is no cutoff to be past, rather than an error."""
+    structure = _structure(*legs)
+
+    assert close_due_on(structure, day, _TERMS) is None
+    assert entry_cutoff_on(structure, day, _TERMS) is None
+
+
 def test_the_day_a_close_is_owed_on_is_new_yorks_and_not_the_day_it_already_is_in_utc() -> None:
     """Between eight in the evening and midnight in New York the UTC date is already the next day's."""
     expiring_friday = _structure(("bought", "long", _FRIDAY))

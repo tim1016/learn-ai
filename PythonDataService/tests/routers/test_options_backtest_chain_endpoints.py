@@ -1000,11 +1000,6 @@ async def test_a_download_with_no_contracts_or_expiry_captures_the_listing_and_t
             "OPTIONS_BACKTEST_CONTRACT_NOT_OF_EXPIRY",
             id="a contract of another expiry",
         ),
-        pytest.param(
-            {"contracts": [f"SPY250613C{strike * 1000:08d}" for strike in range(400, 461)]},
-            "OPTIONS_BACKTEST_TOO_MANY_CONTRACTS",
-            id="sixty-one contracts",
-        ),
     ],
 )
 @respx.mock
@@ -1032,12 +1027,12 @@ async def test_the_most_contracts_a_download_takes_is_the_limit_served_the_limit
         one_more = await c.post(f"{PREFIX}/download", json=_download(contracts=symbols))
 
     # A window holds at most 60 contracts and a download takes as many: the listing, the underlying and 60 contracts
-    # are 62 items; 61 contracts are refused before anything is asked.
+    # are 62 items; 61 contracts are refused at the body's own bound, before a symbol of them is parsed.
     assert limit == 60
     assert at_the_limit.status_code == 200, at_the_limit.text
     assert len(at_the_limit.json()["items"]) == 62
-    assert one_more.status_code == 400
-    assert one_more.json()["detail"]["code"] == "OPTIONS_BACKTEST_TOO_MANY_CONTRACTS"
+    assert one_more.status_code == 422
+    assert one_more.json()["detail"][0]["loc"] == ["body", "contracts"]
 
 
 @pytest.mark.parametrize(
@@ -1364,12 +1359,3 @@ def test_every_timestamp_field_is_bounded_by_the_domains_last_instant_and_not_th
         options = definition.get("anyOf", [definition])
         integer = next(option for option in options if option.get("type") == "integer")
         assert integer["maximum"] == MAX_TIMESTAMP_MS, (name, field)
-
-
-def test_the_underlying_pattern_is_the_setups_own() -> None:
-    from app.options_backtest.setup import OptionsBacktestSetup
-    from app.schemas.options_backtest_chain import UNDERLYING_PATTERN
-
-    pattern = next(m.pattern for m in OptionsBacktestSetup.model_fields["underlying"].metadata if hasattr(m, "pattern"))
-
-    assert pattern == UNDERLYING_PATTERN

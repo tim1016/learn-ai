@@ -107,7 +107,7 @@ def _envelope_invalid(error: CommandEnvelopeInvalid) -> Response:
 @router.get(
     "/broker-clerks",
     dependencies=[Depends(require_data_plane_control_secret_always)],
-    summary="Broker-neutral clerk fleet directory (§10.1)",
+    summary="Broker-neutral clerk fleet directory",
 )
 async def list_broker_clerks(request: Request) -> Response:
     """Every lane across production providers, from the registry projection."""
@@ -117,7 +117,7 @@ async def list_broker_clerks(request: Request) -> Response:
 @router.get(
     "/brokers/{broker}/clerks",
     dependencies=[Depends(require_data_plane_control_secret_always)],
-    summary="One broker's clerk lanes (§10.2)",
+    summary="One broker's clerk lanes",
 )
 async def list_broker_clerks_for_broker(broker: str, request: Request) -> Response:
     """The same projection filtered to one provider."""
@@ -198,7 +198,7 @@ async def aggregate_broker_clerks_attention(request: Request) -> Response:
     )
     if operation is None:
         return _refuse(
-            FleetControlError("The Alpaca adapter declares no attention_read operation.")
+            BrokerClerkCapabilityUnavailable("The Alpaca adapter declares no attention_read operation.")
         )
 
     async def read_lane(clerk_id: str) -> dict[str, object]:
@@ -219,10 +219,8 @@ async def aggregate_broker_clerks_attention(request: Request) -> Response:
             )
         return dict(json.loads(delivered.body))
 
-    # Only lanes whose provider serves attention today. Another provider
-    # joins this poll by declaring an ``attention_read`` operation — not by
-    # this route learning its name; a fake/test provider's lanes are simply
-    # not read, not failed.
+    # This aggregate reads Alpaca lanes only; other providers need an
+    # explicit reader here before their lanes join the poll.
     lane_reads = [
         (
             "alpaca",
@@ -277,7 +275,7 @@ async def aggregate_broker_clerks_bot_history(
     )
     if operation is None:
         return _refuse(
-            FleetControlError("The Alpaca adapter declares no bot_history_read operation.")
+            BrokerClerkCapabilityUnavailable("The Alpaca adapter declares no bot_history_read operation.")
         )
 
     lane_query = {} if strategy_instance_id is None else {"strategy_instance_id": strategy_instance_id}
@@ -359,23 +357,35 @@ async def _sse_frames(events: AsyncIterator[SseEvent]) -> AsyncIterator[bytes]:
     framing — a joined blob would make the later lines unreadable fields.
     """
     iterator = events.__aiter__()
-    while True:
-        try:
-            event = await asyncio.wait_for(
-                iterator.__anext__(), timeout=_KEEPALIVE_INTERVAL_S
-            )
-        except TimeoutError:
-            yield b": keepalive\n\n"
-            continue
-        except StopAsyncIteration:
-            return
-        lines = [f"event: {event.event}"]
-        for name, value in sorted(event.identity.items()):
-            lines.append(f"{name}: {value}")
-        if event.id is not None:
-            lines.append(f"id: {event.id}")
-        lines.extend(f"data: {line}" for line in event.data.split("\n"))
-        yield ("\n".join(lines) + "\n\n").encode()
+    pending: asyncio.Task[SseEvent] | None = None
+    try:
+        while True:
+            if pending is None:
+                pending = asyncio.create_task(iterator.__anext__())
+            done, _ = await asyncio.wait({pending}, timeout=_KEEPALIVE_INTERVAL_S)
+            if not done:
+                yield b": keepalive\n\n"
+                continue
+            try:
+                event = pending.result()
+            except StopAsyncIteration:
+                return
+            finally:
+                pending = None
+            lines = [f"event: {event.event}"]
+            for name, value in sorted(event.identity.items()):
+                lines.append(f"{name}: {value}")
+            if event.id is not None:
+                lines.append(f"id: {event.id}")
+            lines.extend(f"data: {line}" for line in event.data.split("\n"))
+            yield ("\n".join(lines) + "\n\n").encode()
+    finally:
+        if pending is not None:
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        close = getattr(iterator, "aclose", None)
+        if close is not None:
+            await close()
 
 
 def _make_operation_handler(operation: ProviderOperation) -> Any:
@@ -403,7 +413,7 @@ def _make_operation_handler(operation: ProviderOperation) -> Any:
             routed = _lookup_operation(broker, operation, service)
         except FleetControlError as error:
             return _refuse(error)
-        query = dict(request.query_params)
+        query = request.query_params.multi_items()
         body: Any = kwargs.get("body")
         envelope = None
         try:

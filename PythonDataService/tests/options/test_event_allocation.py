@@ -591,6 +591,24 @@ def test_a_lots_opening_time_is_whole_milliseconds_inside_the_domains_range(open
         HeldOptionLot(owner="bot-a", contract=_CALL, quantity=1, opened_at_ms=opened, sequence=0)
 
 
+@pytest.mark.parametrize(
+    "event_date",
+    [-5, MAX_TIMESTAMP_MS + 1, True, 1_689_900_000_000.5, "1689900000000"],
+    ids=["before 1970", "past year 9999", "a boolean", "a float", "text"],
+)
+def test_an_events_date_is_whole_milliseconds_inside_the_domains_range(event_date: Any) -> None:
+    """A float was once allocated, and a boolean or a negative was refused as an event "assigned on 1969-12-31"."""
+    with pytest.raises(ValueError, match="an event's date"):
+        allocate_option_event(
+            kind=OptionEventKind.ASSIGNED,
+            contract=_CALL,
+            position_change=1,
+            event_date_ms=event_date,
+            multiplier=100,
+            lots=[_lot("bot-a", -1)],
+        )
+
+
 @pytest.mark.parametrize("opened", [0, MAX_TIMESTAMP_MS], ids=["the epoch", "the last admitted millisecond"])
 def test_a_lot_may_be_opened_at_either_end_of_the_domains_range(opened: int) -> None:
     assert _lot("bot-a", 1, opened=opened).opened_at_ms == opened

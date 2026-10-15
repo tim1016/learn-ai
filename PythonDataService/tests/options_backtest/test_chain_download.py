@@ -416,6 +416,30 @@ async def test_an_underlying_the_stock_function_cannot_fetch_is_a_failed_item_wi
     assert "could not materialize" in (items[1].detail or "")
 
 
+@respx.mock
+async def test_an_underlying_the_stock_function_stored_with_no_bar_in_the_regular_session_is_a_failed_item(
+    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A file the stock function wrote and the lake's coverage rule does not hold: its only bar is before the open.
+    premarket = stock_bar(FRIDAY_OPEN_MS - 60 * MINUTE_MS, "600.00", "600.50", "599.75", "600.25")
+    double = StockFetchDouble(fake_catalog, tmp_lake, bars=[premarket])
+    monkeypatch.setattr(chain_download, "materialize_engine_run", double)
+    vendor_lists(CALL_600)
+    vendor_bars(lambda symbol: no_trades(symbol))
+
+    items = await ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=[CALL_600])
+
+    assert len(double.calls) == 1
+    assert _summary(items) == [
+        ("listing", "SPY", "fetched", None),
+        ("underlying", "SPY", "failed", "underlying_not_fetched"),
+        ("contract", SYMBOL_600, "fetched", None),
+    ]
+    assert "still not in the lake" in (items[1].detail or "")
+    # The chain reads the same file as not stored, so the item and the chain now say one thing.
+    assert (await asyncio.to_thread(LakeRunData("SPY").underlying_day, FRIDAY)) is None
+
+
 @pytest.mark.parametrize(
     "payload",
     [

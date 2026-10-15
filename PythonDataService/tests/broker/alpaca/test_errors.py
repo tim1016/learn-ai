@@ -194,6 +194,41 @@ def test_rate_limited_without_header_has_no_retry_hint(make_api_error: ApiErrorF
     assert error.retry_after_ms is None
 
 
+@pytest.mark.parametrize(
+    ("header", "expected_ms"),
+    [("0", 0), ("1.5", 1500), ("2", 2000)],
+    ids=["zero", "fractional", "whole"],
+)
+def test_a_finite_non_negative_retry_after_is_the_hint_in_ms(
+    make_api_error: ApiErrorFactory, header: str, expected_ms: int
+) -> None:
+    error = map_api_error(make_api_error(429, headers={"Retry-After": header}), broker="alpaca")
+
+    assert isinstance(error, BrokerRateLimited)
+    assert error.retry_after_ms == expected_ms
+
+
+@pytest.mark.parametrize(
+    "header",
+    ["inf", "-inf", "1e999", "-1e999", "1e306", "nan", "-5", "-0.001", "soon", "Wed, 21 Oct 2015 07:28:00 GMT", ""],
+    ids=repr,
+)
+def test_a_retry_after_that_is_not_a_finite_non_negative_number_is_no_hint(
+    make_api_error: ApiErrorFactory, header: str
+) -> None:
+    """``Retry-After: inf`` once raised ``OverflowError`` out of the error map (#3216).
+
+    That replaced the ``BrokerRateLimited`` with a raw error no caller catches,
+    and ``-5`` was echoed as ``retry_after_ms=-5000``. A value that is not a
+    finite non-negative number of seconds is no hint, as an absent header is:
+    the write path then backs off by its own default.
+    """
+    error = map_api_error(make_api_error(429, headers={"Retry-After": header}), broker="alpaca")
+
+    assert isinstance(error, BrokerRateLimited)
+    assert error.retry_after_ms is None
+
+
 def test_unknown_status_defaults_to_unavailable(make_api_error: ApiErrorFactory) -> None:
     error = map_api_error(make_api_error(None), broker="alpaca")
 

@@ -42,7 +42,7 @@ class SkewMetrics:
     atm_iv: float
     rr_25d: float | None
     bf_25d: float | None
-    skew_slope: float
+    skew_slope: float | None
     call_25d: DeltaStrikeResult | None
     put_25d: DeltaStrikeResult | None
 
@@ -185,6 +185,8 @@ def compute_skew_metrics(
 
     Returns:
         SkewMetrics dataclass with ATM IV, 25D RR, 25D BF, and skew slope.
+        ``skew_slope`` is None when the surface cannot be queried at
+        forward ± 1%; 0.0 means a measured flat skew.
     """
     dte_days = round(ttm * 365)
     forward = surface.spot * math.exp((surface.rate - surface.dividend) * ttm)
@@ -205,12 +207,14 @@ def compute_skew_metrics(
     dk = 0.01 * forward
     k_lo = forward - dk
     k_hi = forward + dk
+    skew_slope: float | None
     try:
         vol_lo = surface.volatility(k_lo, ttm)
         vol_hi = surface.volatility(k_hi, ttm)
         skew_slope = (vol_hi - vol_lo) / (2.0 * dk)
     except (ValueError, RuntimeError):
-        skew_slope = 0.0
+        # A failed query is "unknown", not a flat skew (0.0).
+        skew_slope = None
 
     return SkewMetrics(
         ttm=ttm,
@@ -232,7 +236,8 @@ def compute_health_score(surface) -> HealthScore:
     - Solver convergence rate (25%): 100 if >95%, linear to 0 at <70%
     - Fit RMSE avg (25%): 100 if <0.005, 0 if >0.05, linear between
     - Rejection rate (25%): 100 if <10%, 0 if >50%, linear between
-    - Arbitrage violations (25%): 100 if 0, -10 per butterfly, -15 per calendar
+    - Arbitrage violations (25%): 100 if 0, -10 per butterfly, -15 per calendar,
+      scaled by the share of slices the arbitrage check could actually test
 
     Returns:
         HealthScore dataclass with component scores and total.
@@ -287,11 +292,17 @@ def compute_health_score(surface) -> HealthScore:
     total_butterfly_violations = 0
     total_calendar_violations = 0
 
+    checked_slices = 0
     for slice_diag in diag.slices:
-        if slice_diag.arbitrage is not None:
-            total_butterfly_violations += slice_diag.arbitrage.butterfly_violations
-            total_calendar_violations += slice_diag.arbitrage.calendar_violations
+        arb = slice_diag.arbitrage
+        if arb is not None:
+            total_butterfly_violations += arb.butterfly_violations
+            total_calendar_violations += arb.calendar_violations
+            checked_slices += arb.unevaluable == 0 and arb.butterfly_triples_tested > 0
 
+    # A smile the check could not test (or never ran on) is not arbitrage-free:
+    # score only the checked share of slices.
+    arbitrage_score *= checked_slices / len(diag.slices)
     arbitrage_score -= 10 * total_butterfly_violations
     arbitrage_score -= 15 * total_calendar_violations
     arbitrage_score = max(0.0, arbitrage_score)

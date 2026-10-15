@@ -45,7 +45,11 @@ def iv30_atm_50d(iv_by_expiry: pd.Series, target_days: int = 30) -> float | None
     """Pick the two expiries straddling target_days (in days) and interpolate.
 
     iv_by_expiry: Series indexed by expiry-in-days, values = ATM IV (50Δ).
-    Returns None if no straddling expiries exist.
+    Returns None unless one expiry sits below ``target_days`` and one at or
+    above it (or one sits exactly on it, which is the answer): an IV read off
+    a single side is not a constant-maturity number,
+    and labelling the nearest expiry's IV as one would be a silent
+    extrapolation (#3219).
 
     Output σ is on ACT/365 basis (the input σ values come from our IV solver
     which uses ``TTM = days / 365``). For comparison against trailing/forward
@@ -54,13 +58,12 @@ def iv30_atm_50d(iv_by_expiry: pd.Series, target_days: int = 30) -> float | None
     if iv_by_expiry.empty:
         return None
     days = iv_by_expiry.index.to_numpy()
-    if (days < target_days).any() and (days >= target_days).any():
-        t1_days = int(days[days < target_days].max())
-        t2_days = int(days[days >= target_days].min())
-    else:
-        # Extrapolate: pick the nearest expiry as a flat assumption.
-        nearest = int(days[np.argmin(np.abs(days - target_days))])
-        return float(iv_by_expiry.loc[nearest])
+    if not ((days < target_days).any() and (days >= target_days).any()):
+        if (days == target_days).any():
+            return float(iv_by_expiry.loc[target_days])  # an expiry exactly on the target is the answer
+        return None
+    t1_days = int(days[days < target_days].max())
+    t2_days = int(days[days >= target_days].min())
     return variance_interpolated_iv(
         sigma_t1=float(iv_by_expiry.loc[t1_days]),
         t1_years=t1_days / 365.0,

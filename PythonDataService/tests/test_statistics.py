@@ -26,7 +26,6 @@ from app.engine.results.statistics import (
     compute_trade_statistics,
     max_drawdown,
     summarize,
-    validate_statistics,
     validate_trade_log,
 )
 from app.utils.timestamps import to_ms_utc
@@ -631,25 +630,6 @@ class TestValidateTradeLog:
         )
         errors = validate_trade_log([t])
         assert any(e.code == "nan_indicator" for e in errors)
-
-
-class TestValidateStatistics:
-    def test_valid_stats(self) -> None:
-        stats = {"win_rate": 0.6, "max_drawdown_pct": 0.15, "profit_factor": 2.0, "sharpe_ratio": 1.5}
-        errors = validate_statistics(stats)
-        assert errors == []
-
-    def test_invalid_win_rate(self) -> None:
-        errors = validate_statistics({"win_rate": 1.5})
-        assert any(e.code == "invalid_win_rate_bounds" for e in errors)
-
-    def test_negative_profit_factor(self) -> None:
-        errors = validate_statistics({"profit_factor": -1.0})
-        assert any(e.code == "negative_profit_factor" for e in errors)
-
-    def test_nan_sharpe(self) -> None:
-        errors = validate_statistics({"sharpe_ratio": float("nan")})
-        assert any(e.code == "nan_sharpe" for e in errors)
 
 
 class TestSummarizeFiniteSanitization:

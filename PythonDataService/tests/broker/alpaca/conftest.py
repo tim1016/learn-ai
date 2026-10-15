@@ -34,6 +34,14 @@ def load_alpaca_fixture_file(family: str, filename: str) -> Any:
     return json.loads((_ALPACA_FIXTURES / family / filename).read_text())
 
 
+@pytest.fixture(autouse=True)
+def _forget_noted_non_finite_figures() -> None:
+    """The adapter logs a non-finite figure once per field; each test sees its own warning (#3216)."""
+    from app.broker.alpaca.adapter import reset_non_finite_notes_for_testing
+
+    reset_non_finite_notes_for_testing()
+
+
 @pytest.fixture
 def load_alpaca_fixture() -> AlpacaFixtureLoader:
     """Load a committed Alpaca payload fixture: (family, filename) → parsed JSON."""

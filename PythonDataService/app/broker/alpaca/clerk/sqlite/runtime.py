@@ -275,7 +275,7 @@ from app.services.market_liveness import (
     prepared_top_of_book,
 )
 from app.services.session_authority import SessionAuthorityState
-from app.utils.session_anchors import et_date_at_ms
+from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.models import ExitSubmission
@@ -2344,7 +2344,7 @@ class SqliteAlpacaClerkFacade:
         Raises ``EntryOutcomeWaitRefused`` for a limit more than a week
         ahead. A past limit judges the books immediately.
         """
-        if isinstance(until_ms, bool) or not isinstance(until_ms, int) or until_ms < 0:
+        if isinstance(until_ms, bool) or not isinstance(until_ms, int) or not 0 <= until_ms <= MAX_TIMESTAMP_MS:
             raise ValueError(f"until_ms is a time in milliseconds; got {until_ms!r}")
         asked_at_ms = self._repo.clock()
         command_id = f"cmd:{strategy_instance_id}:{_durable_decision_id(decision_id)}"

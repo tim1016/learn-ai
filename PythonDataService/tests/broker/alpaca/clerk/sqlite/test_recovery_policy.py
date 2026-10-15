@@ -397,6 +397,21 @@ def test_current_but_unavailable_action_is_a_typed_conflict() -> None:
     assert captured.value.capability.unavailable_reason_code == "NO_ACTIVE_BOT_RUN"
 
 
+def test_a_stop_with_no_active_run_says_where_a_half_done_stop_is_finished() -> None:
+    """A STOP that committed while the bot's process kept running leaves no active run to offer a Stop for.
+
+    The panel has no control for that: the refusal names the raw ``runs/stop`` route (#3217).
+    """
+    stop = next(
+        action
+        for action in build_recovery_catalog(_context(runs=()))
+        if action.action_id == "stop_bot_decisions"
+    )
+
+    assert stop.available is False
+    assert "/bots/{strategy_instance_id}/runs/stop" in stop.next_step
+
+
 def test_safe_flatten_prepares_versioned_exact_close_plan() -> None:
     context = _context(
         strategy_instance_id=None,

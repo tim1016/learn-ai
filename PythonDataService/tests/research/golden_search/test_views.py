@@ -6,6 +6,7 @@ import math
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
+from typing import get_args
 
 import pytest
 
@@ -26,7 +27,14 @@ from app.research.golden_search.guidance import (
     study_guidance,
     weakness_items,
 )
-from app.research.golden_search.models import EvaluationRecord, StudyRow
+from app.research.golden_search.models import (
+    COMMANDS,
+    RETAIN_KINDS,
+    CommandName,
+    EvaluationRecord,
+    RetainKind,
+    StudyRow,
+)
 from app.research.golden_search.planning import protocol_from_request
 from app.research.golden_search.protocol import KnobPlan
 from app.research.golden_search.views import (
@@ -204,6 +212,12 @@ def test_one_outcome_stands_for_the_final_test_the_named_fits_else_the_strongest
 
 
 # ── Permitted actions ────────────────────────────────────────────────────
+
+
+def test_every_command_and_retain_kind_the_wire_names_is_one_the_service_accepts() -> None:
+    # The runtime lists are the allow-lists a request is checked against: a Literal member missing from one is a refusal for a valid name.
+    assert set(COMMANDS) == set(get_args(CommandName)) and len(COMMANDS) == len(get_args(CommandName))
+    assert set(RETAIN_KINDS) == set(get_args(RetainKind)) and len(RETAIN_KINDS) == len(get_args(RetainKind))
 
 
 def test_an_authorized_stage_without_a_worker_reads_queued_and_can_be_cancelled_or_authorized_again() -> None:

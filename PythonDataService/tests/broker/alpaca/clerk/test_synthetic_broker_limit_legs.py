@@ -111,3 +111,30 @@ async def test_list_orders_speaks_the_vendors_query_category(tmp_path: Path) -> 
     ]
     with pytest.raises(ValueError, match="unknown order query category"):
         await broker.list_orders(status="filled")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["canceled", "filled", "expired", "rejected"])
+async def test_cancel_leaves_a_terminal_order_exactly_as_it_was(tmp_path: Path, status: str) -> None:
+    """A terminal order is never re-stamped, as the shadow book's own ``cancel`` leaves it."""
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
+    retained = ledger.append(_bar(), run_id="run-a")
+    now_ms = [retained.end_ms]
+    broker = SyntheticBroker(account_id="sim:ema-1", source_bars=ledger, clock=lambda: now_ms[0])
+    broker.bind_evaluated_bar("bot:ema:enter", retained)
+    submitted = await broker.submit(
+        BrokerOrderLeg(
+            symbol="SPY", side="buy", quantity=1, order_type="limit", limit_price=100.10 if status == "filled" else 99.50
+        ),
+        client_order_id="bot:ema:enter",
+    )
+    if status in {"expired", "rejected"}:  # the simulation ends an order canceled or filled; its ledger can hold these
+        submitted = submitted.model_copy(update={"status": status})
+        with broker._ledger.transaction() as records:  # type: ignore[union-attr]
+            broker._ledger.append_locked(records, order=submitted)  # type: ignore[union-attr]
+    assert submitted.status == status
+
+    now_ms[0] = retained.end_ms + 540_000
+    await broker.cancel(submitted.order_id)
+
+    assert await broker.get_order_by_broker_order_id(submitted.order_id) == submitted

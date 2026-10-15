@@ -143,6 +143,12 @@ class SpecAlgorithm(Strategy):
                 )
         if spec.entry.pyramiding != 1:
             raise NotImplementedError(f"evaluator supports pyramiding=1 only (spec uses {spec.entry.pyramiding})")
+        if isinstance(spec.entry.size, S.FixedContracts):
+            # Refused here, not when an entry first fires: a spec whose entry
+            # never fires would otherwise "succeed" with zero trades.
+            raise NotImplementedError(
+                "FixedContracts sizing is reserved for Phase 2 (options) — Phase 1 equity specs use SetHoldings"
+            )
 
         self._symbol_name = spec.symbols[0].upper()
         self._symbol: str = ""
@@ -401,8 +407,7 @@ class SpecAlgorithm(Strategy):
             self.ctx.set_holdings(self._symbol, Decimal(str(size.fraction)))
             return
         if isinstance(size, S.FixedContracts):
-            # Phase 1 is equity-only; FixedContracts is reserved for Phase 2
-            # options sizing.
+            # The constructor refuses this; defensive only.
             raise NotImplementedError(
                 "FixedContracts sizing is reserved for Phase 2 (options) — Phase 1 equity specs use SetHoldings"
             )

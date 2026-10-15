@@ -184,7 +184,8 @@
       <span class="text-sm text-slate-300">
         <strong class="text-white">{{ c.contractType === 'call' ? 'CALL' : 'PUT' }}</strong>
         Strike: <strong>${{ c.strikePrice | number:'1.2-2' }}</strong>
-        &middot; IV: <strong>{{ (c.impliedVolatility ?? 0) * 100 | number:'1.1-1' }}%</strong>
+        @let iv = c.impliedVolatility;
+        &middot; IV: <strong>{{ iv === null || iv === undefined ? '—' : (iv * 100 | number:'1.1-1') + '%' }}</strong>
         @if (c.lastQuote?.midpoint; as mid) {
           &middot; Mid: <strong>${{ mid | number:'1.2-2' }}</strong>
         }
@@ -239,6 +240,11 @@
             </button>
           }
         </div>
+        @if (metricNotProvidedBy().length) {
+          <span class="text-xs text-slate-400">
+            No {{ selectedMetric() }} from {{ metricNotProvidedBy().join(', ') }}: the engine does not provide it.
+          </span>
+        }
       </div>
     </div>
   }
@@ -348,6 +354,8 @@
             <strong>Step 3 — Read the comparison chart:</strong> The top chart overlays all 8 models. If lines overlap
             perfectly, the models agree. Use the <strong>Metric</strong> toggle to switch between Price, Delta, Gamma,
             Theta, Vega, and Rho. Hover over the chart to see exact values for each model at any spot price.
+            A model that could not run is named, with why, in the status line above the chart, and a Greek an engine
+            does not provide (Monte Carlo has no Theta, Vega or Rho) is left blank rather than drawn as zero.
           </p>
           <p>
             <strong>Step 4 — Read the difference chart:</strong> The bottom chart shows the numerical difference between

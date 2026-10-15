@@ -37,7 +37,7 @@ import logging
 from collections import deque
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import date
 from typing import Literal
 
 from app.broker.ibkr.auto_reconnect_monitor import get_monitor, realtime_feed_healthy
@@ -48,7 +48,9 @@ from app.broker.ibkr.minute_assembler import MinuteAssembler
 from app.services.bar_persistence import (
     BarPersistence,
     BarPersistenceRegressionError,
+    utc_dates_for_window,
 )
+from app.utils.session_anchors import et_date_at_ms, et_day_end_ms, et_midnight_ms
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -107,10 +109,13 @@ class LiveLineStatus:
     status_changed_at_ms: int | None = None
 
 
-def _today_utc():
-    """UTC date for the current wall clock. The replay path uses this as
-    the partition key for today's JSONL."""
-    return datetime.now(UTC).date()
+def _today_et() -> date:
+    """The New York trading date for the current wall clock.
+
+    Not the UTC date: between 20:00 and 24:00 ET the UTC date is already
+    tomorrow's, whose files hold none of the session being shown.
+    """
+    return et_date_at_ms(now_ms_utc())
 
 
 class LiveBarAggregator:
@@ -131,16 +136,17 @@ class LiveBarAggregator:
         self,
         persistence: BarPersistence | None = None,
         *,
-        today_provider: Callable[[], object] | None = None,
+        today_provider: Callable[[], date] | None = None,
     ) -> None:
         self._states: dict[str, _SymbolState] = {}
         self._states_5s: dict[str, _SymbolState] = {}
         # Protect dict access from concurrent ensure_subscribed calls.
         self._lock = asyncio.Lock()
         self._persistence = persistence
-        # Allow tests to inject a fixed "today" so persisted bars with a
-        # historical anchor still replay through ensure_subscribed.
-        self._today_provider = today_provider or _today_utc
+        # The New York trading date whose bars replay on subscribe. Tests inject
+        # a fixed one so persisted bars with a historical anchor still replay
+        # through ensure_subscribed.
+        self._today_provider = today_provider or _today_et
 
     def _key(self, symbol: str) -> str:
         return symbol.strip().upper()
@@ -316,8 +322,14 @@ class LiveBarAggregator:
             return
         if state.bars:
             return
+        today = self._today_provider()
         try:
-            bars = self._persistence.replay(symbol, resolution, self._today_provider())
+            # Files are keyed by UTC date; a New York day spans two of them.
+            bars = [
+                bar
+                for day in utc_dates_for_window(et_midnight_ms(today), et_day_end_ms(today))
+                for bar in self._persistence.replay(symbol, resolution, day)
+            ]
         except Exception as exc:
             logger.warning(
                 "Replay from BarPersistence failed for %s/%s: %s",

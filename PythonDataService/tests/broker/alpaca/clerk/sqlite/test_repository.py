@@ -12,13 +12,14 @@ meaningfully exercise, plus the mirror-fence and hash-chain mechanics from
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import sqlite3
 from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.sqlite import repository_lifecycle
+from app.broker.alpaca.clerk.sqlite import repository_lifecycle, schema
 from app.broker.alpaca.clerk.sqlite.facts import (
     UncertaintyRaisedFacts,
     UncertaintyResolvedFacts,
@@ -30,7 +31,11 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectedOperation,
     ProjectedOrder,
 )
-from app.broker.alpaca.clerk.sqlite.registry import EstablishedAccountsRegistry
+from app.broker.alpaca.clerk.sqlite.registry import (
+    EstablishedAccountsRegistry,
+    EstablishedGeneration,
+    EstablishedRegistryInvalid,
+)
 from app.broker.alpaca.clerk.sqlite.repository import (
     AlreadyInitialized,
     ClerkSqliteRepository,
@@ -113,6 +118,160 @@ def test_initialize_refuses_fuseblk_for_wal_authority(
             artifacts_root=tmp_path,
             clock=_clock_seq(),
         )
+
+
+def test_configure_connection_refuses_a_file_database_that_retains_a_rollback_journal(
+    tmp_path: Path,
+) -> None:
+    """SQLite answers ``PRAGMA journal_mode = WAL`` with the mode it kept.
+
+    A change of journal mode inside a transaction is the one fallback a test
+    can provoke on a real file: SQLite leaves the mode as it was (``delete``)
+    and raises nothing, exactly as a filesystem without WAL support does.
+    """
+    conn = sqlite3.connect(tmp_path / "clerk.db", isolation_level=None)
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        with pytest.raises(UnsupportedWalFilesystem, match="'delete'"):
+            schema.configure_connection(conn)
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("target", [":memory:", ""])
+def test_configure_connection_accepts_a_database_with_no_file(target: str) -> None:
+    conn = sqlite3.connect(target)
+    try:
+        schema.configure_connection(conn)
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def _recorded_connections(monkeypatch: pytest.MonkeyPatch) -> list[sqlite3.Connection]:
+    """Every connection ``sqlite3.connect`` opens from here on, in open order."""
+    real_connect = sqlite3.connect
+    opened: list[sqlite3.Connection] = []
+
+    def connect(*args, **kwargs) -> sqlite3.Connection:
+        conn = real_connect(*args, **kwargs)
+        opened.append(conn)
+        return conn
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    return opened
+
+
+def _assert_closed(conn: sqlite3.Connection) -> None:
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        conn.execute("SELECT 1")
+
+
+def test_open_closes_its_connection_when_a_pending_migration_cannot_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = _clock_seq()
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    repo._conn.execute("UPDATE control_meta SET schema_version = ? WHERE id = 1", (schema.SCHEMA_VERSION - 1,))
+    repo._conn.commit()
+    repo.close()
+
+    def locked(*_args, **_kwargs) -> None:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(schema, "migrate_schema", locked)
+    opened = _recorded_connections(monkeypatch)
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+
+    assert len(opened) == 1
+    _assert_closed(opened[0])
+
+
+def test_open_closes_its_connection_when_the_registry_cannot_be_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = _clock_seq()
+    ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock).close()
+    registry_file = tmp_path / "accounts" / "alpaca" / "_established_generations.jsonl"
+    with registry_file.open("a", encoding="utf-8") as handle:
+        handle.write('{"account_id": "PA-OTH')  # a torn trailing line
+    opened = _recorded_connections(monkeypatch)
+
+    with pytest.raises(ValueError, match="_established_generations"):
+        ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+
+    assert len(opened) == 1
+    _assert_closed(opened[0])
+
+
+def test_initialize_that_cannot_configure_its_connection_strands_no_database_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = _clock_seq()
+    real_configure = schema.configure_connection
+    db_path = tmp_path / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db"
+
+    def refuse(_conn: sqlite3.Connection) -> None:
+        # SQLite can leave its own side files beside a database it could not put in WAL.
+        for suffix in ("-wal", "-shm", "-journal"):
+            Path(f"{db_path}{suffix}").write_bytes(b"")
+        raise UnsupportedWalFilesystem("retained 'delete'")
+
+    monkeypatch.setattr(schema, "configure_connection", refuse)
+    opened = _recorded_connections(monkeypatch)
+    with pytest.raises(UnsupportedWalFilesystem):
+        ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+
+    assert len(opened) == 1
+    _assert_closed(opened[0])
+    assert sorted(path.name for path in db_path.parent.glob("clerk.db*")) == []
+
+    # The refusal was the filesystem's, so the next initialize is a first one, not AlreadyInitialized.
+    monkeypatch.setattr(schema, "configure_connection", real_configure)
+    ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock).close()
+
+
+def test_a_losing_initialize_never_removes_the_winners_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``initialize`` holds the startup fence shared, so two initializers of a new account can
+    both pass the "no database yet" check. The one that creates the file second must stop there:
+    a refusal of its own must never unlink the file the winner established."""
+    clock = _clock_seq()
+    real_assert = repository_lifecycle.assert_wal_filesystem_supported
+    real_configure = schema.configure_connection
+    winner_slipped_in = False
+    configure_calls = 0
+
+    def winner_slips_in_after_the_loser_passed_its_check(path: Path) -> None:
+        nonlocal winner_slipped_in
+        real_assert(path)
+        if not winner_slipped_in:
+            winner_slipped_in = True
+            ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock).close()
+
+    def winner_configures_loser_is_refused(conn: sqlite3.Connection) -> None:
+        nonlocal configure_calls
+        configure_calls += 1
+        if configure_calls == 1:
+            real_configure(conn)
+            return
+        raise UnsupportedWalFilesystem("the loser's own refusal")
+
+    monkeypatch.setattr(
+        repository_lifecycle, "assert_wal_filesystem_supported", winner_slips_in_after_the_loser_passed_its_check
+    )
+    monkeypatch.setattr(schema, "configure_connection", winner_configures_loser_is_refused)
+
+    with pytest.raises(AlreadyInitialized):
+        ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+
+    assert winner_slipped_in
+    monkeypatch.undo()
+    reopened = ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    assert reopened.control_meta_snapshot().authority_generation == 1
+    reopened.close()
 
 
 def test_open_refuses_existing_wal_authority_on_virtiofs(
@@ -423,6 +582,38 @@ def test_substituted_database_rejected_on_identity_mismatch(tmp_path: Path) -> N
         ClerkSqliteRepository.open(account_id="PA-AAAA", artifacts_root=tmp_path, clock=clock)
 
 
+@pytest.mark.parametrize(
+    ("bad_line", "reason", "refused_for"),
+    [
+        ('{"account_id": "PA-OTH', "JSONDecodeError", (ACCOUNT_ID, "PA-OTHER", "PA-NEVER-SEEN")),
+        ('["PA-OTHER", 1]', "TypeError", (ACCOUNT_ID, "PA-OTHER", "PA-NEVER-SEEN")),
+        ('{"account_id": "PA-OTHER", "authority_generation": 1}', "TypeError", ("PA-OTHER",)),
+    ],
+)
+def test_one_unreadable_registry_line_refuses_the_read_naming_its_line(
+    tmp_path: Path, bad_line: str, reason: str, refused_for: tuple[str, ...]
+) -> None:
+    """The registry file is shared, so a torn line must not read as "never established".
+
+    Skipping it would let ``latest`` answer ``None`` for an account whose
+    only entry that line was, and ``initialize`` would then mint generation 1
+    over an established authority.
+    """
+    registry = EstablishedAccountsRegistry(tmp_path)
+    registry.record(
+        EstablishedGeneration(
+            account_id=ACCOUNT_ID, authority_generation=1, db_identity_token="tok", established_at_ms=1
+        )
+    )
+    with (tmp_path / "_established_generations.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(bad_line + "\n")
+
+    for account_id in refused_for:
+        with pytest.raises(EstablishedRegistryInvalid, match=r"_established_generations\.jsonl line 2") as refused:
+            registry.latest(account_id)
+        assert reason in str(refused.value)
+
+
 def test_database_behind_its_mirror_fails_closed_on_open_without_repair(tmp_path: Path) -> None:
     """A clerk.db that lost its committed tail must not open (#3161).
 
@@ -546,6 +737,22 @@ def test_a_stale_handle_s_close_does_not_release_the_new_owner_s_lease(tmp_path:
     live.close()
 
 
+def test_close_closes_the_connection_even_when_the_lease_release_fails(tmp_path: Path) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
+    repo._conn.execute("PRAGMA busy_timeout = 20")
+    rival = sqlite3.connect(repo.db_path, isolation_level=None)
+    rival.execute("BEGIN IMMEDIATE")  # holds the write lock past the busy timeout
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            repo.close()
+    finally:
+        rival.execute("ROLLBACK")
+        rival.close()
+
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        repo._conn.execute("SELECT 1")
+
+
 def test_expired_lease_allows_a_new_process_to_take_over(tmp_path: Path) -> None:
     clock = _clock_seq()
     repo = ClerkSqliteRepository.initialize(
@@ -585,6 +792,32 @@ def test_rebuild_from_mirror_reconstructs_identical_state(tmp_path: Path) -> Non
     rebuilt = ClerkSqliteRepository.rebuild_from_mirror(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
     assert rebuilt.custody_transitions() == original_transitions
     assert rebuilt.strategy_instances() == original_instances
+    rebuilt.close()
+
+
+def test_rebuild_that_cannot_configure_its_connection_leaves_no_database_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = _clock_seq()
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    repo.register_strategy_instance(strategy_instance_id="spy-bot", symbol="SPY", config_hash="h1")
+    db_path = repo.db_path
+    repo.close()
+    db_path.rename(db_path.with_suffix(".db.corrupt"))
+    real_configure = schema.configure_connection
+
+    def refuse(_conn: sqlite3.Connection) -> None:
+        raise UnsupportedWalFilesystem("retained 'delete'")
+
+    monkeypatch.setattr(schema, "configure_connection", refuse)
+    with pytest.raises(UnsupportedWalFilesystem):
+        ClerkSqliteRepository.rebuild_from_mirror(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+
+    assert not db_path.exists()
+    # Nothing was left to refuse the next rebuild as "already exists".
+    monkeypatch.setattr(schema, "configure_connection", real_configure)
+    rebuilt = ClerkSqliteRepository.rebuild_from_mirror(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    assert len(rebuilt.custody_transitions()) == 1
     rebuilt.close()
 
 
@@ -653,6 +886,81 @@ def test_mirror_sequence_gap_fails_closed_on_rebuild(tmp_path: Path) -> None:
 
     with pytest.raises(MirrorChainBroken):
         ClerkSqliteRepository.rebuild_from_mirror(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+
+
+@pytest.mark.parametrize(
+    "record",
+    [{"sequence": 1, "row_hash": "h"}, {"phase": "BOGUS", "sequence": 1, "row_hash": "h"}],
+    ids=["no_phase", "unknown_phase"],
+)
+def test_a_mirror_record_with_no_known_phase_is_a_chain_break(tmp_path: Path, record: dict) -> None:
+    mirror_path = tmp_path / "custody_transitions.mirror"
+    mirror_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    with pytest.raises(MirrorChainBroken, match="unknown mirror record phase"):
+        MirrorFile(mirror_path).rebuild()
+
+
+def test_an_append_after_a_torn_mirror_tail_is_refused_not_glued_on(tmp_path: Path) -> None:
+    """A write that died part-way leaves bytes with no newline.
+
+    The next append used to land on those bytes and succeed, and the open
+    after it failed on a line that was never one record. The mirror is
+    custody evidence: it refuses, and it does not trim the tail itself.
+    """
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
+    repo.register_strategy_instance(strategy_instance_id="spy-bot", symbol="SPY", config_hash="h1")
+    with repo.mirror_path.open("ab") as handle:
+        handle.write(b'{"phase":"PREPARE","seq')
+    torn = repo.mirror_path.read_bytes()
+
+    with pytest.raises(MirrorChainBroken, match="partial"):
+        repo.register_strategy_instance(strategy_instance_id="qqq-bot", symbol="QQQ", config_hash="h2")
+
+    assert repo.mirror_path.read_bytes() == torn
+    assert [row["sequence"] for row in repo.custody_transitions()] == [1]
+    repo.close()
+
+
+def test_an_append_after_a_complete_record_that_lost_only_its_newline_restores_it(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A write that died between the record and its newline lost nothing but the newline."""
+    clock = _clock_seq()
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    repo.register_strategy_instance(strategy_instance_id="spy-bot", symbol="SPY", config_hash="h1")
+    intact = repo.mirror_path.read_bytes()
+    assert intact.endswith(b"\n")
+    repo.mirror_path.write_bytes(intact[:-1])
+
+    with caplog.at_level(logging.WARNING):
+        repo.register_strategy_instance(strategy_instance_id="qqq-bot", symbol="QQQ", config_hash="h2")
+
+    restored = repo.mirror_path.read_bytes()
+    assert restored.startswith(intact)
+    assert [json.loads(line)["phase"] for line in restored.splitlines()] == [
+        "IDENTITY",
+        "PREPARE",
+        "FINALIZE",
+        "PREPARE",
+        "FINALIZE",
+    ]
+    assert [r.action for r in caplog.records if getattr(r, "action", None) == "mirror_tail_newline_restored"]
+    repo.close()
+    reopened = ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    assert len(reopened.custody_transitions()) == 2
+    reopened.close()
+
+
+def test_an_unterminated_record_longer_than_one_read_block_is_still_found_whole(tmp_path: Path) -> None:
+    mirror_path = tmp_path / "custody_transitions.mirror"
+    long_record = json.dumps({"phase": "PREPARE", "sequence": 1, "payload_canonical": "x" * 200_000})
+    mirror_path.write_text('{"phase":"IDENTITY"}\n' + long_record, encoding="utf-8")
+
+    MirrorFile(mirror_path).finalize(sequence=1, authority_generation=1, row_hash="h", recorded_at_ms=1)
+
+    lines = mirror_path.read_text(encoding="utf-8").splitlines()
+    assert [json.loads(line)["phase"] for line in lines] == ["IDENTITY", "PREPARE", "FINALIZE"]
 
 
 def test_mirror_prepare_without_finalize_is_excluded_not_imported(tmp_path: Path) -> None:

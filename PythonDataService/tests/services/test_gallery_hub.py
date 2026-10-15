@@ -16,11 +16,12 @@ from app.services.live_bar_aggregator import LiveLineStatus
 
 # A Saturday (market closed) so ``live_window`` takes its deterministic
 # calendar-day fallback instead of a real NYSE session lookup — mirrors
-# ``test_chart_projection.py``'s ``test_live_window_falls_back_when_market_closed``.
+# ``test_chart_projection.py``'s ``test_live_window_falls_back_to_the_new_york_day_when_market_closed``.
 _NOW = 1_700_319_600_000
 _DEFAULT_LINE = LiveLineStatus(status="streaming", last_bar_ms=1_700_000_000_000)
-_OPEN_MS = 1_700_265_600_000
-_CLOSE_MS = _OPEN_MS + 86_400_000
+# That Saturday's New York day: 2023-11-18 00:00 EST to 2023-11-19 00:00 EST.
+_OPEN_MS = 1_700_283_600_000
+_CLOSE_MS = 1_700_370_000_000
 
 
 def _fill(
@@ -1026,3 +1027,52 @@ def test_a_fill_is_drawn_only_on_the_chart_of_its_own_asset() -> None:
 
     assert drawn("SPY") == [("spy-fill", "SPY")]
     assert drawn("qqq") == [("qqq-fill", "QQQ")]
+
+
+# ── #3217: a read that never returns is a bounded error, not a silent wall ──
+
+
+class _HungCatalogSource(_FakeCatalogSource):
+    """``get_catalog`` blocks forever until ``hang`` is cleared, like a wedged read."""
+
+    def __init__(self, rows: list[_Cat2]) -> None:
+        super().__init__(rows)
+        self.hang = True
+
+    async def get_catalog(self, broker: str, account_id: str) -> list[_Cat2]:
+        if self.hang:
+            await asyncio.Event().wait()
+        return await super().get_catalog(broker, account_id)
+
+
+@pytest.mark.asyncio
+async def test_a_catalog_read_that_never_returns_is_a_bounded_error_and_frees_the_lock() -> None:
+    """Every call collects under one lock, so a read that never returned used to
+    leave the snapshot REST read and every stream behind it with no answer at
+    all. Each caller is now answered within the bound, the lock is free again
+    the moment the read recovers, and the failed calls published no version."""
+    source = _HungCatalogSource([_Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12)])
+    hub = GalleryHub(
+        broker="alpaca",
+        account_id="PA3",
+        catalog_source=source,
+        aggregator=_FakeAggregator(),
+        collect_timeout_s=0.05,
+    )
+
+    outcomes = await asyncio.wait_for(
+        asyncio.gather(
+            hub.build_snapshot(),
+            hub.build_update(since_bar_ms={}, known_sids=set()),
+            return_exceptions=True,
+        ),
+        timeout=2.0,
+    )
+
+    assert [type(outcome) for outcome in outcomes] == [gallery_hub.GalleryCollectTimeoutError] * 2
+    assert all(outcome.http_status == 503 for outcome in outcomes)
+
+    source.hang = False
+    snapshot = await asyncio.wait_for(hub.build_snapshot(), timeout=2.0)
+
+    assert snapshot.surface_version == 1

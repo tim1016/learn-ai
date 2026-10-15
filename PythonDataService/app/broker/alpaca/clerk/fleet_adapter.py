@@ -33,7 +33,7 @@ from app.broker.fleet.provider import (
 )
 from app.broker.fleet.records import LANE_COUNT_KEYS
 
-_ADAPTER_VERSION = "alpaca-fleet.13"
+_ADAPTER_VERSION = "alpaca-fleet.14"
 
 
 def _op(
@@ -42,7 +42,7 @@ def _op(
     path: str,
     *,
     capability: Capability,
-    idempotency: OperationIdempotency = OperationIdempotency.READ,
+    idempotency: OperationIdempotency | None = None,
     readiness: OperationReadiness = OperationReadiness.EXECUTION,
     account: bool = False,
     stream: OperationStream = OperationStream.NONE,
@@ -63,7 +63,16 @@ def _op(
     ``bot_chart_history`` (issue #2204), ``lane_stop_all_bots`` (#2268),
     ``lane_ibkr_bar_check`` (#2269), ``bots_clear`` (#2567) and
     ``bot_history_read`` (#2574) leaves it at the fleet default.
+
+    A GET defaults to read idempotency. Any other method declares it: the
+    provider refuses read on PUT, PATCH and DELETE but not on POST (a plan or
+    a check is a POST that reads), so a POST left to a default would route as
+    an unfenced read and a draining lane would let it through.
     """
+    if idempotency is None:
+        if method != "GET":
+            raise ValueError(f"operation {operation_id!r}: a {method} must declare its idempotency")
+        idempotency = OperationIdempotency.READ
     return ProviderOperation(
         operation_id=operation_id,
         method=method,
@@ -80,6 +89,8 @@ def _op(
 
 
 _CONFIGURATION = OperationReadiness.CONFIGURATION_ACCESS
+#: A POST that only reads (a plan, a preview, a check): named, never defaulted.
+_READ = OperationIdempotency.READ
 _DURABLE = OperationIdempotency.DURABLE_KEY
 _ONE_SHOT = OperationIdempotency.ONE_SHOT
 #: A mutation that only stops a bot or reduces exposure, so a draining lane
@@ -231,6 +242,51 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             "GET",
             "/market-status-snapshot",
             capability=Capability.MARKET_STATUS_READ,
+        ),
+        # IBKR is the read-only market-data feed for every Alpaca clerk
+        # (ADR 0062). These clerk-scoped routes select the lane's own Gateway
+        # session without making the coordinator a market-data client.
+        _op(
+            "ibkr_health_read",
+            "GET",
+            "/market-data/ibkr/health",
+            capability=Capability.MARKET_STATUS_READ,
+            readiness=_CONFIGURATION,
+            agent_path="/api/broker/health",
+        ),
+        _op(
+            "ibkr_expirations_read",
+            "GET",
+            "/market-data/ibkr/expirations/{symbol}",
+            capability=Capability.MARKET_STATUS_READ,
+            readiness=_CONFIGURATION,
+            agent_path="/api/broker/expirations/{symbol}",
+        ),
+        _op(
+            "ibkr_strikes_read",
+            "GET",
+            "/market-data/ibkr/strikes/{symbol}",
+            capability=Capability.MARKET_STATUS_READ,
+            readiness=_CONFIGURATION,
+            agent_path="/api/broker/strikes/{symbol}",
+        ),
+        _op(
+            "ibkr_option_chain_stream",
+            "GET",
+            "/market-data/ibkr/option-chain/{symbol}",
+            capability=Capability.STREAM_SUBSCRIBE,
+            readiness=_CONFIGURATION,
+            stream=OperationStream.SSE,
+            agent_path="/api/broker/option-chain/{symbol}",
+        ),
+        _op(
+            "ibkr_option_surface_stream",
+            "GET",
+            "/market-data/ibkr/option-surface/{symbol}",
+            capability=Capability.STREAM_SUBSCRIBE,
+            readiness=_CONFIGURATION,
+            stream=OperationStream.SSE,
+            agent_path="/api/broker/option-surface/{symbol}",
         ),
         # ── Configuration family (repair stays reachable without a binding) ──
         _op(
@@ -396,9 +452,10 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             "POST",
             "/accounts/{account_id}/bots/admission",
             capability=Capability.DEPLOY,
+            idempotency=_READ,
             account=True,
         ),
-        _op("bot_budget_preview", "POST", "/accounts/{account_id}/bots/budget-preview", capability=Capability.DEPLOY, account=True),
+        _op("bot_budget_preview", "POST", "/accounts/{account_id}/bots/budget-preview", capability=Capability.DEPLOY, idempotency=_READ, account=True),
         _op("bot_budget_read", "GET", "/accounts/{account_id}/bots/{sid}/budget", capability=Capability.BOT_PANEL_READ, account=True),
         _op("account_money_read", "GET", "/accounts/{account_id}/money", capability=Capability.BOT_PANEL_READ, account=True),
         # Every bot this account ran, with its Dry Runs (#2574). Read on
@@ -420,7 +477,7 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
         # bot page reads the end from its panel poll, so no read is routed.
         # The change is the owner's schedule, never a start: a draining lane
         # refuses it with every other non-quiesce mutation.
-        _op("bot_end_preview", "POST", "/accounts/{account_id}/bots/end-preview", capability=Capability.DEPLOY, account=True),
+        _op("bot_end_preview", "POST", "/accounts/{account_id}/bots/end-preview", capability=Capability.DEPLOY, idempotency=_READ, account=True),
         _op(
             "bot_end_edit",
             "PUT",
@@ -484,6 +541,7 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             "POST",
             "/accounts/{account_id}/bots/option-structure-preview",
             capability=Capability.DEPLOY,
+            idempotency=_READ,
             account=True,
         ),
         _op(
@@ -579,6 +637,7 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             "POST",
             "/accounts/{account_id}/strategies/{program_key}/paper-access/plan",
             capability=Capability.DEPLOY,
+            idempotency=_READ,
             account=True,
         ),
         _op(
@@ -669,6 +728,7 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             "POST",
             "/accounts/{account_id}/custody/recovery-actions/check",
             capability=Capability.CUSTODY_COMMAND,
+            idempotency=_READ,
             account=True,
             agent_path=(
                 "/api/alpaca-clerk-sqlite/accounts/{account_id}/recovery-actions/check"
@@ -690,6 +750,7 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             "POST",
             "/accounts/{account_id}/custody/bots/{sid}/recovery-actions/check",
             capability=Capability.CUSTODY_COMMAND,
+            idempotency=_READ,
             account=True,
             agent_path=(
                 "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{sid}/"
@@ -822,6 +883,7 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             "POST",
             "/accounts/{account_id}/manual-orders/preview",
             capability=Capability.MANUAL_ORDERS,
+            idempotency=_READ,
             account=True,
         ),
         _op(

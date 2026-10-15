@@ -662,3 +662,46 @@ async def test_the_live_verdict_reports_a_loss_hold_raised_on_the_composed_shado
         assert body["final_verdict"] == "shadow"
     finally:
         reset_alpaca_settings_for_testing()
+
+
+async def test_a_shadow_bots_fills_reach_its_panel_labelled_simulated(
+    shadow_app: tuple[FastAPI, ActiveClerkRuntime],
+    shadow_registry: BotTaskRegistry,
+) -> None:
+    """ADR 0059 D2: a fill the shadow authority synthesized is served simulated.
+
+    Through the production path: the route resolves the shadow binding, the
+    fold's economics author the fill row, and the page carries the custody id
+    ``shadow:<live id>`` -- never the live account's, which would present a
+    simulated fill as a real-money one.
+    """
+    app, runtime = shadow_app
+    from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+    from app.broker.contract.models import BrokerOrderLeg
+    from tests.broker.alpaca.clerk.sqlite.conftest import DAY_PNL_SID, _append_day_pnl_slice
+
+    deployed = await shadow_registry.deploy(
+        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=DAY_PNL_SID, symbol="SPY", mode="trade"
+    )
+    repo = runtime.sqlite_repository
+    assert repo is not None
+    accepted = accept_enter(
+        repo,
+        account_id=repo.account_id,
+        strategy_instance_id=DAY_PNL_SID,
+        lifecycle_run_id=deployed.active_run_id,
+        decision_id="shadow-fill",
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+    )
+    _append_day_pnl_slice(
+        repo, accepted, execution_id="shadow-buy", side="BUY", quantity=1, price=500, occurred_at_ms=repo.clock()
+    )
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/brokers/alpaca/accounts/{LIVE_ACCT}/bots/{DAY_PNL_SID}/panel")
+
+    assert response.status_code == 200, response.text
+    fills = response.json()["recent_fills"]
+    assert [(fill["authority_account_id"], fill["authority_kind"], fill["simulated"]) for fill in fills] == [
+        (SHADOW_ACCT, "shadow", True)
+    ]

@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Literal
 
 from app.broker.alpaca.clerk.sqlite.repository import (
+    ClaimLostAfterBrokerIO,
     ExecutionLeaseLost,
     ExecutionLeaseLostAfterBrokerIO,
     RepositoryPoisoned,
@@ -310,21 +311,27 @@ class DryRunAuthorityLeaseLostError(ActionExecutionError):
 
 
 def outcome_unknown_after_broker_io(
-    error: ExecutionLeaseLostAfterBrokerIO,
+    error: ExecutionLeaseLostAfterBrokerIO | ClaimLostAfterBrokerIO,
 ) -> ActionOutcomeUnknownError:
-    """The lease was found lost only after the broker acted: an order may be
-    placed or cancelled with no receipt folded. Both executors report that
-    as outcome-unknown with a burned key -- never the "nothing applied,
-    retry" reading a pre-mutation lease loss earns -- and leave the lease to
-    the heartbeat's own revival."""
+    """The lease, or the order's operation claim, was found lost only after
+    the broker was called: an order may be placed or cancelled with no
+    receipt folded. Both executors report that as outcome-unknown with a
+    burned key -- never the "nothing applied, retry" reading a pre-mutation
+    loss earns. A lost lease is left to the heartbeat's own revival; a lost
+    claim leaves the lease as it was."""
+    if isinstance(error, ClaimLostAfterBrokerIO):
+        lost = "The order's operation claim was found lost only after the broker acted"
+        then = "on its next pass"
+    else:
+        lost = "The data plane's execution lease was found lost only after the broker acted"
+        then = "on its next pass once the lease heartbeat has revived the lease"
     return ActionOutcomeUnknownError(
         "The command reached the broker, but its result could not be recorded.",
         detail=(
-            "The data plane's execution lease was found lost only after the broker "
-            "acted, so an order may have been placed or cancelled without its receipt "
-            "being folded. Do not retry this key: inspect Clerk evidence for the final "
-            "outcome -- the reconciliation sweep folds the broker's own record on its "
-            "next pass once the lease heartbeat has revived the lease."
+            f"{lost}, so an order may have been placed or cancelled without its "
+            "receipt being folded. Do not retry this key: inspect Clerk evidence for "
+            "the final outcome -- the reconciliation sweep folds the broker's own "
+            f"record {then}."
         ),
         reason_code=type(error).__name__,
     )
@@ -738,8 +745,8 @@ async def execute_action(
         if reserved_fresh:
             await ledger.fail(sid, request.action_id, request.idempotency_key, str(err))
         raise
-    except ExecutionLeaseLostAfterBrokerIO as err:
-        # The broker already acted (ClaimedBrokerIO's post-I/O renewal):
+    except (ExecutionLeaseLostAfterBrokerIO, ClaimLostAfterBrokerIO) as err:
+        # A broker call was made (ClaimedBrokerIO's post-I/O renewal):
         # outcome unknown, key burned, no retry offered -- the release below
         # is only honest for a lease lost before any mutation.
         if reserved_fresh:

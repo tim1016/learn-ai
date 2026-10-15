@@ -118,8 +118,7 @@ class StrategyEvaluation:
     # optional until issue #1736 removed the state; the guard that made it
     # unreachable already existed. Lets a caller that needs the complete
     # decision-meaning payload -- not just the identity/intents subset above
-    # -- read it without re-deriving strategy state; the run-replay fidelity
-    # classifier (`app/services/run_replay_proof.py`) is one such caller.
+    # -- read it without re-deriving strategy state.
     trace: EvaluationTrace
     # This mode was captured with the source bar before a consolidator could
     # turn it into a semantic decision. It must never be sampled later.
@@ -249,12 +248,10 @@ class _RetainedSourceBarFeed:
         self._held_keys: set[tuple[str, int, int]] = set()
         self.feed_id = source.feed_id
         # The one place every retained run records the session it decided
-        # under, beside the bars and continuity facts that session governs.
-        # The replay proof reads it back from here rather than from whatever
-        # the executing authority declares at replay time (ADR 0059 D5.2): a
-        # capability change after the fact must not reinterpret a finished
-        # run, and a replay generated on demand or during boot repair must
-        # not need an authority to be active at all.
+        # under, beside the bars and continuity facts that session governs
+        # (ADR 0059 D5.2): a capability change after the fact must not
+        # reinterpret a finished run. No reader remains since the replay-proof
+        # service was cut (#2755); the row is kept write-once.
         ledger.record_decision_session(session, run_id=run_id, recorded_at_ms=now_ms_utc())
 
     async def __aenter__(self) -> _RetainedSourceBarFeed:
@@ -517,10 +514,11 @@ def _engine_bar(bar: MarketDataBar) -> TradeBar:
 
 def _evaluation_mode_for(feed: MarketDataFeed, bar: MarketDataBar) -> EvaluationMode:
     """Read a mode captured at feed yield; ordinary feeds always decide."""
-    try:
-        return feed.evaluation_mode_for(bar)  # type: ignore[attr-defined,no-any-return]
-    except AttributeError:
+    mode_for = getattr(feed, "evaluation_mode_for", None)
+    if mode_for is None:
         return EvaluationMode.DECIDE
+    mode: EvaluationMode = mode_for(bar)
+    return mode
 
 
 def _build_signal_strategy(
@@ -1205,9 +1203,7 @@ def _append_decision_receipt(
     facts["decision_bar_close_ms"] = evaluation.decision_bar_close_ms
     # Unconditional since issue #1736: every live evaluation carries a trace,
     # so a receipt written now is always content-verifiable. Rows written
-    # before that hold no `trace_digest` key at all, which is what
-    # `run_replay_proof` still reads for when it may fall back to
-    # intent-kind comparison.
+    # before that hold no `trace_digest` key at all.
     facts["trace_digest"] = _evaluation_trace_digest(evaluation)
     if evaluation.explanation is not None:
         facts["explanation"] = evaluation.explanation.model_dump(mode="json")

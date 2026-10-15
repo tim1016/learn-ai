@@ -196,6 +196,8 @@ class ProviderSummaryObservation:
             payload = dict(raw)
         else:
             raise ValueError("a lane summary must be a JSON object")
+        if not isinstance(payload, dict):
+            raise ValueError("a lane summary must be a JSON object")
         _drop_unknown_summary_keys(payload)
         mode = payload.get("endpoint_mode")
         if mode not in tuple(item.value for item in SummaryEndpointMode):
@@ -227,6 +229,34 @@ class ProviderSummaryObservation:
             account_nickname=account_nickname,
             **counts,
         )
+
+    @classmethod
+    def parse_stored(cls, raw: object, *, clerk_id: str) -> ProviderSummaryObservation | None:
+        """Read a summary already at rest: ``None`` when this build cannot parse it.
+
+        Ingest refuses what it cannot parse at the door; a read never did. A
+        build that accepted a value stored it, and a later build (a rollback
+        after the vocabulary grew, a lowered length cap) may refuse it. One
+        lane's unreadable value withholds that lane's own summary — it never
+        fails a roster read or a refusal's wording (ADR 0062 Decision 1) —
+        until its next beat replaces it. Logged once per clerk per process.
+        """
+        try:
+            return cls.parse(raw)
+        except ValueError:
+            if clerk_id not in _UNREADABLE_SUMMARY_LOGGED:
+                _UNREADABLE_SUMMARY_LOGGED.add(clerk_id)
+                logger.warning(
+                    "A stored lane summary no longer parses; the lane's summary is withheld",
+                    extra={"action": "lane_summary_unreadable", "clerk_id": clerk_id},
+                    exc_info=True,
+                )
+            return None
+
+
+#: Clerks whose unreadable stored summary was already logged this process;
+#: bounded by the number of clerks in the registry.
+_UNREADABLE_SUMMARY_LOGGED: set[str] = set()
 
 
 def _drop_unknown_summary_keys(payload: dict[object, object]) -> None:

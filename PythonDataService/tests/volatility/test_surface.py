@@ -8,18 +8,9 @@ import math
 
 import numpy as np
 import pytest
-from scipy.stats import norm as _norm
 
 from app.volatility.surface import SurfaceMethod, VolSurface, VolSurfaceBuilder
-
-
-def _bs_price(spot: float, strike: float, ttm: float, rate: float, vol: float, is_call: bool) -> float:
-    d1 = (math.log(spot / strike) + (rate + 0.5 * vol**2) * ttm) / (vol * math.sqrt(ttm))
-    d2 = d1 - vol * math.sqrt(ttm)
-    df = math.exp(-rate * ttm)
-    if is_call:
-        return spot * _norm.cdf(d1) - strike * df * _norm.cdf(d2)
-    return strike * df * _norm.cdf(-d2) - spot * _norm.cdf(-d1)
+from tests.volatility.conftest import bs_price
 
 
 class TestSurfaceBuilder:
@@ -68,6 +59,46 @@ class TestSurfaceBuilder:
         surface = builder.build(records, method=SurfaceMethod.VARIANCE)
         assert not surface.diagnostics.valid
 
+    def test_slice_diagnostics_count_the_contracts_that_failed_to_solve(
+        self, flat_vol_chain: list[dict], spot: float, rate: float
+    ) -> None:
+        """A zero-priced contract is refused by the solver and must show up as
+        a failure on its own expiry's slice, not as ``n_failed == 0``."""
+        first_ttm = flat_vol_chain[0]["ttm"]
+        refused = {"strike": 100.0, "ttm": first_ttm, "option_price": 0.0, "is_call": True}
+        builder = VolSurfaceBuilder(spot=spot, rate=rate)
+
+        surface = builder.build([*flat_vol_chain, refused], method=SurfaceMethod.VARIANCE)
+
+        slices = surface.diagnostics.slices
+        assert slices[0].ttm == pytest.approx(first_ttm, abs=1e-6)
+        assert slices[0].n_failed == 1
+        assert all(s.n_failed == 0 for s in slices[1:])
+        assert all(s.n_contracts == s.n_solved + s.n_failed for s in slices)
+        assert sum(s.n_failed for s in slices) == surface.diagnostics.n_total_failed
+
+    def test_butterfly_violation_is_found_when_a_call_and_a_put_share_each_strike(
+        self, spot: float, rate: float
+    ) -> None:
+        """The builder appends one strike per solved record, so a chain with a
+        call and a put at every strike hands the arbitrage check each strike
+        twice. A W-shaped smile must still fail it."""
+        ttm = 90 / 365
+        w_shape = {90.0: 0.30, 95.0: 0.20, 100.0: 0.35, 105.0: 0.20, 110.0: 0.30}
+        records = [
+            {"strike": k, "ttm": ttm, "option_price": bs_price(spot, k, ttm, rate, vol, is_call), "is_call": is_call}
+            for k, vol in w_shape.items()
+            for is_call in (True, False)
+        ]
+        builder = VolSurfaceBuilder(spot=spot, rate=rate, min_contracts_per_slice=5)
+
+        surface = builder.build(records, method=SurfaceMethod.VARIANCE)
+
+        arbitrage = surface.diagnostics.slices[0].arbitrage
+        assert arbitrage is not None
+        assert not arbitrage.passed
+        assert arbitrage.butterfly_violations == 1
+
     def test_diagnostics_populated(self, flat_vol_chain: list[dict], spot: float, rate: float) -> None:
         """Diagnostics should be fully populated."""
         builder = VolSurfaceBuilder(spot=spot, rate=rate)
@@ -104,13 +135,12 @@ class TestSurfaceQuery:
 
         mid_ttm = (ttms[0] + ttms[1]) / 2
         iv = surface.volatility(100.0, mid_ttm)
+        iv_first = surface.volatility(100.0, ttms[0])
+        iv_second = surface.volatility(100.0, ttms[1])
 
-        surface.volatility(100.0, ttms[0])
-        surface.volatility(100.0, ttms[1])
-
-        # Interpolated vol should be roughly between neighbors
-        assert iv > 0
-        assert math.isfinite(iv)
+        # Linear in total variance, so the interpolated vol lies strictly between its two neighbors
+        # (the two expiries' vols differ on this skewed chain).
+        assert min(iv_first, iv_second) < iv < max(iv_first, iv_second)
 
     def test_extrapolation_flat(self, surface: VolSurface) -> None:
         """Query outside fitted range should extrapolate flat."""
@@ -163,7 +193,7 @@ class TestRegressionStability:
             k = spot * m
             forward = spot * math.exp(rate * ttm)
             is_call = k >= forward
-            price = _bs_price(spot, k, ttm, rate, base_vol, is_call)
+            price = bs_price(spot, k, ttm, rate, base_vol, is_call)
             if price < 0.01:
                 continue
             records.append({"strike": float(k), "ttm": ttm, "option_price": price, "is_call": is_call})

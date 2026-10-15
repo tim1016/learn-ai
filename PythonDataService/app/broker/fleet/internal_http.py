@@ -18,6 +18,7 @@ incremental events — real sockets only.
 
 from __future__ import annotations
 
+import asyncio
 import codecs
 import ipaddress
 import socket
@@ -64,6 +65,7 @@ BOTS_CLEAR_READ_TIMEOUT_S = 110.0
 #: nothing between reads; a lane that still overruns it is named as a gap.
 BOT_HISTORY_READ_TIMEOUT_S = 30.0
 DEFAULT_MAX_EVENT_BYTES = 1_000_000
+DEFAULT_STREAM_IDLE_TIMEOUT_S = 45.0
 
 
 class FleetStreamError(Exception):
@@ -87,12 +89,10 @@ class FleetTransportRefused(Exception):
 #: Hosts proven to resolve entirely to private addresses, cached through the
 #: canonical ``TtlCache`` (``app/utils/throttle.py``) instead of a
 #: hand-rolled cache: insertion-ordered ``OrderedDict``, per-entry TTL, and
-#: bounded FIFO eviction, at the same 300s/512-entry magnitudes the
-#: option-contracts cache already uses (``app/routers/broker.py``). The
-#: boundary check runs where a destination is bound (presence and delivery
-#: construction), and the lookup is blocking — proven verdicts are cached so
-#: repeated construction against the same approved-endpoint host does not
-#: repeat a DNS round trip. Only *private* verdicts are cached; a refusal
+#: bounded FIFO eviction, with a 300s/512-entry bound. Async callers run
+#: the boundary check in a worker thread before dispatch; synchronous
+#: callers already run in a worker thread. Proven private verdicts are
+#: cached so repeated requests do not repeat DNS. A refusal
 #: always re-resolves on the next call (see ``enforce_private_http_target``)
 #: — cache keys come from approved-endpoint rows and compose config, never
 #: from request data.
@@ -346,9 +346,26 @@ async def iter_sse_from_response(
     *,
     max_event_bytes: int = DEFAULT_MAX_EVENT_BYTES,
 ) -> AsyncIterator[SseEvent]:
-    """Stream parsed SSE events from one open streaming response."""
+    """Stream parsed SSE events; a silent socket cannot pin the lane forever."""
+    async def bounded_chunks() -> AsyncIterator[bytes]:
+        chunks = response.aiter_bytes().__aiter__()
+        try:
+            while True:
+                try:
+                    yield await asyncio.wait_for(
+                        chunks.__anext__(), timeout=DEFAULT_STREAM_IDLE_TIMEOUT_S
+                    )
+                except StopAsyncIteration:
+                    return
+                except TimeoutError as exc:
+                    raise FleetStreamError("the lane event stream went idle") from exc
+        finally:
+            close = getattr(chunks, "aclose", None)
+            if close is not None:
+                await close()
+
     async for event in iter_sse_events(
-        response.aiter_bytes(), max_event_bytes=max_event_bytes
+        bounded_chunks(), max_event_bytes=max_event_bytes
     ):
         yield event
 

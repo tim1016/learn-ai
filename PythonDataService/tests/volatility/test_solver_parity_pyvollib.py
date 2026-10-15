@@ -21,6 +21,7 @@ from py_vollib.black_scholes_merton.implied_volatility import (
 )
 
 from app.services.bs_greeks import bs_european_price, bs_european_vega
+from app.volatility.solver import MIN_OPTION_PRICE, SolveStatus
 from app.volatility.solver import implied_volatility as our_iv
 
 # Grid factors held tight enough to keep the test < 0.5s but wide enough
@@ -33,6 +34,32 @@ TTMS_DAYS = [7, 30, 90, 365]
 VOLS = [0.05, 0.20, 0.60, 1.50]
 RATES = [0.0, 0.025, 0.07]
 DIVS = [0.0, 0.013, 0.03]
+
+# The IV grid is 5 × 4 × 4 × 3 × 3 × 2 = 1,440 points. Of these, 382 sit below
+# the vega floor and 15 are premiums under MIN_OPTION_PRICE ($0.001) that
+# py_vollib solves and our solver refuses by design (PRICE_TOO_LOW); the other
+# 1,043 are compared. Keyed (K/S, ttm_days, sigma, rate, dividend, flag).
+EXPECTED_VEGA_SKIPS = 382
+EXPECTED_COMPARED = 1043
+EXPECTED_PRICE_TOO_LOW = frozenset(
+    {
+        (0.7, 90, 0.2, 0.0, 0.0, "p"),
+        (0.7, 90, 0.2, 0.0, 0.013, "p"),
+        (0.7, 90, 0.2, 0.0, 0.03, "p"),
+        (0.7, 90, 0.2, 0.025, 0.0, "p"),
+        (0.7, 90, 0.2, 0.025, 0.013, "p"),
+        (0.7, 90, 0.2, 0.025, 0.03, "p"),
+        (0.7, 90, 0.2, 0.07, 0.0, "p"),
+        (0.7, 90, 0.2, 0.07, 0.013, "p"),
+        (0.7, 90, 0.2, 0.07, 0.03, "p"),
+        (0.85, 365, 0.05, 0.0, 0.0, "p"),
+        (0.85, 365, 0.05, 0.025, 0.0, "p"),
+        (0.85, 365, 0.05, 0.025, 0.013, "p"),
+        (0.85, 365, 0.05, 0.025, 0.03, "p"),
+        (1.15, 365, 0.05, 0.0, 0.03, "c"),
+        (1.3, 365, 0.05, 0.07, 0.0, "c"),
+    }
+)
 
 
 def _calls_and_puts():
@@ -78,6 +105,8 @@ class TestIvSolverParity:
         IV_TOL = 5e-5  # 5 bps absolute
 
         cases = 0
+        vega_skipped = 0
+        refused: dict[tuple, tuple[SolveStatus, float]] = {}
         max_diff = 0.0
         worst = None
         for k_rel in STRIKES_REL:
@@ -88,24 +117,23 @@ class TestIvSolverParity:
                     for r in RATES:
                         for q in DIVS:
                             for flag, is_call in _calls_and_puts():
+                                case = (k_rel, ttm_d, sigma_true, r, q, flag)
                                 vega = bs_european_vega(
                                     spot=100.0, strike=k, ttm_years=ttm,
                                     rate=r, volatility=sigma_true, dividend=q,
                                 )
                                 if vega < VEGA_FLOOR:
+                                    vega_skipped += 1
                                     continue
                                 price = bs_european_price(
                                     spot=100.0, strike=k, ttm_years=ttm,
                                     rate=r, volatility=sigma_true, is_call=is_call,
                                     dividend=q,
                                 )
-                                if price <= 0 or not math.isfinite(price):
-                                    continue
-                                # py_vollib raises on bracket failure; skip those.
-                                try:
-                                    pv_solved = pv_iv(price, 100.0, k, ttm, r, q, flag)
-                                except Exception:
-                                    continue
+                                assert price > 0 and math.isfinite(price), f"unpriceable grid point {case}"
+                                # No grid point makes py_vollib raise today; if one starts to,
+                                # the test errors here instead of dropping the case.
+                                pv_solved = pv_iv(price, 100.0, k, ttm, r, q, flag)
                                 ours_res = our_iv(
                                     option_price=price,
                                     spot=100.0,
@@ -116,13 +144,22 @@ class TestIvSolverParity:
                                     is_call=is_call,
                                 )
                                 if ours_res.iv is None:
+                                    refused[case] = (ours_res.status, price)
                                     continue
                                 diff = abs(ours_res.iv - pv_solved)
                                 if diff > max_diff:
                                     max_diff = diff
                                     worst = (k_rel, ttm_d, sigma_true, r, q, flag, ours_res.iv, pv_solved)
                                 cases += 1
-        assert cases > 100, f"too few non-degenerate cases ({cases})"
+
+        # Every case that is not compared is accounted for, so coverage cannot
+        # shrink (or grow) without this test saying so.
+        assert vega_skipped == EXPECTED_VEGA_SKIPS
+        assert set(refused) == EXPECTED_PRICE_TOO_LOW
+        assert all(
+            status == SolveStatus.PRICE_TOO_LOW and price < MIN_OPTION_PRICE for status, price in refused.values()
+        ), refused
+        assert cases == EXPECTED_COMPARED
         assert max_diff < IV_TOL, f"max IV diff {max_diff:.2e} > {IV_TOL}, worst {worst}"
 
     def test_round_trip_iv_recovers_input_within_5bps(self):

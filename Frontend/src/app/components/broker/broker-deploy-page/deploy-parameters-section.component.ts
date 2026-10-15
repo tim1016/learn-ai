@@ -9,10 +9,13 @@ import type {
 
 import { InstrumentCardComponent } from '../../../shared/ticker-range-picker/parts/instrument-card.component';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
+import { canonicalJson } from './deploy-draft.store';
 import type { TickerRange } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
 
 export interface DeployParameterEntry {
   field: string;
+  /** The field under this schema: a row is a new row when the schema is another one, even of the same name. */
+  key: string;
   property: DeployStrategyParamProperty;
   isNumeric: boolean;
   currentValue: unknown;
@@ -115,7 +118,15 @@ export class DeployParametersSectionComponent {
     return new Set([...this.invalidFieldsRaw()].filter((field) => schemaFields.has(field)));
   });
 
+  /** The schema's content: a reload that returns the same schema keeps what the owner typed; another
+   * strategy's schema starts clean, even where it names a field of the same name. */
+  protected readonly schemaKey = computed(() => canonicalJson(this.paramsSchema()));
+
   constructor() {
+    effect(() => {
+      this.schemaKey();
+      untracked(() => this.invalidFieldsRaw.set(new Set()));
+    });
     effect(() => {
       this.qualifiedConfiguration();
       this.values();
@@ -130,11 +141,13 @@ export class DeployParametersSectionComponent {
     const properties = this.paramsSchema().properties ?? {};
     const values = this.values();
     const invalid = this.currentInvalidFields();
+    const schemaKey = this.schemaKey();
     return Object.entries(properties).map(([field, property]) => {
       const isNumeric = property.type === 'integer' || property.type === 'number';
       const currentValue = values[field] ?? property.default;
       return {
         field,
+        key: `${schemaKey}\u0000${field}`,
         property,
         isNumeric,
         currentValue,

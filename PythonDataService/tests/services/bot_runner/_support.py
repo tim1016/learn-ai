@@ -64,13 +64,13 @@ class _OrderingClerk(_CustodyClerk):
         self.fail_stop = False
 
     async def register_strategy_run(
-        self, binding: BrokerBotBinding, *, run_owner: object = None
+        self, binding: BrokerBotBinding, *, admission_snapshot: object = None, run_owner: object = None
     ) -> None:
         self.registration_saw_bot_task = any(
             task.get_name() == f"bot:{binding.strategy_instance_id}"
             for task in asyncio.all_tasks()
         )
-        await super().register_strategy_run(binding, run_owner=run_owner)
+        await super().register_strategy_run(binding, admission_snapshot=admission_snapshot, run_owner=run_owner)
 
     async def stop_strategy_run(
         self,

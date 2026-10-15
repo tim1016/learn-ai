@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import sqlite3
 from datetime import date
 from pathlib import Path
@@ -9,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
+from app.broker.alpaca.clerk.sqlite import reads, schema
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.custody_subjects import manual_operator_subject_id
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
@@ -1383,3 +1386,64 @@ async def test_a_refreshed_price_conflict_survives_a_sweep_holding_the_old_ident
         assert _recorded_price_conflict_episode(repo) is None
     finally:
         repo.close()
+
+
+def test_the_price_conflict_worklist_logs_each_episode_it_cannot_read(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An unreadable episode is skipped so the others still re-derive, never silently (#2460)."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    schema.apply_schema(conn)
+    readable = {
+        "cause_facts": {
+            "orders": [
+                {
+                    "order_ref": "o-1",
+                    "reported_avg_price": 90.0,
+                    "recorded_avg_price": 100.0,
+                    "source_event_at_ms": 1,
+                }
+            ]
+        }
+    }
+    for operator_id in ("op-1", "op-2", "op-3", "op-4"):
+        conn.execute(
+            "INSERT INTO custody_subjects (subject_id, kind, operator_id, created_at_ms) "
+            "VALUES (?, 'MANUAL_OPERATOR', ?, 1)",
+            (manual_operator_subject_id(operator_id), operator_id),
+        )
+    episodes = [
+        # (uncertainty_id, scope, subject_id, facts_json)
+        ("u-torn", "CUSTODY_SUBJECT", manual_operator_subject_id("op-1"), '{"cause_facts": '),
+        ("u-array", "CUSTODY_SUBJECT", manual_operator_subject_id("op-2"), "[1, 2]"),
+        ("u-no-cause", "CUSTODY_SUBJECT", manual_operator_subject_id("op-3"), "{}"),
+        ("u-no-subject", "ACCOUNT_CLERK", None, json.dumps(readable)),
+        ("u-readable", "CUSTODY_SUBJECT", manual_operator_subject_id("op-4"), json.dumps(readable)),
+    ]
+    for observed_at_ms, (uncertainty_id, scope, subject_id, facts_json) in enumerate(episodes, start=1):
+        conn.execute(
+            "INSERT INTO uncertainties (uncertainty_id, scope, severity, blocks_new_exposure, "
+            "allows_reduction, subject_id, reason_code, headline, explanation, operator_impact, "
+            "next_step, observed_at_ms, facts_schema_version, facts_json) "
+            "VALUES (?, ?, 'HIGH', 1, 0, ?, ?, 'h', 'e', 'o', 'n', ?, 1, ?)",
+            (uncertainty_id, scope, subject_id, EXECUTION_PRICE_CONFLICT_REASON_CODE, observed_at_ms, facts_json),
+        )
+
+    with caplog.at_level(logging.WARNING):
+        worklist = reads.active_execution_price_conflicts(conn)
+
+    assert [(uncertainty_id, subject_id) for uncertainty_id, subject_id, _cause in worklist] == [
+        ("u-readable", manual_operator_subject_id("op-4"))
+    ]
+    skipped = {
+        record.uncertainty_id: record.reason
+        for record in caplog.records
+        if getattr(record, "action", None) == "execution_price_conflict_skipped"
+    }
+    assert skipped == {
+        "u-torn": "cause_unreadable",
+        "u-array": "cause_unreadable",
+        "u-no-cause": "cause_unreadable",
+        "u-no-subject": "no_custody_subject",
+    }

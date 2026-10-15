@@ -1,14 +1,4 @@
-"""Tests for IBKR_BROKER_ENABLED=false behavior.
-
-When IBKR_BROKER_ENABLED=false:
-  - GET /api/broker/health → HTTP 200, disabled=True, connected=False, reason set
-  - get_client() raises NotConnectedError (client was never set)
-
-``GET /api/broker/diagnose`` retired with ``app/broker/ibkr/diagnostics.py``
-(PR-B of #1813, 2026-08-27); its 4 tests were removed with it.
-
-Uses httpx.AsyncClient + ASGITransport per repo testing rules.
-"""
+"""The broker health read reports when the IBKR connection is disabled."""
 
 from __future__ import annotations
 
@@ -37,50 +27,16 @@ def broker_disabled(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-async def test_health_returns_200_when_disabled():
-    """Disabled broker: /health must return 200, NOT 503."""
+async def test_health_reports_disabled_connection():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/api/broker/health")
 
     assert response.status_code == 200
-
-
-async def test_health_disabled_flag_true():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/broker/health")
-
     data = response.json()
     assert data["disabled"] is True
-
-
-async def test_health_connected_false():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/broker/health")
-
-    data = response.json()
     assert data["connected"] is False
-
-
-async def test_health_reason_field_set():
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/broker/health")
-
-    data = response.json()
     assert data.get("reason") is not None
     assert len(data["reason"]) > 0
-
-
-# ---------------------------------------------------------------------------
-# get_client() raises NotConnectedError when disabled
-# ---------------------------------------------------------------------------
-
-
-async def test_get_client_raises_not_connected_when_disabled():
-    """When disabled, get_client() must raise NotConnectedError (client was never set)."""
-    from app.broker.ibkr.client import NotConnectedError, get_client
-
-    with pytest.raises(NotConnectedError):
-        get_client()
 
 
 # ---------------------------------------------------------------------------

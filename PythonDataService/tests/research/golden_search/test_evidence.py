@@ -17,15 +17,12 @@ from app.research.golden_search.evidence import (
     neighborhood,
     pair_map,
     recommendation,
-    same_as,
 )
 from app.research.golden_search.grid_procedure import neighbor_probes, pair_grid
 from app.research.golden_search.protocol import KnobPlan, SelectionPolicy
 from app.research.walk_forward_study.verdict import Verdict
 from app.utils.session_anchors import et_midnight_ms
 from tests._helpers.golden_search import declaration, knob, metrics, protocol, synthetic_point
-
-_MINUTE_MS = 60_000
 
 
 def _utc_ms(*parts: int) -> int:
@@ -240,9 +237,3 @@ def test_recommendation_names_the_only_new_eligible_candidate() -> None:
         "range. Inspect that range before using your final test."
     )
     assert [f.code for f in result.findings] == ["SAME_AS_INCUMBENT", "RECENT_DIFFERS_FROM_ALL_PERIOD", "EDGE_OF_RANGE"]
-
-
-def test_same_as_collapses_identical_points() -> None:
-    candidates = [_candidate("incumbent", "h-1"), _candidate("all_period", "h-2"), _candidate("recent", "h-2")]
-
-    assert same_as(candidates) == {"incumbent": [], "all_period": ["recent"], "recent": ["all_period"]}

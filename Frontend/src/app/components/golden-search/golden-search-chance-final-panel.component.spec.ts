@@ -72,23 +72,12 @@ describe('GoldenSearchChanceFinalPanelComponent', () => {
     expect(screen.queryByRole('img', { name: /final profit uncertainty/i })).toBeNull();
   });
 
-  it('names the window it resampled and carries the two-selection caveat, never the development note', async () => {
+  it('names the window it resampled, keeps the frozen-verdict separation and carries the two-selection caveat, never the development note', async () => {
     await renderPanel(finalChance());
     expect(screen.getByText(/paired resamples of these final sessions/i)).toBeTruthy();
-    expect(screen.getAllByText(/chosen after the final test/i).length).toBeGreaterThan(0);
-    expect(screen.queryByText(/selected on these same development sessions/i)).toBeNull();
-  });
-
-  it('keeps the frozen-verdict separation and the selection caveats visible', async () => {
-    await renderPanel(finalChance());
     expect(screen.getByText(/frozen "meets the rules" verdict above is\s+separate from this model support/i)).toBeTruthy();
     expect(screen.getAllByText(/chosen after the final test/i).length).toBeGreaterThan(0);
-  });
-
-  it('shows the fit-to-fit sentence from the shared draw when two fits ran', async () => {
-    await renderPanel(finalChance());
-    expect(screen.getByText(/All-period fit was at least as good as Recent fit in 68\.4% of paths/i)).toBeTruthy();
-    expect(screen.getByText(/not adjusted for that choice/i)).toBeTruthy();
+    expect(screen.queryByText(/selected on these same development sessions/i)).toBeNull();
   });
 
   it('announces a failed fit-to-fit as an alert instead of rendering nothing', async () => {
@@ -105,9 +94,10 @@ describe('GoldenSearchChanceFinalPanelComponent', () => {
     expect(alert.textContent).toContain('could not be computed');
   });
 
-  it('shows the All-period fit its own direction of the shared draw, never the other fit’s (#3029)', async () => {
+  it('shows the All-period fit its own direction of the shared draw, never the other fit’s, unadjusted for that choice (#3029)', async () => {
     await renderPanel(finalChance(), CANDIDATE);
     expect(screen.getByText(/All-period fit was at least as good as Recent fit in 68\.4% of paths/i)).toBeTruthy();
+    expect(screen.getByText(/not adjusted for that choice/i)).toBeTruthy();
     expect(screen.queryByText(/Recent fit was at least as good as/i)).toBeNull();
   });
 

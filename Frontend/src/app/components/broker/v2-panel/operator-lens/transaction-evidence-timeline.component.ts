@@ -42,6 +42,12 @@ export class TransactionEvidenceTimelineComponent {
   protected readonly loadError = signal<string | null>(null);
   protected readonly hasNextPage = computed(() => this.nextCursor() !== null);
 
+  /** The lane's fence as a value: a directory read that returns the same lane again is no reason to read the page again. */
+  private readonly laneFence = computed(() => {
+    const lane = this.fleetDirectory.lane(this.broker(), this.clerkId());
+    return `${lane?.effective_binding_generation ?? ''}|${lane?.routing_epoch ?? ''}`;
+  });
+
   constructor() {
     effect(() => {
       this.broker();
@@ -49,7 +55,7 @@ export class TransactionEvidenceTimelineComponent {
       this.accountId();
       this.sid();
       this.transactionRef();
-      this.fleetDirectory.lane(this.broker(), this.clerkId());
+      this.laneFence();
       untracked(() => void this.resetAndLoad());
     });
   }

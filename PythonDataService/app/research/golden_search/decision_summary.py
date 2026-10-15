@@ -117,6 +117,8 @@ def _neighbors(item: Mapping[str, Any]) -> dict[str, Any]:
         return _row("neighbors", label, "concern", f"A one-step change in {', '.join(losing)} loses money.", link)
     if unrecorded:
         return _row("neighbors", label, "missing", f"{unrecorded} neighbor {'run was' if unrecorded == 1 else 'runs were'} not recorded.", link)
+    if not any(row["status"] == "tested" for hood in hoods for row in hood["rows"]):
+        return _row("neighbors", label, "missing", "No one-step neighbor was tested: each was invalid or outside the legal range.", link)
     return _row("neighbors", label, "meets", "No tested one-step neighbor loses money.", link)
 
 

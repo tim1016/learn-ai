@@ -762,9 +762,36 @@ SCHEMA_DDL = (
 
 
 def configure_connection(conn: sqlite3.Connection) -> None:
-    """Apply the pinned PRAGMA set to a freshly-opened connection."""
+    """Apply the pinned PRAGMA set to a freshly-opened connection.
+
+    ``PRAGMA journal_mode`` answers with the mode SQLite actually retained,
+    not the mode asked for: on a filesystem that cannot honour WAL it falls
+    back to a rollback journal without an error. The mount-table guard in
+    ``repository_lifecycle`` sees nothing off Linux or when it cannot read
+    the table, so the retained mode is the proof, and anything but ``wal``
+    refuses. A database with no file (``:memory:``, a private temporary
+    database) has no filesystem to ask and keeps the mode SQLite gives it.
+    The caller closes ``conn`` when this raises.
+    """
     for statement in PRAGMA_STATEMENTS:
-        conn.execute(statement)
+        cursor = conn.execute(statement)
+        if statement == "PRAGMA journal_mode = WAL":
+            _require_retained_wal(conn, str(cursor.fetchone()[0]).lower())
+
+
+def _require_retained_wal(conn: sqlite3.Connection, retained: str) -> None:
+    if retained == "wal":
+        return
+    main_file = next(row[2] for row in conn.execute("PRAGMA database_list") if row[1] == "main")
+    if not main_file:
+        return
+    from app.broker.alpaca.clerk.sqlite.repository import UnsupportedWalFilesystem
+
+    raise UnsupportedWalFilesystem(
+        f"SQLite retained journal_mode {retained!r} for {main_file} instead of 'wal'; the "
+        "Clerk store requires a VM-local filesystem. Mount ALPACA_CLERK_DIR from a "
+        "container-local named volume."
+    )
 
 
 def apply_schema(conn: sqlite3.Connection) -> None:

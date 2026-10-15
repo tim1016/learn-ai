@@ -91,7 +91,7 @@ async def test_the_run_report_serves_the_stored_envelopes_as_the_producers_wrote
         assert json.loads(run["insightSummaryJson"]) == {"total": 1}
         [persisted] = run["trades"]
         assert persisted["entryTimestamp"] == ENTRY_MS and persisted["pnL"] == 20.0
-        assert persisted["pnlPts"] == pytest.approx(2.0) and persisted["pnlPct"] == pytest.approx(2.0 / 710.0)
+        assert persisted["pnlPts"] == pytest.approx(2.0, abs=1e-9) and persisted["pnlPct"] == pytest.approx(2.0 / 710.0, abs=1e-9)
         assert run["tradesTruncated"] is False
         [verdict] = run["parityVerdicts"]
         assert verdict["status"] == "pending" and json.loads(verdict["verdictJson"]) == {"status": "pending"} and verdict["createdAt"] > 0

@@ -17,10 +17,11 @@ singleton — the same production seams ``broker_v2_panel.py`` and
 ``live_bar_aggregator.py`` already expose.
 
 KNOWN LIMITATION: the module-level ``_HUB_CACHE`` dict is a simple
-per-``(broker, account_id)`` cache with no ref-counting or teardown — a hub,
-once built, lives for the process lifetime. Full lifecycle management
-(eviction, ref-counted subscriber teardown like ``live_projection.py``'s hub
-cache) is out of scope for this task.
+per-``(broker, canonical account id)`` cache with no ref-counting or teardown
+— a hub, once built, lives for the process lifetime. It is filled only for an
+account the broker validated, so it holds at most one hub per broker. Full
+lifecycle management (eviction, ref-counted subscriber teardown like
+``live_projection.py``'s hub cache) is out of scope for this task.
 
 The stream is poll-driven (``GalleryHub`` has no pub/sub producer): each
 iteration calls ``build_update`` against the last-emitted bar per symbol.
@@ -40,6 +41,10 @@ Every frame fits the fleet coordinator's per-event cap (#2328): a frame
 whose inline bars would exceed it sends them first as ``bars`` pages (see
 ``_capped_frames``). A frame that cannot fit even then ends the stream with
 a ``refused`` event, never an oversized frame for the coordinator to abort.
+
+A read that does not return within the hub's bound (#3217) ends the stream
+with a named ``error`` event rather than leaving it silent; the keepalive
+keeps flowing while a read is pending.
 """
 
 from __future__ import annotations
@@ -49,10 +54,12 @@ import json
 import logging
 import time
 from collections.abc import AsyncIterator
+from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+from app.broker.alpaca.clerk.account_authority import canonical_alpaca_account_id
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.fleet.internal_http import DEFAULT_MAX_EVENT_BYTES
 from app.schemas.broker_v2_gallery import (
@@ -62,12 +69,14 @@ from app.schemas.broker_v2_gallery import (
     GallerySymbolBars,
 )
 from app.schemas.broker_v2_panel import ChartFillMarker
-from app.services.broker_v2_panel import panel_chart_data_source, panel_data_source
+from app.services.broker_v2_panel import panel_chart_data_source, panel_data_source, panel_errors, panel_scope
 from app.services.broker_v2_panel.gallery_hub import (
+    GalleryCollectTimeoutError,
     GalleryFillSource,
     GalleryHub,
 )
 from app.services.broker_v2_panel.panel_errors import PanelUnavailableError, UnknownBotError
+from app.services.broker_v2_panel.stream_frame_budget import frame_budget_bytes
 from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
 
 logger = logging.getLogger(__name__)
@@ -85,12 +94,6 @@ _GALLERY_IO_CACHE_TTL_MS = 800
 # over its per-event cap, after the 200 has gone out (#2328). No frame this
 # lane emits may exceed it.
 _MAX_EVENT_BYTES = DEFAULT_MAX_EVENT_BYTES
-# Bytes held back from that cap for framing added after this router: the
-# lane's ``FleetIdentityMiddleware`` (``agent_identity._FrameInjector``)
-# appends ``x-fleet-*`` provenance lines to every event (~115 B for a
-# typical clerk id, epoch and generation). 8 KB covers any realistic
-# identity with a wide margin, so a frame that fits here still fits there.
-_FLEET_FRAMING_RESERVE_BYTES = 8_192
 # Bars per ``bars`` page. A serialized 5 s ``ChartBar`` is ~145 B, so a page
 # is ~145 KB: far under the cap, whatever the ring-buffer depth.
 _BARS_PER_PAGE = 1_000
@@ -129,7 +132,12 @@ _FILL_SOURCE: GalleryFillSource = _PanelChartFillSource()
 
 
 async def get_gallery_hub(broker: str, account_id: str) -> GalleryHub:
-    """Return the per-``(broker, account_id)`` cached ``GalleryHub``.
+    """Return the cached ``GalleryHub`` for the broker's validated account.
+
+    The path ``account_id`` is validated first and the cache is keyed on the
+    account's canonical id, so every spelling the validation accepts shares
+    one hub and a path that names no real account refuses (the panel router's
+    404/503 body) without inserting anything.
 
     See the module docstring for the cache's known limitation (no
     ref-counting/eviction). A FastAPI dependency so tests can override it via
@@ -138,8 +146,9 @@ async def get_gallery_hub(broker: str, account_id: str) -> GalleryHub:
     ``async def`` (not a plain sync helper) so FastAPI awaits this directly
     on the event loop instead of running it in a threadpool
     (``run_in_threadpool``) — the get-or-create check-then-set below has no
-    ``await`` in it, so keeping it on the event loop makes it atomic. A
-    sync ``def`` here would let two concurrent requests for the same
+    ``await`` in it (the one validation ``await`` comes first), so keeping it
+    on the event loop makes it atomic. A sync ``def`` here would let two
+    concurrent requests for the same
     ``(broker, account_id)`` (e.g. a gallery page firing ``/snapshot`` and
     ``/stream`` at once) race on separate threads, each missing the cache
     and constructing its own ``GalleryHub`` with an independent
@@ -147,12 +156,19 @@ async def get_gallery_hub(broker: str, account_id: str) -> GalleryHub:
     ``get_or_start_live_projection_hub`` (``live_projection.py``) already
     avoids the same way.
     """
-    key = (broker, account_id)
+    try:
+        real_account_id = await panel_scope.validate_account(broker, account_id)
+    except panel_errors.PanelDataError as error:
+        raise HTTPException(
+            status_code=error.http_status,
+            detail={"message": str(error), "why": error.detail, "next_action": error.next_action},
+        ) from error
+    key = (broker, canonical_alpaca_account_id(real_account_id))
     hub = _HUB_CACHE.get(key)
     if hub is None:
         hub = GalleryHub(
             broker=broker,
-            account_id=account_id,
+            account_id=real_account_id,
             catalog_source=panel_data_source,
             aggregator=LIVE_BAR_AGGREGATOR,
             resolution="5s",
@@ -194,7 +210,7 @@ def _marker_event_keys(markers: dict[str, list[ChartFillMarker]]) -> dict[str, s
 def _frame_budget_bytes() -> int:
     """The most bytes one frame may carry when it leaves this router: the
     coordinator's cap less the lane's framing reserve."""
-    return _MAX_EVENT_BYTES - _FLEET_FRAMING_RESERVE_BYTES
+    return frame_budget_bytes(_MAX_EVENT_BYTES)
 
 
 class _OversizedFrameError(Exception):
@@ -256,14 +272,40 @@ def _capped_frames(
     return frames
 
 
+async def _keepalive_while(task: asyncio.Future[Any], *, since: float) -> AsyncIterator[str]:
+    """``: keepalive`` comments, one per interval of silence, until ``task`` is done.
+
+    ``since`` is the ``time.monotonic()`` of the last byte sent. A collect is
+    bounded by the hub, but it may still outlast the keepalive interval, and
+    the stream must not go quiet while it is pending (#3217).
+    """
+    while True:
+        due_in = max(0.0, _KEEPALIVE_INTERVAL_S - (time.monotonic() - since))
+        done, _pending = await asyncio.wait({task}, timeout=due_in)
+        if done:
+            return
+        since = time.monotonic()
+        yield ": keepalive\n\n"
+
+
 async def _gallery_event_source(hub: GalleryHub, *, cursor: str | None) -> AsyncIterator[str]:
     """The gallery stream, ended by a named ``refused`` event when a frame
     cannot fit the coordinator's cap. The client stops reconnecting and says
     the wall is not live; it never sees an open stream that carries no
-    data (#2328)."""
+    data (#2328).
+
+    A read that does not return within the hub's bound ends it with a named
+    ``error`` event instead of leaving it silent. The client's SSE primitive
+    reads ``error`` as a failed stream (status stale, a REST poll while it
+    reconnects from its cursor) (#3217).
+    """
     try:
         async for frame in _gallery_frames(hub, cursor=cursor):
             yield frame
+    except GalleryCollectTimeoutError:
+        # Authored here, never the exception's own text: a stream payload built
+        # from a caught exception is a CodeQL stack-trace exposure.
+        yield _sse_frame("error", json.dumps({"error": "The bot gallery could not be read in time."}))
     except _OversizedFrameError as exc:
         logger.error(
             "[GALLERY] stream frame exceeds the fleet event cap; refusing the stream",
@@ -281,7 +323,13 @@ async def _gallery_event_source(hub: GalleryHub, *, cursor: str | None) -> Async
 
 
 async def _gallery_frames(hub: GalleryHub, *, cursor: str | None) -> AsyncIterator[str]:
-    snapshot = await hub.build_snapshot()
+    first_collect = asyncio.ensure_future(hub.build_snapshot())
+    try:
+        async for keepalive in _keepalive_while(first_collect, since=time.monotonic()):
+            yield keepalive
+        snapshot = first_collect.result()
+    finally:
+        first_collect.cancel()
     epoch = snapshot.stream_epoch
     current_id = f"{epoch}:{snapshot.surface_version}"
     requested_epoch = cursor.rsplit(":", 1)[0] if cursor and ":" in cursor else None
@@ -314,9 +362,18 @@ async def _gallery_frames(hub: GalleryHub, *, cursor: str | None) -> AsyncIterat
     # stops at its next ``await``.
     while True:
         await asyncio.sleep(_POLL_INTERVAL_S)
-        update = await hub.build_update(
-            since_bar_ms, known_sids=known_sids, since_marker_keys=since_marker_keys
+        collect = asyncio.ensure_future(
+            hub.build_update(
+                since_bar_ms, known_sids=known_sids, since_marker_keys=since_marker_keys
+            )
         )
+        try:
+            async for keepalive in _keepalive_while(collect, since=last_emit):
+                yield keepalive
+                last_emit = time.monotonic()
+            update = collect.result()
+        finally:
+            collect.cancel()
         since_bar_ms.update(_latest_bar_start_ms(update.symbols))
         for sid, keys in _marker_event_keys(update.markers_delta).items():
             since_marker_keys.setdefault(sid, set()).update(keys)

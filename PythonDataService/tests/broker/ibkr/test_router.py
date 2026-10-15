@@ -1,22 +1,28 @@
-"""Tests for the broker router — health endpoint and 503 fallback.
-
-The streaming endpoints integrate with a connected IBKR client and are
-covered by integration tests that run against a live Gateway. This file
-covers only the synthetic-disconnected paths the router must handle
-with no Gateway present.
-"""
+"""Broker health, option-read validation, and stream error behavior without a Gateway."""
 
 from __future__ import annotations
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from pydantic import ValidationError
 
-from app.broker.ibkr.client import set_client
+from app.broker.ibkr.client import BrokerError, set_client
 from app.main import app
+from app.routers import broker as broker_router
 
 _MIDNIGHT_UTC_EXPIRY_MS = 1_800_057_600_000  # 2027-01-16T00:00:00Z
 
 # ── Phase 1 endpoints ──────────────────────────────────────────────────
+
+
+def test_read_router_exposes_only_the_retained_feed_reads() -> None:
+    assert {(route.path, tuple(sorted(route.methods))) for route in broker_router.read_router.routes} == {
+        ("/health", ("GET",)),
+        ("/expirations/{symbol}", ("GET",)),
+        ("/strikes/{symbol}", ("GET",)),
+        ("/option-chain/{symbol}", ("GET",)),
+        ("/option-surface/{symbol}", ("GET",)),
+    }
 
 
 @pytest.mark.asyncio
@@ -57,6 +63,20 @@ async def test_expirations_returns_503_when_disconnected() -> None:
     assert resp.status_code == 503
 
 
+async def test_expirations_returns_the_typed_anchor_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(broker_router, "require_connected_client", lambda: object())
+
+    async def listed(_client: object, _symbol: str) -> list[int]:
+        return [1_800_046_800_000]
+
+    monkeypatch.setattr(broker_router.ibkr_contracts, "list_expirations", listed)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/api/broker/expirations/SPY")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"symbol": "SPY", "expirations_ms": [1_800_046_800_000]}
+
+
 @pytest.mark.asyncio
 async def test_chain_returns_422_when_strikes_missing() -> None:
     set_client(None)
@@ -84,10 +104,110 @@ async def test_chain_returns_400_when_strike_is_non_positive() -> None:
             ],
         )
 
-    # Service-unavailable trips first when no client is set; the handler's
-    # validation runs after _require_connected_or_503. Either is acceptable
-    # for this defensive guard — both block the bad request.
-    assert resp.status_code in (400, 503)
+    assert resp.status_code == 400
+
+
+async def test_chain_refuses_more_lines_than_the_default_ibkr_allocation() -> None:
+    set_client(None)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get(
+            "/api/broker/option-chain/SPY",
+            params=[("expiry_ms", 1_800_046_800_000), *[("strikes", strike) for strike in range(1, 52)]],
+        )
+    assert resp.status_code == 422
+
+
+@pytest.mark.parametrize("path", ["expirations", "strikes", "option-chain", "option-surface"])
+async def test_invalid_equity_symbol_is_refused_before_gateway_access(path: str) -> None:
+    set_client(None)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get(
+            f"/api/broker/{path}/spy",
+            params=[("expiry_ms", 1_800_046_800_000), ("strikes", 420)],
+        )
+    assert resp.status_code == 422
+
+
+@pytest.mark.parametrize("path", ["expirations", "strikes", "option-chain", "option-surface"])
+async def test_disabled_ibkr_feed_refuses_option_reads(path: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.broker.ibkr import config
+
+    monkeypatch.setenv("IBKR_BROKER_ENABLED", "false")
+    config.reset_settings_for_testing()
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get(
+                f"/api/broker/{path}/SPY",
+                params=[("expiry_ms", 1_800_046_800_000), ("strikes", 420)],
+            )
+        assert resp.status_code == 503
+    finally:
+        config.reset_settings_for_testing()
+
+
+@pytest.mark.parametrize("kind", ["chain", "surface"])
+async def test_option_stream_reports_broker_refusal_without_exposing_its_text(
+    monkeypatch: pytest.MonkeyPatch, kind: str,
+) -> None:
+    monkeypatch.setattr(broker_router, "require_connected_client", lambda: object())
+
+    async def refused(*args, **kwargs):
+        raise BrokerError("private Gateway detail")
+        yield  # pragma: no cover - keeps the stream-shaped fake
+
+    if kind == "chain":
+        monkeypatch.setattr(broker_router, "stream_option_chain", refused)
+        response = await broker_router.option_chain_stream(
+            symbol="SPY", expiry_ms=1_800_046_800_000, strikes=[420], debounce_ms=250,
+        )
+    else:
+        monkeypatch.setattr(broker_router, "stream_option_surface", refused)
+        response = await broker_router.option_surface_stream(
+            symbol="SPY", expiry_ms=[1_800_046_800_000], strikes=[420], debounce_ms=250,
+            max_lines=100,
+        )
+    chunks = [chunk async for chunk in response.body_iterator]
+
+    assert len(chunks) == 1
+    assert "event: error" in chunks[0]
+    assert "private Gateway detail" not in chunks[0]
+
+
+async def test_chain_stream_does_not_describe_a_model_failure_as_a_bad_symbol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(broker_router, "require_connected_client", lambda: object())
+
+    async def broken(*args, **kwargs):
+        broker_router.IbkrExpirationsResponse.model_validate({})
+        yield  # pragma: no cover - keeps the stream-shaped fake
+
+    monkeypatch.setattr(broker_router, "stream_option_chain", broken)
+    response = await broker_router.option_chain_stream(
+        symbol="SPY", expiry_ms=1_800_046_800_000, strikes=[420], debounce_ms=250,
+    )
+
+    with pytest.raises(ValidationError):
+        _ = [chunk async for chunk in response.body_iterator]
+
+
+async def test_unexpected_stream_failure_propagates_without_a_false_error_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(broker_router, "require_connected_client", lambda: object())
+
+    async def broken(*args, **kwargs):
+        raise RuntimeError("unexpected stream failure")
+        yield  # pragma: no cover - keeps the stream-shaped fake
+
+    monkeypatch.setattr(broker_router, "stream_option_surface", broken)
+    response = await broker_router.option_surface_stream(
+        symbol="SPY", expiry_ms=[1_800_046_800_000], strikes=[420], debounce_ms=250,
+        max_lines=100,
+    )
+
+    with pytest.raises(RuntimeError, match="unexpected stream failure"):
+        _ = [chunk async for chunk in response.body_iterator]
 
 
 @pytest.mark.asyncio
@@ -206,10 +326,6 @@ async def test_surface_returns_503_when_disconnected() -> None:
     ("path", "params"),
     [
         ("/api/broker/strikes/SPY", [("expiry_ms", _MIDNIGHT_UTC_EXPIRY_MS)]),
-        (
-            "/api/broker/option-contracts/SPY",
-            [("expiry_ms", _MIDNIGHT_UTC_EXPIRY_MS), ("strike", 420), ("right", "C")],
-        ),
         ("/api/broker/option-chain/SPY", [("expiry_ms", _MIDNIGHT_UTC_EXPIRY_MS), ("strikes", 420)]),
         (
             "/api/broker/option-surface/SPY",
@@ -238,7 +354,7 @@ async def test_an_expiry_that_is_not_16_00_new_york_on_its_date_is_refused(
 _ANCHOR_BEFORE_1970_MS = -97_200_000
 
 
-@pytest.mark.parametrize("path", ["strikes", "option-contracts", "option-chain", "option-surface"])
+@pytest.mark.parametrize("path", ["strikes", "option-chain", "option-surface"])
 @pytest.mark.parametrize(
     ("expiry_ms", "error_type"),
     [

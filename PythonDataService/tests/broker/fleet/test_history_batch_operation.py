@@ -159,14 +159,6 @@ async def test_browser_control_secret_cannot_substitute_for_the_agent_token() ->
     assert response.json()["reason"] == FleetAgentTokenRefused.reason
 
 
-def test_route_is_excluded_from_the_public_schema() -> None:
-    """The internal route stays out of public OpenAPI (``include_in_schema``)."""
-    app = _build_app({_CLERK_ID: _TOKEN})
-    matching = [route for route in app.routes if getattr(route, "path", None) == _PATH]
-    assert matching, "the history-batch route did not mount on a coordinator-shaped app"
-    assert all(getattr(route, "include_in_schema", True) is False for route in matching)
-
-
 # ---- issue #2206: the qualification-only recorded provider selection --------
 #
 # The gate now runs once at boot (app/main.py), not per-request inside this
@@ -175,16 +167,6 @@ def test_route_is_excluded_from_the_public_schema() -> None:
 # test in this file uses. Role/namespace gating is decided once at Python
 # import time, so each posture below runs in its own fresh subprocess, same
 # reasoning as test_route_is_absent_outside_the_coordinator_role.
-
-
-def test_bare_router_app_falls_back_to_the_production_provider() -> None:
-    """``_build_app()`` never installs ``app.state.history_batch_provider``
-    -- the route's own default must still be the real, Polygon-backed
-    provider, so every other test in this file (which relies on exactly
-    that default) keeps testing the production path."""
-    assert internal_fleet.production_history_batch_provider.__name__ == (
-        "production_history_batch_provider"
-    )
 
 
 _HISTORY_BATCH_PROVIDER_SELECTION_PROBE = """

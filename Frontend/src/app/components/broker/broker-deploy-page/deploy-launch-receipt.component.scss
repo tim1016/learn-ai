@@ -8,6 +8,15 @@
   border-radius: var(--radius-lg);
 }
 
+.launch-receipt--failed {
+  background: linear-gradient(145deg, rgba(239, 83, 80, 0.13), var(--bg-surface) 45%);
+  border-color: rgba(239, 83, 80, 0.42);
+}
+
+.launch-receipt--failed .launch-receipt__mark {
+  background: var(--bear);
+}
+
 .launch-receipt__mark {
   display: grid;
   place-items: center;

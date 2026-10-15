@@ -7,6 +7,7 @@ translation — not any vendor. Grows one endpoint block per read-path slice.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Generator
 from datetime import date
 from typing import Any
@@ -441,6 +442,34 @@ async def test_portfolio_history_proof_preserves_one_broker_snapshot_when_local_
     )
     assert port.portfolio_history_calls == 1
     assert port.position_calls == 1
+
+
+async def test_portfolio_history_proof_logs_failed_positions_read(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    history = BrokerPortfolioHistory(
+        timestamps=[1_700_000_000_000, 1_700_086_400_000],
+        equity=[10_000.0, 10_125.0],
+        profit_loss=[0.0, 125.0],
+        base_value=10_000.0,
+        timeframe="1D",
+    )
+
+    class FailedPositionsPort(_FakePort):
+        async def list_positions(self) -> list[BrokerPosition]:
+            raise RuntimeError("positions read failed")
+
+    get_broker_registry().register(FailedPositionsPort(portfolio_history=history))
+    with caplog.at_level(logging.WARNING, logger="app.routers.brokers"):
+        response = await _get("/api/brokers/alpaca/portfolio-history-proof?range=30D")
+
+    assert response.status_code == 200
+    assert response.json()["proof_unavailable_reason"] is not None
+    assert any(
+        record.action == "portfolio_history_proof_unavailable"
+        and record.failure_class == "RuntimeError"
+        for record in caplog.records
+    )
 
 
 @pytest.mark.parametrize(

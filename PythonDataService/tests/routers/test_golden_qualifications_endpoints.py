@@ -26,17 +26,21 @@ from app.lean_sidecar.trading_calendar import expected_sessions
 from app.main import app
 from app.research.golden_search import qualification_service
 from app.research.golden_search.proof import BlobStore, ProofRecord, ProofWindow, build_proof
-from app.research.golden_search.qualification_service import QUALIFICATION_UNJUDGEABLE
 from app.research.golden_search.qualifications import get_default
 from app.research.persistence.db import with_connection
 from app.research.sweep.snapshot import capture_data_snapshot
-from app.schemas.run_admission import QUALIFICATION_REVOKED, QUALIFICATION_STALE
+from app.schemas.run_admission import QUALIFICATION_REVOKED, QUALIFICATION_STALE, QUALIFICATION_UNJUDGEABLE
 from app.services import signal_program_admission as admission_module
 from app.services.signal_program_admission import running_build_digests
 from app.utils.session_anchors import et_midnight_ms
-from tests._helpers.golden_qualification import CONTRACT, PROGRAM, canonical_point, seed_qualification
+from tests._helpers.golden_qualification import (
+    CONTRACT,
+    PROGRAM,
+    canonical_point,
+    copied_source_tree,
+    seed_qualification,
+)
 from tests._helpers.lean_store import seed_store_day
-from tests.services.test_signal_program_admission import _copied_source_tree
 
 BASE = "/api/research/golden-qualifications"
 WINDOW = ProofWindow(
@@ -144,7 +148,7 @@ async def test_a_process_that_cannot_name_its_build_never_reads_ready(
     client: httpx.AsyncClient, symbol: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     row = await _seed(symbol, artifact_digest=_running(), make_default=True)
-    monkeypatch.setattr(admission_module, "_SERVICE_ROOT", _copied_source_tree(tmp_path, drift_artifact=True))
+    monkeypatch.setattr(admission_module, "_SERVICE_ROOT", copied_source_tree(tmp_path, drift_artifact=True))
 
     offer = await client.get(f"{BASE}/{row.id}/deploy-offer")
 
@@ -345,7 +349,7 @@ async def test_reprove_refuses_while_a_restart_is_needed(
 ) -> None:
     record, _blobs = proven
     row = await _seed(symbol, artifact_digest=record.artifact_digest, proof=record.as_dict(), params=record.params)
-    monkeypatch.setattr(admission_module, "_SERVICE_ROOT", _copied_source_tree(tmp_path / "src", drift_artifact=True))
+    monkeypatch.setattr(admission_module, "_SERVICE_ROOT", copied_source_tree(tmp_path / "src", drift_artifact=True))
 
     response = await client.post(f"{BASE}/{row.id}/reprove", json={"idempotency_key": f"reprove-{symbol}"})
 

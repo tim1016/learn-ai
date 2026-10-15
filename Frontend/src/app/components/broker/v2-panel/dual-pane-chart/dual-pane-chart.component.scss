@@ -422,6 +422,13 @@
   }
 }
 
+.tape-indicator-error {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  color: var(--bear);
+  font-size: var(--fs-xs);
+}
+
 .tape-legend {
   display: flex;
   min-height: 2.4rem;

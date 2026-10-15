@@ -169,6 +169,29 @@ async def test_the_account_boots_at_once_while_a_dry_run_s_account_is_still_held
         holder.close()
 
 
+async def test_a_dry_run_with_a_corrupt_desired_state_is_not_restored_and_does_not_fail_the_boot(
+    restarted_lane: _Lane,
+) -> None:
+    """Owner ruling 7 of #3159: the corrupt file is that bot's own failure, said as such, and the lane boots."""
+    from app.engine.live.desired_state import stable_desired_state_path
+
+    path = stable_desired_state_path(restarted_lane.artifacts_root, SID)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not-json", encoding="utf-8")
+    try:
+        await restarted_lane.boot_account()
+        await restarted_lane.registry.start_dry_run_restoration()
+        for _ in range(60):
+            if restarted_lane.registry.dry_run_restoration_state(SID) == "not_restored":
+                break
+            await asyncio.sleep(0.05)
+
+        assert restarted_lane.registry.dry_run_restoration_state(SID) == "not_restored"
+        assert await restarted_lane.start_refusal() is not None
+    finally:
+        await restarted_lane.registry.stop_dry_run_restoration()
+
+
 async def test_a_dry_run_whose_account_another_process_still_holds_is_its_own_failure(
     restarted_lane: _Lane, monkeypatch: pytest.MonkeyPatch
 ) -> None:

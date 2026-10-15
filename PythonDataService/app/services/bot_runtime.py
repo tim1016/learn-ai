@@ -79,10 +79,14 @@ class DecisionFenceFeed:
             yield bar
 
     def evaluation_mode_for(self, bar: MarketDataBar) -> EvaluationMode:
-        """Return the mode captured when this precise source bar was yielded."""
+        """Return the mode captured when this precise source bar was yielded.
+
+        A bar this feed never yielded takes the fence as it stands now: once
+        Stop has closed it, an unseen bar only observes.
+        """
         return self._captured_modes.pop(
             (bar.symbol, bar.start_ms, bar.end_ms),
-            EvaluationMode.DECIDE,
+            EvaluationMode.OBSERVE_ONLY if self.observe_only else EvaluationMode.DECIDE,
         )
 
     async def recent_closed_bars(

@@ -98,14 +98,25 @@ def test_variance_interpolated_iv_midpoint():
 def test_iv30_atm_50d_picks_straddling_expiries():
     iv_by_expiry = pd.Series({20: 0.20, 40: 0.30, 60: 0.32})
     iv30 = iv30_atm_50d(iv_by_expiry, target_days=30)
-    assert 0.20 < iv30 < 0.30
+    # Variance interpolated between the 20d and 40d points only; the 60d point never enters.
+    expected = np.sqrt((0.5 * 0.20**2 * 20 + 0.5 * 0.30**2 * 40) / 30)
+    np.testing.assert_allclose(iv30, expected, atol=1e-12, rtol=0)
+
+
+@pytest.mark.parametrize("expiries", [{40: 0.30, 60: 0.32}, {7: 0.18, 14: 0.19}])
+def test_iv30_atm_50d_is_none_when_the_expiries_do_not_straddle_the_target(expiries):
+    """A one-sided set used to answer the nearest expiry's IV as if it were a 30-day number."""
+    assert iv30_atm_50d(pd.Series(expiries), target_days=30) is None
+
+
+def test_iv30_atm_50d_returns_an_expiry_that_sits_exactly_on_the_target_with_none_below():
+    np.testing.assert_allclose(iv30_atm_50d(pd.Series({30: 0.25, 45: 0.28}), target_days=30), 0.25, atol=1e-12)
+
+
+def test_iv30_atm_50d_accepts_an_expiry_exactly_at_the_target():
+    iv30 = iv30_atm_50d(pd.Series({20: 0.20, 30: 0.25}), target_days=30)
     assert iv30 is not None
-
-
-def test_iv30_atm_50d_extrapolates_when_no_straddle():
-    iv_by_expiry = pd.Series({40: 0.30, 60: 0.32})
-    iv30 = iv30_atm_50d(iv_by_expiry, target_days=30)
-    assert iv30 == 0.30  # nearest = 40d
+    np.testing.assert_allclose(iv30, 0.25, atol=1e-12)
 
 
 def test_skew_25d_typical_equity_positive():

@@ -164,14 +164,15 @@ class ExecutionLeaseLost(ClerkSqliteError):
 
 
 class ExecutionLeaseLostAfterBrokerIO(ExecutionLeaseLost):
-    """The lease was found lost only *after* a broker call succeeded.
+    """The lease was found lost only *after* a broker call was made.
 
     Raised by ``ClaimedBrokerIO``'s post-I/O renewal in place of the base
     class. The distinction is the whole point: a lease lost before any
     mutation means "nothing applied" (the key is released and a retry is
     honest), but here an order may already be placed or cancelled without
     its receipt folded, so the outcome is unknown -- the key is burned and
-    no retry is offered.
+    no retry is offered. A claim found lost at that point is
+    :class:`ClaimLostAfterBrokerIO`.
     """
 
 
@@ -190,6 +191,19 @@ class RepositoryPoisoned(ClerkSqliteError):
 
 class OperationClaimError(ClerkSqliteError):
     """Scope D: an ``effect_operations`` claim attempt found a live owner."""
+
+
+class ClaimLostAfterBrokerIO(OperationClaimError):
+    """The operation claim was found lost only *after* a broker call was made.
+
+    The claim-side twin of :class:`ExecutionLeaseLostAfterBrokerIO`: an order
+    may already be placed or cancelled with no receipt folded, so the outcome
+    is unknown and a panel action burns its key. It stays an
+    ``OperationClaimError`` and is no ``ExecutionLeaseLost``: the account's
+    lease is healthy, the effect stays non-terminal, and every sweep step that
+    defers an effect whose claim is contended defers this one the same way --
+    the next pass's exact lookup folds what the broker holds.
+    """
 
 
 class ClerkSqliteRepository(
@@ -322,16 +336,21 @@ class ClerkSqliteRepository(
         process that now owns the account. A leaseless handle (no
         ``lease_owner``) owns nothing, and SQL ``= NULL`` matches no row, so
         the guarded update is a no-op for it.
+
+        The connection is closed even when the release fails (a write lock
+        held past the busy timeout); the lease then lapses on its own TTL.
         """
         with self._write_lock:
-            self._conn.execute(
-                "UPDATE control_meta SET execution_lease_owner = NULL, "
-                "execution_lease_expires_at_ms = NULL "
-                "WHERE id = 1 AND execution_lease_owner = ?",
-                (self._lease_owner,),
-            )
-            self._conn.commit()
-            self._conn.close()
+            try:
+                self._conn.execute(
+                    "UPDATE control_meta SET execution_lease_owner = NULL, "
+                    "execution_lease_expires_at_ms = NULL "
+                    "WHERE id = 1 AND execution_lease_owner = ?",
+                    (self._lease_owner,),
+                )
+                self._conn.commit()
+            finally:
+                self._conn.close()
 
     # ------------------------------------------------------------------
     # Construction

@@ -15,14 +15,7 @@ from collections.abc import Sequence
 import asyncpg
 import pytest
 
-from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.research.golden_search.qualifications import (
-    QUALIFICATION_ABSENT,
-    QUALIFICATION_COVERED,
-    QUALIFICATION_REVOKED,
-    QUALIFICATION_STALE,
-    QUALIFICATION_UNVERIFIABLE,
-    REGISTRY_POINT_COVERED,
     EventKind,
     QualificationEvent,
     QualificationEvidence,
@@ -33,10 +26,16 @@ from app.research.golden_search.qualifications import (
     registry_point_matches,
     resolve_coverage,
 )
+from app.schemas.run_admission import (
+    QUALIFICATION_ABSENT,
+    QUALIFICATION_COVERED,
+    QUALIFICATION_REVOKED,
+    QUALIFICATION_STALE,
+    QUALIFICATION_UNVERIFIABLE,
+    REGISTRY_POINT_COVERED,
+)
+from tests._helpers.golden_qualification import CONTRACT, PROGRAM
 
-PROGRAM = "ema_crossover_signal"
-CONTRACT = _STRATEGY_REGISTRY[PROGRAM].signal_program_contract
-assert CONTRACT is not None
 RUNNING = "1" * 64
 PREVIOUS = "2" * 64
 REGISTRY_POINT = {**CONTRACT.validated_settings, "symbol": "SPY"}

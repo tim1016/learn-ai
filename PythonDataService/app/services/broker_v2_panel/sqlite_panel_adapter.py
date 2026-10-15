@@ -27,15 +27,18 @@ from app.broker.alpaca.clerk.recovery_reduction import (
 )
 from app.broker.alpaca.clerk.sqlite.budget_projection import BotResult
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
+from app.broker.alpaca.clerk.sqlite.execution_coverage import FILL_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.exit_resolution import priced_reduction_reference_price
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
+from app.broker.alpaca.clerk.sqlite.order_projection import UNFILLED_TERMINAL_STATES
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     ClerkProjection,
     ProjectedOperation,
     ProjectedOrder,
     RecoveryCapability,
 )
-from app.broker.alpaca.clerk.sqlite.reads import NONTERMINAL_EFFECT_STATES
+from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
+from app.broker.alpaca.clerk.sqlite.reads import FAILED_EFFECT_STATES, NONTERMINAL_EFFECT_STATES
 from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     FRESH_EVIDENCE_MAX_AGE_MS,
     UNCONDITIONAL_RECOVERY_ACTION_IDS,
@@ -76,6 +79,7 @@ from app.services.broker_v2_panel.catalog_projection_service import (
     require_sqlite_catalog_identity,
     sqlite_catalog_rollup,
 )
+from app.services.broker_v2_panel.panel_authority_guard import reject_mixed_authority
 from app.services.broker_v2_panel.panel_projection_service import open_pnl_fields, select_primary_action
 from app.services.session_authority import SessionAuthorityState
 
@@ -144,6 +148,29 @@ def adapt_sqlite_panel(
     checks = [_readiness_check(item, projection.generated_at_ms) for item in projection.recovery_actions]
     ready_count = sum(check.ready for check in checks)
     recovery_cure = _recovery_cure(projection, bot_owns_problem=has_bot_scoped_custody_problem(projection))
+    # The fills the page serves, each carrying the account it was recorded in.
+    # They and the decisions are judged as one aggregate of the Clerk authority
+    # the fold was read from, so a simulated fill never sits beside a real
+    # account's panel (#1729 AC #8).
+    fills = (
+        []
+        if economics is None
+        else [
+            recent_fill_view(
+                fill,
+                authority_account_id=fill.account_id,
+                account_mode=account_mode,
+                repository=repository,
+            )
+            for fill in economics.recent_fills
+        ]
+    )
+    reject_mixed_authority(
+        authority_account_id=projection.account_id,
+        authority_kind=authority_kind_for_account(projection.account_id, account_mode=account_mode),
+        decision_views=panel.recent_decisions,
+        fill_views=fills,
+    )
     exposure = {
         position.symbol: position.attributed_qty
         for position in projection.positions
@@ -184,19 +211,7 @@ def adapt_sqlite_panel(
             ),
             # SQLite is the sole custody projection after activation.  Legacy
             # JSONL fill/P&L rollups must not be mixed into this evidence cut.
-            "recent_fills": (
-                []
-                if economics is None
-                else [
-                    recent_fill_view(
-                        fill,
-                        authority_account_id=projection.account_id,
-                        account_mode=account_mode,
-                        repository=repository,
-                    )
-                    for fill in economics.recent_fills
-                ]
-            ),
+            "recent_fills": fills,
             "fills_today": None if economics is None else economics.fills_today,
             "realized_pnl_today": (
                 None if economics is None else economics.realized_pnl_today
@@ -1095,10 +1110,10 @@ def recent_fill_view(
     """Adapt one S2 fill record to the existing panel wire contract.
 
     Stamps the authority the fill was actually read from (#1729 AC #8). This
-    adapter overwrites whatever ``recent_fills`` the projector produced, so
-    without the stamp here a production fill row reaches the panel carrying no
-    authority at all while its sibling decision row carries one — the exact
-    asymmetry the single-authority guard exists to make impossible.
+    is the only writer of a served panel's fills, so without the stamp here a
+    production fill row reaches the panel carrying no authority at all while
+    its sibling decision row carries one — the exact asymmetry the
+    single-authority guard exists to make impossible.
 
     A fill of a priced reducing leg — an operator's confirmed extended-hours
     flatten (#2007), or a limit the Clerk priced itself (#2229, #2440) — also
@@ -1162,32 +1177,6 @@ def _require_coherent_economic_snapshot(
 
 
 @dataclass(frozen=True)
-class _ResolvedOrderEvidence:
-    """Just enough order evidence for the rail, sourced outside the bounded window."""
-
-    broker_order_id: str | None
-    broker_state: str | None
-
-
-@dataclass(frozen=True)
-class _ResolvedOperationEvidence:
-    """One effect operation's rail-relevant evidence, resolved by exact stored key.
-
-    Mirrors the subset of ``ProjectedOperation`` the rail actually reads.
-    Built from unbounded exact-key repository reads
-    (``ClerkSqliteRepository.effect_operation`` / ``.order`` /
-    ``.orders_for_effect_operation`` — already used throughout the SQLite
-    Clerk, e.g. ``exit_resolution.py``, ``reconcile.py``), never from a
-    hand-rolled second copy of the fold's operation-assembly query.
-    """
-
-    effect_operation_id: str
-    state: str
-    terminal_receipt_id: str | None
-    orders: tuple[_ResolvedOrderEvidence, ...]
-
-
-@dataclass(frozen=True)
 class _OperationSelection:
     """The outcome of resolving one ``selected_ref`` against custody evidence.
 
@@ -1199,13 +1188,20 @@ class _OperationSelection:
     substituting another transaction (issue #1729 AC #6/#7).
     """
 
-    operation: ProjectedOperation | _ResolvedOperationEvidence | None
+    operation: ProjectedOperation | None
     unresolved_ref: str | None
 
 
 def _operation_matches_ref(operation: ProjectedOperation, ref: str) -> bool:
+    """An operation is its own id and the orders it sent; not the entries an EXIT merely links.
+
+    The stored-key join resolves an order to the operation that owns it
+    (``order.effect_operation_id``). Matching an EXIT's linked entry here
+    would send an entry's ref to the EXIT, newest first, and the two paths
+    would show one order's rail as two operations.
+    """
     return operation.effect_operation_id == ref or any(
-        order.order_ref == ref for order in operation.orders
+        order.order_ref == ref for order in _own_orders(operation)
     )
 
 
@@ -1213,30 +1209,27 @@ def _resolve_operation_outside_window(
     repository: ClerkSqliteRepository,
     projection: ClerkProjection,
     ref: str,
-) -> _ResolvedOperationEvidence | None:
+) -> ProjectedOperation | None:
     """Stored-key join for a ref absent from the bounded operation window.
 
     ``ref`` may name an effect operation directly or one of its orders — the
-    same two identities ``_operation_matches_ref`` checks in-window. Resolved
-    evidence is discarded (treated as not found) unless it belongs to the
-    bot this projection is scoped to; a real ref from a *different* bot must
-    not leak into this bot's rail.
+    same two identities ``_operation_matches_ref`` checks in-window. The
+    operation is read by the projection reader the window is built with, so
+    its orders carry the same roles, fills and openness. It is discarded
+    (treated as not found) unless it belongs to the bot this projection is
+    scoped to; a real ref from a *different* bot must not leak into this
+    bot's rail.
     """
     order = repository.order(ref)
     effect_operation_id = order.effect_operation_id if order is not None else ref
-    effect = repository.effect_operation(effect_operation_id)
-    if effect is None or effect.strategy_instance_id != projection.strategy_instance_id:
+    reader = SqliteClerkProjectionReader.from_repository(repository)
+    try:
+        operation = reader.operation(effect_operation_id)
+    finally:
+        reader.close()
+    if operation is None or operation.strategy_instance_id != projection.strategy_instance_id:
         return None
-    orders = repository.orders_for_effect_operation(effect_operation_id)
-    return _ResolvedOperationEvidence(
-        effect_operation_id=effect.effect_operation_id,
-        state=effect.state,
-        terminal_receipt_id=effect.terminal_receipt_id,
-        orders=tuple(
-            _ResolvedOrderEvidence(broker_order_id=o.broker_order_id, broker_state=o.broker_state)
-            for o in orders
-        ),
-    )
+    return operation
 
 
 def _select_operation(
@@ -1290,10 +1283,6 @@ def _transaction_rail(
             transaction_ref=None,
             stations=[_station(station_id, "not_applicable", "No custody operation selected.") for station_id in _station_ids()],
         )
-    has_broker_ack = any(order.broker_order_id is not None for order in operation.orders)
-    has_fill_evidence = any(
-        (order.broker_state or "").lower() in _FILLED_BROKER_STATES for order in operation.orders
-    )
     reconciled = (
         operation.terminal_receipt_id is not None
         or (
@@ -1307,16 +1296,8 @@ def _transaction_rail(
         _station("SIGNAL", "satisfied", "The durable command records the requested operation."),
         _station("INTENT", "satisfied", "The Clerk captured the operation before broker contact."),
         _station("SUBMIT_GATE", "satisfied", "SQLite custody accepted the operation under its active authority."),
-        _station(
-            "BROKER_ACK",
-            "satisfied" if has_broker_ack else ("unknown_stale" if operation.state == "unknown" else "waiting"),
-            "A broker order identity is durably linked." if has_broker_ack else "No broker acknowledgment is durably linked yet.",
-        ),
-        _station(
-            "FILL",
-            "satisfied" if has_fill_evidence else ("unknown_stale" if operation.state == "unknown" else "waiting"),
-            "A broker fill or partial fill is durably recorded." if has_fill_evidence else "No fill has been recorded for this order.",
-        ),
+        _broker_ack_station(operation),
+        _fill_station(operation, repository),
         _station(
             "RECONCILED",
             "satisfied" if reconciled else ("unknown_stale" if operation.state == "unknown" else "waiting"),
@@ -1329,11 +1310,172 @@ def _transaction_rail(
     )
 
 
+def _own_orders(operation: ProjectedOperation) -> tuple[ProjectedOrder, ...]:
+    """The orders this operation itself sent, which are the ones its stations speak for.
+
+    An EXIT also links the entry orders it closes (``operation_order_links``).
+    Those carry their own acknowledgment and fills: the ENTER's, not the
+    EXIT's, so an entry that filled says nothing about the exit.
+    """
+    if operation.kind != "EXIT":
+        return operation.orders
+    return tuple(order for order in operation.orders if order.role != "ENTRY")
+
+
+def _broker_ack_station(operation: ProjectedOperation) -> StationView:
+    if any(order.broker_order_id is not None for order in _own_orders(operation)):
+        return _station("BROKER_ACK", "satisfied", "A broker order identity is durably linked.")
+    receipt = "No broker acknowledgment is durably linked yet."
+    if operation.state == "unknown":
+        return _station("BROKER_ACK", "unknown_stale", receipt)
+    if operation.state not in FAILED_EFFECT_STATES:
+        return _station("BROKER_ACK", "waiting", receipt)
+    return _station(
+        "BROKER_ACK",
+        "blocked",
+        f"No broker acknowledgment was recorded before this operation ended as {operation.state}.",
+        evidence_at_ms=operation.updated_at_ms,
+        blocker=_rail_blocker(
+            "ORDER_NEVER_ACKNOWLEDGED",
+            headline="No broker acknowledgment was recorded for this order.",
+            detail=f"The operation ended as {operation.state} and no broker order identity is recorded for it.",
+            evidence={"operation_state": operation.state},
+        ),
+    )
+
+
+def _fill_station(operation: ProjectedOperation, repository: ClerkSqliteRepository | None) -> StationView:
+    """FILL: satisfied by a recorded execution, blocked once its order ended without one.
+
+    "Ended without a fill" is said only on the books' proof, the Clerk's own:
+    no recorded execution and no fill the broker reported that the books
+    lack. Where that proof is missing the order is over and its fill is
+    unknown, which is ``unknown_stale``, not calm. The Clerk folds a
+    broker-ended entry to failed only on a later observation, so the broker's
+    ending counts on its own and the rail does not wait for it.
+    """
+    orders = _own_orders(operation)
+    if any(_order_has_fill(order) for order in orders):
+        return _station("FILL", "satisfied", "A broker fill or partial fill is durably recorded.")
+    receipt = "No fill has been recorded for this order."
+    if operation.state == "unknown":
+        return _station("FILL", "unknown_stale", receipt)
+    failed = operation.state in FAILED_EFFECT_STATES
+    if failed and all(order.broker_order_id is None and order.broker_state is None for order in orders):
+        # The broker never answered for it, so nothing can fill: BROKER_ACK is the station that says why.
+        return _station(
+            "FILL",
+            "blocked",
+            "No fill can follow: no broker acknowledgment was recorded for this order.",
+            evidence_at_ms=operation.updated_at_ms,
+        )
+    broker_states = sorted({(order.broker_state or "").lower() for order in orders})
+    ended_by_broker = bool(orders) and all(state in UNFILLED_TERMINAL_STATES for state in broker_states)
+    if not (all(not order.may_fill for order in orders) and (failed or ended_by_broker)):
+        return _station("FILL", "waiting", receipt)
+    ended_at_ms = max((order.updated_at_ms for order in orders), default=operation.updated_at_ms)
+    ended = " and ".join(broker_states)
+    if not all(_books_prove_no_fill(order, repository) for order in orders):
+        cause = f"The broker ended this order as {ended}" if ended_by_broker else (
+            f"The operation ended as {operation.state}"
+        )
+        return _station(
+            "FILL",
+            "unknown_stale",
+            f"{cause}, but the books do not yet prove it went unfilled.",
+            evidence_at_ms=ended_at_ms,
+        )
+    if ended_by_broker:
+        return _station(
+            "FILL",
+            "blocked",
+            f"The broker ended this order as {ended} and no fill has been recorded.",
+            evidence_at_ms=ended_at_ms,
+            blocker=_rail_blocker(
+                "ORDER_ENDED_WITHOUT_FILL",
+                headline="The broker ended this order without filling it.",
+                detail=f"The broker reports it {ended}, and the books record no fill for it.",
+                evidence={"operation_state": operation.state, "broker_state": ended},
+            ),
+        )
+    return _station(
+        "FILL",
+        "blocked",
+        f"No fill has been recorded and the operation ended as {operation.state}.",
+        evidence_at_ms=operation.updated_at_ms,
+        blocker=_rail_blocker(
+            "ORDER_ENDED_WITHOUT_FILL",
+            headline="This order ended without filling.",
+            detail=f"No execution is recorded and the operation ended as {operation.state}.",
+            evidence={"operation_state": operation.state},
+        ),
+    )
+
+
+def _order_has_fill(order: ProjectedOrder) -> bool:
+    """A fill or partial fill is recorded: the broker's state says so, or an effective execution does."""
+    return (order.broker_state or "").lower() in _FILLED_BROKER_STATES or (
+        order.filled_quantity is not None and order.filled_quantity >= FILL_QTY_EPSILON
+    )
+
+
+def _books_prove_no_fill(order: ProjectedOrder, repository: ClerkSqliteRepository | None) -> bool:
+    """The Clerk's own proof that an ended order went unfilled (``order_evidence``'s ENTER-unfilled fold).
+
+    The broker never having answered for an order proves it. Otherwise no
+    fill the broker reported may be missing from the books: a cumulative it
+    reported above what is recorded is an outcome still unknown
+    (``entry_outcome``), however the order's state reads. Without the books to
+    ask, nothing is proven.
+    """
+    if order.broker_order_id is None and order.broker_state is None:
+        return True
+    if repository is None:
+        return False
+    return (repository.latest_reported_filled_quantity(order.order_ref) or 0.0) < FILL_QTY_EPSILON and not (
+        repository.order_fills_short_of_broker_cumulative(order.order_ref)
+    )
+
+
+def _rail_blocker(
+    condition_id: str,
+    *,
+    headline: str,
+    detail: str,
+    evidence: dict[str, str | int | float | bool | None],
+) -> OperatorBlocker:
+    """What stopped a rail station, in the words the station shows.
+
+    An ended order is a fact to read, not an emergency, so it is a warning;
+    and it has no move for the rail to offer: what the operator can do about
+    the position is the page's own action list.
+    """
+    return OperatorBlocker.for_host(
+        condition_id=condition_id,
+        scope="bot",
+        host="bot_cockpit",
+        anchor=SURFACE_ANCHOR,
+        disposition="wait",
+        headline=headline,
+        detail=detail,
+        applies_to="run",
+        severity="warning",
+        evidence=evidence,
+    )
+
+
 def _station_ids() -> tuple[str, ...]:
     return ("SIGNAL", "INTENT", "SUBMIT_GATE", "BROKER_ACK", "FILL", "RECONCILED")
 
 
-def _station(station_id: str, state: str, receipt: str) -> StationView:
+def _station(
+    station_id: str,
+    state: str,
+    receipt: str,
+    *,
+    evidence_at_ms: int | None = None,
+    blocker: OperatorBlocker | None = None,
+) -> StationView:
     station_copy = copy_for(station_id)
     state_copy = copy_for(state)
     return StationView(
@@ -1342,8 +1484,8 @@ def _station(station_id: str, state: str, receipt: str) -> StationView:
         state=state,
         state_label=state_copy.label,
         receipt=receipt,
-        evidence_at_ms=None,
-        blocker=None,
+        evidence_at_ms=evidence_at_ms,
+        blocker=blocker,
     )
 
 

@@ -52,12 +52,10 @@ from app.services.signal_program_admission import (
     running_build_digests,
 )
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
+from tests._helpers.golden_qualification import CONTRACT, PROGRAM
 from tests.services.test_run_admission import _NOW as _ADMISSION_NOW
 from tests.services.test_run_admission import _bot, _clerk
 
-PROGRAM = "ema_crossover_signal"
-CONTRACT = _STRATEGY_REGISTRY[PROGRAM].signal_program_contract
-assert CONTRACT is not None
 _SID = "golden-qualified-1"
 _VERIFIED_AT = _ADMISSION_NOW - 1_000
 # A configuration the registry's validated point does not cover.

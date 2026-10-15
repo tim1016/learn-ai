@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query, status
+from typing import Annotated
+
+from fastapi import APIRouter, HTTPException, Path, Query, status
 
 from app.research.golden_validation import service
 from app.research.persistence.db import with_connection
 from app.schemas.golden_validation import (
+    MAX_RUN_ID,
     DesignateGoldenRunRequest,
     GoldenValidationResponse,
     ReviewGoldenRunRequest,
@@ -14,6 +17,7 @@ from app.schemas.golden_validation import (
 from app.services.strategy_validation_manifest import local_strategy_validation_actor
 
 router = APIRouter()
+GoldenRunId = Annotated[int, Path(le=MAX_RUN_ID)]
 
 
 def _not_found(message: str) -> HTTPException:
@@ -74,7 +78,7 @@ async def list_golden_runs(
 
 
 @router.post("/{golden_run_id}/reviews", response_model=GoldenValidationResponse)
-async def review_golden_run(golden_run_id: int, body: ReviewGoldenRunRequest) -> GoldenValidationResponse:
+async def review_golden_run(golden_run_id: GoldenRunId, body: ReviewGoldenRunRequest) -> GoldenValidationResponse:
     try:
         dossier = await with_connection(
             service.review,

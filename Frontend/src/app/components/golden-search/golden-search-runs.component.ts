@@ -35,6 +35,8 @@ const COLUMNS: readonly SortColumn[] = [
 interface RunRow {
   readonly run: StudyRun;
   readonly ticked: boolean;
+  /** The run has a curve to draw: the listing says it kept one, and no read has found it not recorded. */
+  readonly canDraw: boolean;
   readonly netReturn: string;
   readonly sharpe: string;
   readonly worstFall: string;
@@ -134,10 +136,11 @@ export class GoldenSearchRunsComponent {
     (this.mismatched() ? [] : (this.runs()?.rows ?? [])).map((run) => ({
       run,
       ticked: this.tickedKeys().has(run.evaluation_key),
+      canDraw: this.canDraw(run),
       netReturn: signedPercentText(run.total_return_pct),
       sharpe: ratioText(run.sharpe_ratio),
       worstFall: percentText(run.max_drawdown_pct),
-      note: run.status === 'failed' ? `Run failed — ${run.error ?? 'no reason recorded'}` : run.status === 'pending' ? 'Still running' : run.has_curve ? null : 'Curve not recorded',
+      note: run.status === 'failed' ? `Run failed — ${run.error ?? 'no reason recorded'}` : run.status === 'pending' ? 'Still running' : this.canDraw(run) ? null : 'Curve not recorded',
     })),
   );
   protected readonly totalRuns = computed(() => (this.runs()?.groups ?? []).reduce((sum, group) => sum + group.runs, 0));
@@ -153,13 +156,23 @@ export class GoldenSearchRunsComponent {
   protected readonly firstShown = computed(() => (this.runs()?.total ? (this.page() - 1) * PAGE_SIZE + 1 : 0));
   protected readonly lastShown = computed(() => Math.min(this.page() * PAGE_SIZE, this.runs()?.total ?? 0));
   /** The runs on this page that can still be ticked. */
-  protected readonly drawable = computed(() => this.rows().filter((row) => row.run.has_curve && !row.ticked).length);
+  protected readonly drawable = computed(() => this.rows().filter((row) => row.canDraw && !row.ticked).length);
 
   constructor() {
     effect(() => {
       if (this.listing.hasValue()) this.shown.set({ page: this.listing.value(), query: untracked(this.query) });
     });
+    // A tick whose curve the read found not recorded draws nothing: it leaves the ticks rather than count as drawn.
+    effect(() => {
+      const missing = this.ticked().filter((run) => !this.canDraw(run));
+      if (missing.length > 0) untracked(() => this.ticked.update((ticked) => ticked.filter((run) => !missing.includes(run))));
+    });
     reloadOnProgress(() => `${this.study().revision}|${this.study().consumed_evaluations}`, this.listing);
+  }
+
+  /** The listing's `has_curve` is its word at that read; the curve read that follows can still find the run's curve not recorded. */
+  private canDraw(run: StudyRun): boolean {
+    return run.has_curve && this.curves.of(run.evaluation_key) !== null;
   }
 
   protected chooseGroup(group: RunGroupKey | null): void {
@@ -196,13 +209,13 @@ export class GoldenSearchRunsComponent {
 
   protected toggle(run: StudyRun): void {
     if (this.tickedKeys().has(run.evaluation_key)) this.ticked.update((ticked) => ticked.filter((other) => other.evaluation_key !== run.evaluation_key));
-    else if (run.has_curve && !this.full()) this.ticked.update((ticked) => [...ticked, run]);
+    else if (this.canDraw(run) && !this.full()) this.ticked.update((ticked) => [...ticked, run]);
   }
 
   /** Ticks every run on this page that has a curve, up to the most that can be drawn. */
   protected drawPage(): void {
     const room = MAX_DRAWN - this.ticked().length;
-    const more = this.rows().filter((row) => row.run.has_curve && !row.ticked).slice(0, room).map((row) => row.run);
+    const more = this.rows().filter((row) => row.canDraw && !row.ticked).slice(0, room).map((row) => row.run);
     if (more.length > 0) this.ticked.update((ticked) => [...ticked, ...more]);
   }
 

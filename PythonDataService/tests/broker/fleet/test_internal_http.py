@@ -105,7 +105,17 @@ class _InternalServer:
                 # Hold the stream open until the test releases it: a
                 # buffering transport never yields even the first event
                 # before this server finishes.
-                await self.hold_open.wait()
+                released = asyncio.create_task(self.hold_open.wait())
+                disconnected = asyncio.create_task(reader.read(1))
+                done, pending = await asyncio.wait(
+                    {released, disconnected}, return_when=asyncio.FIRST_COMPLETED
+                )
+                for pending_task in pending:
+                    pending_task.cancel()
+                    await asyncio.gather(pending_task, return_exceptions=True)
+                if disconnected in done:
+                    self.disconnect_seen.set()
+                    return
                 await asyncio.sleep(0.05)
                 writer.write(b": keepalive\nid: 42\nevent: update\ndata: second\ndata: cont\n\n")
                 await writer.drain()
@@ -266,9 +276,27 @@ async def test_cancellation_propagates_to_the_open_stream(
     with pytest.raises(asyncio.CancelledError):
         await task
     await client.aclose()
+    await asyncio.wait_for(internal_server.disconnect_seen.wait(), timeout=2)
     # Release the server's connection handler so fixture teardown does not
     # wait on a stream this test intentionally never finishes reading.
     internal_server.hold_open.set()
+
+
+async def test_a_silent_lane_stream_is_closed_after_the_idle_bound(
+    internal_server: _InternalServer, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(internal_http, "DEFAULT_STREAM_IDLE_TIMEOUT_S", 0.05)
+    client = build_internal_client(read_timeout_s=None)
+    try:
+        async with client.stream("GET", f"{internal_server.base_url}/events") as response:
+            iterator = iter_sse_from_response(response)
+            first = await asyncio.wait_for(iterator.__anext__(), timeout=1)
+            assert first.data == "first"
+            with pytest.raises(FleetStreamError, match="went idle"):
+                await asyncio.wait_for(iterator.__anext__(), timeout=1)
+    finally:
+        await client.aclose()
+        internal_server.hold_open.set()
 
 
 async def test_the_asgi_transport_buffers_and_must_not_carry_streams() -> None:

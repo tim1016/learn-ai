@@ -899,7 +899,7 @@ describe('AlpacaSqliteCustodyComponent', () => {
     expect(await screen.findByRole('region', {
       name: 'Prepared safe-flatten reduction plan',
     })).toBeTruthy();
-    expect(screen.getByText('Spy')).toBeTruthy();
+    expect(screen.getByText('SPY')).toBeTruthy();
     expect(screen.getByText('1.25')).toBeTruthy();
     expect(checkSqliteRecoveryAction).toHaveBeenCalledWith('clrk_spec', 'PA1', prepare);
     expect(executeSqliteRecoveryAction).not.toHaveBeenCalled();

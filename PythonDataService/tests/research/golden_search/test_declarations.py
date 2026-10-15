@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from decimal import Decimal
 
 import pytest
@@ -24,7 +25,8 @@ EMA = "ema_crossover_signal"
 EMA_PREVIOUS = "ema_previous_crossover"
 _EMA_DECLARATION = declaration_for(EMA)
 assert _EMA_DECLARATION is not None
-_EMA_SCHEMA = public_params_schema(_STRATEGY_REGISTRY[EMA])["properties"]
+_EMA_PREVIOUS_DECLARATION = declaration_for(EMA_PREVIOUS)
+assert _EMA_PREVIOUS_DECLARATION is not None
 
 
 def test_ema_declaration_follows_the_owner_order_and_table() -> None:
@@ -63,9 +65,13 @@ def test_ema_declaration_follows_the_owner_order_and_table() -> None:
     assert _EMA_DECLARATION.default_pair_audits == (("fast_period", "slow_period"), ("rsi_min", "rsi_max"))
 
 
-@pytest.mark.parametrize("knob", _EMA_DECLARATION.knobs, ids=lambda k: k.name)
-def test_ema_knob_agrees_with_the_registered_parameter_model(knob: SearchKnob) -> None:
-    schema = _EMA_SCHEMA[knob.name]
+@pytest.mark.parametrize(
+    ("strategy_key", "knob"),
+    [(declaration.strategy_key, knob) for declaration in (_EMA_DECLARATION, _EMA_PREVIOUS_DECLARATION) for knob in declaration.knobs],
+    ids=lambda value: value if isinstance(value, str) else value.name,
+)
+def test_each_declared_knob_agrees_with_the_registered_parameter_model(strategy_key: str, knob: SearchKnob) -> None:
+    schema = public_params_schema(_STRATEGY_REGISTRY[strategy_key])["properties"][knob.name]
 
     assert schema["type"] == ("integer" if knob.kind == "integer" else "number")
     assert Decimal(str(schema["default"])) == knob.default_value
@@ -182,6 +188,22 @@ def test_canonical_point_refuses_out_of_domain_and_unknown_inputs() -> None:
         canonical_point(EMA, "SPY", {"gap": "wide"})
     with pytest.raises(ValueError):
         canonical_point(EMA, "SPY", {"rsi_min": 80})  # the model refuses rsi_min >= rsi_max
+
+
+@pytest.mark.parametrize(("name", "value"), [("gap", -0.004), ("gap", 2.004), ("rsi_min", -0.4), ("gap_bps", 100.2)])
+def test_canonical_point_refuses_a_value_less_than_half_a_quantum_outside_the_domain(name: str, value: float) -> None:
+    # The raw value is outside the domain: rounding it onto the boundary would move it, not refuse it.
+    with pytest.raises(ValueError, match="outside its domain"):
+        canonical_point(EMA, "SPY", {name: value})
+
+
+def test_a_zero_has_one_sign_and_so_one_hash() -> None:
+    negative = canonical_point(EMA, "SPY", {"gap": -0.0, "gap_bps": -0.0})
+    positive = canonical_point(EMA, "SPY", {"gap": 0.0, "gap_bps": 0.0})
+
+    assert negative == positive
+    assert math.copysign(1.0, negative["gap"]) == 1.0 and math.copysign(1.0, negative["gap_bps"]) == 1.0
+    assert point_hash(EMA, negative) == point_hash(EMA, positive)
 
 
 def test_point_hash_ignores_key_order() -> None:

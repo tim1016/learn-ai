@@ -23,6 +23,21 @@ describe('FillTableComponent', () => {
     expect(screen.queryByRole('columnheader', { name: 'Asset' })).toBeNull();
   });
 
+  it('draws every partial fill of one order, though they share its order reference', async () => {
+    await render(FillTableComponent, {
+      inputs: {
+        label: 'Fills this run',
+        fills: [
+          { filled_at_ms: 1_753_800_000_000, side: 'buy', quantity: 1, price: 625.1, order_ref: 'buy-1', event_key: 'exec-1' },
+          { filled_at_ms: 1_753_800_001_000, side: 'buy', quantity: 1, price: 625.2, order_ref: 'buy-1', event_key: 'exec-2' },
+        ],
+      },
+    });
+
+    expect(screen.getByText('$625.10')).toBeTruthy();
+    expect(screen.getByText('$625.20')).toBeTruthy();
+  });
+
   it('names each fill’s asset for a bot that trades something other than what it listens to (#2912)', async () => {
     await render(FillTableComponent, {
       inputs: {

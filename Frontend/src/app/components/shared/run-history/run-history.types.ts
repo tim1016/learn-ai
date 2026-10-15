@@ -43,4 +43,6 @@ export interface RunHistoryRow {
   parityGroupId: string | null;
   /** Current human-review projection for a designated Validation Golden Run. */
   goldenValidationState?: string | null;
+  /** False when that review was recorded against evidence that has since changed. */
+  goldenReviewIsCurrent?: boolean | null;
 }

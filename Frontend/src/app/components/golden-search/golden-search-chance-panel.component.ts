@@ -3,7 +3,7 @@ import { ChangeDetectionStrategy, Component, computed, input } from '@angular/co
 import { GoldenSearchChartComponent } from './charts/golden-search-chart.component';
 import { GoldenSearchPanelComponent } from './charts/golden-search-panel.component';
 import { sameChart } from './charts/golden-search-chart-spec';
-import { chanceComparisonSpec, countText, profitabilityText, shareStripText, shareSegments, shareText } from './golden-search-chance-charts';
+import { chanceComparisonSpec, countText, shareStripText, shareSegments, shareText } from './golden-search-chance-charts';
 import type { CandidateRef, ChanceReadings, MeasuredChanceComparison, MeasuredChanceProfitability } from './golden-search.types';
 
 /**
@@ -57,11 +57,6 @@ export class GoldenSearchChancePanelComponent {
   protected readonly stripText = computed(() => {
     const measured = this.measured();
     return measured === null ? '' : shareStripText(measured);
-  });
-
-  protected readonly moneyText = computed(() => {
-    const profitability = this.profitability();
-    return profitability === null ? '' : profitabilityText(profitability);
   });
 
   /** The profit line's words when profitability was not measured, as Python recorded them. */

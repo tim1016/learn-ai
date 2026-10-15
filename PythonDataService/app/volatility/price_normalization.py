@@ -147,9 +147,22 @@ def from_snapshot_quote(bid: float, ask: float) -> NormalizedOptionPrice:
 
     Zero-bid (no buyer), zero-ask (no seller), or inverted (bid > ask)
     input collapses to a quality-zero, mid-zero record so the
-    wing-truncation rule in VIX replication still fires correctly. This
-    matches the legacy ``OptionQuote.call_mid`` semantics: a leg with no
-    bid is not a real quote, even if an ask exists.
+    wing-truncation rule in VIX replication still fires correctly: a leg
+    with no bid is not a real quote, even if an ask exists.
+
+    This is NOT the legacy ``OptionQuote`` behaviour. Legacy ``call_mid`` is
+    ``(bid + ask) / 2`` whenever ``ask > 0`` (else 0.0) and legacy truncation
+    fires only on ``bid <= 0``. Here every one-sided or crossed leg has mid
+    0.0 and truncates:
+
+    - bid=0 / ask=0.5: legacy mid 0.25, truncating.
+    - crossed 0.6 / 0.5: legacy mid 0.55, kept in the integral.
+    - bid=0.5 / ask=0: legacy mid 0.0 and NOT truncating, so it stays in as a
+      Q = 0 strike that still narrows its neighbours' dK.
+
+    The two agree on any two-sided, uncrossed quote. They differ in
+    ATM-strike selection, in the K0 average, and in which strikes enter the
+    integral.
     """
     if bid <= 0 or ask <= 0 or bid > ask:
         return NormalizedOptionPrice(

@@ -2554,6 +2554,125 @@ describe('AlpacaDeployWorkflowComponent — Start checks and the lane fence', ()
     expect(service.deployBudgetBot).not.toHaveBeenCalled();
   });
 
+  it('leaves the other account’s form alone when a Deploy answers after an account switch', async () => {
+    let answer!: (receipt: BudgetDeployReceipt) => void;
+    const service = mockService();
+    service.deployBudgetBot.mockReturnValue(new Promise<BudgetDeployReceipt>((resolve) => { answer = resolve; }));
+    const { fixture } = await renderWorkflow(service);
+    await chooseMoney();
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
+    const sentKey = submittedBody(service).submission_key;
+    const page = fixture.componentInstance as unknown as { submissionKey(): string };
+
+    fixture.componentRef.setInput('accountId', 'PA10');
+    await fixture.whenStable();
+    const keyOnB = page.submissionKey();
+    expect(keyOnB).not.toBe(sentKey);
+    // A Deploy was sent: the notice must not claim nothing was sent.
+    expect((await screen.findAllByText(/The account changed after a Deploy was sent/)).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Nothing was sent/)).toBeNull();
+
+    answer({ ...RECEIPT, account_id: 'PA9' });
+    await fixture.whenStable();
+
+    // B's form holds its own key and no receipt of A's Deploy.
+    expect(page.submissionKey()).toBe(keyOnB);
+    expect(screen.queryByRole('heading', { name: RECEIPT.message })).toBeNull();
+
+    // Back on A, the Deploy is still unknown, and its status read asks for the key it was sent under.
+    fixture.componentRef.setInput('accountId', service.accountId);
+    await fixture.whenStable();
+    fireEvent.click(await screen.findByRole('button', { name: 'Check deployment status' }));
+    await vi.waitFor(() => expect(service.getDeploySubmission).toHaveBeenCalledWith(expect.anything(), sentKey));
+  });
+
+  it('keeps a sent Deploy unknown, with its own sentence, when a flat fleet refusal answers it', async () => {
+    const service = mockService();
+    service.deployBudgetBot.mockRejectedValue(new HttpErrorResponse({
+      status: 503,
+      error: {
+        reason: 'clerk_unreachable',
+        message: 'The Clerk for this account did not answer.',
+        next_step: 'Wait for the lane to recover, then check the deployment status.',
+      },
+    }));
+    await renderWorkflow(service);
+    await chooseMoney();
+    fireEvent.click(deployButton());
+
+    const refusal = await screen.findByRole('alert', { name: 'Outcome unknown' });
+    expect(within(refusal).getByText('The Clerk for this account did not answer.')).toBeTruthy();
+    expect(within(refusal).getByText(/Wait for the lane to recover/)).toBeTruthy();
+    // A flat refusal settles nothing: the key is held, and asking again is the safe move.
+    expect(within(refusal).getByRole('button', { name: 'Check deployment status' })).toBeTruthy();
+    expect(within(refusal).getByText(/never starts a second bot/)).toBeTruthy();
+    expect(service.getDeploySubmission).not.toHaveBeenCalled();
+    const sentKey = submittedBody(service).submission_key;
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledTimes(2));
+    expect(submittedBody(service, 1).submission_key).toBe(sentKey);
+  });
+
+  it('titles a flat fleet 409 that is no account change as a refusal, not as a changed account', async () => {
+    const service = mockService();
+    service.previewStartAdmission.mockRejectedValue(new HttpErrorResponse({
+      status: 409,
+      error: {
+        reason: 'clerk_lane_draining',
+        message: 'This lane is draining and takes no new Deploy.',
+        next_step: 'Deploy on the lane that replaced it.',
+      },
+    }));
+    await renderWorkflow(service);
+    await chooseMoney();
+    fireEvent.click(deployButton());
+
+    const refusal = await screen.findByRole('alert', { name: 'Deploy refused' });
+    expect(within(refusal).getByText('This lane is draining and takes no new Deploy.')).toBeTruthy();
+    expect(screen.queryByRole('alert', { name: 'The account changed before Deploy' })).toBeNull();
+  });
+
+  it('words a flat fleet refusal in its own sentences, not as an unknown outcome', async () => {
+    const service = mockService();
+    // The fleet coordinator's refusals are flat `{reason, message, next_step}`, not nested under `detail`.
+    service.previewStartAdmission.mockRejectedValue(new HttpErrorResponse({
+      status: 503,
+      error: {
+        reason: 'clerk_unreachable',
+        message: 'The Clerk for this account did not answer.',
+        next_step: 'Wait for the lane to recover, then try again.',
+      },
+    }));
+    await renderWorkflow(service);
+    await chooseMoney();
+    fireEvent.click(deployButton());
+
+    const refusal = await screen.findByRole('alert', { name: 'Deploy refused' });
+    expect(within(refusal).getByText('The Clerk for this account did not answer.')).toBeTruthy();
+    expect(within(refusal).getByText(/Wait for the lane to recover, then try again\./)).toBeTruthy();
+    expect(screen.queryByText(/No answer came back from Deploy/)).toBeNull();
+    expect(service.deployBudgetBot).not.toHaveBeenCalled();
+  });
+
+  it('runs a reload asked for while the view is loading once that load ends', async () => {
+    const service = mockService();
+    const { fixture } = await renderWorkflow(service);
+    const loads = service.getDeployView.mock.calls.length;
+    let finish!: (view: DeployBotView) => void;
+    service.getDeployView.mockReturnValueOnce(new Promise<DeployBotView>((resolve) => { finish = resolve; }));
+    const page = fixture.componentInstance as unknown as { reload(): void; paperAccessChanged(): void };
+
+    page.reload();
+    await vi.waitFor(() => expect(service.getDeployView).toHaveBeenCalledTimes(loads + 1));
+    // The view is loading: this ask is refused by the resource and must not be dropped.
+    page.paperAccessChanged();
+    expect(service.getDeployView).toHaveBeenCalledTimes(loads + 1);
+
+    finish(DEPLOY_VIEW);
+    await vi.waitFor(() => expect(service.getDeployView).toHaveBeenCalledTimes(loads + 2));
+  });
+
   it('refuses to submit when the page opened against a cold directory, and dispatches nothing', async () => {
     const service = mockService();
     const { fixture } = await render(AlpacaDeployWorkflowComponent, {
@@ -2677,6 +2796,16 @@ describe('AlpacaDeployWorkflowComponent — a traded asset the strategy was neve
     await within(stepRegion('What')).findByText('Tested trading SPY. Untested trading QQQ.');
     expect(service.getDeployTradedAsset.mock.calls.at(-1)?.slice(1)).toEqual(['SPY', 'QQQ']);
     expect(service.previewBudget.mock.calls.some(([, body]) => body.budget)).toBe(false);
+  });
+
+  it('says so when the check on the picked asset could not be read, rather than showing nothing', async () => {
+    const service = mockService();
+    service.getDeployTradedAsset.mockRejectedValue(new HttpErrorResponse({ status: 503, error: null }));
+    const { fixture } = await renderWorkflow(service);
+    await tradeAnotherAsset(fixture);
+
+    await within(stepRegion('What')).findByText(/This asset’s check did not answer/);
+    expect(within(stepRegion('What')).queryByText(/Untested trading QQQ/)).toBeNull();
   });
 
   it('says at once when Alpaca cannot trade the picked asset, and will not deploy it', async () => {

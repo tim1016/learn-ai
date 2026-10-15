@@ -103,6 +103,27 @@ describe('GoldenSearchRunsComponent', () => {
     await waitFor(() => expect(service.runCurves).toHaveBeenCalledWith('study-0001-aaaa', ['run-winner', 'run-second', 'run-fold']));
   });
 
+  it('a ticked run whose curve the read finds not recorded is unticked and says so, never counted as drawn', async () => {
+    // The listing said it has a curve; the read that followed found none (a run recorded in between).
+    await renderRuns(undefined, undefined, async (keys) =>
+      runCurves(
+        keys.filter((key) => key !== 'run-winner'),
+        keys.filter((key) => key === 'run-winner'),
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /^Draw All-period search · All-period fit/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /^Draw All-period search, Gap \$0\.10/ }));
+
+    await waitFor(() => expect(screen.getByText('1 of at most 100 drawn')).not.toBeNull());
+    const missing = within(rowOf('All-period search · All-period fit'));
+    expect((missing.getByRole('checkbox') as HTMLInputElement).checked).toBe(false);
+    expect((missing.getByRole('checkbox') as HTMLInputElement).disabled).toBe(true);
+    expect(missing.getByText('Curve not recorded')).not.toBeNull();
+    expect((screen.getByRole('checkbox', { name: /^Draw All-period search, Gap \$0\.10/ }) as HTMLInputElement).checked).toBe(true);
+    expect((await within(screen.getByRole('region', { name: 'Run equity curves' })).findByRole('img')).getAttribute('aria-label')).toContain('1 run drawn');
+  });
+
   it('filters by what asked for the runs and sorts by a measure, better end first, keeping the ticks', async () => {
     const { service } = await renderRuns(studyDetail('awaiting_candidate'), (query) =>
       query.group === 'fold_test' ? runsPage({ total: 1, rows: [studyRun('run-fold', { label: 'Fold 1 test · Fold winner' })] }) : runsPage(),

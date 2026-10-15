@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { signal } from '@angular/core';
 import { fireEvent, render, screen, within } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
@@ -256,6 +257,74 @@ describe('AccountDeskTransactionHistoryComponent', () => {
     expect(screen.getByRole('button', { name: 'Acknowledge external order' })).toBeTruthy();
   });
 
+  it('says why the Clerk refused an acknowledgement, in its own words', async () => {
+    const acknowledgeExternalOrder = vi.fn().mockRejectedValue(new HttpErrorResponse({
+      status: 409,
+      error: {
+        reason: 'external_order_not_in_review',
+        message: 'This external order is no longer waiting for review.',
+        next_step: 'Reload the account’s history.',
+      },
+    }));
+    await renderHistory({
+      load: vi.fn().mockResolvedValue(undefined),
+      rows: signal([transaction({
+        transaction_origin: 'external',
+        order_ref: null,
+        external_order_id: 'alpaca-external-1',
+        lifecycle_state: 'review_required',
+      })]),
+    }, {
+      accountTransaction: vi.fn().mockResolvedValue({
+        ...transaction({
+          transaction_origin: 'external',
+          external_order_id: 'alpaca-external-1',
+          lifecycle_state: 'review_required',
+        }),
+        receipt: {},
+        events: [],
+        custody_timeline: null,
+      }),
+      acknowledgeExternalOrder,
+    });
+    fireEvent.click(screen.getByRole('button', { name: /view evidence for alpaca-external-1/i }));
+    fireEvent.input(screen.getByRole('textbox', { name: 'Operator' }), { target: { value: 'operator@example.test' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Acknowledge external order' }));
+
+    expect(await screen.findByText('This external order is no longer waiting for review.')).toBeTruthy();
+    expect(screen.queryByText(/Retry after reviewing the evidence/)).toBeNull();
+  });
+
+  it('says the generic retry line when nothing answered the acknowledgement', async () => {
+    const acknowledgeExternalOrder = vi.fn().mockRejectedValue(new Error('network down'));
+    await renderHistory({
+      load: vi.fn().mockResolvedValue(undefined),
+      rows: signal([transaction({
+        transaction_origin: 'external',
+        order_ref: null,
+        external_order_id: 'alpaca-external-1',
+        lifecycle_state: 'review_required',
+      })]),
+    }, {
+      accountTransaction: vi.fn().mockResolvedValue({
+        ...transaction({
+          transaction_origin: 'external',
+          external_order_id: 'alpaca-external-1',
+          lifecycle_state: 'review_required',
+        }),
+        receipt: {},
+        events: [],
+        custody_timeline: null,
+      }),
+      acknowledgeExternalOrder,
+    });
+    fireEvent.click(screen.getByRole('button', { name: /view evidence for alpaca-external-1/i }));
+    fireEvent.input(screen.getByRole('textbox', { name: 'Operator' }), { target: { value: 'operator@example.test' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Acknowledge external order' }));
+
+    expect(await screen.findByText(/Could not acknowledge this external order\. Retry after reviewing the evidence\./)).toBeTruthy();
+  });
+
   it('does not refresh a new lane when an old acknowledgement finishes late', async () => {
     let release = (): void => undefined;
     const pending = new Promise<void>((resolve) => {
@@ -337,6 +406,28 @@ describe('AccountDeskTransactionHistoryComponent', () => {
   /** #3180: after a recovery action the page re-reads the history. A failed
    * re-read left the last good rows under the old "History is current" banner
    * with no error — a stale read presented as current. */
+  it('says what an option ending was, in the backend’s own sentence, not "No request details recorded"', async () => {
+    await renderHistory({
+      rows: signal([transaction({
+        transaction_kind: 'option_ending',
+        order_ref: null,
+        option_event: {
+          contract: { expiry_ms: 1_789_000_000_000, occ_symbol: 'SPY260918C00585000', right: 'call', strike: '585', underlying: 'SPY' },
+          contracts: 1,
+          ended_on_ms: 1_789_000_000_000,
+          headline: 'SPY 585 call, 1 contract, expired worthless.',
+          held: 'bought',
+          kind: 'expired',
+          recorded_at_ms: 1_789_000_001_000,
+          simulated: false,
+        },
+      })]),
+    });
+
+    expect(screen.getByText('SPY 585 call, 1 contract, expired worthless.')).toBeTruthy();
+    expect(screen.queryByText('No request details recorded')).toBeNull();
+  });
+
   it('says a failed refresh failed and stops calling the kept rows current', async () => {
     let readFails = false;
     const accountTransactions = vi.fn(() => readFails

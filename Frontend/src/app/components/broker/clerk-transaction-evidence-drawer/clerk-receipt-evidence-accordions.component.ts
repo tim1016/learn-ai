@@ -1,3 +1,4 @@
+import { CurrencyPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 import {
   Accordion,
@@ -8,7 +9,7 @@ import {
 
 import type { ClerkTransactionDetail } from '../../../api/clerk-transaction-history.types';
 import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
-import { formatReceiptValue, ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
+import { formatReceiptLabel, formatReceiptValue, ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 
 interface ReceiptEntry {
@@ -27,6 +28,7 @@ interface ReceiptEntry {
     AccordionHeader,
     AccordionPanel,
     AssetIdentityComponent,
+    CurrencyPipe,
     ReceiptLabelPipe,
     TimestampDisplayComponent,
   ],
@@ -35,6 +37,24 @@ interface ReceiptEntry {
 })
 export class ClerkReceiptEvidenceAccordionsComponent {
   readonly detail = input.required<ClerkTransactionDetail>();
+  /** The instruction's side and order type, each only when it was recorded. */
+  protected readonly sideAndType = computed(() => {
+    const instruction = this.detail().order_instruction;
+    const parts = [instruction?.action, instruction?.order_type]
+      .filter((part): part is string => typeof part === 'string' && part !== '')
+      .map((part) => formatReceiptLabel(part));
+    return parts.length === 0 ? 'Not recorded' : parts.join(' · ');
+  });
+  /** The instrument an execution event recorded, when exactly one did: the instruction's symbol is no observed one. */
+  protected readonly executionSymbol = computed(() => {
+    const symbols = new Set(
+      this.detail().events
+        .filter((event) => event.event_kind.startsWith('execution_'))
+        .map((event) => event.receipt['symbol'])
+        .filter((symbol): symbol is string => typeof symbol === 'string' && symbol !== ''),
+    );
+    return symbols.size === 1 ? [...symbols][0] : null;
+  });
   protected readonly receiptEntries = computed(() => receiptEntries(this.detail().receipt));
   protected readonly trackEvent = (_: number, event: ClerkTransactionDetail['events'][number]): string => event.event_id;
   protected readonly trackReceipt = (_: number, entry: ReceiptEntry): string => entry.key;

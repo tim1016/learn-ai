@@ -15,12 +15,12 @@
 .golden-workbench__form > div, .golden-workbench__form > label:last-of-type, .golden-workbench__form > button { grid-column: 1 / -1; }
 .golden-workbench__form label { display: grid; gap: var(--space-1); color: var(--text-secondary); font-size: var(--fs-sm); }
 .golden-workbench__form em { color: var(--text-subtle); font-style: normal; }
-.golden-workbench input, .golden-workbench textarea { width: 100%; box-sizing: border-box; padding: var(--space-2); border: 1px solid var(--border-light); border-radius: var(--radius-sm); background: var(--bg-surface); color: var(--text); font: inherit; }
+.golden-workbench input, .golden-workbench textarea { width: 100%; box-sizing: border-box; padding: var(--space-2); border: 1px solid var(--border-light); border-radius: var(--radius-sm); background: var(--bg-surface); color: var(--text-primary); font: inherit; }
 .golden-workbench button { width: fit-content; padding: var(--space-2) var(--space-3); border: 1px solid var(--accent); border-radius: var(--radius-sm); background: var(--accent); color: var(--text-on-accent); font: inherit; font-weight: var(--fw-bold); cursor: pointer; }
 .golden-workbench button:disabled { opacity: .6; cursor: not-allowed; }
 .golden-workbench .golden-workbench__refresh { margin-left: auto; background: transparent; color: var(--accent); }
 .golden-workbench__catalog { display: flex; gap: var(--space-2); overflow-x: auto; }
-.golden-workbench__catalog button { display: grid; gap: var(--space-1); min-width: 12rem; text-align: left; background: var(--bg-elevated); color: var(--text); border-color: var(--border-light); }
+.golden-workbench__catalog button { display: grid; gap: var(--space-1); min-width: 12rem; text-align: left; background: var(--bg-elevated); color: var(--text-primary); border-color: var(--border-light); }
 .golden-workbench__catalog button.selected { border-color: var(--accent); background: var(--accent-faint); }
 .golden-workbench__catalog small { color: var(--text-secondary); }
 .golden-workbench__notice { color: var(--text-secondary); }

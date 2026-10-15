@@ -38,6 +38,7 @@ from app.broker.alpaca.clerk.sqlite.option_order_evidence import (
 )
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_uncertain, trade_port_folds_simulated_evidence
 from app.broker.alpaca.clerk.sqlite.repository import (
+    ClaimLostAfterBrokerIO,
     ClerkSqliteRepository,
     ExecutionLeaseLost,
     ExecutionLeaseLostAfterBrokerIO,
@@ -53,6 +54,20 @@ from app.options.quotes import HeldQuote
 _SEND_CLAIM_RENEWAL_S = ORDER_SEND_CLAIM_TTL_MS / 4_000
 _SEND_CLAIM_RETRY_S = 1.0
 logger = logging.getLogger(__name__)
+
+
+def _lost_after_broker_io(
+    lost: ExecutionLeaseLost | OperationClaimError, message: str
+) -> ExecutionLeaseLostAfterBrokerIO | ClaimLostAfterBrokerIO:
+    """The error for a lease, or a claim, found lost once a broker call was made.
+
+    A lease loss stays a lease loss. A claim loss stays an
+    ``OperationClaimError``: the sweep defers such an effect and moves on to
+    the next, and it is no reason to fail the pass.
+    """
+    if isinstance(lost, ExecutionLeaseLost):
+        return ExecutionLeaseLostAfterBrokerIO(message, account_id=lost.account_id)
+    return ClaimLostAfterBrokerIO(message)
 
 
 @dataclass(frozen=True)
@@ -75,14 +90,58 @@ class ClaimedBrokerIO:
             )
 
     def _renew_after_io(self) -> None:
-        """The broker already acted. A lease lost here is not "nothing
-        applied": the response cannot be folded (folding is itself a
+        """A broker call was made. A lease or a claim lost here is not
+        "nothing applied": the response cannot be folded (folding is itself a
         mutation the lost lease refuses), so the caller must report the
-        outcome unknown rather than release its key and invite a retry."""
+        outcome unknown rather than release its key and invite a retry. A
+        plain ``OperationClaimError`` would read as "another owner holds it,
+        nothing was sent", which is only true of a claim never acquired."""
         try:
             self._renew()
-        except ExecutionLeaseLost as lost:
-            raise ExecutionLeaseLostAfterBrokerIO(str(lost), account_id=lost.account_id) from lost
+        except (ExecutionLeaseLost, OperationClaimError) as lost:
+            failure = _lost_after_broker_io(lost, str(lost))
+            if isinstance(failure, ClaimLostAfterBrokerIO):
+                logger.warning(
+                    "ClaimLostAfterBrokerIO: the operation claim was lost after a broker call; "
+                    "the effect stays open for the sweep's lookup",
+                    extra={
+                        "action": "claim_lost_after_broker_io",
+                        "effect_operation_id": self.effect_operation_id,
+                    },
+                )
+            raise failure from lost
+
+    def _fold_unknown_of_cancelled_call(
+        self, *, order_ref: str, why: str, transition_kind: str = "ORDER_SUBMIT_UNCERTAIN"
+    ) -> None:
+        """Fold the unknown outcome of a call cancelled while its transport may still complete.
+
+        The caller re-raises its ``CancelledError``. A lease or claim already
+        gone refuses the fold, and that refusal must not replace the
+        cancellation: a task whose cancel surfaces as another error is not
+        cancelled, and wedges the task group above it. The order's effect
+        stays open, so the reconciliation sweep's lookup settles it.
+        """
+        try:
+            self._renew()
+            fold_uncertain(
+                self.repo,
+                effect_operation_id=self.effect_operation_id,
+                order_ref=order_ref,
+                why=why,
+                transition_kind=transition_kind,
+            )
+        except (ExecutionLeaseLost, OperationClaimError):
+            logger.error(
+                "alpaca broker call was cancelled after its lease or operation claim was lost; "
+                "its unknown outcome is not folded",
+                extra={
+                    "action": "claimed_io_cancelled_unfolded",
+                    "effect_operation_id": self.effect_operation_id,
+                    "order_ref": order_ref,
+                },
+                exc_info=True,
+            )
 
     async def submit(self, leg: BrokerOrderLeg | OptionOrderRequest, *, client_order_id: str) -> BrokerOrder:
         """Send one instruction once: a leg in shares, or one option order, of one contract or of several legs (ADR 0076).
@@ -120,6 +179,7 @@ class ClaimedBrokerIO:
             return None
 
         renewal = asyncio.create_task(keep_claim())
+        cancelled = False
         try:
             try:
                 if isinstance(leg, MultiLegOptionOrderRequest):
@@ -129,27 +189,26 @@ class ClaimedBrokerIO:
                 else:
                     observed = await self.trade.submit(leg, client_order_id=client_order_id)
             except asyncio.CancelledError:
-                self._renew()
-                fold_uncertain(
-                    self.repo,
-                    effect_operation_id=self.effect_operation_id,
+                cancelled = True
+                self._fold_unknown_of_cancelled_call(
                     order_ref=client_order_id,
                     why="Broker submission was cancelled while its transport may still complete.",
                 )
                 raise
             except BrokerError:
-                self._renew()
+                # The call was made, and a transport error leaves its outcome unknown.
+                self._renew_after_io()
                 raise
             self._renew_after_io()
             return observed
         finally:
             finished.set()
             claim_loss = await renewal
-            if claim_loss is not None:
-                account_id = claim_loss.account_id if isinstance(claim_loss, ExecutionLeaseLost) else None
-                raise ExecutionLeaseLostAfterBrokerIO(
+            # A cancelled send stays a cancellation; its lost claim is logged by the renewal and the cancel handler.
+            if claim_loss is not None and not cancelled:
+                raise _lost_after_broker_io(
+                    claim_loss,
                     f"effect_operation {self.effect_operation_id!r} lost its claim during broker submission",
-                    account_id=account_id,
                 ) from claim_loss
 
     async def _submit_option_order(self, order: SingleOptionOrderRequest, *, client_order_id: str) -> BrokerOrder:
@@ -276,17 +335,15 @@ class ClaimedBrokerIO:
         try:
             await self.trade.cancel(broker_order_id)
         except asyncio.CancelledError:
-            self._renew()
-            fold_uncertain(
-                self.repo,
-                effect_operation_id=self.effect_operation_id,
+            self._fold_unknown_of_cancelled_call(
                 order_ref=order_ref,
                 why="Broker cancellation was cancelled while its transport may still complete.",
                 transition_kind="ORDER_CANCEL_UNCERTAIN",
             )
             raise
         except BrokerError:
-            self._renew()
+            # The call was made, and a transport error leaves its outcome unknown.
+            self._renew_after_io()
             raise
         self._renew_after_io()
 

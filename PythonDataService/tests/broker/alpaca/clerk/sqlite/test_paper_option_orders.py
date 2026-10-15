@@ -54,6 +54,7 @@ from app.schemas.deployment_budget import DeployBudgetConsent
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.market_liveness import QUOTE_MAX_AGE_MS
 from app.services.session_authority import et_minute_of_day_ms
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from tests._helpers.market_quotes import publish_quotes
 from tests.broker.alpaca.clerk.sqlite.conftest import documented_option_listing
 from tests.broker.alpaca.clerk.sqlite.resting_entry_harness import (
@@ -933,6 +934,17 @@ async def test_a_wait_asked_to_run_exactly_a_week_is_taken(paper: PaperOptions) 
     )
 
     assert (settled.settlement, settled.standing, settled.recorded) == (EntrySettlement.ENTERED, EntryStanding.FILLED, True)
+
+
+async def test_a_limit_past_the_last_admissible_instant_is_refused_before_the_books_are_read(
+    paper: PaperOptions,  # noqa: F811
+) -> None:
+    # A decision with no entry on the books: only the check at the door, which runs before any read, can name the
+    # limit. Past it, the same limit would fail inside the write fence when the settlement is built.
+    with pytest.raises(ValueError, match="until_ms"):
+        await paper.clerk.await_entry_outcome(
+            strategy_instance_id="a", decision_id="never-entered", until_ms=MAX_TIMESTAMP_MS + 1
+        )
 
 
 @pytest.mark.parametrize("behind_the_clock_ms", [1, 0], ids=["a millisecond past", "the clock's own moment"])

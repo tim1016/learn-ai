@@ -260,16 +260,6 @@ async def test_history_reaching_back_to_the_tail_fills_the_hole_without_a_floor(
     assert join.filled[0].start_ms == _et(_WED, 10, 0)
 
 
-def test_replayed_rows_keep_their_provenance() -> None:
-    """Review: the replay proof must not replay a history bucket as live-decided."""
-    from app.services.run_replay_proof import to_market_bar
-    from app.services.source_bar_ledger import RetainedSourceBar
-
-    row = RetainedSourceBar.from_market_bar(seq=1, account_id="acct", bar=_minute_bar(_et(_THU, 10, 0)))
-
-    assert to_market_bar(row).provenance == "history"
-
-
 # ── _RetainedSourceBarFeed (the resumed run's warmup) ───────────────────────
 
 

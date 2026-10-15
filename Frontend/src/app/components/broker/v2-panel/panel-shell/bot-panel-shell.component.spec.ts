@@ -1055,8 +1055,14 @@ describe('BotPanelShellComponent', () => {
       'sid-001',
       HISTORICAL_RECOVERY_PLAN,
     );
-    expect(mockService.confirmHistoricalExecutionRecovery.mock.calls[0][0])
-      .toBe(mockService.prepareHistoricalExecutionRecovery.mock.calls[0][0]);
+    // The fleet ledger pins an idempotency key to one operation: confirm must not reuse prepare's,
+    // and must address the same lane the operator was shown.
+    const prepared = mockService.prepareHistoricalExecutionRecovery.mock.calls[0][0];
+    const confirmed = mockService.confirmHistoricalExecutionRecovery.mock.calls[0][0];
+    expect(prepared.idempotencyKey).toEqual(expect.any(String));
+    expect(confirmed.idempotencyKey).toEqual(expect.any(String));
+    expect(confirmed.idempotencyKey).not.toBe(prepared.idempotencyKey);
+    expect({ ...confirmed, idempotencyKey: null }).toEqual({ ...prepared, idempotencyKey: null });
     expect(screen.getByText(/recorded exact evidence without changing economic totals/i)).toBeTruthy();
     expect(mockService.runBotAction).not.toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1511,6 +1517,28 @@ describe('BotPanelShellComponent', () => {
       expect(mockService.executeExtendedSafeFlatten).not.toHaveBeenCalled();
       expect(screen.getByRole('region', { name: 'Prepared safe-flatten reduction plan' }).textContent)
         .toContain('No order has been submitted.');
+    });
+
+    it('stops saying Pricing… when the Clerk’s price check fails, and names why beside the ticket', async () => {
+      const observedAtMs = Date.now();
+      mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
+      brokersMock.checkSqliteRecoveryActionInFull.mockImplementation(async () => EXTENDED_CHECK_WITH_READING(observedAtMs));
+      const fixture = await prepareFlatten();
+      const ticket = await screen.findByRole('region', { name: 'Extended-hours flatten limit order' });
+      // From here the Clerk cannot price the operator's own limit.
+      brokersMock.checkSqliteRecoveryActionInFull.mockRejectedValue(new HttpErrorResponse({
+        status: 503,
+        error: { detail: { message: 'The Clerk could not read its quote.', why: null, next_action: null } },
+      }));
+      fireEvent.input(within(ticket).getByLabelText('Limit price (USD)'), { target: { value: '478.50' } });
+
+      fireEvent.click(within(ticket).getByRole('button', { name: 'Review limit order' }));
+      await settle(fixture);
+
+      expect(within(ticket).queryByRole('button', { name: 'Pricing…' })).toBeNull();
+      expect((within(ticket).getByRole('button', { name: 'Review limit order' }) as HTMLButtonElement).disabled).toBe(false);
+      expect(screen.getByText(/Quote refresh failed: The Clerk could not read its quote\./)).toBeTruthy();
+      expect(mockService.executeExtendedSafeFlatten).not.toHaveBeenCalled();
     });
 
     it('closes the ticket and fails the Sell step when a refresh finds the plan gone', async () => {

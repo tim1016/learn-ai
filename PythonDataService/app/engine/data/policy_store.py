@@ -58,22 +58,18 @@ def policy_key(*, source: BarSource, adjusted: bool) -> str:
 
 
 def resolve_data_roots(*, source: BarSource, adjusted: bool) -> list[Path]:
-    """Return the ordered reader roots for a policy: [reference?, policy cache].
+    """Return the ordered reader roots for a policy: always ``[lake root]``.
 
-    Reference mount comes first so the bit-exact SPY fixture always wins
-    over anything materialized into the cache for the same date range.
-    The policy cache root is created if missing. Both engines and the
-    bars endpoint must resolve roots through this single function so
-    they always observe the same bytes.
-
-    When the flag is on, the lake is the market-data authority and the sole
-    root: its tree is already LEAN-format, so the readers are unchanged. The
-    reference mount is deliberately dropped rather than stacked in front — a
-    run must be able to say which bytes it consumed, and a fixture silently
-    outranking the lake would make the manifest fingerprint recorded on the
-    run a lie. The policy key does not carry over either: the pre-lake cache
-    keys its subtree by ``source`` *and* adjustment, while the lake is
-    single-source and keys only by adjustment (``path_policy.resolve_lake_root``).
+    The lake is the market-data authority and the sole root (#1893 retired
+    the flag that selected it against the pre-lake store): its tree is already
+    LEAN-format, so the readers are unchanged. No reference mount is stacked
+    in front — a run must be able to say which bytes it consumed, and a
+    fixture silently outranking the lake would make the manifest fingerprint
+    recorded on the run a lie. Both engines and the bars endpoint resolve
+    roots through this single function so they always observe the same bytes.
+    The lake root is created if missing. The policy key does not select it:
+    the lake is single-source and keys only by adjustment
+    (``path_policy.resolve_lake_root``).
 
     ``adjusted`` selects the lake root rather than being refused by it. It
     used to raise ``LakeAdjustmentUnsupportedError`` here, because the lake

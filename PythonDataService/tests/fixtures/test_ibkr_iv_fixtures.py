@@ -15,8 +15,8 @@ calls more than puts.
 Run standalone (no FastAPI app needed):
   python -m pytest tests/fixtures/test_ibkr_iv_fixtures.py -v --noconftest
 
-The test suite skips automatically if the fixture has not yet been generated
-(status=planned in manifest, no arrow files on disk). Generate it by:
+A missing fixture file fails the suite (the manifest marks it active and
+test_golden_manifest.py checks the files). Regenerate it by:
   1. python scripts/capture_ibkr_snapshot.py        (requires IBKR Gateway)
   2. python scripts/generate_fixtures.py --id OPT-IB-002 --justification '...'
   3. Update manifest.json active_version and status, commit the fixture files.
@@ -28,7 +28,6 @@ import sys
 from pathlib import Path
 
 import pyarrow.ipc as ipc
-import pytest
 from scipy.stats import norm
 
 _SVC_ROOT = Path(__file__).parent.parent.parent
@@ -39,13 +38,6 @@ from golden_support.registry import default as registry  # noqa: E402
 from app.volatility.solver import SolveStatus, implied_volatility  # noqa: E402
 
 _FIXTURE_ID = "OPT-IB-002"
-_FIXTURE_AVAILABLE = registry.exists_on_disk(_FIXTURE_ID)
-
-pytestmark = pytest.mark.skipif(
-    not _FIXTURE_AVAILABLE,
-    reason=f"Fixture {_FIXTURE_ID} not yet generated (status=planned). "
-    "Run scripts/capture_ibkr_snapshot.py then scripts/generate_fixtures.py.",
-)
 
 _OK_STATUSES = {
     SolveStatus.NEWTON_OK,
@@ -74,11 +66,10 @@ def _bsm_price(spot: float, strike: float, ttm: float, rate: float, dividend: fl
 
 
 def _load() -> tuple:
-    files = registry.active_files(_FIXTURE_ID)
-    fixture_dir = registry.fixture_dir(_FIXTURE_ID)
+    # ``resolve`` raises if a file is missing: a deleted fixture fails here, it does not skip.
     mf = registry._manifest.by_id(_FIXTURE_ID)
-    inp = ipc.open_file(fixture_dir / files.input).read_all()
-    out = ipc.open_file(fixture_dir / files.output).read_all()
+    inp = ipc.open_file(registry.resolve(_FIXTURE_ID, "input")).read_all()
+    out = ipc.open_file(registry.resolve(_FIXTURE_ID, "output")).read_all()
     return inp, out, mf.tolerance.atol, mf.tolerance.rtol
 
 

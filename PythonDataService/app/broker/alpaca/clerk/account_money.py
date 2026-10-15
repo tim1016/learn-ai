@@ -68,7 +68,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Decimal, Inexact
 from typing import Literal
 
 from app.broker.alpaca.clerk.budgets import AccountBudget, DeploymentBudget, ReleaseAtStop
@@ -79,20 +79,27 @@ from app.broker.alpaca.clerk.money import (
     cents_spendable,
     display_cents,
     money_context,
+    normalize_money,
 )
 
 FULL_BAR_BPS = 10_000
+_SHARE_STEP = Decimal("1e-9")
 
 SegmentKind = Literal["bot", "stopped", "outside", "charges", "settling", "new", "free"]
 
 
 def quantity_text(quantity: float | Decimal) -> str:
-    """A share count as the owner reads it: ``4``, ``0.125`` -- never ``4.000000`` or ``1e+06``.
+    """A share count as the owner reads it: ``4``, ``0.125``, ``1234567`` -- never ``4.000000`` or ``1e+06``.
 
-    A float position is read to six significant digits first, so storage
-    noise (``0.30000000000000004``) never reaches the owner.
+    Exact to nine decimal places, the broker's finest fractional-share step
+    and ``POSITION_QTY_EPSILON`` (ADR 0036), the smallest quantity custody
+    reads as exposure. A float is read by its shortest repr, so storage noise
+    (``0.30000000000000004``) rounds away below that step, and whole counts
+    of any size print in full.
     """
-    return f"{Decimal(f'{quantity:g}').normalize():f}"
+    with money_context() as context:
+        context.traps[Inexact] = False
+        return f"{normalize_money(quantity).quantize(_SHARE_STEP, rounding=ROUND_HALF_EVEN).normalize():f}"
 
 
 def holdings_text(exposure: Mapping[str, float | Decimal]) -> str:

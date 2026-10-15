@@ -18,12 +18,14 @@ Fixture layout (trade_updates.json):
 
 from __future__ import annotations
 
+import logging
 import math
 from typing import Any
 
 import pytest
 
 from app.broker.alpaca.adapter import from_alpaca_trade_update, rfc3339_to_ms
+from app.broker.alpaca.clerk.sqlite.facts import _require_finite_positive
 from tests.broker.alpaca.conftest import AlpacaFixtureLoader
 
 # Broker figures are float display values, not ported math, so a tight-but-explicit
@@ -188,3 +190,126 @@ def test_a_fill_that_lists_legs_but_is_not_a_multi_leg_order_still_fails_fast() 
                 "order": {"order_class": "", "symbol": "SPY261016C00771000"},
             }
         )
+
+
+@pytest.mark.parametrize("event", ["fill", "partial_fill"])
+@pytest.mark.parametrize(
+    "slice_figures",
+    [
+        {"qty": "1"},
+        {"price": "100.25"},
+        {},
+        {"qty": None, "price": "100.25"},
+        {"qty": "", "price": ""},
+        {"qty": "0", "price": "100.25"},
+        {"qty": "-1", "price": "100.25"},
+        {"qty": "1", "price": "0"},
+        {"qty": "1", "price": "-100.25"},
+    ],
+    ids=[
+        "no-price",
+        "no-qty",
+        "neither",
+        "null-qty",
+        "blank-figures",
+        "zero-qty",
+        "negative-qty",
+        "zero-price",
+        "negative-price",
+    ],
+)
+def test_a_fill_naming_an_execution_must_state_its_slice(event: str, slice_figures: dict[str, Any]) -> None:
+    """The Clerk's exact-execution append takes no slice without a positive quantity and price (#3216).
+
+    Raised out of the evidence sink that refusal ends the stream, which
+    reconnects and is fed the same frame again. The adapter refuses the frame
+    first, so the consumer counts it as a parse error and carries on.
+    """
+    with pytest.raises(ValueError, match="must state its quantity and price"):
+        from_alpaca_trade_update(
+            {
+                "event": event,
+                "timestamp": "2026-07-24T14:42:50.129256359Z",
+                "execution_id": "exec-no-slice",
+                **slice_figures,
+            }
+        )
+
+
+@pytest.mark.parametrize("figure", ["NaN", "Infinity", "-inf", float("nan"), float("inf")])
+@pytest.mark.parametrize("field", ["price", "qty"])
+def test_a_fill_slice_that_is_not_a_finite_number_is_refused(field: str, figure: object) -> None:
+    """``float("NaN")`` parses; a slice carrying one would be credited as a fill (#3216)."""
+    payload = {
+        "event": "partial_fill",
+        "timestamp": "2026-07-24T14:42:50.129256359Z",
+        "execution_id": "exec-not-finite",
+        "price": "100.25",
+        "qty": "1",
+        field: figure,
+    }
+
+    with pytest.raises(ValueError, match="must be finite"):
+        from_alpaca_trade_update(payload)
+
+
+@pytest.mark.parametrize("event", ["new", "canceled", "rejected", "pending_new"])
+def test_an_event_that_is_not_a_fill_still_carries_no_slice(event: str) -> None:
+    """The slice rule is a fill's: every other lifecycle event maps with no execution figures (#3216)."""
+    mapped = from_alpaca_trade_update({"event": event, "timestamp": "2026-07-24T14:42:50Z"})
+
+    assert (mapped.price, mapped.quantity, mapped.execution_id) == (None, None, None)
+
+
+@pytest.mark.parametrize("event", ["canceled", "expired", "new", "rejected"])
+@pytest.mark.parametrize("field", ["price", "qty"])
+def test_a_lifecycle_event_with_a_figure_that_is_not_finite_maps_with_it_absent(
+    event: str, field: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A figure no consumer of a ``canceled`` frame reads must not drop the frame's lifecycle (#3216).
+
+    A cancel dropped as a parse error is a cancel the Clerk never sees.
+    """
+    with caplog.at_level(logging.WARNING, logger="app.broker.alpaca.adapter"):
+        mapped = from_alpaca_trade_update(
+            {"event": event, "timestamp": "2026-07-24T14:44:00Z", "price": "100.0", "qty": "1", field: "NaN"}
+        )
+
+    assert mapped.event_type == event
+    assert (mapped.price if field == "price" else mapped.quantity) is None
+    assert (mapped.quantity if field == "price" else mapped.price) is not None
+    (record,) = caplog.records
+    assert (record.action, record.field) == ("alpaca_optional_figure_not_finite", field)
+
+
+# Values the store's slice validation and the adapter's fill rule must agree on. A fill the adapter takes
+# that the store refuses is raised out of the evidence sink and ends the stream (#3216).
+_SLICE_FIGURES: list[object] = [
+    1.0, 0.5, 1e-9, 1e300, 100, 0, 0.0, -0.0, -1.0, -100, float("nan"), float("inf"), float("-inf"), True, False,
+]
+
+
+@pytest.mark.parametrize("figure", _SLICE_FIGURES, ids=repr)
+@pytest.mark.parametrize("field", ["price", "qty"])
+def test_the_adapters_fill_slice_rule_is_the_stores_finite_positive_rule(field: str, figure: object) -> None:
+    """Parity: ``adapter.from_alpaca_trade_update`` takes a fill's figure iff ``facts._require_finite_positive`` does."""
+    frame = {
+        "event": "fill",
+        "timestamp": "2026-07-24T14:42:50.129256359Z",
+        "execution_id": "exec-parity",
+        "price": "100.25",
+        "qty": "1",
+        field: figure,
+    }
+    try:
+        _require_finite_positive(figure, field=field)  # type: ignore[arg-type]
+        store_takes_it = True
+    except ValueError:
+        store_takes_it = False
+    try:
+        from_alpaca_trade_update(frame)
+        adapter_takes_it = True
+    except (TypeError, ValueError):
+        adapter_takes_it = False
+
+    assert adapter_takes_it is store_takes_it

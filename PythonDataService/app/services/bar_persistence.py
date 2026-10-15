@@ -115,6 +115,18 @@ def _ms_to_date(ms: int) -> date:
     return datetime.fromtimestamp(ms / 1000.0, tz=UTC).date()
 
 
+def utc_dates_for_window(from_ms: int, to_ms: int) -> list[date]:
+    """The UTC dates, oldest first, whose files can hold a bar of ``[from_ms, to_ms)``.
+
+    Files are partitioned by the UTC date of a bar's ``start_ms``, so a window
+    that is a New York day (``[ET midnight, next ET midnight)``) spans two of
+    them.
+    """
+    start = _ms_to_date(from_ms)
+    end = _ms_to_date(max(from_ms, to_ms - 1))
+    return [date.fromordinal(ordinal) for ordinal in range(start.toordinal(), end.toordinal() + 1)]
+
+
 def _now_ms_utc() -> int:
     """Wall-clock ``now`` in int64 ms UTC. Used for quarantine /
     compaction suffixes so the file name is monotonic."""
@@ -401,4 +413,5 @@ __all__ = [
     "BarPersistenceError",
     "BarPersistenceRegressionError",
     "Counters",
+    "utc_dates_for_window",
 ]

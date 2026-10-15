@@ -58,6 +58,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from app.jobs.progress import JobCancelled
 from app.research.golden_search.chance import (
+    CLEAR,
     CONVENTION,
     MEAN_BLOCK_SESSIONS,
     REPLICATIONS,
@@ -321,7 +322,7 @@ def fit_to_fit_reading(
     sides: list[SessionSeries] = []
     for side in (first, second):
         try:
-            admitted = admit_run(side["metrics"], side["detail"], window)
+            admitted = admit_run(side["metrics"], side["detail"], window, sessions_label="final")
         except JobCancelled:
             raise
         except Exception as exc:
@@ -347,10 +348,10 @@ def fit_to_fit_reading(
             counts[name] += value
     basis = {
         "schema_version": SCHEMA_FIT_TO_FIT,
-        "convention": "stationary-bootstrap/v1",
+        "convention": CONVENTION,
         "replications": REPLICATIONS,
         "mean_block_sessions": MEAN_BLOCK_SESSIONS,
-        "thresholds": {"clear": 0.95},
+        "thresholds": {"clear": CLEAR},
         "objective": {"measure": objective, "label": OBJECTIVES[objective][0], "units": OBJECTIVES[objective][1]},
         "seed": {"inputs": seed_inputs, "value": seed},
         "source": {

@@ -96,6 +96,15 @@ class RunSetupCannotBeRead(ValueError):
         super().__init__(f"the setup stored with run {run_id} cannot be read: {reason}")
 
 
+class RunFiguresCannotBeRead(ValueError):
+    """A complete run's stored summary, ladder or tolerance no longer reads: a key is missing or is not what it was
+    written as. ``reason`` says which, in a sentence."""
+
+    def __init__(self, run_id: int, reason: str) -> None:
+        self.reason = reason
+        super().__init__(f"the figures stored with run {run_id} cannot be read: {reason}")
+
+
 @dataclass(frozen=True)
 class FailureItem:
     """One thing that failed: a session (by its open) or the run as a whole (``None``), a code and plain words."""
@@ -479,6 +488,8 @@ async def get_run(conn: asyncpg.Connection, run_id: int, *, is_live: IsLive) -> 
     """One run with its setup and, when it is complete, its summary, ladder and tolerance; ``None`` when there is none.
 
     A run whose stored setup no longer validates still opens, with its figures and no setup (see ``StoredRun``).
+    ``RunFiguresCannotBeRead`` for a complete run whose stored figures are missing a key or hold a value that is not
+    what was written.
     """
     row = await conn.fetchrow(
         f"SELECT {_RUN_COLUMNS}, setup_json::text AS setup_json, summary_json::text AS summary_json, "
@@ -490,11 +501,17 @@ async def get_run(conn: asyncpg.Connection, run_id: int, *, is_live: IsLive) -> 
         return None
     figures = None
     if row["summary_json"] is not None:
-        figures = RunFigures(
-            summary=run_json.summary_from_json(json.loads(row["summary_json"])),
-            slippage=run_json.slippage_from_json(json.loads(row["slippage_json"])),
-            slippage_tolerance=run_json.tolerance_from_json(json.loads(row["tolerance_json"])),
-        )
+        try:
+            figures = RunFigures(
+                summary=run_json.summary_from_json(json.loads(row["summary_json"])),
+                slippage=run_json.slippage_from_json(json.loads(row["slippage_json"])),
+                slippage_tolerance=run_json.tolerance_from_json(json.loads(row["tolerance_json"])),
+            )
+        except KeyError as exc:
+            raise RunFiguresCannotBeRead(run_id, f"a stored figure is missing: {exc.args[0]!r}") from exc
+        except (TypeError, ValueError, ArithmeticError) as exc:
+            reason = f"a stored figure is not what it was written as ({type(exc).__name__}: {exc})"
+            raise RunFiguresCannotBeRead(run_id, reason) from exc
     saved = read_stored_setup(f"run {run_id}", row["setup_json"], row["created_at_ms"])
     return StoredRun(
         record=_record(row, is_live),

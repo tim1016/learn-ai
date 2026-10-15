@@ -14140,6 +14140,7 @@
           },
           "source_run_id": {
             "exclusiveMinimum": 0.0,
+            "maximum": 2147483647.0,
             "title": "Source Run Id",
             "type": "integer"
           }
@@ -19662,6 +19663,8 @@
             "type": "string"
           },
           "reviewed_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
             "title": "Reviewed At Ms",
             "type": "integer"
           },
@@ -26203,11 +26206,15 @@
           },
           "testMonths": {
             "default": 2,
+            "maximum": 60.0,
+            "minimum": 1.0,
             "title": "Testmonths",
             "type": "integer"
           },
           "trainingMonths": {
             "default": 6,
+            "maximum": 120.0,
+            "minimum": 1.0,
             "title": "Trainingmonths",
             "type": "integer"
           },
@@ -28185,7 +28192,16 @@
             "type": "string"
           },
           "target": {
-            "description": "An evidence tab of the Compare step (trades, months), a Compare chart (neighbor-tornado, cost-stress) or a study step (search, test, decision).",
+            "description": "An evidence tab of the Compare step (trades), a Compare chart (neighbor-tornado, cost-stress, without-best) or a study step (search, test, decision).",
+            "enum": [
+              "trades",
+              "search",
+              "test",
+              "decision",
+              "neighbor-tornado",
+              "cost-stress",
+              "without-best"
+            ],
             "title": "Target",
             "type": "string"
           }
@@ -28241,6 +28257,15 @@
         "description": "One kind of evidence for a candidate; a result the study did not record is ``missing``, never ``meets``.",
         "properties": {
           "key": {
+            "enum": [
+              "development_activity",
+              "recent_activity",
+              "test_over_time",
+              "neighbors",
+              "stress",
+              "concentration",
+              "final_exposure"
+            ],
             "title": "Key",
             "type": "string"
           },
@@ -29269,6 +29294,8 @@
       "GoldenValidationResponse": {
         "properties": {
           "designated_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
             "title": "Designated At Ms",
             "type": "integer"
           },
@@ -31348,6 +31375,30 @@
           "last_transition_ms"
         ],
         "title": "IbkrConnectionHealth",
+        "type": "object"
+      },
+      "IbkrExpirationsResponse": {
+        "description": "Listed option expiries for one equity symbol, anchored in UTC milliseconds.",
+        "properties": {
+          "expirations_ms": {
+            "items": {
+              "exclusiveMinimum": 0.0,
+              "maximum": 253402300799999.0,
+              "type": "integer"
+            },
+            "title": "Expirations Ms",
+            "type": "array"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "expirations_ms"
+        ],
+        "title": "IbkrExpirationsResponse",
         "type": "object"
       },
       "IbkrStrikeList": {
@@ -45154,6 +45205,7 @@
             "items": {
               "type": "string"
             },
+            "maxItems": 60,
             "title": "Contracts",
             "type": "array"
           },
@@ -46060,6 +46112,14 @@
           "time_to_expiry_years": {
             "title": "Time To Expiry Years",
             "type": "number"
+          },
+          "unavailable_models": {
+            "description": "Each requested model that has no curve in `models`, with why; empty when every model ran",
+            "items": {
+              "$ref": "#/components/schemas/PricingModelUnavailable"
+            },
+            "title": "Unavailable Models",
+            "type": "array"
           }
         },
         "required": [
@@ -46096,6 +46156,26 @@
         "title": "PricingModelCurve",
         "type": "object"
       },
+      "PricingModelUnavailable": {
+        "description": "A model the comparison asked for and has no curve for.",
+        "properties": {
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why in the service's own words; never the engine's error text",
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model",
+          "reason"
+        ],
+        "title": "PricingModelUnavailable",
+        "type": "object"
+      },
       "PricingPointResult": {
         "description": "Single data point for one model at one spot price.",
         "properties": {
@@ -46112,20 +46192,44 @@
             "type": "number"
           },
           "rho": {
-            "title": "Rho",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Per 1% rate move; null when the engine does not provide it (Monte Carlo has no rho)",
+            "title": "Rho"
           },
           "spot": {
             "title": "Spot",
             "type": "number"
           },
           "theta": {
-            "title": "Theta",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Per calendar day; null when the engine does not provide it (Monte Carlo has no theta)",
+            "title": "Theta"
           },
           "vega": {
-            "title": "Vega",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Per 1% IV move; null when the engine does not provide it (Monte Carlo has no vega)",
+            "title": "Vega"
           }
         },
         "required": [
@@ -53687,9 +53791,11 @@
         "type": "object"
       },
       "StopRunRequest": {
+        "additionalProperties": false,
         "description": "``lifecycle_run_id`` is required (corrective foundation slice): Stop\nis no longer resolved from the currently active run, since that made a\nlost response unrecoverable \u2014 see ADR 0035's binding annex \u00a73a.",
         "properties": {
           "lifecycle_run_id": {
+            "maxLength": 512,
             "minLength": 1,
             "title": "Lifecycle Run Id",
             "type": "string"
@@ -53697,6 +53803,7 @@
           "operator_reason": {
             "anyOf": [
               {
+                "maxLength": 512,
                 "type": "string"
               },
               {
@@ -61921,7 +62028,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Broker-neutral clerk fleet directory (\u00a710.1)",
+        "summary": "Broker-neutral clerk fleet directory",
         "tags": [
           "broker-clerks"
         ]
@@ -62257,6 +62364,7 @@
             "name": "symbol",
             "required": true,
             "schema": {
+              "pattern": "^[A-Z]{1,5}(?:[.-][A-Z])?$",
               "title": "Symbol",
               "type": "string"
             }
@@ -62283,8 +62391,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "title": "Response List Expirations Endpoint Api Broker Expirations  Symbol  Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/IbkrExpirationsResponse"
                 }
               }
             },
@@ -62303,6 +62410,7 @@
         },
         "summary": "List Expirations Endpoint",
         "tags": [
+          "broker",
           "broker"
         ]
       }
@@ -62353,6 +62461,7 @@
         },
         "summary": "Broker Health",
         "tags": [
+          "broker",
           "broker"
         ]
       }
@@ -62367,6 +62476,7 @@
             "name": "symbol",
             "required": true,
             "schema": {
+              "pattern": "^[A-Z]{1,5}(?:[.-][A-Z])?$",
               "title": "Symbol",
               "type": "string"
             }
@@ -62395,6 +62505,7 @@
                   "items": {
                     "type": "number"
                   },
+                  "maxItems": 50,
                   "type": "array"
                 },
                 {
@@ -62456,103 +62567,7 @@
         },
         "summary": "Option Chain Stream",
         "tags": [
-          "broker"
-        ]
-      }
-    },
-    "/api/broker/option-contracts/{symbol}": {
-      "get": {
-        "description": "Slice 1F \u2014 IBKR ``reqContractDetails`` qualification for the\ncockpit's option leg picker. Returns the rich ``OptionContractMatch``\n(with ``con_id``, ``local_symbol``, etc.) that the picker persists\nalongside the declared leg. ``conId`` is the broker-canonical\nidentity the Slice 4 resolver will key against.",
-        "operationId": "option_contracts_endpoint_api_broker_option_contracts__symbol__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "symbol",
-            "required": true,
-            "schema": {
-              "title": "Symbol",
-              "type": "string"
-            }
-          },
-          {
-            "description": "An option expiry: 16:00 New York time on the expiry date, as int64 ms UTC.",
-            "in": "query",
-            "name": "expiry_ms",
-            "required": true,
-            "schema": {
-              "description": "An option expiry: 16:00 New York time on the expiry date, as int64 ms UTC.",
-              "exclusiveMinimum": 0,
-              "maximum": 253402300799999,
-              "title": "Expiry Ms",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Option strike.",
-            "in": "query",
-            "name": "strike",
-            "required": true,
-            "schema": {
-              "description": "Option strike.",
-              "exclusiveMinimum": 0.0,
-              "title": "Strike",
-              "type": "number"
-            }
-          },
-          {
-            "description": "C for call, P for put.",
-            "in": "query",
-            "name": "right",
-            "required": true,
-            "schema": {
-              "description": "C for call, P for put.",
-              "pattern": "^[CP]$",
-              "title": "Right",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "title": "Response Option Contracts Endpoint Api Broker Option Contracts  Symbol  Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Option Contracts Endpoint",
-        "tags": [
+          "broker",
           "broker"
         ]
       }
@@ -62567,6 +62582,7 @@
             "name": "symbol",
             "required": true,
             "schema": {
+              "pattern": "^[A-Z]{1,5}(?:[.-][A-Z])?$",
               "title": "Symbol",
               "type": "string"
             }
@@ -62680,6 +62696,7 @@
         },
         "summary": "Option Surface Stream",
         "tags": [
+          "broker",
           "broker"
         ]
       }
@@ -62744,6 +62761,7 @@
             "name": "symbol",
             "required": true,
             "schema": {
+              "pattern": "^[A-Z]{1,5}(?:[.-][A-Z])?$",
               "title": "Symbol",
               "type": "string"
             }
@@ -62802,6 +62820,7 @@
         },
         "summary": "List Strikes Endpoint",
         "tags": [
+          "broker",
           "broker"
         ]
       }
@@ -68065,7 +68084,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "One broker's clerk lanes (\u00a710.2)",
+        "summary": "One broker's clerk lanes",
         "tags": [
           "broker-clerks"
         ]
@@ -75796,6 +75815,372 @@
         ]
       }
     },
+    "/api/brokers/{broker}/clerks/{clerk_id}/market-data/ibkr/expirations/{symbol}": {
+      "get": {
+        "description": "Fleet-routed GET /market-data/ibkr/expirations/{symbol} (market_status_read).",
+        "operationId": "fleet_ibkr_expirations_read_api_brokers__broker__clerks__clerk_id__market_data_ibkr_expirations__symbol__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "symbol",
+            "required": true,
+            "schema": {
+              "title": "Symbol",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Ibkr Expirations Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/market-data/ibkr/health": {
+      "get": {
+        "description": "Fleet-routed GET /market-data/ibkr/health (market_status_read).",
+        "operationId": "fleet_ibkr_health_read_api_brokers__broker__clerks__clerk_id__market_data_ibkr_health_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Ibkr Health Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/market-data/ibkr/option-chain/{symbol}": {
+      "get": {
+        "description": "Fleet-routed GET /market-data/ibkr/option-chain/{symbol} (stream_subscribe).",
+        "operationId": "fleet_ibkr_option_chain_stream_api_brokers__broker__clerks__clerk_id__market_data_ibkr_option_chain__symbol__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "symbol",
+            "required": true,
+            "schema": {
+              "title": "Symbol",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Ibkr Option Chain Stream",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/market-data/ibkr/option-surface/{symbol}": {
+      "get": {
+        "description": "Fleet-routed GET /market-data/ibkr/option-surface/{symbol} (stream_subscribe).",
+        "operationId": "fleet_ibkr_option_surface_stream_api_brokers__broker__clerks__clerk_id__market_data_ibkr_option_surface__symbol__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "symbol",
+            "required": true,
+            "schema": {
+              "title": "Symbol",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Ibkr Option Surface Stream",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/market-data/ibkr/strikes/{symbol}": {
+      "get": {
+        "description": "Fleet-routed GET /market-data/ibkr/strikes/{symbol} (market_status_read).",
+        "operationId": "fleet_ibkr_strikes_read_api_brokers__broker__clerks__clerk_id__market_data_ibkr_strikes__symbol__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "symbol",
+            "required": true,
+            "schema": {
+              "title": "Symbol",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Ibkr Strikes Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
     "/api/brokers/{broker}/clerks/{clerk_id}/market-status-snapshot": {
       "get": {
         "description": "Fleet-routed GET /market-status-snapshot (market_status_read).",
@@ -79293,7 +79678,7 @@
     },
     "/api/quantlib/compare": {
       "post": {
-        "description": "Compare ALL pricing models across a spot price range.\n\nReturns curves for:\n  1. python_bs         \u2014 Python analytical BS (scipy.stats.norm CDF)\n  2. quantlib_bs       \u2014 QuantLib Analytic European Engine (C++ via SWIG)\n  3. quantlib_crr      \u2014 QuantLib Binomial Cox-Ross-Rubinstein (801 steps)\n  4. quantlib_jr       \u2014 QuantLib Binomial Jarrow-Rudd (801 steps)\n  5. quantlib_lr       \u2014 QuantLib Binomial Leisen-Reimer (801 steps)\n  6. quantlib_fd       \u2014 QuantLib Finite Differences (801\u00d7800 grid)\n  7. quantlib_mc       \u2014 QuantLib Monte Carlo (tol=0.001, seed=42)\n\nThe frontend additionally computes \"Legacy BS\" (Abramowitz & Stegun normCdf\napproximation, |error| < 1.5e-7) client-side and overlays it.",
+        "description": "Compare ALL pricing models across a spot price range.\n\nReturns curves for:\n  1. python_bs         \u2014 Python analytical BS (canonical bs_greeks.py, at the request's dividend yield)\n  2. quantlib_bs       \u2014 QuantLib Analytic European Engine (C++ via SWIG)\n  3. quantlib_crr      \u2014 QuantLib Binomial Cox-Ross-Rubinstein (801 steps)\n  4. quantlib_jr       \u2014 QuantLib Binomial Jarrow-Rudd (801 steps)\n  5. quantlib_lr       \u2014 QuantLib Binomial Leisen-Reimer (801 steps)\n  6. quantlib_fd       \u2014 QuantLib Finite Differences (801\u00d7800 grid)\n  7. quantlib_mc       \u2014 QuantLib Monte Carlo (tol=0.001, seed=42)\n\nA model with no curve in `models` is named in `unavailable_models` with why (QuantLib not installed, or the\nengine raised). A Greek an engine does not provide (Monte Carlo theta, vega, rho) is null, never 0.0.\n\nThe frontend additionally computes \"Legacy BS\" (Abramowitz & Stegun normCdf\napproximation, |error| < 1.5e-7) client-side and overlays it.",
         "operationId": "pricing_compare_api_quantlib_compare_post",
         "requestBody": {
           "content": {
@@ -79792,6 +80177,8 @@
             "name": "qualification_id",
             "required": true,
             "schema": {
+              "maxLength": 64,
+              "minLength": 1,
               "title": "Qualification Id",
               "type": "string"
             }
@@ -79851,6 +80238,8 @@
             "name": "qualification_id",
             "required": true,
             "schema": {
+              "maxLength": 64,
+              "minLength": 1,
               "title": "Qualification Id",
               "type": "string"
             }
@@ -79909,6 +80298,8 @@
             "name": "qualification_id",
             "required": true,
             "schema": {
+              "maxLength": 64,
+              "minLength": 1,
               "title": "Qualification Id",
               "type": "string"
             }
@@ -79977,6 +80368,8 @@
             "name": "qualification_id",
             "required": true,
             "schema": {
+              "maxLength": 64,
+              "minLength": 1,
               "title": "Qualification Id",
               "type": "string"
             }
@@ -80480,6 +80873,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "summary": "List Studies",
@@ -81930,6 +82333,7 @@
             "name": "golden_run_id",
             "required": true,
             "schema": {
+              "maximum": 2147483647,
               "title": "Golden Run Id",
               "type": "integer"
             }
@@ -83126,6 +83530,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
           }
         },
         "summary": "Get The Run",

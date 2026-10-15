@@ -167,19 +167,28 @@ _WEAKNESS_COPY: dict[str, str] = {
 }
 
 
-def weakness_items(exam: Mapping[str, Any], fit: Mapping[str, Any]) -> list[dict[str, str]]:
-    """Each weakness approving ``fit`` must acknowledge, in the words the acknowledgement names; empty before an outcome."""
-    if fit.get("outcome") is None:
-        return []
+def _research_items(exam: Mapping[str, Any], fit: Mapping[str, Any]) -> list[dict[str, str]]:
     failed = [str(check["label"]).lower() for check in fit.get("checks", []) if check.get("status") == "fail"]
     items: list[dict[str, str]] = []
-    for code in research_weakness(fit["outcome"], exam.get("claim"), exam.get("exposure_state")):
+    for code in research_weakness(fit.get("outcome"), exam.get("claim"), exam.get("exposure_state")):
         if code == "EXAM_DOES_NOT_MEET_RULES":
             text = f"failing the stated rules ({', '.join(failed)})" if failed else "failing the stated rules"
         else:
             text = _WEAKNESS_COPY[code]
         items.append({"code": code, "text": text})
     return items
+
+
+def weakness_items(exam: Mapping[str, Any], fit: Mapping[str, Any]) -> list[dict[str, str]]:
+    """Each weakness approving ``fit`` must acknowledge, in the words the acknowledgement names; empty before an outcome."""
+    if fit.get("outcome") is None:
+        return []
+    return _research_items(exam, fit)
+
+
+def weakness_words(exam: Mapping[str, Any], fit: Mapping[str, Any], chance_items: Sequence[Mapping[str, str]]) -> str:
+    """Every weakness approving ``fit`` names, as the one phrase the acknowledgement itself reads, for a refusal to quote instead of codes."""
+    return " and ".join(item["text"] for item in [*_research_items(exam, fit), *chance_items])
 
 
 # ── The final test's fits ────────────────────────────────────────────────

@@ -27,13 +27,11 @@ from app.services.broker_v2_panel.paper_deploy_service import (
     resolve_deploy_strategy_params,
 )
 from app.services.broker_v2_panel.strategy_catalog import GoldenValidationScope
+from tests._helpers.golden_qualification import CONTRACT, PROGRAM
 from tests.broker.v2panel.conftest import _BODY
 from tests.broker.v2panel.fixtures import ACCT
 
-PROGRAM = "ema_crossover_signal"
 REGISTRATION = _STRATEGY_REGISTRY[PROGRAM]
-CONTRACT = REGISTRATION.signal_program_contract
-assert CONTRACT is not None
 _ALLOW_BODY_STRATEGY = frozenset({(PROGRAM, ACCT)})
 _REGISTRY_EXPLANATION_START = "This exact symbol and parameter configuration is covered by the registered"
 
@@ -262,7 +260,6 @@ async def test_a_dropped_research_connection_degrades_to_the_registry_point(monk
 # ---------------------------------------------------------------------------
 # The Deploy form and the deploy itself
 # ---------------------------------------------------------------------------
-@pytest.mark.asyncio
 async def test_deploy_offers_and_accepts_the_ready_default_tuple(deploy_app, monkeypatch: pytest.MonkeyPatch) -> None:
     fast_app, registry = deploy_app
     monkeypatch.setattr("app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS", _ALLOW_BODY_STRATEGY)

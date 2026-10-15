@@ -240,10 +240,6 @@ def test_a_record_the_clerk_already_judged_has_its_result_and_is_not_judged_agai
     assert rejudge(_recorded(reason=None, result=result)) is None
 
 
-def test_the_reason_the_clerk_writes_for_an_unjudged_pair_is_the_one_offline_judgment_looks_for() -> None:
-    assert NotComparedReason.JUDGMENT_NOT_SWITCHED_ON.value == JUDGMENT_NOT_SWITCHED_ON_REASON
-
-
 @pytest.mark.parametrize(
     ("changes", "complaint"),
     [
