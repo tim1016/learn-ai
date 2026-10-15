@@ -7,7 +7,8 @@ Formula: a study locks an immutable enrollment marker beside its plan
   :func:`chance_weakness_items` — reads the chosen fit's stored final chance
   components and returns the acknowledgement items: ``CHANCE_WITHIN_NOISE``
   when a measured required share sits below that reading's own stored clear
-  threshold (equality is clear; raw counts decide, never rounded shares),
+  threshold, or ``CHANCE_CLEARLY_ADVERSE`` when the adverse share itself
+  reaches that threshold (equality is clear; raw counts decide),
   and ``CHANCE_UNAVAILABLE`` when an enrolled study's required component is
   missing, unsupported, corrupt, without a finite usable sample, or without
   its stored interpretation basis. Carry-over ranks and the rehearsal's 80%
@@ -46,13 +47,14 @@ from app.research.golden_search.guidance import research_weakness
 from app.research.golden_search.protocol import GoldenSearchProtocol
 
 #: What the enrollment marker (and the approval gate it names) call themselves.
-SCHEMA = "golden-search-chance-approval/v1"
+SCHEMA = "golden-search-chance-approval/v2"
 
 #: The final-test components an enrolled approval requires; the optional ones are informational and never gate.
 REQUIRED_COMPONENTS = ("comparison", "profitability", "carry_over")
 INFORMATIONAL_COMPONENTS = ("fit_to_fit", "compare_drawdown")
 
 CHANCE_WITHIN_NOISE = "CHANCE_WITHIN_NOISE"
+CHANCE_CLEARLY_ADVERSE = "CHANCE_CLEARLY_ADVERSE"
 CHANCE_UNAVAILABLE = "CHANCE_UNAVAILABLE"
 
 
@@ -70,6 +72,10 @@ def enrollment_policy() -> dict[str, Any]:
         "weakness": {
             "code": CHANCE_WITHIN_NOISE,
             "rule": "A measured required share below that reading's own stored clear threshold is weak; at-or-above it is clear. Raw counts decide; a rounded share never does.",
+        },
+        "adverse": {
+            "code": CHANCE_CLEARLY_ADVERSE,
+            "rule": "When the adverse share itself reaches the reading's stored clear threshold, the weakness is clearly adverse. Raw counts decide.",
         },
         "unavailable": {
             "code": CHANCE_UNAVAILABLE,
@@ -106,13 +112,12 @@ def _reason_of(record: Mapping[str, Any]) -> str:
 
 
 def _share_item(
-    component: str, label: str, against: str, record: Mapping[str, Any], *, numerator: int, adverse: int, enrolled: bool
+    component: str, label: str, against: str, record: Mapping[str, Any], *, numerator: int, adverse: int, enrolled: bool, policy_version: str | None
 ) -> dict[str, str] | None:
     """One measured share-bearing component's item: weak below its own stored threshold, nothing at-or-above it.
 
-    A weak share is worded two ways under the one code: ``adverse`` paths (strictly worse, or a loss) reaching the
-    clear threshold the other way say so in ``against``'s words; any other weak share is inside the model's noise.
-    The wording never changes what is asked: every weak share needs the same acknowledgement.
+    An adverse share reaching the clear threshold has its own code for studies enrolled under v2. Older
+    enrollment markers keep their original code; any other weak share is inside the model's noise.
 
     A reading without its stored threshold is unavailable for enrolled studies — today's constants are never
     borrowed for a reading that lacks them, and a legacy study simply has nothing to read.
@@ -124,12 +129,12 @@ def _share_item(
     if not _at_least(numerator, replications, threshold):  # the same exact comparison #3011 owns, inverted
         if _at_least(adverse, replications, threshold):
             return {
-                "code": CHANCE_WITHIN_NOISE,
-                "text": f"{against} in {adverse:,} of {replications:,} paths ({adverse / replications:.1%}), at or above the {threshold:.0%} clear threshold the reading stored",
+                "code": CHANCE_CLEARLY_ADVERSE if enrolled and policy_version == SCHEMA else CHANCE_WITHIN_NOISE,
+                "text": f"{against} in {adverse:,} of {replications:,} paths ({adverse / replications:.1%}), at or above the {threshold:.2%} clear threshold the reading stored",
             }
         return {
             "code": CHANCE_WITHIN_NOISE,
-            "text": f"{label} inside the resampling model's noise: {numerator:,} of {replications:,} paths ({numerator / replications:.1%}), below the {threshold:.0%} clear threshold the reading stored",
+            "text": f"{label} inside the resampling model's noise: {numerator:,} of {replications:,} paths ({numerator / replications:.1%}), below the {threshold:.2%} clear threshold the reading stored",
         }
     return None
 
@@ -183,6 +188,7 @@ def chance_weakness_items(
                 numerator=as_good,
                 adverse=worse,
                 enrolled=enrolled,
+                policy_version=policy.get("schema_version") if policy is not None else None,
             )
             if item is not None:
                 items.append(item)
@@ -204,6 +210,7 @@ def chance_weakness_items(
                     numerator=positive,
                     adverse=negative,
                     enrolled=enrolled,
+                    policy_version=policy.get("schema_version") if policy is not None else None,
                 )
                 if item is not None:
                     items.append(item)

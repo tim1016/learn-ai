@@ -79,6 +79,7 @@ class AuthoritySteps:
     select: Callable[[], Awaitable[ActiveClerkRuntime]]
     acknowledge: Callable[[ActiveClerkRuntime], Awaitable[ActiveClerkRuntime]]
     install: Callable[[ActiveClerkRuntime], None]
+    installed: Callable[[], ActiveClerkRuntime | None]
     retire: Callable[[ActiveClerkRuntime], Awaitable[None]]
     boot: Callable[[ActiveClerkRuntime], Awaitable[None]]
 
@@ -158,7 +159,21 @@ async def run_authority_reconnect(
                 extra={"action": "clerk_authority_reconnect_final_ack_failed", "account_id": failure.account_id},
             )
             acknowledged = final
-        steps.install(acknowledged)
+        try:
+            steps.install(acknowledged)
+        except Exception:
+            served = steps.installed()
+            logger.exception(
+                "Installing this Clerk's final reconnect refusal failed; the installed authority remains served",
+                extra={
+                    "action": "clerk_authority_reconnect_final_install_failed",
+                    "account_id": failure.account_id,
+                    "served_reason_code": None if served is None or served.startup_failure is None else served.startup_failure.reason_code,
+                },
+            )
+            if served is None:
+                raise RuntimeError("final reconnect refusal failed to install and no authority is serving")
+            return served
         try:
             await steps.boot(acknowledged)
         except Exception:

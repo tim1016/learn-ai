@@ -160,7 +160,8 @@ def outside_orders_in(conn: sqlite3.Connection, symbol: str) -> list[ExternalOrd
         "SELECT broker_order_id FROM external_orders WHERE UPPER(symbol) = ? ORDER BY observed_at_ms, broker_order_id",
         (symbol,),
     ).fetchall()
-    orders = [reads.external_order_by_broker_order_id(conn, row["broker_order_id"]) for row in rows]
+    by_id = reads.external_orders_by_broker_order_ids(conn, [row["broker_order_id"] for row in rows])
+    orders = [by_id.get(row["broker_order_id"]) for row in rows]
     return [order for order in orders if order is not None]
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import threading
 from collections.abc import Callable
@@ -514,6 +515,19 @@ def _record_reconciliation_attempt(
     trigger: Trigger,
     outcome: ReconciliationOutcome,
 ) -> None:
+    # Failed-operation lookup attempts date the next fair rotation (#2854); only an unchanged unknown can coalesce.
+    if outcome == "STILL_UNKNOWN":
+        previous = repo.last_effect_transition(
+            effect_operation_id=effect.effect_operation_id, transition_kind="RECONCILIATION_ATTEMPTED"
+        )
+        if previous is not None:
+            earlier = json.loads(previous["facts_json"])
+            if (
+                earlier.get("trigger") == trigger
+                and earlier.get("outcome") == outcome
+                and previous["operation_state"] == effect.state
+            ):
+                return
     facts = ReconciliationAttemptedFacts(
         trigger=trigger,
         outcome=outcome,

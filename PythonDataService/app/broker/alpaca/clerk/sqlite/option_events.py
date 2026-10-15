@@ -2064,8 +2064,9 @@ def _book_outside_orders(
         "SELECT eo.broker_order_id AS broker_order_id FROM option_contracts c "
         "CROSS JOIN external_orders eo ON UPPER(eo.symbol) = c.symbol ORDER BY eo.observed_at_ms, eo.broker_order_id"
     ).fetchall()
+    by_id = reads.external_orders_by_broker_order_ids(conn, [row["broker_order_id"] for row in rows])
     for row in rows:
-        order = reads.external_order_by_broker_order_id(conn, row["broker_order_id"])
+        order = by_id.get(row["broker_order_id"])
         # An order that adds to what is held outside the books asks nothing here: it is offered
         # to an event as an outside lot.
         unsettled = None if order is None else unsettled_outside_order(conn, order)

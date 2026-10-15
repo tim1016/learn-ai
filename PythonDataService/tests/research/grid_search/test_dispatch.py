@@ -138,9 +138,6 @@ def test_a_ready_cell_wires_its_own_identity_interval_and_execution() -> None:
 
 def test_child_answers_translate_to_the_outcomes_the_runner_consumes() -> None:
     item = _ready(1)
-    cancelled = cell_outcome(item, {"type": "failed", "key": "hash-1", "error": "cancelled"})
-    assert cancelled.cancelled_by is not None and cancelled.cell is None
-
     failed = cell_outcome(item, {"type": "failed", "key": "hash-1", "error": "ValueError: no bars"})
     assert failed.cell is not None and failed.cell.status == "failed" and failed.cell.error == "ValueError: no bars"
     assert failed.cell.params_hash == "hash-1", "a failed cell keeps its candidate's identity"
@@ -203,9 +200,7 @@ def test_the_child_builds_the_in_process_request_and_projects_the_grid_cell(monk
     assert ("search", "durable_completions", 1) in phases, "a completed cell reports the durable cursor"
 
 
-def test_a_refused_identity_or_a_cancelled_run_delivers_never_computes(monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.services import engine_backtest_service
-
+def test_a_refused_identity_never_computes() -> None:
     refused_out = _Out()
     run_grid_cell_task(
         _ready(1).as_wire(),
@@ -216,27 +211,6 @@ def test_a_refused_identity_or_a_cancelled_run_delivers_never_computes(monkeypat
     )
     assert any(message["type"] == "identity_refused" for message in refused_out.messages)
     assert not any(message["type"] == "result" for message in refused_out.messages)
-
-    def cancelled_engine(*, request: Any, **kwargs: Any) -> Any:
-        # The coordinator's cancel flag is already set: the engine's wait
-        # hook is the first place a queued run observes it (#1957 shape).
-        kwargs["while_waiting"]()
-        raise AssertionError("a cancelled run never proceeds past its wait hook")
-
-    monkeypatch.setattr(engine_backtest_service, "execute_engine_backtest", cancelled_engine)
-    cancelled_out = _Out()
-    cancelled_flag = threading.Event()
-    cancelled_flag.set()
-    run_grid_cell_task(
-        _ready(1).as_wire(),
-        out=cancelled_out,
-        ask_admission=lambda path: b"",
-        cancel_flag=cancelled_flag,
-        state=_child_state(),
-    )
-    failed = next(message for message in cancelled_out.messages if message["type"] == "failed")
-    assert failed["error"] == "cancelled"
-
 
 # ── The serial adapter over one fake child ────────────────────────────────
 
@@ -308,19 +282,6 @@ def test_the_serial_dispatch_runs_cells_through_one_child_in_logical_order(monke
     assert len(children) == 1 and len(children[0].tasks) == 3
     assert all(task["kind"] == GRID_WIRE_KIND for task in children[0].tasks), "the grid wire, not the golden one"
     assert children[0].closed
-
-
-def test_a_delivered_cancellation_stops_the_child_and_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    children: list[_FakeChild] = []
-    dispatch = _serial_dispatch(
-        monkeypatch, children, behavior=lambda task: {"type": "failed", "key": task["key"], "error": "cancelled"}
-    )
-    try:
-        with pytest.raises(JobCancelled):
-            list(dispatch([_candidate(0), _candidate(1)]))
-    finally:
-        dispatch.close()
-    assert children[0].cancelled, "the child is stopped, not just abandoned"
 
 
 def test_a_lost_child_re_offers_the_cell_and_a_loss_past_the_allowance_stops_the_search(
@@ -633,7 +594,7 @@ def test_ready_cell_builder_freezes_the_receipt_parts_into_each_item() -> None:
 
 def test_cell_outcome_fields_name_their_meaning() -> None:
     outcome = CellOutcome(key="k", attempt=1, task_gen=1, cell=None)
-    assert outcome.lost_reason is None and outcome.cancelled_by is None
+    assert outcome.lost_reason is None
 
 
 # ── A real spawned child (slow: real process, real engine) ────────────────

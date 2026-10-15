@@ -197,6 +197,7 @@ class _CompositionRoot:
             select=self.select,
             acknowledge=self.acknowledge,
             install=self.install,
+            installed=get_active_clerk_runtime,
             retire=self.retire,
             boot=self.boot,
         )
@@ -1085,6 +1086,53 @@ async def test_a_final_refusal_whose_boot_recovery_also_fails_ends_the_reconnect
     ]
     assert logged.exc_info is not None
     assert str(logged.exc_info[1]) == "a bot's lifecycle record could not be read"
+
+
+async def test_a_final_refusal_whose_install_fails_keeps_the_previous_refusal_served(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def _select_breaks() -> ActiveClerkRuntime:
+        raise OSError("the activation ledger could not be read")
+
+    root = _CompositionRoot(_select_breaks)
+
+    def _install_breaks(runtime: ActiveClerkRuntime) -> None:
+        root.events.append(("install", runtime))
+        raise OSError("the runtime slot could not be replaced")
+
+    root.install = _install_breaks  # type: ignore[method-assign]
+    at_boot = reconnecting_refusal(_unreachable(), account_id=LIVE_ACCT)
+
+    served = await _reconnect(at_boot, root)
+
+    assert served is at_boot and get_active_clerk_runtime() is at_boot
+    assert root.names() == ["acknowledge", "install"]
+    assert any(getattr(record, "action", None) == "clerk_authority_reconnect_final_install_failed" for record in caplog.records)
+
+
+async def test_a_final_refusal_whose_install_raises_after_publish_returns_the_served_refusal(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def _select_breaks() -> ActiveClerkRuntime:
+        raise OSError("the activation ledger could not be read")
+
+    root = _CompositionRoot(_select_breaks)
+
+    def _install_then_break(runtime: ActiveClerkRuntime) -> None:
+        root.events.append(("install", runtime))
+        install_primary_clerk_runtime(runtime)
+        raise OSError("the lane report could not be updated")
+
+    root.install = _install_then_break  # type: ignore[method-assign]
+    at_boot = reconnecting_refusal(_unreachable(), account_id=LIVE_ACCT)
+
+    served = await _reconnect(at_boot, root)
+
+    assert served is get_active_clerk_runtime()
+    assert served is root.events[-1][1]
+    assert served.startup_failure is not None
+    assert served.startup_failure.reason_code == RECONNECT_FAILED
+    assert any(getattr(record, "action", None) == "clerk_authority_reconnect_final_install_failed" for record in caplog.records)
 
 
 async def test_a_selection_cut_short_by_shutdown_releases_its_execution_lease(

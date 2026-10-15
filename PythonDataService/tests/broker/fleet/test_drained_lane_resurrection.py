@@ -902,13 +902,10 @@ async def test_a_drain_in_the_reserve_to_confirm_window_refuses_the_bringup(
 def test_a_failed_evidence_mark_leaves_the_drain_lesson_retryable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A failed tombstone write must not latch the learned state (#2155).
+    """A failed tombstone write closes the start gate and remains retryable (#3197).
 
-    Review follow-up on PR #2247: ``boot.draining`` flipped before the durable
-    mark ran, so an I/O failure on the evidence write left the lane "learned"
-    with provisioned evidence still on disk — and the once-only latch then
-    suppressed every retry, letting a later offline boot resurrect the drained
-    binding after all. The latch must flip only after the mark succeeds.
+    The in-process drain latch closes immediately; the separate evidence latch
+    allows the next beat to retry the durable mark before an offline restart.
     """
     from app.broker.alpaca.clerk import fleet_boot
 
@@ -928,11 +925,10 @@ def test_a_failed_evidence_mark_leaves_the_drain_lesson_retryable(
         raise OSError("disk full while re-authoring the tombstone")
 
     monkeypatch.setattr(fleet_boot, "mark_confirmation_evidence_draining", _disk_full_mark)
-    with pytest.raises(OSError):
-        fleet_boot._learn_drain(boot)
-    # Nothing was durably marked, so the lesson must not latch: the retry owes
-    # this volume its tombstone.
-    assert boot.draining is False
+    fleet_boot._learn_drain(boot)
+    assert boot.draining is True
+    # Nothing was durably marked, so the retry still owes this volume a tombstone.
+    assert boot.drain_evidence_marked is False
     survived = read_confirmation_evidence(root)
     assert survived is not None
     assert survived.lifecycle_state == "provisioned"
@@ -944,6 +940,7 @@ def test_a_failed_evidence_mark_leaves_the_drain_lesson_retryable(
     )
     fleet_boot._learn_drain(boot)
     assert boot.draining is True
+    assert boot.drain_evidence_marked is True
     marked = read_confirmation_evidence(root)
     assert marked is not None
     assert marked.lifecycle_state == "draining"

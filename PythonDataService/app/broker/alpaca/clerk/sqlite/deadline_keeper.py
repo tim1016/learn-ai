@@ -360,14 +360,22 @@ class DeadlineKeeper:
         reading, self._option_events = self._option_events, None
         if reading is not None:
             reading.cancel()
-            with suppress(asyncio.CancelledError):
+            try:
                 await reading
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("Option-event read failed before shutdown", extra={"action": "deadline_keeper_option_read_stop_failed"})
         task, self._task = self._task, None
         if task is None:
             return
         task.cancel()
-        with suppress(asyncio.CancelledError):
+        try:
             await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("Deadline keeper failed before shutdown", extra={"action": "deadline_keeper_stop_failed"})
 
     async def last_round(self) -> None:
         """The round a closing Clerk makes: cancel and prove every resting entry, due or not (ADR 0076 decision 19).

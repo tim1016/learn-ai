@@ -350,6 +350,7 @@ def fit_to_fit_reading(
         "schema_version": SCHEMA_FIT_TO_FIT,
         "convention": CONVENTION,
         "replications": REPLICATIONS,
+        "chunk_replications": CHUNK_REPLICATIONS,
         "mean_block_sessions": MEAN_BLOCK_SESSIONS,
         "thresholds": {"clear": CLEAR},
         "objective": {"measure": objective, "label": OBJECTIVES[objective][0], "units": OBJECTIVES[objective][1]},

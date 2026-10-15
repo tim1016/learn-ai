@@ -94,6 +94,7 @@ _MUTATIONS: list[tuple[str, Callable[[GoldenSearchProtocol], GoldenSearchProtoco
     ("SEED_CONFLICTS_FIXED", _seed(z=1.0)),
     ("INCUMBENT_INVALID", lambda p: dataclasses.replace(p, incumbent=IncumbentRef("qualification", None, dict(SEED)))),
     ("INCUMBENT_INVALID", lambda p: dataclasses.replace(p, incumbent=IncumbentRef("registry", "q-1", dict(SEED)))),
+    ("INCUMBENT_INVALID", lambda p: dataclasses.replace(p, incumbent=IncumbentRef("qualification", 42, dict(SEED)))),
     ("INCUMBENT_INVALID", lambda p: dataclasses.replace(p, incumbent=IncumbentRef("registry", None, {**SEED, "symbol": "QQQ"}))),
     ("INCUMBENT_INVALID", lambda p: dataclasses.replace(p, incumbent=IncumbentRef("registry", None, {**SEED, "x": "wide"}))),
     ("INCUMBENT_INVALID", lambda p: dataclasses.replace(p, incumbent=IncumbentRef("registry", None, {**SEED, "g": float("nan")}))),

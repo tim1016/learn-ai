@@ -1445,6 +1445,7 @@ class GoldenSearchChanceFitToFitBasis(_Wire):
     schema_version: str
     convention: str
     replications: int
+    chunk_replications: int | None = Field(None, description="Draw chunk size; absent for legacy readings that did not record it.")
     mean_block_sessions: float
     thresholds: dict[str, float]
     objective: GoldenSearchChanceObjective

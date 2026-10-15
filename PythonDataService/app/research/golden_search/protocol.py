@@ -622,6 +622,10 @@ def _validate_incumbent(p: GoldenSearchProtocol, declaration: SearchDeclaration,
     source = p.incumbent.source
     if source not in get_args(IncumbentSource):
         refusals.add("INCUMBENT_INVALID", "incumbent.source", f"The incumbent must come from the registry or a qualification, not {source!r}.")
+    elif p.incumbent.qualification_id is not None and (
+        not isinstance(p.incumbent.qualification_id, str) or not p.incumbent.qualification_id.strip()
+    ):
+        refusals.add("INCUMBENT_INVALID", "incumbent.qualification_id", "The incumbent's qualification id must be a nonempty string.")
     elif (source == "qualification") != bool(p.incumbent.qualification_id):
         refusals.add(
             "INCUMBENT_INVALID",

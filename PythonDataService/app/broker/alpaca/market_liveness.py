@@ -145,20 +145,20 @@ class AlpacaMarketLivenessConsumer:
         """Read one broker clock observation, replacing stale proof on errors."""
         try:
             clock = await self._read.get_clock_evidence()
+            self._store.observe_clock(clock)
         except asyncio.CancelledError:
             raise
         except Exception:
             self._store.mark_clock_unavailable(
                 observed_at_ms=self._clock(),
-                reason="The live Alpaca market-clock request failed.",
+                reason="The live Alpaca market-clock read or observation failed.",
             )
             logger.warning(
-                "alpaca market clock request failed; new exposure is blocked",
+                "alpaca market clock read or observation failed; new exposure is blocked",
                 extra={"action": "market_liveness_clock_error"},
                 exc_info=True,
             )
             return
-        self._store.observe_clock(clock)
 
     async def _poll_clock(self) -> None:
         while True:

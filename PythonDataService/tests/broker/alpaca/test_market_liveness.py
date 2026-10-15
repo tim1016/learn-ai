@@ -80,6 +80,22 @@ async def test_clock_poll_and_status_transition_compose_the_shared_fact(tmp_path
     assert resumed.symbol_status.reason_code == "ALPACA_STATUS_RESUME"
 
 
+async def test_clock_observation_failure_invalidates_clock_without_ending_the_poller(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    store = MarketLivenessStore()
+    consumer = _consumer(tmp_path, store)
+
+    def refuse_clock(_clock: BrokerClockEvidence) -> None:
+        raise ValueError("invalid vendor clock")
+
+    monkeypatch.setattr(store, "observe_clock", refuse_clock)
+    await consumer.refresh_clock()
+
+    assert store.fact("SPY", now_ms=_NOW).state == "UNKNOWN"
+    assert any(getattr(record, "action", None) == "market_liveness_clock_error" for record in caplog.records)
+
+
 def test_bad_status_frame_does_not_clear_prior_symbol_evidence(tmp_path: Path) -> None:
     """A single malformed frame refuses evidence for itself only — it must
     not wipe previously-established evidence for other symbols. Only a

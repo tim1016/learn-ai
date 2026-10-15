@@ -20792,6 +20792,18 @@
         "additionalProperties": false,
         "description": "Everything a stored fit-to-fit reading was drawn under, so reading it back never reclassifies it.",
         "properties": {
+          "chunk_replications": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Draw chunk size; absent for legacy readings that did not record it.",
+            "title": "Chunk Replications"
+          },
           "convention": {
             "title": "Convention",
             "type": "string"

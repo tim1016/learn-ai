@@ -421,6 +421,7 @@ def test_fit_to_fit_stores_both_directions_from_one_shared_draw() -> None:
     forward = _fit_to_fit(_smooth(25, 11), _smooth(25, 12))
     assert forward["status"] == "measured"
     assert forward["basis"]["schema_version"] == "golden-search-chance-fit-to-fit/v2"
+    assert forward["basis"]["chunk_replications"] == 1_000
     # The basis names the shared draw convention and clear threshold, with the values every stored record already holds.
     assert (CONVENTION, CLEAR) == ("stationary-bootstrap/v1", 0.95)
     assert (forward["basis"]["convention"], forward["basis"]["thresholds"]) == (CONVENTION, {"clear": CLEAR})

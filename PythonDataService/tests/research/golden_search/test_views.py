@@ -358,11 +358,14 @@ def test_flags_lead_with_the_failed_rule_then_the_candidates_findings() -> None:
         finding_codes=["NEIGHBORS_LOSE_MONEY", "VALIDATION_GOT_WORSE", "NEIGHBORS_LOSE_MONEY"],
     )
     assert flags == [
-        {"code": "DRAWDOWN_ABOVE_CEILING", "text": "Above 12% limit"},
+        {"code": "DRAWDOWN_ABOVE_CEILING", "text": "Above 12.00% limit"},
         {"code": "NEIGHBORS_LOSE_MONEY", "text": "Nearby settings lose money"},
     ]
     assert candidate_flags(ineligibility="TOO_FEW_TRADES", total_trades=17, min_trades=30, drawdown_ceiling=0.2, finding_codes=[]) == [
         {"code": "TOO_FEW_TRADES", "text": "17 trades, below 30"}
+    ]
+    assert candidate_flags(ineligibility="DRAWDOWN_ABOVE_CEILING", total_trades=91, min_trades=30, drawdown_ceiling=0.125, finding_codes=[]) == [
+        {"code": "DRAWDOWN_ABOVE_CEILING", "text": "Above 12.50% limit"}
     ]
 
 
@@ -414,7 +417,7 @@ def test_the_evidence_view_marks_duplicates_the_incumbent_and_ineligible_candida
     assert all_period["guidance"]["title"] == "Nearby settings lose money"
     assert all_period["flags"] == [{"code": "NEIGHBORS_LOSE_MONEY", "text": "Nearby settings lose money"}]
     assert (recent["eligible"], recent["ineligibility"]) == (False, "DRAWDOWN_ABOVE_CEILING")
-    assert recent["flags"] == [{"code": "DRAWDOWN_ABOVE_CEILING", "text": "Above 12% limit"}]
+    assert recent["flags"] == [{"code": "DRAWDOWN_ABOVE_CEILING", "text": "Above 12.00% limit"}]
     assert incumbent["guidance"]["title"] == "No change can be the best decision"
     assert view["scope"]["capital"] == 100_000.0
 

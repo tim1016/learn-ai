@@ -117,9 +117,7 @@ class ReadyCell:
 class CellOutcome:
     """One dispatched cell's arrived outcome — the grid twin of golden's ``DeliveredOutcome``.
 
-    A cancellation is *delivered* (``cancelled_by``), never raised out of a
-    child, so the dispatch stops its lanes and re-raises it on the
-    coordinator's terms; a failed run is a failed cell exactly as the
+    A failed run is a failed cell exactly as the
     in-process adapter records one; the attempt and task generation travel
     with the outcome so a straggler from a superseded re-offer is discarded
     in memory before the store's fences ever see it.
@@ -129,20 +127,11 @@ class CellOutcome:
     attempt: int
     task_gen: int
     cell: CellResult | None
-    cancelled_by: Exception | None = None
     lost_reason: str | None = None
 
 
 def cell_outcome(item: ReadyCell, message: Mapping[str, Any]) -> CellOutcome:
     """One child answer as the runner consumes it — the same translation both adapters make."""
-    if message["type"] == "failed" and message.get("error") == "cancelled":
-        return CellOutcome(
-            key=item.key,
-            attempt=item.attempt,
-            task_gen=item.task_gen,
-            cell=None,
-            cancelled_by=JobCancelled("cancelled in a research worker"),
-        )
     if message["type"] == "failed":
         return CellOutcome(
             key=item.key,
@@ -256,10 +245,6 @@ def run_grid_cell_task(
         params_hash=str(task["candidate"]["params_hash"]),
     )
 
-    def raise_if_cancelled() -> None:
-        if cancel_flag.is_set():
-            raise JobCancelled("cancelled by the coordinator")
-
     try:
         if state["identity"] != _expected_identity(task):
             out.write(
@@ -273,7 +258,6 @@ def run_grid_cell_task(
             on_phase=lambda phase: checkpoint(phase),
             on_log=lambda message: None,
             data_manifest=dict(task["manifest"]),
-            while_waiting=raise_if_cancelled,
             decoded_cache=state["decoded_cache"],
             admission=ask_admission,
         )
@@ -282,12 +266,6 @@ def run_grid_cell_task(
         checkpoint("search", cursor_kind="durable_completions", cursor=state["completed"])
         out.write({"type": "result", "key": task["key"], "cell": cell_to_wire(cell), **_residency_fields(state)})
     except BaseException as exc:  # the child's terminal sink: every failure is a delivered answer
-        if isinstance(exc, JobCancelled):
-            out.write(
-                {"type": "failed", "key": str(task.get("key", "?")), "error": "cancelled", **_residency_fields(state)}
-            )
-            cancel_flag.set()
-            return
         out.write(
             {
                 "type": "failed",
@@ -357,10 +335,7 @@ class WorkerCellDispatch(ChildOwnerDispatch):
                 # retryable loss, and no foreign cell ever persists.
                 self._worker_lost(worker)
                 raise
-            if outcome.cancelled_by is not None:
-                self._cancel()
-                raise outcome.cancelled_by
-            assert outcome.cell is not None  # only a cancellation delivers without one
+            assert outcome.cell is not None
             yield candidate, outcome.cell
 
 
@@ -425,11 +400,8 @@ class PooledCellDispatch(PooledOwnerDispatch):
                         owed[item.key].task_gen,
                         extra={"action": "grid_search_cell_reoffered", "params_hash": item.key},
                     )
-                elif arrival.cancelled_by is not None:
-                    self._interrupt(epoch)
-                    raise arrival.cancelled_by
                 else:
-                    assert arrival.cell is not None  # only a cancellation delivers without one
+                    assert arrival.cell is not None
                     yield candidates.pop(item.key), arrival.cell
                 # The runner resumed — the cell it took is durable — so the
                 # window opens by one for the next submission (or the lost

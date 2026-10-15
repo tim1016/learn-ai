@@ -329,6 +329,7 @@ class FleetLaneBoot:
     #: bot-start gate and the re-confirmation retry so a drained lane serves
     #: nothing new and re-presents no grant while it winds down.
     draining: bool = False
+    drain_evidence_marked: bool = False
     #: How this lane answers lane quiet once draining (#2154). Installed by
     #: the composition root once both the bot runner and the account's clerk
     #: exist; ``None`` on a lane with no clerk, which then never confirms and
@@ -994,23 +995,24 @@ def _learn_drain(boot: FleetLaneBoot) -> None:
     back through FR-066's offline boot; the in-process acts — stopping new
     bot starts and grant re-presentations — read ``boot.draining``.
     """
-    if boot.draining:
+    if boot.drain_evidence_marked:
         return
-    # The latch flips only after the durable mark succeeds: an I/O failure on
-    # the evidence write must leave this call retryable, or the surviving
-    # provisioned evidence would vouch for a later offline boot forever.
-    marked = mark_confirmation_evidence_draining(boot.volume_root)
+    first_learned = not boot.draining
     boot.draining = True
-    logger.warning(
-        "This lane learned it is drained; its confirmation evidence is "
-        "marked and new bot starts refuse while the drain completes.",
-        extra={
-            "clerk_id": boot.clerk_id,
-            "action": "fleet_lane_drain_learned",
-            "evidence_marked": marked,
-        },
-    )
-    if boot.lane_quiet_probe is None:
+    try:
+        marked = mark_confirmation_evidence_draining(boot.volume_root)
+    except (OSError, ConfirmationEvidenceError):
+        logger.exception(
+            "This drained lane could not mark its confirmation evidence; the next beat retries",
+            extra={"clerk_id": boot.clerk_id, "action": "fleet_lane_drain_tombstone_failed"},
+        )
+    else:
+        boot.drain_evidence_marked = True
+        logger.warning(
+            "This lane learned it is drained; its confirmation evidence is marked and new bot starts refuse.",
+            extra={"clerk_id": boot.clerk_id, "action": "fleet_lane_drain_learned", "evidence_marked": marked},
+        )
+    if first_learned and boot.lane_quiet_probe is None:
         # Said once, here, because the gate's own refusal only reaches the
         # operator running retire: a lane with no clerk to read its account
         # never confirms lane quiet, so this drain can only end forced.
@@ -1225,6 +1227,8 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
                     if await _advance_retirement(boot):
                         return
                     continue
+                if boot.draining and not boot.drain_evidence_marked:
+                    _learn_drain(boot)
                 if boot.session is None:
                     # An offline boot (FR-066) asks again on every beat
                     # (#2321); the next beat observes once it rejoined.
