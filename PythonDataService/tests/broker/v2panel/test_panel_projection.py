@@ -1179,6 +1179,9 @@ def test_adapt_sqlite_panel_omits_sub_epsilon_exposure() -> None:
     )
 
     assert adapted.exposure == {}
+    archive = next(action for action in adapted.actions if action.action_id == "archive")
+    assert archive.enabled is True
+    assert archive.blockers == []
 
 
 def test_build_sqlite_catalog_omits_sub_epsilon_exposure_and_reports_flat() -> None:
@@ -2430,7 +2433,7 @@ def _stopped(**update: object) -> BotStatusView:
         ),
         pytest.param(
             _stopped(), _clerk_status(), (), {"SPY": 0.0},
-            [_served_archive(token="7e0bd848bccbd3ccfb31951e917f8597")],
+            [_served_archive(token="9a8f9b9530fb687e13bc07cfd1c5b9aa")],
             id="stopped-zero-quantity-row",
         ),
         pytest.param(
@@ -2472,9 +2475,8 @@ def test_the_served_archive_is_the_one_the_registry_presented(
 ) -> None:
     """#2635 moved archive out of the generic action registry and into the
     adapter; the owner sees the same action. Each expectation -- copy,
-    blockers, confirmation and token -- was captured from the registry build
-    before the move, and the stopped-flat token is the one every lane served
-    on 2026-09-30."""
+    blockers, confirmation and token -- is pinned here. A zero or dust
+    position has the same token as a flat bot because it does not block Clear."""
     served = adapt_sqlite_panel(
         _panel(status, clerk, exposure=exposure),
         _rail_projection(orders=(), working_order_refs=working_order_refs),

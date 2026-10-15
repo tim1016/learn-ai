@@ -14,7 +14,6 @@ from types import SimpleNamespace
 from typing import get_args
 
 import pytest
-from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.repository import (
@@ -30,7 +29,6 @@ from app.services.broker_v2_panel.action_execution_service import (
     ActionExecutionError,
     ActionNotAvailableError,
     ActionOutcomeUnknownError,
-    ActivationFailedError,
     DurableIdempotencyStore,
     IdempotencyStore,
     StaleRevisionError,
@@ -377,72 +375,6 @@ async def test_repository_poisoned_propagates_unwrapped_too() -> None:
     assert store._records[(_SID, "archive", "poisoned")].state == "failed"
 
 
-async def test_activation_failed_cleanup_proven_burns_the_key_as_a_known_failure() -> None:
-    """PRD #1716 FR-6: cleanup-proven activation failures burn the
-    idempotency key (post-execution) and report as-is, not wrapped into
-    ActionOutcomeUnknownError."""
-
-    async def _perform(_operator: str, _reason: str | None) -> str:
-        raise ActivationFailedError(
-            "Resume for run 'run-2' failed after Clerk registration; the Clerk stop committed.",
-            detail="boom",
-        )
-
-    store = IdempotencyStore()
-    with pytest.raises(ActivationFailedError) as exc:
-        await execute_action(
-            _request(action_id="reconcile_now", key="cleanup-proven-1"),
-            sid=_SID,
-            current_revision=42,
-            current_concurrency_token="token",
-            performers={"reconcile_now": _perform},
-            operator_identity="op",
-            store=store,
-        )
-
-    assert "the Clerk stop committed" in str(exc.value)
-    assert store._records[(_SID, "reconcile_now", "cleanup-proven-1")].state == "failed"
-
-
-async def test_activation_failed_replay_returns_the_same_failure_without_reexecuting() -> None:
-    """PRD #1716 FR-6: reusing the same key replays the identical terminal
-    failure without another activation attempt."""
-    calls: list[str] = []
-
-    async def _perform(_operator: str, _reason: str | None) -> str:
-        calls.append("attempted")
-        raise ActivationFailedError(
-            "Resume for run 'run-2' failed after Clerk registration; the Clerk stop committed.",
-        )
-
-    store = IdempotencyStore()
-    request = _request(action_id="reconcile_now", key="cleanup-proven-2")
-    with pytest.raises(ActivationFailedError):
-        await execute_action(
-            request,
-            sid=_SID,
-            current_revision=42,
-            current_concurrency_token="token",
-            performers={"reconcile_now": _perform},
-            operator_identity="op",
-            store=store,
-        )
-
-    with pytest.raises(ActionNotAvailableError) as replay:
-        await execute_action(
-            request,
-            sid=_SID,
-            current_revision=42,
-            current_concurrency_token="token",
-            performers={"reconcile_now": _perform},
-            operator_identity="op",
-            store=store,
-        )
-
-    assert calls == ["attempted"]
-    assert "previously failed" in str(replay.value)
-
-
 async def test_disabled_presented_action_cannot_bypass_guard_via_post(
     monkeypatch,
     tmp_path: Path,
@@ -778,27 +710,6 @@ def test_durable_store_refuses_an_id_that_is_not_one_confined_segment(
     assert not (tmp_path / "escape").exists()
 
 
-async def test_unwired_action_is_typed_not_available() -> None:
-    with pytest.raises(ActionNotAvailableError) as exc:
-        await execute_action(
-            _request(action_id="open_custody_timeline"),
-            sid=_SID,
-            current_revision=42,
-            current_concurrency_token="token",
-            performers={"archive": lambda op, reason: _noop()},  # open_custody_timeline not wired
-            operator_identity="op",
-            store=IdempotencyStore(),
-        )
-    assert exc.value.http_status == 409
-
-
-
-
-
-
-
-
-
 
 def _clock_evidence(observed_at_ms: int):
     from app.broker.contract.models import BrokerClockEvidence
@@ -989,24 +900,6 @@ async def test_stale_revision_releases_key_for_corrected_retry() -> None:
     )
     assert result.applied is True
     assert calls == 1
-
-
-async def test_not_available_action_releases_key() -> None:
-    """An unwired action rejects pre-execution and frees its idempotency key."""
-    store = IdempotencyStore()
-
-    with pytest.raises(ActionNotAvailableError):
-        await execute_action(
-            _request(action_id="open_custody_timeline", key="na"),
-            sid=_SID,
-            current_revision=42,
-            current_concurrency_token="token",
-            performers={"archive": lambda op, reason: _noop()},  # open_custody_timeline not wired
-            operator_identity="op",
-            store=store,
-        )
-
-    assert (_SID, "open_custody_timeline", "na") not in store._records
 
 
 async def test_duplicate_concurrent_posts_run_mutation_once() -> None:

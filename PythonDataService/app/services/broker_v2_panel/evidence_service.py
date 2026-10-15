@@ -327,10 +327,15 @@ def _append_audit_entry(entry: EvidenceAuditEntry) -> None:
         with _AUDIT_LOCK, path.open("a", encoding="utf-8") as fh:
             fh.write(line)
             fh.flush()
-    except OSError:
+    except OSError as error:
         logger.warning(
             "Evidence audit log write failed",
-            extra={"account_id": entry.account_id, "sid": entry.strategy_instance_id},
+            exc_info=error,
+            extra={
+                "action": "evidence_audit_write_failed",
+                "account_id": entry.account_id,
+                "sid": entry.strategy_instance_id,
+            },
         )
 
 

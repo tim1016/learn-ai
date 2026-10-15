@@ -124,7 +124,14 @@ class _PanelChartFillSource:
         except (PanelUnavailableError, UnknownBotError) as exc:
             logger.warning(
                 "[GALLERY] fill evidence unavailable for bot; rendering no markers",
-                extra={"broker": broker, "account_id": account_id, "sid": sid, "error": str(exc)},
+                exc_info=exc,
+                extra={
+                    "action": "gallery_fill_evidence_unavailable",
+                    "broker": broker,
+                    "account_id": account_id,
+                    "sid": sid,
+                    "error_class": type(exc).__name__,
+                },
             )
             return "", ()
 

@@ -405,19 +405,6 @@ class AuthorityPoisonedError(ActionExecutionError):
         )
 
 
-class ActivationFailedError(ActionExecutionError):
-    """A performer registered real state, then failed with cleanup proven (500).
-
-    A known, resolved failure distinct from ``ActionOutcomeUnknownError``:
-    the outcome is ``failure``, not ``unknown``, because the attempted run's
-    Clerk stop provably committed. Still burns the idempotency key like any
-    other post-execution failure — a blind retry with the same key must not
-    re-fire the action.
-    """
-
-    http_status = 500
-
-
 # A performer runs one action and returns a human-readable outcome message.
 # Receives the channel-derived operator identity and the request's
 # operator-authored reason (may be ``None``); most performers ignore reason.
@@ -724,9 +711,8 @@ async def execute_action(
 ) -> PanelActionResult:
     """Execute one presented action under the three invariants.
 
-    ``performers`` maps each executable action id to a coroutine that performs
-    it and returns an outcome message. An action id absent from the map raises
-    ``ActionNotAvailableError`` (the honest "not yet wired" path).
+    ``performers`` maps the presented executable action to a coroutine that
+    performs it and returns an outcome message.
     """
     ledger = store if store is not None else get_idempotency_store()
 
@@ -779,12 +765,7 @@ async def execute_action(
                 detail=("The action's current concurrency token no longer matches. Refresh and retry."),
             )
 
-        performer = performers.get(request.action_id)
-        if performer is None:
-            raise ActionNotAvailableError(
-                f"The '{request.action_id}' action cannot be executed right now.",
-                detail="This action's backend is not available for this bot in its current state.",
-            )
+        performer = performers[request.action_id]
 
         # 3. Identity from the channel — the performer receives the configured
         # operator identity, never anything from the request body. The
@@ -816,14 +797,6 @@ async def execute_action(
         )
         if reserved_fresh:
             await ledger.release(sid, request.action_id, request.idempotency_key)
-        raise
-    except ActivationFailedError as err:
-        # A known, resolved failure (cleanup proven): burn the key like any
-        # other post-execution failure, but report it as-is rather than
-        # collapsing it into ActionOutcomeUnknownError — the outcome is
-        # failure, not unknown.
-        if reserved_fresh:
-            await ledger.fail(sid, request.action_id, request.idempotency_key, str(err))
         raise
     except (ExecutionLeaseLostAfterBrokerIO, ClaimLostAfterBrokerIO) as err:
         # A broker call was made (ClaimedBrokerIO's post-I/O renewal):

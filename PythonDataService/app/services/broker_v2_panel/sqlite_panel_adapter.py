@@ -240,7 +240,11 @@ def _lifecycle_actions(panel: BotPanelView, projection: ClerkProjection) -> list
             running=panel.health.running,
             phase=panel.health.phase,
             freeze_active=panel.clerk.freeze_active,
-            exposure=panel.exposure,
+            exposure={
+                symbol: quantity
+                for symbol, quantity in panel.exposure.items()
+                if position_quantity_is_nonzero(quantity)
+            },
             working_order_count=len(projection.working_order_refs),
             account_id=panel.account_id,
             strategy_instance_id=panel.strategy_instance_id,
