@@ -417,6 +417,29 @@ is the durable index, the issue is the working brief.
 The 2026-09-09 Paper / Live workflow audit is historical and in Git history;
 current budget, risk-edit and mode behavior is recorded in ADRs 0059 and 0060.
 
+- **Paper option spread fees differ from the canonical model (P2,
+  2026-10-15, #3306).** For 2026-10-14's 38 option-leg fills,
+  `PythonDataService/app/broker/alpaca/option_fees.py` predicted $1.65 of
+  account-day charges; Alpaca Paper posted $1.90. OCC is $0.19 higher and
+  OPT TAF is $0.06 higher. The per-order OCC allocation is inferred because
+  Alpaca's fee rows carry no order ID. The exact comparison is in the Paper
+  qualification runbook; do not change rates or rounding without stronger
+  attribution evidence.
+- **Outside option short fills block Paper fee evidence (P1, 2026-10-15,
+  #3308).** In `PythonDataService/app/broker/alpaca/clerk/sqlite/fee_evidence.py`,
+  the outside-fill path refuses Alpaca's `sell_short` activity side. The #3225
+  Paper credit sign check produced one such valid option fill; the account's
+  fee population became incomplete and bot entries stayed held. The repair
+  needs the broker's contract multiplier and option fee model, not an equity
+  fee estimate for the short option.
+- **Outside multi-leg parents have no reviewable custody row (P2,
+  2026-10-15, #3309).** Alpaca gives an `mleg` parent no single symbol or side.
+  `PythonDataService/app/broker/alpaca/clerk/sqlite/external_orders.py` contains
+  it as an unfoldable broker order; #3225's opening and closing parents needed
+  individual acknowledgement after the Paper account was verified flat. The
+  hold was safe, but the outside order's leg executions remain unrepresented
+  in the Clerk's transaction history.
+
 
 ## 13. Data Lab workspace redesign residuals (2026-09-12)
 

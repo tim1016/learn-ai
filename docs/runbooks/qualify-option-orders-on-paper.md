@@ -837,3 +837,43 @@ disconnect and an exposure hold, then the Gateway reconnected and the hold
 cleared; the remaining `Profile defaults pre-fill future deployments only`
 row is not a fee notice. Recheck Home and the account's posture immediately
 before the owner's hand-placed sign check.
+
+## Run record: 2026-10-15, the credit sign check (#3225)
+
+The owner authorized Paper-only orders on 2026-10-15. The Alpaca dashboard was
+not signed in, so this step used the **Paper trading API**, with the endpoint
+fixed to `https://paper-api.alpaca.markets`, rather than the dashboard action
+section 6 describes. It was an outside order, not a bot pass. Before submission
+Alpaca reported option level 3, no position and no working order; IBKR supplied
+live quotes. The order sold one SPY Oct 16 776 call and bought one 777 call. The
+$1-wide spread's maximum Paper loss at the $0.14 credit was $86 before fees.
+
+| Paper order | Limit sent | Alpaca's accepted limit | Alpaca's filled net | Leg fills |
+|---|---:|---:|---:|---|
+| Earlier shape B bull call spread, bought (`B1-bull-call-spread-flat`) | +$2.14 | +$2.14 | +$2.13 | Bought lower strike, sold higher strike |
+| Outside bear call spread, opened at 1792080283912 ms UTC | −$0.14 | −$0.14 | −$0.14 | Sold 776 at $0.60, bought 777 at $0.46 |
+| Outside bear call spread, closed immediately | Market | — | +$0.16 | Bought 776 at $0.61, sold 777 at $0.45 |
+
+The opening order filled at 1792080283975 ms UTC; the single closing `mleg`
+order filled at 1792080284687 ms UTC. At 1792080286961 ms UTC, Alpaca again
+reported **no positions and no working orders**. Cash and option buying power
+both read $99,926.65, down $2.10 from the preflight $99,928.75. The difference
+is the $2.00 round-trip spread loss plus $0.10 of Paper cash fee effect. The
+private API order answers and bundle stay outside Git. The bundle
+`3225-credit-sign-check` says `Not read: the bot`, as expected for an outside
+order; its stream, activity and account journal were sanitized into
+`tests/fixtures/alpaca/option_paper_recordings/3225-credit-sign-check` and
+checked by `test_paper_option_recordings.py`.
+
+The outside `mleg` parents have no single symbol or side. The Clerk contained
+both as unrecordable outside orders and held new entries. After the exact broker
+orders and flat account were reviewed, **Reconcile now** succeeded and both
+orders were acknowledged in the Paper Activity recovery control. The hold
+cleared; #3309 tracks the representation gap. The short leg's Alpaca `FILL`
+activity says `sell_short`, which the fee population reader currently refuses.
+Home then reported incomplete fee-bearing fill coverage and held Paper bot
+entries. This is a deliberate fail-closed rule, so no side was relabeled and no
+fee model was loosened. #3308 tracks the outside-option fee gap. The API sign
+and fill are shown; the dashboard-specific action is unverified. Shapes C and
+D cannot be called qualified until the fee evidence and admission gate are
+repaired and their bot passes run.
