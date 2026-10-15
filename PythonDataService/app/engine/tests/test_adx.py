@@ -23,7 +23,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pandas_ta as ta
-import pytest
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.indicators.adx import AverageDirectionalIndex
@@ -242,8 +241,7 @@ def test_golden_fixture_regression():
     """
     input_csv = FIXTURE_DIR / "input.csv"
     output_csv = FIXTURE_DIR / "output.csv"
-    if not input_csv.exists() or not output_csv.exists():
-        pytest.skip("ADX golden fixture not yet generated — run regenerate_adx_fixture.py")
+    assert input_csv.is_file() and output_csv.is_file(), "ADX golden fixture is missing"
 
     df_in = pd.read_csv(input_csv, parse_dates=["timestamp"])
     # pandas parses ISO-with-Z as UTC naive; force tz-aware.

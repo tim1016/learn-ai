@@ -47,11 +47,11 @@ from app.services.broker_v2_panel.action_execution_service import (
     ActionOutcomeUnknownError,
     reset_idempotency_store_for_testing,
 )
+from tests._helpers.bot_runner.resume import _FlatBroker
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
 from tests.broker.alpaca.clerk.sqlite.conftest import _make_held_position
 from tests.broker.v2panel.conftest import account_snapshot
-from tests.services.test_bot_runner_ema_resume import _FlatBroker
 
 _LIVE = "9LIVE0001"
 _SEALED = f"shadow:{_LIVE}"

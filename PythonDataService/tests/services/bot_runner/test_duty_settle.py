@@ -53,20 +53,20 @@ from app.services.bot_runner import BotTaskRegistry
 from app.services.bot_runner_errors import BotRunnerError
 from app.services.source_bar_ledger import SourceBarLedger
 from tests._helpers.bot_runner.custody import admission_guard_for
+from tests._helpers.bot_runner.market import _tradable_market_liveness
+from tests._helpers.bot_runner.resume import (
+    _STRATEGY_INSTANCE_ID,
+    _first_resumed_bar,
+    _FlatBroker,
+    _ResumeFeed,
+    _wait_for,
+)
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests._helpers.session_clock import pin_wall_clock_in_session
 from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
 from tests.broker.alpaca.clerk.sqlite.conftest import _broker_leg, _broker_order_fixture, _FakeTradePort
 from tests.broker.alpaca.clerk.test_active_authority import _LiveBroker
 from tests.broker.alpaca.clerk.test_shadow_broker import _LiveRead, _retain
-from tests.services.test_bot_runner_ema_resume import (
-    _STRATEGY_INSTANCE_ID,
-    _first_resumed_bar,
-    _FlatBroker,
-    _ResumeFeed,
-    _tradable_market_liveness,
-    _wait_for,
-)
 
 pytestmark = pytest.mark.usefixtures("legacy_run_registration")
 

@@ -1118,9 +1118,9 @@ async def run_trade_bot(
             else:
                 _settle_evaluation(evaluation, Settlement.COMMIT)
             logger.info(
-                "Trade bot effect accepted",
+                "Trade bot effect settled",
                 extra={
-                    "action": "bot_effect_accepted",
+                    "action": "bot_effect_settled",
                     "strategy_instance_id": binding.strategy_instance_id,
                     "strategy_key": binding.strategy_key,
                     "purpose": intent.kind,

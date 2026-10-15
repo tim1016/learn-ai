@@ -21,15 +21,15 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.services.bot_runner import BotTaskRegistry
 from tests._helpers.bot_runner.custody import admission_guard_for
-from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
-from tests.services.test_bot_runner_ema_resume import (
+from tests._helpers.bot_runner.market import _tradable_market_liveness
+from tests._helpers.bot_runner.resume import (
     _STRATEGY_INSTANCE_ID,
     _first_resumed_bar,
     _FlatBroker,
     _ResumeFeed,
-    _tradable_market_liveness,
     _wait_for,
 )
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 pytestmark = pytest.mark.usefixtures("legacy_run_registration")
 

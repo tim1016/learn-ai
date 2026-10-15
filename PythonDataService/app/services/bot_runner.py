@@ -2837,7 +2837,7 @@ class BotTaskRegistry:
             )
         }
         for strategy_instance_id, run_id in self._authority_for(binding).lifecycle_recovery_candidates():
-            candidates[binding.strategy_instance_id] = BotRecoveryCandidate(
+            candidates[strategy_instance_id] = BotRecoveryCandidate(
                 strategy_instance_id=strategy_instance_id,
                 run_id=run_id,
                 sqlite_active=True,
