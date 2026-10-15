@@ -1,57 +1,75 @@
 :host {
   display: inline-flex;
-  // In a narrow column the revealed code drops under the name.
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0 0.35em;
-  min-width: 0;
+  vertical-align: middle;
+  max-width: 100%;
 }
 
-// The name and its control stay on one line together.
-.option-contract__head {
+.option-chip {
+  --option-ink: var(--bull, #26a69a);
   display: inline-flex;
-  align-items: baseline;
-  gap: 0.35em;
+  align-items: center;
+  gap: 6px;
+  min-height: 27px;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--option-ink) 40%, var(--border-strong, #363a45));
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--bg-elevated, #1b1f2e), var(--bg-surface, #131722));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--option-ink) 14%, transparent);
+  color: var(--text-primary, #f0f3fa);
+  font: 500 11px/1.25 var(--font-sans, sans-serif);
   white-space: nowrap;
+  cursor: help;
+
+  &--put { --option-ink: var(--chart-series-violet, #a78bfa); }
+  &:hover { border-color: var(--option-ink); }
 }
 
-// The underlying and the rest of the name read as one name.
-.option-contract__name {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 0.35em;
+.option-chip__right {
+  color: var(--option-ink);
+  font-weight: 750;
 }
 
-.option-contract__reveal {
-  padding: 0 0.15em;
-  border: 0;
-  border-radius: 2px;
-  background: transparent;
-  color: var(--text-subtle, currentColor);
-  font: inherit;
-  line-height: 1;
-  cursor: pointer;
-
-  .pi {
-    font-size: 0.75em;
-  }
-
-  &:hover,
-  &[aria-expanded='true'] {
-    color: var(--text-primary, currentColor);
-  }
-
-  &:focus-visible {
-    outline: 2px solid var(--accent, currentColor);
-    outline-offset: 2px;
-  }
+.option-chip__status {
+  padding: 2px 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--option-ink) 19%, transparent);
+  color: var(--option-ink);
+  font-size: 9px;
+  font-weight: 750;
 }
 
-.option-contract__code {
-  color: var(--text-secondary, currentColor);
-  font-family: var(--font-mono, monospace);
-  font-size: 0.85em;
-  white-space: nowrap;
-  // One click on the code selects all of it, to copy into the broker's search.
-  user-select: all;
+.option-chip__strike {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--option-ink) 12%, var(--bg-sunken, #070a11));
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
 }
+
+.option-chip__expiry {
+  padding-left: 6px;
+  border-left: 1px solid var(--border-strong, #363a45);
+  color: var(--text-secondary, #b2b5be);
+  font-size: 10px;
+}
+
+.option-details {
+  width: 264px;
+  max-width: calc(100vw - 40px);
+  padding: 5px;
+  text-align: left;
+  font: 12px/1.5 var(--font-sans, sans-serif);
+  color: var(--text-primary, #f0f3fa);
+}
+
+.option-details__heading { margin-bottom: 4px; font-weight: 650; }
+.option-details__code { display: block; width: fit-content; font-size: 10px; user-select: all; }
+.option-details__metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px 14px;
+  margin: 12px 0 0;
+  dt { color: var(--text-subtle, #9598a1); font-size: 10px; }
+  dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+}
+.option-details__note { margin: 9px 0 0; color: var(--text-subtle, #9598a1); font-size: 10px; }

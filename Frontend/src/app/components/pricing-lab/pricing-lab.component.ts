@@ -1,3 +1,5 @@
+import { AssetIdentityComponent } from '../../shared/asset-identity';
+import { OptionContractComponent, type OptionContract } from '../../shared/option-contract/option-contract.component';
 import { DecimalPipe, TitleCasePipe } from '@angular/common';
 import {
   afterNextRender,
@@ -140,7 +142,7 @@ export const MODEL_REGISTRY: ModelDef[] = [
 @Component({
   selector: 'app-pricing-lab',
   standalone: true,
-  imports: [FormsModule, DecimalPipe, TitleCasePipe, InputText, Button, Select, SelectButton, Skeleton, PageHeaderComponent, SymbolPickerComponent],
+  imports: [AssetIdentityComponent, OptionContractComponent, FormsModule, DecimalPipe, TitleCasePipe, InputText, Button, Select, SelectButton, Skeleton, PageHeaderComponent, SymbolPickerComponent],
   templateUrl: './pricing-lab.component.html',
   styleUrls: ['./pricing-lab.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -189,6 +191,16 @@ export class PricingLabComponent implements OnDestroy {
 
   // ── Selected contract ────────────────────────────────────────
   readonly selectedContract = signal<SnapshotContractResult | null>(null);
+
+  readonly selectedContractIdentity = computed<OptionContract | null>(() => {
+    const contract = this.selectedContract();
+    if (!contract || contract.strikePrice === null || contract.expirationMs === null
+      || (contract.contractType !== 'call' && contract.contractType !== 'put')) return null;
+    return {
+      occ_symbol: contract.ticker ?? '', underlying: this.ticker(), expiry_ms: contract.expirationMs,
+      right: contract.contractType, strike: contract.strikePrice,
+    };
+  });
 
   // ── Chart metric toggle ──────────────────────────────────────
   readonly selectedMetric = signal<ChartMetric>('price');

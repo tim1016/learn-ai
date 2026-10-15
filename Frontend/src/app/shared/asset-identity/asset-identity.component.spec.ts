@@ -163,4 +163,28 @@ describe('AssetIdentityComponent', () => {
     );
     expect(symbol.textContent).toBe('MSFT');
   });
+  it('renders raw option symbols as chips wherever an asset identity is used', async () => {
+    const { container } = await render(AssetIdentityComponent, {
+      inputs: { symbol: 'SPY261009P00587500', size: 'xs' },
+    });
+    expect(container.querySelector('app-option-contract')).toBeTruthy();
+    expect(screen.getByText('SPY')).toBeTruthy();
+    expect(screen.getByText('Put')).toBeTruthy();
+    expect(screen.getByText('587.5')).toBeTruthy();
+    expect(container.querySelector('.asset-identity__fallback')).toBeNull();
+  });
+
+  it('switches between stock and option identities when a reused row changes instrument', async () => {
+    const { fixture } = await render(AssetIdentityComponent, { inputs: { symbol: 'AAPL' } });
+    expect(screen.getByText('AAPL')).toBeTruthy();
+    fixture.componentRef.setInput('symbol', 'SPY261009C00585000');
+    fixture.detectChanges();
+    expect(screen.getByText('Call')).toBeTruthy();
+    expect(screen.queryByText('AAPL')).toBeNull();
+    fixture.componentRef.setInput('symbol', 'MSFT');
+    fixture.detectChanges();
+    expect(screen.getByText('MSFT')).toBeTruthy();
+    expect(screen.queryByText('Call')).toBeNull();
+  });
+
 });

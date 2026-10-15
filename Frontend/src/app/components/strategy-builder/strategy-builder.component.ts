@@ -1,3 +1,4 @@
+import { OptionContractComponent, type OptionContract, type OptionMarketDetails } from '../../shared/option-contract/option-contract.component';
 import {
   Component, inject, signal, computed, effect, untracked,
   ChangeDetectionStrategy, OnDestroy,
@@ -20,7 +21,7 @@ import {
 import {
   strategyPnlAtPrice, strategyGreekAtPrice, LegParams, GreekName,
 } from '../../utils/black-scholes';
-import { parseOccForDisplay, OccDisplayParts } from '../../utils/occ-ticker';
+import { AssetIdentityComponent } from '../../shared/asset-identity';
 import { getMinAllowedDate } from '../../utils/date-validation';
 import { payoffAtExpiry, payoffBreakevens, payoffExtremes, PayoffExtremes, PayoffLeg } from '../../utils/strategy-payoff';
 import { ExpirationRibbonComponent } from '../options-chain-v2/expiration-ribbon/expiration-ribbon.component';
@@ -124,7 +125,7 @@ function formatPayoffExtremum(value: number | null): string {
   selector: 'app-strategy-builder',
   standalone: true,
   imports: [
-    FormsModule, DecimalPipe,
+    AssetIdentityComponent, OptionContractComponent, FormsModule, DecimalPipe,
     Drawer, Button, Tooltip, Skeleton,
     ExpirationRibbonComponent, PayoffChartComponent,
     CandlestickChartComponent, VolumeChartComponent,
@@ -137,6 +138,26 @@ function formatPayoffExtremum(value: number | null): string {
 })
 export class StrategyBuilderComponent implements OnDestroy {
   private marketDataService = inject(MarketDataService);
+
+  protected identityForLeg(leg: LegConfig): { contract: OptionContract; market: OptionMarketDetails } | null {
+    const expiry = this.selectedExpiration();
+    if (expiry === null) return null;
+    const candidates = this.allContracts().filter((contract) =>
+      contract.strikePrice === leg.strike && contract.contractType === leg.optionType);
+    // A hypothetical leg names terms, not a unique listing when adjusted contracts share them.
+    const snapshot = candidates.length === 1 ? candidates[0] : undefined;
+    return {
+      contract: {
+        occ_symbol: snapshot?.ticker ?? '', underlying: this.ticker(), expiry_ms: expiry,
+        right: leg.optionType, strike: leg.strike,
+      },
+      market: {
+        underlyingPrice: this.spotPrice(), bid: snapshot?.lastQuote?.bid, ask: snapshot?.lastQuote?.ask,
+        last: snapshot?.lastTrade?.price, delta: snapshot?.greeks?.delta,
+        impliedVolatility: snapshot?.impliedVolatility, source: snapshot ? 'Chain snapshot' : null,
+      },
+    };
+  }
 
   // ── Input & Loading ───────────────────────────────────────
   ticker = signal('SPY');
@@ -277,12 +298,6 @@ export class StrategyBuilderComponent implements OnDestroy {
   historyLoading = signal(false);
   historyAggregates = signal<StockAggregate[]>([]);
   historyError = signal<string | null>(null);
-
-  parsedHistoryTicker = computed<OccDisplayParts | null>(() => {
-    const sc = this.selectedHistoryContract();
-    if (!sc?.ticker) return null;
-    return parseOccForDisplay(sc.ticker);
-  });
 
   historySummary = computed(() => {
     const aggs = this.historyAggregates();

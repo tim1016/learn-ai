@@ -94,7 +94,7 @@ function figureRows(): FigureRowText[] {
 function quoteRows(): string[] {
   return Array.from(document.querySelectorAll('.exit-estimate__quote'))
     .map((row) => Array.from(row.children).map((part) => part.textContent?.replace(/\s+/g, ' ').trim())
-      .filter((part) => part !== undefined && part !== '' && !/^Show contract code/.test(part))
+      .filter((part) => part !== undefined && part !== '')
       .join(' | '));
 }
 
@@ -120,8 +120,8 @@ describe('What getting out costs', () => {
       },
     ]);
     expect(quoteRows()).toEqual([
-      "SPY Oct 16 '26 500 Put | bought 1 | 1 s old | gap $0.10 a share",
-      "SPY Oct 16 '26 505 Put | sold 1 | 1 s old | gap $0.10 a share",
+      "SPY Put 500 Oct 16 '26 | bought 1 | 1 s old | gap $0.10 a share",
+      "SPY Put 505 Oct 16 '26 | sold 1 | 1 s old | gap $0.10 a share",
     ]);
     expect(conditionLines()).toEqual([FEES, BUY_BACK_ALONE, CLOSE, CUTOFF]);
     expect(screen.queryByText(/stale/)).toBeNull();
@@ -135,7 +135,7 @@ describe('What getting out costs', () => {
       ['Closing everything as one order', '$500.00', 'stale, as last read'],
       ['Buying back the sold legs alone', '$10,000.00', null],
     ]);
-    expect(quoteRows()[0]).toBe("SPY Oct 16 '26 500 Put | bought 1 | 81 s old | gap $0.10 a share | stale");
+    expect(quoteRows()[0]).toBe("SPY Put 500 Oct 16 '26 | bought 1 | 81 s old | gap $0.10 a share | stale");
     expect(quoteRows()[1]).not.toContain('stale');
   });
 
@@ -150,8 +150,8 @@ describe('What getting out costs', () => {
     expect(rows[0].source).toContain('real accounts keep no option quotes');
     expect(document.querySelector('.exit-estimate__figures')?.textContent).not.toContain('$');
     expect(quoteRows()).toEqual([
-      "SPY Oct 16 '26 500 Put | bought 1 | no bid or ask | unknown",
-      "SPY Oct 16 '26 505 Put | sold 1 | no bid or ask | unknown",
+      "SPY Put 500 Oct 16 '26 | bought 1 | no bid or ask | unknown",
+      "SPY Put 505 Oct 16 '26 | sold 1 | no bid or ask | unknown",
     ]);
     expect(conditionLines()).toEqual([FEES, BUY_BACK_ALONE, CUTOFF]);
   });
@@ -162,7 +162,7 @@ describe('What getting out costs', () => {
     };
     await render(ExitEstimateComponent, { inputs: { estimate } });
 
-    expect(quoteRows()[0]).toBe("SPY Oct 16 '26 500 Put | bought 1 | 1 s old | no ask");
+    expect(quoteRows()[0]).toBe("SPY Put 500 Oct 16 '26 | bought 1 | 1 s old | no ask");
   });
 
   it('shows a buy-back of zero as a known amount when nothing is sold', async () => {

@@ -330,10 +330,10 @@ describe('OptionStructureBuilderComponent', () => {
     const picks = screen.getByRole('region', { name: 'What this picks right now' });
     const [bought, sold] = await within(picks).findAllByRole('listitem');
     expect(within(bought).getByText('Buy 1')).toBeTruthy();
-    expect(within(bought).getByRole('button', { name: "Show contract code for SPY Oct 9 '26 585 Call" })).toBeTruthy();
+    expect(within(bought).getByLabelText("SPY Oct 9 '26 585 Call")).toBeTruthy();
     expect(termsIn(bought)).toEqual({ 'Bid': '3.10', 'Ask': '3.16', 'Age': '1 s', 'Our delta': '0.48', 'IBKR delta': '0.47' });
     expect(within(sold).getByText('Sell 1')).toBeTruthy();
-    expect(within(sold).getByRole('button', { name: "Show contract code for SPY Oct 9 '26 590 Call" })).toBeTruthy();
+    expect(within(sold).getByLabelText("SPY Oct 9 '26 590 Call")).toBeTruthy();
     expect(termsIn(sold)).toEqual({ 'Bid': '1.22', 'Ask': '1.27', 'Age': '2 s', 'Our delta': '0.31', 'IBKR delta': '0.31' });
 
     // When the quotes were read, and the server's own sentences for their age and for what was watched.

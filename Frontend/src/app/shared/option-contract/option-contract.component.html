@@ -1,19 +1,31 @@
-<span class="option-contract__head">
-  <span class="option-contract__name">
-    <app-asset-identity [symbol]="contract().underlying" size="xs" [logo]="false" [showTitle]="false" />&ngsp;<span>{{ terms() }}</span>
-  </span>
-  <button
-    type="button"
-    class="option-contract__reveal"
-    [attr.aria-expanded]="codeShown()"
-    [attr.aria-controls]="codeShown() ? codeId : null"
-    [attr.aria-label]="revealLabel()"
-    [attr.title]="revealLabel()"
-    (click)="codeShown.set(!codeShown())"
-  >
-    <i class="pi pi-hashtag" aria-hidden="true"></i>
-  </button>
+<span
+  class="option-chip"
+  [class.option-chip--put]="contract().right === 'put'"
+  [pTooltip]="details" tooltipPosition="top" tooltipEvent="both"
+  tooltipStyleClass="option-contract-tooltip" [showDelay]="180" [hideDelay]="120" [autoHide]="false"
+  [attr.aria-label]="name()" tabindex="0"
+>
+  <app-asset-wordmark [symbol]="contract().underlying" size="xs" [logo]="false" [showTitle]="false" />{{ ' ' }}
+  <span class="option-chip__right">{{ right() }}</span>{{ ' ' }}
+  @if (moneyness(); as status) { <span class="option-chip__status">{{ status }}</span>{{ ' ' }} }
+  <span class="option-chip__strike">{{ strike() }}</span>{{ ' ' }}
+  <span class="option-chip__expiry">{{ expiry() }}</span>
 </span>
-@if (codeShown()) {
-  <code class="option-contract__code" [id]="codeId">{{ contract().occ_symbol }}</code>
-}
+
+<ng-template #details>
+  <div class="option-details">
+    <div class="option-details__heading">{{ name() }}</div>
+    @if (contract().occ_symbol) { <code class="option-details__code">{{ contract().occ_symbol }}</code> }
+    @if (metrics().length > 0) {
+      <dl class="option-details__metrics">
+        @for (metric of metrics(); track metric.label) {
+          <div><dt>{{ metric.label }}</dt><dd>{{ metric.value }}</dd></div>
+        }
+      </dl>
+    } @else {
+      <p class="option-details__note">Contract details only. No quote or Greeks supplied.</p>
+    }
+    @if (market()?.source; as source) { <p class="option-details__note">{{ source }}</p> }
+    @if (asOf(); as time) { <p class="option-details__note">As of {{ time }}</p> }
+  </div>
+</ng-template>

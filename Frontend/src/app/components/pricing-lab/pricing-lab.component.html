@@ -182,8 +182,15 @@
   @if (selectedContract(); as c) {
     <div class="contract-info mb-4">
       <span class="text-sm text-slate-300">
-        <strong class="text-white">{{ c.contractType === 'call' ? 'CALL' : 'PUT' }}</strong>
-        Strike: <strong>${{ c.strikePrice | number:'1.2-2' }}</strong>
+        @if (selectedContractIdentity(); as contract) {
+          <app-option-contract [contract]="contract" [market]="{
+            bid: c.lastQuote?.bid, ask: c.lastQuote?.ask, last: c.lastTrade?.price,
+            delta: c.greeks?.delta, impliedVolatility: c.impliedVolatility,
+            underlyingPrice: underlying()?.price, source: 'Chain snapshot'
+          }" />
+        } @else if (c.ticker; as symbol) {
+          <app-asset-identity [symbol]="symbol" size="xs" />
+        }
         @let iv = c.impliedVolatility;
         &middot; IV: <strong>{{ iv === null || iv === undefined ? '—' : (iv * 100 | number:'1.1-1') + '%' }}</strong>
         @if (c.lastQuote?.midpoint; as mid) {

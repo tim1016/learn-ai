@@ -34,8 +34,8 @@ describe('two contracts at one strike', () => {
     expect(rows).toHaveLength(2);
     expect(rows[0]?.[0]).toBe('$602.00 At the money');
     expect(rows[1]?.[0]).toBe('$602.00');
-    expect(rows[0]?.[2]).toContain('SPY261016P00602000');
-    expect(rows[1]?.[1]).toContain('SPY1261016C00602000');
+    expect(rows[0]?.[2]).toContain("SPY Put 602 Oct 16 '26");
+    expect(rows[1]?.[1]).toContain("SPY1 Call 602 Oct 16 '26");
     expect(rows[1]?.[2]).toBe('No other contract at this strike');
     expect(chainTable().textContent).not.toContain('Not listed at this strike');
     expect(within(chainTable()).getAllByText('At the money')).toHaveLength(1);

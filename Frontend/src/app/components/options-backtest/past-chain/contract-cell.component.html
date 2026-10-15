@@ -15,4 +15,4 @@
   <span class="state state--bad">This page does not know this state of its price: {{ state.code | receiptLabel }}</span>
 }
 @if (!contract().standard) { <span class="nonstandard">Non-standard</span> }
-<code class="symbol">{{ contract().symbol }}</code>
+<app-asset-identity class="symbol" [symbol]="contract().symbol" size="xs" />

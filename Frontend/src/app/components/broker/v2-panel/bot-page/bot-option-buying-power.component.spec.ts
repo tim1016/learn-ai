@@ -158,8 +158,9 @@ describe('BotOptionBuyingPowerComponent (#3098)', () => {
     expect(within(reasons).getAllByRole('listitem')).toHaveLength(1);
     expect(within(reasons).getByText('The comparison for this entry has not been made yet.')).toBeTruthy();
     // The counts come first, then the entries.
-    const text = card.textContent ?? '';
-    expect(text.indexOf('1 of 2 option entries')).toBeLessThan(text.indexOf('SPY260918C00585000'));
+    const counts = within(card).getByText('1 of 2 option entries were compared with Alpaca’s option buying power, 1 not.');
+    const entries = within(card).getByRole('list', { name: 'Option entries, newest first' });
+    expect(counts.compareDocumentPosition(entries) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('shows each entry’s result in the backend’s words, both readings, the fall, the commitment and the account’s requirement change', async () => {

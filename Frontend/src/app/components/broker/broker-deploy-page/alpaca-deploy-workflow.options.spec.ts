@@ -234,7 +234,7 @@ describe('AlpacaDeployWorkflowComponent — a bot that trades options (#2913)', 
     const what = step('What');
     expect(within(what).getByText('Stand-in: what a bull call spread is.')).toBeTruthy();
     const picks = within(what).getByRole('region', { name: 'Right now this picks' });
-    expect(await within(picks).findByRole('button', { name: "Show contract code for SPY Oct 9 '26 585 Call" })).toBeTruthy();
+    expect(await within(picks).findByLabelText("SPY Oct 9 '26 585 Call")).toBeTruthy();
     expect(within(what).getByText('Stand-in: it can be deployed.')).toBeTruthy();
     expect(service.previewOptionStructure.mock.calls.at(-1)?.[1]).toMatchObject({
       underlying: 'SPY', listens_to: 'SPY', structure: 'bull_call_spread', legs: BULL_CALL_SPREAD_LEGS,

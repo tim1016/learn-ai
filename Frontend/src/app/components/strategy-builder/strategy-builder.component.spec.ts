@@ -1,4 +1,6 @@
-import { TestBed } from '@angular/core/testing';
+import { TestBed, type ComponentFixture } from '@angular/core/testing';
+import { screen, within } from '@testing-library/angular';
+import userEvent from '@testing-library/user-event';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { vi } from 'vitest';
@@ -14,7 +16,7 @@ import {
 
 vi.mock('lightweight-charts', () => {
   const mockTimeScale = { fitContent: vi.fn() };
-  const createMockSeries = () => ({ setData: vi.fn(), applyOptions: vi.fn() });
+  const createMockSeries = () => ({ setData: vi.fn(), applyOptions: vi.fn(), createPriceLine: vi.fn() });
   const createMockChart = () => ({
     addSeries: vi.fn().mockReturnValue(createMockSeries()),
     removeSeries: vi.fn(),
@@ -27,6 +29,7 @@ vi.mock('lightweight-charts', () => {
   return {
     createChart: vi.fn().mockImplementation(() => createMockChart()),
     CandlestickSeries: 'CandlestickSeries',
+    BaselineSeries: 'BaselineSeries',
     LineSeries: 'LineSeries',
     HistogramSeries: 'HistogramSeries',
     LineStyle: { Solid: 0, Dotted: 1, Dashed: 2, LargeDashed: 3, SparseDotted: 4 },
@@ -83,6 +86,7 @@ function buildAnalysisResult(): StrategyAnalyzeResult {
 
 describe('StrategyBuilderComponent', () => {
   let component: StrategyBuilderComponent;
+  let fixture: ComponentFixture<StrategyBuilderComponent>;
   let httpMock: HttpTestingController;
 
   beforeEach(() => {
@@ -96,7 +100,7 @@ describe('StrategyBuilderComponent', () => {
         ...fakePickerWorld().providers,
       ],
     });
-    const fixture = TestBed.createComponent(StrategyBuilderComponent);
+    fixture = TestBed.createComponent(StrategyBuilderComponent);
     component = fixture.componentInstance;
     httpMock = TestBed.inject(HttpTestingController);
   });
@@ -108,6 +112,28 @@ describe('StrategyBuilderComponent', () => {
       if (!req.cancelled) req.flush({ data: {} });
     });
     httpMock.verify();
+  });
+
+  it('omits a broker identity and Greeks when multiple contracts match a hypothetical leg', async () => {
+    const expiry = optionExpiryAnchorMs('2027-01-15');
+    const snapshot: SnapshotContractResult = {
+      ticker: 'O:SPY270115C00590000', contractType: 'call', strikePrice: 590, expirationMs: expiry,
+      breakEvenPrice: null, impliedVolatility: 0.2, openInterest: null, greeks: { delta: 0.7, gamma: null, theta: null, vega: null },
+      day: null, lastTrade: null, lastQuote: { bid: 3.1, ask: 3.2, bidSize: null, askSize: null, midpoint: 3.15, timeframe: null },
+    };
+    component.selectedExpiration.set(expiry);
+    component.allContracts.set([snapshot, { ...snapshot, ticker: 'O:SPY1270115C00590000' }]);
+    component.legs.set([{ strike: 590, optionType: 'call', position: 'long', premium: 3.2, iv: 0.2, quantity: 1, enabled: true }]);
+    fixture.detectChanges();
+
+    const root: HTMLElement = fixture.nativeElement;
+    const chip = root.querySelector<HTMLElement>('.leg-chip .option-chip');
+    if (!chip) throw new Error('Expected the leg’s option chip');
+    await userEvent.hover(chip);
+    const details = within(await screen.findByRole('tooltip'));
+    expect(details.queryByText(snapshot.ticker ?? '')).toBeNull();
+    expect(details.queryByText('Delta')).toBeNull();
+    expect(details.queryByText('Bid')).toBeNull();
   });
 
   // ── SB-A: Data-fetch prelude ───────────────────────────────────
@@ -570,7 +596,7 @@ describe('StrategyBuilderComponent', () => {
         ...fakePickerWorld().providers,
       ],
       });
-      const fixture = TestBed.createComponent(StrategyBuilderComponent);
+      fixture = TestBed.createComponent(StrategyBuilderComponent);
       expect(fixture.componentInstance.chainDensity()).toBe('quick');
     });
 

@@ -1,3 +1,4 @@
+import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -50,7 +51,7 @@ const REVIEW_UNANSWERED = 'The review was not recorded, so the result is not kno
 @Component({
   selector: 'app-bot-option-buying-power',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [BotEndRefusalComponent, TimestampDisplayComponent, TypedHaltConfirmComponent],
+  imports: [AssetIdentityComponent, BotEndRefusalComponent, TimestampDisplayComponent, TypedHaltConfirmComponent],
   templateUrl: './bot-option-buying-power.component.html',
   styleUrl: './bot-option-buying-power.component.scss',
 })

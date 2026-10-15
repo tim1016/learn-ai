@@ -39,6 +39,16 @@
   --asset-identity-fallback-border: rgba(255, 255, 255, 0.28);
 }
 
+// Preserve the public renderer's sizing and color overrides at the wordmark boundary.
+app-asset-wordmark {
+  --asset-identity-logo-size: inherit;
+  --asset-identity-symbol-color: inherit;
+  --asset-identity-name-color: inherit;
+  --asset-identity-exchange-color: inherit;
+  --asset-identity-fallback-bg: inherit;
+  --asset-identity-fallback-border: inherit;
+}
+
 .asset-identity__logo,
 .asset-identity__fallback {
   width: var(--asset-identity-logo-size);

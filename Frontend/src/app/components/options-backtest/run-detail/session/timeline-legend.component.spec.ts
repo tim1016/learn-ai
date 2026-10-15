@@ -18,8 +18,8 @@ describe('the legend of the chart', () => {
     expect(panes.length).toBe(3);
     expect(panes[0].querySelector('app-asset-identity')).not.toBeNull();
     expect(panes[0].querySelector('app-option-contract')).toBeNull();
-    expect(reads(panes[1].querySelector('app-option-contract'))).toContain("Oct 16 '26 585 Call");
-    expect(reads(panes[2].querySelector('app-option-contract'))).toContain("Oct 16 '26 585 Put");
+    expect(reads(panes[1].querySelector('app-option-contract'))).toContain("Call 585 Oct 16 '26");
+    expect(reads(panes[2].querySelector('app-option-contract'))).toContain("Put 585 Oct 16 '26");
   });
 
   it('draws a swatch of the line’s own style in the colour of its token, and a glyph in the mark’s colour', async () => {
@@ -66,7 +66,7 @@ describe('what the chart does not draw', () => {
     const items = within(screen.getByRole('region', { name: 'Not drawn' })).getAllByRole('listitem');
     expect(items.map((item) => reads(item))).toEqual([
       `SPY : Lake Unavailable ${SERIES_WORDS.lake_unavailable}`,
-      `SPY Oct 16 '26 585 Put : Gone ${SERIES_WORDS.gone} Its levels, fills and marks are listed below.`,
+      `SPY Put 585 Oct 16 '26 : Gone ${SERIES_WORDS.gone} Its levels, fills and marks are listed below.`,
     ]);
   });
 
@@ -74,10 +74,10 @@ describe('what the chart does not draw', () => {
     await renderLegend(buildTimelinePlan(sessionDetail({ levels: [{ ...SCENE_LEVELS[2], price_usd: 'x' }] })));
 
     const items = within(screen.getByRole('region', { name: 'Not drawn' })).getAllByRole('listitem');
-    expect(items.map((item) => reads(item))).toEqual([`Stop level of SPY Oct 16 '26 585 Call : ${UNPLACEABLE}`]);
+    expect(items.map((item) => reads(item))).toEqual([`Stop level of SPY Call 585 Oct 16 '26 : ${UNPLACEABLE}`]);
   });
 
-  it('names a withheld underlying through the shared symbol renderer, and keeps plain code for a contract symbol the server sent no parts for', async () => {
+  it('names a withheld underlying and decodes an option symbol even without separate contract parts', async () => {
     const { container } = await renderLegend(buildTimelinePlan(sessionDetail({
       underlying: withheldSeries('SPY', null, 'gone'),
       contracts: [withheldSeries(CALL_585.symbol, null, 'gone'), shownSeries(PUT_585.symbol, PUT_585, [[3, '1.40'], [4, '1.44']])],
@@ -87,8 +87,7 @@ describe('what the chart does not draw', () => {
     expect(items.length).toBe(2);
     expect(items[0].querySelector('app-asset-identity')).not.toBeNull();
     expect(items[0].querySelector('code')).toBeNull();
-    expect(items[1].querySelector('app-asset-identity')).toBeNull();
-    expect(reads(items[1].querySelector('code'))).toBe(CALL_585.symbol);
+    expect(items[1].querySelector('.option-chip')?.getAttribute('aria-label')).toBe("SPY Oct 16 '26 585 Call");
   });
 
   it('never leaves the words of a withheld series empty: the page says that the server gave none', async () => {
