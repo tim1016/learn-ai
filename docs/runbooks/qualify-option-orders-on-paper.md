@@ -610,12 +610,11 @@ time, anything not promoted is off, and the amendment lists what stays unverifie
 Write these into the amendment as unverified; do not let a clean run read as
 proof of them.
 
-- **Regulatory fees.** Paper takes the OCC clearing fee at the fill ($0.025 a contract,
-  the order's total rounded up to the cent: $0.03 for one contract, $0.05 for two, on
-  2026-10-14) and posts the regulatory fees the morning after, as non-trade
-  `FEE` rows dated the trading day. A same-day run shows none of those rows, so
-  what this system's fee model estimates for a spread's legs is checked only
-  against the next morning's. Fee accounting stays unverified until then.
+- **Regulatory fees on the trade day.** Paper posts non-trade `FEE` rows the
+  morning after, dated the trading day. A same-day run cannot check its fee
+  estimates. The 2026-10-15 comparison of the previous day's rows found that
+  Alpaca's OCC and OPT TAF charges exceed this model's estimates (#3306); see
+  the run record below. Check the posted rows before qualifying fee accounting.
 - **Assignment, exercise and expiry.** No event for them arrives on the trade
   stream, and a later activity row arrives a day after. Nothing in a same-day
   experiment exercises that path.
@@ -787,3 +786,54 @@ The second day, on the same flat Paper account (option level 3), after #3137 and
   again after any refused attempt.
 - **Not run.** Shapes C and D and the hand-placed sign check of a *received* price (it is the owner's,
   at Alpaca's dashboard); the buy-back of one sold leg.
+
+## Run record: 2026-10-15, the spread fee check (#3225)
+
+The Paper journal's activity feed now carries 42 distinct `FEE` rows dated
+2026-10-14 for 38 distinct option-leg fills in 24 orders: 10 one-leg orders and
+14 two-leg `mleg` orders. The fee rows have no order identifier. One $0.03 OCC
+row for each leg fill is therefore an **inferred**, not directly linked,
+per-order attribution; the account-day totals are directly observed. The
+underlying bundles and order identifiers stay offline.
+
+| Fill time (ms UTC) | Legs | OCC model, order alone | OCC posted, inferred | Posted less model |
+|---:|---:|---:|---:|---:|
+| 1791985682018 | 1 | $0.03 | $0.03 | $0.00 |
+| 1791985860867 | 1 | $0.03 | $0.03 | $0.00 |
+| 1791989771937 | 1 | $0.03 | $0.03 | $0.00 |
+| 1791989942113 | 1 | $0.03 | $0.03 | $0.00 |
+| 1791990665693 | 1 | $0.03 | $0.03 | $0.00 |
+| 1791991012782 | 1 | $0.03 | $0.03 | $0.00 |
+| 1791992823371 | 1 | $0.03 | $0.03 | $0.00 |
+| 1791992827020 | 1 | $0.03 | $0.03 | $0.00 |
+| 1791993001228 | 1 | $0.03 | $0.03 | $0.00 |
+| 1791993001335 | 1 | $0.03 | $0.03 | $0.00 |
+| 1791993543721 | 2 | $0.05 | $0.06 | +$0.01 |
+| 1791995484539 | 2 | $0.05 | $0.06 | +$0.01 |
+| 1791999844075 | 2 | $0.05 | $0.06 | +$0.01 |
+| 1792000021098 | 2 | $0.05 | $0.06 | +$0.01 |
+| 1792000503610 | 2 | $0.05 | $0.06 | +$0.01 |
+| 1792000681153 | 2 | $0.05 | $0.06 | +$0.01 |
+| 1792000803224 | 2 | $0.05 | $0.06 | +$0.01 |
+| 1792000983546 | 2 | $0.05 | $0.06 | +$0.01 |
+| 1792001043546 | 2 | $0.05 | $0.06 | +$0.01 |
+| 1792001106712 | 2 | $0.05 | $0.06 | +$0.01 |
+| 1792001220716 | 2 | $0.05 | $0.06 | +$0.01 |
+| 1792001283968 | 2 | $0.05 | $0.06 | +$0.01 |
+| 1792002543815 | 2 | $0.05 | $0.06 | +$0.01 |
+| 1792007400459 | 2 | $0.05 | $0.06 | +$0.01 |
+
+Across the account day, `settle_option_session` rounds OCC once and predicts
+$0.95; Alpaca posted 38 × $0.03 = $1.14, a $0.19 difference. The model
+predicts no OPT TAF on this date; Alpaca posted $0.06 for 19 sold contracts.
+ORF ($0.57), CAT ($0.02) and OPT REG/SEC ($0.11) agree exactly. Total posted
+fees were $1.90 against the model's $1.65, $0.25 more. The two model differences
+are tracked separately in #3306; the qualification does not change the model.
+
+At the account's Home read before the next experiment, there were no running
+bots or held positions and no fee notice was visible. Home still displayed
+`Fees not posted yet` of $0.36. The deploy check initially reported an IBKR
+disconnect and an exposure hold, then the Gateway reconnected and the hold
+cleared; the remaining `Profile defaults pre-fill future deployments only`
+row is not a fee notice. Recheck Home and the account's posture immediately
+before the owner's hand-placed sign check.
