@@ -53,10 +53,6 @@ class AccountInstanceBindingIndex:
     active_by_namespace: Mapping[str, tuple[AccountInstanceBinding, ...]]
 
 
-def bot_order_namespace_for_instance(strategy_instance_id: str) -> str:
-    return f"learn-ai/{strategy_instance_id}/v1"
-
-
 def read_account_instance_registry(
     artifacts_root: Path,
     account_id: str,
@@ -170,7 +166,6 @@ __all__ = [
     "ACTIVE_INSTANCE_BINDING_STATES",
     "AccountInstanceBinding",
     "AccountInstanceBindingIndex",
-    "bot_order_namespace_for_instance",
     "index_account_instance_bindings",
     "read_account_instance_registry",
 ]

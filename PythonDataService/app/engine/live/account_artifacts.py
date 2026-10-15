@@ -29,11 +29,6 @@ def safe_account_artifact_id(account_id: str) -> str:
     return safe_account_id
 
 
-# Private compatibility alias for the older binding-ledger import. New callers
-# should use the public name so the path-boundary contract is explicit.
-_safe_account_path_segment = safe_account_artifact_id
-
-
 def account_artifacts_root(artifacts_root: Path, account_id: str) -> Path:
     """Return the confined account artifact directory for one account id.
 

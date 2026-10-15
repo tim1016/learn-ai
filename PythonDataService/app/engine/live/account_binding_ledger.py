@@ -16,8 +16,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.engine.live.account_artifacts import (
     AccountArtifactError,
-    _safe_account_path_segment,
     account_artifacts_root,
+    safe_account_artifact_id,
 )
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
@@ -81,7 +81,7 @@ def account_binding_ledger_read_enabled() -> bool:
 def binding_command_ledger_path(artifacts_root: Path, account_id: str) -> Path:
     """Return one confined ledger path for a canonical account id."""
 
-    safe_account_id = _safe_account_path_segment(account_id)
+    safe_account_id = safe_account_artifact_id(account_id)
     root = os.path.realpath(os.fspath(account_artifacts_root(artifacts_root, safe_account_id)))
     filename = os.path.basename(BINDING_COMMAND_LEDGER_FILENAME)
     if filename != BINDING_COMMAND_LEDGER_FILENAME:

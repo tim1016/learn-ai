@@ -588,7 +588,6 @@ class BotTaskRegistry:
             clock=self._now_ms,
         )
         self._boot_recovery = BotBootRecovery(
-            self._artifacts_root,
             lifecycle_repo_for=self._lifecycle_repo,
             lifecycle_projector=self._lifecycle_projector,
             lifecycle_projector_for=self._lifecycle_projector_for_instance,

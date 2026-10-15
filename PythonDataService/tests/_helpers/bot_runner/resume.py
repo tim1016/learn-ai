@@ -132,5 +132,3 @@ def _first_resumed_bar() -> MarketDataBar:
         feed_id="ibkr",
         session_phase="RTH",
     )
-
-

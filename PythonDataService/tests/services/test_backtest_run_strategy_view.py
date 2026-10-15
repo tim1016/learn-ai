@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections import OrderedDict
+import threading
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -389,7 +389,6 @@ async def test_the_route_checks_the_replay_against_trades_older_than_the_report_
     saved_run: RunDetail, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The run report keeps only a run's newest trades; the replay is held to every one."""
-    monkeypatch.setattr(backtest_runs, "_view_cache", OrderedDict())
     first, *rest = saved_run.trades
     moved = replace(saved_run, trades=(replace(first, entry_price=first.entry_price + 0.01), *rest))
 
@@ -407,31 +406,31 @@ async def test_the_route_checks_the_replay_against_trades_older_than_the_report_
     assert "changed its trade 1" in refused.json()["detail"]["message"]
 
 
-async def test_a_replay_in_flight_is_joined_and_then_kept(
+async def test_a_replay_in_flight_is_joined_and_a_later_read_rechecks_the_lake(
     saved_run: RunDetail, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A strategy view replays a whole backtest: a second read joins the first, and a third is served kept."""
-    monkeypatch.setattr(backtest_runs, "_view_cache", OrderedDict())
+    """Concurrent readers share one replay, then a later read rechecks mutable lake data."""
     view = await asyncio.to_thread(build_backtest_run_strategy_view, saved_run)
     built: list[int] = []
+    started = threading.Event()
+    release = threading.Event()
 
     def build(run: RunDetail):
         built.append(run.id)
+        started.set()
+        assert release.wait(2)
         return view
 
-    async def read(function: object, run_id: int, **_kwargs: object) -> RunDetail:
-        return saved_run
-
     monkeypatch.setattr(backtest_runs, "build_backtest_run_strategy_view", build)
-    monkeypatch.setattr(backtest_runs, "with_connection", read)
-    app = FastAPI()
-    app.include_router(backtest_runs.router, prefix="/api/research/backtest-runs")
-    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        first, second = await asyncio.gather(
-            client.get("/api/research/backtest-runs/7/strategy-view"),
-            client.get("/api/research/backtest-runs/7/strategy-view"),
-        )
-        third = await client.get("/api/research/backtest-runs/7/strategy-view")
+    first = asyncio.create_task(backtest_runs._replayed_view(saved_run))
+    assert await asyncio.to_thread(started.wait, 2)
+    second = asyncio.create_task(backtest_runs._replayed_view(saved_run))
+    await asyncio.sleep(0)
+    release.set()
 
-    assert [response.status_code for response in (first, second, third)] == [200, 200, 200]
+    first_view, second_view = await asyncio.gather(first, second)
+    assert (first_view, second_view) == (view, view)
     assert built == [7]
+
+    assert await backtest_runs._replayed_view(saved_run) == view
+    assert built == [7, 7]
