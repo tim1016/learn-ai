@@ -15,10 +15,9 @@
  *    maintenance hazard, not a real fallback).
  * 3. **Non-empty prose** — every fallback entry has real message and
  *    next-step text, not an empty string a caller would render as blank.
- * 4. **Outcome derivation matches pinned status** — every `409` family maps
- *    to `'conflict'` and every other status maps to `'failure'`, which is
- *    the exact rule `deriveActionRejection` needs to stop a fleet 409 from
- *    reading as "Unknown" (#2102).
+ * 4. **Outcome derivation matches meaning** — conflicts map to `'conflict'`,
+ *    an unsettled dispatch maps to `'unknown'`, and other refusals map to
+ *    `'failure'`.
  *
  * Adding a fleet refusal family requires updating:
  *   1. PythonDataService/app/broker/fleet/refusal_vocabulary.py
@@ -60,9 +59,11 @@ describe('FLEET_REFUSAL_COPY', () => {
     expect(blank).toEqual([]);
   });
 
-  it('derives conflict for every 409 family and failure for every other pinned status', () => {
+  it('derives unknown for an unsettled dispatch, conflict for 409, and failure otherwise', () => {
     const mismatched = SNAPSHOT_CODES.filter((code) => {
-      const expected = SNAPSHOT_REASONS[code].status_code === 409 ? 'conflict' : 'failure';
+      const expected = code === 'clerk_routing_outcome_unknown'
+        ? 'unknown'
+        : SNAPSHOT_REASONS[code].status_code === 409 ? 'conflict' : 'failure';
       return FLEET_REFUSAL_COPY[code]?.outcome !== expected;
     });
 

@@ -399,6 +399,33 @@ async def test_off_loop_abandoned_fold_timeout_poisons_the_fence(
     fold_release.set()
 
 
+async def test_poison_refuses_reentry_by_the_task_still_holding_the_fence() -> None:
+    fence = ReentrantAsyncLock(abandoned_hop_timeout_s=0.05)
+    fold_started = threading.Event()
+    fold_release = threading.Event()
+
+    def stuck_fold() -> None:
+        fold_started.set()
+        fold_release.wait(timeout=10)
+
+    async def holder() -> None:
+        async with fence:
+            try:
+                await fence.off_loop(stuck_fold)
+            except asyncio.CancelledError:
+                with pytest.raises(IntakeFencePoisonedError):
+                    async with fence:
+                        pass
+
+    task = asyncio.create_task(holder())
+    try:
+        await asyncio.get_running_loop().run_in_executor(None, fold_started.wait, 10)
+        task.cancel()
+        await asyncio.wait_for(task, timeout=5)
+    finally:
+        fold_release.set()
+
+
 async def test_off_loop_poison_refuses_waiters_parked_before_it_was_set() -> None:
     """Tasks queued behind a wedged fold must not be admitted by the release
     that poisons the fence (#3160).

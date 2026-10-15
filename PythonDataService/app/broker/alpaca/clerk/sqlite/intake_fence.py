@@ -99,12 +99,12 @@ class ReentrantAsyncLock:
         current = asyncio.current_task()
         if current is None:
             raise RuntimeError("SQLite Clerk intake requires an asyncio task")
+        if self._poisoned_reason is not None:
+            raise IntakeFencePoisonedError(self._poisoned_reason)
         if self._owner is current:
             self._depth += 1
             self._scope_tokens.append(self._enter_dynamic_scope())
             return self
-        if self._poisoned_reason is not None:
-            raise IntakeFencePoisonedError(self._poisoned_reason)
 
         await self._lock.acquire()
         if self._poisoned_reason is not None:

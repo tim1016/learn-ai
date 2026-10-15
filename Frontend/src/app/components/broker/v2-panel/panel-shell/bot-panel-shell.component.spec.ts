@@ -1490,6 +1490,9 @@ describe('BotPanelShellComponent', () => {
       const plan = screen.getByRole('region', { name: 'Prepared safe-flatten reduction plan' });
       expect(plan.textContent).not.toContain('No order has been submitted');
       expect(plan.textContent).toContain('is not known');
+      if (_name === 'a lane that failed after dispatch') {
+        expect(outcomeText('alert')).toContain('Unknown');
+      }
     });
 
     it('keeps saying no order was submitted when the request never went out (#3178)', async () => {

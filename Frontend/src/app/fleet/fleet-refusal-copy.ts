@@ -12,20 +12,16 @@
  * `panel-action-outcome.ts`'s `deriveActionRejection`, which consults this
  * map only when the refusal body itself carries none.
  *
- * `outcome` is hand-set from each family's pinned wire status, per the retry
- * semantics `refusal_vocabulary.py`'s module docstring pins: a `409` is a
- * state conflict the caller must re-read and re-prepare before retrying —
- * `'conflict'`. Every other status (terminal `404`s, retry-safe `503`s, the
- * `4xx` auth/validation refusals) is a `'failure'` the panel cannot resolve
- * by re-preparing the identical command — `ActionRejection.outcome` has no
- * finer-grained bucket than `conflict` / `failure` / `unknown`.
+ * `outcome` follows each family's meaning: an unsettled dispatched command
+ * is `unknown`, a `409` state conflict is `conflict`, and other refusals are
+ * `failure`. The backend's prose still supplies the specific next step.
  *
  * Locked against `fleet-refusal-vocabulary.snapshot.json` by
  * `fleet-refusal-copy.spec.ts`: a reason code the backend mints without a
  * matching entry here fails that test instead of silently rendering blank.
  */
 
-export type FleetRefusalOutcome = 'conflict' | 'failure';
+export type FleetRefusalOutcome = 'conflict' | 'failure' | 'unknown';
 
 export interface FleetRefusalCopy {
   readonly outcome: FleetRefusalOutcome;
@@ -125,7 +121,7 @@ export const FLEET_REFUSAL_COPY: Readonly<Record<string, FleetRefusalCopy>> = {
     nextStep: "Refresh the routing attempt's state, then re-prepare the command with a fresh key if needed.",
   },
   clerk_routing_outcome_unknown: {
-    outcome: 'failure',
+    outcome: 'unknown',
     message: "The last routing attempt's outcome could not be confirmed.",
     nextStep: 'Retry with the same broker, clerk, and idempotency identity.',
   },

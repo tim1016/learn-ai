@@ -92,7 +92,6 @@ export class AccountDeskTransactionHistoryStore {
     this.loadingState.set(true);
     this.loadedCountState.set(0);
     this.loadedPagesState.set(0);
-    this.rowLimitReachedState.set(false);
     this.errorState.set(null);
     try {
       let cursor: string | null = null;

@@ -205,10 +205,8 @@ describe('fleet refusals (flat body, no `detail` envelope)', () => {
 describe('fleet refusal vocabulary fallback (#2067, #2102)', () => {
   // The fleet's flat body never carries an `outcome` field, so before this
   // fallback every fleet refusal — a fence's own #2068 rejection included —
-  // rendered as the literal word "Unknown". A known code must now read
-  // `conflict` for a 409 and `failure` for anything else; an unrecognized
-  // code must still fall back to `unknown` rather than a plausible-looking
-  // wrong guess.
+  // rendered as the literal word "Unknown". A known code reads its pinned
+  // outcome; an unrecognized code falls back to `unknown`.
   it('derives conflict for a known 409 fleet reason with no outcome field', () => {
     const error = new HttpErrorResponse({
       status: 409,
@@ -228,6 +226,21 @@ describe('fleet refusal vocabulary fallback (#2067, #2102)', () => {
     });
 
     expect(deriveActionRejection(error, 'fallback').outcome).toBe('failure');
+  });
+
+  it('labels a dispatched command whose outcome could not be settled as unknown', () => {
+    const error = new HttpErrorResponse({
+      status: 503,
+      error: {
+        reason: 'clerk_routing_outcome_unknown',
+        message: 'The command may have been applied.',
+        next_step: 'Reconcile by the idempotency key.',
+      },
+    });
+
+    const rejection = deriveActionRejection(error, 'fallback');
+    expect(rejection.outcome).toBe('unknown');
+    expect(rejection.message).toBe('The command may have been applied.');
   });
 
   it('leaves outcome as unknown for a reason code outside the closed vocabulary', () => {
