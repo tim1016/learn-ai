@@ -333,9 +333,11 @@ The items below remain open.
   at 270 ms after further settling), and no restart was needed. Neither
   symptom reproduces. This is a **non-reproduction, not a fix** — the
   original observation was not attributed. One condition differs: the
-  2026-08-26 run had IB Gateway live, and IBKR has since been decommissioned
-  (#1813); its auto-reconnect monitor polls at 3 s and is gated on
-  `ibkr_settings.broker_enabled`. That is a plausible but unproven cause.
+  2026-08-26 run had IB Gateway live. IBKR remains the read-only market-data
+  provider for Alpaca bots under ADR 0062; #1813 retired IBKR bot control,
+  not this feed. The auto-reconnect monitor polls at 3 s and is gated on
+  `ibkr_settings.broker_enabled`, so a different feed state is a plausible
+  but unproven cause.
   Delete this bullet if a second stopped-fleet run also comes back clean.
 - **S10 UI — active holds contradict roster counts and guidance (medium;
   partially cured).** An active stream-health hold can coexist with "Running 0,
