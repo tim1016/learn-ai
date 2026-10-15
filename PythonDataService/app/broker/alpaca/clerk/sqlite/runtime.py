@@ -1288,13 +1288,20 @@ class SqliteAlpacaClerkFacade:
         """
         reading = None if self._buying_power is None else self._buying_power.begin_first()
         try:
-            answers = await asyncio.wait_for(
-                asyncio.gather(
-                    *(self._read.get_option_contract(contract) for contract in contracts),
-                    return_exceptions=len(contracts) > 1,
-                ),
-                timeout=CONTRACT_REFERENCE_READ_BOUND_MS / 1000,
-            )
+            if len(contracts) == 1:
+                answers = (
+                    await asyncio.wait_for(
+                        self._read.get_option_contract(contracts[0]),
+                        timeout=CONTRACT_REFERENCE_READ_BOUND_MS / 1000,
+                    ),
+                )
+            else:
+                answers = await asyncio.wait_for(
+                    asyncio.gather(
+                        *(self._read.get_option_contract(contract) for contract in contracts), return_exceptions=True
+                    ),
+                    timeout=CONTRACT_REFERENCE_READ_BOUND_MS / 1000,
+                )
         except BaseException:
             if reading is not None:
                 reading.cancel()

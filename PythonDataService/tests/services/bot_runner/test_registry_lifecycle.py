@@ -1031,7 +1031,6 @@ class _CustodyWhenAlpacaCannotBeRead:
                 "exposure": CustodyExposureFact(state="unknown"),
                 "working_orders": unknown,
                 "pending_orders": unknown,
-                "terminal_orders": unknown,
                 "unresolved_effects": unknown,
                 "freeze": AccountFreezeState(
                     active=True,

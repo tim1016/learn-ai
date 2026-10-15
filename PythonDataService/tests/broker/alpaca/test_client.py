@@ -928,7 +928,7 @@ async def test_order_send_claim_outlasts_the_real_submit_retry_loop_at_its_worst
 
     # Three attempts is the loop's whole budget: the measured time is its worst case.
     assert calls["n"] == _MAX_RATE_LIMIT_RETRIES + 1
-    assert DEFAULT_CLAIM_TTL_MS > round(elapsed_s * 1000)
+    assert round(elapsed_s * 1000) < DEFAULT_CLAIM_TTL_MS
 
 
 def test_client_rejects_timeout_above_the_claimed_send_bound() -> None:

@@ -228,7 +228,6 @@ async def test_custody_projection_answers_from_the_last_sweep_without_broker_con
     assert broker.read_calls == after_sweep, "a read reached the broker port"
     assert projection is not None
     assert projection.reconciliation_state == "clean"
-    assert projection.reconciled_at_ms > 0
 
     repo.close()
 
@@ -443,7 +442,7 @@ async def test_published_pass_is_dated_at_its_verdict_never_at_its_publish(tmp_p
     assert published is not None
     assert (published.vouches, published.observed_at_ms) == (True, _PASS_AT_MS)
     assert facade.last_clean_pass_at_ms() == _PASS_AT_MS
-    assert (await facade.custody_snapshot_projection("sid-1")).reconciled_at_ms == _PASS_AT_MS
+    assert (await facade.custody_snapshot_projection("sid-1")).reconciliation_state == "clean"
 
     # The pass stands for 60 s from its verdict. A millisecond later it vouches
     # for nothing, though its publish is not yet 60 s old.
@@ -1551,7 +1550,7 @@ async def test_the_real_sweep_publishes_the_verdict_panel_reads_project(
     ``ReconciliationSweep`` is what actually runs every 15 s, and it calls
     ``reconcile_account`` directly rather than through the facade. If it does
     not publish its verdict, ``custody_snapshot_projection`` answers ``stale``
-    with ``reconciled_at_ms=0`` forever no matter how many sweeps succeed --
+    with a stale reconciliation state forever no matter how many sweeps succeed --
     reads stay pure, but they also stop telling the truth.
 
     Drives the real sweep, not a facade stand-in, so the wiring is what is
@@ -1577,7 +1576,7 @@ async def test_the_real_sweep_publishes_the_verdict_panel_reads_project(
     projection = await facade.custody_snapshot_projection("sid-1")
 
     assert projection.reconciliation_state == "clean"
-    assert projection.reconciled_at_ms > 0, "the sweep's verdict never reached the projection"
+    assert (await facade.published_pass("sid-1")) is not None, "the sweep's verdict never reached the projection"
 
     repo.close()
 

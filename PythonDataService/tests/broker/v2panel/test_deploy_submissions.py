@@ -44,7 +44,7 @@ from app.services.broker_v2_panel.deploy_submissions import (
 )
 from app.services.broker_v2_panel.paper_deploy_service import resolve_deploy_strategy_params
 from app.utils import timestamps
-from tests.broker.v2panel.conftest import _BODY, _SETTINGS, DEPLOYED_SID, account_snapshot
+from tests.broker.v2panel.conftest import _BODY, _SETTINGS, DEPLOYED_SID, account_snapshot, committed_receipt
 from tests.broker.v2panel.fixtures import ACCT
 
 _ALLOW_BODY_STRATEGY = frozenset({("ema_crossover_signal", ACCT)})
@@ -808,7 +808,7 @@ async def test_a_key_claimed_under_one_account_is_never_read_as_not_committed_th
         budgeted.refuse.append(BudgetUnavailable("Wait for a fresh IBKR price, then review Deploy again."))
 
     async with _client(budgeted.app) as client:
-        deployed = await client.post(_BOTS, json=_BUDGETED)
+        deployed = await client.post(_BOTS, json=_BODY)
         _custody_holds_only(budgeted, monkeypatch, ACCT)
         _lane_now_serves(_OTHER_ACCT)
         elsewhere = await client.get(f"{_OTHER_RECOVERY}/{_BODY['submission_key']}")
@@ -841,7 +841,7 @@ async def test_a_deploy_being_sent_is_never_called_in_flight_through_another_acc
     budgeted.registry.deploy_with_admission = slow_deploy
 
     async with _client(budgeted.app) as client:
-        sending = asyncio.create_task(client.post(_BOTS, json=_BUDGETED))
+        sending = asyncio.create_task(client.post(_BOTS, json=_BODY))
         await asyncio.wait_for(entered.wait(), timeout=5)
         _lane_now_serves(_OTHER_ACCT)
         elsewhere = await client.get(f"{_OTHER_RECOVERY}/{_BODY['submission_key']}")
@@ -861,7 +861,7 @@ async def test_the_recovery_read_answers_a_committed_receipt_while_the_broker_ac
         raise BrokerError("The account could not be read.", broker="alpaca")
 
     async with _client(budgeted.app) as client:
-        deployed = await client.post(_BOTS, json=_BUDGETED)
+        deployed = await client.post(_BOTS, json=_BODY)
         monkeypatch.setattr(get_broker_registry().resolve("alpaca"), "get_account", account_read_fails)
         clear_broker_account_snapshot_cache_for_testing()
         recovered = await client.get(f"{_RECOVERY}/{_BODY['submission_key']}")
@@ -873,7 +873,7 @@ async def test_the_recovery_read_answers_a_committed_receipt_while_the_broker_ac
 
 async def test_the_recovery_read_takes_the_account_in_any_case(budgeted) -> None:
     async with _client(budgeted.app) as client:
-        first = await client.post(_BOTS, json=_BUDGETED)
+        first = await client.post(_BOTS, json=_BODY)
         recovered = await client.get(f"/api/brokers/alpaca/accounts/{ACCT.upper()}/deploy-submissions/{_BODY['submission_key']}")
 
     assert recovered.status_code == 200
@@ -887,7 +887,7 @@ async def test_a_claim_from_before_claims_named_their_account_is_read_as_it_alwa
     """No account was recorded, so none can disagree: custody is read under the route's own account."""
     _write_claim_from_before_claims_named_an_account(budgeted.registry.artifacts_root, _BODY["submission_key"], DEPLOYED_SID)
     if committed:
-        budgeted.committed[DEPLOYED_SID] = _receipt(DEPLOYED_SID)
+        budgeted.committed[DEPLOYED_SID] = committed_receipt(DEPLOYED_SID)
 
     async with _client(budgeted.app) as client:
         recovered = await client.get(f"{_RECOVERY}/{_BODY['submission_key']}")
