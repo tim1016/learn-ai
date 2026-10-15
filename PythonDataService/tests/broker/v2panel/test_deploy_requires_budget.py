@@ -55,7 +55,7 @@ async def test_a_resend_with_no_budget_of_a_key_an_earlier_send_claimed_is_not_s
     fast_app, registry = deploy_with_the_pairing_admitted
     request = AlpacaDeploySubmission.model_validate(_NO_BUDGET)
     DeploySubmissionLedger(registry.artifacts_root).claim(
-        submission_key=request.submission_key, symbol=request.symbol, strategy_key=request.strategy_key,
+        submission_key=request.submission_key, account_id=ACCT, symbol=request.symbol, strategy_key=request.strategy_key,
         request_fingerprint=panel_deploy._submission_fingerprint(ACCT, request),
         replaces_strategy_instance_id=None, now_ms=1_790_000_000_000,
     )
