@@ -183,7 +183,7 @@ new lane. Changing a saved profile does not transfer an account assignment.
    ```
 
 6. Run the roster check in section 1. If a fresh/reset Paper account reports
-   `ACTIVATION_REQUIRED` or `developer_reset_reactivation_required`, continue
+   `ACTIVATION_REQUIRED` or `DEVELOPER_RESET_REACTIVATION_REQUIRED`, continue
    with section 4. A newly bound Live Shadow lane should use `shadow`; do not
    perform the Paper ceremony against it.
 
@@ -626,7 +626,7 @@ archive or a stopped container has closed it.
 | Message or symptom | Meaning | Recovery and completion check |
 |---|---|---|
 | Account card opens but roster does not | Custody may be unavailable, or an account request may have failed | Run `status --require roster`; follow any startup refusal. If it succeeds but the menu still fails, reload the app and retain the failing URL/error for diagnosis; do not reassign the account to fix a link. |
-| `developer_reset_reactivation_required` | Paper authority was deliberately moved aside | Section 4; preserve old generation and backup. |
+| `DEVELOPER_RESET_REACTIVATION_REQUIRED` | Paper authority was deliberately moved aside | Section 4; preserve old generation and backup. |
 | `ACTIVATION_REQUIRED` on fresh Paper | Account verified but custody not activated | Section 4, then check roster readiness. This is not required for Live Shadow. |
 | Account pin missing/mismatch | Verified account was not approved, or credentials changed | Verify the intended number, approve, stage/apply, restart; never pin the wrong returned account. |
 | Apply refused because bots remain bound | The proposed change would replace an account still used by bots | Keep the current binding. Inspect its bot list and the exact refusal; do not force a profile swap. |

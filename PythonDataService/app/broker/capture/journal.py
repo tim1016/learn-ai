@@ -34,11 +34,12 @@ Invariants:
   keys are redacted here as defence in depth, in a request body too (the
   vendor capture hook is the first line — it never forwards auth headers or
   key material).
-- **Non-fatal on the read path (phase 1).** A capture failure logs ERROR and
-  increments an observable counter; it never breaks the caller's request. The
-  phase-2 order path flips this to fail-closed (no journal → no order).
+- **The alpaca-py response hook is best-effort.** A journal write failure logs
+  ERROR and increments ``failure_count``; the hook runs after the broker
+  answered, so it cannot prevent an order. Shared market-status reads and
+  stream consumers refuse uncaptured evidence.
 - **Single writer per process.** Appends are serialized by a lock and flushed
-  per line; ``fsync`` is deferred to the phase-2 order path.
+  per line; the journal does not ``fsync`` them.
 """
 
 from __future__ import annotations

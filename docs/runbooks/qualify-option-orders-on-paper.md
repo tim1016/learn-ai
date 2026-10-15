@@ -1,13 +1,13 @@
 # Qualify option orders on a Paper account
 
-This is the operator procedure for the first option orders this system sends to
-Alpaca. Nothing in this repository has sent one: every option path was proven
-on stand-ins and on Alpaca's published examples. This runbook sets one Paper
-account aside, turns one temporary setting on for its Clerk, runs the orders
-through their whole life, sets what Alpaca did beside what the Clerk worked
-out, and ends with the setting off again or with a capability promoted on the
-evidence. Run terminal commands from the repository root. Stop at any failed
-command and use the troubleshooting table.
+This is the operator procedure for qualifying option orders this system sends to
+Alpaca. The run records below cover a bought call and a debit spread on Paper;
+the limit credit opening-order sign and remaining shapes still need their
+checks. This runbook sets one Paper account aside, turns one temporary setting
+on for its Clerk, runs the orders through their whole life, sets what Alpaca
+did beside what the Clerk worked out, and ends with the setting off again or
+with a capability promoted on the evidence. Run terminal commands from the
+repository root. Stop at any failed command and use the troubleshooting table.
 
 The kit that makes the evidence is [ADR 0032, amendment 2](../architecture/adrs/0032-broker-contract-v2-and-verbatim-capture.md)
 (what the capture journal records) and
@@ -787,4 +787,3 @@ The second day, on the same flat Paper account (option level 3), after #3137 and
   again after any refused attempt.
 - **Not run.** Shapes C and D and the hand-placed sign check of a *received* price (it is the owner's,
   at Alpaca's dashboard); the buy-back of one sold leg.
-

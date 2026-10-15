@@ -112,10 +112,9 @@ Targets Angular 22.
 
 ## Accessibility
 
-- All UI must pass AXE.
-- WCAG AA minimums: focus management, color contrast, ARIA.
-- `NgOptimizedImage` for static images (not base64 inline).
-- Every interactive control has an accessible name.
+- Accessibility bugs are out of scope under the 2026-10-12 owner decision in `AGENTS.md`. Do not add fixes, issues, or review findings for ARIA, contrast, focus, or keyboard behavior.
+- Existing axe specs remain in the repository; do not remove them for this rule change.
+- Use `NgOptimizedImage` for static images (not base64 inline).
 
 ## TypeScript
 
