@@ -181,7 +181,7 @@ class ProjectedOperationResponse(BaseModel):
     kind: str
     state: str
     custody_owner: str
-    strategy_instance_id: str
+    strategy_instance_id: str | None
     run_id: str | None
     created_at_ms: int
     updated_at_ms: int

@@ -46781,8 +46781,15 @@
             "type": "string"
           },
           "strategy_instance_id": {
-            "title": "Strategy Instance Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Instance Id"
           },
           "terminal_receipt_id": {
             "anyOf": [

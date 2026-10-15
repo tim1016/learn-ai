@@ -20,6 +20,7 @@ from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.exit_recovery import RecoveryResult, record_exit_recovery
 from app.broker.alpaca.clerk.sqlite.facts import ExitReducingOrderCreatedFacts
+from app.broker.alpaca.clerk.sqlite.manual_orders import accept_manual_order
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.projection_errors import InvalidTimelineCursor
 from app.broker.alpaca.clerk.sqlite.projections import (
@@ -32,6 +33,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import raise_uncertainty
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.contract.models import BrokerOrderLeg
+from app.schemas.alpaca_clerk_sqlite import ClerkProjectionResponse
 from app.utils.timestamps import to_ms_utc
 
 ACCOUNT_ID = "PA-PROJECTION"
@@ -91,6 +93,28 @@ def _repository(tmp_path: Path, clock: _Clock) -> ClerkSqliteRepository:
         config_hash="qqq-hash",
     )
     return repo
+
+
+def test_account_snapshot_serializes_a_manual_custody_operation_without_a_bot(tmp_path: Path) -> None:
+    clock = _Clock()
+    repo = _repository(tmp_path, clock)
+    accepted = accept_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id="operator",
+        ticket_id="7de3a77c-b698-4e0d-a5d1-2f624574ed35",
+        leg_id="09d6d63e-6375-4e6d-8d20-3b1bf70c2465",
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+    )
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock)
+    try:
+        wire = ClerkProjectionResponse.from_projection(reader.account_snapshot())
+    finally:
+        reader.close()
+        repo.close()
+
+    operation = next(item for item in wire.operations if item.effect_operation_id == accepted.leg.effect_operation_id)
+    assert operation.strategy_instance_id is None
 
 
 def test_bot_snapshot_reads_fold_state_and_backend_authors_recovery(tmp_path: Path) -> None:

@@ -25381,7 +25381,7 @@ export interface components {
             /** State */
             state: string;
             /** Strategy Instance Id */
-            strategy_instance_id: string;
+            strategy_instance_id: string | null;
             /** Terminal Receipt Id */
             terminal_receipt_id: string | null;
             /** Transition Count */
