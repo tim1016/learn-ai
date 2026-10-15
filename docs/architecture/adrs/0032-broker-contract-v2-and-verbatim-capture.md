@@ -33,9 +33,13 @@ app/broker/
 3. **Files-canonical capture (decision D3).** Every response — success *or*
    error — is journaled verbatim to an append-only JSONL file before the SDK
    parses it. Files are canonical; any future Postgres projection is rebuildable
-   from them and never authoritative. On the read path a capture failure is
-   non-fatal (logged + counted); the phase-2 order path flips this to
-   fail-closed (no journal → no order).
+   from them and never authoritative. The alpaca-py response hook treats a
+   capture failure as non-fatal (logged; journal write failures counted).
+   The planned phase-2 order-path guarantee (no journal → no order) has not
+   shipped: the REST hook captures an answer after the broker responded, so
+   capture failure cannot prevent an order. Shared market-status reads and
+   stream consumers refuse uncaptured evidence. Appends are flushed per line
+   without `fsync`.
 4. **Registry seam.** `broker_id → BrokerReadPort`; the router resolves the
    `{broker}` path segment, unknown → 404. Ports construct lazily so the service
    boots without credentials.

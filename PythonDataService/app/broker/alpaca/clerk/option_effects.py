@@ -254,8 +254,8 @@ def option_plan_taken(action_plan: ActionPlan, *, real_account: bool, live_shado
         raise OptionPlanRefused(
             OptionEffectRefusal.SEVERAL_LEGS_SETTING_OFF,
             f"This plan opens {len(legs)} option legs as one order. A Paper or a Live account takes such an order "
-            f"only once its deployment turns on {_SEVERAL_LEGS_SETTING}, which is off: no order of several legs "
-            "has been checked against Alpaca yet. A Dry Run takes this plan.",
+            f"only once its deployment turns on {_SEVERAL_LEGS_SETTING}, which is off for this deployment. "
+            "A Dry Run takes this plan.",
         )
     return TakenOptionPlan(legs=legs, underlying=underlyings[0])
 

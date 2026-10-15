@@ -36,8 +36,8 @@ Canonical implementation: the net price is ``app/options/requirement.py``
   nothing but a lone sold leg's sign.
 Validated against: tests/broker/contract/test_options.py, and on the wire
   tests/broker/alpaca/test_adapter_option_orders.py, held to Alpaca's
-  published examples. No order has been sent to Alpaca: the sign of a credit
-  is its reference's sentence, not yet a recording.
+  published examples. Paper recordings cover a bought call and a debit spread;
+  the sign of a limit credit order still has no Paper recording.
 """
 
 from __future__ import annotations
