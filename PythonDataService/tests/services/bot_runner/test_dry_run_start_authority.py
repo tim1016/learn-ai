@@ -39,23 +39,25 @@ async def test_a_start_preview_of_a_new_dry_run_leaves_no_open_authority(tmp_pat
     registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
 
     for sid in ("preview-one", "preview-two", "preview-three"):
-        await registry.preview_start_admission(
-            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=sid, symbol="SPY", mode="dry_run",
-        )
+        for _ in range(2):
+            await registry.preview_start_admission(
+                exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=sid, symbol="SPY", mode="dry_run",
+            )
 
-        assert get_clerk_runtime(f"sim:{sid}") is None
+            assert get_clerk_runtime(f"sim:{sid}") is None
 
 
 async def test_a_refused_dry_run_start_leaves_no_open_authority(tmp_path: Path) -> None:
     # No market-data feed is installed: the Start is refused on the evidence it has.
     registry = _registry(tmp_path, None)
 
-    with pytest.raises(MarketDataFeedUnavailableError):
-        await registry.deploy_with_admission(
-            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="dry_run",
-        )
+    for _ in range(2):
+        with pytest.raises(MarketDataFeedUnavailableError):
+            await registry.deploy_with_admission(
+                exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="dry_run",
+            )
 
-    assert get_clerk_runtime(f"sim:{_SID}") is None
+        assert get_clerk_runtime(f"sim:{_SID}") is None
 
 
 async def test_an_admitted_dry_run_start_opens_its_authority_once_and_keeps_it_for_its_run(

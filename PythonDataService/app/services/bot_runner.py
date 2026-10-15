@@ -1270,7 +1270,7 @@ class BotTaskRegistry:
                 if authority.reconciliation_covers(reconciled):
                     yield cut
                     return
-        async with authority.start_custody_guard() as cut:
+        async with authority.archive_custody_guard() as cut:
             yield cut
 
     async def stop(

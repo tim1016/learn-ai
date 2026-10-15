@@ -98,6 +98,10 @@ class BindingAuthority:
     def start_custody_guard(self) -> AbstractAsyncContextManager[AdmissionCustodyCut]:
         raise NotImplementedError
 
+    def archive_custody_guard(self) -> AbstractAsyncContextManager[AdmissionCustodyCut]:
+        """Keep custody available until Archive retires through its projector."""
+        return self.start_custody_guard()
+
     def start_custody_projection(self) -> AbstractAsyncContextManager[AdmissionCustodyCut]:
         """Custody for a read: projects the sweep's verdict, never reconciles."""
         raise NotImplementedError
@@ -471,6 +475,9 @@ class SyntheticBindingAuthority(BindingAuthority):
     def start_custody_guard(self) -> AbstractAsyncContextManager[AdmissionCustodyCut]:
         return self._start_custody_guard()
 
+    def archive_custody_guard(self) -> AbstractAsyncContextManager[AdmissionCustodyCut]:
+        return self._start_custody_guard(retain_for_archive=True)
+
     def start_custody_projection(self) -> AbstractAsyncContextManager[AdmissionCustodyCut]:
         return self._start_custody_guard(project=True)
 
@@ -568,10 +575,11 @@ class SyntheticBindingAuthority(BindingAuthority):
         )
 
     @asynccontextmanager
-    async def _start_custody_guard(self, *, project: bool = False) -> AsyncIterator[AdmissionCustodyCut]:
+    async def _start_custody_guard(
+        self, *, project: bool = False, retain_for_archive: bool = False,
+    ) -> AsyncIterator[AdmissionCustodyCut]:
         async with self.runtime_access.hold():
             account = self._account
-            first_opening = not account.is_activated()
             runtime = await account.open(SyntheticOpening.OPERATE)
             try:
                 clerk = runtime.clerk
@@ -586,15 +594,12 @@ class SyntheticBindingAuthority(BindingAuthority):
                 async with admission(self.binding.strategy_instance_id) as snapshot:
                     yield snapshot, clerk.program_leg_policy, clerk.exit_terms_for_instance(self.binding.strategy_instance_id)
             finally:
-                if first_opening and not account.holds_a_registered_strategy():
-                    # An account no Start had ever opened is opened here only to
-                    # read custody from. A preview, or a Start that is refused,
-                    # ends with no bot registered in it, and it is released
-                    # rather than kept open for the life of the process; a Start
-                    # that went through registered its bot, so it stays and its
-                    # run releases it (#3217). An account already activated is
-                    # its caller's to release: Archive retires its bot through
-                    # it after this guard ends.
+                if not retain_for_archive and not account.holds_a_registered_strategy():
+                    # Activation evidence can outlive a preview. Each preview
+                    # and refused Start releases a runtime with no registered
+                    # bot, including a second opening of the same account.
+                    # A Start that registered its bot keeps the authority for
+                    # the run and its end pass (#3217).
                     await account.release_if_unused()
 
 

@@ -437,7 +437,7 @@ async def test_a_custody_guard_leaves_an_activated_dry_run_s_authority_to_its_ca
         await previous.release_if_unused()
         assert get_clerk_runtime(f"sim:{sid}") is None
 
-        async with selector.for_binding(binding).start_custody_guard():
+        async with selector.for_binding(binding).archive_custody_guard():
             pass
 
         assert get_clerk_runtime(f"sim:{sid}") is not None
