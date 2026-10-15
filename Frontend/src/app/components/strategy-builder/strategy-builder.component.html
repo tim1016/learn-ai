@@ -553,7 +553,7 @@
 >
   <ng-template #header>
     @if (selectedHistoryContract(); as history) {
-      <app-asset-identity [symbol]="history.ticker" size="sm" [optionMarket]="{
+      <app-asset-identity [symbol]="history.ticker" [optionUnderlying]="history.underlying" size="sm" [optionMarket]="{
         bid: history.snapshot.lastQuote?.bid, ask: history.snapshot.lastQuote?.ask,
         last: history.snapshot.lastTrade?.price, delta: history.snapshot.greeks?.delta,
         impliedVolatility: history.snapshot.impliedVolatility, source: 'Chain snapshot'

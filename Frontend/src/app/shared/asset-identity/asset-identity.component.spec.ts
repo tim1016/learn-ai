@@ -187,4 +187,12 @@ describe('AssetIdentityComponent', () => {
     expect(screen.queryByText('Call')).toBeNull();
   });
 
+  it('uses the supplied stock symbol instead of guessing it from a dotted ticker’s OCC root', async () => {
+    await render(AssetIdentityComponent, {
+      inputs: { symbol: 'BRKB250613C00500000', optionUnderlying: 'BRK.B', size: 'xs' },
+    });
+    expect(screen.getByText('BRK.B')).toBeTruthy();
+    expect(screen.queryByText('BRKB')).toBeNull();
+  });
+
 });

@@ -2,20 +2,34 @@
   class="option-chip"
   [class.option-chip--put]="contract().right === 'put'"
   [pTooltip]="details" tooltipPosition="top" tooltipEvent="both"
+  [tooltipDisabled]="pinnedDetails.overlayVisible()"
   tooltipStyleClass="option-contract-tooltip" [showDelay]="180" [hideDelay]="120" [autoHide]="false"
-  [attr.aria-label]="name()" tabindex="0"
+  [attr.aria-label]="name()" [attr.aria-expanded]="pinnedDetails.overlayVisible()" role="button" tabindex="0"
+  (click)="toggleDetails($event)" (keydown.enter)="toggleDetails($event)"
+  (keydown.space)="$event.preventDefault(); toggleDetails($event)"
 >
-  <app-asset-wordmark [symbol]="contract().underlying" size="xs" [logo]="false" [showTitle]="false" />{{ ' ' }}
+  @if (contract().underlyingIsRoot) {
+    <span class="option-chip__root" title="OCC root; underlying symbol not supplied">{{ contract().underlying }}</span>
+  } @else {
+    <app-asset-wordmark [symbol]="contract().underlying" size="xs" [logo]="false" [showTitle]="false" />
+  }{{ ' ' }}
   <span class="option-chip__right">{{ right() }}</span>{{ ' ' }}
   @if (moneyness(); as status) { <span class="option-chip__status">{{ status }}</span>{{ ' ' }} }
   <span class="option-chip__strike">{{ strike() }}</span>{{ ' ' }}
   <span class="option-chip__expiry">{{ expiry() }}</span>
 </span>
 
+<p-popover #pinnedDetails styleClass="option-contract-popover" [ariaLabel]="name()" [focusOnShow]="false">
+  <ng-template #content><ng-container [ngTemplateOutlet]="details" /></ng-template>
+</p-popover>
+
 <ng-template #details>
   <div class="option-details">
     <div class="option-details__heading">{{ name() }}</div>
     @if (contract().occ_symbol) { <code class="option-details__code">{{ contract().occ_symbol }}</code> }
+    @if (contract().underlyingIsRoot) {
+      <p class="option-details__note">OCC root {{ contract().underlying }}; underlying symbol not supplied.</p>
+    }
     @if (metrics().length > 0) {
       <dl class="option-details__metrics">
         @for (metric of metrics(); track metric.label) {

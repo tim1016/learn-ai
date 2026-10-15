@@ -1,15 +1,18 @@
-import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
-import { formatNumber, formatPercent } from '@angular/common';
+import { ChangeDetectionStrategy, Component, computed, input, viewChild } from '@angular/core';
+import { NgTemplateOutlet, formatNumber, formatPercent } from '@angular/common';
 import { Tooltip } from 'primeng/tooltip';
+import { Popover } from 'primeng/popover';
 
-import { AssetWordmarkComponent } from '../asset-identity/asset-wordmark.component';
+import { AssetWordmarkComponent, type AssetIdentitySize } from '../asset-identity/asset-wordmark.component';
 import { formatTimestampDisplay } from '../timestamp/timestamp-display';
 
-/** The facts that name one option contract, as the server sends them (#2913). */
+/** Display terms from a supplied contract or its decoded broker identifier (#2913). */
 export interface OptionContract {
   /** The contract's code at the broker, e.g. `SPY261009C00585000`. */
   occ_symbol: string;
   underlying: string;
+  /** A decoded OCC root is not necessarily the stock's symbol (e.g. BRKB / BRK.B). */
+  underlyingIsRoot?: boolean;
   /** The expiry date's 16:00 New York anchor, `int64 ms UTC` (ADR 0022 (i)). */
   expiry_ms: number;
   right: 'call' | 'put';
@@ -54,13 +57,28 @@ export function optionContractName(contract: OptionContract): string {
 @Component({
   selector: 'app-option-contract',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AssetWordmarkComponent, Tooltip],
+  imports: [AssetWordmarkComponent, Tooltip, Popover, NgTemplateOutlet],
   templateUrl: './option-contract.component.html',
   styleUrl: './option-contract.component.scss',
+  host: {
+    '[class.option-contract--xs]': 'size() === "xs"',
+    '[class.option-contract--sm]': 'size() === "sm"',
+    '[class.option-contract--lg]': 'size() === "lg"',
+  },
 })
 export class OptionContractComponent {
   readonly contract = input.required<OptionContract>();
   readonly market = input<OptionMarketDetails | null>(null);
+  readonly size = input<AssetIdentitySize>('sm');
+
+  private readonly hoverDetails = viewChild(Tooltip);
+  private readonly pinnedDetails = viewChild(Popover);
+
+  protected toggleDetails(event: Event): void {
+    event.stopPropagation();
+    this.hoverDetails()?.deactivate();
+    this.pinnedDetails()?.toggle(event);
+  }
 
   protected readonly name = computed(() => optionContractName(this.contract()));
   protected readonly expiry = computed(() => expiryText(this.contract()));

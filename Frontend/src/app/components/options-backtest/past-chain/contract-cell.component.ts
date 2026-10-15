@@ -22,5 +22,6 @@ import { cellOf } from './past-chain-view';
 })
 export class ContractCellComponent {
   readonly contract = input.required<ChainContract>();
+  readonly underlying = input.required<string>();
   protected readonly cell = computed(() => cellOf(this.contract()));
 }

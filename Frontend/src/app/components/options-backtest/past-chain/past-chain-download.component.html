@@ -28,7 +28,7 @@
           <ul class="items">
             @for (each of current.answer.items; track itemKey(each)) {
               <li [attr.data-outcome]="each.outcome">
-                <span class="what">{{ kindLabel(each) }} <app-asset-identity [symbol]="each.subject" size="xs" [logo]="false" /></span>
+                <span class="what">{{ kindLabel(each) }} <app-asset-identity [symbol]="each.subject" [optionUnderlying]="current.answer.underlying" size="xs" [logo]="false" /></span>
                 <span class="outcome">{{ each.outcome | receiptLabel }}</span>
                 @if (each.reason; as reason) {
                   <span class="reason">{{ reason | receiptLabel }}</span>

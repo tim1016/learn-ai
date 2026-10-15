@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/angular';
+import { render, screen, waitFor, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
@@ -47,6 +47,18 @@ describe('OptionContractComponent', () => {
     expect(details.getByText(/Contract details only/)).toBeTruthy();
     expect(details.queryByText('Delta')).toBeNull();
     expect(screen.queryByText('ITM')).toBeNull();
+  });
+
+  it('keeps clicked contract details open after the pointer leaves the chip', async () => {
+    await render(OptionContractComponent, { inputs: { contract: CALL } });
+    const chip = screen.getByLabelText("SPY Oct 9 '26 585 Call");
+
+    await userEvent.click(chip);
+    await userEvent.unhover(chip);
+
+    expect(await screen.findByText(CALL.occ_symbol)).toBeTruthy();
+    await userEvent.click(document.body);
+    await waitFor(() => expect(screen.queryByText(CALL.occ_symbol)).toBeNull());
   });
 
   it('shows only supplied finite facts, including zero values, with their snapshot time', async () => {

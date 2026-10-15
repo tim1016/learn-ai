@@ -92,6 +92,7 @@ interface LegConfig {
  */
 interface SelectedHistoryContract {
   ticker: string;
+  underlying: string;
   contractType: 'call' | 'put';
   strikePrice: number;
   /** The expiry anchor instant: 16:00 New York time on the expiry date. */
@@ -152,7 +153,7 @@ export class StrategyBuilderComponent implements OnDestroy {
         right: leg.optionType, strike: leg.strike,
       },
       market: {
-        underlyingPrice: this.spotPrice(), bid: snapshot?.lastQuote?.bid, ask: snapshot?.lastQuote?.ask,
+        underlyingPrice: this.underlying()?.price, bid: snapshot?.lastQuote?.bid, ask: snapshot?.lastQuote?.ask,
         last: snapshot?.lastTrade?.price, delta: snapshot?.greeks?.delta,
         impliedVolatility: snapshot?.impliedVolatility, source: snapshot ? 'Chain snapshot' : null,
       },
@@ -235,6 +236,7 @@ export class StrategyBuilderComponent implements OnDestroy {
 
     this.selectedHistoryContract.set({
       ticker: contract.ticker,
+      underlying: this.underlying()?.ticker ?? this.ticker(),
       contractType: side,
       strikePrice: contract.strikePrice ?? 0,
       expirationMs: contract.expirationMs ?? null,

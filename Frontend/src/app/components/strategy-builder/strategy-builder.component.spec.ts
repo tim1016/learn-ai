@@ -136,6 +136,26 @@ describe('StrategyBuilderComponent', () => {
     expect(details.queryByText('Bid')).toBeNull();
   });
 
+  it('classifies a leg with the option chain’s spot rather than a separate stock close', async () => {
+    const expiry = optionExpiryAnchorMs('2027-01-15');
+    component.selectedExpiration.set(expiry);
+    component.underlying.set({ ticker: 'SPY', price: 586, change: 0, changePercent: 0 });
+    component.stockSnapshot.set({
+      ticker: 'SPY', day: { open: null, high: null, low: null, close: 584, volume: null, vwap: null },
+      prevDay: null, min: null, todaysChange: null, todaysChangePercent: null, updated: null,
+    });
+    component.allContracts.set([{
+      ticker: 'O:SPY270115C00585000', contractType: 'call', strikePrice: 585, expirationMs: expiry,
+      breakEvenPrice: null, impliedVolatility: 0.2, openInterest: null, greeks: null,
+      day: null, lastTrade: null, lastQuote: null,
+    }]);
+    component.legs.set([{ strike: 585, optionType: 'call', position: 'long', premium: 3.2, iv: 0.2, quantity: 1, enabled: true }]);
+    fixture.detectChanges();
+
+    const root: HTMLElement = fixture.nativeElement;
+    expect(root.querySelector('.leg-chip .option-chip__status')?.textContent).toBe('ITM');
+  });
+
   // ── SB-A: Data-fetch prelude ───────────────────────────────────
   describe('SB-A: ticker → expirations → chain prelude', () => {
     it('populates expirations and selects the nearest one on fetchExpirations()', async () => {
@@ -691,7 +711,7 @@ describe('StrategyBuilderComponent', () => {
     it('closeHistoryDrawer clears all drill-down state', () => {
       component.historyDrawerOpen.set(true);
       component.selectedHistoryContract.set({
-        ticker: 'O:SPY260220C00590000',
+        ticker: 'O:SPY260220C00590000', underlying: 'SPY',
         contractType: 'call', strikePrice: 590, expirationMs: 1_771_621_200_000,
         snapshot: buildContract('call'),
       });

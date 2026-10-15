@@ -16,6 +16,18 @@ describe('optionContractFromSymbol', () => {
     expect(contract && optionExpiryDate(contract.expiry_ms)).toBe(symbol.includes('270115') ? '2027-01-15' : '2026-10-09');
   });
 
+  it('preserves a supplied underlying whose punctuation is absent from the OCC root', () => {
+    expect(optionContractFromSymbol('BRKB250613C00500000', 'BRK.B')).toMatchObject({
+      underlying: 'BRK.B', underlyingIsRoot: false, occ_symbol: 'BRKB250613C00500000',
+    });
+  });
+
+  it('does not claim an OCC root is a verified underlying symbol', () => {
+    expect(optionContractFromSymbol('BRKB250613C00500000')).toMatchObject({
+      underlying: 'BRKB', underlyingIsRoot: true,
+    });
+  });
+
   it.each(['SPY', 'BTC/USD', 'SPY261332C00585000', 'SPY260229C00585000', 'SPY261009X00585000', 'SPY261009C00000000', 'SPY261009C0058500', 'SPY261009C00585000junk'])('leaves an ordinary or malformed symbol alone: %s', (symbol) => {
     expect(optionContractFromSymbol(symbol)).toBeNull();
   });

@@ -32,8 +32,9 @@ export class AssetIdentityComponent {
   readonly tone = input<AssetIdentityTone>('default');
   readonly showTitle = input(true);
   readonly optionMarket = input<OptionMarketDetails | null>(null);
+  readonly optionUnderlying = input<string | null>(null);
 
-  protected readonly optionContract = computed(() => optionContractFromSymbol(this.symbol()));
+  protected readonly optionContract = computed(() => optionContractFromSymbol(this.symbol(), this.optionUnderlying()));
   protected readonly titleText = computed(() => {
     const symbol = displayAssetSymbol(this.symbol());
     const name = this.name()?.trim();
