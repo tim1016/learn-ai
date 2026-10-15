@@ -173,6 +173,17 @@
             ],
             "title": "Account Shortfall Usd"
           },
+          "broker_position_disagreement": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broker Position Disagreement"
+          },
           "cash_usd": {
             "anyOf": [
               {

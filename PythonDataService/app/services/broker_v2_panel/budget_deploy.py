@@ -969,6 +969,20 @@ def _money_view(
         )
     open_pnl, open_pnl_detail = _open_pnl(money, observation)
     detail = "Cash plus shares at the price paid."
+    outside_disagrees = (
+        world in ("real_paper", "real_live")
+        and observation.position_count == 0
+        and bar.cents_of("outside") > 0
+    )
+    disagreement = None
+    if outside_disagrees:
+        detail = "Clerk book total: cash plus recorded purchase cost. Alpaca equity is shown separately."
+        disagreement = (
+            "Alpaca reports no open positions, but the Clerk's outside-fill history still carries "
+            f"${dollars(bar.cents_of('outside'))} of purchase cost. This is an unresolved record difference, "
+            "not a confirmed holding. Review the order records in Activity. The difference stays visible "
+            "until the fill history is reconciled with broker evidence."
+        )
     if money.unvalued:
         detail += " Not on the bar: " + "; ".join(money.unvalued) + "."
     picture, picture_detail = (
@@ -983,7 +997,12 @@ def _money_view(
         account_charges_usd=dollars(bar.cents_of("charges")), settling_usd=dollars(bar.cents_of("settling")),
         account_shortfall_usd=_shortfall_usd(bar.shortfall_cents), stopped_holding_count=bar.count_of("stopped"),
         open_pnl_usd=open_pnl, open_pnl_detail=open_pnl_detail,
-        segments=tuple(_segment_view(segment) for segment in bar.segments),
+        broker_position_disagreement=disagreement,
+        segments=tuple(
+            _segment_view(segment).model_copy(update={"label": "outside fills not confirmed by Alpaca"})
+            if outside_disagrees and segment.kind == "outside" else _segment_view(segment)
+            for segment in bar.segments
+        ),
     )
 
 

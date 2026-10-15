@@ -187,6 +187,7 @@ export class AlpacaHomeComponent {
    * renders (`accountMoneyState`). */
   protected readonly money = this.accountData.moneyState;
   protected readonly settingsRoute = computed(() => accountWorkspaceTabRoute(this.account(), 'settings'));
+  protected readonly activityRoute = computed(() => accountWorkspaceTabRoute(this.account(), 'activity'));
 
   protected readonly bots = computed(() => {
     const roster = this.roster();

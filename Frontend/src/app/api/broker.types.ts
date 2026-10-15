@@ -7125,6 +7125,8 @@ export interface components {
             account_id: string;
             /** Account Shortfall Usd */
             account_shortfall_usd?: string | null;
+            /** Broker Position Disagreement */
+            broker_position_disagreement?: string | null;
             /** Cash Usd */
             cash_usd?: string | null;
             /** Deploy Refusal */

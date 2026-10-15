@@ -176,6 +176,9 @@ class AccountMoneyView(BaseModel):
     open_pnl_detail: str | None = None
     equity_usd: str | None = None
     today_pnl_usd: str | None = None
+    # A broker-flat reading can disagree with historical outside fills. Keep
+    # the book amount visible, but do not present it as a confirmed holding.
+    broker_position_disagreement: str | None = None
     segments: tuple[MoneySegment, ...] = ()
     # Why Deploy would refuse a new bot on this account's money right now
     # (a missing daily loss limit, a loss hold, no fresh reading), in the
@@ -196,7 +199,8 @@ class AccountMoneyView(BaseModel):
                     self.settling_usd, self.stopped_holding_count)
         shortfall = self.account_shortfall_usd
         if self.state != "ready":
-            notes = (shortfall, self.open_pnl_usd, self.open_pnl_detail, self.deploy_refusal, self.picture, self.picture_detail)
+            notes = (shortfall, self.open_pnl_usd, self.open_pnl_detail, self.broker_position_disagreement,
+                     self.deploy_refusal, self.picture, self.picture_detail)
             if self.segments or any(value is not None for value in (*headline, *notes)):
                 raise ValueError("a money read that cannot draw its bar carries a reason, never bar figures")
             if self.state == "legacy" and (self.equity_usd, self.today_pnl_usd, self.observed_at_ms) != (None, None, None):

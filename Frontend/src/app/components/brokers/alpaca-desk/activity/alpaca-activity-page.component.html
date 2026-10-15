@@ -18,8 +18,13 @@
     </div>
   </header>
 
+  @let accountMoney = money();
+  @if (accountMoney.kind === 'ready' && accountMoney.view.broker_position_disagreement; as difference) {
+    <p class="activity__difference" role="note"><strong>Broker and Clerk records disagree.</strong> {{ difference }}</p>
+  }
+
   <p class="activity__sync">
-    <span>Sync check</span>
+    <span>Order custody sync check</span>
     @if (syncCheck(); as sync) {
       <strong>{{ sync.verdict | receiptLabel }}</strong>
       <span>· last checked <app-timestamp-display [value]="sync.recorded_at_ms" mode="local" /></span>
@@ -84,6 +89,7 @@
         [windowReading]="activities.isLoading()"
         [timelineQuery]="timelineQuery()"
         [focusAction]="recoverAction()"
+        [openRecords]="openRecords()"
         (retry)="activities.reload()"
       />
     }

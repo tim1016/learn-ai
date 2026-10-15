@@ -7,7 +7,8 @@
     [account]="account()"
   />
 
-  <app-home-money [state]="money()" [settingsRoute]="settingsRoute()" />
+  <app-home-money [state]="money()" [settingsRoute]="settingsRoute()"
+    [activityRoute]="activityRoute()" (refreshRequested)="refresh()" />
 
   @if (outcome(); as done) {
     <p

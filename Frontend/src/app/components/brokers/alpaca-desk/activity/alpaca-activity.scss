@@ -74,6 +74,14 @@
   font-size: var(--fs-sm);
 }
 
+.activity__difference {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--warn);
+  background: var(--bg-surface);
+  font-size: var(--fs-sm);
+}
+
 .activity__sync strong {
   color: var(--text-primary);
 }
