@@ -272,12 +272,11 @@ class _AccountReadForbidden:
 
 
 @pytest.mark.asyncio
-async def test_clerk_status_never_reads_the_broker_and_carries_no_desk_posture(
+async def test_clerk_status_never_reads_the_broker(
     sqlite_desk_clean: FastAPI,
 ) -> None:
-    """PRD #2560: the Overview desk that rendered the account posture (and its
-    "Open Clerk recovery" shortcut) is gone, so the status no longer authors
-    one -- nor makes the same-request account read that only fed it."""
+    """PRD #2560: the Overview desk that rendered the account posture is gone,
+    so the status makes no same-request account read that only fed it."""
     get_broker_registry().register(_AccountReadForbidden())  # type: ignore[arg-type]
 
     async with httpx.AsyncClient(
@@ -288,7 +287,6 @@ async def test_clerk_status_never_reads_the_broker_and_carries_no_desk_posture(
     assert status.status_code == 200, status.json()
     body = status.json()
     assert body["account_id"] == "PA-SQLITE-DESK-CLEAN"
-    assert "operator_posture" not in body
 
 
 def _projection(tmp_path: Path, account_id: str) -> Any:

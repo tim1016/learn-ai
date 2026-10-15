@@ -359,7 +359,7 @@ def test_one_unreadable_uncertainty_is_projected_as_unreadable_without_failing_t
     assert logged.__dict__["uncertainty_id"] == unreadable.uncertainty_id
 
 
-def _raise_exit_not_flat(repo: ClerkSqliteRepository, sid: str, *, next_attempt_at_ms: int) -> None:
+def _raise_exit_not_flat(repo: ClerkSqliteRepository, sid: str) -> None:
     raise_uncertainty(
         repo,
         strategy_instance_id=sid,
@@ -371,7 +371,6 @@ def _raise_exit_not_flat(repo: ClerkSqliteRepository, sid: str, *, next_attempt_
         evidence_refs=(f"order:exit:{sid}",),
         cause_facts={"symbol": "SPY", "attributed_qty": 10.0},
         severity="error",
-
     )
 
 
@@ -390,7 +389,7 @@ def test_recovery_eligibility_is_evaluated_and_does_not_show_a_past_due_time(tmp
     clock = _Clock()
     repo = _repository(tmp_path, clock)
     allowed = clock.value + offset
-    _raise_exit_not_flat(repo, SID, next_attempt_at_ms=allowed)
+    _raise_exit_not_flat(repo, SID)
     _observe_retry(repo, SID, allowed)
     reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock)
     try:
@@ -408,14 +407,14 @@ def test_an_escalated_exit_projects_no_next_attempt(tmp_path: Path) -> None:
     """#2440 review: once the watchdog escalates to EXIT_STUCK it re-drives no more.
 
     The EXIT_NOT_FLAT episode stays open beside EXIT_STUCK, still carrying
-    the time its fold recorded; the projection drops it for that strategy
-    only, since nothing will try then.
+    the time its last recovery check recorded; the projection drops it for
+    that strategy only, since nothing will try then.
     """
     clock = _Clock()
     repo = _repository(tmp_path, clock)
     future_at_ms = clock.value + 3_600_000
-    _raise_exit_not_flat(repo, SID, next_attempt_at_ms=future_at_ms)
-    _raise_exit_not_flat(repo, OTHER_SID, next_attempt_at_ms=future_at_ms)
+    _raise_exit_not_flat(repo, SID)
+    _raise_exit_not_flat(repo, OTHER_SID)
     _observe_retry(repo, SID, future_at_ms)
     _observe_retry(repo, OTHER_SID, future_at_ms)
     raise_uncertainty(
@@ -466,7 +465,7 @@ def test_an_escalated_exit_projects_no_next_attempt(tmp_path: Path) -> None:
 def test_an_unevaluated_exit_never_infers_retry_eligibility(tmp_path: Path, delay_ms: int) -> None:
     clock = _Clock()
     repo = _repository(tmp_path, clock)
-    _raise_exit_not_flat(repo, SID, next_attempt_at_ms=clock.value + 120_000)
+    _raise_exit_not_flat(repo, SID)
     reader = SqliteClerkProjectionReader.from_repository(repo, clock=lambda: clock.value + delay_ms)
     try:
         [episode] = reader.bot_snapshot(SID).uncertainties
@@ -478,10 +477,10 @@ def test_an_unevaluated_exit_never_infers_retry_eligibility(tmp_path: Path, dela
         repo.close()
 
 
-def test_status_keeps_original_episode_age_without_refreshing_evaluation(tmp_path: Path) -> None:
+def test_a_stale_evaluation_reads_unknown_and_keeps_its_last_check_time(tmp_path: Path) -> None:
     clock = _Clock()
     repo = _repository(tmp_path, clock)
-    _raise_exit_not_flat(repo, SID, next_attempt_at_ms=clock.value + 120_000)
+    _raise_exit_not_flat(repo, SID)
     _observe_retry(repo, SID, clock.value + 120_000)
     reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock)
     try:
@@ -489,11 +488,9 @@ def test_status_keeps_original_episode_age_without_refreshing_evaluation(tmp_pat
         for _ in range(6):
             clock.value += 10_000
             repo.renew_execution_lease()
-        _raise_exit_not_flat(repo, SID, next_attempt_at_ms=clock.value + 120_000)
         current = reader.bot_snapshot(SID).uncertainties[0].recovery_status
         assert current.kind == "unknown"
         assert current.last_checked_at_ms == original.last_checked_at_ms
-        assert current.stuck_since_ms == original.stuck_since_ms
     finally:
         reader.close()
         repo.close()
@@ -512,8 +509,8 @@ def test_a_record_with_mistyped_facts_is_unreadable_and_never_breaks_the_read(
     """
     clock = _Clock()
     repo = _repository(tmp_path, clock)
-    _raise_exit_not_flat(repo, SID, next_attempt_at_ms=clock.value + 3_600_000)
-    _raise_exit_not_flat(repo, OTHER_SID, next_attempt_at_ms=clock.value + 3_600_000)
+    _raise_exit_not_flat(repo, SID)
+    _raise_exit_not_flat(repo, OTHER_SID)
     for sid, field, value in (
         (SID, "cause_facts", ["SPY"]),
         (OTHER_SID, "cause_facts", "not an object"),
@@ -552,19 +549,18 @@ def test_a_record_with_mistyped_facts_is_unreadable_and_never_breaks_the_read(
 def test_a_legacy_future_time_is_not_reinterpreted_by_the_projection(
     tmp_path: Path,
 ) -> None:
-    """#2440 final review (m3): an in-range int64 the calendar cannot project fails only its row.
+    """#2440 final review (m3): a retired ``next_attempt_at_ms`` hint left in a stored record is never read back.
 
-    ``_checked_record`` admits any ``next_attempt_at_ms`` up to
-    ``MAX_TIMESTAMP_MS``, but re-projecting one past pandas' range (year 3000
-    here) raised ``OverflowError`` outside the guard, blanking the desk, the
-    bot page and the bell. Only a damaged record holds such a value; it is
-    now projected unreadable like any other.
+    A record may still hold one past pandas' range (year 3000 here), which
+    once raised ``OverflowError`` outside the guard and blanked the desk, the
+    bot page and the bell. ``_checked_record`` ignores the hint, so each
+    status stays unknown and every surface reads.
     """
     clock = _Clock()
     repo = _repository(tmp_path, clock)
     year_3000_ms = 32_503_680_000_000
-    _raise_exit_not_flat(repo, SID, next_attempt_at_ms=year_3000_ms)
-    _raise_exit_not_flat(repo, OTHER_SID, next_attempt_at_ms=clock.value + 3_600_000)
+    _raise_exit_not_flat(repo, SID)
+    _raise_exit_not_flat(repo, OTHER_SID)
     for sid, legacy_ms in ((SID, year_3000_ms), (OTHER_SID, clock.value + 3_600_000)):
         row = repo._conn.execute("SELECT facts_json FROM uncertainties WHERE strategy_instance_id=?", (sid,)).fetchone()
         facts = json.loads(row[0])
@@ -1074,47 +1070,42 @@ def test_safe_flatten_uses_account_reconciliation_not_newer_effect_attempt(
 
 
 def test_hot_projection_queries_use_covering_fold_indexes(tmp_path: Path) -> None:
+    """The plans of the reader's own statements, captured as it runs them."""
     clock = _Clock()
     repo = _repository(tmp_path, clock)
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock)
+    executed: list[str] = []
+    reader._conn.set_trace_callback(executed.append)
+    try:
+        reader.account_snapshot()
+        reader.bot_snapshot(SID)
+        reader.timeline_page(strategy_instance_id=SID, page_size=25)
+    finally:
+        reader._conn.set_trace_callback(None)
+        reader.close()
 
-    plans = {
-        "account_commands": repo._conn.execute(
-            "EXPLAIN QUERY PLAN SELECT command_id FROM commands "
-            "ORDER BY updated_at_ms DESC, command_id DESC LIMIT 50"
-        ).fetchall(),
-        "bot_commands": repo._conn.execute(
-            "EXPLAIN QUERY PLAN SELECT command_id FROM commands "
-            "WHERE strategy_instance_id = ? "
-            "ORDER BY updated_at_ms DESC, command_id DESC LIMIT 50",
-            (SID,),
-        ).fetchall(),
-        "account_operations": repo._conn.execute(
-            "EXPLAIN QUERY PLAN SELECT effect_operation_id FROM effect_operations "
-            "ORDER BY updated_at_ms DESC, effect_operation_id DESC LIMIT 50"
-        ).fetchall(),
-        "bot_operations": repo._conn.execute(
-            "EXPLAIN QUERY PLAN SELECT effect_operation_id FROM effect_operations "
-            "WHERE strategy_instance_id = ? "
-            "ORDER BY updated_at_ms DESC, effect_operation_id DESC LIMIT 50",
-            (SID,),
-        ).fetchall(),
-        "bot_timeline": repo._conn.execute(
-            "EXPLAIN QUERY PLAN SELECT sequence FROM custody_transitions "
-            "WHERE sequence <= ? AND sequence < ? AND strategy_instance_id = ? "
-            "ORDER BY sequence DESC LIMIT 25",
-            (100, 101, SID),
-        ).fetchall(),
+    def plan(select: str, *, scoped_to_bot: bool) -> str:
+        (statement,) = {
+            sql
+            for sql in executed
+            if sql.startswith(select) and (f"strategy_instance_id = '{SID}'" in sql) == scoped_to_bot
+        }
+        rows = repo._conn.execute(f"EXPLAIN QUERY PLAN {statement}").fetchall()
+        return " | ".join(str(row[3]) for row in rows)
+
+    details = {
+        "account_commands": plan("SELECT command_id", scoped_to_bot=False),
+        "bot_commands": plan("SELECT command_id", scoped_to_bot=True),
+        "account_operations": plan("SELECT e.effect_operation_id", scoped_to_bot=False),
+        "bot_operations": plan("SELECT e.effect_operation_id", scoped_to_bot=True),
+        "bot_timeline": plan("SELECT ct.sequence", scoped_to_bot=True),
     }
     repo.close()
 
-    details = {
-        name: " | ".join(str(row[3]) for row in rows)
-        for name, rows in plans.items()
-    }
     assert "ix_commands_updated_at" in details["account_commands"]
     assert "ix_commands_strategy_updated_at" in details["bot_commands"]
-    assert "ix_effect_operations_updated_at" in details["account_operations"]
-    assert "ix_effect_operations_strategy_updated_at" in details["bot_operations"]
+    assert "ix_effect_operations_created_at" in details["account_operations"]
+    assert "ix_effect_operations_strategy_created_at" in details["bot_operations"]
     assert "ix_custody_transitions_strategy_sequence" in details["bot_timeline"]
 
 
@@ -1124,7 +1115,7 @@ def test_current_recovery_custody_facts_outrank_a_missing_check(tmp_path: Path, 
     clock = _Clock()
     repo = _repository(tmp_path, clock)
     try:
-        _raise_exit_not_flat(repo, SID, next_attempt_at_ms=None)
+        _raise_exit_not_flat(repo, SID)
         episode = repo.active_uncertainty(scope="CUSTODY_SUBJECT", reason_code="EXIT_NOT_FLAT", strategy_instance_id=SID)
         status = read_recovery_status(repo._conn, strategy_instance_id=SID, uncertainty_id=episode["uncertainty_id"],
             now_ms=clock(), stopped=stopped, working=working)

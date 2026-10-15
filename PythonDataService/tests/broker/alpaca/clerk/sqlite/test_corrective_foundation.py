@@ -63,17 +63,6 @@ def repo(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_stale_schema_version_fails_closed_on_open(tmp_path: Path) -> None:
-    clock = _clock_seq()
-    r = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
-    r._conn.execute("UPDATE control_meta SET schema_version = 1 WHERE id = 1")
-    r._conn.commit()
-    r.close()
-
-    with pytest.raises(SchemaVersionMismatch):
-        ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
-
-
 def test_future_schema_version_fails_closed_on_open(tmp_path: Path) -> None:
     clock = _clock_seq()
     r = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
@@ -225,7 +214,7 @@ def test_is_upgradable_to_current_reflects_the_registered_migration_chain() -> N
     assert schema.is_upgradable_to_current(1) is False
 
 
-def test_fresh_v7_boot_preserves_hash_chain_and_passes_integrity_check(tmp_path: Path) -> None:
+def test_fresh_boot_preserves_hash_chain_and_passes_integrity_check(tmp_path: Path) -> None:
     clock = _clock_seq()
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
     try:

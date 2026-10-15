@@ -262,19 +262,20 @@ async def test_an_extended_exit_decision_submits_a_marketable_day_limit_at_the_e
     )
 
 
-def test_the_one_published_leg_policy_carries_the_envelope_allowances_for_both_sides(
+def test_the_one_published_leg_policy_carries_the_envelope_entry_allowance_and_no_exit_allowance(
     tmp_path: Path,
 ) -> None:
     """Entries are priced from the envelope, and admission reads the policy that prices.
 
-    The owner's decision names entries *and* exits. The entry price cannot be
-    driven end-to-end the way the exit is — a live ENTER with no fresh
-    observation is refused ``LIVE_ENVELOPE_UNOBSERVED`` before it is priced
-    — so what is pinned here is the accessor both
-    sides share. Start and Resume admission receive it with the held
-    custody snapshot; ``_execute_effect`` prices from it (which
-    the extended-exit tests above prove end-to-end). One accessor is what stops
-    admission answering this policy's questions off a different object.
+    An exit is priced from the bot's own sealed terms, so the envelope's exit
+    value (40 here) is not published. The entry price cannot be driven
+    end-to-end the way the exit is — a live ENTER with no fresh observation is
+    refused ``LIVE_ENVELOPE_UNOBSERVED`` before it is priced — so what is
+    pinned here is the accessor admission and pricing share. Start and Resume
+    admission receive it with the held custody snapshot; ``_execute_effect``
+    prices from it (which the extended-exit tests above prove end-to-end). One
+    accessor is what stops admission answering this policy's questions off a
+    different object.
     """
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
     armed = replace(TEST_ENVELOPE_VALUES, xh_entry_bps=30.0, xh_exit_bps=40.0)
@@ -318,35 +319,7 @@ async def test_an_extended_exit_is_priced_from_the_bots_sealed_terms_not_the_acc
 
     assert state is not EffectOperationState.REJECTED
     (leg,) = trade.submitted_legs
-    assert leg.limit_price == pytest.approx(99.80)  # registered 20 bps outranks account envelope
-
-
-async def test_an_extended_exit_prices_from_the_configured_envelope(
-    tmp_path: Path,
-) -> None:
-    """An EXIT is never refused or delayed for want of an arming.
-
-    A position the operator is closing prices from the configured values;
-    no arming record seals the envelope any more (#2629).
-    """
-    envelope = LiveEnvelopeGate(
-        # As in production, the environment feeds both the configured envelope
-        # and the policy's allowances, so the two agree at 20 bps on the exit.
-        values=replace(TEST_ENVELOPE_VALUES, xh_entry_bps=10.0, xh_exit_bps=20.0),
-        custody_is_simulated=False,
-    )
-
-    trade, state, explanation = await _exit(
-        tmp_path,
-        use_rth=False,
-        policy=_EXTENDED_POLICY,
-        retained_source_bar=_bar(18, 30, phase="POST"),
-        live_envelope=envelope,
-    )
-
-    assert state is not EffectOperationState.REJECTED, explanation
-    (leg,) = trade.submitted_legs
-    assert leg.limit_price == pytest.approx(99.80)  # 100.00 − the configured 20 bps
+    assert leg.limit_price == pytest.approx(99.80, rel=0, abs=1e-9)  # registered 20 bps outranks account envelope
 
 
 async def test_an_exit_decision_at_session_close_is_rejected_before_broker_contact(

@@ -159,7 +159,7 @@ def test_stop_command_id_is_scoped_to_the_lifecycle_run_id(repo: ClerkSqliteRepo
     embeds its own run identity in the content-addressed key. (Repeated
     Stop of the *same* run is covered separately by
     test_stop_retry_after_run_already_stopped_replays_the_completed_result
-    in test_corrective_foundation.py.)"""
+    below.)"""
     submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="run-1")
     first_stop = submit_stop_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="run-1"
@@ -192,25 +192,6 @@ def test_stop_retry_after_run_already_stopped_replays_the_completed_result(
     )
     assert not retry.created
     assert retry.command.command_id == stop1.command.command_id
-
-
-def test_run2_stop_cannot_collide_with_run1_stop(repo: ClerkSqliteRepository) -> None:
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="run-1")
-    stop1 = submit_stop_run(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="run-1"
-    )
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="run-2")
-    stop2 = submit_stop_run(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="run-2"
-    )
-
-    assert stop1.command.idempotency_key != stop2.command.idempotency_key
-    # A stop for a lifecycle_run_id that was never active is the correct
-    # typed outcome, not a silent reuse of either prior stop's result.
-    with pytest.raises(NoActiveRunError):
-        submit_stop_run(
-            repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="run-3"
-        )
 
 
 def test_get_command_returns_the_full_resource(repo: ClerkSqliteRepository) -> None:

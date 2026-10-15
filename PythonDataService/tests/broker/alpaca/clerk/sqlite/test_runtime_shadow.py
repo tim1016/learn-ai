@@ -17,6 +17,7 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import build_recovery_catalo
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
+from app.broker.contract.models import BrokerOrder
 from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.services.broker_v2_panel.catalog_projection_service import sqlite_catalog_rollup
 from app.services.session_authority import et_minute_of_day_ms
@@ -367,8 +368,12 @@ async def _extended_enter_on_a_closed_clock(
     monkeypatch: pytest.MonkeyPatch,
     *,
     stream_health: StreamHealthGate | None,
-) -> tuple[EffectOperationState, str]:
-    """Drive one POST-session shadow ENTER while the broker clock reports CLOSED."""
+) -> tuple[EffectOperationState, str, list[BrokerOrder]]:
+    """Drive one POST-session shadow ENTER while the broker clock reports CLOSED.
+
+    Returns the receipt's state and explanation, and the orders the shadow
+    broker holds afterwards.
+    """
     monkeypatch.setattr(clerk_runtime, "market_liveness_fact", _closed_clock)
     evidence = SourceBarLedger(artifacts_root=tmp_path, account_id="shadow-evidence:spy-bot")
     decision = _retain(evidence, minute=17 * 60, close="100.00", phase="POST")
@@ -410,10 +415,11 @@ async def _extended_enter_on_a_closed_clock(
             use_rth=False,
             retained_source_bar=decision,
         )
+        orders = await ports.read.list_orders()
     finally:
         repo.close()
         evidence.close()
-    return receipt.state, receipt.explanation
+    return receipt.state, receipt.explanation, orders
 
 
 async def test_a_closed_clock_refuses_a_shadow_extended_enter_with_no_live_feed_evidence(
@@ -428,7 +434,7 @@ async def test_a_closed_clock_refuses_a_shadow_extended_enter_with_no_live_feed_
     refusal the real Clerk would make must appear in the paper twin too, or
     the two stop reconciling trade-for-trade.
     """
-    state, explanation = await _extended_enter_on_a_closed_clock(
+    state, explanation, _ = await _extended_enter_on_a_closed_clock(
         tmp_path, monkeypatch, stream_health=None
     )
 
@@ -441,8 +447,10 @@ async def test_a_closed_clock_admits_a_shadow_extended_enter_when_the_feed_is_pr
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The same ENTER, with live evidence the venue is printing, is admitted."""
-    state, explanation = await _extended_enter_on_a_closed_clock(
+    state, explanation, orders = await _extended_enter_on_a_closed_clock(
         tmp_path, monkeypatch, stream_health=_stream_health(market_data_healthy=True)
     )
 
     assert state is not EffectOperationState.REJECTED, explanation
+    [order] = orders
+    assert (order.order_type, order.extended_hours) == ("limit", True), order

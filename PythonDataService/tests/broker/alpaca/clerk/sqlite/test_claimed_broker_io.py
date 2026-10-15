@@ -101,10 +101,13 @@ async def test_a_slow_send_keeps_renewing_its_claim_until_broker_io_finishes(
     trade = _SlowTrade()
     send = asyncio.create_task(_io(repo, trade).submit(object(), client_order_id="c-1"))
     try:
-        await asyncio.sleep(0.04)
+        for _ in range(100):
+            if repo.calls >= 3:
+                break
+            await asyncio.sleep(0.005)
+        assert repo.calls >= 3
         assert trade.submitted == ["c-1"]
         assert not send.done()
-        assert repo.calls >= 3
     finally:
         finished.set()
     await send

@@ -17,6 +17,7 @@ from app.broker.alpaca.clerk.budgets import (
     DeploymentBudget,
     account_budget,
     deployment_budget,
+    entry_requirement,
 )
 from app.broker.alpaca.clerk.funding import EntryNeed, Figure, FundingAnswer, Term, funding_answer
 from app.broker.alpaca.clerk.live_envelope import OBSERVATION_MAX_AGE_MS
@@ -378,10 +379,12 @@ def test_an_entry_that_fits_a_limit_only_within_the_same_cent_is_refused_one_cen
 ) -> None:
     """A share at $100.001 with a one-cent fee provision needs $100.011, $100.02 rounded up. $100.0115 or
     $100.0199 free is $100.01 rounded down: the exact comparison admitted both, the cent comparison refuses
-    both, $0.01 short. At $100.02 free it admits."""
-    need = EntryNeed.for_shares(requirement=D("100.011"), fee_provision_cents=1)
+    both, $0.01 short. At $100.02 free it admits. The need is the one the shares seam derives."""
+    required, fee_cents = entry_requirement(quantity=1, price="100.001", at_ms=NOON)
+    need = EntryNeed.for_shares(requirement=required, fee_provision_cents=fee_cents)
     answer = _answer(_account(_bot("b", committed=100, realized=D(realized)), cash=1000), need=need)
 
+    assert (required, fee_cents) == (D("100.011"), 1)
     assert need.commitment_cents == 10_002
     assert answer.free_budget.amount_cents == free_cents
     assert (answer.admits, answer.binding, answer.shortfall_cents, answer.fits) == (admits, "bot_budget", shortfall, fits)

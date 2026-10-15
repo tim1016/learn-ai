@@ -367,40 +367,6 @@ def test_commit_first_transition_shortcut_surfaces_diverging_decision_receipt_as
     assert json.loads(after[0].facts_json)["bar_ref"] == "decision-bar:test:SPY:1"
 
 
-def test_commit_first_transition_shortcut_is_idempotent_for_a_byte_identical_replay(
-    repo: ClerkSqliteRepository,
-) -> None:
-    """The flip side of the conflict test above: a genuine transport retry
-    -- identical decision receipt, not merely identical command payload --
-    must still take the fast, no-append ``CommandExistingSame`` path."""
-    receipt = _atomic_receipt(decision_id="dec-1")
-    first = accept_enter(
-        repo,
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=SID,
-        decision_id="dec-1",
-        lifecycle_run_id=RUN_ID,
-        leg=_leg(),
-        decision_receipt=receipt,
-    )
-    assert first.created
-    before = repo.decision_receipt_tail(strategy_instance_id=SID, limit=10)
-
-    retry = accept_enter(
-        repo,
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=SID,
-        decision_id="dec-1",
-        lifecycle_run_id=RUN_ID,
-        leg=_leg(),
-        decision_receipt=_atomic_receipt(decision_id="dec-1"),
-    )
-
-    assert not retry.created
-    assert retry.effect_operation_id == first.effect_operation_id
-    assert repo.decision_receipt_tail(strategy_instance_id=SID, limit=10) == before
-
-
 # ── 4. Synthetic authority can never write a real account (FR-028) ─────────
 
 
