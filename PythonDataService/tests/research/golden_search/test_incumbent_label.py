@@ -54,12 +54,16 @@ def store(monkeypatch: pytest.MonkeyPatch) -> QualificationRow:
     async def get_qualification(conn: Any, qualification_id: str) -> QualificationRow | None:
         return row if qualification_id == row.id else None
 
+    async def find_qualifications(conn: Any, *, program_key: str, symbol: str, params_sha256: str, program_version: str | None = None) -> list[QualificationRow]:
+        return [row] if (program_key, symbol, params_sha256) == (row.program_key, row.symbol, row.params_sha256) else []
+
     async def not_locked_yet(key: str, digest: str) -> None:
         return None
 
     monkeypatch.setattr(service, "connection", connection)
     monkeypatch.setattr(qualifications, "get_default", get_default)
     monkeypatch.setattr(qualifications, "get_qualification", get_qualification)
+    monkeypatch.setattr(qualifications, "find_qualifications", find_qualifications)
     monkeypatch.setattr(service, "_locked_by", not_locked_yet)
     return row
 

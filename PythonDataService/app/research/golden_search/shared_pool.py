@@ -573,7 +573,7 @@ class SharedWorkerPool:
             return
         finally:
             lane.current = None
-        self._record_residency(lane, message)
+        self._record_residency(lane, worker, message)
         self._deliver(lane, entry, delivered_outcome(entry.item, message))
 
     def _slot_worker(self, lane: _Lane) -> ResearchWorker | None:
@@ -591,7 +591,7 @@ class SharedWorkerPool:
         worker.close()
         return None
 
-    def _record_residency(self, lane: _Lane, message: dict[str, Any]) -> None:
+    def _record_residency(self, lane: _Lane, worker: ResearchWorker, message: dict[str, Any]) -> None:
         """Fold a child's reported decode delta — additions and removals — into this lane's warm hints (#3048).
 
         Under the pool lock: ``facts()`` iterates the same dict from
@@ -599,6 +599,8 @@ class SharedWorkerPool:
         iteration is a crash, not a hint (#3048 review).
         """
         with self._state_changed:
+            if lane.worker is not worker:
+                return
             for artifact in message.get("decoded") or []:
                 path = artifact.get("relative_path")
                 if path:

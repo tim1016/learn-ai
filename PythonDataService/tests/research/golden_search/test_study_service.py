@@ -856,7 +856,7 @@ async def test_outside_research_on_the_final_interval_makes_its_history_unknown(
     # retained with the qualification (#3015).
     assert research["research_override"] and research["weakness"] == ["EXPOSURE_HISTORY_UNKNOWN", "CHANCE_WITHIN_NOISE"]
     assert research["chance"]["components"]["comparison"]["status"] == "measured"
-    assert research["chance"]["policy_schema"] == "golden-search-chance-approval/v1"
+    assert research["chance"]["policy_schema"] == "golden-search-chance-approval/v2"
 
 
 async def test_exposure_rows_survive_hiding_the_study(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
@@ -1281,11 +1281,26 @@ async def test_defaults_offer_the_ready_default_qualification_as_the_incumbent(
     leaked = await service.preflight({**plan, "seed": point}, roots=driver.roots)
     assert [item["code"] for item in leaked["refusals"]] == ["SEED_IS_QUALIFIED"]
 
+    registry_label = {**plan, "incumbent": {"source": "registry", "qualification_id": None, "params": registry}, "seed": point}
+    mislabeled = await service.preflight(registry_label, roots=driver.roots)
+    assert [item["code"] for item in mislabeled["refusals"]] == ["SEED_IS_QUALIFIED"]
+
+    non_string_id = {**plan, "incumbent": {"source": "qualification", "qualification_id": 42, "params": point}}
+    invalid = await service.preflight(non_string_id, roots=driver.roots)
+    assert "INCUMBENT_INVALID" in [item["code"] for item in invalid["refusals"]]
+
     stale = await service.defaults(
         "ema_crossover_signal", symbol, lake_coverage=_no_lake_history, running_digest=lambda strategy_key: "b" * 64
     )
     assert stale["incumbent"]["source"] == "registry"
     assert stale["incumbent_label"] == "Registry validated point (the Golden Search default is not ready)"
+
+    await qualifications.set_default_cas(
+        conn, program_key="ema_crossover_signal", symbol=symbol, qualification_id=None,
+        expected_qualification_id=f"q-{unique}", reason="Testing non-default seed leakage", actor="local:owner", now_ms=2_000,
+    )
+    without_default = await service.preflight(registry_label, roots=driver.roots)
+    assert "SEED_IS_QUALIFIED" in [item["code"] for item in without_default["refusals"]]
 
 
 async def test_preflight_answers_refusals_as_data_with_the_run_up_and_exposure(driver: Driver, symbol: str) -> None:

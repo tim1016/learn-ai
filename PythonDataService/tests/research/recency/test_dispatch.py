@@ -121,9 +121,6 @@ def test_a_ready_run_wires_its_window_execution_and_identity() -> None:
 
 def test_child_answers_translate_to_the_outcomes_the_runner_consumes() -> None:
     item = _ready_of(_run(1))
-    cancelled = run_outcome(item, {"type": "failed", "key": item.key, "error": "cancelled"})
-    assert cancelled.cancelled_by is not None and cancelled.pieces is None
-
     failed = run_outcome(item, {"type": "failed", "key": item.key, "error": "RuntimeError: no bars"})
     assert failed.error == "RuntimeError: no bars" and failed.pieces is None
 
@@ -186,7 +183,7 @@ def test_the_child_builds_the_in_process_request_and_returns_the_snapshot_pieces
     assert ("search", "durable_completions", 1) in phases
 
 
-def test_an_unsuccessful_or_cancelled_run_delivers_never_computes(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_unsuccessful_run_delivers_never_computes(monkeypatch: pytest.MonkeyPatch) -> None:
     from types import SimpleNamespace
 
     from app.services import engine_backtest_service
@@ -199,18 +196,6 @@ def test_an_unsuccessful_or_cancelled_run_delivers_never_computes(monkeypatch: p
     run_recency_run_task(_ready_of(_run(1)).as_wire(), out=out, ask_admission=lambda path: b"", cancel_flag=threading.Event(), state=_child_state())
     failed = next(message for message in out.messages if message["type"] == "failed")
     assert "engine refused the window" in failed["error"]
-
-    def cancelled_engine(*, request: Any, **kwargs: Any) -> Any:
-        kwargs["while_waiting"]()
-        raise AssertionError("a cancelled run never proceeds past its wait hook")
-
-    monkeypatch.setattr(engine_backtest_service, "execute_engine_backtest", cancelled_engine)
-    cancelled_out = _Out()
-    flag = threading.Event()
-    flag.set()
-    run_recency_run_task(_ready_of(_run(1)).as_wire(), out=cancelled_out, ask_admission=lambda path: b"", cancel_flag=flag, state=_child_state())
-    assert next(message for message in cancelled_out.messages if message["type"] == "failed")["error"] == "cancelled"
-
 
 def test_the_coordinators_snapshot_over_the_pieces_equals_the_snapshot_over_the_response() -> None:
     """The parity receipt (#3051): pieces crossing the wire buy the identical persisted evidence."""
@@ -293,7 +278,7 @@ def test_the_serial_dispatch_runs_in_logical_order_over_the_composite_keys(monke
     assert children[0].closed
 
 
-def test_a_lost_child_re_offers_and_a_delivered_cancellation_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_lost_child_re_offers(monkeypatch: pytest.MonkeyPatch) -> None:
     attempts: list[int] = []
 
     def dying(task: dict[str, Any]) -> dict[str, Any]:
@@ -308,17 +293,6 @@ def test_a_lost_child_re_offers_and_a_delivered_cancellation_raises(monkeypatch:
     finally:
         dispatch.close()
     assert attempts == [1, 2, 3]
-
-    cancelling = lambda task: {"type": "failed", "key": task["key"], "error": "cancelled"}  # noqa: E731
-    children2: list[_FakeChild] = []
-    dispatch2 = _serial_dispatch(monkeypatch, children2, behavior=cancelling)
-    try:
-        with pytest.raises(JobCancelled):
-            list(dispatch2([_run(0), _run(1)]))
-    finally:
-        dispatch2.close()
-    assert children2[0].cancelled
-
 
 # ── The pooled adapter over fake children on the real pool ────────────────
 
@@ -556,4 +530,4 @@ def test_ready_run_builder_freezes_the_launch_parts() -> None:
 
 def test_run_outcome_fields_name_their_meaning() -> None:
     outcome = RunOutcome(key="k", attempt=1, task_gen=1, pieces=None)
-    assert outcome.error is None and outcome.cancelled_by is None
+    assert outcome.error is None

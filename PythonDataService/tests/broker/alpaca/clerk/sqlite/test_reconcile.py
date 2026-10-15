@@ -614,6 +614,14 @@ async def test_accepted_enter_lookup_failure_blocks_admission_until_terminal_res
     ]
     assert len(attempts) == 1
     assert '"outcome":"STILL_UNKNOWN"' in attempts[0]["facts_json"]
+    await _reconcile_unknown_effect(
+        repo, trade=_FakeTrade(lookup_error=BrokerUnavailable("exact lookup unavailable"))
+    )
+    repeated = [
+        transition for transition in repo.transitions_for_order(accepted.order_ref)
+        if transition["transition_kind"] == "RECONCILIATION_ATTEMPTED"
+    ]
+    assert len(repeated) == 1, "an unchanged unknown outcome must not grow its operation timeline on every pass"
     with pytest.raises(AdmissionBlockedError) as exc_info:
         accept_enter(
             repo,

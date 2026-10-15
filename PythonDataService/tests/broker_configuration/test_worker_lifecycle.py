@@ -251,7 +251,8 @@ async def test_a_reconnect_that_breaks_records_the_apply_it_held_as_refused(
             account_id="PA-TEST",
         ),
         steps=AuthoritySteps(
-            select=select_breaks, acknowledge=acknowledge, install=installed.append, retire=nothing, boot=nothing,
+            select=select_breaks, acknowledge=acknowledge, install=installed.append,
+            installed=lambda: installed[-1] if installed else None, retire=nothing, boot=nothing,
         ),
         sleep=nothing,
     )
@@ -382,7 +383,8 @@ async def _reconnect_to(
     return await run_authority_reconnect(
         reconnecting_refusal(_ALPACA_UNANSWERED, account_id=None),
         steps=AuthoritySteps(
-            select=select, acknowledge=acknowledge, install=lambda _: None, retire=nothing, boot=nothing,
+            select=select, acknowledge=acknowledge, install=lambda _: None,
+            installed=lambda: None, retire=nothing, boot=nothing,
         ),
         sleep=nothing,
     )

@@ -15192,6 +15192,11 @@ export interface components {
          * @description Everything a stored fit-to-fit reading was drawn under, so reading it back never reclassifies it.
          */
         GoldenSearchChanceFitToFitBasis: {
+            /**
+             * Chunk Replications
+             * @description Draw chunk size; absent for legacy readings that did not record it.
+             */
+            chunk_replications?: number | null;
             /** Convention */
             convention: string;
             /** Mean Block Sessions */

@@ -24,7 +24,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from contextlib import suppress
 
 from app.broker.alpaca.clerk.hold_debounce import (
     HoldDebounceState,
@@ -156,8 +155,12 @@ class StreamHealthHoldSync:
         if task is None:
             return
         task.cancel()
-        with suppress(asyncio.CancelledError):
+        try:
             await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("Stream-health task failed before shutdown", extra={"action": "stream_health_stop_failed"})
 
 
 __all__ = [

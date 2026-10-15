@@ -369,6 +369,10 @@ async def preflight(request: Mapping[str, Any], *, roots: Sequence[Path] | None 
     """Review a plan with no side effects: refusals, estimate, folds, exposure and run-up."""
     protocol = protocol_from_request(request)
     plan = await asyncio.to_thread(review_plan, protocol, roots=roots)
+    if not plan.refusals:
+        incumbent_refusals = await _verified_incumbent_refusals(protocol)
+        if incumbent_refusals:
+            plan = replace(plan, refusals=incumbent_refusals)
     exposure = (
         await exposure_view(protocol.symbol, protocol.final_start_ms, protocol.final_end_ms)
         if protocol.final_start_ms < protocol.final_end_ms
@@ -409,7 +413,9 @@ async def lock_study(
     return row
 
 
-async def _require_verified_incumbent(protocol: GoldenSearchProtocol) -> None:
+async def _verified_incumbent_refusals(
+    protocol: GoldenSearchProtocol, *, frozen_incumbent: Mapping[str, Any] | None = None
+) -> tuple[ProtocolRefusal, ...]:
     """Refuse a plan whose incumbent label is not what the server holds, or whose seed is the stored default's tuple.
 
     A request names its own incumbent, and the label picks the leakage gate that applies (#2696), so the label is
@@ -418,23 +424,36 @@ async def _require_verified_incumbent(protocol: GoldenSearchProtocol) -> None:
     settings. The seed is held off the stored default's tuple whatever the request calls its incumbent.
     """
     if declaration_for(protocol.strategy_key) is None or not _SYMBOL.match(protocol.symbol):
-        return  # review_plan names a strategy with no declaration and a symbol that is not a ticker
+        return ()  # review_plan names a strategy with no declaration and a symbol that is not a ticker
     from app.research.golden_search import qualifications
 
     incumbent, subject = protocol.incumbent, (protocol.strategy_key, protocol.symbol)
     named = stored_default = None
+    seeded_qualifications = []
+    seed_is_registry = _canonical_or_raw(*subject, protocol.seed) == registry_incumbent(*subject).params
     async with connection() as conn:
-        if incumbent.source == "qualification" and incumbent.qualification_id:
+        if incumbent.source == "qualification" and isinstance(incumbent.qualification_id, str) and incumbent.qualification_id:
             named = await qualifications.get_qualification(conn, incumbent.qualification_id)
         pointer = await qualifications.get_default(conn, *subject)
         if pointer is not None and pointer.qualification_id is not None:
             stored_default = await qualifications.get_qualification(conn, pointer.qualification_id)
+        if not seed_is_registry:
+            seeded_qualifications = await qualifications.find_qualifications(
+                conn, program_key=subject[0], symbol=subject[1],
+                params_sha256=qualifications.params_sha256(_canonical_or_raw(*subject, protocol.seed)),
+            )
 
     def canonical(params: Mapping[str, Any]) -> dict[str, Any]:
         return _canonical_or_raw(*subject, params)
 
     refusals: list[ProtocolRefusal] = []
-    if incumbent.source == "registry" and dict(incumbent.params) != registry_incumbent(*subject).params:
+    frozen_registry = (
+        frozen_incumbent is not None
+        and frozen_incumbent.get("source") == "registry"
+        and frozen_incumbent.get("qualification_id") is None
+        and frozen_incumbent.get("params") == dict(incumbent.params)
+    )
+    if incumbent.source == "registry" and dict(incumbent.params) != registry_incumbent(*subject).params and not frozen_registry:
         message = "A registry incumbent is the registry's validated point; this plan names other settings."
         refusals.append(ProtocolRefusal("INCUMBENT_INVALID", "incumbent.params", message))
     if incumbent.source == "qualification":
@@ -447,6 +466,16 @@ async def _require_verified_incumbent(protocol: GoldenSearchProtocol) -> None:
     if stored_default is not None and not _qualified_seed_refusals(protocol):
         held = replace(protocol, incumbent=IncumbentRef("qualification", stored_default.id, canonical(stored_default.params)))
         refusals.extend(_qualified_seed_refusals(held))
+    if seeded_qualifications and not any(refusal.code == "SEED_IS_QUALIFIED" for refusal in refusals):
+        held = replace(protocol, incumbent=IncumbentRef("qualification", seeded_qualifications[0].id, canonical(seeded_qualifications[0].params)))
+        refusals.extend(_qualified_seed_refusals(held))
+    return tuple(refusals)
+
+
+async def _require_verified_incumbent(
+    protocol: GoldenSearchProtocol, *, frozen_incumbent: Mapping[str, Any] | None = None
+) -> None:
+    refusals = await _verified_incumbent_refusals(protocol, frozen_incumbent=frozen_incumbent)
     if refusals:
         raise GoldenSearchRefusal(
             "; ".join(refusal.message for refusal in refusals),
@@ -859,7 +888,7 @@ async def run_command(
                 code="REVISION_SUBJECT_CHANGED",
                 field="payload.protocol",
             )
-        await _require_verified_incumbent(protocol)
+        await _require_verified_incumbent(protocol, frozen_incumbent=seen.protocol.get("incumbent"))
         prepared = await asyncio.to_thread(prepare_lock, protocol, idempotency_key=key, parent_study_id=study_id, roots=roots, identity=identity)
     async with connection() as conn, conn.transaction():
         # Commands on one study serialize on its row lock, so the key is checked once the lock is held:
@@ -1138,4 +1167,3 @@ def run_stage(
         on_progress=on_progress,
         identity=identity,
     )
-

@@ -371,6 +371,22 @@ class ClerkSqliteRepositoryReadApi:
             ).fetchone()
             return None if row is None else writes.row_to_payload(row)
 
+    def last_effect_transition(
+        self: ClerkSqliteRepository,
+        *,
+        effect_operation_id: str,
+        transition_kind: str,
+    ) -> dict | None:
+        """The newest transition of one kind for an effect, using its sequence index."""
+        with self._write_lock:
+            row = self._conn.execute(
+                f"SELECT {', '.join(writes.TRANSITION_COLUMNS)} FROM custody_transitions "
+                "WHERE effect_operation_id = ? AND transition_kind = ? "
+                "ORDER BY sequence DESC LIMIT 1",
+                (effect_operation_id, transition_kind),
+            ).fetchone()
+            return None if row is None else writes.row_to_payload(row)
+
     def has_order_transition(
         self: ClerkSqliteRepository,
         *,

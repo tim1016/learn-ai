@@ -527,6 +527,7 @@ async def _service_lifespan(
     from app.broker.alpaca.broker import AlpacaBroker
     from app.broker.alpaca.clerk.active_authority import (
         ActiveClerkRuntime,
+        get_active_clerk_runtime,
         install_primary_clerk_runtime,
         select_active_clerk_runtime,
     )
@@ -1048,13 +1049,26 @@ async def _service_lifespan(
             return await acknowledge_reconnected_binding(bound=reconnecting_binding, runtime=selected)
 
         def _install_reconnected(reconnected: ActiveClerkRuntime) -> None:
-            if fleet_lane is not None:
-                report_authority_state(
-                    fleet_lane,
-                    authority_kind=reconnected.authority_kind,
-                    reconnecting=reconnected.reconnecting,
-                )
-            _install_alpaca_authority(reconnected)
+            previous = get_active_clerk_runtime()
+            previous_report = None if fleet_lane is None else fleet_lane.reported_facts
+            try:
+                _install_alpaca_authority(reconnected)
+                if fleet_lane is not None:
+                    report_authority_state(
+                        fleet_lane,
+                        authority_kind=reconnected.authority_kind,
+                        reconnecting=reconnected.reconnecting,
+                    )
+            except Exception:
+                # A final refusal has no consumer or lease to unwind. Restore
+                # both published views if its installation failed after either
+                # one changed; the reconnect reads the actual slot afterward.
+                if reconnected.clerk is None:
+                    if get_active_clerk_runtime() is reconnected and previous is not None:
+                        install_primary_clerk_runtime(previous)
+                    if fleet_lane is not None and previous_report is not None:
+                        fleet_lane.reported_facts = previous_report
+                raise
 
         alpaca_reconnect_task = asyncio.create_task(
             run_authority_reconnect(
@@ -1063,6 +1077,7 @@ async def _service_lifespan(
                     select=_select_alpaca_authority,
                     acknowledge=_acknowledge_reconnected,
                     install=_install_reconnected,
+                    installed=get_active_clerk_runtime,
                     retire=_retire_alpaca_authority,
                     boot=_boot_alpaca_authority,
                 ),

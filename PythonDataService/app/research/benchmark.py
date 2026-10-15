@@ -68,7 +68,6 @@ from pathlib import Path
 from typing import Any, Literal
 
 from app.engine.data.decoded_cache import DecodedArtifactCache
-from app.jobs.progress import JobCancelled
 from app.research.golden_search.declarations import point_hash as hash_point
 from app.research.golden_search.evaluator import (
     BASE_SCENARIO,
@@ -1169,9 +1168,6 @@ class _BenchmarkReady:
             task_gen=self.task_gen,
             run=message.get("run"),
             error=str(message["error"]) if message["type"] == "failed" else None,
-            cancelled_by=JobCancelled("cancelled in a research worker")
-            if message["type"] == "failed" and message.get("error") == "cancelled"
-            else None,
         )
 
 
@@ -1182,7 +1178,6 @@ class _BenchmarkOutcome:
     task_gen: int
     run: Mapping[str, Any] | None
     error: str | None = None
-    cancelled_by: Exception | None = None
 
 
 def run_benchmark_eval_task(
@@ -1206,10 +1201,6 @@ def run_benchmark_eval_task(
     from app.research.golden_search.worker import _expected_identity, _residency_fields, _task_checkpoint
     from app.schemas.engine_backtest import EngineBacktestRequest
     from app.services.engine_backtest_service import execute_engine_backtest
-
-    def raise_if_cancelled() -> None:
-        if cancel_flag.is_set():
-            raise JobCancelled("cancelled by the coordinator")
 
     stamps: dict[str, float] = {}
     order: list[str] = []
@@ -1235,7 +1226,6 @@ def run_benchmark_eval_task(
             on_phase=on_phase,
             on_log=lambda message: None,
             data_manifest=dict(task["manifest"]),
-            while_waiting=raise_if_cancelled,
             decoded_cache=state["decoded_cache"],
             admission=ask_admission,
         )
@@ -1264,12 +1254,6 @@ def run_benchmark_eval_task(
             }
         )
     except BaseException as exc:  # the child's terminal sink
-        from app.jobs.progress import JobCancelled as Cancelled
-
-        if isinstance(exc, Cancelled):
-            out.write({"type": "failed", "key": str(task.get("key", "?")), "error": "cancelled", **_residency_fields(state)})
-            cancel_flag.set()
-            return
         out.write(
             {
                 "type": "failed",
@@ -1382,8 +1366,6 @@ def _run_pooled_baseline(
                     waiting_states.append(waiting_state_of({"ready_width": len(owed), "busy_lanes": pool.facts()["busy_lanes"], "workers": workers}) or "evaluating")
                     parent_ms = (time.perf_counter() - (submit_at or waited_at)) * 1000 if submit_at else 0.0
                     outcome = arrival  # the pool decoded the child's message on delivery
-                    if outcome.cancelled_by is not None:
-                        raise outcome.cancelled_by
                     if outcome.error is not None or outcome.run is None:
                         raise BaselineExecutionError(f"evaluation {key} failed: {outcome.error}")
                     child = outcome.run
@@ -1423,4 +1405,3 @@ def _run_pooled_baseline(
         f"pooled executor: {workers} worker(s), window {window}, adaptive_wait_ms_total={int(adaptive_wait_ms)}"
     )
     return wall_seconds
-

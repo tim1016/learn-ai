@@ -532,6 +532,7 @@ def test_a_dead_idle_child_is_replaced_before_the_next_start_marker(monkeypatch:
     from typing import Any
 
     import app.research.golden_search.worker as worker_module
+    from app.research.golden_search import shared_pool
     from tests.research.golden_search.test_evaluator import (
         _EngineSpy,
         _key_of,
@@ -577,6 +578,7 @@ def test_a_dead_idle_child_is_replaced_before_the_next_start_marker(monkeypatch:
         events.append(("spawn", child.name))
         return child
 
+    assert shared_pool.ResearchWorker is worker_module.ResearchWorker
     monkeypatch.setattr(worker_module, "ResearchWorker", spawn)
     context = WorkerDispatchContext(
         strategy_key="ema_crossover_signal",

@@ -18,7 +18,6 @@ import json
 import logging
 import math
 from collections.abc import Awaitable, Callable
-from contextlib import suppress
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Any, Literal, NamedTuple
@@ -797,8 +796,12 @@ class LiveEnvelopeSync:
         for task in (self._task, self._entry_reading):
             if task is not None:
                 task.cancel()
-                with suppress(asyncio.CancelledError):
+                try:
                     await task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    logger.exception("Live envelope task failed before shutdown", extra={"action": "live_envelope_stop_failed"})
         self._task = self._entry_reading = None
 
 

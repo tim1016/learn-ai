@@ -8,6 +8,7 @@ import pytest
 
 from app.research.golden_search import service
 from app.research.golden_search.chance_approval import (
+    CHANCE_CLEARLY_ADVERSE,
     CHANCE_UNAVAILABLE,
     CHANCE_WITHIN_NOISE,
     approval_weakness,
@@ -57,10 +58,11 @@ POLICY = enrollment_policy()
 
 
 def test_the_policy_names_the_required_components_and_the_two_codes() -> None:
-    assert POLICY["schema_version"] == "golden-search-chance-approval/v1"
+    assert POLICY["schema_version"] == "golden-search-chance-approval/v2"
     assert POLICY["required_final_components"] == ["comparison", "profitability", "carry_over"]
     assert POLICY["informational"] == ["fit_to_fit", "compare_drawdown"]
     assert POLICY["weakness"]["code"] == CHANCE_WITHIN_NOISE
+    assert POLICY["adverse"]["code"] == CHANCE_CLEARLY_ADVERSE
     assert POLICY["unavailable"]["code"] == CHANCE_UNAVAILABLE
 
 
@@ -168,7 +170,7 @@ def test_a_share_that_ran_clearly_the_other_way_says_so_and_a_mixed_one_stays_in
     # 100 of 10,000 paths as good, so 9,900 strictly worse: past the 95% threshold the other way.
     against = chance_weakness_items(POLICY, {"comparison": _measured_share(0.01), "profitability": _measured_profitability(0.005), "carry_over": _carry()}, positive_net_required=True)
 
-    assert _codes(against) == [CHANCE_WITHIN_NOISE]
+    assert _codes(against) == [CHANCE_CLEARLY_ADVERSE]
     text = against[0]["text"]
     assert "strictly worse than the current settings in 9,900 of 10,000 paths (99.0%)" in text
     assert "negative compounded net return in 9,950 of 10,000 paths (99.5%)" in text
@@ -181,7 +183,17 @@ def test_a_share_that_ran_clearly_the_other_way_says_so_and_a_mixed_one_stays_in
 
     # Exactly 9,500 worse is at the threshold the other way: clear, by the same raw-count comparison the reading used.
     boundary = chance_weakness_items(POLICY, {"comparison": _measured_share(0.05), "profitability": _measured_profitability(1.0), "carry_over": _carry()}, positive_net_required=True)
+    assert _codes(boundary) == [CHANCE_CLEARLY_ADVERSE]
     assert "strictly worse than the current settings in 9,500 of 10,000" in boundary[0]["text"]
+
+    old_policy = {**POLICY, "schema_version": "golden-search-chance-approval/v1"}
+    assert _codes(chance_weakness_items(old_policy, {"comparison": _measured_share(0.01), "carry_over": _carry()}, positive_net_required=False)) == [CHANCE_WITHIN_NOISE]
+
+
+def test_stored_threshold_copy_keeps_fractional_percent_precision() -> None:
+    chance = {"comparison": _measured_share(0.4, thresholds={"clear": 0.975}), "profitability": _measured_profitability(1.0), "carry_over": _carry()}
+    items = chance_weakness_items(POLICY, chance, positive_net_required=True)
+    assert "97.50% clear threshold" in items[0]["text"]
 
 
 def test_the_words_an_approval_refusal_quotes_are_the_acknowledgements_own_and_name_each_weakness_once() -> None:

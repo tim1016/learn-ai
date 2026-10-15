@@ -481,6 +481,21 @@ def external_order_by_broker_order_id(
     return _external_order_resource(row) if row is not None else None
 
 
+def external_orders_by_broker_order_ids(
+    conn: sqlite3.Connection, broker_order_ids: Sequence[str]
+) -> dict[str, ExternalOrderResource]:
+    """Read a batch of recorded outside orders without one journal lookup per order."""
+    if not broker_order_ids:
+        return {}
+    rows = conn.execute(
+        f"SELECT {_EXTERNAL_ORDER_SELECT} FROM {_EXTERNAL_ORDER_FROM} "
+        "WHERE eo.broker_order_id IN (SELECT value FROM json_each(?))",
+        (json.dumps(broker_order_ids),),
+    ).fetchall()
+    orders = (_external_order_resource(row) for row in rows)
+    return {order.broker_order_id: order for order in orders}
+
+
 def external_orders(conn: sqlite3.Connection) -> list[ExternalOrderResource]:
     """Every outside order custody tracks: each ``external_orders`` row a manual chain does not hold (#2787).
 

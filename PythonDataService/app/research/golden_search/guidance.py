@@ -311,7 +311,7 @@ def candidate_flags(
     """Short labels for what weakens a candidate: its first failed rule, then its own findings."""
     flags: list[dict[str, str]] = []
     if ineligibility == "DRAWDOWN_ABOVE_CEILING":
-        flags.append({"code": ineligibility, "text": f"Above {drawdown_ceiling:.0%} limit"})
+        flags.append({"code": ineligibility, "text": f"Above {drawdown_ceiling:.2%} limit"})
     elif ineligibility == "TOO_FEW_TRADES":
         flags.append({"code": ineligibility, "text": f"{total_trades} trades, below {min_trades}"})
     elif ineligibility is not None:

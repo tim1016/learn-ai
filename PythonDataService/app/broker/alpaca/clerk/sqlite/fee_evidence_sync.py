@@ -8,14 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sqlite3
-from contextlib import suppress
 from typing import TYPE_CHECKING
 
-from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicProjectionError
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteError
-from app.broker.contract.errors import BrokerError
 from app.broker.contract.ports import BrokerActivityEvidencePort, BrokerReadPort
 
 if TYPE_CHECKING:
@@ -94,19 +89,35 @@ class FeeEvidenceSync:
         while True:
             try:
                 await self.tick()
-            # The walk's floor reads custody fills, so a projection error
-            # refuses this tick instead of ending the producer.
-            except (BrokerError, TimeoutError, ValueError, sqlite3.Error, ClerkSqliteError, EconomicProjectionError):
-                logger.warning("Account fee evidence could not be refreshed", exc_info=True)
+            except Exception:
+                logger.exception(
+                    "Account fee evidence could not be refreshed",
+                    extra={"action": "clerk_fee_evidence_tick_failed", "account_id": self._repo.account_id},
+                )
             await asyncio.sleep(15)
 
     def start(self) -> None:
         if self._task is None:
             self._task = asyncio.create_task(self._run(), name="clerk-fee-evidence")
+            self._task.add_done_callback(self._report_if_ended_on_an_error)
+
+    def _report_if_ended_on_an_error(self, task: asyncio.Task[None]) -> None:
+        if task.cancelled() or task.exception() is None:
+            return
+        logger.critical(
+            "Account fee evidence producer ended; new spending will lose fresh fee proof",
+            extra={"action": "clerk_fee_evidence_ended", "account_id": self._repo.account_id},
+            exc_info=task.exception(),
+        )
 
     async def stop(self) -> None:
-        if self._task is not None:
-            self._task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._task
-            self._task = None
+        task, self._task = self._task, None
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("Fee evidence task failed before shutdown", extra={"action": "clerk_fee_evidence_stop_failed"})

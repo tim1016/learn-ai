@@ -123,7 +123,7 @@ class ReadyRun:
 class RunOutcome:
     """One dispatched run's arrived outcome — recency's twin of grid's ``CellOutcome``.
 
-    A cancellation is *delivered* (``cancelled_by``); a failed run arrives
+    A failed run arrives
     as its error string exactly as the serial loop's ``on_error`` would see
     it; a succeeded run arrives as the coordinator's snapshot pieces. The
     attempt and task generation travel with the outcome so a straggler
@@ -135,7 +135,6 @@ class RunOutcome:
     task_gen: int
     pieces: dict[str, Any] | None
     error: str | None = None
-    cancelled_by: Exception | None = None
 
 
 def run_outcome(item: ReadyRun, message: Mapping[str, Any]) -> RunOutcome:
@@ -145,14 +144,6 @@ def run_outcome(item: ReadyRun, message: Mapping[str, Any]) -> RunOutcome:
         # a child answer keyed otherwise is a protocol break, never a foreign
         # run the durable record would skip forever (the grid twin's rule).
         raise WorkerLost(f"a research worker answered run {item.key} as {message.get('key')!s}")
-    if message["type"] == "failed" and message.get("error") == "cancelled":
-        return RunOutcome(
-            key=item.key,
-            attempt=item.attempt,
-            task_gen=item.task_gen,
-            pieces=None,
-            cancelled_by=JobCancelled("cancelled in a research worker"),
-        )
     if message["type"] == "failed":
         return RunOutcome(
             key=item.key,
@@ -283,10 +274,6 @@ def run_recency_run_task(
         params_hash=str(task["run"]["params_hash"]),
     )
 
-    def raise_if_cancelled() -> None:
-        if cancel_flag.is_set():
-            raise JobCancelled("cancelled by the coordinator")
-
     try:
         if state["identity"] != _expected_identity(task):
             out.write(
@@ -299,7 +286,6 @@ def run_recency_run_task(
             request=engine_request_over(run_spec, window=task["window"], execution=task["execution"]),
             on_phase=lambda phase: checkpoint(phase),
             on_log=lambda message: None,
-            while_waiting=raise_if_cancelled,
             decoded_cache=state["decoded_cache"],
             admission=ask_admission,
         )
@@ -311,12 +297,6 @@ def run_recency_run_task(
         checkpoint("search", cursor_kind="durable_completions", cursor=state["completed"])
         out.write({"type": "result", "key": task["key"], "run": pieces_to_wire(response), **_residency_fields(state)})
     except BaseException as exc:  # the child's terminal sink: every failure is a delivered answer
-        if isinstance(exc, JobCancelled):
-            out.write(
-                {"type": "failed", "key": str(task.get("key", "?")), "error": "cancelled", **_residency_fields(state)}
-            )
-            cancel_flag.set()
-            return
         out.write(
             {
                 "type": "failed",
@@ -378,9 +358,6 @@ class WorkerRunDispatch(ChildOwnerDispatch):
                 # A protocol break from this child: reap it before the raise.
                 self._worker_lost(worker)
                 raise
-            if outcome.cancelled_by is not None:
-                self._cancel()
-                raise outcome.cancelled_by
             yield run_spec, outcome.pieces, outcome.error
 
 
@@ -441,9 +418,6 @@ class PooledRunDispatch(PooledOwnerDispatch):
                         owed[item.key].task_gen,
                         extra={"action": "recency_run_reoffered", "run_key": item.key},
                     )
-                elif arrival.cancelled_by is not None:
-                    self._interrupt(epoch)
-                    raise arrival.cancelled_by
                 else:
                     yield candidates.pop(item.key), arrival.pieces, arrival.error
                 # The runner resumed — the snapshot it took is durable — so

@@ -44,7 +44,7 @@ APPROVE = {
 #: Windows starting at or after this instant are the recent months and the final interval.
 FINAL_FROM_MS = window_ms(FINAL)[0]
 
-APPROVAL_SCHEMA = "golden-search-chance-approval/v1"
+APPROVAL_SCHEMA = "golden-search-chance-approval/v2"
 
 
 @pytest.fixture
