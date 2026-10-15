@@ -71,7 +71,7 @@ EntryReadingOutcome = Literal["covered", "unread", "out_of_time", "stopped"]
 # read ``superseded`` it.
 _SharedReadingOutcome = Literal["covered", "superseded", "unread"]
 # The fewest seconds between two readings taken for waiting ENTERs. Each
-# reading is three broker requests; this keeps a busy account's back-to-back
+# reading is four broker requests; this keeps a busy account's back-to-back
 # fills from spending Alpaca's request allowance.
 DEFAULT_ENTRY_READING_INTERVAL_S = 1.0
 
@@ -367,12 +367,21 @@ class LiveEnvelopeSync:
         except BrokerEvidenceUnavailable:
             self.discard_observation()
             raise
+        try:
+            position_count = len(await self._read.list_positions())
+        except BrokerAccountModeDisagreement:
+            raise
+        except BrokerError:
+            # Position count describes the displayed book, not the cash/loss
+            # verdict. Preserve that verdict and leave the count unknown.
+            logger.warning("Broker positions could not be read for the money view", exc_info=True)
+            position_count = None
         stable = day_pnl_window_start_ms(account.observed_at_ms) == current_start and _cash_flow_snapshots_match(before, after)
         self._observed_account_id = account.account_id
         return AccountObservation(
             observed_at_ms=observed_at_ms, broker_cash_usd=account.cash,
             cash_available_usd=account.cash, equity_usd=account.equity,
-            last_equity_usd=account.last_equity, position_count=None,
+            last_equity_usd=account.last_equity, position_count=position_count,
             risk_fill_sequence=fill_sequence, risk_cash_flows=tuple(after),
             risk_cash_flow_evidence_complete=stable, risk_cash_flow_window_start_ms=start, risk_equity_window_start_ms=current_start,
         )

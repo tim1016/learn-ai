@@ -278,6 +278,28 @@ describe('AlpacaHomeComponent', () => {
     expect(within(money).queryByRole('note')).toBeNull();
   });
 
+  it('shows a broker-flat book difference with working review and refresh actions', async () => {
+    const outside = {
+      kind: 'outside' as const, label: 'outside fills not confirmed by Alpaca',
+      amount_usd: '2.68', share_bps: 1,
+    };
+    const { panel } = await renderHome({ money: fakeAccountMoney({
+      account_id: TEST_ACCOUNT_ID,
+      detail: 'Clerk book total: cash plus recorded purchase cost. Alpaca equity is shown separately.',
+      broker_position_disagreement: 'Alpaca reports no open positions, but the Clerk still carries $2.68 of purchase cost.',
+      outside_bots_usd: '2.68', segments: [outside, ...fakeAccountMoney().segments ?? []],
+    }) });
+
+    const money = screen.getByRole('region', { name: 'Where the money is' });
+    expect(within(money).getByText('Broker and Clerk records disagree.')).toBeTruthy();
+    expect(within(money).getByText('outside fills not confirmed by Alpaca')).toBeTruthy();
+    expect(within(money).queryByText('held outside any bot')).toBeNull();
+    expect(within(money).getByRole('link', { name: 'Review 60-day order records' }).getAttribute('href'))
+      .toBe(`${ACCOUNT_URL}/activity?period=60d&records=1`);
+    fireEvent.click(within(money).getByRole('button', { name: 'Recheck money view' }));
+    expect(panel.getAccountMoney).toHaveBeenCalledTimes(2);
+  });
+
   it('states the backend’s Deploy refusal beside the bar, so free to deploy never reads as spendable', async () => {
     const refusal = 'No daily loss limit is set for this account, so new entries are refused. Set one in Settings.';
     await renderHome({ money: fakeAccountMoney({ account_id: TEST_ACCOUNT_ID, deploy_refusal: refusal }) });

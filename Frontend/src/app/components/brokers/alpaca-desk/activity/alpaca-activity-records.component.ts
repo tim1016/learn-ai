@@ -50,6 +50,7 @@ export class AlpacaActivityRecordsComponent {
   readonly timelineQuery = input<SqliteTimelineQuery | null>(null);
   /** The recovery action a link asked for; its button is brought into view. */
   readonly focusAction = input<string | null>(null);
+  readonly openRecords = input(false);
 
   protected readonly opened = signal(false);
   /** Bumped after a recovery action so every record here re-reads. */
@@ -57,7 +58,7 @@ export class AlpacaActivityRecordsComponent {
 
   constructor() {
     effect(() => {
-      if (this.timelineQuery() !== null || this.focusAction() !== null) this.opened.set(true);
+      if (this.timelineQuery() !== null || this.focusAction() !== null || this.openRecords()) this.opened.set(true);
     });
   }
 

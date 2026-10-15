@@ -173,6 +173,17 @@
             ],
             "title": "Account Shortfall Usd"
           },
+          "broker_position_disagreement": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broker Position Disagreement"
+          },
           "cash_usd": {
             "anyOf": [
               {
@@ -57141,6 +57152,7 @@
           "EXTERNAL_ORDER_ACKNOWLEDGED",
           "EXTERNAL_ORDER_OBSERVED",
           "FEE_EVIDENCE_OBSERVED",
+          "FEE_OPTION_CONTRACT_OBSERVED",
           "MANUAL_ORDER_ACCEPTED",
           "MANUAL_ORDER_CANCELED",
           "MANUAL_ORDER_CANCEL_ACCEPTED",

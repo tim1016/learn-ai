@@ -610,12 +610,11 @@ time, anything not promoted is off, and the amendment lists what stays unverifie
 Write these into the amendment as unverified; do not let a clean run read as
 proof of them.
 
-- **Regulatory fees.** Paper takes the OCC clearing fee at the fill ($0.025 a contract,
-  the order's total rounded up to the cent: $0.03 for one contract, $0.05 for two, on
-  2026-10-14) and posts the regulatory fees the morning after, as non-trade
-  `FEE` rows dated the trading day. A same-day run shows none of those rows, so
-  what this system's fee model estimates for a spread's legs is checked only
-  against the next morning's. Fee accounting stays unverified until then.
+- **Regulatory fees on the trade day.** Paper posts non-trade `FEE` rows the
+  morning after, dated the trading day. A same-day run cannot check its fee
+  estimates. The 2026-10-15 comparison of the previous day's rows found that
+  Alpaca's OCC and OPT TAF charges exceed this model's estimates (#3306); see
+  the run record below. Check the posted rows before qualifying fee accounting.
 - **Assignment, exercise and expiry.** No event for them arrives on the trade
   stream, and a later activity row arrives a day after. Nothing in a same-day
   experiment exercises that path.
@@ -787,3 +786,122 @@ The second day, on the same flat Paper account (option level 3), after #3137 and
   again after any refused attempt.
 - **Not run.** Shapes C and D and the hand-placed sign check of a *received* price (it is the owner's,
   at Alpaca's dashboard); the buy-back of one sold leg.
+
+## Run record: 2026-10-15, the spread fee check (#3225)
+
+The Paper journal's activity feed now carries 42 distinct `FEE` rows dated
+2026-10-14 for 38 distinct option-leg fills in 24 orders: 10 one-leg orders and
+14 two-leg `mleg` orders. The fee rows have no order identifier. One $0.03 OCC
+row for each leg fill is therefore an **inferred**, not directly linked,
+per-order attribution; the account-day totals are directly observed. The
+underlying bundles and order identifiers stay offline.
+
+| Fill time (ms UTC) | Legs | OCC model, order alone | OCC posted, inferred | Posted less model |
+|---:|---:|---:|---:|---:|
+| 1791985682018 | 1 | $0.03 | $0.03 | $0.00 |
+| 1791985860867 | 1 | $0.03 | $0.03 | $0.00 |
+| 1791989771937 | 1 | $0.03 | $0.03 | $0.00 |
+| 1791989942113 | 1 | $0.03 | $0.03 | $0.00 |
+| 1791990665693 | 1 | $0.03 | $0.03 | $0.00 |
+| 1791991012782 | 1 | $0.03 | $0.03 | $0.00 |
+| 1791992823371 | 1 | $0.03 | $0.03 | $0.00 |
+| 1791992827020 | 1 | $0.03 | $0.03 | $0.00 |
+| 1791993001228 | 1 | $0.03 | $0.03 | $0.00 |
+| 1791993001335 | 1 | $0.03 | $0.03 | $0.00 |
+| 1791993543721 | 2 | $0.05 | $0.06 | +$0.01 |
+| 1791995484539 | 2 | $0.05 | $0.06 | +$0.01 |
+| 1791999844075 | 2 | $0.05 | $0.06 | +$0.01 |
+| 1792000021098 | 2 | $0.05 | $0.06 | +$0.01 |
+| 1792000503610 | 2 | $0.05 | $0.06 | +$0.01 |
+| 1792000681153 | 2 | $0.05 | $0.06 | +$0.01 |
+| 1792000803224 | 2 | $0.05 | $0.06 | +$0.01 |
+| 1792000983546 | 2 | $0.05 | $0.06 | +$0.01 |
+| 1792001043546 | 2 | $0.05 | $0.06 | +$0.01 |
+| 1792001106712 | 2 | $0.05 | $0.06 | +$0.01 |
+| 1792001220716 | 2 | $0.05 | $0.06 | +$0.01 |
+| 1792001283968 | 2 | $0.05 | $0.06 | +$0.01 |
+| 1792002543815 | 2 | $0.05 | $0.06 | +$0.01 |
+| 1792007400459 | 2 | $0.05 | $0.06 | +$0.01 |
+
+Across the account day, `settle_option_session` rounds OCC once and predicts
+$0.95; Alpaca posted 38 × $0.03 = $1.14, a $0.19 difference. The model
+predicts no OPT TAF on this date; Alpaca posted $0.06 for 19 sold contracts.
+ORF ($0.57), CAT ($0.02) and OPT REG/SEC ($0.11) agree exactly. Total posted
+fees were $1.90 against the model's $1.65, $0.25 more. The two model differences
+are tracked separately in #3306; the qualification does not change the model.
+
+At the account's Home read before the next experiment, there were no running
+bots or held positions and no fee notice was visible. Home still displayed
+`Fees not posted yet` of $0.36. The deploy check initially reported an IBKR
+disconnect and an exposure hold, then the Gateway reconnected and the hold
+cleared; the remaining `Profile defaults pre-fill future deployments only`
+row is not a fee notice. Recheck Home and the account's posture immediately
+before the owner's hand-placed sign check.
+
+## Run record: 2026-10-15, the credit sign check (#3225)
+
+The owner authorized Paper-only orders on 2026-10-15. The Alpaca dashboard was
+not signed in, so this step used the **Paper trading API**, with the endpoint
+fixed to `https://paper-api.alpaca.markets`, rather than the dashboard action
+section 6 describes. It was an outside order, not a bot pass. Before submission
+Alpaca reported option level 3, no position and no working order; IBKR supplied
+live quotes. The order sold one SPY Oct 16 776 call and bought one 777 call. The
+$1-wide spread's maximum Paper loss at the $0.14 credit was $86 before fees.
+
+| Paper order | Limit sent | Alpaca's accepted limit | Alpaca's filled net | Leg fills |
+|---|---:|---:|---:|---|
+| Earlier shape B bull call spread, bought (`B1-bull-call-spread-flat`) | +$2.14 | +$2.14 | +$2.13 | Bought lower strike, sold higher strike |
+| Outside bear call spread, opened at 1792080283912 ms UTC | −$0.14 | −$0.14 | −$0.14 | Sold 776 at $0.60, bought 777 at $0.46 |
+| Outside bear call spread, closed immediately | Market | — | +$0.16 | Bought 776 at $0.61, sold 777 at $0.45 |
+
+The opening order filled at 1792080283975 ms UTC; the single closing `mleg`
+order filled at 1792080284687 ms UTC. At 1792080286961 ms UTC, Alpaca again
+reported **no positions and no working orders**. Cash and option buying power
+both read $99,926.65, down $2.10 from the preflight $99,928.75. The difference
+is the $2.00 round-trip spread loss plus $0.10 of Paper cash fee effect. The
+private API order answers and bundle stay outside Git. The bundle
+`3225-credit-sign-check` says `Not read: the bot`, as expected for an outside
+order; its stream, activity and account journal were sanitized into
+`tests/fixtures/alpaca/option_paper_recordings/3225-credit-sign-check` and
+checked by `test_paper_option_recordings.py`.
+
+The outside `mleg` parents have no single symbol or side. The Clerk contained
+both as unrecordable outside orders and held new entries. After the exact broker
+orders and flat account were reviewed, **Reconcile now** succeeded and both
+orders were acknowledged in the Paper Activity recovery control. The hold
+cleared; #3309 tracks the representation gap. The short leg's Alpaca `FILL`
+activity says `sell_short`, which the fee population reader currently refuses.
+Home then reported incomplete fee-bearing fill coverage and held Paper bot
+entries. This is a deliberate fail-closed rule, so no side was relabeled and no
+fee model was loosened. #3308 tracks the outside-option fee gap. The API sign
+and fill are shown; the dashboard-specific action is unverified. Shapes C and
+D cannot be called qualified until the fee evidence and admission gate are
+repaired and their bot passes run.
+
+Two Dry Run launches checked the form and live IBKR selection without sending
+another Paper order. For shape C, `spy-dv-20261015-1210` selected a one-contract,
+$1-wide bear call spread (sell 774 call, buy 775 call), with a quoted $24 credit
+and $76.10 set aside from $90 simulated cash. It stopped flat before a
+two-green-bar signal; it placed no order. For shape D,
+`spy-dv-20261015-1215` selected an iron condor with $1 wings (buy 765 put,
+sell 766 put, sell 773 call, buy 774 call). Its money review showed a $47
+credit and $53.18 set aside from $70 simulated cash. The IBKR feed remained
+continuous, but the three decision bars at 11:17, 11:18 and 11:19 local time
+produced no entry. It stopped at 11:19:26, released all $70 and showed no
+simulated position, order or fill. These launches show structure resolution,
+budgeting and a flat stop, **not** an entry, exit or overlap pass of C or D.
+The Paper account still had zero positions and zero open orders on a direct
+broker read before teardown.
+
+With the Paper account flat and both rehearsals finished, the temporary
+`ALPACA_MULTI_LEG_OPTION_ORDERS_ENABLED=true` line was removed from the
+gitignored Paper lane env file and only `alpaca-paper-clerk` was recreated. The
+running container now has the several-leg setting absent, the buying-power
+judgment and Live option settings absent, `IBKR_BROKER_ENABLED=true`,
+`IBKR_READONLY=true` and the unchanged 84-line option quote budget. Its health
+and roster returned ready, and a fresh account journal line retained
+`began_at_ms`. The coordinator's Paper `budget-preview` read of a two-leg
+structure returned `OPTION_SEVERAL_LEGS_SETTING_OFF`, saying a Dry Run still
+takes it. The Mac locked before the same row could be re-read in the Deploy
+screen; the coordinator read is the Deploy form's backing check. Nothing was
+promoted; several-leg Paper orders and Live option bots remain off.

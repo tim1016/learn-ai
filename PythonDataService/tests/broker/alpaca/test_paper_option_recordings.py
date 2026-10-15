@@ -1,12 +1,13 @@
-"""What a real Alpaca Paper account answered to one bought SPY call and one bull call spread, read by this repo's own readers (#3103).
+"""What a real Alpaca Paper account answered to bought and spread orders, read by this repo's own readers (#3103, #3225).
 
 The recordings (``tests/fixtures/alpaca/option_paper_recordings``) are the
 capture journal of the first option orders ever sent from this system, made on
-2026-10-13 and 2026-10-14 under the qualification runbook and sanitised by the
+2026-10-13 through 2026-10-15 under the qualification runbook and sanitised by the
 kit. They sit beside the documented examples and replace none of them: each
 shows one account on one day, for **one bought contract, or one bull call
 spread bought and closed (alone, and twice at once by two bots), every order
-filled inside its wait**. A credit placed by hand, a resting or part-filled
+filled inside its wait**. The #3225 recording adds one outside credit spread
+opened with a negative limit and closed at once. A resting or part-filled
 order, a cancel and an exercise are not in them. Regulatory and clearing fees
 are: Alpaca Paper posts them the morning after the fills, and the 2026-10-14
 steps' activity feed carries 2026-10-13's.
@@ -34,6 +35,7 @@ from app.broker.alpaca.adapter import (
     from_alpaca_option_account,
     from_alpaca_option_contract,
     from_alpaca_option_order,
+    from_alpaca_order,
     from_alpaca_position,
     from_alpaca_trade_update,
     to_alpaca_option_order_request,
@@ -494,3 +496,41 @@ def test_the_clerks_own_scheduled_close_sends_a_spread_held_through_a_restart_ou
     assert Decimal(close_fill["price"]) == Decimal("-2.43")
     # Both legs are flat after the one closing order.
     assert close_fill["position_qtys"] == {_SPREAD_LONG: "0", _SPREAD_SHORT: "0"}
+
+
+def test_paper_accepts_a_negative_limit_as_a_credit_and_a_positive_market_close_as_a_debit() -> None:
+    """#3225: an outside Paper API order shows the credit sign before a bot may send one."""
+    step = "3225-credit-sign-check"
+    frames = _frames(step)
+    assert [frame["event"] for frame in frames] == ["pending_new", "new", "fill"] * 2
+    opening, closing = [frame for frame in frames if frame["event"] == "fill"]
+    short, long = "SPY261016C00776000", "SPY261016C00777000"
+
+    assert [(frame["order"]["order_class"], frame["order"]["type"]) for frame in (opening, closing)] == [
+        ("mleg", "limit"), ("mleg", "market")
+    ]
+    assert Decimal(opening["order"]["limit_price"]) == Decimal("-0.14")
+    assert Decimal(opening["price"]) == Decimal(opening["order"]["filled_avg_price"]) == Decimal("-0.14")
+    assert Decimal(closing["price"]) == Decimal(closing["order"]["filled_avg_price"]) == Decimal("0.16")
+
+    for frame, sides, amounts in (
+        (opening, ((short, "sell", "sell_to_open"), (long, "buy", "buy_to_open")), ("0.60", "0.46")),
+        (closing, ((short, "buy", "buy_to_close"), (long, "sell", "sell_to_close")), ("0.61", "0.45")),
+    ):
+        # The trade-update consumer reads its embedded parent with this reader. Alpaca's stream
+        # states a misleading parent side, so the stricter REST option-order reader does not apply.
+        read_order = from_alpaca_order(frame["order"])
+        assert read_order.unreadable_fields == ()
+        assert read_order.status == "filled"
+        assert read_order.quantity == read_order.filled_quantity == 1
+        assert read_order.limit_price == (-0.14 if frame is opening else None)
+        assert read_order.filled_avg_price == (-0.14 if frame is opening else 0.16)
+        assert frame["order"]["status"] == "filled"
+        assert frame["order"]["filled_qty"] == frame["order"]["qty"] == "1"
+        assert [(leg["symbol"], leg["side"], leg["position_intent"]) for leg in frame["order"]["legs"]] == list(sides)
+        assert [Decimal(leg["price"]) for leg in frame["legs"]] == [Decimal(amount) for amount in amounts]
+        assert from_alpaca_trade_update(frame).event_type == "fill"
+
+    assert opening["position_qtys"] == {short: "-1", long: "1"}
+    assert closing["position_qtys"] == {short: "0", long: "0"}
+    assert _body(_lines(step, "positions")[-1]) == []

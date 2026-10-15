@@ -9,6 +9,7 @@ there is no network I/O, separate fee ledger or independent cash authority.
 from __future__ import annotations
 
 import math
+import re
 import sqlite3
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
@@ -22,6 +23,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.broker.alpaca.adapter import execution_id_from_activity_id
 from app.broker.alpaca.clerk.money import MoneyInputError, money_context, normalize_money
+from app.broker.alpaca.clerk.sqlite.contract_terms import (
+    ContractTerms,
+    contract_terms,
+    is_option_contract_symbol,
+)
 from app.broker.alpaca.clerk.sqlite.custody_subjects import outside_order_subject_id
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
 from app.broker.alpaca.clerk.sqlite.execution_coverage import order_total_retained_exacts_explain_cumulative
@@ -41,6 +47,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PLACEHOLDERS,
 )
 from app.broker.contract.models import BrokerActivity, OrderSide
+from app.broker.contract.options import BrokerOptionContract
 from app.services.alpaca_fee_attribution import (
     CollapsedDeliveries,
     FeeAttribution,
@@ -58,7 +65,11 @@ if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 
 FEE_EVIDENCE_KIND = "FEE_EVIDENCE_OBSERVED"
+FEE_OPTION_CONTRACT_KIND = "FEE_OPTION_CONTRACT_OBSERVED"
 FEE_EVIDENCE_MAX_AGE_MS = 90_000
+# A digit in the OCC root marks an adjusted contract the bot's strict option
+# parser refuses. Fee attribution must hold such a fill, never price it as stock.
+_OPTION_SHAPED_SYMBOL = re.compile(r"^[A-Z0-9]{1,6}[0-9]{6}[CP][0-9]{8}$")
 
 
 class FeeEvidenceFacts(BaseModel):
@@ -87,6 +98,14 @@ class FeeEvidenceFacts(BaseModel):
     # absent, so earlier records keep their exact bytes; a record without it
     # falls back to its own trade rows, which can only place it later.
     oldest_trade_at_ms: int | None = None
+
+
+class FeeOptionContractFacts(BaseModel):
+    """The broker's listing that supplies an outside fill's option multiplier."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    reference: BrokerOptionContract
 
 
 def _trade_instants(rows: Iterable[BrokerActivity]) -> list[int]:
@@ -329,6 +348,80 @@ def retained_activities(conn: sqlite3.Connection) -> CollapsedDeliveries[BrokerA
 def fold_fee_evidence(_conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Strictly validate historical evidence; money is never materialized here."""
     FeeEvidenceFacts.model_validate_json(payload["facts_json"])
+
+
+def _recorded_fee_option_contracts(conn: sqlite3.Connection) -> dict[str, ContractTerms]:
+    """The outside-fee multipliers proven by broker listings in the custody stream."""
+    found: dict[str, ContractTerms] = {}
+    for row in conn.execute(
+        "SELECT facts_json FROM custody_transitions WHERE transition_kind = ? ORDER BY sequence",
+        (FEE_OPTION_CONTRACT_KIND,),
+    ):
+        reference = FeeOptionContractFacts.model_validate_json(row[0]).reference
+        terms = ContractTerms.listed(symbol=reference.symbol, multiplier=reference.multiplier)
+        held = found.get(terms.symbol)
+        if held is not None and held != terms:
+            raise ValueError(f"conflicting outside fee contract references for {terms.symbol}")
+        found[terms.symbol] = terms
+    return found
+
+
+def fold_fee_option_contract(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Validate a listing without changing the bot contract/type table."""
+    reference = FeeOptionContractFacts.model_validate_json(payload["facts_json"]).reference
+    if reference.broker != "alpaca":
+        raise ValueError("an outside Alpaca fill needs an Alpaca contract reference")
+    terms = ContractTerms.listed(symbol=reference.symbol, multiplier=reference.multiplier)
+    held = _recorded_fee_option_contracts(conn).get(reference.symbol)
+    if held is not None and held != terms:
+        raise ValueError(f"conflicting outside fee contract references for {terms.symbol}")
+
+
+def missing_outside_option_contracts(repo: ClerkSqliteRepository) -> tuple[str, ...]:
+    """Option activity symbols whose authoritative multiplier custody has not recorded."""
+    with repo._write_lock:
+        recorded = _recorded_fee_option_contracts(repo._conn)
+        activities = retained_activities(repo._conn).unique.values()
+        return tuple(sorted({
+            row.symbol
+            for row in activities
+            if row.activity_type in {"FILL", "PARTIAL_FILL"}
+            and row.symbol is not None
+            and is_option_contract_symbol(row.symbol)
+            and row.symbol not in recorded
+            and contract_terms(repo._conn, row.symbol) is None
+        }))
+
+
+def record_fee_option_contract(
+    repo: ClerkSqliteRepository, *, expected_symbol: str, reference: BrokerOptionContract
+) -> bool:
+    """Retain one broker listing so outside option fees survive mirror replay."""
+    if repo.account_id.startswith(("sim:", "shadow:")):
+        raise ValueError("simulated custody cannot record real broker contract references")
+    if reference.broker != "alpaca" or reference.symbol != expected_symbol:
+        raise ValueError(f"the broker reference does not name requested option contract {expected_symbol}")
+    terms = ContractTerms.listed(symbol=reference.symbol, multiplier=reference.multiplier)
+    with repo._write_lock:
+        held = _recorded_fee_option_contracts(repo._conn).get(reference.symbol)
+        if held is None:
+            held = contract_terms(repo._conn, reference.symbol)
+        if held is not None:
+            if held != terms:
+                raise ValueError(f"the broker reference conflicts with recorded terms of {reference.symbol}")
+            return False
+        repo.append_transition(
+            TransitionInput(
+                transition_kind=FEE_OPTION_CONTRACT_KIND,
+                custody_owner="ACCOUNT_CLERK",
+                execution_authority="ACCOUNT_CLERK",
+                operation_state="succeeded",
+                clerk_observed_at_ms=reference.observed_at_ms,
+                summary_code=FEE_OPTION_CONTRACT_KIND,
+                facts_json=canonicalize(FeeOptionContractFacts(reference=reference).model_dump(mode="json")),
+            )
+        )
+        return True
 
 
 @money_context()
@@ -629,6 +722,12 @@ def custody_fee_attribution(
     # An outside order's fill booked against the bot that held its option contract is that
     # bot's execution (ADR 0076 decision 22): priced once, on the bot, by the option fee model.
     booked_as_a_sale = outside_orders_booked_as_a_bots_sale(conn)
+    outside_option_terms = _recorded_fee_option_contracts(conn)
+    if any(
+        (bound := contract_terms(conn, symbol)) is not None and bound != terms
+        for symbol, terms in outside_option_terms.items()
+    ):
+        population_complete = False
     witnessed_external: set[str] = set()
     external_fills: list[FeeFill] = []
     pre_custody_quantities: dict[str, Decimal] = defaultdict(Decimal)
@@ -643,11 +742,19 @@ def custody_fee_attribution(
                 if execution_id_from_activity_id(row.activity_id) not in execution_ids:
                     population_complete = False
                 continue
+            option = row.symbol is not None and is_option_contract_symbol(row.symbol)
+            if row.symbol is not None and _OPTION_SHAPED_SYMBOL.fullmatch(row.symbol) and not option:
+                population_complete = False
+                continue
+            terms = None
+            if option and row.symbol is not None:
+                terms = outside_option_terms.get(row.symbol) or contract_terms(conn, row.symbol)
             if (
                 row.native_order_id is None
                 or row.quantity is None
                 or row.price is None
-                or row.side not in {"buy", "sell"}
+                or row.side not in ({"buy", "sell", "sell_short"} if option else {"buy", "sell"})
+                or (option and terms is None)
                 or _normalized_or_none(row.quantity) is None
                 or _normalized_or_none(row.price) is None
                 or row.quantity <= 0
@@ -656,18 +763,16 @@ def custody_fee_attribution(
                 population_complete = False
                 continue
             witnessed_external.add(row.native_order_id)
-            # No contract is on the books for an outside order, so its fill
-            # carries no multiplier and the stock fee model prices it, an
-            # option's too (ADR 0076, a known gap).
             external = FeeFill(
                 fill_id=row.activity_id,
                 subject_id=outside_order_subject_id(row.native_order_id),
-                side=OrderSide(row.side),
+                side=OrderSide.SELL if row.side == "sell_short" else OrderSide(row.side),
                 quantity=normalize_money(row.quantity),
                 price=normalize_money(row.price),
                 native_order_id=row.native_order_id,
                 observed_at_ms=row.observed_at_ms,
                 occurred_at_ms=row.occurred_at_ms,
+                multiplier=None if terms is None else terms.multiplier,
             )
             if day is not None:
                 grouped[day].append(external)

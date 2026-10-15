@@ -15,8 +15,10 @@ from app.broker.contract.ports import BrokerActivityEvidencePort, BrokerReadPort
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+    from app.broker.contract.options import BrokerOptionContract
 
 logger = logging.getLogger(__name__)
+_OPTION_CONTRACTS_PER_TICK = 8
 
 
 class FeeEvidenceSync:
@@ -28,6 +30,7 @@ class FeeEvidenceSync:
         # it, and no broker read ever runs inside it.
         self._intake = intake
         self._task: asyncio.Task[None] | None = None
+        self._contract_scan_offset = 0
 
     async def tick(self) -> bool:
         """Read the account's activity, then credit what it names for bot orders (#2787).
@@ -40,7 +43,48 @@ class FeeEvidenceSync:
 
         grew = await self._read_activity_evidence()
         recovered = await self._intake.off_loop(record_bot_order_executions, self._repo)
-        return grew or recovered
+        contracts = await self._read_outside_option_contracts()
+        return grew or contracts or recovered
+
+    async def _read_outside_option_contracts(self) -> bool:
+        """Resolve retained outside option fills, including ones read on earlier ticks."""
+        from app.broker.alpaca.clerk.sqlite.fee_evidence import (
+            missing_outside_option_contracts,
+            record_fee_option_contract,
+        )
+        from app.options.contract import OptionContract
+
+        missing = await asyncio.to_thread(missing_outside_option_contracts, self._repo)
+        if not missing:
+            return False
+        start = self._contract_scan_offset % len(missing)
+        count = min(_OPTION_CONTRACTS_PER_TICK, len(missing))
+        batch = tuple(missing[(start + index) % len(missing)] for index in range(count))
+        self._contract_scan_offset = (start + count) % len(missing)
+        bound = asyncio.Semaphore(4)
+
+        async def read(symbol: str) -> BrokerOptionContract | None:
+            async with bound:
+                return await asyncio.wait_for(
+                    self._read.get_option_contract(OptionContract.from_occ_symbol(symbol)), timeout=3
+                )
+
+        answers = await asyncio.gather(*(read(symbol) for symbol in batch), return_exceptions=True)
+        grew = False
+        for symbol, answer in zip(batch, answers, strict=True):
+            if isinstance(answer, asyncio.CancelledError):
+                raise answer
+            if isinstance(answer, BaseException):
+                logger.warning(
+                    "Outside option contract reference could not be read for %s: %s",
+                    symbol, answer,
+                    extra={"action": "clerk_fee_option_contract_unread", "account_id": self._repo.account_id},
+                )
+            elif answer is not None:
+                grew = await asyncio.to_thread(
+                    record_fee_option_contract, self._repo, expected_symbol=symbol, reference=answer
+                ) or grew
+        return grew
 
     async def _read_activity_evidence(self) -> bool:
         from app.broker.alpaca.clerk.sqlite.fee_evidence import fee_evidence_cursor, record_fee_evidence

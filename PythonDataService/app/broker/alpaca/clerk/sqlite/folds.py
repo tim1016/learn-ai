@@ -1608,6 +1608,11 @@ def _fold_fee_evidence(conn: sqlite3.Connection, payload: dict[str, Any]) -> Non
     fold_fee_evidence(conn, payload)
 
 
+def _fold_fee_option_contract(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    from app.broker.alpaca.clerk.sqlite.fee_evidence import fold_fee_option_contract
+
+    fold_fee_option_contract(conn, payload)
+
 
 def _fold_simulation_baseline(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     from app.broker.alpaca.clerk.sqlite.simulated_account import fold_simulation_baseline
@@ -1618,6 +1623,7 @@ def _fold_simulation_baseline(conn: sqlite3.Connection, payload: dict[str, Any])
 DEFAULT_FOLD_REGISTRY = FoldRegistry()
 DEFAULT_FOLD_REGISTRY.register("BUDGET_AUTHORITY_CUTOVER", fold_budget_authority_cutover)
 DEFAULT_FOLD_REGISTRY.register("FEE_EVIDENCE_OBSERVED", _fold_fee_evidence)
+DEFAULT_FOLD_REGISTRY.register("FEE_OPTION_CONTRACT_OBSERVED", _fold_fee_option_contract)
 DEFAULT_FOLD_REGISTRY.register("SIMULATION_SESSION_BASELINE", _fold_simulation_baseline)
 DEFAULT_FOLD_REGISTRY.register("STRATEGY_INSTANCE_REGISTERED", _fold_strategy_instance_registered)
 DEFAULT_FOLD_REGISTRY.register("STRATEGY_INSTANCE_RETIRED", _fold_strategy_instance_retired)

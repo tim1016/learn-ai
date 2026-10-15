@@ -1,0 +1,1 @@
+{"broker": "alpaca", "endpoint": "orders", "method": "GET", "params": {"status": "open", "limit": "500", "direction": "desc"}, "status": 200, "captured_at_ms": 1792080288433, "raw_body": "[]", "began_at_ms": 1792080288364, "ended_at_ms": 1792080288433}

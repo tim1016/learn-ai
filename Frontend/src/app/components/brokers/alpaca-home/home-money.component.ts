@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, input, output } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
@@ -34,4 +34,6 @@ export class HomeMoneyComponent {
   /** The lane's Settings, where a refusal's cure lives; `null` when this
    * workspace has none to offer. */
   readonly settingsRoute = input<readonly string[] | null>(null);
+  readonly activityRoute = input<readonly string[] | null>(null);
+  readonly refreshRequested = output();
 }

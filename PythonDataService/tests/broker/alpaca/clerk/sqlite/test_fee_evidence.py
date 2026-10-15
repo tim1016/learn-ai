@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from app.broker.alpaca.adapter import from_alpaca_activity, from_alpaca_option_contract
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.budget_projection import _external_cash_claim
 from app.broker.alpaca.clerk.sqlite.fee_evidence import (
@@ -18,7 +23,9 @@ from app.broker.alpaca.clerk.sqlite.fee_evidence import (
 )
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.contract.models import BrokerActivity
+from app.broker.contract.models import BrokerActivity, BrokerActivityEvidence, OrderSide
+from app.broker.contract.options import BrokerOptionContract
+from app.options.contract import OptionContract
 from app.services.session_authority import et_minute_of_day_ms
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 from tests.broker.alpaca.clerk.sqlite.conftest import (
@@ -857,6 +864,159 @@ def test_outside_short_sale_on_a_custody_day_still_refuses(day_pnl_repo) -> None
     result = repo.fee_attribution(now_ms=NOON)
     assert not result.known
     assert "Account fill coverage is incomplete. Reconcile account executions before deploying." in result.unresolved
+
+
+def test_adjusted_option_symbol_is_never_priced_as_equity_without_its_listing(day_pnl_repo) -> None:
+    repo = day_pnl_repo
+    _seed(repo)
+    adjusted = _outside_fill("adjusted-option", YESTERDAY_OPEN, side="sell").model_copy(
+        update={"symbol": "SPY1261016C00776000"}
+    )
+    record_fee_evidence(repo, [adjusted], checked_at_ms=NOON, history_complete=True)
+    result = repo.fee_attribution(now_ms=NOON)
+    assert not result.known
+    assert "Account fill coverage is incomplete. Reconcile account executions before deploying." in result.unresolved
+
+
+async def test_paper_credit_spread_outside_fills_need_both_recorded_contract_references(tmp_path, monkeypatch) -> None:
+    """#3308: real Paper fill evidence stays held until both leg multipliers are replayable."""
+    from app.broker.alpaca.clerk.sqlite.fee_evidence_sync import FeeEvidenceSync
+
+    fixture = Path(__file__).resolve().parents[4] / "fixtures/alpaca/option_paper_recordings/3225-credit-sign-check/outside_fee_evidence.json"
+    capture = json.loads(fixture.read_text(encoding="utf-8"))
+    activities = [from_alpaca_activity(row, observed_at_ms=0) for row in capture["activities"]]
+    at = max(row.occurred_at_ms for row in activities if row.occurred_at_ms is not None) + 10_000
+    activities = [row.model_copy(update={"observed_at_ms": at}) for row in activities]
+    references = {
+        contract.symbol: contract
+        for contract in (from_alpaca_option_contract(row, observed_at_ms=at) for row in capture["contracts"])
+    }
+    assert {row.side for row in activities} == {"buy", "sell", "sell_short"}
+    assert len(activities) == 4 and len(references) == 2
+
+    class Read:
+        available = {next(iter(references))}
+
+        async def read_activity_evidence(self, *, page_token: str | None = None) -> BrokerActivityEvidence:
+            assert page_token is None
+            return BrokerActivityEvidence(activities=activities, history_complete=True)
+
+        async def get_option_contract(self, contract: OptionContract) -> BrokerOptionContract | None:
+            return references.get(contract.occ_symbol) if contract.occ_symbol in self.available else None
+
+    before_fills = min(row.occurred_at_ms for row in activities if row.occurred_at_ms is not None) - 1
+    clock = _clock_at(before_fills)
+    repo = ClerkSqliteRepository.initialize(account_id="PA-3225-option-fees", artifacts_root=tmp_path, clock=clock)
+    try:
+        record_fee_evidence(repo, [], checked_at_ms=clock())
+        clock.advance(at - clock())
+        read = Read()
+        sync = FeeEvidenceSync(repo=repo, read=read, intake=ReentrantAsyncLock())  # type: ignore[arg-type]
+        await sync.tick()
+        assert not repo.fee_attribution(now_ms=at).known
+        read.available = set(references)
+        await sync.tick()
+        result = repo.fee_attribution(now_ms=at)
+        assert result.known and len(result.external_fills) == 4
+        assert {fill.multiplier for fill in result.external_fills} == {100}
+        assert {fill.side for fill in result.external_fills} == {OrderSide.BUY, OrderSide.SELL}
+        short = next(row for row in activities if row.side == "sell_short")
+        assert next(fill for fill in result.external_fills if fill.fill_id == short.activity_id).price == Decimal("0.60")
+        assert any(row.side == "sell_short" for record in _fee_records(repo) for row in record.activities)
+        assert repo._conn.execute("SELECT COUNT(*) FROM option_contracts").fetchone()[0] == 0
+        budget = repo.account_budget(cash=1000, seen_before_ms=before_fills)
+        assert budget.outside_claims == Decimal("107.00")
+        assert repo.account_money(cash=1000, seen_before_ms=before_fills).unseen_sales == Decimal("105.00")
+        opened = {row.activity_id for row in sorted(activities, key=lambda row: row.occurred_at_ms or 0)[:2]}
+        opening_fills = tuple(fill for fill in result.external_fills if fill.fill_id in opened)
+        symbols = {row.activity_id: row.symbol for row in activities}
+        outside_orders = [
+            SimpleNamespace(broker_order_id=fill.native_order_id, symbol=symbols[fill.fill_id])
+            for fill in opening_fills
+        ]
+        from app.broker.alpaca.clerk.sqlite import budget_projection
+
+        with monkeypatch.context() as patch:
+            patch.setattr(budget_projection, "external_orders", lambda _conn: outside_orders)
+            holdings, unvalued = budget_projection._external_holdings(
+                repo._conn, replace(result, external_fills=opening_fills)
+            )
+        assert [(holding.subject_id, holding.position_cost) for holding in holdings] == [
+            ("external:SPY261016C00777000", Decimal("46.00"))
+        ]
+        assert len(unvalued) == 1 and "SPY261016C00776000" in unvalued[0]
+        recorded = repo.custody_transitions()
+        path = repo.db_path
+    finally:
+        repo.close()
+
+    replayed = ClerkSqliteRepository.open(account_id="PA-3225-option-fees", artifacts_root=tmp_path, clock=clock)
+    try:
+        assert replayed.fee_attribution(now_ms=at).external_fills == result.external_fills
+        await FeeEvidenceSync(repo=replayed, read=read, intake=ReentrantAsyncLock()).tick()  # type: ignore[arg-type]
+        assert replayed.account_budget(cash=1000, seen_before_ms=at).fee_claims >= 0
+        assert replayed._conn.execute("SELECT COUNT(*) FROM option_contracts").fetchone()[0] == 0
+        assert len(replayed.custody_transitions()) == len(recorded)
+    finally:
+        replayed.close()
+
+    path.rename(path.with_suffix(".backup"))
+    rebuilt = ClerkSqliteRepository.rebuild_from_mirror(
+        account_id="PA-3225-option-fees", artifacts_root=tmp_path, clock=clock
+    )
+    try:
+        assert rebuilt.custody_transitions() == recorded
+        assert rebuilt._conn.execute("SELECT COUNT(*) FROM option_contracts").fetchone()[0] == 0
+        await FeeEvidenceSync(repo=rebuilt, read=read, intake=ReentrantAsyncLock()).tick()  # type: ignore[arg-type]
+        assert rebuilt.fee_attribution(now_ms=at).external_fills == result.external_fills
+        assert rebuilt.account_budget(cash=1000, seen_before_ms=before_fills).outside_claims == Decimal("107.00")
+        from app.broker.alpaca.clerk.sqlite.contract_terms import ContractTerms, record_contract_terms
+
+        with rebuilt._write_lock:
+            record_contract_terms(
+                rebuilt._conn, ContractTerms(symbol=next(iter(references)), multiplier=10), recorded_at_ms=at
+            )
+            rebuilt._conn.commit()
+        assert not rebuilt.fee_attribution(now_ms=at).known
+    finally:
+        rebuilt.close()
+
+
+async def test_outside_contract_reference_reads_are_bounded_and_rotate(tmp_path) -> None:
+    from app.broker.alpaca.clerk.sqlite.fee_evidence_sync import FeeEvidenceSync
+
+    activities = [
+        _outside_fill(f"option-{index}", NOON, order=f"order-{index}").model_copy(
+            update={"symbol": f"SPY261016C{776_000 + index:08d}"}
+        )
+        for index in range(9)
+    ]
+
+    class Read:
+        asked: list[str] = []
+
+        async def read_activity_evidence(self, *, page_token: str | None = None) -> BrokerActivityEvidence:
+            assert page_token is None
+            return BrokerActivityEvidence(activities=activities, history_complete=True)
+
+        async def get_option_contract(self, contract: OptionContract) -> BrokerOptionContract | None:
+            self.asked.append(contract.occ_symbol)
+            return None
+
+    clock = _clock_at(NOON - 1)
+    repo = ClerkSqliteRepository.initialize(account_id="PA-option-ref-bound", artifacts_root=tmp_path, clock=clock)
+    try:
+        record_fee_evidence(repo, [], checked_at_ms=clock())
+        clock.advance(1)
+        read = Read()
+        sync = FeeEvidenceSync(repo=repo, read=read, intake=ReentrantAsyncLock())  # type: ignore[arg-type]
+        await sync.tick()
+        assert len(read.asked) == 8
+        await sync.tick()
+        assert len(read.asked) == 16 and set(read.asked) == {row.symbol for row in activities}
+        assert not repo.fee_attribution(now_ms=NOON).known
+    finally:
+        repo.close()
 
 
 def _observe_tracked_gtc(repo: ClerkSqliteRepository) -> None:

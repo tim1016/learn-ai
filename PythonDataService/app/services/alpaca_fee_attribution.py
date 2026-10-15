@@ -34,9 +34,9 @@ option fills alone. The row's total is kept to the cent, and each share is
 ``observed`` as a stock fill's is: the total is Alpaca's, the split is the
 models'. An option fill is never by itself a reason to leave a row unowned.
 
-None of Alpaca's own option fee activities has been seen. Seven gaps are
-known and left open. ADR 0076 decision 19 names the same seven, by the same
-letters:
+Alpaca Paper option fee activities have now been seen (#3225). Six attribution
+gaps remain open. ADR 0076 decision 19 originally named seven; #3308 closed
+(b), the outside option multiplier gap. The remaining letters are:
 
 - (a) A row is shared among the fills of the day it is dated. If Alpaca
   dates an option fee by the day it posts, and that day has only stock
@@ -45,8 +45,6 @@ letters:
   then replaces and which goes on being held back from cash: the fee is
   counted twice, once on each bot. If that day has no fill at all the row
   has no weight to follow and is unowned, as any such row always was.
-- (b) An option order placed outside the Clerk fills with no multiplier on
-  the books, so the stock model prices its fills.
 - (c) An estimate whose rows never come goes on being held back from cash,
   as a stock fill's does. Nothing bounds it.
 - (d) No real row's fee type is read: the Clerk's activity record does not

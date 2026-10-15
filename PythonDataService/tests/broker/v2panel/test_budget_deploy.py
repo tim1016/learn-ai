@@ -614,6 +614,35 @@ async def test_account_money_is_the_running_bot_beside_free_to_deploy(authority:
     assert view.deploy_refusal is None
 
 
+async def test_broker_flat_outside_fill_is_shown_as_a_record_difference(authority: tuple) -> None:
+    from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
+    from tests.broker.alpaca.clerk.sqlite.test_budget_claims import _external_fill, _external_order
+
+    repo, runtime, _ = authority
+    observe_external_order(repo, order=_external_order(state="filled", filled=6, observed_at=NOON))
+    record_fee_evidence(repo, [_external_fill()], checked_at_ms=NOON, history_complete=True)
+    runtime.envelope_sync.reading = replace(runtime.envelope_sync.reading, broker_cash_usd=400, cash_available_usd=400,
+                                            equity_usd=400, last_equity_usd=400, position_count=0)
+
+    view = await budget_deploy.account_money_view(repo.account_id)
+
+    assert view.state == "ready"
+    assert view.outside_bots_usd == "600.00"
+    assert view.broker_position_disagreement is not None
+    assert "Alpaca reports no open positions" in view.broker_position_disagreement
+    assert "$600.00" in view.broker_position_disagreement
+    assert view.detail.startswith("Clerk book total:")
+    assert [(segment.kind, segment.label) for segment in view.segments if segment.kind == "outside"] == [
+        ("outside", "outside fills not confirmed by Alpaca"),
+    ]
+    runtime.envelope_sync.reading = replace(runtime.envelope_sync.reading, position_count=1)
+    holding = await budget_deploy.account_money_view(repo.account_id)
+    assert holding.broker_position_disagreement is None
+    assert [(segment.kind, segment.label) for segment in holding.segments if segment.kind == "outside"] == [
+        ("outside", "held outside any bot"),
+    ]
+
+
 async def test_free_to_deploy_is_the_deploy_previews_unreserved_cash_and_money_after_carves_new(authority: tuple) -> None:
     repo, _, _ = _committed_view(authority)
     view = await budget_deploy.account_money_view(repo.account_id)
