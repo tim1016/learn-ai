@@ -47,7 +47,7 @@
           <li class="obp__entry" [class.is-held]="check.holds">
             <div class="obp__entry-head">
               <strong>{{ check.result_label }}</strong>
-              <code>{{ check.contract }}</code>
+              <app-asset-identity [symbol]="check.contract" size="xs" />
               @if (check.holds) {
                 <span class="obp__chip">Named by the notice</span>
               }

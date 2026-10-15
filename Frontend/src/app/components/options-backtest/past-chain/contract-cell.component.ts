@@ -1,3 +1,4 @@
+import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
@@ -14,12 +15,13 @@ import { cellOf } from './past-chain-view';
  */
 @Component({
   selector: 'app-options-backtest-chain-contract',
-  imports: [AuthoredUsdPipe, ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [AssetIdentityComponent, AuthoredUsdPipe, ReceiptLabelPipe, TimestampDisplayComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './contract-cell.component.html',
   styleUrl: './contract-cell.component.scss',
 })
 export class ContractCellComponent {
   readonly contract = input.required<ChainContract>();
+  readonly underlying = input.required<string>();
   protected readonly cell = computed(() => cellOf(this.contract()));
 }

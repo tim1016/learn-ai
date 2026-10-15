@@ -1,3 +1,4 @@
+import userEvent from '@testing-library/user-event';
 import { fireEvent, render, screen } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -48,7 +49,7 @@ describe('the table of leg trades, its columns', () => {
     const row = cells(bodyRows()[0]);
     expect(row[0]).toBe('2026-09-15');
     expect(row.slice(1, 3)).toEqual(['call', 'first entry']);
-    expect(row[3]).toContain("Oct 16 '26 585 Call");
+    expect(row[3]).toContain("Call 585 Oct 16 '26");
     expect(row.slice(4)).toEqual([
       '1',
       '09:37:00 ET', '09:38 ET', '$2.55', '$2.57',
@@ -63,7 +64,7 @@ describe('the table of leg trades, its columns', () => {
 
     const row = cells(bodyRows()[1]);
     expect(row.slice(1, 3)).toEqual(['call', 're-entry 1']);
-    expect(row[3]).toContain("Oct 16 '26 586 Call");
+    expect(row[3]).toContain("Call 586 Oct 16 '26");
     expect(row.slice(9, 12)).toEqual(['— none', '— none', '$1.20']);
     expect(row.slice(12, 17)).toEqual(['Exit Time', '15:55:00 ET', '15:56 ET', '$1.90', '$1.88']);
     expect(row[19]).toBe('$26.70');
@@ -109,13 +110,13 @@ describe('the table of leg trades, its columns', () => {
     expect(bodyRows().map((row) => cells(row)[0])).toEqual(['2026-09-16', '2026-09-15']);
   });
 
-  it('puts the OCC symbol one click away from the contract in words', async () => {
+  it('reveals the broker code when hovering a trade’s contract', async () => {
     await renderTable({ trades: [stoppedTrade()] });
 
     expect(screen.queryByText('SPY261016C00585000')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: "Show contract code for SPY Oct 16 '26 585 Call" }));
+    await userEvent.hover(screen.getByLabelText("SPY Oct 16 '26 585 Call"));
 
-    expect(screen.getByText('SPY261016C00585000')).toBeTruthy();
+    expect(await screen.findByText('SPY261016C00585000')).toBeTruthy();
   });
 });
 

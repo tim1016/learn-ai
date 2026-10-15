@@ -46,12 +46,12 @@
             <tbody>
               @for (row of part.rows; track row.key) {
                 <tr [class.money]="row.callMoney || row.putMoney">
-                  <td>@if (row.call; as call) { <app-options-backtest-chain-contract [contract]="call" /> } @else { <span class="muted">{{ gapWords(row.callGap) }}</span> }</td>
+                  <td>@if (row.call; as call) { <app-options-backtest-chain-contract [contract]="call" [underlying]="chain.underlying" /> } @else { <span class="muted">{{ gapWords(row.callGap) }}</span> }</td>
                   <th scope="row" class="strike">
                     <span class="price">{{ row.strike | authoredUsd }}</span>
                     @if (row.callMoney && row.putMoney) { <span class="mark">At the money</span> } @else if (row.callMoney) { <span class="mark">At the money for calls</span> } @else if (row.putMoney) { <span class="mark">At the money for puts</span> }
                   </th>
-                  <td>@if (row.put; as put) { <app-options-backtest-chain-contract [contract]="put" /> } @else { <span class="muted">{{ gapWords(row.putGap) }}</span> }</td>
+                  <td>@if (row.put; as put) { <app-options-backtest-chain-contract [contract]="put" [underlying]="chain.underlying" /> } @else { <span class="muted">{{ gapWords(row.putGap) }}</span> }</td>
                 </tr>
               }
             </tbody>

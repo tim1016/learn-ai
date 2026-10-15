@@ -1,3 +1,4 @@
+import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
 import type { CustodyDivergence, CustodyPositionDelta } from '../../../api/alpaca.types';
@@ -11,7 +12,7 @@ import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 @Component({
   selector: 'app-custody-divergence',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ReceiptLabelPipe],
+  imports: [AssetIdentityComponent, ReceiptLabelPipe],
   templateUrl: './custody-divergence.component.html',
   styleUrl: './custody-divergence.component.scss',
   host: { class: 'block' },

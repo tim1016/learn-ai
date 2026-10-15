@@ -149,8 +149,8 @@ describe('one day, the stored facts', () => {
     await screen.findByRole('region', { name: 'What happened, in order (scrolls sideways)' });
 
     const rows = tableRows('What happened, in order (scrolls sideways)');
-    expect(rows[0][3]).toContain("Oct 16 '26 585 Call");
-    expect(rows[1][3]).toContain("Oct 16 '26 585 Put");
+    expect(rows[0][3]).toContain("Call 585 Oct 16 '26");
+    expect(rows[1][3]).toContain("Put 585 Oct 16 '26");
     expect(rows[2][3]).toBe('— none');
     expect(rows[9][3]).toBe('— none');
   });
@@ -167,8 +167,8 @@ describe('one day, the stored facts', () => {
     await renderSession(vi, { detail: servedAs(day), request: ASKED });
     await screen.findByRole('region', { name: 'What happened, in order (scrolls sideways)' });
 
-    expect(tableRows('What happened, in order (scrolls sideways)')[0][3]).toContain("Oct 16 '26 585 Call");
-    expect(tableRows('Levels (scrolls sideways)')[0][3]).toContain("Oct 16 '26 585 Call");
+    expect(tableRows('What happened, in order (scrolls sideways)')[0][3]).toContain("Call 585 Oct 16 '26");
+    expect(tableRows('Levels (scrolls sideways)')[0][3]).toContain("Call 585 Oct 16 '26");
   });
 
   it('names a contract in words that only a trade of the day sent the parts of, because no chart series was sent for it', async () => {
@@ -176,16 +176,16 @@ describe('one day, the stored facts', () => {
     await renderSession(vi, { detail: servedAs(day), request: ASKED });
     await screen.findByRole('region', { name: 'What happened, in order (scrolls sideways)' });
 
-    expect(tableRows('What happened, in order (scrolls sideways)').map((row) => row[3])).toEqual([expect.stringContaining("Oct 16 '26 585 Call"), expect.stringContaining("Oct 16 '26 585 Put")]);
-    expect(tableRows('Levels (scrolls sideways)')[0][3]).toContain("Oct 16 '26 585 Call");
+    expect(tableRows('What happened, in order (scrolls sideways)').map((row) => row[3])).toEqual([expect.stringContaining("Call 585 Oct 16 '26"), expect.stringContaining("Put 585 Oct 16 '26")]);
+    expect(tableRows('Levels (scrolls sideways)')[0][3]).toContain("Call 585 Oct 16 '26");
   });
 
-  it('shows the symbol as it came for a contract the server sent no parts for', async () => {
+  it('decodes a contract’s broker symbol when the server sent no separate parts', async () => {
     const day = sessionDetail({ events: [{ ...sessionDetail().events[0], contract: 'SPY261016C00999000' }] });
     await renderSession(vi, { detail: servedAs(day), request: ASKED });
     await screen.findByRole('region', { name: 'What happened, in order (scrolls sideways)' });
 
-    expect(tableRows('What happened, in order (scrolls sideways)')[0][3]).toBe('SPY261016C00999000');
+    expect(tableRows('What happened, in order (scrolls sideways)')[0][3]).toBe("SPY Call 999 Oct 16 '26");
   });
 
   it('shows the words the server stored for an event exactly as it stored them, a date in them and all', async () => {
@@ -308,7 +308,7 @@ describe('one day, a series the server withholds', () => {
 
     const list = screen.getByRole('region', { name: 'Not drawn' });
     expect(reads(within(list).getAllByRole('listitem')[0])).toContain(SERIES_WORDS[reason]);
-    expect(reads(within(list).getAllByRole('listitem')[0])).toContain("SPY Oct 16 '26 585 Call");
+    expect(reads(within(list).getAllByRole('listitem')[0])).toContain("SPY Call 585 Oct 16 '26");
     expect(reads(within(list).getAllByRole('listitem')[0])).toContain('Its levels, fills and marks are listed below.');
     // The stored facts and the lists are all there, and the withheld contract’s levels and fills are still listed.
     expect(facts()[0]).toBe('Day 2026-09-15');
@@ -333,7 +333,7 @@ describe('one day, a series the server withholds', () => {
     await renderSession(vi, { detail: servedAs(withheld('changed')), request: ASKED });
     await screen.findByRole('region', { name: 'Not drawn' });
 
-    expect(reads(within(screen.getByRole('region', { name: 'Not drawn' })).getAllByRole('listitem')[0])).toBe("SPY Oct 16 '26 585 Call : Changed The stored bars have changed since this run. Its levels, fills and marks are listed below.");
+    expect(reads(within(screen.getByRole('region', { name: 'Not drawn' })).getAllByRole('listitem')[0])).toBe("SPY Call 585 Oct 16 '26 : Changed The stored bars have changed since this run. Its levels, fills and marks are listed below.");
   });
 
   it('draws no chart at all and gives the server’s words for a skipped day, with the facts of it', async () => {

@@ -24,7 +24,7 @@
         <tbody>
           @for (p of positionDeltas(); track p.symbol) {
             <tr>
-              <td>{{ p.symbol }}</td>
+              <td><app-asset-identity [symbol]="p.symbol" size="xs" /></td>
               <td>{{ p.clerk_attributed_qty }}</td>
               <td>{{ p.broker_observed_qty }}</td>
             </tr>

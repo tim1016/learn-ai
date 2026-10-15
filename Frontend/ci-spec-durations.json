@@ -455,7 +455,6 @@
     "src/app/utils/black-scholes.parity.spec.ts": 0.011,
     "src/app/utils/black-scholes.spec.ts": 0.02,
     "src/app/utils/date-validation.spec.ts": 0.003,
-    "src/app/utils/occ-ticker.spec.ts": 0.019,
     "src/app/utils/run-log-buffer.spec.ts": 0.01,
     "src/app/utils/ticker-wire.spec.ts": 0.008
   }

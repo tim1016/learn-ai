@@ -31,7 +31,12 @@
           <li>
             <p class="picks__contract">
               <strong>{{ picked.side }} {{ picked.leg.ratio }}</strong>
-              <app-option-contract [contract]="picked.leg.contract" />
+              <app-option-contract [contract]="picked.leg.contract" [market]="{
+                bid: picked.leg.quote.bid, ask: picked.leg.quote.ask,
+                delta: picked.leg.delta, ibkrDelta: picked.leg.ibkr_delta,
+                impliedVolatility: picked.leg.implied_volatility,
+                asOfMs: told.quotes_read_ms, source: 'IBKR quote · model Greeks'
+              }" />
             </p>
             @if (!compact()) {
               <dl>

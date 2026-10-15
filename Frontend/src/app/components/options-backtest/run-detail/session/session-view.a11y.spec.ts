@@ -41,7 +41,7 @@ describe('one day for a screen reader', () => {
   it('has no violation with a traded day, its chart, its legend, its lists and a contract’s code shown', async () => {
     await renderSession(vi, { detail: serving(sessionDetail()), request: asked });
     await screen.findByRole('img');
-    fireEvent.click(screen.getAllByRole('button', { name: /^Show contract code for/ })[0]);
+    fireEvent.focus(screen.getAllByLabelText(/SPY.*Call/)[0]);
 
     expect(await violations()).toEqual([]);
   });

@@ -25,7 +25,7 @@
     </ng-template>
     <ng-template #body let-leg>
       <tr>
-        <th scope="row">{{ leg.symbol }}</th>
+        <th scope="row"><app-asset-identity [symbol]="leg.symbol" size="xs" /></th>
         <td>{{ leg.side | receiptLabel }}</td>
         <td class="text-right tabular-nums">{{ leg.quantity }}</td>
         <td>{{ leg.orderType | receiptLabel }}</td>

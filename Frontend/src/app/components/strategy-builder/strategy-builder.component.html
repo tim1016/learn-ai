@@ -345,12 +345,9 @@
             @for (leg of legs(); track $index; let i = $index) {
               <div class="leg-chip" [class.long-chip]="leg.position === 'long'" [class.short-chip]="leg.position === 'short'">
                 <span class="leg-pos">{{ leg.position === 'long' ? 'BUY' : 'SELL' }}</span>
-                <span class="leg-detail">
-                  <span [class.text-emerald-400]="leg.optionType === 'call'" [class.text-red-400]="leg.optionType === 'put'">
-                    {{ leg.optionType === 'call' ? 'C' : 'P' }}
-                  </span>
-                  {{ leg.strike }}
-                </span>
+                @if (identityForLeg(leg); as identity) {
+                  <app-option-contract [contract]="identity.contract" [market]="identity.market" />
+                }
                 <div class="leg-qty-stepper" role="group" aria-label="Leg quantity">
                   <button
                     type="button"
@@ -555,20 +552,12 @@
   [showCloseIcon]="true"
 >
   <ng-template #header>
-    @let parsed = parsedHistoryTicker();
-    @if (parsed) {
-      <div class="history-header">
-        <div class="history-header-row">
-          <span class="history-underlying">{{ parsed.underlying }}</span>
-          <span class="history-type" [class.is-call]="parsed.type === 'Call'" [class.is-put]="parsed.type === 'Put'">
-            {{ parsed.type }}
-          </span>
-          <span class="history-strike">{{ parsed.strike }}</span>
-        </div>
-        <div class="history-meta">
-          Exp {{ parsed.expDate }}
-        </div>
-      </div>
+    @if (selectedHistoryContract(); as history) {
+      <app-asset-identity [symbol]="history.ticker" [optionUnderlying]="history.underlying" size="sm" [optionMarket]="{
+        bid: history.snapshot.lastQuote?.bid, ask: history.snapshot.lastQuote?.ask,
+        last: history.snapshot.lastTrade?.price, delta: history.snapshot.greeks?.delta,
+        impliedVolatility: history.snapshot.impliedVolatility, source: 'Chain snapshot'
+      }" />
     }
   </ng-template>
 

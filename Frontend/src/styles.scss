@@ -61,6 +61,21 @@ p {
 .negative { color: var(--bear); font-weight: 600; }
 .muted    { color: var(--text-muted); }
 
+// The contract hover card is appended to body so tables and drawers cannot clip it.
+.option-contract-tooltip.p-tooltip {
+  max-width: min(310px, calc(100vw - 24px));
+  --p-tooltip-background: var(--bg-elevated);
+  --p-tooltip-color: var(--text-primary);
+  --p-tooltip-max-width: 310px;
+}
+
+.option-contract-popover.p-popover {
+  max-width: calc(100vw - 24px);
+  --p-popover-background: var(--bg-elevated);
+  --p-popover-color: var(--text-primary);
+  --p-popover-content-padding: 8px;
+}
+
 /* Tabular-num utilities. Apply to any element rendering a price,
    percentage, count, ratio, or ID-like string so digits align in a
    monospaced grid. Non-negotiable per design system. */

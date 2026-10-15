@@ -105,8 +105,8 @@ describe('DeployOptionStructureComponent', () => {
     const { service } = await renderOptions(SPREAD);
 
     const picks = screen.getByRole('region', { name: 'Right now this picks' });
-    expect(await within(picks).findByRole('button', { name: "Show contract code for SPY Oct 9 '26 585 Call" })).toBeTruthy();
-    expect(within(picks).getByRole('button', { name: "Show contract code for SPY Oct 9 '26 590 Call" })).toBeTruthy();
+    expect(await within(picks).findByLabelText("SPY Oct 9 '26 585 Call")).toBeTruthy();
+    expect(within(picks).getByLabelText("SPY Oct 9 '26 590 Call")).toBeTruthy();
     expect(within(picks).getAllByRole('listitem').map((leg) => leg.querySelector('strong')?.textContent?.trim())).toEqual(['Buy 1', 'Sell 1']);
     // The short view leaves the quotes and deltas to the builder.
     expect(within(picks).queryByText('3.10')).toBeNull();

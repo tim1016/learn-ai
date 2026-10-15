@@ -1,3 +1,4 @@
+import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { ChangeDetectionStrategy, Component, input, output } from '@angular/core';
 import { ButtonModule } from 'primeng/button';
 import { DialogModule } from 'primeng/dialog';
@@ -16,7 +17,7 @@ import type { AlpacaOrderDraftLeg } from './alpaca-order-entry.types';
 @Component({
   selector: 'app-alpaca-order-preview',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ButtonModule, DialogModule, TableModule, ReceiptLabelPipe],
+  imports: [AssetIdentityComponent, ButtonModule, DialogModule, TableModule, ReceiptLabelPipe],
   templateUrl: './alpaca-order-preview.component.html',
 })
 export class AlpacaOrderPreviewComponent {

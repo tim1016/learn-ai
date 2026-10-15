@@ -1,4 +1,5 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { pickSymbol } from '../../../shared/symbol-picker/testing/fake-picker-world';
@@ -144,9 +145,9 @@ describe('what a download answers', () => {
     expect(lines).toEqual([
       'Listing SPY Already Stored',
       "Underlying's bars SPY Fetched",
-      'Contract SPY261016C00602000 Fetched',
-      'Contract SPY261016C00603000 Failed Provider No Data the vendor holds no trades for SPY261016C00603000 on 2026-10-09',
-      'Contract SPY261016C00606000 Failed Lease Timeout Being fetched by another request. Try again shortly. another request holds the claim',
+      "Contract SPY Call 602 Oct 16 '26 Fetched",
+      "Contract SPY Call 603 Oct 16 '26 Failed Provider No Data the vendor holds no trades for SPY261016C00603000 on 2026-10-09",
+      "Contract SPY Call 606 Oct 16 '26 Failed Lease Timeout Being fetched by another request. Try again shortly. another request holds the claim",
     ]);
     expect(reads(paragraph(/fetched, .* already stored/))).toBe('2 fetched, 1 already stored, 2 failed.');
   });
@@ -168,16 +169,20 @@ describe('what a download answers', () => {
     expect(assertNewYorkTimes(result)).toBe(1);
   });
 
-  it('shows the tickers of the answer through the shared symbol display, and a contract symbol as plain code', async () => {
+  it('shows shared identities for every item and reveals a contract’s broker code on hover', async () => {
     await openChainOf(chainWithFiveMissing(), async () => answered());
 
     fireEvent.click(button());
 
     const result = await screen.findByRole('group', { name: 'Download result' });
     const items = within(result).getAllByRole('listitem');
-    expect(items.map((line) => line.querySelectorAll('app-asset-identity').length)).toEqual([1, 1, 0, 0, 0]);
-    expect(items.map((line) => line.querySelectorAll('.subject').length)).toEqual([0, 0, 1, 1, 1]);
+    expect(items.map((line) => line.querySelectorAll('app-asset-identity').length)).toEqual([1, 1, 1, 1, 1]);
+    expect(items.map((line) => line.querySelectorAll('app-option-contract').length)).toEqual([0, 0, 1, 1, 1]);
     expect(result.querySelectorAll('h3 app-asset-identity').length).toBe(1);
+
+    await userEvent.hover(within(items[2]).getByLabelText("SPY Oct 16 '26 602 Call"));
+
+    expect(within(await screen.findByRole('tooltip')).getByText('SPY261016C00602000')).toBeTruthy();
   });
 
   it('moves the keyboard to the result, where the pressed button no longer is', async () => {

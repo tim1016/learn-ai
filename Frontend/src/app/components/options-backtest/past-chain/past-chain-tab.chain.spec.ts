@@ -57,8 +57,8 @@ describe('the chain of one expiry', () => {
 
     expect(headers).toEqual(['Calls', 'Strike', 'Puts']);
     expect(strikes).toEqual(['$601.00', '$602.00', '$603.00']);
-    expect(reads(rowOf('$601.00').querySelectorAll('td')[0] ?? null)).toContain('SPY261016C00601000');
-    expect(reads(rowOf('$601.00').querySelectorAll('td')[1] ?? null)).toContain('SPY261016P00601000');
+    expect(rowOf('$601.00').querySelectorAll('td')[0]?.querySelector('[aria-label]')?.getAttribute('aria-label')).toBe("SPY Oct 16 '26 601 Call");
+    expect(rowOf('$601.00').querySelectorAll('td')[1]?.querySelector('[aria-label]')?.getAttribute('aria-label')).toBe("SPY Oct 16 '26 601 Put");
   });
 
   it('marks the money strike as the server served it', async () => {
