@@ -2507,6 +2507,10 @@ async def test_a_settlement_asked_again_by_a_page_that_names_no_order_is_found_b
         await execute_recovery_action(
             facade, request=naming_no_order("0" * 64), current_context=current_context
         )
+    with pytest.raises(StaleRecoveryTokenError):
+        await execute_recovery_action(
+            facade, request=naming_no_order("é" * 64), current_context=current_context
+        )
 
     assert (again.applied, again.receipt_id) == (False, first.receipt_id)
     assert repo.custody_transitions() == ledger and alpaca.reads == []

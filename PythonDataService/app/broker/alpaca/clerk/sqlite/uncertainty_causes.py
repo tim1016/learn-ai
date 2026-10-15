@@ -11,6 +11,8 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
+from app.utils.session_anchors import is_instant_ms
+
 POSITION_DRIFT_REASON_CODE = "POSITION_DRIFT"
 BROKER_SNAPSHOT_STALE_REASON_CODE = "BROKER_SNAPSHOT_STALE"
 RECONCILIATION_INCOMPLETE_REASON_CODE = "RECONCILIATION_INCOMPLETE"
@@ -298,11 +300,7 @@ class ExitStuckCause:
         if not isinstance(redrive_count, int) or isinstance(redrive_count, bool) or redrive_count < 0:
             raise ValueError("EXIT-stuck redrive_count must be a non-negative integer")
         first_observed_at_ms = value["first_observed_at_ms"]
-        if (
-            not isinstance(first_observed_at_ms, int)
-            or isinstance(first_observed_at_ms, bool)
-            or first_observed_at_ms < 0
-        ):
+        if not is_instant_ms(first_observed_at_ms):
             raise ValueError("EXIT-stuck first_observed_at_ms must be int64 ms UTC")
         return cls(
             symbol=symbol,
@@ -469,7 +467,7 @@ class MissedScheduledClose:
         if not isinstance(kind, str) or not kind:
             raise ValueError("missed scheduled close kind must be a non-empty string")
         for name in ("due_ms", "session_open_ms"):
-            if isinstance(value[name], bool) or not isinstance(value[name], int) or value[name] < 0:
+            if not is_instant_ms(value[name]):
                 raise ValueError(f"missed scheduled close {name} must be int64 ms UTC")
         return cls(
             symbol=symbol,
@@ -952,7 +950,7 @@ class LossHoldCause:
             raise ValueError("loss hold policy revision must be positive")
         for field_name in ("day_start_ms", "observed_at_ms"):
             stamp = value[field_name]
-            if not isinstance(stamp, int) or isinstance(stamp, bool) or stamp < 0:
+            if not is_instant_ms(stamp):
                 raise ValueError(f"loss hold cause {field_name} must be a non-negative int64 ms UTC")
         return cls(
             day_start_ms=value["day_start_ms"],

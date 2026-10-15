@@ -2117,6 +2117,8 @@ def active_uncertainty_for_subject(
 
 def active_execution_price_conflicts(
     conn: sqlite3.Connection,
+    *,
+    warned_episodes: set[str] | None = None,
 ) -> tuple[tuple[str, str, ExecutionPriceConflictCause], ...]:
     """Every active ``EXECUTION_PRICE_CONFLICT`` episode as ``(uncertainty_id,
     subject_id, cause)`` (#2460).
@@ -2131,7 +2133,8 @@ def active_execution_price_conflicts(
     custody subject, are skipped -- an unreadable cause is not a reason to
     wedge every other episode's re-derivation -- and each is logged as
     ``execution_price_conflict_skipped`` with its ``uncertainty_id``, since a
-    skipped episode is never cleared by the sweep.
+    skipped episode is never cleared by the sweep. A repository logs each
+    unreadable active episode once until it becomes readable or resolves.
     """
     rows = conn.execute(
         "SELECT uncertainty_id, subject_id, facts_json FROM uncertainties "
@@ -2139,6 +2142,8 @@ def active_execution_price_conflicts(
         "ORDER BY observed_at_ms ASC, uncertainty_id ASC",
         (EXECUTION_PRICE_CONFLICT_REASON_CODE,),
     ).fetchall()
+    if warned_episodes is not None:
+        warned_episodes.intersection_update(row["uncertainty_id"] for row in rows)
     episodes: list[tuple[str, str, ExecutionPriceConflictCause]] = []
     for row in rows:
         try:
@@ -2147,28 +2152,36 @@ def active_execution_price_conflicts(
                 raise TypeError(f"facts_json holds {type(raised).__name__}, not an object")
             cause = ExecutionPriceConflictCause.from_mapping(raised.get("cause_facts"))
         except (ValueError, TypeError):
-            logger.warning(
-                "an active execution price conflict has a cause that cannot be read; "
-                "the sweep skips it and never clears it",
-                extra={
-                    "action": "execution_price_conflict_skipped",
-                    "reason": "cause_unreadable",
-                    "uncertainty_id": row["uncertainty_id"],
-                },
-                exc_info=True,
-            )
+            if warned_episodes is None or row["uncertainty_id"] not in warned_episodes:
+                logger.warning(
+                    "an active execution price conflict has a cause that cannot be read; "
+                    "the sweep skips it and never clears it",
+                    extra={
+                        "action": "execution_price_conflict_skipped",
+                        "reason": "cause_unreadable",
+                        "uncertainty_id": row["uncertainty_id"],
+                    },
+                    exc_info=True,
+                )
+                if warned_episodes is not None:
+                    warned_episodes.add(row["uncertainty_id"])
             continue
         if row["subject_id"] is None:
-            logger.warning(
-                "an active execution price conflict names no custody subject; "
-                "the sweep skips it and never clears it",
-                extra={
-                    "action": "execution_price_conflict_skipped",
-                    "reason": "no_custody_subject",
-                    "uncertainty_id": row["uncertainty_id"],
-                },
-            )
+            if warned_episodes is None or row["uncertainty_id"] not in warned_episodes:
+                logger.warning(
+                    "an active execution price conflict names no custody subject; "
+                    "the sweep skips it and never clears it",
+                    extra={
+                        "action": "execution_price_conflict_skipped",
+                        "reason": "no_custody_subject",
+                        "uncertainty_id": row["uncertainty_id"],
+                    },
+                )
+                if warned_episodes is not None:
+                    warned_episodes.add(row["uncertainty_id"])
             continue
+        if warned_episodes is not None:
+            warned_episodes.discard(row["uncertainty_id"])
         episodes.append((row["uncertainty_id"], row["subject_id"], cause))
     return tuple(episodes)
 

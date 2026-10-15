@@ -101,6 +101,13 @@ def test_healthy_catalog_omits_failure_and_generic_recovery_actions() -> None:
     assert "reset_authority" not in actions
 
 
+def test_non_ascii_recovery_token_is_a_stale_token_refusal() -> None:
+    with pytest.raises(StaleRecoveryTokenError):
+        recheck_recovery_action(
+            _context(), action_id="reconcile_now", concurrency_token="é" * 64
+        )
+
+
 @pytest.mark.parametrize(
     ("overrides", "says_cash_goes_back"),
     [({}, True), ({"account_id": "sim:spy-bot"}, False)],

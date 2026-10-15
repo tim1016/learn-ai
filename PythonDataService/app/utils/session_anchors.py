@@ -47,6 +47,11 @@ _NY = ZoneInfo("America/New_York")
 MAX_TIMESTAMP_MS = 253_402_300_799_999
 
 
+def is_instant_ms(value: object) -> bool:
+    """Whether a value is a whole UTC millisecond inside the domain's admitted range."""
+    return type(value) is int and 0 <= value <= MAX_TIMESTAMP_MS
+
+
 
 
 

@@ -1678,6 +1678,22 @@ async def test_injected_disconnect_enters_reconnect_path(permit_frame_injection)
         await anext(source)
 
 
+async def test_closing_injected_frame_source_closes_its_inner_socket_generator(permit_frame_injection) -> None:
+    closed = asyncio.Event()
+
+    async def inner() -> AsyncIterator[str]:
+        try:
+            yield '{"stream":"authorization"}'
+            await asyncio.Event().wait()
+        finally:
+            closed.set()
+
+    wrapped = _inject_frame_faults(inner())
+    await anext(wrapped)
+    await wrapped.aclose()
+    assert closed.is_set()
+
+
 async def test_injected_disconnect_preserves_prior_fault_frames(
     permit_frame_injection,
 ) -> None:

@@ -46,6 +46,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 )
 from app.broker.contract.options import OptionOrderRequest
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
+from app.utils.session_anchors import is_instant_ms as _is_instant_ms
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.program_leg import LegShape
@@ -53,14 +54,6 @@ if TYPE_CHECKING:
     from app.schemas.market_liveness import TopOfBookQuote
 
 FACTS_SCHEMA_VERSION = 1
-
-
-def _is_instant_ms(value: object) -> bool:
-    """Whether ``value`` is a whole ``int64 ms UTC`` the domain admits: zero to ``MAX_TIMESTAMP_MS`` (ADR 0022 (g)).
-
-    ``type(...) is int`` also refuses a flag, which is an ``int`` to ``isinstance``.
-    """
-    return type(value) is int and 0 <= value <= MAX_TIMESTAMP_MS
 
 
 @dataclass(frozen=True)

@@ -250,6 +250,8 @@ class MirrorFile:
                 raise MirrorChainBroken("mirror transition record has no sequence")
             sequence = record["sequence"]
             phase = record.get("phase")
+            if phase in ("PREPARE", "FINALIZE") and "row_hash" not in record:
+                raise MirrorChainBroken(f"sequence {sequence} {phase} record has no row_hash")
             if phase == "PREPARE":
                 prepares_by_sequence.setdefault(sequence, []).append(record)
             elif phase == "FINALIZE":

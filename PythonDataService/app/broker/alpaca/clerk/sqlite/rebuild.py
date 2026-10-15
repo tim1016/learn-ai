@@ -81,12 +81,12 @@ def rebuild_repository_from_mirror(
     conn = sqlite3.connect(db_path, isolation_level=None, check_same_thread=False)
     try:
         schema.configure_connection(conn)
-    except Exception:
-        # Nothing was written: an empty file left here would block the next rebuild.
+        schema.apply_schema(conn)
+    except BaseException:
+        # A partial schema or empty file left here would block the next rebuild.
         conn.close()
         remove_database_file_created_here(db_path)
         raise
-    schema.apply_schema(conn)
     conn.row_factory = sqlite3.Row
 
     now = clock()

@@ -17,7 +17,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from app.utils.atomic_file import atomic_write_bytes
-from app.utils.session_anchors import MAX_TIMESTAMP_MS
+from app.utils.session_anchors import is_instant_ms
 from app.utils.timestamps import now_ms_utc
 
 COMPATIBILITY_SNAPSHOT_SCHEMA_VERSION = 1
@@ -551,7 +551,7 @@ def _require_label(value: object) -> None:
 
 
 def _require_timestamp(value: object, label: str) -> None:
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0 or value > MAX_TIMESTAMP_MS:
+    if not is_instant_ms(value):
         raise CompatibilityRetirementRefusal(f"{label} must be an int64 ms UTC timestamp.")
 
 

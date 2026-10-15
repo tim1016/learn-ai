@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from typing import Any
 
 import pytest
@@ -340,3 +341,16 @@ async def test_cancelling_a_call_that_still_holds_its_claim_folds_the_unknown(
 
     assert task.cancelled()
     assert [fold["order_ref"] for fold in folds] == ["c-1"]
+
+
+@pytest.mark.parametrize("call", ["submit", "cancel"])
+async def test_cancelling_a_call_stays_cancelled_when_uncertain_fold_finds_database_locked(
+    call: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def locked_fold(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(claimed_broker_io, "fold_uncertain", locked_fold)
+    task = await _cancel_while_in_flight(call, _Repo())
+    assert task.cancelled()

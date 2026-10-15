@@ -8,7 +8,6 @@ facts, so chart or unrelated-bot activity cannot make a confirmed action stale.
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import math
 from collections.abc import Callable
@@ -72,6 +71,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_policies import (
     reasons_that_strand_a_residue,
     residue_discharge_role,
 )
+from app.broker.fleet.identity import same_secret
 from app.options.contract import OptionContract
 from app.options.deadlines import past_last_session
 from app.utils.et_words import et_when_words
@@ -1815,7 +1815,7 @@ def recheck_recovery_action(
                 primary=False,
             )
         )
-    if not hmac.compare_digest(capability.concurrency_token, concurrency_token):
+    if not same_secret(concurrency_token, capability.concurrency_token):
         raise StaleRecoveryTokenError(
             "The recovery evidence changed. Refresh before confirming the action."
         )

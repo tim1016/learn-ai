@@ -393,6 +393,25 @@ async def test_manual_ticket_preview_submit_replay_and_read_are_durable(
 
 
 @pytest.mark.asyncio
+async def test_manual_ticket_rejects_a_non_ascii_preview_token_as_stale(
+    api: tuple[FastAPI, ClerkSqliteRepository, FakeAlpacaPort, dict[str, bool]],
+) -> None:
+    app, repo, port, _health = api
+    ticket_path = f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-order-tickets/{TICKET_ID}"
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.put(
+            ticket_path,
+            headers=_headers(),
+            json={"legs": _preview_payload()["legs"], "preview_token": "é" * 64},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason"] == "manual_preview_stale"
+    assert repo.manual_order_ticket(TICKET_ID) is None
+    assert port.submit_calls == []
+
+
+@pytest.mark.asyncio
 async def test_manual_ticket_continue_requires_a_fresh_preview_and_activates_one_next_leg(
     api: tuple[FastAPI, ClerkSqliteRepository, FakeAlpacaPort, dict[str, bool]],
 ) -> None:

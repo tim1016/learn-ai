@@ -1047,20 +1047,23 @@ async def _inject_frame_faults(
             frames.append(frame)
         return frames, disconnect
 
-    async for frame in source:
-        yield frame
-        text = frame.decode("utf-8") if isinstance(frame, bytes) else frame
-        try:
-            message = json.loads(text)
-        except (ValueError, TypeError):
-            message = None
-        if isinstance(message, dict) and message.get("stream") == _STREAM_TRADE_UPDATES:
-            last_trade_update = text
-        injected_frames, disconnect = _drain()
-        for injected in injected_frames:
-            yield injected
-        if disconnect:
-            raise ConnectionError("injected trade_updates disconnect")
+    try:
+        async for frame in source:
+            yield frame
+            text = frame.decode("utf-8") if isinstance(frame, bytes) else frame
+            try:
+                message = json.loads(text)
+            except (ValueError, TypeError):
+                message = None
+            if isinstance(message, dict) and message.get("stream") == _STREAM_TRADE_UPDATES:
+                last_trade_update = text
+            injected_frames, disconnect = _drain()
+            for injected in injected_frames:
+                yield injected
+            if disconnect:
+                raise ConnectionError("injected trade_updates disconnect")
+    finally:
+        await _close_source(source)
 
 
 async def alpaca_socket_frames(settings: AlpacaSettings) -> AsyncIterator[bytes | str]:

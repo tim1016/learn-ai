@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 #: The first wait after the failed boot selection. Doubled after every
 #: attempt that still cannot reach Alpaca, up to ``RECONNECT_MAX_DELAY_S``:
 #: a blip of seconds recovers within seconds, and an outage of hours costs one
-#: account read a minute. A rate limit's own Retry-After is waited out whole.
+#: account read a minute. A rate limit's Retry-After is capped at that minute.
 RECONNECT_FIRST_DELAY_S: Final = 2.0
 RECONNECT_MAX_DELAY_S: Final = 60.0
 #: A reconnect that ended on an error nothing expected. Final, like every
@@ -108,7 +108,7 @@ async def run_authority_reconnect(
         while (failure := runtime.startup_failure) is not None and runtime.reconnecting:
             attempt += 1
             RECONNECT_COUNTERS.attempts += 1
-            wait_s = max(delay_s, (failure.retry_after_ms or 0) / 1000)
+            wait_s = min(max_delay_s, max(delay_s, (failure.retry_after_ms or 0) / 1000))
             logger.warning(
                 "Alpaca did not answer this Clerk's startup; reconnect attempt %d in %.0f s: %s",
                 attempt,

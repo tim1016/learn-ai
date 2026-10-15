@@ -171,7 +171,7 @@ tr.selected {
     padding: var(--space-1) var(--space-2);
     border: 1px solid transparent;
     background: transparent;
-    color: var(--text);
+    color: var(--text-primary);
     font-size: var(--fs-xs);
     border-radius: var(--radius-sm);
     cursor: pointer;
@@ -191,7 +191,7 @@ tr.selected {
     padding: var(--space-1) var(--space-2);
     border: 1px solid var(--border-light);
     background: var(--bg-elevated);
-    color: var(--text);
+    color: var(--text-primary);
     border-radius: var(--radius-sm);
     font-size: var(--fs-xs);
     width: 8rem;
