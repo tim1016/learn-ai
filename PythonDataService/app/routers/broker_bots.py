@@ -1,15 +1,7 @@
-"""Broker-parameterized bot runner routes (transport only).
-
-``/api/brokers/{broker}/bots/...`` — Alpaca Bot Control v2, S2 (#1260).
-The router resolves the ``{broker}`` segment via the broker registry
-(unknown broker → typed 404), calls the in-container
-:class:`BotTaskRegistry`, and translates typed runner errors to HTTP.
-No business logic lives here (router-freeze discipline).
-"""
+"""Broker-parameterized current-run read for one bot."""
 
 from __future__ import annotations
 
-import logging
 from typing import NoReturn
 
 from fastapi import APIRouter, HTTPException
@@ -29,8 +21,6 @@ from app.services.bot_runner import (
     get_bot_task_registry,
 )
 from app.services.sqlite_clerk_compat import lane_account_id_for_seal
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/brokers", tags=["broker-bots"])
 

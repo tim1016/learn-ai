@@ -376,9 +376,11 @@ class HttpLaneDelivery:
             )
         finally:
             if not keep_open:
-                if response is not None:
-                    await response.aclose()
-                await client.aclose()
+                try:
+                    if response is not None:
+                        await response.aclose()
+                finally:
+                    await client.aclose()
 
 
 async def _closing_event_iterator(
@@ -389,8 +391,10 @@ async def _closing_event_iterator(
         async for event in iter_sse_from_response(response):
             yield event
     finally:
-        await response.aclose()
-        await client.aclose()
+        try:
+            await response.aclose()
+        finally:
+            await client.aclose()
 
 
 LocalHandler = Callable[[DeliveryRequest], "object"]

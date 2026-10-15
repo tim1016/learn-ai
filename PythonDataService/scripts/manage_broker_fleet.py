@@ -50,6 +50,8 @@ import sys
 from pathlib import Path
 
 from app.broker.fleet.compatibility_retirement import (
+    DEFAULT_MAX_EVIDENCE_AGE_MS,
+    DEFAULT_MAX_WINDOW_DURATION_MS,
     CompatibilityRetirementRefusal,
     CompatibilityRouteState,
     apply_retirement_rollout,
@@ -302,7 +304,10 @@ def _restore_registry(args: argparse.Namespace) -> int:
         max_schema_version=D_COMPATIBLE_SCHEMA_VERSION if args.d_compatible else SCHEMA_VERSION,
     )
     state = read_recovery_state(Path(args.control_dir))
-    assert state is not None
+    if state is None:
+        raise FleetRegistryUnavailable(
+            "Registry restore did not leave a recovery hold; do not resume mutations."
+        )
     _write(
         {
             "registry_id": manifest.registry_id,
@@ -446,7 +451,7 @@ def _migrate_existing_locked(args: argparse.Namespace) -> int:
                         next_step="Restore the registry from the control volume's "
                         "backup, or complete the enrolment on the original root.",
                     )
-                marker = volume_module.write_volume_marker(
+                volume_module.write_volume_marker(
                     volume_root,
                     volume_module.VolumeMarker(
                         marker_version=volume_module.MARKER_SCHEMA_VERSION,
@@ -745,13 +750,13 @@ def _build_parser() -> argparse.ArgumentParser:
         sp.add_argument(
             "--max-evidence-age-ms",
             type=int,
-            default=86_400_000,
+            default=DEFAULT_MAX_EVIDENCE_AGE_MS,
             help="Maximum allowed age of end, inventory, health, and operator evidence",
         )
         sp.add_argument(
             "--max-window-duration-ms",
             type=int,
-            default=604_800_000,
+            default=DEFAULT_MAX_WINDOW_DURATION_MS,
             help="Maximum bounded representative measurement-window duration",
         )
 

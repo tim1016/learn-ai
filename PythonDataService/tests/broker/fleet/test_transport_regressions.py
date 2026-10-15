@@ -16,6 +16,7 @@ from app.broker.fleet.delivery import (
     DeliveryRequest,
     HttpLaneDelivery,
     LocalLaneDelivery,
+    _closing_event_iterator,
     bind_path_template,
 )
 from app.broker.fleet.internal_http import SseEvent
@@ -173,6 +174,66 @@ async def test_http_stream_open_is_bounded_and_releases_the_client(
     )
     request = DeliveryRequest(broker="alpaca", clerk_id="clerk", operation=operation, path_params={})
     with pytest.raises(TimeoutError):
+        await HttpLaneDelivery(
+            base_url="http://127.0.0.1", coordinator_service_token="test-token"
+        ).stream(request)
+    assert client.closed
+
+
+async def test_stream_closes_client_when_response_close_fails() -> None:
+    class BrokenResponse:
+        async def aclose(self) -> None:
+            raise OSError("response close failed")
+
+    class TrackedClient:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    client = TrackedClient()
+    stream = _closing_event_iterator(BrokenResponse(), client)
+    with pytest.raises(OSError, match="response close failed"):
+        await stream.__anext__()
+    assert client.closed
+
+
+async def test_stream_open_failure_closes_client_when_response_close_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.broker.fleet import delivery
+
+    class BrokenResponse:
+        status_code = 503
+        headers: dict[str, str] = {}
+
+        async def aread(self) -> bytes:
+            return b"lane unavailable"
+
+        async def aclose(self) -> None:
+            raise OSError("response close failed")
+
+    class TrackedClient:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def build_request(self, *args: object, **kwargs: object) -> object:
+            return object()
+
+        async def send(self, *args: object, **kwargs: object) -> BrokenResponse:
+            return BrokenResponse()
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    client = TrackedClient()
+    monkeypatch.setattr(delivery, "build_internal_client", lambda **kwargs: client)
+    operation = dataclasses.replace(
+        next(iter(ALPACA_OPERATIONS)), method="GET", agent_path_template="/stream"
+    )
+    request = DeliveryRequest(broker="alpaca", clerk_id="clerk", operation=operation, path_params={})
+    with pytest.raises(OSError, match="response close failed"):
         await HttpLaneDelivery(
             base_url="http://127.0.0.1", coordinator_service_token="test-token"
         ).stream(request)

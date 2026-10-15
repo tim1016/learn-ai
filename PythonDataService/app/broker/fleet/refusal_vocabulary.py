@@ -91,7 +91,7 @@ _MINTED_OUTSIDE_THE_CLOSURE: Final[frozenset[str]] = frozenset(
 )
 
 #: The complete fleet refusal vocabulary: the 39-class FleetControlError
-#: subclass closure (38 reasons) plus the 5 codes minted outside it. Sorted by code.
+#: subclass closure (38 reasons) plus the 5 codes minted outside it.
 FLEET_REFUSAL_REASONS: Final[dict[str, RefusalFamily]] = {
     "broker_and_clerk_required": RefusalFamily(
         400, "A clerk-scoped request arrived without both a broker and a clerk identity."
