@@ -35,7 +35,7 @@ describe('AlpacaCustodyResolutionComponent', () => {
       providers: [{ provide: BrokersService, useValue: service(diagnosis()) }],
     });
 
-    expect(await screen.findByLabelText("The Clerk's records and Alpaca agree")).toBeTruthy();
+    expect(await screen.findByLabelText('No unresolved Clerk custody issue')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /resolve/i })).toBeNull();
   });
 
@@ -69,7 +69,7 @@ describe('AlpacaCustodyResolutionComponent', () => {
     );
 
     expect(await screen.findByText(/cannot be mapped/i)).toBeTruthy();
-    expect(screen.getByRole('heading', { name: "The Clerk's records and Alpaca disagree" })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Clerk custody needs review' })).toBeTruthy();
     expect(screen.getByText('order-ref-abc123')).toBeTruthy();
     // The host names where its recovery actions are; the card never guesses.
     expect(screen.getByText('Recovery is on this host page.')).toBeTruthy();

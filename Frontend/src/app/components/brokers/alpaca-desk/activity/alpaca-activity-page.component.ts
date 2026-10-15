@@ -90,7 +90,10 @@ export class AlpacaActivityPageComponent {
   private readonly activityCount = viewChild<ElementRef<HTMLElement>>('activityCount');
 
   protected readonly periods = PERIODS;
-  protected readonly period = signal<ActivityPeriod>('today');
+  protected readonly period = signal<ActivityPeriod>(
+    this.queryParams().get('period') === '60d' ? '60d'
+    : this.queryParams().get('period') === '30d' ? '30d' : 'today',
+  );
   protected readonly selected = computed(
     () => PERIODS.find((option) => option.id === this.period()) ?? PERIODS[0],
   );
@@ -164,6 +167,8 @@ export class AlpacaActivityPageComponent {
   protected readonly timelineQuery = computed(() => sqliteTimelineQueryFromParams(this.queryParams()));
   /** The recovery action a link asked for (`?recover=reconcile_now`), or `null`. */
   protected readonly recoverAction = computed(() => this.queryParams().get(ACTIVITY_RECOVER_QUERY_PARAM));
+  protected readonly openRecords = computed(() => this.queryParams().get('records') === '1');
+  protected readonly money = this.accountData.moneyState;
 
   /** The latest Clerk↔Alpaca sync check, from the workspace's shared status
    * read. `null` while there is none to show. */

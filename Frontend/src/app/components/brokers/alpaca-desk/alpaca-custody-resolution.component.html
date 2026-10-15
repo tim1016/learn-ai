@@ -6,16 +6,16 @@
   </p>
 } @else if (diagnosis.value(); as d) {
   @if (d.in_sync) {
-    <section class="custody custody--sync" aria-label="The Clerk's records and Alpaca agree">
+    <section class="custody custody--sync" aria-label="No unresolved Clerk custody issue">
       <span class="custody__ok" aria-hidden="true">✓</span>
       <p>
-        The Clerk's records and Alpaca agree · checked
+        No unresolved Clerk hold or uncertainty · checked
         <app-timestamp-display [value]="d.observed_at_ms" mode="local" />
       </p>
     </section>
   } @else {
     <section class="custody custody--diverged" aria-labelledby="custody-title">
-      <h2 id="custody-title">The Clerk's records and Alpaca disagree</h2>
+      <h2 id="custody-title">Clerk custody needs review</h2>
 
       @for (div of divergences(); track div.kind) {
         <app-custody-divergence [divergence]="div" />

@@ -15,6 +15,7 @@ import type {
 import type { components } from '../../../../api/broker.types';
 import { resourceTarget } from '../../../../fleet/resource-target';
 import { BrokersService } from '../../../../services/brokers.service';
+import { fakeAccountMoney } from '../../../../testing/account-money-fixtures';
 import { AlpacaDeskAccountDataService } from '../alpaca-desk-account-data.service';
 import { ALPACA_PORTFOLIO_HISTORY_CHART_FACTORY } from '../alpaca-portfolio-history-chart.component';
 import { AlpacaActivityPageComponent } from './alpaca-activity-page.component';
@@ -131,7 +132,11 @@ function projectionWithReconcileNow(): SqliteClerkProjection {
   };
 }
 
-async function renderActivity(options: { query?: Record<string, string>; broker?: ReturnType<typeof brokers> } = {}) {
+async function renderActivity(options: {
+  query?: Record<string, string>;
+  broker?: ReturnType<typeof brokers>;
+  disagreement?: string;
+} = {}) {
   const broker = options.broker ?? brokers();
   const queryParamMap = convertToParamMap(options.query ?? {});
   const view = await render(AlpacaActivityPageComponent, {
@@ -145,6 +150,9 @@ async function renderActivity(options: { query?: Record<string, string>; broker?
           target: () => TARGET,
           accountId: () => 'PA1',
           fence: () => FENCE,
+          moneyState: () => options.disagreement
+            ? { kind: 'ready', view: fakeAccountMoney({ broker_position_disagreement: options.disagreement }) }
+            : { kind: 'loading', text: 'Reading account money…', nextStep: null },
           clerkStatus: {
             hasValue: () => true,
             value: () => ({ latest_reconciliation: { verdict: 'clean', recorded_at_ms: OBSERVED_AT_MS } }),
@@ -359,9 +367,23 @@ describe('AlpacaActivityPageComponent', () => {
   it('shows the sync check at the top of the page', async () => {
     await renderActivity();
 
-    const sync = await screen.findByText('Sync check');
+    const sync = await screen.findByText('Order custody sync check');
     expect(sync.parentElement?.textContent).toContain('Clean');
     expect(sync.parentElement?.textContent).toContain('last checked');
+  });
+
+  it('opens historical records from Home while keeping the position difference visible', async () => {
+    const { broker } = await renderActivity({
+      query: { period: '60d', records: '1' },
+      disagreement: 'Alpaca reports no open positions; the Clerk still carries $2.68 of outside purchase cost.',
+    });
+
+    expect(screen.getByRole('radio', { name: '60D' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByText('Broker and Clerk records disagree.')).toBeTruthy();
+    const fold = (await screen.findByText('Order records and recovery')).closest('details');
+    await waitFor(() => expect(fold?.open).toBe(true));
+    await waitFor(() => expect(broker.getActivityPeriod).toHaveBeenCalledWith(TARGET, '60d'));
+    await waitFor(() => expect(broker.getSqliteClerkProjection).toHaveBeenCalled());
   });
 
   it('keeps order records and recovery folded, unread, until opened', async () => {

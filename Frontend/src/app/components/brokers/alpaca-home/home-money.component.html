@@ -9,6 +9,17 @@
   </header>
 
   @if (money.kind === 'ready') {
+    @if (money.view.broker_position_disagreement; as disagreement) {
+      <div class="home-money__refusal" role="note">
+        <p><strong>Broker and Clerk records disagree.</strong> {{ disagreement }}</p>
+        <div class="home-money__actions">
+          @if (activityRoute(); as activity) {
+            <a [routerLink]="activity" [queryParams]="{ period: '60d', records: '1' }">Review 60-day order records</a>
+          }
+          <button type="button" (click)="refreshRequested.emit()">Recheck money view</button>
+        </div>
+      </div>
+    }
     @if (money.view.deploy_refusal; as refusal) {
       <p class="home-money__refusal" role="note">
         <strong>New bots can't be deployed on this money right now.</strong> {{ refusal }}

@@ -14,6 +14,17 @@
 - `positions.jsonl`: 1
 - `stream.jsonl`: 6
 
+## Follow-up fee evidence (#3308)
+
+`outside_fee_evidence.json` is a later read of the same Paper account on
+2026-10-15, after the four spread-leg fills appeared in Alpaca's activity
+feed. It contains those four raw `FILL` rows and the two raw option contract
+references fetched by symbol from Alpaca's Trading API. The payload was
+sanitized with `app.broker.capture.sanitize.sanitize_payload` before it was
+copied into this fixture. UUIDs and asset IDs are replaced with fixture
+tokens; symbols, sides, prices, quantities, times, and broker multipliers are
+preserved. This read is separate from the initial bundle window above.
+
 ## Repeated polls dropped
 
 A poll, or a page-through of up to eight polls, that asked the same and got the same status and body as the polls kept just before it is not written. The lines above are where an answer changed, not how often it was asked.

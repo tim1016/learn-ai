@@ -195,6 +195,10 @@ _SQLITE_TRANSITION_COPY: Final[dict[str, tuple[str, str]]] = {
         "Account fee evidence recorded",
         "New broker activity evidence was retained for deployment fee attribution.",
     ),
+    "FEE_OPTION_CONTRACT_OBSERVED": (
+        "Option contract terms recorded for fees",
+        "The broker's contract terms were retained to value an outside option fill.",
+    ),
     "RECONCILIATION_ATTEMPTED": (
         "Reconciliation completed",
         "The Account Clerk compared durable custody with a broker observation.",

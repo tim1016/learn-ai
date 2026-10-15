@@ -34,7 +34,7 @@ from app.broker.alpaca.clerk.budgets import (
 )
 from app.broker.alpaca.clerk.fifo_pnl import LotWriteOff, OpenLot, compute_fifo_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
-from app.broker.alpaca.clerk.money import ZERO, MoneyInputError, money_context, normalize_money
+from app.broker.alpaca.clerk.money import ZERO, MoneyInputError, money_context, normalize_money, notional
 from app.broker.alpaca.clerk.sqlite.custody_subjects import BOT_SUBJECT_PREFIX, bot_subject_id
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
     EconomicProjectionError,
@@ -92,12 +92,13 @@ def _external_cash_claim(conn: sqlite3.Connection, fees: BudgetFees, *, seen_bef
     complete their order's population and are never priced (H35), because
     their cash is inside the account custody started from.
 
-    Formula: sum(qty * price for custody-era external BUYs not yet inside
-      observed cash).
-    Reference: PRD #2540 all-disjoint-claims contract; observation #2441/#2442.
+    Formula: sum(qty * price * multiplier for custody-era external BUYs not
+      yet inside observed cash); multiplier is 1 for shares.
+    Reference: ADR 0076 option multiplier; PRD #2540 all-disjoint-claims contract.
     Canonical implementation: this composition over the fee evidence's exact
-      activity population; no external balance or second execution ledger.
-    Validated against: sqlite/test_budget_claims.py external cases (exact).
+      activity population using clerk.money.notional.
+    Validated against: sqlite/test_budget_claims.py external cases and
+      sqlite/test_fee_evidence.py::test_paper_credit_spread_outside_fills_need_both_recorded_contract_references.
     """
     quantities: dict[str, Decimal] = dict(fees.pre_custody_quantities)
     unseen = ZERO
@@ -109,7 +110,7 @@ def _external_cash_claim(conn: sqlite3.Connection, fees: BudgetFees, *, seen_bef
             )
         quantities[key] = quantities.get(key, ZERO) + fill.quantity
         if fill.side is OrderSide.BUY and fill.observed_at_ms >= seen_before_ms:
-            unseen += fill.quantity * fill.price
+            unseen += notional(fill.quantity, fill.price, multiplier=fill.multiplier)
     for order in external_orders(conn):
         if order.broker_state not in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES or order.filled_quantity is None:
             raise BudgetUnavailable(
@@ -166,7 +167,11 @@ def project_account_money(
     proceeds the cash observation has not seen are counted by the same
     ``seen_before_ms`` boundary as unseen purchases. A short position has no
     place on a long-only bar and is named, never dropped.
-    Formula/reference/validation: clerk.account_money.
+    Formula: unseen sale proceeds = sum of exact fill notionals not yet in observed cash.
+    Reference: ADR 0076 option multiplier; PRD #2540 account money claims.
+    Canonical implementation: this composition using clerk.money.notional and clerk.account_money.
+    Validated against: sqlite/test_budget_claims.py and
+      sqlite/test_fee_evidence.py::test_paper_credit_spread_outside_fills_need_both_recorded_contract_references.
     """
     projected = _project(conn, cash=cash, seen_before_ms=seen_before_ms, fees=fees,
                          modelled_fees_seen_before_ms=modelled_fees_seen_before_ms)
@@ -204,7 +209,7 @@ def project_account_money(
             for fill in projected.records
             if fill.side is OrderSide.SELL and fill.recorded_at_ms is not None and fill.recorded_at_ms >= seen_before_ms
         ), ZERO) + sum((
-            fill.quantity * fill.price for fill in fees.external_fills
+            notional(fill.quantity, fill.price, multiplier=fill.multiplier) for fill in fees.external_fills
             if fill.side is OrderSide.SELL and fill.observed_at_ms >= seen_before_ms
         ), ZERO)
     return account_money(
@@ -231,7 +236,7 @@ def _shorts(lots: Iterable[OpenLot], *, holder: str) -> list[str]:
 
 
 def _external_holdings(conn: sqlite3.Connection, fees: BudgetFees) -> tuple[list[Holding], list[str]]:
-    """Shares bought outside every bot, at FIFO cost, one holding per symbol.
+    """Shares or contracts bought outside every bot, at FIFO cost, one holding per symbol.
 
     The execution population is the custody-era one ``_external_cash_claim``
     already proved complete; each fill's symbol is its external order's. A
@@ -239,6 +244,13 @@ def _external_holdings(conn: sqlite3.Connection, fees: BudgetFees) -> tuple[list
     named. Executions from before custody began never reach it (H35): custody
     starts from a flat account, so lotting an older sale alone would read the
     closing sale of an older purchase as a short.
+
+    Formula: each open lot's cost is contracts * premium * broker multiplier,
+      or shares * price for a stock fill.
+    Reference: ADR 0076 option multiplier and account-money decision.
+    Canonical implementation: clerk.fifo_pnl.compute_fifo_pnl over FillRecord
+      with the multiplier from fee evidence.
+    Validated against: sqlite/test_fee_evidence.py::test_paper_credit_spread_outside_fills_need_both_recorded_contract_references.
     """
     symbols = {order.broker_order_id: order.symbol for order in external_orders(conn)}
     records: list[FillRecord] = []
@@ -254,6 +266,7 @@ def _external_holdings(conn: sqlite3.Connection, fees: BudgetFees) -> tuple[list
             event_key=fill.fill_id, symbol=symbol, side=fill.side, quantity=float(fill.quantity),
             fill_price=float(fill.price), filled_at_ms=fill.occurred_at_ms, fee=None,
             native_order_id=fill.native_order_id, recorded_at_ms=fill.observed_at_ms,
+            multiplier=fill.multiplier,
         ))
     fifo = compute_fifo_pnl(sorted(records, key=lambda record: (record.filled_at_ms, record.event_key)))
     held: dict[str, Decimal] = {}

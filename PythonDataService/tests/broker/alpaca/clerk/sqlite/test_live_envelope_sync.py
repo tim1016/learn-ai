@@ -449,6 +449,19 @@ async def test_positions_are_not_required_for_the_equity_loss_verdict(
     assert observation.position_count is None
 
 
+async def test_account_read_carries_broker_position_count_for_the_money_view(
+    day_pnl_repo: ClerkSqliteRepository,
+    make_sync: Callable[..., LiveEnvelopeSync],
+) -> None:
+    flat = make_sync(day_pnl_repo, _Read())
+    assert await flat.tick() == "observed"
+    assert flat.envelope.latest_observation().position_count == 0
+
+    holding = make_sync(day_pnl_repo, _Read(unrealized=5_000.0))
+    assert await holding.tick() == "observed"
+    assert holding.envelope.latest_observation().position_count == 1
+
+
 async def test_incomplete_cash_transfer_evidence_withdraws_the_observation(
     day_pnl_repo: ClerkSqliteRepository,
     make_sync: Callable[..., LiveEnvelopeSync],
@@ -532,6 +545,9 @@ class _RawAlpacaClient:
 
     async def get_account(self) -> dict[str, Any]:
         return self.account
+
+    async def list_positions(self) -> list[dict[str, Any]]:
+        return []
 
     async def list_activities(
         self,
