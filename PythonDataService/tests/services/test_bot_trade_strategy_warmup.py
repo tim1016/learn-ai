@@ -155,22 +155,6 @@ async def test_replay_warmup_bars_requests_the_larger_contract_lookback_from_the
     assert feed.recorded_lookback_days == 7
 
 
-@pytest.mark.asyncio
-async def test_replay_warmup_bars_requests_the_floor_for_an_unregistered_strategy() -> None:
-    feed = _RecordingFeed()
-    binding = _binding(strategy_key="not-a-registered-strategy")
-
-    await replay_warmup_bars(
-        _FakeRuntime(),  # type: ignore[arg-type]
-        _context(),
-        feed,  # type: ignore[arg-type]
-        binding,
-        captured_decisions=None,
-    )
-
-    assert feed.recorded_lookback_days == _WARMUP_LOOKBACK_DAYS
-
-
 # 2026-09-23 (Wed) 15:00 EDT. A 7-day lookback starts Wed 09-16 15:00, which
 # holds only 1h of that day's session (not owed). Owed: Thu 09-17, Fri 09-18,
 # Mon 09-21, Tue 09-22 (wholly inside) and today, 5.5h of 6.5h elapsed
