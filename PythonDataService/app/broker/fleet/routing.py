@@ -445,6 +445,10 @@ class LaneRouter:
                 query=query,
                 body=body,
             )
+        try:
+            json.dumps(body, allow_nan=False)
+        except ValueError as exc:
+            raise CommandEnvelopeInvalid("Command body must contain only finite JSON numbers.") from exc
         validated = self._validated_envelope(
             operation, envelope, body, path_params
         )

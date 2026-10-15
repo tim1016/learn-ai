@@ -79,8 +79,8 @@ export function deriveActionRejection(error: unknown, fallbackMessage: string): 
   // this branch every fleet refusal (including the #2068 fence's own) fell
   // through to 'unknown' and rendered as the literal word "Unknown" (#2067,
   // #2102). `fleetRefusalCopyFor` knows each closed-vocabulary code's pinned
-  // wire status and derives 'conflict' for a 409 (a state conflict the
-  // caller must re-read and re-prepare) or 'failure' for anything else.
+  // refusal meaning: 'conflict' for a 409 state conflict, 'unknown' for an
+  // unsettled dispatch, and 'failure' for other refusals.
   const knownRefusal = fleetRefusalCopyFor(reasonCode);
   return {
     outcome:

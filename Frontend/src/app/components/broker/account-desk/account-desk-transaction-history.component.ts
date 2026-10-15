@@ -217,7 +217,8 @@ export class AccountDeskTransactionHistoryComponent {
     effect(() => {
       const accountId = this.accountId();
       const window = this.activeWindow();
-      this.store.setTarget(this.target());
+      const target = this.target();
+      untracked(() => this.store.setTarget(target));
       this.refreshVersion();
       if (accountId !== null && window !== null) {
         untracked(() => void this.store.load(accountId, {

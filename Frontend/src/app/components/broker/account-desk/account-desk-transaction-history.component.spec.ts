@@ -466,6 +466,25 @@ describe('AccountDeskTransactionHistoryComponent', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
+  it('fetches one history page once when the table mounts', async () => {
+    const accountTransactions = vi.fn().mockResolvedValue({
+      ...historyPage(), rows: [transaction()],
+    });
+    await render(AccountDeskTransactionHistoryComponent, {
+      inputs: {
+        accountId: 'PA1', target: TARGET, fence: FENCE, showScopeControl: false, fromMs: 1, toMs: 2,
+      },
+      providers: [
+        provideFleetDirectory(),
+        AccountDeskTransactionHistoryStore,
+        { provide: BrokersService, useValue: { accountTransactions } },
+      ],
+    });
+
+    await vi.waitFor(() => expect(screen.getByText('History is current')).toBeTruthy());
+    expect(accountTransactions).toHaveBeenCalledTimes(1);
+  });
+
   it('derives a local calendar day only while matching canonical timestamp values', () => {
     const selectedDay = new Date(2026, 7, 13);
     const startOfDayMs = selectedDay.getTime();

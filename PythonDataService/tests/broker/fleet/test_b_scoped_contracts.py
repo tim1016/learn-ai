@@ -578,6 +578,25 @@ async def test_the_manual_order_path_converter_routes(fleet: _Fleet) -> None:
         assert response.json() == {"cancelled": "ord/1"}
 
 
+@pytest.mark.parametrize("number", ["NaN", "Infinity", "-Infinity"])
+async def test_non_finite_manual_order_input_is_refused_before_dispatch(
+    fleet: _Fleet, number: str,
+) -> None:
+    ticket = f"{fleet.base}/accounts/{ACCOUNT}/manual-order-tickets/test-ticket"
+    before = fleet.lane.service._store.list_routing_receipts(clerk_id=fleet.lane.clerk_id)
+    body = (
+        '{"quantity": ' + number + ', "command_context": {'
+        '"capability": "manual_orders", "idempotency_key": "bad-number", '
+        '"expected_effective_binding_generation": 3}}'
+    )
+
+    async with fleet.client() as client:
+        response = await client.put(ticket, content=body, headers={"content-type": "application/json"})
+
+    assert response.status_code == 422
+    assert fleet.lane.service._store.list_routing_receipts(clerk_id=fleet.lane.clerk_id) == before
+
+
 async def test_stream_events_carry_and_verify_provenance(fleet: _Fleet) -> None:
     """Every event proves its origin; the frames re-emit it publicly."""
     async with fleet.client() as client, client.stream(

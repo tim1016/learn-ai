@@ -122,6 +122,28 @@ describe('AccountDeskTransactionHistoryStore', () => {
     expect(store.rowLimitReached()).toBe(true);
   });
 
+  it('keeps the safety-limit warning with the retained rows after a failed refresh', async () => {
+    broker.accountTransactions.mockImplementation((_: string, _accountId: string, cursor: string | null) => {
+      const pageNumber = cursor === null ? 0 : Number(cursor);
+      const rows = Array.from({ length: 100 }, (_, index) => {
+        const sequence = pageNumber * 100 + index;
+        return transaction(`transaction-${sequence}`, sequence);
+      });
+      return Promise.resolve(historyPage(rows, String(pageNumber + 1)));
+    });
+    const store = TestBed.inject(AccountDeskTransactionHistoryStore);
+    store.setTarget(FIRST_TARGET);
+    await store.load('PA1');
+    expect(store.rowLimitReached()).toBe(true);
+
+    broker.accountTransactions.mockRejectedValueOnce(new Error('Refresh failed'));
+    await store.load('PA1');
+
+    expect(store.rows()).toHaveLength(5_000);
+    expect(store.errorMessage()).not.toBeNull();
+    expect(store.rowLimitReached()).toBe(true);
+  });
+
   it('discards a late page and reloads when the same account moves to another lane', async () => {
     let resolveFirst: ((page: ClerkTransactionHistoryResponse) => void) | undefined;
     broker.accountTransactions
