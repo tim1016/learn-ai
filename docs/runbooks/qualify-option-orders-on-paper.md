@@ -877,3 +877,31 @@ fee model was loosened. #3308 tracks the outside-option fee gap. The API sign
 and fill are shown; the dashboard-specific action is unverified. Shapes C and
 D cannot be called qualified until the fee evidence and admission gate are
 repaired and their bot passes run.
+
+Two Dry Run launches checked the form and live IBKR selection without sending
+another Paper order. For shape C, `spy-dv-20261015-1210` selected a one-contract,
+$1-wide bear call spread (sell 774 call, buy 775 call), with a quoted $24 credit
+and $76.10 set aside from $90 simulated cash. It stopped flat before a
+two-green-bar signal; it placed no order. For shape D,
+`spy-dv-20261015-1215` selected an iron condor with $1 wings (buy 765 put,
+sell 766 put, sell 773 call, buy 774 call). Its money review showed a $47
+credit and $53.18 set aside from $70 simulated cash. The IBKR feed remained
+continuous, but the three decision bars at 11:17, 11:18 and 11:19 local time
+produced no entry. It stopped at 11:19:26, released all $70 and showed no
+simulated position, order or fill. These launches show structure resolution,
+budgeting and a flat stop, **not** an entry, exit or overlap pass of C or D.
+The Paper account still had zero positions and zero open orders on a direct
+broker read before teardown.
+
+With the Paper account flat and both rehearsals finished, the temporary
+`ALPACA_MULTI_LEG_OPTION_ORDERS_ENABLED=true` line was removed from the
+gitignored Paper lane env file and only `alpaca-paper-clerk` was recreated. The
+running container now has the several-leg setting absent, the buying-power
+judgment and Live option settings absent, `IBKR_BROKER_ENABLED=true`,
+`IBKR_READONLY=true` and the unchanged 84-line option quote budget. Its health
+and roster returned ready, and a fresh account journal line retained
+`began_at_ms`. The coordinator's Paper `budget-preview` read of a two-leg
+structure returned `OPTION_SEVERAL_LEGS_SETTING_OFF`, saying a Dry Run still
+takes it. The Mac locked before the same row could be re-read in the Deploy
+screen; the coordinator read is the Deploy form's backing check. Nothing was
+promoted; several-leg Paper orders and Live option bots remain off.

@@ -2,7 +2,7 @@
 
 The recordings (``tests/fixtures/alpaca/option_paper_recordings``) are the
 capture journal of the first option orders ever sent from this system, made on
-2026-10-13 and 2026-10-14 under the qualification runbook and sanitised by the
+2026-10-13 through 2026-10-15 under the qualification runbook and sanitised by the
 kit. They sit beside the documented examples and replace none of them: each
 shows one account on one day, for **one bought contract, or one bull call
 spread bought and closed (alone, and twice at once by two bots), every order
@@ -35,6 +35,7 @@ from app.broker.alpaca.adapter import (
     from_alpaca_option_account,
     from_alpaca_option_contract,
     from_alpaca_option_order,
+    from_alpaca_order,
     from_alpaca_position,
     from_alpaca_trade_update,
     to_alpaca_option_order_request,
@@ -516,6 +517,14 @@ def test_paper_accepts_a_negative_limit_as_a_credit_and_a_positive_market_close_
         (opening, ((short, "sell", "sell_to_open"), (long, "buy", "buy_to_open")), ("0.60", "0.46")),
         (closing, ((short, "buy", "buy_to_close"), (long, "sell", "sell_to_close")), ("0.61", "0.45")),
     ):
+        # The trade-update consumer reads its embedded parent with this reader. Alpaca's stream
+        # states a misleading parent side, so the stricter REST option-order reader does not apply.
+        read_order = from_alpaca_order(frame["order"])
+        assert read_order.unreadable_fields == ()
+        assert read_order.status == "filled"
+        assert read_order.quantity == read_order.filled_quantity == 1
+        assert read_order.limit_price == (-0.14 if frame is opening else None)
+        assert read_order.filled_avg_price == (-0.14 if frame is opening else 0.16)
         assert frame["order"]["status"] == "filled"
         assert frame["order"]["filled_qty"] == frame["order"]["qty"] == "1"
         assert [(leg["symbol"], leg["side"], leg["position_intent"]) for leg in frame["order"]["legs"]] == list(sides)
