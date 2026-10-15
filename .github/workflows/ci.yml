@@ -9,10 +9,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# PR #3300 qualifies the local VM; other PRs and master use GitHub-hosted runners.
 jobs:
   temporal-authority-guard:
     name: Temporal Authority Guard
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.pull_request.number == 3300 && fromJSON('["self-hosted", "Linux", "ARM64", "learn-ai-vm"]') || 'ubuntu-latest' }}
     permissions:
       contents: read
     steps:
@@ -26,7 +27,7 @@ jobs:
 
   alpaca-onboarding-gates:
     name: Alpaca Onboarding Gates
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.pull_request.number == 3300 && fromJSON('["self-hosted", "Linux", "ARM64", "learn-ai-vm"]') || 'ubuntu-latest' }}
     permissions:
       contents: read
     steps:
@@ -44,7 +45,7 @@ jobs:
 
   fleet-topology-render:
     name: Fleet Topology Render
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.pull_request.number == 3300 && fromJSON('["self-hosted", "Linux", "ARM64", "learn-ai-vm"]') || 'ubuntu-latest' }}
     permissions:
       contents: read
     # CI renders with `docker compose` (what this runner image ships); the
@@ -97,7 +98,7 @@ jobs:
 
   frontend-lint:
     name: Frontend Lint
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.pull_request.number == 3300 && fromJSON('["self-hosted", "Linux", "ARM64", "learn-ai-vm"]') || 'ubuntu-latest' }}
     defaults:
       run:
         working-directory: Frontend
@@ -117,7 +118,7 @@ jobs:
 
   frontend-typecheck:
     name: Frontend Type Check
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.pull_request.number == 3300 && fromJSON('["self-hosted", "Linux", "ARM64", "learn-ai-vm"]') || 'ubuntu-latest' }}
     defaults:
       run:
         working-directory: Frontend
@@ -135,7 +136,7 @@ jobs:
 
   frontend-test-shard:
     name: Frontend Test Shard ${{ matrix.shard }}/6
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.pull_request.number == 3300 && fromJSON('["self-hosted", "Linux", "ARM64", "learn-ai-vm"]') || 'ubuntu-latest' }}
     # The test step fails the job at three minutes and says why (#2873). This
     # stops a job whose checkout, Node setup or `npm ci` hangs before that step
     # runs. It is a minute later so the test step's own message is the one seen.
@@ -171,7 +172,7 @@ jobs:
 
   backend-lint:
     name: Backend Lint
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.pull_request.number == 3300 && fromJSON('["self-hosted", "Linux", "ARM64", "learn-ai-vm"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -182,7 +183,7 @@ jobs:
 
   backend-graphql-contract:
     name: Backend GraphQL Contract
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.pull_request.number == 3300 && fromJSON('["self-hosted", "Linux", "ARM64", "learn-ai-vm"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -196,7 +197,7 @@ jobs:
 
   backend-test:
     name: Backend Tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.pull_request.number == 3300 && fromJSON('["self-hosted", "Linux", "ARM64", "learn-ai-vm"]') || 'ubuntu-latest' }}
     permissions:
       contents: read
     steps:
@@ -222,7 +223,7 @@ jobs:
 
   python-lint:
     name: Python Lint
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.pull_request.number == 3300 && fromJSON('["self-hosted", "Linux", "ARM64", "learn-ai-vm"]') || 'ubuntu-latest' }}
     defaults:
       run:
         working-directory: PythonDataService
@@ -236,7 +237,7 @@ jobs:
 
   python-test-shard:
     name: Python Test Shard ${{ matrix.shard }}/16
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.pull_request.number == 3300 && fromJSON('["self-hosted", "Linux", "ARM64", "learn-ai-vm"]') || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -290,7 +291,7 @@ jobs:
       - backend-test
       - python-lint
       - python-test-shard
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.pull_request.number == 3300 && fromJSON('["self-hosted", "Linux", "ARM64", "learn-ai-vm"]') || 'ubuntu-latest' }}
     permissions:
       contents: read
     steps:
