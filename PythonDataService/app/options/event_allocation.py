@@ -93,7 +93,7 @@ from decimal import Decimal
 from enum import StrEnum
 
 from app.options.contract import OptionContract
-from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms
+from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms, is_instant_ms
 
 # A strike is in thousandths of a dollar; ten of them make a cent.
 _THOUSANDTHS_PER_CENT = 10
@@ -144,7 +144,7 @@ def _require_whole(name: str, value: object, *, at_least: int) -> None:
 
 def _require_an_instant(name: str, value: object) -> None:
     """Refuse a time that is not ``int64`` ms UTC inside the range the domain admits."""
-    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= MAX_TIMESTAMP_MS:
+    if not is_instant_ms(value):
         raise ValueError(
             f"{name} must be a whole number of milliseconds from 0 to {MAX_TIMESTAMP_MS}; got {value!r}"
         )

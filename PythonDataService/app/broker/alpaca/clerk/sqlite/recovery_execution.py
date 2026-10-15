@@ -8,7 +8,6 @@ cannot drift into separate guard implementations.
 from __future__ import annotations
 
 import asyncio
-import hmac
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -49,6 +48,7 @@ from app.broker.alpaca.clerk.sqlite.unknown_order_attestation import (
     settled_orders,
 )
 from app.broker.contract.errors import BrokerError
+from app.broker.fleet.identity import same_secret
 
 logger = logging.getLogger(__name__)
 
@@ -431,8 +431,8 @@ def recorded_settlement_result(
                 for settled_order in settled_orders(
                     facade.repository, strategy_instance_id=strategy_instance_id
                 )
-                if hmac.compare_digest(
-                    settle_unknown_exit_order_token(context, settled_order), request.concurrency_token
+                if same_secret(
+                    request.concurrency_token, settle_unknown_exit_order_token(context, settled_order)
                 )
             ),
             None,

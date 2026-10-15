@@ -138,6 +138,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.broker.alpaca.clerk.account_authority import is_simulated_account_id
+from app.broker.alpaca.clerk.account_money import quantity_text
 from app.broker.alpaca.clerk.fifo_pnl import compute_fifo_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.simulated_option_settlement import (
@@ -1738,7 +1739,7 @@ def _book_events(
                 hold(
                     OPTION_EVENT_MORE_CONTRACTS_THAN_HELD_REASON_CODE, [sid],
                     f"{contracts} of {symbol} {event.kind.value} were matched to {sid}, whose books now hold "
-                    f"{reads.position(conn, sid, symbol):g}.",
+                    f"{quantity_text(reads.position(conn, sid, symbol))}.",
                 )
                 booked_whole = False
                 continue
@@ -1979,7 +1980,7 @@ def _hold_what_expired_and_is_still_held(
             what_now = f". {_what_came_and_ends_nothing(set_aside)}"
         holds.add(
             OPTION_EXPIRED_NOT_SETTLED_REASON_CODE, [sid], ref=ref, symbol=symbol, date_ms=None,
-            detail=f"{symbol} expired on {expired_on}. The broker shows {at_broker:g} of it, {on_the_books}{what_now}",
+            detail=f"{symbol} expired on {expired_on}. The broker shows {quantity_text(at_broker)} of it, {on_the_books}{what_now}",
             next_step=next_step,
         )
         if in_the_way and quantity > 0:
@@ -2073,7 +2074,7 @@ def _book_outside_orders(
         symbol = order.symbol.upper()
         key = booking_key(SALE_KEY_PREFIX, OUTSIDE_ORDER_BROKER, order.broker_order_id)
         ref = outside_order_hold_ref(order.broker_order_id)
-        named = f"Order {order.broker_order_id} to {order.side.lower()} {order.qty:g} of {symbol}"
+        named = f"Order {order.broker_order_id} to {order.side.lower()} {quantity_text(order.qty)} of {symbol}"
         reduces = _BOUGHT if order.side == "SELL" else _SOLD
 
         def hold(
@@ -2284,7 +2285,7 @@ def _why_a_real_account_cannot_end(
     if at_broker:
         return _owner_ending_refused(
             owner_ending_rule.BROKER_STILL_HOLDS,
-            f"The broker still shows {at_broker:g} of {symbol}. A position the broker holds is not ended at a word.",
+            f"The broker still shows {quantity_text(at_broker)} of {symbol}. A position the broker holds is not ended at a word.",
         )
     return None
 
@@ -2437,7 +2438,7 @@ def _end_at_the_owners_word(
     if terms is None or book is None or sum(lot.quantity for lot in book.lots) != contracts:
         return _owner_ending_refused(
             owner_ending_rule.LOTS_DISAGREE,
-            f"{sid}'s lots of {symbol} do not add up to the {held_now:g} it holds, so they cannot be closed.",
+            f"{sid}'s lots of {symbol} do not add up to the {quantity_text(held_now)} it holds, so they cannot be closed.",
         ), None
     allocation = [
         {

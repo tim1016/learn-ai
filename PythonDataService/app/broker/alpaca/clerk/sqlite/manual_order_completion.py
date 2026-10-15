@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 
+from app.broker.alpaca.clerk.account_money import quantity_text
 from app.broker.alpaca.clerk.sqlite.execution_coverage import FILL_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.facts import ManualOrderAcceptedFacts
 from app.broker.alpaca.clerk.sqlite.manual_order_replacement import MANUAL_ORDER_REPLACED_TRANSITION
@@ -103,11 +104,6 @@ _ENDING_COPY: Mapping[str, Callable[[BrokerOrderLeg, bool], str]] = {
 _require_copy_for_every_unfilled_state(frozenset(_ENDING_COPY), UNFILLED_TERMINAL_STATES)
 
 
-def _shares(quantity: float) -> str:
-    """A share count in plain digits: no exponent, no float residue past ``FILL_QTY_EPSILON``."""
-    return f"{quantity:.9f}".rstrip("0").rstrip(".")
-
-
 def manual_order_ending_copy(repo: ClerkSqliteRepository, *, order: OrderResource) -> str:
     """How Alpaca ended a manual order it did not fill in full, in the owner's words (#2647).
 
@@ -126,7 +122,7 @@ def manual_order_ending_copy(repo: ClerkSqliteRepository, *, order: OrderResourc
     filled_quantity, _ = repo.effective_fill_totals_for_order(order.order_ref)
     if filled_quantity < FILL_QTY_EPSILON:
         return f"{ending}."
-    return f"{ending} with {_shares(filled_quantity)} of {_shares(leg.quantity)} shares filled."
+    return f"{ending} with {quantity_text(filled_quantity)} of {quantity_text(leg.quantity)} shares filled."
 
 
 def manual_order_broker_ending(repo: ClerkSqliteRepository, *, order_ref: str) -> str | None:

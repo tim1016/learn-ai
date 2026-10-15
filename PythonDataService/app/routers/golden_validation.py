@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Path, Query, status
 
 from app.research.golden_validation import service
 from app.research.persistence.db import with_connection
+from app.routers.research_store_unavailable import StoreUnreachableIsA503
 from app.schemas.golden_validation import (
     MAX_RUN_ID,
     DesignateGoldenRunRequest,
@@ -16,7 +17,7 @@ from app.schemas.golden_validation import (
 )
 from app.services.strategy_validation_manifest import local_strategy_validation_actor
 
-router = APIRouter()
+router = APIRouter(route_class=StoreUnreachableIsA503)
 GoldenRunId = Annotated[int, Path(le=MAX_RUN_ID)]
 
 

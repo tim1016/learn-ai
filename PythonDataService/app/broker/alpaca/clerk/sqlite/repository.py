@@ -261,6 +261,7 @@ class ClerkSqliteRepository(
         # Home's Finished results at the last custody revision read; created
         # on first use (``bot_results``), process-local like the line above.
         self._bot_results_memo: RevisionMemo[dict[str, BotResult]] | None = None
+        self._unreadable_price_conflicts_logged: set[str] = set()
         # Annex §4: an application-owned write coordinator sits in front of
         # BEGIN IMMEDIATE -- belt-and-suspenders, not a substitute for it.
         # BEGIN IMMEDIATE's lock only protects from the point it's acquired;

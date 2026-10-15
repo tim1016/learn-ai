@@ -339,8 +339,16 @@ class ShadowOrderBook:
         unsent: shadow execution is never priced from a later bar.
         """
         account_id = self._evidence_namespace_for(client_order_id)
-        with self._evidence.open(account_id) as ledger:
-            retained = ledger.by_identity(bar_identity)
+        try:
+            with self._evidence.open(account_id) as ledger:
+                retained = ledger.by_identity(bar_identity)
+        except _EVIDENCE_LEDGER_UNREADABLE as error:
+            self.ledger_unreadable(
+                account_id, error, action="shadow_decision_ledger_unreadable", symbol=symbol,
+                message="shadow decision cannot read its instance's evidence ledger; the order is left unpriced",
+            )
+            return False
+        self.ledger_readable(account_id)
         if retained is None or retained.symbol != symbol:
             return False
         self.bind_evaluated_bar(client_order_id, retained, fill_at_ms=decided_at_ms)

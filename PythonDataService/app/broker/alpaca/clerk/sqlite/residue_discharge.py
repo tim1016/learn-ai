@@ -36,6 +36,7 @@ import logging
 import math
 from dataclasses import dataclass
 
+from app.broker.alpaca.clerk.account_money import quantity_text
 from app.broker.alpaca.clerk.sqlite.account_open_work import open_order_snapshot_is_full
 from app.broker.alpaca.clerk.sqlite.exit_watchdog import (
     BrokerSymbolReader,
@@ -205,9 +206,9 @@ def _discharge(
     if position_quantity_is_nonzero(view.broker_qty - (view.attributed_qty - residue)):
         raise ResidueDischargeRefused(
             "BROKER_DISAGREES_WITH_DISCHARGE",
-            f"The broker holds {view.broker_qty:g} {symbol}; discharging this bot's "
-            f"{residue:g} would leave the Clerk attributing "
-            f"{view.attributed_qty - residue:g}. Only a residue the broker does not "
+            f"The broker holds {quantity_text(view.broker_qty)} {symbol}; discharging this bot's "
+            f"{quantity_text(residue)} would leave the Clerk attributing "
+            f"{quantity_text(view.attributed_qty - residue)}. Only a residue the broker does not "
             "hold can be discharged.",
         )
     facts = AttributedResidueDischargedFacts(

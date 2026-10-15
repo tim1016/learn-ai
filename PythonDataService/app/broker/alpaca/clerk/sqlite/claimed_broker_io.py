@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
@@ -116,11 +117,10 @@ class ClaimedBrokerIO:
     ) -> None:
         """Fold the unknown outcome of a call cancelled while its transport may still complete.
 
-        The caller re-raises its ``CancelledError``. A lease or claim already
-        gone refuses the fold, and that refusal must not replace the
-        cancellation: a task whose cancel surfaces as another error is not
-        cancelled, and wedges the task group above it. The order's effect
-        stays open, so the reconciliation sweep's lookup settles it.
+        The caller re-raises its ``CancelledError``. A lost lease or claim, or
+        a locked database, refuses the fold; that refusal must not replace
+        the cancellation, or the task group above it can wedge. The order's
+        effect stays open for the reconciliation sweep's lookup.
         """
         try:
             self._renew()
@@ -131,10 +131,9 @@ class ClaimedBrokerIO:
                 why=why,
                 transition_kind=transition_kind,
             )
-        except (ExecutionLeaseLost, OperationClaimError):
+        except (ExecutionLeaseLost, OperationClaimError, sqlite3.OperationalError):
             logger.error(
-                "alpaca broker call was cancelled after its lease or operation claim was lost; "
-                "its unknown outcome is not folded",
+                "alpaca broker call was cancelled and its unknown outcome could not be folded",
                 extra={
                     "action": "claimed_io_cancelled_unfolded",
                     "effect_operation_id": self.effect_operation_id,

@@ -101,7 +101,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar, Literal, NamedTuple, TypedDict
 
-from app.broker.alpaca.clerk.account_money import holdings_text
+from app.broker.alpaca.clerk.account_money import holdings_text, quantity_text
 from app.broker.alpaca.clerk.option_effects import OptionEffectRefusal
 from app.broker.alpaca.clerk.program_leg import (
     LegRefusal,
@@ -873,9 +873,9 @@ def _finalize_claimed_exit(
         # watchdog tries again; nothing is queued for the next day.
         headline = "An extended-hours exit ended unfilled; the position is still open"
         explanation = (
-            f"The extended-hours limit to {created.side.lower()} {created.quantity:g} "
+            f"The extended-hours limit to {created.side.lower()} {quantity_text(created.quantity)} "
             f"{state.symbol} at {created.limit_price} ended {refreshed.broker_state} "
-            f"without flattening the position; {final_qty:g} {state.symbol} is still held."
+            f"without flattening the position; {quantity_text(final_qty)} {state.symbol} is still held."
         )
         next_step = (
             f"{_REDRIVE_NEXT_STEP} Nothing was queued for the next open."
@@ -883,7 +883,7 @@ def _finalize_claimed_exit(
     else:
         headline = "A completed EXIT left attributed exposure"
         explanation = (
-            f"The reducing order became terminal while {holdings_text({symbol: qty for symbol, qty in held.items() if qty})} "
+            f"The reducing order became terminal while {holdings_text({symbol: qty for symbol, qty in held.items() if position_quantity_is_nonzero(qty)})} "
             "remained attributed to this strategy."
         )
         next_step = "Run another EXIT or reconcile until attributed exposure is flat."
@@ -1203,8 +1203,8 @@ def _raise_if_working_past_session(
         reason_code=EXIT_NOT_FLAT_REASON_CODE,
         headline="An exit order is still working after its session ended; the position is still open",
         explanation=(
-            f"The {leg} to {created.side.lower()} {created.quantity:g} {symbol} is still "
-            f"working at the broker after the last session it could trade in ended; {held:g} "
+            f"The {leg} to {created.side.lower()} {quantity_text(created.quantity)} {symbol} is still "
+            f"working at the broker after the last session it could trade in ended; {quantity_text(held)} "
             f"{symbol} is still held."
         ),
         operator_impact=_EXIT_NOT_FLAT_OPERATOR_IMPACT,
@@ -1955,7 +1955,7 @@ def _fold_unsendable_leg(
         },
     )
     why_not_repriced = _why_not_repriced(not_repriced)
-    held = f"{remaining_qty:g} {symbol} remains attributed to this strategy"
+    held = f"{quantity_text(remaining_qty)} {symbol} remains attributed to this strategy"
 
     def fold(*, summary_code: str, reason: str, headline: str, explanation: str, next_step: str) -> None:
         _fold_exit_not_flat(
@@ -1978,7 +1978,7 @@ def _fold_unsendable_leg(
             reason=PROGRAM_EXIT_SESSION_ENDED.explanation,
             headline="An exit could not be sent after its session ended; the position is still open",
             explanation=(
-                f"{remaining_qty:g} {symbol} is still held: this exit's {leg} could not go "
+                f"{quantity_text(remaining_qty)} {symbol} is still held: this exit's {leg} could not go "
                 "out after the session it was shaped for ended, and nothing is queued "
                 "for the next open."
             ),
@@ -2017,7 +2017,7 @@ def _fold_unsendable_leg(
                 reason=RECOVERY_MARKET_WAIT_ENDED.explanation,
                 headline="An unpriced recovery reduction waited past the regular session",
                 explanation=(
-                    f"The regular session ended while {remaining_qty:g} {symbol} waited "
+                    f"The regular session ended while {quantity_text(remaining_qty)} {symbol} waited "
                     "under a market reduction nothing had priced; it is not queued to "
                     "the next open."
                 ),
@@ -2090,8 +2090,8 @@ def _confirmed_quantity_still_holds(
             reason=RECOVERY_LIMIT_QUANTITY_CHANGED.explanation,
             headline="The flatten's quantity changed after the Clerk priced it",
             explanation=(
-                f"A price the Clerk computed would have reduced {confirmed:g} {symbol}, "
-                f"but {abs(remaining_qty):g} is attributed now, so it was never sent."
+                f"A price the Clerk computed would have reduced {quantity_text(confirmed)} {symbol}, "
+                f"but {quantity_text(abs(remaining_qty))} is attributed now, so it was never sent."
             ),
             next_step=(
                 "No action needed: the next automatic re-drive prices the new "
@@ -2109,8 +2109,8 @@ def _confirmed_quantity_still_holds(
         reason=RECOVERY_LIMIT_QUANTITY_CHANGED.explanation,
         headline="The flatten's quantity changed after its price was confirmed",
         explanation=(
-            f"A price was confirmed to reduce {confirmed:g} {symbol}, but "
-            f"{abs(remaining_qty):g} is attributed now; the confirmation does not cover it."
+            f"A price was confirmed to reduce {quantity_text(confirmed)} {symbol}, but "
+            f"{quantity_text(abs(remaining_qty))} is attributed now; the confirmation does not cover it."
         ),
         next_step=RECOVERY_LIMIT_QUANTITY_CHANGED.next_step,
     )
@@ -3034,7 +3034,7 @@ def _fold_flatten_uncovered(
         reason=refusal.explanation,
         headline=FLATTEN_COVER_HEADLINES[refusal.reason_code],
         explanation=(
-            f"{refusal.explanation} The Clerk still attributes {held:g} {created.symbol} to this bot."
+            f"{refusal.explanation} The Clerk still attributes {quantity_text(held)} {created.symbol} to this bot."
         ),
         next_step=refusal.next_step,
     )
@@ -3448,13 +3448,13 @@ def _fold_submit_refused(
         ),
         explanation=(
             (
-                f"The order to {created.side.lower()} {created.quantity:g} {created.symbol} was not taken, so "
-                f"nothing was closed; {held:g} {created.symbol} is still held. {refusal.why}"
+                f"The order to {created.side.lower()} {quantity_text(created.quantity)} {created.symbol} was not taken, so "
+                f"nothing was closed; {quantity_text(held)} {created.symbol} is still held. {refusal.why}"
             )
             if closes_an_option
             else (
-                f"The broker refused the order to {created.side.lower()} {created.quantity:g} "
-                f"{created.symbol}, so nothing was sent; {held:g} {created.symbol} is still "
+                f"The broker refused the order to {created.side.lower()} {quantity_text(created.quantity)} "
+                f"{created.symbol}, so nothing was sent; {quantity_text(held)} {created.symbol} is still "
                 "held. The broker's reason is on the order's evidence."
             )
         ),
@@ -3795,7 +3795,7 @@ def _reducing_order_facts(repo: ClerkSqliteRepository, order_ref: str) -> ExitRe
 
 def _the_reduction(created: ExitReducingOrderCreatedFacts) -> str:
     """A reducing order as a notice names it: its side, quantity and symbol."""
-    return f"{created.side.lower()} {created.quantity:g} {created.symbol}"
+    return f"{created.side.lower()} {quantity_text(created.quantity)} {created.symbol}"
 
 
 RESEND_WAITS_AFTER_A_RESEND_MS: tuple[int, ...] = (60_000, 120_000)

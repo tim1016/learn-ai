@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Path, Query, status
 from app.research.golden_search import qualification_service
 from app.research.golden_search.qualification_service import JudgedQualification, QualificationRefusal
 from app.research.persistence.db import with_connection
+from app.routers.research_store_unavailable import StoreUnreachableIsA503
 from app.schemas.golden_qualifications import (
     GoldenDefaultView,
     GoldenQualificationDeployOffer,
@@ -19,7 +20,7 @@ from app.schemas.golden_qualifications import (
 )
 from app.services.strategy_validation_manifest import local_strategy_validation_actor
 
-router = APIRouter()
+router = APIRouter(route_class=StoreUnreachableIsA503)
 # Minted ids are ``gq-`` and 32 hex characters; the bound is only a ceiling on what a path may ask the store to look up.
 QualificationId = Annotated[str, Path(min_length=1, max_length=64)]
 
@@ -28,7 +29,16 @@ def _refusal(exc: QualificationRefusal) -> HTTPException:
     return HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": exc.message})
 
 
+def _validate_qualification_id(qualification_id: str) -> None:
+    if "\x00" in qualification_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "INVALID_QUALIFICATION_ID", "message": "Qualification id contains a NUL character."},
+        )
+
+
 async def _judged(qualification_id: str) -> JudgedQualification:
+    _validate_qualification_id(qualification_id)
     judged = await with_connection(qualification_service.get_judged, qualification_id)
     if judged is None:
         raise HTTPException(
@@ -85,6 +95,7 @@ async def get_golden_qualification_deploy_offer(qualification_id: QualificationI
 async def revoke_golden_qualification(
     qualification_id: QualificationId, body: RevokeQualificationRequest
 ) -> GoldenQualificationDetail:
+    _validate_qualification_id(qualification_id)
     try:
         judged = await qualification_service.revoke(
             qualification_id=qualification_id,
@@ -101,6 +112,7 @@ async def revoke_golden_qualification(
 async def reprove_golden_qualification(
     qualification_id: QualificationId, body: ReproveQualificationRequest
 ) -> GoldenQualificationDetail:
+    _validate_qualification_id(qualification_id)
     try:
         judged = await qualification_service.reprove_qualification(
             qualification_id=qualification_id,

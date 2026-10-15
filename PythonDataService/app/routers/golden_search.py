@@ -19,21 +19,19 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable
 from typing import Annotated, Any
 
-import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response, status
-from fastapi.routing import APIRoute
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response, status
 
 from app.config import settings
-from app.data_lake.catalog_client import CatalogUnavailableError
 from app.jobs.progress import CancellationCheck, ProgressEmitter
 from app.jobs.runner import run_in_thread
 from app.research.golden_search import service
 from app.research.golden_search.models import CandidateKey, GoldenSearchRefusal, RefusalKind, StudyRow
 from app.research.golden_search.run_curves import MAX_CURVES, CurveSet, RunGroup, RunSort
 from app.routers import research_records as records
+from app.routers.research_store_unavailable import StoreUnreachableIsA503
 from app.schemas.golden_search import (
     MAX_TEST_MONTHS,
     MAX_TRAINING_MONTHS,
@@ -61,43 +59,14 @@ from app.security.data_plane_control import require_data_plane_control_secret
 from app.utils.background_loop import CallerStoppedWaitingError
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
-# The research store being out of reach, as the driver reports it: not configured or refused at connect (the
-# catalog's own error), a connection lost under a live pool, or a reconnect that is refused.
-_STORE_UNREACHABLE = (CatalogUnavailableError, asyncpg.PostgresConnectionError, asyncpg.InterfaceError, ConnectionError)
-_STORE_UNREACHABLE_DETAIL = GoldenSearchRefusalDetail(
-    code="RESEARCH_STORE_UNAVAILABLE",
-    message="The research store could not be reached. Try again once it is back.",
-    field=None,
-    refusals=[],
-    study=None,
-).model_dump(mode="json")
+
+class _GoldenSearchStoreUnreachableIsA503(StoreUnreachableIsA503):
+    unavailable_detail = GoldenSearchRefusalDetail.model_validate(
+        {**StoreUnreachableIsA503.unavailable_detail, "field": None, "refusals": [], "study": None}
+    ).model_dump(mode="json")
 
 
-class _StoreUnreachableIsA503(APIRoute):
-    """An unreachable research store is a state of the system, not a fault: answered 503 in the refusal body, without the driver's text.
-
-    The catch-all answers 500 and echoes ``str(exc)``: the connection's host and the setting's name (#3188 closed the
-    same leak on one options route). The text stays in the log.
-    """
-
-    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
-        handle = super().get_route_handler()
-
-        async def answered(request: Request) -> Response:
-            try:
-                return await handle(request)
-            except _STORE_UNREACHABLE as exc:
-                logger.warning(
-                    "research store unreachable; answered 503",
-                    extra={"action": "golden_search_store_unreachable", "error_type": type(exc).__name__, "path": request.url.path},
-                    exc_info=True,
-                )
-                raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=_STORE_UNREACHABLE_DETAIL) from exc
-
-        return answered
-
-
-router = APIRouter(route_class=_StoreUnreachableIsA503)
+router = APIRouter(route_class=_GoldenSearchStoreUnreachableIsA503)
 jobs_router = APIRouter()
 logger = logging.getLogger(__name__)
 NOUN = "study"

@@ -83,12 +83,12 @@ class EstablishedAccountsRegistry:
         if not self._path.is_file():
             return None
         latest: EstablishedGeneration | None = None
-        with self._path.open(encoding="utf-8") as handle:
+        with self._path.open("rb") as handle:
             for line_number, raw in enumerate(handle, start=1):
-                stripped = raw.strip()
-                if not stripped:
-                    continue
                 try:
+                    stripped = raw.decode("utf-8").strip()
+                    if not stripped:
+                        continue
                     entry: dict[str, Any] = json.loads(stripped)
                     if entry["account_id"] != account_id:
                         continue

@@ -744,6 +744,24 @@ async def test_a_recovery_with_no_readable_evidence_ledger_is_unbound_not_an_err
     assert ports.trade.bind_latest_recovery_bar(f"{OTHER_NAMESPACE}:recovery", symbol="SPY", side="sell") is False
 
 
+@pytest.mark.parametrize("damage", ["missing", "corrupt"])
+def test_a_decision_with_no_readable_evidence_ledger_is_unbound_not_an_error(
+    world: tuple[ShadowPorts, SourceBarLedger, _LiveRead, _Clock], tmp_path: Path, damage: str,
+) -> None:
+    ports, _bars, _live, _clock = world
+    other = SourceBarLedger(artifacts_root=tmp_path, account_id=shadow_evidence_account_id_for_strategy(OTHER_SID))
+    if damage == "corrupt":
+        decision = _retain(other, minute=601, close="100.00")
+        bar_identity = decision.bar_ref
+    else:
+        bar_identity = "absent"
+    _damage_evidence_ledger(other, damage)
+
+    assert ports.trade.bind_decision_bar(
+        f"{OTHER_NAMESPACE}:entry", bar_identity=bar_identity, decided_at_ms=1, symbol="SPY"
+    ) is False
+
+
 async def test_shadow_limit_expires_at_the_calendar_early_close(tmp_path: Path) -> None:
     from app.services.session_authority import scheduled_extended_session_bounds
     day = date(2026, 11, 27)

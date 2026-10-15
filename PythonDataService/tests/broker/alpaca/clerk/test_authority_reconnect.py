@@ -383,6 +383,23 @@ async def test_a_rate_limited_startup_reconnects_after_alpaca_s_own_wait(tmp_pat
         await serving.close()
 
 
+async def test_a_huge_retry_after_cannot_park_authority_reconnect(tmp_path: Path) -> None:
+    throttled = map_api_error(_api_error(429, "too many requests", headers={"Retry-After": "999999"}), broker="alpaca")
+    select = _live_selection(tmp_path, _LiveAlpacaThatBlinks(outage=1, error=throttled))
+    backoff = _Backoff()
+
+    at_boot = await select()
+    assert at_boot.startup_failure is not None
+    assert at_boot.startup_failure.retry_after_ms == 999_999_000
+
+    serving = await _reconnect(at_boot, _CompositionRoot(select), backoff)
+    try:
+        assert serving.clerk is not None
+        assert backoff.waits == [authority_reconnect.RECONNECT_MAX_DELAY_S]
+    finally:
+        await serving.close()
+
+
 async def test_a_startup_recovery_that_runs_out_of_time_reconnects(tmp_path: Path) -> None:
     """Recovery outrunning its own deadline is Alpaca answering too slowly: retried, not final."""
 

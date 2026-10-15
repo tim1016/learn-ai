@@ -614,6 +614,20 @@ def test_one_unreadable_registry_line_refuses_the_read_naming_its_line(
         assert reason in str(refused.value)
 
 
+def test_non_utf8_registry_line_refuses_the_read_naming_its_line(tmp_path: Path) -> None:
+    registry = EstablishedAccountsRegistry(tmp_path)
+    registry.record(
+        EstablishedGeneration(
+            account_id=ACCOUNT_ID, authority_generation=1, db_identity_token="tok", established_at_ms=1
+        )
+    )
+    with (tmp_path / "_established_generations.jsonl").open("ab") as handle:
+        handle.write(b"\xff\n")
+
+    with pytest.raises(EstablishedRegistryInvalid, match=r"_established_generations\.jsonl line 2"):
+        registry.latest(ACCOUNT_ID)
+
+
 def test_database_behind_its_mirror_fails_closed_on_open_without_repair(tmp_path: Path) -> None:
     """A clerk.db that lost its committed tail must not open (#3161).
 
@@ -795,6 +809,37 @@ def test_rebuild_from_mirror_reconstructs_identical_state(tmp_path: Path) -> Non
     rebuilt.close()
 
 
+@pytest.mark.parametrize("operation", ["initialize", "rebuild"])
+def test_failed_apply_schema_strands_no_partial_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str,
+) -> None:
+    clock = _clock_seq()
+    db_path = tmp_path / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db"
+    if operation == "rebuild":
+        repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+        repo.close()
+        db_path.rename(db_path.with_suffix(".db.corrupt"))
+    real_apply = schema.apply_schema
+
+    def refuse(conn: sqlite3.Connection) -> None:
+        conn.execute("CREATE TABLE partial_schema (id INTEGER)")
+        raise sqlite3.OperationalError("schema write failed")
+
+    monkeypatch.setattr(schema, "apply_schema", refuse)
+    with pytest.raises(sqlite3.OperationalError, match="schema write failed"):
+        if operation == "initialize":
+            ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+        else:
+            ClerkSqliteRepository.rebuild_from_mirror(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    assert not db_path.exists()
+
+    monkeypatch.setattr(schema, "apply_schema", real_apply)
+    if operation == "initialize":
+        ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock).close()
+    else:
+        ClerkSqliteRepository.rebuild_from_mirror(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock).close()
+
+
 def test_rebuild_that_cannot_configure_its_connection_leaves_no_database_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -898,6 +943,15 @@ def test_a_mirror_record_with_no_known_phase_is_a_chain_break(tmp_path: Path, re
     mirror_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
 
     with pytest.raises(MirrorChainBroken, match="unknown mirror record phase"):
+        MirrorFile(mirror_path).rebuild()
+
+
+@pytest.mark.parametrize("phase", ["PREPARE", "FINALIZE"])
+def test_a_mirror_transition_without_row_hash_is_a_chain_break(tmp_path: Path, phase: str) -> None:
+    mirror_path = tmp_path / "custody_transitions.mirror"
+    mirror_path.write_text(json.dumps({"phase": phase, "sequence": 1}) + "\n", encoding="utf-8")
+
+    with pytest.raises(MirrorChainBroken, match=f"{phase} record has no row_hash"):
         MirrorFile(mirror_path).rebuild()
 
 

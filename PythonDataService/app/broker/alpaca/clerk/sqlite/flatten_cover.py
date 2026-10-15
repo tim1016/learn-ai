@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import math
 
+from app.broker.alpaca.clerk.account_money import quantity_text
 from app.broker.alpaca.clerk.program_leg import LegRefusal
 from app.broker.alpaca.clerk.sqlite.account_open_work import (
     OpenOrdersThenPositions,
@@ -134,16 +135,16 @@ def flatten_cover_refusal(
     """
     if not (math.isfinite(quantity) and quantity > 0):
         return _unproven(
-            f"This flatten's own {symbol} quantity ({quantity:g}) is not a positive, finite number of shares; "
+            f"This flatten's own {symbol} quantity ({quantity}) is not a positive, finite number of shares; "
             "nothing was sent."
         )
     selling = side is OrderSide.SELL
     unconfirmed = (
         "so the Clerk could not confirm the account "
         + (
-            f"holds the {quantity:g} {symbol} this flatten would sell"
+            f"holds the {quantity_text(quantity)} {symbol} this flatten would sell"
             if selling
-            else f"is short the {quantity:g} {symbol} this flatten would buy back"
+            else f"is short the {quantity_text(quantity)} {symbol} this flatten would buy back"
         )
         + "; nothing was sent."
     )
@@ -198,7 +199,7 @@ def flatten_cover_refusal(
     position = broker_quantity_by_symbol(broker_positions).get(symbol.upper(), 0.0)
     if not math.isfinite(position):
         return _unproven(
-            f"Alpaca reported its {symbol} position as {position:g}, which is not a finite number "
+            f"Alpaca reported its {symbol} position as {position}, which is not a finite number "
             f"of shares, {unconfirmed}"
         )
     shortfall = quantity - cover_after_open_orders(
@@ -209,14 +210,14 @@ def flatten_cover_refusal(
     if shortfall < POSITION_QTY_EPSILON:
         return None
     already_taken = (
-        f" with {competing_unfilled:g} of it already in open {side.value} orders"
+        f" with {quantity_text(competing_unfilled)} of it already in open {side.value} orders"
         if position_quantity_is_nonzero(competing_unfilled)
         else ""
     )
     short_of = (
-        f"less than the {quantity:g} this flatten would sell"
+        f"less than the {quantity_text(quantity)} this flatten would sell"
         if selling
-        else f"which does not cover the {quantity:g} this flatten would buy back"
+        else f"which does not cover the {quantity_text(quantity)} this flatten would buy back"
     )
     return LegRefusal(
         reason_code=FLATTEN_NOT_COVERED_AT_BROKER,
@@ -267,7 +268,7 @@ def held_text(position: float, symbol: str) -> str:
     """A signed position in plain words: ``10 SPY``, ``no SPY``, ``a short of 10 SPY``."""
     if not position_quantity_is_nonzero(position):
         return f"no {symbol}"
-    return f"{position:g} {symbol}" if position > 0 else f"a short of {abs(position):g} {symbol}"
+    return f"{quantity_text(position)} {symbol}" if position > 0 else f"a short of {quantity_text(abs(position))} {symbol}"
 
 
 __all__ = [

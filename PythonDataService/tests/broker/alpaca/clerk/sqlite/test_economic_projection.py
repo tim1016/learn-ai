@@ -1447,3 +1447,32 @@ def test_the_price_conflict_worklist_logs_each_episode_it_cannot_read(
         "u-no-cause": "cause_unreadable",
         "u-no-subject": "no_custody_subject",
     }
+
+    caplog.clear()
+    warned_episodes: set[str] = set()
+    with caplog.at_level(logging.WARNING):
+        assert reads.active_execution_price_conflicts(conn, warned_episodes=warned_episodes) == worklist
+        assert reads.active_execution_price_conflicts(conn, warned_episodes=warned_episodes) == worklist
+    assert len([record for record in caplog.records if getattr(record, "action", None) == "execution_price_conflict_skipped"]) == 4
+
+
+def test_unreadable_price_conflict_warning_is_once_per_repository(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id="PA-WARN", artifacts_root=tmp_path, clock=lambda: 1)
+    try:
+        with repo.write_fence() as conn:
+            conn.execute(
+                "INSERT INTO uncertainties (uncertainty_id, scope, severity, blocks_new_exposure, "
+                "allows_reduction, reason_code, headline, explanation, operator_impact, "
+                "next_step, observed_at_ms, facts_schema_version, facts_json) "
+                "VALUES ('u-torn', 'ACCOUNT_CLERK', 'HIGH', 1, 0, ?, 'h', 'e', 'o', 'n', 1, 1, ?)",
+                (EXECUTION_PRICE_CONFLICT_REASON_CODE, '{"cause_facts": '),
+            )
+
+        with caplog.at_level(logging.WARNING):
+            assert repo.active_execution_price_conflicts() == ()
+            assert repo.active_execution_price_conflicts() == ()
+        assert [record.uncertainty_id for record in caplog.records if getattr(record, "action", None) == "execution_price_conflict_skipped"] == ["u-torn"]
+    finally:
+        repo.close()

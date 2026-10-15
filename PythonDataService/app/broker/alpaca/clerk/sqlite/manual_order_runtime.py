@@ -35,6 +35,7 @@ from app.broker.contract.models import (
     is_active_tradable_us_equity,
 )
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
+from app.broker.fleet.identity import same_secret
 from app.engine.live.identity import validate_strategy_instance_id
 
 _LOCAL_PREVIEW_KEY = b"learn-ai/local-manual-preview/v1"
@@ -465,7 +466,7 @@ async def submit_previewed_manual_order(
         if not preview.capability.available:
             assert preview.capability.unavailable is not None
             raise ManualPreviewStaleError(preview.capability.unavailable.message)
-        if not hmac.compare_digest(preview.preview_token or "", preview_token):
+        if not same_secret(preview_token, preview.preview_token or ""):
             raise ManualPreviewStaleError("The manual-order preview is stale. Refresh the ticket before confirming.")
     try:
         return await submit_manual_order(
