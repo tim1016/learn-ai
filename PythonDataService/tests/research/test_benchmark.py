@@ -219,7 +219,9 @@ def test_the_smoke_baseline_is_deterministic_and_hash_pinned(lake) -> None:
     typical = next(run for run in first.runs if run.group == "sma-typical" and run.window_kind == "full-development")
     assert (typical.trades, typical.bars_scored) == (350, 15210)
     assert typical.trade_log_hash == "72ddf6ba3706e5ee04c94fb343affaff8ea1a9b1b477690a623416b9dc984bf5"
-    assert typical.metrics_hash == "7a345affa257c4877078fa815f9af77610500c780f9a20b24a57d9ec362de598"
+    # PR #3300 removes the null mae_pct/mfe_pct placeholders; every retained
+    # metric and the trade log match the previous pinned projection exactly.
+    assert typical.metrics_hash == "ac20af8dd03617e93b0baab55e414637503e8fd8804cd9f39fec359df4a55b77"
     no_trade = next(run for run in first.runs if run.group == "sma-no-trade")
     assert no_trade.trades == 0
     # The empty trade log's own hash: the no-trade projection is pinned too,
