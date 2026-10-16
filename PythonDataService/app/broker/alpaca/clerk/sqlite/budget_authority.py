@@ -1,8 +1,8 @@
 """One durable authorization cutover, replayed by the existing custody mirror.
 
 Schema compatibility excludes older writers before they acquire the lease.
-Within this compatible runtime, version 1 alone permits legacy Start; version
-2 alone permits fresh budget-backed Deploy. Only version 2 admits a new entry
+Version 1 retains historical runs but cannot start a new one; version 2 permits
+fresh budget-backed Deploy. Only version 2 admits a new entry
 (#2553): an account still on version 1 refuses every ENTER under
 ``BUDGETS_NOT_SWITCHED_ON`` until its owner switches it in Settings -- never
 automatically. The cutover requires every old runner stopped; positions,

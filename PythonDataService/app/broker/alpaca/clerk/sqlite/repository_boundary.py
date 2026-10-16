@@ -59,7 +59,6 @@ REPOSITORY_MUTATION_HELPERS = frozenset(
         "observe_external_order",
         "observe_or_record_unfoldable",
         "record_unfoldable_broker_order",
-        "submit_start_run",
         "submit_stop_run",
     }
 )
