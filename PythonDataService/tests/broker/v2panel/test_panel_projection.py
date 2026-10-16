@@ -3115,7 +3115,6 @@ def test_warmup_join_projection_names_the_filled_window() -> None:
 
     assert view is not None
     assert (view.state, view.label) == ("filled", "Filled 10 missing bars from IBKR history")
-    assert view.warmed_from_history_only is False
     assert build_warmup_join(None) is None
 
 
@@ -3349,6 +3348,25 @@ def test_an_entry_order_the_broker_has_not_finished_is_warned_about(broker_state
     assert _notices(_refused_panel(), _exposure_projection(orders=(order,))) == [
         ("entry_order_working", "An entry order is still working")
     ]
+
+
+@pytest.mark.parametrize("broker_state", ["suspended", "accepted_for_bidding", "pending_replace", "calculated", "stopped"])
+def test_panel_lists_broker_identified_orders_that_can_still_fill(broker_state: str) -> None:
+    order = _entry_order(broker_state)
+
+    panel = adapt_sqlite_panel(_refused_panel(), _exposure_projection(orders=(order,)))
+
+    assert [(item.order_ref, item.status) for item in panel.working_orders] == [
+        (order.order_ref, broker_state)
+    ]
+
+
+def test_panel_does_not_list_a_terminal_broker_order_as_working() -> None:
+    order = replace(_entry_order("canceled"), may_fill=False)
+
+    panel = adapt_sqlite_panel(_refused_panel(), _exposure_projection(orders=(order,)))
+
+    assert panel.working_orders == []
 
 
 def test_a_finished_entry_order_is_not_warned_about() -> None:

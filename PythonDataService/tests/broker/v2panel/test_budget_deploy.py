@@ -28,7 +28,7 @@ from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerActivity
-from app.schemas.broker_bots import AlpacaPaperDeployRequest
+from app.schemas.broker_bots import AlpacaDeploySubmission, AlpacaPaperDeployRequest
 from app.schemas.deployment_budget import (
     AccountMoneyView,
     BudgetDeployCommandReceipt,
@@ -48,7 +48,7 @@ from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
 
 
 @pytest.mark.parametrize(("model", "field", "payload"), [
-    (DeploymentBudgetPreview, "observed_at_ms", dict(state="ready", detail="Ready", world="real_paper", custody_account_id="PAPER")),
+    (DeploymentBudgetPreview, "observed_at_ms", dict(state="ready", detail="Ready", world="real_paper")),
     (DeploymentBudgetView, "observed_at_ms", dict(state="ready", headline="Ready", detail="Ready", world="real_paper", strategy_instance_id="bot")),
     (BudgetDeployCommandReceipt, "recorded_at_ms", dict(
         status="pending", outcome="pending", receipt_id="receipt", command_id="command", strategy_instance_id="bot",
@@ -65,6 +65,50 @@ def test_budget_receipts_reject_out_of_domain_timestamps(model: type[BaseModel],
     assert getattr(model(**payload, **{field: MAX_TIMESTAMP_MS}), field) == MAX_TIMESTAMP_MS
     with pytest.raises(ValidationError, match=field):
         model(**payload, **{field: MAX_TIMESTAMP_MS + 1})
+
+
+def test_paper_deploy_submission_requires_budget_on_the_wire() -> None:
+    with pytest.raises(ValidationError, match="budget"):
+        AlpacaDeploySubmission.model_validate({"symbol": "SPY"})
+
+
+@pytest.mark.asyncio
+async def test_budgetless_preview_is_served_but_budgetless_deploy_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from app.routers import broker_v2_panel
+
+    previewed: list[AlpacaPaperDeployRequest] = []
+    deployed: list[AlpacaDeploySubmission] = []
+
+    async def preview(_broker: str, _account: str, request: AlpacaPaperDeployRequest) -> DeploymentBudgetPreview:
+        previewed.append(request)
+        return DeploymentBudgetPreview(state="ready", detail="Ready", world="real_paper")
+
+    async def deploy(_broker: str, _account: str, request: AlpacaDeploySubmission) -> BudgetDeployCommandReceipt:
+        deployed.append(request)
+        raise AssertionError("A budgetless Deploy must not reach execution")
+
+    monkeypatch.setattr(broker_v2_panel.panel_deploy, "preview_alpaca_deployment_budget", preview)
+    monkeypatch.setattr(broker_v2_panel.panel_deploy, "deploy_alpaca_paper_bot", deploy)
+    app = FastAPI()
+    app.include_router(broker_v2_panel.router)
+    body = _request().model_dump(mode="json", exclude_none=True)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        preview_response = await client.post("/api/brokers/alpaca/accounts/PAPER/bots/budget-preview", json=body)
+        deploy_response = await client.post(
+            "/api/brokers/alpaca/accounts/PAPER/bots",
+            json={**body, "submission_key": "budgetless-probe"},
+        )
+
+    assert preview_response.status_code == 200
+    assert len(previewed) == 1 and previewed[0].budget is None
+    assert deploy_response.status_code == 422
+    assert any(part["loc"][-1] == "budget" for part in deploy_response.json()["detail"])
+    assert deployed == []
 
 
 def _publish_book(*asks: tuple[str, float]) -> None:
@@ -240,7 +284,7 @@ def test_dry_run_never_copies_parent_cash_or_risk(authority) -> None:
     preview = budget_deploy.preview_budget("BUDGET-PAPER", request, resolved_parameters={})
     assert preview.state == "ready" and preview.world == "synthetic"
     # H18: simulated cash is the bot's own; no real account's number or cash applies.
-    assert preview.custody_account_id is None and preview.unreserved_usd is None
+    assert preview.unreserved_usd is None
     assert [item.key for item in preview.shortcuts] == ["position_headroom"]
     assert preview.budget_usd == "2000.00"
 
@@ -417,15 +461,14 @@ def _committed_view(authority: tuple) -> tuple:
 
 def test_budget_read_uses_the_sealed_next_position_and_current_cash(authority: tuple) -> None:
     repo, runtime, gate = _committed_view(authority)
-    assert budget_deploy._budget_view(runtime, "view").entry_eligible
+    assert budget_deploy._budget_view(runtime, "view").headline == "Ready for its next entry"
     before = repo.custody_transitions()
     _publish_book(("SPY", 200))
     view = budget_deploy._budget_view(runtime, "view")
-    assert not view.entry_eligible and "The entry needs $200.01 including its fee provision." in view.detail
+    assert "The entry needs $200.01 including its fee provision." in view.detail
     assert ("Free to trade", "200.00", False) in _statement(view)
     _publish_book(("SPY", 100))
     gate.publish(replace(gate.latest_observation(), cash_available_usd=100))
-    assert not budget_deploy._budget_view(runtime, "view").entry_eligible
     assert "the account can fund only $100.00 after protecting other positions" in budget_deploy._budget_view(runtime, "view").detail
     assert repo.custody_transitions() == before
 
@@ -435,7 +478,7 @@ def test_budget_read_rejudges_risk_without_creating_a_hold(authority: tuple) -> 
     gate.publish(replace(gate.latest_observation(), equity_usd=899))
     before = repo.custody_transitions()
     view = budget_deploy._budget_view(runtime, "view")
-    assert not view.entry_eligible and "loss limit is breached" in view.detail
+    assert "loss limit is breached" in view.detail
     assert repo.custody_transitions() == before
     assert gate.latest_observation() is not None
 
@@ -446,7 +489,7 @@ def test_budget_read_requires_a_fresh_price_and_observes_existing_holds(authorit
     repo, runtime, _ = _committed_view(authority)
     _publish_book()
     view = budget_deploy._budget_view(runtime, "view")
-    assert not view.entry_eligible and "fresh IBKR price" in view.detail
+    assert "fresh IBKR price" in view.detail
     # The read asks IBKR for the sealed symbol, so a bot no running process
     # watches still gets a price to judge its next position against.
     monkeypatch.setattr("app.utils.timestamps.now_ms_utc", lambda: NOON)
@@ -457,7 +500,7 @@ def test_budget_read_requires_a_fresh_price_and_observes_existing_holds(authorit
     })
     before = repo.custody_transitions()
     view = budget_deploy._budget_view(runtime, "view")
-    assert not view.entry_eligible and "loss hold stands" in view.detail
+    assert "loss hold stands" in view.detail
     assert repo.custody_transitions() == before
 
 
@@ -695,14 +738,13 @@ async def test_a_loss_hold_withdraws_admission_but_never_the_accounts_money(auth
     """Review A6: the sync withdraws its admission observation whenever the
     account is not judged safe (a loss hold, an unjudgeable day). The money
     was still read, so the bar and Alpaca's figures stay."""
-    repo, runtime, gate = _committed_view(authority)
+    repo, _runtime, gate = _committed_view(authority)
     gate.withdraw()
 
     view = await budget_deploy.account_money_view(repo.account_id)
 
     assert view.state == "ready" and view.free_to_deploy_usd == "800.00"
     assert (view.equity_usd, view.today_pnl_usd) == ("1000.00", "0.00")
-    assert not budget_deploy._budget_view(runtime, "view").entry_eligible
     assert view.deploy_refusal is not None
 
 
@@ -1086,7 +1128,7 @@ def test_a_running_bot_reads_its_money_as_a_statement(authority: tuple) -> None:
 
     view = budget_deploy._budget_view(runtime, "view")
 
-    assert (view.headline, view.entry_eligible) == ("Ready for its next entry", True)
+    assert view.headline == "Ready for its next entry"
     assert _statement(view) == [
         ("Budget set aside at deploy", "200.00", False),
         ("Realized gains and losses", "0.00", False),
@@ -1129,7 +1171,7 @@ def test_holding_a_position_reads_as_holding_never_as_a_fault(authority: tuple) 
 
     view = budget_deploy._budget_view(runtime, "view")
 
-    assert view.state == "ready" and not view.entry_eligible
+    assert view.state == "ready"
     assert (view.headline, view.detail) in {
         ("Holding its position", "Its next entry waits until this position is sold."),
         ("Entering its position", "Its entry is still working. The next entry waits until this one finishes."),
@@ -1263,7 +1305,7 @@ def test_a_stopped_bot_statement_shows_what_was_released_and_what_is_still_held(
 
     view = budget_deploy._budget_view(runtime, "view")
 
-    assert view.state == "ready" and not view.entry_eligible
+    assert view.state == "ready"
     assert view.headline == "Stopped · still holds shares"
     assert view.detail == ("It released $100.00 when it stopped; $100.00 stayed claimed. "
                            "The money in its shares comes back when they are sold.")
@@ -1581,7 +1623,7 @@ def test_the_bot_page_and_the_clerks_admission_give_one_verdict_with_the_same_fi
         enter(200, "refused")
 
     funding = refused_view.funding
-    assert funding is not None and not refused_view.entry_eligible
+    assert funding is not None
     assert (funding.admits, funding.binding, funding.shortfall_usd, funding.fits) == (False, "bot_budget", "0.01", 0)
     assert (funding.free_budget.amount_usd, funding.account_headroom.amount_usd) == ("200.00", "1000.00")
     assert funding.need is not None and funding.need.commitment_usd == "200.01"
@@ -1590,7 +1632,7 @@ def test_the_bot_page_and_the_clerks_admission_give_one_verdict_with_the_same_fi
 
     _publish_book(("SPY", 100))
     admitted_view = budget_deploy._budget_view(runtime, "view")
-    assert admitted_view.funding is not None and admitted_view.entry_eligible
+    assert admitted_view.funding is not None
     assert (admitted_view.funding.admits, admitted_view.funding.shortfall_usd, admitted_view.funding.fits) == (True, None, 1)
     assert enter(100, "admitted").created
 

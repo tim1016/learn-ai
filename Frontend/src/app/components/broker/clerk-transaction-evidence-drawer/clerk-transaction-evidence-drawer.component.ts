@@ -177,12 +177,8 @@ function targetIdentity(target: ResourceTarget): string {
 function custodyClocks(timeline: ClerkCustodyTimeline | null): readonly TimelineClock[] {
   return [
     { label: 'Intent created (originator clock)', value: timeline?.intent_created_at_ms ?? null },
-    { label: 'Clerk request received', value: timeline?.clerk_request_received_at_ms ?? null },
     { label: 'Clerk intake admitted', value: timeline?.clerk_intake_admitted_at_ms ?? null },
-    { label: 'Inbox fsynced', value: timeline?.inbox_fsynced_at_ms ?? null },
     { label: 'A0 custody accepted', value: timeline?.a0_custody_accepted_at_ms ?? null },
-    { label: 'A1 broker write started', value: timeline?.broker_write_started_at_ms ?? null },
-    { label: 'Broker call returned', value: timeline?.broker_call_returned_at_ms ?? null },
     { label: 'A2 broker acknowledgement recorded', value: timeline?.broker_ack_recorded_at_ms ?? null },
     { label: 'Earliest broker event time', value: timeline?.earliest_broker_source_at_ms ?? null },
     { label: 'First callback arrival', value: timeline?.first_callback_arrived_at_ms ?? null },

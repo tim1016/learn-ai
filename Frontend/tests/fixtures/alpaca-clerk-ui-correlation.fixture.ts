@@ -259,7 +259,6 @@ export function evidenceReceipt(
     next_cursor: null,
     total_entries: 1,
     truncated: false,
-    read_by: 'operator:playwright-1415',
     read_at_ms: BASE_TIMESTAMP_MS + 3_000 + revision,
   };
 }

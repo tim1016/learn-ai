@@ -473,6 +473,5 @@ def read_evidence_page(
         next_cursor=next_cursor,
         total_entries=total,
         truncated=truncated,
-        read_by=operator_identity,
         read_at_ms=read_at,
     )

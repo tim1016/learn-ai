@@ -382,38 +382,6 @@ async def test_the_directory_lists_lanes_with_catalog_capabilities(
         assert "deploy" in capabilities
         assert "market_status_read" in capabilities
 
-        filtered = await client.get("/api/brokers/alpaca/clerks")
-        assert [c["clerk_id"] for c in filtered.json()["clerks"]] == [
-            fleet.lane.clerk_id
-        ]
-        unregistered = await client.get("/api/brokers/nosuch/clerks")
-        assert unregistered.status_code == 404
-        assert unregistered.json()["reason"] == "broker_not_supported"
-
-        described = await client.get(
-            f"/api/brokers/alpaca/clerks/{fleet.lane.clerk_id}"
-        )
-        assert described.status_code == 200
-        wrong = await client.get(
-            f"/api/brokers/nosuch/clerks/{fleet.lane.clerk_id}"
-        )
-        assert wrong.status_code == 409
-        assert wrong.json()["reason"] == "clerk_broker_mismatch"
-
-
-async def test_an_unregistered_broker_is_a_typed_404_not_an_empty_lane_list(
-    fleet: _Fleet,
-) -> None:
-    """`GET /brokers/{broker}/clerks` for a broker with no production adapter
-    must refuse the same way `_lookup_operation` already does for the same
-    condition — not answer 200 with an empty ``clerks`` list, which is
-    indistinguishable from "this provider has zero lanes today"."""
-    async with fleet.client() as client:
-        response = await client.get("/api/brokers/nosuch/clerks")
-        assert response.status_code == 404
-        assert response.json()["reason"] == "broker_not_supported"
-
-
 async def test_b2_desk_reads_and_account_bound_run_evidence_route_through_the_lane(
     fleet: _Fleet,
 ) -> None:

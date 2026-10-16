@@ -51,7 +51,6 @@ def _request(
 ) -> PanelActionRequest:
     return PanelActionRequest(
         action_id=action_id,  # type: ignore[arg-type]
-        revision=revision,
         concurrency_token=token,
         idempotency_key=key,
         reason=reason,

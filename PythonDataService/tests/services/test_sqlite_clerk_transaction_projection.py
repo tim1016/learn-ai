@@ -257,7 +257,6 @@ def test_account_desk_reads_operation_first_sqlite_projection(tmp_path: Path) ->
         repo.close()
 
     assert page.feed_headline == "SQLite custody projection live"
-    assert page.canonical_fallback_required is False
     assert len(page.rows) == 1
     assert page.rows[0].transaction_id == accepted.effect_operation_id
     assert page.rows[0].event_count == 1

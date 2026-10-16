@@ -932,6 +932,29 @@ def _discharge(context: RecoveryPolicyContext) -> RecoveryCapability:
     )
 
 
+@pytest.mark.parametrize("broker_state", ["suspended", "accepted_for_bidding", "pending_replace", "calculated", "stopped"])
+def test_rare_live_order_blocks_reduction_without_offering_unsafe_cancel(broker_state: str) -> None:
+    order = ProjectedOrder(
+        order_ref="order:live", client_order_id="client:live", broker_order_id="broker:live",
+        role="ENTRY", broker_state=broker_state, submitted_at_ms=_NOW_MS - 10_000,
+        updated_at_ms=_NOW_MS - 1_000, may_fill=True,
+    )
+    context = _stopped_holding(current_orders=(order,))
+    catalog = {action.action_id: action for action in build_recovery_catalog(context)}
+
+    cancel = catalog["cancel_verified_working_orders"]
+    assert cancel.needed and not cancel.available
+    flatten = catalog["prepare_safe_flatten"]
+    assert flatten.available is False
+    assert flatten.unavailable_reason_code == "LIVE_ORDER_MAY_STILL_FILL"
+    assert "Cancel verified" not in flatten.next_step
+
+    discharge = _discharge(_residue_context(current_orders=(order,)))
+    assert discharge.available is False
+    assert discharge.unavailable_reason_code == "LIVE_ORDER_MAY_STILL_FILL"
+    assert "Cancel verified" not in discharge.next_step
+
+
 @pytest.mark.parametrize("reason_code", ["EXIT_NOT_FLAT", "EXIT_STUCK"])
 def test_residue_discharge_is_offered_for_a_residue_an_exit_episode_strands(
     reason_code: str,

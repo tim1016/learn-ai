@@ -50,7 +50,7 @@ from app.schemas.broker_v2_gallery import (
     GalleryResolution,
     GallerySymbolBars,
 )
-from app.schemas.broker_v2_panel import BotCatalogView, ChartBar, ChartFillMarker
+from app.schemas.broker_v2_panel import BotCatalogView, ChartFillMarker
 from app.services.broker_v2_panel.catalog_projection_service import day_pnl
 from app.services.broker_v2_panel.chart_projection_service import (
     aggregator_bars_to_chart_bars,
@@ -98,33 +98,6 @@ def _is_retired(row: BotCatalogView) -> bool:
     retired identities must not reappear as active tiles.
     """
     return getattr(row, "status_label", "") == "Retired"
-
-
-def _session_change_pct(bars: Sequence[ChartBar], *, open_ms: int) -> float | None:
-    """Session return from the first bar within TODAY's session to the last
-    bar overall. Its input is always the aggregator's full-session 1-minute
-    buffer, never a resolution-specific chart buffer: the 5-second buffer is
-    deliberately shorter than a trading session, while the 1-minute buffer
-    retains a complete session plus tail. A naive ``bars[0]`` can therefore
-    either fold in a prior-session gap or silently begin late in the session.
-    ``None`` when no bar falls within ``[open_ms, ...)`` yet, or that
-    session's first open is zero.
-
-    Formula: session_change_pct = (last_session_close - first_session_open)
-      / first_session_open for bars whose start_ms is at or after open_ms.
-    Reference: internal product contract; no external software port.
-    Canonical implementation: this file.
-    Validated against:
-      tests/services/test_gallery_hub.py::test_build_snapshot_session_change_pct_excludes_a_prior_session_bar.
-    """
-    session_bars = [bar for bar in bars if bar.start_ms >= open_ms]
-    if not session_bars:
-        return None
-    first_open = float(session_bars[0].open)
-    if first_open == 0:
-        return None
-    last_close = float(session_bars[-1].close)
-    return (last_close - first_open) / first_open
 
 
 def shown_symbols(catalog: list[BotCatalogView]) -> list[str]:
@@ -384,15 +357,10 @@ class GalleryHub:
             return self._aggregator.snapshot_5s(symbol, since_ms=since_ms)
         return self._aggregator.snapshot(symbol, since_ms=since_ms)
 
-    async def _ensure_session_change_subscription(self, symbol: str) -> None:
-        if self._resolution == "5s":
-            await self._aggregator.ensure_subscribed(symbol)
-
     def _project_bot(
         self,
         row: BotCatalogView,
         *,
-        session_change_pcts: dict[str, float],
         feeds: dict[str, GalleryFeedView],
         model: type[GalleryBotView] = GalleryBotView,
     ) -> GalleryBotView:
@@ -407,9 +375,7 @@ class GalleryHub:
         ``fmtInteger`` already use for ``null``. ``day_pnl`` is the one
         numerical answer taken from its canonical authority
         (``catalog_projection_service.day_pnl``) rather than left to any
-        surface to sum for itself. ``session_change_pct`` is looked up by symbol in
-        ``session_change_pcts`` (see ``_fetch_session_change_pcts``) —
-        ``None`` when that symbol has no session-scoped bar yet. ``feed`` is
+        surface to sum for itself. ``feed`` is
         the symbol's chart line state from ``feeds`` (see ``_fetch_feeds``).
         """
         realized = getattr(row, "realized_pnl_today", None)
@@ -426,7 +392,6 @@ class GalleryHub:
             realized_pnl_today=realized,
             open_pnl=open_pnl,
             day_pnl=day_pnl(realized, open_pnl),
-            session_change_pct=session_change_pcts.get(row.symbol),
             fills_today=getattr(row, "fills_today", None),
             last_bar_at_ms=self._latest_bar_end_ms.get(row.symbol),
             feed=feeds[row.symbol],
@@ -495,7 +460,6 @@ class GalleryHub:
         symbol_bars: list[GallerySymbolBars] = []
         for symbol in shown_symbols(catalog):
             await self._ensure_chart_subscription(symbol)
-            await self._ensure_session_change_subscription(symbol)
             since_ms = since_bar_ms.get(symbol) if since_bar_ms is not None else None
             raw = self._snapshot_symbol_bars(symbol, since_ms=since_ms)
             symbol_bars.append(
@@ -503,29 +467,6 @@ class GalleryHub:
             )
         self._latest_bar_end_ms.update(_latest_bar_end_ms(symbol_bars))
         return shown, symbol_bars
-
-    def _fetch_session_change_pcts(self, symbols: list[str], *, open_ms: int) -> dict[str, float]:
-        """Per-symbol session return (see ``_session_change_pct``).
-
-        Reads the aggregator's FULL in-memory bar buffer fresh
-        (``since_ms=None``) for each symbol — not ``build_update``'s own
-        ``since_bar_ms``-sliced ``symbol_bars``, which on an incremental poll
-        may carry only the newest bar or two and can't establish today's
-        session open on its own. ``GalleryBarAggregator.snapshot`` is
-        documented as a synchronous in-memory ring-buffer read, not I/O, so
-        this extra unsliced read per poll is cheap — unlike the fill-source
-        fan-out in ``_fetch_markers``, which is real I/O and is fanned out
-        via ``asyncio.gather`` for exactly that reason. A symbol with no
-        session-scoped bar yet is omitted, mirroring ``_latest_bar_end_ms``'s
-        omission convention.
-        """
-        pcts: dict[str, float] = {}
-        for symbol in symbols:
-            raw = self._aggregator.snapshot(symbol, since_ms=None)
-            pct = _session_change_pct(aggregator_bars_to_chart_bars(raw), open_ms=open_ms)
-            if pct is not None:
-                pcts[symbol] = pct
-        return pcts
 
     async def _fetch_markers(
         self, shown: list[BotCatalogView], *, now_ms: int
@@ -609,9 +550,7 @@ class GalleryHub:
             shown, symbol_bars = await self._fetch_shown_and_bars(since_bar_ms=None)
             as_of_ms = now_ms_utc()
             markers = await self._fetch_markers(shown, now_ms=as_of_ms)
-            open_ms, _close_ms = live_window(as_of_ms)
             symbols = sorted({row.symbol for row in shown})
-            session_change_pcts = self._fetch_session_change_pcts(symbols, open_ms=open_ms)
             feeds = self._fetch_feeds(symbols, now_ms=as_of_ms)
             self._version += 1
             version = self._version
@@ -623,7 +562,6 @@ class GalleryHub:
                 bots=[
                     self._project_bot(
                         row,
-                        session_change_pcts=session_change_pcts,
                         feeds=feeds,
                     )
                     for row in shown
@@ -678,9 +616,7 @@ class GalleryHub:
             as_of_ms = now_ms_utc()
             markers = await self._fetch_markers(shown, now_ms=as_of_ms)
             markers_delta = _markers_delta(markers, since_marker_keys)
-            open_ms, _close_ms = live_window(as_of_ms)
             symbols = sorted({row.symbol for row in shown})
-            session_change_pcts = self._fetch_session_change_pcts(symbols, open_ms=open_ms)
             feeds = self._fetch_feeds(symbols, now_ms=as_of_ms)
             self._version += 1
             version = self._version
@@ -692,7 +628,6 @@ class GalleryHub:
                 bots_delta=[
                     self._project_bot(
                         row,
-                        session_change_pcts=session_change_pcts,
                         feeds=feeds,
                         model=GalleryBotDelta,
                     )

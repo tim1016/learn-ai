@@ -71,7 +71,6 @@ function bot(sid: string, overrides: Partial<GalleryBotView> = {}): GalleryBotVi
     realized_pnl_today: 0,
     open_pnl: 0,
     day_pnl: 0,
-    session_change_pct: 0,
     fills_today: 0,
     last_bar_at_ms: null,
     feed: {

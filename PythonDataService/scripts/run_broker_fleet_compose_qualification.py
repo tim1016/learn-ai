@@ -1056,12 +1056,28 @@ def run_host_qualification(
             if not isinstance(paper_clerk, dict):
                 raise QualificationError("Actual coordinator directory does not contain the Paper qualification lane.")
             mutation_status, mutation_refusal = _request_json(
-                f"{coordinator_url}/api/brokers/alpaca/clerks/{live_id}/orders",
+                f"{coordinator_url}/api/brokers/alpaca/clerks/{live_id}"
+                "/accounts/PAQUALIFICATION/bots/qualification-probe/actions",
                 method="POST",
                 headers=directory_headers,
+                json_body={
+                    "action_id": "archive",
+                    "idempotency_key": "qualification-unbound-live-probe",
+                    "command_context": {
+                        "capability": "bot_action",
+                        "idempotency_key": "qualification-unbound-live-probe",
+                        "target": {"account_id": "PAQUALIFICATION", "entity_id": "qualification-probe"},
+                    },
+                },
             )
-            if mutation_status < HTTPStatus.BAD_REQUEST:
-                raise QualificationError("Live mutation route unexpectedly accepted an unbound qualification lane.")
+            if (
+                mutation_status != HTTPStatus.SERVICE_UNAVAILABLE
+                or mutation_refusal.get("reason") != "clerk_unreachable"
+                or "no effective account assignment" not in str(mutation_refusal.get("message", ""))
+            ):
+                raise QualificationError(
+                    "Unbound Live lane did not refuse a declared mutation for its missing assignment."
+                )
 
             faults: dict[str, dict[str, Any]] = {}
             evidence["stage"] = "provider_outage"

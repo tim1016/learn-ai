@@ -39,7 +39,6 @@ async def _no_published_pass(_strategy_instance_id: str) -> None:
 def _request(*, action_id: str, revision: int = 42, token: str = "token") -> PanelActionRequest:
     return PanelActionRequest(
         action_id=action_id,  # type: ignore[arg-type]
-        revision=revision,
         concurrency_token=token,
         idempotency_key="k1",
         reason=None,

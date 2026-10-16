@@ -1,9 +1,8 @@
 """Committed-snapshot parity for the fleet's closed refusal vocabulary (#2067).
 
 Decision 9: the reasons do NOT enter the exported OpenAPI contract. The
-frontend's copy map locks against the committed snapshot instead, exactly as
-the broker-v2 panel vocabulary does -- see
-``scripts/regenerate_broker_v2_vocabulary_snapshot.py`` for the pattern this
+frontend's copy map locks against the committed snapshot instead -- see
+``scripts/regenerate_fleet_refusal_vocabulary_snapshot.py`` for the pattern this
 mirrors.
 
 The live set is derived, not hand-listed: walking ``FleetControlError``'s

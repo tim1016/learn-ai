@@ -707,7 +707,6 @@ def _snapshot_frame_of_exact_size(target_bytes: int) -> GalleryLiveSnapshot:
                     realized_pnl_today=None,
                     open_pnl=None,
                     day_pnl=None,
-                    session_change_pct=None,
                     fills_today=None,
                     feed=GalleryFeedView(
                         state="LIVE",

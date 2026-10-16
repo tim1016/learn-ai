@@ -1754,7 +1754,7 @@ async def test_an_option_bots_money_view_prices_no_next_entry_from_a_share_of_th
     claim that the money is enough: it says the entry is priced when its contracts are picked."""
     view = await _money_view(floor)
 
-    assert (view.state, view.world, view.entry_eligible) == ("ready", "synthetic", True)
+    assert (view.state, view.world) == ("ready", "synthetic")
     _claims_no_money_is_enough(view)
     assert "picked" in view.headline and "option" in view.detail.lower()
     assert _lines(view)["Free to trade"] == "1000.00"
@@ -1843,7 +1843,7 @@ async def test_an_option_bot_whose_entry_took_its_whole_budget_reads_as_holding_
     view = await _money_view(floor)
 
     assert floor.holds() == {CALL: 1.0}
-    assert (view.state, view.entry_eligible) == ("ready", False)
+    assert view.state == "ready"
     assert (view.headline, view.detail) == ("Holding its position", "Its next entry waits until this position is sold.")
     assert _lines(view)["Free to trade"] == "0.00"
 

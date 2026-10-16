@@ -392,9 +392,6 @@ function toTableRow(transaction: ClerkTransactionSummary): TransactionTableRow {
     transaction.run_id,
     transaction.intent_id,
     transaction.order_ref,
-    transaction.order_id,
-    transaction.perm_id,
-    transaction.exec_id,
     transaction.native_order_id,
     transaction.native_execution_id,
     transaction.external_order_id,
@@ -448,36 +445,6 @@ function presentFeed(feed: ClerkTransactionHistoryResponse): FeedPresentation {
         headline: 'History is current',
         detail: 'Broker activity in this period is ready to search and review.',
         attention: false,
-      };
-    case 'reconnecting':
-      return {
-        headline: 'History is reconnecting',
-        detail: 'Saved records remain available while new broker updates reconnect.',
-        attention: true,
-      };
-    case 'rebuilding':
-      return {
-        headline: 'History is being rebuilt',
-        detail: 'The table may change as saved broker records are restored.',
-        attention: true,
-      };
-    case 'stale':
-      return {
-        headline: 'History may be delayed',
-        detail: 'Review the technical feed details before relying on the newest row.',
-        attention: true,
-      };
-    case 'offline_but_saved':
-      return {
-        headline: 'Showing saved history',
-        detail: 'New broker activity will appear after the connection returns.',
-        attention: true,
-      };
-    case 'corrupt':
-      return {
-        headline: 'History needs attention',
-        detail: 'The saved transaction view cannot currently be relied on.',
-        attention: true,
       };
     case 'projection_unavailable':
       return {

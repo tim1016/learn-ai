@@ -17,7 +17,7 @@ const TARGET = resourceTarget('alpaca', 'clrk_spec', { accountId: 'PA9', binding
 
 const RUNNING: DeploymentBudgetView = {
   state: 'ready', headline: 'Holding its position', detail: 'Its next entry waits until this position is sold.',
-  strategy_instance_id: 'spy-ema-a', world: 'real_paper', entry_eligible: false,
+  strategy_instance_id: 'spy-ema-a', world: 'real_paper',
   statement: [
     { label: 'Budget set aside at deploy', amount_usd: '1000.00' },
     { label: 'Realized gains and losses', amount_usd: '12.40' },
@@ -151,7 +151,7 @@ const STOPPED_SEGMENT: MoneySegment = {
 const STOPPED: DeploymentBudgetView = {
   state: 'ready', headline: 'Stopped · still holds shares',
   detail: 'Its free budget was released when it stopped. The money in its shares comes back when they are sold.',
-  strategy_instance_id: 'spy-ema-b', world: 'real_paper', entry_eligible: false,
+  strategy_instance_id: 'spy-ema-b', world: 'real_paper',
   statement: [
     { label: 'Budget set aside at deploy', amount_usd: '1000.00' },
     { label: 'Realized gains and losses', amount_usd: '-10.00' },

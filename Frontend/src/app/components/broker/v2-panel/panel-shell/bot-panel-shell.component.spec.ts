@@ -597,7 +597,6 @@ const mockService = {
     next_cursor: null,
     total_entries: 1,
     truncated: false,
-    read_by: 'operator:test',
     read_at_ms: 1_753_800_000_000,
   }),
   runBotAction: vi.fn().mockResolvedValue({

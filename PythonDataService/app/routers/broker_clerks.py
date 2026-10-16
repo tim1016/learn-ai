@@ -115,61 +115,6 @@ async def list_broker_clerks(request: Request) -> Response:
 
 
 @router.get(
-    "/brokers/{broker}/clerks",
-    dependencies=[Depends(require_data_plane_control_secret_always)],
-    summary="One broker's clerk lanes",
-)
-async def list_broker_clerks_for_broker(broker: str, request: Request) -> Response:
-    """The same projection filtered to one provider."""
-    service = _fleet_service(request)
-    if broker not in service.adapters():
-        from app.broker.fleet.errors import BrokerNotSupported
-
-        return _refuse(
-            BrokerNotSupported(
-                f"No production adapter serves {broker!r}.",
-                next_step="Use a provider this deployment supports; adding one "
-                "is a reviewed code change, not a request parameter.",
-            )
-        )
-    directory = service.directory()
-    clerks = [
-        clerk
-        for clerk in directory["clerks"]
-        if clerk.get("broker") == broker  # type: ignore[union-attr]
-    ]
-    return JSONResponse(
-        {"observed_at_ms": directory["observed_at_ms"], "clerks": clerks}
-    )
-
-
-@router.get(
-    "/brokers/{broker}/clerks/{clerk_id}",
-    dependencies=[Depends(require_data_plane_control_secret_always)],
-    summary="One clerk lane's directory entry",
-)
-async def describe_broker_clerk(
-    broker: str, clerk_id: str, request: Request
-) -> Response:
-    """Lifecycle, session, capabilities and provider summary for one lane."""
-    try:
-        descriptor = _fleet_service(request).describe_clerk(clerk_id)
-    except FleetControlError as error:
-        return _refuse(error)
-    fields = descriptor.public_fields()
-    if fields.get("broker") != broker:
-        from app.broker.fleet.errors import ClerkBrokerMismatch
-
-        return _refuse(
-            ClerkBrokerMismatch(
-                f"Route broker {broker!r} does not match clerk {clerk_id}'s "
-                f"immutable broker {fields.get('broker')!r}.",
-            )
-        )
-    return JSONResponse(fields)
-
-
-@router.get(
     "/broker-clerks/aggregate/attention",
     dependencies=[Depends(require_data_plane_control_secret_always)],
     summary="Per-lane operator-attention sets, one lane's failure isolated (#2228)",

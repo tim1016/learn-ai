@@ -86,9 +86,6 @@ from app.services.session_authority import SessionAuthorityState
 
 logger = logging.getLogger(__name__)
 
-_WORKING_BROKER_STATES = frozenset(
-    {"new", "accepted", "pending_new", "partially_filled", "pending_cancel"}
-)
 # FILL is satisfied only by actual fill evidence, never by any terminal
 # outcome — a canceled/expired/rejected order definitively received zero fill
 # and must not render as satisfied.
@@ -872,8 +869,8 @@ def _flatten_ready(projection: ClerkProjection) -> bool:
 
 
 def _is_working(order: ProjectedOrder) -> bool:
-    """An order the broker acknowledged and has not finished."""
-    return order.broker_order_id is not None and (order.broker_state or "").lower() in _WORKING_BROKER_STATES
+    """A broker-identified order that the Clerk still considers able to fill."""
+    return order.broker_order_id is not None and order.may_fill
 
 
 def _may_still_fill(order: ProjectedOrder) -> bool:

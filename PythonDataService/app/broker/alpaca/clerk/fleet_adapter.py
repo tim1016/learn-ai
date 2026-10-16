@@ -110,8 +110,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
     {
         # ── Lane reads ────────────────────────────────────────────────────
         _op("account_read", "GET", "/account", capability=Capability.ACCOUNT_READ),
-        _op("positions_read", "GET", "/positions", capability=Capability.POSITIONS_READ),
-        _op("orders_read", "GET", "/orders", capability=Capability.ORDERS_READ),
         # The desk's account evidence is lane-scoped even where the
         # pre-fleet clerk handler still exposes its compatibility alias under
         # ``/api/brokers/alpaca``.  These declarations are the one migration
@@ -236,12 +234,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             capability=Capability.BOT_ACTION,
             idempotency=_ONE_SHOT,
             readiness=_CONFIGURATION,
-        ),
-        _op(
-            "market_status_read",
-            "GET",
-            "/market-status-snapshot",
-            capability=Capability.MARKET_STATUS_READ,
         ),
         # IBKR is the read-only market-data feed for every Alpaca clerk
         # (ADR 0062). These clerk-scoped routes select the lane's own Gateway

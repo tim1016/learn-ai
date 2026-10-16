@@ -213,7 +213,6 @@ function gallerySnapshot(epoch: string): GalleryLiveSnapshot {
         realized_pnl_today: 0,
         open_pnl: 0,
         day_pnl: 0,
-        session_change_pct: 0.4,
         last_bar_at_ms: NOW_MS,
         feed: {
           state: 'LIVE',

@@ -350,7 +350,6 @@ async def test_shadow_panel_lease_revival_uses_the_custody_namespace(
     )
     request = PanelActionRequest(
         action_id="reconcile_now",
-        revision=0,
         concurrency_token="shadow-lease",
         idempotency_key="shadow-lease",
     )

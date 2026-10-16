@@ -70,14 +70,6 @@ class StrategyInfo(BaseModel):
     # Data resolutions this strategy accepts. The Engine Lab uses this to
     # filter the strategy dropdown once the user picks a resolution.
     supported_resolutions: list[str] = Field(default_factory=list)
-    # Short pseudocode snippet of the entry/exit rules, rendered in the
-    # frontend strategy picker so users can see the rules at a glance.
-    algorithm_pseudocode: str = ""
-    # Parity-critical gotchas — implementation quirks, porting traps, or
-    # known cross-system divergences. Rendered as a bullet list under the
-    # strategy in the frontend so they're not rediscovered by trial and
-    # error on the next ticker / strategy combination.
-    gotchas: list[str] = Field(default_factory=list)
     # The LEAN trusted template that validates this strategy's execution
     # semantics. ``None`` means Engine Lab must not offer a LEAN parity run.
     lean_twin: str | None = None
@@ -125,8 +117,6 @@ def list_engine_strategies() -> list[StrategyInfo]:
                 description=reg.description,
                 params_schema=public_params_schema(reg),
                 supported_resolutions=sorted(reg.supported_resolutions),
-                algorithm_pseudocode=reg.algorithm_pseudocode,
-                gotchas=list(reg.gotchas),
                 lean_twin=reg.lean_twin,
                 lean_parameter_names=list(reg.lean_parameter_names),
                 lean_data_policy_parameter_names=list(reg.lean_data_policy_parameter_names),

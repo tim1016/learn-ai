@@ -38,7 +38,6 @@ from app.schemas.bot_history import AccountBotHistory
 from app.schemas.broker_bots import (
     SUBMISSION_KEY_PATTERN,
     AlpacaDeploySubmission,
-    AlpacaPaperDeployReceipt,
     AlpacaPaperDeployRequest,
     AlpacaPaperDeployView,
     BotDeployPrefill,
@@ -626,7 +625,7 @@ async def edit_bot_end_scoped(broker: str, account_id: str, sid: str, request: B
 
 @router.post(
     "/{broker}/accounts/{account_id}/bots",
-    response_model=AlpacaPaperDeployReceipt | BudgetDeployCommandReceipt,
+    response_model=BudgetDeployCommandReceipt,
     status_code=201,
     summary="Deploy one Clerk-governed Alpaca bot, named by the backend (§5, #2551)",
 )
@@ -634,7 +633,7 @@ async def deploy_bot_scoped(
     broker: str,
     account_id: str,
     request: AlpacaDeploySubmission,
-) -> AlpacaPaperDeployReceipt | BudgetDeployCommandReceipt:
+) -> BudgetDeployCommandReceipt:
     try:
         return await panel_deploy.deploy_alpaca_paper_bot(broker, account_id, request)
     except panel_errors.PanelDataError as error:

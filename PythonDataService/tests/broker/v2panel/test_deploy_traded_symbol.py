@@ -546,4 +546,4 @@ def test_a_bots_next_entry_is_judged_at_the_price_of_what_it_buys(authority: tup
 
     view = budget_deploy._budget_view(runtime, "listens-spy")
 
-    assert (view.headline, view.entry_eligible) == ("Ready for its next entry", True)
+    assert view.headline == "Ready for its next entry"

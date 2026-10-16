@@ -43,10 +43,9 @@ describe('AccountDeskTransactionHistoryComponent', () => {
       rows: signal([
         transaction({
           order_instruction: {
-            symbol: 'GOOGL', sec_type: 'us_equity', action: 'buy', quantity: 3,
+            symbol: 'GOOGL', action: 'buy', quantity: 3,
             order_type: 'market', limit_price: null, stop_price: null,
-            time_in_force: 'day', outside_rth: false,
-          },
+            time_in_force: 'day', },
           transaction_origin: 'strategy',
           execution_quantity: 3,
           execution_price: 175.25,
@@ -550,9 +549,6 @@ function transaction(overrides: Partial<ClerkTransactionSummary> = {}): ClerkTra
     run_id: null,
     intent_id: null,
     order_ref: 'manual/v1:opaque',
-    order_id: null,
-    perm_id: null,
-    exec_id: null,
     native_order_id: null,
     native_execution_id: null,
     lifecycle_state: 'submitted',
@@ -566,13 +562,10 @@ function transaction(overrides: Partial<ClerkTransactionSummary> = {}): ClerkTra
 function historyPage(): ClerkTransactionHistoryResponse {
   return {
     projection_available: true,
-    canonical_fallback_required: false,
     feed_state: 'live',
     feed_headline: 'SQLite projection current',
     feed_detail: 'Current',
     high_water_journal_seq: 1,
-    lag_records: 0,
-    lag_is_lower_bound: false,
     custody_summary: {
       record_count: 0,
       a0_custody_accepted_count: 0,

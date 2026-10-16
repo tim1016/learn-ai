@@ -288,7 +288,7 @@ async def test_a_clear_that_retired_the_bot_but_failed_to_record_it_is_finished_
         await panel_data_source.run_action(
             "alpaca", _LIVE, _FLAT,
             PanelActionRequest(
-                action_id="archive", revision=0, concurrency_token=_PRESENTED_CLEAR_TOKEN,
+                action_id="archive", concurrency_token=_PRESENTED_CLEAR_TOKEN,
                 idempotency_key="direct-1", reason="The rehearsal is over",
             ),
             operator_identity="owner",
@@ -392,7 +392,7 @@ async def test_a_shadow_store_that_cannot_confirm_the_retirement_is_this_bots_un
         await panel_data_source.run_action(
             "alpaca", _LIVE, _FLAT,
             PanelActionRequest(
-                action_id="archive", revision=0, concurrency_token=_PRESENTED_CLEAR_TOKEN, idempotency_key="k-1",
+                action_id="archive", concurrency_token=_PRESENTED_CLEAR_TOKEN, idempotency_key="k-1",
             ),
             operator_identity="owner",
         )

@@ -451,7 +451,6 @@ async def _post_stop_bot_decisions(
             f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/actions",
             json={
                 "action_id": "stop_bot_decisions",
-                "revision": panel.json()["revision"],
                 "concurrency_token": action["concurrency_token"],
                 "idempotency_key": idempotency_key,
             },
@@ -1280,7 +1279,6 @@ async def test_presented_action_executes_and_repost_replays_as_noop(api) -> None
         )
         request = {
             "action_id": "reconcile_now",
-            "revision": panel.json()["revision"],
             "concurrency_token": action["concurrency_token"],
             "idempotency_key": "sqlite-reconcile",
         }
@@ -1359,7 +1357,6 @@ async def test_a_presented_action_reaches_the_clerk_as_the_routes_configured_ope
             f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/actions/quiesce",
             json={
                 "action_id": "reconcile_now",
-                "revision": panel.json()["revision"],
                 "concurrency_token": action["concurrency_token"],
                 "idempotency_key": "who-asks",
             },
@@ -1394,7 +1391,6 @@ async def test_action_refuses_malformed_sid_before_touching_receipt_path(
     monkeypatch.setattr(panel_data_source, "durable_idempotency_store_for", spy)
     request = {
         "action_id": "stop_bot_decisions",
-        "revision": 1,
         "concurrency_token": "token",
         "idempotency_key": "malformed-sid",
     }
@@ -1585,7 +1581,6 @@ async def test_lost_execution_lease_is_an_authored_blocker_not_a_raw_500(
         )
         request = {
             "action_id": "reconcile_now",
-            "revision": panel.json()["revision"],
             "concurrency_token": action["concurrency_token"],
             "idempotency_key": "sqlite-lease-lost",
         }
@@ -1865,7 +1860,6 @@ async def test_poisoned_authority_is_not_reported_as_a_lost_lease(
             f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/actions",
             json={
                 "action_id": "reconcile_now",
-                "revision": panel.json()["revision"],
                 "concurrency_token": action["concurrency_token"],
                 "idempotency_key": "sqlite-poisoned",
             },
@@ -2549,7 +2543,6 @@ def _flatten_offer(panel: dict, *, key: str) -> _FlattenOffer:
         command_enabled=execute["enabled"],
         command={
             "action_id": "execute_safe_flatten",
-            "revision": panel["revision"],
             "concurrency_token": execute["concurrency_token"],
             "idempotency_key": key,
         },
@@ -2567,7 +2560,7 @@ async def _reconcile_now(world: _CrashedHolding) -> None:
         panel = (await client.get(_PANEL)).json()
         action = next(item for item in panel["actions"] if item["action_id"] == "reconcile_now")
         response = await client.post(_ACTIONS, json={
-            "action_id": "reconcile_now", "revision": panel["revision"],
+            "action_id": "reconcile_now",
             "concurrency_token": action["concurrency_token"], "idempotency_key": "reconcile-now",
         })
     assert response.status_code == 200, response.text

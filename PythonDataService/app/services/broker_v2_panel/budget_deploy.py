@@ -221,7 +221,7 @@ def preview_budget(
                         "The IBKR market-data feed is unavailable, so this instrument cannot be "
                         "priced. Restore the connection, then review the budget."
                     ),
-                    world=world, custody_account_id=custody_id, bot_name_note=name_note,
+                    world=world, bot_name_note=name_note,
                 )
             # The read above asked IBKR for this symbol; its quote arrives with
             # a later snapshot, so the client re-checks instead of giving up.
@@ -232,7 +232,7 @@ def preview_budget(
                     if request.traded_symbol is None
                     else f"Waiting for a {request.traded_symbol} price from IBKR."
                 ),
-                world=world, custody_account_id=custody_id, bot_name_note=name_note,
+                world=world, bot_name_note=name_note,
             )
         requirement, fee_cents = entry_requirement(quantity=request.sizing.quantity, price=quote.ask, at_ms=now)
         return _priced_preview(
@@ -246,7 +246,7 @@ def preview_budget(
         )
     except (BudgetUnavailable, MoneyInputError, RateNotPinnedError) as exc:
         return DeploymentBudgetPreview(
-            state="unavailable", detail=str(exc), world=world, custody_account_id=custody_id, bot_name_note=name_note,
+            state="unavailable", detail=str(exc), world=world, bot_name_note=name_note,
         )
 
 
@@ -306,7 +306,7 @@ def _priced_preview(
         if entry.commitment_cents is None:
             return DeploymentBudgetPreview(
                 state="awaiting_price" if entry.waiting else "unavailable", detail=entry.detail,
-                world=world, custody_account_id=custody_id, bot_name_note=name_note,
+                world=world, bot_name_note=name_note,
             )
         priced = _PricedEntry(
             requirement=Decimal(entry.commitment_cents) / 100, observed_at_ms=entry.observed_at_ms,
@@ -398,7 +398,7 @@ def _priced_preview(
     return DeploymentBudgetPreview(
         state="ready" if refusal is None else "unavailable",
         detail=refusal or "This is an entry-admission budget. Market fills and losses can exceed it.",
-        world=world, custody_account_id=custody_id, bot_name_note=name_note,
+        world=world, bot_name_note=name_note,
         budget_usd=None if token is None or amount is None else dollars(amount), observed_at_ms=observed_at,
         minimum_budget_usd=dollars(minimum), unreserved_usd=None if available is None else dollars(available),
         estimated_price_usd=priced.estimated_price_usd, risk_revision=risk_revision,
@@ -889,7 +889,6 @@ def _fenced_budget_view(runtime: ActiveClerkRuntime, sid: str) -> DeploymentBudg
             return DeploymentBudgetView(
                 state="ready", headline=headline, detail=detail,
                 strategy_instance_id=sid, world=world, committed_usd=dollars(own.committed_cents),
-                entry_eligible=entry is not None and entry.eligible,
                 observed_at_ms=read.observed_at_ms,
                 segment=None if segment is None else _segment_view(segment),
                 statement=_statement(own, entry),

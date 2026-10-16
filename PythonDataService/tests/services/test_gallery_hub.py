@@ -274,7 +274,7 @@ async def test_build_snapshot_uses_the_five_second_buffer_when_configured() -> N
     snapshot = await hub.build_snapshot()
 
     assert snapshot.resolution == "5s"
-    assert aggregator.subscribed == ["SPY"]
+    assert aggregator.subscribed == []
     assert aggregator.subscribed_5s == ["SPY"]
     assert snapshot.symbols[0].bars[0].end_ms - snapshot.symbols[0].bars[0].start_ms == 5_000
 
@@ -495,42 +495,6 @@ async def test_build_snapshot_preserves_none_economics_instead_of_zero() -> None
     assert bot.realized_pnl_today is None
     assert bot.open_pnl is None
     assert bot.fills_today is None
-
-
-@pytest.mark.asyncio
-async def test_build_snapshot_session_change_pct_uses_full_session_bars_for_a_five_second_gallery(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """5-second chart buffers are shorter than a session, so the current-
-    session return must retain the full-session 1-minute source."""
-    monkeypatch.setattr(gallery_hub, "now_ms_utc", lambda: _NOW)
-    prior_session_bar = _raw_bar(
-        start_ms=_OPEN_MS - 3_600_000, end_ms=_OPEN_MS - 3_540_000, open=50.0, close=200.0,
-    )
-    todays_first_bar = _raw_bar(start_ms=_OPEN_MS, end_ms=_OPEN_MS + 60_000, open=100.0, close=101.0)
-    todays_last_bar = _raw_bar(
-        start_ms=_OPEN_MS + 60_000, end_ms=_OPEN_MS + 120_000, open=101.0, close=110.0,
-    )
-    rows = [_Cat2("Aug11-02", "SPY", True, 0.0, 0.0, 0)]
-    aggregator = _FakeAggregator(
-        {"SPY": [prior_session_bar, todays_first_bar, todays_last_bar]}
-    )
-    hub = GalleryHub(
-        broker="alpaca",
-        account_id="PA3",
-        catalog_source=_FakeCatalogSource(rows),
-        aggregator=aggregator,
-        resolution="5s",
-    )
-
-    snap = await hub.build_snapshot()
-
-    # (110 - 100) / 100 = 0.10 — NOT (110 - 50) / 50 = 1.2, which is what a
-    # naive bars[0]-based calculation would have produced by folding in the
-    # prior session's bar.
-    assert snap.bots[0].session_change_pct == pytest.approx(0.10, abs=1e-9, rel=0)
-    assert aggregator.subscribed == ["SPY"]
-    assert aggregator.subscribed_5s == ["SPY"]
 
 
 @pytest.mark.asyncio

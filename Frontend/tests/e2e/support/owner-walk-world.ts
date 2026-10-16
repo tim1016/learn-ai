@@ -443,7 +443,6 @@ function budgetPreview(deploy: DeployLane, body: DeployBotBody): DeploymentBudge
     state: 'ready',
     detail: 'This is an entry-admission budget. Market fills and losses can exceed it.',
     world,
-    custody_account_id: deploy.view.account_id,
     observed_at_ms: NOW_MS,
     risk_revision: 1,
     minimum_budget_usd: '500.00',

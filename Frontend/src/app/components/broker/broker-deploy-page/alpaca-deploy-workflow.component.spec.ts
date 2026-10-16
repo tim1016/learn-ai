@@ -156,7 +156,7 @@ function previewFor(view: DeployBotView, body: DeployBotBody): DeploymentBudgetP
     state: 'ready',
     detail: 'This is an entry-admission budget. Market fills and losses can exceed it.',
     world,
-    custody_account_id: dryRun ? null : view.account_id,
+
     risk_revision: dryRun ? 0 : 1,
     minimum_budget_usd: '500.00',
     unreserved_usd: dryRun ? null : '98329.57',

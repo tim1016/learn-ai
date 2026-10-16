@@ -104,7 +104,6 @@ describe('TransactionRailComponent', () => {
       next_cursor: null,
       total_entries: 2,
       truncated: false,
-      read_by: 'operator:test',
       read_at_ms: 1_700_000_000_001,
     };
     const getEvidence = vi.fn().mockResolvedValue(evidence);

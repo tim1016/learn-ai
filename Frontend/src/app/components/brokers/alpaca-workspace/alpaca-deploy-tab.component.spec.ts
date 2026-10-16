@@ -94,7 +94,7 @@ async function renderDeployTab(options: {
           getCatalog: vi.fn().mockResolvedValue([]),
           previewStartAdmission: vi.fn(),
           previewBudget: vi.fn().mockResolvedValue({ state: 'ready', detail: 'Money is ready.', world: 'real_paper',
-            custody_account_id: 'PA9', risk_revision: 1, shortcuts: [] }),
+            risk_revision: 1, shortcuts: [] }),
         },
       },
     ],
@@ -115,7 +115,7 @@ describe('AlpacaDeployTabComponent', () => {
         { provide: BrokerV2PanelService, useValue: {
           getDeployView: vi.fn().mockResolvedValue(DEPLOY_VIEW), getCatalog: vi.fn().mockResolvedValue([]),
           previewBudget: vi.fn().mockResolvedValue({ state: 'ready', detail: 'Money is ready.', world: 'real_paper',
-            custody_account_id: 'PA9', risk_revision: 1, shortcuts: [] }),
+            risk_revision: 1, shortcuts: [] }),
         } },
       ],
     });
@@ -157,7 +157,7 @@ describe('AlpacaDeployTabComponent', () => {
         { provide: BrokerV2PanelService, useValue: {
           getDeployView: vi.fn().mockResolvedValue(DEPLOY_VIEW), getCatalog: vi.fn().mockResolvedValue([]), previewStartAdmission: preview,
           previewBudget: vi.fn().mockImplementation(async (_target, body: DeployBotBody) => ({
-            state: 'ready', detail: 'Money is ready.', world: 'real_paper', custody_account_id: 'PA9', risk_revision: 1,
+            state: 'ready', detail: 'Money is ready.', world: 'real_paper', risk_revision: 1,
             shortcuts: [], review_token: body.budget ? 'reviewed-money' : null, budget_usd: body.budget?.amount_usd ?? null,
           })),
         } },

@@ -44,7 +44,6 @@ function page(
     next_cursor: nextCursor,
     total_entries: totalEntries,
     truncated: false,
-    read_by: 'operator:test',
     read_at_ms: 1_700_000_001_000,
   };
 }

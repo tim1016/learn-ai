@@ -42,7 +42,6 @@ const PARAM_FIELD: Readonly<Record<string, keyof OperationTarget>> = {
   revision: 'revision',
   transaction_id: 'transactionId',
   external_order_id: 'externalOrderId',
-  command_id: 'commandId',
   program_key: 'programKey',
   submission_key: 'submissionKey',
   symbol: 'symbol',
@@ -67,7 +66,6 @@ export interface OperationTarget {
   readonly revision?: string;
   readonly transactionId?: string;
   readonly externalOrderId?: string;
-  readonly commandId?: string;
   readonly programKey?: string;
   readonly submissionKey?: string;
   readonly symbol?: string;

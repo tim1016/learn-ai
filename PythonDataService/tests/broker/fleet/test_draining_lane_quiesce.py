@@ -245,8 +245,6 @@ def test_a_read_declaring_quiesce_is_refused_by_the_catalog_validator() -> None:
         # (#2854): a check, which settles nothing.
         "custody_bot_recovery_check",
         "bot_panel_read",
-        "orders_read",
-        "positions_read",
     ],
 )
 async def test_a_draining_lane_routes_its_quiesce_operations_and_reads(
@@ -361,7 +359,6 @@ def test_the_quiesce_action_set_is_one_closed_set_every_surface_derives_from() -
 def test_the_quiesce_panel_route_admits_exactly_the_quiesce_actions() -> None:
     """The split operation's lane handler cannot be used to resume a bot."""
     body = {
-        "revision": 1,
         "concurrency_token": "tok",
         "idempotency_key": "key",
     }
@@ -406,7 +403,6 @@ async def test_every_quiesce_action_executes_through_the_quiesce_route(
             f"/api/brokers/alpaca/accounts/{ACCOUNT}/bots/sid-1/actions/quiesce",
             json={
                 "action_id": action_id,
-                "revision": 1,
                 "concurrency_token": "tok",
                 "idempotency_key": "key",
             },
@@ -433,7 +429,7 @@ async def test_a_draining_lane_routes_the_panels_cancel_verified_working_orders(
             boot.clerk_id,
             _operation("bot_panel_quiesce_action"),
             key="cancel-1",
-            body={"action_id": "cancel_verified_working_orders", "revision": 1},
+            body={"action_id": "cancel_verified_working_orders"},
         )
 
         assert delivery.delivered == ["bot_panel_quiesce_action"]
@@ -465,7 +461,7 @@ class _PaperLane:
             self._account.repo.account_id,
             "a",
             request=posted,
-            panel=SimpleNamespace(revision=posted.revision),
+            panel=SimpleNamespace(revision=1),
             action=SimpleNamespace(
                 action_id=self._presented.action_id,
                 label=self._presented.label,
@@ -523,7 +519,6 @@ async def test_a_draining_lane_ends_its_bots_expired_option_contract_and_can_the
             key="end-1",
             body={
                 "action_id": "end_expired_option",
-                "revision": 1,
                 "concurrency_token": presented.concurrency_token,
                 "reason": "nothing will settle it",
             },
@@ -562,7 +557,6 @@ async def test_the_quiesce_panel_route_refuses_a_resume_before_it_runs(
             f"/api/brokers/alpaca/accounts/{ACCOUNT}/bots/sid-1/actions/quiesce",
             json={
                 "action_id": "resume",
-                "revision": 1,
                 "concurrency_token": "tok",
                 "idempotency_key": "key",
             },

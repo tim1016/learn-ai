@@ -39,8 +39,6 @@ export interface StrategyInfo {
   description: string;
   params_schema: ParamsSchema;
   supported_resolutions: string[];
-  algorithm_pseudocode?: string;
-  gotchas?: string[];
   lean_twin?: string | null;
   /** Settings the LEAN twin takes as `strategy_parameters`. A catalog that
    *  predates the field lists none, so every changed setting is refused. */

@@ -346,6 +346,5 @@ def build_warmup_join(join: RetainedWarmupJoin | None) -> WarmupJoinView | None:
         filled_count=join.filled_count,
         filled_start_ms=join.filled_start_ms,
         filled_end_ms=join.filled_end_ms,
-        warmed_from_history_only=history_only,
         reason_code=join.reason_code,
     )

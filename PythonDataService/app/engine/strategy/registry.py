@@ -350,15 +350,6 @@ class StrategyRegistration:
     # minute bars via a ``TradeBarConsolidator``. Daily-native strategies
     # explicitly declare ``{"daily"}``.
     supported_resolutions: set[str] = dc_field(default_factory=lambda: {"minute"})
-    # Human-readable pseudocode snippet, shown under the strategy in the
-    # frontend picker. Keep it short and accurate — the point is to let
-    # users see the rules at a glance without opening the source file.
-    algorithm_pseudocode: str = ""
-    # Parity-critical gotchas and implementation quirks. Surfaced in the
-    # UI so they're not rediscovered by trial and error on the next
-    # ticker / strategy combination. Each entry is one short paragraph
-    # or bullet; render as a list on the frontend.
-    gotchas: list[str] = dc_field(default_factory=list)
     # Fields of ``param_schema`` no caller may set: hidden from
     # ``GET /strategies`` and refused by a backtest, a chart and a Deploy. No
     # registered strategy declares one today.
@@ -1115,93 +1106,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "position lifecycle open at a time. In live runs, the Action Plan "
             "selects the stock to trade; the strategy does not."
         ),
-        algorithm_pseudocode=(
-            "Universe\n"
-            "    signal_symbol = configurable (default SPY)\n"
-            "    resolution = 15-minute bars consolidated from minute data\n"
-            "\n"
-            "Indicators (Alpha — updated each 15m bar close at bar.end_time)\n"
-            "    EMA_fast = ExponentialMovingAverage(fast_period)   # default 5\n"
-            "    EMA_slow = ExponentialMovingAverage(slow_period)   # default 10\n"
-            "    RSI      = RelativeStrengthIndex(14, Wilders smoothing)\n"
-            "\n"
-            "Warmup\n"
-            "    no signals fire until EMA_fast.is_ready and EMA_slow.is_ready\n"
-            "    and RSI.is_ready (at least 15 closes for RSI; EMAs are\n"
-            "    SMA-seeded over their period). The crossover-state flag is\n"
-            "    primed during warmup so the first eligible bar is not a\n"
-            "    spurious 'fresh' cross; when the slow EMA turns ready on\n"
-            "    that same bar, it cannot be fresh and does not enter.\n"
-            "\n"
-            "Alpha — bar entry conditions (evaluated while flat)\n"
-            "    fresh_cross = EMA_fast > EMA_slow\n"
-            "                  AND EMA_fast[-1] <= EMA_slow[-1]\n"
-            "    gap_ok      = (EMA_fast - EMA_slow) >= gap        # default 0.20\n"
-            "    rsi_ok      = rsi_min <= RSI <= rsi_max          # default 50..70\n"
-            "    ⇒ if all three: emit Insight(UP, period=hold_bars bars); emit ENTER\n"
-            "\n"
-            "Alpha — bar exit conditions (evaluated while in trade)\n"
-            "    bars_held += 1 each new 15m decision bar (never wall-clock time)\n"
-            "    ⇒ when bars_held == hold_bars (default 5): emit EXIT\n"
-            "\n"
-            "Risk Management — position survival rules\n"
-            "    none — no stop-loss, no take-profit, no signal-flip exit.\n"
-            "    A losing trade is held to the time-stop. A reversed crossover\n"
-            "    inside the hold window is ignored.\n"
-            "\n"
-            "Action Plan / Portfolio Construction\n"
-            "    live execution selects the stock from its Action Plan\n"
-            "    Engine Lab binds intents to its single signal stream\n"
-            "\n"
-            "Execution\n"
-            "    fill_mode = signal_bar_close → fills at the signal bar's close\n"
-            "                                   (matches LEAN parity fixture)\n"
-            "              | next_bar_open    → fills at the next bar's open\n"
-            "                                   (matches TradingView trade-list)\n"
-            "\n"
-            "End of algorithm\n"
-            "    if still in position at the last bar: emit EXIT"
-        ),
-        gotchas=[
-            "EMA warmup is seeded from the SMA of the first N samples — "
-            "LEAN's convention, not the Pine/most-libraries default of "
-            "seeding from the first sample alone. Porting EMA to a new "
-            "language without matching this will produce a different "
-            "EMA trajectory for the first ~4×N bars.",
-            "RSI uses Wilders smoothing with period+1 warmup. The first "
-            "average gain/loss is a plain SMA at sample N+1; "
-            "`is_ready` flips true at sample ≥ period+1.",
-            "Indicators are updated with bar.close at bar.end_time, NOT at "
-            "bar.time. Off-by-one-bar timestamps break downstream timing.",
-            "The _prev_ema5_above_ema10 crossover-state flag must be updated "
-            "on warmup bars too — LEAN's C# sets it before the early return. "
-            "Skipping warmup updates produces a spurious cross on the first "
-            "post-warmup bar.",
-            "Fast/slow EMA lengths and the hold are configurable (defaults "
-            "5/10/5). Only the defaults have a LEAN twin: any other length "
-            "or hold makes the parity companion honestly unavailable. The "
-            "hold counts 15-minute decision bars across sessions, never "
-            "wall-clock time.",
-            "15-min consolidator must be wall-clock / epoch-anchored (bars "
-            "landing on :00 :15 :30 :45). A first-bar-anchored consolidator "
-            "phase-shifts every bar and ruins parity.",
-            "Prices must be Python Decimal end-to-end. Float drift over two "
-            "years of recursive EMA is enough to misprint at 4-decimal "
-            "display precision.",
-            "Use ROUND_HALF_UP for display strings to match C# "
-            'decimal.ToString("F2"). Python\'s default Decimal.quantize '
-            "uses banker's rounding (ROUND_HALF_EVEN) and disagrees on "
-            "midpoints like 515.045 → 515.05.",
-            "TradingView exports timestamps in the viewer's LOCAL timezone; "
-            "Engine Lab writes proper UTC in bar.end_time. Cross-system "
-            "diffs must normalize to a single reference frame (see SPY EMA "
-            "validation report §5.1).",
-            "The Action Plan may trade a different stock from the signal "
-            "stream. That stock selection and sizing are execution concerns; "
-            "this strategy emits only ENTER and EXIT intents.",
-            "TV labels trades by bar START, Engine Lab by bar END — a fixed "
-            "15-minute label offset that is cosmetic, not a fill-time bug.",
-        ],
         param_schema=EmaCrossoverSignalParams,
         strategy_view=_EMA_CROSSOVER_SIGNAL_VIEW,
         strategy_bars=StrategyBarCadence("minute", 15),
@@ -1341,81 +1245,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "open at a time. In live runs, the Action Plan selects the stock to "
             "trade; the strategy does not."
         ),
-        algorithm_pseudocode=(
-            "Universe\n"
-            "    signal_symbol = configurable (default SPY)\n"
-            "    resolution = 15-minute bars consolidated from minute data\n"
-            "\n"
-            "Indicators (Alpha — updated each 15m bar close at bar.end_time)\n"
-            "    EMA_fast = ExponentialMovingAverage(fast_period)   # default 5\n"
-            "    EMA_slow = ExponentialMovingAverage(slow_period)   # default 10\n"
-            "    RSI      = RelativeStrengthIndex(14, Wilders smoothing)\n"
-            "\n"
-            "Cross (tracked on every bar, whatever the position)\n"
-            "    cross_up = EMA_fast > EMA_slow AND EMA_fast[-1] <= EMA_slow[-1]\n"
-            "    cross_up                 ⇒ cross_time = bar.end_time\n"
-            "    EMA_fast <= EMA_slow     ⇒ cross_time = none\n"
-            "    fast above slow on the first bar both EMAs are ready is not a\n"
-            "    cross: cross_time stays none until a cross is seen\n"
-            "\n"
-            "Alpha — entry bar (needs all three indicators ready)\n"
-            "    cross_age = bar.end_time - cross_time            # clock time\n"
-            "    recent    = cross_age <= cross_max_age_bars × 15 min   # default 1\n"
-            "    gap_ok    = (EMA_fast - EMA_slow) >= gap         # default 0.20\n"
-            "    rsi_ok    = rsi_min <= RSI <= rsi_max           # default 50..70\n"
-            "    entry_bar = recent AND gap_ok AND rsi_ok\n"
-            "    ⇒ on an entry bar while flat: emit Insight(UP); emit ENTER\n"
-            "\n"
-            "Alpha — bar exit conditions (evaluated while in trade)\n"
-            "    bars_held += 1 each new 15m decision bar (never wall-clock time)\n"
-            "    ⇒ when bars_held == hold_bars (default 5): emit EXIT\n"
-            "\n"
-            "Risk Management — position survival rules\n"
-            "    none — no stop-loss, no take-profit, no signal-flip exit.\n"
-            "    A reversed crossover inside the hold window is ignored.\n"
-            "\n"
-            "Action Plan / Portfolio Construction\n"
-            "    live execution selects the stock from its Action Plan\n"
-            "    Engine Lab binds intents to its single signal stream\n"
-            "\n"
-            "End of algorithm\n"
-            "    if still in position at the last bar: emit EXIT"
-        ),
-        gotchas=[
-            "The cross age limit is clock time, set in 15-minute bars. At the "
-            "default of 1 the cross bar must have closed at most 15 minutes "
-            "before the bar being evaluated; at 0 it must be that bar.",
-            "A cross on the last bar of a session is never recent on the next "
-            "session's first bar: the limit is at most two hours, and the "
-            "overnight gap is longer. A bar missing inside a session ages the "
-            "cross the same way.",
-            "Nothing else is remembered between bars. If an entry is not "
-            "taken (the order is refused, the bot is paused, or an earlier "
-            "trade is still held), the next bar can still enter while the "
-            "cross is recent and the gates pass.",
-            "A bot starts with no position. If it starts or is restarted "
-            "while a cross is still recent, it can enter on a bar where a "
-            "backtest that began earlier is already holding the trade it "
-            "took on the bar before. A bot restarted within the limit of its "
-            "own entry can therefore buy the same cross a second time.",
-            "With a cross age limit longer than the hold, one cross can give "
-            "a second trade after the first one exits.",
-            "Fast touching slow (equal values) ends the cross. The next bar "
-            "with fast above slow is a new cross.",
-            "The gap and the RSI must pass on the same bar. A gap that passed "
-            "on an earlier bar is not remembered.",
-            "EMA warmup is seeded from the SMA of the first N samples — "
-            "LEAN's convention, not the Pine/most-libraries default of "
-            "seeding from the first sample alone.",
-            "RSI uses Wilders smoothing with period+1 warmup. A cross seen "
-            "while RSI is still warming up keeps its age and can enter once "
-            "RSI is ready, if it is still recent.",
-            "The hold counts 15-minute decision bars across sessions, never "
-            "wall-clock time.",
-            "The Action Plan may trade a different stock from the signal "
-            "stream. That stock selection and sizing are execution concerns; "
-            "this strategy emits only ENTER and EXIT intents.",
-        ],
         param_schema=EmaPreviousCrossoverParams,
         strategy_view=_EMA_PREVIOUS_CROSSOVER_VIEW,
         strategy_bars=StrategyBarCadence("minute", 15),
@@ -1541,59 +1370,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "SMA crosses above the long SMA, exits on the opposite cross. "
             "Configurable symbol, window sizes (in bars), and bar resolution."
         ),
-        algorithm_pseudocode=(
-            "Universe\n"
-            "    symbol     = configurable (default SPY)\n"
-            "    resolution = consolidated to resolution_minutes (default 15m)\n"
-            "\n"
-            "Indicators (Alpha — updated each bar at bar.end_time)\n"
-            "    SMA_short = SimpleMovingAverage(short_window bars)\n"
-            "    SMA_long  = SimpleMovingAverage(long_window bars)\n"
-            "\n"
-            "Warmup\n"
-            "    no signals until both SMAs have window-size samples.\n"
-            "    SMA has no recursion (just a rolling mean), so there is\n"
-            "    no warmup parity drift between LEAN and Pine.\n"
-            "\n"
-            "Alpha — bar entry conditions (evaluated while flat)\n"
-            "    fresh_cross = SMA_short > SMA_long\n"
-            "                  AND SMA_short[-1] <= SMA_long[-1]\n"
-            "    ⇒ if fresh_cross: emit Insight(UP); enter long\n"
-            "\n"
-            "Alpha — bar exit conditions (evaluated while in trade)\n"
-            "    death_cross = SMA_short < SMA_long\n"
-            "    ⇒ if death_cross: emit EXIT intent\n"
-            "\n"
-            "Risk Management — position survival rules\n"
-            "    none — exit is signal-driven only. Re-entry requires a\n"
-            "    fresh crossover, which prevents the same-bar re-entry\n"
-            "    that would otherwise produce many spurious trades.\n"
-            "\n"
-            "Portfolio Construction\n"
-            "    action plan binds ENTER/EXIT to one long stock leg\n"
-            "\n"
-            "Execution\n"
-            "    fill_mode = signal_bar_close (LEAN default) | next_bar_open | decision_minute_open"
-        ),
-        gotchas=[
-            "Window sizes are in BARS, not minutes. With "
-            "resolution_minutes=15 and short_window=10, the short SMA "
-            "covers 150 minutes (10 × 15).",
-            "Re-entry requires a FRESH crossover (short was ≤ long on "
-            "the prior bar and is strictly > long on this bar). The "
-            "strategy cannot re-enter on the same side of the cross it "
-            "just exited from, so the multi-trade-per-day issue that hit "
-            "ORB doesn't apply here.",
-            "Simple SMA has no recursion — it's just a rolling mean — so "
-            "warmup parity across implementations is much easier than EMA. "
-            "Both LEAN and Pine produce identical SMA values once they "
-            "have window-size samples.",
-            "Same TV timestamp conventions as other strategies: viewer's "
-            "local timezone in TV exports, proper UTC in Engine Lab, "
-            "bar-start vs bar-end labeling differs by the bar length.",
-            "A 50/200 cross produces very few signals per year — 1-year "
-            "backtests will often show only 1–4 trades.",
-        ],
         param_schema=SmaCrossoverParams,
         strategy_view=_SMA_CROSSOVER_VIEW,
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
@@ -1702,54 +1478,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "thresholds, and resolution. No time-based exit — position is held "
             "as long as RSI stays inside the band."
         ),
-        algorithm_pseudocode=(
-            "Universe\n"
-            "    symbol     = configurable (default SPY)\n"
-            "    resolution = consolidated to resolution_minutes (default 15m)\n"
-            "\n"
-            "Indicators (Alpha — updated each bar at bar.end_time)\n"
-            "    RSI = RelativeStrengthIndex(window, Wilders smoothing)\n"
-            "\n"
-            "Warmup\n"
-            "    no signals until RSI is_ready (sample ≥ window+1).\n"
-            "    First avg gain/loss is a plain SMA at sample window+1,\n"
-            "    Wilders recursion thereafter.\n"
-            "\n"
-            "Alpha — bar entry conditions (evaluated while flat)\n"
-            "    oversold = RSI < oversold_threshold\n"
-            "    ⇒ if oversold: emit Insight(UP); enter long\n"
-            "\n"
-            "Alpha — bar exit conditions (evaluated while in trade)\n"
-            "    overbought = RSI > overbought_threshold\n"
-            "    ⇒ if overbought: emit EXIT intent\n"
-            "\n"
-            "Risk Management — position survival rules\n"
-            "    none — no stop, no time-stop, no max drawdown guard.\n"
-            "    Re-entry IS allowed on the same day if RSI dips back\n"
-            "    below oversold after an exit (intentional).\n"
-            "\n"
-            "Portfolio Construction\n"
-            "    action plan binds ENTER/EXIT to one long stock leg\n"
-            "\n"
-            "Execution\n"
-            "    fill_mode = signal_bar_close | next_bar_open | decision_minute_open"
-        ),
-        gotchas=[
-            "Uses Wilders smoothing — first average gain/loss is a plain "
-            "SMA at sample window+1, then the recursion thereafter. Same "
-            "warmup convention as the EMA strategy's RSI.",
-            "No time-based exit. Position is held for as long as RSI stays "
-            "between oversold and overbought. On grinding sideways markets "
-            "this can be many bars; on sharp reversals it can be one bar.",
-            "No per-day trade limit — once flat, the strategy will re-enter "
-            "if RSI drops back below oversold. Multiple entries per day are "
-            "possible (this is intentional, unlike the ORB defect).",
-            "Default thresholds (30/70) may need adjustment by ticker. "
-            "Higher-volatility names rarely reach 30 or 70 on the default "
-            "14-period window.",
-            "Same TV timestamp conventions as other intraday strategies "
-            "(viewer-local-tz exports, bar-start vs bar-end labeling).",
-        ],
         param_schema=RsiMeanReversionParams,
         strategy_view=_RSI_MEAN_REVERSION_VIEW,
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
@@ -1899,50 +1627,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "it stops detecting new entries and flattens any open position. "
             "This is a deployment-validation primitive, not an alpha model."
         ),
-        algorithm_pseudocode=(
-            "Universe\n"
-            "    symbol     = configurable (default SPY)\n"
-            "    resolution = 1-minute bars\n"
-            "    session    = regular session data; strategy starts 15 minutes after the open\n"
-            "\n"
-            "Indicators\n"
-            "    none — only bar.open and bar.close are inspected\n"
-            "\n"
-            "Entry pattern\n"
-            "    green = bar.close > bar.open\n"
-            "    if two consecutive eligible green bars occur while flat:\n"
-            "        SetHoldings(symbol, 1.0)\n"
-            "\n"
-            "Hold / exit\n"
-            "    intended fill mode is next_bar_open, so the entry fills on\n"
-            "    the third bar's open after the two green confirmation bars.\n"
-            "    Count bar closes while in position, including the entry bar.\n"
-            "    On the fifth bar: Liquidate(symbol)\n"
-            "\n"
-            "Reset\n"
-            "    after each exit fill, reset the green-bar detector. Bars from\n"
-            "    the open trade cannot seed the next entry pattern.\n"
-            "\n"
-            "Session barrier\n"
-            "    15 minutes before the close (12:45 ET on an early close): stop detecting entries and liquidate any exposure\n"
-            "\n"
-            "Portfolio Construction\n"
-            "    SetHoldings(symbol, 1.0) — one open position at a time\n"
-            "\n"
-            "Execution\n"
-            "    intended fill_mode = next_bar_open"
-        ),
-        gotchas=[
-            "Run this strategy with fill_mode=next_bar_open. The Strategy Lab "
-            "starts on decision_minute_open and the Engine API on "
-            "signal_bar_close, but this validation strategy's timing spec is "
-            "next-bar-open.",
-            "A green bar means close > open, not close > previous close.",
-            "Detection begins on the 09:45 ET bar close and stops at 15:45 ET. "
-            "The 15:45 barrier also flattens any open position.",
-            "The detector resets after exit, so bars that occurred during an "
-            "open position cannot contribute to the next entry pattern.",
-        ],
         lean_twin="deployment_validation",
         param_schema=DeploymentValidationParams,
         strategy_view=_DEPLOYMENT_VALIDATION_VIEW,
@@ -2102,54 +1786,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "program; it is qualified against its own deterministic replay "
             "of committed bars."
         ),
-        algorithm_pseudocode=(
-            "Universe\n"
-            "    symbol     = configurable (default SPY)\n"
-            "    resolution = consolidated to resolution_minutes (default 15m)\n"
-            "\n"
-            "Indicators (Alpha — updated each bar at bar.end_time)\n"
-            "    EMA_fast = ExponentialMovingAverage(ema_fast_period, default 20)\n"
-            "    EMA_slow = ExponentialMovingAverage(ema_slow_period, default 50)\n"
-            "    MACD     = MovingAverageConvergenceDivergence(\n"
-            "                   macd_fast, macd_slow, macd_signal)\n"
-            "    RSI      = RelativeStrengthIndex(rsi_period, Wilders smoothing)\n"
-            "    ADX      = AverageDirectionalIndex(adx_period, Wilders)\n"
-            "\n"
-            "Warmup\n"
-            "    ~200 bars by default (longest indicator chain is\n"
-            "    EMA_slow=50 plus a buffer for steady state).\n"
-            "\n"
-            "Alpha — bar entry conditions (evaluated while flat)\n"
-            "    rsi_in_range = rsi_low_gate <= RSI <= rsi_high_gate\n"
-            "    gap_ok       = (EMA_fast - EMA_slow) > ema_gap_threshold\n"
-            "    macd_bull    = MACD.line > 0     (line, NOT histogram, NOT signal)\n"
-            "    ⇒ if all three: emit Insight(UP); enter long\n"
-            "\n"
-            "Alpha — bar exit conditions (evaluated while in trade)\n"
-            "    trend_weak = ADX < adx_exit_threshold (default 15)\n"
-            "    ⇒ if trend_weak: Liquidate(symbol)\n"
-            "\n"
-            "Risk Management — position survival rules\n"
-            "    pyramiding=1 — no scale-in / re-entry while holding.\n"
-            "    no SL / no TP — drawdown is unbounded until ADX collapses.\n"
-            "\n"
-            "Portfolio Construction\n"
-            "    SetHoldings(symbol, 1.0)  — single-position, all-in\n"
-            "\n"
-            "Execution\n"
-            "    fill_mode = next_bar_open  (TradingView-parity setting;\n"
-            "    signals fire at bar close, fill price = next bar's open)"
-        ),
-        gotchas=[
-            "EMA gap threshold is ticker-scaled. Default 0.5 is a reasonable "
-            "SPY 15-min starting point; other tickers scale with price.",
-            "MACD gate is the MACD line itself (fast_EMA − slow_EMA), NOT the histogram and NOT the signal line.",
-            "Fills land on NEXT_BAR_OPEN — the strategy signals at the bar "
-            "close, the fill price is the next bar's open. Set the engine's "
-            "fill mode accordingly for TV parity.",
-            "Warmup is 200 bars by default — longest indicator chain is EMA_slow(50) plus buffer.",
-            "No SL/TP — TV defaults. Worst-case drawdown per trade is unbounded until ADX drops below 15.",
-        ],
         param_schema=RsiRangeStrategyAParams,
         strategy_view=_SPY_STRATEGY_A_VIEW,
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
@@ -2297,59 +1933,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "range, Supertrend is long, ADX > 20 (strong trend), and MACD "
             "line > 0. Exits when ADX drops below 20."
         ),
-        algorithm_pseudocode=(
-            "Universe\n"
-            "    symbol     = configurable (default SPY)\n"
-            "    resolution = consolidated to resolution_minutes (default 15m)\n"
-            "\n"
-            "Indicators (Alpha — updated each bar at bar.end_time)\n"
-            "    Supertrend = Supertrend(supertrend_atr_period,\n"
-            "                            supertrend_multiplier)   default (10, 3)\n"
-            "    MACD       = MACD(macd_fast, macd_slow, macd_signal)\n"
-            "    RSI        = RSI(rsi_period, Wilders)\n"
-            "    ADX        = ADX(adx_period, Wilders)\n"
-            "\n"
-            "Warmup\n"
-            "    ~50 bars minimum (Supertrend = atr_period bars,\n"
-            "    MACD ≈ 34 bars to converge, RSI ≈ 15, plus buffer).\n"
-            "\n"
-            "Alpha — bar entry conditions (evaluated while flat)\n"
-            "    rsi_in_range  = rsi_low_gate <= RSI <= rsi_high_gate\n"
-            "    trend_long    = Supertrend.is_long\n"
-            "    trend_strong  = ADX > adx_entry_threshold (default 20)\n"
-            "    macd_bull     = MACD.line > 0\n"
-            "    ⇒ if all four: emit Insight(UP); enter long\n"
-            "\n"
-            "Alpha — bar exit conditions (evaluated while in trade)\n"
-            "    trend_weak = ADX < adx_exit_threshold (default 20)\n"
-            "    ⇒ if trend_weak: Liquidate(symbol)\n"
-            "\n"
-            "Risk Management — position survival rules\n"
-            "    pyramiding=1 — no scale-in while holding.\n"
-            "    no SL / no TP — exit is purely trend-strength-driven.\n"
-            "\n"
-            "Portfolio Construction\n"
-            "    SetHoldings(symbol, 1.0)  — single-position, all-in\n"
-            "\n"
-            "Execution\n"
-            "    fill_mode = signal_bar_close | next_bar_open | decision_minute_open"
-        ),
-        gotchas=[
-            "Supertrend here uses the pandas-ta direction convention "
-            "(1 = uptrend / bullish, −1 = downtrend / bearish). Pine's "
-            "ta.supertrend() returns the *opposite* sign. The `is_long` "
-            "property abstracts this away — read that, not the raw "
-            "direction integer.",
-            "Supertrend default (ATR=10, multiplier=3) matches the Pine defaults. pandas-ta's default is ATR=7.",
-            "ADX entry threshold and ADX exit threshold are independent "
-            "parameters — the default pair (20 in / 20 out) means the "
-            "strategy exits as soon as trend strength weakens below its "
-            "own entry condition.",
-            "Supertrend needs at least `atr_period` bars of warmup before "
-            "emitting a direction. Combined with MACD's 34-bar warmup and "
-            "RSI's 15-bar warmup, plan for ~50 bars minimum before the "
-            "first possible trade.",
-        ],
         param_schema=RsiRangeStrategyBParams,
         strategy_view=_SPY_STRATEGY_B_VIEW,
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
@@ -2452,46 +2035,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "ADX is rising bar-over-bar (ADX[i] > ADX[i-1]). Exits when "
             "ADX drops below 15 (same exit rule as Strategy A)."
         ),
-        algorithm_pseudocode=(
-            "Universe\n"
-            "    symbol     = configurable (default SPY)\n"
-            "    resolution = consolidated to resolution_minutes (default 15m)\n"
-            "\n"
-            "Indicators (Alpha — updated each bar at bar.end_time)\n"
-            "    RSI = RelativeStrengthIndex(rsi_period, Wilders)\n"
-            "    ADX = AverageDirectionalIndex(adx_period, Wilders)\n"
-            "\n"
-            "Warmup\n"
-            "    ~30 bars (longest dependency is ADX, Wilders-smoothed).\n"
-            "\n"
-            "Alpha — bar entry conditions (evaluated while flat)\n"
-            "    rsi_in_range = rsi_low_gate <= RSI <= rsi_high_gate\n"
-            "    trend_strong = ADX > adx_entry_threshold (default 20)\n"
-            "    adx_rising   = ADX > ADX[-1]    (strict; flat ADX does NOT count)\n"
-            "    ⇒ if all three: emit Insight(UP); enter long\n"
-            "\n"
-            "Alpha — bar exit conditions (evaluated while in trade)\n"
-            "    trend_weak = ADX < adx_exit_threshold (default 15)\n"
-            "    ⇒ if trend_weak: Liquidate(symbol)\n"
-            "\n"
-            "Risk Management — position survival rules\n"
-            "    pyramiding=1 — no scale-in while holding.\n"
-            "    no SL / no TP. Cleanest test of the RSI-range + ADX-strength\n"
-            "    combination — no MACD or Supertrend confounds.\n"
-            "\n"
-            "Portfolio Construction\n"
-            "    SetHoldings(symbol, 1.0)  — single-position, all-in\n"
-            "\n"
-            "Execution\n"
-            "    fill_mode = signal_bar_close | next_bar_open | decision_minute_open"
-        ),
-        gotchas=[
-            "'ADX rising' is strictly greater than the prior bar. Flat ADX "
-            "(exactly equal to prior) does NOT count as rising.",
-            "No MACD, no Supertrend — this is the cleanest test of the RSI-range + ADX-strength combination.",
-            "Same exit threshold as Strategy A by default (15). The user's "
-            "TV screenshot had C's exit rule cropped; we inherit A's.",
-        ],
         param_schema=RsiRangeStrategyCParams,
         strategy_view=_SPY_STRATEGY_C_VIEW,
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
