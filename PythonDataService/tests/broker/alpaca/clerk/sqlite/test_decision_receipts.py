@@ -12,7 +12,6 @@ import pytest
 import app.broker.alpaca.clerk.sqlite.decision_receipts as decision_receipts_module
 from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
 from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.decision_receipts import (
     CRASH_CANDIDATE_OUTCOME,
     MAX_DECISION_RECEIPT_READ,
@@ -25,17 +24,24 @@ from app.broker.alpaca.clerk.sqlite.decision_receipts import (
     rotated_out_before_ms,
     run_first_closes_ms,
 )
-from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.errors import BrokerRequestInvalid
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
+from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
+from tests._helpers.bot_runner.custody import budget_consent_for_test
 from tests._helpers.bot_runner.doubles import _SqliteRuntimeBroker
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
+from tests._helpers.session_clock import IN_SESSION_DAY
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import (
+    accept_budgeted_test_enter,
+    retain_budgeted_test_bar,
+    submit_budgeted_test_run,
+)
 
-pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+pytestmark = pytest.mark.usefixtures("budgeted_run_registration", "wall_clock_in_session")
 
 
 @pytest.fixture()
@@ -240,7 +246,7 @@ def test_candidate_uncaptured_at_crash_survives_retention_pruning(
 
 _SHORT_WINDOW = 3
 _MINUTE_MS = 60_000
-_FIRST_CLOSE_MS = 1_790_000_060_000
+_FIRST_CLOSE_MS = session_open_ms_utc(IN_SESSION_DAY) + 60_000
 
 
 @pytest.fixture()
@@ -396,10 +402,10 @@ def _enter(repository: ClerkSqliteRepository, minute: int, *, run: str) -> None:
     that names the effect, under the Clerk's own run id.
     """
     if repository.active_run("spy-bot") is None:
-        submit_start_run(
+        submit_budgeted_test_run(
             repository, account_id="PA-TEST", strategy_instance_id="spy-bot", lifecycle_run_id=run
         )
-    accept_enter(
+    accept_budgeted_test_enter(
         repository,
         account_id="PA-TEST",
         strategy_instance_id="spy-bot",
@@ -581,12 +587,14 @@ async def test_the_real_clerks_enter_is_held_into_the_window_unless_the_broker_r
         carryover_policy="FORBID",
         sealed_account_id="PA-TEST",
         action_plan=alpaca_v1_action_plan("SPY"),
+        budget_consent=budget_consent_for_test(),
         run_id="run-1",
         created_at_ms=1,
     )
     await clerk.register_strategy_run(binding)
     receipts = SqliteDecisionReceipts(repo, strategy_instance_id="spy-bot")
     evaluation_id = "a" * 64
+    retained_bar = retain_budgeted_test_bar(repo, root=tmp_path)
 
     answer = await clerk.execute_for_instance(
         strategy_instance_id="spy-bot",
@@ -595,9 +603,10 @@ async def test_the_real_clerks_enter_is_held_into_the_window_unless_the_broker_r
         purpose=EffectPurpose.ENTER,
         action_plan=binding.action_plan,
         quantity=binding.quantity,
+        retained_source_bar=retained_bar,
         decision_evidence=EffectDecisionEvidence(
             evaluation_id=evaluation_id,
-            bar_ref="decision-bar:test:SPY:0",
+            bar_ref=retained_bar.bar_ref,
             symbol="SPY",
             outcome="enter_intent",
             observed_at_ms=9_000_000_000_000,
