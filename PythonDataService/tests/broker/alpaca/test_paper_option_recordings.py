@@ -41,6 +41,7 @@ from app.broker.alpaca.adapter import (
     from_alpaca_trade_update,
     to_alpaca_option_order_request,
 )
+from app.broker.alpaca.option_fees import fees_for_option_fill, settle_option_session
 from app.broker.contract.models import OrderSide, OrderType
 from app.broker.contract.options import (
     MultiLegOptionOrderRequest,
@@ -50,6 +51,7 @@ from app.broker.contract.options import (
 )
 from app.options.contract import OptionContract
 from app.options.expiry import option_expiry_anchor_ms
+from app.utils.session_anchors import et_date_at_ms
 
 _RECORDINGS = Path(__file__).resolve().parents[2] / "fixtures" / "alpaca" / "option_paper_recordings"
 
@@ -276,9 +278,10 @@ def test_credit_spread_clearing_fees_link_to_each_leg_execution() -> None:
         for row in _body(line)
     }
     fills = {
-        execution_id_from_activity_id(row["id"]): from_alpaca_activity(row)
-        for row in rows.values()
-        if row["activity_type"] == "FILL" and row["transaction_time"].startswith("2026-10-15T")
+        execution_id_from_activity_id(activity.activity_id): activity
+        for activity in map(from_alpaca_activity, rows.values())
+        if activity.activity_type == "FILL" and activity.occurred_at_ms is not None
+        and et_date_at_ms(activity.occurred_at_ms) == date(2026, 10, 15)
     }
     clearing = [
         row for row in rows.values()
@@ -293,6 +296,45 @@ def test_credit_spread_clearing_fees_link_to_each_leg_execution() -> None:
     assert {fill.symbol for fill in fills.values()} == {"SPY261016C00776000", "SPY261016C00777000"}
     assert {fill.side for fill in fills.values()} == {"buy", "sell", "sell_short"}
     assert all(Decimal(row["net_amount"]) == Decimal("-0.03") for row in clearing)
+
+
+def test_credit_spread_recorded_fills_model_eighteen_cents_before_the_posted_three_cent_difference() -> None:
+    """#3306: canonical option_fees.py predicts OCC $0.02 and TAF $0.01 less than Paper posted."""
+    evidence = json.loads((_RECORDINGS / "3225-credit-sign-check" / "outside_fee_evidence.json").read_text())
+    contracts = {contract.symbol: contract for contract in map(from_alpaca_option_contract, evidence["contracts"])}
+    fills = list(map(from_alpaca_activity, evidence["activities"]))
+    assert len(fills) == 4
+    assert {fill.side for fill in fills} == {"buy", "sell", "sell_short"}
+    accrued = []
+    for fill in fills:
+        assert fill.occurred_at_ms is not None and et_date_at_ms(fill.occurred_at_ms) == date(2026, 10, 15)
+        assert fill.symbol is not None and fill.side is not None
+        assert fill.quantity is not None and fill.price is not None
+        multiplier = contracts[fill.symbol].multiplier
+        assert multiplier == multiplier.to_integral_value()
+        accrued.append(fees_for_option_fill(
+            trade_date_ms=fill.occurred_at_ms,
+            side=OrderSide.SELL if fill.side == "sell_short" else OrderSide(fill.side),
+            contracts=Decimal(str(fill.quantity)),
+            premium=Decimal(str(fill.price)),
+            multiplier=int(multiplier),
+        ))
+
+    model = settle_option_session(accrued)
+    assert (model.sec, model.taf, model.cat, model.orf, model.occ, model.total) == tuple(
+        map(Decimal, ("0.01", "0.00", "0.01", "0.06", "0.10", "0.18"))
+    )
+    rows = {
+        row["id"]: from_alpaca_activity(row)
+        for line in _lines("3225-credit-fees-20261016", "activities")
+        for row in _body(line)
+    }
+    posted = -sum(
+        Decimal(str(activity.net_amount)) for activity in rows.values()
+        if activity.activity_type == "FEE" and activity.occurred_at_ms is not None
+        and et_date_at_ms(activity.occurred_at_ms) == date(2026, 10, 15)
+    )
+    assert posted - model.total == Decimal("0.03")
 
 
 # ── The first several-leg order: a bull call spread, 2026-10-14 ──────────────
