@@ -1272,3 +1272,47 @@ buy-back remain outstanding. Final posted October 16 fees, clean overlap
 buying-power judgments, resting-entry deadline cancellation, partial fills,
 cancel/fill races and recovery of a resting entry are not established by
 this pass.
+
+## Run record: 2026-10-16, second isolated buy-back window missed (#3225)
+
+The owner returned ready for the dashboard step. A fresh check at
+1792176312277 ms UTC found no active or exposed bot, no Alpaca position or
+open order, and cash and option buying power both $99,907.14. Alpaca's Home
+also showed no open positions. The temporary several-leg Paper setting was
+enabled again, with the default quote window and unchanged 84-line IBKR
+allowance. Judgment and Live options stayed off.
+
+The retry used the previously rehearsed credit-spread rules: one short SPY
+call nearest 0.30 delta within 0.05, one bought call $1 above, at least three
+days to expiry, one contract per leg and $90 allocated. The order terms stayed
+8% gap, 20-second entry wait, 10% cost limit and 45-minute expiry-close lead.
+After waiting for its signal, the bot entered the October 19 $766/$767 spread
+at `-0.32`. The owner ticket was prepared as **Buy to Close** one $766 call
+at its displayed $1.71 ask, within the $200-before-fees cap. No isolated
+dashboard order appeared in the captured broker records before the strategy
+closed both legs as one market order at `+0.35`. The remaining draft was
+cleared. A rejected dashboard submission is not established by these records.
+This is another whole-spread
+round trip, **not an isolated buy-back result**.
+
+All four leg executions were attributed. Held, Alpaca cash was $99,939.09
+and option buying power $99,839.09; after close both were $99,904.04. The
+bot stopped flat at 1792177406283 ms UTC and released $86.83 after $3 premium
+loss and $0.17 estimated fees. Its complete offline comparison is
+over-reserved by $0.05: $68.10 committed against a $68.05 buying-power fall,
+classified as unused entry fee provision. Final posted October 16 fees remain
+due. Nothing was left unread in the private bundle covering 1792176312277
+through 1792177477255 ms UTC. Its sanitized recording is
+`tests/fixtures/alpaca/option_paper_recordings/3225-C4-buyback-retry-window-missed-20261016`;
+the reader tests pin the signed orders, all four executions and the cash and
+buying-power movements.
+
+The Alpaca SPY page showed no positions or contracts after the close, and the
+stale ticket was removed. The temporary Paper setting was then removed and
+only that lane recreated. At 1792177577915 ms UTC, direct broker reads still
+showed no positions or open orders, with no running or exposed bot. The
+container confirmed several-leg orders, judgment and Live options off;
+IBKR remained enabled/read-only, window override absent and line budget 84.
+Deploy again refused the two-leg plan. The Mac locked again before a final
+Alpaca Home recheck. Nothing was promoted; the owner-dashboard buy-back
+remains outstanding.
