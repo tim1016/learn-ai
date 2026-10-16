@@ -2,15 +2,16 @@
 
 The recordings (``tests/fixtures/alpaca/option_paper_recordings``) are the
 capture journal of the first option orders ever sent from this system, made on
-2026-10-13 through 2026-10-15 under the qualification runbook and sanitised by the
+2026-10-13 through 2026-10-16 under the qualification runbook and sanitised by the
 kit. They sit beside the documented examples and replace none of them: each
 shows one account on one day, for **one bought contract, or one bull call
 spread bought and closed (alone, and twice at once by two bots), every order
 filled inside its wait**. The #3225 recording adds one outside credit spread
 opened with a negative limit and closed at once. A resting or part-filled
 order, a cancel and an exercise are not in them. Regulatory and clearing fees
-are: Alpaca Paper posts them the morning after the fills, and the 2026-10-14
-steps' activity feed carries 2026-10-13's.
+are: the 2026-10-14 steps' activity feed carries 2026-10-13's fees. The
+2026-10-16 recording carries the outside credit spread's four leg fills and
+eight fee rows. The capture proves their presence then, not their first posting time.
 
 What these tests prove is that what Alpaca really answered is read whole by
 the readers the Clerk uses, and that the body the Clerk sent is the body the
@@ -236,25 +237,62 @@ def test_option_buying_power_can_sit_below_cash_after_a_sale_until_the_next_orde
     assert (settled, settled) in figures
 
 
-@pytest.mark.parametrize("step", ["A4-long-call-flat-fix-landed", "A5-1s-wait-restart-held-flatten"])
-def test_the_morning_after_alpaca_paper_posts_the_options_fees_of_the_day_as_fee_activities(step: str) -> None:
-    """The 2026-10-13 option orders' regulatory and clearing fees, in the 2026-10-14 steps' activity feed.
+@pytest.mark.parametrize(
+    ("step", "trade_date", "clearing_rows", "total"),
+    [
+        ("A4-long-call-flat-fix-landed", "2026-10-13", 8, "-0.42"),
+        ("A5-1s-wait-restart-held-flatten", "2026-10-13", 8, "-0.42"),
+        ("3225-credit-fees-20261016", "2026-10-15", 4, "-0.21"),
+    ],
+)
+def test_recorded_option_fees_are_read_as_non_trade_activities_for_the_fill_day(
+    step: str, trade_date: str, clearing_rows: int, total: str,
+) -> None:
+    """Bought-option and outside credit-spread fees, present in the later activity feed.
 
-    Paper does charge them, but not on the day: they are non-trade activities of type FEE dated the trading
-    day, one per clearing fee and one each for ORF, OPT REG, OPT TAF and CAT, $0.42 for eight option orders.
+    Paper does charge them: they are non-trade activities of type FEE dated the trading
+    day, one per leg's clearing fee and one each for ORF, OPT REG, OPT TAF and CAT. These are observed
+    postings, not an endorsement of the fee model: #3306 tracks the OCC and OPT TAF discrepancies.
     """
     fees: dict[str, Any] = {}
     for line in _lines(step, "activities"):
         for row in _body(line):
-            if row["activity_type"] == "FEE" and row.get("date") == "2026-10-13":
+            if row["activity_type"] == "FEE" and row.get("date") == trade_date:
                 fees[row["id"]] = row
 
     read = [from_alpaca_activity(row) for row in fees.values()]
 
     assert read and all(a.category == "non_trade_activity" and a.symbol is None for a in read)
-    assert sum(Decimal(str(a.net_amount)) for a in read) == Decimal("-0.42")
+    assert sum(Decimal(str(a.net_amount)) for a in read) == Decimal(total)
     descriptions = sorted(row["description"].split(" fee")[0].split(" for ")[0] for row in fees.values())
-    assert descriptions == sorted(["CAT"] + ["OCC Clearing Fee"] * 8 + ["OPT REG", "OPT TAF", "ORF"])
+    assert descriptions == sorted(["CAT"] + ["OCC Clearing Fee"] * clearing_rows + ["OPT REG", "OPT TAF", "ORF"])
+
+
+def test_credit_spread_clearing_fees_link_to_each_leg_execution() -> None:
+    """#3225: OCC gives an execution ID even though its fee row has no order ID."""
+    rows = {
+        row["id"]: row
+        for line in _lines("3225-credit-fees-20261016", "activities")
+        for row in _body(line)
+    }
+    fills = {
+        execution_id_from_activity_id(row["id"]): from_alpaca_activity(row)
+        for row in rows.values()
+        if row["activity_type"] == "FILL" and row["transaction_time"].startswith("2026-10-15T")
+    }
+    clearing = [
+        row for row in rows.values()
+        if row["activity_type"] == "FEE" and row.get("date") == "2026-10-15"
+        and row.get("activity_sub_type") == "OCC"
+    ]
+
+    assert len(clearing) == len(fills) == 4
+    assert {row["execution_id"] for row in clearing} == set(fills)
+    assert len({fill.native_order_id for fill in fills.values()}) == 4
+    assert all(fill.native_order_id is not None for fill in fills.values())
+    assert {fill.symbol for fill in fills.values()} == {"SPY261016C00776000", "SPY261016C00777000"}
+    assert {fill.side for fill in fills.values()} == {"buy", "sell", "sell_short"}
+    assert all(Decimal(row["net_amount"]) == Decimal("-0.03") for row in clearing)
 
 
 # ── The first several-leg order: a bull call spread, 2026-10-14 ──────────────

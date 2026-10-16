@@ -905,3 +905,41 @@ structure returned `OPTION_SEVERAL_LEGS_SETTING_OFF`, saying a Dry Run still
 takes it. The Mac locked before the same row could be re-read in the Deploy
 screen; the coordinator read is the Deploy form's backing check. Nothing was
 promoted; several-leg Paper orders and Live option bots remain off.
+
+## Run record: 2026-10-16, the credit spread's posted fees (#3225)
+
+The October 16 journal contains four distinct leg fills and eight `FEE` rows
+dated 2026-10-15 for the outside credit-sign round trip. It proves the fees
+were present at capture, not when they first became visible. The OCC rows'
+`created_at` values name October 15. Each OCC row also names an `execution_id`
+that matches one fill activity's ID suffix; that fill names its leg order.
+The reader test proves all four links and their $0.03 charges. This supplies
+direct per-leg clearing-fee evidence, beyond the earlier count-based allocation.
+
+| Component | Canonical model, four fills | Alpaca posted | Posted less model |
+|---|---:|---:|---:|
+| OCC clearing | $0.10 | $0.12 (four $0.03 rows) | +$0.02 |
+| OPT TAF | $0.00 | $0.01 | +$0.01 |
+| ORF | $0.06 | $0.06 | $0.00 |
+| CAT | $0.01 | $0.01 | $0.00 |
+| OPT REG/SEC | $0.01 | $0.01 | $0.00 |
+| Total | $0.18 | $0.21 | +$0.03 |
+
+The model comparison uses `fees_for_option_fill` and `settle_option_session`
+over the four previously recorded fills and the two recorded contract
+multipliers. This is another observation of #3306's OCC and OPT TAF difference,
+classified as a fee posting; no rate, rounding rule or tolerance was changed.
+The sanitized activity recording is
+`tests/fixtures/alpaca/option_paper_recordings/3225-credit-fees-20261016`, read by
+`test_paper_option_recordings.py`. Its offline bundle has the expected
+`Not read: the bot` because the sign check was an outside order; it supplies
+no bot entry comparison. It has no unread journal evidence or unsanitized body.
+
+At the preflight beginning at 1792160737448 ms UTC, Alpaca reported level 3,
+zero positions, zero open orders, and $99,926.54 cash and option buying power.
+The roster had no running or held bot. Home and the protected money read were
+ready with no fee admission refusal, $99,926.18 free to deploy and $0.36 still
+shown as fees not posted yet. The separate $2.68 historical outside-fill
+disagreement remains disclosed under #3311. IB Gateway reconnected; the Paper
+Clerk retained read-only IBKR market data and its 84-line option budget.
+Several-leg Paper orders, buying-power judgment and Live option bots were off.
