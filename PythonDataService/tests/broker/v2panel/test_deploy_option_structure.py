@@ -367,7 +367,7 @@ async def test_the_review_warns_that_options_have_no_backtest_and_asks_only_a_br
 ) -> None:
     app, _registry = deploy_app
     _serve(monkeypatch, view_of)
-    money = DeploymentBudgetPreview(state="ready", detail="Ready", world="real_paper", custody_account_id=ACCT)
+    money = DeploymentBudgetPreview(state="ready", detail="Ready", world="real_paper")
     monkeypatch.setattr(budget_deploy, "preview_budget", lambda *_args, **_kwargs: money)
     monkeypatch.setattr(budget_deploy, "same_symbol_note", lambda account_id, request: None)
 
@@ -561,7 +561,7 @@ async def _review(app, floor: _Floor, monkeypatch: pytest.MonkeyPatch, **changes
         account_id: str, request: AlpacaPaperDeployRequest, *, resolved_parameters: dict, option_entry: Any, **_more: Any
     ):
         priced.append(option_entry)
-        return DeploymentBudgetPreview(state="ready", detail="Ready", world="real_paper", custody_account_id=ACCT)
+        return DeploymentBudgetPreview(state="ready", detail="Ready", world="real_paper")
 
     monkeypatch.setattr(budget_deploy, "preview_budget", reviewed)
     monkeypatch.setattr(budget_deploy, "same_symbol_note", lambda account_id, request: None)

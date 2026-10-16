@@ -150,7 +150,7 @@ async def test_the_budget_review_carries_the_same_symbol_warning_beside_the_mone
         "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
         _ALLOW_BODY_STRATEGY,
     )
-    money = DeploymentBudgetPreview(state="ready", detail="Ready", world="real_paper", custody_account_id=ACCT)
+    money = DeploymentBudgetPreview(state="ready", detail="Ready", world="real_paper")
     monkeypatch.setattr(budget_deploy, "preview_budget", lambda account_id, request, *, resolved_parameters: money)
     monkeypatch.setattr(
         budget_deploy, "same_symbol_note",
