@@ -110,6 +110,10 @@ class ActiveAlpacaClerk(Protocol):
         """
         ...
 
+    async def record_deployment_launch(self, binding: BrokerBotBinding) -> None:
+        """Confirm a budgeted run's task launch before intake is released."""
+        ...
+
     async def stop_strategy_run(
         self,
         *,
