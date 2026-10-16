@@ -89,7 +89,6 @@ from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
 from app.broker.alpaca.clerk.sqlite.commands import (
     CommandSubmission,
-    submit_start_run,
     submit_stop_run,
 )
 from app.broker.alpaca.clerk.sqlite.contract_terms import (
@@ -107,6 +106,7 @@ from app.broker.alpaca.clerk.sqlite.enter import (
     OptionEntryProofWindowClosed,
     accept_enter,
     accept_option_enter,
+    enter_command_id,
     submit_accepted_enter,
 )
 from app.broker.alpaca.clerk.sqlite.entry_buying_power import (
@@ -190,6 +190,7 @@ from app.broker.alpaca.clerk.sqlite.option_admission import (
 )
 from app.broker.alpaca.clerk.sqlite.option_decision_fills import OptionDecisionFill, option_fills_of_decision
 from app.broker.alpaca.clerk.sqlite.option_entry import (
+    MultiLegOptionEntryFacts,
     OptionEntry,
     option_entry_contracts,
     option_entry_of_order,
@@ -217,6 +218,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
 )
 from app.broker.alpaca.clerk.sqlite.reconcile import (
     AccountReconciliationResult,
+    Trigger,
 )
 from app.broker.alpaca.clerk.sqlite.reconcile import (
     reconcile_account as reconcile_sqlite_account,
@@ -327,6 +329,15 @@ _LISTING_NOT_ASKED: Final = OptionEntryRefused(
     "closed or a channel was unhealthy, and an entry is not taken in a contract whose listing was not read.",
 )
 logger = logging.getLogger(__name__)
+
+
+def _listing_unread(named: str, why: object) -> OptionEntryRefused:
+    """The refusal of an entry whose contract's listing the broker could not answer."""
+    return OptionEntryRefused(
+        OptionEffectRefusal.CONTRACT_REFERENCE_UNREAD.value,
+        f"Alpaca's listing of {named} could not be read ({why}), so the contract was not "
+        "confirmed and the entry was not taken.",
+    )
 
 
 class EntryReading(Protocol):
@@ -508,6 +519,12 @@ class _OptionQuoteBoundTradePort:
 
 class StrategyRegistrationConflictError(RuntimeError):
     """One strategy identity was reused with different immutable semantics."""
+
+
+class DeployBudgetRequiredError(BudgetUnavailable):
+    """A run was registered with no budget: a Deploy sets one aside or it does not start (#3216)."""
+
+    reason_code = "deploy_budget_required"
 
 
 class SealedAccountMismatchError(RuntimeError):
@@ -986,6 +1003,12 @@ class SqliteAlpacaClerkFacade:
     ) -> None:
         """Durably register immutable strategy + run before order capability.
 
+        A Deploy names its budget (``binding.budget_consent``); a binding with
+        none is refused as ``DeployBudgetRequiredError`` before anything is
+        written (#3216). A new bot's registration and budget commit fold in
+        one custody transition, so a refused Deploy leaves no registered,
+        never-started bot behind.
+
         ``run_owner`` is what holds the run in this process -- its ``done()``
         turns true once the runner has ended (#2369). It is recorded in the
         same intake critical section that admits the run, so the sweep can
@@ -1017,15 +1040,6 @@ class SqliteAlpacaClerkFacade:
             if existing is None:
                 if binding.exit_terms is None or binding.exit_terms.provenance != "deployed":
                     raise StrategyRegistrationConflictError("Explicit exit terms are required for a new Start.")
-                self._repo.register_strategy_instance(
-                    strategy_instance_id=binding.strategy_instance_id,
-                    symbol=traded_symbol,
-                    config_hash=config_hash,
-                    strategy_key=binding.strategy_key,
-                    display_name=display_name,
-                    config_json=config_json,
-                    exit_terms=binding.exit_terms,
-                )
             elif existing["symbol"].upper() != traded_symbol.upper() or existing["config_hash"] != config_hash:
                 raise StrategyRegistrationConflictError(
                     f"strategy instance {binding.strategy_instance_id!r} conflicts with "
@@ -1044,57 +1058,50 @@ class SqliteAlpacaClerkFacade:
                         f"strategy instance {binding.strategy_instance_id!r} conflicts with "
                         "its SQLite authority configuration"
                     )
+                self._sealed_exit_terms(binding)
 
-            terms = self._repo.exit_terms(binding.strategy_instance_id)
-            if terms is None or (binding.exit_terms is not None and binding.exit_terms != terms):
-                raise StrategyRegistrationConflictError("The bot must use its immutable custody-sealed exit terms.")
-            self._exit_terms[binding.strategy_instance_id] = terms
-            if binding.budget_consent is not None:
-                consent = binding.budget_consent
-                world = authority_kind_for_account(self.account_id, account_mode=self._account_mode)
-                if consent.world != world or self._live_envelope is None:
-                    raise BudgetUnavailable("The reviewed deployment world or cash authority changed. Review Deploy again.")
-                if is_option_plan(binding.action_plan):
-                    # One option position's cost is known only from its
-                    # contract's quotes. No minimum is asked of the budget
-                    # here; each entry is admitted on its own commitment.
-                    required = Decimal(0)
-                else:
-                    # One estimated position is priced from the asset the bot
-                    # buys, as the Deploy review priced it (#2912).
-                    quote = self._quote_source(traded_symbol, self._repo.clock())
-                    if quote is None:
-                        raise BudgetUnavailable("Wait for a fresh IBKR price, then review Deploy again.")
-                    required, _ = entry_requirement(quantity=binding.quantity, price=quote.ask, at_ms=self._repo.clock())
-                submission = submit_budgeted_deploy(
-                    self._repo, strategy_instance_id=binding.strategy_instance_id, lifecycle_run_id=binding.run_id,
-                    world=world, committed_cents=consent.committed_cents, configuration_hash=config_hash,
-                    exit_terms_hash=canonical_sha256(terms.model_dump(mode="json")),
-                    risk_revision=consent.risk_revision, actor=consent.actor, request_fingerprint=consent.request_fingerprint,
-                    envelope=self._live_envelope, minimum_position_cost=required,
-                )
-                if not submission.created:
-                    raise BudgetUnavailable("This Deploy command already exists. Recover its stored result; it cannot launch again.")
-                self._hold_run(binding, run_owner)
-                return
-            active = self._repo.active_run(binding.strategy_instance_id)
-            if active is not None:
-                if active.lifecycle_run_id == binding.run_id:
-                    self._hold_run(binding, run_owner)
-                    return
-                raise StrategyRegistrationConflictError(
-                    f"strategy instance {binding.strategy_instance_id!r} already has "
-                    f"active lifecycle run {active.lifecycle_run_id!r}"
-                )
-            submission = submit_start_run(
-                self._repo,
-                account_id=self.account_id,
-                strategy_instance_id=binding.strategy_instance_id,
-                lifecycle_run_id=binding.run_id,
+            consent = binding.budget_consent
+            if consent is None:
+                raise DeployBudgetRequiredError("A Deploy needs a budget. Review one for this bot, then deploy again.")
+            world = authority_kind_for_account(self.account_id, account_mode=self._account_mode)
+            if consent.world != world or self._live_envelope is None:
+                raise BudgetUnavailable("The reviewed deployment world or cash authority changed. Review Deploy again.")
+            if is_option_plan(binding.action_plan):
+                # One option position's cost is known only from its
+                # contract's quotes. No minimum is asked of the budget
+                # here; each entry is admitted on its own commitment.
+                required = Decimal(0)
+            else:
+                # One estimated position is priced from the asset the bot
+                # buys, as the Deploy review priced it (#2912).
+                quote = self._quote_source(traded_symbol, self._repo.clock())
+                if quote is None:
+                    raise BudgetUnavailable("Wait for a fresh IBKR price, then review Deploy again.")
+                required, _ = entry_requirement(quantity=binding.quantity, price=quote.ask, at_ms=self._repo.clock())
+            terms = binding.exit_terms if existing is None else self._sealed_exit_terms(binding)
+            assert terms is not None
+            registration_json = None if existing is not None else canonicalize({
+                "symbol": traded_symbol, "config_hash": config_hash,
+                "strategy_key": binding.strategy_key, "display_name": display_name,
+                "config_json": config_json, "exit_terms": terms.model_dump(mode="json"),
+            })
+            submission = submit_budgeted_deploy(
+                self._repo, strategy_instance_id=binding.strategy_instance_id, lifecycle_run_id=binding.run_id,
+                world=world, committed_cents=consent.committed_cents, configuration_hash=config_hash,
+                exit_terms_hash=canonical_sha256(terms.model_dump(mode="json")),
+                risk_revision=consent.risk_revision, actor=consent.actor, request_fingerprint=consent.request_fingerprint,
+                envelope=self._live_envelope, minimum_position_cost=required, registration_json=registration_json,
             )
-            if submission.command.state != "succeeded":
-                raise StrategyRegistrationConflictError(f"SQLite authority rejected lifecycle run {binding.run_id!r}")
+            if not submission.created:
+                raise BudgetUnavailable("This Deploy command already exists. Recover its stored result; it cannot launch again.")
+            self._exit_terms[binding.strategy_instance_id] = terms
             self._hold_run(binding, run_owner)
+
+    def _sealed_exit_terms(self, binding: BrokerBotBinding) -> ExitTerms:
+        terms = self._repo.exit_terms(binding.strategy_instance_id)
+        if terms is None or (binding.exit_terms is not None and binding.exit_terms != terms):
+            raise StrategyRegistrationConflictError("The bot must use its immutable custody-sealed exit terms.")
+        return terms
 
     def _symbol_to_register(self, action_plan: ActionPlan) -> str:
         """The symbol a bot is registered under, or a typed refusal of a plan this account cannot take.
@@ -1109,9 +1116,7 @@ class SqliteAlpacaClerkFacade:
         refusal = self._option_plan_account_refusal()
         if refusal is not None:
             raise OptionPlanRefused(OptionEffectRefusal.ACCOUNT_NOT_OPEN, refusal)
-        return option_plan_taken(
-            action_plan, real_account=self._is_a_real_account, live_shadow=self.authority_kind == "shadow",
-        ).underlying
+        return option_plan_taken(action_plan, real_account=self._is_a_real_account).underlying
 
     def require_option_plan_taken(self, action_plan: ActionPlan) -> None:
         """Raise the typed refusal of an option plan this account does not take (ADR 0076).
@@ -1216,18 +1221,15 @@ class SqliteAlpacaClerkFacade:
         if not self._asks_the_brokers_listing or option_entry is None:
             return None
         try:
-            taken = option_plan_taken(
-                action_plan, real_account=self._is_a_real_account, live_shadow=self.authority_kind == "shadow",
-            )
+            taken = option_plan_taken(action_plan, real_account=self._is_a_real_account)
         except OptionPlanRefused:
             return None
         picked = option_entry.picked
         contracts = tuple(picked.get(leg.leg_id) for leg in taken.legs) if isinstance(picked, Mapping) else ()
         if len(contracts) != len(taken.legs) or any(not isinstance(contract, OptionContract) for contract in contracts):
             return None
-        contract = contracts[0]
         named = ", ".join(each.occ_symbol for each in contracts)
-        if self._repo.get_command(f"cmd:{strategy_instance_id}:{durable_decision_id}") is not None:
+        if self._repo.get_command(enter_command_id(strategy_instance_id, durable_decision_id)) is not None:
             return None
         if (
             stream_health_refusal(self._stream_health, symbol=taken.underlying) is not None
@@ -1235,14 +1237,9 @@ class SqliteAlpacaClerkFacade:
         ):
             return _LISTING_NOT_ASKED
         try:
-            if len(contracts) == 1:
-                listings = (await self._listing_beside_the_first_reading(
-                    contract, entry=(strategy_instance_id, durable_decision_id)
-                ),)
-            else:
-                listings = await self._listings_beside_the_first_reading(
-                    contracts, entry=(strategy_instance_id, durable_decision_id)
-                )
+            listings = await self._listings_beside_the_first_reading(
+                contracts, entry=(strategy_instance_id, durable_decision_id)
+            )
         except TimeoutError:
             return OptionEntryRefused(
                 OptionEffectRefusal.CONTRACT_REFERENCE_UNREAD.value,
@@ -1250,18 +1247,10 @@ class SqliteAlpacaClerkFacade:
                 f"{CONTRACT_REFERENCE_READ_BOUND_MS:,} ms, so the contract was not confirmed and the entry was not taken.",
             )
         except BrokerError as exc:
-            return OptionEntryRefused(
-                OptionEffectRefusal.CONTRACT_REFERENCE_UNREAD.value,
-                f"Alpaca's listing of {named} could not be read ({exc}), so the contract was not "
-                "confirmed and the entry was not taken.",
-            )
+            return _listing_unread(named, exc)
         for contract, listing in zip(contracts, listings, strict=True):
             if isinstance(listing, BrokerError):
-                return OptionEntryRefused(
-                    OptionEffectRefusal.CONTRACT_REFERENCE_UNREAD.value,
-                    f"Alpaca's listing of {contract.occ_symbol} could not be read ({listing}), so the contract was not "
-                    "confirmed and the entry was not taken.",
-                )
+                return _listing_unread(contract.occ_symbol, listing)
             if isinstance(listing, BaseException):
                 raise listing
             refused = option_contract_refusal(contract, listing)
@@ -1272,13 +1261,34 @@ class SqliteAlpacaClerkFacade:
     async def _listings_beside_the_first_reading(
         self, contracts: tuple[OptionContract, ...], *, entry: tuple[str, str]
     ) -> tuple[BrokerOptionContract | BaseException | None, ...]:
-        """Read all listings inside one bound, alongside one account reading (ADR 0076)."""
+        """Alpaca's listing of each contract, read while the account's option buying power is read too.
+
+        The reads are made at once, so the reading of the account adds no
+        step to an entry (ADR 0076 decision 26). Each has its own bound, and
+        the reading's is the shorter. A listing's answer, or what its read
+        raised, is the caller's; the reading never raises: what it could not
+        read it keeps as that.
+
+        One contract's failure is raised and the entry is refused for it, its
+        reading cancelled. Of several, each answers for itself, so the
+        refusal names the first one that could not be read, in leg order.
+        """
         reading = None if self._buying_power is None else self._buying_power.begin_first()
         try:
-            answers = await asyncio.wait_for(
-                asyncio.gather(*(self._read.get_option_contract(contract) for contract in contracts), return_exceptions=True),
-                timeout=CONTRACT_REFERENCE_READ_BOUND_MS / 1000,
-            )
+            if len(contracts) == 1:
+                answers = (
+                    await asyncio.wait_for(
+                        self._read.get_option_contract(contracts[0]),
+                        timeout=CONTRACT_REFERENCE_READ_BOUND_MS / 1000,
+                    ),
+                )
+            else:
+                answers = await asyncio.wait_for(
+                    asyncio.gather(
+                        *(self._read.get_option_contract(contract) for contract in contracts), return_exceptions=True
+                    ),
+                    timeout=CONTRACT_REFERENCE_READ_BOUND_MS / 1000,
+                )
         except BaseException:
             if reading is not None:
                 reading.cancel()
@@ -1286,32 +1296,6 @@ class SqliteAlpacaClerkFacade:
         if self._buying_power is not None and reading is not None:
             await self._buying_power.finish_first(entry, reading)
         return tuple(answers)
-
-
-    async def _listing_beside_the_first_reading(
-        self, contract: OptionContract, *, entry: tuple[str, str]
-    ) -> BrokerOptionContract | None:
-        """Alpaca's listing of ``contract``, read while the account's option buying power is read too.
-
-        The two reads are made at once, so the reading of the account adds
-        no step to an entry (ADR 0076 decision 26). Each has its own bound,
-        and the reading's is the shorter. The listing's answer, or what its
-        read raised, is the caller's as before; the reading never raises:
-        what it could not read it keeps as that.
-        """
-        reading = None if self._buying_power is None else self._buying_power.begin_first()
-        try:
-            listing = await asyncio.wait_for(
-                self._read.get_option_contract(contract), timeout=CONTRACT_REFERENCE_READ_BOUND_MS / 1000
-            )
-        except BaseException:
-            if reading is not None:
-                # The entry is refused for its listing: its reading of the account is not wanted.
-                reading.cancel()
-            raise
-        if self._buying_power is not None and reading is not None:
-            await self._buying_power.finish_first(entry, reading)
-        return listing
 
     def synthesized_option_fills(self) -> Mapping[str, SynthesizedOptionFill]:
         """How a simulation priced each option order it answered, by client order id."""
@@ -1357,7 +1341,7 @@ class SqliteAlpacaClerkFacade:
         did not send made one: it stands never sent, and the code is the
         one the books last recorded of its order, which says why.
         """
-        command_id = f"cmd:{strategy_instance_id}:{_durable_decision_id(decision_id)}"
+        command_id = enter_command_id(strategy_instance_id, _durable_decision_id(decision_id))
         with self._repo.write_fence():
             found = self._option_entry_of_command(command_id)
             if found is None:
@@ -1428,6 +1412,7 @@ class SqliteAlpacaClerkFacade:
                 strategy_instance_id=strategy_instance_id,
                 lifecycle_run_id=run_id,
                 operator_reason=reason,
+                clock=self._repo.clock,
             )
 
     def flatten_send_verdict(self) -> SessionAuthorityState | LegRefusal:
@@ -1997,7 +1982,7 @@ class SqliteAlpacaClerkFacade:
                 # A decision sent again is answered from its own entry, before
                 # anything is judged again: its quotes have aged since, and a
                 # refusal now would deny an entry the bot may already hold.
-                already = self._repo.get_command(f"cmd:{strategy_instance_id}:{durable_decision_id}")
+                already = self._repo.get_command(enter_command_id(strategy_instance_id, durable_decision_id))
                 if already is not None and already.action == "ENTER" and already.effect_operation_id is not None:
                     existing = self._repo.order_for_effect_operation(already.effect_operation_id)
                     first = None if existing is None else option_entry_of_order(self._repo, existing.order_ref)
@@ -2026,7 +2011,6 @@ class SqliteAlpacaClerkFacade:
                 worked_out = work_out_option_entry(
                     action_plan, evidence=option_entry, units=quantity, now_ms=self._repo.clock(),
                     real_account=self._is_a_real_account,
-                    live_shadow=self.authority_kind == "shadow",
                 )
                 if isinstance(worked_out, OptionEntryRefused):
                     logger.info(
@@ -2081,9 +2065,7 @@ class SqliteAlpacaClerkFacade:
                         explanation=against_another.explanation,
                         next_step=_ENTRY_NOT_RETRIED,
                     )
-                underlying = option_plan_taken(
-                    action_plan, real_account=self._is_a_real_account, live_shadow=self.authority_kind == "shadow",
-                ).underlying
+                underlying = option_plan_taken(action_plan, real_account=self._is_a_real_account).underlying
                 if stream_health_refusal(self._stream_health, symbol=underlying) is not None:
                     return rejected(
                         reason_code=STREAM_HEALTH_REASON_CODE,
@@ -2152,8 +2134,6 @@ class SqliteAlpacaClerkFacade:
                 ]
                 closing = held[0] if held else (opened[0] if opened else None)
                 target = None if closing is None else newest_reducible_entry(self._repo, strategy_instance_id, closing)
-                from app.broker.alpaca.clerk.sqlite.option_entry import MultiLegOptionEntryFacts
-
                 entry = None if target is None else option_entry_of_order(self._repo, target.order_ref)
                 contracts = () if entry is None else tuple(terms.symbol for terms in entry.leg_terms)
                 if len(held) > 1 and (not isinstance(entry, MultiLegOptionEntryFacts) or set(held) - set(contracts)):
@@ -2347,7 +2327,7 @@ class SqliteAlpacaClerkFacade:
         if isinstance(until_ms, bool) or not isinstance(until_ms, int) or not 0 <= until_ms <= MAX_TIMESTAMP_MS:
             raise ValueError(f"until_ms is a time in milliseconds; got {until_ms!r}")
         asked_at_ms = self._repo.clock()
-        command_id = f"cmd:{strategy_instance_id}:{_durable_decision_id(decision_id)}"
+        command_id = enter_command_id(strategy_instance_id, _durable_decision_id(decision_id))
         waited = False
         while True:
             async with self._intake:
@@ -2853,6 +2833,7 @@ class SqliteAlpacaClerkFacade:
                         strategy_instance_id=strategy_instance_id,
                         lifecycle_run_id=active.lifecycle_run_id,
                         operator_reason="service_restart_recovery",
+                        clock=self._repo.clock,
                     )
         result = await self._reconcile()
         if result.verdict == "stale":
@@ -3004,7 +2985,7 @@ class SqliteAlpacaClerkFacade:
     async def reconcile_account(
         self,
         *,
-        trigger: str,
+        trigger: Trigger,
     ) -> AccountReconciliationResult:
         """Run one full account reconciliation with caller-authored provenance."""
         return self.publish_reconciliation(
@@ -3112,9 +3093,7 @@ class SqliteAlpacaClerkFacade:
 
     async def custody_snapshot(self, strategy_instance_id: str) -> ClerkCustodySnapshot:
         await self._reconcile()
-        return await self._custody_from_result(
-            strategy_instance_id, *self._published()
-        )
+        return await self._custody_from_result(strategy_instance_id, self._published())
 
     async def custody_snapshot_projection(
         self, strategy_instance_id: str
@@ -3122,8 +3101,7 @@ class SqliteAlpacaClerkFacade:
         """Project the sweep's latest verdict without reconciling (#1776).
 
         Reads are pure: the 15 s sweep is the sole automatic reconciler, so a
-        read answers from its last verdict and carries that verdict's own
-        observation time rather than stamping itself "now".
+        read answers from its last verdict.
 
         Before this process has completed a sweep there is nothing to project,
         which is exactly the existing ``stale`` verdict -- custody is unproven
@@ -3131,9 +3109,7 @@ class SqliteAlpacaClerkFacade:
         already handles unprovable custody instead of inventing an absence
         case, and the sweep cadence closes the window.
         """
-        return await self._custody_from_result(
-            strategy_instance_id, *self._published()
-        )
+        return await self._custody_from_result(strategy_instance_id, self._published())
 
     def last_clean_pass_at_ms(self) -> int | None:
         """When the latest published pass found the account clean against Alpaca.
@@ -3148,23 +3124,21 @@ class SqliteAlpacaClerkFacade:
             return None
         return published.observed_at_ms
 
-    def _published(self) -> tuple[AccountReconciliationResult, int]:
-        """The last published verdict and its own observation time.
+    def _published(self) -> AccountReconciliationResult:
+        """The last published verdict.
 
-        Read as one value so the two can never come from different passes.
         Nothing published yet is the existing ``stale`` verdict: custody is
         unproven until something proves it.
         """
         published = self._last_published
         if published is None:
-            return AccountReconciliationResult(verdict="stale"), 0
-        return published.result, published.observed_at_ms
+            return AccountReconciliationResult(verdict="stale")
+        return published.result
 
     async def _custody_from_result(
         self,
         strategy_instance_id: str,
         result: AccountReconciliationResult,
-        reconciled_at_ms: int,
     ) -> ClerkCustodySnapshot:
         """Build the custody snapshot a verdict implies.
 
@@ -3209,7 +3183,6 @@ class SqliteAlpacaClerkFacade:
                 journal_sequence=meta.control_revision,
                 reconciliation_state=proof.reconciliation_verdict,
                 reconciliation_fresh=proof.reconciliation_verdict != "stale",
-                reconciled_at_ms=reconciled_at_ms,
                 exposure=(
                     CustodyExposureFact(
                         state="non_zero" if exposure else "zero",
@@ -3220,7 +3193,6 @@ class SqliteAlpacaClerkFacade:
                 ),
                 working_orders=_count_fact(len(working), trusted=trusted),
                 pending_orders=_count_fact(len(unresolved), trusted=trusted),
-                terminal_orders=_count_fact(0, trusted=trusted),
                 unresolved_effects=_count_fact(len(unresolved), trusted=trusted),
                 hold=_hold_state(self._repo, strategy_instance_id),
                 freeze=proof.freeze,

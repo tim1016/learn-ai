@@ -8,7 +8,7 @@ snapshot -- never a broker read of its own.
 
 The Overview desk's operator card, which once rendered this beside the
 custody-side recovery condition and an "Open Clerk recovery" shortcut, was
-retired with the Trader/Operator lens (PRD #2560); nothing renders either
+retired with the Trader/Operator lens (#2560); nothing renders either
 any more, so neither is authored.
 """
 

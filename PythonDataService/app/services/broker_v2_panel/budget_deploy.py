@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import re
 import sqlite3
 from collections.abc import AsyncIterator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -68,6 +69,7 @@ from app.broker.alpaca.clerk.sqlite.simulated_account import SimulationEvidenceU
 from app.broker.alpaca.clerk.sqlite.uncertainty import admit_new_exposure
 from app.broker.alpaca.regulatory_fees import RateNotPinnedError
 from app.broker_configuration.runtime import get_broker_configuration_service
+from app.engine.live.identity import INSTANCE_ID_PATTERN
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.options.requirement import ContractAtMultiplier, incremental_account_requirement, with_contracts
 from app.schemas.account_authority import AuthorityKind
@@ -89,10 +91,10 @@ from app.schemas.deployment_budget import (
 from app.schemas.exit_terms import ExitTerms
 from app.schemas.option_deploy import OptionDeployReview
 from app.services.broker_v2_panel.account_picture_read import read_account_picture
-from app.services.broker_v2_panel.bot_custody import bot_clerk_runtime
+from app.services.broker_v2_panel.bot_custody import bot_clerk_runtime, bot_is_known
 from app.services.broker_v2_panel.deploy_submissions import DeploySubmission, bot_name_note
 from app.services.broker_v2_panel.exit_estimate_read import exit_estimate_view, read_exit_estimate, read_quotes_ahead
-from app.services.broker_v2_panel.panel_errors import PanelRunnerError, PanelUnavailableError
+from app.services.broker_v2_panel.panel_errors import PanelRunnerError, PanelUnavailableError, UnknownBotError
 from app.services.broker_v2_panel.sqlite_panel_source import home_roster
 from app.services.market_liveness import prepared_top_of_book, status_stream_connected
 
@@ -100,7 +102,7 @@ logger = logging.getLogger(__name__)
 
 
 #: What an account that has not switched to budgets says in place of its
-#: money, and on its Home's attention line (PRD #2560).
+#: money, and on its Home's attention line (#2560).
 LEGACY_BUDGET_DETAIL = "This account has not switched to budgets. Switch it in Settings to see where its money is."
 
 
@@ -219,7 +221,7 @@ def preview_budget(
                         "The IBKR market-data feed is unavailable, so this instrument cannot be "
                         "priced. Restore the connection, then review the budget."
                     ),
-                    world=world, custody_account_id=custody_id, bot_name_note=name_note,
+                    world=world, bot_name_note=name_note,
                 )
             # The read above asked IBKR for this symbol; its quote arrives with
             # a later snapshot, so the client re-checks instead of giving up.
@@ -230,7 +232,7 @@ def preview_budget(
                     if request.traded_symbol is None
                     else f"Waiting for a {request.traded_symbol} price from IBKR."
                 ),
-                world=world, custody_account_id=custody_id, bot_name_note=name_note,
+                world=world, bot_name_note=name_note,
             )
         requirement, fee_cents = entry_requirement(quantity=request.sizing.quantity, price=quote.ask, at_ms=now)
         return _priced_preview(
@@ -244,7 +246,7 @@ def preview_budget(
         )
     except (BudgetUnavailable, MoneyInputError, RateNotPinnedError) as exc:
         return DeploymentBudgetPreview(
-            state="unavailable", detail=str(exc), world=world, custody_account_id=custody_id, bot_name_note=name_note,
+            state="unavailable", detail=str(exc), world=world, bot_name_note=name_note,
         )
 
 
@@ -304,7 +306,7 @@ def _priced_preview(
         if entry.commitment_cents is None:
             return DeploymentBudgetPreview(
                 state="awaiting_price" if entry.waiting else "unavailable", detail=entry.detail,
-                world=world, custody_account_id=custody_id, bot_name_note=name_note,
+                world=world, bot_name_note=name_note,
             )
         priced = _PricedEntry(
             requirement=Decimal(entry.commitment_cents) / 100, observed_at_ms=entry.observed_at_ms,
@@ -396,7 +398,7 @@ def _priced_preview(
     return DeploymentBudgetPreview(
         state="ready" if refusal is None else "unavailable",
         detail=refusal or "This is an entry-admission budget. Market fills and losses can exceed it.",
-        world=world, custody_account_id=custody_id, bot_name_note=name_note,
+        world=world, bot_name_note=name_note,
         budget_usd=None if token is None or amount is None else dollars(amount), observed_at_ms=observed_at,
         minimum_budget_usd=dollars(minimum), unreserved_usd=None if available is None else dollars(available),
         estimated_price_usd=priced.estimated_price_usd, risk_revision=risk_revision,
@@ -576,6 +578,15 @@ async def command_receipt(account_id: str, submission: DeploySubmission) -> Budg
         return _command_receipt(runtime, account_id, submission)
 
 
+async def historical_run_exists(account_id: str, strategy_instance_id: str) -> bool:
+    """Whether custody has a run for a claim made before budget receipts existed."""
+    async with _deployment_runtime(account_id, strategy_instance_id) as runtime:
+        repo = runtime.sqlite_repository
+        assert repo is not None
+        with repo.write_fence():
+            return repo.latest_run(strategy_instance_id) is not None
+
+
 #: The receipt's words per outcome. Honest on a first read and on every
 #: recovery read alike, so no copy claims a replay (H12).
 _RECEIPT_COPY: dict[str, tuple[str, str]] = {
@@ -616,7 +627,23 @@ def _command_receipt(runtime: ActiveClerkRuntime, account_id: str, submission: D
 
 
 async def budget_view(account_id: str, sid: str) -> DeploymentBudgetView:
+    """One bot's money, from the authority that custodies it.
+
+    ``UnknownBotError`` (404) for an id no bot could have and for one that
+    nothing holds. A bot something does hold that has no budget row is an
+    earlier deployment, and reads ``legacy``.
+    """
+    if re.fullmatch(INSTANCE_ID_PATTERN, sid) is None:
+        raise UnknownBotError(
+            f"Bot id '{sid}' is not a valid strategy instance id.",
+            detail="A bot's id is one path segment of letters, digits, '_', '.' or '-'.",
+        )
     async with _deployment_runtime(account_id, sid) as runtime:
+        if not bot_is_known("alpaca", sid):
+            raise UnknownBotError(
+                f"No bot '{sid}' is bound to broker 'alpaca'.",
+                detail="Deploy the bot first; bindings are broker-tagged.",
+            )
         return _budget_view(runtime, sid)
 
 
@@ -664,7 +691,7 @@ def _budget_cash(runtime: ActiveClerkRuntime, repo: ClerkSqliteRepository, risk:
 
     A Dry Run's cash is its committed starting cash less what its fills spent,
     which needs no price and no account evidence: its money stays readable
-    while its prices are stale or it is stopped (hurdle H27). Every recorded
+    while its prices are stale or it is stopped. Every recorded
     fill and fee is inside that cash. A real account's cash is its last
     reading, as the money bar shows it, and a missing one is never a zero.
     """
@@ -694,7 +721,7 @@ class _NextEntry:
 
 
 # Custody refusals that are this bot's own position at work, not a fault: a
-# bot that holds shares enters again only once it has sold them (hurdle H25).
+# bot that holds shares enters again only once it has sold them.
 _HOLDING_COPY: dict[str, tuple[str, str]] = {
     "ATTRIBUTED_EXPOSURE_EXISTS": ("Holding its position", "Its next entry waits until this position is sold."),
     "ENTER_IN_PROGRESS": ("Entering its position", "Its entry is still working. The next entry waits until this one finishes."),
@@ -770,7 +797,7 @@ def _broker_buying_power(runtime: ActiveClerkRuntime) -> Figure | None:
 
 
 def _statement(own: DeploymentBudget, entry: _NextEntry | None) -> tuple[BudgetStatementLine, ...]:
-    """The bot's money, in the order the owner reads it (PRD #2560 D6).
+    """The bot's money, in the order the owner reads it (#2560 D6).
 
     The caller holds the money context. A running bot shows where its balance
     is; a stopped one shows what its Stop released (#2555), what its money did
@@ -871,7 +898,6 @@ def _fenced_budget_view(runtime: ActiveClerkRuntime, sid: str) -> DeploymentBudg
             return DeploymentBudgetView(
                 state="ready", headline=headline, detail=detail,
                 strategy_instance_id=sid, world=world, committed_usd=dollars(own.committed_cents),
-                entry_eligible=entry is not None and entry.eligible,
                 observed_at_ms=read.observed_at_ms,
                 segment=None if segment is None else _segment_view(segment),
                 statement=_statement(own, entry),
@@ -1065,7 +1091,7 @@ def _open_pnl(money: AccountMoney, observation: AccountObservation) -> tuple[str
 
 
 def _segment_label(segment: BarSegment) -> str:
-    """The legend's words for a slice: one wording per fact (PRD #2560)."""
+    """The legend's words for a slice: one wording per fact (#2560)."""
     match segment.kind, segment.strategy_instance_id:
         case "bot", str(sid):
             return sid

@@ -24,7 +24,7 @@ This is deliberately **not** folded into the ``FleetPresence`` protocol
 (``app.broker.fleet.presence``): presence's lifecycle (register, reserve,
 confirm, observe) has nothing to do with a bounded market-data read, and
 widening that narrow interface for one unrelated operation would blur it for
-every future presence caller (PRD #2201 §10.3). It also does not live under
+every future presence caller (#2201 §10.3). It also does not live under
 ``app.broker.fleet`` itself: that package's generic spine may import no
 provider implementation (enforced by
 ``tests/broker/fleet/test_import_isolation.py``), and this module reaches

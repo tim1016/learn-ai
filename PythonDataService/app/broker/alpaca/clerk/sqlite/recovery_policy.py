@@ -59,7 +59,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     SettlementChoice,
     UnknownOrderSettlement,
 )
-from app.broker.alpaca.clerk.sqlite.reads import WORKING_BROKER_STATES
+from app.broker.alpaca.clerk.sqlite.reads import CANCELLABLE_ENTRY_BROKER_STATES
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     OPTION_EXPIRED_NOT_SETTLED_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
@@ -94,10 +94,6 @@ FRESH_EVIDENCE_MAX_AGE_MS = 30_000
 #: The sweep publishes a pass about every 15 s, so one older than this means
 #: it has stopped: its verdict proves nothing about the account now.
 SWEEP_LIVENESS_BOUND_MS = 60_000
-# Imported rather than restated: the catalog's inert-terminal test asks the
-# same question of the same column (`reads.WORKING_BROKER_STATES`), and two
-# copies would let "working order" drift between the two answers.
-_WORKING_BROKER_STATES = WORKING_BROKER_STATES
 
 
 class RecoveryPolicyError(Exception):
@@ -530,10 +526,17 @@ def _working_orders(ctx: RecoveryPolicyContext) -> tuple[ProjectedOrder, ...]:
     working = (
         order
         for order in ctx.current_orders
-        if order.broker_order_id is not None
-        and (order.broker_state or "").lower() in _WORKING_BROKER_STATES
+        if order.role == "ENTRY"
+        and order.broker_order_id is not None
+        and (order.broker_state or "").lower() in CANCELLABLE_ENTRY_BROKER_STATES
     )
     unique = {order.order_ref: order for order in working}
+    return tuple(sorted(unique.values(), key=lambda order: order.order_ref))
+
+
+def _orders_that_may_fill(ctx: RecoveryPolicyContext) -> tuple[ProjectedOrder, ...]:
+    """Every nonterminal order in this custody cut, including those without broker identity."""
+    unique = {order.order_ref: order for order in ctx.current_orders if order.may_fill}
     return tuple(sorted(unique.values(), key=lambda order: order.order_ref))
 
 
@@ -748,8 +751,8 @@ def _decision(ctx: RecoveryPolicyContext, action_id: RecoveryActionId) -> _Decis
                 (order.order_ref, order.broker_order_id, order.broker_state, order.updated_at_ms)
                 for order in orders
             ],
-            # Needed while any order may still fill, verified or not: one the
-            # broker has not acknowledged, or one held or pending replace.
+            # Needed while any order may still fill, including one the broker
+            # has not acknowledged with a durable identity yet.
             needed=any(order.may_fill for order in ctx.current_orders),
         )
     if action_id == "prepare_safe_flatten":
@@ -893,6 +896,7 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
     positions = _relevant_positions(ctx)
     non_finite_positions = _non_finite_positions(ctx)
     working_orders = _working_orders(ctx)
+    live_orders = _orders_that_may_fill(ctx)
     reconciliation = ctx.latest_account_reconciliation
     reconciliation_evidence = _evidence(
         ctx,
@@ -964,6 +968,9 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
             )
         else:
             reason = "Active uncertainty prevents the Clerk from proving a safe reduction quantity."
+    elif live_orders:
+        reason_code = "LIVE_ORDER_MAY_STILL_FILL"
+        reason = "An order in broker custody can still fill. Wait for the Clerk to prove it terminal before preparing reduction."
     else:
         checked = _account_evidence(ctx, positions, reconciliation_evidence)
         if isinstance(checked, AccountCheckEvidence):
@@ -990,9 +997,9 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
             )
             for position in non_finite_positions
         ],
-        "working_orders": [
+        "orders_that_may_fill": [
             (order.order_ref, order.broker_state, order.updated_at_ms)
-            for order in working_orders
+            for order in live_orders
         ],
         "uncertainties": [
             (uncertainty.uncertainty_id, uncertainty.reason_code)
@@ -1048,10 +1055,12 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
                 if after_hours is not None and reason_code == after_hours.reason_code
                 else unpriced.next_step
                 if unpriced is not None and reason_code == unpriced.reason_code
-                else "Cancel verified working orders first."
-                if working_orders
                 else settle_first
                 if settle_first is not None
+                else "Cancel verified working orders first."
+                if working_orders
+                else "Wait for the Clerk to settle the live order, then refresh the panel."
+                if live_orders
                 else "Run Reconcile now and refresh the custody snapshot."
             )
         ),
@@ -1286,6 +1295,7 @@ def _residue_discharge_decision(ctx: RecoveryPolicyContext) -> _Decision:
     )
     active_runs = _relevant_runs(ctx)
     working_orders = _working_orders(ctx)
+    live_orders = _orders_that_may_fill(ctx)
     reason_code: str | None = None
     reason: str | None = None
     next_step = "Confirm at the broker that the symbol is flat, then discharge the residue."
@@ -1321,10 +1331,18 @@ def _residue_discharge_decision(ctx: RecoveryPolicyContext) -> _Decision:
         reason_code = "RUN_STILL_ACTIVE"
         reason = "Stop the bot's active run before discharging its residue."
         next_step = "Stop bot decisions first."
-    elif working_orders:
-        reason_code = "WORKING_ORDERS_REQUIRE_CANCEL_FIRST"
-        reason = "Cancel and prove every working order terminal before discharging."
-        next_step = "Cancel verified working orders first."
+    elif live_orders:
+        reason_code = "WORKING_ORDERS_REQUIRE_CANCEL_FIRST" if working_orders else "LIVE_ORDER_MAY_STILL_FILL"
+        reason = (
+            "Cancel and prove every working order terminal before discharging."
+            if working_orders
+            else "An order in broker custody can still fill. Wait for the Clerk to prove it terminal before discharging."
+        )
+        next_step = (
+            "Cancel verified working orders first."
+            if working_orders
+            else "Wait for the Clerk to settle the live order, then refresh the panel."
+        )
     elif _reconciliation_confirms_residue(ctx.latest_account_reconciliation, positions, episodes):
         reason_code = "BROKER_AGREES_WITH_CUSTODY"
         reason = "The latest reconciliation found the broker holding this exposure."
@@ -1370,7 +1388,7 @@ def _residue_discharge_decision(ctx: RecoveryPolicyContext) -> _Decision:
             "episodes": [(episode.uncertainty_id, episode.reason_code) for episode in episodes],
             "refusing": [(episode.uncertainty_id, episode.reason_code) for episode in refusing],
             "active_runs": [run.run_id for run in active_runs],
-            "working_orders": [order.order_ref for order in working_orders],
+            "orders_that_may_fill": [order.order_ref for order in live_orders],
             "reconciliation": (
                 None
                 if ctx.latest_account_reconciliation is None
@@ -1837,7 +1855,6 @@ def build_projection_guidance(
     (#1801 §11 lever 2, predicted by #1907 §5(a)).
     """
     relevant = _relevant_uncertainties(ctx)
-    available = tuple(action.label for action in actions if action.available)
     if ctx.authority_health != "healthy":
         return ProjectionGuidance(
             headline="Alpaca execution is on hold",
@@ -1848,9 +1865,6 @@ def build_projection_guidance(
             scope="ACCOUNT_CLERK",
             impact="All new broker-mutating Clerk work is blocked.",
             custody_owner="ACCOUNT_CLERK",
-            may_create_exposure=False,
-            available_safety_actions=available,
-            action_required=True,
             next_step=(
                 next((action.next_step for action in actions if action.primary), "Inspect recovery evidence.")
             ),
@@ -1863,9 +1877,6 @@ def build_projection_guidance(
             scope=primary.scope,
             impact=primary.operator_impact,
             custody_owner=primary.custody_owner,
-            may_create_exposure=not any(item.blocks_new_exposure for item in relevant),
-            available_safety_actions=available,
-            action_required=False,
             next_step=primary.next_step,
             recovery_status=primary.recovery_status,
         )
@@ -1875,8 +1886,5 @@ def build_projection_guidance(
         scope=_scope(ctx),
         impact="Normal Clerk-governed controls remain available.",
         custody_owner="ACCOUNT_CLERK",
-        may_create_exposure=True,
-        available_safety_actions=available,
-        action_required=False,
         next_step="No recovery action is required.",
     )

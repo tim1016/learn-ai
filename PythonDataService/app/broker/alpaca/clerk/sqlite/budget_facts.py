@@ -21,6 +21,7 @@ class DeployCommittedFacts:
     risk_revision: int
     actor: str
     request_fingerprint: str = ""
+    registration_json: str | None = None
 
     def __post_init__(self) -> None:
         if type(self.committed_cents) is not int or not 0 < self.committed_cents <= 2**63 - 1:

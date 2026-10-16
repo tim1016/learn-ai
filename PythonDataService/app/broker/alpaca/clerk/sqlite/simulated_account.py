@@ -7,7 +7,7 @@ Formula: cash = reference capital - effective BUY costs + effective SELL
   - prior modelled fees, using the canonical previous-session close marks.
   Realized and open P&L are canonical FIFO's exact fields
   (``exact_realized_pnl``, ``exact_open_pnl``), never its float views (#2556).
-Reference: PRD #2540 world isolation; ADR 0059 simulation-risk amendment.
+Reference: #2540 world isolation; ADR 0059 simulation-risk amendment.
 Canonical implementation: this composition; FIFO and fees retain their existing
   authorities. No balance, position or fee ledger is introduced.
 Validated against: tests/broker/alpaca/clerk/sqlite/test_simulated_account.py
@@ -148,7 +148,7 @@ def _cash_after_fills(capital: Decimal, records: tuple[FillRecord, ...], fees: F
 
 @money_context()
 def private_dry_run_cash(repo: ClerkSqliteRepository, *, now_ms: int) -> Decimal:
-    """A private Dry Run's own cash now, valued without any price (hurdle H27).
+    """A private Dry Run's own cash now, valued without any price.
 
     Cash is the committed starting cash less what its fills spent and its
     settled modelled fees -- the same formula ``observe`` publishes -- and it

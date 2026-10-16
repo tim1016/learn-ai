@@ -34,6 +34,7 @@ from app.services.broker_v2_panel.cohort_execution import (
     count_outcomes,
     execute_cohort_legs,
 )
+from app.services.broker_v2_panel.panel_errors import PanelDataError
 from app.services.broker_v2_panel.panel_scope import validate_account
 from app.utils.timestamps import now_ms_utc
 
@@ -67,6 +68,24 @@ def _leg_from_panel(panel: BotPanelView, action: PanelAction | None) -> CohortFl
     )
 
 
+def _unavailable_leg(row: BotCatalogView, error: PanelDataError) -> CohortFlattenLeg:
+    """A leg that presents no action because its member's page could not be read.
+
+    The leg's own vocabulary already says it: no flatten-class action
+    presented, so never armed, and the reason where a blocker's headline goes.
+    The exposure is the roster's, or empty when the roster does not know it.
+    """
+    return CohortFlattenLeg(
+        strategy_instance_id=row.strategy_instance_id,
+        action_id=None,
+        enabled=False,
+        revision=None,
+        concurrency_token=None,
+        blocker_headline=str(error),
+        exposure=dict(row.exposure or {}),
+    )
+
+
 async def get_cohort_flatten_view(broker: str, account_id: str) -> CohortFlattenView:
     """Group the roster by (strategy_key, symbol); present per-leg facts.
 
@@ -89,9 +108,24 @@ async def get_cohort_flatten_view(broker: str, account_id: str) -> CohortFlatten
             continue
         legs: list[CohortFlattenLeg] = []
         for row in sorted(members, key=lambda member: member.strategy_instance_id):
-            panel = await panel_data_source.get_panel(
-                broker, resolved, row.strategy_instance_id
-            )
+            try:
+                panel = await panel_data_source.get_panel(
+                    broker, resolved, row.strategy_instance_id
+                )
+            except PanelDataError as error:
+                # One member's page that cannot be read now -- a Dry Run still
+                # restoring, a custody cut that will not cohere -- is that
+                # member's leg unavailable, never the whole remedy surface.
+                logger.warning(
+                    "A cohort member's page could not be read; its leg is shown unavailable",
+                    extra={
+                        "action": "cohort_flatten_member_unreadable",
+                        "strategy_instance_id": row.strategy_instance_id,
+                        "error": str(error),
+                    },
+                )
+                legs.append(_unavailable_leg(row, error))
+                continue
             legs.append(_leg_from_panel(panel, _presented_flatten(panel.actions)))
         cohorts.append(
             CohortFlattenCohort(

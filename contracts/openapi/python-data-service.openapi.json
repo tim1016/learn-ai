@@ -1080,14 +1080,7 @@
         "description": "One Deploy command: the settings plus the opaque key that makes it retry-safe.\n\n``submission_key`` is minted by the browser when the form opens. The same\nkey returns the same bot; a new key with identical settings is a second\nbot. ``replaces_strategy_instance_id`` is Deploy again's display-only\nlineage: it names the bot this one follows and grants it nothing.",
         "properties": {
           "budget": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/DeploymentBudgetInput"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/DeploymentBudgetInput"
           },
           "carryover_policy": {
             "default": "FORBID",
@@ -1223,6 +1216,7 @@
         "required": [
           "strategy_key",
           "exit_terms",
+          "budget",
           "symbol",
           "submission_key"
         ],
@@ -1606,121 +1600,6 @@
           "recovery"
         ],
         "title": "AlpacaPaperDeployReadinessCheck",
-        "type": "object"
-      },
-      "AlpacaPaperDeployReceipt": {
-        "additionalProperties": false,
-        "description": "Backend-authored terminal receipt for one accepted deployment.",
-        "properties": {
-          "account_id": {
-            "title": "Account Id",
-            "type": "string"
-          },
-          "action_plan": {
-            "$ref": "#/components/schemas/ActionPlan"
-          },
-          "admission": {
-            "$ref": "#/components/schemas/RunAdmissionDecision"
-          },
-          "bot": {
-            "$ref": "#/components/schemas/BotStatusView"
-          },
-          "carryover_policy": {
-            "enum": [
-              "FORBID",
-              "ALLOW"
-            ],
-            "title": "Carryover Policy",
-            "type": "string"
-          },
-          "evidence_override": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/AlpacaPaperEvidenceOverride"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "execution_mode": {
-            "default": "paper",
-            "enum": [
-              "paper",
-              "dry_run",
-              "shadow",
-              "live"
-            ],
-            "title": "Execution Mode",
-            "type": "string"
-          },
-          "explanation": {
-            "title": "Explanation",
-            "type": "string"
-          },
-          "message": {
-            "title": "Message",
-            "type": "string"
-          },
-          "next_action": {
-            "title": "Next Action",
-            "type": "string"
-          },
-          "outcome": {
-            "const": "success",
-            "default": "success",
-            "title": "Outcome"
-          },
-          "panel_path": {
-            "title": "Panel Path",
-            "type": "string"
-          },
-          "parameters": {
-            "title": "Parameters",
-            "type": "object"
-          },
-          "parameters_diverge_from_defaults": {
-            "default": [],
-            "items": {
-              "type": "string"
-            },
-            "title": "Parameters Diverge From Defaults",
-            "type": "array"
-          },
-          "receipt_id": {
-            "title": "Receipt Id",
-            "type": "string"
-          },
-          "recorded_at_ms": {
-            "maximum": 253402300799999.0,
-            "minimum": 0.0,
-            "title": "Recorded At Ms",
-            "type": "integer"
-          },
-          "sizing": {
-            "$ref": "#/components/schemas/AlpacaPaperSizingSelection"
-          },
-          "status": {
-            "const": "deployed",
-            "title": "Status"
-          }
-        },
-        "required": [
-          "status",
-          "receipt_id",
-          "recorded_at_ms",
-          "message",
-          "explanation",
-          "next_action",
-          "panel_path",
-          "account_id",
-          "sizing",
-          "carryover_policy",
-          "action_plan",
-          "admission",
-          "bot"
-        ],
-        "title": "AlpacaPaperDeployReceipt",
         "type": "object"
       },
       "AlpacaPaperDeployRequest": {
@@ -4708,50 +4587,6 @@
         "title": "BotDeployPrefill",
         "type": "object"
       },
-      "BotDutyOutcomeView": {
-        "additionalProperties": false,
-        "description": "Durable terminal duty evidence rendered by the operator surface.",
-        "properties": {
-          "kind": {
-            "enum": [
-              "STOPPED",
-              "HALTED",
-              "CRASHED",
-              "FAILED_LAUNCH",
-              "EXITED_UNVERIFIED",
-              "RETIRED"
-            ],
-            "title": "Kind",
-            "type": "string"
-          },
-          "reason_code": {
-            "title": "Reason Code",
-            "type": "string"
-          },
-          "recorded_at_ms": {
-            "title": "Recorded At Ms",
-            "type": "integer"
-          },
-          "run_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Run Id"
-          }
-        },
-        "required": [
-          "kind",
-          "reason_code",
-          "recorded_at_ms"
-        ],
-        "title": "BotDutyOutcomeView",
-        "type": "object"
-      },
       "BotEndInput": {
         "additionalProperties": false,
         "description": "The owner's choice of end, as Deploy and the bot panel send it.\n\nBoth fields are required. ``end_at_ms`` ``null`` is the explicit \"no\nend\" choice, sent with ``end_action`` ``SELL``: a bot with no end has no\nshares to keep at one. A Deploy that sends no ``end`` at all gets the\ndefault end.",
@@ -6092,171 +5927,6 @@
         "title": "BotRunView",
         "type": "object"
       },
-      "BotStatusView": {
-        "description": "One bot's roster row: broker-tagged binding + artifact-derived state.",
-        "properties": {
-          "active_run_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Active Run Id"
-          },
-          "binding_created_at_ms": {
-            "title": "Binding Created At Ms",
-            "type": "integer"
-          },
-          "broker": {
-            "title": "Broker",
-            "type": "string"
-          },
-          "carryover_policy": {
-            "default": "FORBID",
-            "enum": [
-              "FORBID",
-              "ALLOW"
-            ],
-            "title": "Carryover Policy",
-            "type": "string"
-          },
-          "desired_state": {
-            "enum": [
-              "RUNNING",
-              "STOPPED"
-            ],
-            "title": "Desired State",
-            "type": "string"
-          },
-          "duty_outcome": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/BotDutyOutcomeView"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "evidence_override": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/AlpacaPaperEvidenceOverride"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "last_transition_at_ms": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Transition At Ms"
-          },
-          "mode": {
-            "enum": [
-              "log_only",
-              "dry_run",
-              "trade"
-            ],
-            "title": "Mode",
-            "type": "string"
-          },
-          "phase": {
-            "enum": [
-              "OFF_DUTY",
-              "ON_DUTY",
-              "RETIRED"
-            ],
-            "title": "Phase",
-            "type": "string"
-          },
-          "quantity": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Quantity"
-          },
-          "running": {
-            "title": "Running",
-            "type": "boolean"
-          },
-          "strategy_instance_id": {
-            "title": "Strategy Instance Id",
-            "type": "string"
-          },
-          "strategy_key": {
-            "default": "deployment_validation",
-            "title": "Strategy Key",
-            "type": "string"
-          },
-          "strategy_label": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Strategy Label"
-          },
-          "symbol": {
-            "title": "Symbol",
-            "type": "string"
-          },
-          "traded": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/TradedInstrumentView"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "traded_asset_acknowledgement": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/UntestedTradedAssetAcknowledgement"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "strategy_instance_id",
-          "broker",
-          "symbol",
-          "mode",
-          "quantity",
-          "running",
-          "phase",
-          "desired_state",
-          "active_run_id",
-          "duty_outcome",
-          "binding_created_at_ms",
-          "last_transition_at_ms"
-        ],
-        "title": "BotStatusView",
-        "type": "object"
-      },
       "BreachProbability": {
         "additionalProperties": false,
         "description": "Probability that *any* simulation hit a drawdown >= threshold.\n\nThreshold is a positive fraction (``0.10`` = 10% drawdown). The\nprobability is the *fraction of simulations* whose realised\nmax-drawdown met or exceeded the threshold \u2014 a sample estimate\nof P(MDD >= threshold) under the simulation distribution.",
@@ -6659,313 +6329,6 @@
         "title": "BrokerHealthCondition",
         "type": "object"
       },
-      "BrokerOrder": {
-        "additionalProperties": false,
-        "description": "An order and its status, for the recent-orders table.",
-        "properties": {
-          "asset_class": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Asset Class"
-          },
-          "broker": {
-            "title": "Broker",
-            "type": "string"
-          },
-          "canceled_at_ms": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Canceled At Ms"
-          },
-          "client_order_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Client Order Id"
-          },
-          "created_at_ms": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Created At Ms"
-          },
-          "events": {
-            "items": {
-              "$ref": "#/components/schemas/BrokerOrderEvent"
-            },
-            "title": "Events",
-            "type": "array"
-          },
-          "expired_at_ms": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Expired At Ms"
-          },
-          "extended_hours": {
-            "default": false,
-            "title": "Extended Hours",
-            "type": "boolean"
-          },
-          "fill_latency_seconds": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Fill Latency Seconds"
-          },
-          "filled_at_ms": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Filled At Ms"
-          },
-          "filled_avg_price": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Filled Avg Price"
-          },
-          "filled_quantity": {
-            "title": "Filled Quantity",
-            "type": "number"
-          },
-          "limit_price": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Limit Price"
-          },
-          "observed_at_ms": {
-            "title": "Observed At Ms",
-            "type": "integer"
-          },
-          "order_id": {
-            "title": "Order Id",
-            "type": "string"
-          },
-          "order_type": {
-            "title": "Order Type",
-            "type": "string"
-          },
-          "quantity": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Quantity"
-          },
-          "replaced_by": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Replaced By"
-          },
-          "replaces": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Replaces"
-          },
-          "side": {
-            "title": "Side",
-            "type": "string"
-          },
-          "status": {
-            "title": "Status",
-            "type": "string"
-          },
-          "stop_price": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Stop Price"
-          },
-          "submitted_at_ms": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Submitted At Ms"
-          },
-          "symbol": {
-            "title": "Symbol",
-            "type": "string"
-          },
-          "time_in_force": {
-            "title": "Time In Force",
-            "type": "string"
-          },
-          "unreadable_fields": {
-            "default": [],
-            "items": {
-              "type": "string"
-            },
-            "title": "Unreadable Fields",
-            "type": "array"
-          },
-          "updated_at_ms": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Updated At Ms"
-          }
-        },
-        "required": [
-          "broker",
-          "order_id",
-          "client_order_id",
-          "symbol",
-          "asset_class",
-          "side",
-          "order_type",
-          "time_in_force",
-          "quantity",
-          "filled_quantity",
-          "limit_price",
-          "stop_price",
-          "filled_avg_price",
-          "status",
-          "submitted_at_ms",
-          "created_at_ms",
-          "updated_at_ms",
-          "filled_at_ms",
-          "canceled_at_ms",
-          "expired_at_ms",
-          "observed_at_ms"
-        ],
-        "title": "BrokerOrder",
-        "type": "object"
-      },
-      "BrokerOrderEvent": {
-        "additionalProperties": false,
-        "description": "A lifecycle event on an order (fill/partial-fill/cancel/...).\n\nPhase-1 REST orders carry only their own lifecycle timestamps, from which\nthe adapter synthesizes a fill event when the order reports a fill. The\nricher per-event stream arrives with the phase-2 ``trade_updates`` consumer.",
-        "properties": {
-          "event_type": {
-            "title": "Event Type",
-            "type": "string"
-          },
-          "execution_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Execution Id"
-          },
-          "occurred_at_ms": {
-            "title": "Occurred At Ms",
-            "type": "integer"
-          },
-          "price": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Price"
-          },
-          "quantity": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Quantity"
-          }
-        },
-        "required": [
-          "event_type",
-          "occurred_at_ms",
-          "price",
-          "quantity"
-        ],
-        "title": "BrokerOrderEvent",
-        "type": "object"
-      },
       "BrokerOrderLeg": {
         "additionalProperties": false,
         "description": "One equity leg of an order request (broker-neutral).\n\nS2 adds ``LIMIT`` orders alongside S1's ``MARKET``: a limit leg carries a\n``limit_price`` and rests until filled or canceled. ``time_in_force`` selects\nhow long a resting order stays working (``DAY``/``GTC``). All additions are\nadditive \u2014 a bare S1 market leg (no ``limit_price``, default ``DAY``) still\nvalidates. The quantity is a positive share count; the *sign* is ``side``.",
@@ -7077,120 +6440,6 @@
           "timeframe"
         ],
         "title": "BrokerPortfolioHistory",
-        "type": "object"
-      },
-      "BrokerPosition": {
-        "additionalProperties": false,
-        "description": "A single open position (symbol, quantity, entry, value, unrealized PnL).\n\n``prior_close_price`` is the broker's price for the instrument at the\nprevious regular-session close -- the same close the account's\nprevious-close equity describes -- or ``None`` when the broker gives none.",
-        "properties": {
-          "asset_class": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Asset Class"
-          },
-          "asset_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Asset Id"
-          },
-          "average_entry_price": {
-            "title": "Average Entry Price",
-            "type": "number"
-          },
-          "broker": {
-            "title": "Broker",
-            "type": "string"
-          },
-          "cost_basis": {
-            "title": "Cost Basis",
-            "type": "number"
-          },
-          "current_price": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Current Price"
-          },
-          "market_value": {
-            "title": "Market Value",
-            "type": "number"
-          },
-          "observed_at_ms": {
-            "title": "Observed At Ms",
-            "type": "integer"
-          },
-          "prior_close_price": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Prior Close Price"
-          },
-          "quantity": {
-            "title": "Quantity",
-            "type": "number"
-          },
-          "side": {
-            "title": "Side",
-            "type": "string"
-          },
-          "symbol": {
-            "title": "Symbol",
-            "type": "string"
-          },
-          "unrealized_pl": {
-            "title": "Unrealized Pl",
-            "type": "number"
-          },
-          "unrealized_plpc": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Unrealized Plpc"
-          }
-        },
-        "required": [
-          "broker",
-          "symbol",
-          "asset_id",
-          "asset_class",
-          "quantity",
-          "side",
-          "average_entry_price",
-          "market_value",
-          "cost_basis",
-          "current_price",
-          "unrealized_pl",
-          "unrealized_plpc",
-          "observed_at_ms"
-        ],
-        "title": "BrokerPosition",
         "type": "object"
       },
       "BudgetAuthorityApplyRequest": {
@@ -9388,86 +8637,6 @@
         "title": "ClerkCard",
         "type": "object"
       },
-      "ClerkCustodyDurations": {
-        "additionalProperties": false,
-        "description": "Measured same-clock durations for one Clerk-owned intent.",
-        "properties": {
-          "a0_to_broker_write_ms": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "A0 To Broker Write Ms"
-          },
-          "broker_return_to_first_callback_ms": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Broker Return To First Callback Ms"
-          },
-          "broker_write_to_return_ms": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Broker Write To Return Ms"
-          },
-          "intake_to_a0_ms": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Intake To A0 Ms"
-          },
-          "request_to_intake_ms": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Request To Intake Ms"
-          },
-          "terminal_age_ms": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Terminal Age Ms"
-          }
-        },
-        "title": "ClerkCustodyDurations",
-        "type": "object"
-      },
       "ClerkCustodyTimeline": {
         "additionalProperties": false,
         "description": "Distinct source, arrival, and durable clocks for one intent lifecycle.",
@@ -9498,32 +8667,6 @@
             ],
             "title": "Broker Ack Recorded At Ms"
           },
-          "broker_call_returned_at_ms": {
-            "anyOf": [
-              {
-                "maximum": 253402300799999.0,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Broker Call Returned At Ms"
-          },
-          "broker_write_started_at_ms": {
-            "anyOf": [
-              {
-                "maximum": 253402300799999.0,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Broker Write Started At Ms"
-          },
           "clerk_intake_admitted_at_ms": {
             "anyOf": [
               {
@@ -9536,22 +8679,6 @@
               }
             ],
             "title": "Clerk Intake Admitted At Ms"
-          },
-          "clerk_request_received_at_ms": {
-            "anyOf": [
-              {
-                "maximum": 253402300799999.0,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Clerk Request Received At Ms"
-          },
-          "durations": {
-            "$ref": "#/components/schemas/ClerkCustodyDurations"
           },
           "earliest_broker_source_at_ms": {
             "anyOf": [
@@ -9604,19 +8731,6 @@
               }
             ],
             "title": "First Callback Recorded At Ms"
-          },
-          "inbox_fsynced_at_ms": {
-            "anyOf": [
-              {
-                "maximum": 253402300799999.0,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Inbox Fsynced At Ms"
           },
           "intent_created_at_ms": {
             "anyOf": [
@@ -9720,17 +8834,6 @@
             ],
             "title": "Order Type"
           },
-          "outside_rth": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Outside Rth"
-          },
           "quantity": {
             "anyOf": [
               {
@@ -9741,18 +8844,6 @@
               }
             ],
             "title": "Quantity"
-          },
-          "sec_type": {
-            "anyOf": [
-              {
-                "maxLength": 16,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Sec Type"
           },
           "stop_price": {
             "anyOf": [
@@ -9807,7 +8898,6 @@
           "authority_health": {
             "enum": [
               "healthy",
-              "degraded_to_mirror",
               "failed"
             ],
             "title": "Authority Health",
@@ -9823,13 +8913,6 @@
               }
             ],
             "title": "Authority Health Reason"
-          },
-          "commands": {
-            "items": {
-              "$ref": "#/components/schemas/ProjectedCommandResponse"
-            },
-            "title": "Commands",
-            "type": "array"
           },
           "control_revision": {
             "title": "Control Revision",
@@ -9913,13 +8996,6 @@
             ],
             "title": "Strategy Instance Id"
           },
-          "terminal_receipts": {
-            "items": {
-              "$ref": "#/components/schemas/ProjectedReceiptResponse"
-            },
-            "title": "Terminal Receipts",
-            "type": "array"
-          },
           "uncertainties": {
             "items": {
               "$ref": "#/components/schemas/ProjectedUncertaintyResponse"
@@ -9938,13 +9014,11 @@
           "control_revision",
           "custody_owner",
           "runs",
-          "commands",
           "operations",
           "positions",
           "holds",
           "uncertainties",
           "latest_reconciliation",
-          "terminal_receipts",
           "guidance",
           "recovery_actions",
           "generated_at_ms"
@@ -10148,6 +9222,9 @@
             "title": "Native Order Id"
           },
           "receipt": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
             "title": "Receipt",
             "type": "object"
           },
@@ -10173,10 +9250,6 @@
         "additionalProperties": false,
         "description": "One bounded keyset page, with backend-owned projection status.",
         "properties": {
-          "canonical_fallback_required": {
-            "title": "Canonical Fallback Required",
-            "type": "boolean"
-          },
           "custody_summary": {
             "$ref": "#/components/schemas/ClerkCustodyWindowSummary"
           },
@@ -10195,11 +9268,6 @@
           "feed_state": {
             "enum": [
               "live",
-              "reconnecting",
-              "rebuilding",
-              "stale",
-              "offline_but_saved",
-              "corrupt",
               "projection_unavailable"
             ],
             "title": "Feed State",
@@ -10216,23 +9284,6 @@
               }
             ],
             "title": "High Water Journal Seq"
-          },
-          "lag_is_lower_bound": {
-            "default": false,
-            "title": "Lag Is Lower Bound",
-            "type": "boolean"
-          },
-          "lag_records": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Lag Records"
           },
           "next_cursor": {
             "anyOf": [
@@ -10259,7 +9310,6 @@
         },
         "required": [
           "projection_available",
-          "canonical_fallback_required",
           "feed_state",
           "feed_headline",
           "feed_detail",
@@ -10314,18 +9364,6 @@
             "title": "Events",
             "type": "array"
           },
-          "exec_id": {
-            "anyOf": [
-              {
-                "maxLength": 256,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Exec Id"
-          },
           "execution_price": {
             "anyOf": [
               {
@@ -10445,18 +9483,6 @@
               }
             ]
           },
-          "order_id": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Order Id"
-          },
           "order_instruction": {
             "$ref": "#/components/schemas/ClerkOrderInstruction"
           },
@@ -10473,19 +9499,10 @@
             ],
             "title": "Order Ref"
           },
-          "perm_id": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Perm Id"
-          },
           "receipt": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
             "title": "Receipt",
             "type": "object"
           },
@@ -10552,12 +9569,7 @@
               "manual",
               "strategy",
               "external",
-              "unknown",
-              "recovery",
-              "emergency",
-              "shutdown",
-              "force_flat",
-              "other"
+              "unknown"
             ],
             "title": "Transaction Origin",
             "type": "string"
@@ -10606,18 +9618,6 @@
             "minimum": 1.0,
             "title": "Event Count",
             "type": "integer"
-          },
-          "exec_id": {
-            "anyOf": [
-              {
-                "maxLength": 256,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Exec Id"
           },
           "execution_price": {
             "anyOf": [
@@ -10738,18 +9738,6 @@
               }
             ]
           },
-          "order_id": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Order Id"
-          },
           "order_instruction": {
             "$ref": "#/components/schemas/ClerkOrderInstruction"
           },
@@ -10765,18 +9753,6 @@
               }
             ],
             "title": "Order Ref"
-          },
-          "perm_id": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Perm Id"
           },
           "recorded_at_ms": {
             "maximum": 253402300799999.0,
@@ -10841,12 +9817,7 @@
               "manual",
               "strategy",
               "external",
-              "unknown",
-              "recovery",
-              "emergency",
-              "shutdown",
-              "force_flat",
-              "other"
+              "unknown"
             ],
             "title": "Transaction Origin",
             "type": "string"
@@ -13610,17 +12581,6 @@
             ],
             "title": "Confirmation Text"
           },
-          "custody_account_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Custody Account Id"
-          },
           "detail": {
             "title": "Detail",
             "type": "string"
@@ -13845,11 +12805,6 @@
           "detail": {
             "title": "Detail",
             "type": "string"
-          },
-          "entry_eligible": {
-            "default": false,
-            "title": "Entry Eligible",
-            "type": "boolean"
           },
           "exit_estimate": {
             "anyOf": [
@@ -16056,10 +15011,6 @@
             "title": "Read At Ms",
             "type": "integer"
           },
-          "read_by": {
-            "title": "Read By",
-            "type": "string"
-          },
           "strategy_instance_id": {
             "title": "Strategy Instance Id",
             "type": "string"
@@ -16092,7 +15043,6 @@
           "next_cursor",
           "total_entries",
           "truncated",
-          "read_by",
           "read_at_ms"
         ],
         "title": "EvidencePage",
@@ -18464,17 +17414,6 @@
             "title": "Running",
             "type": "boolean"
           },
-          "session_change_pct": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Session Change Pct"
-          },
           "sid": {
             "title": "Sid",
             "type": "string"
@@ -18505,7 +17444,6 @@
           "realized_pnl_today",
           "open_pnl",
           "day_pnl",
-          "session_change_pct",
           "fills_today",
           "feed"
         ],
@@ -20014,14 +18952,6 @@
       "GoldenSearchCapabilityKnob": {
         "additionalProperties": false,
         "properties": {
-          "default_high": {
-            "title": "Default High",
-            "type": "number"
-          },
-          "default_low": {
-            "title": "Default Low",
-            "type": "number"
-          },
           "default_step": {
             "title": "Default Step",
             "type": "number"
@@ -20061,10 +18991,6 @@
             "title": "Name",
             "type": "string"
           },
-          "neighbor_step": {
-            "title": "Neighbor Step",
-            "type": "number"
-          },
           "note": {
             "title": "Note",
             "type": "string"
@@ -20072,10 +18998,6 @@
           "quantum": {
             "title": "Quantum",
             "type": "number"
-          },
-          "searchable_by_default": {
-            "title": "Searchable By Default",
-            "type": "boolean"
           },
           "unit": {
             "title": "Unit",
@@ -20094,11 +19016,7 @@
           "domain_low",
           "domain_high",
           "quantum",
-          "default_low",
-          "default_high",
-          "neighbor_step",
           "default_step",
-          "searchable_by_default",
           "warmup_dependent",
           "default_value",
           "note"
@@ -22849,27 +21767,6 @@
         "title": "GoldenSearchEntryTimes",
         "type": "object"
       },
-      "GoldenSearchEquityPoint": {
-        "additionalProperties": false,
-        "properties": {
-          "equity": {
-            "title": "Equity",
-            "type": "number"
-          },
-          "ms": {
-            "maximum": 253402300799999.0,
-            "minimum": 0.0,
-            "title": "Ms",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "ms",
-          "equity"
-        ],
-        "title": "GoldenSearchEquityPoint",
-        "type": "object"
-      },
       "GoldenSearchEstimate": {
         "additionalProperties": false,
         "properties": {
@@ -25062,10 +23959,6 @@
             "title": "Knob",
             "type": "string"
           },
-          "one_sided": {
-            "title": "One Sided",
-            "type": "boolean"
-          },
           "rows": {
             "items": {
               "$ref": "#/components/schemas/GoldenSearchNeighborRow"
@@ -25076,8 +23969,7 @@
         },
         "required": [
           "knob",
-          "rows",
-          "one_sided"
+          "rows"
         ],
         "title": "GoldenSearchNeighborhood",
         "type": "object"
@@ -26876,13 +25768,6 @@
             "title": "Cumulative Return",
             "type": "array"
           },
-          "daily_equity": {
-            "items": {
-              "$ref": "#/components/schemas/GoldenSearchEquityPoint"
-            },
-            "title": "Daily Equity",
-            "type": "array"
-          },
           "drawdown": {
             "items": {
               "$ref": "#/components/schemas/GoldenSearchDrawdownPoint"
@@ -26934,7 +25819,6 @@
           "window",
           "metrics",
           "cumulative_return",
-          "daily_equity",
           "drawdown",
           "monthly",
           "concentration_curve",
@@ -27924,11 +26808,6 @@
             "title": "Revision",
             "type": "integer"
           },
-          "run_to_compare": {
-            "description": "Run research is on: Search hands on to Test over time and the study pauses at Compare.",
-            "title": "Run To Compare",
-            "type": "boolean"
-          },
           "scope": {
             "$ref": "#/components/schemas/GoldenSearchScope"
           },
@@ -27957,12 +26836,6 @@
           "symbol": {
             "title": "Symbol",
             "type": "string"
-          },
-          "updated_at_ms": {
-            "maximum": 253402300799999.0,
-            "minimum": 0.0,
-            "title": "Updated At Ms",
-            "type": "integer"
           }
         },
         "required": [
@@ -27974,7 +26847,6 @@
           "presented_status",
           "revision",
           "created_at_ms",
-          "updated_at_ms",
           "protocol_hash",
           "method",
           "consumed_evaluations",
@@ -27984,7 +26856,6 @@
           "incomplete",
           "failure_reason",
           "hidden",
-          "run_to_compare",
           "exposure_claim",
           "exam_outcome",
           "qualification_id",
@@ -28137,11 +27008,6 @@
             "title": "Revision",
             "type": "integer"
           },
-          "run_to_compare": {
-            "description": "Run research is on: Search hands on to Test over time and the study pauses at Compare.",
-            "title": "Run To Compare",
-            "type": "boolean"
-          },
           "state": {
             "enum": [
               "locked",
@@ -28167,12 +27033,6 @@
           "symbol": {
             "title": "Symbol",
             "type": "string"
-          },
-          "updated_at_ms": {
-            "maximum": 253402300799999.0,
-            "minimum": 0.0,
-            "title": "Updated At Ms",
-            "type": "integer"
           }
         },
         "required": [
@@ -28184,7 +27044,6 @@
           "presented_status",
           "revision",
           "created_at_ms",
-          "updated_at_ms",
           "protocol_hash",
           "method",
           "consumed_evaluations",
@@ -28194,7 +27053,6 @@
           "incomplete",
           "failure_reason",
           "hidden",
-          "run_to_compare",
           "exposure_claim",
           "exam_outcome",
           "qualification_id"
@@ -28822,16 +27680,6 @@
             "title": "Fold Index",
             "type": "integer"
           },
-          "incumbent_test_metrics": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/GoldenSearchMetrics"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "status": {
             "enum": [
               "pending",
@@ -28840,50 +27688,6 @@
             ],
             "title": "Status",
             "type": "string"
-          },
-          "test_end_ms": {
-            "maximum": 253402300799999.0,
-            "minimum": 0.0,
-            "title": "Test End Ms",
-            "type": "integer"
-          },
-          "test_metrics": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/GoldenSearchMetrics"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "test_start_ms": {
-            "maximum": 253402300799999.0,
-            "minimum": 0.0,
-            "title": "Test Start Ms",
-            "type": "integer"
-          },
-          "train_end_ms": {
-            "maximum": 253402300799999.0,
-            "minimum": 0.0,
-            "title": "Train End Ms",
-            "type": "integer"
-          },
-          "train_metrics": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/GoldenSearchMetrics"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "train_start_ms": {
-            "maximum": 253402300799999.0,
-            "minimum": 0.0,
-            "title": "Train Start Ms",
-            "type": "integer"
           },
           "winner": {
             "anyOf": [
@@ -28895,31 +27699,12 @@
               }
             ],
             "title": "Winner"
-          },
-          "winner_hash": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Winner Hash"
           }
         },
         "required": [
           "fold_index",
-          "train_start_ms",
-          "train_end_ms",
-          "test_start_ms",
-          "test_end_ms",
           "status",
           "winner",
-          "winner_hash",
-          "train_metrics",
-          "test_metrics",
-          "incumbent_test_metrics",
           "failure_reason",
           "failure_code"
         ],
@@ -28944,20 +27729,6 @@
             "title": "Incomplete",
             "type": "boolean"
           },
-          "incumbent_linked": {
-            "items": {
-              "$ref": "#/components/schemas/GoldenSearchLinkedReturn"
-            },
-            "title": "Incumbent Linked",
-            "type": "array"
-          },
-          "linked": {
-            "items": {
-              "$ref": "#/components/schemas/GoldenSearchLinkedReturn"
-            },
-            "title": "Linked",
-            "type": "array"
-          },
           "summary_pills": {
             "$ref": "#/components/schemas/GoldenSearchSummaryPills"
           },
@@ -28975,8 +27746,6 @@
         "required": [
           "folds",
           "verdict",
-          "linked",
-          "incumbent_linked",
           "summary_pills",
           "explanation",
           "incomplete"
@@ -40912,28 +39681,8 @@
             "title": "Created At Ms",
             "type": "integer"
           },
-          "fee_policy": {
-            "title": "Fee Policy",
-            "type": "string"
-          },
-          "first_session_open_ms": {
-            "maximum": 253402300799999.0,
-            "minimum": 0.0,
-            "title": "First Session Open Ms",
-            "type": "integer"
-          },
           "id": {
             "title": "Id",
-            "type": "integer"
-          },
-          "last_session_open_ms": {
-            "maximum": 253402300799999.0,
-            "minimum": 0.0,
-            "title": "Last Session Open Ms",
-            "type": "integer"
-          },
-          "sessions_requested": {
-            "title": "Sessions Requested",
             "type": "integer"
           },
           "setup_name": {
@@ -40950,11 +39699,7 @@
         },
         "required": [
           "id",
-          "created_at_ms",
-          "first_session_open_ms",
-          "last_session_open_ms",
-          "sessions_requested",
-          "fee_policy"
+          "created_at_ms"
         ],
         "title": "OptionsBacktestComparedRunResponse",
         "type": "object"
@@ -41088,32 +39833,6 @@
         "properties": {
           "counts": {
             "$ref": "#/components/schemas/OptionsBacktestDataCountsResponse"
-          },
-          "first_testable_session_open_ms": {
-            "anyOf": [
-              {
-                "maximum": 253402300799999.0,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "First Testable Session Open Ms"
-          },
-          "last_testable_session_open_ms": {
-            "anyOf": [
-              {
-                "maximum": 253402300799999.0,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Testable Session Open Ms"
           },
           "longest_testable_stretch": {
             "anyOf": [
@@ -41276,10 +39995,6 @@
             "title": "Fall Usd",
             "type": "string"
           },
-          "measured_at": {
-            "const": "session_end",
-            "title": "Measured At"
-          },
           "peak_equity_usd": {
             "title": "Peak Equity Usd",
             "type": "string"
@@ -41313,8 +40028,7 @@
           "trough_equity_usd",
           "fall_usd",
           "fall_ratio",
-          "trough_session_open_ms",
-          "measured_at"
+          "trough_session_open_ms"
         ],
         "title": "OptionsBacktestDrawdownResponse",
         "type": "object"
@@ -42926,12 +41640,6 @@
             "title": "Problems",
             "type": "array"
           },
-          "session_close_ms": {
-            "maximum": 253402300799999.0,
-            "minimum": 0.0,
-            "title": "Session Close Ms",
-            "type": "integer"
-          },
           "session_open_ms": {
             "maximum": 253402300799999.0,
             "minimum": 0.0,
@@ -42965,7 +41673,6 @@
         },
         "required": [
           "session_open_ms",
-          "session_close_ms",
           "verdict",
           "missing",
           "contracts",
@@ -43065,10 +41772,6 @@
             "title": "Profit Usd",
             "type": "string"
           },
-          "run_id": {
-            "title": "Run Id",
-            "type": "integer"
-          },
           "session_close_ms": {
             "maximum": 253402300799999.0,
             "minimum": 0.0,
@@ -43130,7 +41833,6 @@
           }
         },
         "required": [
-          "run_id",
           "session_open_ms",
           "session_close_ms",
           "status",
@@ -43186,44 +41888,9 @@
           "label": {
             "title": "Label",
             "type": "string"
-          },
-          "leg_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Leg Id"
-          },
-          "setting": {
-            "enum": [
-              "entry_time",
-              "exit_time",
-              "no_reentry_after",
-              "square_off",
-              "leg",
-              "leg_side",
-              "leg_right",
-              "leg_contracts",
-              "leg_expiry",
-              "leg_strike",
-              "leg_stop_loss",
-              "leg_momentum",
-              "leg_reentry",
-              "slippage",
-              "price_step",
-              "fees",
-              "starting_cash"
-            ],
-            "title": "Setting",
-            "type": "string"
           }
         },
         "required": [
-          "setting",
           "label",
           "a",
           "b"
@@ -43836,12 +42503,6 @@
       "OptionsBacktestTradesResponse": {
         "description": "A page of a run's leg trades. ``total`` counts every trade that matches, on every page; ``next_offset`` is the\n``offset`` to ask for the rest, and is ``None`` on the last page. The CSV export is never paged.\n\nA ``leg_id`` that the run's setup does not have is a 404 when the setup can be read. On a run whose stored setup can\nno longer be read there is no setup to say which legs the run had, so an unknown ``leg_id`` is answered from the\nstored trades alone: a 200 with ``total`` 0, which says only that no trade was stored for that leg.",
         "properties": {
-          "limit": {
-            "maximum": 5000.0,
-            "minimum": 1.0,
-            "title": "Limit",
-            "type": "integer"
-          },
           "next_offset": {
             "anyOf": [
               {
@@ -43858,10 +42519,6 @@
             "title": "Offset",
             "type": "integer"
           },
-          "run_id": {
-            "title": "Run Id",
-            "type": "integer"
-          },
           "total": {
             "minimum": 0.0,
             "title": "Total",
@@ -43876,10 +42533,8 @@
           }
         },
         "required": [
-          "run_id",
           "total",
           "offset",
-          "limit",
           "trades"
         ],
         "title": "OptionsBacktestTradesResponse",
@@ -44387,7 +43042,7 @@
         "type": "object"
       },
       "PanelAction": {
-        "description": "One backend-presented action.\n\nAngular executes only the closed set of known action ids and renders\nexactly what it is given. ``revision`` binds the action to the panel-state\nrevision it was presented against; a stale POST is a 409.",
+        "description": "One backend-presented action.\n\nAngular executes only the closed set of known action ids and renders\nexactly what it is given. ``revision`` identifies the presented panel state;\nthe action-scoped concurrency token fences a stale POST.",
         "properties": {
           "action_id": {
             "enum": [
@@ -44619,16 +43274,10 @@
               }
             ],
             "title": "Reason"
-          },
-          "revision": {
-            "minimum": 0.0,
-            "title": "Revision",
-            "type": "integer"
           }
         },
         "required": [
           "action_id",
-          "revision",
           "concurrency_token",
           "idempotency_key"
         ],
@@ -44785,16 +43434,10 @@
               }
             ],
             "title": "Reason"
-          },
-          "revision": {
-            "minimum": 0.0,
-            "title": "Revision",
-            "type": "integer"
           }
         },
         "required": [
           "action_id",
-          "revision",
           "concurrency_token",
           "idempotency_key"
         ],
@@ -46690,10 +45333,6 @@
             "title": "Evidence Refs",
             "type": "array"
           },
-          "hold_id": {
-            "title": "Hold Id",
-            "type": "string"
-          },
           "opened_at_ms": {
             "title": "Opened At Ms",
             "type": "integer"
@@ -46723,7 +45362,6 @@
           }
         },
         "required": [
-          "hold_id",
           "scope",
           "strategy_instance_id",
           "reason_code",
@@ -46781,8 +45419,15 @@
             "type": "string"
           },
           "strategy_instance_id": {
-            "title": "Strategy Instance Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Instance Id"
           },
           "terminal_receipt_id": {
             "anyOf": [
@@ -46858,17 +45503,6 @@
             "title": "Role",
             "type": "string"
           },
-          "submitted_at_ms": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Submitted At Ms"
-          },
           "updated_at_ms": {
             "title": "Updated At Ms",
             "type": "integer"
@@ -46880,7 +45514,6 @@
           "broker_order_id",
           "role",
           "broker_state",
-          "submitted_at_ms",
           "updated_at_ms"
         ],
         "title": "ProjectedOrderResponse",
@@ -46914,70 +45547,6 @@
         "title": "ProjectedPositionResponse",
         "type": "object"
       },
-      "ProjectedReceiptResponse": {
-        "properties": {
-          "command_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Command Id"
-          },
-          "effect_operation_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Effect Operation Id"
-          },
-          "proof_reference": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Proof Reference"
-          },
-          "receipt_id": {
-            "title": "Receipt Id",
-            "type": "string"
-          },
-          "recorded_at_ms": {
-            "title": "Recorded At Ms",
-            "type": "integer"
-          },
-          "summary_code": {
-            "title": "Summary Code",
-            "type": "string"
-          },
-          "terminal_state": {
-            "title": "Terminal State",
-            "type": "string"
-          }
-        },
-        "required": [
-          "receipt_id",
-          "command_id",
-          "effect_operation_id",
-          "terminal_state",
-          "summary_code",
-          "proof_reference",
-          "recorded_at_ms"
-        ],
-        "title": "ProjectedReceiptResponse",
-        "type": "object"
-      },
       "ProjectedReconciliationResponse": {
         "properties": {
           "attempted_at_ms": {
@@ -46994,10 +45563,6 @@
               }
             ],
             "title": "Effect Operation Id"
-          },
-          "evidence_age_ms": {
-            "title": "Evidence Age Ms",
-            "type": "integer"
           },
           "evidence_refs": {
             "items": {
@@ -47024,20 +45589,14 @@
           "reconciliation_id": {
             "title": "Reconciliation Id",
             "type": "string"
-          },
-          "trigger": {
-            "title": "Trigger",
-            "type": "string"
           }
         },
         "required": [
           "reconciliation_id",
           "effect_operation_id",
           "order_ref",
-          "trigger",
           "attempted_at_ms",
           "outcome",
-          "evidence_age_ms",
           "evidence_refs"
         ],
         "title": "ProjectedReconciliationResponse",
@@ -47101,10 +45660,6 @@
           "custody_owner": {
             "title": "Custody Owner",
             "type": "string"
-          },
-          "evidence_age_ms": {
-            "title": "Evidence Age Ms",
-            "type": "integer"
           },
           "evidence_refs": {
             "items": {
@@ -47189,7 +45744,6 @@
           "operator_impact",
           "next_step",
           "observed_at_ms",
-          "evidence_age_ms",
           "evidence_refs"
         ],
         "title": "ProjectedUncertaintyResponse",
@@ -47197,17 +45751,6 @@
       },
       "ProjectionGuidanceResponse": {
         "properties": {
-          "action_required": {
-            "title": "Action Required",
-            "type": "boolean"
-          },
-          "available_safety_actions": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Available Safety Actions",
-            "type": "array"
-          },
           "custody_owner": {
             "title": "Custody Owner",
             "type": "string"
@@ -47223,10 +45766,6 @@
           "impact": {
             "title": "Impact",
             "type": "string"
-          },
-          "may_create_exposure": {
-            "title": "May Create Exposure",
-            "type": "boolean"
           },
           "next_step": {
             "title": "Next Step",
@@ -47257,9 +45796,6 @@
           "scope",
           "impact",
           "custody_owner",
-          "may_create_exposure",
-          "available_safety_actions",
-          "action_required",
           "next_step"
         ],
         "title": "ProjectionGuidanceResponse",
@@ -47327,17 +45863,6 @@
           "explanation": {
             "title": "Explanation",
             "type": "string"
-          },
-          "golden_qualification_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Golden Qualification Id"
           },
           "parameters": {
             "additionalProperties": {
@@ -50951,16 +49476,22 @@
             "title": "Started At Ms"
           },
           "trade_count": {
-            "minimum": 0.0,
-            "title": "Trade Count",
-            "type": "integer"
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trade Count"
           }
         },
         "required": [
           "run_id",
           "ending",
           "decision_count",
-          "trade_count",
           "set_aside_usd",
           "returned_usd",
           "held",
@@ -53057,6 +51588,7 @@
           },
           "end_date": {
             "description": "YYYY-MM-DD",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
             "title": "End Date",
             "type": "string"
           },
@@ -53068,7 +51600,7 @@
           },
           "initial_cash": {
             "default": 100000.0,
-            "minimum": 0.0,
+            "exclusiveMinimum": 0.0,
             "title": "Initial Cash",
             "type": "number"
           },
@@ -53082,6 +51614,7 @@
           },
           "start_date": {
             "description": "YYYY-MM-DD",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
             "title": "Start Date",
             "type": "string"
           }
@@ -54471,11 +53004,6 @@
       },
       "StrategyInfo": {
         "properties": {
-          "algorithm_pseudocode": {
-            "default": "",
-            "title": "Algorithm Pseudocode",
-            "type": "string"
-          },
           "description": {
             "title": "Description",
             "type": "string"
@@ -54494,13 +53022,6 @@
               }
             ],
             "title": "Experimental Notice"
-          },
-          "gotchas": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Gotchas",
-            "type": "array"
           },
           "lean_data_policy_parameter_names": {
             "items": {
@@ -59755,7 +58276,7 @@
         "type": "object"
       },
       "WarmupJoinView": {
-        "description": "How the current run joined its retained bars to the present (#2314).\n\nPresent only for a run that resumed on retained bars. ``state`` is\n``contiguous`` (nothing missing), ``filled`` (the hole was fetched from\nIBKR 1-minute history before warmup) or ``refused`` (the hole could not\nbe filled, so the run never decided). ``warmed_from_history_only`` means\nthe bot was stopped longer than its warmup lookback and warmed on that\nlookback's history, as a fresh deploy does.",
+        "description": "How the current run joined its retained bars to the present (#2314).\n\nPresent only for a run that resumed on retained bars. ``state`` is\n``contiguous`` (nothing missing), ``filled`` (the hole was fetched from\nIBKR 1-minute history before warmup) or ``refused`` (the hole could not\nbe filled, so the run never decided). A history-only join means\nthe bot was stopped longer than its warmup lookback and warmed on that\nlookback's history, as a fresh deploy does.",
         "properties": {
           "explanation": {
             "title": "Explanation",
@@ -59836,10 +58357,6 @@
             ],
             "title": "State",
             "type": "string"
-          },
-          "warmed_from_history_only": {
-            "title": "Warmed From History Only",
-            "type": "boolean"
           }
         },
         "required": [
@@ -59852,7 +58369,6 @@
           "filled_count",
           "filled_start_ms",
           "filled_end_ms",
-          "warmed_from_history_only",
           "reason_code"
         ],
         "title": "WarmupJoinView",
@@ -60430,16 +58946,6 @@
           },
           {
             "in": "query",
-            "name": "broker",
-            "required": false,
-            "schema": {
-              "const": "alpaca",
-              "default": "alpaca",
-              "title": "Broker"
-            }
-          },
-          {
-            "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
@@ -60479,12 +58985,7 @@
                     "manual",
                     "strategy",
                     "external",
-                    "unknown",
-                    "recovery",
-                    "emergency",
-                    "shutdown",
-                    "force_flat",
-                    "other"
+                    "unknown"
                   ],
                   "type": "string"
                 },
@@ -60731,16 +59232,6 @@
             "schema": {
               "title": "Transaction Id",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "broker",
-            "required": false,
-            "schema": {
-              "const": "alpaca",
-              "default": "alpaca",
-              "title": "Broker"
             }
           },
           {
@@ -65186,15 +63677,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/AlpacaPaperDeployReceipt"
-                    },
-                    {
-                      "$ref": "#/components/schemas/BudgetDeployCommandReceipt"
-                    }
-                  ],
-                  "title": "Response Deploy Bot Scoped Api Brokers  Broker  Accounts  Account Id  Bots Post"
+                  "$ref": "#/components/schemas/BudgetDeployCommandReceipt"
                 }
               }
             },
@@ -68054,129 +66537,6 @@
         "summary": "Get Clerk Status",
         "tags": [
           "brokers-v2"
-        ]
-      }
-    },
-    "/api/brokers/{broker}/clerks": {
-      "get": {
-        "description": "The same projection filtered to one provider.",
-        "operationId": "list_broker_clerks_for_broker_api_brokers__broker__clerks_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "broker",
-            "required": true,
-            "schema": {
-              "title": "Broker",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "One broker's clerk lanes",
-        "tags": [
-          "broker-clerks"
-        ]
-      }
-    },
-    "/api/brokers/{broker}/clerks/{clerk_id}": {
-      "get": {
-        "description": "Lifecycle, session, capabilities and provider summary for one lane.",
-        "operationId": "describe_broker_clerk_api_brokers__broker__clerks__clerk_id__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "broker",
-            "required": true,
-            "schema": {
-              "title": "Broker",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "clerk_id",
-            "required": true,
-            "schema": {
-              "title": "Clerk Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "One clerk lane's directory entry",
-        "tags": [
-          "broker-clerks"
         ]
       }
     },
@@ -76205,138 +74565,6 @@
         ]
       }
     },
-    "/api/brokers/{broker}/clerks/{clerk_id}/market-status-snapshot": {
-      "get": {
-        "description": "Fleet-routed GET /market-status-snapshot (market_status_read).",
-        "operationId": "fleet_market_status_read_api_brokers__broker__clerks__clerk_id__market_status_snapshot_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "broker",
-            "required": true,
-            "schema": {
-              "title": "Broker",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "clerk_id",
-            "required": true,
-            "schema": {
-              "title": "Clerk Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Fleet Market Status Read",
-        "tags": [
-          "broker-clerks"
-        ]
-      }
-    },
-    "/api/brokers/{broker}/clerks/{clerk_id}/orders": {
-      "get": {
-        "description": "Fleet-routed GET /orders (orders_read).",
-        "operationId": "fleet_orders_read_api_brokers__broker__clerks__clerk_id__orders_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "broker",
-            "required": true,
-            "schema": {
-              "title": "Broker",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "clerk_id",
-            "required": true,
-            "schema": {
-              "title": "Clerk Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Fleet Orders Read",
-        "tags": [
-          "broker-clerks"
-        ]
-      }
-    },
     "/api/brokers/{broker}/clerks/{clerk_id}/portfolio-history": {
       "get": {
         "description": "Fleet-routed GET /portfolio-history (account_read).",
@@ -76464,72 +74692,6 @@
           }
         },
         "summary": "Fleet Portfolio History Proof Read",
-        "tags": [
-          "broker-clerks"
-        ]
-      }
-    },
-    "/api/brokers/{broker}/clerks/{clerk_id}/positions": {
-      "get": {
-        "description": "Fleet-routed GET /positions (positions_read).",
-        "operationId": "fleet_positions_read_api_brokers__broker__clerks__clerk_id__positions_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "broker",
-            "required": true,
-            "schema": {
-              "title": "Broker",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "clerk_id",
-            "required": true,
-            "schema": {
-              "title": "Clerk Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Fleet Positions Read",
         "tags": [
           "broker-clerks"
         ]
@@ -77014,125 +75176,6 @@
         ]
       }
     },
-    "/api/brokers/{broker}/orders": {
-      "get": {
-        "operationId": "list_orders_api_brokers__broker__orders_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "broker",
-            "required": true,
-            "schema": {
-              "title": "Broker",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "status",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "open",
-                    "closed",
-                    "all"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Status"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maximum": 500,
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Limit"
-            }
-          },
-          {
-            "in": "query",
-            "name": "after_ms",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maximum": 253402300799999,
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "After Ms"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/BrokerOrder"
-                  },
-                  "title": "Response List Orders Api Brokers  Broker  Orders Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Orders",
-        "tags": [
-          "brokers-v2"
-        ]
-      }
-    },
     "/api/brokers/{broker}/panel-profile": {
       "get": {
         "operationId": "get_panel_profile_api_brokers__broker__panel_profile_get",
@@ -77320,68 +75363,6 @@
           }
         },
         "summary": "Get Portfolio History Proof",
-        "tags": [
-          "brokers-v2"
-        ]
-      }
-    },
-    "/api/brokers/{broker}/positions": {
-      "get": {
-        "operationId": "list_positions_api_brokers__broker__positions_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "broker",
-            "required": true,
-            "schema": {
-              "title": "Broker",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/BrokerPosition"
-                  },
-                  "title": "Response List Positions Api Brokers  Broker  Positions Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Positions",
         "tags": [
           "brokers-v2"
         ]

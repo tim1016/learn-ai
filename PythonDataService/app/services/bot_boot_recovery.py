@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
-from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
@@ -145,7 +144,6 @@ class BotBootRecovery:
 
     def __init__(
         self,
-        artifacts_root: Path,
         *,
         lifecycle_repo_for: Callable[[str], BotLifecycleStateRepo],
         lifecycle_projector: AlpacaLifecycleProjector,
@@ -159,7 +157,6 @@ class BotBootRecovery:
         binding_for: Callable[[str], BrokerBotBinding | None],
         installed_custody_account_id: Callable[[], str | None],
     ) -> None:
-        del artifacts_root
         self._lifecycle_repo_for = lifecycle_repo_for
         self._lifecycle_projector = lifecycle_projector
         self._lifecycle_projector_for = lifecycle_projector_for or (

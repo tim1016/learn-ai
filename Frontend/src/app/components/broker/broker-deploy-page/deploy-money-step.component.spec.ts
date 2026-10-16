@@ -35,7 +35,7 @@ const MONEY_AFTER: AccountMoneyView = fakeAccountMoney({
 
 const FACTS: DeploymentBudgetPreview = {
   state: 'ready', detail: 'This is an entry-admission budget. Market fills and losses can exceed it.',
-  world: 'real_paper', custody_account_id: 'PA9', risk_revision: 4,
+  world: 'real_paper', risk_revision: 4,
   unreserved_usd: '98329.57', minimum_budget_usd: '501.02', estimated_price_usd: '501.01',
   shortcuts: [{ key: 'half', label: '50%', amount_usd: '617.28', explanation: '50% of $1234.56 currently unreserved cash.' }],
   review_token: null, confirmation_text: null, observed_at_ms: 1_800_000_000_000,
@@ -126,7 +126,7 @@ describe('Deploy step 3, Money', () => {
   it('shows a refused amount’s own sentence, with the backend’s exact amounts, and emits no review', async () => {
     const previewBudget = vi.fn().mockImplementation(async (_target, body: DeployBotBody) =>
       body.budget
-        ? { state: 'unavailable', world: 'real_paper', custody_account_id: 'PA9',
+        ? { state: 'unavailable', world: 'real_paper',
           detail: 'One estimated position needs at least $501.02, including fees.' } satisfies DeploymentBudgetPreview
         : FACTS);
     const { emitted } = await setup(previewBudget);
@@ -175,7 +175,7 @@ describe('Deploy step 3, Money', () => {
 
   it('words Dry Run money as simulated starting cash, with no account bar and no free to deploy (H18)', async () => {
     const dryRunFacts: DeploymentBudgetPreview = {
-      ...FACTS, world: 'synthetic', custody_account_id: null, unreserved_usd: null, risk_revision: 0,
+      ...FACTS, world: 'synthetic', unreserved_usd: null, risk_revision: 0,
       money_after: null, shortcuts: [FACTS.shortcuts?.[0] ?? { key: 'position_headroom', label: '1.2 × one position',
         amount_usd: '601.23', explanation: '1.2 × the $501.02 estimated position.' }],
     };
@@ -208,7 +208,7 @@ describe('Deploy step 3, Money', () => {
     vi.useFakeTimers();
     const priceWait: DeploymentBudgetPreview = {
       state: 'awaiting_price', detail: 'Wait for a fresh IBKR price for this instrument, then review the budget.',
-      world: 'real_paper', custody_account_id: 'PA9',
+      world: 'real_paper',
     };
     const previewBudget = vi.fn().mockResolvedValue(priceWait);
     await render(DeployMoneyStepComponent, {
@@ -238,7 +238,7 @@ describe('Deploy step 3, Money', () => {
       + 'Restore the connection, then review the budget.'],
   ] as const)('sends no amount preview while the money read is %s, so no review can carry risk revision 0 (#2559)', async (state, detail) => {
     vi.useFakeTimers();
-    const wait: DeploymentBudgetPreview = { state, detail, world: 'real_paper', custody_account_id: 'PA9' };
+    const wait: DeploymentBudgetPreview = { state, detail, world: 'real_paper' };
     const previewBudget = vi.fn().mockResolvedValue(wait);
     const emitted: (MoneyReview | null)[] = [];
     await render(DeployMoneyStepComponent, {

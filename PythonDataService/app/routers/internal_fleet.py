@@ -520,4 +520,4 @@ async def option_model_inputs(
     return ModelInputsAnswer.from_read(payload, read)
 
 
-__all__ = ["HistoryBatchProvider", "production_history_batch_provider", "router"]
+__all__ = ["production_history_batch_provider", "router"]

@@ -29,6 +29,7 @@ from uuid import UUID
 import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
+from pydantic import ValidationError
 
 from app.config import settings
 from app.data_lake import run_materialization
@@ -42,7 +43,7 @@ from app.engine.strategy.spec import StrategySpec
 from app.lean_sidecar.trading_calendar import expected_sessions, is_early_close
 from app.main import app
 from app.research.backtest_runs.service import SAVE_FAILED
-from app.routers.spec_strategy import _FIXTURES_DIR, get_data_source_factory
+from app.routers.spec_strategy import _FIXTURES_DIR, SpecBacktestRequest, get_data_source_factory
 from app.schemas.engine_backtest import EngineBacktestRequest
 from app.services import engine_backtest_service
 from tests._helpers.fake_lake_catalog import record_fixture_publication
@@ -465,3 +466,29 @@ async def test_spec_backtest_with_an_end_before_its_start_is_a_bad_request(lean_
 
     assert resp.status_code == 400, resp.text
     assert resp.json()["detail"] == "end_date must not precede start_date (got start=2024-12-06, end=2024-11-25)"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "field"),
+    [
+        ({"start_date": "2024-02-30"}, "start_date"),
+        ({"end_date": "9999-12-31"}, "end_date"),
+        ({"initial_cash": 0}, "initial_cash"),
+    ],
+)
+async def test_spec_backtest_refuses_invalid_window_or_cash_before_reading_data(
+    overrides: dict[str, object], field: str
+) -> None:
+    body = {"spec": _sma_spec(), "start_date": "2024-11-25", "end_date": "2024-12-06", **overrides}
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/spec-strategy/backtest", json=body)
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"][-1] == field
+
+
+@pytest.mark.parametrize("field", ["initial_cash", "commission_per_order"])
+def test_spec_backtest_refuses_non_finite_money(field: str) -> None:
+    body = {"spec": _sma_spec(), "start_date": "2024-11-25", "end_date": "2024-12-06", field: float("inf")}
+    with pytest.raises(ValidationError):
+        SpecBacktestRequest.model_validate(body)

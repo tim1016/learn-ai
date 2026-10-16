@@ -588,7 +588,6 @@ class BotTaskRegistry:
             clock=self._now_ms,
         )
         self._boot_recovery = BotBootRecovery(
-            self._artifacts_root,
             lifecycle_repo_for=self._lifecycle_repo,
             lifecycle_projector=self._lifecycle_projector,
             lifecycle_projector_for=self._lifecycle_projector_for_instance,
@@ -1270,7 +1269,7 @@ class BotTaskRegistry:
                 if authority.reconciliation_covers(reconciled):
                     yield cut
                     return
-        async with authority.start_custody_guard() as cut:
+        async with authority.archive_custody_guard() as cut:
             yield cut
 
     async def stop(
@@ -2837,7 +2836,7 @@ class BotTaskRegistry:
             )
         }
         for strategy_instance_id, run_id in self._authority_for(binding).lifecycle_recovery_candidates():
-            candidates[binding.strategy_instance_id] = BotRecoveryCandidate(
+            candidates[strategy_instance_id] = BotRecoveryCandidate(
                 strategy_instance_id=strategy_instance_id,
                 run_id=run_id,
                 sqlite_active=True,

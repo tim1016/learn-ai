@@ -114,7 +114,7 @@ export class AccountDeskTransactionHistoryStore {
         this.loadedCountState.set(rows.length);
         this.loadedPagesState.update((count) => count + 1);
 
-        const nextCursor = page.next_cursor;
+        const nextCursor = page.next_cursor ?? null;
         if (nextCursor === null) {
           cursor = null;
           break;

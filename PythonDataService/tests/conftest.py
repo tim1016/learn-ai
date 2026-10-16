@@ -8,6 +8,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from tests._helpers.fake_lake_catalog import seeded_lake_catalog as seeded_lake_catalog
+from tests._helpers.legacy_run_registration import legacy_run_registration as legacy_run_registration
 
 # POLYGON_API_KEY and the Signal Program source anchor are primed by the
 # service-root conftest before any collection import (#2485) — including for

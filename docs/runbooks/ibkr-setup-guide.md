@@ -61,7 +61,7 @@ at its next decision trigger because the feed it streams from is gone.
 Do not respond to this by disabling `IBKR_BROKER_ENABLED`; that flag controls
 whether the shared market-data feed exists at all and is load-bearing for
 Alpaca execution (see
-[`docs/ibkr-integration-authority.md`](../ibkr-integration-authority.md)). Fix
+[ADR 0062](../architecture/adrs/0062-broker-clerk-fleet-control-plane.md)). Fix
 the Gateway-side login/Auto restart setting instead.
 
 ## Verify the evidence path
@@ -74,7 +74,8 @@ the Gateway-side login/Auto restart setting instead.
    and correct the Gateway/TWS connectivity or API settings. Do not manufacture a
    broker write to test the connection.
 
-For the boundary, retained routes, and current implementation evidence, use
-[`docs/ibkr-integration-authority.md`](../ibkr-integration-authority.md). This guide
+For the provider boundary, use
+[ADR 0062](../architecture/adrs/0062-broker-clerk-fleet-control-plane.md); the registered routes are in
+`PythonDataService/app/routers/broker.py`. This guide
 intentionally does not describe host-daemon process control: the surviving host daemon
 is a constrained capability-observation bridge, not an IBKR bot supervisor.

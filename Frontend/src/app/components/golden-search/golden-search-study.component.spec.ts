@@ -63,7 +63,7 @@ describe('GoldenSearchStudyComponent', () => {
 
   it('locked: Run research is the next action and sends run_research against the revision on screen', async () => {
     const service = fakeService(studyDetail('locked'));
-    service.command.mockResolvedValueOnce({ study: studyDetail('search_running', { revision: 4, run_to_compare: true }), jobId: 'job-1' });
+    service.command.mockResolvedValueOnce({ study: studyDetail('search_running', { revision: 4 }), jobId: 'job-1' });
     await renderStudy(service);
 
     const process = screen.getByRole('list', { name: 'Research process' });
@@ -76,7 +76,7 @@ describe('GoldenSearchStudyComponent', () => {
   });
 
   it('a stopped research run offers Resume research', async () => {
-    const service = fakeService(studyDetail('search_running', { presented_status: 'interrupted', run_to_compare: true, permitted_actions: ['run_research', 'finish', 'close', 'revise'] }));
+    const service = fakeService(studyDetail('search_running', { presented_status: 'interrupted', permitted_actions: ['run_research', 'finish', 'close', 'revise'] }));
     await renderStudy(service);
 
     fireEvent.click(screen.getByRole('button', { name: 'Resume research' }));

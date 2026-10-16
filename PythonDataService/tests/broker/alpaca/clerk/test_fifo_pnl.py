@@ -346,16 +346,6 @@ def test_multi_symbol_fifo() -> None:
     assert _close(result.realized_pnl, 700.0)
 
 
-def test_duplicate_event_key_is_idempotent() -> None:
-    """A redelivered fill (same event_key) must not double-count P&L."""
-    fill_a = _fill(side=OrderSide.BUY, qty=100, price=10.0, ts_ms=1000, event_key="exec:abc")
-    fill_b = _fill(side=OrderSide.SELL, qty=100, price=12.0, ts_ms=2000, event_key="exec:def")
-    # compute_fifo_pnl processes whatever FillRecords it receives — dedup happens upstream
-    # in project_instance_fills.  Here we verify the math on de-duped input.
-    result = compute_fifo_pnl([fill_a, fill_b])
-    assert _close(result.realized_pnl, 200.0)
-
-
 # ── Exact arithmetic (#2550) ──────────────────────────────────────────────────
 
 

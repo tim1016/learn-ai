@@ -70,7 +70,7 @@ class RunSummaryFacts(BaseModel):
     decision_count: int = Field(ge=0)
     # The Clerk keeps a bot's newest 1,000 decisions; a longer run may count only those.
     decision_count_is_floor: bool = False
-    trade_count: int = Field(ge=0)
+    trade_count: int | None = Field(default=None, ge=0)
     # A running bot's budget, in dollars.
     set_aside_usd: str | None
     # What a stopped bot's Stop released, in dollars, as the Stop recorded it.

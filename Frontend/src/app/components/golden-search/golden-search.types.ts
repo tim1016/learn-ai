@@ -121,11 +121,11 @@ export type ProcedureView = Omit<Schemas['GoldenSearchProcedureView'], 'winner'>
 /** The all-period procedure, with its pair landscapes centered on its winner; `pair_maps_incomplete` when the budget cut them short. */
 export type SearchView = Omit<Schemas['GoldenSearchSearchView'], 'winner'> & { winner: Point };
 
-/** One fold; `incumbent_test_metrics` is the frozen incumbent on the same test window, the benchmark every fold is read against. */
+/** A fold's progress in the study read; detailed measures come from the test charts. */
 export type ValidationFold = Omit<Schemas['GoldenSearchValidationFold'], 'winner'> & { winner: Point | null };
 /** Growth of 1 linked across test folds, minus 1; `linked_return` is null once a fold is missing (the line breaks). */
 export type LinkedFoldReturn = Schemas['GoldenSearchLinkedReturn'];
-/** `incumbent_linked` is the frozen incumbent's test returns linked the same way; `incomplete` when the budget stopped the stage. */
+/** The study's validation result; `incomplete` when the budget stopped the stage. */
 export type ValidationView = Omit<Schemas['GoldenSearchValidationView'], 'folds'> & { folds: ValidationFold[] };
 
 /** `center` marks the candidate's own value in a neighborhood. */

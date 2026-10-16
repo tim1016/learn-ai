@@ -20,7 +20,7 @@ export interface FakeRunDetail {
  */
 export function fakeRunDetail(spy: Spy, changes: Partial<FakeRunDetail> = {}): FakeRunDetail {
   return {
-    trades: spy.fn(async (runId: number) => tradesPage({ run_id: runId, total: 0, trades: [] })),
+    trades: spy.fn(async () => tradesPage({ total: 0, trades: [] })),
     session: spy.fn(async (runId: number, sessionOpenMs: number) => {
       throw new RunDetailRefusedError('OPTIONS_BACKTEST_SESSION_NOT_IN_RUN', `Run ${runId} did not test a session that opened at ${sessionOpenMs}.`, 404);
     }),
@@ -35,7 +35,7 @@ export function fakeRunDetail(spy: Spy, changes: Partial<FakeRunDetail> = {}): F
 /** What `RunDetailService` is provided as when a spec does not care: no trades, no sessions, no comparison, and no mock to count. */
 export function inertRunDetail(): Pick<RunDetailService, 'trades' | 'session' | 'tradesCsv' | 'compare'> {
   return {
-    trades: async (runId) => tradesPage({ run_id: runId, total: 0, trades: [] }),
+    trades: async () => tradesPage({ total: 0, trades: [] }),
     session: async (runId, sessionOpenMs) => {
       throw new RunDetailRefusedError('OPTIONS_BACKTEST_SESSION_NOT_IN_RUN', `Run ${runId} did not test a session that opened at ${sessionOpenMs}.`, 404);
     },

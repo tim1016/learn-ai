@@ -61,26 +61,18 @@ async def test_deploy_scoped_correct_account_delegates(
     body = resp.json()
     assert body["status"] == "deployed"
     assert body["outcome"] == "success"
-    assert body["receipt_id"].startswith("alpaca-paper-deploy:")
-    assert body["recorded_at_ms"] == _T0
     assert body["account_id"] == ACCT
-    assert body["execution_mode"] == "paper"
-    assert body["sizing"] == {"preset": "custom", "quantity": 2}
-    assert body["evidence_override"] is None
-    assert body["bot"]["strategy_instance_id"] == DEPLOYED_SID
-    assert body["bot"]["mode"] == "trade"
-    assert body["bot"]["quantity"] == 2
-    assert body["admission"]["reason_code"] == "START_ADMITTED"
-    assert body["action_plan"]["on_enter"][0]["instrument"]["underlying"] == "SPY"
-    assert body["action_plan"]["on_exit"] == [{"kind": "close_leg", "entry_leg_id": "primary"}]
-    assert body["next_action"]
-    assert body["panel_path"].endswith(f"/{DEPLOYED_SID}")
+    assert body["strategy_instance_id"] == DEPLOYED_SID
+    assert body["committed_usd"] == "1000.00"
     assert len(registry.deploy_calls) == 1
     call = registry.deploy_calls[0]
+    assert call["strategy_instance_id"] == DEPLOYED_SID
     assert call["broker"] == "alpaca"
     assert call["mode"] == "trade"
     assert call["quantity"] == 2
     assert call["use_rth"] is True
+    assert call["evidence_override"] is None
+    assert call["budget_consent"].committed_cents == 100_000
 
 
 async def test_dry_run_deploy_selects_zero_broker_write_runner_mode(deploy_app) -> None:
@@ -97,8 +89,7 @@ async def test_dry_run_deploy_selects_zero_broker_write_runner_mode(deploy_app) 
         )
 
     assert response.status_code == 201
-    assert response.json()["execution_mode"] == "dry_run"
-    assert response.json()["bot"]["mode"] == "dry_run"
+    assert response.json()["status"] == "deployed"
     assert registry.deploy_calls[-1]["mode"] == "dry_run"
 
 
@@ -159,7 +150,7 @@ async def test_the_budget_review_carries_the_same_symbol_warning_beside_the_mone
         "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
         _ALLOW_BODY_STRATEGY,
     )
-    money = DeploymentBudgetPreview(state="ready", detail="Ready", world="real_paper", custody_account_id=ACCT)
+    money = DeploymentBudgetPreview(state="ready", detail="Ready", world="real_paper")
     monkeypatch.setattr(budget_deploy, "preview_budget", lambda account_id, request, *, resolved_parameters: money)
     monkeypatch.setattr(
         budget_deploy, "same_symbol_note",
@@ -192,7 +183,6 @@ async def test_deploy_accepts_dotted_equity_symbol_supported_by_form(
         )
 
     assert response.status_code == 201
-    assert response.json()["action_plan"]["on_enter"][0]["instrument"]["underlying"] == "BRK.B"
     assert registry.deploy_calls[0]["symbol"] == "BRK.B"
 
 
@@ -217,7 +207,6 @@ async def test_deploy_submits_selected_validated_strategy(
         )
 
     assert response.status_code == 201
-    assert response.json()["bot"]["strategy_key"] == "ema_crossover_signal"
     assert registry.deploy_calls[0]["strategy_key"] == "ema_crossover_signal"
 
 
@@ -467,7 +456,7 @@ async def test_evidence_only_strategy_deploys_to_paper_with_the_durable_override
         )
 
     assert response.status_code == 201
-    assert response.json()["bot"]["strategy_key"] == "sma_crossover"
+    assert registry.deploy_calls[0]["strategy_key"] == "sma_crossover"
     recorded = registry.deploy_calls[0]["evidence_override"]
     assert recorded is not None
     assert recorded.acknowledgement == "I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK"
@@ -1112,7 +1101,6 @@ async def test_dry_run_admits_despite_clerk_hold_and_freeze_while_paper_stays_re
         )
 
     assert dry_run_response.status_code == 201
-    assert dry_run_response.json()["execution_mode"] == "dry_run"
     assert paper_response.status_code == 409
     assert paper_response.json()["detail"]["outcome"] == "conflict"
     assert len(registry.deploy_calls) == 1

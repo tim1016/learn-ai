@@ -440,10 +440,8 @@ def test_safe_flatten_prepares_versioned_exact_close_plan() -> None:
             reconciliation_id="reconciliation-17",
             effect_operation_id=None,
             order_ref=None,
-            trigger="operator",
             attempted_at_ms=1_700_000_009_000,
             outcome="RESOLVED_SUCCESS",
-            evidence_age_ms=1_000,
             evidence_refs=("alpaca:positions:17", "alpaca:orders:17"),
         ),
     )
@@ -550,10 +548,8 @@ def test_safe_flatten_plan_token_rejects_newer_position_evidence() -> None:
             reconciliation_id="reconciliation-17",
             effect_operation_id=None,
             order_ref=None,
-            trigger="operator",
             attempted_at_ms=1_700_000_009_000,
             outcome="RESOLVED_SUCCESS",
-            evidence_age_ms=1_000,
             evidence_refs=("alpaca:positions:17",),
         ),
     )
@@ -605,10 +601,8 @@ def test_safe_flatten_fails_closed_for_non_finite_attributed_quantity(
                     reconciliation_id="reconciliation-17",
                     effect_operation_id=None,
                     order_ref=None,
-                    trigger="operator",
                     attempted_at_ms=1_700_000_009_000,
                     outcome="RESOLVED_SUCCESS",
-                    evidence_age_ms=1_000,
                     evidence_refs=("alpaca:positions:17",),
                 ),
             )
@@ -626,10 +620,8 @@ def test_account_safe_flatten_blocks_on_any_bot_uncertainty() -> None:
         reconciliation_id="account-reconciliation-17",
         effect_operation_id=None,
         order_ref=None,
-        trigger="OPERATOR_RECONCILE_NOW",
         attempted_at_ms=1_700_000_009_000,
         outcome="RESOLVED_SUCCESS",
-        evidence_age_ms=1_000,
         evidence_refs=("fresh_account_snapshot",),
     )
     capability = next(
@@ -660,7 +652,6 @@ def test_account_safe_flatten_blocks_on_any_bot_uncertainty() -> None:
                         operator_impact="Account reduction is not proven.",
                         next_step="Reconcile the account.",
                         observed_at_ms=1_700_000_009_000,
-                        evidence_age_ms=1_000,
                         evidence_refs=("order:spy",),
                     ),
                 ),
@@ -680,10 +671,8 @@ def test_safe_flatten_requires_account_wide_reconciliation() -> None:
         reconciliation_id="effect-reconciliation-17",
         effect_operation_id="effect:spy-bot:decision-17",
         order_ref="order:spy-bot:decision-17",
-        trigger="AUTOMATIC",
         attempted_at_ms=1_700_000_009_000,
         outcome="RESOLVED_SUCCESS",
-        evidence_age_ms=1_000,
         evidence_refs=("order:spy-bot:decision-17",),
     )
     capability = next(
@@ -714,10 +703,8 @@ def test_safe_flatten_rejects_position_observed_after_reconciliation() -> None:
         reconciliation_id="account-reconciliation-17",
         effect_operation_id=None,
         order_ref=None,
-        trigger="OPERATOR_RECONCILE_NOW",
         attempted_at_ms=1_700_000_008_000,
         outcome="RESOLVED_SUCCESS",
-        evidence_age_ms=2_000,
         evidence_refs=("fresh_account_snapshot",),
     )
     capability = next(
@@ -748,10 +735,8 @@ def test_safe_flatten_checks_complete_current_orders_not_operation_page() -> Non
         reconciliation_id="account-reconciliation-17",
         effect_operation_id=None,
         order_ref=None,
-        trigger="OPERATOR_RECONCILE_NOW",
         attempted_at_ms=1_700_000_009_000,
         outcome="RESOLVED_SUCCESS",
-        evidence_age_ms=1_000,
         evidence_refs=("fresh_account_snapshot",),
     )
     capability = next(
@@ -765,7 +750,6 @@ def test_safe_flatten_checks_complete_current_orders_not_operation_page() -> Non
                         broker_order_id="alpaca-order-17",
                         role="ENTRY",
                         broker_state="accepted",
-                        submitted_at_ms=1_700_000_007_000,
                         updated_at_ms=1_700_000_009_000,
                     ),
                 ),
@@ -805,7 +789,6 @@ def _account_uncertainty(
         operator_impact="New entries are paused account-wide.",
         next_step="Review it.",
         observed_at_ms=observed_at_ms,
-        evidence_age_ms=1_000,
         evidence_refs=("evidence",),
     )
 
@@ -826,10 +809,8 @@ def _flatten_actions(*uncertainties: ProjectedUncertainty) -> dict[str, Recovery
             reconciliation_id="reconciliation-17",
             effect_operation_id=None,
             order_ref=None,
-            trigger="operator",
             attempted_at_ms=1_700_000_009_000,
             outcome="RESOLVED_SUCCESS",
-            evidence_age_ms=1_000,
             evidence_refs=("alpaca:positions:17",),
         ),
     )
@@ -932,6 +913,58 @@ def _discharge(context: RecoveryPolicyContext) -> RecoveryCapability:
     )
 
 
+@pytest.mark.parametrize("broker_state", ["suspended", "accepted_for_bidding", "pending_replace", "calculated", "stopped"])
+def test_rare_live_order_offers_verified_cancel_before_reduction(broker_state: str) -> None:
+    order = ProjectedOrder(
+        order_ref="order:live", client_order_id="client:live", broker_order_id="broker:live",
+        role="ENTRY", broker_state=broker_state,
+        updated_at_ms=_NOW_MS - 1_000, may_fill=True,
+    )
+    context = _stopped_holding(current_orders=(order,))
+    catalog = {action.action_id: action for action in build_recovery_catalog(context)}
+
+    cancel = catalog["cancel_verified_working_orders"]
+    assert cancel.needed and cancel.available
+    assert [item.reference for item in cancel.evidence] == ["order:order:live"]
+    flatten = catalog["prepare_safe_flatten"]
+    assert flatten.available is False
+    assert flatten.unavailable_reason_code == "WORKING_ORDERS_REQUIRE_CANCEL_FIRST"
+    assert "Cancel verified" in flatten.next_step
+
+    discharge = _discharge(_residue_context(current_orders=(order,)))
+    assert discharge.available is False
+    assert discharge.unavailable_reason_code == "WORKING_ORDERS_REQUIRE_CANCEL_FIRST"
+    assert "Cancel verified" in discharge.next_step
+
+
+def test_live_exit_order_blocks_reduction_without_offering_entry_cancel() -> None:
+    order = ProjectedOrder(
+        order_ref="order:exit", client_order_id="client:exit", broker_order_id="broker:exit",
+        role="REDUCING", broker_state="suspended",
+        updated_at_ms=_NOW_MS - 1_000, may_fill=True,
+    )
+    catalog = {action.action_id: action for action in build_recovery_catalog(_stopped_holding(current_orders=(order,)))}
+
+    cancel = catalog["cancel_verified_working_orders"]
+    assert cancel.needed and not cancel.available
+    assert cancel.evidence == ()
+    flatten = catalog["prepare_safe_flatten"]
+    assert flatten.unavailable_reason_code == "LIVE_ORDER_MAY_STILL_FILL"
+
+
+def test_terminal_entry_order_does_not_offer_cancel() -> None:
+    order = ProjectedOrder(
+        order_ref="order:ended", client_order_id="client:ended", broker_order_id="broker:ended",
+        role="ENTRY", broker_state="canceled",
+        updated_at_ms=_NOW_MS - 1_000, may_fill=False,
+    )
+    catalog = {action.action_id: action for action in build_recovery_catalog(_stopped_holding(current_orders=(order,)))}
+
+    cancel = catalog["cancel_verified_working_orders"]
+    assert not cancel.needed and not cancel.available
+    assert cancel.evidence == ()
+
+
 @pytest.mark.parametrize("reason_code", ["EXIT_NOT_FLAT", "EXIT_STUCK"])
 def test_residue_discharge_is_offered_for_a_residue_an_exit_episode_strands(
     reason_code: str,
@@ -983,10 +1016,8 @@ def test_residue_discharge_is_offered_for_a_residue_an_exit_episode_strands(
                     reconciliation_id="reconciliation-17",
                     effect_operation_id=None,
                     order_ref=None,
-                    trigger="operator",
                     attempted_at_ms=1_700_000_009_500,
                     outcome="RESOLVED_SUCCESS",
-                    evidence_age_ms=500,
                     evidence_refs=("alpaca:positions:17",),
                 )
             },
@@ -1043,10 +1074,8 @@ def test_a_reconciliation_older_than_the_residue_does_not_hide_the_discharge() -
                 reconciliation_id="reconciliation-16",
                 effect_operation_id=None,
                 order_ref=None,
-                trigger="operator",
                 attempted_at_ms=1_700_000_007_000,
                 outcome="RESOLVED_SUCCESS",
-                evidence_age_ms=3_000,
                 evidence_refs=("alpaca:positions:16",),
             )
         )
@@ -1074,10 +1103,8 @@ def _receipt(*, age_ms: int) -> ProjectedReconciliation:
         reconciliation_id="reconciliation-17",
         effect_operation_id=None,
         order_ref=None,
-        trigger="OPERATOR_RECONCILE_NOW",
         attempted_at_ms=_NOW_MS - age_ms,
         outcome="RESOLVED_SUCCESS",
-        evidence_age_ms=age_ms,
         evidence_refs=("fresh_account_snapshot",),
     )
 
@@ -1669,7 +1696,6 @@ def _not_settled_hold(sid: str, *, contract: str = _EXPIRED_CALL) -> ProjectedUn
         operator_impact="New entries are paused for this bot.",
         next_step="End the contract at your word.",
         observed_at_ms=1_700_000_009_000,
-        evidence_age_ms=1_000,
         evidence_refs=(f"contract:{contract}",),
     )
 

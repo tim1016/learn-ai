@@ -15,16 +15,16 @@
           <tr><th scope="row">Side and type</th><td>{{ sideAndType() }}</td><td>{{ detail().lifecycle_state | receiptLabel }}</td></tr>
           <tr><th scope="row">Quantity</th><td>{{ detail().order_instruction?.quantity ?? 'Not recorded' }}</td><td>{{ detail().execution_quantity ?? 'Not recorded' }}</td></tr>
           <tr><th scope="row">Price</th><td>@let limit = detail().order_instruction?.limit_price; @if (limit !== null && limit !== undefined) { {{ limit | currency: 'USD' : 'symbol' : '1.2-6' }} } @else { Market / not recorded }</td><td>@let fillPrice = detail().execution_price; @if (fillPrice !== null && fillPrice !== undefined) { {{ fillPrice | currency: 'USD' : 'symbol' : '1.2-6' }} } @else { Not recorded }</td></tr>
-          <tr><th scope="row">Broker identifiers</th><td><code>{{ detail().order_ref ?? detail().external_order_id ?? 'Not recorded' }}</code></td><td><code>{{ detail().exec_id ?? detail().native_execution_id ?? 'Not recorded' }}</code></td></tr>
+          <tr><th scope="row">Broker identifiers</th><td><code>{{ detail().order_ref ?? detail().external_order_id ?? 'Not recorded' }}</code></td><td><code>{{ detail().native_execution_id ?? 'Not recorded' }}</code></td></tr>
         </tbody>
       </table>
     </p-accordion-content>
   </p-accordion-panel>
   <p-accordion-panel value="events">
-    <p-accordion-header>Event log ({{ detail().events.length }})</p-accordion-header>
+    <p-accordion-header>Event log ({{ events().length }})</p-accordion-header>
     <p-accordion-content>
       <ol class="receipt-events">
-        @for (event of detail().events; track trackEvent($index, event)) {
+        @for (event of events(); track trackEvent($index, event)) {
           <li>
             <div class="receipt-events__headline">
               <strong>{{ event.event_kind | receiptLabel }}</strong>

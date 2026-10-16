@@ -27,7 +27,7 @@ export class MarketDataFeedService {
 
   expirations(symbol: string): Promise<ExpirationsResponse> {
     return firstValueFrom(
-      this.http.get<ExpirationsResponse>(`${this.base}/expirations/${symbol}`),
+      this.http.get<ExpirationsResponse>(`${this.base}/expirations/${encodeURIComponent(symbol)}`),
     );
   }
 

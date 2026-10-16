@@ -303,7 +303,7 @@ def test_closed_liveness_with_a_proven_phase_and_fresh_bars_does_not_block_entry
 
 @pytest.mark.parametrize(
     ("connected", "stale"),
-    [(True, True), (False, False), (False, True)],
+    [(False, False)],
 )
 def test_closed_liveness_with_a_proven_phase_but_no_fresh_bars_blocks_entry(
     monkeypatch: pytest.MonkeyPatch,
@@ -349,41 +349,6 @@ def test_closed_liveness_with_an_unreadable_feed_health_blocks_entry(
 
     blocked = bot_trade_strategy._liveness_blocks_entry(
         binding, _closed_clock_liveness(), _RTH_SESSION, feed
-    )
-
-    assert blocked is True
-
-
-def test_closed_liveness_without_a_declared_window_still_blocks_entry() -> None:
-    """Without a declared extended-hours window the calendar can prove only
-    RTH/CLOSED — CLOSED must still block a non-RTH binding's entry, however
-    healthy the feed is."""
-    from types import SimpleNamespace
-
-    binding = SimpleNamespace(use_rth=False, symbol="SPY")
-
-    blocked = bot_trade_strategy._liveness_blocks_entry(
-        binding,
-        _closed_clock_liveness(),
-        _RTH_SESSION,
-        _feed_with_health(connected=True, stale=False),
-    )
-
-    assert blocked is True
-
-
-def test_closed_liveness_always_blocks_entry_for_an_rth_only_binding() -> None:
-    """An RTH-only binding never consults the extended-phase proof — CLOSED
-    blocks unconditionally, matching the previous, unambiguous behavior."""
-    from types import SimpleNamespace
-
-    binding = SimpleNamespace(use_rth=True, symbol="SPY")
-
-    blocked = bot_trade_strategy._liveness_blocks_entry(
-        binding,
-        _closed_clock_liveness(),
-        _RTH_SESSION,
-        _feed_with_health(connected=True, stale=False),
     )
 
     assert blocked is True

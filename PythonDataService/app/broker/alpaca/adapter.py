@@ -28,7 +28,6 @@ from threading import Lock
 from time import monotonic
 from typing import Any, Literal
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 from app.broker.alpaca.config import BROKER_ID
 from app.broker.contract.errors import BrokerAccountModeDisagreement
@@ -64,12 +63,10 @@ from app.options.contract import OptionContract
 from app.options.event_allocation import OptionEventKind
 from app.options.exact import require_everyday
 from app.options.expiry import option_expiry_anchor_ms
+from app.utils.session_anchors import et_midnight_ms
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
-
-# DST-correct ET zone for anchoring bare dates (never a fixed offset).
-_ET = ZoneInfo("America/New_York")
 
 # Trailing sub-microsecond digits some feeds emit beyond fromisoformat's range.
 _OVERLONG_FRACTION = re.compile(r"(?P<head>.*\.\d{6})\d+(?P<tail>.*)")
@@ -279,9 +276,7 @@ def et_date_to_ms(value: str) -> int:
     Anchoring at the start of the ET calendar day keeps the value from drifting
     a calendar day when rendered in ``date-et`` mode (ADR 0022 (a), (e)).
     """
-    day = date.fromisoformat(value)
-    anchored = datetime(day.year, day.month, day.day, tzinfo=_ET)
-    return int(anchored.timestamp() * 1000)
+    return et_midnight_ms(date.fromisoformat(value))
 
 
 def occurred_at_ms(payload: Mapping[str, Any]) -> int | None:

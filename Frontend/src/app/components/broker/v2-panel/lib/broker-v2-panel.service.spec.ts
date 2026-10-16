@@ -536,7 +536,6 @@ describe('BrokerV2PanelService action submission', () => {
 
   const request = (actionId: PanelActionRequest['action_id']): PanelActionRequest => ({
     action_id: actionId,
-    revision: 1,
     concurrency_token: 'tok',
     idempotency_key: 'command-key-1',
     reason: null,

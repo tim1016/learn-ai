@@ -24,7 +24,6 @@ const SHOWN = '$9,007,199,254,740,993.01';
 const fall = (peak: number | null): Drawdown => ({
   fall_usd: BIG,
   fall_ratio: { numerator_usd: BIG, denominator_usd: BIG, rounded_to_6_places: '0.500000' },
-  measured_at: 'session_end',
   peak_equity_usd: BIG,
   peak_session_open_ms: peak,
   trough_equity_usd: BIG,

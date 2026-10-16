@@ -16,7 +16,6 @@ import {
   HISTORICAL_SNAPSHOT_STATE,
   PAGE_LOAD_COUNT,
   PRESENTED_ACTION_ID,
-  PROFILE,
   REVISION_SEQUENCE,
   STATION_BUTTON_NAME,
   STRATEGY_INSTANCE_ID,
@@ -348,7 +347,7 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
         await route.fulfill({ json: {
           strategy_instance_id: STRATEGY_INSTANCE_ID, account_id: ACCOUNT_ID, transaction_ref: null,
           entries: [], next_cursor: null, total_entries: 0, truncated: false,
-          read_by: 'operator:e2e', read_at_ms: 1_753_800_000_000,
+          read_at_ms: 1_753_800_000_000,
         } });
         return;
       }
@@ -411,10 +410,6 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
             message: 'Unexpected lifecycle request.',
           },
         });
-        return;
-      }
-      if (path === '/api/brokers/alpaca/panel-profile') {
-        await route.fulfill({ json: PROFILE });
         return;
       }
       if (path === `${CLERK_SCOPE}/account`) {

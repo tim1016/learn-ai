@@ -80,14 +80,12 @@ from app.services.broker_v2_panel.catalog_projection_service import (
     sqlite_catalog_rollup,
 )
 from app.services.broker_v2_panel.panel_authority_guard import reject_mixed_authority
+from app.services.broker_v2_panel.panel_errors import PanelUnavailableError
 from app.services.broker_v2_panel.panel_projection_service import open_pnl_fields, select_primary_action
 from app.services.session_authority import SessionAuthorityState
 
 logger = logging.getLogger(__name__)
 
-_WORKING_BROKER_STATES = frozenset(
-    {"new", "accepted", "pending_new", "partially_filled", "pending_cancel"}
-)
 # FILL is satisfied only by actual fill evidence, never by any terminal
 # outcome — a canceled/expired/rejected order definitively received zero fill
 # and must not render as satisfied.
@@ -239,7 +237,11 @@ def _lifecycle_actions(panel: BotPanelView, projection: ClerkProjection) -> list
             running=panel.health.running,
             phase=panel.health.phase,
             freeze_active=panel.clerk.freeze_active,
-            exposure=panel.exposure,
+            exposure={
+                symbol: quantity
+                for symbol, quantity in panel.exposure.items()
+                if position_quantity_is_nonzero(quantity)
+            },
             working_order_count=len(projection.working_order_refs),
             account_id=panel.account_id,
             strategy_instance_id=panel.strategy_instance_id,
@@ -396,7 +398,7 @@ def adapt_sqlite_catalog(
 
 @dataclass(frozen=True)
 class CatalogHomeFacts:
-    """What places an authority's rows on its account's Home (PRD #2560).
+    """What places an authority's rows on its account's Home (#2560).
 
     ``world`` is the authority's own; ``holding_money`` the bots with position
     cost or still-claimed money; ``latest_stops`` each bot's newest run's stop
@@ -559,14 +561,14 @@ def _sqlite_catalog_explanation(
 
     So the unclean-exit case defers to the incoming explanation rather than
     restating it here, unless the bot still holds money: then the row says
-    what it holds and that no bot manages it (PRD #2560 D7), which a crash
+    what it holds and that no bot manages it (#2560 D7), which a crash
     label beside it never contradicts. The copy names no internal authority.
     """
     held = holdings_text(exposure)
     if row.running:
         return f"Running · holds {held}" if held else "Running · no position"
-    # What a stopped bot still holds is its row's headline on Home (PRD
-    # #2560 D7), whatever else is true of it: an unclean label beside it
+    # What a stopped bot still holds is its row's headline on Home (#2560),
+    # whatever else is true of it: an unclean label beside it
     # names how the run ended, and nothing here contradicts that.
     if held:
         return f"Stopped · still holds {held} · no bot is managing it"
@@ -867,8 +869,8 @@ def _flatten_ready(projection: ClerkProjection) -> bool:
 
 
 def _is_working(order: ProjectedOrder) -> bool:
-    """An order the broker acknowledged and has not finished."""
-    return order.broker_order_id is not None and (order.broker_state or "").lower() in _WORKING_BROKER_STATES
+    """A broker-identified order that the Clerk still considers able to fill."""
+    return order.broker_order_id is not None and order.may_fill
 
 
 def _may_still_fill(order: ProjectedOrder) -> bool:
@@ -1000,7 +1002,7 @@ def exit_unconfirmed(projection: ClerkProjection, sid: str) -> bool:
     return projection.strategy_instance_id == sid and _settle_capability(projection) is not None
 
 
-# Every fix it names is on the bot's own page (hurdle H29): it never sends
+# Every fix it names is on the bot's own page: it never sends
 # the owner to the broker outside the app.
 _POSITION_UNVERIFIED = ExposureNoticeView(
     kind="position_unverified",
@@ -1086,7 +1088,8 @@ def _working_order_view(
         or order.filled_quantity is None
     ):
         raise SqlitePanelAdapterUnavailable(
-            f"SQLite order {order.order_ref!r} lacks durable leg or fill evidence"
+            "This bot's working orders could not be shown.",
+            detail=f"SQLite order {order.order_ref!r} lacks durable leg or fill evidence.",
         )
     return WorkingOrderView(
         order_ref=order.order_ref,
@@ -1157,8 +1160,12 @@ def recent_fill_view(
     )
 
 
-class SqlitePanelAdapterUnavailable(RuntimeError):
-    """The active SQLite panel cannot safely present an incomplete fold."""
+class SqlitePanelAdapterUnavailable(PanelUnavailableError):
+    """The active SQLite panel cannot safely present an incomplete fold.
+
+    The panel's own typed refusal (503): the page and the action that builds
+    it answer in words, never the global 500.
+    """
 
 
 def _require_coherent_economic_snapshot(
@@ -1172,7 +1179,8 @@ def _require_coherent_economic_snapshot(
         or economics.control_revision != projection.control_revision
     ):
         raise SqlitePanelAdapterUnavailable(
-            "SQLite custody and economic projections do not share one authority revision"
+            "This bot's custody and money could not be read together.",
+            detail="SQLite custody and economic projections do not share one authority revision.",
         )
 
 

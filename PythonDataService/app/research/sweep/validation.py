@@ -107,7 +107,7 @@ def validate_grid(
         raise WorkloadLimitError(total, limit)
     for candidate in _expanded_or_invalid(config, symbol):
         try:
-            registration.param_schema.model_validate({**candidate.params, "symbol": symbol})
+            validated = registration.param_schema.model_validate({**candidate.params, "symbol": symbol})
         except ValidationError as exc:
             first = exc.errors()[0]
             location = first.get("loc") or ()
@@ -118,6 +118,9 @@ def validate_grid(
                 parameter=parameter,
                 value=value,
             ) from exc
+        refusal = None if registration.params_refusal is None else registration.params_refusal(validated)
+        if refusal is not None:
+            raise GridInvalidError(f"candidate {candidate.params} is not executable: {refusal}")
     return ValidatedGrid(strategy_key=strategy_key, symbol=symbol, combinations=combinations)
 
 

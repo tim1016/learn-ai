@@ -1,4 +1,4 @@
-"""Grid Search HTTP boundary (PRD #1926 "HTTP contract").
+"""Grid Search HTTP boundary (#1926 "HTTP contract").
 
 ``router`` — the research surface under ``/api/research/grid-search``:
 preflight, history listing, detail, server-paged cells, and delete.

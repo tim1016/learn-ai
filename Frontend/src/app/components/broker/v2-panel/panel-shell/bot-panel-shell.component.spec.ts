@@ -31,7 +31,6 @@ import type {
   BotRunView,
   PanelAction,
   PanelActionResult,
-  PanelProfile,
 } from '../lib/broker-v2-panel.types';
 import { provideRouter, Router } from '@angular/router';
 import {
@@ -89,13 +88,6 @@ beforeEach(() => {
   });
   chartMocks.createChart.mockClear();
 });
-
-const PROFILE: PanelProfile = {
-  broker: 'alpaca',
-  fee_fidelity: 'none',
-  live_bars_supported: false,
-  stations: [],
-};
 
 const PANEL: BotPanelView = {
   strategy_instance_id: 'sid-001',
@@ -377,7 +369,7 @@ const RECONCILE_ACTION = {
 } satisfies PanelAction;
 
 /** A crashed bot still holding 2.5 QQQ, with no header action (the backend's
- * rule): the stranded-position warning is where it is flattened (H30–H31). */
+ * rule): the stranded-position warning is where it is flattened (#2794). */
 function strandedPanel(overrides: Partial<BotPanelView> = {}): BotPanelView {
   return {
     ...PANEL,
@@ -560,7 +552,6 @@ const STOPPED_BUDGET: DeploymentBudgetView = {
 
 const mockService = {
   getBudget: vi.fn().mockResolvedValue(RUNNING_BUDGET),
-  getPanelProfile: vi.fn().mockResolvedValue(PROFILE),
   getPanel: vi.fn().mockResolvedValue(PANEL),
   getLiveSnapshot: vi.fn().mockResolvedValue(liveSnapshot()),
   liveStreamUrl: vi.fn().mockReturnValue('/api/test/live-stream'),
@@ -597,7 +588,6 @@ const mockService = {
     next_cursor: null,
     total_entries: 1,
     truncated: false,
-    read_by: 'operator:test',
     read_at_ms: 1_753_800_000_000,
   }),
   runBotAction: vi.fn().mockResolvedValue({
@@ -764,10 +754,8 @@ describe('BotPanelShellComponent', () => {
   });
 
   describe('the workspace tab this page belongs to', () => {
-    // A bot's page sits inside the account workspace, under Home (PRD #2560):
-    // Overview, Bots and Gallery merged into it, so there is no tab to stamp.
-    async function renderShellWithStamp(query: string) {
-      const view = await render(BotPanelShellComponent, {
+    it('points its way back at Home', async () => {
+      const { fixture } = await render(BotPanelShellComponent, {
         inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
         providers: [
           provideRouter([{ path: '**', children: [] }]),
@@ -776,16 +764,8 @@ describe('BotPanelShellComponent', () => {
           { provide: MessageService, useValue: messageService },
         ],
       });
-      await TestBed.inject(Router).navigateByUrl(
-        `/brokers/alpaca/clerks/clrk_spec/accounts/DUM284968/bots/sid-001${query}`,
-      );
-      await view.fixture.whenStable();
-      view.fixture.detectChanges();
-      return view;
-    }
-
-    it.each([[''], ['?from=gallery']])('points its way back at Home (%s)', async (query) => {
-      await renderShellWithStamp(query);
+      await fixture.whenStable();
+      fixture.detectChanges();
 
       const back = screen.getByRole('link', { name: 'Home' });
       expect(back.getAttribute('href')).toBe('/brokers/alpaca/clerks/clrk_spec/accounts/DUM284968');
@@ -911,7 +891,7 @@ describe('BotPanelShellComponent', () => {
     });
   });
 
-  it('shows loading state initially then renders the one view', async () => {
+  it('renders the loaded panel and reveals current-run evidence when Runs opens', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }, { provide: BrokersService, useValue: brokersMock },
@@ -947,7 +927,7 @@ describe('BotPanelShellComponent', () => {
     expect(screen.getByText('run-current')).toBeTruthy();
   });
 
-  describe('every safe-flatten trigger routes into the warning (H30)', () => {
+  describe('every safe-flatten trigger routes into the warning (#2794)', () => {
     async function renderWith(snapshot: BotPanelLiveSnapshot) {
       const view = await render(BotPanelShellComponent, {
         inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
@@ -1290,7 +1270,7 @@ describe('BotPanelShellComponent', () => {
     });
 
     /** Flatten the stranded bot from its warning, the one way a flatten
-     * starts: reconcile, a fresh panel, then the checked plan (H30). */
+     * starts: reconcile, a fresh panel, then the checked plan (#2794). */
     async function prepareFlatten(): Promise<ComponentFixture<BotPanelShellComponent>> {
       mockService.getPanel
         .mockResolvedValueOnce(strandedPanel())
@@ -1620,7 +1600,7 @@ describe('BotPanelShellComponent', () => {
       // A durably accepted EXIT whose reducing order is still pending — a
       // broker lookup outage, a transiently blocked REDUCE — has sent nothing,
       // and telling the operator otherwise is the one thing worse than the
-      // outage itself (Codex review 2026-09-19).
+      // outage itself.
       const observedAtMs = Date.now();
       mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
       brokersMock.checkSqliteRecoveryActionInFull.mockImplementation(async () => EXTENDED_CHECK_WITH_READING(observedAtMs));
@@ -1651,8 +1631,11 @@ describe('BotPanelShellComponent', () => {
       // The Clerk re-mints the token every reconciliation pass, so a refresh
       // that meets a rotated one must refresh the panel and retry with the
       // token it now presents — never strand the ticket (#2007 review).
-      mockService.getLiveSnapshot.mockResolvedValueOnce(extendedFlattenSnapshot());
-      mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot('plan-token-18'));
+      let rotated = false;
+      mockService.getLiveSnapshot.mockImplementation(async () => ({
+        ...extendedFlattenSnapshot(rotated ? 'plan-token-18' : 'plan-token-17'),
+        surface_version: rotated ? 2 : 1,
+      }));
       const extendedCheck = {
         capability: SAFE_FLATTEN_CAPABILITY,
         reduction_pricing: {
@@ -1666,12 +1649,13 @@ describe('BotPanelShellComponent', () => {
       } satisfies SqliteRecoveryActionCheck;
       brokersMock.checkSqliteRecoveryActionInFull.mockResolvedValueOnce(extendedCheck);
       const fixture = await prepareFlatten();
-      brokersMock.checkSqliteRecoveryActionInFull.mockRejectedValueOnce(
-        new HttpErrorResponse({
+      brokersMock.checkSqliteRecoveryActionInFull.mockImplementationOnce(async () => {
+        rotated = true;
+        throw new HttpErrorResponse({
           status: 409,
           error: { detail: { reason: 'stale_action_token', message: 'The plan changed.' } },
-        }),
-      );
+        });
+      });
       brokersMock.checkSqliteRecoveryActionInFull.mockResolvedValueOnce(extendedCheck);
 
       const ticket = await screen.findByRole('region', { name: 'Extended-hours flatten limit order' });
@@ -1684,12 +1668,8 @@ describe('BotPanelShellComponent', () => {
       const tokens = brokersMock.checkSqliteRecoveryActionInFull.mock.calls.map(
         (call: unknown[]) => (call[2] as { concurrency_token: string }).concurrency_token,
       );
-      // Each call carries the token the panel presented at the time. The
-      // retry's *value* cannot be asserted here: this harness's live store
-      // does not push the second snapshot into the signal the shell reads, so
-      // the rotation itself is covered by the refresh path, not by this spec.
       expect(tokens[1]).toBe('plan-token-17');
-      expect(tokens[2]).toBeDefined();
+      expect(tokens[2]).toBe('plan-token-18');
       expect(mockService.getLiveSnapshot.mock.calls.length).toBeGreaterThan(1);
       expect(screen.queryByText(/Quote refresh failed/)).toBeNull();
       expect(screen.getByRole('region', { name: 'Extended-hours flatten limit order' })).toBeTruthy();
@@ -1774,8 +1754,6 @@ describe('BotPanelShellComponent', () => {
 
     expect(container.querySelectorAll('app-bot-page-header')).toHaveLength(1);
     expect(screen.getByRole('toolbar', { name: 'Actions for this bot' })).toBeTruthy();
-    expect(screen.queryByRole('tab', { name: 'Trader' })).toBeNull();
-    expect(screen.queryByRole('tab', { name: 'Operator' })).toBeNull();
     // The chart on the left; on the right, money, orders and setup, then decisions and health.
     const panels = (selector: string): string[] =>
       [...container.querySelectorAll(selector)].map((panel) => panel.classList[1]);
@@ -1836,7 +1814,7 @@ describe('BotPanelShellComponent', () => {
     expect(slot.content()).toBeNull();
   });
 
-  it('prices the tape from the last IBKR bar and never reads a Polygon snapshot (H15)', async () => {
+  it('prices the tape from the last IBKR bar and never reads a Polygon snapshot (#2595)', async () => {
     const bar = (startMs: number, close: string) => ({
       start_ms: startMs, end_ms: startMs + 5_000, open: close, high: close, low: close, close,
       volume: 10, source: 'ibkr' as const,
@@ -1883,13 +1861,12 @@ describe('BotPanelShellComponent', () => {
     fixture.detectChanges();
 
     expect(screen.getByText('run-current')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Previous Runs' })).toBeNull();
     expect(screen.getByRole('link', { name: 'History' }).getAttribute('href'))
       .toBe('/brokers/alpaca/clerks/clrk_spec/history?account=clrk_spec&bot=sid-001');
     expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps lifecycle actions bound to the current instance with Runs open', async () => {
+  it('sends Reconcile for this bot while Runs is open', async () => {
     mockService.getLiveSnapshot.mockResolvedValueOnce(liveSnapshot({
       ...PANEL,
       health: { ...PANEL.health, running: false },
@@ -2028,7 +2005,7 @@ describe('BotPanelShellComponent', () => {
     fixture.destroy();
   });
 
-  it('shows log-only degradation panel after data loads', async () => {
+  it('explains log-only mode after data loads', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }, { provide: BrokersService, useValue: brokersMock },
@@ -2477,15 +2454,13 @@ describe('BotPanelShellComponent', () => {
         `${term.textContent?.trim()} ${term.nextElementSibling?.textContent?.trim()}`);
     }
 
-    it('leads with the bot’s own status and the backend’s summary, and no LIVE chip (#2794 R1, R3)', async () => {
+    it('leads with the bot’s own status and the backend’s summary (#2794 R1, R3)', async () => {
       const { container } = await renderPage({ ...PANEL, mode: 'trade' });
 
       const banner = container.querySelector('app-bot-page-header');
       expect(banner?.textContent).toContain('Running');
       await userEvent.click(screen.getByRole('button', { name: 'Running' }));
       expect(screen.getByText('Running since Tue Nov 14 2023, 17:13 ET · no decisions, no trades.')).toBeTruthy();
-      expect(banner?.textContent).not.toContain('LIVE');
-      expect(banner?.querySelector('app-alpaca-lane-mode-chip')).toBeNull();
     });
 
     it('splits health into this run and the account right now (#2794 R9)', async () => {
@@ -2564,7 +2539,7 @@ describe('BotPanelShellComponent', () => {
       ]);
     });
 
-    it('moves the keyboard to the outcome after a command (story 48)', async () => {
+    it('moves the keyboard to the outcome after a command (#2794)', async () => {
       await renderPage({ ...PANEL, mode: 'trade', actions: [RECONCILE_ACTION], primary_action: 'reconcile_now' });
 
       await userEvent.click(screen.getByRole('button', { name: 'Check against Alpaca' }));
@@ -2573,7 +2548,7 @@ describe('BotPanelShellComponent', () => {
       expect(document.activeElement?.textContent).toContain('Reconciliation requested.');
     });
 
-    it('flattens on one confirmation: reconcile, fresh panel, checked plan, then send (H30)', async () => {
+    it('flattens on one confirmation: reconcile, fresh panel, checked plan, then send (#2794)', async () => {
       const getPanel = vi.fn()
         .mockResolvedValueOnce(strandedPanel())
         .mockResolvedValueOnce(strandedPanel({ actions: [RECONCILE_ACTION, PREPARE_SAFE_FLATTEN_ACTION] }))

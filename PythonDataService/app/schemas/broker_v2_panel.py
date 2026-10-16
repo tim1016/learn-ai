@@ -130,8 +130,8 @@ class PanelAction(BaseModel):
     """One backend-presented action.
 
     Angular executes only the closed set of known action ids and renders
-    exactly what it is given. ``revision`` binds the action to the panel-state
-    revision it was presented against; a stale POST is a 409.
+    exactly what it is given. ``revision`` identifies the presented panel state;
+    the action-scoped concurrency token fences a stale POST.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -363,7 +363,7 @@ class WarmupJoinView(BaseModel):
     Present only for a run that resumed on retained bars. ``state`` is
     ``contiguous`` (nothing missing), ``filled`` (the hole was fetched from
     IBKR 1-minute history before warmup) or ``refused`` (the hole could not
-    be filled, so the run never decided). ``warmed_from_history_only`` means
+    be filled, so the run never decided). A history-only join means
     the bot was stopped longer than its warmup lookback and warmed on that
     lookback's history, as a fresh deploy does.
     """
@@ -379,7 +379,6 @@ class WarmupJoinView(BaseModel):
     filled_count: int = Field(ge=0)
     filled_start_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
     filled_end_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
-    warmed_from_history_only: bool
     reason_code: WarmupRefusalReason | None
 
 
@@ -798,7 +797,7 @@ class BotPanelView(BaseModel):
     # first, as chart markers: the page is one bot's, on its one symbol, so a
     # marker carries no symbol or authority stamp. Labelled with the run's date
     # (``bot_page.summary.facts.started_at_ms``), never "today" (#2794 R8).
-    # ``None`` exactly when ``bot_page`` is.
+    # ``None`` when ``bot_page`` is absent or the Clerk-admitted run is unreadable.
     run_fills: list[RunFillView] | None = None
 
     @model_validator(mode="after")
@@ -836,7 +835,6 @@ class PanelActionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     action_id: ActionId
-    revision: int = Field(ge=0)
     concurrency_token: str = Field(min_length=1, max_length=128)
     idempotency_key: str = Field(min_length=1, max_length=128)
     reason: str | None = Field(default=None, max_length=512)

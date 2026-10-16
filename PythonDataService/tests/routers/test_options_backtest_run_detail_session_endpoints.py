@@ -96,11 +96,7 @@ async def test_the_busy_session_is_served_with_its_stored_facts_in_order_and_eve
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert (body["run_id"], body["session_open_ms"], body["session_close_ms"]) == (
-        run_id,
-        WED_OPEN_MS,
-        WED_OPEN_MS + 390 * MS_PER_MINUTE,
-    )
+    assert (body["session_open_ms"], body["session_close_ms"]) == (WED_OPEN_MS, WED_OPEN_MS + 390 * MS_PER_MINUTE)
     # 10,000.00 less 8.70 - 121.30 - 31.30 = -143.90 is 9,856.10.
     assert (body["status"], body["skip_reason"]) == ("traded", None)
     assert (D(body["cash_before_usd"]), D(body["cash_after_usd"]), D(body["profit_usd"])) == (

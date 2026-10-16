@@ -43,6 +43,7 @@ from app.broker.alpaca.clerk.sqlite.runtime import (
     SqliteAlpacaClerkFacade,
     StrategyAdmissionStaleError,
 )
+from app.broker.alpaca.clerk.sqlite.uncertainty import raise_account_hold
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.errors import BrokerError
@@ -55,9 +56,7 @@ from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite.conftest import _TestClock
 
 # #2596: these ENTERs run on the default clock; keep it inside a session.
-pytestmark = pytest.mark.usefixtures("wall_clock_in_session")
-
-
+pytestmark = pytest.mark.usefixtures("wall_clock_in_session", "legacy_run_registration")
 class _Broker:
     broker_id = "alpaca"
 
@@ -69,6 +68,7 @@ class _Broker:
         self.release_cancel.set()
         self.submissions: list[str] = []
         self.cancellations: list[str] = []
+        self.live_status = "accepted"
 
     async def list_orders(self, **_kwargs: Any) -> list[BrokerOrder]:
         return []
@@ -99,7 +99,7 @@ class _Broker:
         )
         if f"broker-{client_order_id}" in self.cancellations:
             return order.model_copy(update={"status": "canceled", "canceled_at_ms": 11, "updated_at_ms": 11})
-        return order
+        return order.model_copy(update={"status": self.live_status})
 
 
 def _order(client_order_id: str, leg: BrokerOrderLeg) -> BrokerOrder:
@@ -230,7 +230,6 @@ async def test_custody_projection_answers_from_the_last_sweep_without_broker_con
     assert broker.read_calls == after_sweep, "a read reached the broker port"
     assert projection is not None
     assert projection.reconciliation_state == "clean"
-    assert projection.reconciled_at_ms > 0
 
     repo.close()
 
@@ -445,7 +444,7 @@ async def test_published_pass_is_dated_at_its_verdict_never_at_its_publish(tmp_p
     assert published is not None
     assert (published.vouches, published.observed_at_ms) == (True, _PASS_AT_MS)
     assert facade.last_clean_pass_at_ms() == _PASS_AT_MS
-    assert (await facade.custody_snapshot_projection("sid-1")).reconciled_at_ms == _PASS_AT_MS
+    assert (await facade.custody_snapshot_projection("sid-1")).reconciliation_state == "clean"
 
     # The pass stands for 60 s from its verdict. A millisecond later it vouches
     # for nothing, though its publish is not yet 60 s old.
@@ -993,8 +992,10 @@ async def test_the_clerks_decision_receipt_carries_the_explanation_it_was_handed
     repo.close()
 
 
+@pytest.mark.parametrize("broker_state", ["accepted", "suspended", "pending_replace", "canceled"])
 async def test_cancel_verified_working_entry_records_intent_before_broker_contact(
     tmp_path: Path,
+    broker_state: str,
 ) -> None:
     repo = ClerkSqliteRepository.initialize(
         account_id="PA-TEST",
@@ -1014,6 +1015,10 @@ async def test_cancel_verified_working_entry_records_intent_before_broker_contac
         quantity=binding.quantity,
     )
     order_ref = receipt.child_order_refs[0]
+    broker.live_status = broker_state
+    with repo.write_fence() as conn:
+        conn.execute("UPDATE orders SET broker_state = ? WHERE order_ref = ?", (broker_state, order_ref))
+        conn.commit()
 
     orders = await facade.cancel_verified_working_orders(
         strategy_instance_id=binding.strategy_instance_id,
@@ -1021,20 +1026,76 @@ async def test_cancel_verified_working_entry_records_intent_before_broker_contac
     )
 
     assert orders[0].broker_state == "canceled"
-    assert broker.cancellations == [f"broker-{order_ref}"]
+    assert broker.cancellations == ([] if broker_state == "canceled" else [f"broker-{order_ref}"])
     transitions = repo.transitions_for_order(order_ref)
-    cancel_index = next(
-        index
-        for index, transition in enumerate(transitions)
-        if transition["transition_kind"] == "ORDER_CANCEL_REQUESTED"
-    )
-    confirmed_index = next(
-        index
-        for index, transition in enumerate(transitions)
-        if transition["transition_kind"] == "ENTRY_TERMINAL_CONFIRMED"
-    )
-    assert cancel_index < confirmed_index
+    if broker_state == "canceled":
+        assert not any(transition["transition_kind"] == "ORDER_CANCEL_REQUESTED" for transition in transitions)
+    else:
+        cancel_index = next(
+            index
+            for index, transition in enumerate(transitions)
+            if transition["transition_kind"] == "ORDER_CANCEL_REQUESTED"
+        )
+        confirmed_index = next(
+            index
+            for index, transition in enumerate(transitions)
+            if transition["transition_kind"] == "ENTRY_TERMINAL_CONFIRMED"
+        )
+        assert cancel_index < confirmed_index
     repo.close()
+
+
+async def test_cancel_verified_working_orders_refuses_unowned_duplicate_and_other_bot_refs_before_contact(
+    tmp_path: Path,
+) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    broker = _Broker()
+    broker.release_submit.set()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
+    binding = _binding()
+    try:
+        await facade.register_strategy_run(binding)
+        receipt = await facade.execute_for_instance(
+            strategy_instance_id=binding.strategy_instance_id,
+            run_id=binding.run_id,
+            decision_id="decision-cancel-guards",
+            purpose=EffectPurpose.ENTER,
+            action_plan=binding.action_plan,
+            quantity=binding.quantity,
+        )
+        [order_ref] = receipt.child_order_refs
+
+        with pytest.raises(ValueError, match="duplicates"):
+            await facade.cancel_verified_working_orders(
+                strategy_instance_id=binding.strategy_instance_id, order_refs=(order_ref, order_ref)
+            )
+        with pytest.raises(ValueError, match="not an owned ENTRY"):
+            await facade.cancel_verified_working_orders(
+                strategy_instance_id=binding.strategy_instance_id, order_refs=("unknown-ref",)
+            )
+        with pytest.raises(ValueError, match="not owned by strategy"):
+            await facade.cancel_verified_working_orders(strategy_instance_id="another-bot", order_refs=(order_ref,))
+
+        assert broker.cancellations == []
+        assert not any(row["transition_kind"] == "ORDER_CANCEL_REQUESTED" for row in repo.transitions_for_order(order_ref))
+    finally:
+        repo.close()
+
+
+async def test_custody_projection_keeps_an_active_account_hold_visible(tmp_path: Path) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    broker = _Broker()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
+    try:
+        raise_account_hold(repo, reason_code="STREAM_HEALTH_HOLD", evidence_refs=["stream:down"])
+
+        projection = await facade.custody_snapshot_projection("sid-1")
+
+        assert projection.hold.active is True
+        assert projection.hold.reason_code == "STREAM_HEALTH_HOLD"
+        assert broker.submissions == [] and broker.cancellations == []
+    finally:
+        repo.close()
 
 
 async def test_parked_cancellation_does_not_block_trade_update_fold(tmp_path: Path) -> None:
@@ -1553,7 +1614,7 @@ async def test_the_real_sweep_publishes_the_verdict_panel_reads_project(
     ``ReconciliationSweep`` is what actually runs every 15 s, and it calls
     ``reconcile_account`` directly rather than through the facade. If it does
     not publish its verdict, ``custody_snapshot_projection`` answers ``stale``
-    with ``reconciled_at_ms=0`` forever no matter how many sweeps succeed --
+    with a stale reconciliation state forever no matter how many sweeps succeed --
     reads stay pure, but they also stop telling the truth.
 
     Drives the real sweep, not a facade stand-in, so the wiring is what is
@@ -1579,7 +1640,7 @@ async def test_the_real_sweep_publishes_the_verdict_panel_reads_project(
     projection = await facade.custody_snapshot_projection("sid-1")
 
     assert projection.reconciliation_state == "clean"
-    assert projection.reconciled_at_ms > 0, "the sweep's verdict never reached the projection"
+    assert (await facade.published_pass("sid-1")) is not None, "the sweep's verdict never reached the projection"
 
     repo.close()
 

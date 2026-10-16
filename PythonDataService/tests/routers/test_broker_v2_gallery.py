@@ -36,6 +36,7 @@ from app.services.broker_v2_panel import panel_chart_data_source
 from app.services.broker_v2_panel.chart_projection_service import aggregator_bars_to_chart_bars
 from app.services.broker_v2_panel.gallery_hub import GalleryHub
 from app.services.broker_v2_panel.panel_data_source import PanelUnavailableError, UnknownBotError
+from app.services.broker_v2_panel.panel_errors import AccountMismatchError
 from app.services.broker_v2_panel.stream_frame_budget import FLEET_FRAMING_RESERVE_BYTES
 from app.services.live_bar_aggregator import _RING_BUFFER_SIZE_5S, LiveLineStatus
 
@@ -231,6 +232,53 @@ async def test_gallery_snapshot_includes_stopped_bot_and_excludes_retired(
     assert {s["symbol"] for s in body["symbols"]} == {"SPY", "QQQ"}  # IWM (retired) never subscribed
     stopped = next(b for b in body["bots"] if b["sid"] == "Aug11-03")
     assert stopped["running"] is False
+
+
+class _RefusingCatalogSource:
+    """A roster the panel refuses to read, as it does for another account or a runner that is not up."""
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    async def get_catalog(self, broker: str, account_id: str) -> list[_Cat2]:
+        raise self._error
+
+
+@pytest.mark.parametrize("surface", ["snapshot", "stream"])
+@pytest.mark.parametrize(
+    ("error", "status"),
+    [
+        (AccountMismatchError("Account 'PA9' is not the account for broker 'alpaca'.", detail="The broker's is PA3."), 404),
+        (PanelUnavailableError("The bot runner is not available.", detail="The service is still starting."), 503),
+    ],
+    ids=["another-account-is-404", "backend-unavailable-is-503"],
+)
+async def test_a_roster_the_panel_refuses_is_its_typed_answer_on_both_gallery_reads(
+    monkeypatch: pytest.MonkeyPatch, surface: str, error: Exception, status: int
+) -> None:
+    """The wall answers a refused account as the panel does: with the refusal, before any stream is opened.
+
+    It used to answer the global 500 on the snapshot, and on the stream a 200
+    whose generator then died.
+    """
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "")
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", True)
+    hub = GalleryHub(
+        broker=_BROKER,
+        account_id=_ACCOUNT_ID,
+        catalog_source=_RefusingCatalogSource(error),
+        aggregator=_FakeAggregator(),
+    )
+    app.dependency_overrides[broker_v2_gallery.get_gallery_hub] = lambda: hub
+    try:
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get(f"{_URL_PREFIX}/{surface}")
+    finally:
+        app.dependency_overrides.pop(broker_v2_gallery.get_gallery_hub, None)
+
+    assert response.status_code == status, response.text
+    assert response.json()["detail"]["message"] == str(error)
+    assert response.json()["detail"]["why"] == error.detail  # type: ignore[attr-defined]
 
 
 async def test_gallery_stream_stopped_bot_survives_update() -> None:
@@ -659,7 +707,6 @@ def _snapshot_frame_of_exact_size(target_bytes: int) -> GalleryLiveSnapshot:
                     realized_pnl_today=None,
                     open_pnl=None,
                     day_pnl=None,
-                    session_change_pct=None,
                     fills_today=None,
                     feed=GalleryFeedView(
                         state="LIVE",

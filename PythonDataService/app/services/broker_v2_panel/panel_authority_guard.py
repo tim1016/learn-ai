@@ -24,9 +24,10 @@ from app.schemas.account_authority import (
 )
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import RecentDecisionView, RecentFillView
+from app.services.broker_v2_panel.panel_errors import PanelUnavailableError
 
 
-class MixedAuthorityAggregateError(RuntimeError):
+class MixedAuthorityAggregateError(PanelUnavailableError):
     """A panel evidence aggregate would have combined more than one account authority.
 
     A roster or panel aggregate accepts exactly one Clerk account authority
@@ -34,7 +35,17 @@ class MixedAuthorityAggregateError(RuntimeError):
     of simulated and real-paper rows, and never rows stamped for two different
     accounts of the same kind (e.g. one bot's synthetic authority leaking into
     another bot's projection).
+
+    The panel's own typed refusal (503), so the page and the action that
+    builds it answer in words rather than the global 500; ``reason`` is the
+    specific disagreement.
     """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(
+            "This bot's page was refused: its records name more than one account's authority.",
+            detail=reason,
+        )
 
 
 def default_authority_account_id(status: BotStatusView, account_id: str) -> str:
@@ -104,4 +115,7 @@ def reject_mixed_authority(
             rows=tuple(rows),
         )
     except ValidationError as exc:
-        raise MixedAuthorityAggregateError(str(exc)) from exc
+        named = sorted({authority_account_id, *(row.account_id for row in rows)})
+        raise MixedAuthorityAggregateError(
+            "panel evidence rows belong to more than one account authority: " + ", ".join(repr(a) for a in named)
+        ) from exc

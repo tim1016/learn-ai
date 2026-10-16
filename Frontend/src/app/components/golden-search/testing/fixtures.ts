@@ -65,13 +65,13 @@ export function emaCapability(overrides: Partial<StrategyCapability> = {}): Stra
     available: true,
     reason: null,
     knobs: [
-      { name: 'gap', label: 'Crossover gap', unit: 'price ($)', kind: 'decimal', domain_low: 0, domain_high: 2, quantum: 0.01, default_low: 0, default_high: 0.6, neighbor_step: 0.05, default_step: 0.05, searchable_by_default: true, warmup_dependent: false, default_value: 0.2, note: '' },
-      { name: 'rsi_min', label: 'RSI lower gate', unit: 'RSI points', kind: 'decimal', domain_low: 0, domain_high: 100, quantum: 1, default_low: 30, default_high: 60, neighbor_step: 2, default_step: 1, searchable_by_default: true, warmup_dependent: false, default_value: 50, note: '' },
-      { name: 'rsi_max', label: 'RSI upper gate', unit: 'RSI points', kind: 'decimal', domain_low: 0, domain_high: 100, quantum: 1, default_low: 60, default_high: 90, neighbor_step: 2, default_step: 1, searchable_by_default: true, warmup_dependent: false, default_value: 70, note: '' },
-      { name: 'fast_period', label: 'Fast EMA length', unit: 'decision bars', kind: 'integer', domain_low: 2, domain_high: 30, quantum: 1, default_low: 3, default_high: 12, neighbor_step: 1, default_step: 1, searchable_by_default: true, warmup_dependent: true, default_value: 5, note: '' },
-      { name: 'slow_period', label: 'Slow EMA length', unit: 'decision bars', kind: 'integer', domain_low: 3, domain_high: 40, quantum: 1, default_low: 8, default_high: 30, neighbor_step: 1, default_step: 1, searchable_by_default: true, warmup_dependent: true, default_value: 10, note: '' },
-      { name: 'hold_bars', label: 'Hold time', unit: 'decision bars', kind: 'integer', domain_low: 1, domain_high: 26, quantum: 1, default_low: 2, default_high: 12, neighbor_step: 1, default_step: 1, searchable_by_default: true, warmup_dependent: false, default_value: 5, note: '' },
-      { name: 'gap_bps', label: 'Crossover gap (bps)', unit: 'basis points', kind: 'decimal', domain_low: 0, domain_high: 100, quantum: 0.5, default_low: 0, default_high: 5, neighbor_step: 0.5, default_step: 0.5, searchable_by_default: false, warmup_dependent: false, default_value: 0, note: 'Both gap floors apply together: an entry must clear the price gap and this basis-point gap.' },
+      { name: 'gap', label: 'Crossover gap', unit: 'price ($)', kind: 'decimal', domain_low: 0, domain_high: 2, quantum: 0.01, default_step: 0.05, warmup_dependent: false, default_value: 0.2, note: '' },
+      { name: 'rsi_min', label: 'RSI lower gate', unit: 'RSI points', kind: 'decimal', domain_low: 0, domain_high: 100, quantum: 1, default_step: 1, warmup_dependent: false, default_value: 50, note: '' },
+      { name: 'rsi_max', label: 'RSI upper gate', unit: 'RSI points', kind: 'decimal', domain_low: 0, domain_high: 100, quantum: 1, default_step: 1, warmup_dependent: false, default_value: 70, note: '' },
+      { name: 'fast_period', label: 'Fast EMA length', unit: 'decision bars', kind: 'integer', domain_low: 2, domain_high: 30, quantum: 1, default_step: 1, warmup_dependent: true, default_value: 5, note: '' },
+      { name: 'slow_period', label: 'Slow EMA length', unit: 'decision bars', kind: 'integer', domain_low: 3, domain_high: 40, quantum: 1, default_step: 1, warmup_dependent: true, default_value: 10, note: '' },
+      { name: 'hold_bars', label: 'Hold time', unit: 'decision bars', kind: 'integer', domain_low: 1, domain_high: 26, quantum: 1, default_step: 1, warmup_dependent: false, default_value: 5, note: '' },
+      { name: 'gap_bps', label: 'Crossover gap (bps)', unit: 'basis points', kind: 'decimal', domain_low: 0, domain_high: 100, quantum: 0.5, default_step: 0.5, warmup_dependent: false, default_value: 0, note: 'Both gap floors apply together: an entry must clear the price gap and this basis-point gap.' },
     ],
     fixed: [
       { label: 'RSI length', value: '14', reason: 'fixed in this program version' },
@@ -398,7 +398,6 @@ export function searchCharts(procedures: ProcedureCharts[] = [procedureCharts('s
 
 /** The Test over time read for `validationView`: fold 1 completed and kept 64% of its training Sharpe, fold 2 failed. */
 export function testOverTimeCharts(overrides: Partial<TestOverTimeCharts> = {}): TestOverTimeCharts {
-  const validation = validationView();
   const [first, second] = preflight().folds;
   return {
     planned: false,
@@ -435,8 +434,14 @@ export function testOverTimeCharts(overrides: Partial<TestOverTimeCharts> = {}):
         incumbent_failure: null,
       },
     ],
-    linked: validation.linked,
-    incumbent_linked: validation.incumbent_linked,
+    linked: [
+      { fold_index: 0, test_end_ms: first.test_end_ms, linked_return: 0.021, fold_missing: false },
+      { fold_index: 1, test_end_ms: second.test_end_ms, linked_return: null, fold_missing: true },
+    ],
+    incumbent_linked: [
+      { fold_index: 0, test_end_ms: first.test_end_ms, linked_return: 0.007, fold_missing: false },
+      { fold_index: 1, test_end_ms: second.test_end_ms, linked_return: 0.002972, fold_missing: false },
+    ],
     retention_threshold: 0.5,
     median_retention: 0.9 / 1.4,
     test_trades_total: 42,
@@ -463,28 +468,19 @@ export function plannedTestOverTimeCharts(): TestOverTimeCharts {
 }
 
 export function validationView(overrides: Partial<ValidationView> = {}): ValidationView {
-  const [first, second] = preflight().folds;
   return {
     folds: [
       {
-        ...first,
+        fold_index: 0,
         status: 'completed',
         winner: { ...INCUMBENT_PARAMS, fast_period: 8 },
-        winner_hash: 'f0',
-        train_metrics: metrics({ sharpe_ratio: 1.4 }),
-        test_metrics: metrics({ sharpe_ratio: 0.9, total_return_pct: 0.021 }),
-        incumbent_test_metrics: metrics({ total_trades: 17, sharpe_ratio: 0.41, total_return_pct: 0.007 }),
         failure_code: null,
         failure_reason: null,
       },
       {
-        ...second,
+        fold_index: 1,
         status: 'failed',
         winner: null,
-        winner_hash: null,
-        train_metrics: null,
-        test_metrics: null,
-        incumbent_test_metrics: metrics({ total_trades: 15, sharpe_ratio: -0.2, total_return_pct: -0.004 }),
         failure_code: 'NO_ELIGIBLE_CANDIDATE',
         failure_reason: "No setting met your rules in this fold's training window.",
       },
@@ -500,14 +496,6 @@ export function validationView(overrides: Partial<ValidationView> = {}): Validat
       based_on: 'based on 1 of 2 folds',
       retention_threshold: 0.5,
     },
-    linked: [
-      { fold_index: 0, test_end_ms: first.test_end_ms, linked_return: 0.021, fold_missing: false },
-      { fold_index: 1, test_end_ms: second.test_end_ms, linked_return: null, fold_missing: true },
-    ],
-    incumbent_linked: [
-      { fold_index: 0, test_end_ms: first.test_end_ms, linked_return: 0.007, fold_missing: false },
-      { fold_index: 1, test_end_ms: second.test_end_ms, linked_return: 0.002972, fold_missing: false },
-    ],
     summary_pills: { judged: '1 of 2 folds judged', test_trades: 42, median_retention: null },
     explanation: 'Each fold searched only its own training months.',
     incomplete: false,
@@ -813,7 +801,6 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
       neighbors: [
         {
           knob: 'fast_period',
-          one_sided: false,
           rows: [
             { value: 7, status: 'tested', metrics: metrics({ total_return_pct: 0.052 }), reason: null, step: -1, return_change: -0.035 },
             { value: 8, status: 'center', metrics: metrics({ total_return_pct: 0.087 }), reason: null, step: 0, return_change: null },
@@ -1017,7 +1004,6 @@ export function finalRun(key: CandidateKey): NonNullable<CandidateDetail['exam']
     metrics: metrics({ total_return_pct: end, sharpe_ratio: key === 'incumbent' ? 0.54 : 0.91, total_trades: key === 'incumbent' ? 39 : 36 }),
     // Up half the way, back to three tenths, then up to the end: the fall is the dip from the first peak.
     cumulative_return: sessions.map((ms, i) => ({ ms, value: [end * 0.5, end * 0.3, end][i] })),
-    daily_equity: [],
     drawdown: sessions.map((ms, i) => ({ ms, drawdown: i === 1 ? (1 + end * 0.3) / (1 + end * 0.5) - 1 : 0 })),
     monthly: [
       { month_start_ms: etMidnightMs('2026-01-01'), year: 2026, month: 1, net_profit: end * 40_000, return_fraction: end * 0.4, trades: 12 },
@@ -1048,7 +1034,6 @@ export function candidateDetail(key: CandidateKey, overrides: Partial<CandidateD
         { ms: days[1], value: end / 2 },
         { ms: days[2], value: end },
       ],
-      daily_equity: [],
       comparison: null,
       drawdown: [
         { ms: days[0], drawdown: 0 },
@@ -1283,7 +1268,6 @@ export function studyDetail(state: StudyState, overrides: Partial<StudyDetail> =
     presented_status: state.endsWith('_running') || state === 'qualification_pending' ? 'running' : 'idle',
     revision: 3,
     created_at_ms: etMidnightMs('2026-09-30'),
-    updated_at_ms: etMidnightMs('2026-09-30'),
     protocol_hash: 'abcdef0123456789',
     method: 'zoom',
     consumed_evaluations: 420,
@@ -1293,7 +1277,6 @@ export function studyDetail(state: StudyState, overrides: Partial<StudyDetail> =
     incomplete: false,
     failure_reason: state === 'qualification_failed' ? QUALIFICATION_FAILURE : null,
     hidden: false,
-    run_to_compare: false,
     decision_summaries: reachedValidation ? [decisionSummary('all_period'), decisionSummary('recent'), decisionSummary('incumbent')] : [],
     exposure_claim: examOpened ? 'confirmatory' : null,
     exam_outcome: examJudged ? 'meets_rules' : null,

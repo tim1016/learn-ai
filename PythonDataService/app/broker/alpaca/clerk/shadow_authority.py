@@ -174,7 +174,7 @@ async def select_shadow_clerk_runtime(
             stream_health_gate=stream_health_gate,
             # Simulated custody: the live account's cash never moves, so the
             # envelope subtracts what this Clerk's own fills would have spent
-            # (plan R2). Shadow uses current account policy and per-run budgets.
+            # under simulated custody. Shadow uses current account policy and per-run budgets.
             live_envelope=LiveEnvelopeGate(
                 values=live_envelope_values, custody_is_simulated=True
             ),

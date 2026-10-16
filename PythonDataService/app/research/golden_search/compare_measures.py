@@ -68,7 +68,7 @@ def neighborhood_view(hood: Mapping[str, Any]) -> dict[str, Any]:
         step: Step = 0 if row is center else _step(float(row["value"]), float(center["value"]), hood["knob"])
         change = None if row is center else return_change(row["metrics"], center["metrics"])
         rows.append({**row, "step": step, "return_change": change})
-    return {**hood, "rows": rows}
+    return {"knob": hood["knob"], "rows": rows}
 
 
 def _step(value: float, center: float, knob: str) -> Step:

@@ -59,6 +59,8 @@ from tests._helpers.bot_runner.doubles import _CustodyClerk, _FakeFeed, _SqliteR
 from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
+pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+
 _SID = "alpaca-drill-bot"
 _T0 = 1_700_000_000_000
 
@@ -221,7 +223,6 @@ async def test_boot_sweep_records_why_a_binding_was_left_unprojected(
     caplog.set_level("WARNING", logger="app.services.bot_boot_recovery")
 
     report = await BotBootRecovery(
-        artifacts_root,
         lifecycle_repo_for=lambda _strategy_instance_id: lifecycle_repo,
         lifecycle_projector=_projector_for(lifecycle_repo),
         desired_repo_for=lambda _strategy_instance_id: desired_repo,
@@ -370,7 +371,6 @@ async def test_boot_recovers_sqlite_before_reading_file_projection(tmp_path: Pat
         require_alpaca_identity=lambda _strategy_instance_id, _sqlite_claim: None,
     )
     await BotBootRecovery(
-        artifacts_root,
         lifecycle_repo_for=lambda _strategy_instance_id: lifecycle_repo,
         lifecycle_projector=projector,
         desired_repo_for=lambda _strategy_instance_id: desired_repo,
@@ -429,7 +429,6 @@ async def test_boot_reconstructs_missing_projection_from_binding_candidate(
         require_alpaca_identity=lambda _strategy_instance_id, _sqlite_claim: None,
     )
     report = await BotBootRecovery(
-        artifacts_root,
         lifecycle_repo_for=lambda _strategy_instance_id: lifecycle_repo,
         lifecycle_projector=projector,
         desired_repo_for=lambda _strategy_instance_id: desired_repo,
@@ -501,7 +500,6 @@ async def test_file_cas_refusal_fails_boot_recovery(tmp_path: Path) -> None:
         require_alpaca_identity=lambda _strategy_instance_id, _sqlite_claim: None,
     )
     recovery = BotBootRecovery(
-        artifacts_root,
         lifecycle_repo_for=lambda _strategy_instance_id: lifecycle_repo,
         lifecycle_projector=projector,
         desired_repo_for=lambda _strategy_instance_id: desired_repo,
@@ -564,7 +562,6 @@ async def test_authority_retry_exhaustion_fails_boot_recovery(tmp_path: Path) ->
         require_alpaca_identity=lambda _strategy_instance_id, _sqlite_claim: None,
     )
     recovery = BotBootRecovery(
-        artifacts_root,
         lifecycle_repo_for=lambda _strategy_instance_id: lifecycle_repo,
         lifecycle_projector=projector,
         desired_repo_for=lambda _strategy_instance_id: desired_repo,
@@ -690,7 +687,6 @@ async def test_boot_sweep_does_not_report_a_superseded_interruption(
     )
 
     report = await BotBootRecovery(
-        artifacts_root,
         lifecycle_repo_for=lambda _strategy_instance_id: lifecycle_repo,
         lifecycle_projector=projector,
         desired_repo_for=lambda _strategy_instance_id: desired_repo,
@@ -949,7 +945,6 @@ async def test_repair_pass_preserves_same_run_terminal_evidence(
         stops.append((strategy_instance_id, run_id))
 
     report = await BotBootRecovery(
-        artifacts_root,
         lifecycle_repo_for=lambda _strategy_instance_id: lifecycle_repo,
         lifecycle_projector=_projector_for(lifecycle_repo),
         desired_repo_for=lambda _strategy_instance_id: desired_repo,
@@ -999,7 +994,6 @@ async def test_lease_recovery_pass_stamps_revival_provenance(
         del strategy_instance_id, run_id
 
     report = await BotBootRecovery(
-        artifacts_root,
         lifecycle_repo_for=lambda _strategy_instance_id: lifecycle_repo,
         lifecycle_projector=_projector_for(lifecycle_repo),
         desired_repo_for=lambda _strategy_instance_id: desired_repo,

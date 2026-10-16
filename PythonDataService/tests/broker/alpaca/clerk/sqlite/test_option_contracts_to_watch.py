@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_acknowledgement
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _broker_order_fixture
@@ -49,13 +51,16 @@ def test_a_contract_is_to_be_watched_from_the_moment_it_is_held_until_it_is_clos
         repo.close()
 
 
-def test_a_contract_an_order_is_working_in_at_the_broker_is_watched_though_nothing_is_held(tmp_path: Path) -> None:
+@pytest.mark.parametrize("broker_state", ["new", "suspended", "pending_replace"])
+def test_a_contract_an_order_is_working_in_at_the_broker_is_watched_though_nothing_is_held(
+    tmp_path: Path, broker_state: str,
+) -> None:
     """A resting entry has filled nothing yet. Its contract's quotes are still what its outcome is judged by."""
     repo = open_option_books(tmp_path)
     try:
         resting = accept_option_order(repo, terms=AAPL_PUT, side="buy", contracts=1, decision_id="d1")
         before_the_broker_answers = repo.option_contracts_requiring_quotes()
-        _the_broker_says(repo, resting, symbol=AAPL_PUT.symbol, status="new", contracts=1)
+        _the_broker_says(repo, resting, symbol=AAPL_PUT.symbol, status=broker_state, contracts=1)
         working = repo.option_contracts_requiring_quotes()
         _the_broker_says(repo, resting, symbol=AAPL_PUT.symbol, status="canceled", contracts=1)
 

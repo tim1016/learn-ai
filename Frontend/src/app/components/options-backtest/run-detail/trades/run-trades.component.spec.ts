@@ -350,9 +350,9 @@ describe('the trades of a run, an answer that comes too late', () => {
     await lettingGo();
 
     await view.rerender({ inputs: { run: runDetail({ id: 8 }) } });
-    second.resolve(pageOf(1, { run_id: 8, total: 1, trades: [stoppedTrade({ leg_id: 'run_eight' })] }));
+    second.resolve(pageOf(1, { total: 1, trades: [stoppedTrade({ leg_id: 'run_eight' })] }));
     await screen.findByRole('table', { name: 'Leg trades' });
-    first.resolve(pageOf(1, { run_id: 7, total: 1, trades: [stoppedTrade({ leg_id: 'run_seven' })] }));
+    first.resolve(pageOf(1, { total: 1, trades: [stoppedTrade({ leg_id: 'run_seven' })] }));
     await lettingGo();
 
     expect(legsOnScreen()).toEqual(['run_eight']);

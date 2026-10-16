@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, field_validator, model_serializer
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+)
 
 from app.schemas.option_endings import OptionEndingView
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
@@ -15,12 +23,8 @@ if TYPE_CHECKING:
     )
     from app.broker.alpaca.clerk.sqlite.models import ExternalOrderResource
 
-TransactionFeedState = Literal[
-    "live", "reconnecting", "rebuilding", "stale", "offline_but_saved", "corrupt", "projection_unavailable"
-]
-TransactionOrigin = Literal[
-    "manual", "strategy", "external", "unknown", "recovery", "emergency", "shutdown", "force_flat", "other"
-]
+TransactionFeedState = Literal["live", "projection_unavailable"]
+TransactionOrigin = Literal["manual", "strategy", "external", "unknown"]
 
 
 class ExternalOrderAcknowledgementRequest(BaseModel):
@@ -70,14 +74,12 @@ class ClerkOrderInstruction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     symbol: str | None = Field(default=None, max_length=64)
-    sec_type: str | None = Field(default=None, max_length=16)
     action: str | None = Field(default=None, max_length=16)
     quantity: float | None = None
     order_type: str | None = Field(default=None, max_length=16)
     limit_price: float | None = None
     stop_price: float | None = None
     time_in_force: str | None = Field(default=None, max_length=16)
-    outside_rth: bool | None = None
 
 
 class ClerkTransactionEventRow(BaseModel):
@@ -102,20 +104,7 @@ class ClerkTransactionEventRow(BaseModel):
     execution_price: float | None = None
     journal_seq: int = Field(ge=1)
     recorded_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
-    receipt: dict[str, Any] = Field(default_factory=dict)
-
-
-class ClerkCustodyDurations(BaseModel):
-    """Measured same-clock durations for one Clerk-owned intent."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    request_to_intake_ms: int | None = Field(default=None, ge=0)
-    intake_to_a0_ms: int | None = Field(default=None, ge=0)
-    a0_to_broker_write_ms: int | None = Field(default=None, ge=0)
-    broker_write_to_return_ms: int | None = Field(default=None, ge=0)
-    broker_return_to_first_callback_ms: int | None = Field(default=None, ge=0)
-    terminal_age_ms: int | None = Field(default=None, ge=0)
+    receipt: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class ClerkCustodyTimeline(BaseModel):
@@ -124,18 +113,13 @@ class ClerkCustodyTimeline(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     intent_created_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
-    clerk_request_received_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     clerk_intake_admitted_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
-    inbox_fsynced_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     a0_custody_accepted_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
-    broker_write_started_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
-    broker_call_returned_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     broker_ack_recorded_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     earliest_broker_source_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     first_callback_arrived_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     first_callback_recorded_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     economic_terminal_recorded_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
-    durations: ClerkCustodyDurations = Field(default_factory=ClerkCustodyDurations)
 
 
 class ClerkTransactionRow(BaseModel):
@@ -156,9 +140,6 @@ class ClerkTransactionRow(BaseModel):
     run_id: str | None = Field(default=None, min_length=1, max_length=128)
     intent_id: str | None = Field(default=None, min_length=1, max_length=256)
     order_ref: str | None = Field(default=None, min_length=1, max_length=512)
-    order_id: int | None = Field(default=None, ge=0)
-    perm_id: int | None = Field(default=None, ge=0)
-    exec_id: str | None = Field(default=None, max_length=256)
     native_order_id: str | None = Field(default=None, max_length=256)
     native_execution_id: str | None = Field(default=None, max_length=256)
     lifecycle_state: str = Field(min_length=1, max_length=64)
@@ -168,7 +149,7 @@ class ClerkTransactionRow(BaseModel):
     execution_quantity: float | None = None
     execution_price: float | None = None
     external_order_id: str | None = Field(default=None, min_length=1, max_length=256)
-    receipt: dict[str, Any] = Field(default_factory=dict)
+    receipt: dict[str, JsonValue] = Field(default_factory=dict)
     events: list[ClerkTransactionEventRow] = Field(default_factory=list)
     custody_timeline: ClerkCustodyTimeline | None = None
     #: Set when the row is an option position that ended with no order of the bot's: it expired,
@@ -204,9 +185,6 @@ class ClerkTransactionSummaryRow(BaseModel):
     run_id: str | None = Field(default=None, min_length=1, max_length=128)
     intent_id: str | None = Field(default=None, min_length=1, max_length=256)
     order_ref: str | None = Field(default=None, min_length=1, max_length=512)
-    order_id: int | None = Field(default=None, ge=0)
-    perm_id: int | None = Field(default=None, ge=0)
-    exec_id: str | None = Field(default=None, max_length=256)
     native_order_id: str | None = Field(default=None, max_length=256)
     native_execution_id: str | None = Field(default=None, max_length=256)
     lifecycle_state: str = Field(min_length=1, max_length=64)
@@ -255,13 +233,10 @@ class ClerkTransactionHistoryResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     projection_available: bool
-    canonical_fallback_required: bool
     feed_state: TransactionFeedState
     feed_headline: str = Field(min_length=1, max_length=128)
     feed_detail: str = Field(min_length=1, max_length=512)
     high_water_journal_seq: int | None = Field(default=None, ge=0)
-    lag_records: int | None = Field(default=None, ge=0)
-    lag_is_lower_bound: bool = False
     custody_summary: ClerkCustodyWindowSummary
     rows: list[ClerkTransactionSummaryRow]
     next_cursor: str | None = None

@@ -206,7 +206,7 @@ def project_custody_history(
       bucketed by broker state; result = ``bot_results_from_fills`` over the
       same fills; fees = the fee reconciler's per-subject total.
     Reference: https://github.com/tim1016/learn-ai/issues/2574; money
-      semantics are PRD #2540's, unchanged.
+      semantics are #2540's, unchanged.
     Canonical implementation: this composition; the counts reuse
       ``effective_fill_records`` and the money ``project_bot_results``'
       ``bot_results_from_fills``, over the one fill read.

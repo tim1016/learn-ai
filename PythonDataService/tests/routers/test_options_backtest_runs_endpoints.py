@@ -809,8 +809,6 @@ async def test_check_data_says_for_each_session_what_is_stored_what_is_missing_a
     assert tuesday["contracts"] == {"state": "not_yet_known", "needed": None, "missing": None}
     assert wednesday["contracts"] == {"state": "known", "needed": 1, "missing": 0}
     assert body["counts"] == {"ready": 2, "needs_download": 2, "cannot_be_tested": 0}
-    assert body["first_testable_session_open_ms"] == session_window_for_date(TUE).open_ms_utc
-    assert body["last_testable_session_open_ms"] == session_window_for_date(FRI).open_ms_utc
     # All four can be tested (a session that needs a download can be), so the run available is the whole range, and
     # the pair of instants to ask for it is the range's own.
     assert body["longest_testable_stretch"] == {
@@ -845,7 +843,7 @@ async def test_check_data_gives_each_reason_a_session_cannot_be_tested_and_the_r
         et_day_end_ms(last),
         1,
     )
-    assert body["first_testable_session_open_ms"] == body["last_testable_session_open_ms"]
+    assert stretch["first_session_open_ms"] == stretch["last_session_open_ms"]
 
 
 async def test_check_data_on_a_range_that_cannot_be_run_is_a_400_and_a_body_that_is_not_one_a_422(

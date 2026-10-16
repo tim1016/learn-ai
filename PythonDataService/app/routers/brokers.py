@@ -13,7 +13,7 @@ import asyncio
 import logging
 import math
 from collections.abc import Awaitable, Callable
-from typing import Literal, NoReturn
+from typing import NoReturn
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -49,9 +49,7 @@ from app.broker.contract.errors import (
 )
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
-    BrokerOrder,
     BrokerPortfolioHistory,
-    BrokerPosition,
     PortfolioHistoryRange,
 )
 from app.broker.contract.ports import BrokerReadPort
@@ -124,12 +122,10 @@ from app.services.sqlite_clerk_compat import (
     sqlite_custody_diagnosis,
     sqlite_projection,
 )
-from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import now_ms_utc
 
 router = APIRouter(prefix="/api/brokers", tags=["brokers-v2"])
 logger = logging.getLogger(__name__)
-_MAX_READ_LIMIT = 500
 
 
 def _raise_http(error: BrokerError) -> NoReturn:
@@ -269,24 +265,6 @@ async def get_account(broker: str) -> BrokerAccountSnapshot:
         return await resolve_broker_account_snapshot(broker)
     except BrokerError as error:
         _raise_http(error)
-
-
-@router.get("/{broker}/positions", response_model=list[BrokerPosition])
-async def list_positions(broker: str) -> list[BrokerPosition]:
-    return await _run(broker, lambda port: port.list_positions())
-
-
-@router.get("/{broker}/orders", response_model=list[BrokerOrder])
-async def list_orders(
-    broker: str,
-    status: Literal["open", "closed", "all"] | None = None,
-    limit: int | None = Query(default=None, ge=1, le=_MAX_READ_LIMIT),
-    after_ms: int | None = Query(default=None, ge=0, le=MAX_TIMESTAMP_MS),
-) -> list[BrokerOrder]:
-    return await _run(
-        broker,
-        lambda port: port.list_orders(status=status, limit=limit, after_ms=after_ms),
-    )
 
 
 @router.get("/{broker}/activities/period", response_model=ActivityPeriodRead)

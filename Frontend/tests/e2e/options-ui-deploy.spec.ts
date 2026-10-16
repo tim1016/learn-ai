@@ -15,7 +15,7 @@ import {
   resolvedPreview,
 } from '../../src/app/components/broker/broker-deploy-page/option-structure/option-structure.fixtures';
 import { fakeAccountMoney } from '../../src/app/testing/account-money-fixtures';
-import { OwnerWalkWorld, PAPER_ACCOUNT, PAPER_API, PAPER_WORKSPACE, WALKED_BOT } from './support/owner-walk-world';
+import { OwnerWalkWorld, PAPER_API, PAPER_WORKSPACE, WALKED_BOT } from './support/owner-walk-world';
 
 /** Browser coverage of #2913's option Deploy. Every API request is intercepted;
  * the existing owner-walk world supplies account readiness and the receipt. */
@@ -42,7 +42,7 @@ async function optionWorld(page: Page, blocked = false): Promise<OwnerWalkWorld>
       const answer: DeploymentBudgetPreview = {
         state: blocked ? 'unavailable' : 'ready',
         detail: blocked ? review.blockers?.[0]?.headline ?? '' : 'Money is ready.',
-        world: 'real_paper', custody_account_id: PAPER_ACCOUNT, risk_revision: 1,
+        world: 'real_paper', risk_revision: 1,
         minimum_budget_usd: '824.09', unreserved_usd: '25000.00', shortcuts: [],
         money_after: fakeAccountMoney(),
         budget_usd: body.budget?.amount_usd ?? null,

@@ -16,8 +16,8 @@
  * the unchanged per-bot pipeline for its own `strategy_instance_id`
  * (`execute_cohort_legs` → `panel_data_source.run_action` in
  * `PythonDataService/app/services/broker_v2_panel/cohort_execution.py`), whose
- * flatten performers reduce only that bot's Clerk-attributed exposure (PRD
- * #1752 US2; the account-level broker flatten that would net manual positions
+ * flatten performers reduce only that bot's Clerk-attributed exposure (#1752;
+ * the account-level broker flatten that would net manual positions
  * is the alternative ADR 0051 rejects). If that ever changes, this copy must.
  */
 

@@ -33,8 +33,8 @@ export interface ManualOrderTicketNavigation {
  * The link from a bot's page to the account's manual-order ticket.
  *
  * The path is the account as this workspace routes it (`routeAccountId`), so
- * the link lands in the same workspace every other route uses (hurdle H20:
- * the broker's upper-case spelling opened a second address for one account).
+ * the link lands in the same workspace every other route uses: the broker's
+ * upper-case spelling previously opened a second address for one account.
  * The ticket query keeps the broker's own account id, which is what the desk
  * checks the connected account against before opening the ticket.
  */

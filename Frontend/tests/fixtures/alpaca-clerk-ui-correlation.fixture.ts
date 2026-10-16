@@ -4,7 +4,6 @@ import type {
   BotPanelLiveSnapshot,
   BotPanelView,
   EvidencePage,
-  PanelProfile,
 } from '../../src/app/components/broker/v2-panel/lib/broker-v2-panel.types';
 import { fakeBotPage } from '../../src/app/testing/bot-panel-fixtures';
 
@@ -63,13 +62,6 @@ function requiredRevision(index: number): number {
   }
   return revision;
 }
-
-export const PROFILE: PanelProfile = {
-  broker: 'alpaca',
-  fee_fidelity: 'none',
-  live_bars_supported: false,
-  stations: [],
-};
 
 export function panelAtRevision(revision: number): BotPanelView {
   const panel: BotPanelView = {
@@ -259,7 +251,6 @@ export function evidenceReceipt(
     next_cursor: null,
     total_entries: 1,
     truncated: false,
-    read_by: 'operator:playwright-1415',
     read_at_ms: BASE_TIMESTAMP_MS + 3_000 + revision,
   };
 }

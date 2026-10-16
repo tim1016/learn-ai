@@ -23,7 +23,7 @@ describe('BrokersService Clerk transaction history', () => {
     const promise = service.accountTransactions(TEST_CLERK_ID, 'PA / 1', 'ctxhp1.opaque', 25, {});
     const request = http.expectOne(`/api/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/PA%20%2F%201/custody/transactions?limit=25&cursor=ctxhp1.opaque`);
     expect(request.request.method).toBe('GET');
-    request.flush({ projection_available: true, canonical_fallback_required: false, high_water_journal_seq: 4, lag_records: 0, lag_is_lower_bound: false, rows: [], next_cursor: null });
+    request.flush({ projection_available: true, high_water_journal_seq: 4, rows: [], next_cursor: null });
     await expect(promise).resolves.toMatchObject({ high_water_journal_seq: 4, rows: [] });
   });
 
@@ -38,7 +38,7 @@ describe('BrokersService Clerk transaction history', () => {
       `/api/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/PA%20%2F%201/custody/transactions?limit=25&origin=strategy&lifecycle_state=partially_filled&strategy_instance_id=bot-1&run_id=run-1`,
     );
     expect(request.request.method).toBe('GET');
-    request.flush({ projection_available: true, canonical_fallback_required: false, high_water_journal_seq: 4, lag_records: 0, lag_is_lower_bound: false, rows: [], next_cursor: null });
+    request.flush({ projection_available: true, high_water_journal_seq: 4, rows: [], next_cursor: null });
     await expect(promise).resolves.toMatchObject({ rows: [] });
   });
 
@@ -51,7 +51,7 @@ describe('BrokersService Clerk transaction history', () => {
       `/api/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/PA%20%2F%201/custody/transactions?limit=25&from_ms=1700000000000&to_ms=1700086400000`,
     );
     expect(request.request.method).toBe('GET');
-    request.flush({ projection_available: true, canonical_fallback_required: false, high_water_journal_seq: 4, lag_records: 0, lag_is_lower_bound: false, rows: [], next_cursor: null });
+    request.flush({ projection_available: true, high_water_journal_seq: 4, rows: [], next_cursor: null });
     await expect(promise).resolves.toMatchObject({ rows: [] });
   });
 
@@ -76,13 +76,10 @@ describe('BrokersService Clerk transaction history', () => {
     http.expectNone('/api/brokers/alpaca/orders');
     req.flush({
       projection_available: true,
-      canonical_fallback_required: false,
       feed_state: 'live',
       feed_headline: 'SQLite projection current',
       feed_detail: 'One durable execution receipt is available.',
       high_water_journal_seq: 12,
-      lag_records: 0,
-      lag_is_lower_bound: false,
       custody_summary: {
         record_count: 1,
         a0_custody_accepted_count: 1,
@@ -104,9 +101,6 @@ describe('BrokersService Clerk transaction history', () => {
           run_id: 'run-1',
           intent_id: 'intent-1',
           order_ref: 'learn-ai/bot-1/v1:intent-1',
-          order_id: null,
-          perm_id: null,
-          exec_id: null,
           native_order_id: 'alpaca-order-1',
           native_execution_id: 'execution-1',
           lifecycle_state: 'filled',
@@ -119,13 +113,11 @@ describe('BrokersService Clerk transaction history', () => {
           event_count: 1,
           order_instruction: {
             symbol: 'SPY',
-            sec_type: 'us_equity',
             action: 'buy',
             quantity: 2,
             order_type: 'market',
             limit_price: null,
             time_in_force: 'day',
-            outside_rth: false,
           },
         },
       ],

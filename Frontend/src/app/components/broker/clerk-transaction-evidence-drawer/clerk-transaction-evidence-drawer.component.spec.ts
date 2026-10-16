@@ -34,9 +34,6 @@ function summary(accountId: string, transactionId: string): ClerkTransactionSumm
     run_id: 'run-a',
     intent_id: `intent/${transactionId}`,
     order_ref: `order/${transactionId}`,
-    order_id: null,
-    perm_id: null,
-    exec_id: null,
     native_order_id: null,
     native_execution_id: null,
     lifecycle_state: 'submitted',
@@ -183,14 +180,12 @@ describe('ClerkTransactionEvidenceDrawerComponent', () => {
           order_ref: 'order/opaque',
           order_instruction: {
             symbol: 'SPY',
-            sec_type: 'STK',
             action: 'buy',
             quantity: 2,
             order_type: 'market',
             limit_price: null,
             stop_price: null,
             time_in_force: 'day',
-            outside_rth: false,
           },
           execution_quantity: 2,
           execution_price: 601.25,
@@ -282,11 +277,11 @@ describe('ClerkTransactionEvidenceDrawerComponent', () => {
 
   it('says a custody marker nobody wrote is not recorded, never that it is awaited', async () => {
     const host = await renderReceipt({
-      custody_timeline: { ...custodyTimeline(), broker_write_started_at_ms: null, broker_ack_recorded_at_ms: null,
+      custody_timeline: { ...custodyTimeline(), broker_ack_recorded_at_ms: null,
         economic_terminal_recorded_at_ms: null },
     });
 
-    expect(host.textContent).toContain('Broker write started');
+    expect(host.textContent).toContain('Broker acknowledgement');
     expect(host.textContent).not.toContain('Awaiting');
     expect(host.querySelectorAll('.custody-stage--recorded')).toHaveLength(1);
   });
@@ -294,7 +289,7 @@ describe('ClerkTransactionEvidenceDrawerComponent', () => {
   it('words the first marker of an order the Clerk only observed as an observation', async () => {
     const host = await renderReceipt({
       transaction_origin: 'external',
-      custody_timeline: { ...custodyTimeline(), broker_write_started_at_ms: null },
+      custody_timeline: custodyTimeline(),
     });
 
     expect(host.textContent).toContain('Order observed');
@@ -311,8 +306,8 @@ describe('ClerkTransactionEvidenceDrawerComponent', () => {
   it('shows an execution\'s instrument as not recorded and writes a missing side and type out', async () => {
     const host = await renderReceipt({
       order_instruction: {
-        symbol: 'SPY', sec_type: 'STK', action: null, quantity: 2, order_type: null,
-        limit_price: 511.2899999999, stop_price: null, time_in_force: 'day', outside_rth: false,
+        symbol: 'SPY', action: null, quantity: 2, order_type: null,
+        limit_price: 511.2899999999, stop_price: null, time_in_force: 'day',
       },
       execution_price: 511.1,
     });
@@ -330,8 +325,8 @@ describe('ClerkTransactionEvidenceDrawerComponent', () => {
   it('shows the instrument an execution event itself recorded, and keeps a sub-cent fill price', async () => {
     const host = await renderReceipt({
       order_instruction: {
-        symbol: 'SPY', sec_type: 'STK', action: 'buy', quantity: 2, order_type: 'market',
-        limit_price: null, stop_price: null, time_in_force: 'day', outside_rth: false,
+        symbol: 'SPY', action: 'buy', quantity: 2, order_type: 'market',
+        limit_price: null, stop_price: null, time_in_force: 'day',
       },
       execution_price: 175.2349,
       events: [{
@@ -398,24 +393,12 @@ function accordionHeader(host: HTMLElement, label: string): HTMLElement {
 function custodyTimeline(): ClerkCustodyTimeline {
   return {
     intent_created_at_ms: 1_780_000_000_000,
-    clerk_request_received_at_ms: 1_780_000_000_001,
     clerk_intake_admitted_at_ms: 1_780_000_000_002,
-    inbox_fsynced_at_ms: 1_780_000_000_003,
     a0_custody_accepted_at_ms: 1_780_000_000_004,
-    broker_write_started_at_ms: 1_780_000_000_005,
-    broker_call_returned_at_ms: 1_780_000_000_006,
     broker_ack_recorded_at_ms: 1_780_000_000_007,
     earliest_broker_source_at_ms: 1_780_000_000_008,
     first_callback_arrived_at_ms: 1_780_000_000_009,
     first_callback_recorded_at_ms: 1_780_000_000_010,
     economic_terminal_recorded_at_ms: 1_780_000_000_011,
-    durations: {
-      request_to_intake_ms: 1,
-      intake_to_a0_ms: 2,
-      a0_to_broker_write_ms: 1,
-      broker_write_to_return_ms: 1,
-      broker_return_to_first_callback_ms: 2,
-      terminal_age_ms: 1,
-    },
   };
 }

@@ -53,8 +53,7 @@ from tests.broker.alpaca.clerk.sqlite.test_two_bots_one_symbol import (
 from tests.broker.alpaca.clerk.test_shadow_broker import DAY, MINUTE_MS, _Clock, _LiveRead
 
 # #2596: these ENTERs run on the default clock; keep it inside a session.
-pytestmark = pytest.mark.usefixtures("wall_clock_in_session")
-
+pytestmark = pytest.mark.usefixtures("wall_clock_in_session", "legacy_run_registration")
 SIGNAL = "SPY"
 TRADED = "QQQ"
 _TRADES_QQQ = alpaca_v1_action_plan(TRADED)

@@ -25,26 +25,20 @@ from app.lean_sidecar.trading_calendar import next_trading_day
 from app.marketdata.feed import MAX_WARMUP_LOOKBACK_DAYS
 from app.research.golden_search.qualification_service import JudgedQualification, public_parameters
 from app.schemas.account_authority import CustodyWorld, world_admits_account_mode
-from app.schemas.action_plan import ActionPlan
 from app.schemas.broker_bots import (
     AlpacaPaperDeployEligibility,
     AlpacaPaperDeployReadinessCheck,
-    AlpacaPaperDeployReceipt,
-    AlpacaPaperDeployRequest,
     AlpacaPaperDeployStrategy,
     AlpacaPaperDeployView,
     AlpacaPaperExecutionMode,
     AlpacaPaperSizingOption,
-    BotStatusView,
     QualifiedDeployConfiguration,
 )
 from app.schemas.exit_terms import ExitTermsInput
-from app.schemas.run_admission import RunAdmissionDecision
 from app.schemas.signal_program_seal import ParameterOrigin
 from app.schemas.strategy_params_schema import StrategyParamsSchema
 from app.schemas.strategy_validation import StrategyValidationEntry
 from app.services.bot_end import resolve_bot_end, resolved_bot_end_view
-from app.services.bot_runner import alpaca_v1_action_plan
 from app.services.broker_v2_panel.channel_health import (
     REQUIRED_CLERK_CHANNELS,
     ChannelHealthEvaluation,
@@ -306,73 +300,6 @@ def _deploy_view_copy(account: BrokerAccountSnapshot, custody_world: CustodyWorl
     )
 
 
-@dataclass(frozen=True)
-class _ReceiptCopy:
-    """The operator sentences one execution mode's terminal receipt says.
-
-    ``duty`` names the world the bot is now on duty in and is the one field
-    an evidence override never replaces — an override is a statement about
-    the *proof*, not about where the effects land.
-    """
-
-    duty: str
-    explanation: str
-    next_action: str
-
-
-_RECEIPT_COPY: dict[DeployExecutionMode, _ReceiptCopy] = {
-    "dry_run": _ReceiptCopy(
-        duty="Dry Run",
-        explanation="The immutable Dry Run binding consumes market data and records only simulated activity.",
-        next_action="Open the bot panel and verify clearly labelled simulated decisions and fills.",
-    ),
-    "paper": _ReceiptCopy(
-        duty="Alpaca paper",
-        explanation="The deployment binding is durable and all strategy effects are owned by the Alpaca Clerk.",
-        next_action="Open the production bot panel and verify the first Clerk receipt.",
-    ),
-    "shadow": _ReceiptCopy(
-        duty="Alpaca shadow",
-        explanation=(
-            "The deployment binding is durable; the shadow Clerk synthesizes every fill "
-            "against this live account's real reads and submits nothing (ADR 0059 D2)."
-        ),
-        next_action="Open the bot panel and verify the first synthesized fill.",
-    ),
-    "live": _ReceiptCopy(
-        duty="Alpaca live",
-        explanation=(
-            "The deployment binding is durable and sealed on the real-money account; "
-            "new entries remain subject to its budget and the effective account risk limits."
-        ),
-        next_action=(
-            "Open the bot panel to review its budget, launch status and first Clerk receipt."
-        ),
-    ),
-}
-
-_OVERRIDE_RECEIPT_EXPLANATION = (
-    "The immutable binding records a human override of evidence-only strategy proof. "
-    "This launch is not numerical-equivalence evidence; all other admission gates remain in force."
-)
-_OVERRIDE_RECEIPT_NEXT_ACTION = (
-    "Open the bot panel, inspect every early decision, and stop the bot if behavior differs from expectation."
-)
-
-
-def _override_receipt_copy(copy: _ReceiptCopy) -> _ReceiptCopy:
-    """The override's sentences beside the mode's own — an override records a risk; it never hides what the mode does.
-
-    A live launch under an override must still name its budget and risk bounds;
-    a shadow one must still say it submits nothing.
-    """
-    return _ReceiptCopy(
-        duty=copy.duty,
-        explanation=f"{_OVERRIDE_RECEIPT_EXPLANATION} {copy.explanation}",
-        next_action=f"{copy.next_action} {_OVERRIDE_RECEIPT_NEXT_ACTION}",
-    )
-
-
 def _execution_modes(broker_mode: BrokerExecutionMode) -> tuple[AlpacaPaperExecutionMode, ...]:
     """Author the mode cards this custody world offers.
 
@@ -468,7 +395,6 @@ def _qualified_configuration(
                 symbol=golden.qualification.symbol,
                 parameters=parameters,
                 explanation=golden.explanation,
-                golden_qualification_id=golden.qualification.id,
             )
     if not contract.validated_symbols:
         return None
@@ -1096,59 +1022,6 @@ def build_alpaca_paper_deploy_view(
             "requires a Clerk-proven flatten before fresh deployment."
         ),
         allowed_actions=("deploy",) if eligibility.eligible or dry_run_eligibility.eligible else (),
-    )
-
-
-def build_alpaca_paper_deploy_receipt(
-    *,
-    broker: str,
-    view: AlpacaPaperDeployView,
-    request: AlpacaPaperDeployRequest,
-    strategy_instance_id: str,
-    bot: BotStatusView,
-    admission: RunAdmissionDecision,
-    resolved_params: ResolvedDeployParams,
-    action_plan: ActionPlan | None = None,
-) -> AlpacaPaperDeployReceipt:
-    """Author the terminal receipt after the runner accepts the deployment.
-
-    ``action_plan`` is the plan the start was handed, for a bot that trades
-    option contracts (#2913): the receipt says what the bot trades, never
-    shares of the contracts' underlying. ``None`` for a bot in shares, whose
-    plan is the one its symbol makes, as before.
-
-    The three operator sentences are derived once from the mode's own copy
-    row, so a shadow deployment on a live account never inherits paper
-    prose (ADR 0059 D2). When an evidence override is present, its sentences
-    are prepended/appended to the mode's own rather than replacing them, so
-    an override never hides what the mode itself does or its money bounds. ``receipt_id``'s prefix is an
-    opaque audit token and is deliberately not world-scoped.
-    """
-    copy = _RECEIPT_COPY[request.execution_mode]
-    if request.evidence_override is not None:
-        copy = _override_receipt_copy(copy)
-    lane_world = next((mode.mode for mode in view.execution_modes
-                       if mode.mode != "dry_run" and mode.availability == "available"), "paper")
-    return AlpacaPaperDeployReceipt(
-        status="deployed",
-        receipt_id=(
-            f"alpaca-{lane_world}-deploy:{view.account_id}:{strategy_instance_id}:{bot.binding_created_at_ms}"
-        ),
-        recorded_at_ms=bot.binding_created_at_ms,
-        message=f"{strategy_instance_id} is on duty in {copy.duty}.",
-        explanation=copy.explanation,
-        next_action=copy.next_action,
-        panel_path=(f"/brokers/{broker}/accounts/{view.account_id}/bots/{strategy_instance_id}"),
-        account_id=view.account_id,
-        execution_mode=request.execution_mode,
-        sizing=request.sizing,
-        carryover_policy=request.carryover_policy,
-        evidence_override=request.evidence_override,
-        action_plan=action_plan or alpaca_v1_action_plan(request.order_symbol),
-        admission=admission,
-        bot=bot,
-        parameters=resolved_params.effective,
-        parameters_diverge_from_defaults=resolved_params.diverges_from_defaults,
     )
 
 

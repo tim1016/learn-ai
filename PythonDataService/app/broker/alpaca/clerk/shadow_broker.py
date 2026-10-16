@@ -506,7 +506,10 @@ class ShadowOrderBook:
         # A position in an option contract is stated in dollars by the multiplier its opening order kept.
         records = list(self._settled_records().values())
         return synthesized_positions(
-            SHADOW_BROKER_ID, [record.order for record in records], contract_multipliers=contract_multipliers(records)
+            SHADOW_BROKER_ID,
+            [record.order for record in records],
+            observed_at_ms=self._clock(),
+            contract_multipliers=contract_multipliers(records),
         )
 
     @staticmethod

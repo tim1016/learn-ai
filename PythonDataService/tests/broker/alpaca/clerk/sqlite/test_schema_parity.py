@@ -155,7 +155,7 @@ def test_v24_migration_indexes_entry_outcomes_without_changing_orders(tmp_path: 
 
     schema.migrate_schema(conn, from_version=24)
 
-    assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == 25
+    assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == schema.SCHEMA_VERSION
     assert conn.execute(
         "SELECT order_ref, broker_state FROM orders WHERE order_ref = 'order-1'"
     ).fetchone() == ("order-1", "working")
@@ -365,9 +365,10 @@ def test_partial_unique_indexes_allow_only_one_active_safety_cause() -> None:
     schema.apply_schema(conn)
     # The former ``ux_holds_one_active_cause`` half of this test is gone with
     # the table (ADR 0048 D2). ``ux_uncertainties_one_active_cause`` below is
-    # the surviving fence and now covers hold causes too, which is asserted
-    # against the compatibility view in
-    # ``test_holds_view_shows_one_active_episode_per_hold_cause``.
+    # the surviving fence and now covers hold causes too, which is exercised
+    # through the compatibility view in
+    # ``test_a_live_authority_raises_and_resolves_a_hold_through_the_view``
+    # (``test_v12_holds_to_uncertainties.py``).
     conn.execute(
         "INSERT INTO uncertainties (uncertainty_id, scope, severity, blocks_new_exposure, "
         "allows_reduction, strategy_instance_id, reason_code, headline, explanation, "

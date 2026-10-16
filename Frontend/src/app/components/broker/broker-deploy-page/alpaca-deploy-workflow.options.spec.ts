@@ -80,7 +80,7 @@ function mockService(optionAnswer: OptionAnswer = PRICED) {
     previewBudget: vi.fn().mockImplementation(async (_target, body: DeployBotBody) => ({
       state: 'ready', detail: 'Money is ready.',
       world: body.execution_mode === 'live' ? 'real_live' : body.execution_mode === 'shadow' ? 'shadow' : body.execution_mode === 'dry_run' ? 'dry_run' : 'real_paper',
-      custody_account_id: 'PA9', risk_revision: 1,
+      risk_revision: 1,
       minimum_budget_usd: '500.00', unreserved_usd: '1000.00', shortcuts: [], money_after: fakeAccountMoney(),
       review_token: body.budget ? 'reviewed-money' : null, budget_usd: body.budget?.amount_usd ?? null,
       confirmation_text: body.budget && body.execution_mode === 'live' ? 'Deploy PA9 with $1000.00' : null,

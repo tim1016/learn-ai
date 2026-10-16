@@ -24,8 +24,8 @@ short-circuiting the walk would, at no extra cost, so it is the one
 implemented here.
 
 **Recorded bars.** Real Polygon fixtures cannot be replayed verbatim: the
-ceremony sends ``as_of_ms = now`` at an arbitrary wall-clock time (PRD
-#2201 §11.7), so a fixture pinned to literal historical timestamps would
+ceremony sends ``as_of_ms = now`` at an arbitrary wall-clock time (#2201),
+so a fixture pinned to literal historical timestamps would
 either miss the walk's requested window or need ad-hoc resampling (banned by
 the issue). Instead this module is a **seeded, calendar-aligned generator**:
 for any requested ``(symbol, start, end, multiplier, timespan)`` it enumerates

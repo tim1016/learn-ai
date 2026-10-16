@@ -24,7 +24,7 @@ import { AssetIdentityComponent } from '../../../../shared/asset-identity';
  * The dialog is open for exactly as long as it is mounted: every host renders
  * it under its own `@if` and removes it on `confirmed` or `cancelled`. So the
  * keyboard enters it when it is created and, after a cancel, goes back to
- * what opened it when it is destroyed (PRD #2560 story 80). A confirm leaves
+ * what opened it when it is destroyed (#2560). A confirm leaves
  * the keyboard to its host, which moves it to the outcome.
  */
 @Component({

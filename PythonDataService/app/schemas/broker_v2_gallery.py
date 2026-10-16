@@ -71,14 +71,6 @@ class GalleryBotView(BaseModel):
     # a lone-present component contributes its own value, matching the
     # existing "show whichever side is present" display intent.
     day_pnl: float | None
-    # Session return `(last_close - session_open) / session_open`, scoped to
-    # TODAY's session (see gallery_hub._session_change_pct). Computed here,
-    # not client-side from `bars[0]`: the shared per-symbol bar buffer can
-    # (and does) retain a prior session's tail bars, so `bars[0]` is not
-    # reliably today's session open — the same single-numerical-authority
-    # reasoning as `day_pnl`. `None` when no bar has fallen within today's
-    # session yet, or the session's first open is zero.
-    session_change_pct: float | None
     fills_today: int | None
     last_bar_at_ms: int | None = None
     # Required, never defaulted: a tile with no feed fact must not render as live.

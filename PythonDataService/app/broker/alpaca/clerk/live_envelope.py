@@ -7,7 +7,7 @@ Formula: an ENTER is admitted by ``budgets.budget_entry_decision``: its entry
   ``budgets.account_headroom``), judged by ``sqlite/envelope_admission.py``; loss limit
   ``L = min(loss_fraction × last_equity, loss_usd)``; loss breached iff
   ``day_pnl <= −L``.
-Reference: ADR 0059 Decision 4; owner rulings 2026-09-08 (plan R1–R4).
+Reference: ADR 0059 Decision 4 and its owner amendments.
 Canonical implementation: this file. Day P&L composition lives in
   ``app/broker/alpaca/clerk/sqlite/day_pnl.py``.
 Validated against: ``tests/broker/alpaca/clerk/test_live_envelope.py``.
@@ -209,7 +209,7 @@ class AccountObservation:
     observed_at_ms: int
     broker_cash_usd: float
     # ``broker_cash_usd`` less what the Clerk's own fills would have spent
-    # under simulated custody (plan R2); equal to it under real custody.
+    # under simulated custody; equal to it under real custody.
     cash_available_usd: float | Decimal
     # The broker's float, or simulated custody's exact retained prior-close
     # baseline (#2586); on the loss-hold clearance path a sealed hold's float
@@ -316,7 +316,7 @@ class LiveEnvelopeGate:
         """Drop the published observation.
 
         The sync could not judge the account, so ENTER refuses
-        ``LIVE_ENVELOPE_UNOBSERVED`` at once (plan R3, R5) rather than
+        ``LIVE_ENVELOPE_UNOBSERVED`` at once rather than
         bounding one against a figure that only *looks* fresh.
         """
         self._observation = None

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Path, Query, status
 
@@ -80,7 +79,6 @@ async def acknowledge_external_order_endpoint(
 @router.get("/{account_id}/transactions", response_model=ClerkTransactionHistoryResponse)
 async def get_clerk_transaction_history(
     account_id: str,
-    broker: Literal["alpaca"] = Query(default="alpaca"),
     limit: int = Query(default=50, ge=1, le=100),
     cursor: str | None = Query(default=None, min_length=1, max_length=512),
     origin: TransactionOrigin | None = Query(default=None),
@@ -129,13 +127,10 @@ async def get_clerk_transaction_history(
         # durable even while this downstream read model is unavailable.
         return ClerkTransactionHistoryResponse(
             projection_available=False,
-            canonical_fallback_required=True,
             feed_state="projection_unavailable",
             feed_headline="Projection unavailable",
             feed_detail="Clerk transaction projection unavailable; canonical acknowledgement remains durable.",
             high_water_journal_seq=None,
-            lag_records=None,
-            lag_is_lower_bound=False,
             custody_summary=ClerkCustodyWindowSummary(
                 record_count=0,
                 a0_custody_accepted_count=0,
@@ -158,7 +153,6 @@ async def get_clerk_transaction_history(
 async def get_clerk_transaction_detail(
     account_id: str,
     transaction_id: str,
-    broker: Literal["alpaca"] = Query(default="alpaca"),
 ) -> ClerkTransactionRow:
     """Read exactly one selected projected receipt; never rescan Clerk."""
 

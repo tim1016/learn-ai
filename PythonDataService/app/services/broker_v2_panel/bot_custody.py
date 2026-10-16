@@ -1,4 +1,4 @@
-"""The one selection of the Clerk authority that custodies a bot (hurdle H33, #2563).
+"""The one selection of the Clerk authority that custodies a bot (#2563).
 
 Panel reads, panel actions, the bot's money, its recovery and every per-bot
 Clerk route act in the authority this module selects, so a Dry Run's reads and
@@ -22,12 +22,14 @@ an already-authorized request acts.
 
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES, ActiveClerkRuntime
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.engine.live.identity import INSTANCE_ID_PATTERN
 from app.services.bot_binding_authority import UnboundDryRunAuthority
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_runner import BotTaskRegistry, get_bot_task_registry
@@ -141,8 +143,31 @@ def _binding(registry: BotTaskRegistry | None, broker: str, sid: str) -> BrokerB
         return None
 
 
+def bot_is_known(broker: str, sid: str) -> bool:
+    """Whether anything holds ``sid``: the runner's binding, the account's own record of it, or the
+    activation of a Dry Run a crash left unbound.
+
+    A well-formed id nothing holds names no bot, so a read of its money is a
+    404 and not the earlier deployment's "no budget" (#3217). Reads only.
+    """
+    registry = get_bot_task_registry()
+    if _binding(registry, broker, sid) is not None:
+        return True
+    account = _account_runtime(broker)
+    repository = None if account is None else account.sqlite_repository
+    if repository is not None and (
+        repository.strategy_instance(sid) is not None or repository.deployment_budget(sid) is not None
+    ):
+        return True
+    return _unbound_dry_run(registry, broker, sid) is not None
+
+
 def _unbound_dry_run(registry: object, broker: str, sid: str) -> UnboundDryRunAuthority | None:
     """The Dry Run a crash left without a binding, when the account's own authority does not hold ``sid``."""
+    if re.fullmatch(INSTANCE_ID_PATTERN, sid) is None:
+        # No activation was ever written under an id that could not name a bot,
+        # and looking one up would be a ValueError out of the registry.
+        return None
     account = _account_runtime(broker)
     repository = None if account is None else account.sqlite_repository
     unbound = getattr(registry, "unbound_dry_run", None)

@@ -13,7 +13,6 @@ import {
   HIDE_EVIDENCE_BUTTON_NAME,
   INITIAL_REVISION,
   PAGE_LOAD_COUNT,
-  PROFILE,
   REVISION_SEQUENCE,
   STATION_BUTTON_NAME,
   STRATEGY_INSTANCE_ID,
@@ -122,7 +121,6 @@ describe('BotPanelShellComponent #1413 correlation campaign', () => {
   it('keeps #1413 evidence controls read-only through five mounted-shell recreations and unchanged/advancing SSE revisions', async () => {
     const lifecycleRequestActionIds: string[] = [];
     const campaignService = {
-      getPanelProfile: vi.fn().mockResolvedValue(PROFILE),
       getLiveSnapshot: vi.fn().mockResolvedValue(
         snapshotAtRevision(0, INITIAL_REVISION),
       ),

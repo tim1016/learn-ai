@@ -50,7 +50,7 @@ export class BrokerHealthService {
 
   /**
    * Begin background polling. Idempotent — repeated calls are no-ops.
-   * The shell calls this once on app boot.
+   * The options pages call this on entry; repeated calls are no-ops.
    */
   start(): void {
     if (this.started) return;

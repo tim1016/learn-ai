@@ -101,7 +101,7 @@ function mockService() {
       .mockImplementation(async (_target, body) => previewedEnd(body)),
     previewBudget: vi.fn().mockImplementation(async (_target, body: DeployBotBody) => ({
       state: 'ready', detail: 'Money is ready.', world: body.execution_mode === 'dry_run' ? 'synthetic' : 'real_paper',
-      custody_account_id: 'PA9', risk_revision: 1, minimum_budget_usd: '500.00', unreserved_usd: '1000.00',
+      risk_revision: 1, minimum_budget_usd: '500.00', unreserved_usd: '1000.00',
       shortcuts: [], money_after: fakeAccountMoney(), review_token: body.budget ? 'reviewed-money' : null,
       budget_usd: body.budget?.amount_usd ?? null,
     })),

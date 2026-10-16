@@ -25,14 +25,13 @@ from app.broker.alpaca.clerk.account_authority import (
     account_route_matches_custody,
     canonical_alpaca_account_id,
 )
-from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
-from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.sqlite.projection_models import TimelineEntry
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.reads import FILL_CREDIT_WITHHELD_BY_DISCHARGE
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker_configuration.runtime import resolve_clerk_dir
 from app.schemas.broker_v2_evidence import EvidenceAuditEntry, EvidenceEntry, EvidencePage
+from app.services.broker_v2_panel.panel_errors import AccountMismatchError
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -328,10 +327,15 @@ def _append_audit_entry(entry: EvidenceAuditEntry) -> None:
         with _AUDIT_LOCK, path.open("a", encoding="utf-8") as fh:
             fh.write(line)
             fh.flush()
-    except OSError:
+    except OSError as error:
         logger.warning(
             "Evidence audit log write failed",
-            extra={"account_id": entry.account_id, "sid": entry.strategy_instance_id},
+            exc_info=error,
+            extra={
+                "action": "evidence_audit_write_failed",
+                "account_id": entry.account_id,
+                "sid": entry.strategy_instance_id,
+            },
         )
 
 
@@ -365,28 +369,18 @@ def _sqlite_evidence_entry(entry: TimelineEntry) -> EvidenceEntry:
     )
 
 
-def _read_active_sqlite_evidence(
+def _read_sqlite_evidence(
     *,
-    account_id: str,
+    facade: SqliteAlpacaClerkFacade,
     sid: str,
     transaction_ref: str | None,
     cursor: str | int | None,
     page_size: int,
 ) -> tuple[list[EvidenceEntry], str | None, int, bool]:
-    """Read the selected SQLite authority, never a latent database by path."""
-    runtime = get_active_clerk_runtime()
-    if runtime is None or runtime.authority_kind not in SQLITE_FACADE_AUTHORITIES:
-        raise RuntimeError("The activated SQLite Clerk evidence authority is unavailable")
-    clerk = runtime.clerk
-    if not isinstance(clerk, SqliteAlpacaClerkFacade):
-        raise RuntimeError("Active SQLite Clerk does not expose its verified read authority")
-    if not account_route_matches_custody(
-        account_id, clerk.account_id, shadow=runtime.authority_kind == "shadow",
-    ):
-        raise RuntimeError("Active SQLite Clerk account does not match the requested account")
+    """Read the authority the bot is custodied in, never a latent database by path."""
     if cursor is not None and not isinstance(cursor, str):
         raise ValueError("SQLite evidence requires its opaque cursor")
-    reader = SqliteClerkProjectionReader.from_facade(clerk)
+    reader = SqliteClerkProjectionReader.from_facade(facade)
     try:
         effect_operation_id = (
             transaction_ref
@@ -408,6 +402,7 @@ def _read_active_sqlite_evidence(
 
 def read_evidence_page(
     *,
+    facade: SqliteAlpacaClerkFacade,
     account_id: str,
     sid: str,
     transaction_ref: str | None,
@@ -419,7 +414,10 @@ def read_evidence_page(
     """Return one bounded, redacted, audit-logged evidence page.
 
     Args:
-        account_id: The public route account whose journal to read.
+        facade: The authority the bot is custodied in (``bot_custody``'s one
+            selection): a Dry Run's own ``sim:`` Clerk, or the account's.
+        account_id: The public route account, already authorized by the
+            caller; it names the audit log and the page, never the store read.
         sid: Filter to this bot's namespace only.
         transaction_ref: If given, filter to the selected SQLite effect operation.
         cursor: Opaque SQLite timeline cursor; ``None`` starts at the newest page.
@@ -433,11 +431,20 @@ def read_evidence_page(
     Side effect:
         Appends one ``EvidenceAuditEntry`` to the per-account audit log.
     """
+    # The account's own authority must be the route's account. A bot's isolated
+    # Dry Run authority is not the account: its route was authorized upstream.
+    if facade.authority_kind != "synthetic" and not account_route_matches_custody(
+        account_id, facade.account_id, shadow=facade.authority_kind == "shadow",
+    ):
+        raise AccountMismatchError(
+            f"Account '{account_id}' is not the account for broker 'alpaca'.",
+            detail="The active Clerk custodies another account.",
+        )
     page_size = min(max(1, page_size), PAGE_SIZE_MAX)
     read_at = now_ms_utc()
 
-    sqlite_page = _read_active_sqlite_evidence(
-        account_id=account_id,
+    sqlite_page = _read_sqlite_evidence(
+        facade=facade,
         sid=sid,
         transaction_ref=transaction_ref,
         cursor=cursor,
@@ -466,6 +473,5 @@ def read_evidence_page(
         next_cursor=next_cursor,
         total_entries=total,
         truncated=truncated,
-        read_by=operator_identity,
         read_at_ms=read_at,
     )

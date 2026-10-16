@@ -35,6 +35,7 @@ from app.services.broker_v2_panel.chart_projection_service import (
 from app.services.broker_v2_panel.history_batch_client import build_history_batch_provider
 from app.services.broker_v2_panel.panel_data_source import get_panel_with_chart_fills
 from app.services.broker_v2_panel.panel_errors import (
+    BotRunnerUnavailableError,
     PanelDataError,
     PanelUnavailableError,
     UnknownBotError,
@@ -191,8 +192,11 @@ def _within_latest_run(
     broker: str, sid: str, window: tuple[int, int], *, timeframe: ChartHistoryTimeframe, now_ms: int
 ) -> tuple[int, int]:
     """The window held to the bot's latest run, as its run record dates it."""
+    registry = get_bot_task_registry()
+    if registry is None:
+        raise BotRunnerUnavailableError
     try:
-        run = get_bot_task_registry().current_run(broker, sid)
+        run = registry.current_run(broker, sid)
     except RunnerUnknownBotError:
         run = None
     terminal = None if run is None else run.terminal_outcome

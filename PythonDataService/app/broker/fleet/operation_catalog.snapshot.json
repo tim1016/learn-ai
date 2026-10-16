@@ -472,16 +472,6 @@
       "path_template": "/accounts/{account_id}/manual-orders/preview",
       "requires_account": true
     },
-    "market_status_read": {
-      "method": "GET",
-      "path_template": "/market-status-snapshot",
-      "requires_account": false
-    },
-    "orders_read": {
-      "method": "GET",
-      "path_template": "/orders",
-      "requires_account": false
-    },
     "paper_access_confirm": {
       "method": "POST",
       "path_template": "/accounts/{account_id}/strategies/{program_key}/paper-access/confirm",
@@ -500,11 +490,6 @@
     "portfolio_history_read": {
       "method": "GET",
       "path_template": "/portfolio-history",
-      "requires_account": false
-    },
-    "positions_read": {
-      "method": "GET",
-      "path_template": "/positions",
       "requires_account": false
     },
     "shadow_activate": {

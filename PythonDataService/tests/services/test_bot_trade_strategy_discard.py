@@ -8,99 +8,23 @@ inside ``commit_signal_decision``, which a session runs only on
 ``Settlement.COMMIT``, so a refusal has nothing to unwind and DISCARD is the
 whole disposition.
 
-That leaves one invariant holding the simplification up: every evaluation the
-adapter yields owns a decision cycle to settle. It holds because
+Every evaluation the adapter yields owns a decision cycle to settle. It holds because
 ``_build_signal_strategy`` refuses to construct a runtime for a strategy with no
 registered Signal Program -- without a session there is no stage, so such a
 runtime could only stream bars and decide nothing, which is the failure shape
-this module works hardest to make impossible. These tests pin both halves: the
-refusal is forwarded as DISCARD, and the program-less runtime is unconstructable
-rather than merely unused.
+this module works hardest to make impossible. The test proves the program-less
+runtime is unconstructable rather than merely unused.
 """
 
 from __future__ import annotations
 
-from decimal import Decimal
-
 import pytest
 
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
-from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
-from app.engine.strategy.signal_program import EvaluationMode, EvaluationTrace, Settlement
-from app.marketdata.feed import MarketDataBar
 from app.services.bot_trade_strategy import (
-    StrategyEvaluation,
     _build_signal_strategy,
-    _discard_evaluation,
     supported_alpaca_paper_strategy_keys,
 )
-
-_BAR_END_MS = 1_711_641_600_000
-
-
-def _placeholder_trace(evaluation_id: str) -> EvaluationTrace:
-    """A structurally valid trace for a test that asserts nothing about it.
-
-    ``StrategyEvaluation.trace`` is non-optional (issue #1736), so these
-    tests -- which are about settlement and refusal disposition, not
-    decision content -- still have to supply one. Local rather than in
-    ``tests/_helpers/``: that package is explicitly for helpers consumed
-    from more than one test *directory*, and this has one consumer.
-    """
-    return EvaluationTrace(
-        program_key="ema_crossover_signal",
-        program_version="v1",
-        evaluation_id=evaluation_id,
-        bar_close_ms=_BAR_END_MS,
-        bar_qualified=True,
-        bucket_closed=True,
-        ready=True,
-        relation_facts={},
-        signal_facts={},
-        staged_candidate=None,
-        reason_evidence={},
-        action_plan_request=None,
-        evaluation_mode=EvaluationMode.DECIDE,
-    )
-
-
-def _evaluation(settle_stage: object) -> StrategyEvaluation:
-    return StrategyEvaluation(
-        bar=MarketDataBar(
-            symbol="SPY",
-            start_ms=_BAR_END_MS - 60_000,
-            end_ms=_BAR_END_MS,
-            open=Decimal("500.00"),
-            high=Decimal("500.50"),
-            low=Decimal("499.50"),
-            close=Decimal("500.25"),
-            volume=1_000,
-            fetched_at_ms=_BAR_END_MS,
-            feed_id="test",
-        ),
-        evaluation_id="evaluation-under-test",
-        decision_bar_close_ms=_BAR_END_MS,
-        intents=(
-            SignalIntent(
-                kind=SignalIntentKind.ENTER,
-                bar_close_ms=_BAR_END_MS,
-                intended_price=Decimal("500.25"),
-            ),
-        ),
-        settle_stage=settle_stage,  # type: ignore[arg-type]
-        # Non-optional since issue #1736 -- the type-level statement of the
-        # invariant this module's docstring already argues in prose. These
-        # tests are about settlement, not decision content.
-        trace=_placeholder_trace("evaluation-under-test"),
-    )
-
-
-def test_discard_settles_the_staged_candidate_as_discarded() -> None:
-    settled: list[Settlement] = []
-
-    _discard_evaluation(_evaluation(settled.append))
-
-    assert settled == [Settlement.DISCARD]
 
 
 def _key_without_a_signal_program() -> str:

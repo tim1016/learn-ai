@@ -104,6 +104,7 @@ from app.services.broker_v2_panel.catalog_projection_service import (
 )
 from app.services.broker_v2_panel.market_pulse import build_market_pulse
 from app.services.broker_v2_panel.panel_errors import (
+    BotRunnerUnavailableError,
     DryRunRestoringError,
     PanelUnavailableError,
     UnknownBotError,
@@ -195,10 +196,7 @@ async def selected_panel_authority(
     resolved = await validate_account(broker, account_id)
     registry = get_bot_task_registry()
     if registry is None:
-        raise PanelUnavailableError(
-            "The bot runner is not available.",
-            detail="The service is still starting or has shut down.",
-        )
+        raise BotRunnerUnavailableError
     try:
         binding = registry.binding_for_control(broker, sid)
     except (RunnerUnknownBotError, InvalidStrategyInstanceIdError) as exc:
@@ -377,7 +375,9 @@ async def get_catalog(broker: str, account_id: str, *, home: bool = False) -> li
         )
     registry = get_bot_task_registry()
     if registry is None:
-        return sqlite_catalog
+        # Dry Run and rehearsal rows are the runner's: without it the roster
+        # is not partial, it is unavailable.
+        raise BotRunnerUnavailableError
     synthetic_rows: list[BotCatalogView] = []
     bindings = registry.bindings_for_broker(broker)
     for binding in bindings:
@@ -425,7 +425,7 @@ async def get_catalog(broker: str, account_id: str, *, home: bool = False) -> li
                 detail=str(exc),
             ) from exc
         # A Dry Run's starting cash is its consent amount, private to its
-        # simulated account (PRD #2540); a pre-budget Dry Run has none. Only
+        # simulated account (#2540); a pre-budget Dry Run has none. Only
         # the Dry Run group carries it: a stopped, flat Dry Run is Finished
         # (#2567).
         simulated_cash = None if budget is None else dollars(budget["committed_cents"])
@@ -740,7 +740,11 @@ def _with_bot_page(
                 sweep_pass_at_ms=facade.recovery_evaluation_observation().last_pass_completed_at_ms,
                 now_ms=now_ms,
             ),
-            "run_fills": run_fill_views(run_fills, _simulated_fill_anchors(facade, sid), _simulated_option_fills(facade, sid)),
+            "run_fills": (
+                None if run.unreadable else run_fill_views(
+                    run_fills, _simulated_fill_anchors(facade, sid), _simulated_option_fills(facade, sid)
+                )
+            ),
         }
     )
 
@@ -1220,7 +1224,7 @@ async def _run_action_under_live_authority(
 
     Reads always opened a Dry Run's own ``sim:`` Clerk while actions ran
     against the account's, which has never held that bot: Reconcile now
-    answered "no custody record" and Flatten never unlocked (hurdle H33). The
+    answered "no custody record" and Flatten never unlocked. The
     panel and the action now share one selection, held open across both, so
     a Dry Run recovers inside its simulator and never reaches Alpaca.
     """

@@ -170,7 +170,6 @@ class ProjectedOrderResponse(BaseModel):
     broker_order_id: str | None
     role: str
     broker_state: str | None
-    submitted_at_ms: int | None
     updated_at_ms: int
 
 
@@ -181,7 +180,7 @@ class ProjectedOperationResponse(BaseModel):
     kind: str
     state: str
     custody_owner: str
-    strategy_instance_id: str
+    strategy_instance_id: str | None
     run_id: str | None
     created_at_ms: int
     updated_at_ms: int
@@ -204,7 +203,6 @@ class ProjectedPositionResponse(BaseModel):
 class ProjectedHoldResponse(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
-    hold_id: str
     scope: CustodyScope
     strategy_instance_id: str | None
     reason_code: str
@@ -239,7 +237,6 @@ class ProjectedUncertaintyResponse(BaseModel):
     operator_impact: str
     next_step: str
     observed_at_ms: int
-    evidence_age_ms: int
     evidence_refs: tuple[str, ...]
     # The one observed recovery status shared across operator surfaces.
     recovery_status: RecoveryStatusResponse | None = None
@@ -251,23 +248,9 @@ class ProjectedReconciliationResponse(BaseModel):
     reconciliation_id: str
     effect_operation_id: str | None
     order_ref: str | None
-    trigger: str
     attempted_at_ms: int
     outcome: str
-    evidence_age_ms: int
     evidence_refs: tuple[str, ...]
-
-
-class ProjectedReceiptResponse(BaseModel):
-    model_config = ConfigDict(frozen=True, from_attributes=True)
-
-    receipt_id: str
-    command_id: str | None
-    effect_operation_id: str | None
-    terminal_state: str
-    summary_code: str
-    proof_reference: str | None
-    recorded_at_ms: int
 
 
 class RecoveryEvidenceResponse(BaseModel):
@@ -379,9 +362,6 @@ class ProjectionGuidanceResponse(BaseModel):
     scope: CustodyScope
     impact: str
     custody_owner: str
-    may_create_exposure: bool
-    available_safety_actions: tuple[str, ...]
-    action_required: bool
     next_step: str
     # The primary episode's next automatic attempt, as its uncertainty
     # projects it (#2440).
@@ -419,18 +399,16 @@ class ClerkProjectionResponse(BaseModel):
     strategy_instance_id: str | None
     authority_generation: int
     db_identity_token: str
-    authority_health: Literal["healthy", "degraded_to_mirror", "failed"]
+    authority_health: Literal["healthy", "failed"]
     authority_health_reason: str | None
     control_revision: int
     custody_owner: str
     runs: tuple[ProjectedRunResponse, ...]
-    commands: tuple[ProjectedCommandResponse, ...]
     operations: tuple[ProjectedOperationResponse, ...]
     positions: tuple[ProjectedPositionResponse, ...]
     holds: tuple[ProjectedHoldResponse, ...]
     uncertainties: tuple[ProjectedUncertaintyResponse, ...]
     latest_reconciliation: ProjectedReconciliationResponse | None
-    terminal_receipts: tuple[ProjectedReceiptResponse, ...]
     guidance: ProjectionGuidanceResponse
     recovery_actions: tuple[RecoveryCapabilityResponse, ...]
     generated_at_ms: int

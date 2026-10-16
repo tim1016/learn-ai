@@ -77,7 +77,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.alpaca.errors import AlpacaRequest, map_api_error
 from app.broker.alpaca.marketable_limit import marketable_limit_price
-from app.broker.contract.errors import BrokerError, BrokerOrderNotPermitted, BrokerUnavailable
+from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerOrder,
@@ -302,16 +302,6 @@ def test_account_fifo_lets_one_bots_sale_close_the_other_bots_lot() -> None:
 
 
 # ── Alpaca's wash-trade refusal ───────────────────────────────────────────────
-
-
-def test_a_wash_trade_refusal_is_an_order_rejection_that_keeps_alpacas_code() -> None:
-    """A 403 on an order submission is Alpaca refusing that order, not our credentials (#2621)."""
-    error = _wash_trade_rejection()
-
-    assert isinstance(error, BrokerOrderNotPermitted)
-    assert error.message == f"Alpaca refused the order: {_WASH_TRADE_MESSAGE}"
-    assert error.detail == "HTTP 403"
-    assert error.code == _ILLUSTRATIVE_CODE
 
 
 async def test_an_enter_refused_as_a_wash_trade_fails_and_the_bot_may_enter_again(tmp_path: Path) -> None:

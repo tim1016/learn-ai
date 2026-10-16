@@ -31,6 +31,8 @@ from tests.broker.alpaca.clerk.sqlite.conftest import _FakeReadPort, _FakeTradeP
 
 from ._support import _SESSION_OPEN_MS, _green_bar
 
+pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+
 # 09:59 and 10:00 ET on 2024-01-02 — inside the regular session, and so also
 # inside the broker's declared 04:00–20:00 ET extended window. The second bar
 # closes the green streak `deployment_validation` enters on.

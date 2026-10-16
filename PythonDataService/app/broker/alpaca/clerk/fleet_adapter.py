@@ -110,8 +110,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
     {
         # ── Lane reads ────────────────────────────────────────────────────
         _op("account_read", "GET", "/account", capability=Capability.ACCOUNT_READ),
-        _op("positions_read", "GET", "/positions", capability=Capability.POSITIONS_READ),
-        _op("orders_read", "GET", "/orders", capability=Capability.ORDERS_READ),
         # The desk's account evidence is lane-scoped even where the
         # pre-fleet clerk handler still exposes its compatibility alias under
         # ``/api/brokers/alpaca``.  These declarations are the one migration
@@ -124,7 +122,7 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             capability=Capability.ACCOUNT_READ,
             agent_path="/api/brokers/alpaca/fees/attribution",
         ),
-        # The Activity page's two reads beside its fees (PRD #2560): a
+        # The Activity page's two reads beside its fees (#2560): a
         # period's orders and cash moves, and Today's money statement.
         _op(
             "activity_period_read",
@@ -236,12 +234,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             capability=Capability.BOT_ACTION,
             idempotency=_ONE_SHOT,
             readiness=_CONFIGURATION,
-        ),
-        _op(
-            "market_status_read",
-            "GET",
-            "/market-status-snapshot",
-            capability=Capability.MARKET_STATUS_READ,
         ),
         # IBKR is the read-only market-data feed for every Alpaca clerk
         # (ADR 0062). These clerk-scoped routes select the lane's own Gateway
@@ -976,7 +968,7 @@ class AlpacaProviderAdapter:
 
         The agent's bounded typed observation (endpoint mode, authority
         state, and — when the confirmed account has one set — its nickname,
-        PRD #2182, and the lane's own bot and attention counts, PRD #2560) is
+        #2182, and the lane's own bot and attention counts, #2560) is
         carried through with the registry's confirmed facts; no financial
         quantity is computed or combined here (FR-034).
         """

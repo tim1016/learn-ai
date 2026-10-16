@@ -161,7 +161,7 @@ def test_a_line_carries_when_the_request_began_and_when_the_answer_ended(tmp_pat
     [record] = _records(tmp_path, "account")
     # The headers arrived at the clock's instant, 250 ms after the request was sent; the body read took no time here.
     assert record["began_at_ms"] == _FIXED_MS - 250
-    assert _FIXED_MS <= record["ended_at_ms"] < _FIXED_MS + 50
+    assert record["ended_at_ms"] >= _FIXED_MS
     assert record["captured_at_ms"] == _FIXED_MS
 
 

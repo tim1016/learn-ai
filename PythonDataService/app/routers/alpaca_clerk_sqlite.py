@@ -20,7 +20,6 @@ import asyncio
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from enum import StrEnum
-from typing import TypeVar
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -102,7 +101,6 @@ from app.services.option_buying_power_views import option_buying_power_checks
 from app.services.sqlite_clerk_compat import failed_sqlite_projection
 
 router = APIRouter(prefix="/api/alpaca-clerk-sqlite", tags=["alpaca-clerk-sqlite"])
-ReadResult = TypeVar("ReadResult")
 _MAX_TIMELINE_CURSOR_LENGTH = 4_096
 # The raw lifecycle Stop's author in the bot's desired state, and the reason
 # recorded there when the caller gave none.
@@ -245,7 +243,7 @@ def _unknown_bot_response(exc: UnknownStrategyInstanceError) -> HTTPException:
     )
 
 
-def _read_projection(  # noqa: UP047 - Python 3.11 runtime; PEP 695 needs 3.12.
+def _read_projection[ReadResult](
     facade: SqliteAlpacaClerkFacade,
     read: Callable[[SqliteClerkProjectionReader], ReadResult],
 ) -> ReadResult:

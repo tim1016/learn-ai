@@ -39,7 +39,6 @@ from app.services.broker_account_snapshot import (
     clear_broker_account_snapshot_cache_for_testing,
 )
 from app.services.broker_v2_panel.panel_scope import resolve_account_id
-from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
 @pytest.fixture(autouse=True)
@@ -273,67 +272,6 @@ async def test_rate_limited_rounds_retry_after_up_to_whole_second() -> None:
     assert response.headers["Retry-After"] == "3"
 
 
-def _position(**overrides: Any) -> BrokerPosition:
-    base: dict[str, Any] = dict(
-        broker="alpaca",
-        symbol="AAPL",
-        asset_id="a-1",
-        asset_class="us_equity",
-        quantity=10.0,
-        side="long",
-        average_entry_price=135.8,
-        market_value=1358.02,
-        cost_basis=1358.0,
-        current_price=135.8,
-        unrealized_pl=0.02,
-        unrealized_plpc=0.0,
-        observed_at_ms=1_700_000_000_000,
-    )
-    base.update(overrides)
-    return BrokerPosition(**base)
-
-
-async def test_positions_endpoint_returns_list() -> None:
-    get_broker_registry().register(_FakePort(positions=[_position(symbol="MSFT")]))
-
-    response = await _get("/api/brokers/alpaca/positions")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert len(body) == 1
-    assert body[0]["symbol"] == "MSFT"
-
-
-def _order(**overrides: Any) -> BrokerOrder:
-    base: dict[str, Any] = dict(
-        broker="alpaca",
-        order_id="o-1",
-        client_order_id=None,
-        symbol="AAPL",
-        asset_class="us_equity",
-        side="buy",
-        order_type="market",
-        time_in_force="day",
-        quantity=10.0,
-        filled_quantity=10.0,
-        limit_price=None,
-        stop_price=None,
-        filled_avg_price=135.8,
-        status="filled",
-        submitted_at_ms=1_700_000_000_000,
-        created_at_ms=1_700_000_000_000,
-        updated_at_ms=1_700_000_000_000,
-        filled_at_ms=1_700_000_000_500,
-        canceled_at_ms=None,
-        expired_at_ms=None,
-        events=[],
-        observed_at_ms=1_700_000_000_000,
-        fill_latency_seconds=0.5,
-    )
-    base.update(overrides)
-    return BrokerOrder(**base)
-
-
 def _activity(**overrides: Any) -> BrokerActivity:
     base: dict[str, Any] = dict(
         broker="alpaca",
@@ -350,26 +288,6 @@ def _activity(**overrides: Any) -> BrokerActivity:
     )
     base.update(overrides)
     return BrokerActivity(**base)
-
-
-async def test_orders_endpoint_returns_list_and_forwards_query_params() -> None:
-    port = _FakePort(orders=[_order(order_id="o-9")])
-    get_broker_registry().register(port)
-
-    response = await _get("/api/brokers/alpaca/orders?status=open&limit=5&after_ms=123")
-
-    assert response.status_code == 200
-    assert response.json()[0]["order_id"] == "o-9"
-    assert response.json()[0]["fill_latency_seconds"] == 0.5
-    assert port.orders_call == {"status": "open", "limit": 5, "after_ms": 123}
-
-
-async def test_orders_endpoint_rejects_invalid_status() -> None:
-    get_broker_registry().register(_FakePort(orders=[]))
-
-    response = await _get("/api/brokers/alpaca/orders?status=bogus")
-
-    assert response.status_code == 422
 
 
 class _MalformedAlpacaClient:
@@ -393,8 +311,6 @@ class _MalformedAlpacaClient:
 @pytest.mark.parametrize(
     ("path", "evidence"),
     [
-        pytest.param("/api/brokers/alpaca/positions", "position", id="positions"),
-        pytest.param("/api/brokers/alpaca/orders?status=open", "order", id="orders"),
         pytest.param("/api/brokers/alpaca/activities/period?period=30d", "activity", id="activity-period"),
         # These reads once let the adapter's raw error escape as a 500 (#2643).
         pytest.param("/api/brokers/alpaca/portfolio-history?range=30D", "portfolio history", id="portfolio-history"),
@@ -542,46 +458,3 @@ async def test_activity_period_requires_a_known_period() -> None:
     response = await _get("/api/brokers/alpaca/activities/period?period=7d")
 
     assert response.status_code == 422
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        "/api/brokers/alpaca/orders?after_ms=-1",
-        f"/api/brokers/alpaca/orders?after_ms={MAX_TIMESTAMP_MS + 1}",
-    ],
-)
-async def test_timestamp_cursors_reject_values_outside_the_representable_ms_range(
-    path: str,
-) -> None:
-    get_broker_registry().register(_FakePort())
-
-    response = await _get(path)
-
-    assert response.status_code == 422
-
-
-@pytest.mark.parametrize(
-    ("path", "expected_call"),
-    [
-        (
-            "/api/brokers/alpaca/orders?after_ms=0",
-            {"status": None, "limit": None, "after_ms": 0},
-        ),
-        (
-            f"/api/brokers/alpaca/orders?after_ms={MAX_TIMESTAMP_MS}",
-            {"status": None, "limit": None, "after_ms": MAX_TIMESTAMP_MS},
-        ),
-    ],
-)
-async def test_timestamp_cursors_accept_the_whole_representable_ms_range(
-    path: str,
-    expected_call: dict[str, str | int | None],
-) -> None:
-    port = _FakePort()
-    get_broker_registry().register(port)
-
-    response = await _get(path)
-
-    assert response.status_code == 200
-    assert port.orders_call == expected_call

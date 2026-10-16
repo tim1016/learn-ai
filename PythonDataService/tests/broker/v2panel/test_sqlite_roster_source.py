@@ -468,6 +468,7 @@ async def test_catalog_does_not_scan_runner_bindings_after_sqlite_activation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(panel_data_source, "validate_account", _resolved_account)
+    monkeypatch.setattr(panel_data_source, "get_bot_task_registry", _runner_holding_no_dry_run)
     assert not hasattr(panel_data_source, "_bot_statuses")
     assert not hasattr(panel_data_source, "_latest_decision")
     assert not hasattr(panel_data_source, "get_or_create_owner")
@@ -700,6 +701,7 @@ async def test_activated_catalog_never_scans_large_legacy_set(
         (legacy_root / f"disposable-{index:05d}").mkdir()
 
     monkeypatch.setattr(panel_data_source, "validate_account", _resolved_account)
+    monkeypatch.setattr(panel_data_source, "get_bot_task_registry", _runner_holding_no_dry_run)
     assert not hasattr(panel_data_source, "_bot_statuses")
     monkeypatch.setattr(sqlite_panel_source, "read_sqlite_catalog_projections", _empty_projections)
     monkeypatch.setattr(
@@ -722,6 +724,11 @@ async def test_activated_catalog_never_scans_large_legacy_set(
 
 async def _resolved_account(_broker: str, account_id: str) -> str:
     return account_id
+
+
+def _runner_holding_no_dry_run() -> SimpleNamespace:
+    """The runner is up, and no Dry Run is bound to it; without a runner the roster is unavailable (#3217)."""
+    return SimpleNamespace(bindings_for_broker=lambda _broker: [])
 
 
 async def _empty_projections(

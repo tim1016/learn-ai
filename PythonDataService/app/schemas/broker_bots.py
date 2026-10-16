@@ -307,6 +307,7 @@ class AlpacaDeploySubmission(AlpacaPaperDeployRequest):
     lineage: it names the bot this one follows and grants it nothing.
     """
 
+    budget: DeploymentBudgetInput
     submission_key: str = Field(pattern=SUBMISSION_KEY_PATTERN)
     replaces_strategy_instance_id: str | None = Field(default=None, min_length=1, max_length=128)
 
@@ -383,8 +384,6 @@ class QualifiedDeployConfiguration(BaseModel):
     symbol: str
     parameters: dict[str, JsonValue]
     explanation: str
-    # The Golden Search qualified version this preset is (#2696); unset for the registry's validated point.
-    golden_qualification_id: str | None = None
 
 
 class AlpacaPaperDeployStrategy(BaseModel):

@@ -14,7 +14,6 @@ from types import SimpleNamespace
 from typing import get_args
 
 import pytest
-from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.repository import (
@@ -30,7 +29,6 @@ from app.services.broker_v2_panel.action_execution_service import (
     ActionExecutionError,
     ActionNotAvailableError,
     ActionOutcomeUnknownError,
-    ActivationFailedError,
     DurableIdempotencyStore,
     IdempotencyStore,
     StaleRevisionError,
@@ -38,6 +36,7 @@ from app.services.broker_v2_panel.action_execution_service import (
     execute_action,
 )
 from app.services.broker_v2_panel.panel_data_source import run_action
+from app.services.broker_v2_panel.panel_errors import PanelUnavailableError
 
 _SID = "bot-alpha"
 
@@ -52,7 +51,6 @@ def _request(
 ) -> PanelActionRequest:
     return PanelActionRequest(
         action_id=action_id,  # type: ignore[arg-type]
-        revision=revision,
         concurrency_token=token,
         idempotency_key=key,
         reason=reason,
@@ -183,6 +181,47 @@ async def test_performer_failure_returns_unknown_and_burns_receipt_key() -> None
 
     assert "Inspect Clerk evidence" in (exc.value.detail or "")
     assert store._records[(_SID, "archive", "unknown")].state == "failed"
+
+
+@pytest.mark.parametrize(
+    ("error", "logged_here"),
+    [
+        (RuntimeError("secret /var/db/path"), True),
+        (ExecutionLeaseLostAfterBrokerIO("secret /var/db/path", account_id="acct"), True),
+        # Raised on, raw: ``run_action`` is where its text is logged.
+        (RepositoryPoisoned("secret /var/db/path"), False),
+    ],
+    ids=["any-failure", "lease-lost-after-broker-io", "poisoned"],
+)
+async def test_a_replayed_burned_key_never_carries_the_performers_exception_text(
+    tmp_path: Path, error: Exception, logged_here: bool, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """What a burned key tells a replay is authored (#1865), in memory and in the ledger file.
+
+    The exception's own text (a database path, say) stays in the server's log.
+    """
+
+    async def _perform(_operator: str, _reason: str | None) -> str:
+        raise error
+
+    path = tmp_path / "panel_action_receipts.json"
+    arguments = {
+        "sid": _SID,
+        "current_revision": 42,
+        "current_concurrency_token": "token",
+        "performers": {"archive": _perform},
+        "operator_identity": "op",
+        "store": DurableIdempotencyStore(path),
+    }
+    with caplog.at_level(logging.ERROR), pytest.raises((ActionExecutionError, type(error))):
+        await execute_action(_request(key="burned"), **arguments)
+    with pytest.raises(ActionNotAvailableError) as replay:
+        await execute_action(_request(key="burned"), **arguments)
+
+    assert "secret" not in f"{replay.value} {replay.value.detail}"
+    assert "outcome is unknown" in (replay.value.detail or "")
+    assert "secret" not in path.read_text(encoding="utf-8")
+    assert ("secret /var/db/path" in caplog.text) is logged_here
 
 
 async def test_performer_raised_action_execution_error_burns_key_not_released(
@@ -333,72 +372,6 @@ async def test_repository_poisoned_propagates_unwrapped_too() -> None:
         )
 
     assert store._records[(_SID, "archive", "poisoned")].state == "failed"
-
-
-async def test_activation_failed_cleanup_proven_burns_the_key_as_a_known_failure() -> None:
-    """PRD #1716 FR-6: cleanup-proven activation failures burn the
-    idempotency key (post-execution) and report as-is, not wrapped into
-    ActionOutcomeUnknownError."""
-
-    async def _perform(_operator: str, _reason: str | None) -> str:
-        raise ActivationFailedError(
-            "Resume for run 'run-2' failed after Clerk registration; the Clerk stop committed.",
-            detail="boom",
-        )
-
-    store = IdempotencyStore()
-    with pytest.raises(ActivationFailedError) as exc:
-        await execute_action(
-            _request(action_id="reconcile_now", key="cleanup-proven-1"),
-            sid=_SID,
-            current_revision=42,
-            current_concurrency_token="token",
-            performers={"reconcile_now": _perform},
-            operator_identity="op",
-            store=store,
-        )
-
-    assert "the Clerk stop committed" in str(exc.value)
-    assert store._records[(_SID, "reconcile_now", "cleanup-proven-1")].state == "failed"
-
-
-async def test_activation_failed_replay_returns_the_same_failure_without_reexecuting() -> None:
-    """PRD #1716 FR-6: reusing the same key replays the identical terminal
-    failure without another activation attempt."""
-    calls: list[str] = []
-
-    async def _perform(_operator: str, _reason: str | None) -> str:
-        calls.append("attempted")
-        raise ActivationFailedError(
-            "Resume for run 'run-2' failed after Clerk registration; the Clerk stop committed.",
-        )
-
-    store = IdempotencyStore()
-    request = _request(action_id="reconcile_now", key="cleanup-proven-2")
-    with pytest.raises(ActivationFailedError):
-        await execute_action(
-            request,
-            sid=_SID,
-            current_revision=42,
-            current_concurrency_token="token",
-            performers={"reconcile_now": _perform},
-            operator_identity="op",
-            store=store,
-        )
-
-    with pytest.raises(ActionNotAvailableError) as replay:
-        await execute_action(
-            request,
-            sid=_SID,
-            current_revision=42,
-            current_concurrency_token="token",
-            performers={"reconcile_now": _perform},
-            operator_identity="op",
-            store=store,
-        )
-
-    assert calls == ["attempted"]
-    assert "previously failed" in str(replay.value)
 
 
 async def test_disabled_presented_action_cannot_bypass_guard_via_post(
@@ -620,20 +593,92 @@ async def test_retired_action_receipts_stay_history_and_never_block_the_next_com
     assert len(persisted) == 2
 
 
-async def test_an_unreadable_ledger_refuses_every_command_and_keeps_its_file(tmp_path: Path) -> None:
+_TRUNCATED_RECEIPT = json.dumps(
+    {"\u001f".join((_SID, "archive", "truncated")): {"state": "succeeded", "result": {"action_id": "archive"}}}
+)
+
+
+@pytest.mark.parametrize(
+    "ledger",
+    [_TRUNCATED_RECEIPT, '{"not": "closed', "[]", json.dumps({"no-separator": {"state": "failed"}})],
+    ids=["a-receipt-missing-its-fields", "not-json", "not-an-object", "a-key-that-is-no-compound"],
+)
+async def test_an_unreadable_ledger_refuses_every_command_and_keeps_its_file(tmp_path: Path, ledger: str) -> None:
     """A load failure must not mark the ledger loaded: the next command would
-    start from an empty ledger and overwrite the bot's receipt history."""
+    start from an empty ledger and overwrite the bot's receipt history.
+
+    The refusal is the panel's own typed 503: nothing was sent, and the client
+    gets words rather than the validator's or the parser's own text.
+    """
     path = tmp_path / "panel_action_receipts.json"
-    compound = "\u001f".join((_SID, "archive", "truncated"))
-    path.write_text(json.dumps({compound: {"state": "succeeded", "result": {"action_id": "archive"}}}), encoding="utf-8")
-    original = path.read_text(encoding="utf-8")
+    path.write_text(ledger, encoding="utf-8")
     store = DurableIdempotencyStore(path)
 
     for _ in range(2):
-        with pytest.raises(ValidationError):
+        with pytest.raises(PanelUnavailableError) as refused:
             await store.reserve_or_get(_SID, "archive", "next-command")
 
-    assert path.read_text(encoding="utf-8") == original
+    assert refused.value.http_status == 503
+    assert "Nothing was sent" in (refused.value.detail or "")
+    assert str(path) not in str(refused.value) + (refused.value.detail or "")
+    assert path.read_text(encoding="utf-8") == ledger
+
+
+async def test_a_reservation_that_cannot_be_written_does_not_leave_the_key_in_flight(tmp_path: Path) -> None:
+    """Nothing ran, so the key is free: no in-memory ``in_flight`` that answers "still processing"."""
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("", encoding="utf-8")
+    store = DurableIdempotencyStore(blocker / "panel_action_receipts.json", wait_timeout_s=0)
+
+    with pytest.raises(PanelUnavailableError) as refused:
+        await store.reserve_or_get(_SID, "archive", "first")
+    assert refused.value.http_status == 503
+    assert (_SID, "archive", "first") not in store._records
+
+    blocker.unlink()
+    assert await store.reserve_or_get(_SID, "archive", "first") is None
+
+
+class _LedgerWhoseReleaseYields(IdempotencyStore):
+    """A ledger whose release gives the loop a turn, as a disk write does, so a
+    second same-key POST reaches the key while the first is being rejected."""
+
+    async def release(self, sid: str, action_id: str, key: str) -> None:
+        await asyncio.sleep(0)
+        await super().release(sid, action_id, key)
+
+
+async def test_a_post_waiting_on_a_first_rejected_before_it_ran_takes_the_key_and_runs_once() -> None:
+    """The waiter owns the reservation it proceeds under: a third POST under
+    the key replays its receipt instead of running the performer again."""
+    calls = 0
+
+    async def _perform(_operator: str, _reason: str | None) -> str:
+        nonlocal calls
+        calls += 1
+        return "archived"
+
+    store = _LedgerWhoseReleaseYields()
+    arguments = {
+        "sid": _SID,
+        "current_revision": 42,
+        "current_concurrency_token": "token",
+        "performers": {"archive": _perform},
+        "operator_identity": "op",
+        "store": store,
+    }
+    first, second = await asyncio.gather(
+        execute_action(_request(key="shared", token="stale"), **arguments),
+        execute_action(_request(key="shared"), **arguments),
+        return_exceptions=True,
+    )
+    third = await execute_action(_request(key="shared"), **arguments)
+
+    assert isinstance(first, StaleRevisionError)
+    assert not isinstance(second, BaseException) and second.applied is True
+    assert third.applied is False
+    assert third.receipt_id == second.receipt_id
+    assert calls == 1
 
 
 async def test_durable_store_keeps_receipts_beside_the_instance_artifacts(tmp_path: Path) -> None:
@@ -662,27 +707,6 @@ def test_durable_store_refuses_an_id_that_is_not_one_confined_segment(
 
     assert not artifacts_root.exists()
     assert not (tmp_path / "escape").exists()
-
-
-async def test_unwired_action_is_typed_not_available() -> None:
-    with pytest.raises(ActionNotAvailableError) as exc:
-        await execute_action(
-            _request(action_id="open_custody_timeline"),
-            sid=_SID,
-            current_revision=42,
-            current_concurrency_token="token",
-            performers={"archive": lambda op, reason: _noop()},  # open_custody_timeline not wired
-            operator_identity="op",
-            store=IdempotencyStore(),
-        )
-    assert exc.value.http_status == 409
-
-
-
-
-
-
-
 
 
 
@@ -875,24 +899,6 @@ async def test_stale_revision_releases_key_for_corrected_retry() -> None:
     )
     assert result.applied is True
     assert calls == 1
-
-
-async def test_not_available_action_releases_key() -> None:
-    """An unwired action rejects pre-execution and frees its idempotency key."""
-    store = IdempotencyStore()
-
-    with pytest.raises(ActionNotAvailableError):
-        await execute_action(
-            _request(action_id="open_custody_timeline", key="na"),
-            sid=_SID,
-            current_revision=42,
-            current_concurrency_token="token",
-            performers={"archive": lambda op, reason: _noop()},  # open_custody_timeline not wired
-            operator_identity="op",
-            store=store,
-        )
-
-    assert (_SID, "open_custody_timeline", "na") not in store._records
 
 
 async def test_duplicate_concurrent_posts_run_mutation_once() -> None:

@@ -32,6 +32,8 @@ from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 from ._support import _install_fake_clerk, _wait_for
 
+pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+
 # The Monday of a trading week whose regulatory fee rates are all pinned.
 _FEE_PINNED_MONDAY = date(2026, 9, 21)
 

@@ -26,7 +26,6 @@ function page(entries: EvidenceEntry[]): EvidencePage {
     next_cursor: null,
     total_entries: entries.length,
     truncated: false,
-    read_by: 'operator:test',
     read_at_ms: 1_700_000_001_000,
   };
 }

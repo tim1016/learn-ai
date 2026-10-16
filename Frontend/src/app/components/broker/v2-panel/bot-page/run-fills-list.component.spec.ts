@@ -23,6 +23,13 @@ function fills(count: number): ChartFillMarker[] {
 }
 
 describe('RunFillsListComponent (#2794)', () => {
+  it('does not call an unreadable run empty', async () => {
+    await render(RunFillsListComponent, { inputs: { fills: null, fillCount: null } });
+
+    expect(screen.getByRole('status').textContent?.trim()).toBe("This run's fills could not be read.");
+    expect(screen.queryByText('No fills this run.')).toBeNull();
+  });
+
   it('says when the run has no fills', async () => {
     await render(RunFillsListComponent, { inputs: { fills: [], fillCount: 0 } });
 

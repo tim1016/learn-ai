@@ -4,13 +4,13 @@ import type { ClerkCustodyTimeline } from '../../../api/clerk-transaction-histor
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 
 interface CustodyStage {
-  readonly code: 'A0' | 'A1' | 'A2' | 'A3';
+  readonly code: 'A0' | 'A2' | 'A3';
   readonly label: string;
   readonly explanation: string;
   readonly timestamp: number | null;
 }
 
-/** Visual, fact-only rendering of the four durable Clerk custody checkpoints. */
+/** Visual, fact-only rendering of the recorded Clerk custody checkpoints. */
 @Component({
   selector: 'app-clerk-receipt-custody-timeline',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -35,12 +35,6 @@ function buildCustodyStages(timeline: ClerkCustodyTimeline | null, external: boo
         ? 'The Clerk first recorded this order. It was placed outside the Clerk, which accepted no instruction for it.'
         : 'The Clerk durably accepted the instruction.',
       timestamp: timeline?.a0_custody_accepted_at_ms ?? null,
-    },
-    {
-      code: 'A1' as const,
-      label: 'Broker write started',
-      explanation: 'The Clerk began the broker write.',
-      timestamp: timeline?.broker_write_started_at_ms ?? null,
     },
     {
       code: 'A2' as const,

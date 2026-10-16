@@ -46,6 +46,8 @@ from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
 from tests._helpers.canary_admission import admit_canary_pairing
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
+pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+
 
 @pytest.fixture(autouse=True)
 def _fresh_live_market_liveness(monkeypatch: pytest.MonkeyPatch) -> None:

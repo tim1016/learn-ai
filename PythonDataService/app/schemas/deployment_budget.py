@@ -350,10 +350,6 @@ class DeploymentBudgetPreview(BaseModel):
     state: Literal["ready", "unavailable", "awaiting_price"]
     detail: str
     world: AuthorityKind
-    # The account whose money this budget comes from. ``None`` for Dry Run:
-    # its simulated cash lives in the bot's own ``sim:`` account, which is
-    # named from the bot at Deploy, so no real account number applies (H18).
-    custody_account_id: str | None = None
     # How the bot will be named -- the backend names it at Deploy (#2551).
     bot_name_note: str = "The bot is named at Deploy."
     # A warning, never a refusal (#2622): one short line naming the other
@@ -605,7 +601,6 @@ class DeploymentBudgetView(BaseModel):
     strategy_instance_id: str
     world: AuthorityKind
     committed_usd: str | None = None
-    entry_eligible: bool = False
     observed_at_ms: EpochMs | None = None
     segment: MoneySegment | None = None
     statement: tuple[BudgetStatementLine, ...] = ()

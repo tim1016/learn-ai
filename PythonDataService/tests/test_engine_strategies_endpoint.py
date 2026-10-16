@@ -1,18 +1,12 @@
 """Tests for the strategy registry and the list_engine_strategies handler.
 
 This is the contract between the Engine Lab frontend strategy picker and
-the Python backend registry. After the 2026-04-18 metadata push, every
-StrategyRegistration must populate `algorithm_pseudocode` (a pseudocode
-snippet) and `gotchas` (a non-empty list of implementation / parity
-traps). If either is missing the frontend renders an empty section.
+the Python backend registry.
 
 These tests protect:
     1. The `orb` strategy is registered and wire-able end-to-end.
-    2. Every registered strategy ships both `algorithm_pseudocode` and
-       `gotchas` — populating them is a must-do for every new strategy.
-    3. The ORB gotcha list flags the one-trade-per-day invariant (the
-       QQQ validation study's primary finding).
-    4. Each params_schema round-trips cleanly through JSON so the
+    2. The expected strategies remain registered.
+    3. Each params_schema round-trips cleanly through JSON so the
        frontend's dynamic form renderer can consume it.
 
 The handler is called directly rather than through a FastAPI TestClient,
@@ -62,8 +56,6 @@ def test_deployment_validation_is_registered_with_fixed_rule_metadata():
     assert strategy["lean_twin"] == "deployment_validation"
     props = strategy["params_schema"]["properties"]
     assert set(props) == {"symbol"}
-    combined = " ".join(strategy["gotchas"]).lower()
-    assert "next_bar_open" in combined
 
 
 def test_list_engine_strategies_names_deployment_validation_experimental_only():
@@ -109,30 +101,13 @@ def test_an_engine_lab_backtest_refuses_a_parameter_its_strategy_hides(monkeypat
     assert exc.value.detail["params_errors"][0]["loc"] == ["params", "long_window"]
 
 
-def test_all_registered_strategies_have_algorithm_and_gotchas():
-    """Every strategy must populate the two structured metadata fields.
-
-    An empty string or empty list passes the Pydantic type check but
-    renders as an empty section in the UI — strictly worse than not
-    having the field at all. So we assert non-emptiness.
-    """
+def test_expected_strategies_are_registered():
     strategies = _list_strategies()
     names = {s["name"] for s in strategies}
     assert names >= EXPECTED_STRATEGY_KEYS, (
         f"registry regressed — at least one expected strategy is missing: {EXPECTED_STRATEGY_KEYS - names}"
     )
 
-    missing_algo = [s["name"] for s in strategies if not s.get("algorithm_pseudocode", "").strip()]
-    missing_gotchas = [s["name"] for s in strategies if not s.get("gotchas")]
-
-    assert not missing_algo, (
-        f"strategies missing algorithm_pseudocode: {missing_algo}.  "
-        f"Populate the field in app/routers/engine.py _STRATEGY_REGISTRY."
-    )
-    assert not missing_gotchas, (
-        f"strategies missing gotchas: {missing_gotchas}.  "
-        f"Populate the field in app/routers/engine.py _STRATEGY_REGISTRY."
-    )
 
 
 def test_legacy_spy_ema_key_is_not_offered_in_the_strategy_picker():
@@ -217,26 +192,6 @@ def test_registry_exposes_strategy_bar_cadence_without_frontend_name_heuristics(
         "multiplier": 15,
         "parameter": "resolution_minutes",
     }
-
-
-if __name__ == "__main__":
-    # Allow `python -m app.engine.tests.test_engine_strategies_endpoint` style.
-    import sys
-
-    tests = [
-        test_deployment_validation_has_matching_spec_fixture,
-        test_all_registered_strategies_have_algorithm_and_gotchas,
-        test_params_schema_is_round_trippable_json,
-    ]
-    failed = 0
-    for t in tests:
-        try:
-            t()
-            print(f"PASS: {t.__name__}")
-        except AssertionError as e:
-            print(f"FAIL: {t.__name__}\n       {e}")
-            failed += 1
-    sys.exit(1 if failed else 0)
 
 
 def test_rsi_mean_reversion_advertises_its_matching_lean_validation_template():

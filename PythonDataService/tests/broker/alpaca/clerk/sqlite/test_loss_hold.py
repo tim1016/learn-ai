@@ -121,7 +121,6 @@ def test_the_explanation_dollars_the_sealed_floats_each_normalized_on_their_own(
     )
 
     assert "reached -2.68 USD against a loss limit of 5000.00 USD" in envelope.explanation
-    assert f"{sealed.day_pnl_usd:.2f}" == "-2.67"  # what master's message said
     # The sealed cause is untouched and still decodable, byte for byte.
     assert envelope.cause_facts == facts
     assert LossHoldCause.from_mapping(envelope.cause_facts) == sealed

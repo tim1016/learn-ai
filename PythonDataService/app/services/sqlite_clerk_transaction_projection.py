@@ -132,7 +132,6 @@ def sqlite_transaction_history(
         economic_reader.close()
     return ClerkTransactionHistoryResponse(
         projection_available=True,
-        canonical_fallback_required=False,
         feed_state="live",
         feed_headline="SQLite custody projection live",
         feed_detail=(
@@ -140,8 +139,6 @@ def sqlite_transaction_history(
             "materialized folds."
         ),
         high_water_journal_seq=page.high_water_sequence,
-        lag_records=0,
-        lag_is_lower_bound=False,
         custody_summary=_all_window_summary(matching_operations, record_count=len(rows)),
         rows=rows,
         next_cursor=page.next_cursor,
@@ -472,7 +469,6 @@ def _all_transaction_history(
     )
     return ClerkTransactionHistoryResponse(
         projection_available=True,
-        canonical_fallback_required=False,
         feed_state="live",
         feed_headline="SQLite custody projection live",
         feed_detail=(
@@ -480,8 +476,6 @@ def _all_transaction_history(
             "observations."
         ),
         high_water_journal_seq=high_water_sequence,
-        lag_records=0,
-        lag_is_lower_bound=False,
         custody_summary=_all_window_summary(strategy_operations, record_count=len(rows)),
         rows=rows,
         next_cursor=next_cursor,

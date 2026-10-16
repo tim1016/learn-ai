@@ -145,8 +145,7 @@ def test_matches_pandas_ta_macd_strict():
 def test_golden_fixture_regression():
     input_csv = FIXTURE_DIR / "input.csv"
     output_csv = FIXTURE_DIR / "output.csv"
-    if not input_csv.exists() or not output_csv.exists():
-        pytest.skip("MACD golden fixture not yet generated")
+    assert input_csv.is_file() and output_csv.is_file(), "MACD golden fixture is missing"
 
     df_in = pd.read_csv(input_csv, parse_dates=["timestamp"])
     if df_in["timestamp"].dt.tz is None:

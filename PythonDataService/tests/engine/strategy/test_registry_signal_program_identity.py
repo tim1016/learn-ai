@@ -381,6 +381,11 @@ def test_validated_against_only_names_evidence_that_actually_exists() -> None:
         # (LEAN C# revisions, a TradingView Pine script, a validation PDF)
         # that are not required to exist inside this repo.
         evidence = f"{provenance.validated_against}; {provenance.canonical_implementation}"
+        for fixture_id in provenance.parity_fixture_ids:
+            assert _resolve(fixture_id) is not None, (
+                f"'{key}' parity_fixture_ids names '{fixture_id}', which does not "
+                "exist under the service or repository root."
+            )
         for raw in token.findall(evidence):
             file_part, _, node_part = raw.partition("::")
             resolved = _resolve(file_part)
@@ -427,4 +432,3 @@ def test_every_registration_constructs_its_params_with_a_symbol() -> None:
             f"'{key}' registered a parameter schema whose default symbol is empty; "
             "every strategy names the signal stream it reads."
         )
-

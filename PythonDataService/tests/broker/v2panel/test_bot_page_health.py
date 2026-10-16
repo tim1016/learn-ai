@@ -46,7 +46,7 @@ def _reconciliation_line(
             provider_label="IBKR", state="continuous", state_label="Live", explanation="Bars are arriving."
         ),
     )
-    run = SimpleNamespace(decision_count=0, decision_count_is_floor=False, started_at_ms=None, orders_sent=0)
+    run = SimpleNamespace(decision_count=0, decision_count_is_floor=False, started_at_ms=None, orders_sent=0, unreadable=False)
     groups = health_groups(panel, run, sweep_pass_at_ms=sweep_pass_at_ms, now_ms=_NOW)  # type: ignore[arg-type]
     [line] = [line for line in groups.account if line.key == "reconciliation"]
     return line

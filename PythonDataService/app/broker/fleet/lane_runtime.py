@@ -28,7 +28,10 @@ from typing import Any
 
 from starlette.datastructures import Headers
 
-from app.broker.fleet.compatibility_retirement import RETIRED_COMPATIBILITY_ROUTE_FAMILIES
+from app.broker.fleet.compatibility_retirement import (
+    COMPATIBILITY_EVIDENCE_SCHEMA_VERSION,
+    RETIRED_COMPATIBILITY_ROUTE_FAMILIES,
+)
 from app.broker.fleet.delivery import lane_forward_is_authorized
 from app.broker.fleet.errors import flat_refusal_body
 from app.broker.fleet.history_batch import INTERNAL_HISTORY_BATCH_PATH
@@ -37,7 +40,6 @@ from app.config import fleet_settings
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import now_ms_utc
 
-_COMPATIBILITY_EVIDENCE_SCHEMA_VERSION = 2
 _COMPATIBILITY_EVIDENCE_RELATIVE_PATH = Path("compatibility") / "route_hits.json"
 _COMPATIBILITY_ROUTE_STATE_RELATIVE_PATH = Path("compatibility") / "route_state.json"
 _SAFE_METHODS = frozenset({"GET", "HEAD"})
@@ -426,14 +428,14 @@ class CompatibilityReadEvidence:
     def _read_locked(self) -> dict[str, Any]:
         if not self._path.exists():
             return {
-                "schema_version": _COMPATIBILITY_EVIDENCE_SCHEMA_VERSION,
+                "schema_version": COMPATIBILITY_EVIDENCE_SCHEMA_VERSION,
                 "updated_at_ms": None,
                 "route_hits": [],
             }
         payload = json.loads(self._path.read_text(encoding="utf-8"))
         if (
             not isinstance(payload, dict)
-            or payload.get("schema_version") != _COMPATIBILITY_EVIDENCE_SCHEMA_VERSION
+            or payload.get("schema_version") != COMPATIBILITY_EVIDENCE_SCHEMA_VERSION
             or not isinstance(payload.get("route_hits"), list)
         ):
             raise ValueError("Compatibility route-hit evidence is unreadable.")

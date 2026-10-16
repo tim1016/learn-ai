@@ -117,21 +117,3 @@ def test_expiry_is_inclusive_of_the_last_admissible_millisecond() -> None:
     require_unexpired(now_ms=20, expires_at_ms=20, refused=_Refused, label="cutover")
     with pytest.raises(_Refused, match="cutover confirmation token has expired"):
         require_unexpired(now_ms=21, expires_at_ms=20, refused=_Refused, label="cutover")
-
-
-def test_the_refusal_type_is_the_callers_own() -> None:
-    """`LiveArmingRefused` takes (reason_code, message), so the seam is a callable."""
-
-    class _Coded(ValueError):
-        def __init__(self, reason_code: str, message: str) -> None:
-            super().__init__(message)
-            self.reason_code = reason_code
-
-    with pytest.raises(_Coded) as caught:
-        require_unexpired(
-            now_ms=21,
-            expires_at_ms=20,
-            refused=lambda message: _Coded("LIVE_ARMING_PLAN_EXPIRED", message),
-            label="live arming",
-        )
-    assert caught.value.reason_code == "LIVE_ARMING_PLAN_EXPIRED"

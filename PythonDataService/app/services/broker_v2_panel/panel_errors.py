@@ -38,6 +38,20 @@ class PanelUnavailableError(PanelDataError):
     http_status = 503
 
 
+class BotRunnerUnavailableError(PanelUnavailableError):
+    """The process has no bot runner: it is still starting, or has shut down (503).
+
+    A read that needs the runner's roster refuses with this rather than
+    answering from the part of it that does not (#3217).
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "The bot runner is not available.",
+            detail="The service is still starting or has shut down.",
+        )
+
+
 class DryRunRestoringError(PanelUnavailableError):
     """A Dry Run boot is still restoring (503): its own read, never its lane's roster (#2668)."""
 

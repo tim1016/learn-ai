@@ -25,7 +25,7 @@
     </section>
 
     <app-clerk-receipt-custody-timeline
-      [timeline]="receipt.custody_timeline"
+      [timeline]="receipt.custody_timeline ?? null"
       [external]="receipt.transaction_origin === 'external'"
     />
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from app.broker.fleet.errors import (
 from app.broker.fleet.service import FleetControlService
 from app.broker.fleet.store import FleetRegistryStore
 from app.broker.fleet.volume import marker_path, read_volume_marker
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from tests.broker.fleet.conftest import (
     TEST_CHANGE_REF,
     TEST_OPERATOR,
@@ -43,6 +45,22 @@ def test_provision_mints_distinct_identities_and_marks_the_volume(
     assert marker.broker == "fake_alpha"
     assert marker.clerk_id == alpha.clerk_id
     assert marker.created_at_ms == clock()
+
+
+@pytest.mark.parametrize("created_at_ms", [-1, MAX_TIMESTAMP_MS + 1])
+def test_out_of_range_volume_marker_instant_refuses_before_authority(
+    control_dir: Path, fleet_service, created_at_ms: int
+) -> None:
+    lane = provision_lane(
+        fleet_service, broker="fake_alpha", label="invalid-time", tmp_path=control_dir.parent
+    )
+    path = marker_path(lane.volume_root)
+    marker = json.loads(path.read_text(encoding="utf-8"))
+    marker["created_at_ms"] = created_at_ms
+    path.write_text(json.dumps(marker), encoding="utf-8")
+
+    with pytest.raises(ClerkVolumeIdentityMismatch, match="created_at_ms"):
+        fleet_service.verify_clerk_volume(clerk_id=lane.clerk_id, volume_root=lane.volume_root)
 
 
 def test_provisioning_against_an_empty_adapter_set_fails_closed(

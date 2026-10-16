@@ -72,6 +72,8 @@ from tests.broker.alpaca.clerk.sqlite.test_stopped_run_entries import (
 )
 from tests.broker.alpaca.clerk.test_shadow_broker import DAY, _Clock, _LiveRead, _retain
 
+pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+
 # A second bot on the same account: what a new Deploy would register.
 NEXT_DEPLOY_SID = "spy-bot-next"
 # Long enough that no test here outlives the execution lease.

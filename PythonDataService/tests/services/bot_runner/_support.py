@@ -35,6 +35,7 @@ from app.marketdata.feed import MarketDataBar
 from app.services.bot_binding_repository import BrokerBotBinding
 from tests._helpers.bot_runner.custody import _SID
 from tests._helpers.bot_runner.doubles import _CustodyClerk, _FakeClerk
+from tests._helpers.bot_runner.resume import _wait_for as _wait_for
 
 _RTH_MS = 1_700_060_400_000
 _EMA_FIRST_ENTER_MS = 1_770_389_100_000
@@ -97,14 +98,6 @@ def _current_run_json(tmp_path: Path, sid: str = _SID) -> dict:
 def _strategy_instance_json(tmp_path: Path, sid: str = _SID) -> dict:
     path = tmp_path / "live_state" / sid / "strategy_instance.json"
     return json.loads(path.read_text(encoding="utf-8"))
-
-
-async def _wait_for(predicate, *, timeout_s: float = 2.0) -> None:
-    deadline = asyncio.get_running_loop().time() + timeout_s
-    while not predicate():
-        if asyncio.get_running_loop().time() > deadline:
-            raise AssertionError("condition not reached in time")
-        await asyncio.sleep(0.01)
 
 
 # 2024-01-02 is a regular NYSE trading day (Tuesday after New Year's).

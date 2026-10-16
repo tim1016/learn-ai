@@ -189,7 +189,6 @@
         <p><strong>{{ feed.feed_headline }}</strong> {{ feed.feed_detail }}</p>
         <dl>
           <div><dt>Projection high-water</dt><dd>{{ feed.high_water_journal_seq ?? 'Not yet projected' }}</dd></div>
-          <div><dt>Recorded lag</dt><dd>{{ feed.lag_records ?? 'Unknown' }}{{ feed.lag_is_lower_bound ? '+' : '' }}</dd></div>
           <div><dt>Loaded records</dt><dd>{{ store.rows().length }}</dd></div>
         </dl>
       </div>

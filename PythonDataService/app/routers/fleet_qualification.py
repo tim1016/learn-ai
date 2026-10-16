@@ -150,8 +150,8 @@ def require_qualification_secret(supplied: str | None, secret: str) -> None:
 #: The exact value ``compose.fleet.qualification.yaml`` sets the
 #: coordinator's ``POLYGON_API_KEY`` to -- a non-working placeholder chosen
 #: precisely so qualification can never fetch a real bar (that gap is the
-#: reason issue #2206 exists). Read back here, not guessed, so this gate
-#: cannot silently drift from the compose file that defines it.
+#: reason issue #2206 exists). Keep this value in step with the Compose
+#: qualification configuration; the ceremony refuses a mismatch.
 QUALIFICATION_POLYGON_API_KEY_PLACEHOLDER = "qualification-polygon-placeholder"
 
 

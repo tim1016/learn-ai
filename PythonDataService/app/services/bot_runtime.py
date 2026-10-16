@@ -18,24 +18,15 @@ from app.services.source_bar_ledger import SourceBarLedger
 logger = logging.getLogger(__name__)
 
 
-def _open_run_gate() -> asyncio.Event:
-    """Create the gate for a newly evaluating run."""
-    gate = asyncio.Event()
-    gate.set()
-    return gate
-
-
 @dataclass
 class ManagedBot:
     """One supervised bot task and its terminal bookkeeping."""
 
     binding: BrokerBotBinding
     task: asyncio.Task[None] = field(repr=False)
+    run_gate: asyncio.Event = field(repr=False)
     stop_reason_code: str | None = None
     finalized: bool = False
-    # A new managed run evaluates immediately; Stop is the transition
-    # that closes this gate.
-    run_gate: asyncio.Event = field(default_factory=_open_run_gate, repr=False)
     # The owner-set end (``end_at_ms``) whose Clerk pass the end watch already
     # asked for (#2607): asked once per end, never on every look.
     end_pass_asked_for_ms: int | None = None

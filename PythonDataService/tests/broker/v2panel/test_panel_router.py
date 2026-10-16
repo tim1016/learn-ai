@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from decimal import Decimal
@@ -16,6 +17,7 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport
 
+from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     get_active_clerk_runtime,
@@ -47,6 +49,7 @@ from app.broker.contract.registry import (
 from app.broker.fleet.agent_identity import _FrameInjector
 from app.broker.fleet.internal_http import DEFAULT_MAX_EVENT_BYTES, SseEvent, iter_sse_events
 from app.broker.ibkr.bar_models import IbkrMinuteBar
+from app.engine.live.identity import INSTANCE_ID_PATTERN
 from app.routers import alpaca_clerk_sqlite, broker_v2_gallery, broker_v2_panel
 from app.routers.broker_v2_panel import router
 from app.schemas.alpaca_clerk_sqlite import RecoveryActionCheckRequest, RecoveryActionExecuteRequest
@@ -66,7 +69,7 @@ from app.schemas.run_admission import RunAdmissionDecision
 from app.services import broker_account_snapshot, surface_hub
 from app.services.bot_end import bot_end_view
 from app.services.bot_runner import get_bot_task_registry, set_bot_task_registry
-from app.services.bot_runner_errors import UnknownBotError
+from app.services.bot_runner_errors import InvalidStrategyInstanceIdError, UnknownBotError
 from app.services.broker_v2_panel import (
     live_projection,
     panel_chart_data_source,
@@ -194,6 +197,13 @@ class _FakeRegistry:
 
     def status(self, broker: str, sid: str) -> BotStatusView:
         assert broker == "alpaca"
+        if re.fullmatch(INSTANCE_ID_PATTERN, sid) is None:
+            # The real registry confines the id before it looks for a binding,
+            # and answers an id it could never bind with its own 422 type.
+            raise InvalidStrategyInstanceIdError(
+                f"Bot id {sid!r} is not a valid strategy instance id.",
+                detail="A bot's id is one path segment of letters, digits, '_', '.' or '-'.",
+            )
         if sid not in self._sids:
             raise UnknownBotError(
                 f"No bot '{sid}' is bound to broker '{broker}'.",
@@ -240,6 +250,12 @@ class _FakeRegistry:
 
     def foreign_binding(self, sid: str) -> None:
         """Every bot in this harness is sealed on the installed account (#2694)."""
+        return None
+
+    def unbound_dry_run(self, sid: str) -> None:
+        """No Dry Run is left without its binding here; an id that could name none is refused as the real
+        registry refuses it, by looking for the activation under the simulator's account name."""
+        synthetic_account_id_for_strategy(sid)
         return None
 
     def bot_end(self, broker: str, sid: str) -> BotEndView:
@@ -435,7 +451,6 @@ async def _post_stop_bot_decisions(
             f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/actions",
             json={
                 "action_id": "stop_bot_decisions",
-                "revision": panel.json()["revision"],
                 "concurrency_token": action["concurrency_token"],
                 "idempotency_key": idempotency_key,
             },
@@ -1264,7 +1279,6 @@ async def test_presented_action_executes_and_repost_replays_as_noop(api) -> None
         )
         request = {
             "action_id": "reconcile_now",
-            "revision": panel.json()["revision"],
             "concurrency_token": action["concurrency_token"],
             "idempotency_key": "sqlite-reconcile",
         }
@@ -1280,6 +1294,40 @@ async def test_presented_action_executes_and_repost_replays_as_noop(api) -> None
     assert second.status_code == 200
     assert second.json()["applied"] is False
     assert second.json()["receipt_id"] == first.json()["receipt_id"]
+
+
+async def test_a_performer_failure_and_its_replay_never_put_its_exception_text_on_the_wire(
+    api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1865: no exception text (a database path, say) in a response body, first attempt or replay.
+
+    The first attempt is the typed unknown outcome; the replay of its burned
+    key is a 409 that says the outcome is unknown, in the ledger's own words.
+    """
+    from app.services.broker_v2_panel import sqlite_panel_source
+
+    app, _repo = api
+
+    async def execute(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("secret /var/db/path")
+
+    monkeypatch.setattr(sqlite_panel_source, "execute_recovery_action", execute)
+    async with _client(app) as client:
+        panel = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")
+        action = next(item for item in panel.json()["actions"] if item["action_id"] == "reconcile_now")
+        request = {
+            "action_id": "reconcile_now",
+            "concurrency_token": action["concurrency_token"],
+            "idempotency_key": "performer-fails",
+        }
+        first = await client.post(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/actions", json=request)
+        replay = await client.post(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/actions", json=request)
+
+    assert (first.status_code, first.json()["detail"]["outcome"]) == (500, "unknown")
+    assert replay.status_code == 409, replay.text
+    assert "outcome is unknown" in replay.json()["detail"]["why"]
+    for response in (first, replay):
+        assert "secret" not in response.text
 
 
 async def test_a_presented_action_reaches_the_clerk_as_the_routes_configured_operator(
@@ -1308,7 +1356,6 @@ async def test_a_presented_action_reaches_the_clerk_as_the_routes_configured_ope
             f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/actions/quiesce",
             json={
                 "action_id": "reconcile_now",
-                "revision": panel.json()["revision"],
                 "concurrency_token": action["concurrency_token"],
                 "idempotency_key": "who-asks",
             },
@@ -1343,7 +1390,6 @@ async def test_action_refuses_malformed_sid_before_touching_receipt_path(
     monkeypatch.setattr(panel_data_source, "durable_idempotency_store_for", spy)
     request = {
         "action_id": "stop_bot_decisions",
-        "revision": 1,
         "concurrency_token": "token",
         "idempotency_key": "malformed-sid",
     }
@@ -1365,6 +1411,97 @@ async def test_chart_contract_rejects_unknown_timeframe(api) -> None:
         )
 
     assert history.status_code == 422
+
+
+async def test_a_roster_read_while_the_runner_is_not_up_refuses_instead_of_listing_part_of_it(api) -> None:
+    """Dry Run and rehearsal rows come from the runner: without it the roster is not partial, it is unavailable."""
+    app, _repo = api
+    set_bot_task_registry(None)
+
+    async with _client(app) as client:
+        roster = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/catalog")
+
+    assert roster.status_code == 503, roster.text
+    assert roster.json()["detail"]["message"] == "The bot runner is not available."
+
+
+@pytest.mark.parametrize("surface", ["panel", "evidence", "live-snapshot", "live-stream"])
+@pytest.mark.parametrize("sid", ["%2E%2E", "%20padded"], ids=["traversal-segment", "padded"])
+async def test_a_malformed_bot_id_is_a_404_on_every_bot_read_not_a_503(api, surface: str, sid: str) -> None:
+    """The panel and its actions already answer an id no bot could have as 404; so do the
+    evidence page and the live reads, which used to say the service was unavailable."""
+    app, _repo = api
+
+    async with _client(app) as client:
+        response = await client.get(f"{_ACCOUNT_ROOT}/bots/{sid}/{surface}")
+
+    assert response.status_code == 404, response.text
+    assert "not a valid strategy instance id" in response.json()["detail"]["message"]
+
+
+@pytest.fixture()
+def budget_api(api):
+    """The panel harness with its account authority serving the money reads, as an account that has not switched to budgets."""
+    app, repo = api
+    runtime = get_active_clerk_runtime()
+    assert runtime is not None
+    runtime._sqlite_repository = repo
+    runtime.account_authority_kind = "real_paper"
+    return app, repo
+
+
+@pytest.mark.parametrize("sid", ["%2E%2E", "%20padded"], ids=["traversal-segment", "padded"])
+async def test_a_malformed_bot_id_is_a_404_on_the_budget_read_not_a_500(budget_api, sid: str) -> None:
+    app, _repo = budget_api
+
+    async with _client(app) as client:
+        response = await client.get(f"{_ACCOUNT_ROOT}/bots/{sid}/budget")
+
+    assert response.status_code == 404, response.text
+    assert "not a valid strategy instance id" in response.json()["detail"]["message"]
+
+
+async def test_an_unknown_bot_has_no_budget_to_read_and_an_earlier_deployment_reads_legacy(budget_api) -> None:
+    """A bot nothing holds is a 404; a bot the runner holds that was deployed before budgets still says so."""
+    app, repo = budget_api
+
+    async with _client(app) as client:
+        unknown = await client.get(f"{_ACCOUNT_ROOT}/bots/never-deployed/budget")
+        earlier = await client.get(f"{_ACCOUNT_ROOT}/bots/{SID}/budget")
+
+    assert unknown.status_code == 404, unknown.text
+    assert unknown.json()["detail"]["message"] == "No bot 'never-deployed' is bound to broker 'alpaca'."
+    assert repo.strategy_instance("never-deployed") is None and repo.deployment_budget("never-deployed") is None
+    assert earlier.status_code == 200, earlier.text
+    assert earlier.json()["state"] == "legacy"
+
+
+async def test_a_malformed_evidence_cursor_is_a_400_not_a_500(api) -> None:
+    """A cursor the timeline cannot read is the client's to drop, as on the Clerk's own timeline route."""
+    app, _repo = api
+
+    async with _client(app) as client:
+        response = await client.get(
+            f"{_ACCOUNT_ROOT}/bots/{SID}/evidence", params={"cursor": "not-a-cursor"}
+        )
+
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"]["message"] == "The evidence cursor is not valid."
+
+
+async def test_a_run_window_read_while_the_runner_is_not_up_refuses_with_a_503(api) -> None:
+    """The run window is the runner's record of the run; with no runner the read was an AttributeError 500."""
+    app, _repo = api
+    set_bot_task_registry(None)
+
+    async with _client(app) as client:
+        tape = await client.get(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/chart/history",
+            params={"timeframe": "1m", "from_ms": _T0 - 600_000, "to_ms": _T0},
+        )
+
+    assert tape.status_code == 503, tape.text
+    assert tape.json()["detail"]["message"] == "The bot runner is not available."
 
 
 async def test_a_finished_runs_tape_reads_that_runs_window_and_refuses_another(
@@ -1443,7 +1580,6 @@ async def test_lost_execution_lease_is_an_authored_blocker_not_a_raw_500(
         )
         request = {
             "action_id": "reconcile_now",
-            "revision": panel.json()["revision"],
             "concurrency_token": action["concurrency_token"],
             "idempotency_key": "sqlite-lease-lost",
         }
@@ -1723,7 +1859,6 @@ async def test_poisoned_authority_is_not_reported_as_a_lost_lease(
             f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/actions",
             json={
                 "action_id": "reconcile_now",
-                "revision": panel.json()["revision"],
                 "concurrency_token": action["concurrency_token"],
                 "idempotency_key": "sqlite-poisoned",
             },
@@ -1904,6 +2039,108 @@ async def test_panel_decision_rows_explain_themselves(api) -> None:
     assert [chip["chip"] for chip in newest["explanation"]["checks"]] == ["window", "green 1"]
     # "values not recorded": a row from before decisions saved them.
     assert older["explanation"] is None
+
+
+def _append_receipt_without_a_reason(repo: ClerkSqliteRepository, seq_ms: int) -> None:
+    """A receipt whose facts lack ``reason_code``: stored, but not a panel decision row."""
+    SqliteDecisionReceipts(repo, strategy_instance_id=SID).append(
+        outcome="no_action",
+        symbol="SPY",
+        observed_at_ms=seq_ms + 5,
+        facts={"bar_ref": f"decision-bar:ibkr:SPY:{seq_ms}"},
+    )
+
+
+async def test_one_unreadable_decision_receipt_is_its_own_row_and_never_takes_the_page_or_its_actions_down(
+    api,
+) -> None:
+    """A decision row is display evidence; the page and its controls are the operator's.
+
+    One receipt among the bot's last eight that this build cannot read is
+    shown as unreadable, in its place, while every other row and every action
+    on the page keeps working.
+    """
+    app, repo = api
+    _append_no_action(repo, _T0, explanation=None)
+    _append_receipt_without_a_reason(repo, _T0 + 60_000)
+    _append_no_action(repo, _T0 + 120_000, explanation=None)
+
+    async with _client(app) as client:
+        panel = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")
+        action = next(item for item in panel.json()["actions"] if item["action_id"] == "reconcile_now")
+        acted = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/actions",
+            json={
+                "action_id": "reconcile_now",
+                "concurrency_token": action["concurrency_token"],
+                "idempotency_key": "with-an-unreadable-receipt",
+            },
+        )
+
+    assert panel.status_code == 200, panel.text
+    assert [(row["reason_code"], row["bar_ref"] == "") for row in panel.json()["recent_decisions"]] == [
+        ("NO_ACTION", False),
+        ("RECEIPT_UNREADABLE", True),
+        ("NO_ACTION", False),
+    ]
+    assert acted.status_code == 200, acted.text
+    assert acted.json()["applied"] is True
+
+
+async def test_a_receipt_whose_outcome_this_build_cannot_name_is_left_out_not_fatal(api) -> None:
+    """A row from a newer build is reported and left out, like an explanation this build cannot read."""
+    app, repo = api
+    _append_no_action(repo, _T0, explanation=None)
+    repo._conn.execute(
+        "INSERT INTO decision_receipts (strategy_instance_id, seq, outcome, symbol, intent_id, order_ref, "
+        "observed_at_ms, facts_json) VALUES (?, 2, 'from_a_newer_build', 'SPY', NULL, NULL, ?, '{}')",
+        (SID, _T0 + 60_000),
+    )
+    repo._conn.commit()
+
+    async with _client(app) as client:
+        panel = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")
+
+    assert panel.status_code == 200, panel.text
+    assert [row["reason_code"] for row in panel.json()["recent_decisions"]] == ["NO_ACTION"]
+
+
+async def test_an_incoherent_custody_and_economics_cut_is_a_typed_503_on_the_page_and_its_actions(
+    api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The adapter refuses a cut whose custody and economics are of two revisions, and says so.
+
+    The page and the action POST (which builds the panel first) used to answer
+    the global 500 for it: a bare ``RuntimeError`` nothing translated.
+    """
+    app, _repo = api
+    async with _client(app) as client:
+        panel = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")
+        action = next(item for item in panel.json()["actions"] if item["action_id"] == "reconcile_now")
+        real_read = panel_data_source.read_sqlite_panel_evidence
+
+        async def torn(*args: object, **kwargs: object):
+            evidence = await real_read(*args, **kwargs)  # type: ignore[arg-type]
+            snapshot = replace(
+                evidence.economics.snapshot, control_revision=evidence.projection.control_revision + 1
+            )
+            return replace(evidence, economics=replace(evidence.economics, snapshot=snapshot))
+
+        monkeypatch.setattr(panel_data_source, "read_sqlite_panel_evidence", torn)
+        page = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")
+        acted = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/actions",
+            json={
+                "action_id": "reconcile_now",
+                "concurrency_token": action["concurrency_token"],
+                "idempotency_key": "on-an-incoherent-cut",
+            },
+        )
+
+    for refused in (page, acted):
+        assert refused.status_code == 503, refused.text
+        assert refused.json()["detail"]["message"]
+        assert "authority revision" in refused.json()["detail"]["why"]
 
 
 async def test_a_live_accounts_panel_labels_its_decisions_real_live(
@@ -2303,7 +2540,6 @@ def _flatten_offer(panel: dict, *, key: str) -> _FlattenOffer:
         command_enabled=execute["enabled"],
         command={
             "action_id": "execute_safe_flatten",
-            "revision": panel["revision"],
             "concurrency_token": execute["concurrency_token"],
             "idempotency_key": key,
         },
@@ -2321,7 +2557,7 @@ async def _reconcile_now(world: _CrashedHolding) -> None:
         panel = (await client.get(_PANEL)).json()
         action = next(item for item in panel["actions"] if item["action_id"] == "reconcile_now")
         response = await client.post(_ACTIONS, json={
-            "action_id": "reconcile_now", "revision": panel["revision"],
+            "action_id": "reconcile_now",
             "concurrency_token": action["concurrency_token"], "idempotency_key": "reconcile-now",
         })
     assert response.status_code == 200, response.text
@@ -2677,7 +2913,9 @@ async def test_a_run_the_clerk_admitted_without_a_launch_record_needs_attention(
 
     monkeypatch.setattr(registry, "current_run", missing_record)
     async with _client(app) as client:
-        page = (await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")).json()["bot_page"]
+        body = (await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")).json()
+
+    page = body["bot_page"]
 
     assert page["status"] == {
         "state": "needs_attention",
@@ -2685,6 +2923,11 @@ async def test_a_run_the_clerk_admitted_without_a_launch_record_needs_attention(
         "reason": "This bot's latest run record could not be read.",
     }
     assert page["summary"]["facts"]["ending"] == "unreadable"
+    assert page["summary"]["facts"]["trade_count"] is None
+    assert body["run_fills"] is None
+    lines = {line["key"]: line for line in page["health"]["run"]}
+    assert lines["decisions"]["value"] == "Not recorded"
+    assert lines["orders"]["value"] == "Not recorded"
 
 
 async def test_a_run_the_clerk_never_admitted_has_not_started(api, monkeypatch: pytest.MonkeyPatch) -> None:

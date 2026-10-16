@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -87,6 +90,25 @@ class _FakeRegistry:
         if sid not in (SID, OTHER_SID):
             raise BotRunnerError(f"Unknown bot {sid}", detail=None)
         return _make_status(sid)
+
+    def binding_for_control(self, broker: str, sid: str) -> SimpleNamespace:
+        """What custody selection reads of a bound bot: the world it runs in."""
+        self.status(broker, sid)
+        return SimpleNamespace(strategy_instance_id=sid, broker=broker, mode="log_only")
+
+
+class _DryRunRegistry(_FakeRegistry):
+    """A registry whose bot is a Dry Run, held in the simulator ``simulator`` opens."""
+
+    def __init__(self, simulator: SqliteAlpacaClerkFacade) -> None:
+        self._simulator = simulator
+
+    def binding_for_control(self, broker: str, sid: str) -> SimpleNamespace:
+        return SimpleNamespace(**{**vars(super().binding_for_control(broker, sid)), "mode": "dry_run"})
+
+    @asynccontextmanager
+    async def synthetic_runtime_for_projection(self, _binding: object) -> AsyncIterator[ActiveClerkRuntime]:
+        yield ActiveClerkRuntime(authority_kind="synthetic", clerk=self._simulator)
 
 
 @pytest.fixture()
@@ -241,6 +263,67 @@ async def test_sqlite_evidence_filters_selected_effect_operation(app_and_tmp) ->
         }
     finally:
         repo.close()
+
+
+@pytest.mark.asyncio
+async def test_a_dry_runs_evidence_is_read_from_its_own_simulator_not_the_accounts(app_and_tmp) -> None:
+    """A Dry Run is custodied in its own ``sim:`` store; the account's has never held it.
+
+    Read from the account's, its page said "no entries" for a bot that had
+    taken orders.
+    """
+    app, tmp_path = app_and_tmp
+    account_repo = _activate_sqlite(tmp_path)
+    simulator_repo = ClerkSqliteRepository.initialize(
+        account_id=f"sim:{SID}", artifacts_root=tmp_path / "simulator"
+    )
+    simulator_repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="config-1")
+    submit_start_run(
+        simulator_repo, account_id=f"sim:{SID}", strategy_instance_id=SID, lifecycle_run_id="run-1"
+    )
+    accepted = accept_enter(
+        simulator_repo,
+        account_id=f"sim:{SID}",
+        strategy_instance_id=SID,
+        decision_id="decision-1",
+        lifecycle_run_id="run-1",
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+    )
+    simulator = SqliteAlpacaClerkFacade(
+        account_mode="paper",
+        repo=simulator_repo,
+        read=_FakeReadPort(f"sim:{SID}"),  # type: ignore[arg-type]
+        trade=_FakeReadPort(f"sim:{SID}"),  # type: ignore[arg-type]
+        authority_kind="synthetic",
+    )
+    set_bot_task_registry(_DryRunRegistry(simulator))  # type: ignore[arg-type]
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/evidence")
+
+        assert response.status_code == 200, response.text
+        kinds = {entry["kind"] for entry in response.json()["entries"]}
+        assert "ENTER_ACCEPTED" in kinds
+        assert {entry["operation_ref"] for entry in response.json()["entries"]} >= {accepted.effect_operation_id}
+        # The account's own store, which the page used to read, holds none of it.
+        assert account_repo.effect_operation(accepted.effect_operation_id) is None
+    finally:
+        simulator_repo.close()
+        account_repo.close()
+
+
+@pytest.mark.asyncio
+async def test_evidence_with_no_clerk_authority_installed_is_a_typed_503(app_and_tmp) -> None:
+    """The bot is bound but the process holds no Clerk: the page says so, not a raw 500."""
+    app, _tmp_path = app_and_tmp
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/evidence")
+
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"]["message"] == "This bot's Clerk is unavailable."
 
 
 async def _read_account_number_evidence(

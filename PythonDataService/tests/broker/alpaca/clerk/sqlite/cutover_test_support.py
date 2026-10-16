@@ -4,16 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.engine.live.account_registry import (
-    AccountInstanceBinding,
-    bot_order_namespace_for_instance,
-)
+from app.engine.live.account_registry import AccountInstanceBinding
 from app.engine.live.bot_lifecycle_state import (
     BotDutyOutcome,
     BotLifecyclePhase,
     BotLifecycleStateRecord,
 )
 from app.engine.live.desired_state import DesiredState, DesiredStateRecord
+from app.engine.live.order_identity import build_bot_order_namespace
 from app.services.bot_binding_repository import (
     BotBindingRepository,
     BrokerBotBinding,
@@ -95,7 +93,7 @@ def write_stopped_runner_bot(
                 account_id=account_id,
                 strategy_instance_id=strategy_instance_id,
                 run_id=run_id,
-                bot_order_namespace=bot_order_namespace_for_instance(strategy_instance_id),
+                bot_order_namespace=build_bot_order_namespace(strategy_instance_id),
                 lifecycle_state="ACTIVE",
                 recorded_at_ms=PLAN_MS - 3_000,
                 source="cutover.test",

@@ -540,7 +540,7 @@ def select_primary_action(
 
     A stopped bot that still holds shares has none: its page's stranded-position
     warning owns the one action there, Flatten, and no other command may sit
-    beside it in the header (PRD #2560; review B4). Otherwise one precedence
+    beside it in the header (#2560; review B4). Otherwise one precedence
     rule (ADR 0027): a recovery capability the custody policy marks as this
     bot's cure outranks the routine lifecycle command, because the routine
     command may not even reflect the bot's true state. The caller passes only
@@ -561,7 +561,7 @@ def select_primary_action(
 
 
 def open_pnl_fields(exact_open_pnl: Decimal | None) -> dict[str, object]:
-    """A bot's open P&L with the words the owner reads it in (PRD #2560 D12).
+    """A bot's open P&L with the words the owner reads it in (#2560 D12).
 
     The one writer of ``BotPanelView.open_pnl_usd`` and
     ``open_pnl_direction``: half-even display cents rounded once from

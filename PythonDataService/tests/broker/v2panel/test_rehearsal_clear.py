@@ -47,11 +47,11 @@ from app.services.broker_v2_panel.action_execution_service import (
     ActionOutcomeUnknownError,
     reset_idempotency_store_for_testing,
 )
+from tests._helpers.bot_runner.resume import _FlatBroker
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
 from tests.broker.alpaca.clerk.sqlite.conftest import _make_held_position
 from tests.broker.v2panel.conftest import account_snapshot
-from tests.services.test_bot_runner_ema_resume import _FlatBroker
 
 _LIVE = "9LIVE0001"
 _SEALED = f"shadow:{_LIVE}"
@@ -288,7 +288,7 @@ async def test_a_clear_that_retired_the_bot_but_failed_to_record_it_is_finished_
         await panel_data_source.run_action(
             "alpaca", _LIVE, _FLAT,
             PanelActionRequest(
-                action_id="archive", revision=0, concurrency_token=_PRESENTED_CLEAR_TOKEN,
+                action_id="archive", concurrency_token=_PRESENTED_CLEAR_TOKEN,
                 idempotency_key="direct-1", reason="The rehearsal is over",
             ),
             operator_identity="owner",
@@ -362,7 +362,6 @@ async def test_a_command_posted_for_a_rehearsal_bot_answers_with_a_code(
             f"/api/brokers/alpaca/accounts/{_LIVE}/bots/{_HELD}/actions",
             json={
                 "action_id": action_id,
-                "revision": 0,
                 "concurrency_token": _PRESENTED_CLEAR_TOKEN,
                 "idempotency_key": f"direct-{action_id}",
             },
@@ -392,7 +391,7 @@ async def test_a_shadow_store_that_cannot_confirm_the_retirement_is_this_bots_un
         await panel_data_source.run_action(
             "alpaca", _LIVE, _FLAT,
             PanelActionRequest(
-                action_id="archive", revision=0, concurrency_token=_PRESENTED_CLEAR_TOKEN, idempotency_key="k-1",
+                action_id="archive", concurrency_token=_PRESENTED_CLEAR_TOKEN, idempotency_key="k-1",
             ),
             operator_identity="owner",
         )

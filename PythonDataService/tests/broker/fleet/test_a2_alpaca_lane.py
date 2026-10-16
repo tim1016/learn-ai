@@ -2828,20 +2828,14 @@ def _route_paths_for_role(role: str) -> set[str]:
     ("role", "expect_unscoped_brokers", "expect_internal"),
     [
         ("combined", True, False),
-        ("fleet_coordinator", True, False),
+        ("fleet_coordinator", False, False),
         ("clerk_agent", True, False),
     ],
 )
 def test_the_router_surface_follows_the_role(
     role: str, expect_unscoped_brokers: bool, expect_internal: bool
 ) -> None:
-    """Combined keeps today's surface; the coordinator is narrowly bounded.
-
-    Delivery B gives the coordinator the clerk-scoped routing surface under
-    ``/api/brokers/{broker}/clerks/…``. Delivery D adds exactly one retained
-    read alias (``panel-profile``); the unscoped agent families stay on
-    clerk-agent processes.
-    """
+    """Only combined and clerk-agent roles expose unscoped broker routes."""
     paths = _route_paths_for_role(role)
     unscoped_broker_paths = {
         path
@@ -2854,7 +2848,7 @@ def test_the_router_surface_follows_the_role(
         sorted(paths)[:5],
     )
     if role == "fleet_coordinator":
-        assert unscoped_broker_paths == {"/api/brokers/{broker}/panel-profile"}
+        assert not unscoped_broker_paths
     has_internal = any(path.startswith("/internal/fleet") for path in paths)
     assert has_internal is expect_internal
     if role == "fleet_coordinator":
@@ -2904,8 +2898,7 @@ def test_the_coordinator_surface_appears_with_a_control_directory() -> None:
         assert completed.returncode == 0, completed.stderr[-2000:]
         paths = set(json.loads(completed.stdout.strip().splitlines()[-1]))
         assert any(path.startswith("/internal/fleet") for path in paths)
-        # The coordinator owns the clerk-scoped routing surface plus exactly
-        # one D compatibility read (panel-profile); agent families remain private.
+        # The coordinator owns only the clerk-scoped broker routing surface.
         brokers_paths = {
             path for path in paths if path.startswith("/api/brokers")
         }
@@ -2915,7 +2908,7 @@ def test_the_coordinator_surface_appears_with_a_control_directory() -> None:
             for path in brokers_paths
             if not path.startswith("/api/brokers/{broker}/clerks")
         }
-        assert unscoped == {"/api/brokers/{broker}/panel-profile"}
+        assert not unscoped
 
 
 def _volume_with_effective_tuple(tmp_path: Path, *, binding_generation: int = 0) -> Path:

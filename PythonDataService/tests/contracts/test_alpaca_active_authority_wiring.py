@@ -67,7 +67,7 @@ def test_every_reconciliation_sweep_publishes_its_verdict() -> None:
     ``reconcile_account`` directly rather than through the facade. Panel reads
     project the facade's last verdict, so a construction site that omits
     ``on_result`` leaves ``custody_snapshot_projection`` answering ``stale``
-    with ``reconciled_at_ms=0`` however many sweeps succeed (#1776 WP2).
+    with a stale reconciliation state however many sweeps succeed (#1776 WP2).
 
     Structural because the failure is silent: every unit test still passes and
     the degradation only shows in production.

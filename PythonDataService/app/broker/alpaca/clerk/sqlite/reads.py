@@ -220,21 +220,13 @@ def strategy_instances(conn: sqlite3.Connection) -> list[dict]:
     return [dict(row) for row in rows]
 
 
-#: Alpaca order states in which the broker may still act on an order. One
-#: definition, imported by the recovery policy rather than restated there, so
-#: "this bot still has a working order" cannot mean two different things
-#: depending on which side asks.
-WORKING_BROKER_STATES: frozenset[str] = frozenset(
-    {"new", "accepted", "pending_new", "partially_filled", "pending_cancel"}
-)
-
 #: Alpaca order states in which an owned ENTRY can still fill, so an ENTRY in
 #: one of them outliving its run must be cancelled. The operator's
 #: ``cancel_verified_working_orders`` and the reconciliation sweep's
 #: stopped-run step (:func:`entry_orders_owed_a_cancel`) read this one
 #: definition, so the two cancellers cannot disagree about which orders are
-#: still live. Deliberately wider than :data:`WORKING_BROKER_STATES`: an
-#: auction-bound, suspended or replace-pending order can still fill.
+#: still live, including auction-bound, suspended, replace-pending, calculated
+#: and stopped orders.
 CANCELLABLE_ENTRY_BROKER_STATES: frozenset[str] = frozenset(
     {
         "new",
@@ -249,6 +241,14 @@ CANCELLABLE_ENTRY_BROKER_STATES: frozenset[str] = frozenset(
         "calculated",
     }
 )
+
+#: Alpaca order states in which an order can still fill: the ones that make a
+#: bot's custody live, its symbol watched and its contract quoted. A retired bot
+#: whose only live thing is an order held for an auction, suspended, pending a
+#: replace, calculated or stopped is not inert, whatever its effect says
+#: (#3216, owner ruling 2026-10-14). The same states the Clerk cancels an
+#: owned entry in, so the two cannot disagree about which orders are live.
+LIVE_CUSTODY_BROKER_STATES: frozenset[str] = CANCELLABLE_ENTRY_BROKER_STATES
 
 #: Effect-operation states that have not reached a terminal outcome. An effect
 #: here can still create broker custody, so a registration carrying one is not
@@ -270,7 +270,7 @@ def strategy_instances_with_live_custody(conn: sqlite3.Connection, *, dormant: b
     authored recovery command are derived from: an unresolved uncertainty
     (which since v12 is also every active hold and every execution-coverage
     conflict, both being ``uncertainties`` rows), a non-zero attributed
-    position, an active run, an order in a working broker state, and a
+    position, an active run, an order in a state it can still fill from, and a
     nonterminal effect operation. Account-scoped uncertainties are excluded on
     purpose -- they reach every row alike through the account facts, so they
     say nothing about one bot.
@@ -279,8 +279,8 @@ def strategy_instances_with_live_custody(conn: sqlite3.Connection, *, dormant: b
     working order observed after retirement, or an effect accepted in the
     window before its order becomes working, would otherwise leave that bot's
     custody projection and its authored recovery command out of the catalog
-    entirely. The order states are the same set ``recovery_policy`` treats as
-    working, and the effect states are its nonterminal ones.
+    entirely. The order states are :data:`LIVE_CUSTODY_BROKER_STATES`, and the
+    effect states are its nonterminal ones.
 
     Answering this for the whole roster in one query is what lets the catalog
     skip the per-row projection for a retired registration that is provably
@@ -299,7 +299,7 @@ def strategy_instances_with_live_custody(conn: sqlite3.Connection, *, dormant: b
     broker evidence (``reconcilable_effect_operations``), Clear's own test of
     them (``recorded_custody``). Every other arm stands as it is.
     """
-    working_states = ", ".join("?" for _ in WORKING_BROKER_STATES)
+    working_states = ", ".join("?" for _ in LIVE_CUSTODY_BROKER_STATES)
     nonterminal_states = ", ".join("?" for _ in NONTERMINAL_EFFECT_STATES)
     held = (
         "SELECT strategy_instance_id FROM uncertainties "
@@ -313,7 +313,7 @@ def strategy_instances_with_live_custody(conn: sqlite3.Connection, *, dormant: b
         "AND e.strategy_instance_id IS NOT NULL "
     )
     if dormant:
-        rows = conn.execute(held, tuple(sorted(WORKING_BROKER_STATES))).fetchall()
+        rows = conn.execute(held, tuple(sorted(LIVE_CUSTODY_BROKER_STATES))).fetchall()
         owed_evidence = {
             effect.strategy_instance_id
             for effect in reconcilable_effect_operations(conn)
@@ -323,7 +323,7 @@ def strategy_instances_with_live_custody(conn: sqlite3.Connection, *, dormant: b
     rows = conn.execute(
         held + "UNION SELECT strategy_instance_id FROM effect_operations "
         f"WHERE state IN ({nonterminal_states}) AND strategy_instance_id IS NOT NULL",
-        (*sorted(WORKING_BROKER_STATES), *sorted(NONTERMINAL_EFFECT_STATES)),
+        (*sorted(LIVE_CUSTODY_BROKER_STATES), *sorted(NONTERMINAL_EFFECT_STATES)),
     ).fetchall()
     return {str(row["strategy_instance_id"]) for row in rows}
 
@@ -339,7 +339,7 @@ def market_data_symbols(conn: sqlite3.Connection) -> tuple[str, ...]:
     its bot is registered under, the underlying: a contract's own symbol is
     never a stock line to watch.
     """
-    working = ",".join("?" for _ in WORKING_BROKER_STATES)
+    working = ",".join("?" for _ in LIVE_CUSTODY_BROKER_STATES)
     pending = ",".join("?" for _ in NONTERMINAL_EFFECT_STATES)
     rows = conn.execute(
         "WITH live_effects AS ("
@@ -362,7 +362,7 @@ def market_data_symbols(conn: sqlite3.Connection) -> tuple[str, ...]:
         "ON t.effect_operation_id = e.effect_operation_id "
         "WHERE e.strategy_instance_id IS NULL AND t.transition_kind = 'MANUAL_ORDER_ACCEPTED') "
         "SELECT symbol FROM demand GROUP BY symbol ORDER BY min(priority), symbol",
-        (*sorted(NONTERMINAL_EFFECT_STATES), *sorted(WORKING_BROKER_STATES)),
+        (*sorted(NONTERMINAL_EFFECT_STATES), *sorted(LIVE_CUSTODY_BROKER_STATES)),
     ).fetchall()
     return tuple(row["symbol"] for row in rows)
 
@@ -375,13 +375,13 @@ def option_contracts_requiring_quotes(conn: sqlite3.Connection) -> tuple[str, ..
     contract is told by its recorded terms, never by its symbol's spelling,
     so a stock position is never in the answer.
     """
-    working = ",".join("?" for _ in WORKING_BROKER_STATES)
+    working = ",".join("?" for _ in LIVE_CUSTODY_BROKER_STATES)
     rows = conn.execute(
         "SELECT p.symbol AS symbol FROM positions p JOIN option_contracts c ON c.symbol = p.symbol "
         "WHERE p.attributed_qty != 0 "
         "UNION SELECT oc.symbol FROM order_contracts oc JOIN orders o ON o.order_ref = oc.order_ref "
         f"WHERE lower(o.broker_state) IN ({working}) ORDER BY symbol",
-        tuple(sorted(WORKING_BROKER_STATES)),
+        tuple(sorted(LIVE_CUSTODY_BROKER_STATES)),
     ).fetchall()
     return tuple(row["symbol"] for row in rows)
 
@@ -1703,7 +1703,7 @@ def effective_execution_slice(conn: sqlite3.Connection, execution_id: str) -> di
 
 
 #: A fill row is effective while no correction names its ``execution_id`` as
-#: superseded (PRD #1441 S1.2). Expects the row aliased ``f``.
+#: superseded (#1441 S1.2). Expects the row aliased ``f``.
 _EFFECTIVE_FILL_PREDICATE = (
     "NOT EXISTS (SELECT 1 FROM fills successor "
     "WHERE successor.superseded_execution_ref = f.execution_id)"
@@ -1890,7 +1890,7 @@ def effective_fill_totals_for_order(conn: sqlite3.Connection, order_ref: str) ->
 
     Formula: ``effective_qty = SUM(qty)`` and ``effective_cost = SUM(qty * price)``
     for fills with no successor naming their ``execution_id`` as superseded.
-    Reference: PRD #1441 S1.2 execution corrections.
+    Reference: #1441 S1.2 execution corrections.
     Canonical implementation: this query, reused by cumulative recovery.
     Validated against: ``test_one_exact_auto_supersedes_many_cumulative_recovery_rows``.
     """

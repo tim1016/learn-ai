@@ -48,8 +48,6 @@ class EvidencePage(BaseModel):
     next_cursor: str | int | None
     total_entries: int
     truncated: bool
-    # The operator identity attached to the audit log for this read.
-    read_by: str
     read_at_ms: int
 
 

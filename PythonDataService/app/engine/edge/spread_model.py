@@ -1,16 +1,13 @@
 """Bid-ask spread models for the Edge trade simulator.
 
-Formula: effective_spread = fixed_component + impact_component * sqrt(volume / ADV)
-Reference: Madhavan, A. & Smidt, S. (1991) "A Bayesian Model of Intraday Specialist Pricing" Journal of Financial Economics 30(1)
+Formula: option_spread = max(floor, k * iv * sqrt(T) * (1 + alpha * |delta - 0.5|) * S)
+Reference: Internal heuristic; Madhavan & Smidt (1991) motivates liquidity costs but does not supply this equation or its constants.
 Canonical implementation: app/engine/edge/spread_model.py
-Validated against: NONE — pending
+Validated against: tests/edge/test_spread_model.py (behavioral only; no external parity fixture)
 
-Options spread follows the Madhavan-Smidt (1991) liquidity framework:
-spread reflects market-maker inventory risk and asymmetric-information cost.
-
-Math provenance:
-- Madhavan, A. & Smidt, S. (1991), "A Bayesian Model of Intraday Specialist
-  Pricing", Journal of Financial Economics 30(1).
+The option coefficients are internal assumptions, not values attributed to
+Madhavan & Smidt (1991), "A Bayesian Model of Intraday Specialist Pricing",
+Journal of Financial Economics 30(1).
 """
 
 from __future__ import annotations

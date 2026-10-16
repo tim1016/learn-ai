@@ -19,21 +19,16 @@ from app.broker.contract.models import BrokerAccountSnapshot
 from app.broker.contract.registry import get_broker_registry
 from app.schemas.broker_bots import (
     AlpacaPaperDeployReadinessCheck,
-    AlpacaPaperDeployReceipt,
     AlpacaPaperDeployRequest,
     AlpacaPaperDeployView,
-    BotStatusView,
 )
 from app.schemas.exit_terms import ExitTermsInput
-from app.schemas.run_admission import RunAdmissionDecision
 from app.schemas.strategy_validation import StrategyValidationEntry
 from app.services.broker_v2_panel import panel_deploy
 from app.services.broker_v2_panel.panel_deploy import _require_alpaca_deploy_request
 from app.services.broker_v2_panel.panel_errors import PanelRunnerError, PanelUnavailableError
 from app.services.broker_v2_panel.paper_deploy_service import (
-    build_alpaca_paper_deploy_receipt,
     build_alpaca_paper_deploy_view,
-    resolve_deploy_strategy_params,
 )
 from app.services.strategy_validation_manifest import (
     load_strategy_validation_entries,
@@ -42,7 +37,7 @@ from app.services.strategy_validation_manifest import (
 from app.utils.timestamps import now_ms_utc
 from tests._helpers.canary_admission import admit_canary_pairing
 from tests.broker.v2panel.conftest import _BODY, _SETTINGS, account_snapshot
-from tests.broker.v2panel.fixtures import ACCT, SID
+from tests.broker.v2panel.fixtures import ACCT
 
 LIVE_ACCT = "9LIVE0001"
 _STRATEGY_KEY = "ema_crossover_signal"
@@ -179,71 +174,6 @@ def test_shadow_request_passes_the_gate_paper_passes_today(
 
     assert "symbol" not in resolved.effective
     assert resolved.origins
-
-
-def _bot() -> BotStatusView:
-    return BotStatusView(
-        strategy_instance_id=SID,
-        strategy_key=_STRATEGY_KEY,
-        broker="alpaca",
-        symbol="SPY",
-        mode="trade",
-        quantity=2,
-        running=True,
-        phase="ON_DUTY",
-        desired_state="RUNNING",
-        active_run_id="run-test",
-        duty_outcome=None,
-        binding_created_at_ms=_BINDING_AT_MS,
-        last_transition_at_ms=None,
-    )
-
-
-def _admission() -> RunAdmissionDecision:
-    return RunAdmissionDecision(
-        operation="START",
-        allowed=True,
-        reason_code="START_ADMITTED",
-        explanation="The Clerk and bot registry admit Start.",
-        next_step=None,
-        strategy_instance_id=SID,
-        proposed_run_id="run-test",
-        configuration_hash="a" * 64,
-        account_id=LIVE_ACCT,
-        evaluated_at_ms=_BINDING_AT_MS,
-        fact_ages_ms={
-            "program_build": 0,
-            "runtime": 0,
-            "process": 0,
-            "market_data": 0,
-            "market_liveness": 0,
-            "clerk": 0,
-        },
-        evidence_refs=("test-admission",),
-    )
-
-
-def _receipt(view: AlpacaPaperDeployView, execution_mode: str) -> AlpacaPaperDeployReceipt:
-    request = _request(execution_mode)
-    return build_alpaca_paper_deploy_receipt(
-        broker="alpaca",
-        view=view,
-        request=request,
-        strategy_instance_id=SID,
-        bot=_bot(),
-        admission=_admission(),
-        resolved_params=resolve_deploy_strategy_params(
-            request.strategy_key, request.symbol, dict(request.parameters)
-        ),
-    )
-
-
-def test_shadow_receipt_names_the_shadow_world_not_paper(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A shadow deploy lands on a real-money account; its receipt must say so."""
-    receipt = _receipt(_shadow_view(monkeypatch), "shadow")
-
-    prose = (receipt.message, receipt.explanation, receipt.next_action)
-    assert not any("paper" in sentence.lower() for sentence in prose)
 
 
 @pytest.mark.asyncio

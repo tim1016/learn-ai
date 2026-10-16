@@ -83,7 +83,6 @@ function snapshot(
 
 function service(getStrategyView: ReturnType<typeof vi.fn>) {
   return {
-    getPanelProfile: vi.fn().mockResolvedValue({ broker: 'alpaca', fee_fidelity: 'none', live_bars_supported: false, stations: [] }),
     getLiveSnapshot: vi.fn().mockResolvedValue(snapshot(1)),
     liveStreamUrl: vi.fn().mockReturnValue('/api/test/live-stream'),
     getCurrentRun: vi.fn().mockRejectedValue(new Error('No current run fixture.')),

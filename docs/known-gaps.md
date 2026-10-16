@@ -133,25 +133,7 @@ previously tracked items (issues #1655, #1671, #1672, #1674, #1677, #1664,
   (`spy_orb.py`, `spy_ema_crossover_options.py`) were corrected; the rest are
   pre-existing and out of scope.
 
-## 8. Sealed Signal Program admission (verified 2026-08-21, issue #1728 / ADR 0043)
-
-*The former first bullet — FR-016 crash-candidate capture "scoped to
-`ema_crossover_signal` only" — was closed 2026-08-24: the #1730 promotion
-registered `signal_program_factory` for all seven sealed programs (verified
-against `app/engine/strategy/registry.py`), so `_warm_up_signal_strategy`'s
-capture now covers every deployable strategy. The residual factory-less pair
-is exactly the next bullet, and neither is live-deployable
-(`supported_alpaca_paper_strategy_keys` derives from factory presence). Git
-history has the old bullet.*
-
-- ~~**`ema_crossover_2_bps` and `spy_ema_crossover` have no build-proof identity
-  of their own.**~~ **Resolved 2026-08-28 by removal.** The signal/asset
-  decoupling sweep deleted both registry entries: `spy_ema_crossover` was a
-  compatibility wrapper for run ledgers that are themselves disposable, and
-  `ema_crossover_2_bps` was folded into `ema_crossover_signal`'s `gap_bps`
-  parameter — inheriting that program's real qualification instead of running
-  `NOT_APPLICABLE` beside it. No unqualified registration remains on the EMA
-  lineage.
+## 8. Sealed Signal Program admission (issue #1728 / ADR 0043)
 - **The external repository-writer census is a convention nudge, not a sound
   safety gate.** `app/broker/alpaca/clerk/sqlite/repository_boundary.py` plus
   `tests/broker/alpaca/clerk/sqlite/test_repository_writer_boundary.py` are
@@ -333,9 +315,11 @@ The items below remain open.
   at 270 ms after further settling), and no restart was needed. Neither
   symptom reproduces. This is a **non-reproduction, not a fix** — the
   original observation was not attributed. One condition differs: the
-  2026-08-26 run had IB Gateway live, and IBKR has since been decommissioned
-  (#1813); its auto-reconnect monitor polls at 3 s and is gated on
-  `ibkr_settings.broker_enabled`. That is a plausible but unproven cause.
+  2026-08-26 run had IB Gateway live. IBKR remains the read-only market-data
+  provider for Alpaca bots under ADR 0062; #1813 retired IBKR bot control,
+  not this feed. The auto-reconnect monitor polls at 3 s and is gated on
+  `ibkr_settings.broker_enabled`, so a different feed state is a plausible
+  but unproven cause.
   Delete this bullet if a second stopped-fleet run also comes back clean.
 - **S10 UI — active holds contradict roster counts and guidance (medium;
   partially cured).** An active stream-health hold can coexist with "Running 0,
@@ -568,36 +552,6 @@ re-arms the server-authored timeframe auto-correct, and numeric
   runbook. Shrinks only when #2154's confirmation push lets the coordinator
   know the drain reached the lane.
 
-## Live EMA replay evidence — verified 2026-09-17
-
-- **P2: retrospective replay can classify a legitimate pre-launch warmup
-  signal as a missing live decision.** For `live-ema-spy-0917`, run
-  `126c2688f51348619ad0f86d011a64bc`, the saved replay receipt reports
-  `MISSING_LIVE_RECORD` for the 10:00 ET ENTER, although launch was
-  10:01:28.134 ET. Replaying with the empty captured history present at fresh
-  launch reproduces all 24 live no-action trace digests exactly. Supplying
-  the later captured decisions recreates a false `crash_recovered` candidate
-  at 10:00. The nonempty-history condition in
-  `PythonDataService/app/services/bot_trade_strategy_warmup.py:165` does not
-  distinguish pre-launch history from the crash-recovery window when used
-  retrospectively by `run_replay_proof.py`. Correct the retrospective
-  eligibility boundary without enabling historical orders or weakening real
-  crash recovery. The same saved receipt's engine-parity leg also failed at
-  index 0 ("reference sequence exhausted"). That was a separate defect, fixed
-  2026-09-29 (#2608): the reference backtest in
-  `qualification_shadow_trace._reference_backtest_traces` ran each strategy
-  over its built-in default window (EMA, SMA, RSI and the SPY strategies end
-  2026-03-27, Deployment Validation 2026-04-15), and `InMemoryDataReader`
-  drops every bar outside that window, so every run after it was compared
-  with an empty reference. The reference now runs over the New York dates of
-  the first and last bar it is handed, and raises
-  `IncompleteReferenceReplayError` (a `replay_failed` receipt) if the engine
-  still reads fewer bars than it was handed. A regenerated receipt therefore
-  carries a real engine-parity comparison; the missing-row misclassification
-  above is what remains open. Evidence:
-  [incident report](audits/live-ema-spy-missed-entry-2026-09-17.md),
-  [final-bar decisions note](./references/final-bar-decisions-2467.md).
-
 ## Backtest vs reality: when a bot ends (#2607, 2026-09-29)
 
 - **P2: a backtest always holds overnight; the owner's end schedule is not
@@ -621,7 +575,6 @@ re-arms the server-authored timeframe auto-correct, and numeric
   `DECISION_BAR_MISSED` after IB Gateway's nightly blackout -- leaves the
   position held. It is not silent: Start refuses with
   `START_REQUIRES_FLAT_CUSTODY`, and the dead-run warning and Flatten apply.
-  #2607 slice 2's scheduled end and #2640 are the eventual fix.
 
 ## Paper outside-fill reconciliation — verified 2026-10-15
 

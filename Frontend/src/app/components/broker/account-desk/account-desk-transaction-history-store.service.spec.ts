@@ -181,9 +181,6 @@ function transaction(transactionId: string, recordedAtMs: number): ClerkTransact
     run_id: null,
     intent_id: null,
     order_ref: null,
-    order_id: null,
-    perm_id: null,
-    exec_id: null,
     native_order_id: null,
     native_execution_id: null,
     lifecycle_state: 'submitted',
@@ -199,13 +196,10 @@ function historyPage(
 ): ClerkTransactionHistoryResponse {
   return {
     projection_available: true,
-    canonical_fallback_required: false,
     feed_state: 'live',
     feed_headline: 'Live',
     feed_detail: 'Current',
     high_water_journal_seq: 1,
-    lag_records: 0,
-    lag_is_lower_bound: false,
     custody_summary: {
       record_count: rows.length,
       a0_custody_accepted_count: 0,

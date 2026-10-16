@@ -1,4 +1,4 @@
-"""Backend-authored bot names and the Deploy submission ledger (#2551, PRD #2560).
+"""Backend-authored bot names and the Deploy submission ledger (#2551, #2560).
 
 A bot is named when its Deploy is claimed, never by the client:
 ``<symbol>-<strategy code>-<YYYYMMDD>-<HHMM>``, lowercase, with the minute read

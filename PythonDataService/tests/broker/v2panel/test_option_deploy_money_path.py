@@ -49,6 +49,7 @@ from app.schemas.option_order_terms import SealedOptionOrderTerms
 from app.services import market_liveness
 from app.services import option_structure_preview as preview_service
 from app.services.broker_v2_panel import bot_custody, budget_deploy, option_deploy
+from app.services.broker_v2_panel.budget_deploy import resolve_consent as real_resolve_consent
 from app.services.option_structure_preview import FIGURES_GOOD_FOR_MS, plan_of
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
 from tests.broker.v2panel.conftest import _BODY, _SETTINGS
@@ -95,6 +96,8 @@ def books(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNamespace
         reconnecting=False, startup_failure=None,
     )
     monkeypatch.setattr(budget_deploy, "get_active_clerk_runtime", lambda: runtime)
+    # The harness grants consent to every click; here the click's consent is the one the books give.
+    monkeypatch.setattr(budget_deploy, "resolve_consent", real_resolve_consent)
     monkeypatch.setattr(bot_custody, "get_active_clerk_runtime", lambda: runtime)
     monkeypatch.setattr(bot_custody, "get_bot_task_registry", lambda: None)
     monkeypatch.setattr(

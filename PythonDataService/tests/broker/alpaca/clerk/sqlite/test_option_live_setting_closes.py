@@ -51,6 +51,8 @@ from tests.broker.alpaca.clerk.sqlite.test_scheduled_close import (
     _until,
 )
 
+pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+
 _ACCOUNT_NOT_OPEN = "OPTION_PLAN_ACCOUNT_NOT_OPEN"
 
 

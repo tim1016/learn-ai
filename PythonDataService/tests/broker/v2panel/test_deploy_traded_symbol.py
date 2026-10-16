@@ -133,7 +133,6 @@ async def test_a_dry_run_that_names_another_asset_trades_it(deploy_app, alpaca: 
     assert response.status_code == 201, response.text
     [call] = registry.deploy_calls
     assert (call["symbol"], call["traded_symbol"]) == ("SPY", "QQQ")
-    assert response.json()["action_plan"]["on_enter"][0]["instrument"]["underlying"] == "QQQ"
     assert alpaca.asked == ["QQQ"]
 
 
@@ -299,7 +298,7 @@ async def test_the_review_carries_the_warning_and_asks_only_a_broker_bot_to_acce
     """The review is read before the owner accepts, so it is never refused for want of the acceptance."""
     app, _registry = deploy_app
     _serve(monkeypatch, view_of)
-    money = DeploymentBudgetPreview(state="ready", detail="Ready", world="real_paper", custody_account_id=ACCT)
+    money = DeploymentBudgetPreview(state="ready", detail="Ready", world="real_paper")
     monkeypatch.setattr(budget_deploy, "preview_budget", lambda account_id, request, *, resolved_parameters: money)
     monkeypatch.setattr(budget_deploy, "same_symbol_note", lambda account_id, request: None)
 
@@ -416,7 +415,7 @@ async def test_a_deploy_that_names_no_traded_asset_is_sent_as_it_always_was(depl
 
     assert response.status_code == 201, response.text
     assert registry.deploy_calls[0]["traded_symbol"] is None
-    assert response.json()["action_plan"]["on_enter"][0]["instrument"]["underlying"] == "SPY"
+    assert registry.deploy_calls[0]["action_plan"] is None, "the runner makes the plan of a bot in shares"
     assert alpaca.asked == [], "Alpaca is asked about an asset only when the bot trades another one"
 
 
@@ -547,4 +546,4 @@ def test_a_bots_next_entry_is_judged_at_the_price_of_what_it_buys(authority: tup
 
     view = budget_deploy._budget_view(runtime, "listens-spy")
 
-    assert (view.headline, view.entry_eligible) == ("Ready for its next entry", True)
+    assert view.headline == "Ready for its next entry"

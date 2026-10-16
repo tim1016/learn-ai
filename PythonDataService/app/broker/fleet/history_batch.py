@@ -5,7 +5,7 @@ Polygon key, ADR 0062) and onto one authenticated request to the
 fleet-coordinator role's ``/internal/fleet/*`` surface
 (``app.routers.internal_fleet``). The coordinator runs the entire backward
 Polygon widening walk locally and returns one completed batch, so the Clerk
-makes exactly one internal call per public history attempt (PRD #2201 §2.3).
+makes exactly one internal call per public history attempt (#2201 §2.3).
 
 **Both hops of that one browser request must widen past the fleet default**
 (``DEFAULT_INTERNAL_TIMEOUT_S`` = 10s, ``app.broker.fleet.internal_http``):

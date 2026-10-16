@@ -1,0 +1,366 @@
+{
+  "schema_version": 1,
+  "canonical": "PythonDataService/app/options/bounds.py::Bounds.fault",
+  "cases": [
+    {
+      "name": "exclusive minimum",
+      "value": "0",
+      "bounds": {
+        "min": "0",
+        "min_included": false,
+        "max": "100",
+        "max_included": true,
+        "step": "0.000001"
+      },
+      "accepted": false
+    },
+    {
+      "name": "negative zero",
+      "value": "-0",
+      "bounds": {
+        "min": "0",
+        "min_included": false,
+        "max": "100",
+        "max_included": true,
+        "step": "0.000001"
+      },
+      "accepted": false
+    },
+    {
+      "name": "positive zero",
+      "value": "+0",
+      "bounds": {
+        "min": "0",
+        "min_included": false,
+        "max": "100",
+        "max_included": true,
+        "step": "0.000001"
+      },
+      "accepted": false
+    },
+    {
+      "name": "finest step",
+      "value": "0.000001",
+      "bounds": {
+        "min": "0",
+        "min_included": false,
+        "max": "100",
+        "max_included": true,
+        "step": "0.000001"
+      },
+      "accepted": true
+    },
+    {
+      "name": "closed maximum",
+      "value": "100",
+      "bounds": {
+        "min": "0",
+        "min_included": false,
+        "max": "100",
+        "max_included": true,
+        "step": "0.000001"
+      },
+      "accepted": true
+    },
+    {
+      "name": "above by a tiny decimal",
+      "value": "100.0000000000000000001",
+      "bounds": {
+        "min": "0",
+        "min_included": false,
+        "max": "100",
+        "max_included": true,
+        "step": "0.000001"
+      },
+      "accepted": false
+    },
+    {
+      "name": "very large above",
+      "value": "1e999999999",
+      "bounds": {
+        "min": "0",
+        "min_included": false,
+        "max": "100",
+        "max_included": true,
+        "step": "0.000001"
+      },
+      "accepted": false
+    },
+    {
+      "name": "very small finer",
+      "value": "1e-999999999",
+      "bounds": {
+        "min": "0",
+        "min_included": false,
+        "max": "100",
+        "max_included": true,
+        "step": "0.000001"
+      },
+      "accepted": false
+    },
+    {
+      "name": "at the step",
+      "value": "1.234567",
+      "bounds": {
+        "min": "0",
+        "min_included": false,
+        "max": "100",
+        "max_included": true,
+        "step": "0.000001"
+      },
+      "accepted": true
+    },
+    {
+      "name": "trailing zeros",
+      "value": "1.2345670",
+      "bounds": {
+        "min": "0",
+        "min_included": false,
+        "max": "100",
+        "max_included": true,
+        "step": "0.000001"
+      },
+      "accepted": true
+    },
+    {
+      "name": "finer step",
+      "value": "1.2345678",
+      "bounds": {
+        "min": "0",
+        "min_included": false,
+        "max": "100",
+        "max_included": true,
+        "step": "0.000001"
+      },
+      "accepted": false
+    },
+    {
+      "name": "fraction without integer",
+      "value": ".3",
+      "bounds": {
+        "min": "0",
+        "min_included": false,
+        "max": "100",
+        "max_included": true,
+        "step": "0.000001"
+      },
+      "accepted": true
+    },
+    {
+      "name": "point without fraction",
+      "value": "5.",
+      "bounds": {
+        "min": "0",
+        "min_included": false,
+        "max": "100",
+        "max_included": true,
+        "step": "0.000001"
+      },
+      "accepted": true
+    },
+    {
+      "name": "positive exponent",
+      "value": "+1e1",
+      "bounds": {
+        "min": "0",
+        "min_included": false,
+        "max": "100",
+        "max_included": true,
+        "step": "0.000001"
+      },
+      "accepted": true
+    },
+    {
+      "name": "below and finer",
+      "value": "-0.0000001",
+      "bounds": {
+        "min": "0",
+        "min_included": false,
+        "max": "100",
+        "max_included": true,
+        "step": "0.000001"
+      },
+      "accepted": false
+    },
+    {
+      "name": "invalid point",
+      "value": ".",
+      "bounds": {
+        "min": "0",
+        "min_included": false,
+        "max": "100",
+        "max_included": true,
+        "step": "0.000001"
+      },
+      "accepted": false
+    },
+    {
+      "name": "invalid NaN",
+      "value": "NaN",
+      "bounds": {
+        "min": "0",
+        "min_included": false,
+        "max": "100",
+        "max_included": true,
+        "step": "0.000001"
+      },
+      "accepted": false
+    },
+    {
+      "name": "invalid exponent",
+      "value": "1e",
+      "bounds": {
+        "min": "0",
+        "min_included": false,
+        "max": "100",
+        "max_included": true,
+        "step": "0.000001"
+      },
+      "accepted": false
+    },
+    {
+      "name": "unbounded huge integer",
+      "value": "1e999999999",
+      "bounds": {
+        "min": null,
+        "min_included": true,
+        "max": null,
+        "max_included": true,
+        "step": "1"
+      },
+      "accepted": true
+    },
+    {
+      "name": "unbounded negative huge",
+      "value": "-1e999999999",
+      "bounds": {
+        "min": null,
+        "min_included": true,
+        "max": null,
+        "max_included": true,
+        "step": "1"
+      },
+      "accepted": true
+    },
+    {
+      "name": "unbounded tiny",
+      "value": "1e-999999999",
+      "bounds": {
+        "min": null,
+        "min_included": true,
+        "max": null,
+        "max_included": true,
+        "step": "1"
+      },
+      "accepted": false
+    },
+    {
+      "name": "unbounded shifted fraction",
+      "value": "1.5e1000000",
+      "bounds": {
+        "min": null,
+        "min_included": true,
+        "max": null,
+        "max_included": true,
+        "step": "1"
+      },
+      "accepted": true
+    },
+    {
+      "name": "unbounded zero with exponent",
+      "value": "0E-30",
+      "bounds": {
+        "min": null,
+        "min_included": true,
+        "max": null,
+        "max_included": true,
+        "step": "1"
+      },
+      "accepted": true
+    },
+    {
+      "name": "unbounded 30 digit fraction",
+      "value": "12345678901234567890123456789.5",
+      "bounds": {
+        "min": null,
+        "min_included": true,
+        "max": null,
+        "max_included": true,
+        "step": "1"
+      },
+      "accepted": false
+    },
+    {
+      "name": "closed decimal high",
+      "value": "0.3",
+      "bounds": {
+        "min": "0.1",
+        "min_included": true,
+        "max": "0.3",
+        "max_included": true,
+        "step": null
+      },
+      "accepted": true
+    },
+    {
+      "name": "just above decimal high",
+      "value": "0.30000000000000001",
+      "bounds": {
+        "min": "0.1",
+        "min_included": true,
+        "max": "0.3",
+        "max_included": true,
+        "step": null
+      },
+      "accepted": false
+    },
+    {
+      "name": "closed decimal low",
+      "value": "0.1",
+      "bounds": {
+        "min": "0.1",
+        "min_included": true,
+        "max": "0.3",
+        "max_included": true,
+        "step": null
+      },
+      "accepted": true
+    },
+    {
+      "name": "just below decimal low",
+      "value": "0.09999999999999999",
+      "bounds": {
+        "min": "0.1",
+        "min_included": true,
+        "max": "0.3",
+        "max_included": true,
+        "step": null
+      },
+      "accepted": false
+    },
+    {
+      "name": "negative exact with trailing zeros",
+      "value": "-1.200",
+      "bounds": {
+        "min": "-2",
+        "min_included": true,
+        "max": "-1",
+        "max_included": false,
+        "step": "0.1"
+      },
+      "accepted": true
+    },
+    {
+      "name": "negative exclusive high",
+      "value": "-1",
+      "bounds": {
+        "min": "-2",
+        "min_included": true,
+        "max": "-1",
+        "max_included": false,
+        "step": "0.1"
+      },
+      "accepted": false
+    }
+  ]
+}

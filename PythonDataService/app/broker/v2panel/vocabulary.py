@@ -1,10 +1,8 @@
 """Closed operator vocabulary for the broker-v2 bot control panel (S1).
 
-This module is the **Python authority** for the ~25-code closed vocabulary the
+This module is the **Python authority** for the closed vocabulary the
 panel renders: phases, duty-outcome kinds, hold reasons, reconciliation
-verdicts, channel states, station ids, station states, and action ids. It is
-the source of truth the committed snapshot pins (see
-``scripts/regenerate_broker_v2_vocabulary_snapshot.py``).
+verdicts, channel states, station ids, station states, and action ids.
 
 Two invariants this file enforces and the contract tests pin:
 
@@ -405,7 +403,7 @@ def duty_outcome_copy_key(kind: str) -> str:
     return f"{kind}_OUTCOME" if kind in {"STOPPED", "RETIRED"} else kind
 
 
-# The full set of codes the panel can emit — used by the snapshot + copy-coverage
+# The full set of codes the panel can emit — used by copy-coverage
 # tests. ``STOPPED_OUTCOME`` and ``RETIRED_OUTCOME`` are the disambiguated
 # duty-outcome copy keys for the ``STOPPED`` and ``RETIRED`` kinds.
 ALL_VOCABULARY_CODES: Final[frozenset[str]] = (
@@ -443,4 +441,3 @@ def hold_reason_for(*, active: bool, stored_code: str | None) -> HoldReason:
     if not active:
         return "NO_HOLD"
     return HOLD_REASON_BY_STORED_CODE.get(stored_code or "", "UNKNOWN_HOLD")
-

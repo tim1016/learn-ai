@@ -8,13 +8,13 @@ tree -- so the two test containers (which do not share a working tree) each
 lock against their own copy:
 
 - pytest ``tests/broker/fleet/test_refusal_vocabulary_snapshot.py`` asserts
-  the live 28-class ``FleetControlError`` subclass closure plus the 5 codes
+  the live ``FleetControlError`` subclass closure plus the 5 codes
   minted outside it equals the committed Python-tree snapshot exactly.
   Failing means a refusal family was added, renamed, or had its status code
   changed without regenerating.
 
-- The Frontend's ``fleet-refusal-copy.spec.ts`` (Task 8, #2067 follow-up)
-  will load the Frontend-tree snapshot and assert its copy map covers
+- The Frontend's ``fleet-refusal-copy.spec.ts`` loads the Frontend-tree
+  snapshot and asserts its copy map covers
   exactly the same code set.
 
 ``test_refusal_vocabulary_snapshot.py`` also regenerates the snapshot from
@@ -59,7 +59,7 @@ _FRONTEND_SNAPSHOT_PATH: Final[Path] = (
 
 _SNAPSHOT_COMMENT: Final[str] = (
     "Snapshot of the fleet control plane's closed refusal vocabulary (#2067): "
-    "the 28-class FleetControlError subclass closure plus 5 codes minted "
+    "the FleetControlError subclass closure plus 5 codes minted "
     "outside it. Two test surfaces lock against this file. Pytest "
     "PythonDataService/tests/broker/fleet/test_refusal_vocabulary_snapshot.py "
     "reads the Python-tree copy and asserts equality with the live subclass "

@@ -14,10 +14,8 @@ from app.broker.alpaca.clerk.sqlite.catalog_quarantine import (
     plan_catalog_quarantine,
 )
 from app.broker.alpaca.clerk.sqlite.database_verification import DatabaseVerification
-from app.engine.live.account_registry import (
-    AccountInstanceBinding,
-    bot_order_namespace_for_instance,
-)
+from app.engine.live.account_registry import AccountInstanceBinding
+from app.engine.live.order_identity import build_bot_order_namespace
 from app.services.bot_binding_repository import StrategyInstanceRecord, alpaca_v1_action_plan
 from tests._helpers.legacy_ibkr_artifacts import (
     write_historical_account_binding,
@@ -97,7 +95,7 @@ def _register_account_binding(
             account_id=account_id,
             strategy_instance_id=sid,
             run_id=f"run-{sid}",
-            bot_order_namespace=bot_order_namespace_for_instance(sid),
+            bot_order_namespace=build_bot_order_namespace(sid),
             lifecycle_state="ACTIVE",
             recorded_at_ms=1_700_000_000_000,
             source="catalog-quarantine.test",

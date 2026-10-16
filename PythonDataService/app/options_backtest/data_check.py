@@ -225,14 +225,6 @@ class DataCheck:
         return sum(1 for session in self.sessions if session.verdict is verdict)
 
     @property
-    def first_testable(self) -> SessionCheck | None:
-        return next((session for session in self.sessions if session.testable), None)
-
-    @property
-    def last_testable(self) -> SessionCheck | None:
-        return next((session for session in reversed(self.sessions) if session.testable), None)
-
-    @property
     def longest_testable_stretch(self) -> TestableStretch | None:
         """The longest unbroken run of testable sessions; of two as long, the earlier."""
         best: tuple[int, int] | None = None  # (start index, length)

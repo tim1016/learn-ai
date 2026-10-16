@@ -28,6 +28,7 @@ from app.broker.fleet.errors import (
     ClerkVolumeMountUnproven,
 )
 from app.broker.fleet.records import VolumeMarker
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 MARKER_FILENAME = ".learn-ai-clerk-volume.json"
 MARKER_SCHEMA_VERSION = 1
@@ -157,6 +158,11 @@ def read_volume_marker(root: Path) -> VolumeMarker | None:
     # (``"2"`` is not ``2``; ``True`` is not a version).
     _require_marker_type(target, raw, "marker_version", int)
     _require_marker_type(target, raw, "created_at_ms", int)
+    if not 0 <= raw["created_at_ms"] <= MAX_TIMESTAMP_MS:
+        raise ClerkVolumeIdentityMismatch(
+            f"The identity marker at {target} has an out-of-range created_at_ms.",
+            next_step="Restore the volume from backup or re-provision the clerk.",
+        )
     for field in ("broker", "clerk_id", "volume_id", "attestation_kind", "attestation_id"):
         _require_marker_type(target, raw, field, str)
         if not str(raw[field]):

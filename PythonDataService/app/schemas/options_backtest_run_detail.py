@@ -73,27 +73,6 @@ SeriesStateWord = Literal["shown", "not_shown"]
 SeriesReasonWord = Literal[
     "session_skipped", "no_pin", "gone", "changed", "not_confirmed", "unreadable", "lake_unavailable"
 ]
-SettingWord = Literal[
-    "entry_time",
-    "exit_time",
-    "no_reentry_after",
-    "square_off",
-    "leg",
-    "leg_side",
-    "leg_right",
-    "leg_contracts",
-    "leg_expiry",
-    "leg_strike",
-    "leg_stop_loss",
-    "leg_momentum",
-    "leg_reentry",
-    "slippage",
-    "price_step",
-    "fees",
-    "starting_cash",
-]
-
-
 class OptionsBacktestContractResponse(BaseModel):
     """An option contract: its OCC symbol, and the symbol read out for display."""
 
@@ -237,20 +216,16 @@ class OptionsBacktestTradesResponse(BaseModel):
     no longer be read there is no setup to say which legs the run had, so an unknown ``leg_id`` is answered from the
     stored trades alone: a 200 with ``total`` 0, which says only that no trade was stored for that leg."""
 
-    run_id: int
     total: int = Field(ge=0)
     offset: int = Field(ge=0)
-    limit: int = Field(ge=1, le=TRADES_PAGE_MAX)
     next_offset: int | None = None
     trades: list[OptionsBacktestTradeResponse]
 
     @classmethod
     def from_page(cls, page: TradePage) -> Self:
         return cls(
-            run_id=page.run_id,
             total=page.total,
             offset=page.offset,
-            limit=page.limit,
             next_offset=page.next_offset,
             trades=[OptionsBacktestTradeResponse.from_stored(stored) for stored in page.trades],
         )
@@ -450,7 +425,6 @@ class OptionsBacktestSessionResponse(BaseModel):
     whose level comes from the leg's rule.
     """
 
-    run_id: int
     session_open_ms: Ms
     session_close_ms: Ms
     status: SessionStatusWord
@@ -485,7 +459,6 @@ class OptionsBacktestSessionResponse(BaseModel):
         session = stored.result
         outcome = session.outcome
         return cls(
-            run_id=record.header.record.id,
             session_open_ms=session.session_open_ms,
             session_close_ms=session.session_close_ms,
             status=outcome.status.value,  # type: ignore[arg-type]
@@ -517,11 +490,6 @@ class OptionsBacktestComparedRunResponse(BaseModel):
     id: int
     setup_name: str | None = None
     created_at_ms: Ms
-    first_session_open_ms: Ms
-    last_session_open_ms: Ms
-    sessions_requested: int
-    # The fee policy in a sentence, written when the run was made.
-    fee_policy: str
 
     @classmethod
     def from_header(cls, header: RunHeader) -> Self:
@@ -530,10 +498,6 @@ class OptionsBacktestComparedRunResponse(BaseModel):
             id=record.id,
             setup_name=record.setup_name,
             created_at_ms=record.created_at_ms,
-            first_session_open_ms=record.first_session_open_ms,
-            last_session_open_ms=record.last_session_open_ms,
-            sessions_requested=record.sessions_requested,
-            fee_policy=record.fee_policy_text,
         )
 
 
@@ -542,9 +506,6 @@ class OptionsBacktestSettingDifferenceResponse(BaseModel):
     ``a`` and ``b`` are each run's value in words ("not set" for a rule that is off, "not in this run" for a leg the run
     lacks). The settings were compared as validated objects, so ``0.3`` and ``0.3000`` are never a difference."""
 
-    setting: SettingWord
-    # The leg a setting belongs to; ``null`` for a setting of the whole run.
-    leg_id: str | None = None
     label: str
     a: str
     b: str
@@ -552,8 +513,6 @@ class OptionsBacktestSettingDifferenceResponse(BaseModel):
     @classmethod
     def from_difference(cls, difference: SettingDifference) -> Self:
         return cls(
-            setting=difference.setting.value,  # type: ignore[arg-type]
-            leg_id=difference.leg_id,
             label=difference.label,
             a=difference.a,
             b=difference.b,

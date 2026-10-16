@@ -80,6 +80,8 @@ from tests.broker.alpaca.clerk.live_envelope_fixtures import (
 )
 from tests.broker.v2panel.conftest import _FakeDeployRegistry
 
+pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+
 SID = "ema-shadow-1"
 # A calendar-derived instant, never a wall-clock read: 10:00 ET on a known
 # trading day, so the session window the panel reads is deterministic.
@@ -348,7 +350,6 @@ async def test_shadow_panel_lease_revival_uses_the_custody_namespace(
     )
     request = PanelActionRequest(
         action_id="reconcile_now",
-        revision=0,
         concurrency_token="shadow-lease",
         idempotency_key="shadow-lease",
     )

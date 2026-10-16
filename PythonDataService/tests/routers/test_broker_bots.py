@@ -38,6 +38,8 @@ from tests._helpers.bot_runner.doubles import _CustodyClerk
 from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
+pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+
 _SID = "alpaca-api-bot-1"
 _T0 = 1_700_000_000_000
 # Custody spells the Alpaca account number as the broker reports it; the

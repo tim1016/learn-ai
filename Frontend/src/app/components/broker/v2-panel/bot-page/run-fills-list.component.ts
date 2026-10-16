@@ -28,21 +28,22 @@ const INLINE_FILL_LIMIT = 4;
 })
 export class RunFillsListComponent {
   /** The run's newest fills, oldest first. */
-  readonly fills = input<readonly RunFillView[]>([]);
+  readonly fills = input<readonly RunFillView[] | null>(null);
   /** Every fill the run has, as the backend counts its trades. */
-  readonly fillCount = input(0);
+  readonly fillCount = input<number | null>(null);
   /** When the run started, int64 ms UTC; the list is dated by it. */
   readonly runStartedAtMs = input<number | null>(null);
   /** Name each fill's asset: for a bot that trades something else (#2912). */
   readonly showAsset = input(false);
 
-  protected readonly hasFills = computed(() => this.fills().length > 0);
-  protected readonly inlineFills = computed(() => this.fills().slice(-INLINE_FILL_LIMIT));
-  protected readonly hasMoreFills = computed(() => this.fillCount() > INLINE_FILL_LIMIT);
-  protected readonly shownWords = computed(() =>
-    this.fillCount() > this.fills().length
-      ? `the newest ${this.fills().length} of ${this.fillCount()} fills`
-      : `all ${this.fills().length} fills`);
+  protected readonly hasFills = computed(() => (this.fills()?.length ?? 0) > 0);
+  protected readonly inlineFills = computed(() => this.fills()?.slice(-INLINE_FILL_LIMIT) ?? []);
+  protected readonly hasMoreFills = computed(() => (this.fillCount() ?? 0) > INLINE_FILL_LIMIT);
+  protected readonly shownWords = computed(() => {
+    const shown = this.fills()?.length ?? 0;
+    const total = this.fillCount() ?? 0;
+    return total > shown ? `the newest ${shown} of ${total} fills` : `all ${shown} fills`;
+  });
   protected readonly allFillsOpen = signal(false);
 
   protected openAllFills(): void {

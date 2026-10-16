@@ -103,7 +103,7 @@ class SummaryEndpointMode(StrEnum):
 
 _AUTHORITY_STATE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 _DETAIL_MAX_CHARS = 200
-#: PRD #2182: the account nickname an agent may report alongside its lane
+#: #2182: the account nickname an agent may report alongside its lane
 #: summary, bounded the same way ``detail`` is — a short string, refused when
 #: oversized or not a string at all. Must equal ``NicknamePutRequest``'s
 #: ``max_length`` (``app/schemas/broker_configuration.py``) — the writer's own
@@ -113,7 +113,7 @@ _DETAIL_MAX_CHARS = 200
 #: (test_admission_probes_2026_09_13.py) pins the two together instead. Raise
 #: both together, never just one.
 _ACCOUNT_NICKNAME_MAX_CHARS = 120
-#: PRD #2560: the bot and attention counts a lane reports for its account
+#: #2560: the bot and attention counts a lane reports for its account
 #: card. Whole, non-negative and bounded like every other summary field; the
 #: bound is far above any real fleet and exists only so the key cannot carry
 #: an arbitrary number.
@@ -150,7 +150,7 @@ class ProviderSummaryObservation:
     #: accepts this key before any agent sends it, and an absent key parses
     #: exactly as it did before this field existed.
     account_nickname: str | None = None
-    #: The lane's own counts for its account card (PRD #2560): bots running
+    #: The lane's own counts for its account card (#2560): bots running
     #: in the lane's world, running Dry Runs, and the items its attention
     #: read lists. Each is absent when the lane could not count it this beat
     #: -- never reported as zero.

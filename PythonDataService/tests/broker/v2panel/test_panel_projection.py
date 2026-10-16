@@ -91,6 +91,7 @@ from app.services.broker_v2_panel import panel_data_source
 from app.services.broker_v2_panel.channel_health import evaluate_channel_health
 from app.services.broker_v2_panel.feed_continuity_projection import build_feed_continuity, build_startup_join
 from app.services.broker_v2_panel.panel_authority_guard import MixedAuthorityAggregateError
+from app.services.broker_v2_panel.panel_errors import PanelDataError
 from app.services.broker_v2_panel.panel_projection_service import (
     build_panel,
     open_pnl_fields,
@@ -405,8 +406,6 @@ def _panel(
         latest_decision=decision,
         last_bar_at_ms=last_bar_at_ms,
         now_ms=now_ms,
-
-
         sealed_program=sealed_program,
         program_build=program_build or _default_program_build(status.strategy_key),
         dry_run_activity=dry_run_activity,
@@ -675,7 +674,6 @@ def test_sqlite_adapter_replaces_legacy_custody_with_fold_projection() -> None:
                 broker_order_id="broker-1",
                 role="ENTRY",
                 broker_state="accepted",
-                submitted_at_ms=_NOW - 350,
                 updated_at_ms=_NOW - 300,
             ),
         ),
@@ -717,7 +715,6 @@ def test_sqlite_adapter_replaces_legacy_custody_with_fold_projection() -> None:
                 stopped_at_ms=None,
             ),
         ),
-        commands=(command,),
         operations=(operation,),
         working_order_refs=(),
         positions=(
@@ -731,16 +728,12 @@ def test_sqlite_adapter_replaces_legacy_custody_with_fold_projection() -> None:
         holds=(),
         uncertainties=(),
         latest_reconciliation=None,
-        terminal_receipts=(),
         guidance=ProjectionGuidance(
             headline="Account Clerk custody is healthy",
             explanation="SQLite has current custody truth.",
             scope="CUSTODY_SUBJECT",
             impact="Normal Clerk-governed controls remain available.",
             custody_owner="ACCOUNT_CLERK",
-            may_create_exposure=True,
-            available_safety_actions=("Reconcile now",),
-            action_required=False,
             next_step="No recovery action is required.",
         ),
         recovery_actions=(action,),
@@ -960,7 +953,6 @@ def test_sqlite_adapter_projects_execution_economics_and_durable_working_order_d
         broker_order_id="broker-googl",
         role="ENTRY",
         broker_state="partially_filled",
-        submitted_at_ms=_NOW - 900,
         updated_at_ms=_NOW - 300,
         symbol="GOOGL",
         side="buy",
@@ -1178,13 +1170,16 @@ def test_adapt_sqlite_panel_omits_sub_epsilon_exposure() -> None:
     )
 
     assert adapted.exposure == {}
+    archive = next(action for action in adapted.actions if action.action_id == "archive")
+    assert archive.enabled is True
+    assert archive.blockers == []
 
 
 def test_build_sqlite_catalog_omits_sub_epsilon_exposure_and_reports_flat() -> None:
     status = _status(running=False).model_copy(
         update={"strategy_label": "Deployment Validation"}
     )
-    projection = replace(_rail_projection(orders=()), runs=(), commands=(), operations=())
+    projection = replace(_rail_projection(orders=()), runs=(), operations=())
     economics = EconomicSnapshot(
         account_id=ACCT,
         strategy_instance_id=SID,
@@ -1235,7 +1230,7 @@ def test_build_sqlite_catalog_explains_a_crash_beside_the_crash_label() -> None:
             )
         }
     )
-    projection = replace(_rail_projection(orders=()), runs=(), commands=(), operations=())
+    projection = replace(_rail_projection(orders=()), runs=(), operations=())
     economics = EconomicSnapshot(
         account_id=ACCT,
         strategy_instance_id=SID,
@@ -1321,23 +1316,18 @@ def _rail_projection(
                 stopped_at_ms=None,
             ),
         ),
-        commands=(command,),
         operations=(operation,),
         working_order_refs=working_order_refs,
         positions=(),
         holds=(),
         uncertainties=(),
         latest_reconciliation=latest_reconciliation,
-        terminal_receipts=(),
         guidance=ProjectionGuidance(
             headline="Account Clerk custody is healthy",
             explanation="SQLite has current custody truth.",
             scope="CUSTODY_SUBJECT",
             impact="Normal Clerk-governed controls remain available.",
             custody_owner="ACCOUNT_CLERK",
-            may_create_exposure=True,
-            available_safety_actions=(),
-            action_required=False,
             next_step="No recovery action is required.",
         ),
         recovery_actions=(),
@@ -1354,7 +1344,6 @@ def test_sqlite_status_does_not_count_a_filled_entry_as_outstanding() -> None:
                 broker_order_id="broker-1",
                 role="ENTRY",
                 broker_state="filled",
-                submitted_at_ms=_NOW - 350,
                 updated_at_ms=_NOW - 300,
             ),
         ),
@@ -1379,7 +1368,6 @@ def test_sqlite_status_counts_a_working_entry_as_outstanding() -> None:
                 broker_order_id="broker-1",
                 role="ENTRY",
                 broker_state="accepted",
-                submitted_at_ms=_NOW - 350,
                 updated_at_ms=_NOW - 300,
             ),
         ),
@@ -1506,7 +1494,6 @@ def test_the_mission_verdict_carries_retry_eligibility(offset_ms: int) -> None:
         operator_impact="New exposure is paused for this strategy.",
         next_step="Let the Clerk retry after a fresh recovery check.",
         observed_at_ms=_NOW - 1_000,
-        evidence_age_ms=1_000,
         evidence_refs=("order:exit",),
         recovery_status=RecoveryStatus("allowed_from", "NO_SESSION_OPEN", "Waiting for the next session.", None, None, next_attempt_at_ms),
     )
@@ -1567,7 +1554,6 @@ def test_reconciled_station_requires_resolved_success_outcome() -> None:
             broker_order_id="broker-1",
             role="ENTRY",
             broker_state="accepted",
-            submitted_at_ms=_NOW - 350,
             updated_at_ms=_NOW - 300,
         ),
     )
@@ -1575,10 +1561,8 @@ def test_reconciled_station_requires_resolved_success_outcome() -> None:
         reconciliation_id="recon-1",
         effect_operation_id="effect:enter",
         order_ref="order:enter",
-        trigger="AUTOMATIC",
         attempted_at_ms=_NOW - 100,
         outcome="STILL_UNKNOWN",
-        evidence_age_ms=100,
         evidence_refs=(),
     )
     unresolved = adapt_sqlite_panel(
@@ -1607,7 +1591,6 @@ def test_fill_station_requires_actual_fill_not_a_terminal_broker_state() -> None
             broker_order_id="broker-1",
             role="ENTRY",
             broker_state="canceled",
-            submitted_at_ms=_NOW - 350,
             updated_at_ms=_NOW - 300,
         ),
     )
@@ -1624,7 +1607,6 @@ def test_fill_station_requires_actual_fill_not_a_terminal_broker_state() -> None
             broker_order_id="broker-1",
             role="ENTRY",
             broker_state="filled",
-            submitted_at_ms=_NOW - 350,
             updated_at_ms=_NOW - 300,
         ),
     )
@@ -1648,7 +1630,6 @@ def _rail_order(
         broker_order_id=broker_order_id,
         role="ENTRY",
         broker_state=broker_state,
-        submitted_at_ms=_NOW - 350,
         updated_at_ms=_NOW - 300,
         filled_quantity=filled_quantity,
         may_fill=may_fill,
@@ -2429,7 +2410,7 @@ def _stopped(**update: object) -> BotStatusView:
         ),
         pytest.param(
             _stopped(), _clerk_status(), (), {"SPY": 0.0},
-            [_served_archive(token="7e0bd848bccbd3ccfb31951e917f8597")],
+            [_served_archive(token="9a8f9b9530fb687e13bc07cfd1c5b9aa")],
             id="stopped-zero-quantity-row",
         ),
         pytest.param(
@@ -2471,9 +2452,8 @@ def test_the_served_archive_is_the_one_the_registry_presented(
 ) -> None:
     """#2635 moved archive out of the generic action registry and into the
     adapter; the owner sees the same action. Each expectation -- copy,
-    blockers, confirmation and token -- was captured from the registry build
-    before the move, and the stopped-flat token is the one every lane served
-    on 2026-09-30."""
+    blockers, confirmation and token -- is pinned here. A zero or dust
+    position has the same token as a flat bot because it does not block Clear."""
     served = adapt_sqlite_panel(
         _panel(status, clerk, exposure=exposure),
         _rail_projection(orders=(), working_order_refs=working_order_refs),
@@ -2792,8 +2772,12 @@ def test_a_dry_run_panel_with_activity_from_a_different_synthetic_authority_is_n
     )
     projection = replace(_rail_projection(orders=()), account_id=f"sim:{SID}")
 
-    with pytest.raises(MixedAuthorityAggregateError):
+    with pytest.raises(MixedAuthorityAggregateError) as refused:
         adapt_sqlite_panel(base, projection)
+
+    assert isinstance(refused.value, PanelDataError)
+    assert refused.value.http_status == 503
+    assert "sim:other-bot" in (refused.value.detail or "")
 
 
 _SHADOW_ACCT = "shadow:9LIVE0001"
@@ -3061,7 +3045,6 @@ def test_sqlite_adapter_stopped_bot_still_holding_shares_has_no_primary_action()
         operator_impact="New exposure is paused for this strategy.",
         next_step="Reconcile, then flatten.",
         observed_at_ms=_NOW - 1_000,
-        evidence_age_ms=1_000,
         evidence_refs=(),
     )
     base = _panel(_status(running=False), _clerk_status(), exposure={})
@@ -3108,7 +3091,6 @@ def test_warmup_join_projection_names_the_filled_window() -> None:
 
     assert view is not None
     assert (view.state, view.label) == ("filled", "Filled 10 missing bars from IBKR history")
-    assert view.warmed_from_history_only is False
     assert build_warmup_join(None) is None
 
 
@@ -3163,8 +3145,8 @@ def test_a_stopped_run_that_was_never_refused_shows_no_preparation() -> None:
 def _exposure_projection(*, orders: tuple[ProjectedOrder, ...]) -> ClerkProjection:
     return _rail_projection(orders=orders, latest_reconciliation=ProjectedReconciliation(
         reconciliation_id="reconciliation:fresh", effect_operation_id=None, order_ref=None,
-        trigger="sweep", attempted_at_ms=_NOW - 100, outcome="RESOLVED_SUCCESS",
-        evidence_age_ms=100, evidence_refs=(),
+        attempted_at_ms=_NOW - 100, outcome="RESOLVED_SUCCESS",
+        evidence_refs=(),
     ))
 
 
@@ -3186,7 +3168,6 @@ def _entry_order(broker_state: str = "new") -> ProjectedOrder:
         broker_order_id="broker:entry",
         role="ENTRY",
         broker_state=broker_state,
-        submitted_at_ms=_NOW - 400,
         updated_at_ms=_NOW - 300,
         symbol="SPY",
         side="buy",
@@ -3258,7 +3239,7 @@ def test_a_flat_refusal_with_a_working_entry_order_warns_it_can_still_fill() -> 
 
 
 def test_a_refusal_the_clerk_cannot_vouch_for_says_the_position_is_unverified() -> None:
-    projection = replace(_exposure_projection(orders=()), positions=_held(3.0), authority_health="degraded_to_mirror")
+    projection = replace(_exposure_projection(orders=()), positions=_held(3.0), authority_health="failed")
 
     assert _notices(_refused_panel(), projection) == [
         ("position_unverified", "Position could not be verified")
@@ -3272,7 +3253,7 @@ def test_every_abnormal_end_reports_reconciled_exposure(kind: str, reason: str, 
     projection = replace(
         _exposure_projection(orders=(_entry_order(),) if working_entry else ()),
         positions=_held(3.0) if exposure == "held" else (),
-        authority_health="degraded_to_mirror" if exposure == "unknown" else "healthy",
+        authority_health="failed" if exposure == "unknown" else "healthy",
     )
     notices = _notices(_refused_panel(reason, kind), projection)
     expected = []
@@ -3342,6 +3323,25 @@ def test_an_entry_order_the_broker_has_not_finished_is_warned_about(broker_state
     assert _notices(_refused_panel(), _exposure_projection(orders=(order,))) == [
         ("entry_order_working", "An entry order is still working")
     ]
+
+
+@pytest.mark.parametrize("broker_state", ["suspended", "accepted_for_bidding", "pending_replace", "calculated", "stopped"])
+def test_panel_lists_broker_identified_orders_that_can_still_fill(broker_state: str) -> None:
+    order = _entry_order(broker_state)
+
+    panel = adapt_sqlite_panel(_refused_panel(), _exposure_projection(orders=(order,)))
+
+    assert [(item.order_ref, item.status) for item in panel.working_orders] == [
+        (order.order_ref, broker_state)
+    ]
+
+
+def test_panel_does_not_list_a_terminal_broker_order_as_working() -> None:
+    order = replace(_entry_order("canceled"), may_fill=False)
+
+    panel = adapt_sqlite_panel(_refused_panel(), _exposure_projection(orders=(order,)))
+
+    assert panel.working_orders == []
 
 
 def test_a_finished_entry_order_is_not_warned_about() -> None:
@@ -3471,7 +3471,7 @@ def test_a_pass_that_cannot_prove_the_bot_leaves_its_position_unverified(proof: 
 
 
 def test_a_clean_pass_never_vouches_over_an_unhealthy_authority() -> None:
-    projection = _unreceipted_projection(authority_health="degraded_to_mirror")
+    projection = _unreceipted_projection(authority_health="failed")
 
     assert _notices(_refused_panel("CRASHED"), projection, pass_proof=_pass_proof()) == [
         ("position_unverified", "Position could not be verified")
@@ -3507,7 +3507,7 @@ def test_sqlite_status_has_no_last_check_before_any_receipt_or_clean_pass() -> N
 
 def _account_hold(reason_code: str) -> ProjectedHold:
     return ProjectedHold(
-        hold_id=f"hold:{reason_code}", scope="ACCOUNT", strategy_instance_id=None,
+        scope="ACCOUNT", strategy_instance_id=None,
         reason_code=reason_code, opened_at_ms=_NOW - 9_000, evidence_refs=(),
     )
 
@@ -3569,7 +3569,7 @@ def test_an_open_uncertainty_keeps_a_resolved_check_from_reading_clean() -> None
         strategy_instance_id=SID, reason_code="ORDER_OUTCOME_UNKNOWN",
         headline="An order's outcome is unknown", explanation="The Clerk could not confirm it.",
         operator_impact="New exposure is paused.", next_step="Reconcile now.",
-        observed_at_ms=_NOW - 1_000, evidence_age_ms=1_000, evidence_refs=("order:enter",),
+        observed_at_ms=_NOW - 1_000, evidence_refs=("order:enter",),
     )
     projection = replace(_exposure_projection(orders=()), uncertainties=(uncertainty,))
 

@@ -89,7 +89,6 @@ describe('operationUrl', () => {
       revision: 'rev-1',
       transactionId: 'txn-1',
       externalOrderId: 'ext-1',
-      commandId: 'cmd-1',
       programKey: 'program-1',
       submissionKey: 'submission-1',
       symbol: 'SPY',

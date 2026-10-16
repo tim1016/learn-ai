@@ -50,6 +50,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     ExecutionLeaseLost,
     ExecutionLeaseLostAfterBrokerIO,
+    RepositoryPoisoned,
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.lean_sidecar.trading_calendar import current_trading_session_window
@@ -67,12 +68,14 @@ from app.schemas.broker_v2_panel import (
 )
 from app.schemas.decision_explanation import DecisionExplanationRecord
 from app.services.broker_v2_panel.action_execution_service import (
+    UNKNOWN_FIRST_ATTEMPT_DETAIL,
     ActionNotAvailableError,
     ActionOutcomeUnknownError,
     IdempotencyStore,
     StaleRevisionError,
     get_idempotency_store,
     outcome_unknown_after_broker_io,
+    outcome_unknown_after_performer_failure,
 )
 from app.services.broker_v2_panel.catalog_projection_service import (
     SqliteCatalogProjectionUnavailable,
@@ -313,7 +316,7 @@ async def read_sqlite_clerk_status(
     """One authority's Clerk card facts: the account's, or a Dry Run's own ``sim:`` Clerk.
 
     A Dry Run's card names its simulated account, never the real one it is
-    listed under (hurdle H33).
+    listed under.
     """
     facade = facade or active_sqlite_facade(broker)
     if facade is None:
@@ -541,10 +544,56 @@ def read_sqlite_decision_receipts(
     # call as a durable `SqliteDecisionReceipts.append` mutation; this is a
     # plain in-memory list of already-read display DTOs, not a repository
     # handle.
-    adapted_views: list[DecisionReceipt] = [
-        _decision_receipt_from_resource(resource) for resource in resources
-    ]
+    adapted_views: list[DecisionReceipt] = []
+    for resource in resources:
+        try:
+            adapted_views.append(_decision_receipt_from_resource(resource))
+        except SqlitePanelDecisionUnavailable as exc:
+            # A decision row is display evidence, and the page that shows it
+            # is the operator's control surface: one receipt this build cannot
+            # read is shown as unreadable, never allowed to take every other
+            # row and every action down with it.
+            logger.warning(
+                "A decision receipt could not be read; it is shown as unreadable",
+                extra={
+                    "action": "panel_decision_receipt_unreadable",
+                    "strategy_instance_id": strategy_instance_id,
+                    "receipt_seq": resource.seq,
+                    "reason": str(exc),
+                },
+            )
+            unreadable = _unreadable_decision_receipt(resource)
+            if unreadable is not None:
+                adapted_views.append(unreadable)
     return adapted_views
+
+
+#: The reason a decision row carries when its stored receipt cannot be read.
+UNREADABLE_RECEIPT_REASON_CODE = "RECEIPT_UNREADABLE"
+
+
+def _unreadable_decision_receipt(resource: DecisionReceiptResource) -> DecisionReceipt | None:
+    """The row for a receipt this build cannot read: what its own columns say, and nothing of its facts.
+
+    ``None`` when even its columns say what this build cannot name (an
+    outcome from a newer build): that row is left out, as an explanation this
+    build cannot read is (``_facts_explanation``).
+    """
+    try:
+        return DecisionReceipt.model_validate(
+            {
+                "seq": resource.seq,
+                "ts_ms": resource.observed_at_ms,
+                "bar_ref": "",
+                "outcome": resource.outcome,
+                "reason_code": UNREADABLE_RECEIPT_REASON_CODE,
+                "intent_id": resource.intent_id or "",
+                "order_ref": resource.order_ref or "",
+                "explanation_unreadable": True,
+            }
+        )
+    except ValueError:
+        return None
 
 
 def _decision_receipt_from_resource(
@@ -931,7 +980,7 @@ async def execute_sqlite_panel_action(
     (``bot_custody``'s one selection): a Dry Run's own
     ``sim:`` Clerk, whose ports are its simulator, or the account's. Acting
     anywhere else is how a Dry Run's recovery used to ask the real account
-    about a bot it has never held (hurdle H33). ``None`` means no SQLite
+    about a bot it has never held. ``None`` means no SQLite
     authority is selected, and the caller's legacy performers apply.
     """
     if facade is None:
@@ -1089,7 +1138,7 @@ async def execute_sqlite_panel_action(
         # outcome unknown, key burned, no retry -- the release branch below
         # is only honest for a lease lost before any mutation.
         await ledger.fail(
-            strategy_instance_id, request.action_id, request.idempotency_key, str(exc)
+            strategy_instance_id, request.action_id, request.idempotency_key, UNKNOWN_FIRST_ATTEMPT_DETAIL
         )
         raise outcome_unknown_after_broker_io(exc) from exc
     except Exception as exc:
@@ -1122,11 +1171,20 @@ async def execute_sqlite_panel_action(
             # Other attempted actions/errors have no equivalent committed-command
             # replay contract, so a blind same-key retry remains unsafe.
             await ledger.fail(
-                strategy_instance_id, request.action_id, request.idempotency_key, str(exc)
+                strategy_instance_id, request.action_id, request.idempotency_key, UNKNOWN_FIRST_ATTEMPT_DETAIL
             )
         if isinstance(exc, RecoveryExecutionError):
             raise ActionNotAvailableError(str(exc)) from exc
-        raise
+        if isinstance(exc, (ExecutionLeaseLost, RepositoryPoisoned, SqlitePanelBotNotFound)):
+            # Answered by the caller from the raw condition: the ADR 0050
+            # revival names the lost lease or the poison
+            # (panel_data_source.run_action), and a bot that vanished is 404.
+            raise
+        # Whatever else a started performer raised: the shared executor's
+        # typed unknown outcome, never the exception's own text as a 500.
+        raise outcome_unknown_after_performer_failure(
+            exc, action_id=request.action_id, sid=strategy_instance_id
+        ) from exc
 
     outcome = PanelActionResult(
         action_id=request.action_id,
@@ -1204,7 +1262,7 @@ async def read_account_projection(facade: SqliteAlpacaClerkFacade) -> ClerkProje
 
 @dataclass(frozen=True)
 class HomeRosterBot:
-    """Where one live registration sits on its account's Home (PRD #2560 D7).
+    """Where one live registration sits on its account's Home (#2560 D7).
 
     ``symbol`` is what the bot trades, the asset the Clerk registered it
     under: its readers ask what a bot holds or sends orders in, never what it
@@ -1396,7 +1454,7 @@ def _unreadable_evidence_notice(sid: str, symbol: str, account_id: str) -> Expos
     return ExposureNoticeView(
         strategy_instance_id=sid, symbol=symbol,
         kind="position_unverified", label="Position could not be verified",
-        # Every fix it names is in the app (hurdle H29).
+        # Every fix it names is in the app.
         explanation=(
             "This bot's lifecycle or custody evidence could not be read, so the app cannot vouch "
             "for what it holds. Reconcile now re-reads the account at Alpaca; Flatten becomes "

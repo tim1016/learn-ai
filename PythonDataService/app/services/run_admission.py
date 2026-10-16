@@ -308,7 +308,7 @@ def evaluate_run_admission(
     # `shape_program_leg` on the synthetic authority, so admitting one with
     # unset allowances started a run that then rejected every extended decision
     # it made. The refusals are `program_leg.py`'s named values, so the gate and
-    # the receipt say the same thing (thermo MAJOR 3; plan R8 as amended).
+    # the receipt say the same thing.
     extended_refusal = bot.extended_hours.refusal
 
     if extended_refusal is not None:

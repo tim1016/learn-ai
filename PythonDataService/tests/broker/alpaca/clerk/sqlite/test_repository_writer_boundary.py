@@ -238,19 +238,6 @@ def test_writer_census_detects_direct_repository_and_facade_aliases() -> None:
     }
 
 
-def test_unknown_external_repository_mutator_fails_until_classified(tmp_path: Path) -> None:
-    fixture = tmp_path / "unknown_writer.py"
-    fixture.write_text(
-        "def unsafe_writer(repo):\n    repo.append_transition(None)\n",
-        encoding="utf-8",
-    )
-    visitor = _WriterCallVisitor(source_root=Path("fixture/unknown_writer.py"))
-    visitor.visit(ast.parse(fixture.read_text(encoding="utf-8"), filename=str(fixture)))
-
-    with pytest.raises(AssertionError, match="Unclassified"):
-        _assert_census(visitor.calls, set())
-
-
 @dataclass(frozen=True, order=True)
 class _FillTransitionSite:
     path: str

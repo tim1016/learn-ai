@@ -913,7 +913,7 @@ class TradeUpdatesConsumer:
         def _injected_source() -> AsyncIterator[bytes | str]:
             return _inject_frame_faults(_socket_source())
 
-        # Dev-only fault-injection seam (PRD #1354): wrap the real socket source
+        # Dev-only fault-injection seam (#1354): wrap the real socket source
         # so armed frame faults interleave through the SAME consumer path. The
         # wrap is applied ONLY when the seam is permitted (off by default,
         # paper-only), so a normal run's hot path has zero injection code.
@@ -1007,7 +1007,7 @@ async def _inject_frame_faults(
 ) -> AsyncIterator[bytes | str]:
     """Interleave armed dev-only fault frames into a real inbound frame stream.
 
-    Wraps a real frame source (PRD #1354). After each real frame it drains any
+    Wraps a real frame source (#1354). After each real frame it drains any
     armed frame faults and yields the crafted frames, so they thread through the
     SAME ``_handle_frame`` path (capture → parse → live_idempotent dedup →
     attribution → journal) as socket frames. The last real ``trade_updates``

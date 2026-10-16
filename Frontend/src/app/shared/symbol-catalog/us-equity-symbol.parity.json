@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "canonical": "PythonDataService/app/broker/contract/models.py::BrokerOrderLeg.symbol",
+  "cases": [
+    { "symbol": "A", "accepted": true },
+    { "symbol": "SPY", "accepted": true },
+    { "symbol": "BRK.B", "accepted": true },
+    { "symbol": "BRK-B", "accepted": true },
+    { "symbol": "ABCDE", "accepted": true },
+    { "symbol": "ABCDE.F", "accepted": true },
+    { "symbol": "", "accepted": false },
+    { "symbol": "abcdef", "accepted": false },
+    { "symbol": "ABCDEF", "accepted": false },
+    { "symbol": "AB.CD", "accepted": false },
+    { "symbol": "A/BC", "accepted": false },
+    { "symbol": " SPY", "accepted": false },
+    { "symbol": "SPY ", "accepted": false },
+    { "symbol": "SPY1", "accepted": false },
+    { "symbol": "A\n", "accepted": false },
+    { "symbol": "SPY\n", "accepted": false }
+  ]
+}

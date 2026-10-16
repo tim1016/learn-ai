@@ -281,7 +281,7 @@ async def _run(panel: BotPanelView, action_id: str, key: str):
     action = _action(panel, action_id)
     return await panel_data_source.run_action(
         "alpaca", ACCT, SID,
-        PanelActionRequest(action_id=action_id, revision=panel.revision,
+        PanelActionRequest(action_id=action_id,
                            concurrency_token=action.concurrency_token, idempotency_key=key),
         operator_identity="owner",
     )

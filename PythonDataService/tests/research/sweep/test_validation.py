@@ -42,6 +42,19 @@ def test_valid_corners_with_an_invalid_interior_combination_are_refused() -> Non
         _validate(short_window=ValueListRange((10.0, 20.0)), long_window=ValueListRange((15.0, 30.0)))
 
 
+def test_a_strategy_rule_refuses_an_invalid_grid_candidate_before_launch() -> None:
+    registration = _STRATEGY_REGISTRY["spy_strategy_a"]
+
+    with pytest.raises(GridInvalidError, match=r"macd_fast \(30\) must be less than macd_slow \(26\)"):
+        validate_grid(
+            registration,
+            strategy_key="spy_strategy_a",
+            symbol="SPY",
+            param_ranges={"macd_fast": ValueListRange((12.0, 30.0))},
+            limit=10,
+        )
+
+
 def test_the_limit_is_on_total_backtests_not_combinations() -> None:
     _validate(limit=10, short_window=ValueListRange((5.0, 6.0)), long_window=ValueListRange((20.0, 30.0, 40.0, 50.0, 60.0)))
 

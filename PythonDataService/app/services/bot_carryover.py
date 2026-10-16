@@ -13,13 +13,13 @@ import json
 import logging
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.broker.alpaca.clerk.models import InstanceCustodyProof
 from app.engine.live.run_status import _atomic_write_json
-from app.schemas.action_plan import ActionPlan
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 logger = logging.getLogger(__name__)
 
@@ -33,15 +33,7 @@ StopCustodyOutcome = Literal[
 
 class CarryoverBinding(Protocol):
     strategy_instance_id: str
-    broker: str
-    symbol: str
-    use_rth: bool
-    mode: Literal["log_only", "dry_run", "trade"]
-    quantity: int
     carryover_policy: Literal["FORBID", "ALLOW"]
-    evidence_override: object | None
-    action_plan: ActionPlan
-    strategy_params: dict[str, Any] | None
     run_id: str
 
     def model_dump(self, **kwargs) -> dict: ...
@@ -64,7 +56,7 @@ class CarryoverStopCheckpoint(BaseModel):
     exposure: dict[str, float]
     approved: bool
     outcome: StopCustodyOutcome
-    recorded_at_ms: int
+    recorded_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
 
 
 def configuration_hash(binding: CarryoverBinding) -> str:

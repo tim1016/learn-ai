@@ -22,11 +22,9 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     DatabaseMissingAfterEstablishment,
 )
-from app.engine.live.account_registry import (
-    AccountInstanceBinding,
-    bot_order_namespace_for_instance,
-)
+from app.engine.live.account_registry import AccountInstanceBinding
 from app.engine.live.bot_lifecycle_state import BotLifecycleStateRepo, stable_bot_lifecycle_state_path
+from app.engine.live.order_identity import build_bot_order_namespace
 from app.services.bot_binding_repository import (
     CURRENT_RUN_FILENAME,
     BrokerBotBinding,
@@ -52,7 +50,7 @@ def _register_runner_catalog(runner_root: Path, strategy_instance_id: str) -> Pa
             account_id=ACCOUNT_ID,
             strategy_instance_id=strategy_instance_id,
             run_id=f"run-{strategy_instance_id}",
-            bot_order_namespace=bot_order_namespace_for_instance(strategy_instance_id),
+            bot_order_namespace=build_bot_order_namespace(strategy_instance_id),
             lifecycle_state="ACTIVE",
             recorded_at_ms=NOW_MS,
             source="dev-reset.test",

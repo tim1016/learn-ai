@@ -1843,46 +1843,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/{broker}/clerks": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * One broker's clerk lanes
-         * @description The same projection filtered to one provider.
-         */
-        get: operations["list_broker_clerks_for_broker_api_brokers__broker__clerks_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * One clerk lane's directory entry
-         * @description Lifecycle, session, capabilities and provider summary for one lane.
-         */
-        get: operations["describe_broker_clerk_api_brokers__broker__clerks__clerk_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/brokers/{broker}/clerks/{clerk_id}/account": {
         parameters: {
             query?: never;
@@ -3707,46 +3667,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/{broker}/clerks/{clerk_id}/market-status-snapshot": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Market Status Read
-         * @description Fleet-routed GET /market-status-snapshot (market_status_read).
-         */
-        get: operations["fleet_market_status_read_api_brokers__broker__clerks__clerk_id__market_status_snapshot_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/orders": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Orders Read
-         * @description Fleet-routed GET /orders (orders_read).
-         */
-        get: operations["fleet_orders_read_api_brokers__broker__clerks__clerk_id__orders_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/brokers/{broker}/clerks/{clerk_id}/portfolio-history": {
         parameters: {
             query?: never;
@@ -3779,26 +3699,6 @@ export interface paths {
          * @description Fleet-routed GET /portfolio-history-proof (account_read).
          */
         get: operations["fleet_portfolio_history_proof_read_api_brokers__broker__clerks__clerk_id__portfolio_history_proof_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/positions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Positions Read
-         * @description Fleet-routed GET /positions (positions_read).
-         */
-        get: operations["fleet_positions_read_api_brokers__broker__clerks__clerk_id__positions_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3977,23 +3877,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/{broker}/orders": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Orders */
-        get: operations["list_orders_api_brokers__broker__orders_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/brokers/{broker}/panel-profile": {
         parameters: {
             query?: never;
@@ -4043,23 +3926,6 @@ export interface paths {
          * @description Bundle one C1 history snapshot with independent C2/C3 proof when available.
          */
         get: operations["get_portfolio_history_proof_api_brokers__broker__portfolio_history_proof_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/positions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Positions */
-        get: operations["list_positions_api_brokers__broker__positions_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -7465,7 +7331,7 @@ export interface components {
          *     lineage: it names the bot this one follows and grants it nothing.
          */
         AlpacaDeploySubmission: {
-            budget?: components["schemas"]["DeploymentBudgetInput"] | null;
+            budget: components["schemas"]["DeploymentBudgetInput"];
             /**
              * Carryover Policy
              * @default FORBID
@@ -7626,60 +7492,6 @@ export interface components {
              * @enum {string}
              */
             scope: "strategy" | "account" | "broker";
-        };
-        /**
-         * AlpacaPaperDeployReceipt
-         * @description Backend-authored terminal receipt for one accepted deployment.
-         */
-        AlpacaPaperDeployReceipt: {
-            /** Account Id */
-            account_id: string;
-            action_plan: components["schemas"]["ActionPlan"];
-            admission: components["schemas"]["RunAdmissionDecision"];
-            bot: components["schemas"]["BotStatusView"];
-            /**
-             * Carryover Policy
-             * @enum {string}
-             */
-            carryover_policy: "FORBID" | "ALLOW";
-            evidence_override?: components["schemas"]["AlpacaPaperEvidenceOverride"] | null;
-            /**
-             * Execution Mode
-             * @default paper
-             * @enum {string}
-             */
-            execution_mode?: "paper" | "dry_run" | "shadow" | "live";
-            /** Explanation */
-            explanation: string;
-            /** Message */
-            message: string;
-            /** Next Action */
-            next_action: string;
-            /**
-             * Outcome
-             * @default success
-             * @constant
-             */
-            outcome?: "success";
-            /** Panel Path */
-            panel_path: string;
-            /** Parameters */
-            parameters?: Record<string, never>;
-            /**
-             * Parameters Diverge From Defaults
-             * @default []
-             */
-            parameters_diverge_from_defaults?: string[];
-            /** Receipt Id */
-            receipt_id: string;
-            /** Recorded At Ms */
-            recorded_at_ms: number;
-            sizing: components["schemas"]["AlpacaPaperSizingSelection"];
-            /**
-             * Status
-             * @constant
-             */
-            status: "deployed";
         };
         /**
          * AlpacaPaperDeployRequest
@@ -8839,23 +8651,6 @@ export interface components {
             trades?: components["schemas"]["TradesOptions-Output"] | null;
         };
         /**
-         * BotDutyOutcomeView
-         * @description Durable terminal duty evidence rendered by the operator surface.
-         */
-        BotDutyOutcomeView: {
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "STOPPED" | "HALTED" | "CRASHED" | "FAILED_LAUNCH" | "EXITED_UNVERIFIED" | "RETIRED";
-            /** Reason Code */
-            reason_code: string;
-            /** Recorded At Ms */
-            recorded_at_ms: number;
-            /** Run Id */
-            run_id?: string | null;
-        };
-        /**
          * BotEndInput
          * @description The owner's choice of end, as Deploy and the bot panel send it.
          *
@@ -9299,60 +9094,6 @@ export interface components {
             terminal_outcome: components["schemas"]["BotRunTerminalOutcomeView"] | null;
         };
         /**
-         * BotStatusView
-         * @description One bot's roster row: broker-tagged binding + artifact-derived state.
-         */
-        BotStatusView: {
-            /** Active Run Id */
-            active_run_id: string | null;
-            /** Binding Created At Ms */
-            binding_created_at_ms: number;
-            /** Broker */
-            broker: string;
-            /**
-             * Carryover Policy
-             * @default FORBID
-             * @enum {string}
-             */
-            carryover_policy?: "FORBID" | "ALLOW";
-            /**
-             * Desired State
-             * @enum {string}
-             */
-            desired_state: "RUNNING" | "STOPPED";
-            duty_outcome: components["schemas"]["BotDutyOutcomeView"] | null;
-            evidence_override?: components["schemas"]["AlpacaPaperEvidenceOverride"] | null;
-            /** Last Transition At Ms */
-            last_transition_at_ms: number | null;
-            /**
-             * Mode
-             * @enum {string}
-             */
-            mode: "log_only" | "dry_run" | "trade";
-            /**
-             * Phase
-             * @enum {string}
-             */
-            phase: "OFF_DUTY" | "ON_DUTY" | "RETIRED";
-            /** Quantity */
-            quantity: number | null;
-            /** Running */
-            running: boolean;
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-            /**
-             * Strategy Key
-             * @default deployment_validation
-             */
-            strategy_key?: string;
-            /** Strategy Label */
-            strategy_label?: string | null;
-            /** Symbol */
-            symbol: string;
-            traded?: components["schemas"]["TradedInstrumentView"] | null;
-            traded_asset_acknowledgement?: components["schemas"]["UntestedTradedAssetAcknowledgement"] | null;
-        };
-        /**
          * BreachProbability
          * @description Probability that *any* simulation hit a drawdown >= threshold.
          *
@@ -9493,92 +9234,6 @@ export interface components {
             title: string;
         };
         /**
-         * BrokerOrder
-         * @description An order and its status, for the recent-orders table.
-         */
-        BrokerOrder: {
-            /** Asset Class */
-            asset_class: string | null;
-            /** Broker */
-            broker: string;
-            /** Canceled At Ms */
-            canceled_at_ms: number | null;
-            /** Client Order Id */
-            client_order_id: string | null;
-            /** Created At Ms */
-            created_at_ms: number | null;
-            /** Events */
-            events?: components["schemas"]["BrokerOrderEvent"][];
-            /** Expired At Ms */
-            expired_at_ms: number | null;
-            /**
-             * Extended Hours
-             * @default false
-             */
-            extended_hours?: boolean;
-            /** Fill Latency Seconds */
-            fill_latency_seconds?: number | null;
-            /** Filled At Ms */
-            filled_at_ms: number | null;
-            /** Filled Avg Price */
-            filled_avg_price: number | null;
-            /** Filled Quantity */
-            filled_quantity: number;
-            /** Limit Price */
-            limit_price: number | null;
-            /** Observed At Ms */
-            observed_at_ms: number;
-            /** Order Id */
-            order_id: string;
-            /** Order Type */
-            order_type: string;
-            /** Quantity */
-            quantity: number | null;
-            /** Replaced By */
-            replaced_by?: string | null;
-            /** Replaces */
-            replaces?: string | null;
-            /** Side */
-            side: string;
-            /** Status */
-            status: string;
-            /** Stop Price */
-            stop_price: number | null;
-            /** Submitted At Ms */
-            submitted_at_ms: number | null;
-            /** Symbol */
-            symbol: string;
-            /** Time In Force */
-            time_in_force: string;
-            /**
-             * Unreadable Fields
-             * @default []
-             */
-            unreadable_fields?: string[];
-            /** Updated At Ms */
-            updated_at_ms: number | null;
-        };
-        /**
-         * BrokerOrderEvent
-         * @description A lifecycle event on an order (fill/partial-fill/cancel/...).
-         *
-         *     Phase-1 REST orders carry only their own lifecycle timestamps, from which
-         *     the adapter synthesizes a fill event when the order reports a fill. The
-         *     richer per-event stream arrives with the phase-2 ``trade_updates`` consumer.
-         */
-        BrokerOrderEvent: {
-            /** Event Type */
-            event_type: string;
-            /** Execution Id */
-            execution_id?: string | null;
-            /** Occurred At Ms */
-            occurred_at_ms: number;
-            /** Price */
-            price: number | null;
-            /** Quantity */
-            quantity: number | null;
-        };
-        /**
          * BrokerOrderLeg
          * @description One equity leg of an order request (broker-neutral).
          *
@@ -9629,44 +9284,6 @@ export interface components {
             timeframe: string;
             /** Timestamps */
             timestamps: number[];
-        };
-        /**
-         * BrokerPosition
-         * @description A single open position (symbol, quantity, entry, value, unrealized PnL).
-         *
-         *     ``prior_close_price`` is the broker's price for the instrument at the
-         *     previous regular-session close -- the same close the account's
-         *     previous-close equity describes -- or ``None`` when the broker gives none.
-         */
-        BrokerPosition: {
-            /** Asset Class */
-            asset_class: string | null;
-            /** Asset Id */
-            asset_id: string | null;
-            /** Average Entry Price */
-            average_entry_price: number;
-            /** Broker */
-            broker: string;
-            /** Cost Basis */
-            cost_basis: number;
-            /** Current Price */
-            current_price: number | null;
-            /** Market Value */
-            market_value: number;
-            /** Observed At Ms */
-            observed_at_ms: number;
-            /** Prior Close Price */
-            prior_close_price?: number | null;
-            /** Quantity */
-            quantity: number;
-            /** Side */
-            side: string;
-            /** Symbol */
-            symbol: string;
-            /** Unrealized Pl */
-            unrealized_pl: number;
-            /** Unrealized Plpc */
-            unrealized_plpc: number | null;
         };
         /** BudgetAuthorityApplyRequest */
         BudgetAuthorityApplyRequest: {
@@ -10675,24 +10292,6 @@ export interface components {
             reconciliation_verdict_label: string | null;
         };
         /**
-         * ClerkCustodyDurations
-         * @description Measured same-clock durations for one Clerk-owned intent.
-         */
-        ClerkCustodyDurations: {
-            /** A0 To Broker Write Ms */
-            a0_to_broker_write_ms?: number | null;
-            /** Broker Return To First Callback Ms */
-            broker_return_to_first_callback_ms?: number | null;
-            /** Broker Write To Return Ms */
-            broker_write_to_return_ms?: number | null;
-            /** Intake To A0 Ms */
-            intake_to_a0_ms?: number | null;
-            /** Request To Intake Ms */
-            request_to_intake_ms?: number | null;
-            /** Terminal Age Ms */
-            terminal_age_ms?: number | null;
-        };
-        /**
          * ClerkCustodyTimeline
          * @description Distinct source, arrival, and durable clocks for one intent lifecycle.
          */
@@ -10701,15 +10300,8 @@ export interface components {
             a0_custody_accepted_at_ms?: number | null;
             /** Broker Ack Recorded At Ms */
             broker_ack_recorded_at_ms?: number | null;
-            /** Broker Call Returned At Ms */
-            broker_call_returned_at_ms?: number | null;
-            /** Broker Write Started At Ms */
-            broker_write_started_at_ms?: number | null;
             /** Clerk Intake Admitted At Ms */
             clerk_intake_admitted_at_ms?: number | null;
-            /** Clerk Request Received At Ms */
-            clerk_request_received_at_ms?: number | null;
-            durations?: components["schemas"]["ClerkCustodyDurations"];
             /** Earliest Broker Source At Ms */
             earliest_broker_source_at_ms?: number | null;
             /** Economic Terminal Recorded At Ms */
@@ -10718,8 +10310,6 @@ export interface components {
             first_callback_arrived_at_ms?: number | null;
             /** First Callback Recorded At Ms */
             first_callback_recorded_at_ms?: number | null;
-            /** Inbox Fsynced At Ms */
-            inbox_fsynced_at_ms?: number | null;
             /** Intent Created At Ms */
             intent_created_at_ms?: number | null;
         };
@@ -10755,12 +10345,8 @@ export interface components {
             limit_price?: number | null;
             /** Order Type */
             order_type?: string | null;
-            /** Outside Rth */
-            outside_rth?: boolean | null;
             /** Quantity */
             quantity?: number | null;
-            /** Sec Type */
-            sec_type?: string | null;
             /** Stop Price */
             stop_price?: number | null;
             /** Symbol */
@@ -10781,11 +10367,9 @@ export interface components {
              * Authority Health
              * @enum {string}
              */
-            authority_health: "healthy" | "degraded_to_mirror" | "failed";
+            authority_health: "healthy" | "failed";
             /** Authority Health Reason */
             authority_health_reason: string | null;
-            /** Commands */
-            commands: components["schemas"]["ProjectedCommandResponse"][];
             /** Control Revision */
             control_revision: number;
             /** Custody Owner */
@@ -10810,8 +10394,6 @@ export interface components {
             runs: components["schemas"]["ProjectedRunResponse"][];
             /** Strategy Instance Id */
             strategy_instance_id: string | null;
-            /** Terminal Receipts */
-            terminal_receipts: components["schemas"]["ProjectedReceiptResponse"][];
             /** Uncertainties */
             uncertainties: components["schemas"]["ProjectedUncertaintyResponse"][];
         };
@@ -10884,7 +10466,9 @@ export interface components {
             /** Native Order Id */
             native_order_id?: string | null;
             /** Receipt */
-            receipt?: Record<string, never>;
+            receipt?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
             /** Recorded At Ms */
             recorded_at_ms: number;
         };
@@ -10893,8 +10477,6 @@ export interface components {
          * @description One bounded keyset page, with backend-owned projection status.
          */
         ClerkTransactionHistoryResponse: {
-            /** Canonical Fallback Required */
-            canonical_fallback_required: boolean;
             custody_summary: components["schemas"]["ClerkCustodyWindowSummary"];
             /** Feed Detail */
             feed_detail: string;
@@ -10904,16 +10486,9 @@ export interface components {
              * Feed State
              * @enum {string}
              */
-            feed_state: "live" | "reconnecting" | "rebuilding" | "stale" | "offline_but_saved" | "corrupt" | "projection_unavailable";
+            feed_state: "live" | "projection_unavailable";
             /** High Water Journal Seq */
             high_water_journal_seq?: number | null;
-            /**
-             * Lag Is Lower Bound
-             * @default false
-             */
-            lag_is_lower_bound?: boolean;
-            /** Lag Records */
-            lag_records?: number | null;
             /** Next Cursor */
             next_cursor?: string | null;
             /** Projection Available */
@@ -10943,8 +10518,6 @@ export interface components {
             custody_timeline?: components["schemas"]["ClerkCustodyTimeline"] | null;
             /** Events */
             events?: components["schemas"]["ClerkTransactionEventRow"][];
-            /** Exec Id */
-            exec_id?: string | null;
             /** Execution Price */
             execution_price?: number | null;
             /** Execution Quantity */
@@ -10966,15 +10539,13 @@ export interface components {
             /** Native Order Id */
             native_order_id?: string | null;
             option_event?: components["schemas"]["OptionEndingView"] | null;
-            /** Order Id */
-            order_id?: number | null;
             order_instruction?: components["schemas"]["ClerkOrderInstruction"];
             /** Order Ref */
             order_ref?: string | null;
-            /** Perm Id */
-            perm_id?: number | null;
             /** Receipt */
-            receipt?: Record<string, never>;
+            receipt?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
             /** Recorded At Ms */
             recorded_at_ms: number;
             /** Run Id */
@@ -10992,7 +10563,7 @@ export interface components {
              * @default manual
              * @enum {string}
              */
-            transaction_origin?: "manual" | "strategy" | "external" | "unknown" | "recovery" | "emergency" | "shutdown" | "force_flat" | "other";
+            transaction_origin?: "manual" | "strategy" | "external" | "unknown";
         };
         /**
          * ClerkTransactionSummaryRow
@@ -11015,8 +10586,6 @@ export interface components {
             commission_status?: "unknown" | "reported";
             /** Event Count */
             event_count: number;
-            /** Exec Id */
-            exec_id?: string | null;
             /** Execution Price */
             execution_price?: number | null;
             /** Execution Quantity */
@@ -11038,13 +10607,9 @@ export interface components {
             /** Native Order Id */
             native_order_id?: string | null;
             option_event?: components["schemas"]["OptionEndingView"] | null;
-            /** Order Id */
-            order_id?: number | null;
             order_instruction?: components["schemas"]["ClerkOrderInstruction"];
             /** Order Ref */
             order_ref?: string | null;
-            /** Perm Id */
-            perm_id?: number | null;
             /** Recorded At Ms */
             recorded_at_ms: number;
             /** Run Id */
@@ -11062,7 +10627,7 @@ export interface components {
              * @default manual
              * @enum {string}
              */
-            transaction_origin?: "manual" | "strategy" | "external" | "unknown" | "recovery" | "emergency" | "shutdown" | "force_flat" | "other";
+            transaction_origin?: "manual" | "strategy" | "external" | "unknown";
         };
         /** CloseAllAction */
         CloseAllAction: {
@@ -12406,8 +11971,6 @@ export interface components {
             budget_usd?: string | null;
             /** Confirmation Text */
             confirmation_text?: string | null;
-            /** Custody Account Id */
-            custody_account_id?: string | null;
             /** Detail */
             detail: string;
             /** Estimated Price Usd */
@@ -12489,11 +12052,6 @@ export interface components {
             committed_usd?: string | null;
             /** Detail */
             detail: string;
-            /**
-             * Entry Eligible
-             * @default false
-             */
-            entry_eligible?: boolean;
             exit_estimate?: components["schemas"]["ExitEstimateView"] | null;
             funding?: components["schemas"]["FundingView"] | null;
             /** Headline */
@@ -13383,8 +12941,6 @@ export interface components {
             next_cursor: string | number | null;
             /** Read At Ms */
             read_at_ms: number;
-            /** Read By */
-            read_by: string;
             /** Strategy Instance Id */
             strategy_instance_id: string;
             /** Total Entries */
@@ -14280,8 +13836,6 @@ export interface components {
             realized_pnl_today: number | null;
             /** Running */
             running: boolean;
-            /** Session Change Pct */
-            session_change_pct: number | null;
             /** Sid */
             sid: string;
             /** Symbol */
@@ -14853,10 +14407,6 @@ export interface components {
         };
         /** GoldenSearchCapabilityKnob */
         GoldenSearchCapabilityKnob: {
-            /** Default High */
-            default_high: number;
-            /** Default Low */
-            default_low: number;
             /** Default Step */
             default_step: number;
             /** Default Value */
@@ -14874,14 +14424,10 @@ export interface components {
             label: string;
             /** Name */
             name: string;
-            /** Neighbor Step */
-            neighbor_step: number;
             /** Note */
             note: string;
             /** Quantum */
             quantum: number;
-            /** Searchable By Default */
-            searchable_by_default: boolean;
             /** Unit */
             unit: string;
             /** Warmup Dependent */
@@ -16172,13 +15718,6 @@ export interface components {
              */
             weekdays: string[];
         };
-        /** GoldenSearchEquityPoint */
-        GoldenSearchEquityPoint: {
-            /** Equity */
-            equity: number;
-            /** Ms */
-            ms: number;
-        };
         /** GoldenSearchEstimate */
         GoldenSearchEstimate: {
             /** Budget Cap */
@@ -16990,8 +16529,6 @@ export interface components {
         GoldenSearchNeighborhood: {
             /** Knob */
             knob: string;
-            /** One Sided */
-            one_sided: boolean;
             /** Rows */
             rows: components["schemas"]["GoldenSearchNeighborRow"][];
         };
@@ -17587,8 +17124,6 @@ export interface components {
             concentration_curve: components["schemas"]["GoldenSearchConcentrationCurve"] | null;
             /** Cumulative Return */
             cumulative_return: components["schemas"]["GoldenSearchCumulativeReturnPoint"][];
-            /** Daily Equity */
-            daily_equity: components["schemas"]["GoldenSearchEquityPoint"][];
             /** Drawdown */
             drawdown: components["schemas"]["GoldenSearchDrawdownPoint"][];
             metrics: components["schemas"]["GoldenSearchMetrics"];
@@ -17953,11 +17488,6 @@ export interface components {
             results: components["schemas"]["GoldenSearchResults"];
             /** Revision */
             revision: number;
-            /**
-             * Run To Compare
-             * @description Run research is on: Search hands on to Test over time and the study pauses at Compare.
-             */
-            run_to_compare: boolean;
             scope: components["schemas"]["GoldenSearchScope"];
             /**
              * State
@@ -17968,8 +17498,6 @@ export interface components {
             strategy_key: string;
             /** Symbol */
             symbol: string;
-            /** Updated At Ms */
-            updated_at_ms: number;
         };
         /** GoldenSearchStudySummary */
         GoldenSearchStudySummary: {
@@ -18014,11 +17542,6 @@ export interface components {
             /** Revision */
             revision: number;
             /**
-             * Run To Compare
-             * @description Run research is on: Search hands on to Test over time and the study pauses at Compare.
-             */
-            run_to_compare: boolean;
-            /**
              * State
              * @enum {string}
              */
@@ -18027,8 +17550,6 @@ export interface components {
             strategy_key: string;
             /** Symbol */
             symbol: string;
-            /** Updated At Ms */
-            updated_at_ms: number;
         };
         /** GoldenSearchSummaryLink */
         GoldenSearchSummaryLink: {
@@ -18259,26 +17780,13 @@ export interface components {
             failure_reason: string | null;
             /** Fold Index */
             fold_index: number;
-            incumbent_test_metrics: components["schemas"]["GoldenSearchMetrics"] | null;
             /**
              * Status
              * @enum {string}
              */
             status: "pending" | "completed" | "failed";
-            /** Test End Ms */
-            test_end_ms: number;
-            test_metrics: components["schemas"]["GoldenSearchMetrics"] | null;
-            /** Test Start Ms */
-            test_start_ms: number;
-            /** Train End Ms */
-            train_end_ms: number;
-            train_metrics: components["schemas"]["GoldenSearchMetrics"] | null;
-            /** Train Start Ms */
-            train_start_ms: number;
             /** Winner */
             winner: Record<string, never> | null;
-            /** Winner Hash */
-            winner_hash: string | null;
         };
         /** GoldenSearchValidationView */
         GoldenSearchValidationView: {
@@ -18288,10 +17796,6 @@ export interface components {
             folds: components["schemas"]["GoldenSearchValidationFold"][];
             /** Incomplete */
             incomplete: boolean;
-            /** Incumbent Linked */
-            incumbent_linked: components["schemas"]["GoldenSearchLinkedReturn"][];
-            /** Linked */
-            linked: components["schemas"]["GoldenSearchLinkedReturn"][];
             summary_pills: components["schemas"]["GoldenSearchSummaryPills"];
             verdict: components["schemas"]["GoldenSearchVerdict"] | null;
         };
@@ -23011,16 +22515,8 @@ export interface components {
         OptionsBacktestComparedRunResponse: {
             /** Created At Ms */
             created_at_ms: number;
-            /** Fee Policy */
-            fee_policy: string;
-            /** First Session Open Ms */
-            first_session_open_ms: number;
             /** Id */
             id: number;
-            /** Last Session Open Ms */
-            last_session_open_ms: number;
-            /** Sessions Requested */
-            sessions_requested: number;
             /** Setup Name */
             setup_name?: string | null;
         };
@@ -23079,10 +22575,6 @@ export interface components {
          */
         OptionsBacktestDataCheckResponse: {
             counts: components["schemas"]["OptionsBacktestDataCountsResponse"];
-            /** First Testable Session Open Ms */
-            first_testable_session_open_ms?: number | null;
-            /** Last Testable Session Open Ms */
-            last_testable_session_open_ms?: number | null;
             longest_testable_stretch?: components["schemas"]["OptionsBacktestTestableStretchResponse"] | null;
             /** Option Prices From Ms */
             option_prices_from_ms: number;
@@ -23145,11 +22637,6 @@ export interface components {
             fall_ratio: components["schemas"]["OptionsBacktestDollarRateResponse"];
             /** Fall Usd */
             fall_usd: string;
-            /**
-             * Measured At
-             * @constant
-             */
-            measured_at: "session_end";
             /** Peak Equity Usd */
             peak_equity_usd: string;
             /** Peak Session Open Ms */
@@ -23750,8 +23237,6 @@ export interface components {
             notes: string[];
             /** Problems */
             problems: components["schemas"]["OptionsBacktestProblemResponse"][];
-            /** Session Close Ms */
-            session_close_ms: number;
             /** Session Open Ms */
             session_open_ms: number;
             /** Skip */
@@ -23808,8 +23293,6 @@ export interface components {
             marks: components["schemas"]["OptionsBacktestMarkResponse"][];
             /** Profit Usd */
             profit_usd: string;
-            /** Run Id */
-            run_id: number;
             /** Session Close Ms */
             session_close_ms: number;
             /** Session Open Ms */
@@ -23853,13 +23336,6 @@ export interface components {
             b: string;
             /** Label */
             label: string;
-            /** Leg Id */
-            leg_id?: string | null;
-            /**
-             * Setting
-             * @enum {string}
-             */
-            setting: "entry_time" | "exit_time" | "no_reentry_after" | "square_off" | "leg" | "leg_side" | "leg_right" | "leg_contracts" | "leg_expiry" | "leg_strike" | "leg_stop_loss" | "leg_momentum" | "leg_reentry" | "slippage" | "price_step" | "fees" | "starting_cash";
         };
         /**
          * OptionsBacktestSetup
@@ -24118,14 +23594,10 @@ export interface components {
          *     stored trades alone: a 200 with ``total`` 0, which says only that no trade was stored for that leg.
          */
         OptionsBacktestTradesResponse: {
-            /** Limit */
-            limit: number;
             /** Next Offset */
             next_offset?: number | null;
             /** Offset */
             offset: number;
-            /** Run Id */
-            run_id: number;
             /** Total */
             total: number;
             /** Trades */
@@ -24397,8 +23869,8 @@ export interface components {
          * @description One backend-presented action.
          *
          *     Angular executes only the closed set of known action ids and renders
-         *     exactly what it is given. ``revision`` binds the action to the panel-state
-         *     revision it was presented against; a stale POST is a 409.
+         *     exactly what it is given. ``revision`` identifies the presented panel state;
+         *     the action-scoped concurrency token fences a stale POST.
          */
         PanelAction: {
             /**
@@ -24481,8 +23953,6 @@ export interface components {
             idempotency_key: string;
             /** Reason */
             reason?: string | null;
-            /** Revision */
-            revision: number;
         };
         /**
          * PanelActionResult
@@ -24561,8 +24031,6 @@ export interface components {
             idempotency_key: string;
             /** Reason */
             reason?: string | null;
-            /** Revision */
-            revision: number;
         };
         /**
          * PaperXhAllowancesPayload
@@ -25347,8 +24815,6 @@ export interface components {
         ProjectedHoldResponse: {
             /** Evidence Refs */
             evidence_refs: string[];
-            /** Hold Id */
-            hold_id: string;
             /** Opened At Ms */
             opened_at_ms: number;
             /** Reason Code */
@@ -25381,7 +24847,7 @@ export interface components {
             /** State */
             state: string;
             /** Strategy Instance Id */
-            strategy_instance_id: string;
+            strategy_instance_id: string | null;
             /** Terminal Receipt Id */
             terminal_receipt_id: string | null;
             /** Transition Count */
@@ -25401,8 +24867,6 @@ export interface components {
             order_ref: string;
             /** Role */
             role: string;
-            /** Submitted At Ms */
-            submitted_at_ms: number | null;
             /** Updated At Ms */
             updated_at_ms: number;
         };
@@ -25417,31 +24881,12 @@ export interface components {
             /** Updated At Ms */
             updated_at_ms: number;
         };
-        /** ProjectedReceiptResponse */
-        ProjectedReceiptResponse: {
-            /** Command Id */
-            command_id: string | null;
-            /** Effect Operation Id */
-            effect_operation_id: string | null;
-            /** Proof Reference */
-            proof_reference: string | null;
-            /** Receipt Id */
-            receipt_id: string;
-            /** Recorded At Ms */
-            recorded_at_ms: number;
-            /** Summary Code */
-            summary_code: string;
-            /** Terminal State */
-            terminal_state: string;
-        };
         /** ProjectedReconciliationResponse */
         ProjectedReconciliationResponse: {
             /** Attempted At Ms */
             attempted_at_ms: number;
             /** Effect Operation Id */
             effect_operation_id: string | null;
-            /** Evidence Age Ms */
-            evidence_age_ms: number;
             /** Evidence Refs */
             evidence_refs: string[];
             /** Order Ref */
@@ -25450,8 +24895,6 @@ export interface components {
             outcome: string;
             /** Reconciliation Id */
             reconciliation_id: string;
-            /** Trigger */
-            trigger: string;
         };
         /** ProjectedRunResponse */
         ProjectedRunResponse: {
@@ -25476,8 +24919,6 @@ export interface components {
             blocks_new_exposure: boolean;
             /** Custody Owner */
             custody_owner: string;
-            /** Evidence Age Ms */
-            evidence_age_ms: number;
             /** Evidence Refs */
             evidence_refs: string[];
             /** Explanation */
@@ -25507,10 +24948,6 @@ export interface components {
         };
         /** ProjectionGuidanceResponse */
         ProjectionGuidanceResponse: {
-            /** Action Required */
-            action_required: boolean;
-            /** Available Safety Actions */
-            available_safety_actions: string[];
             /** Custody Owner */
             custody_owner: string;
             /** Explanation */
@@ -25519,8 +24956,6 @@ export interface components {
             headline: string;
             /** Impact */
             impact: string;
-            /** May Create Exposure */
-            may_create_exposure: boolean;
             /** Next Step */
             next_step: string;
             recovery_status?: components["schemas"]["RecoveryStatusResponse"] | null;
@@ -25565,8 +25000,6 @@ export interface components {
         QualifiedDeployConfiguration: {
             /** Explanation */
             explanation: string;
-            /** Golden Qualification Id */
-            golden_qualification_id?: string | null;
             /** Parameters */
             parameters: {
                 [key: string]: components["schemas"]["JsonValue"];
@@ -26886,7 +26319,7 @@ export interface components {
             /** Started At Ms */
             started_at_ms?: number | null;
             /** Trade Count */
-            trade_count: number;
+            trade_count?: number | null;
         };
         /**
          * RunSummaryView
@@ -28373,19 +27806,12 @@ export interface components {
         };
         /** StrategyInfo */
         StrategyInfo: {
-            /**
-             * Algorithm Pseudocode
-             * @default
-             */
-            algorithm_pseudocode?: string;
             /** Description */
             description: string;
             /** Display Name */
             display_name: string;
             /** Experimental Notice */
             experimental_notice?: string | null;
-            /** Gotchas */
-            gotchas?: string[];
             /** Lean Data Policy Parameter Names */
             lean_data_policy_parameter_names?: string[];
             /** Lean Parameter Names */
@@ -30407,7 +29833,7 @@ export interface components {
          *     Present only for a run that resumed on retained bars. ``state`` is
          *     ``contiguous`` (nothing missing), ``filled`` (the hole was fetched from
          *     IBKR 1-minute history before warmup) or ``refused`` (the hole could not
-         *     be filled, so the run never decided). ``warmed_from_history_only`` means
+         *     be filled, so the run never decided). A history-only join means
          *     the bot was stopped longer than its warmup lookback and warmed on that
          *     lookback's history, as a fresh deploy does.
          */
@@ -30435,8 +29861,6 @@ export interface components {
              * @enum {string}
              */
             state: "contiguous" | "filled" | "refused";
-            /** Warmed From History Only */
-            warmed_from_history_only: boolean;
         };
         /**
          * WindowSummary
@@ -30751,10 +30175,9 @@ export interface operations {
     get_clerk_transaction_history_api_accounts__account_id__transactions_get: {
         parameters: {
             query?: {
-                broker?: "alpaca";
                 limit?: number;
                 cursor?: string | null;
-                origin?: ("manual" | "strategy" | "external" | "unknown" | "recovery" | "emergency" | "shutdown" | "force_flat" | "other") | null;
+                origin?: ("manual" | "strategy" | "external" | "unknown") | null;
                 lifecycle_state?: string | null;
                 strategy_instance_id?: string | null;
                 run_id?: string | null;
@@ -30831,9 +30254,7 @@ export interface operations {
     };
     get_clerk_transaction_detail_api_accounts__account_id__transactions__transaction_id__get: {
         parameters: {
-            query?: {
-                broker?: "alpaca";
-            };
+            query?: never;
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;
             };
@@ -33141,7 +32562,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AlpacaPaperDeployReceipt"] | components["schemas"]["BudgetDeployCommandReceipt"];
+                    "application/json": components["schemas"]["BudgetDeployCommandReceipt"];
                 };
             };
             /** @description Validation Error */
@@ -34409,73 +33830,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClerkStatus"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_broker_clerks_for_broker_api_brokers__broker__clerks_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    describe_broker_clerk_api_brokers__broker__clerks__clerk_id__get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -38037,74 +37391,6 @@ export interface operations {
             };
         };
     };
-    fleet_market_status_read_api_brokers__broker__clerks__clerk_id__market_status_snapshot_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_orders_read_api_brokers__broker__clerks__clerk_id__orders_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     fleet_portfolio_history_read_api_brokers__broker__clerks__clerk_id__portfolio_history_get: {
         parameters: {
             query?: never;
@@ -38140,40 +37426,6 @@ export interface operations {
         };
     };
     fleet_portfolio_history_proof_read_api_brokers__broker__clerks__clerk_id__portfolio_history_proof_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_positions_read_api_brokers__broker__clerks__clerk_id__positions_get: {
         parameters: {
             query?: never;
             header?: {
@@ -38450,43 +37702,6 @@ export interface operations {
             };
         };
     };
-    list_orders_api_brokers__broker__orders_get: {
-        parameters: {
-            query?: {
-                status?: ("open" | "closed" | "all") | null;
-                limit?: number | null;
-                after_ms?: number | null;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BrokerOrder"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_panel_profile_api_brokers__broker__panel_profile_get: {
         parameters: {
             query?: never;
@@ -38577,39 +37792,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PortfolioHistoryProofResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_positions_api_brokers__broker__positions_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BrokerPosition"][];
                 };
             };
             /** @description Validation Error */

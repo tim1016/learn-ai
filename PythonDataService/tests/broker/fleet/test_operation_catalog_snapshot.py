@@ -1,7 +1,7 @@
 """Committed-snapshot parity for the fleet's operation catalog (#2076, #2103).
 
-Mirrors the established pattern for the broker-v2 panel vocabulary and the
-fleet refusal vocabulary -- see ``scripts/regenerate_broker_v2_vocabulary_snapshot.py``
+Mirrors the established pattern for the fleet refusal vocabulary -- see
+``scripts/regenerate_fleet_refusal_vocabulary_snapshot.py``
 and ``tests/broker/fleet/test_refusal_vocabulary_snapshot.py`` for the
 precedent this follows. The live catalog is derived from
 ``production_provider_adapters()``, not hand-listed, so a new, renamed or

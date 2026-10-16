@@ -689,3 +689,103 @@ async def test_facade_refuses_unexpected_account_evidence_failure_without_unbloc
         assert repo.active_uncertainties_for_admission(strategy_instance_id=SID)
     finally:
         repo.close()
+
+
+# ── through the facade: the production composition (settings-keyed plan, owned read port) ─────
+
+
+class _CountingRead(_Read):
+    """Counts the account reads, so a replay is shown to have asked the broker nothing."""
+
+    def __init__(self, *, activities: list[BrokerActivity]) -> None:
+        super().__init__(activities=activities)
+        self.account_reads = 0
+
+    async def get_account(self) -> BrokerAccountSnapshot:
+        self.account_reads += 1
+        return await super().get_account()
+
+
+def _facade_with_settings_secret(
+    repo: ClerkSqliteRepository, read: _Read, monkeypatch: pytest.MonkeyPatch
+) -> SqliteAlpacaClerkFacade:
+    monkeypatch.setattr(sqlite_runtime.settings, "DATA_PLANE_CONTROL_SECRET", "test-control-secret")
+    monkeypatch.setattr(sqlite_runtime.settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
+    return SqliteAlpacaClerkFacade(account_mode="paper", repo=repo, read=read, trade=read)
+
+
+@pytest.mark.asyncio
+async def test_facade_prepares_a_no_write_plan_and_confirms_it_against_a_fresh_account_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo, uncertainty_id = _seed_historical_conflict(tmp_path)
+    try:
+        context, action = _recovery_action(repo)
+        read = _CountingRead(activities=[_activity()])
+        facade = _facade_with_settings_secret(repo, read, monkeypatch)
+        before = repo.control_meta_snapshot().control_revision
+
+        plan = await facade.prepare_historical_execution_recovery(
+            context=context, concurrency_token=action.concurrency_token
+        )
+
+        assert plan.uncertainty_id == uncertainty_id
+        assert plan.exact_symbol == "SPY"
+        assert plan.exact_quantity == 5.0
+        assert repo.control_meta_snapshot().control_revision == before
+        assert repo.active_uncertainties_for_admission(strategy_instance_id=SID)
+        reads_to_prepare = read.account_reads
+
+        receipt = await facade.confirm_historical_execution_recovery(
+            plan=plan, confirmation_token=plan.confirmation_token
+        )
+
+        assert receipt.applied is True
+        assert read.account_reads == reads_to_prepare + 1
+        assert repo.active_uncertainties_for_admission(strategy_instance_id=SID) == []
+        assert [
+            (item["execution_id"], item["evidence_source"])
+            for item in repo.fills_for_order(plan.order_ref)
+        ] == [(EXECUTION_ID, "activity_recovery")]
+    finally:
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_facade_replays_a_confirmed_plan_after_expiry_without_reading_the_account_again(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo, _ = _seed_historical_conflict(tmp_path)
+    try:
+        context, action = _recovery_action(repo)
+        read = _CountingRead(activities=[_activity()])
+        facade = _facade_with_settings_secret(repo, read, monkeypatch)
+        plan = await facade.prepare_historical_execution_recovery(
+            context=context, concurrency_token=action.concurrency_token
+        )
+        receipt = await facade.confirm_historical_execution_recovery(
+            plan=plan, confirmation_token=plan.confirmation_token
+        )
+        assert receipt.applied is True
+        reads_to_confirm = read.account_reads
+
+        clock = repo.clock
+        assert isinstance(clock, _Clock)
+        clock.value = plan.expires_at_ms + 1
+        replay = await facade.confirm_historical_execution_recovery(
+            plan=plan, confirmation_token=plan.confirmation_token
+        )
+
+        assert replay == replace(receipt, applied=False)
+        assert read.account_reads == reads_to_confirm
+        assert len(
+            [
+                transition
+                for transition in repo.transitions_for_order(plan.order_ref)
+                if transition["transition_kind"] == "EXECUTION_COVERAGE_QUARANTINED"
+            ]
+        ) == 1
+    finally:
+        repo.close()

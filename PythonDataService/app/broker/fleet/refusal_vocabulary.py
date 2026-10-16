@@ -71,11 +71,7 @@ _MINTED_OUTSIDE_THE_CLOSURE: Final[frozenset[str]] = frozenset(
         "command_envelope_invalid",
         # app/broker/fleet/lane_runtime.py -- a retired compatibility-read
         # alias route, written directly as JSON on a raw-ASGI middleware path
-        # with no Response object to raise through. Also minted (as a flat
-        # JSONResponse, not raised) by app/routers/fleet_compatibility_reads.py's
-        # `get_legacy_live_verdict` (#2140): unlike the evidence-gated ASGI
-        # path, this one refuses unconditionally -- a standalone coordinator
-        # never has a legitimate answer to measure.
+        # with no Response object to raise through.
         "compatibility_read_retired",
         # app/broker/fleet/lane_runtime.py -- the compatibility-retirement
         # evidence file is unreadable; same raw-ASGI constraint as above.
@@ -91,7 +87,7 @@ _MINTED_OUTSIDE_THE_CLOSURE: Final[frozenset[str]] = frozenset(
 )
 
 #: The complete fleet refusal vocabulary: the 39-class FleetControlError
-#: subclass closure (38 reasons) plus the 5 codes minted outside it. Sorted by code.
+#: subclass closure (38 reasons) plus the 5 codes minted outside it.
 FLEET_REFUSAL_REASONS: Final[dict[str, RefusalFamily]] = {
     "broker_and_clerk_required": RefusalFamily(
         400, "A clerk-scoped request arrived without both a broker and a clerk identity."

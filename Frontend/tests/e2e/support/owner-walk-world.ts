@@ -36,7 +36,6 @@ import type {
   PanelAction,
   PanelActionRequest,
   PanelActionResult,
-  PanelProfile,
 } from '../../../src/app/components/broker/v2-panel/lib/broker-v2-panel.types';
 import type { FleetDirectoryResponse, LaneDescriptor } from '../../../src/app/fleet/fleet-directory.types';
 import type { CommandContext } from '../../../src/app/fleet/resource-target';
@@ -443,7 +442,6 @@ function budgetPreview(deploy: DeployLane, body: DeployBotBody): DeploymentBudge
     state: 'ready',
     detail: 'This is an entry-admission budget. Market fills and losses can exceed it.',
     world,
-    custody_account_id: deploy.view.account_id,
     observed_at_ms: NOW_MS,
     risk_revision: 1,
     minimum_budget_usd: '500.00',
@@ -736,13 +734,6 @@ const EXECUTE_ACTION = fakePanelAction('execute_safe_flatten', {
   label: 'Sell the prepared position', explanation: 'Send the prepared sale.', concurrency_token: 'execute-prepared',
 });
 
-const PANEL_PROFILE = {
-  broker: 'alpaca',
-  fee_fidelity: 'per_fill',
-  live_bars_supported: true,
-  stations: [],
-} satisfies PanelProfile;
-
 /** A bot on duty, or one its owner stopped from Home. */
 function botHealth(sid: string, running: boolean): BotPanelView['health'] {
   return {
@@ -984,7 +975,6 @@ export class OwnerWalkWorld {
     }
     if (path === `${CLERK_SCOPE(PAPER_CLERK)}/live-verdict`) return json(verdict('paper', PAPER_ACCOUNT));
     if (path === `${CLERK_SCOPE(LIVE_CLERK)}/live-verdict`) return json(verdict('live', LIVE_ACCOUNT));
-    if (path === '/api/brokers/alpaca/panel-profile') return json(PANEL_PROFILE);
     // The symbol picker on Deploy: SPY listed, held by the lake, no jobs.
     if (path === '/api/tickers/catalog') return json(VENDOR_CATALOG);
     if (path === '/api/data-lake/storage-summary') return json(LAKE_COVERAGE);

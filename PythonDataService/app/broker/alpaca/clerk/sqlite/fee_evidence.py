@@ -669,7 +669,7 @@ def custody_fee_attribution(
     unresolved. A day with no option fill is projected exactly as before.
 
     Formula: existing session fee model/apportionment over selected effective fills.
-    Reference: ADR 0059 fee attribution amendment; PRD #2540; ADR 0076 for option fills.
+    Reference: ADR 0059 fee attribution amendment; #2540; ADR 0076 for option fills.
     Canonical implementation: app.services.alpaca_fee_attribution.attribute_session_fees,
       and ``attribute_simulated_option_fees`` for a simulation's option fills.
     Validated against: tests/broker/alpaca/clerk/sqlite/test_fee_evidence.py,

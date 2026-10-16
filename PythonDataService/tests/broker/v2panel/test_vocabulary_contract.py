@@ -1,14 +1,12 @@
 """Contract tests for the closed broker-v2 panel vocabulary (S1).
 
-Pins the snapshot ↔ live-set parity, the copy-coverage rule (every emitted code
-carries non-trivial server-authored copy), same-run Pause/Continue vocabulary,
-and the reconciliation-verdict lockstep with the clerk model.
+Pins the copy-coverage rule (every emitted code carries non-trivial server-authored
+copy), same-run Pause/Continue vocabulary, and the reconciliation-verdict
+lockstep with the clerk model.
 """
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import get_args
 
 import pytest
@@ -38,24 +36,6 @@ from app.broker.v2panel.vocabulary import (
     hold_reason_for,
 )
 
-_SNAPSHOT_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "app"
-    / "broker"
-    / "v2panel"
-    / "vocabulary.snapshot.json"
-)
-
-
-def test_committed_snapshots_match_freshly_generated_output() -> None:
-    """Regression for #1666: committed bytes must equal what the generator
-    produces from live source right now, exercised in-process.
-    """
-    from scripts.regenerate_broker_v2_vocabulary_snapshot import build_snapshot
-
-    fresh = json.dumps(build_snapshot(), indent=2, sort_keys=False) + "\n"
-    assert _SNAPSHOT_PATH.read_text(encoding="utf-8") == fresh
-
 
 def test_reconciliation_verdicts_match_clerk_model() -> None:
     """The panel verdict set stays in lockstep with the clerk's StrEnum/Literal."""
@@ -72,7 +52,7 @@ def test_reconciliation_verdicts_match_clerk_model() -> None:
 # ``ActionId`` (a ``Literal``) and ``ACTION_IDS`` (a tuple) drifting apart is
 # the failure this guards against: a member added to the ``Literal`` alone
 # makes the request schema accept it while the copy-coverage test above stays
-# green and every generated artifact (snapshot, manual) silently omits it. The
+# green and downstream copies silently omit it. The
 # same drift is possible for any of the other eight pairs, so all nine are
 # swept here, not just ``ActionId``.
 _LITERAL_COLLECTION_PAIRS = (

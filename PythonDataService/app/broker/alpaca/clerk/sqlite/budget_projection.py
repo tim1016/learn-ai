@@ -94,7 +94,7 @@ def _external_cash_claim(conn: sqlite3.Connection, fees: BudgetFees, *, seen_bef
 
     Formula: sum(qty * price * multiplier for custody-era external BUYs not
       yet inside observed cash); multiplier is 1 for shares.
-    Reference: ADR 0076 option multiplier; PRD #2540 all-disjoint-claims contract.
+    Reference: ADR 0076 option multiplier; #2540 all-disjoint-claims contract.
     Canonical implementation: this composition over the fee evidence's exact
       activity population using clerk.money.notional.
     Validated against: sqlite/test_budget_claims.py external cases and
@@ -168,7 +168,7 @@ def project_account_money(
     ``seen_before_ms`` boundary as unseen purchases. A short position has no
     place on a long-only bar and is named, never dropped.
     Formula: unseen sale proceeds = sum of exact fill notionals not yet in observed cash.
-    Reference: ADR 0076 option multiplier; PRD #2540 account money claims.
+    Reference: ADR 0076 option multiplier; #2540 account money claims.
     Canonical implementation: this composition using clerk.money.notional and clerk.account_money.
     Validated against: sqlite/test_budget_claims.py and
       sqlite/test_fee_evidence.py::test_paper_credit_spread_outside_fills_need_both_recorded_contract_references.
@@ -279,7 +279,7 @@ def _external_holdings(conn: sqlite3.Connection, fees: BudgetFees) -> tuple[list
 
 
 def bots_holding_money(conn: sqlite3.Connection) -> frozenset[str]:
-    """Bots with position cost or still-claimed money above zero (PRD #2560 D7).
+    """Bots with position cost or still-claimed money above zero (#2560 D7).
 
     The fact-level twin of ``account_money``'s stopped-slice rule
     (``position_cost + still_claimed > 0``), read without a cash observation
@@ -343,7 +343,7 @@ def bot_results_from_fills(
       = the bot's effective executions. A lot a residue discharge wrote off
       realizes nothing and is no position (#2975).
     Reference: https://github.com/tim1016/learn-ai/issues/2560 (Finished rows);
-      money semantics are PRD #2540's, unchanged.
+      money semantics are #2540's, unchanged.
     Canonical implementation: this composition; FIFO stays ``fifo_pnl.py`` and
       fees the canonical fee reconciler.
     Validated against: tests/broker/alpaca/clerk/sqlite/test_bot_results.py.

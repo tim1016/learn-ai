@@ -37,6 +37,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from decimal import Decimal
 
+from app.broker.alpaca.broker import CASH_TRANSFER_ACTIVITY_FILTER
 from app.broker.alpaca.clerk.live_envelope import AccountObservation
 from app.broker.alpaca.clerk.money import ZERO, money_context, normalize_money
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -44,7 +45,6 @@ from app.broker.contract.models import BrokerActivity
 from app.lean_sidecar.trading_calendar import previous_completed_session_close_ms
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 
-CASH_TRANSFER_ACTIVITY_FILTER = "TRANS"
 CASH_TRANSFER_ACTIVITY_TYPES: frozenset[str] = frozenset({"CSD", "CSW"})
 
 

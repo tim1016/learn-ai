@@ -367,7 +367,7 @@ async def test_the_review_warns_that_options_have_no_backtest_and_asks_only_a_br
 ) -> None:
     app, _registry = deploy_app
     _serve(monkeypatch, view_of)
-    money = DeploymentBudgetPreview(state="ready", detail="Ready", world="real_paper", custody_account_id=ACCT)
+    money = DeploymentBudgetPreview(state="ready", detail="Ready", world="real_paper")
     monkeypatch.setattr(budget_deploy, "preview_budget", lambda *_args, **_kwargs: money)
     monkeypatch.setattr(budget_deploy, "same_symbol_note", lambda account_id, request: None)
 
@@ -561,7 +561,7 @@ async def _review(app, floor: _Floor, monkeypatch: pytest.MonkeyPatch, **changes
         account_id: str, request: AlpacaPaperDeployRequest, *, resolved_parameters: dict, option_entry: Any, **_more: Any
     ):
         priced.append(option_entry)
-        return DeploymentBudgetPreview(state="ready", detail="Ready", world="real_paper", custody_account_id=ACCT)
+        return DeploymentBudgetPreview(state="ready", detail="Ready", world="real_paper")
 
     monkeypatch.setattr(budget_deploy, "preview_budget", reviewed)
     monkeypatch.setattr(budget_deploy, "same_symbol_note", lambda account_id, request: None)
@@ -828,6 +828,8 @@ async def test_deploy_again_of_an_option_bot_then_a_deploy_from_its_answer_seals
             **again, "execution_mode": "dry_run" if prefill["dry_run"] else "paper",
             "submission_key": "deploy-again-0001",
             "replaces_strategy_instance_id": earlier.strategy_instance_id,
+            # The prefill is never the owner's money: the form adds the budget they review.
+            "budget": _BODY["budget"],
         })
 
     assert "traded_symbol" not in again, "an option bot names no stock to trade: both together are refused"
@@ -853,8 +855,9 @@ async def test_deploy_again_of_an_option_bot_with_no_sealed_terms_is_refused_by_
     assert "QQQ" not in json.dumps(found.json().get("traded_symbol", ""))
 
 
-async def test_the_answer_to_an_option_deploy_says_the_plan_the_start_was_handed(deploy_app, floor: _Floor) -> None:
-    """Not shares of the contracts' underlying."""
+async def test_an_option_deploy_hands_the_start_a_plan_in_the_contracts_not_shares_of_the_underlying(
+    deploy_app, floor: _Floor,
+) -> None:
     app, registry = deploy_app
     await _the_quotes_are_up(floor)
 
@@ -862,8 +865,9 @@ async def test_the_answer_to_an_option_deploy_says_the_plan_the_start_was_handed
 
     assert response.status_code == 201, response.text
     [call] = registry.deploy_calls
-    assert response.json()["action_plan"] == call["action_plan"].model_dump(mode="json")
-    assert response.json()["action_plan"]["on_enter"][0]["instrument"] == {"kind": "option", "underlying": "SPY"}
+    assert call["action_plan"].model_dump(mode="json")["on_enter"][0]["instrument"] == {
+        "kind": "option", "underlying": "SPY",
+    }
 
 
 def test_deploy_again_of_an_option_bot_carries_its_structure_and_its_sealed_terms() -> None:

@@ -78,6 +78,8 @@ from tests.broker.alpaca.clerk.sqlite.test_option_entry_and_exit import (
 )
 from tests.broker.alpaca.clerk.test_shadow_broker import DAY, _Clock, _LiveRead
 
+pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+
 EXPIRY = date(2026, 9, 18)
 EXPIRY_NOON = et_minute_of_day_ms(EXPIRY, 12 * 60)
 EXPIRY_CLOSE = et_minute_of_day_ms(EXPIRY, 16 * 60)

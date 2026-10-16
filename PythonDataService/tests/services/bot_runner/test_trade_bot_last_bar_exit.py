@@ -48,6 +48,8 @@ from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 from ._support import _green_bar, _trade_bar
 
+pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+
 _ACCOUNT_ID = "PA-TEST"
 # Two greens enter before the program's close-minus-15-minute barrier.
 # Skipping to the final minute then makes the last bar decide EXIT.

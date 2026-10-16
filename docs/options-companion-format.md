@@ -87,7 +87,7 @@ A slot is a stable, **price-ordered** position relative to ATM, holding for one 
 
 The convention is **identical for calls and puts** — `atm-3` is always the lowest strike, `atm+3` always the highest. This is *price-ordered*, not *moneyness-ordered*: for puts, "more in the money" means higher strike, which lives in `atm+N` slots. The user analyzing moneyness flips the sign mentally; the file format does not encode it.
 
-**ATM anchor:** the closest listed strike to the *prior trading day's close* of the underlying. The anchor is fixed for the entire trading day — it does not re-anchor intraday on underlying moves. Source: `_select_strikes` and `_prior_day_close_map` in `options_companion_service.py`.
+**ATM anchor:** the closest listed strike to the *prior trading day's close* of the underlying. The anchor is fixed for the entire trading day — it does not re-anchor intraday on underlying moves. Source: `_select_strikes_with_slots` and `_prior_day_close_map` in `options_companion_service.py`.
 
 **Edge of chain:** if a slot's offset would land outside the listed strike range for that day, the row's strike-dependent cells are blank (the `unix_ts` row still appears so the file stays time-aligned across slots).
 
@@ -95,7 +95,7 @@ The convention is **identical for calls and puts** — `atm-3` is always the low
 
 ## 4. Expiry model — constant DTE distance
 
-Single integer config field: `dte_distance: int`, default `0`. Replaces the legacy `expiry_mode` + `max_dte` pair.
+Single integer config field: `dte_distance: int`, default `0`.
 
 For each trading day `D`, the chosen expiry is:
 
@@ -199,7 +199,7 @@ $$\rho_\text{raw} = -K t e^{-r t}\Phi(-d_2)$$
 
 $\Gamma$ and $\mathcal{V}$ are identical for calls and puts.
 
-**$\Phi$ and $\phi$ implementation.** $\Phi$ via `math.erf`: $\Phi(x) = \tfrac{1}{2}(1 + \operatorname{erf}(x/\sqrt{2}))$. $\phi$ via direct exponential. `_norm_cdf` and `_norm_pdf` in `options_companion_service.py`.
+**$\Phi$ and $\phi$ implementation.** The companion calls `black_scholes_greeks` in `app/services/bs_greeks.py`, which uses `scipy.stats.norm.cdf` and `norm.pdf`.
 
 **Unit conventions emitted in the CSV:**
 

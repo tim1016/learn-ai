@@ -443,13 +443,13 @@ describe('one day, an answer that comes too late', () => {
 
   it('shows the second run’s day and not the first run’s when the first run’s answer arrives last', async () => {
     const first = deferred<SessionDetail>();
-    const session = vi.fn((runId: number) => (runId === 7 ? first.promise : Promise.resolve(sessionDetail({ run_id: 8, profit_usd: '5.00' }))));
+    const session = vi.fn((runId: number) => (runId === 7 ? first.promise : Promise.resolve(sessionDetail({ profit_usd: '5.00' }))));
     const { view } = await renderSession(vi, { detail: fakeRunDetail(vi, { session }), request: ASKED });
     await screen.findByText('Reading the day…');
 
     await view.rerender({ inputs: { run: runDetail({ id: 8 }) }, partialUpdate: true });
     await waitFor(() => expect(facts()).toContain('Profit $5.00'));
-    first.resolve(sessionDetail({ run_id: 7, profit_usd: '-111.60' }));
+    first.resolve(sessionDetail({ profit_usd: '-111.60' }));
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(facts()).toContain('Profit $5.00');

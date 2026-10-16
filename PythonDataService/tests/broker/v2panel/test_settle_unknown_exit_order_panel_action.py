@@ -127,7 +127,6 @@ async def _run_from_the_panel(
         settling.SID,
         request=PanelActionRequest(
             action_id=SETTLE,
-            revision=1,
             concurrency_token=posted_again_with_token or presented.concurrency_token,
             idempotency_key=idempotency_key,
             reason="Alpaca's order list shows no sell of SPY.",
@@ -728,7 +727,7 @@ async def test_the_quiesce_route_carries_the_attestation_and_acts_as_the_configu
     monkeypatch.setattr(broker_v2_panel.settings, "PANEL_OPERATOR_IDENTITY", "desk-operator")
     app = FastAPI()
     app.include_router(broker_v2_panel.router)
-    body = {"action_id": SETTLE, "revision": 1, "concurrency_token": "tok", "idempotency_key": "key"}
+    body = {"action_id": SETTLE, "concurrency_token": "tok", "idempotency_key": "key"}
     exists = {"kind": "exists", "broker_order_id": "61e69015-8549-4bfd-b9c3-01e75843f47d"}
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         route = "/api/brokers/alpaca/accounts/PA-1/bots/sid-1/actions/quiesce"

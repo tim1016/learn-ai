@@ -27,7 +27,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from app.data_lake.run_materialization import LakeMaterializationError
 from app.engine.data.availability import MissingSessionsError
@@ -41,6 +41,7 @@ from app.services.spec_run_data import (
     SpecDataSourceFactory,
     materialize_spec_data_source,
 )
+from app.utils.session_anchors import LAST_SCHEDULABLE_DATE
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -57,11 +58,22 @@ _FIXTURES_DIR = Path(__file__).resolve().parents[1] / "engine" / "strategy" / "s
 # ---------------------------------------------------------------------------
 class SpecBacktestRequest(BaseModel):
     spec: StrategySpec = Field(..., description="Validated StrategySpec — see /schema for shape")
-    start_date: str = Field(..., description="YYYY-MM-DD")
-    end_date: str = Field(..., description="YYYY-MM-DD")
-    initial_cash: float = Field(100000.0, ge=0)
+    start_date: str = Field(..., description="YYYY-MM-DD", pattern=r"^\d{4}-\d{2}-\d{2}$")
+    end_date: str = Field(..., description="YYYY-MM-DD", pattern=r"^\d{4}-\d{2}-\d{2}$")
+    initial_cash: float = Field(100000.0, gt=0, allow_inf_nan=False)
     fill_mode: str = Field("signal_bar_close", description="signal_bar_close, next_bar_open or decision_minute_open")
-    commission_per_order: float = Field(0.0, ge=0)
+    commission_per_order: float = Field(0.0, ge=0, allow_inf_nan=False)
+
+    @field_validator("start_date", "end_date")
+    @classmethod
+    def _a_date_is_a_calendar_date(cls, value: str) -> str:
+        try:
+            date_value = Date.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError(f"{value!r} is not a calendar date") from exc
+        if date_value > LAST_SCHEDULABLE_DATE:
+            raise ValueError(f"date must not be past {LAST_SCHEDULABLE_DATE.isoformat()}, the last date the NYSE calendar can schedule")
+        return value
 
 
 class SpecTradeResponse(BaseModel):

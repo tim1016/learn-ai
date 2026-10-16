@@ -523,7 +523,7 @@ async def test_run_research_locks_and_one_job_carries_the_study_to_compare_over_
     locked = await client.post(f"{BASE}/studies", json=body)
     assert locked.status_code == 201, locked.text
     study = locked.json()
-    assert study["run_to_compare"] and study["dispatch"] is not None and "cancel" in study["permitted_actions"]
+    assert study["dispatch"] is not None and "cancel" in study["permitted_actions"]
 
     retried = (await client.post(f"{BASE}/studies", json=body)).json()
     assert retried["id"] == study["id"] and retried["dispatch"] == study["dispatch"]

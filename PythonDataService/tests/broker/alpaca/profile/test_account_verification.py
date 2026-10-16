@@ -127,27 +127,6 @@ def _verification(
 # ── Discovery is read-only ──────────────────────────────────────────────────
 
 
-class _ReadOnlyDouble:
-    """Exposes one read method and nothing else — no submit, no cancel."""
-
-    def __init__(self, snapshot: BrokerAccountSnapshot) -> None:
-        self._snapshot = snapshot
-
-    async def get_account(self) -> BrokerAccountSnapshot:
-        return self._snapshot
-
-
-async def test_verification_needs_nothing_but_a_read_method() -> None:
-    double = _ReadOnlyDouble(_snapshot())
-
-    assert not hasattr(double, "submit")
-    assert not hasattr(double, "cancel")
-
-    verification = await verify_account(_paper_context(), discovery=double)
-
-    assert verification.candidates[0].account_id == _PAPER_ACCOUNT_ID
-
-
 def test_the_default_discovery_port_exposes_no_mutating_method() -> None:
     """The default is a narrowing adapter, not the full trade port.
 
