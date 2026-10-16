@@ -19,7 +19,6 @@ import pytest
 
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
-from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.execution_coverage import ORDER_TOTAL_PROVEN_SUMMARY_CODE
 from app.broker.alpaca.clerk.sqlite.exit_resolution import ENTRY_ENTER_FAILED
 from app.broker.alpaca.clerk.sqlite.order_evidence import fence_fills_on_terminal_enters
@@ -48,6 +47,7 @@ from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.errors import BrokerRequestInvalid
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 from app.services.run_admission import evaluate_run_admission
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_enter
 from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
     ACCOUNT_ID,
     RUN_ID,
@@ -131,7 +131,7 @@ class _DuplicateIdTrade(_FakeTrade):
 async def _failed_enter_that_filled(
     repo: ClerkSqliteRepository, *, fill_first: bool = False
 ) -> str:
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -526,7 +526,7 @@ async def _failed_enter_never_filled(
 ) -> str:
     """A duplicate-id-refused ENTER (#2304) whose fill is never delivered."""
     clock.advance(1_000)
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,

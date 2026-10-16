@@ -22,6 +22,7 @@ import copy
 import json
 import sqlite3
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -29,7 +30,6 @@ import pytest
 
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite import reads, schema
-from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.facts import OrderSubmitAckedFacts
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_acknowledgement
@@ -46,7 +46,8 @@ from app.broker.alpaca.trade_updates import TradeUpdatesConsumer
 from app.broker.capture.journal import CaptureJournal
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 from app.broker.contract.ports import BrokerReadPort
-from tests.broker.alpaca.clerk.sqlite.conftest import remove_budget_schema_for_legacy_fixture
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_enter
+from tests.broker.alpaca.clerk.sqlite.conftest import BUDGETED_RTH_MS, remove_budget_schema_for_legacy_fixture
 from tests.broker.alpaca.clerk.sqlite.test_reconcile import (
     ACCOUNT_ID,
     WATCHDOG_RUN,
@@ -130,7 +131,8 @@ def _frame(
         )
     )
     d = f["data"]
-    ts = "2023-11-15T15:00:05.000000Z"
+    ts = datetime.fromtimestamp((BUDGETED_RTH_MS + 5_000) / 1000, UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    submitted = datetime.fromtimestamp(BUDGETED_RTH_MS / 1000, UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
     d.update({"event": event, "timestamp": ts, "at": ts})
     if exec_id is not None:
         d.update({"qty": str(qty), "price": "100.0", "execution_id": exec_id, "position_qty": "0"})
@@ -146,9 +148,9 @@ def _frame(
             "filled_avg_price": "100.0" if filled_qty else None,
             "status": status,
             "position_intent": "buy_to_open" if side == "buy" else "sell_to_close",
-            "created_at": "2023-11-15T15:00:00.000000Z",
+            "created_at": submitted,
             "updated_at": ts,
-            "submitted_at": "2023-11-15T15:00:00.000000Z",
+            "submitted_at": submitted,
             "filled_at": ts if status == "filled" else None,
         }
     )
@@ -188,7 +190,7 @@ async def _connect(
 
 async def _open_enter(repo: ClerkSqliteRepository, trade: _Trade, *, decision_id: str) -> tuple[str, str, str]:
     """ENTER BUY 5, open with 0 filled at a boot reconcile."""
-    sub = await submit_enter(
+    sub = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=WATCHDOG_SID,
@@ -824,5 +826,3 @@ def test_reconcilable_worklist_read_probes_fills_through_its_indexes(
     assert "ix_fills_order_ref" in plan, plan
     assert "ix_fills_superseded_execution_ref" in plan, plan
     assert "SCAN f " not in f"{plan} " and "SCAN successor" not in plan, plan
-
-

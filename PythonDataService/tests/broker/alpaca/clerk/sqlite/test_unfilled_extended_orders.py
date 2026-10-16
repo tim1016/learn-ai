@@ -21,7 +21,6 @@ import pytest
 
 from app.broker.alpaca.clerk.program_leg import LegShape, ProgramLeg
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
-from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
 from app.broker.alpaca.clerk.sqlite.exit_resolution import (
     cancel_and_prove_owned_entry,
@@ -46,6 +45,7 @@ from app.broker.contract.models import (
     OrderType,
     TimeInForce,
 )
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_enter
 from tests.broker.alpaca.clerk.sqlite.conftest import _walk_clock_to
 from tests.broker.alpaca.clerk.sqlite.test_exit import (
     ACCOUNT_ID,
@@ -86,7 +86,7 @@ async def test_enter_cancelled_by_the_vendor_unfilled_leaves_no_exposure(
     trade = _FakeTrade(
         submit_result=_broker_order("placeholder", status="accepted", filled_quantity=0.0)
     )
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -136,7 +136,7 @@ async def test_enter_cancelled_by_the_vendor_unfilled_reaches_failed(
     trade = _FakeTrade(
         submit_result=_broker_order("placeholder", status="accepted", filled_quantity=0.0)
     )
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -168,7 +168,7 @@ async def test_terminal_unfilled_enter_folds_its_failure_once(
     trade = _FakeTrade(
         submit_result=_broker_order("placeholder", status="accepted", filled_quantity=0.0)
     )
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -208,7 +208,7 @@ async def test_partially_filled_then_cancelled_enter_does_not_reach_failed(
     trade = _FakeTrade(
         submit_result=_broker_order("placeholder", status="accepted", filled_quantity=0.0)
     )
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -432,7 +432,7 @@ async def test_a_submit_response_that_returns_cancelled_does_not_end_the_enter(
     trade = _FakeTrade(
         submit_result=_broker_order("placeholder", status="canceled", filled_quantity=0.0)
     )
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -462,7 +462,7 @@ async def test_a_recorded_fill_blocks_the_fold_even_when_the_snapshot_reports_ze
     trade = _FakeTrade(
         submit_result=_broker_order("placeholder", status="accepted", filled_quantity=0.0)
     )
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -714,7 +714,7 @@ async def _frame(
 
 
 async def _working_xh_enter(clerk: ClerkSqliteRepository) -> tuple[str, str]:
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         clerk,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -892,7 +892,7 @@ async def test_a_websocket_cancel_during_the_submit_post_ends_the_enter(
     worklist, and the submit response never folds ``ENTER_UNFILLED``. So the
     frame ends it, and the late submit response does not revive it.
     """
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,

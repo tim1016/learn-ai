@@ -43,6 +43,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
 from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import accept_budgeted_test_enter, submit_budgeted_test_run
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _clock_at
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 
 _FIXTURE_ROOT = Path(__file__).parents[4] / "fixtures" / "golden" / "alpaca-sqlite-execution"
 _ACCOUNT_ID = "PA-S1-EXECUTION"
@@ -63,6 +64,7 @@ def _repository_for_strategy(
     *,
     strategy_instance_id: str,
     symbol: str,
+    historical: bool = False,
 ) -> tuple[ClerkSqliteRepository, EnterSubmission]:
     clock = _clock_at(NOON)
     repo = ClerkSqliteRepository.initialize(
@@ -75,12 +77,17 @@ def _repository_for_strategy(
         symbol=symbol,
         config_hash="s1-ledger-config",
     )
-    submit_budgeted_test_run(
-        repo,
-        account_id=_ACCOUNT_ID,
-        strategy_instance_id=strategy_instance_id,
-        lifecycle_run_id=_RUN_ID,
-    )
+    if historical:
+        seed_historical_run_started(
+            repo, account_id=_ACCOUNT_ID, strategy_instance_id=strategy_instance_id, lifecycle_run_id=_RUN_ID
+        )
+    else:
+        submit_budgeted_test_run(
+            repo,
+            account_id=_ACCOUNT_ID,
+            strategy_instance_id=strategy_instance_id,
+            lifecycle_run_id=_RUN_ID,
+        )
     accepted = accept_budgeted_test_enter(
         repo,
         account_id=_ACCOUNT_ID,

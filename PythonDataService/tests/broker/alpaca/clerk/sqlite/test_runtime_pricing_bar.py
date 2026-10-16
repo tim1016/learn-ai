@@ -27,20 +27,24 @@ from app.broker.alpaca.clerk.live_envelope import LIVE_ENVELOPE_CASH_EXCEEDED, L
 from app.broker.alpaca.clerk.models import EffectOperationReceipt, EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.program_leg import PRICING_BAR_MISMATCH, ProgramLegPolicy
 from app.broker.alpaca.clerk.shadow_broker import compose_shadow_ports
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
+from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade, _order_pricing_bar
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade, _order_pricing_bar, _strategy_display_name
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide, OrderType
 from app.marketdata.feed import MarketDataBar
 from app.schemas.deployment_budget import DeployBudgetConsent
 from app.services import market_liveness
 from app.services.bot_binding_authority import SyntheticBindingAuthority
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
+from app.services.bot_carryover import configuration_hash, immutable_configuration_payload
 from app.services.session_authority import et_minute_of_day_ms
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
 from tests._helpers.market_quotes import publish_quotes
 from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_enter
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _FakeReadPort, _FakeTradePort, _TestClock
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS
 from tests.broker.alpaca.clerk.sqlite.test_exit import _broker_order, _FakeTrade
 from tests.broker.alpaca.clerk.sqlite.test_runtime_program_leg import _binding
@@ -211,18 +215,40 @@ async def test_a_broker_sent_exit_goes_out_with_no_bar_of_the_traded_asset(tmp_p
         repo.close()
 
 
-async def test_a_bot_that_trades_another_asset_is_registered_under_that_asset(tmp_path: Path) -> None:
-    """The Clerk records the traded asset, not the bot's signal stream."""
+async def test_a_bot_that_trades_another_asset_can_be_started_again(tmp_path: Path) -> None:
+    """A historical Resume keeps the traded asset; v2 requires a fresh identity."""
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
     facade = SqliteAlpacaClerkFacade(repo=repo, read=_FakeReadPort(), trade=_FakeTradePort(), account_mode="paper")
     binding = _binding(use_rth=True).model_copy(update={"action_plan": _TRADES_QQQ})
     try:
-        await facade.register_strategy_run(binding)
-        with pytest.raises(BudgetUnavailable, match="already exists"):
-            await facade.register_strategy_run(binding)
+        repo.register_strategy_instance(
+            strategy_instance_id=binding.strategy_instance_id, symbol=TRADED,
+            config_hash=configuration_hash(binding), strategy_key=binding.strategy_key,
+            display_name=_strategy_display_name(binding.strategy_key),
+            config_json=canonicalize(immutable_configuration_payload(binding)), exit_terms=binding.exit_terms,
+        )
+        seed_historical_run_started(
+            repo, account_id=repo.account_id, strategy_instance_id=binding.strategy_instance_id,
+            lifecycle_run_id=binding.run_id,
+        )
+        submit_stop_run(
+            repo, account_id=repo.account_id, strategy_instance_id=binding.strategy_instance_id,
+            lifecycle_run_id=binding.run_id, operator_reason="resume_with_budget",
+        )
+        seed_historical_run_started(
+            repo, account_id=repo.account_id, strategy_instance_id=binding.strategy_instance_id,
+            lifecycle_run_id="resumed-run",
+        )
 
         registered = repo.strategy_instance(binding.strategy_instance_id)
         assert registered is not None and registered["symbol"] == TRADED
+        assert repo.active_run(binding.strategy_instance_id) is not None
+        submit_stop_run(
+            repo, account_id=repo.account_id, strategy_instance_id=binding.strategy_instance_id,
+            lifecycle_run_id="resumed-run", operator_reason="retire_historical_resume",
+        )
+        with pytest.raises(BudgetUnavailable, match="fresh deployment identity"):
+            await facade.register_strategy_run(binding.model_copy(update={"run_id": "v2-run"}))
     finally:
         repo.close()
 
