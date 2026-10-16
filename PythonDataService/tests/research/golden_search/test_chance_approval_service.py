@@ -176,7 +176,7 @@ async def test_an_enrolled_study_refuses_to_approve_a_missing_required_carry_ove
     with pytest.raises(GoldenSearchRefusal) as refused:
         await driver.command(row, "approve", {**APPROVE, "candidate_key": "all_period"})
     assert refused.value.code == "WEAKNESS_ACKNOWLEDGEMENT_REQUIRED"
-    assert "CHANCE_UNAVAILABLE" in str(refused.value)
+    assert fit["weakness"][0]["text"] in str(refused.value)
 
     row = await driver.advance(row, "approve", {**APPROVE, "candidate_key": "all_period", "acknowledge_research_weakness": True})
     assert row.state == "approved"

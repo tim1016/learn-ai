@@ -1062,10 +1062,12 @@ def run_host_qualification(
                 headers=directory_headers,
                 json_body={
                     "action_id": "archive",
+                    "concurrency_token": "qualification-unbound-live-probe",
                     "idempotency_key": "qualification-unbound-live-probe",
                     "command_context": {
                         "capability": "bot_action",
                         "idempotency_key": "qualification-unbound-live-probe",
+                        "expected_effective_binding_generation": 1,
                         "target": {"account_id": "PAQUALIFICATION", "entity_id": "qualification-probe"},
                     },
                 },
