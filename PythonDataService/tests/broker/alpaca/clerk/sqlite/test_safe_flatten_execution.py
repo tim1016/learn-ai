@@ -222,7 +222,7 @@ async def _held_position(
     await sink.record_lifecycle_event(
         client_order_id=submission.order_ref,
         event=BrokerOrderEvent(
-            event_type="fill", occurred_at_ms=1_700_000_000_600,
+            event_type="fill", occurred_at_ms=repo.clock(),
             price=100, quantity=10, execution_id=execution_id,
         ),
         event_key=f"execution:{execution_id}",
