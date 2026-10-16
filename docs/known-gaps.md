@@ -409,13 +409,6 @@ current budget, risk-edit and mode behavior is recorded in ADRs 0059 and 0060.
   Alpaca's fee rows carry no order ID. The exact comparison is in the Paper
   qualification runbook; do not change rates or rounding without stronger
   attribution evidence.
-- **Outside option short fills block Paper fee evidence (P1, 2026-10-15,
-  #3308).** In `PythonDataService/app/broker/alpaca/clerk/sqlite/fee_evidence.py`,
-  the outside-fill path refuses Alpaca's `sell_short` activity side. The #3225
-  Paper credit sign check produced one such valid option fill; the account's
-  fee population became incomplete and bot entries stayed held. The repair
-  needs the broker's contract multiplier and option fee model, not an equity
-  fee estimate for the short option.
 - **Outside multi-leg parents have no reviewable custody row (P2,
   2026-10-15, #3309).** Alpaca gives an `mleg` parent no single symbol or side.
   `PythonDataService/app/broker/alpaca/clerk/sqlite/external_orders.py` contains

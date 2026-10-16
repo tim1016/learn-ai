@@ -923,7 +923,7 @@ def terminal_exposure_notices(
     held = _vouched_holdings(projection, sid, pass_proof)
     # A pass that vouches for what the bot holds, but that the page's own
     # gate did not accept in this cut, sends the owner to Reconcile now first.
-    flatten_ready = _flatten_ready(projection)
+    flatten_ready = _flatten_ready(projection) and held is not None and len(held) == 1
     settle = _settle_capability(projection) if projection.strategy_instance_id == sid else None
     if settle is not None:
         notices.append(_closing_order_unconfirmed(settle))
@@ -932,9 +932,13 @@ def terminal_exposure_notices(
     elif held:
         positions = ", ".join(f"{quantity:g} {held_symbol}" for held_symbol, quantity in held.items())
         if exit_in_progress(projection, sid):
+            closing = "The Clerk is still working this bot's exit order."
+            if len(held) == 1:
+                closing += " Flatten becomes available if that order ends without closing the position."
+        elif len(held) > 1:
             closing = (
-                "The Clerk is still working this bot's exit order; Flatten becomes available "
-                "if that order ends without closing the position."
+                "Flatten is unavailable for this multi-leg position. Open the bot's What getting out costs "
+                "section to check the Clerk's scheduled close. A scheduled close sends the whole structure as one order."
             )
         elif flatten_ready:
             closing = "Use Flatten to close this position."

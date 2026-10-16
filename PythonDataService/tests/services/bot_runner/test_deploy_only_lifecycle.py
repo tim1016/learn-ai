@@ -149,7 +149,7 @@ async def test_a_trade_run_records_who_ended_it_beside_its_custody_proof(
         assert outcome_headline(outcome.kind, outcome.reason_code, flattened=False) == headline
         label, explanation = outcome_card_copy(outcome.kind, outcome.reason_code)
         assert label == ('Failed to launch' if not launch_recorded else 'Stopped; flatten required')
-        assert explanation.endswith('Use Flatten to resolve that exposure.')
+        assert explanation.endswith('Check the position warning for the available closing path.')
         # The canary verdict is keyed off the proof, as before.
         assert outcome.canary_rollback is not None
         assert (outcome.canary_rollback.stop_outcome, outcome.canary_rollback.allowed) == ('STOP_REQUIRES_FLATTEN', False)

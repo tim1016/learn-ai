@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import threading
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 
@@ -19,23 +16,13 @@ from app.services.quantlib_pricer import (
     PricingEngine,
     price_option,
 )
+from app.services.quantlib_worker import run_quantlib
 from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import now_ms_utc
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-# A QuantLib call runs in a worker thread, so a long one does not hold the event loop (#3187). QuantLib keeps its
-# evaluation date in one process-wide setting that each call sets and then reads, which the loop used to keep to one
-# call at a time. The lock keeps that. A call holds it for one price, never a whole request.
-_QUANTLIB_CALL = threading.Lock()
-
-
-def _one_call_at_a_time[T](price: Callable[..., T], /, **inputs: object) -> T:
-    with _QUANTLIB_CALL:
-        return price(**inputs)
-
 
 # The bound the strategy and portfolio requests declare on their rate (`ge=0, le=0.5`). It is checked in a validator,
 # not a `Field` constraint, so the published OpenAPI schema keeps its shape.
@@ -126,8 +113,7 @@ async def quantlib_price(request: QuantLibPriceRequest):
         eval_d = date.fromisoformat(request.evaluation_date) if request.evaluation_date else None
         exp_d = option_expiry_date(request.expiration_ms)
 
-        result = await asyncio.to_thread(
-            _one_call_at_a_time,
+        result = await run_quantlib(
             price_option,
             spot=request.spot,
             strike=request.strike,
@@ -644,8 +630,7 @@ async def pricing_compare(request: PricingCompareRequest):
                 engine_points: list[PricingPointResult] = []
                 try:
                     for s in spots:
-                        result = await asyncio.to_thread(
-                            _one_call_at_a_time,
+                        result = await run_quantlib(
                             _price_option_for_compare,
                             spot=s,
                             strike=request.strike,
