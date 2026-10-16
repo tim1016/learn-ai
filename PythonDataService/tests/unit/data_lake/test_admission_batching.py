@@ -245,7 +245,7 @@ def test_the_call_bound_is_preserved_as_the_outage_taxonomy() -> None:
     assert elapsed < 5.0, "the bound fired promptly, not at some outer timeout"
 
 
-def test_closing_fails_everything_still_parked_with_the_typed_outage() -> None:
+def test_closing_fails_everything_still_parked_with_the_typed_outage(caplog: pytest.LogCaptureFixture) -> None:
     """Teardown never leaves a waiter to its own bound (#3047 review)."""
     in_flight = threading.Event()
 
@@ -256,25 +256,32 @@ def test_closing_fails_everything_still_parked_with_the_typed_outage() -> None:
 
     batcher = AdmissionBatcher(pool_max_size=1, lookup=held)
     failures: dict[int, BaseException | bool] = {}
+    completed = {1: threading.Event(), 2: threading.Event()}
 
     def submit(n: int) -> None:
         failures[n] = _capture(batcher.submit, _check(n))
+        completed[n].set()
 
     first = threading.Thread(target=submit, args=(1,), daemon=True)
     first.start()
     assert in_flight.wait(timeout=5.0), "the lookup is in flight"
     second = threading.Thread(target=submit, args=(2,), daemon=True)  # parks behind it
     second.start()
-    time.sleep(0.1)
 
-    started = time.monotonic()
+    async def wait_for_parked() -> None:
+        while not batcher._pending:
+            await asyncio.sleep(0.01)
+
+    asyncio.run_coroutine_threadsafe(wait_for_parked(), batcher._loop).result(timeout=15.0)
+
     batcher.close()
-    first.join(timeout=5.0)
-    second.join(timeout=5.0)
+    assert completed[1].wait(timeout=15.0), "the in-flight submitter recorded its shutdown verdict"
+    assert completed[2].wait(timeout=15.0), "the parked submitter recorded its shutdown verdict"
 
     assert isinstance(failures.get(1), CatalogUnavailableError), "the in-flight batch failed with the outage"
     assert isinstance(failures.get(2), CatalogUnavailableError), "the parked waiter failed with the outage"
-    assert time.monotonic() - started < 5.0, "both failed at close, not at their own call bound"
+    assert all("shutting down" in str(failures[n]) for n in (1, 2)), "close, not the call bound, failed both"
+    assert "its thread is abandoned" not in caplog.text
 
 
 # ── Database tier: set-based parity and revocation ─────────────────────────
