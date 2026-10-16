@@ -145,3 +145,19 @@ async def test_a_new_deploy_cannot_refuse_funding_after_registering_its_bot(
     assert checks == 1
     assert budget_repo.strategy_instance(SID) is not None
     assert budget_repo.deployment_budget(SID) is not None
+
+
+async def test_a_new_deploy_needs_no_database_read_after_its_budget_commits(
+    budget_repo, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The run owner must be held even if a later exit-terms read would fail."""
+    facade = _facade(budget_repo, gate=_gate())
+
+    def fail_exit_terms(_strategy_instance_id: str):
+        raise RuntimeError("exit terms read failed")
+
+    monkeypatch.setattr(budget_repo, "exit_terms", fail_exit_terms)
+    await facade.register_strategy_run(_deploy_of(budget_repo, _consent()))
+
+    assert budget_repo.active_run(SID) is not None
+    assert budget_repo.deployment_budget(SID) is not None

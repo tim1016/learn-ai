@@ -1094,7 +1094,7 @@ class SqliteAlpacaClerkFacade:
             )
             if not submission.created:
                 raise BudgetUnavailable("This Deploy command already exists. Recover its stored result; it cannot launch again.")
-            self._exit_terms[binding.strategy_instance_id] = self._sealed_exit_terms(binding)
+            self._exit_terms[binding.strategy_instance_id] = terms
             self._hold_run(binding, run_owner)
 
     def _sealed_exit_terms(self, binding: BrokerBotBinding) -> ExitTerms:
