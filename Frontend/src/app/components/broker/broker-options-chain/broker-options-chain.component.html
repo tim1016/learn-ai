@@ -26,8 +26,7 @@
 
 @if (!canStream()) {
   <p class="muted">
-    Broker is disconnected. Connect IB Gateway to a paper account and
-    refresh the Status page.
+    Broker is disconnected. Connect IB Gateway to a paper account; this page checks again automatically.
   </p>
 } @else {
   <section class="controls">
@@ -37,7 +36,7 @@
         class="control-input mono"
         type="text"
         [value]="symbol()"
-        (input)="symbol.set($any($event.target).value)"
+        (input)="setSymbol($any($event.target).value)"
         aria-label="Symbol"
       />
     </label>
@@ -47,7 +46,7 @@
       <select
         class="control-input"
         [ngModel]="selectedExpiry()"
-        (ngModelChange)="selectedExpiry.set($event)"
+        (ngModelChange)="selectExpiry($event)"
         aria-label="Expiry"
       >
         @for (e of expirations(); track e.ms) {
@@ -88,7 +87,7 @@
       type="button"
       class="ghost-btn"
       (click)="togglePause()"
-      [disabled]="streamStatus() === 'idle'"
+      [disabled]="streamStatus() === 'idle' && !paused()"
     >
       {{ paused() ? 'Resume' : 'Pause' }}
     </button>
@@ -115,6 +114,14 @@
       [error]="err"
       contextWhat="The chain stream stopped."
       (retry)="startStream()"
+    />
+  }
+
+  @if (engineError(); as err) {
+    <app-section-error
+      [error]="err"
+      contextWhat="The engine comparison could not be calculated for one or more quotes."
+      [canRetry]="false"
     />
   }
 
@@ -166,18 +173,10 @@
   </section>
 
   <section class="chain-table-wrap">
-    <!--
-      delayedFallback stays false until the Python service exposes
-      /api/broker/market-data-tier so we can flip the caption to
-      amber when no OPRA subscription is detected. Tracked as a
-      follow-up to PR 2.
-    -->
     <app-data-source
       origin="IBKR"
       method="OPRA top-of-book, SMART-routed · engine column from QuantLibService"
-      [freshness]="latestSnapshot()
-        ? 'live · last tick ' + fmtTimestampNy(latestSnapshot()?.as_of_ms ?? 0)
-        : 'awaiting first snapshot'"
+      [freshness]="freshness()"
     />
     @if (rows().length === 0) {
       <p class="muted">No quotes yet. Start the stream after picking strikes.</p>

@@ -95,11 +95,12 @@ export class BrokerOptionsSurfaceComponent {
   private readonly injector = inject(Injector);
   private readonly destroyRef = inject(DestroyRef);
   readonly bannerState = this.health.bannerState;
+  private expirationsRequested = false;
+  private setupRequestSeq = 0;
 
   readonly symbol = signal(DEFAULT_SYMBOL);
   readonly daysOut = signal(DEFAULT_DAYS_OUT);
   readonly strikesBand = signal(DEFAULT_STRIKES_BAND);
-  readonly debounceMs = signal(DEFAULT_DEBOUNCE_MS);
   readonly zMetric = signal<ZMetric>('last');
   readonly monthliesOnly = signal(true);
 
@@ -107,11 +108,9 @@ export class BrokerOptionsSurfaceComponent {
   readonly allExpirations = signal<number[]>([]);
   /** Strikes per expiry, populated lazily by setupSurface(). */
   private strikesByExpiry = new Map<number, number[]>();
-  /** Best-effort spot price used to pick the strike band. Null until first snapshot. */
-  readonly spotPrice = signal<number | null>(null);
-
   readonly setupLoading = signal(false);
   readonly setupError = signal<unknown>(null);
+  readonly chartError = signal<unknown>(null);
   readonly paused = signal(false);
   readonly readyExpiries = signal<number[]>([]);
   readonly readyStrikes = signal<number[]>([]);
@@ -123,8 +122,9 @@ export class BrokerOptionsSurfaceComponent {
     () => this.currentStream()?.status() ?? 'idle',
   );
   readonly streamError = signal<unknown>(null);
+  private readonly lastSnapshot = signal<IbkrSurfaceSnapshot | null>(null);
   readonly latestSnapshot = computed<IbkrSurfaceSnapshot | null>(
-    () => this.currentStream()?.latest() ?? null,
+    () => this.currentStream()?.latest() ?? this.lastSnapshot(),
   );
 
   readonly canStream = computed(() => {
@@ -148,9 +148,7 @@ export class BrokerOptionsSurfaceComponent {
 
   readonly overCap = computed(() => this.projectedLines() > LINE_CAP);
 
-  readonly underlyingPrice = computed(
-    () => this.latestSnapshot()?.underlying_price ?? this.spotPrice(),
-  );
+  readonly underlyingPrice = computed(() => this.latestSnapshot()?.underlying_price ?? null);
 
   /** Currently-rendered grid: sorted unique strikes and expiries. */
   readonly axesY = computed<number[]>(() => {
@@ -191,6 +189,11 @@ export class BrokerOptionsSurfaceComponent {
   );
 
   constructor() {
+    this.health.start();
+    effect(() => {
+      const snapshot = this.currentStream()?.latest() ?? null;
+      if (snapshot !== null) this.lastSnapshot.set(snapshot);
+    });
     // Mirror stream error onto our local signal.
     effect(() => {
       const err = this.currentStream()?.lastError() ?? null;
@@ -207,12 +210,13 @@ export class BrokerOptionsSurfaceComponent {
       void this.axesX();
       void this.axesY();
       void this.zMetric();
-      this.renderCharts();
+      void this.renderCharts().catch((error: unknown) => this.chartError.set(error));
     });
 
     // Auto-load expirations on first paint when the broker is live.
     effect(() => {
-      if (this.canStream() && this.allExpirations().length === 0 && !this.setupLoading()) {
+      if (this.canStream() && !this.expirationsRequested) {
+        this.expirationsRequested = true;
         void this.loadExpirations();
       }
     });
@@ -229,43 +233,68 @@ export class BrokerOptionsSurfaceComponent {
 
   async loadExpirations(): Promise<void> {
     if (!this.canStream()) return;
+    const seq = ++this.setupRequestSeq;
+    const symbol = this.symbol();
     this.setupLoading.set(true);
     this.setupError.set(null);
     try {
-      const result = await this.broker.expirations(this.symbol());
+      const result = await this.broker.expirations(symbol);
+      if (seq !== this.setupRequestSeq) return;
       this.allExpirations.set(result.expirations_ms);
     } catch (err) {
-      this.setupError.set(err);
+      if (seq === this.setupRequestSeq) this.setupError.set(err);
     } finally {
-      this.setupLoading.set(false);
+      if (seq === this.setupRequestSeq) this.setupLoading.set(false);
     }
+  }
+
+  setSymbol(symbol: string): void {
+    if (symbol === this.symbol()) return;
+    this.invalidateSetup();
+    this.symbol.set(symbol);
+    this.allExpirations.set([]);
+    this.strikesByExpiry.clear();
+  }
+
+  setDaysOut(days: number): void {
+    if (days === this.daysOut()) return;
+    this.invalidateSetup();
+    this.daysOut.set(days);
+  }
+
+  setStrikesBand(band: number): void {
+    if (band === this.strikesBand()) return;
+    this.invalidateSetup();
+    this.strikesBand.set(band);
+  }
+
+  setMonthliesOnly(monthliesOnly: boolean): void {
+    if (monthliesOnly === this.monthliesOnly()) return;
+    this.invalidateSetup();
+    this.monthliesOnly.set(monthliesOnly);
+  }
+
+  private invalidateSetup(): void {
+    this.setupRequestSeq++;
+    this.stopStream();
+    this.paused.set(false);
+    this.lastSnapshot.set(null);
+    this.readyExpiries.set([]);
+    this.readyStrikes.set([]);
+    this.setupError.set(null);
+    this.setupLoading.set(false);
   }
 
   /**
    * Pick expiries within the user-chosen window. If monthliesOnly is on
-   * we keep only the third-Friday-style monthlies (heuristic: largest
-   * gap from the prior expiry > 6 days), which gives the typical ~2
-   * monthlies inside a 60-day window and keeps the line count well
-   * under the cap.
+   * we keep each month's listed expiry on or immediately before its
+   * third Friday (the Thursday listing covers a Friday market holiday).
    */
   pickExpiries(): number[] {
     const now = Date.now();
     const cutoff = now + this.daysOut() * 24 * 60 * 60 * 1000;
     const inWindow = this.allExpirations().filter((ms) => ms >= now && ms <= cutoff);
-    if (!this.monthliesOnly()) return inWindow;
-    // Heuristic: the gap between a monthly and the prior weekly is
-    // typically a week or more. Sort and accept entries where the prior
-    // entry was > 6 days earlier (or it's the first).
-    const sorted = [...inWindow].sort((a, b) => a - b);
-    const monthlies: number[] = [];
-    let prev = 0;
-    for (const ms of sorted) {
-      if (prev === 0 || ms - prev > 6 * 24 * 60 * 60 * 1000) {
-        monthlies.push(ms);
-      }
-      prev = ms;
-    }
-    return monthlies;
+    return this.monthliesOnly() ? pickMonthlyExpiries(inWindow) : inWindow;
   }
 
   /**
@@ -276,10 +305,21 @@ export class BrokerOptionsSurfaceComponent {
    */
   async setupSurface(): Promise<void> {
     if (!this.canStream()) return;
+    this.stopStream();
+    this.paused.set(false);
+    this.lastSnapshot.set(null);
+    const seq = ++this.setupRequestSeq;
+    const sym = this.symbol();
     this.setupLoading.set(true);
     this.setupError.set(null);
+    this.readyExpiries.set([]);
+    this.readyStrikes.set([]);
     try {
-      const sym = this.symbol();
+      if (this.allExpirations().length === 0) {
+        const result = await this.broker.expirations(sym);
+        if (seq !== this.setupRequestSeq) return;
+        this.allExpirations.set(result.expirations_ms);
+      }
       const expiries = this.pickExpiries();
       if (expiries.length === 0) {
         throw new Error(
@@ -291,25 +331,25 @@ export class BrokerOptionsSurfaceComponent {
       const lists = await Promise.all(
         expiries.map((ms) => this.broker.strikes(sym, ms)),
       );
+      if (seq !== this.setupRequestSeq) return;
       for (const list of lists) this.strikesByExpiry.set(list.expiry_ms, list.strikes);
 
-      // Spot is needed to centre the strike band. Use the latest snapshot
-      // if we have one (from a previous load) or fall back to the median
-      // strike of the nearest expiry as a sanity centre.
-      let spot = this.underlyingPrice();
-      if (spot === null) {
+      // A strike-grid midpoint can centre selection before the first tick,
+      // but it is not a market spot price and must never be labelled as one.
+      let centre = this.underlyingPrice();
+      if (centre === null) {
         const first = this.strikesByExpiry.get(expiries[0]) ?? [];
-        if (first.length > 0) spot = first[Math.floor(first.length / 2)];
+        if (first.length > 0) centre = first[Math.floor(first.length / 2)];
       }
-      this.spotPrice.set(spot);
-      if (spot === null) {
-        throw new Error('Could not resolve a spot price to centre the strike band.');
+      if (centre === null) {
+        throw new Error('Could not resolve a strike-grid centre for the band.');
       }
+      const selectedCentre = centre;
 
       const band = this.strikesBand();
       const perExpiry: number[][] = expiries.map((ms) => {
         const all = this.strikesByExpiry.get(ms) ?? [];
-        return pickStrikesAroundAtm(all, spot as number, band);
+        return pickStrikesAroundAtm(all, selectedCentre, band);
       });
 
       const intersected = intersectAll(perExpiry).sort((a, b) => a - b);
@@ -322,9 +362,9 @@ export class BrokerOptionsSurfaceComponent {
       this.readyExpiries.set(expiries.sort((a, b) => a - b));
       this.readyStrikes.set(intersected);
     } catch (err) {
-      this.setupError.set(err);
+      if (seq === this.setupRequestSeq) this.setupError.set(err);
     } finally {
-      this.setupLoading.set(false);
+      if (seq === this.setupRequestSeq) this.setupLoading.set(false);
     }
   }
 
@@ -347,11 +387,12 @@ export class BrokerOptionsSurfaceComponent {
     this.stopStream();
     this.streamError.set(null);
     this.paused.set(false);
+    this.lastSnapshot.set(null);
 
     const params = new URLSearchParams();
     for (const e of expiries) params.append('expiry_ms', String(e));
     for (const k of strikes) params.append('strikes', String(k));
-    params.set('debounce_ms', String(this.debounceMs()));
+    params.set('debounce_ms', String(DEFAULT_DEBOUNCE_MS));
     params.set('max_lines', String(LINE_CAP));
     const url =
       `/api/broker/option-surface/${encodeURIComponent(this.symbol())}` +
@@ -441,6 +482,8 @@ export class BrokerOptionsSurfaceComponent {
     // Lazy-load echarts so this page's bundle doesn't bloat the rest.
     const echarts = await import('echarts');
     await import('echarts-gl');
+    if (xs !== this.axesX() || ys !== this.axesY()) return;
+    this.chartError.set(null);
 
     const xCategories = xs.map((ms) => fmtBrokerExpiryDate(ms));
     const yCategories = ys.map((k) => k.toFixed(2));
@@ -503,6 +546,28 @@ export class BrokerOptionsSurfaceComponent {
 }
 
 // ── Helpers (pure, exported for unit tests) ───────────────────────────
+
+const EXPIRY_DATE = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York', year: 'numeric', month: 'numeric', day: 'numeric',
+});
+
+export function pickMonthlyExpiries(expiriesMs: number[]): number[] {
+  const byMonth = new Map<string, { ms: number; day: number }>();
+  for (const ms of expiriesMs) {
+    const parts = EXPIRY_DATE.formatToParts(ms);
+    const numberPart = (type: string): number => Number(parts.find((part) => part.type === type)?.value);
+    const year = numberPart('year');
+    const month = numberPart('month');
+    const day = numberPart('day');
+    const firstWeekday = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
+    const thirdFriday = 1 + (5 - firstWeekday + 7) % 7 + 14;
+    if (day > thirdFriday || day < thirdFriday - 1) continue;
+    const key = `${year}-${month}`;
+    const prior = byMonth.get(key);
+    if (prior === undefined || day > prior.day) byMonth.set(key, { ms, day });
+  }
+  return [...byMonth.values()].map(({ ms }) => ms).sort((a, b) => a - b);
+}
 
 export function pickStrikesAroundAtm(
   strikes: number[],

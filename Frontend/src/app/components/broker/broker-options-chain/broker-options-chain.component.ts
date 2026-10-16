@@ -93,6 +93,7 @@ export class BrokerOptionsChainComponent {
   readonly bannerState = this.health.bannerState;
   private readonly quantlib = inject(QuantLibService);
   private readonly injector = inject(Injector);
+  private expirationsRequested = false;
 
   readonly symbol = signal(DEFAULT_SYMBOL);
   readonly expirations = signal<ExpirationOption[]>([]);
@@ -115,8 +116,10 @@ export class BrokerOptionsChainComponent {
     this.currentStream()?.status() ?? 'idle',
   );
   readonly streamError = signal<unknown>(null);
+  readonly engineError = signal<unknown>(null);
+  private readonly lastSnapshot = signal<IbkrChainSnapshot | null>(null);
   readonly latestSnapshot = computed<IbkrChainSnapshot | null>(
-    () => this.currentStream()?.latest() ?? null,
+    () => this.currentStream()?.latest() ?? this.lastSnapshot(),
   );
 
   /** Engine reprice cache keyed by `${strike}:${right}` → last bid/ask mid we priced at. */
@@ -128,6 +131,7 @@ export class BrokerOptionsChainComponent {
   // Monotonic sequence so a slow strike-fetch for an old (symbol, expiry)
   // cannot overwrite the result of a newer one. Increment on every issue.
   private strikesRequestSeq = 0;
+  private repriceRequestSeq = 0;
 
   readonly fmtCurrency = fmtCurrency;
   readonly fmtNumber = fmtNumber;
@@ -174,33 +178,51 @@ export class BrokerOptionsChainComponent {
   });
 
   readonly underlyingPrice = computed(() => this.latestSnapshot()?.underlying_price ?? null);
+  readonly freshness = computed(() => {
+    const snapshot = this.latestSnapshot();
+    const status = this.streamStatus();
+    if (status === 'error') return 'stream stopped · last snapshot is stale';
+    if (status === 'idle') return this.paused() ? 'paused · last snapshot is stale' : 'awaiting first snapshot';
+    return snapshot === null ? 'awaiting first snapshot' : `live · last tick ${fmtTimestampNy(snapshot.as_of_ms)}`;
+  });
 
   constructor() {
-    void this.loadExpirations();
+    this.health.start();
+    effect(() => {
+      const snapshot = this.currentStream()?.latest() ?? null;
+      if (snapshot !== null) this.lastSnapshot.set(snapshot);
+    });
+    effect(() => {
+      if (this.canStream() && !this.expirationsRequested) {
+        this.expirationsRequested = true;
+        void this.loadExpirations();
+      }
+    });
 
     // When the expiry changes, refetch the qualifiable strikes for the
     // new (symbol, expiry) and reset any previous selection. Bumping the
     // sequence in both branches invalidates any in-flight loadStrikes
     // that is about to resolve from a now-stale request.
-    effect(() => {
+    effect((onCleanup) => {
       const expiry = this.selectedExpiry();
       const sym = this.symbol();
+      this.strikesRequestSeq++;
       if (expiry === null) {
-        this.strikesRequestSeq++;
         this.availableStrikes.set([]);
         this.selectedStrikes.set(new Set());
         return;
       }
-      void this.loadStrikes(sym, expiry);
+      const timer = setTimeout(() => void this.loadStrikes(sym, expiry), 250);
+      onCleanup(() => clearTimeout(timer));
     });
 
     // Recompute engine Greeks any time a snapshot arrives. Throttled
     // implicitly by the per-key mid threshold.
     effect(() => {
+      if (this.currentStream() === null) return;
       const snap = this.latestSnapshot();
-      const expiry = this.selectedExpiry();
-      if (snap === null || expiry === null) return;
-      this.maybeRepriceEngine(snap, expiry);
+      if (snap === null) return;
+      this.maybeRepriceEngine(snap);
     });
 
     // Mirror SSE error onto our local signal so it survives stream
@@ -213,9 +235,11 @@ export class BrokerOptionsChainComponent {
 
   async loadExpirations(): Promise<void> {
     if (!this.canStream()) return;
+    const symbol = this.symbol();
     this.setupError.set(null);
     try {
-      const result = await this.broker.expirations(this.symbol());
+      const result = await this.broker.expirations(symbol);
+      if (symbol !== this.symbol()) return;
       const opts: ExpirationOption[] = result.expirations_ms.map((ms) => ({
         ms,
         label: fmtBrokerExpiryDate(ms),
@@ -224,10 +248,34 @@ export class BrokerOptionsChainComponent {
       // Default to nearest expiry.
       const now = Date.now();
       const next = opts.find((o) => o.ms >= now) ?? opts[0];
-      if (next) this.selectedExpiry.set(next.ms);
+      if (next) this.selectExpiry(next.ms);
     } catch (err) {
-      this.setupError.set(err);
+      if (symbol === this.symbol()) this.setupError.set(err);
     }
+  }
+
+  setSymbol(symbol: string): void {
+    if (symbol === this.symbol()) return;
+    this.stopStream();
+    this.paused.set(false);
+    this.symbol.set(symbol);
+    this.lastSnapshot.set(null);
+    this.selectedExpiry.set(null);
+    this.expirations.set([]);
+    this.availableStrikes.set([]);
+    this.selectedStrikes.set(new Set());
+    this.engineMidByKey.clear();
+    this.engineGreeksByKey.set(new Map());
+  }
+
+  selectExpiry(expiryMs: number): void {
+    if (expiryMs === this.selectedExpiry()) return;
+    this.stopStream();
+    this.paused.set(false);
+    this.lastSnapshot.set(null);
+    this.engineMidByKey.clear();
+    this.engineGreeksByKey.set(new Map());
+    this.selectedExpiry.set(expiryMs);
   }
 
   startStream(): void {
@@ -246,7 +294,9 @@ export class BrokerOptionsChainComponent {
     this.stopStream();
 
     this.streamError.set(null);
+    this.engineError.set(null);
     this.paused.set(false);
+    this.lastSnapshot.set(null);
     this.engineMidByKey.clear();
     this.engineGreeksByKey.set(new Map());
 
@@ -268,6 +318,7 @@ export class BrokerOptionsChainComponent {
   }
 
   stopStream(): void {
+    this.repriceRequestSeq++;
     const stream = this.currentStream();
     if (stream) {
       stream.close();
@@ -337,30 +388,48 @@ export class BrokerOptionsChainComponent {
 
   trackRow = (_: number, row: Row): number => row.strike;
 
-  private maybeRepriceEngine(snap: IbkrChainSnapshot, expiryMs: number): void {
+  private maybeRepriceEngine(snap: IbkrChainSnapshot): void {
     const spot = snap.underlying_price;
-    if (spot === null) return;
+    if (spot === null) {
+      this.engineMidByKey.clear();
+      this.engineGreeksByKey.set(new Map());
+      return;
+    }
 
+    const requestSeq = this.repriceRequestSeq;
     const promises: Promise<void>[] = [];
+    const missingGreeks: string[] = [];
     for (const q of snap.quotes) {
       const mid = midOrNull(q);
-      if (mid === null) continue;
+      if (q.greeks_source === 'none' || q.iv === null || q.iv <= 0 || mid === null) {
+        missingGreeks.push(`${q.strike}:${q.right}`);
+        continue;
+      }
       const key = `${q.strike}:${q.right}`;
       const lastMid = this.engineMidByKey.get(key);
       if (lastMid !== undefined && Math.abs(lastMid - mid) < ENGINE_REPRICE_THRESHOLD_CENTS / 100) {
         continue;
       }
       this.engineMidByKey.set(key, mid);
-      const iv = q.iv ?? 0.2; // when IBKR has no IV, keep a benign placeholder
       promises.push(
         this.repriceEngine({
           strike: q.strike,
           right: q.right,
           spot,
-          iv,
-          expirationMs: expiryMs,
+          iv: q.iv,
+          mid,
+          expirationMs: snap.expiry_ms,
+          requestSeq,
         }),
       );
+    }
+    if (missingGreeks.length > 0) {
+      for (const key of missingGreeks) this.engineMidByKey.delete(key);
+      this.engineGreeksByKey.update((current) => {
+        const next = new Map(current);
+        for (const key of missingGreeks) next.delete(key);
+        return next;
+      });
     }
     void Promise.all(promises);
   }
@@ -370,7 +439,9 @@ export class BrokerOptionsChainComponent {
     right: OptionRight;
     spot: number;
     iv: number;
+    mid: number;
     expirationMs: number;
+    requestSeq: number;
   }): Promise<void> {
     try {
       const result = await this.quantlib.priceOption({
@@ -380,16 +451,18 @@ export class BrokerOptionsChainComponent {
         expirationMs: args.expirationMs,
         optionType: args.right === 'C' ? 'call' : 'put',
       });
-      if (!result.success) return;
       const key = `${args.strike}:${args.right}`;
+      if (
+        !result.success || args.requestSeq !== this.repriceRequestSeq
+        || this.engineMidByKey.get(key) !== args.mid
+      ) return;
       this.engineGreeksByKey.update((m) => {
         const next = new Map(m);
         next.set(key, { delta: result.delta, gamma: result.gamma });
         return next;
       });
-    } catch {
-      // Engine reprice errors are non-fatal — the column simply stays
-      // blank for that row and the diff column reads ``—``.
+    } catch (error) {
+      if (args.requestSeq === this.repriceRequestSeq) this.engineError.set(error);
     }
   }
 }

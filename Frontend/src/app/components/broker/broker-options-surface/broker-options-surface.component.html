@@ -3,12 +3,12 @@
 >
   <app-page-guide
     slot="guide"
-    pulls="Live IBKR option-surface SSE stream (one underlying + N×M×2 option lines, capped at 100). Two echarts-gl bar3D canvases — calls on the left, puts on the right."
+    pulls="Live IBKR option-surface SSE stream (one underlying + N×M×2 option lines, using the shared 100-line IBKR allocation). Two echarts-gl bar3D canvases — calls on the left, puts on the right."
     why="See the entire near-the-money landscape at once: which strikes are bid up, where IV is fat, where delta drops off. The 2D chain ladder buries this; the 3D view surfaces it."
     [steps]="[
       'Pick a symbol, days-out window, and strikes-band.',
       'Click Setup — we intersect qualifiable strikes across every expiry in the window.',
-      'Watch the line-count badge; if it goes red, narrow the band or disable streaming.',
+      'Watch the line-count badge; if it goes red, narrow the band. Other IBKR streams also use this allocation.',
       'Click Load Surface to open the stream.'
     ]"
     [related]="[
@@ -27,7 +27,7 @@
 
 @if (!canStream()) {
   <p class="muted">
-    Broker is disconnected. Connect IB Gateway to a paper account and refresh the Status page.
+    Broker is disconnected. Connect IB Gateway to a paper account; this page checks again automatically.
   </p>
 } @else {
   <section class="controls" aria-label="Surface configuration">
@@ -37,7 +37,7 @@
         class="control-input mono"
         type="text"
         [value]="symbol()"
-        (input)="symbol.set($any($event.target).value)"
+        (input)="setSymbol($any($event.target).value)"
         aria-label="Symbol"
       />
     </label>
@@ -50,7 +50,7 @@
         min="1"
         max="365"
         [ngModel]="daysOut()"
-        (ngModelChange)="daysOut.set($event)"
+        (ngModelChange)="setDaysOut($event)"
         aria-label="Days out"
       />
     </label>
@@ -63,7 +63,7 @@
         min="1"
         max="25"
         [ngModel]="strikesBand()"
-        (ngModelChange)="strikesBand.set($event)"
+        (ngModelChange)="setStrikesBand($event)"
         aria-label="Strikes band"
       />
     </label>
@@ -86,7 +86,7 @@
       <input
         type="checkbox"
         [checked]="monthliesOnly()"
-        (change)="monthliesOnly.set($any($event.target).checked)"
+        (change)="setMonthliesOnly($any($event.target).checked)"
         aria-label="Monthlies only"
       />
       <span class="control-label">Monthlies only</span>
@@ -110,7 +110,7 @@
       Load Surface
     </button>
 
-    @if (currentStreamActive()) {
+    @if (currentStreamActive() || paused()) {
       <button type="button" class="ghost-btn" (click)="togglePause()">
         @if (paused()) { Resume } @else { Pause }
       </button>
@@ -131,17 +131,20 @@
     }
     @if (latestSnapshot()) {
       <span class="badge">
-        Last tick {{ fmtTimestampNy(latestSnapshot()!.as_of_ms) }}
+        Last tick {{ fmtTimestampNy(latestSnapshot()!.as_of_ms) }}{{ paused() ? ' (paused)' : streamStatus() === 'error' ? ' (stale)' : '' }}
       </span>
     }
     <span class="badge stream-{{ streamStatus() }}">stream: {{ streamStatus() }}</span>
   </section>
 
   @if (setupError(); as err) {
-    <app-section-error [error]="err" label="Setup failed" />
+    <app-section-error [error]="err" contextWhat="Surface setup failed." (retry)="setupSurface()" />
   }
   @if (streamError(); as err) {
-    <app-section-error [error]="err" label="Stream error" />
+    <app-section-error [error]="err" contextWhat="The surface stream stopped." (retry)="startStream()" />
+  }
+  @if (chartError(); as err) {
+    <app-section-error [error]="err" contextWhat="The surface chart could not be drawn." [canRetry]="false" />
   }
 
   <section class="surface-grid" aria-label="3D option surfaces">
