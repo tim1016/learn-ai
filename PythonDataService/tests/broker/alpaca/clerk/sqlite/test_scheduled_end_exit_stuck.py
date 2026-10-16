@@ -23,8 +23,6 @@ import pytest
 
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite import scheduled_end
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
-from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
 from app.broker.alpaca.clerk.sqlite.exit_recovery import DEFAULT_RECOVERY_INTERVAL_MS
 from app.broker.alpaca.clerk.sqlite.exit_resolution import (
@@ -63,6 +61,7 @@ from app.services.broker_v2_panel import lane_summary, panel_data_source
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite import test_safe_flatten_execution as safe_flatten
 from tests.broker.alpaca.clerk.sqlite import test_scheduled_end as _ends
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_enter, submit_budgeted_test_run
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     _AssertingNoReconciler,
     _broker_leg,
@@ -71,6 +70,7 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
     _clock_at,
     _FakeReadPort,
     _FakeTradePort,
+    _fill_entry,
     _make_held_position,
     _walk_clock_to,
 )
@@ -174,7 +174,7 @@ def _a_running_bot(artifacts_root: Path, **registration: Any) -> ClerkSqliteRepo
         lease_ttl_ms=300_000,
     )
     own.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1", **registration)
-    submit_start_run(own, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    submit_budgeted_test_run(own, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     return own
 
 
@@ -398,7 +398,7 @@ async def test_the_operators_sale_completes_the_end_with_no_sale_of_its_own(
 
 async def _short_ten(repo: ClerkSqliteRepository) -> None:
     """The bot is short 10 SPY: a filled sell entry with its exact execution slice."""
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="enter-short",
         lifecycle_run_id=RUN_ID, leg=_broker_leg(side="sell"), trade=_FakeTradePort(),
     )
@@ -487,25 +487,27 @@ async def test_an_end_recorded_carried_out_keeps_its_words_while_the_bot_is_stuc
 # ── with no such episode, the end sells as it always has ─────────────────────
 
 
-async def _another_bot_holds_ten(repo: ClerkSqliteRepository, sid: str) -> None:
-    repo.register_strategy_instance(strategy_instance_id=sid, symbol="SPY", config_hash=f"h-{sid}")
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}")
-    await _make_held_position(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=sid, run_id=f"run-{sid}",
-        decision_id=f"enter-{sid}", execution_id=f"exec-{sid}",
-    )
-
-
 @pytest.mark.parametrize("bots", [2, 4, 8])
 async def test_bots_in_one_symbol_ending_together_at_the_default_end_all_sell_in_the_first_pass(
-    repo: ClerkSqliteRepository, schedule: _Schedule, bots: int,
+    tmp_path: Path, schedule: _Schedule, bots: int,
 ) -> None:
     """Every bot's sale goes out on the first pass after their common end -- the default end,
     one lead before the session's close -- so none is left holding overnight."""
+    repo = _a_running_bot(tmp_path)
     sids = [SID, *(f"end-bot-{n}" for n in range(2, bots + 1))]
-    await _hold_ten(repo)
     for sid in sids[1:]:
-        await _another_bot_holds_ten(repo, sid)
+        repo.register_strategy_instance(strategy_instance_id=sid, symbol="SPY", config_hash=f"h-{sid}")
+        submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}")
+    entries = [
+        await submit_budgeted_test_enter(
+            repo, account_id=ACCOUNT_ID, strategy_instance_id=sid,
+            decision_id=f"enter-{sid}", lifecycle_run_id=RUN_ID if sid == SID else f"run-{sid}",
+            leg=_broker_leg(), trade=_FakeTradePort(),
+        )
+        for sid in sids
+    ]
+    for sid, entry in zip(sids, entries, strict=True):
+        await _fill_entry(repo, entry, quantity=10, execution_id=f"exec-{sid}")
     default_end = default_bot_end(repo.clock())
     assert default_end.end_at_ms == _SESSION.close_ms_utc - BOT_END_LEAD_MS
     assert default_end.end_action == "SELL"
@@ -523,6 +525,7 @@ async def test_bots_in_one_symbol_ending_together_at_the_default_end_all_sell_in
 
     await _passes(repo, alpaca, market, 1)
     assert _sent(market) == [_THE_SALE] * bots, "an end sold twice while its order worked"
+    repo.close()
 
 
 @pytest.mark.parametrize(
