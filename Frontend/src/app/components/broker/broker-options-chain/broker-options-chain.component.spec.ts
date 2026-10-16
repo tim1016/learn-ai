@@ -100,7 +100,7 @@ it('clears old Greeks after a failed current calculation and retries that input'
 
   offer(chainSnapshot(500, 0.25));
   await waitFor(() => expect(component.rows()[0].callEngineDelta).toBe(0.6));
-  component.engineError.set(null);
+  expect(component.engineError()).toBeNull();
   offer(chainSnapshot(501, 0.25));
   await waitFor(() => expect(component.engineError()).toBeInstanceOf(Error));
   expect(component.rows()[0].callEngineDelta).toBeNull();

@@ -472,6 +472,7 @@ export class BrokerOptionsChainComponent {
         next.set(key, { delta: result.delta, gamma: result.gamma });
         return next;
       });
+      this.engineError.set(null);
     } catch (error) {
       if (!stillCurrent()) return;
       this.engineInputByKey.delete(key);
