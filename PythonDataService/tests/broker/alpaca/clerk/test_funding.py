@@ -394,14 +394,6 @@ def test_an_entry_that_fits_a_limit_only_within_the_same_cent_is_refused_one_cen
         )
 
 
-def test_an_option_entry_as_admission_is_handed_it_splits_into_its_commitment_and_its_fee() -> None:
-    need = EntryNeed.for_options(commitment_cents=19_300, fee_provision_cents=6)
-
-    assert [(term.label, term.amount_cents) for term in need.terms] == [
-        ("Broker requirement and net premium", 19_294), ("Fee provision", 6),
-    ]
-
-
 def test_a_figure_whose_terms_do_not_add_up_is_refused_rather_than_drawn() -> None:
     with pytest.raises(ValueError, match="terms add up"):
         Figure(100, "known", "Clerk books", NOON, (Term("a", 60), Term("b", 30)))

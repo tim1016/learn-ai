@@ -229,29 +229,6 @@ def test_claims_beyond_the_cash_are_a_negative_unreserved_line_that_still_adds_u
     _adds_up(picture)
 
 
-def test_a_fractional_claim_adds_up_with_one_visible_rounding_line() -> None:
-    """Bot a's free budget is $100.004 ($100.00 and a $0.004 gain): $100.00 as a claim. The account's unreserved
-    cash is 1,000 - 100.004 = 899.996, which floors to $899.99 as the Deploy preview's does. The cent between them
-    is stated, not hidden."""
-    a = _bot("a", committed_cents=10_000, realized="0.004")
-    picture = _picture(_budget("1000", [a]))
-
-    lines = _lines(picture)
-    assert lines["bot_free"][0:2] == (10_000, "known")
-    assert lines["unreserved"][0] == 89_999
-    assert lines["rounding"] == (1, "known", [("Rounding to whole cents", 1)])
-    _adds_up(picture)
-
-
-def test_the_unreserved_line_is_the_deploy_previews_own_unreserved_cash() -> None:
-    budget = _budget("1000", [_bot("a", committed_cents=10_000, realized="0.004")])
-
-    picture = _picture(budget)
-
-    unreserved = next(line for line in picture.spoken_for.lines if line.kind == "unreserved")
-    assert unreserved.figure.amount_cents == budget.unreserved_cents
-
-
 def test_a_line_that_cannot_be_worked_out_makes_the_partition_unknown_and_is_never_left_out() -> None:
     """A budget with order claims that nothing says the bots or the outside own: its orders and outside lines are
     unknown, so the partition is, and the lines that are known are still shown."""

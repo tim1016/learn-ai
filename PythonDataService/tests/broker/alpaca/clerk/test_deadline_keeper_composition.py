@@ -50,6 +50,8 @@ async def test_a_paper_accounts_clerk_is_composed_with_a_keeper_that_its_facade_
         assert runtime.clerk._entry_deadline_nudge is keeper._nudge
         # Acts through the Clerk's own guarded trade port, and is not started by the selection.
         assert keeper._trade is runtime.clerk._trade and keeper._task is None
+        assert keeper._intake is runtime.clerk.intake and keeper._pricing == runtime.clerk.recovery_pricing
+        assert keeper._read is runtime.clerk._read
 
         runtime.start_background_taps()
 
@@ -81,6 +83,7 @@ async def test_a_live_shadows_clerk_is_composed_with_a_keeper_that_is_started_wi
     assert runtime.clerk._entry_deadline_nudge is keeper._nudge
     assert keeper._trade is runtime.clerk._trade and keeper._task is None
     assert keeper._intake is runtime.clerk.intake and keeper._pricing == runtime.clerk.recovery_pricing
+    assert keeper._read is runtime.clerk._read
 
     runtime.start_background_taps()
 
@@ -139,79 +142,7 @@ async def test_a_dry_run_store_opened_to_operate_has_its_keeper_running(tmp_path
         assert keeper._task is not None and not keeper._task.done()
         # The nudge its facade sends is the one this keeper sleeps on.
         assert runtime.clerk._entry_deadline_nudge is keeper._nudge
-    finally:
-        await runtime.close()
-
-
-async def test_a_paper_accounts_keeper_is_handed_the_scheduled_closes_with_the_clerks_own_lock_and_pricing(
-    tmp_path: Path,
-) -> None:
-    """A close taken under another lock could meet the bot's own exit and make a second closing order."""
-    broker = _Broker()
-    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
-
-    runtime = await select_active_clerk_runtime(
-        read=broker, trade=broker, artifacts_root=tmp_path, activation_store=_ActivationStore(_activation()),
-        repository_opener=lambda _account_id, _root: repo,
-    )
-
-    try:
-        keeper = runtime.deadline_keeper
-        assert isinstance(keeper, DeadlineKeeper)
         assert keeper._intake is runtime.clerk.intake and keeper._pricing == runtime.clerk.recovery_pricing
-    finally:
-        await runtime.close()
-
-
-async def test_a_dry_runs_keeper_is_handed_the_scheduled_closes_with_the_clerks_own_lock_and_pricing(
-    tmp_path: Path,
-) -> None:
-    account_id = "sim:ema-1"
-    broker = SyntheticBroker(account_id=account_id)
-    await activate_synthetic_clerk_authority(account_id=account_id, artifacts_root=tmp_path)
-
-    runtime = await select_synthetic_clerk_runtime(
-        account_id=account_id, read=broker, trade=broker, artifacts_root=tmp_path, opening=SyntheticOpening.OPERATE,
-    )
-
-    try:
-        keeper = runtime.deadline_keeper
-        assert isinstance(keeper, DeadlineKeeper)
-        assert keeper._intake is runtime.clerk.intake and keeper._pricing == runtime.clerk.recovery_pricing
-    finally:
-        await runtime.close()
-
-
-async def test_a_paper_accounts_keeper_reads_option_events_through_the_clerks_own_guarded_read(tmp_path: Path) -> None:
-    """The guarded read refuses a broker call made while the intake lock is held, as every read of the Clerk's does."""
-    broker = _Broker()
-    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
-
-    runtime = await select_active_clerk_runtime(
-        read=broker, trade=broker, artifacts_root=tmp_path, activation_store=_ActivationStore(_activation()),
-        repository_opener=lambda _account_id, _root: repo,
-    )
-
-    try:
-        keeper = runtime.deadline_keeper
-        assert isinstance(keeper, DeadlineKeeper)
-        assert keeper._read is runtime.clerk._read
-    finally:
-        await runtime.close()
-
-
-async def test_a_dry_runs_keeper_reads_option_events_through_the_clerks_own_guarded_read(tmp_path: Path) -> None:
-    account_id = "sim:ema-1"
-    broker = SyntheticBroker(account_id=account_id)
-    await activate_synthetic_clerk_authority(account_id=account_id, artifacts_root=tmp_path)
-
-    runtime = await select_synthetic_clerk_runtime(
-        account_id=account_id, read=broker, trade=broker, artifacts_root=tmp_path, opening=SyntheticOpening.OPERATE,
-    )
-
-    try:
-        keeper = runtime.deadline_keeper
-        assert isinstance(keeper, DeadlineKeeper)
         assert keeper._read is runtime.clerk._read
     finally:
         await runtime.close()
