@@ -15,10 +15,16 @@ with full ``IvProvenance``:
 
 The response carries ``r`` and ``q`` from ``rate_dividend_service`` so the
 UI can show the inputs that drove the number.
+
+Formula: VIX-style IV30 is two-expiry replicated variance interpolated to target maturity; parametric IV30 interpolates solved ATM call variances at that maturity.
+Reference: CBOE, "VIX Index Calculation: Step-by-Step" (2019), and Hull, Options Futures and Other Derivatives (10e), §19.
+Canonical implementation: app/volatility/vix_replication.py (replication), app/engine/edge/features_realtime/iv30_constructor.py (variance interpolation), and app/volatility/solver.py (implied volatility); this router composes them.
+Validated against: golden IV-003 and RV-004 in tests/fixtures/test_volatility_fixtures.py for the canonical VIX replication; tests/routers/test_iv30_router.py for route composition; tests/routers/test_polygon_routes_do_not_block_loop.py for responsive execution. Parametric reference parity remains pending in its canonical module.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 
@@ -223,6 +229,10 @@ async def iv30_vix_style(req: Iv30LiveRequest) -> Iv30LiveResponse:
     called against SPY. The provenance object reports
     ``variance_contribution_synthetic ≈ 0`` and ``opra_mid`` ≈ 100% mix.
     """
+    return await asyncio.to_thread(_iv30_vix_style, req)
+
+
+def _iv30_vix_style(req: Iv30LiveRequest) -> Iv30LiveResponse:
     snapshot = snapshot_around_target(polygon_client, req.symbol, req.target_calendar_days)
     underlying = snapshot.get("underlying") or {}
     contracts = snapshot.get("contracts") or []
@@ -281,6 +291,10 @@ async def iv30_parametric(req: Iv30LiveRequest) -> Iv30LiveResponse:
     ATM legs have real quotes, with ``strike_coverage_score = 0`` because
     no wing is sampled.
     """
+    return await asyncio.to_thread(_iv30_parametric, req)
+
+
+def _iv30_parametric(req: Iv30LiveRequest) -> Iv30LiveResponse:
     snapshot = snapshot_around_target(polygon_client, req.symbol, req.target_calendar_days)
     underlying = snapshot.get("underlying") or {}
     contracts = snapshot.get("contracts") or []
