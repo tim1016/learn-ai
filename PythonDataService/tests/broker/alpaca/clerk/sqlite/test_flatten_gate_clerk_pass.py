@@ -15,11 +15,12 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
 from app.broker.alpaca.clerk.recovery_reduction import ConfirmedRecoveryLimit
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.flatten_cover import FLATTEN_NOT_COVERED_AT_BROKER
 from app.broker.alpaca.clerk.sqlite.projection_models import RecoveryCapability
 from app.broker.alpaca.clerk.sqlite.projections import read_recovery_context
@@ -43,7 +44,9 @@ from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.models import BrokerOrderEvent, OrderType, TimeInForce
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite import test_safe_flatten_execution as safe_flatten
-from tests.broker.alpaca.clerk.sqlite.conftest import _make_held_position, _walk_clock_to
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_run
+from tests.broker.alpaca.clerk.sqlite.conftest import BUDGETED_RTH_MS, _clock_at, _make_held_position, _walk_clock_to
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 from tests.broker.alpaca.clerk.sqlite.test_flatten_send_cover import (
     SIBLING_RUN_ID,
     SIBLING_SID,
@@ -324,15 +327,18 @@ async def test_a_flatten_presented_under_a_pass_is_refused_at_commit_once_that_p
 
 
 async def test_a_custody_record_of_the_bots_written_after_the_pass_withdraws_the_flatten_until_the_next_pass(
-    crashed_with_exposure,  # noqa: F811
+    tmp_path: Path,
 ) -> None:
-    """The bot is resumed and stopped again after the pass: that pass no longer says what it holds."""
-    repo, clock = crashed_with_exposure
+    """A retained pre-budget Resume and Stop invalidate the pass until the next check."""
+    clock = _clock_at(BUDGETED_RTH_MS)
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    repo.register_strategy_instance(exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=SID, symbol="SPY", config_hash="h1")
+    seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     account, trade = _Account(holds=10.0), safe_flatten._FakeTrade()
     facade = await _stopped_bot_the_clerk_has_checked(repo, account=account, trade=trade)
     assert (await _offered(facade)).available
 
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="run-2")
+    seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="run-2")
     submit_stop_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="run-2", operator_reason="operator_stop"
     )
@@ -343,6 +349,7 @@ async def test_a_custody_record_of_the_bots_written_after_the_pass_withdraws_the
     await _clerk_pass(facade)
 
     assert (await _offered(facade)).available
+    repo.close()
 
 
 async def test_a_running_bots_flatten_still_waits_for_reconcile_now(
@@ -458,7 +465,7 @@ async def test_two_cohort_legs_on_one_symbol_are_both_sent_under_one_pass_of_the
     repo.register_strategy_instance(
         exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=SIBLING_SID, symbol="SPY", config_hash="h2"
     )
-    submit_start_run(
+    submit_budgeted_test_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SIBLING_SID, lifecycle_run_id=SIBLING_RUN_ID
     )
     await _make_held_position(
