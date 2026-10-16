@@ -3,7 +3,8 @@
 This is the operator procedure for qualifying option orders this system sends to
 Alpaca. The run records below cover a bought call, a debit spread and the
 owner's dashboard credit-order sign check on Paper, plus flat and overlapping
-credit-spread bot passes; the iron-condor passes still need their checks.
+credit-spread bot passes and a flat-account iron-condor pass. The iron-condor
+overlap and isolated short-leg buy-back still need their checks.
 The overlapping credit entries' buying-power comparisons remain unknown.
 This runbook sets one Paper
 account aside, turns one temporary setting
@@ -1074,3 +1075,60 @@ The overlap and whole-spread closes are shown. A clean overlap buying-power
 judgment and the other unobserved lifecycle cases remain unverified. No
 capability was promoted; the temporary several-leg Paper setting was removed
 and the Paper lane recreated after both bots stopped flat.
+
+## Run record: 2026-10-16, shape D on a flat account (#3225)
+
+The owner approved one Paper Deployment Validation bot, one SPY iron condor
+with $1 wings and one contract per leg, and $70 allocated. Its completed Dry
+Run had already exercised entry and exit. The order terms matched shape C:
+8% maximum leg bid-ask gap, 20-second entry wait, 10% whole-structure cost
+limit and 45-minute expiry-close lead. IBKR remained enabled and read-only
+with 84 option quote lines. Buying-power judgment and Live option bots stayed
+off; only the temporary several-leg Paper setting was enabled.
+
+The October 19 contracts entered as one `mleg` limit order at `-0.52`:
+
+| Leg | Entry | Whole-structure close |
+|---|---:|---:|
+| Buy $758 put | $1.67 | Sell at $1.65 |
+| Sell $759 put | $1.86 | Buy at $1.86 |
+| Sell $768 call | $1.56 | Buy at $1.56 |
+| Buy $769 call | $1.23 | Sell at $1.21 |
+
+Three decision bars after entry, the strategy sent one market close for all
+four legs, filled at `+0.56`. All eight executions were attributed to their
+own leg orders. The bot stopped flat at 1792170909790 ms UTC. Its $70 budget
+released $65.66 after $4 of premium loss and $0.34 of estimated fees; no
+position or entry reservation remained. Alpaca's dashboard also showed no
+open positions.
+
+| Reading | Cash | Option buying power |
+|---|---:|---:|
+| Before entry | $99,923.04 | $99,923.04 |
+| Condor held | $99,974.94 | $99,874.94 |
+| After close | $99,918.84 | $99,918.84 |
+
+The complete entry pair judges **over-reserved** offline: $48.18 committed,
+$100 account requirement added, $48.10 fall in option buying power. The $52
+credit leaves $48 of requirement net of premium. The remaining $0.08 is the
+unused part of the $0.18 entry fee provision against the observed $0.10 cash
+charge, classified as fee posting. The round trip's $4.20 cash reduction is
+not the final posted fee total; October 16's posted fee check remains due.
+No tolerance or calculation was changed.
+
+The private bundle covers 1792170561661 through 1792170921343 ms UTC, with two
+orders, one complete comparison and nothing unread. The sanitized recording
+is `tests/fixtures/alpaca/option_paper_recordings/3225-D1-condor-flat-20261016`,
+read by `test_paper_option_recordings.py`. The same writer, signed-fill and
+per-leg activity tests now cover both two- and four-leg structures; the new
+recording also pins the contracts, held positions and returned buying power.
+
+**Overlap was not attempted.** Deploy reserves up to 84 candidate quote lines
+for this four-leg plan, so two such bots require 168 against the configured
+84. The owner approved only the single-bot pass. The quote allowance was not
+raised and the gate was not bypassed. This is a precondition for the missing
+overlap, not evidence that it works or that the admission check is defective.
+The isolated short-leg buy-back and unobserved lifecycle cases also remain
+unverified. Nothing was promoted. The temporary several-leg setting was
+removed, the Paper lane recreated, and Deploy again refused the four-leg
+plan because that setting was off.
