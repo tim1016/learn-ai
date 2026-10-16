@@ -253,6 +253,8 @@ class _CustodyClerk:
         self.known_runs.add((binding.strategy_instance_id, binding.run_id))
 
     async def record_deployment_launch(self, binding: BrokerBotBinding) -> None:
+        assert binding.budget_consent is not None
+        assert (binding.strategy_instance_id, binding.run_id) in self.known_runs
         self.launched_runs.append(binding.run_id)
 
     async def recover(self) -> None:
@@ -537,6 +539,8 @@ class _FakeClerk:
             )
 
     async def record_deployment_launch(self, binding: BrokerBotBinding) -> None:
+        assert binding.budget_consent is not None
+        assert (binding.strategy_instance_id, binding.run_id) in self.known_runs
         self.launched_runs.append(binding.run_id)
 
     async def stop_strategy_run(
