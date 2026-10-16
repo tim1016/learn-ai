@@ -247,41 +247,29 @@ def compute_pop(
     if ttm_years <= 0:
         # At expiration, POP is binary based on current spot
         pnl_now = compute_payoff_at_expiry(legs, spot_price)
-        return 1.0 if pnl_now > 0 else 0.0
+        return 1.0 if pnl_now > _PAYOFF_ZERO else 0.0
 
     t = ttm_years
-    breakevens = find_breakevens(legs)
-
-    if not breakevens:
-        # No breakevens: entire range is profit or loss
-        pnl_at_spot = compute_payoff_at_expiry(legs, spot_price)
-        return 1.0 if pnl_at_spot > 0 else 0.0
-
-    # Determine the profit structure by sampling just above/below each breakeven
-    # and at the extremes of the range
-    eps = 0.01
-
-    # Build regions: (-inf, BE1), (BE1, BE2), ..., (BEn, +inf)
-    # Determine which regions are profitable
-    boundaries = [0.0, *breakevens, float("inf")]
+    # A zero payoff can extend between strikes without changing sign. Strikes
+    # split those stretches from the profitable regions beside them.
+    boundaries = [
+        0.0,
+        *sorted({leg.strike for leg in legs} | set(find_breakevens(legs))),
+        float("inf"),
+    ]
     pop = 0.0
 
     for i in range(len(boundaries) - 1):
         low_b, high_b = boundaries[i], boundaries[i + 1]
 
-        # Test midpoint of region
+        # Test inside each region; payoff is linear between these boundaries.
         if high_b == float("inf"):
-            test_price = breakevens[-1] + eps
-        elif low_b == 0.0:
-            test_price = breakevens[0] - eps
+            test_price = low_b + max(1.0, low_b * 0.01)
         else:
             test_price = (low_b + high_b) / 2.0
 
-        if test_price <= 0:
-            test_price = eps
-
         pnl = compute_payoff_at_expiry(legs, test_price)
-        if pnl <= 0:
+        if pnl <= _PAYOFF_ZERO:
             continue
 
         # This region is profitable — compute its probability

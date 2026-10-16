@@ -309,6 +309,24 @@ class TestD2:
 
 
 class TestPOP:
+    def test_zero_cost_call_spread_profits_above_its_lower_strike(self):
+        legs = [_leg(116, "call", "short", 0.05), _leg(106, "call", "long", 0.05)]
+
+        # The expiry payoff is zero through 106 and positive above it.
+        # N(d2) at 106 for S=100, sigma=0.25, T=30/365, r=0 is 0.1979902692.
+        assert compute_pop(legs, 100, 0.0, 30 / 365.0) == pytest.approx(0.1979902692, abs=1e-6, rel=0)
+
+    def test_zero_payoff_rounding_residue_is_not_profit(self):
+        legs = [
+            _leg(116, "call", "short", 0.04),
+            _leg(106, "call", "long", 0.03),
+            _leg(126, "call", "long", 0.01),
+        ]
+
+        # Premium cancellation leaves a tiny positive float below 106, not a real profit.
+        assert compute_pop(legs, 100, 0.0, 30 / 365.0) == pytest.approx(0.1979902692, abs=1e-6, rel=0)
+        assert compute_pop(legs, 100, 0.0, 0.0) == 0.0
+
     def test_returns_between_0_and_1(self):
         pop = compute_pop(bull_call_spread(), 102, 0.043, 30 / 365.0)
         assert 0.0 <= pop <= 1.0
