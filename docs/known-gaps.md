@@ -405,10 +405,15 @@ current budget, risk-edit and mode behavior is recorded in ADRs 0059 and 0060.
   2026-10-15, #3306).** For 2026-10-14's 38 option-leg fills,
   `PythonDataService/app/broker/alpaca/option_fees.py` predicted $1.65 of
   account-day charges; Alpaca Paper posted $1.90. OCC is $0.19 higher and
-  OPT TAF is $0.06 higher. The per-order OCC allocation is inferred because
-  Alpaca's fee rows carry no order ID. The exact comparison is in the Paper
-  qualification runbook; do not change rates or rounding without stronger
-  attribution evidence.
+  OPT TAF is $0.06 higher. That run's per-order OCC allocation was inferred.
+  The 2026-10-16 capture adds direct attribution for the Oct 15 outside credit
+  spread: each of its four OCC rows links by execution ID to one leg fill and
+  charges $0.03. The canonical day model predicts $0.18; Paper posted $0.21
+  (OCC $0.02 higher, OPT TAF $0.01 higher). The recordings and executable
+  comparison are in `tests/broker/alpaca/test_paper_option_recordings.py`, and
+  the exact comparisons are in the Paper qualification runbook. This supplies
+  stronger attribution for investigating rounding; it does not establish a
+  replacement fee schedule or resolve the OPT TAF discrepancy.
 - **Outside multi-leg parents have no reviewable custody row (P2,
   2026-10-15, #3309).** Alpaca gives an `mleg` parent no single symbol or side.
   `PythonDataService/app/broker/alpaca/clerk/sqlite/external_orders.py` contains
