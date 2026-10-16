@@ -1002,7 +1002,7 @@ def exit_unconfirmed(projection: ClerkProjection, sid: str) -> bool:
     return projection.strategy_instance_id == sid and _settle_capability(projection) is not None
 
 
-# Every fix it names is on the bot's own page (hurdle H29): it never sends
+# Every fix it names is on the bot's own page: it never sends
 # the owner to the broker outside the app.
 _POSITION_UNVERIFIED = ExposureNoticeView(
     kind="position_unverified",

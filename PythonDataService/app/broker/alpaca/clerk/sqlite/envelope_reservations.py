@@ -1,4 +1,4 @@
-"""Cash reservations for accepted ENTERs (ADR 0059 D4, plan R1).
+"""Cash reservations for accepted ENTERs (ADR 0059 D4).
 
 A reservation prices the part of an ENTER the latest cash observation
 cannot see: the unfilled remainder of a working order, plus any fill the

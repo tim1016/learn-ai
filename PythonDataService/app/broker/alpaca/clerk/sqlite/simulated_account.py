@@ -148,7 +148,7 @@ def _cash_after_fills(capital: Decimal, records: tuple[FillRecord, ...], fees: F
 
 @money_context()
 def private_dry_run_cash(repo: ClerkSqliteRepository, *, now_ms: int) -> Decimal:
-    """A private Dry Run's own cash now, valued without any price (hurdle H27).
+    """A private Dry Run's own cash now, valued without any price.
 
     Cash is the committed starting cash less what its fills spent and its
     settled modelled fees -- the same formula ``observe`` publishes -- and it

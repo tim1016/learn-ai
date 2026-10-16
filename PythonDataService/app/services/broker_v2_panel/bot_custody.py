@@ -1,4 +1,4 @@
-"""The one selection of the Clerk authority that custodies a bot (hurdle H33, #2563).
+"""The one selection of the Clerk authority that custodies a bot (#2563).
 
 Panel reads, panel actions, the bot's money, its recovery and every per-bot
 Clerk route act in the authority this module selects, so a Dry Run's reads and

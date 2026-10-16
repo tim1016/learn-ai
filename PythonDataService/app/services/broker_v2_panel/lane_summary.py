@@ -453,7 +453,7 @@ def _bot_items(
             items.append(LaneAttentionItem(
                 condition_id=f"lifecycle-unreadable:{sid}", reason_code="LIFECYCLE_UNREADABLE",
                 kind="position_unverified", severity="warning", strategy_instance_id=sid, symbol=bot.symbol,
-                # Its fix is in the app (hurdle H29): reconciling re-reads
+                # Its fix is in the app: reconciling re-reads
                 # what the account holds at Alpaca.
                 headline=(
                     f"{sid}'s lifecycle could not be read, so what it holds is unknown. "

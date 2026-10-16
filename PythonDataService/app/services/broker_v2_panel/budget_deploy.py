@@ -691,7 +691,7 @@ def _budget_cash(runtime: ActiveClerkRuntime, repo: ClerkSqliteRepository, risk:
 
     A Dry Run's cash is its committed starting cash less what its fills spent,
     which needs no price and no account evidence: its money stays readable
-    while its prices are stale or it is stopped (hurdle H27). Every recorded
+    while its prices are stale or it is stopped. Every recorded
     fill and fee is inside that cash. A real account's cash is its last
     reading, as the money bar shows it, and a missing one is never a zero.
     """
@@ -721,7 +721,7 @@ class _NextEntry:
 
 
 # Custody refusals that are this bot's own position at work, not a fault: a
-# bot that holds shares enters again only once it has sold them (hurdle H25).
+# bot that holds shares enters again only once it has sold them.
 _HOLDING_COPY: dict[str, tuple[str, str]] = {
     "ATTRIBUTED_EXPOSURE_EXISTS": ("Holding its position", "Its next entry waits until this position is sold."),
     "ENTER_IN_PROGRESS": ("Entering its position", "Its entry is still working. The next entry waits until this one finishes."),

@@ -316,7 +316,7 @@ async def read_sqlite_clerk_status(
     """One authority's Clerk card facts: the account's, or a Dry Run's own ``sim:`` Clerk.
 
     A Dry Run's card names its simulated account, never the real one it is
-    listed under (hurdle H33).
+    listed under.
     """
     facade = facade or active_sqlite_facade(broker)
     if facade is None:
@@ -980,7 +980,7 @@ async def execute_sqlite_panel_action(
     (``bot_custody``'s one selection): a Dry Run's own
     ``sim:`` Clerk, whose ports are its simulator, or the account's. Acting
     anywhere else is how a Dry Run's recovery used to ask the real account
-    about a bot it has never held (hurdle H33). ``None`` means no SQLite
+    about a bot it has never held. ``None`` means no SQLite
     authority is selected, and the caller's legacy performers apply.
     """
     if facade is None:
@@ -1454,7 +1454,7 @@ def _unreadable_evidence_notice(sid: str, symbol: str, account_id: str) -> Expos
     return ExposureNoticeView(
         strategy_instance_id=sid, symbol=symbol,
         kind="position_unverified", label="Position could not be verified",
-        # Every fix it names is in the app (hurdle H29).
+        # Every fix it names is in the app.
         explanation=(
             "This bot's lifecycle or custody evidence could not be read, so the app cannot vouch "
             "for what it holds. Reconcile now re-reads the account at Alpaca; Flatten becomes "

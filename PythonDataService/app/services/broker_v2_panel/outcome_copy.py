@@ -40,7 +40,7 @@ END_REASON_COPY: dict[str, tuple[str, str]] = {
         "once its bars arrive clean.",
     ),
     **WARMUP_REFUSAL_COPY,
-    # A crash the market-data feed caused says so (hurdle H29): the generic
+    # A crash the market-data feed caused says so: the generic
     # crash copy disclaims any market-data verdict, which here is the cause.
     "FEED_DEATH": (
         "Crashed: market data stopped",

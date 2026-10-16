@@ -1224,7 +1224,7 @@ async def _run_action_under_live_authority(
 
     Reads always opened a Dry Run's own ``sim:`` Clerk while actions ran
     against the account's, which has never held that bot: Reconcile now
-    answered "no custody record" and Flatten never unlocked (hurdle H33). The
+    answered "no custody record" and Flatten never unlocked. The
     panel and the action now share one selection, held open across both, so
     a Dry Run recovers inside its simulator and never reaches Alpaca.
     """

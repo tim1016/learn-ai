@@ -247,7 +247,7 @@ CREATE TABLE IF NOT EXISTS envelope_reservations (
 # strings agreeing.
 # The day-P&L rule asks ``external_orders`` one question on every 15 s envelope
 # tick -- "was any order the Clerk did not place observed since the ET day
-# opened?" (plan R5) -- and the table's only index is on ``broker_order_id``,
+# opened?" -- and the table's only index is on ``broker_order_id``,
 # so that question was a full scan. Additive, and in the same statement list,
 # so fresh and upgraded files converge exactly as the view above does.
 EXTERNAL_ORDERS_OBSERVED_AT_INDEX_DDL = (
