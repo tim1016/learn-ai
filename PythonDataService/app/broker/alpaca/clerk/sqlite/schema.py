@@ -82,7 +82,7 @@ CREATE TABLE strategy_instances (
 CREATE TABLE runs (
     run_id                  TEXT PRIMARY KEY,
     strategy_instance_id    TEXT NOT NULL REFERENCES strategy_instances(strategy_instance_id),
-    lifecycle_run_id        TEXT NOT NULL,          -- caller-proposed identity for a run (ADR 0035 #3)
+    lifecycle_run_id        TEXT NOT NULL,          -- the identity Start/Resume reserves (ADR 0035 #3)
     state                   TEXT NOT NULL CHECK (state IN ('ACTIVE','STOPPED')),
     started_at_ms           INTEGER NOT NULL,
     stopped_at_ms           INTEGER
