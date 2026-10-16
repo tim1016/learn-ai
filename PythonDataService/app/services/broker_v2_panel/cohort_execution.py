@@ -112,7 +112,6 @@ async def execute_cohort_legs(
     for leg in legs:
         leg_request = PanelActionRequest(
             action_id=leg.action_id,
-            revision=leg.revision,
             concurrency_token=leg.concurrency_token,
             idempotency_key=f"{idempotency_key}:{leg.strategy_instance_id}",
             reason=reason,

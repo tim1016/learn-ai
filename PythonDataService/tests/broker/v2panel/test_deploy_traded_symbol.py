@@ -298,7 +298,7 @@ async def test_the_review_carries_the_warning_and_asks_only_a_broker_bot_to_acce
     """The review is read before the owner accepts, so it is never refused for want of the acceptance."""
     app, _registry = deploy_app
     _serve(monkeypatch, view_of)
-    money = DeploymentBudgetPreview(state="ready", detail="Ready", world="real_paper", custody_account_id=ACCT)
+    money = DeploymentBudgetPreview(state="ready", detail="Ready", world="real_paper")
     monkeypatch.setattr(budget_deploy, "preview_budget", lambda account_id, request, *, resolved_parameters: money)
     monkeypatch.setattr(budget_deploy, "same_symbol_note", lambda account_id, request: None)
 

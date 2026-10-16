@@ -362,7 +362,6 @@ async def test_a_command_posted_for_a_rehearsal_bot_answers_with_a_code(
             f"/api/brokers/alpaca/accounts/{_LIVE}/bots/{_HELD}/actions",
             json={
                 "action_id": action_id,
-                "revision": 0,
                 "concurrency_token": _PRESENTED_CLEAR_TOKEN,
                 "idempotency_key": f"direct-{action_id}",
             },
