@@ -277,10 +277,10 @@ async def test_a_dry_runs_evidence_is_read_from_its_own_simulator_not_the_accoun
         account_id=f"sim:{SID}", artifacts_root=tmp_path / "simulator"
     )
     simulator_repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="config-1")
-    submit_start_run(
+    submit_budgeted_test_run(
         simulator_repo, account_id=f"sim:{SID}", strategy_instance_id=SID, lifecycle_run_id="run-1"
     )
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         simulator_repo,
         account_id=f"sim:{SID}",
         strategy_instance_id=SID,
