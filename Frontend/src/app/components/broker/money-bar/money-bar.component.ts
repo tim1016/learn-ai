@@ -8,7 +8,7 @@ import type { AccountMoneyView, MoneySegment } from '../v2-panel/lib/broker-v2-p
  * row's budget strip, or an Accounts card / Wall tile. */
 export type MoneyBarSize = 'home' | 'detail' | 'row' | 'mini';
 
-/** What an account's bar carries beside it, never as a slice (PRD #2560 D6):
+/** What an account's bar carries beside it, never as a slice (#2560):
  * what the claims exceed the account by, when they do, and its open P&L — or
  * the backend's reason there is none. */
 export type MoneyBarNotes = Pick<AccountMoneyView, 'account_shortfall_usd' | 'open_pnl_usd' | 'open_pnl_detail'>;
@@ -20,7 +20,7 @@ interface DrawnSlice {
 }
 
 /**
- * The money bar (PRD #2560 D12): one account's money as disjoint slices.
+ * The money bar (#2560): one account's money as disjoint slices.
  *
  * Purely presentational and free of arithmetic. Python authors every dollar
  * string and every width (`share_bps`, and a bot slice's `*_bps` shading);

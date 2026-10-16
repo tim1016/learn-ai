@@ -9,13 +9,13 @@ import { BrokerV2PanelService } from '../v2-panel/lib/broker-v2-panel.service';
 import type { BotPanelView } from '../v2-panel/lib/broker-v2-panel.types';
 
 /** The panel's open gain or loss on shares: Python's dollars and the way they
- * point, so the card neither formats nor compares a number (PRD #2560 D12). */
+ * point, so the card neither formats nor compares a number (#2560). */
 export type BotOpenPnl = Pick<BotPanelView, 'open_pnl_usd' | 'open_pnl_direction'>;
 
 let nextHeadingId = 0;
 
 /**
- * The bot page's "This bot's money" card (PRD #2560 D6, stories 42–43).
+ * The bot page's "This bot's money" card (#2560).
  *
  * Python authors the headline, the detail, every statement line and every
  * dollar; this card renders them verbatim and in order, and does no money

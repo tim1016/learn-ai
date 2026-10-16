@@ -567,8 +567,8 @@ def _sqlite_catalog_explanation(
     held = holdings_text(exposure)
     if row.running:
         return f"Running · holds {held}" if held else "Running · no position"
-    # What a stopped bot still holds is its row's headline on Home (PRD
-    # #2560 D7), whatever else is true of it: an unclean label beside it
+    # What a stopped bot still holds is its row's headline on Home (#2560),
+    # whatever else is true of it: an unclean label beside it
     # names how the run ended, and nothing here contradicts that.
     if held:
         return f"Stopped · still holds {held} · no bot is managing it"

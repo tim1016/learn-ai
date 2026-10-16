@@ -1,4 +1,4 @@
-/** #2202 (PRD #2201 §8 FR-001): an Angular `resource()`'s `.value()` throws
+/** #2202 and #2201: an Angular `resource()`'s `.value()` throws
  * `ResourceValueError` while the resource is in its error state. Reading it
  * unguarded in a template — `histChart.value() ?? null`,
  * `journalPage.value() ?? null` — or in a class `computed()` the template
@@ -26,7 +26,7 @@
  * `strategy-view/strategy-gates-state.ts`), not every `.value()` call. Signals, form controls, and plain objects
  * legitimately expose a `.value()` member; scanning for those too would
  * false-positive on unrelated work and get this spec disabled the first time
- * it blocks an unrelated PR (PRD #2201 §8 FR-001). A template is checked
+ * it blocks an unrelated PR (#2201). A template is checked
  * against the resources its sibling `.ts` declares; a class against its own.
  * Discovering them rather than listing them means a new resource is covered
  * the moment it is declared.

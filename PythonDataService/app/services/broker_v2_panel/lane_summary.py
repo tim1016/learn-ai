@@ -10,7 +10,7 @@ installs (``FleetLaneBoot.lane_counts_probe``).
 Every attention item is one line on the account's Home: a backend-authored
 headline and exactly one fix, a link to where that fix lives. Only what the
 owner must act on is listed -- an old bot that is flat with nothing still
-claimed is Finished, not attention (hurdles H13, H34).
+claimed is Finished, not attention.
 
 Locks a beat takes: the bot counts read the runner's task table only -- no
 lock, no file. The attention count is the attention read: one SQLite read
