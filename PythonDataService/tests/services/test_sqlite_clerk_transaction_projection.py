@@ -790,7 +790,6 @@ def test_exit_projection_uses_only_reducing_order_execution_economics() -> None:
         broker_order_id="broker-exit",
         role="REDUCING",
         broker_state="filled",
-        submitted_at_ms=1_001,
         updated_at_ms=1_002,
         symbol="SPY",
     )
@@ -1184,7 +1183,6 @@ def _projected_operation(
                 broker_order_id=None,
                 role="entry",
                 broker_state=None,
-                submitted_at_ms=created_at_ms,
                 updated_at_ms=created_at_ms,
                 symbol="SPY",
             ),
@@ -1245,13 +1243,11 @@ def test_origin_filtered_operation_page_scans_past_a_sparse_first_page() -> None
     ) == "manual"
     pages = [
         OperationPage(
-            account_id="PA-ACCOUNT-DESK", strategy_instance_id=None,
-            authority_generation=1, control_revision=1, high_water_sequence=2,
+            high_water_sequence=2,
             operations=(strategy_op,), next_cursor="cursor-1",
         ),
         OperationPage(
-            account_id="PA-ACCOUNT-DESK", strategy_instance_id=None,
-            authority_generation=1, control_revision=1, high_water_sequence=2,
+            high_water_sequence=2,
             operations=(manual_op,), next_cursor=None,
         ),
     ]

@@ -58,7 +58,6 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectedOperation,
     ProjectedOrder,
     ProjectedPosition,
-    ProjectedReceipt,
     ProjectedReconciliation,
     ProjectedRun,
     ProjectedUncertainty,
@@ -98,7 +97,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DEFAULT_OPERATION_LIMIT, MAX_OPERATION_LIMIT = 50, 100
-DEFAULT_RECEIPT_LIMIT, CURRENT_STATE_LIMIT = 20, 100
+CURRENT_STATE_LIMIT = 100
 DEFAULT_TIMELINE_PAGE_SIZE, MAX_TIMELINE_PAGE_SIZE = 25, 100
 
 
@@ -267,7 +266,6 @@ def _projected_uncertainty(
         operator_impact=operator_impact,
         next_step=next_step,
         observed_at_ms=row["observed_at_ms"],
-        evidence_age_ms=max(0, now_ms - row["observed_at_ms"]),
         evidence_refs=_json_string_tuple(row["evidence_refs_json"]),
         symbol=symbol,
         recovery_status=recovery_status,
@@ -542,10 +540,8 @@ class SqliteClerkProjectionReader:
                     if is_working_order(order)
                 )
             )
-            commands = self._commands(strategy_instance_id, operation_limit)
             holds = self._holds(strategy_instance_id)
-            reconciliation = self._latest_reconciliation(strategy_instance_id, now_ms)
-            receipts = self._terminal_receipts(strategy_instance_id)
+            reconciliation = self._latest_reconciliation(strategy_instance_id)
         recovery_actions = build_recovery_catalog(context)
         return ClerkProjection(
             account_id=self._account_id,
@@ -557,14 +553,12 @@ class SqliteClerkProjectionReader:
             control_revision=meta["control_revision"],
             custody_owner="ACCOUNT_CLERK",
             runs=context.runs,
-            commands=commands,
             operations=operations,
             working_order_refs=working_order_refs,
             positions=context.positions,
             holds=holds,
             uncertainties=context.uncertainties[:CURRENT_STATE_LIMIT],
             latest_reconciliation=reconciliation,
-            terminal_receipts=receipts,
             guidance=build_projection_guidance(context, recovery_actions),
             recovery_actions=recovery_actions,
             generated_at_ms=now_ms,
@@ -628,7 +622,6 @@ class SqliteClerkProjectionReader:
             execution_coverage_conflicts=self._execution_coverage_conflicts(strategy_instance_id),
             latest_account_reconciliation=self._latest_reconciliation(
                 None,
-                now_ms,
                 account_wide_only=True,
             ),
             published_pass=None if strategy_instance_id is None else published_pass,
@@ -717,7 +710,6 @@ class SqliteClerkProjectionReader:
         page_size = projection_helpers.bounded_limit(page_size, maximum=MAX_TIMELINE_PAGE_SIZE)
         with self._read_transaction():
             self._verify_identity()
-            meta = self._meta()
             high_water = self._conn.execute(
                 "SELECT COALESCE(MAX(sequence), 0) AS sequence FROM custody_transitions"
             ).fetchone()
@@ -761,10 +753,6 @@ class SqliteClerkProjectionReader:
                 before=(last.created_at_ms, last.effect_operation_id),
             )
         return OperationPage(
-            account_id=self._account_id,
-            strategy_instance_id=strategy_instance_id,
-            authority_generation=self._authority_generation,
-            control_revision=meta["control_revision"],
             high_water_sequence=int(high_water["sequence"]),
             operations=operations,
             next_cursor=next_cursor,
@@ -1023,20 +1011,6 @@ class SqliteClerkProjectionReader:
             (*parameters, limit),
         ).fetchall()
 
-    def _commands(
-        self,
-        strategy_instance_id: str | None,
-        limit: int,
-    ) -> tuple[ProjectedCommand, ...]:
-        where, params = projection_helpers.scope_filter("strategy_instance_id", strategy_instance_id)
-        rows = self._conn.execute(
-            "SELECT command_id, kind, action, state, run_id, receipt_id, created_at_ms, "
-            f"updated_at_ms FROM commands {where} "
-            "ORDER BY updated_at_ms DESC, command_id DESC LIMIT ?",
-            (*params, limit),
-        ).fetchall()
-        return tuple(ProjectedCommand(**dict(row)) for row in rows)
-
     def _orders_by_operation(
         self,
         operation_ids: tuple[str, ...],
@@ -1071,14 +1045,13 @@ class SqliteClerkProjectionReader:
             where += " AND (scope = 'ACCOUNT_CLERK' OR strategy_instance_id = ?)"
             params = (strategy_instance_id,)
         rows = self._conn.execute(
-            "SELECT hold_id, scope, strategy_instance_id, reason_code, opened_at_ms, "
+            "SELECT scope, strategy_instance_id, reason_code, opened_at_ms, "
             f"evidence_refs_json FROM holds WHERE {where} "
             "ORDER BY opened_at_ms DESC LIMIT ?",
             (*params, CURRENT_STATE_LIMIT),
         ).fetchall()
         return tuple(
             ProjectedHold(
-                hold_id=row["hold_id"],
                 scope=row["scope"],
                 strategy_instance_id=row["strategy_instance_id"],
                 reason_code=row["reason_code"],
@@ -1197,7 +1170,6 @@ class SqliteClerkProjectionReader:
     def _latest_reconciliation(
         self,
         strategy_instance_id: str | None,
-        now_ms: int,
         *,
         account_wide_only: bool = False,
     ) -> ProjectedReconciliation | None:
@@ -1211,7 +1183,7 @@ class SqliteClerkProjectionReader:
             where = " WHERE e.strategy_instance_id = ? OR r.effect_operation_id IS NULL"
             params = (strategy_instance_id,)
         row = self._conn.execute(
-            "SELECT r.reconciliation_id, r.effect_operation_id, r.order_ref, r.trigger, "
+            "SELECT r.reconciliation_id, r.effect_operation_id, r.order_ref, "
             "r.attempted_at_ms, r.outcome, r.evidence_refs_json FROM reconciliations r"
             f"{joins}{where} ORDER BY r.attempted_at_ms DESC LIMIT 1",
             params,
@@ -1222,31 +1194,10 @@ class SqliteClerkProjectionReader:
             reconciliation_id=row["reconciliation_id"],
             effect_operation_id=row["effect_operation_id"],
             order_ref=row["order_ref"],
-            trigger=row["trigger"],
             attempted_at_ms=row["attempted_at_ms"],
             outcome=row["outcome"],
-            evidence_age_ms=max(0, now_ms - row["attempted_at_ms"]),
             evidence_refs=_json_string_tuple(row["evidence_refs_json"]),
         )
-
-    def _terminal_receipts(
-        self,
-        strategy_instance_id: str | None,
-    ) -> tuple[ProjectedReceipt, ...]:
-        joins = ""
-        where = ""
-        params: tuple[object, ...] = ()
-        if strategy_instance_id is not None:
-            joins = " JOIN commands c ON c.command_id = r.command_id"
-            where = " WHERE c.strategy_instance_id = ?"
-            params = (strategy_instance_id,)
-        rows = self._conn.execute(
-            "SELECT r.receipt_id, r.command_id, r.effect_operation_id, r.terminal_state, "
-            "r.summary_code, r.proof_reference, r.recorded_at_ms FROM receipts r"
-            f"{joins}{where} ORDER BY r.recorded_at_ms DESC LIMIT ?",
-            (*params, DEFAULT_RECEIPT_LIMIT),
-        ).fetchall()
-        return tuple(ProjectedReceipt(**dict(row)) for row in rows)
 
     def _encode_operation_cursor(
         self,

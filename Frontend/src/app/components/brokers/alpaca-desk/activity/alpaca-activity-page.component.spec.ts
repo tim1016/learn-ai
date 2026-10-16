@@ -112,12 +112,11 @@ function projectionWithReconcileNow(): SqliteClerkProjection {
   return {
     account_id: 'PA1', strategy_instance_id: null, authority_generation: 1, db_identity_token: 'db-1',
     authority_health: 'healthy', authority_health_reason: null, control_revision: 3, custody_owner: 'ACCOUNT_CLERK',
-    runs: [], commands: [], operations: [], positions: [], holds: [], uncertainties: [],
-    latest_reconciliation: null, terminal_receipts: [],
+    runs: [], operations: [], positions: [], holds: [], uncertainties: [],
+    latest_reconciliation: null,
     guidance: {
       headline: 'Account Clerk custody is healthy', explanation: 'No unresolved uncertainty.',
       scope: 'ACCOUNT_CLERK', impact: 'Normal controls remain available.', custody_owner: 'ACCOUNT_CLERK',
-      may_create_exposure: true, available_safety_actions: ['Reconcile now'], action_required: false,
       next_step: 'No recovery action is required.',
     },
     recovery_actions: [{

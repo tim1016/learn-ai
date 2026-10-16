@@ -195,7 +195,7 @@ def read_orders_by_operation(
     placeholders = ",".join("?" for _ in operation_ids)
     rows = conn.execute(
         "SELECT owner.effect_operation_id AS owner_effect_operation_id, o.order_ref, "
-        "o.client_order_id, o.broker_order_id, o.role, o.broker_state, o.submitted_at_ms, "
+        "o.client_order_id, o.broker_order_id, o.role, o.broker_state, "
         f"o.updated_at_ms, {ORDER_OPEN_SQL} AS may_fill FROM orders o "
         "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id JOIN ("
         "SELECT effect_operation_id, order_ref FROM operation_order_links "
@@ -221,7 +221,6 @@ def read_orders_by_operation(
                 broker_order_id=row["broker_order_id"],
                 role=row["role"],
                 broker_state=row["broker_state"],
-                submitted_at_ms=row["submitted_at_ms"],
                 updated_at_ms=row["updated_at_ms"],
                 may_fill=bool(row["may_fill"]),
                 symbol=detail.symbol,
@@ -247,7 +246,7 @@ def read_current_orders(
         where, params = "WHERE e.strategy_instance_id = ?", (strategy_instance_id,)
     rows = conn.execute(
         "SELECT o.order_ref, o.client_order_id, o.broker_order_id, o.role, "
-        f"o.broker_state, o.submitted_at_ms, o.updated_at_ms, {ORDER_OPEN_SQL} AS may_fill FROM orders o "
+        f"o.broker_state, o.updated_at_ms, {ORDER_OPEN_SQL} AS may_fill FROM orders o "
         "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
         f"{where} ORDER BY o.updated_at_ms ASC, o.order_ref ASC",
         params,
@@ -274,7 +273,7 @@ def read_open_opposite_side_orders(
     """
     rows = conn.execute(
         "SELECT o.order_ref, o.client_order_id, o.broker_order_id, o.role, "
-        "o.broker_state, o.submitted_at_ms, o.updated_at_ms FROM orders o "
+        "o.broker_state, o.updated_at_ms FROM orders o "
         "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
         f"WHERE {ORDER_OPEN_SQL} "
         "ORDER BY o.updated_at_ms ASC, o.order_ref ASC",

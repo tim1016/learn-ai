@@ -440,10 +440,8 @@ def test_safe_flatten_prepares_versioned_exact_close_plan() -> None:
             reconciliation_id="reconciliation-17",
             effect_operation_id=None,
             order_ref=None,
-            trigger="operator",
             attempted_at_ms=1_700_000_009_000,
             outcome="RESOLVED_SUCCESS",
-            evidence_age_ms=1_000,
             evidence_refs=("alpaca:positions:17", "alpaca:orders:17"),
         ),
     )
@@ -550,10 +548,8 @@ def test_safe_flatten_plan_token_rejects_newer_position_evidence() -> None:
             reconciliation_id="reconciliation-17",
             effect_operation_id=None,
             order_ref=None,
-            trigger="operator",
             attempted_at_ms=1_700_000_009_000,
             outcome="RESOLVED_SUCCESS",
-            evidence_age_ms=1_000,
             evidence_refs=("alpaca:positions:17",),
         ),
     )
@@ -605,10 +601,8 @@ def test_safe_flatten_fails_closed_for_non_finite_attributed_quantity(
                     reconciliation_id="reconciliation-17",
                     effect_operation_id=None,
                     order_ref=None,
-                    trigger="operator",
                     attempted_at_ms=1_700_000_009_000,
                     outcome="RESOLVED_SUCCESS",
-                    evidence_age_ms=1_000,
                     evidence_refs=("alpaca:positions:17",),
                 ),
             )
@@ -626,10 +620,8 @@ def test_account_safe_flatten_blocks_on_any_bot_uncertainty() -> None:
         reconciliation_id="account-reconciliation-17",
         effect_operation_id=None,
         order_ref=None,
-        trigger="OPERATOR_RECONCILE_NOW",
         attempted_at_ms=1_700_000_009_000,
         outcome="RESOLVED_SUCCESS",
-        evidence_age_ms=1_000,
         evidence_refs=("fresh_account_snapshot",),
     )
     capability = next(
@@ -660,7 +652,6 @@ def test_account_safe_flatten_blocks_on_any_bot_uncertainty() -> None:
                         operator_impact="Account reduction is not proven.",
                         next_step="Reconcile the account.",
                         observed_at_ms=1_700_000_009_000,
-                        evidence_age_ms=1_000,
                         evidence_refs=("order:spy",),
                     ),
                 ),
@@ -680,10 +671,8 @@ def test_safe_flatten_requires_account_wide_reconciliation() -> None:
         reconciliation_id="effect-reconciliation-17",
         effect_operation_id="effect:spy-bot:decision-17",
         order_ref="order:spy-bot:decision-17",
-        trigger="AUTOMATIC",
         attempted_at_ms=1_700_000_009_000,
         outcome="RESOLVED_SUCCESS",
-        evidence_age_ms=1_000,
         evidence_refs=("order:spy-bot:decision-17",),
     )
     capability = next(
@@ -714,10 +703,8 @@ def test_safe_flatten_rejects_position_observed_after_reconciliation() -> None:
         reconciliation_id="account-reconciliation-17",
         effect_operation_id=None,
         order_ref=None,
-        trigger="OPERATOR_RECONCILE_NOW",
         attempted_at_ms=1_700_000_008_000,
         outcome="RESOLVED_SUCCESS",
-        evidence_age_ms=2_000,
         evidence_refs=("fresh_account_snapshot",),
     )
     capability = next(
@@ -748,10 +735,8 @@ def test_safe_flatten_checks_complete_current_orders_not_operation_page() -> Non
         reconciliation_id="account-reconciliation-17",
         effect_operation_id=None,
         order_ref=None,
-        trigger="OPERATOR_RECONCILE_NOW",
         attempted_at_ms=1_700_000_009_000,
         outcome="RESOLVED_SUCCESS",
-        evidence_age_ms=1_000,
         evidence_refs=("fresh_account_snapshot",),
     )
     capability = next(
@@ -765,7 +750,6 @@ def test_safe_flatten_checks_complete_current_orders_not_operation_page() -> Non
                         broker_order_id="alpaca-order-17",
                         role="ENTRY",
                         broker_state="accepted",
-                        submitted_at_ms=1_700_000_007_000,
                         updated_at_ms=1_700_000_009_000,
                     ),
                 ),
@@ -805,7 +789,6 @@ def _account_uncertainty(
         operator_impact="New entries are paused account-wide.",
         next_step="Review it.",
         observed_at_ms=observed_at_ms,
-        evidence_age_ms=1_000,
         evidence_refs=("evidence",),
     )
 
@@ -826,10 +809,8 @@ def _flatten_actions(*uncertainties: ProjectedUncertainty) -> dict[str, Recovery
             reconciliation_id="reconciliation-17",
             effect_operation_id=None,
             order_ref=None,
-            trigger="operator",
             attempted_at_ms=1_700_000_009_000,
             outcome="RESOLVED_SUCCESS",
-            evidence_age_ms=1_000,
             evidence_refs=("alpaca:positions:17",),
         ),
     )
@@ -1006,10 +987,8 @@ def test_residue_discharge_is_offered_for_a_residue_an_exit_episode_strands(
                     reconciliation_id="reconciliation-17",
                     effect_operation_id=None,
                     order_ref=None,
-                    trigger="operator",
                     attempted_at_ms=1_700_000_009_500,
                     outcome="RESOLVED_SUCCESS",
-                    evidence_age_ms=500,
                     evidence_refs=("alpaca:positions:17",),
                 )
             },
@@ -1066,10 +1045,8 @@ def test_a_reconciliation_older_than_the_residue_does_not_hide_the_discharge() -
                 reconciliation_id="reconciliation-16",
                 effect_operation_id=None,
                 order_ref=None,
-                trigger="operator",
                 attempted_at_ms=1_700_000_007_000,
                 outcome="RESOLVED_SUCCESS",
-                evidence_age_ms=3_000,
                 evidence_refs=("alpaca:positions:16",),
             )
         )
@@ -1097,10 +1074,8 @@ def _receipt(*, age_ms: int) -> ProjectedReconciliation:
         reconciliation_id="reconciliation-17",
         effect_operation_id=None,
         order_ref=None,
-        trigger="OPERATOR_RECONCILE_NOW",
         attempted_at_ms=_NOW_MS - age_ms,
         outcome="RESOLVED_SUCCESS",
-        evidence_age_ms=age_ms,
         evidence_refs=("fresh_account_snapshot",),
     )
 
@@ -1692,7 +1667,6 @@ def _not_settled_hold(sid: str, *, contract: str = _EXPIRED_CALL) -> ProjectedUn
         operator_impact="New entries are paused for this bot.",
         next_step="End the contract at your word.",
         observed_at_ms=1_700_000_009_000,
-        evidence_age_ms=1_000,
         evidence_refs=(f"contract:{contract}",),
     )
 

@@ -140,8 +140,6 @@ def test_bot_snapshot_reads_fold_state_and_backend_authors_recovery(tmp_path: Pa
     assert snapshot.authority_health == "healthy"
     assert snapshot.custody_owner == "ACCOUNT_CLERK"
     assert snapshot.runs[0].state == "ACTIVE"
-    assert snapshot.commands[0].action == "START"
-    assert snapshot.guidance.may_create_exposure is True
     actions = {action.action_id: action for action in snapshot.recovery_actions}
     assert actions["stop_bot_decisions"].available is True
     assert actions["stop_bot_decisions"].confirmation is not None
@@ -284,13 +282,12 @@ def test_bot_uncertainty_does_not_leak_to_another_bot_projection(tmp_path: Path)
 
     assert affected is not None
     assert affected.guidance.scope == "CUSTODY_SUBJECT"
-    assert affected.guidance.may_create_exposure is False
+    assert affected.uncertainties[0].blocks_new_exposure is True
     assert [item.reason_code for item in affected.uncertainties] == [
         "ORDER_OUTCOME_UNKNOWN"
     ]
     assert unaffected is not None
     assert unaffected.uncertainties == ()
-    assert unaffected.guidance.may_create_exposure is True
 
 
 def test_one_unreadable_uncertainty_is_projected_as_unreadable_without_failing_the_read(

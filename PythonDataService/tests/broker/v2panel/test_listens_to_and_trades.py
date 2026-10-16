@@ -230,7 +230,7 @@ def _bot_page() -> BotPanelView:
 def test_a_working_order_with_no_recorded_symbol_is_in_the_asset_the_bot_trades() -> None:
     order = ProjectedOrder(
         order_ref="ref-1", client_order_id="ref-1", broker_order_id=None, role="ENTER", broker_state="new",
-        submitted_at_ms=1, updated_at_ms=2,
+        updated_at_ms=2,
     )
 
     assert _working_order_view(_bot_page(), order, strict=False).symbol == "QQQ"

@@ -1861,7 +1861,6 @@ def build_projection_guidance(
     (#1801 §11 lever 2, predicted by #1907 §5(a)).
     """
     relevant = _relevant_uncertainties(ctx)
-    available = tuple(action.label for action in actions if action.available)
     if ctx.authority_health != "healthy":
         return ProjectionGuidance(
             headline="Alpaca execution is on hold",
@@ -1872,9 +1871,6 @@ def build_projection_guidance(
             scope="ACCOUNT_CLERK",
             impact="All new broker-mutating Clerk work is blocked.",
             custody_owner="ACCOUNT_CLERK",
-            may_create_exposure=False,
-            available_safety_actions=available,
-            action_required=True,
             next_step=(
                 next((action.next_step for action in actions if action.primary), "Inspect recovery evidence.")
             ),
@@ -1887,9 +1883,6 @@ def build_projection_guidance(
             scope=primary.scope,
             impact=primary.operator_impact,
             custody_owner=primary.custody_owner,
-            may_create_exposure=not any(item.blocks_new_exposure for item in relevant),
-            available_safety_actions=available,
-            action_required=False,
             next_step=primary.next_step,
             recovery_status=primary.recovery_status,
         )
@@ -1899,8 +1892,5 @@ def build_projection_guidance(
         scope=_scope(ctx),
         impact="Normal Clerk-governed controls remain available.",
         custody_owner="ACCOUNT_CLERK",
-        may_create_exposure=True,
-        available_safety_actions=available,
-        action_required=False,
         next_step="No recovery action is required.",
     )

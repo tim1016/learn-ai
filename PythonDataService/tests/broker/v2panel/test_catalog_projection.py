@@ -102,7 +102,7 @@ def _hold(
     account-wide problem from a bot-scoped one.
     """
     return ProjectedHold(
-        hold_id=hold_id,
+
         scope=scope,
         strategy_instance_id=sid,
         reason_code=reason_code,
@@ -128,23 +128,18 @@ def _projection(
         control_revision=control_revision,
         custody_owner="ACCOUNT_CLERK",
         runs=(),
-        commands=(),
         operations=(),
         working_order_refs=(),
         positions=(),
         holds=holds,
         uncertainties=(),
         latest_reconciliation=None,
-        terminal_receipts=(),
         guidance=ProjectionGuidance(
             headline="Account Clerk custody is healthy",
             explanation="SQLite has current custody truth.",
             scope="CUSTODY_SUBJECT",
             impact="Normal Clerk-governed controls remain available.",
             custody_owner="ACCOUNT_CLERK",
-            may_create_exposure=True,
-            available_safety_actions=(),
-            action_required=False,
             next_step="No recovery action is required.",
         ),
         recovery_actions=recovery_actions,

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 ClerkScope = Literal["CUSTODY_SUBJECT", "ACCOUNT_CLERK"]
-AuthorityHealth = Literal["healthy", "degraded_to_mirror", "failed"]
+AuthorityHealth = Literal["healthy", "failed"]
 EvidenceFreshness = Literal["fresh", "stale", "not_required", "unavailable"]
 # The check of the account against Alpaca a safe-flatten plan rests on: an
 # operator's Reconcile now receipt, or the Clerk's own published pass (#2839).
@@ -60,7 +60,6 @@ class ProjectedOrder:
     broker_order_id: str | None
     role: str
     broker_state: str | None
-    submitted_at_ms: int | None
     updated_at_ms: int
     # Immutable order-leg facts and effective execution totals are read from
     # the SQLite authority alongside this working-order projection.  The
@@ -107,7 +106,6 @@ class ProjectedPosition:
 
 @dataclass(frozen=True)
 class ProjectedHold:
-    hold_id: str
     scope: ClerkScope
     strategy_instance_id: str | None
     reason_code: str
@@ -130,7 +128,6 @@ class ProjectedUncertainty:
     operator_impact: str
     next_step: str
     observed_at_ms: int
-    evidence_age_ms: int
     evidence_refs: tuple[str, ...]
     # The symbol the episode's cause names, when it names one (an
     # EXIT_NOT_FLAT does); the lane's attention bell shows it.
@@ -190,22 +187,9 @@ class ProjectedReconciliation:
     reconciliation_id: str
     effect_operation_id: str | None
     order_ref: str | None
-    trigger: str
     attempted_at_ms: int
     outcome: str
-    evidence_age_ms: int
     evidence_refs: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class ProjectedReceipt:
-    receipt_id: str
-    command_id: str | None
-    effect_operation_id: str | None
-    terminal_state: str
-    summary_code: str
-    proof_reference: str | None
-    recorded_at_ms: int
 
 
 @dataclass(frozen=True)
@@ -317,9 +301,6 @@ class ProjectionGuidance:
     scope: ClerkScope
     impact: str
     custody_owner: str
-    may_create_exposure: bool
-    available_safety_actions: tuple[str, ...]
-    action_required: bool
     next_step: str
     # The primary episode's next automatic attempt, projected as
     # ``ProjectedUncertainty`` projects it (#2440): the bot page shows it
@@ -338,7 +319,6 @@ class ClerkProjection:
     control_revision: int
     custody_owner: str
     runs: tuple[ProjectedRun, ...]
-    commands: tuple[ProjectedCommand, ...]
     operations: tuple[ProjectedOperation, ...]
     # Every still-working order of this bot, as a STOP proof and Clear's
     # commit-time check count them (``order_evidence.is_working_order``): all
@@ -349,7 +329,6 @@ class ClerkProjection:
     holds: tuple[ProjectedHold, ...]
     uncertainties: tuple[ProjectedUncertainty, ...]
     latest_reconciliation: ProjectedReconciliation | None
-    terminal_receipts: tuple[ProjectedReceipt, ...]
     guidance: ProjectionGuidance
     recovery_actions: tuple[RecoveryCapability, ...]
     generated_at_ms: int
@@ -391,10 +370,6 @@ class TimelinePage:
 class OperationPage:
     """Stable operation-first page for existing control-plane surfaces."""
 
-    account_id: str
-    strategy_instance_id: str | None
-    authority_generation: int
-    control_revision: int
     high_water_sequence: int
     operations: tuple[ProjectedOperation, ...]
     next_cursor: str | None

@@ -19,7 +19,7 @@ def _order(
 ) -> ProjectedOrder:
     return ProjectedOrder(
         order_ref=ref, client_order_id=ref, broker_order_id=ref, role="OTHER", broker_state=state,
-        submitted_at_ms=1, updated_at_ms=1, symbol=symbol, side=side, quantity=1.0, filled_quantity=filled,
+        updated_at_ms=1, symbol=symbol, side=side, quantity=1.0, filled_quantity=filled,
     )
 
 
