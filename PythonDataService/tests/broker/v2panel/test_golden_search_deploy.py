@@ -91,7 +91,6 @@ def test_qualified_configuration_prefers_the_ready_default_with_its_approval_and
     assert preset.parameters == {
         name: value for name, value in default.qualification.params.items() if name != "symbol"
     }
-    assert preset.golden_qualification_id == default.qualification.id
     assert "study study-ab" in preset.explanation
     assert "approved 2025-10-01" in preset.explanation
 
@@ -101,7 +100,6 @@ def test_a_default_that_is_not_ready_falls_back_to_the_registry_point(status: St
     preset = _qualified_configuration(PROGRAM, "SPY", {(PROGRAM, "SPY"): _judged(status=status)})
 
     assert preset is not None
-    assert preset.golden_qualification_id is None
     assert preset.parameters == {name: value for name, value in _point("SPY").items() if name != "symbol"}
     assert preset.explanation.startswith(_REGISTRY_EXPLANATION_START)
 
@@ -137,7 +135,6 @@ def test_a_ready_default_deploy_would_refuse_falls_back_to_the_registry_point_an
     preset = _qualified_configuration("sma_crossover", "SPY", {("sma_crossover", "SPY"): default})
 
     assert preset is not None
-    assert preset.golden_qualification_id is None
     assert preset.parameters == registry_parameters
     assert preset.explanation.startswith(_REGISTRY_EXPLANATION_START)
     assert "The Golden Search default for SPY is not offered" in preset.explanation
@@ -161,7 +158,6 @@ def test_a_ready_default_is_offered_without_the_parameter_deploy_sets_itself() -
     preset = _qualified_configuration("sma_crossover", "SPY", {("sma_crossover", "SPY"): default})
 
     assert preset is not None
-    assert preset.golden_qualification_id == default.qualification.id
     assert "long_window" not in preset.parameters
     resolved = resolve_deploy_strategy_params("sma_crossover", preset.symbol, dict(preset.parameters))
     assert resolved.effective["long_window"] == default.qualification.params["long_window"]
@@ -175,7 +171,6 @@ def test_a_ready_default_deploy_cannot_reach_is_not_offered() -> None:
     preset = _qualified_configuration("sma_crossover", "SPY", {("sma_crossover", "SPY"): default})
 
     assert preset is not None
-    assert preset.golden_qualification_id is None
     assert preset.parameters == registry_parameters
     assert "The Golden Search default for SPY is not offered: Deploy sets long_window itself" in preset.explanation
 
@@ -185,7 +180,6 @@ def test_another_stocks_default_leaves_this_stock_on_the_registry_point() -> Non
 
     assert preset is not None
     assert preset.symbol == "QQQ"
-    assert preset.golden_qualification_id is None
 
 
 def test_without_a_requested_stock_the_default_of_the_first_validated_stock_is_offered() -> None:
@@ -195,7 +189,7 @@ def test_without_a_requested_stock_the_default_of_the_first_validated_stock_is_o
 
     assert preset is not None
     assert preset.symbol == first
-    assert preset.golden_qualification_id is not None
+    assert "Golden Search" in preset.explanation
 
 
 def test_a_default_can_offer_a_stock_outside_the_registry_corpus() -> None:
@@ -203,7 +197,7 @@ def test_a_default_can_offer_a_stock_outside_the_registry_corpus() -> None:
 
     assert preset is not None
     assert preset.symbol == "MSFT"
-    assert preset.golden_qualification_id is not None
+    assert "Golden Search" in preset.explanation
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +279,7 @@ async def test_deploy_offers_and_accepts_the_ready_default_tuple(deploy_app, mon
 
     assert view.status_code == 200, view.text
     strategy = next(row for row in view.json()["strategies"] if row["strategy_key"] == PROGRAM)
-    assert strategy["qualified_configuration"]["golden_qualification_id"] == default.qualification.id
+    assert "Golden Search" in strategy["qualified_configuration"]["explanation"]
     assert strategy["qualified_configuration"]["parameters"] == offered
     assert strategy["validation_case_parameters"] == offered
     assert strategy["golden_validation_scope"] is True

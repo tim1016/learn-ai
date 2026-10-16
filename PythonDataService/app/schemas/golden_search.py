@@ -229,11 +229,7 @@ class GoldenSearchCapabilityKnob(_Wire):
     domain_low: float
     domain_high: float
     quantum: float
-    default_low: float
-    default_high: float
-    neighbor_step: float
     default_step: float
-    searchable_by_default: bool
     warmup_dependent: bool
     default_value: int | float
     note: str
@@ -469,7 +465,6 @@ class GoldenSearchStudySummary(_Wire):
     presented_status: PresentedStatus
     revision: int
     created_at_ms: InstantMs
-    updated_at_ms: InstantMs
     protocol_hash: str
     method: Method
     consumed_evaluations: int
@@ -479,7 +474,6 @@ class GoldenSearchStudySummary(_Wire):
     incomplete: bool
     failure_reason: str | None
     hidden: bool
-    run_to_compare: bool = Field(description="Run research is on: Search hands on to Test over time and the study pauses at Compare.")
     exposure_claim: Claim | None
     exam_outcome: ExamOutcome | None
     qualification_id: str | None
@@ -635,16 +629,8 @@ class GoldenSearchVerdict(_Wire):
 
 class GoldenSearchValidationFold(_Wire):
     fold_index: int
-    train_start_ms: InstantMs
-    train_end_ms: InstantMs
-    test_start_ms: InstantMs
-    test_end_ms: InstantMs
     status: Literal["pending", "completed", "failed"]
     winner: dict[str, Any] | None
-    winner_hash: str | None
-    train_metrics: GoldenSearchMetrics | None
-    test_metrics: GoldenSearchMetrics | None
-    incumbent_test_metrics: GoldenSearchMetrics | None
     failure_reason: str | None
     failure_code: str | None
 
@@ -906,8 +892,6 @@ class GoldenSearchSummaryPills(_Wire):
 class GoldenSearchValidationView(_Wire):
     folds: list[GoldenSearchValidationFold]
     verdict: GoldenSearchVerdict | None
-    linked: list[GoldenSearchLinkedReturn]
-    incumbent_linked: list[GoldenSearchLinkedReturn]
     summary_pills: GoldenSearchSummaryPills
     explanation: str
     incomplete: bool
@@ -927,7 +911,6 @@ class GoldenSearchNeighborRow(_Wire):
 class GoldenSearchNeighborhood(_Wire):
     knob: str
     rows: list[GoldenSearchNeighborRow]
-    one_sided: bool
 
 
 class GoldenSearchStressResult(_Wire):
@@ -1638,11 +1621,6 @@ class GoldenSearchCumulativeReturnPoint(_Wire):
     value: float = Field(description="A fraction of starting capital.")
 
 
-class GoldenSearchEquityPoint(_Wire):
-    ms: InstantMs
-    equity: float
-
-
 class GoldenSearchDrawdownPoint(_Wire):
     ms: InstantMs
     drawdown: float
@@ -1770,7 +1748,6 @@ class GoldenSearchRunDetail(_Wire):
     window: GoldenSearchWindow
     metrics: GoldenSearchMetrics
     cumulative_return: list[GoldenSearchCumulativeReturnPoint]
-    daily_equity: list[GoldenSearchEquityPoint]
     drawdown: list[GoldenSearchDrawdownPoint]
     monthly: list[GoldenSearchMonthlyResult]
     concentration_curve: GoldenSearchConcentrationCurve | None = Field(description="The development run's; null on a final-test run.")

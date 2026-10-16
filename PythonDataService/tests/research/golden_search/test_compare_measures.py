@@ -77,7 +77,9 @@ def test_a_neighborhood_names_each_rows_step_and_its_change_from_the_candidate()
         ],
     }
 
-    rows = neighborhood_view(hood)["rows"]
+    projected = neighborhood_view(hood)
+    rows = projected["rows"]
+    assert "one_sided" not in projected
 
     # The step follows the value, not the stored order.
     assert [(row["step"], row["return_change"]) for row in rows] == [(1, pytest.approx(-0.06, abs=1e-12, rel=0)), (0, None), (-1, None)]

@@ -384,8 +384,6 @@ class QualifiedDeployConfiguration(BaseModel):
     symbol: str
     parameters: dict[str, JsonValue]
     explanation: str
-    # The Golden Search qualified version this preset is (#2696); unset for the registry's validated point.
-    golden_qualification_id: str | None = None
 
 
 class AlpacaPaperDeployStrategy(BaseModel):

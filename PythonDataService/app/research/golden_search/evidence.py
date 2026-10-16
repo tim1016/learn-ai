@@ -122,7 +122,6 @@ class NeighborRow:
 class Neighborhood:
     knob: str
     rows: tuple[NeighborRow, ...]
-    one_sided: bool
 
     @property
     def losing_neighbors(self) -> tuple[NeighborRow, ...]:
@@ -133,7 +132,7 @@ class Neighborhood:
         )
 
     def as_dict(self) -> dict[str, Any]:
-        return {"knob": self.knob, "rows": [row.as_dict() for row in self.rows], "one_sided": self.one_sided}
+        return {"knob": self.knob, "rows": [row.as_dict() for row in self.rows]}
 
 
 def _audit_status(cell: AuditCell, metrics_by_hash: Mapping[str, Metrics]) -> tuple[CellStatus, Metrics | None]:
@@ -160,8 +159,7 @@ def neighborhood(
         status, metrics = _audit_status(cell, metrics_by_hash)
         rows.append(NeighborRow(value=cell.values[knob], status=status, metrics=metrics, reason=cell.reason))
     center = NeighborRow(value=center_value, status="center", metrics=center_metrics, reason=None)
-    tested = sum(1 for row in rows if row.status == "tested")
-    return Neighborhood(knob=knob, rows=(rows[0], center, rows[1]), one_sided=tested == 1)
+    return Neighborhood(knob=knob, rows=(rows[0], center, rows[1]))
 
 
 def pair_map(grid: PairGrid, metrics_by_hash: Mapping[str, Metrics]) -> dict[str, Any]:

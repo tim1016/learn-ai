@@ -395,7 +395,6 @@ def _qualified_configuration(
                 symbol=golden.qualification.symbol,
                 parameters=parameters,
                 explanation=golden.explanation,
-                golden_qualification_id=golden.qualification.id,
             )
     if not contract.validated_symbols:
         return None

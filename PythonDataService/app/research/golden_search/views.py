@@ -112,7 +112,6 @@ def study_summary(row: StudyRow, *, presented: str) -> dict[str, Any]:
         "presented_status": presented,
         "revision": row.revision,
         "created_at_ms": row.created_at_ms,
-        "updated_at_ms": row.updated_at_ms,
         "protocol_hash": row.protocol_hash,
         "method": row.protocol.get("method"),
         "consumed_evaluations": row.consumed_evaluations,
@@ -122,7 +121,6 @@ def study_summary(row: StudyRow, *, presented: str) -> dict[str, Any]:
         "incomplete": row.incomplete or _stage_incomplete(row.results),
         "failure_reason": row.failure_reason,
         "hidden": row.hidden,
-        "run_to_compare": row.run_to_compare,
         "exposure_claim": exam.get("claim"),
         "exam_outcome": _exam_outcome(row),
         "qualification_id": qualification.get("qualification_id") if qualification.get("status") == "ready" else None,
@@ -319,16 +317,8 @@ def validation_view(stored: Mapping[str, Any]) -> dict[str, Any]:
     folds = [
         {
             "fold_index": fold["fold_index"],
-            "train_start_ms": fold["train_start_ms"],
-            "train_end_ms": fold["train_end_ms"],
-            "test_start_ms": fold["test_start_ms"],
-            "test_end_ms": fold["test_end_ms"],
             "status": fold["status"],
             "winner": fold["winner"],
-            "winner_hash": fold["winner_hash"],
-            "train_metrics": fold["train_metrics"],
-            "test_metrics": fold["test_metrics"],
-            "incumbent_test_metrics": fold["incumbent_test_metrics"],
             "failure_reason": fold["failure_reason"],
             "failure_code": fold["failure_code"],
         }
@@ -347,8 +337,6 @@ def validation_view(stored: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "folds": folds,
         "verdict": verdict,
-        "linked": list(stored.get("linked", [])),
-        "incumbent_linked": list(stored.get("incumbent_linked", [])),
         "summary_pills": pills,
         "explanation": validation_explanation(None if verdict is None else verdict["based_on"], len(folds)),
         "incomplete": bool(stored.get("incomplete")),
@@ -546,7 +534,7 @@ def run_detail(record: EvaluationRecord) -> dict[str, Any]:
     window = {"start_ms": record.window_start_ms, "end_ms": record.window_end_ms}
     detail = record.detail_json
     if detail is None:
-        return {"window": window, "metrics": metrics_of(record).as_dict(), "cumulative_return": [], "daily_equity": [], "drawdown": [], "monthly": []}
+        return {"window": window, "metrics": metrics_of(record).as_dict(), "cumulative_return": [], "drawdown": [], "monthly": []}
     capital = float(detail["initial_cash"])
     daily = [(int(ms), float(equity)) for ms, equity in detail["daily_equity"]]
     exits = [int(trade["exit_ms"]) for trade in detail["trades"]]
@@ -554,7 +542,6 @@ def run_detail(record: EvaluationRecord) -> dict[str, Any]:
         "window": window,
         "metrics": metrics_of(record).as_dict(),
         "cumulative_return": [{"ms": ms, "value": value} for ms, value in cumulative_return_series(daily, capital)],
-        "daily_equity": [{"ms": ms, "equity": equity} for ms, equity in daily],
         "drawdown": [{"ms": ms, "drawdown": value} for ms, value in drawdown_series(daily)],
         "monthly": [month.as_dict() for month in monthly_results(daily, capital, exits)],
     }

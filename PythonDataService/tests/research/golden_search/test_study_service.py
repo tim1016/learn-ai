@@ -390,7 +390,7 @@ async def test_an_interrupted_run_keeps_its_intent_and_finish_resumes_it_through
     # The worker claims the stage and its process dies: the attempt stays running with no live job.
     await repo.claim_stage(conn, outcome.study.id, stage_token=token, job_id="job-lost")
     interrupted = await driver.detail(await service.get_row(outcome.study.id))
-    assert interrupted["presented_status"] == "interrupted" and interrupted["run_to_compare"]
+    assert interrupted["presented_status"] == "interrupted"
     assert interrupted["guidance"]["headline"] == "Your research was interrupted"
     assert {"finish", "run_research"} <= set(interrupted["permitted_actions"])
 
@@ -1351,12 +1351,13 @@ async def test_a_fold_without_an_eligible_training_winner_is_recorded_failed_nev
 
     first, second = validation["folds"]
     assert (first["status"], first["failure_code"], first["winner"]) == ("failed", "NO_ELIGIBLE_CANDIDATE", None)
-    assert first["incumbent_test_metrics"] is not None  # the benchmark still ran on the test window
+    charts = await service.test_over_time_charts(row.id)
+    assert charts["folds"][0]["incumbent_return"] is not None  # the benchmark still ran on the test window
     assert second["status"] == "completed"
     assert validation["verdict"]["label"] == "could not be judged"
-    assert validation["linked"][0]["linked_return"] is None and validation["linked"][1]["linked_return"] is None
+    assert charts["linked"][0]["linked_return"] is None and charts["linked"][1]["linked_return"] is None
     # Only the first fold is missing; the second completed but sits after the break.
-    assert [point["fold_missing"] for point in validation["linked"]] == [True, False]
+    assert [point["fold_missing"] for point in charts["linked"]] == [True, False]
 
 
 async def test_keeping_the_current_settings_ends_the_study_without_opening_the_final_test(driver: Driver, symbol: str) -> None:

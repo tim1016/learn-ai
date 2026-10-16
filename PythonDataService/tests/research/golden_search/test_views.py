@@ -410,6 +410,7 @@ def test_the_evidence_view_marks_duplicates_the_incumbent_and_ineligible_candida
     assert all_period["stress"][0]["return_change"] == pytest.approx(-0.006, abs=1e-12, rel=0)
     assert all_period["stress_tally"] == {"in_profit": 1, "recorded": 1, "scenarios": 1}
     assert [row["step"] for row in all_period["neighbors"][0]["rows"]] == [-1, 0]
+    assert "one_sided" not in all_period["neighbors"][0]
     # The stored measure reads back as recorded; evidence recorded before it was measured says so.
     assert all_period["concentration"] == measured
     assert incumbent["concentration"] == {"status": "missing", "reason": NOT_MEASURED}
@@ -475,7 +476,8 @@ def test_a_failed_detail_run_has_metrics_and_no_series() -> None:
         sharpe_ratio=None, max_drawdown_pct=None, win_rate=None, error="engine refused", detail_json=None, created_at_ms=0, completed_at_ms=0,
     )
     detail = run_detail(record)
-    assert detail["metrics"]["error"] == "engine refused" and detail["daily_equity"] == [] and detail["monthly"] == []
+    assert detail["metrics"]["error"] == "engine refused" and detail["monthly"] == []
+    assert "daily_equity" not in detail
 
 
 def test_the_decimal_sentence_drops_trailing_zeros_but_keeps_the_gap_in_cents() -> None:

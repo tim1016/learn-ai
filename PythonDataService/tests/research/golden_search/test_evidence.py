@@ -60,7 +60,7 @@ def _decl():  # type: ignore[no-untyped-def]
     return declaration(knob("x", high="10"), knob("y", high="10"), constraints=(KnobConstraint("x", "<", "y", "x must be below y"),))
 
 
-def test_neighborhood_reports_each_side_and_a_one_sided_view() -> None:
+def test_neighborhood_reports_each_side() -> None:
     decl = _decl()
     center = synthetic_point({"x": 4, "y": 5})
     below, above = neighbor_probes(decl, center, "x", canonicalize=synthetic_point)
@@ -70,7 +70,6 @@ def test_neighborhood_reports_each_side_and_a_one_sided_view() -> None:
 
     assert [(row.value, row.status) for row in hood.rows] == [(3.0, "tested"), (4.0, "center"), (5.0, "invalid")]
     assert hood.rows[2].reason == "x must be below y"
-    assert hood.one_sided
     assert [row.value for row in hood.losing_neighbors] == [3.0]
 
 
@@ -82,7 +81,6 @@ def test_neighborhood_distinguishes_failed_and_untested_neighbors() -> None:
     hood = neighborhood("x", 2.0, metrics(1.0), (below, above), {below.point_hash: metrics(None, status="failed")})
 
     assert [row.status for row in hood.rows] == ["failed", "center", "untested"]
-    assert not hood.one_sided
     assert hood.losing_neighbors == ()
 
 

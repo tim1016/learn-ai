@@ -459,7 +459,7 @@ describe('GoldenSearchDecisionStepComponent — after the final test', () => {
       ...base,
       state: 'retained',
       permitted_actions: ['revise'],
-      decision: { kind: 'keep_current', note: 'The test did not justify a change.', at_ms: base.updated_at_ms },
+      decision: { kind: 'keep_current', note: 'The test did not justify a change.', at_ms: base.created_at_ms },
     });
 
     const recorded = screen.getByRole('region', { name: 'Recorded decision' });
