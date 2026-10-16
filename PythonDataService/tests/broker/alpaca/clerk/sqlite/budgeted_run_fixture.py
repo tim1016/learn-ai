@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 from app.broker.alpaca.clerk.et_day import et_day_window_ms
@@ -17,12 +18,30 @@ from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms, risk
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter, submit_enter
 from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.marketdata.feed import MarketDataBar
 from app.schemas.account_authority import AuthorityKind
 from app.schemas.exit_terms import ExitTerms
+from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
 
 _TERMS = ExitTerms(band_multiple=2.0, spread_cap_bps=100.0, exit_allowance_bps=5.0, provenance="deployed")
 _CASH = 1_000_000_000.0
 _BUDGET_CENTS = 100_000_000
+
+
+def retain_budgeted_test_bar(
+    repo: ClerkSqliteRepository, *, root: Path, run_id: str = "run-1", symbol: str = "SPY",
+) -> RetainedSourceBar:
+    """Retain a priced, closed decision minute for a real budgeted market ENTER."""
+    end_ms = repo.clock() // 60_000 * 60_000
+    ledger = SourceBarLedger(artifacts_root=root, account_id=repo.account_id)
+    try:
+        return ledger.append(MarketDataBar(
+            feed_id="fixture", symbol=symbol, start_ms=end_ms - 60_000, end_ms=end_ms,
+            open=Decimal("100"), high=Decimal("100"), low=Decimal("100"), close=Decimal("100"),
+            volume=1, fetched_at_ms=end_ms, session_phase="RTH",
+        ), run_id=run_id)
+    finally:
+        ledger.close()
 
 
 def budgeted_test_envelope(repo: ClerkSqliteRepository) -> LiveEnvelopeGate:
