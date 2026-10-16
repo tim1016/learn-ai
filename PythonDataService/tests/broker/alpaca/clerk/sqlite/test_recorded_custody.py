@@ -14,14 +14,15 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
-from app.broker.alpaca.clerk.sqlite.enter import submit_enter
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.idempotency import UnknownStrategyInstanceError
 from app.broker.alpaca.clerk.sqlite.recorded_custody import RecordedCustody, read_recorded_custody
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import raise_account_hold, raise_uncertainty
 from app.broker.contract.errors import BrokerUnavailable
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_enter, submit_budgeted_test_run
 from tests.broker.alpaca.clerk.sqlite.conftest import (
+    NOON,
     _broker_leg,
     _clock_at,
     _FakeTradePort,
@@ -38,11 +39,11 @@ RUN_ID = "run-1"
 def repo(tmp_path: Path) -> Iterator[ClerkSqliteRepository]:
     """A store with ``SID`` running and ``OTHER_SID`` beside it."""
     store = ClerkSqliteRepository.initialize(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_at(1_700_000_000_000)
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_at(NOON)
     )
     store.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
     store.register_strategy_instance(strategy_instance_id=OTHER_SID, symbol="QQQ", config_hash="h2")
-    submit_start_run(store, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    submit_budgeted_test_run(store, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     yield store
     store.close()
 
@@ -96,7 +97,7 @@ async def test_an_attributed_position_is_named_with_its_symbol_and_quantity(repo
 
 
 async def test_an_accepted_order_the_broker_never_filled_is_a_working_order(repo: ClerkSqliteRepository) -> None:
-    await submit_enter(
+    await submit_budgeted_test_enter(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="enter-1",
         lifecycle_run_id=RUN_ID, leg=_broker_leg(), trade=_FakeTradePort(),
     )
@@ -110,7 +111,7 @@ async def test_an_accepted_order_the_broker_never_filled_is_a_working_order(repo
 
 async def test_an_order_whose_answer_was_lost_is_an_unknown_outcome(repo: ClerkSqliteRepository) -> None:
     """The submit timed out and the broker has no such order yet: it may still land."""
-    await submit_enter(
+    await submit_budgeted_test_enter(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="enter-1",
         lifecycle_run_id=RUN_ID, leg=_broker_leg(),
         trade=_FakeTradePort(submit_error=BrokerUnavailable("timed out", broker="alpaca"), lookup_absent=True),

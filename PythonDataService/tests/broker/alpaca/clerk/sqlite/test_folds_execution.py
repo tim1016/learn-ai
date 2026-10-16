@@ -15,8 +15,7 @@ import pytest
 
 from app.broker.alpaca.adapter import from_alpaca_trade_update
 from app.broker.alpaca.clerk.sqlite import repository_execution_coverage_api as coverage_api_module
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
-from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
+from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission
 from app.broker.alpaca.clerk.sqlite.execution_coverage import ExecutionCoverageSupersededFacts
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExecutionCoverageQuarantinedFacts,
@@ -42,7 +41,8 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ExecutionCoverageConflictCause,
 )
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
-from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import accept_budgeted_test_enter, submit_budgeted_test_run
+from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _clock_at
 
 _FIXTURE_ROOT = Path(__file__).parents[4] / "fixtures" / "golden" / "alpaca-sqlite-execution"
 _ACCOUNT_ID = "PA-S1-EXECUTION"
@@ -64,7 +64,7 @@ def _repository_for_strategy(
     strategy_instance_id: str,
     symbol: str,
 ) -> tuple[ClerkSqliteRepository, EnterSubmission]:
-    clock = _clock_at(1_786_368_000_000)
+    clock = _clock_at(NOON)
     repo = ClerkSqliteRepository.initialize(
         account_id=_ACCOUNT_ID,
         artifacts_root=tmp_path,
@@ -75,13 +75,13 @@ def _repository_for_strategy(
         symbol=symbol,
         config_hash="s1-ledger-config",
     )
-    submit_start_run(
+    submit_budgeted_test_run(
         repo,
         account_id=_ACCOUNT_ID,
         strategy_instance_id=strategy_instance_id,
         lifecycle_run_id=_RUN_ID,
     )
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id=_ACCOUNT_ID,
         strategy_instance_id=strategy_instance_id,

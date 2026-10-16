@@ -21,7 +21,7 @@ from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_author
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms, risk_fill_sequence
-from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter, submit_enter
+from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import (
     AccountHoldRaisedFacts,
@@ -48,6 +48,8 @@ from app.schemas.exit_terms import ExitTerms
 from app.services.session_authority import et_minute_of_day_ms
 from tests._helpers.session_clock import pin_wall_clock_in_session
 from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_enter
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 from tests.broker.alpaca.documented_examples import documented
 
 
@@ -519,7 +521,7 @@ async def _make_held_position(
     quantity: float = 10.0,
 ) -> str:
     """Filled entry with an exact execution slice -> attributed +quantity."""
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=account_id,
         strategy_instance_id=strategy_instance_id,
@@ -693,12 +695,11 @@ def _start_legacy_run(
     repo.register_strategy_instance(
         strategy_instance_id=strategy_instance_id, symbol=symbol, config_hash="h1"
     )
-    submit_start_run(
+    seed_historical_run_started(
         repo,
         account_id=ENVELOPE_ACCOUNT_ID,
         strategy_instance_id=strategy_instance_id,
         lifecycle_run_id=run_id,
-        clock=clock,
     )
 
 
