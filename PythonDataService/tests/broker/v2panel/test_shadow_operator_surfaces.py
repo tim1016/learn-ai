@@ -31,7 +31,6 @@ from app.broker.alpaca.clerk.active_authority import (
     select_active_clerk_runtime,
     set_active_clerk_runtime,
 )
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.repository import ExecutionLeaseLost
 from app.broker.alpaca.config import reset_alpaca_settings_for_testing
 from app.broker.contract.registry import (
@@ -78,6 +77,11 @@ from tests.broker.alpaca.clerk.live_envelope_fixtures import (
     TEST_ENVELOPE_VALUES,
     _LiveBroker,
 )
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import (
+    accept_budgeted_test_enter,
+    submit_budgeted_test_run,
+)
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 from tests.broker.v2panel.conftest import _FakeDeployRegistry
 
 pytestmark = pytest.mark.usefixtures("budgeted_run_registration")
@@ -230,7 +234,7 @@ async def test_shadow_boot_recovers_a_clerk_run_without_a_binding(
     """A crash before the binding write must not strand a Shadow Clerk run."""
     _app, runtime = shadow_app
     _register_instance(runtime.clerk)
-    submit_start_run(
+    seed_historical_run_started(
         runtime.sqlite_repository,
         account_id=SHADOW_ACCT,
         strategy_instance_id=SID,
@@ -628,7 +632,6 @@ async def test_the_live_verdict_reports_a_loss_hold_raised_on_the_composed_shado
     try:
         app, runtime, broker = shadow_app_and_broker
         from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
-        from app.broker.alpaca.clerk.sqlite.enter import accept_enter
         from app.broker.contract.models import BrokerOrderLeg
         from tests.broker.alpaca.clerk.sqlite.conftest import (
             DAY_PNL_RUN_ID,
@@ -639,15 +642,15 @@ async def test_the_live_verdict_reports_a_loss_hold_raised_on_the_composed_shado
         repo = runtime.sqlite_repository
         assert repo is not None and runtime.envelope_sync is not None
         repo.register_strategy_instance(strategy_instance_id=DAY_PNL_SID, symbol="SPY", config_hash="loss-test")
-        submit_start_run(repo, account_id=repo.account_id, strategy_instance_id=DAY_PNL_SID, lifecycle_run_id=DAY_PNL_RUN_ID)
-        accepted = accept_enter(repo, account_id=repo.account_id, strategy_instance_id=DAY_PNL_SID,
+        append_risk_policy(repo, policy=AccountRiskPolicy(1, 0.05, 5000, "live-profile", 1, "owner", repo.clock()), expected_revision=0)
+        submit_budgeted_test_run(repo, account_id=repo.account_id, strategy_instance_id=DAY_PNL_SID, lifecycle_run_id=DAY_PNL_RUN_ID)
+        accepted = accept_budgeted_test_enter(repo, account_id=repo.account_id, strategy_instance_id=DAY_PNL_SID,
             lifecycle_run_id=DAY_PNL_RUN_ID, decision_id="shadow-loss",
             leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=10))
         _append_day_pnl_slice(repo, accepted, execution_id="shadow-buy", side="BUY", quantity=10,
             price=1000, occurred_at_ms=repo.clock())
         _append_day_pnl_slice(repo, accepted, execution_id="shadow-sell", side="SELL", quantity=10,
             price=400, occurred_at_ms=repo.clock())
-        append_risk_policy(repo, policy=AccountRiskPolicy(1, 0.05, 5000, "live-profile", 1, "owner", repo.clock()), expected_revision=0)
         # Foreign real-account profit cannot cancel a simulated realized loss.
         broker.unrealized = 9999.0
         assert await runtime.envelope_sync.tick() == "hold_raised"

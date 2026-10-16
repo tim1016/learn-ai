@@ -25,7 +25,7 @@ from app.broker.alpaca.clerk.active_authority import (
     set_active_clerk_runtime,
 )
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, ExecutionLeaseLost
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
@@ -50,6 +50,7 @@ from app.services.broker_v2_panel.action_execution_service import (
 )
 from app.services.broker_v2_panel.cohort_execution import CohortLegCommand
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_run
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     _broker_position_fixture,
     _FakeReadPort,
@@ -235,7 +236,7 @@ def cohort_lease_lost_api(tmp_path):
     set_bot_task_registry(_FakeRegistry(tmp_path, sids=_LEASE_COHORT_SIDS))  # type: ignore[arg-type]
     port = _FakeBrokerPort()
     get_broker_registry().register(port)  # type: ignore[arg-type]
-    clock = _clock_seq()
+    clock = _clock_seq(start=_COHORT_RTH_MS)
     repo = ClerkSqliteRepository.initialize(
         account_id=ACCT, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=1_000
     )
@@ -250,7 +251,7 @@ def cohort_lease_lost_api(tmp_path):
                 {"mode": "trade", "quantity": 1, "carryover_policy": "FORBID"}
             ),
         )
-        submit_start_run(
+        submit_budgeted_test_run(
             repo, account_id=ACCT, strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}"
         )
     facade = SqliteAlpacaClerkFacade(
@@ -454,7 +455,7 @@ class _MixedLivenessRegistry(_FakeRegistry):
         return view
 
 
-_COHORT_RTH_MS = 1_700_060_400_000  # 2023-11-15 10:00 ET, a Wednesday
+_COHORT_RTH_MS = 1_792_072_800_000  # 2026-10-15 10:00 ET, a Thursday
 
 
 @pytest.fixture()
@@ -484,7 +485,7 @@ async def cohort_api(tmp_path):
                 {"mode": "trade", "quantity": 1, "carryover_policy": "FORBID"}
             ),
         )
-        submit_start_run(
+        submit_budgeted_test_run(
             repo,
             account_id=ACCT,
             strategy_instance_id=sid,

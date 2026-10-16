@@ -22,7 +22,7 @@ import pytest
 from fastapi import FastAPI
 
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
 from app.broker.alpaca.clerk.sqlite.facts import OrderOutcomeAttestedFacts
 from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection
@@ -65,6 +65,7 @@ from app.services.broker_v2_panel.sqlite_panel_source import execute_sqlite_pane
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite import test_unknown_order_attestation as settling
 from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at, _walk_clock_to
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 from tests.broker.alpaca.clerk.sqlite.test_exit_lost_closing_order_resend import WAIT_MS
 from tests.broker.alpaca.clerk.sqlite.test_flatten_send_cover import _context_of, _flatten
 from tests.broker.v2panel.test_panel_projection import _clerk_status, _panel, _status
@@ -82,7 +83,7 @@ def started_bot(tmp_path: Path):
     repo.register_strategy_instance(
         exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=settling.SID, symbol="SPY", config_hash="h1"
     )
-    submit_start_run(
+    seed_historical_run_started(
         repo, account_id=settling.ACCOUNT_ID, strategy_instance_id=settling.SID,
         lifecycle_run_id=settling.RUN_ID,
     )

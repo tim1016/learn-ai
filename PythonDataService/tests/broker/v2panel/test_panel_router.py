@@ -24,9 +24,8 @@ from app.broker.alpaca.clerk.active_authority import (
     set_active_clerk_runtime,
 )
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
-from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
 from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
@@ -87,6 +86,11 @@ from app.services.broker_v2_panel.chart_projection_service import (
 )
 from app.services.live_chart_window import CHART_FEED_NOT_EXPECTED, ChartWindowResult
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import (
+    accept_budgeted_test_enter,
+    submit_budgeted_test_enter,
+    submit_budgeted_test_run,
+)
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     FIXTURE_RTH_MS,
     _broker_position_fixture,
@@ -95,6 +99,7 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
     _TestClock,
     _walk_clock_to,
 )
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
 from tests.broker.alpaca.clerk.sqlite.test_scheduled_end import (
     _Schedule,
@@ -319,7 +324,7 @@ def api(tmp_path: Path, fleet_size: int):
             # assuming `trade`.
             config_json=json.dumps({"mode": "trade", "quantity": 1, "carryover_policy": "FORBID"}),
         )
-        submit_start_run(
+        submit_budgeted_test_run(
             repo,
             account_id=ACCT,
             strategy_instance_id=sid,
@@ -387,7 +392,7 @@ def lease_lost_api(tmp_path: Path):
     set_bot_task_registry(_FakeRegistry(tmp_path, sids=(SID,)))  # type: ignore[arg-type]
     port = _FakeBrokerPort()
     get_broker_registry().register(port)  # type: ignore[arg-type]
-    clock = _clock_seq()
+    clock = _clock_seq(start=1_792_072_800_000)
     repo = ClerkSqliteRepository.initialize(
         account_id=ACCT, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=1_000
     )
@@ -399,7 +404,7 @@ def lease_lost_api(tmp_path: Path):
         display_name="Deployment Validation",
         config_json=json.dumps({"mode": "trade", "quantity": 1, "carryover_policy": "FORBID"}),
     )
-    submit_start_run(
+    submit_budgeted_test_run(
         repo, account_id=ACCT, strategy_instance_id=SID, lifecycle_run_id=_run_id(SID)
     )
     facade = SqliteAlpacaClerkFacade(
@@ -691,7 +696,7 @@ async def test_catalog_places_each_bot_on_home_from_its_own_custody_over_http(tm
     set_bot_task_registry(_FakeRegistry(tmp_path, sids=()))  # type: ignore[arg-type]
     port = _FakeBrokerPort()
     get_broker_registry().register(port)  # type: ignore[arg-type]
-    clock = _clock_seq()
+    clock = _clock_seq(start=1_792_072_800_000)
     repo = ClerkSqliteRepository.initialize(account_id=ACCT, artifacts_root=tmp_path, clock=clock)
     bots = (("running", "trade"), ("holding", "trade"), ("finished", "trade"), ("simulated", "dry_run"))
     for sid, mode in bots:
@@ -700,8 +705,8 @@ async def test_catalog_places_each_bot_on_home_from_its_own_custody_over_http(tm
             strategy_key="deployment_validation", display_name="Deployment Validation",
             config_json=json.dumps({"mode": mode, "quantity": 1, "carryover_policy": "FORBID"}),
         )
-        submit_start_run(repo, account_id=ACCT, strategy_instance_id=sid, lifecycle_run_id=_run_id(sid), clock=repo.clock)
-    bought = accept_enter(
+        submit_budgeted_test_run(repo, account_id=ACCT, strategy_instance_id=sid, lifecycle_run_id=_run_id(sid), clock=repo.clock)
+    bought = accept_budgeted_test_enter(
         repo, account_id=ACCT, strategy_instance_id="holding", decision_id="dec-holding",
         lifecycle_run_id=_run_id("holding"), leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=2),
     )
@@ -737,9 +742,9 @@ async def test_catalog_places_each_bot_on_home_from_its_own_custody_over_http(tm
         "running": None, "holding": stopped_at["holding"], "finished": stopped_at["finished"],
     }
     assert rows["holding"]["status_explanation"] == "Stopped · still holds 2 SPY · no bot is managing it"
-    # No fee evidence was ever recorded: the whole-life result is unknown,
-    # never $0.
-    assert (rows["finished"]["final_result_usd"], rows["finished"]["trade_count"]) == (None, None)
+    # A budgeted Deploy includes complete fee evidence, so a bot with no
+    # trades has a known zero result.
+    assert (rows["finished"]["final_result_usd"], rows["finished"]["trade_count"]) == ("0.00", 0)
 
 
 async def test_panel_scoped_uses_sqlite_projection(api) -> None:
@@ -770,7 +775,7 @@ async def test_panel_scoped_uses_sqlite_projection(api) -> None:
 
 def _accept_enter_then_exit(repo: ClerkSqliteRepository) -> tuple[str, str]:
     """Two real, durable effect operations for SID with no broker contact."""
-    entered = accept_enter(
+    entered = accept_budgeted_test_enter(
         repo,
         account_id=ACCT,
         strategy_instance_id=SID,
@@ -2219,7 +2224,9 @@ async def test_a_running_bot_page_leads_with_its_own_status_summary_and_toolbar(
 
     page = body["bot_page"]
     assert page["status"] == {"state": "running", "label": "Running", "reason": None}
-    assert page["summary"]["text"] == "Running since Tue Nov 14 2023, 17:13 ET · 2 decisions, no trades."
+    assert page["summary"]["text"] == (
+        "Running since Tue Nov 14 2023, 17:13 ET · 2 decisions, no trades · $1000000.00 set aside."
+    )
     assert page["summary"]["template_version"] == 2
     toolbar = {entry["action_id"]: entry for entry in page["toolbar"]}
     assert (toolbar["stop_bot_decisions"]["availability"], toolbar["stop_bot_decisions"]["primary"]) == (
@@ -2242,7 +2249,7 @@ async def test_a_running_bot_page_leads_with_its_own_status_summary_and_toolbar(
 async def test_an_order_that_can_still_fill_keeps_cancel_needed_though_blocked(api) -> None:
     """An order the broker has not acknowledged can still fill: Cancel is blocked, never "not needed"."""
     app, repo = api
-    accept_enter(
+    accept_budgeted_test_enter(
         repo, account_id=ACCT, strategy_instance_id=SID, decision_id="dec-1",
         lifecycle_run_id=_run_id(SID), leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
     )
@@ -2258,7 +2265,7 @@ async def test_an_order_that_can_still_fill_keeps_cancel_needed_though_blocked(a
 async def test_an_order_the_broker_refused_leaves_nothing_to_cancel(api) -> None:
     """A refused order has ended: Cancel is not needed, however long ago it was refused."""
     app, repo = api
-    refused = await submit_enter(
+    refused = await submit_budgeted_test_enter(
         repo, account_id=ACCT, strategy_instance_id=SID, decision_id="dec-1", lifecycle_run_id=_run_id(SID),
         leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
         trade=_FakeTradePort(submit_error=BrokerOrderRejected("insufficient buying power")),
@@ -2286,7 +2293,10 @@ async def test_an_account_hold_never_turns_a_finished_bot_red(api) -> None:
     assert body["mission_verdict"]["state"] == "blocked"
     page = body["bot_page"]
     assert page["status"]["state"] == "finished"
-    assert page["summary"]["text"] == "Ran Tue Nov 14 2023, 17:13–17:14 ET · stopped · no decisions, no trades."
+    assert page["summary"]["text"] == (
+        "Ran Tue Nov 14 2023, 17:13–17:14 ET · stopped · no decisions, no trades"
+        " · $1000000.00 back to the account."
+    )
     holds = next(line for line in page["health"]["account"] if line["key"] == "holds")
     assert (holds["state"], holds["value"], holds["note"]) == (
         "attention",
@@ -2497,7 +2507,7 @@ async def crashed_holding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> As
         config_json=json.dumps({"mode": "trade", "quantity": 1, "carryover_policy": "FORBID"}),
         exit_terms=DEPLOY_EXIT_TERMS,
     )
-    submit_start_run(repo, account_id=ACCT, strategy_instance_id=SID, lifecycle_run_id=_run_id(SID))
+    seed_historical_run_started(repo, account_id=ACCT, strategy_instance_id=SID, lifecycle_run_id=_run_id(SID))
     account, trade = _SpyAccount(holds=1.0), _FakeTradePort()
     facade = SqliteAlpacaClerkFacade(account_mode="paper", repo=repo, read=account, trade=trade)  # type: ignore[arg-type]
     set_active_clerk_runtime(ActiveClerkRuntime(authority_kind="sqlite", clerk=facade))
@@ -2618,7 +2628,7 @@ async def _the_pass_is_older_than_the_sweeps_bound(world: _CrashedHolding) -> No
 
 async def _the_bot_wrote_a_record_after_the_pass(world: _CrashedHolding) -> None:
     await _clerk_pass(world)
-    submit_start_run(world.repo, account_id=ACCT, strategy_instance_id=SID, lifecycle_run_id="run-again")
+    seed_historical_run_started(world.repo, account_id=ACCT, strategy_instance_id=SID, lifecycle_run_id="run-again")
     submit_stop_run(world.repo, account_id=ACCT, strategy_instance_id=SID, lifecycle_run_id="run-again")
 
 

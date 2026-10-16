@@ -20,7 +20,6 @@ from httpx import ASGITransport
 from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime, set_active_clerk_runtime
 from app.broker.alpaca.clerk.sqlite.commands import (
     submit_retire_strategy_instance,
-    submit_start_run,
     submit_stop_run,
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
@@ -56,6 +55,7 @@ from app.services.broker_v2_panel.sqlite_panel_adapter import _working_order_vie
 from app.services.broker_v2_panel.sqlite_panel_source import _uncleanly_ended, home_roster
 from app.services.fleet_bot_history import BotHistoryFilters, merge_bot_history
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_run
 from tests.broker.alpaca.clerk.sqlite.conftest import _FakeReadPort, _FakeTradePort
 from tests.broker.v2panel.fixtures import ACCT
 from tests.broker.v2panel.test_bot_history import _receipt
@@ -212,8 +212,8 @@ def test_an_unclean_end_is_reported_under_the_asset_the_bot_may_still_hold(
 ) -> None:
     """The stranded-position notices are about a position, and the position is in QQQ."""
     _roster_row(repo, registered_under="QQQ", config_json=_config())
-    for command in (submit_start_run, submit_stop_run):
-        command(repo, account_id=repo.account_id, strategy_instance_id="bot", lifecycle_run_id="run-1")
+    submit_budgeted_test_run(repo, account_id=repo.account_id, strategy_instance_id="bot", lifecycle_run_id="run-1")
+    submit_stop_run(repo, account_id=repo.account_id, strategy_instance_id="bot", lifecycle_run_id="run-1")
     _receipt(tmp_path, "bot", "run-1", "CRASHED", "RUN_CRASHED")
 
     ended, unreadable = _uncleanly_ended(SimpleNamespace(repository=repo, account_id="PA-ROSTER"))  # type: ignore[arg-type]
@@ -390,7 +390,7 @@ def test_the_traded_assets_lane_holds_the_entries_its_price_feed_refused(monkeyp
 
 # ── the bot page, read whole ────────────────────────────────────────────
 
-_PAGE_RTH_MS = 1_700_060_400_000  # 2023-11-15 10:00 ET, a Wednesday
+_PAGE_RTH_MS = 1_792_072_800_000  # 2026-10-15 10:00 ET, a Thursday
 
 
 @pytest.fixture
@@ -412,7 +412,7 @@ async def bot_pages(tmp_path: Path):
             exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=sid, symbol=registered_under, config_hash="config-1",
             strategy_key="deployment_validation", display_name="Deployment Validation", config_json=config_json,
         )
-        submit_start_run(repo, account_id=ACCT, strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}")
+        submit_budgeted_test_run(repo, account_id=ACCT, strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}")
     facade = SqliteAlpacaClerkFacade(
         account_mode="paper", repo=repo, read=_FakeReadPort(), trade=_FakeTradePort(),  # type: ignore[arg-type]
     )

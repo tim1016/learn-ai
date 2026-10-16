@@ -14,10 +14,11 @@ from app.broker.alpaca.clerk.active_runtime import unavailable_runtime
 from app.broker.alpaca.clerk.shadow_activation import ShadowActivationStore
 from app.broker.alpaca.clerk.shadow_broker import ShadowNamespaceUnproven
 from app.broker.alpaca.clerk.sqlite.activation import ActivationStore
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.services import alpaca_shadow_activation as activation
 from tests.broker.alpaca.clerk.live_envelope_fixtures import LIVE_ACCT, _LiveBroker
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 
 
 @pytest.fixture
@@ -109,7 +110,7 @@ async def test_route_returns_receipt_before_managed_restart(setup_activation: Si
 async def test_existing_history_requires_the_visible_budget_upgrade(setup_activation: SimpleNamespace, tmp_path: Path) -> None:
     repo = ClerkSqliteRepository.initialize(account_id=f"shadow:{LIVE_ACCT}", artifacts_root=tmp_path)
     repo.register_strategy_instance(strategy_instance_id="old", symbol="SPY", config_hash="old-seal")
-    submit_start_run(repo, account_id=repo.account_id, strategy_instance_id="old", lifecycle_run_id="old-run", clock=repo.clock)
+    seed_historical_run_started(repo, account_id=repo.account_id, strategy_instance_id="old", lifecycle_run_id="old-run")
     submit_stop_run(repo, account_id=repo.account_id, strategy_instance_id="old", lifecycle_run_id="old-run", clock=repo.clock)
     repo.close()
     await activation.activate_shadow_from_configuration(LIVE_ACCT)

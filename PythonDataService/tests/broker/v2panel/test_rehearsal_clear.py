@@ -30,7 +30,7 @@ from app.broker.alpaca.clerk.active_authority import (
     set_active_clerk_runtime,
 )
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.facts import StrategyInstanceRetiredFacts
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, RepositoryPoisoned
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
@@ -50,6 +50,7 @@ from app.services.broker_v2_panel.action_execution_service import (
 from tests._helpers.bot_runner.resume import _FlatBroker
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_run
 from tests.broker.alpaca.clerk.sqlite.conftest import _make_held_position
 from tests.broker.v2panel.conftest import account_snapshot
 
@@ -118,7 +119,7 @@ async def _rehearsed(
             display_name="Deployment Validation",
             config_json=json.dumps({"mode": "trade", "quantity": 1, "carryover_policy": "FORBID"}),
         )
-        submit_start_run(sealed, account_id=sealed_account_id, strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}")
+        submit_budgeted_test_run(sealed, account_id=sealed_account_id, strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}")
         if holds_spy:
             await _make_held_position(sealed, account_id=sealed_account_id, strategy_instance_id=sid, run_id=f"run-{sid}")
         submit_stop_run(sealed, account_id=sealed_account_id, strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}")

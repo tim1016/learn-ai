@@ -13,8 +13,6 @@ import pytest
 from app.broker.alpaca import adapter
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite import reads, schema
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
-from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.external_orders import (
     UNIDENTIFIED_BROKER_ORDER_ID,
     acknowledge_unfoldable_broker_order,
@@ -51,6 +49,10 @@ from app.broker.contract.models import (
     BrokerPosition,
 )
 from app.broker.contract.ports import BrokerReadPort
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import (
+    accept_budgeted_test_enter,
+    submit_budgeted_test_run,
+)
 from tests.broker.alpaca.clerk.sqlite.conftest import remove_budget_schema_for_legacy_fixture
 from tests.broker.alpaca.conftest import load_alpaca_fixture_file
 
@@ -175,13 +177,13 @@ def _initialize_owned_order(tmp_path: Path) -> tuple[ClerkSqliteRepository, str]
         symbol="SPY",
         config_hash="config-hash",
     )
-    submit_start_run(
+    submit_budgeted_test_run(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=STRATEGY_INSTANCE_ID,
         lifecycle_run_id=RUN_ID,
     )
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=STRATEGY_INSTANCE_ID,
