@@ -38,12 +38,10 @@ notional cap, no symbol allowlist, no session restriction.
 
 - **Cash observation.** `LiveEnvelopeSync.observe`
   (`PythonDataService/app/broker/alpaca/clerk/sqlite/live_envelope_sync.py`)
-  reads `account.cash` every tick. Under simulated custody
-  (`custody_is_simulated=True`, true under shadow; false on the live
-  authority, whose broker cash already reflects the Clerk's own fills) it
-  subtracts `account_net_cash_spent_usd()` — what the Clerk's own synthesized
-  fills would have spent — to get `cash_available_usd`; under real custody the
-  broker's own cash already reflects it.
+  reads `account.cash` every tick. Real custody uses that broker cash.
+  Simulated custody passes it as reference cash to
+  `SimulatedAccountProjection.observe`, which derives available cash from
+  the simulation's starting cash, effective fills, and settled modelled fees.
 - **The observation is dated when its reads are issued** (fixed 2026-09-24,
   #2441). `observed_at_ms` is stamped before the bracketed cash-transfer and
   account reads go out, never when they return: a broker answer is only
@@ -147,12 +145,10 @@ notional cap, no symbol allowlist, no session restriction.
   same script's `observe` mode, which is read-only, places nothing, and
   censors fills whose attribution windows overlap rather than emitting
   per-fill delays from cash another fill moved.
-- **Under shadow a fill can count twice, never zero times.** Simulated custody
-  subtracts `account_net_cash_spent_usd()`, read *after* the broker answered,
-  so a fill recorded during the read (or inside the grace) is both subtracted
-  from `cash_available_usd` and still reserved until the next observation
-  issued past the grace. For up to one tick the rehearsal refuses an ENTER
-  the true free cash would cover; it never admits one that cash cannot.
+- **Under shadow, simulated cash includes committed fills.** Its observation
+  sets `simulation_cash_seen_before_ms` past the current projection, so
+  reservation claims exclude those same fills. Unfilled ENTERs remain
+  reserved at their decision price.
 - **Account day P&L, the prior-close rule.**
   `PythonDataService/app/broker/alpaca/clerk/sqlite/day_pnl.py::day_pnl_at`
   computes `current equity − last_equity − net cash flows after the prior
@@ -416,7 +412,7 @@ it to every facade authority.
   the pre-cutover cash bound briefly admits against cash it has already
   claimed. The window is bounded by one sync cadence plus the life of that
   working order: the next 15 s tick re-observes cash, and any fill recorded
-  by then is already subtracted through `account_net_cash_spent_usd`. (The
+  by then is already included in the simulated cash projection. (The
   budget read refuses outright while an entry order has no reservation.)
 - **No Frontend button yet.** `Frontend/src/app/shell/alpaca-live-banner.component.ts`
   (Task 10) renders a `· loss hold` chip on the banner when

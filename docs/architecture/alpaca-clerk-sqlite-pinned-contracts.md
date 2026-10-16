@@ -188,7 +188,7 @@ discoverability, not because §3d's rule applies to them:
 
 | Transition | Facts | Fold effect |
 | --- | --- | --- |
-| `RECONCILIATION_ATTEMPTED` | `trigger` (`AUTOMATIC` \| `OPERATOR_RECONCILE_NOW`), `outcome` (`STILL_UNKNOWN` \| `RESOLVED_SUCCESS` \| `RESOLVED_FAILURE`), `why` | Inserts one `reconciliations` row. Never touches `orders`/`effect_operations`/`positions` — those are already correct by the time this is appended (see `reconcile.reconcile_uncertain_order`). |
+| `RECONCILIATION_ATTEMPTED` | `trigger` (`AUTOMATIC` \| `OPERATOR_RECONCILE_NOW`), `outcome` (`STILL_UNKNOWN` \| `RESOLVED_SUCCESS` \| `RESOLVED_FAILURE`), `why` | Inserts one `reconciliations` row. Never touches `orders`/`effect_operations`/`positions` — those are already correct by the time this is appended (see `reconcile._record_reconciliation_attempt`). |
 | `ACCOUNT_HOLD_RAISED` | `reason_code`, `evidence_refs` (foreign orders' broker-assigned `order_id`s) | Inserts one `ACTIVE`, `ACCOUNT_CLERK`-scoped episode. A partial unique index enforces one active cause. Changed evidence uses `ACCOUNT_HOLD_REFRESHED`; a fresh clean snapshot uses `ACCOUNT_HOLD_RESOLVED`; unchanged evidence appends nothing. |
 
 Both mint their own primary key (`reconciliation_id`/`hold_id`) from the
