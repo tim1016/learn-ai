@@ -65,6 +65,13 @@ interface ExpirationOption {
   label: string;
 }
 
+interface EngineInput {
+  mid: number;
+  spot: number;
+  iv: number;
+  expirationMs: number;
+}
+
 /**
  * /broker/options-chain — live SPY chain with IBKR vs engine Greeks.
  *
@@ -72,7 +79,7 @@ interface ExpirationOption {
  * connection → re-render the table per snapshot. ``Pause`` closes the
  * source so backend ``cancelMktData`` fires for every contract. The
  * engine Greek column polls ``QuantLibService.priceOption`` per
- * (strike, right) when the bid/ask mid moves more than a cent.
+ * (strike, right) when its bid/ask mid, IV, spot or expiry changes.
  */
 @Component({
   selector: 'app-broker-options-chain',
@@ -122,8 +129,8 @@ export class BrokerOptionsChainComponent {
     () => this.currentStream()?.latest() ?? this.lastSnapshot(),
   );
 
-  /** Engine reprice cache keyed by `${strike}:${right}` → last bid/ask mid we priced at. */
-  private readonly engineMidByKey = new Map<string, number>();
+  /** The effective input of each in-flight or completed engine comparison. */
+  private readonly engineInputByKey = new Map<string, EngineInput>();
   private readonly engineGreeksByKey = signal<
     Map<string, { delta: number; gamma: number }>
   >(new Map());
@@ -217,7 +224,7 @@ export class BrokerOptionsChainComponent {
     });
 
     // Recompute engine Greeks any time a snapshot arrives. Throttled
-    // implicitly by the per-key mid threshold.
+    // by the per-key effective-input threshold.
     effect(() => {
       if (this.currentStream() === null) return;
       const snap = this.latestSnapshot();
@@ -264,7 +271,7 @@ export class BrokerOptionsChainComponent {
     this.expirations.set([]);
     this.availableStrikes.set([]);
     this.selectedStrikes.set(new Set());
-    this.engineMidByKey.clear();
+    this.engineInputByKey.clear();
     this.engineGreeksByKey.set(new Map());
   }
 
@@ -273,7 +280,7 @@ export class BrokerOptionsChainComponent {
     this.stopStream();
     this.paused.set(false);
     this.lastSnapshot.set(null);
-    this.engineMidByKey.clear();
+    this.engineInputByKey.clear();
     this.engineGreeksByKey.set(new Map());
     this.selectedExpiry.set(expiryMs);
   }
@@ -297,7 +304,7 @@ export class BrokerOptionsChainComponent {
     this.engineError.set(null);
     this.paused.set(false);
     this.lastSnapshot.set(null);
-    this.engineMidByKey.clear();
+    this.engineInputByKey.clear();
     this.engineGreeksByKey.set(new Map());
 
     const params = new URLSearchParams();
@@ -391,7 +398,7 @@ export class BrokerOptionsChainComponent {
   private maybeRepriceEngine(snap: IbkrChainSnapshot): void {
     const spot = snap.underlying_price;
     if (spot === null) {
-      this.engineMidByKey.clear();
+      this.engineInputByKey.clear();
       this.engineGreeksByKey.set(new Map());
       return;
     }
@@ -406,25 +413,28 @@ export class BrokerOptionsChainComponent {
         continue;
       }
       const key = `${q.strike}:${q.right}`;
-      const lastMid = this.engineMidByKey.get(key);
-      if (lastMid !== undefined && Math.abs(lastMid - mid) < ENGINE_REPRICE_THRESHOLD_CENTS / 100) {
+      const input: EngineInput = { mid, spot, iv: q.iv, expirationMs: snap.expiry_ms };
+      const lastInput = this.engineInputByKey.get(key);
+      if (lastInput !== undefined && sameEngineInput(lastInput, input)) {
         continue;
       }
-      this.engineMidByKey.set(key, mid);
+      this.engineInputByKey.set(key, input);
+      this.engineGreeksByKey.update((current) => {
+        const next = new Map(current);
+        next.delete(key);
+        return next;
+      });
       promises.push(
         this.repriceEngine({
           strike: q.strike,
           right: q.right,
-          spot,
-          iv: q.iv,
-          mid,
-          expirationMs: snap.expiry_ms,
+          input,
           requestSeq,
         }),
       );
     }
     if (missingGreeks.length > 0) {
-      for (const key of missingGreeks) this.engineMidByKey.delete(key);
+      for (const key of missingGreeks) this.engineInputByKey.delete(key);
       this.engineGreeksByKey.update((current) => {
         const next = new Map(current);
         for (const key of missingGreeks) next.delete(key);
@@ -437,34 +447,44 @@ export class BrokerOptionsChainComponent {
   private async repriceEngine(args: {
     strike: number;
     right: OptionRight;
-    spot: number;
-    iv: number;
-    mid: number;
-    expirationMs: number;
+    input: EngineInput;
     requestSeq: number;
   }): Promise<void> {
+    const key = `${args.strike}:${args.right}`;
+    const stillCurrent = () => args.requestSeq === this.repriceRequestSeq
+      && this.engineInputByKey.get(key) === args.input;
     try {
       const result = await this.quantlib.priceOption({
-        spot: args.spot,
+        spot: args.input.spot,
         strike: args.strike,
-        volatility: args.iv,
-        expirationMs: args.expirationMs,
+        volatility: args.input.iv,
+        expirationMs: args.input.expirationMs,
         optionType: args.right === 'C' ? 'call' : 'put',
       });
-      const key = `${args.strike}:${args.right}`;
-      if (
-        !result.success || args.requestSeq !== this.repriceRequestSeq
-        || this.engineMidByKey.get(key) !== args.mid
-      ) return;
+      if (!stillCurrent()) return;
+      if (!result.success) {
+        this.engineInputByKey.delete(key);
+        this.engineError.set(new Error(result.error ?? 'The engine did not return a comparison.'));
+        return;
+      }
       this.engineGreeksByKey.update((m) => {
         const next = new Map(m);
         next.set(key, { delta: result.delta, gamma: result.gamma });
         return next;
       });
     } catch (error) {
-      if (args.requestSeq === this.repriceRequestSeq) this.engineError.set(error);
+      if (!stillCurrent()) return;
+      this.engineInputByKey.delete(key);
+      this.engineError.set(error);
     }
   }
+}
+
+function sameEngineInput(left: EngineInput, right: EngineInput): boolean {
+  return Math.abs(left.mid - right.mid) < ENGINE_REPRICE_THRESHOLD_CENTS / 100
+    && left.spot === right.spot
+    && left.iv === right.iv
+    && left.expirationMs === right.expirationMs;
 }
 
 function midOrNull(q: IbkrOptionQuote): number | null {
