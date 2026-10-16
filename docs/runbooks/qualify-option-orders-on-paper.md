@@ -136,11 +136,13 @@ Check each, and write the answer in the step log (section 7).
    window without raising the budget. At the default of 10, a four-leg plan
    reserves up to 84 lines; at 4 it reserves 36, so two reserve 72. This is
    admission's upper bound, not a measurement of subscriptions: shared
-   contracts use one line. Change it in the lane's env file while the test
+   contracts use one line. Record the previous env-file value in the step
+   log, including whether the setting was absent. Change it while the test
    bots are stopped and flat, then recreate the lane. Rehearse the resulting
    rules: a narrower window may not reach a delta target. A rule in steps
    from the money centers its window on that target strike. Keep the existing
-   budget and the IBKR provider boundary.
+   budget and the IBKR provider boundary. Restore the previous window during
+   section 9's teardown, whether or not a capability is promoted.
 3. **Regular hours.** An option bot is only ever started for regular hours,
    and its orders are sent in the regular session. Begin a step with enough of
    the session left for the whole life of its orders, and do not choose a
@@ -585,10 +587,15 @@ When the experiment ends, with or without a promotion:
    be absent or `false`. Then Deploy must refuse a several-leg structure again,
    as section 4's control: a temporary setting that is still on is a rollout by
    accident.
-4. If a second lane was added only for this, leave it at rest or remove it by
+4. If the quote window was narrowed for the experiment, restore its recorded
+   previous value, or remove the override if it was previously absent. This
+   applies whether or not a capability is promoted. Recreate the lane and
+   verify its effective window before ending the experiment; combine this
+   with step 3's recreate when applicable.
+5. If a second lane was added only for this, leave it at rest or remove it by
    [section 6 of the account runbook](add-an-alpaca-account.md#6-removal), as
    the owner chooses. Do not delete its volume.
-5. Keep the bundles, the step log and the owner's go-ahead. Commit the
+6. Keep the bundles, the step log and the owner's go-ahead. Commit the
    recordings only.
 
 **Done:** the account is flat with no working order, the lane's container carries
@@ -1173,3 +1180,13 @@ leaves nothing unread. The sanitized recording
 `tests/fixtures/alpaca/option_paper_recordings/C3-buyback-window-missed`
 pins the two whole-spread orders, four leg executions, held positions and
 released buying power in `test_paper_option_recordings.py`.
+
+The temporary several-leg Paper setting had been re-enabled for this pass.
+The experiment continued directly into the remaining condor-overlap
+rehearsal, so it was still enabled at this checkpoint; this is not a teardown
+record or a capability promotion. Buying-power judgment and Live options
+remained off. The following rehearsal changed the window from its default
+10 to 4 with all bots stopped and flat. The step log records that the old
+override was absent. With nothing promoted, section 9 requires removing both
+temporary overrides and verifying the setting-off refusal when this
+continuing experiment ends.
