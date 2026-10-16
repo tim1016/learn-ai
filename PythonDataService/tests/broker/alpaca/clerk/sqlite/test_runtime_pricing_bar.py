@@ -242,7 +242,8 @@ async def test_a_bot_that_trades_another_asset_can_be_started_again(tmp_path: Pa
 
         registered = repo.strategy_instance(binding.strategy_instance_id)
         assert registered is not None and registered["symbol"] == TRADED
-        assert repo.active_run(binding.strategy_instance_id) is not None
+        active = repo.active_run(binding.strategy_instance_id)
+        assert active is not None and active.lifecycle_run_id == "resumed-run"
         submit_stop_run(
             repo, account_id=repo.account_id, strategy_instance_id=binding.strategy_instance_id,
             lifecycle_run_id="resumed-run", operator_reason="retire_historical_resume",
