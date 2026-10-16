@@ -43,7 +43,6 @@ import pytest
 from alpaca.common.exceptions import APIError
 
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.exit_recovery import DEFAULT_RECOVERY_INTERVAL_MS
 from app.broker.alpaca.clerk.sqlite.exit_resolution import flatten_send_refusal, resend_wait_ms
@@ -73,8 +72,9 @@ from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.utils.session_anchors import et_date_at_ms
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite import test_safe_flatten_execution as safe_flatten
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_run
 from tests.broker.alpaca.clerk.sqlite.conftest import (
-    FIXTURE_RTH_MS,
+    BUDGETED_RTH_MS,
     _clock_at,
     _TestClock,
     _walk_clock_to,
@@ -1254,14 +1254,14 @@ async def test_a_store_rebuilt_from_its_mirror_still_tells_an_order_held_for_ano
     notice recorded for an order that is still unknown. A store replayed from
     its mirror reads the same rows in the same order, and shows the same notice.
     """
-    clock = _clock_at(FIXTURE_RTH_MS)
+    clock = _clock_at(BUDGETED_RTH_MS)
     repo = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
     )
     repo.register_strategy_instance(
         exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=SID, symbol="SPY", config_hash="h1"
     )
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     alpaca, both_unknown = await _the_entry_is_found_while_the_closing_order_is_held_for_another_identity(
         repo, clock
     )
@@ -1288,14 +1288,14 @@ async def test_a_store_rebuilt_from_its_mirror_tells_the_same_refusal(tmp_path: 
     So a store replayed from its mirror shows the bot's page the same notice,
     refreshed by the same later pass, as the store that lived through it.
     """
-    clock = _clock_at(FIXTURE_RTH_MS)
+    clock = _clock_at(BUDGETED_RTH_MS)
     repo = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
     )
     repo.register_strategy_instance(
         exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=SID, symbol="SPY", config_hash="h1"
     )
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     refused = _Refused(403, "insufficient qty available for order (requested: 10, available: 0)")
     alpaca = _Alpaca(repo, clock, submits=("never_arrives", refused))
     await _the_runner_sends_the_exit(repo, alpaca)
