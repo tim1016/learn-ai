@@ -407,7 +407,7 @@ function toTableRow(transaction: ClerkTransactionSummary): TransactionTableRow {
     execution,
     status,
     origin: transaction.transaction_origin,
-    fee: transaction.fee,
+    fee: transaction.fee ?? null,
     feesReported,
     evidence,
     searchText: searchableValues
@@ -421,10 +421,10 @@ function requestLabel(transaction: ClerkTransactionSummary): string {
   // An option ending is no order: the row says what ended, in the sentence the backend authored for it.
   if (instruction === undefined) return transaction.option_event?.headline ?? 'No request details recorded';
   const action = instruction.action ? formatReceiptLabel(instruction.action) : 'Order';
-  const quantity = instruction.quantity === null ? '' : ` ${instruction.quantity}`;
+  const quantity = instruction.quantity == null ? '' : ` ${instruction.quantity}`;
   const orderType = instruction.order_type ? ` · ${formatReceiptLabel(instruction.order_type)}` : '';
-  const limit = instruction.limit_price === null ? '' : ` at ${MONEY.format(instruction.limit_price)}`;
-  const stop = instruction.stop_price === null ? '' : ` · Stop ${MONEY.format(instruction.stop_price)}`;
+  const limit = instruction.limit_price == null ? '' : ` at ${MONEY.format(instruction.limit_price)}`;
+  const stop = instruction.stop_price == null ? '' : ` · Stop ${MONEY.format(instruction.stop_price)}`;
   return `${action}${quantity}${orderType}${limit}${stop}`;
 }
 

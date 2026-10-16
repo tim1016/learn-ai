@@ -194,7 +194,8 @@ interface EpochProvenance {
 
 /** Formats only explicit receipt fields; never derives an epoch from sequence or time. */
 function epochProvenance(detail: ClerkTransactionDetail | null): EpochProvenance {
-  const receipts = detail === null ? [] : [detail.receipt, ...detail.events.map((event) => event.receipt)];
+  const receipts: Record<string, unknown>[] = detail === null
+    ? [] : [detail.receipt ?? {}, ...(detail.events ?? []).map((event) => event.receipt ?? {})];
   return {
     origin: recordedEpochs(receipts, 'origin_epoch'),
     observed: recordedEpochs(receipts, 'observed_epoch'),

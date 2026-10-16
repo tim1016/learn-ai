@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, field_validator, model_serializer
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+)
 
 from app.schemas.option_endings import OptionEndingView
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
@@ -96,7 +104,7 @@ class ClerkTransactionEventRow(BaseModel):
     execution_price: float | None = None
     journal_seq: int = Field(ge=1)
     recorded_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
-    receipt: dict[str, Any] = Field(default_factory=dict)
+    receipt: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class ClerkCustodyTimeline(BaseModel):
@@ -141,7 +149,7 @@ class ClerkTransactionRow(BaseModel):
     execution_quantity: float | None = None
     execution_price: float | None = None
     external_order_id: str | None = Field(default=None, min_length=1, max_length=256)
-    receipt: dict[str, Any] = Field(default_factory=dict)
+    receipt: dict[str, JsonValue] = Field(default_factory=dict)
     events: list[ClerkTransactionEventRow] = Field(default_factory=list)
     custody_timeline: ClerkCustodyTimeline | None = None
     #: Set when the row is an option position that ended with no order of the bot's: it expired,

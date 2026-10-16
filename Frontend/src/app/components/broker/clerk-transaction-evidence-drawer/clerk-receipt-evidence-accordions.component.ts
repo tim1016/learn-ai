@@ -46,19 +46,23 @@ export class ClerkReceiptEvidenceAccordionsComponent {
     return parts.length === 0 ? 'Not recorded' : parts.join(' · ');
   });
   /** The instrument an execution event recorded, when exactly one did: the instruction's symbol is no observed one. */
+  protected readonly events = computed(() => this.detail().events ?? []);
   protected readonly executionSymbol = computed(() => {
     const symbols = new Set(
-      this.detail().events
+      this.events()
         .filter((event) => event.event_kind.startsWith('execution_'))
-        .map((event) => event.receipt['symbol'])
+        .map((event) => {
+          const receipt: Record<string, unknown> = event.receipt ?? {};
+          return receipt['symbol'];
+        })
         .filter((symbol): symbol is string => typeof symbol === 'string' && symbol !== ''),
     );
     return symbols.size === 1 ? [...symbols][0] : null;
   });
-  protected readonly receiptEntries = computed(() => receiptEntries(this.detail().receipt));
-  protected readonly trackEvent = (_: number, event: ClerkTransactionDetail['events'][number]): string => event.event_id;
+  protected readonly receiptEntries = computed(() => receiptEntries(this.detail().receipt ?? {}));
+  protected readonly trackEvent = (_: number, event: NonNullable<ClerkTransactionDetail['events']>[number]): string => event.event_id;
   protected readonly trackReceipt = (_: number, entry: ReceiptEntry): string => entry.key;
-  protected readonly eventReceiptEntries = (event: ClerkTransactionDetail['events'][number]): readonly ReceiptEntry[] => receiptEntries(event.receipt);
+  protected readonly eventReceiptEntries = (event: NonNullable<ClerkTransactionDetail['events']>[number]): readonly ReceiptEntry[] => receiptEntries(event.receipt ?? {});
 }
 
 function receiptEntries(receipt: Record<string, unknown>): readonly ReceiptEntry[] {
