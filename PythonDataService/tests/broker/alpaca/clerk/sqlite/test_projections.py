@@ -16,7 +16,6 @@ import pytest
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
 from app.broker.alpaca.clerk.sqlite import projections
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.exit_recovery import RecoveryResult, record_exit_recovery
 from app.broker.alpaca.clerk.sqlite.facts import ExitReducingOrderCreatedFacts
@@ -35,6 +34,7 @@ from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.contract.models import BrokerOrderLeg
 from app.schemas.alpaca_clerk_sqlite import ClerkProjectionResponse
 from app.utils.timestamps import to_ms_utc
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 
 ACCOUNT_ID = "PA-PROJECTION"
 SID = "spy-bot"
@@ -120,7 +120,7 @@ def test_account_snapshot_serializes_a_manual_custody_operation_without_a_bot(tm
 def test_bot_snapshot_reads_fold_state_and_backend_authors_recovery(tmp_path: Path) -> None:
     clock = _Clock()
     repo = _repository(tmp_path, clock)
-    submit_start_run(
+    seed_historical_run_started(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -154,7 +154,7 @@ def test_bot_snapshot_exposes_immutable_order_leg_and_verified_zero_fill_total(
     """Working-order presentation reads requested leg data from SQLite facts."""
     clock = _Clock()
     repo = _repository(tmp_path, clock)
-    submit_start_run(
+    seed_historical_run_started(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -197,7 +197,7 @@ def test_account_snapshot_projects_sparse_exit_reducing_order_facts(
     """A valid reducing-order fact must not make every Operator read fail."""
     clock = _Clock()
     repo = _repository(tmp_path, clock)
-    submit_start_run(
+    seed_historical_run_started(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -620,7 +620,7 @@ def test_bot_snapshot_is_one_coherent_read_despite_a_concurrent_commit(
     mix of two."""
     clock = _Clock()
     repo = _repository(tmp_path, clock)
-    submit_start_run(
+    seed_historical_run_started(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -676,7 +676,7 @@ def test_operation_page_is_stable_when_a_new_operation_appends(tmp_path: Path, m
     monkeypatch.setattr("app.broker.alpaca.clerk.sqlite.enter.require_admission", lambda *a, **kw: None)
     clock = _Clock()
     repo = _repository(tmp_path, clock)
-    submit_start_run(
+    seed_historical_run_started(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -752,7 +752,7 @@ def test_operation_page_does_not_drop_an_operation_whose_updated_at_ms_advances_
     monkeypatch.setattr("app.broker.alpaca.clerk.sqlite.enter.require_admission", lambda *a, **kw: None)
     clock = _Clock()
     repo = _repository(tmp_path, clock)
-    submit_start_run(
+    seed_historical_run_started(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -832,7 +832,7 @@ def test_an_operation_cursor_of_another_kind_is_refused_and_a_valid_one_still_pa
     monkeypatch.setattr("app.broker.alpaca.clerk.sqlite.enter.require_admission", lambda *a, **kw: None)
     clock = _Clock()
     repo = _repository(tmp_path, clock)
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="run-1", clock=clock)
+    seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="run-1", clock=clock)
     leg = BrokerOrderLeg(symbol="SPY", side="buy", quantity=1)
     for decision_id in ("decision-1", "decision-2"):
         accept_enter(
@@ -873,7 +873,7 @@ def test_recovery_policy_reads_working_orders_outside_the_operation_page(
     monkeypatch.setattr("app.broker.alpaca.clerk.sqlite.enter.require_admission", lambda *a, **kw: None)
     clock = _Clock()
     repo = _repository(tmp_path, clock)
-    submit_start_run(
+    seed_historical_run_started(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -947,7 +947,7 @@ def test_bot_snapshot_counts_every_working_order_as_the_commit_check_does(
     monkeypatch.setattr("app.broker.alpaca.clerk.sqlite.enter.require_admission", lambda *a, **kw: None)
     clock = _Clock()
     repo = _repository(tmp_path, clock)
-    submit_start_run(
+    seed_historical_run_started(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -998,7 +998,7 @@ def test_safe_flatten_uses_account_reconciliation_not_newer_effect_attempt(
 ) -> None:
     clock = _Clock()
     repo = _repository(tmp_path, clock)
-    submit_start_run(
+    seed_historical_run_started(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -1126,7 +1126,7 @@ def test_related_account_and_bot_reads_share_one_revision(tmp_path: Path) -> Non
     try:
         with reader.snapshot():
             account = reader.account_snapshot()
-            submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="later-run")
+            seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="later-run")
             bot = reader.bot_snapshot(SID)
             assert bot is not None
             assert bot.control_revision == account.control_revision
@@ -1147,9 +1147,9 @@ def test_a_published_pass_is_read_beside_the_bots_own_newest_custody_record(tmp_
     account's own actions are never judged against a pass.
     """
     repo = _repository(tmp_path, _Clock())
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="run-1")
+    seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="run-1")
     bots_newest = repo.last_custody_sequence(SID)
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=OTHER_SID, lifecycle_run_id="run-2")
+    seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=OTHER_SID, lifecycle_run_id="run-2")
     ledgers_newest = repo.last_custody_sequence()
     published = PublishedPass(vouches=True, observed_at_ms=1_700_000_000_000, through_sequence=bots_newest)
     reader = SqliteClerkProjectionReader.from_repository(repo)

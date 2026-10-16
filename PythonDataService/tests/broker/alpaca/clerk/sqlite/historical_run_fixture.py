@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from app.broker.alpaca.clerk.sqlite.commands import _lifecycle_identity
 from app.broker.alpaca.clerk.sqlite.facts import RunStartedFacts
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
@@ -15,12 +17,15 @@ def seed_historical_run_started(
     strategy_instance_id: str,
     lifecycle_run_id: str,
     operator_reason: str | None = None,
+    clock: Callable[[], int] | None = None,
 ) -> str:
     """Write one old RUN_STARTED fact so migration/replay tests retain real old-state input."""
     if account_id != repo.account_id or repo.budget_authority_version() != 1:
         raise ValueError("historical Start seed requires this account before budget cutover")
     if repo.strategy_instance(strategy_instance_id) is None:
         raise ValueError("historical Start seed requires a registered strategy instance")
+    if clock is not None and clock is not repo.clock:
+        raise ValueError("historical Start seed requires the repository clock")
     if repo.active_run(strategy_instance_id) is not None:
         raise ValueError("historical Start seed requires no active run")
     key, payload_hash, command_id = _lifecycle_identity(

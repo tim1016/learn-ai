@@ -9,7 +9,6 @@ from typing import Literal, NoReturn, cast
 import pytest
 
 from app.broker.alpaca.clerk.sqlite import runtime as sqlite_runtime
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.facts import (
     UncertaintyRaisedFacts,
@@ -43,6 +42,7 @@ from app.broker.contract.models import (
     BrokerOrder,
     BrokerOrderLeg,
 )
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 
 ACCOUNT_ID = "PA-HISTORICAL-RECOVERY"
 SID = "historical-recovery-bot"
@@ -134,7 +134,7 @@ def _seed_historical_conflict(tmp_path: Path) -> tuple[ClerkSqliteRepository, st
         clock=clock,
     )
     repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
-    submit_start_run(
+    seed_historical_run_started(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
