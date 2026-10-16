@@ -13,6 +13,7 @@ side de-dupes on ``snapshot_ts_ms``).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException, status
@@ -85,7 +86,8 @@ async def take_snapshot(req: SnapshotRequest) -> SnapshotResponse:
             status.HTTP_400_BAD_REQUEST,
             f"slot must be one of {SLOT_CHOICES}, got {req.slot!r}",
         )
-    row = record_iv_snapshot(
+    row = await asyncio.to_thread(
+        record_iv_snapshot,
         ticker=req.ticker,
         slot=req.slot,
         store=get_iv_store(),

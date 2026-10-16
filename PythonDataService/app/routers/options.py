@@ -1,5 +1,8 @@
 """API endpoints for options contract data"""
 
+from __future__ import annotations
+
+import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException, status
@@ -15,7 +18,7 @@ polygon_client = PolygonClientService()
 
 
 @router.post("/expirations", response_model=OptionsExpirationsResponse)
-async def list_options_expirations(request: OptionsExpirationsRequest):
+async def list_options_expirations(request: OptionsExpirationsRequest) -> OptionsExpirationsResponse:
     """
     List unique option expirations for an underlying ticker, each as the
     anchor instant (16:00 New York time on the expiry date). Much faster
@@ -29,7 +32,8 @@ async def list_options_expirations(request: OptionsExpirationsRequest):
             f"range=[{request.expiration_ms_gte}, {request.expiration_ms_lte}]"
         )
 
-        expirations = polygon_client.list_options_expirations(
+        expirations = await asyncio.to_thread(
+            polygon_client.list_options_expirations,
             underlying_ticker=request.underlying_ticker,
             contract_type=request.contract_type,
             expiration_ms_gte=request.expiration_ms_gte,

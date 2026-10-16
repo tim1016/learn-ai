@@ -1,5 +1,8 @@
 """API endpoints for snapshots (options chain + stock snapshots)"""
 
+from __future__ import annotations
+
+import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException, status
@@ -33,7 +36,7 @@ polygon_client = PolygonClientService()
 
 
 @router.post("/options-chain", response_model=OptionsChainSnapshotResponse)
-async def get_options_chain_snapshot(request: OptionsChainSnapshotRequest):
+async def get_options_chain_snapshot(request: OptionsChainSnapshotRequest) -> OptionsChainSnapshotResponse:
     """
     Fetch a snapshot of the options chain for an underlying ticker.
 
@@ -42,6 +45,10 @@ async def get_options_chain_snapshot(request: OptionsChainSnapshotRequest):
 
     - **underlying_ticker**: Underlying stock symbol (e.g., AAPL, SPY, GLD)
     """
+    return await asyncio.to_thread(_get_options_chain_snapshot, request)
+
+
+def _get_options_chain_snapshot(request: OptionsChainSnapshotRequest) -> OptionsChainSnapshotResponse:
     try:
         logger.info(f"[Snapshot] Request: underlying={request.underlying_ticker}")
 
@@ -126,12 +133,12 @@ def _build_ticker_snapshot(data: dict) -> StockTickerSnapshot:
 
 
 @router.post("/ticker", response_model=StockSnapshotResponse)
-async def get_stock_snapshot(request: StockSnapshotRequest):
+async def get_stock_snapshot(request: StockSnapshotRequest) -> StockSnapshotResponse:
     """Fetch a snapshot for a single stock ticker (price, day/prevDay OHLCV, change)."""
     try:
         logger.info(f"[Snapshot] Single ticker request: {request.ticker}")
 
-        result = polygon_client.get_stock_snapshot(request.ticker)
+        result = await asyncio.to_thread(polygon_client.get_stock_snapshot, request.ticker)
         snapshot = _build_ticker_snapshot(result)
 
         logger.info(f"[Snapshot] Returning snapshot for {request.ticker}")
