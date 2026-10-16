@@ -21,7 +21,6 @@ import pytest
 
 from app.broker.alpaca.adapter import from_alpaca_trade_update
 from app.broker.alpaca.clerk.fifo_pnl import compute_fifo_pnl
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
     MarketMark,
     SqliteEconomicProjectionReader,
@@ -40,6 +39,7 @@ from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
 from app.engine.live.order_identity import OwnershipRung, classify_ownership
 from app.lean_sidecar.trading_calendar import SessionWindow
 from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 
 _FIXTURE_ROOT = Path(__file__).parents[4] / "fixtures" / "golden" / "alpaca-sqlite-execution"
 _FIXTURE_FAMILIES = (
@@ -207,7 +207,7 @@ def _project_fixture(
         if frames:
             fixture_strategy_instance_id = str(fixture_input["strategy_instance"]["strategy_instance_id"])
             strategy_instance_id = fixture_to_ledger_sid[fixture_strategy_instance_id]
-            submit_start_run(
+            seed_historical_run_started(
                 repo,
                 account_id=account_id,
                 strategy_instance_id=strategy_instance_id,
