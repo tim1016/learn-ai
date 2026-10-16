@@ -6,7 +6,7 @@ capture journal of the first option orders ever sent from this system, made on
 kit. They sit beside the documented examples and replace none of them: each
 shows one account on one day, for **one bought contract, or one bull call
 spread bought and closed (alone, and twice at once by two bots), every order
-filled inside its wait**. The #3225 recordings add outside and bot credit spreads
+filled inside its wait**. The #3225 recordings add outside and bot credit spreads and an iron condor
 opened with negative limits and closed by market orders. The dashboard step
 also records a resting credit order cancelled without a fill; it does not
 exercise the bot's entry deadline. Part fills and exercise are not in them. Regulatory and clearing fees
@@ -429,34 +429,39 @@ _OVERLAP = "B3-overlap-spread"
 _RESTARTED = "B4-spread-restart-scheduled-close"
 _CREDIT_FLAT = "3225-C1-credit-flat-20261016"
 _CREDIT_OVERLAP = "3225-C2-credit-overlap-20261016"
+_CONDOR_FLAT = "3225-D1-condor-flat-20261016"
 _SPREAD_LONG, _SPREAD_SHORT = "SPY261016C00768000", "SPY261016C00773000"
-# step -> (long leg, short leg, the net limit each order was sent at (None: a market order), the net price each
+# step -> (long legs, short legs, the net limit each order was sent at (None: a market order), the net price each
 # order filled at as Alpaca states it). Entries and exits are in the order they were sent.
-_SPREAD_PASSES: dict[str, tuple[str, str, tuple[str | None, ...], tuple[str, ...]]] = {
-    _CLEAN_PASS: ("SPY261016C00769000", "SPY261016C00774000", ("2.13", None), ("2.12", "-2.07")),
+_STRUCTURE_PASSES: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[str | None, ...], tuple[str, ...]]] = {
+    _CLEAN_PASS: (("SPY261016C00769000",), ("SPY261016C00774000",), ("2.13", None), ("2.12", "-2.07")),
     # Two bots, the same two contracts: the second entered a minute after the first, and left a minute after it.
     _OVERLAP: (
-        "SPY261016C00768000", "SPY261016C00773000", ("2.20", "2.24", None, None), ("2.19", "2.23", "-2.26", "-2.28"),
+        ("SPY261016C00768000",), ("SPY261016C00773000",), ("2.20", "2.24", None, None), ("2.19", "2.23", "-2.26", "-2.28"),
     ),
     # Bought at 12:29 CDT, the Clerk restarted with it held, and its own scheduled close sent the exit at 15:50 ET.
-    _RESTARTED: ("SPY261016C00768000", "SPY261016C00773000", ("2.31", None), ("2.31", "-2.43")),
-    _CREDIT_FLAT: ("SPY261019C00771000", "SPY261019C00770000", ("-0.31", None), ("-0.31", "0.32")),
+    _RESTARTED: (("SPY261016C00768000",), ("SPY261016C00773000",), ("2.31", None), ("2.31", "-2.43")),
+    _CREDIT_FLAT: (("SPY261019C00771000",), ("SPY261019C00770000",), ("-0.31", None), ("-0.31", "0.32")),
     _CREDIT_OVERLAP: (
-        "SPY261019C00771000", "SPY261019C00770000", ("-0.28", "-0.28", None, None), ("-0.28", "-0.28", "0.28", "0.28"),
+        ("SPY261019C00771000",), ("SPY261019C00770000",), ("-0.28", "-0.28", None, None), ("-0.28", "-0.28", "0.28", "0.28"),
+    ),
+    _CONDOR_FLAT: (
+        ("SPY261019P00758000", "SPY261019C00769000"), ("SPY261019P00759000", "SPY261019C00768000"),
+        ("-0.52", None), ("-0.52", "0.56"),
     ),
 }
-_SPREAD_PASS = pytest.mark.parametrize("step", sorted(_SPREAD_PASSES))
+_STRUCTURE_PASS = pytest.mark.parametrize("step", sorted(_STRUCTURE_PASSES))
 # The steps whose recordings keep the activity feed. B4's was left out on purpose (6 MB of polls).
-_SPREAD_PASS_WITH_FEED = pytest.mark.parametrize("step", [_CLEAN_PASS, _OVERLAP, _CREDIT_FLAT, _CREDIT_OVERLAP])
+_STRUCTURE_PASS_WITH_FEED = pytest.mark.parametrize("step", [_CLEAN_PASS, _OVERLAP, _CREDIT_FLAT, _CREDIT_OVERLAP, _CONDOR_FLAT])
 
 
 def _fill_frames(step: str) -> list[dict[str, Any]]:
     return [data for data in _frames(step) if data["event"] == "fill"]
 
 
-@_SPREAD_PASS
-def test_each_spread_order_sent_is_the_body_the_writer_produces_a_signed_limit_in_and_a_market_order_out(step: str) -> None:
-    long_leg, short_leg, limits, _ = _SPREAD_PASSES[step]
+@_STRUCTURE_PASS
+def test_each_structure_order_sent_is_the_body_the_writer_produces_a_signed_limit_in_and_a_market_order_out(step: str) -> None:
+    long_legs, short_legs, limits, _ = _STRUCTURE_PASSES[step]
     posts = [line for line in _lines(step, "orders") if line["method"] == "POST"]
     assert len(posts) == len(limits)
 
@@ -471,9 +476,10 @@ def test_each_spread_order_sent_is_the_body_the_writer_produces_a_signed_limit_i
 
         assert to_alpaca_option_order_request(request, client_order_id=sent["client_order_id"]) == sent
         assert sent.get("limit_price") == limit
-        # The exit is the same two legs, each the other way round, as ONE order.
-        entry = [(long_leg, "buy", "buy_to_open"), (short_leg, "sell", "sell_to_open")]
-        exit_ = [(long_leg, "sell", "sell_to_close"), (short_leg, "buy", "buy_to_close")]
+        assert request.quantity == 1 and all(leg.ratio == 1 for leg in request.legs)
+        # The exit is every leg, each the other way round, as ONE order.
+        entry = [(leg, "buy", "buy_to_open") for leg in long_legs] + [(leg, "sell", "sell_to_open") for leg in short_legs]
+        exit_ = [(leg, "sell", "sell_to_close") for leg in long_legs] + [(leg, "buy", "buy_to_close") for leg in short_legs]
         assert sorted((leg["symbol"], leg["side"], leg["position_intent"]) for leg in sent["legs"]) == sorted(
             entry if limit is not None else exit_
         )
@@ -481,11 +487,11 @@ def test_each_spread_order_sent_is_the_body_the_writer_produces_a_signed_limit_i
         assert (answer.status, answer.filled_quantity, answer.time_in_force) == ("pending_new", 0, "day")
 
 
-@_SPREAD_PASS
-def test_a_spread_fill_states_what_it_paid_as_positive_and_what_it_received_as_negative_whatever_its_parents_side(
+@_STRUCTURE_PASS
+def test_a_structure_fill_states_what_it_paid_as_positive_and_what_it_received_as_negative_whatever_its_parents_side(
     step: str,
 ) -> None:
-    _, _, _, nets = _SPREAD_PASSES[step]
+    _, _, _, nets = _STRUCTURE_PASSES[step]
     fills = _fill_frames(step)
 
     assert [Decimal(data["price"]) for data in fills] == [Decimal(net) for net in nets]
@@ -506,9 +512,10 @@ def test_a_spread_fill_states_what_it_paid_as_positive_and_what_it_received_as_n
         assert data["order"]["order_class"] == "mleg" and "execution_id" not in data
 
 
-@_SPREAD_PASS_WITH_FEED
+@_STRUCTURE_PASS_WITH_FEED
 def test_each_leg_execution_names_its_own_leg_order_and_is_in_the_activity_feed_as_that_legs_fill(step: str) -> None:
-    long_leg, short_leg, _, _ = _SPREAD_PASSES[step]
+    long_legs, short_legs, _, _ = _STRUCTURE_PASSES[step]
+    symbols = set(long_legs + short_legs)
     fills = _fill_frames(step)
     on_the_frames: list[tuple[str, str, str, Decimal]] = []
     for data in fills:
@@ -516,12 +523,12 @@ def test_each_leg_execution_names_its_own_leg_order_and_is_in_the_activity_feed_
         assert {leg["order_id"] for leg in data["legs"]} == {leg["id"] for leg in data["order"]["legs"]}
         on_the_frames += [(leg["execution_id"], leg["order_id"], leg["symbol"], Decimal(leg["price"])) for leg in data["legs"]]
 
-    assert len({execution_id for execution_id, *_ in on_the_frames}) == len(on_the_frames) == 2 * len(fills)
-    assert {symbol for _, _, symbol, _ in on_the_frames} == {long_leg, short_leg}
+    assert len({execution_id for execution_id, *_ in on_the_frames}) == len(on_the_frames) == len(symbols) * len(fills)
+    assert {symbol for _, _, symbol, _ in on_the_frames} == symbols
     in_the_feed: set[tuple[str, str | None, str | None, Decimal]] = set()
     for line in _lines(step, "activities"):
         for row in _body(line):
-            if row["activity_type"] == "FILL" and row.get("symbol") in {long_leg, short_leg}:
+            if row["activity_type"] == "FILL" and row.get("symbol") in symbols:
                 activity = from_alpaca_activity(row)
                 in_the_feed.add(
                     (
@@ -557,7 +564,7 @@ def test_a_spreads_debit_and_credit_move_cash_and_option_buying_power_together_b
 
 @pytest.mark.parametrize("step", [_OVERLAP, _CREDIT_OVERLAP])
 def test_two_bots_spreads_held_at_once_are_one_account_position_of_two_of_each_leg(step: str) -> None:
-    long_leg, short_leg, _, _ = _SPREAD_PASSES[step]
+    (long_leg,), (short_leg,), _, _ = _STRUCTURE_PASSES[step]
     held_over_time = [
         {position.symbol: position.quantity for position in map(from_alpaca_position, _body(line))}
         for line in _lines(step, "positions")
@@ -572,20 +579,43 @@ def test_two_bots_spreads_held_at_once_are_one_account_position_of_two_of_each_l
     }
 
 
-def test_a_credit_spread_adds_premium_to_cash_and_holds_its_width_until_the_whole_structure_closes() -> None:
-    """#3225: the $1-wide spread receives $31, ties up $100 and closes for $32; each order also takes $0.05."""
-    before, held, closed = _account_figures(_CREDIT_FLAT)
+@pytest.mark.parametrize(
+    ("step", "starting", "cash_credit", "buying_power_fall", "round_trip_cost"),
+    [
+        (_CREDIT_FLAT, "99923.44", "30.95", "69.05", "1.10"),
+        (_CONDOR_FLAT, "99923.04", "51.90", "48.10", "4.20"),
+    ],
+)
+def test_a_credit_structure_adds_premium_to_cash_and_holds_its_width_until_the_whole_structure_closes(
+    step: str, starting: str, cash_credit: str, buying_power_fall: str, round_trip_cost: str,
+) -> None:
+    """#3225: both $1-wide structures hold $100, released on close; cash includes observed charges."""
+    before, held, closed = _account_figures(step)
 
-    assert before == (Decimal("99923.44"), Decimal("99923.44"))
-    assert held == (before[0] + Decimal("30.95"), before[1] - Decimal("69.05"))
+    assert before == (Decimal(starting), Decimal(starting))
+    assert held == (before[0] + Decimal(cash_credit), before[1] - Decimal(buying_power_fall))
     assert held[0] - held[1] == Decimal("100.00")
-    assert closed == (before[0] - Decimal("1.10"), before[1] - Decimal("1.10"))
+    assert closed == (before[0] - Decimal(round_trip_cost), before[1] - Decimal(round_trip_cost))
     positions = [
         {position.symbol: position.quantity for position in map(from_alpaca_position, _body(line))}
-        for line in _lines(_CREDIT_FLAT, "positions")
+        for line in _lines(step, "positions")
     ]
     assert positions[0] == positions[-1] == {}
-    assert {"SPY261019C00770000": -1.0, "SPY261019C00771000": 1.0} in positions
+    long_legs, short_legs, _, _ = _STRUCTURE_PASSES[step]
+    assert {**dict.fromkeys(long_legs, 1.0), **dict.fromkeys(short_legs, -1.0)} in positions
+
+
+def test_the_condor_contracts_read_as_two_calls_and_two_puts_with_the_same_expiry_and_multiplier() -> None:
+    contracts = [from_alpaca_option_contract(_body(line)) for line in _lines(_CONDOR_FLAT, "option_contracts")]
+
+    assert {(contract.symbol, contract.right, contract.strike_price) for contract in contracts} == {
+        ("SPY261019P00758000", "put", Decimal("758")),
+        ("SPY261019P00759000", "put", Decimal("759")),
+        ("SPY261019C00768000", "call", Decimal("768")),
+        ("SPY261019C00769000", "call", Decimal("769")),
+    }
+    assert all(contract.expiry_ms == option_expiry_anchor_ms(date(2026, 10, 19)) for contract in contracts)
+    assert all(contract.multiplier == Decimal("100") and contract.tradable for contract in contracts)
 
 
 def test_two_credit_spreads_each_add_premium_and_requirement_then_release_the_whole_requirement() -> None:
