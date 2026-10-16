@@ -51,6 +51,7 @@ from app.services.bot_start_admission import SyntheticAccountRestoring
 from app.services.broker_v2_panel.bot_custody import binding_clerk_runtime
 from app.services.broker_v2_panel.panel_errors import PanelUnavailableError
 from app.utils.timestamps import now_ms_utc
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS
 from tests.broker.alpaca.clerk.test_active_authority import _Broker
 
@@ -94,6 +95,7 @@ class _Lane:
         try:
             await self.registry.deploy_with_admission(
                 broker="alpaca", strategy_instance_id=sid, symbol="SPY", mode="dry_run", exit_terms=TERMS,
+                budget_consent=_dry_run_binding().budget_consent,
             )
         except BotRunnerError as refused:
             return refused
@@ -657,8 +659,14 @@ async def test_boot_retires_the_run_an_orphan_was_left_with_and_keeps_its_accoun
     authority = deploying._authority_for(binding)
     await authority.ensure_recoverable()
     runtime = get_clerk_runtime(f"sim:{sid}")
-    assert runtime is not None and runtime.clerk is not None
-    await runtime.clerk.register_strategy_run(binding)
+    assert runtime is not None and runtime.sqlite_repository is not None
+    runtime.sqlite_repository.register_strategy_instance(
+        strategy_instance_id=sid, symbol="SPY", config_hash="historical-orphan",
+    )
+    seed_historical_run_started(
+        runtime.sqlite_repository, account_id=f"sim:{sid}", strategy_instance_id=sid,
+        lifecycle_run_id=binding.run_id,
+    )
     # The process died with the run ACTIVE and no binding recorded.
     await authority.release_if_unused()
 
@@ -948,6 +956,7 @@ async def test_start_refuses_an_unbound_dry_run_held_elsewhere_at_once(
         with pytest.raises(RunAdmissionRefusedError) as refused:
             await booting.deploy_with_admission(
                 broker="alpaca", strategy_instance_id="orphan-held", symbol="SPY", mode="dry_run", exit_terms=TERMS,
+                budget_consent=_dry_run_binding().budget_consent,
             )
     finally:
         holder.close()

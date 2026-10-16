@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -18,13 +19,20 @@ from app.broker.alpaca.clerk.active_authority import (
     get_clerk_runtime,
     reset_alpaca_clerk_for_testing,
 )
+from app.broker.alpaca.clerk.sqlite import runtime as clerk_runtime
 from app.broker.alpaca.clerk.synthetic_activation import SyntheticActivationStore
+from app.schemas.deployment_budget import DeployBudgetConsent
 from app.services.bot_runner_errors import MarketDataFeedUnavailableError
 from tests._helpers.bot_runner.custody import _SID, _registry
 from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeFeed
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 from ._support import _install_fake_clerk
+
+_BUDGET = DeployBudgetConsent(
+    committed_cents=1_000_000, risk_revision=0, actor="owner",
+    request_fingerprint="reviewed-dry-run", world="synthetic",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -55,6 +63,7 @@ async def test_a_refused_dry_run_start_leaves_no_open_authority(tmp_path: Path) 
         with pytest.raises(MarketDataFeedUnavailableError):
             await registry.deploy_with_admission(
                 exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="dry_run",
+                budget_consent=_BUDGET,
             )
 
         assert get_clerk_runtime(f"sim:{_SID}") is None
@@ -63,6 +72,7 @@ async def test_a_refused_dry_run_start_leaves_no_open_authority(tmp_path: Path) 
 async def test_an_admitted_dry_run_start_opens_its_authority_once_and_keeps_it_for_its_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(clerk_runtime, "prepared_top_of_book", lambda _symbol, _now: SimpleNamespace(ask=100))
     _install_fake_clerk(monkeypatch, _FakeClerk())
     registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
     account_id = f"sim:{_SID}"
@@ -70,6 +80,7 @@ async def test_an_admitted_dry_run_start_opens_its_authority_once_and_keeps_it_f
     started = await registry.deploy_with_admission(
         exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="dry_run",
         strategy_key="ema_crossover_signal",
+        budget_consent=_BUDGET,
     )
     try:
         assert started.admission.allowed is True
