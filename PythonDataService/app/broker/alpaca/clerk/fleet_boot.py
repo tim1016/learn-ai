@@ -200,7 +200,7 @@ LANE_QUIET_OBSERVATION_TIMEOUT_S = 5.0
 #: account this beat — no answer, never a "not quiet" one.
 LaneQuietProbe = Callable[[], Awaitable[LaneQuietAnswer | None]]
 
-#: This lane's own counts for its account card (PRD #2560), keyed as
+#: This lane's own counts for its account card (#2560), keyed as
 #: ``records.LANE_COUNT_KEYS``; a count the lane could not take is absent,
 #: never zero. Installed by the composition root, like ``LaneQuietProbe``, so
 #: the fleet lane never imports up into the services it reports on.
@@ -336,7 +336,7 @@ class FleetLaneBoot:
     #: exits through ``force-retire``.
     lane_quiet_probe: LaneQuietProbe | None = field(default=None, repr=False)
     #: How this lane counts its bots and attention items for its account card
-    #: (PRD #2560), read on every beat. Installed by the composition root;
+    #: for #2560, read on every beat. Installed by the composition root;
     #: ``None`` reports no counts at all -- unknown, never zero.
     lane_counts_probe: LaneCountsProbe | None = field(default=None, repr=False)
     #: The outstanding conditions of the last answer the coordinator accepted,
@@ -941,7 +941,7 @@ async def _guarded_live_nickname(*, clerk_id: str, account_id: str | None) -> st
 
 
 async def _guarded_lane_counts(boot: FleetLaneBoot) -> Mapping[str, int]:
-    """This lane's bot and attention counts for its account card (PRD #2560).
+    """This lane's bot and attention counts for its account card (#2560).
 
     Read fresh every beat through the installed probe, like the nickname, and
     just as unable to end it: a probe that fails is logged and this beat
@@ -1198,7 +1198,7 @@ def start_heartbeat(boot: FleetLaneBoot, *, interval_s: float) -> asyncio.Task:
     report`` runs (a rebind) or when a reconnect re-states the authority
     behind the binding (``report_authority_state``, #2582), but a
     Configuration rename between rebinds must
-    still reach the wire (PRD #2182 — "one account name everywhere" is not
+    still reach the wire (#2182 — "one account name everywhere" is not
     true if the badge and card can go stale for the lane's whole remaining
     lifetime). So every beat re-reads the nickname fresh from the profiles
     store, off the loop and guarded against ever ending the beat
@@ -1464,7 +1464,7 @@ def heartbeat_facts(
     cannot parse is refused as an identity mismatch, and ``start_heartbeat``
     answers a refusal by registering a fresh session, so one free-form key
     here would climb the routing epoch on every beat instead of failing once
-    and visibly. The account's nickname (PRD #2182) is not part of this
+    and visibly. The account's nickname (#2182) is not part of this
     confirm-time snapshot — it is folded in fresh, per beat, by
     ``start_heartbeat`` (see its docstring), which is the only place that
     ever writes ``account_nickname`` or the lane counts onto the outgoing

@@ -1262,7 +1262,7 @@ async def read_account_projection(facade: SqliteAlpacaClerkFacade) -> ClerkProje
 
 @dataclass(frozen=True)
 class HomeRosterBot:
-    """Where one live registration sits on its account's Home (PRD #2560 D7).
+    """Where one live registration sits on its account's Home (#2560 D7).
 
     ``symbol`` is what the bot trades, the asset the Clerk registered it
     under: its readers ask what a bot holds or sends orders in, never what it

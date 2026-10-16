@@ -4,7 +4,7 @@ The ``status_label`` maps the lifecycle phase to the closed status vocabulary
 (Working / Off duty / Retired). ``needs_attention`` is the OR of the
 rollup's decision-based heuristic and lifecycle-derived attention (a hold, an
 unclean duty outcome) — the attention-first sort reads this flag.
-``group`` places the row on the account's Home (PRD #2560 D5/D7) and
+``group`` places the row on the account's Home (#2560 D5/D7) and
 ``world_label`` names the world it trades in, worded once.
 """
 
@@ -32,7 +32,7 @@ _STATUS_LABEL_OFF_DUTY = "Off duty"
 _STATUS_LABEL_RETIRED = "Retired"
 
 
-#: The one wording of each world a bot can trade in (PRD #2560 D4). Dry Run
+#: The one wording of each world a bot can trade in (#2560 D4). Dry Run
 #: is its own world: simulated cash, never the account's money.
 WORLD_LABELS: dict[AuthorityKind, str] = {
     "real_live": "LIVE · real money",
@@ -46,14 +46,14 @@ def bot_world(authority_world: AuthorityKind, mode: str) -> AuthorityKind:
     """The world one bot trades in: its authority's, or simulated for a Dry Run.
 
     A bot configured to simulate trades simulated cash whatever account it
-    sits under (PRD #2560 D4/D5), so its group and its label both follow
+    sits under (#2560 D4/D5), so its group and its label both follow
     this one answer and can never disagree (H23).
     """
     return "synthetic" if mode == "dry_run" else authority_world
 
 
 def bot_group(*, world: AuthorityKind, running: bool, holds_money: bool) -> BotGroup:
-    """Where a bot sits on its account's Home (PRD #2560 D5/D7).
+    """Where a bot sits on its account's Home (#2560 D5/D7).
 
     ``world`` is the bot's own (``bot_world``). A bot is running while it
     runs; once stopped it is holding while it has position cost or

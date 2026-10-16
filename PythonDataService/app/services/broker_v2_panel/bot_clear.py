@@ -1,6 +1,6 @@
 """Clear finished bots from Home: N unchanged per-bot archive legs.
 
-Owner decision 2026-09-28 (PRD #2560, #2567): the Finished fold clears the
+Owner decision 2026-09-28 (#2560, #2567): the Finished fold clears the
 bots the owner ticks. Clearing is ADR 0052's ``archive`` and nothing more:
 the bot leaves Home and the catalog poll, and every record it wrote -- its
 runs, fills, fees and budget rows -- stays in custody, readable by id.

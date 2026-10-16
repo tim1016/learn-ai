@@ -79,7 +79,7 @@ class StrategyInfo(BaseModel):
     lean_parameter_names: list[str] = Field(default_factory=list)
     lean_data_policy_parameter_names: list[str] = Field(default_factory=list)
     strategy_bars: StrategyBarCadenceInfo
-    # Sweep eligibility (PRD #1926): the one structured answer Recency Chart,
+    # Sweep eligibility (#1926): the one structured answer Recency Chart,
     # Grid Search and Walk-Forward all derive from — flag, reason codes, and
     # the offending PUBLIC parameters. ``recency_supported`` is its flag,
     # kept for existing consumers.

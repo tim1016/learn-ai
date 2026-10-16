@@ -8,7 +8,7 @@ Formula: Q = fsum(qty); C = fsum(qty × price). The canonical set proof
   highest row price: putting the exacts in place of the cumulative moves the
   order's average price by less than one increment, beyond the priced share
   residue the quantity rule accepts.
-Reference: Project-authored execution-coverage contract in PRD #1543, stories
+Reference: Project-authored execution-coverage contract in #1543, stories
   18, 19, 28, and 33; this is authored project logic, not a reused proof.
   The price rule is ADR 0036's vendor-rounding rule (2026-09-30 amendment,
   item 3), applied to coverage on 2026-10-01 (#2791).
@@ -492,7 +492,7 @@ def order_total_proves_coverage(evidence: OrderTotalCoverageEvidence) -> bool:
       ∧ |Q_effective − Q_broker| < QTY_ATOL
       ∧ fsum(q_quarantined) − Q_cumulative_recovery < QTY_ATOL (shares).
     Reference: Project-authored order-level coverage proof for issue #2346,
-      extending the PRD #1543 execution-coverage contract.
+      extending the #1543 execution-coverage contract.
     Canonical implementation: this function.
     Validated against: tests/broker/alpaca/clerk/sqlite/
       test_execution_coverage_order_total_proof.py.
@@ -1283,7 +1283,7 @@ def exact_replaces_cumulative(
       cumulative row, where the set proof measures it on the order's whole
       average; the two agree when that row is its order's only fill.
     Reference: Project-authored S0 operator contract retained during the
-      execution-coverage migration in PRD #1543; the price rule is ADR 0036's
+      execution-coverage migration in #1543; the price rule is ADR 0036's
       vendor-rounding rule.
     Canonical implementation: prove_execution_coverage_set in this file; this
       S0 predicate remains only for the shipped operator flow.

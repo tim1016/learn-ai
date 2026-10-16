@@ -1,4 +1,4 @@
-"""Walk-Forward Study HTTP boundary (PRD #1925 "HTTP contract").
+"""Walk-Forward Study HTTP boundary (#1925 "HTTP contract").
 
 ``router`` — ``/api/research/walk-forward-studies``: preflight, history,
 detail (folds and verdict), the folds' test-window curves, delete. ``jobs_router`` —

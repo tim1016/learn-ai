@@ -1,4 +1,4 @@
-"""What the bot page leads with, written from the panel and its run's facts (PRD #2794).
+"""What the bot page leads with, written from the panel and its run's facts (#2794).
 
 Pure functions over an adapted ``BotPanelView`` and the run's facts:
 

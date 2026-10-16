@@ -4,7 +4,7 @@ Formula: ``Δposition = 0``. The current cumulative contribution already owns
 the attributed quantity, so this fold swaps only its rebuildable ``fills``
 representation after rerunning the canonical set proof. Prices move to the
 exacts', within one price increment of the order's average (#2791).
-Reference: PRD #1543 stories 19 and 33; issues #1554 and #1557.
+Reference: #1543 stories 19 and 33; issues #1554 and #1557.
 Canonical implementation: execution_coverage.prove_execution_coverage_set.
 Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
   test_folds_execution.py::test_many_to_many_coverage_supersession_preserves_exact_provenance_and_replay.

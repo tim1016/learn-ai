@@ -398,7 +398,7 @@ def adapt_sqlite_catalog(
 
 @dataclass(frozen=True)
 class CatalogHomeFacts:
-    """What places an authority's rows on its account's Home (PRD #2560).
+    """What places an authority's rows on its account's Home (#2560).
 
     ``world`` is the authority's own; ``holding_money`` the bots with position
     cost or still-claimed money; ``latest_stops`` each bot's newest run's stop
@@ -561,7 +561,7 @@ def _sqlite_catalog_explanation(
 
     So the unclean-exit case defers to the incoming explanation rather than
     restating it here, unless the bot still holds money: then the row says
-    what it holds and that no bot manages it (PRD #2560 D7), which a crash
+    what it holds and that no bot manages it (#2560 D7), which a crash
     label beside it never contradicts. The copy names no internal authority.
     """
     held = holdings_text(exposure)

@@ -425,7 +425,7 @@ async def get_catalog(broker: str, account_id: str, *, home: bool = False) -> li
                 detail=str(exc),
             ) from exc
         # A Dry Run's starting cash is its consent amount, private to its
-        # simulated account (PRD #2540); a pre-budget Dry Run has none. Only
+        # simulated account (#2540); a pre-budget Dry Run has none. Only
         # the Dry Run group carries it: a stopped, flat Dry Run is Finished
         # (#2567).
         simulated_cash = None if budget is None else dollars(budget["committed_cents"])

@@ -2,7 +2,7 @@
 
 The attention read (``GET /{broker}/attention``) and the counts this lane
 reports on every heartbeat come from here, so the Accounts page's attention
-count is always the number of items the lane's bell lists (PRD #2560), and
+count is always the number of items the lane's bell lists (#2560), and
 its bot counts are the lane's own facts rather than a browser tally. The
 heartbeat reaches ``lane_counts`` through the probe the composition root
 installs (``FleetLaneBoot.lane_counts_probe``).
@@ -141,7 +141,7 @@ _CHANNEL_NAMES = {"market_data": "IBKR market data", "execution": "Alpaca order 
 
 
 async def lane_attention_read() -> LaneAttentionRead:
-    """Everything currently needing the owner on this lane (#2228, PRD #2560).
+    """Everything currently needing the owner on this lane (#2228, #2560).
 
     From the lane's own custody ledger and the Clerk's latest published pass,
     never the broker: its active episodes (holds, channels, out-of-sync
@@ -429,7 +429,7 @@ def _channel_headline(evidence_refs: tuple[str, ...]) -> str:
 def _bot_items(
     repository: ClerkSqliteRepository, *, world: AuthorityKind, already_named: set[str | None],
 ) -> tuple[list[LaneAttentionItem], list[str]]:
-    """The lines Home's bots need, placed by the catalog's own groups (PRD #2560 D7).
+    """The lines Home's bots need, placed by the catalog's own groups (#2560 D7).
 
     - A stopped bot still holding money -- the catalog's ``holding`` group,
       so a crashed bot whose run row is stuck ACTIVE is here exactly as it
@@ -500,7 +500,7 @@ def _positions_unchecked_item(count: int) -> LaneAttentionItem:
 
 
 def _stopped_holding_item(repository: ClerkSqliteRepository, sid: str) -> LaneAttentionItem:
-    """A stopped bot still holding money: nothing manages it (PRD #2560 D7)."""
+    """A stopped bot still holding money: nothing manages it (#2560 D7)."""
     held = {
         symbol: quantity
         for symbol, quantity in repository.attributed_positions_for_strategy(sid).items()

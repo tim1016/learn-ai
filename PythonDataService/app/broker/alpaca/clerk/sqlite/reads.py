@@ -1714,7 +1714,7 @@ def effective_execution_slice(conn: sqlite3.Connection, execution_id: str) -> di
 
 
 #: A fill row is effective while no correction names its ``execution_id`` as
-#: superseded (PRD #1441 S1.2). Expects the row aliased ``f``.
+#: superseded (#1441 S1.2). Expects the row aliased ``f``.
 _EFFECTIVE_FILL_PREDICATE = (
     "NOT EXISTS (SELECT 1 FROM fills successor "
     "WHERE successor.superseded_execution_ref = f.execution_id)"
@@ -1901,7 +1901,7 @@ def effective_fill_totals_for_order(conn: sqlite3.Connection, order_ref: str) ->
 
     Formula: ``effective_qty = SUM(qty)`` and ``effective_cost = SUM(qty * price)``
     for fills with no successor naming their ``execution_id`` as superseded.
-    Reference: PRD #1441 S1.2 execution corrections.
+    Reference: #1441 S1.2 execution corrections.
     Canonical implementation: this query, reused by cumulative recovery.
     Validated against: ``test_one_exact_auto_supersedes_many_cumulative_recovery_rows``.
     """

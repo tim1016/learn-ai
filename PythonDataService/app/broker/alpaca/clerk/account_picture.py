@@ -33,7 +33,7 @@ Formula (every amount whole cents):
     one underlying and expiry alone;
   assignment obligation(u) = Σ over sold contracts of u of |n| · strike · m;
   cost to close everything = Σ over bots of the bot's net close.
-Reference: PRD #3095 part B and issue #3101; ADR 0076 decisions 22 and 28;
+Reference: #3095 part B and issue #3101; ADR 0076 decisions 22 and 28;
   Alpaca, "Options Level 3 Trading"
   (https://docs.alpaca.markets/docs/options-level-3-trading, as read for
   ``app.options.requirement`` on 2026-10-08): a position is valued by its

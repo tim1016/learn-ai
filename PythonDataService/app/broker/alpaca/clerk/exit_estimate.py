@@ -20,7 +20,7 @@ Formula: with ``n`` a contract's signed whole contracts (bought above zero),
   after it), and known otherwise. Every amount is whole cents and none is
   rounded: a price that is not a whole number of cents for the contract is no
   price. Fees are not in either figure.
-Reference: PRD #3095 part B and issue #3100; Alpaca support, "Why can't I buy
+Reference: #3095 part B and issue #3100; Alpaca support, "Why can't I buy
   to close my short option" (buying to close does not always provide margin
   relief to fund the closing trade itself); ADR 0076 decision 28 for the side
   a close fills at, which ``app.options.simulated_fill`` states.

@@ -174,8 +174,8 @@ def apportion_units(units: int, weights: Mapping[str, Decimal]) -> dict[str, int
 
     Formula: u_k = floor(U * w_k / sum(w)); the U - sum(u) leftover units go
     one each to the largest exact fractional remainders, ties ordered by key.
-    Reference: Hamilton (largest-remainder) apportionment; PRD #2540 fee
-      attribution contract and PRD #2560 money-bar widths.
+    Reference: Hamilton (largest-remainder) apportionment; #2540 fee
+      attribution contract and #2560 money-bar widths.
     Canonical implementation: this function. Fee cents
       (``alpaca_fee_attribution.apportion_cents``) and money-bar basis points
       (``account_money.share_bps``) both delegate here.

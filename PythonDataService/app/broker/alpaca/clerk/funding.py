@@ -34,7 +34,7 @@ Formula: admits = need <= free budget and need <= account headroom;
   cash), and a refusal by that limit is short by max(need, budget) less the
   cash. How many fit is the least room over the need, a whole number, said
   with the caveat that every bot draws on the same headroom.
-Reference: PRD #3095 part B and issues #3097 and #3099; ADR 0076 decision 28
+Reference: #3095 part B and issues #3097 and #3099; ADR 0076 decision 28
   for the one cash rule (#3096).
 Canonical implementation: this file. The headroom is ``budgets.account_headroom``
   and is not derived a second time here.
@@ -613,7 +613,7 @@ def _deploy_action(admits: bool | None, binding: LimitName | None, need: EntryNe
 def _fits_sentence(
     fits: int | None, binding: LimitName | None, *, simulated: bool = False, refuses: str | None = None,
 ) -> str | None:
-    """How many whole entries fit, said with the caveat that every bot draws on the same account (PRD #3095, story 18).
+    """How many whole entries fit, said with the caveat that every bot draws on the same account (#3095, story 18).
 
     The count is of the limit that binds: the one with the least room for a
     pass, and for a refusal the limit that refuses, which need not have the

@@ -7,7 +7,7 @@ The two ends come from ``session_anchors`` -- ``et_day_end_ms`` is already the
 canonical "next ET midnight", so this adds only the ``at_ms -> ET date`` step
 its callers were repeating.
 
-The account Activity periods (PRD #2560) are windows of those same ET days:
+The account Activity periods (#2560) are windows of those same ET days:
 ``today`` is the ET day containing the instant, and ``30d``/``60d`` reach back
 to the ET midnight opening the 30th/60th most recent NYSE session. Which days
 are sessions comes from the canonical calendar module, never a weekday rule.

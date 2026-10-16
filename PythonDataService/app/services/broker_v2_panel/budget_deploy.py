@@ -102,7 +102,7 @@ logger = logging.getLogger(__name__)
 
 
 #: What an account that has not switched to budgets says in place of its
-#: money, and on its Home's attention line (PRD #2560).
+#: money, and on its Home's attention line (#2560).
 LEGACY_BUDGET_DETAIL = "This account has not switched to budgets. Switch it in Settings to see where its money is."
 
 
@@ -797,7 +797,7 @@ def _broker_buying_power(runtime: ActiveClerkRuntime) -> Figure | None:
 
 
 def _statement(own: DeploymentBudget, entry: _NextEntry | None) -> tuple[BudgetStatementLine, ...]:
-    """The bot's money, in the order the owner reads it (PRD #2560 D6).
+    """The bot's money, in the order the owner reads it (#2560 D6).
 
     The caller holds the money context. A running bot shows where its balance
     is; a stopped one shows what its Stop released (#2555), what its money did
@@ -1091,7 +1091,7 @@ def _open_pnl(money: AccountMoney, observation: AccountObservation) -> tuple[str
 
 
 def _segment_label(segment: BarSegment) -> str:
-    """The legend's words for a slice: one wording per fact (PRD #2560)."""
+    """The legend's words for a slice: one wording per fact (#2560)."""
     match segment.kind, segment.strategy_instance_id:
         case "bot", str(sid):
             return sid

@@ -7,7 +7,7 @@ Formula: cash = reference capital - effective BUY costs + effective SELL
   - prior modelled fees, using the canonical previous-session close marks.
   Realized and open P&L are canonical FIFO's exact fields
   (``exact_realized_pnl``, ``exact_open_pnl``), never its float views (#2556).
-Reference: PRD #2540 world isolation; ADR 0059 simulation-risk amendment.
+Reference: #2540 world isolation; ADR 0059 simulation-risk amendment.
 Canonical implementation: this composition; FIFO and fees retain their existing
   authorities. No balance, position or fee ledger is introduced.
 Validated against: tests/broker/alpaca/clerk/sqlite/test_simulated_account.py

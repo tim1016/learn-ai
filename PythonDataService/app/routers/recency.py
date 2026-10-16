@@ -1,4 +1,4 @@
-"""Python-owned Recency Chart reads and mutations (PRD #1927).
+"""Python-owned Recency Chart reads and mutations (#1927).
 
 ``GET /trades`` serves what the chart draws (trades overlapping the window
 with a live membership), ``GET /hero`` the visible-window winners (trades

@@ -177,7 +177,7 @@ def entry_requirement(*, quantity: object, price: object, at_ms: int) -> tuple[D
     """One position's exact notional plus canonical, disclosed fee provision.
 
     Formula: qty*price + settled canonical model for this prospective BUY.
-    Reference: PRD #2540 admission; regulatory_fees.py dated component rules.
+    Reference: #2540 admission; regulatory_fees.py dated component rules.
     Canonical implementation: this function composes those two authorities.
     Validated against: test_budgets.py; regulatory-fee independent fixtures.
     """
@@ -240,7 +240,7 @@ def option_entry_decision(
 
     Formula: admitted when commitment <= this deployment's free budget and
       commitment <= the account's headroom for it (``account_headroom``).
-    Reference: ADR 0076 decision 2 and decision 28; PRD #2540 admission.
+    Reference: ADR 0076 decision 2 and decision 28; #2540 admission.
     Canonical implementation: the rule is ``funding.funding_answer``'s.
     Validated against: tests/broker/alpaca/clerk/sqlite/test_option_entry_and_exit.py.
     """

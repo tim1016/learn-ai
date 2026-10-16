@@ -54,7 +54,7 @@ rule over its money now and flagged ``released_estimated``, never shown as the
 fact. ``bot_segment`` gives the bot page the very slice the account's bar draws.
 
 Reference: https://github.com/tim1016/learn-ai/issues/2560 ("One account-money
-  read (D12)"); money semantics are PRD #2540's; ADR 0076 decision 28 for
+  read (D12)"); money semantics are #2540's; ADR 0076 decision 28 for
   signed option commitments and retained collateral.
 Canonical implementation: this file composes ``budgets.AccountBudget``;
   ``budgets.py`` stays the money formula.

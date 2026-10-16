@@ -1,4 +1,4 @@
-"""The Recency Chart's jobs boundary, on its own dispatch surface (#3051; PRD #1927, ADR 0065).
+"""The Recency Chart's jobs boundary, on its own dispatch surface (#3051; #1927, ADR 0065).
 
 Extracted from ``app/routers/jobs.py`` when Recency joined the isolated
 research runtime: the API's jobs mount and the runtime's internal mount

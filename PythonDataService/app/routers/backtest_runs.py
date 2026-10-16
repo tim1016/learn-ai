@@ -1,4 +1,4 @@
-"""Python-owned backtest-run reads and verbs (PRD #1929).
+"""Python-owned backtest-run reads and verbs (#1929).
 
 ``GET /`` serves the run-history table (newest first, optionally one
 engine's), ``GET /{id}`` the run report with its newest five hundred trades

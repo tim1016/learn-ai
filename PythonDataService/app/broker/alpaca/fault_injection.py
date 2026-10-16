@@ -1,4 +1,4 @@
-"""Dev-only broker fault-injection seam (PRD #1354).
+"""Dev-only broker fault-injection seam (#1354).
 
 The seam lets a rehearsal deliberately trigger reject / conflict / throttle /
 timeout (write path) and redelivery / halt / partial-fill (trade-updates frame
