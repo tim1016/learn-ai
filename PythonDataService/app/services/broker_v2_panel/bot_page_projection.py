@@ -89,7 +89,7 @@ class RunFacts:
     decision_count: int
     decision_count_is_floor: bool
     # The run's effective fills, as Bot history counts its transactions.
-    trade_count: int
+    trade_count: int | None
     orders_sent: int
     # The bot's budget, and what its Stop released, in cents (``None`` when unrecorded).
     committed_cents: int | None
@@ -120,7 +120,7 @@ def run_facts(
         unreadable=unreadable,
         decision_count=0 if activity is None else activity.decisions,
         decision_count_is_floor=activity is not None and activity.decisions_is_floor,
-        trade_count=len(run_fills),
+        trade_count=None if unreadable else len(run_fills),
         orders_sent=0 if activity is None else activity.orders_sent,
         committed_cents=None if budget is None else budget["committed_cents"],
         released_cents=None if budget is None else budget["released_cents"],
@@ -297,6 +297,7 @@ def run_summary_text(facts: RunSummaryFacts) -> str:
         return _UNREADABLE_RUN
     if facts.ending == "not_started" or facts.started_at_ms is None:
         return "Not started yet."
+    assert facts.trade_count is not None
     decisions = _decision_words(facts.decision_count, floor=facts.decision_count_is_floor)
     activity = f"{decisions}, {_count_words(facts.trade_count, 'trade')}"
     if facts.ending == "running":
@@ -587,12 +588,15 @@ def _run_lines(panel: BotPanelView, run: RunFacts) -> list[HealthLineView]:
         HealthLineView(
             key="decisions",
             label="Decisions",
-            state="attention" if late else "ok",
-            value=_decision_words(run.decision_count, floor=run.decision_count_is_floor),
+            state="attention" if late or run.unreadable else "ok",
+            value="Not recorded" if run.unreadable else _decision_words(run.decision_count, floor=run.decision_count_is_floor),
             note="No decision has come on time." if late else None,
             at_ms=last_this_run,
         ),
-        HealthLineView(key="orders", label="Orders sent", state="ok", value=_count_words(run.orders_sent, "order")),
+        HealthLineView(
+            key="orders", label="Orders sent", state="attention" if run.unreadable else "ok",
+            value="Not recorded" if run.unreadable else _count_words(run.orders_sent, "order"),
+        ),
     ]
 
 

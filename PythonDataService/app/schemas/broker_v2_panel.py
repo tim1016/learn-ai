@@ -797,7 +797,7 @@ class BotPanelView(BaseModel):
     # first, as chart markers: the page is one bot's, on its one symbol, so a
     # marker carries no symbol or authority stamp. Labelled with the run's date
     # (``bot_page.summary.facts.started_at_ms``), never "today" (#2794 R8).
-    # ``None`` exactly when ``bot_page`` is.
+    # ``None`` when ``bot_page`` is absent or the Clerk-admitted run is unreadable.
     run_fills: list[RunFillView] | None = None
 
     @model_validator(mode="after")

@@ -740,7 +740,11 @@ def _with_bot_page(
                 sweep_pass_at_ms=facade.recovery_evaluation_observation().last_pass_completed_at_ms,
                 now_ms=now_ms,
             ),
-            "run_fills": run_fill_views(run_fills, _simulated_fill_anchors(facade, sid), _simulated_option_fills(facade, sid)),
+            "run_fills": (
+                None if run.unreadable else run_fill_views(
+                    run_fills, _simulated_fill_anchors(facade, sid), _simulated_option_fills(facade, sid)
+                )
+            ),
         }
     )
 

@@ -2916,7 +2916,9 @@ async def test_a_run_the_clerk_admitted_without_a_launch_record_needs_attention(
 
     monkeypatch.setattr(registry, "current_run", missing_record)
     async with _client(app) as client:
-        page = (await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")).json()["bot_page"]
+        body = (await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")).json()
+
+    page = body["bot_page"]
 
     assert page["status"] == {
         "state": "needs_attention",
@@ -2924,6 +2926,11 @@ async def test_a_run_the_clerk_admitted_without_a_launch_record_needs_attention(
         "reason": "This bot's latest run record could not be read.",
     }
     assert page["summary"]["facts"]["ending"] == "unreadable"
+    assert page["summary"]["facts"]["trade_count"] is None
+    assert body["run_fills"] is None
+    lines = {line["key"]: line for line in page["health"]["run"]}
+    assert lines["decisions"]["value"] == "Not recorded"
+    assert lines["orders"]["value"] == "Not recorded"
 
 
 async def test_a_run_the_clerk_never_admitted_has_not_started(api, monkeypatch: pytest.MonkeyPatch) -> None:

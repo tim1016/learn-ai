@@ -611,9 +611,9 @@ export class BotPanelShellComponent {
   });
 
   /** The run's fills, under the run's date (#2794 R8). */
-  protected readonly runFills = computed(() => this.panel()?.run_fills ?? []);
+  protected readonly runFills = computed(() => this.panel()?.run_fills ?? null);
   /** Every fill the run has; the panel sends only its newest. */
-  protected readonly runFillCount = computed(() => this.panel()?.bot_page?.summary.facts.trade_count ?? this.runFills().length);
+  protected readonly runFillCount = computed(() => this.panel()?.bot_page?.summary.facts.trade_count ?? null);
   protected readonly runStartedAtMs = computed(() => this.panel()?.bot_page?.summary.facts.started_at_ms ?? null);
   protected readonly notFound = this.liveStore.notFound;
   protected readonly feedContinuity = computed(() => {
