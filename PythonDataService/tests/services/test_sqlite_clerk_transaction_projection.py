@@ -14,9 +14,7 @@ from app.broker.alpaca.clerk.active_authority import (
     ClerkStartupFailure,
     set_active_clerk_runtime,
 )
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.economic_projection import ExecutionRow
-from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.exact_execution_evidence import (
     WEBSOCKET_EXACT_CONFLICT_COPY,
     exact_execution_coverage_conflict,
@@ -50,6 +48,10 @@ from app.services.sqlite_clerk_transaction_projection import (
     classify_transaction_origin,
     sqlite_transaction_detail,
     sqlite_transaction_history,
+)
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import (
+    accept_budgeted_test_enter,
+    submit_budgeted_test_run,
 )
 
 
@@ -151,7 +153,7 @@ def _append_execution(
         fee=fee,
         fee_fidelity=fee_fidelity,
         evidence_source="websocket",
-        source_event_at_ms=1_786_370_000_000,
+        source_event_at_ms=1_800_000_000_000,
     )
     result = repo.append_execution_slice_if_absent(
         execution_id=execution_id,
@@ -188,13 +190,13 @@ def test_account_desk_reads_operation_first_sqlite_projection(tmp_path: Path) ->
         symbol="SPY",
         config_hash="config-1",
     )
-    submit_start_run(
+    submit_budgeted_test_run(
         repo,
         account_id="PA-ACCOUNT-DESK",
         strategy_instance_id="spy-bot",
         lifecycle_run_id="run-1",
     )
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id="PA-ACCOUNT-DESK",
         strategy_instance_id="spy-bot",
@@ -393,15 +395,15 @@ def test_manual_cancellation_transaction_keeps_its_target_order_reference(tmp_pa
 
 def _an_accepted_enter(root: Path) -> tuple[ClerkSqliteRepository, Any]:
     """A store whose clock never repeats an instant, holding one accepted ENTER."""
-    ticks = iter(range(1_786_370_000_000, 1_786_370_900_000))
+    ticks = iter(range(1_800_000_000_000, 1_800_000_900_000))
     repo = ClerkSqliteRepository.initialize(
         account_id="PA-LONG-TIMELINE", artifacts_root=root, clock=lambda: next(ticks)
     )
     repo.register_strategy_instance(strategy_instance_id="spy-bot", symbol="SPY", config_hash="config-1")
-    submit_start_run(
+    submit_budgeted_test_run(
         repo, account_id="PA-LONG-TIMELINE", strategy_instance_id="spy-bot", lifecycle_run_id="run-1"
     )
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id="PA-LONG-TIMELINE",
         strategy_instance_id="spy-bot",
@@ -544,7 +546,7 @@ def test_a_succeeded_operation_is_dated_where_its_state_last_changed_whatever_it
         exact_execution_coverage_conflict(
             repo,
             event=BrokerOrderEvent(
-                event_type="fill", occurred_at_ms=1_786_370_000_000, price=100.0, quantity=1.0, execution_id="exec-1"
+                event_type="fill", occurred_at_ms=1_800_000_000_000, price=100.0, quantity=1.0, execution_id="exec-1"
             ),
             broker_order_id="broker-1",
             order_ref=accepted.order_ref,
@@ -609,13 +611,13 @@ def test_transaction_projection_preserves_each_effective_execution_economics(
         symbol="SPY",
         config_hash="config-1",
     )
-    submit_start_run(
+    submit_budgeted_test_run(
         repo,
         account_id="PA-ACCOUNT-DESK",
         strategy_instance_id="spy-bot",
         lifecycle_run_id="run-1",
     )
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id="PA-ACCOUNT-DESK",
         strategy_instance_id="spy-bot",
@@ -711,13 +713,13 @@ def test_transaction_projection_surfaces_single_slice_economics_on_summary(tmp_p
         symbol="SPY",
         config_hash="config-1",
     )
-    submit_start_run(
+    submit_budgeted_test_run(
         repo,
         account_id="PA-ACCOUNT-DESK",
         strategy_instance_id="spy-bot",
         lifecycle_run_id="run-1",
     )
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id="PA-ACCOUNT-DESK",
         strategy_instance_id="spy-bot",
@@ -902,7 +904,7 @@ def test_external_transaction_history_and_detail_stay_outside_bot_economics(tmp_
             filled_at_ms=None,
             canceled_at_ms=None,
             expired_at_ms=None,
-            observed_at_ms=1_786_370_000_000,
+            observed_at_ms=1_800_000_000_000,
         ),
     )
     broker = _UnusedBroker()
@@ -1040,13 +1042,13 @@ def test_all_transaction_history_keyset_merges_strategy_and_external_without_dup
         symbol="SPY",
         config_hash="config-1",
     )
-    submit_start_run(
+    submit_budgeted_test_run(
         repo,
         account_id="PA-ACCOUNT-DESK",
         strategy_instance_id="spy-bot",
         lifecycle_run_id="run-1",
     )
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id="PA-ACCOUNT-DESK",
         strategy_instance_id="spy-bot",
@@ -1077,7 +1079,7 @@ def test_all_transaction_history_keyset_merges_strategy_and_external_without_dup
             filled_at_ms=None,
             canceled_at_ms=None,
             expired_at_ms=None,
-            observed_at_ms=1_786_370_000_000,
+            observed_at_ms=1_800_000_000_000,
         ),
     )
     broker = _UnusedBroker()

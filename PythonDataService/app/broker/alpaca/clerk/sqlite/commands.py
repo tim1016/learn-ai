@@ -1,22 +1,7 @@
-"""Purely-local operator-lifecycle commands over the SQLite spine (#1376,
-repaired by the corrective foundation slice).
+"""Purely local Stop and Retire commands over the SQLite Clerk spine.
 
-Proves out the full R2 content-addressed command lifecycle end-to-end using
-two commands that never touch the broker: starting and stopping a run.
-Domain logic here (payload hashing, idempotency-key construction, admission)
-is deliberately not in ``repository.py`` — per the Slice-2 review, the
-repository owns the generic event-sourcing spine; this module owns what one
-specific kind of command means. Slices 4+ (ENTER/EXIT, broker-facing
-commands) get their own domain modules the same way, not more methods
-bolted onto ``ClerkSqliteRepository``.
-
-Corrective foundation slice: both Start and Stop now build a
-:class:`~app.broker.alpaca.clerk.sqlite.models.TransitionInput` and commit it
-through :meth:`ClerkSqliteRepository.commit_first_transition` — there is no
-longer a separate ``reserve_command()`` step or a public ``serialized()``
-lock for this module to compose. Stop also now takes a caller-supplied
-``lifecycle_run_id`` instead of resolving it from the currently active run
-(see ADR 0035's binding annex §3a for the full rationale).
+These commands build a transition under the repository's write lock. Historical
+``RUN_STARTED`` facts remain replayable, but new runs use budgeted Deploy.
 """
 
 from __future__ import annotations
@@ -26,8 +11,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.sqlite.facts import (
-    CommandRejectedFacts,
-    RunStartedFacts,
     RunStoppedFacts,
     StrategyInstanceRetiredFacts,
 )
@@ -52,7 +35,6 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.utils.timestamps import Clock, now_ms_utc
 
 __all__ = [
-    "ACTION_START",
     "ACTION_STOP",
     "CommandSubmission",
     "DurableConflictError",
@@ -62,14 +44,11 @@ __all__ = [
     "run_stop_reason",
     "stop_command_resource",
     "submit_retire_strategy_instance",
-    "submit_start_run",
     "submit_stop_run",
 ]
 
-ACTION_START = "START"
 ACTION_STOP = "STOP"
 ACTION_RETIRE = "RETIRE"
-INTENDED_END_STATE_ACTIVE = "ACTIVE"
 INTENDED_END_STATE_STOPPED = "STOPPED"
 INTENDED_END_STATE_RETIRED = "RETIRED"
 
@@ -125,8 +104,7 @@ def _lifecycle_identity(
     intended_end_state: str,
     operator_reason: str | None,
 ) -> tuple[str, str, str]:
-    """Shared by Start and Stop: the (idempotency_key, payload_hash,
-    command_id) triple every operator-lifecycle command commits under."""
+    """Return the key, payload hash, and command ID for a lifecycle command."""
     idempotency_key = _operator_lifecycle_key(
         account_id=account_id,
         strategy_instance_id=strategy_instance_id,
@@ -167,101 +145,6 @@ def _commit(
     return CommandSubmission(command=outcome.command, created=True)
 
 
-def submit_start_run(
-    repo: ClerkSqliteRepository,
-    *,
-    account_id: str,
-    strategy_instance_id: str,
-    lifecycle_run_id: str,
-    operator_reason: str | None = None,
-    clock: Clock = now_ms_utc,
-) -> CommandSubmission:
-    """Start a run. Purely local — no broker contact.
-
-    ``lifecycle_run_id`` is caller-proposed (ADR 0035 #3: "Start/Resume
-    reserves its proposed run identity before committing the key") — the
-    frontend mints it once per user action and resends the same value on a
-    transport retry, which is what makes the retry idempotent.
-    """
-    reject_colon("strategy_instance_id", strategy_instance_id)
-    reject_colon("lifecycle_run_id", lifecycle_run_id)
-
-    idempotency_key, payload_hash, command_id = _lifecycle_identity(
-        account_id=account_id,
-        strategy_instance_id=strategy_instance_id,
-        lifecycle_run_id=lifecycle_run_id,
-        action=ACTION_START,
-        intended_end_state=INTENDED_END_STATE_ACTIVE,
-        operator_reason=operator_reason,
-    )
-
-    def build_transition() -> TransitionInput:
-        # Reading strategy_instance()/active_run() here — not before the
-        # idempotency lookup above — is what makes this thread-safe: both
-        # only run once commit_first_transition's write lock is held, and
-        # only for a fresh key (a retry never re-reads either). Checking
-        # existence before acquiring that lock (like reject_colon() above)
-        # would race unprotected reads against concurrent callers on the
-        # same shared connection.
-        if repo.budget_authority_version() >= 2:
-            from app.broker.alpaca.clerk.budgets import BudgetUnavailable
-
-            raise BudgetUnavailable("Fresh budget-backed Deploy is required after budget authority cutover.")
-        require_strategy_instance(repo, strategy_instance_id)
-        observed_at_ms = clock()
-        if repo.active_run(strategy_instance_id) is not None:
-            facts = CommandRejectedFacts(
-                idempotency_key=idempotency_key,
-                payload_hash=payload_hash,
-                kind="operator_lifecycle",
-                action=ACTION_START,
-                intended_end_state=INTENDED_END_STATE_ACTIVE,
-                reason_code="START_REJECTED_ALREADY_ACTIVE",
-                operator_reason=operator_reason,
-            )
-            return TransitionInput(
-                strategy_instance_id=strategy_instance_id,
-                command_id=command_id,
-                transition_kind="COMMAND_REJECTED",
-                custody_owner="ACCOUNT_CLERK",
-                execution_authority="ACCOUNT_CLERK",
-                operation_state="rejected",
-                clerk_observed_at_ms=observed_at_ms,
-                summary_code="START_REJECTED_ALREADY_ACTIVE",
-                facts_json=facts.to_facts_json(),
-            )
-        run_id = f"{strategy_instance_id}:{lifecycle_run_id}"
-        facts = RunStartedFacts(
-            idempotency_key=idempotency_key,
-            payload_hash=payload_hash,
-            kind="operator_lifecycle",
-            action=ACTION_START,
-            intended_end_state=INTENDED_END_STATE_ACTIVE,
-            lifecycle_run_id=lifecycle_run_id,
-            operator_reason=operator_reason,
-        )
-        return TransitionInput(
-            strategy_instance_id=strategy_instance_id,
-            run_id=run_id,
-            command_id=command_id,
-            transition_kind="RUN_STARTED",
-            custody_owner="ACCOUNT_CLERK",
-            execution_authority="ACCOUNT_CLERK",
-            operation_state="succeeded",
-            clerk_observed_at_ms=observed_at_ms,
-            summary_code="RUN_STARTED",
-            facts_json=facts.to_facts_json(),
-        )
-
-    return _commit(
-        repo,
-        command_id=command_id,
-        idempotency_key=idempotency_key,
-        payload_hash=payload_hash,
-        build_transition=build_transition,
-    )
-
-
 def submit_stop_run(
     repo: ClerkSqliteRepository,
     *,
@@ -276,7 +159,7 @@ def submit_stop_run(
     any existing broker orders, which is why it needs no
     effect_operation/order rows).
 
-    ``lifecycle_run_id`` is caller-supplied, exactly like Start — it is
+    ``lifecycle_run_id`` is caller-supplied; it is
     **not** resolved from the currently active run. A prior revision of this
     function did resolve it, which made a lost Stop response unrecoverable:
     a retry could no longer find an active run to resolve a key against,
@@ -304,8 +187,7 @@ def submit_stop_run(
     )
 
     def build_transition() -> TransitionInput:
-        # See submit_start_run's build_transition for why this existence
-        # check runs here, under the lock, rather than before it.
+        # Check existence under the same write lock that commits the transition.
         require_strategy_instance(repo, strategy_instance_id)
         active = require_active_run(repo, strategy_instance_id, lifecycle_run_id)
         # Valued under the same lock as the append: the release is exactly
@@ -365,7 +247,7 @@ def submit_retire_strategy_instance(
     SQLite is where retirement has to be written — the file lifecycle record
     is a projection of this, never the other way round.
 
-    Unlike Start and Stop the identity carries no ``lifecycle_run_id``:
+    Unlike Stop the identity carries no ``lifecycle_run_id``:
     retirement is instance-scoped and happens exactly once, when the guards in
     ``evaluate_archive`` have already proved there is no active run. The
     key therefore names the instance alone, which is also what makes a
@@ -389,7 +271,7 @@ def submit_retire_strategy_instance(
     command_id = f"cmd:{idempotency_key}"
 
     def build_transition() -> TransitionInput:
-        # Under the write lock, like Start and Stop — see submit_start_run.
+        # Check existence under the same write lock that commits retirement.
         require_strategy_instance(repo, strategy_instance_id)
         facts = StrategyInstanceRetiredFacts(
             idempotency_key=idempotency_key,

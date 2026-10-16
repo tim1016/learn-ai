@@ -16,7 +16,15 @@ import pytest
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.marketdata.feed import ContinuityPolicy
 from app.schemas.traded_asset_acknowledgement import UntestedTradedAssetAcknowledgement
-from tests._helpers.bot_runner.custody import _SID, _T0, _custody_proof, _registry, admission_guard_for
+from tests._helpers.bot_runner.custody import (
+    _SID,
+    _T0,
+    _custody_proof,
+    _registry,
+    admission_guard_for,
+    budget_consent_for_test,
+    deploy_bot,
+)
 from tests._helpers.bot_runner.doubles import _FakeFeed
 from tests._helpers.canary_admission import admit_canary_pairing
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
@@ -62,7 +70,7 @@ async def test_trade_run_registration_precedes_order_capable_task_creation(
     set_alpaca_clerk(clerk)
     admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
     try:
-        deployed = await registry.deploy(
+        deployed = await deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             symbol="SPY",
@@ -98,6 +106,7 @@ async def test_the_owners_acknowledgement_of_an_untested_asset_is_sealed_with_th
             traded_symbol="QQQ",
             mode="trade",
             traded_asset_acknowledgement=acknowledgement,
+            budget_consent=budget_consent_for_test(mode="trade"),
         )
 
         binding = registry.binding_for_control("alpaca", _SID)
@@ -126,7 +135,7 @@ async def test_stop_commits_clerk_stop_before_task_cancellation(
     set_alpaca_clerk(clerk)
     admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
     try:
-        deployed = await registry.deploy(
+        deployed = await deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             symbol="SPY",
@@ -156,7 +165,7 @@ async def test_quiesce_after_clerk_stop_does_not_commit_a_second_stop(
     set_alpaca_clerk(clerk)
     admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
     try:
-        deployed = await registry.deploy(
+        deployed = await deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             symbol="SPY",
@@ -199,7 +208,7 @@ async def test_failed_clerk_stop_closes_run_gate_without_cancelling_task(
     set_alpaca_clerk(clerk)
     admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
     try:
-        await registry.deploy(
+        await deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             symbol="SPY",
@@ -236,7 +245,7 @@ async def test_stop_all_commits_each_trade_run_before_task_cancellation(
     set_alpaca_clerk(clerk)
     admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
     try:
-        deployed = await registry.deploy(
+        deployed = await deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             symbol="SPY",
@@ -255,7 +264,7 @@ async def test_stop_all_commits_each_trade_run_before_task_cancellation(
 async def test_stop_all_preserves_operator_intent(tmp_path: Path) -> None:
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     await registry.stop_all()
     await _wait_for(lambda: _SID not in registry._bots)
@@ -275,7 +284,7 @@ async def test_all_artifacts_are_written_under_the_container_root(tmp_path: Path
 
     feed = _FakeFeed([_bar(_T0)], mode="hold")
     registry = _registry(tmp_path, feed)
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     await registry.stop("alpaca", _SID)
 
     written = sorted(
@@ -333,10 +342,10 @@ async def test_stop_all_stops_every_bot_when_a_cancelled_bots_task_reaps_itself_
     set_alpaca_clerk(clerk)
     admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
     try:
-        first = await registry.deploy(
+        first = await deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade",
         )
-        second = await registry.deploy(
+        second = await deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=f"{_SID}-2", symbol="SPY", mode="trade",
         )
 

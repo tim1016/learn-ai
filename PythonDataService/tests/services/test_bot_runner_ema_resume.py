@@ -11,7 +11,7 @@ from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.services.bot_runner import BotTaskRegistry
-from tests._helpers.bot_runner.custody import admission_guard_for
+from tests._helpers.bot_runner.custody import admission_guard_for, deploy_bot
 from tests._helpers.bot_runner.market import _tradable_market_liveness
 from tests._helpers.bot_runner.resume import (
     _STRATEGY_INSTANCE_ID,
@@ -22,7 +22,7 @@ from tests._helpers.bot_runner.resume import (
 )
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
-pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+pytestmark = pytest.mark.usefixtures("budgeted_run_registration")
 
 
 def _registry_with_sqlite_clerk(
@@ -57,7 +57,7 @@ async def test_unhandled_error_is_preserved_only_on_immutable_run_evidence(
     repository, clerk, registry = _registry_with_sqlite_clerk(tmp_path, feed)
     set_alpaca_clerk(clerk)
     try:
-        await registry.deploy(
+        await deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_STRATEGY_INSTANCE_ID,
             strategy_key="ema_crossover_signal",

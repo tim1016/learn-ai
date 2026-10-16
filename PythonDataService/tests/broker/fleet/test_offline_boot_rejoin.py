@@ -62,7 +62,7 @@ from app.services.bot_runner import (
     RunAdmissionRefusedError,
     fleet_lane_start_gate,
 )
-from tests._helpers.bot_runner.custody import _SID
+from tests._helpers.bot_runner.custody import _SID, deploy_bot
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.fleet.conftest import FrozenClock
 
@@ -823,7 +823,7 @@ async def test_a_refused_offline_lane_gates_a_real_runner_until_it_is_admitted(
         coordinator.up = True
         await _until(lambda: boot.start_refusal is not None, what="the coordinator refused")
         with pytest.raises(RunAdmissionRefusedError, match="refused this lane") as refused:
-            await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+            await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
         assert "fleet_protocol_incompatible" not in str(refused.value.detail)
         assert stops.calls == 0
         evidence = read_confirmation_evidence(root)
@@ -836,7 +836,7 @@ async def test_a_refused_offline_lane_gates_a_real_runner_until_it_is_admitted(
         # Past the fleet gate: what refuses now is the runner's own admission
         # (this test installs no clerk or feed), never the fleet refusal.
         with pytest.raises((RunAdmissionRefusedError, MarketDataFeedUnavailableError)) as later:
-            await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+            await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
         assert "refused this lane" not in str(later.value)
         assert stops.calls == 0
         await close_fleet_lane(boot)

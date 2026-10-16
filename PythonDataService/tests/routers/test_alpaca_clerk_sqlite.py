@@ -25,7 +25,6 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     ExtendedLimitProposal,
     no_session_open,
 )
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
     HistoricalExecutionRecoveryPlan,
 )
@@ -56,6 +55,8 @@ from app.schemas.alpaca_clerk_sqlite import (
 )
 from app.schemas.market_liveness import TopOfBookQuote
 from app.utils.error_handlers import request_validation_exception_handler
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_run
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
@@ -181,10 +182,9 @@ def _client(app: FastAPI) -> httpx.AsyncClient:
 
 
 def _start_run(lifecycle_run_id: str = "run-1") -> CommandResource:
-    """Start a run through the authority, as a bot's admission does. The raw
-    ``/runs/start`` route was deleted (#2675): nothing called it."""
+    """Commit a budgeted Deploy through the authority for route fixtures."""
     repo = alpaca_clerk_sqlite._active_sqlite_facade(ACCOUNT_ID).repository
-    return submit_start_run(
+    return submit_budgeted_test_run(
         repo, account_id=repo.account_id, strategy_instance_id=SID, lifecycle_run_id=lifecycle_run_id,
     ).command
 
@@ -1251,7 +1251,7 @@ async def unknown_exit_api(tmp_path: Path):
     repo.register_strategy_instance(
         exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=settling.SID, symbol="SPY", config_hash="h1"
     )
-    submit_start_run(
+    seed_historical_run_started(
         repo, account_id=settling.ACCOUNT_ID, strategy_instance_id=settling.SID,
         lifecycle_run_id=settling.RUN_ID,
     )
@@ -1379,7 +1379,7 @@ async def unseen_exit_api(tmp_path: Path):
     repo.register_strategy_instance(
         exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=settling.SID, symbol="SPY", config_hash="h1"
     )
-    submit_start_run(
+    seed_historical_run_started(
         repo, account_id=settling.ACCOUNT_ID, strategy_instance_id=settling.SID,
         lifecycle_run_id=settling.RUN_ID,
     )

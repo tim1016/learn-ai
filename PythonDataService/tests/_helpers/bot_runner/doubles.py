@@ -25,20 +25,24 @@ from app.broker.alpaca.clerk.models import (
     ReconciliationVerdict,
 )
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
-from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_failed
 from app.broker.alpaca.clerk.sqlite.order_projection import ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.runtime import DeployBudgetRequiredError
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
 from app.marketdata.feed import ContinuityPolicy, FeedContinuityEvent, FeedHealth, MarketDataBar
 from app.schemas.action_plan import ActionPlan
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_lifecycle_projection import AlpacaLifecycleAuthoritySnapshot
 from app.utils.timestamps import now_ms_utc
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import (
+    accept_budgeted_test_enter,
+    submit_budgeted_test_run,
+)
 
 from .custody import _T0
 
@@ -231,6 +235,7 @@ class _CustodyClerk:
         self.account_id = proof.account_id
         self.repository = _TestDecisionReceiptRepository()
         self.registered_runs: list[str] = []
+        self.launched_runs: list[str] = []
         self.stopped_runs: list[str] = []
         self.active_runs: dict[str, str] = {}
         self.known_runs: set[tuple[str, str]] = set()
@@ -241,9 +246,16 @@ class _CustodyClerk:
         self, binding: BrokerBotBinding, *, admission_snapshot: object = None, run_owner: object = None
     ) -> None:
         del admission_snapshot, run_owner
+        if binding.budget_consent is None:
+            raise DeployBudgetRequiredError("A Deploy needs a budget.")
         self.registered_runs.append(binding.run_id)
         self.active_runs[binding.strategy_instance_id] = binding.run_id
         self.known_runs.add((binding.strategy_instance_id, binding.run_id))
+
+    async def record_deployment_launch(self, binding: BrokerBotBinding) -> None:
+        assert binding.budget_consent is not None
+        assert (binding.strategy_instance_id, binding.run_id) in self.known_runs
+        self.launched_runs.append(binding.run_id)
 
     async def recover(self) -> None:
         return
@@ -501,6 +513,7 @@ class _FakeClerk:
     ) -> None:
         self.calls: list[dict] = []
         self.registered_runs: list[str] = []
+        self.launched_runs: list[str] = []
         self.stopped_runs: list[str] = []
         self._should_raise = should_raise
         self._effect_state = effect_state
@@ -512,16 +525,23 @@ class _FakeClerk:
         self, binding: BrokerBotBinding, *, admission_snapshot: object = None, run_owner: object = None
     ) -> None:
         del admission_snapshot, run_owner
+        if binding.budget_consent is None:
+            raise DeployBudgetRequiredError("A Deploy needs a budget.")
         self.registered_runs.append(binding.run_id)
         self.active_runs[binding.strategy_instance_id] = binding.run_id
         self.known_runs.add((binding.strategy_instance_id, binding.run_id))
         if isinstance(self.repository, ClerkSqliteRepository):
-            submit_start_run(
+            submit_budgeted_test_run(
                 self.repository,
-                account_id="PA-TEST",
+                account_id=self.repository.account_id,
                 strategy_instance_id=binding.strategy_instance_id,
                 lifecycle_run_id=binding.run_id,
             )
+
+    async def record_deployment_launch(self, binding: BrokerBotBinding) -> None:
+        assert binding.budget_consent is not None
+        assert (binding.strategy_instance_id, binding.run_id) in self.known_runs
+        self.launched_runs.append(binding.run_id)
 
     async def stop_strategy_run(
         self,
@@ -686,9 +706,9 @@ class _FakeClerk:
         assert isinstance(self.repository, ClerkSqliteRepository), "a store ENTER needs the real store"
         assert purpose is EffectPurpose.ENTER, "the store ENTER states model no EXIT"
         assert decision_evidence is not None, "the Clerk receipts an ENTER from its decision evidence"
-        accepted = accept_enter(
+        accepted = accept_budgeted_test_enter(
             self.repository,
-            account_id="PA-TEST",
+            account_id=self.repository.account_id,
             strategy_instance_id=strategy_instance_id,
             decision_id=decision_evidence.evaluation_id,
             lifecycle_run_id=run_id,

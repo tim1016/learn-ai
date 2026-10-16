@@ -16,7 +16,7 @@ from app.services.bot_run_evidence import ACTIVATION_FAILED_STOP_REASON_CODE
 from app.services.bot_runner import RunAdmissionRefusedError
 from app.services.bot_runner_errors import ActivationFailedCleanupProvenError
 from app.services.broker_v2_panel.outcome_copy import outcome_card_copy, outcome_headline
-from tests._helpers.bot_runner.custody import _SID, _custody_proof, _registry
+from tests._helpers.bot_runner.custody import _SID, _custody_proof, _registry, deploy_bot
 from tests._helpers.bot_runner.doubles import _CustodyClerk, _FakeFeed
 from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
 from tests._helpers.canary_admission import admit_canary_pairing
@@ -51,13 +51,13 @@ async def test_stopped_identity_cannot_redeploy_and_fresh_deploy_keeps_old_recei
     registry = _registry(tmp_path, _FakeFeed([], mode='hold'))
     set_alpaca_clerk(_CustodyClerk(_custody_proof(exposure={})))
     try:
-        first = await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker='alpaca', strategy_instance_id=_SID, symbol='SPY')
+        first = await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker='alpaca', strategy_instance_id=_SID, symbol='SPY')
         await registry.stop('alpaca', _SID)
         historical = registry.status('alpaca', _SID)
         old_binding = registry.binding_for_control('alpaca', _SID)
         with pytest.raises(RunAdmissionRefusedError):
-            await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker='alpaca', strategy_instance_id=_SID, symbol='SPY')
-        new = await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker='alpaca', strategy_instance_id='fresh-deployment', symbol='SPY')
+            await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker='alpaca', strategy_instance_id=_SID, symbol='SPY')
+        new = await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker='alpaca', strategy_instance_id='fresh-deployment', symbol='SPY')
         assert new.strategy_instance_id != first.strategy_instance_id
         assert new.active_run_id != first.active_run_id
         assert registry.status('alpaca', _SID) == historical
@@ -85,7 +85,7 @@ async def test_unrecorded_launch_stops_and_reaps_the_task_it_started(
     monkeypatch.setattr(bot_runner, 'commit_deploy_launch', launch_not_recorded)
     try:
         with pytest.raises(ActivationFailedCleanupProvenError):
-            await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker='alpaca', strategy_instance_id=_SID, symbol='SPY')
+            await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker='alpaca', strategy_instance_id=_SID, symbol='SPY')
 
         (task,) = started
         assert task.cancelled()
@@ -132,7 +132,7 @@ async def test_a_trade_run_records_who_ended_it_beside_its_custody_proof(
     if not launch_recorded:
         monkeypatch.setattr(bot_runner, 'commit_deploy_launch', launch_not_recorded)
     try:
-        deploy = registry.deploy(
+        deploy = deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker='alpaca', strategy_instance_id=_SID, symbol='SPY', mode='trade',
         )
         if launch_recorded:

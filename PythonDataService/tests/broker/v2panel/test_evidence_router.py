@@ -18,8 +18,6 @@ from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     set_active_clerk_runtime,
 )
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
-from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.folds import DEFAULT_FOLD_REGISTRY
 from app.broker.alpaca.clerk.sqlite.projection_models import TimelineEntry
 from app.broker.alpaca.clerk.sqlite.reads import FILL_CREDIT_WITHHELD_BY_DISCHARGE
@@ -39,6 +37,10 @@ from app.services.broker_v2_panel.evidence_service import (
     _SQLITE_OPERATION_STATE_COPY,
     _SQLITE_TRANSITION_COPY,
     _sqlite_evidence_entry,
+)
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import (
+    accept_budgeted_test_enter,
+    submit_budgeted_test_run,
 )
 from tests.broker.v2panel.fixtures import ACCT, OTHER_SID, SID
 
@@ -140,7 +142,7 @@ def _activate_sqlite(tmp_path: Path, account_id: str = ACCT) -> ClerkSqliteRepos
         symbol="SPY",
         config_hash="config-1",
     )
-    submit_start_run(
+    submit_budgeted_test_run(
         repo,
         account_id=account_id,
         strategy_instance_id=SID,
@@ -226,10 +228,7 @@ async def test_evidence_uses_active_sqlite_timeline_with_opaque_stable_cursor(
             )
 
         assert second.status_code == 200
-        assert {
-            first_body["entries"][0]["seq"],
-            second.json()["entries"][0]["seq"],
-        } == {1, 2}
+        assert second.json()["entries"][0]["seq"] == first_body["entries"][0]["seq"] - 1
     finally:
         repo.close()
 
@@ -238,7 +237,7 @@ async def test_evidence_uses_active_sqlite_timeline_with_opaque_stable_cursor(
 async def test_sqlite_evidence_filters_selected_effect_operation(app_and_tmp) -> None:
     app, tmp_path = app_and_tmp
     repo = _activate_sqlite(tmp_path)
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id=ACCT,
         strategy_instance_id=SID,
@@ -278,10 +277,10 @@ async def test_a_dry_runs_evidence_is_read_from_its_own_simulator_not_the_accoun
         account_id=f"sim:{SID}", artifacts_root=tmp_path / "simulator"
     )
     simulator_repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="config-1")
-    submit_start_run(
+    submit_budgeted_test_run(
         simulator_repo, account_id=f"sim:{SID}", strategy_instance_id=SID, lifecycle_run_id="run-1"
     )
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         simulator_repo,
         account_id=f"sim:{SID}",
         strategy_instance_id=SID,

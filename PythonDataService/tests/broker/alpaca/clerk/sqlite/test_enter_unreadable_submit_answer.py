@@ -15,12 +15,12 @@ from typing import Any
 import pytest
 
 from app.broker.alpaca.broker import AlpacaBroker
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
-from app.broker.alpaca.clerk.sqlite.enter import resolve_enter_submission, submit_enter
+from app.broker.alpaca.clerk.sqlite.enter import resolve_enter_submission
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.client import AlpacaTradingClient
 from app.broker.contract.models import BrokerOrderLeg
-from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_enter, submit_budgeted_test_run
+from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _clock_at
 from tests.broker.alpaca.conftest import ApiErrorFactory
 
 ACCOUNT_ID = "PA-TEST"
@@ -31,10 +31,10 @@ _ALPACA_ORDER_ID = "00000000-0000-0000-0000-0000000000a1"
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Iterator[ClerkSqliteRepository]:
-    clock = _clock_at(1_700_000_000_000)
+    clock = _clock_at(NOON)
     r = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
     r.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
-    submit_start_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    submit_budgeted_test_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     yield r
     r.close()
 
@@ -105,7 +105,7 @@ async def test_an_unusable_answer_to_the_order_post_resolves_by_lookup_and_sends
     sdk = _AlpacaThatPlacesTheOrderButAnswersBadly(answer, make_api_error)
     broker = AlpacaBroker(client=AlpacaTradingClient(client_factory=lambda: sdk))
 
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -138,7 +138,7 @@ async def test_an_unusable_answer_whose_order_is_not_yet_visible_stays_unknown_u
     sdk.lookup_index_has_caught_up = False
     broker = AlpacaBroker(client=AlpacaTradingClient(client_factory=lambda: sdk))
 
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,

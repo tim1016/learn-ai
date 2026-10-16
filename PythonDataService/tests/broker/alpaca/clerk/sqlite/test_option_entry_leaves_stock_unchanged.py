@@ -1,20 +1,19 @@
-"""A stock bot's ENTER and EXIT are recorded exactly as they were before the Clerk took an option entry (#2913).
+"""A stock bot's ENTER identity and EXIT facts remain distinct from option entry (#2913).
 
 Every value pinned here was computed by ``origin/master`` at ``ab1804a7``,
 before the first line of the option entry path was written, and compared
-with this branch's own. An option entry adds a key to the ENTER's identity
-payload and to its facts; a stock ENTER has neither, so its identity hash and
-its facts, which are hashed into the custody chain, must not move by a byte.
+with this branch's own. Budgeted admission adds cash reservation facts to
+the stock ENTER, while option entry adds no key to its identity payload.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
-from app.broker.alpaca.clerk.sqlite.enter import _enter_identity, accept_enter
+from app.broker.alpaca.clerk.sqlite.enter import _enter_identity
 from app.broker.alpaca.clerk.sqlite.exit import _exit_identity
 from app.broker.alpaca.clerk.sqlite.facts import (
     EnterAcceptedFacts,
@@ -23,6 +22,8 @@ from app.broker.alpaca.clerk.sqlite.facts import (
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerOrderLeg
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import accept_budgeted_test_enter, submit_budgeted_test_run
+from tests.broker.alpaca.clerk.sqlite.conftest import NOON
 
 _MARKET = BrokerOrderLeg(symbol="SPY", side="buy", quantity=1)
 _LIMIT = BrokerOrderLeg(symbol="QQQ", side="buy", quantity=3, order_type="limit", limit_price=412.37, extended_hours=True)
@@ -38,24 +39,23 @@ def test_a_stock_enters_identity_hashes_as_it_did_on_master() -> None:
     assert _identity(_LIMIT)[1] == "6b5d466b9ce1102d821dcba69a4ace839622eab8aa8fa3c87998921634504cb7"
 
 
-def test_a_stock_enter_is_stored_with_the_facts_it_had_on_master(tmp_path: Path) -> None:
-    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path, clock=lambda: 1_700_000_000_000)
+def test_a_budgeted_stock_enter_keeps_its_identity_and_records_its_cash_reservation(tmp_path: Path) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path, clock=lambda: NOON)
     try:
         repo.register_strategy_instance(strategy_instance_id="spy-bot", symbol="SPY", config_hash="h1")
-        submit_start_run(repo, account_id="PA-TEST", strategy_instance_id="spy-bot", lifecycle_run_id="run-1")
+        submit_budgeted_test_run(repo, account_id="PA-TEST", strategy_instance_id="spy-bot", lifecycle_run_id="run-1")
 
-        accepted = accept_enter(
+        accepted = accept_budgeted_test_enter(
             repo, account_id="PA-TEST", strategy_instance_id="spy-bot", decision_id="d-1", lifecycle_run_id="run-1",
             leg=_MARKET,
         )
 
         stored = repo.first_order_transition(order_ref=accepted.order_ref, transition_kind="ENTER_ACCEPTED")
-        assert stored["facts_json"] == (
-            '{"action":"ENTER","decision_id":"d-1","effect_idempotency_key":"enter:spy-bot:d-1","effect_kind":"ENTER",'
-            '"idempotency_key":"spy-bot:d-1","intended_end_state":null,"kind":"strategy_decision","leg":{"extended_hours":'
-            'false,"limit_price":null,"order_type":"market","quantity":1.0,"side":"buy","symbol":"SPY","time_in_force":'
-            f'"day"}},"payload_hash":"{_MARKET_HASH}"}}'
-        )
+        facts = json.loads(stored["facts_json"])
+        assert facts["payload_hash"] == _MARKET_HASH
+        assert facts["cash_reference_price"] == "1E+2"
+        assert facts["fee_provision_cents"] == 1
+        assert "option_entry" not in facts
         assert accepted.command.payload_hash == _MARKET_HASH
     finally:
         repo.close()

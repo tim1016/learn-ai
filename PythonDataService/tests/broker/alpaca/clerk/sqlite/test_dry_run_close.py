@@ -13,10 +13,11 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.dry_run_close import closes_owed
 from app.broker.alpaca.clerk.sqlite.exit import accept_recovery_exit
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_run
 from tests.broker.alpaca.clerk.sqlite.conftest import _make_held_position
 
 SID = "dry-bot"
@@ -26,7 +27,7 @@ RUN_ID = "run-1"
 def _held_repo(tmp_path: Path, account_id: str) -> ClerkSqliteRepository:
     repo = ClerkSqliteRepository.initialize(account_id=account_id, artifacts_root=tmp_path)
     repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
-    submit_start_run(repo, account_id=account_id, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    submit_budgeted_test_run(repo, account_id=account_id, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     return repo
 
 

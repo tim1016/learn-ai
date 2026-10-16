@@ -26,9 +26,7 @@ from app.broker.alpaca.clerk.models import (
     InstanceCustodyProof,
     ReconciliationSummary,
 )
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
-from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
 from app.broker.alpaca.clerk.sqlite.facts import ExitReducingOrderCreatedFacts
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
@@ -107,6 +105,10 @@ from app.services.broker_v2_panel.sqlite_panel_adapter import (
 )
 from app.services.source_bar_ledger import RetainedContinuityEvent, RetainedStartupJoin, SourceBarLedger
 from app.services.sqlite_clerk_compat import sqlite_clerk_status
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import (
+    accept_budgeted_test_enter,
+    submit_budgeted_test_run,
+)
 from tests.broker.v2panel.fixtures import (
     ACCT,
     SID,
@@ -777,10 +779,10 @@ def _real_repo(tmp_path: Path, *, account_id: str = ACCT) -> ClerkSqliteReposito
     repo = ClerkSqliteRepository.initialize(
         account_id=account_id,
         artifacts_root=tmp_path,
-        clock=_monotonic_test_clock(_NOW),
+        clock=_monotonic_test_clock(1_792_072_800_000),
     )
     repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
-    submit_start_run(repo, account_id=account_id, strategy_instance_id=SID, lifecycle_run_id="run-1")
+    submit_budgeted_test_run(repo, account_id=account_id, strategy_instance_id=SID, lifecycle_run_id="run-1")
     return repo
 
 
@@ -788,7 +790,7 @@ def _two_real_operations(repo: ClerkSqliteRepository) -> tuple[str, str]:
     """Accept a real ENTER then immediately EXIT it — two distinct, genuinely
     durable effect operations for one bot with no broker contact needed
     (capture-before-contact commits both before any broker attempt)."""
-    entered = accept_enter(
+    entered = accept_budgeted_test_enter(
         repo,
         account_id=repo.account_id,
         strategy_instance_id=SID,
@@ -909,8 +911,8 @@ def test_transaction_rail_never_leaks_a_real_ref_from_a_different_bot(
     try:
         other_sid = "bot-gamma"
         repo.register_strategy_instance(strategy_instance_id=other_sid, symbol="SPY", config_hash="h2")
-        submit_start_run(repo, account_id=ACCT, strategy_instance_id=other_sid, lifecycle_run_id="run-2")
-        foreign = accept_enter(
+        submit_budgeted_test_run(repo, account_id=ACCT, strategy_instance_id=other_sid, lifecycle_run_id="run-2")
+        foreign = accept_budgeted_test_enter(
             repo,
             account_id=ACCT,
             strategy_instance_id=other_sid,
@@ -1109,7 +1111,7 @@ def test_bot_page_open_pnl_is_exact_fifo_at_a_whole_cent_boundary(tmp_path: Path
 
     repo = _real_repo(tmp_path)
     try:
-        entered = accept_enter(
+        entered = accept_budgeted_test_enter(
             repo, account_id=repo.account_id, strategy_instance_id=SID, decision_id="whole-cent",
             lifecycle_run_id="run-1", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
         )
@@ -1666,7 +1668,7 @@ def _broker_order(
 
 
 def _accepted_entry(repo: ClerkSqliteRepository, decision_id: str = "dec-entry"):
-    return accept_enter(
+    return accept_budgeted_test_enter(
         repo, account_id=ACCT, strategy_instance_id=SID, decision_id=decision_id,
         lifecycle_run_id="run-1", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
     )

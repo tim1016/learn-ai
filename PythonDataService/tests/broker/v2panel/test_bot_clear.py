@@ -39,7 +39,9 @@ from app.broker.alpaca.clerk.active_authority import (
 )
 from app.broker.alpaca.clerk.models import ReconciliationCut
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
+from app.broker.alpaca.clerk.sqlite.facts import ReconciliationAttemptedFacts
+from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
@@ -66,6 +68,7 @@ from app.services.broker_v2_panel.action_execution_service import (
 )
 from app.utils.timestamps import now_ms_utc
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_run
 from tests.broker.alpaca.clerk.sqlite.conftest import _broker_position_fixture, _make_held_position
 from tests.broker.v2panel.conftest import account_snapshot
 from tests.broker.v2panel.fixtures import ACCT
@@ -430,7 +433,7 @@ class _Account:
             display_name="Deployment Validation",
             config_json=json.dumps({"mode": "trade", "quantity": 1, "carryover_policy": "FORBID"}),
         )
-        submit_start_run(self.repo, account_id=ACCT, strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}")
+        submit_budgeted_test_run(self.repo, account_id=ACCT, strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}")
         self.runner._bindings.record_launch(
             BrokerBotBinding(
                 strategy_instance_id=sid,
@@ -588,13 +591,22 @@ async def test_a_bot_that_moved_since_the_batch_pass_is_reconciled_for_itself(
     per_pass = await account.requests_per_pass()
     batch_pass = account.facade.reconcile_through
 
-    async def bot_b_runs_again_after_the_pass() -> ReconciliationCut:
+    async def bot_b_changes_after_the_pass() -> ReconciliationCut:
         cut = await batch_pass()
-        submit_start_run(account.repo, account_id=ACCT, strategy_instance_id="spy-done-b", lifecycle_run_id="again")
-        submit_stop_run(account.repo, account_id=ACCT, strategy_instance_id="spy-done-b", lifecycle_run_id="again")
+        # A later per-bot custody fact invalidates the batch cut. A second
+        # Deploy of this instance would conflict with its committed identity.
+        account.repo.append_transition(TransitionInput(
+            strategy_instance_id="spy-done-b", run_id="spy-done-b:run-spy-done-b",
+            transition_kind="RECONCILIATION_ATTEMPTED", custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK", operation_state="clean",
+            clerk_observed_at_ms=account.repo.clock(), summary_code="RECONCILIATION_ATTEMPTED",
+            facts_json=ReconciliationAttemptedFacts(
+                trigger="AUTOMATIC", outcome="STILL_UNKNOWN", why="new post-pass evidence",
+            ).to_facts_json(),
+        ))
         return cut
 
-    monkeypatch.setattr(account.facade, "reconcile_through", bot_b_runs_again_after_the_pass)
+    monkeypatch.setattr(account.facade, "reconcile_through", bot_b_changes_after_the_pass)
     before = account.alpaca.requests
 
     result = await bot_clear.clear_bots(
@@ -714,4 +726,3 @@ async def test_a_stopped_dry_run_clears_beside_an_account_bot_from_one_batch(acc
         ("spy-done-1", "applied"), ("dry-done-1", "applied"),
     ], [leg.error for leg in result.legs if leg.error]
     assert account.runner.status("alpaca", "dry-done-1").phase == "RETIRED"
-

@@ -16,13 +16,15 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk.sqlite import schema
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.commands import _lifecycle_identity, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.database_verification import (
     DatabaseVerificationFailed,
     verify_database,
 )
+from app.broker.alpaca.clerk.sqlite.facts import CommandRejectedFacts
 from app.broker.alpaca.clerk.sqlite.hashchain import PAYLOAD_COLUMNS, verify_chain
 from app.broker.alpaca.clerk.sqlite.mirror import MirrorChainBroken
+from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     ExecutionLeaseLost,
@@ -30,7 +32,9 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     RepositoryPoisoned,
     SchemaVersionMismatch,
 )
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_run
 from tests.broker.alpaca.clerk.sqlite.conftest import remove_budget_schema_for_legacy_fixture
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 
 ACCOUNT_ID = "PA-TEST"
 SID_A = "spy-bot"
@@ -301,7 +305,7 @@ def test_cross_bot_command_run_link_rejected(repo: ClerkSqliteRepository) -> Non
     """A ``commands`` row cannot claim a ``run_id`` belonging to a different
     ``strategy_instance_id``: commands and effects may not point at another
     bot's run."""
-    submission = submit_start_run(
+    submission = submit_budgeted_test_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1"
     )
     other_run_id = repo.active_run(SID_A).run_id
@@ -319,9 +323,10 @@ def test_cross_bot_command_run_link_rejected(repo: ClerkSqliteRepository) -> Non
 
 
 def test_commands_terminal_state_cannot_regress(repo: ClerkSqliteRepository) -> None:
-    submission = submit_start_run(
+    submit_budgeted_test_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1"
     )
+    submission = submit_stop_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1")
     assert submission.command.state == "succeeded"
     with pytest.raises(sqlite3.IntegrityError):
         repo._conn.execute(
@@ -331,7 +336,7 @@ def test_commands_terminal_state_cannot_regress(repo: ClerkSqliteRepository) -> 
 
 
 def test_effect_operations_terminal_state_cannot_regress(repo: ClerkSqliteRepository) -> None:
-    submission = submit_start_run(
+    submission = submit_budgeted_test_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1"
     )
     repo._conn.execute(
@@ -352,7 +357,7 @@ def test_rejected_effect_operation_cannot_regress_either(repo: ClerkSqliteReposi
     backstop must cover it too, not only succeeded/failed — otherwise a
     rejected effect could be moved back to accepted/in_progress and become
     eligible for broker work after rejection."""
-    submission = submit_start_run(
+    submission = submit_budgeted_test_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1"
     )
     repo._conn.execute(
@@ -368,16 +373,27 @@ def test_rejected_effect_operation_cannot_regress_either(repo: ClerkSqliteReposi
 
 
 def test_rejected_command_has_a_durable_rejection_receipt(repo: ClerkSqliteRepository) -> None:
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1")
-    rejected = submit_start_run(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-2"
+    seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1")
+    key, payload_hash, command_id = _lifecycle_identity(
+        account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-2",
+        action="START", intended_end_state="ACTIVE", operator_reason=None,
     )
-    assert rejected.command.state == "rejected"
-    assert rejected.command.receipt_id is not None
+    repo.append_transition(TransitionInput(
+        strategy_instance_id=SID_A, command_id=command_id, transition_kind="COMMAND_REJECTED",
+        custody_owner="ACCOUNT_CLERK", execution_authority="ACCOUNT_CLERK", operation_state="rejected",
+        clerk_observed_at_ms=repo.clock(), summary_code="START_REJECTED_ALREADY_ACTIVE",
+        facts_json=CommandRejectedFacts(
+            idempotency_key=key, payload_hash=payload_hash, kind="operator_lifecycle", action="START",
+            intended_end_state="ACTIVE", reason_code="START_REJECTED_ALREADY_ACTIVE",
+        ).to_facts_json(),
+    ))
+    rejected = repo.get_command(command_id)
+    assert rejected is not None and rejected.state == "rejected"
+    assert rejected.receipt_id is not None
 
     row = repo._conn.execute(
         "SELECT terminal_state FROM receipts WHERE receipt_id = ?",
-        (rejected.command.receipt_id,),
+        (rejected.receipt_id,),
     ).fetchone()
     assert row["terminal_state"] == "rejected"
 
@@ -630,7 +646,7 @@ def test_full_command_lifecycle_rebuild_parity(tmp_path: Path) -> None:
     clock = _clock_seq()
     r = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
     r.register_strategy_instance(strategy_instance_id=SID_A, symbol="SPY", config_hash="h1")
-    start = submit_start_run(
+    start = submit_budgeted_test_run(
         r, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1"
     )
     submit_stop_run(
@@ -741,7 +757,7 @@ def test_revive_refused_after_authority_generation_changed(tmp_path: Path) -> No
 
 
 def test_operation_claim_cas_fences_a_second_owner_until_expiry(repo: ClerkSqliteRepository) -> None:
-    submission = submit_start_run(
+    submission = submit_budgeted_test_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1"
     )
     repo._conn.execute(
@@ -791,7 +807,7 @@ def test_operation_claim_blocks_same_owner_overlap_until_attempt_releases(
     repo: ClerkSqliteRepository,
 ) -> None:
     """Process identity must not make overlapping coroutines re-entrant."""
-    submission = submit_start_run(
+    submission = submit_budgeted_test_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1"
     )
     repo._conn.execute(
@@ -823,7 +839,7 @@ def test_operation_claim_fields_must_be_all_null_or_all_complete(
     owner with no token) or an expiry not strictly after its claimed_at_ms
     would break fencing and recovery — the schema should reject both, not just
     the application code's own CAS discipline."""
-    submission = submit_start_run(
+    submission = submit_budgeted_test_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1"
     )
 
@@ -893,7 +909,7 @@ def test_get_command_is_synchronized_against_an_in_flight_write(
     by holding the repository's write coordinator on the main thread and
     confirming a background get_command() call cannot complete until it is
     released."""
-    submission = submit_start_run(
+    submission = submit_budgeted_test_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1"
     )
     entered = threading.Event()
@@ -926,21 +942,20 @@ def test_commit_first_transition_blocks_an_existing_command_retry_when_poisoned(
     clock = _clock_seq()
     r = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
     r.register_strategy_instance(strategy_instance_id=SID_A, symbol="SPY", config_hash="h1")
-    submit_start_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1")
+    submit_budgeted_test_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1")
 
     def boom(*_args, **_kwargs):
         raise OSError("simulated crash between SQLite commit and mirror finalize")
 
     monkeypatch.setattr(r._mirror, "finalize", boom)
     with pytest.raises(OSError):
-        submit_start_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-2")
+        submit_stop_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1")
     monkeypatch.undo()
 
-    # run-2's Start command already exists (rejected, since run-1 is still
-    # active) — retrying it is the existing-command path, which must still
-    # see the poison.
+    # The Stop command committed before mirror finalize failed. Its retry is
+    # the existing-command path and must still see the poison.
     with pytest.raises(RepositoryPoisoned):
-        submit_start_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-2")
+        submit_stop_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1")
     r._conn.close()
 
 

@@ -9,18 +9,19 @@ import pytest
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite import schema
 from app.broker.alpaca.clerk.sqlite.budget_authority import authority_review_token, commit_budget_authority_cutover
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, SchemaVersionMismatch
 from app.broker.contract.models import BrokerOrderLeg
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 
 
 def test_cutover_requires_stop_and_retains_unresolved_order(tmp_path: Path) -> None:
     repo = ClerkSqliteRepository.initialize(account_id="upgrade", artifacts_root=tmp_path, clock=_TestClock(NOON))
     try:
         repo.register_strategy_instance(strategy_instance_id="old", symbol="SPY", config_hash="old-seal")
-        submit_start_run(repo, account_id=repo.account_id, strategy_instance_id="old", lifecycle_run_id="old-run", clock=repo.clock)
+        seed_historical_run_started(repo, account_id=repo.account_id, strategy_instance_id="old", lifecycle_run_id="old-run")
         accepted = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="old", lifecycle_run_id="old-run", decision_id="working", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1))
         token = authority_review_token(repo)
         with pytest.raises(BudgetUnavailable):
@@ -32,8 +33,6 @@ def test_cutover_requires_stop_and_retains_unresolved_order(tmp_path: Path) -> N
         assert repo.budget_authority_version() == 2
         assert repo.order(accepted.order_ref) == order
         assert repo.deployment_budget("old") is None
-        with pytest.raises(BudgetUnavailable):
-            submit_start_run(repo, account_id=repo.account_id, strategy_instance_id="old", lifecycle_run_id="resurrect", clock=repo.clock)
         with pytest.raises(sqlite3.IntegrityError):
             repo._conn.execute("UPDATE control_meta SET authorization_version=1 WHERE id=1")
     finally:
@@ -77,5 +76,4 @@ def test_older_schema_writer_cannot_acquire_upgraded_authority(tmp_path: Path, m
     monkeypatch.setattr(schema, "SCHEMA_VERSION", 20)
     with pytest.raises(SchemaVersionMismatch):
         ClerkSqliteRepository.open(account_id="upgrade", artifacts_root=tmp_path, clock=_TestClock(NOON))
-
 

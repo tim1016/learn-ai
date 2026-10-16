@@ -22,7 +22,6 @@ from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, appen
 from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.commands import (
     submit_retire_strategy_instance,
-    submit_start_run,
     submit_stop_run,
 )
 from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms, risk_fill_sequence
@@ -40,6 +39,7 @@ from app.services.bot_lifecycle_projection import SqliteAlpacaLifecycleAuthority
 from app.services.broker_v2_panel import bot_history, sqlite_roster_status
 from app.services.broker_v2_panel.catalog_projection_service import custody_bot_status
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 from tests.broker.alpaca.clerk.sqlite.test_bot_history import _ack, _enter
 from tests.broker.alpaca.clerk.sqlite.test_budget_claims import _record_sale
 from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS, _deploy, _gate
@@ -92,7 +92,7 @@ def _dry_run(root: Path) -> None:
     dry = ClerkSqliteRepository.initialize(account_id="sim:dry-1", artifacts_root=root, clock=_TestClock(NOON))
     try:
         _register(dry, "dry-1", mode="dry_run")
-        submit_start_run(dry, account_id=dry.account_id, strategy_instance_id="dry-1", lifecycle_run_id="run-dry", clock=dry.clock)
+        seed_historical_run_started(dry, account_id=dry.account_id, strategy_instance_id="dry-1", lifecycle_run_id="run-dry")
         submit_stop_run(dry, account_id=dry.account_id, strategy_instance_id="dry-1", lifecycle_run_id="run-dry", clock=dry.clock)
     finally:
         dry.close()
@@ -288,7 +288,7 @@ async def test_a_live_accounts_shadow_bots_come_from_its_own_shadow_database(
     )
     try:
         _register(shadow, "rehearsal")
-        submit_start_run(shadow, account_id=shadow.account_id, strategy_instance_id="rehearsal", lifecycle_run_id="run-r", clock=shadow.clock)
+        seed_historical_run_started(shadow, account_id=shadow.account_id, strategy_instance_id="rehearsal", lifecycle_run_id="run-r")
         submit_stop_run(shadow, account_id=shadow.account_id, strategy_instance_id="rehearsal", lifecycle_run_id="run-r", clock=shadow.clock)
     finally:
         shadow.close()
@@ -340,7 +340,7 @@ async def test_a_retired_shadow_bot_reads_cleared_once_its_account_is_live_only_
     )
     try:
         _register(shadow, "rehearsal")
-        submit_start_run(shadow, account_id=shadow.account_id, strategy_instance_id="rehearsal", lifecycle_run_id="run-r", clock=shadow.clock)
+        seed_historical_run_started(shadow, account_id=shadow.account_id, strategy_instance_id="rehearsal", lifecycle_run_id="run-r")
         bought = _enter(shadow, "rehearsal", "run-r", "enter-r")
         if left != "an entry the broker never answered":
             _ack(shadow, bought, "filled")
@@ -372,7 +372,7 @@ def _shadow_rehearsal(lane: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPat
     )
     try:
         _register(shadow, "rehearsal")
-        submit_start_run(shadow, account_id=shadow.account_id, strategy_instance_id="rehearsal", lifecycle_run_id="run-r", clock=shadow.clock)
+        seed_historical_run_started(shadow, account_id=shadow.account_id, strategy_instance_id="rehearsal", lifecycle_run_id="run-r")
         submit_stop_run(shadow, account_id=shadow.account_id, strategy_instance_id="rehearsal", lifecycle_run_id="run-r", clock=shadow.clock)
         path = shadow.db_path
     finally:
@@ -469,7 +469,7 @@ async def test_a_dry_run_is_projected_again_only_once_its_custody_moves(
     again = await bot_history.account_bot_history("alpaca", _ACCOUNT)
     dry = ClerkSqliteRepository.open(account_id="sim:dry-1", artifacts_root=bot_history.live_artifacts_root(), clock=_TestClock(NOON + 10))
     try:
-        submit_start_run(dry, account_id=dry.account_id, strategy_instance_id="dry-1", lifecycle_run_id="run-dry-2", clock=dry.clock)
+        seed_historical_run_started(dry, account_id=dry.account_id, strategy_instance_id="dry-1", lifecycle_run_id="run-dry-2")
     finally:
         dry.close()
     moved = await bot_history.account_bot_history("alpaca", _ACCOUNT)

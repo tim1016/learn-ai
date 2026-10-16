@@ -38,7 +38,6 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     next_redrive_at_ms,
     price_automatic_recovery_reduction,
 )
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, accept_recovery_exit
 from app.broker.alpaca.clerk.sqlite.exit_resolution import (
     EXIT_REDRIVE_DECISION_PREFIX,
@@ -65,6 +64,7 @@ from app.schemas.market_liveness import SymbolTradingStatusEvidence, TopOfBookQu
 from app.services.market_liveness import unknown_market_liveness
 from app.services.session_authority import scheduled_exchange_phase_at_ms
 from app.utils.timestamps import to_ms_utc
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_run
 from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at, _covering_read, _walk_clock_to
 from tests.broker.alpaca.clerk.sqlite.test_exit import (
     ACCOUNT_ID,
@@ -114,7 +114,7 @@ def repo(tmp_path: Path) -> Iterator[ClerkSqliteRepository]:
         lease_ttl_ms=300_000,
     )
     r.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
-    submit_start_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    submit_budgeted_test_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     yield r
     r.close()
 
@@ -222,7 +222,7 @@ async def test_a_program_exit_delayed_past_the_close_goes_out_as_an_after_hours_
     )
     try:
         repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
-        submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+        submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
         entry_ref = await _make_entry(repo, status="partially_filled", filled_quantity=6)
         effect_operation_id = _accept_program_exit(repo, entry_ref)
         still_working = _FakeTrade(
@@ -873,7 +873,7 @@ async def test_an_exit_delayed_past_a_half_days_after_hours_close_is_not_sent(
     )
     try:
         repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
-        submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+        submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
         entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
         effect_operation_id = _accept_program_exit(repo, entry_ref)
         _walk_clock_to(repo, _at(17, 30, day=_EARLY_CLOSE_DAY))
@@ -904,7 +904,7 @@ async def test_a_half_days_after_hours_limit_is_bounded_by_the_calendar_close(
     )
     try:
         repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
-        submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+        submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
         entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
         effect_operation_id = _accept_program_exit(repo, entry_ref)
         _walk_clock_to(repo, _at(13, 0, 30, day=_EARLY_CLOSE_DAY))
@@ -1031,7 +1031,7 @@ async def test_an_authored_limit_working_into_regular_session_is_not_replaced(
     )
     try:
         repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
-        submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+        submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
         entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
         priced = _live_touch().read("SPY", repo.clock(), strategy_instance_id=SID).price(
             side=OrderSide.SELL, symbol="SPY", quantity=10, now_ms=repo.clock(),

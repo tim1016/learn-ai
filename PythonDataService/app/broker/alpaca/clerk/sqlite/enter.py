@@ -340,9 +340,8 @@ def _require_enter_fences(
     admitted against. An entry in shares and one in an option contract pass
     the same five, so neither can lose one the other keeps.
 
-    Called from inside a ``build_transition`` closure: see commands.py's
-    submit_start_run for why these checks run there, under
-    commit_first_transition's lock, rather than before it.
+    Called from inside a ``build_transition`` closure, under
+    ``commit_first_transition``'s lock, to keep admission and append atomic.
     """
     require_strategy_instance(repo, strategy_instance_id)
     active = require_active_run(repo, strategy_instance_id, lifecycle_run_id)

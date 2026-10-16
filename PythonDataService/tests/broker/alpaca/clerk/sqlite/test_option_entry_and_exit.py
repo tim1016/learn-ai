@@ -59,7 +59,7 @@ from tests.broker.alpaca.clerk.sqlite.test_two_bots_one_symbol import (
     one_account,  # noqa: F401 -- pytest fixture, used by name
 )
 
-pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+pytestmark = pytest.mark.usefixtures("budgeted_run_registration")
 
 SID = "dry-run-buys-a-call"
 RUN = "run-dry"

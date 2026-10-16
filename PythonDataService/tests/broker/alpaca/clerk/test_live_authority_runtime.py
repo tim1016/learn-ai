@@ -44,7 +44,9 @@ from app.broker.alpaca.clerk.sqlite.developer_reset_registry import (
     DeveloperCleanSlateReset,
     DeveloperCleanSlateResetRegistry,
 )
+from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
+from app.services.bot_carryover import configuration_hash, immutable_configuration_payload
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
 from tests._helpers.historical_arming import HistoricalArmingLedger as LiveArmingLedger
 from tests.broker.alpaca.clerk.activation_fixtures import _ActivationStore
@@ -61,11 +63,10 @@ from tests.broker.alpaca.clerk.live_envelope_fixtures import (
     TEST_ENVELOPE_VALUES,
     _LiveBroker,
 )
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 from tests.broker.alpaca.clerk.sqlite.test_runtime_program_leg import RUN_ID, _binding
 from tests.broker.alpaca.clerk.test_shadow_broker import _retain
 from tests.broker.alpaca.clerk.test_shadow_envelope_runtime import BAR_CLOSE, DECISION_MINUTE, NOW_MS
-
-pytestmark = pytest.mark.usefixtures("legacy_run_registration")
 
 
 @pytest.fixture(autouse=True)
@@ -103,10 +104,22 @@ async def registered_live_bot(
     runtime, _broker = live_runtime
     assert runtime.clerk is not None
     seal = record_sealed_binding(live_state_root, strategy_instance_id=LIVE_SID, sealed_account_id=LIVE_ACCT)
-    await runtime.clerk.register_strategy_run(
-        _binding(use_rth=True).model_copy(
-            update={"strategy_instance_id": LIVE_SID, "sealed_account_id": LIVE_ACCT}
-        )
+    binding = _binding(use_rth=True).model_copy(
+        update={"strategy_instance_id": LIVE_SID, "sealed_account_id": LIVE_ACCT}
+    )
+    repo = runtime.sqlite_repository
+    assert repo is not None
+    repo.register_strategy_instance(
+        strategy_instance_id=LIVE_SID,
+        symbol="SPY",
+        config_hash=configuration_hash(binding),
+        strategy_key=binding.strategy_key,
+        display_name="Deployment validation",
+        config_json=canonicalize(immutable_configuration_payload(binding)),
+        exit_terms=binding.exit_terms,
+    )
+    seed_historical_run_started(
+        repo, account_id=LIVE_ACCT, strategy_instance_id=LIVE_SID, lifecycle_run_id=RUN_ID,
     )
     bars = SourceBarLedger(
         artifacts_root=tmp_path, account_id=live_evidence_account_id_for_strategy(LIVE_SID)

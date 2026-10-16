@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.external_orders import record_unfoldable_broker_order
 from app.broker.alpaca.clerk.sqlite.lane_quiet import (
@@ -46,14 +46,16 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import _REASON_POLICIES
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerPosition
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_run
 from tests.broker.alpaca.clerk.sqlite.conftest import (
-    FIXTURE_RTH_MS,
+    BUDGETED_RTH_MS,
     _broker_order_fixture,
     _broker_position_fixture,
     _clock_at,
     _TestClock,
     _walk_clock_to,
 )
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 from tests.broker.alpaca.clerk.sqlite.test_exit import (
     ACCOUNT_ID,
     RUN_ID,
@@ -64,7 +66,6 @@ from tests.broker.alpaca.clerk.sqlite.test_exit import (
 )
 from tests.broker.alpaca.clerk.sqlite.test_reconcile import (
     _held_position,
-    _register_second_spy_lane,
 )
 from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
     _broker_order as _flatten_broker_order,
@@ -76,7 +77,7 @@ from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
     _FakeTrade as _ReconcileTrade,
 )
 
-T0 = 1_700_000_000_000
+T0 = BUDGETED_RTH_MS
 
 
 class _ScriptedRead:
@@ -121,7 +122,7 @@ def repo(tmp_path: Path) -> Iterator[ClerkSqliteRepository]:
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_at(T0), lease_ttl_ms=300_000
     )
     r.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
-    submit_start_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    submit_budgeted_test_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     yield r
     r.close()
 
@@ -230,7 +231,7 @@ async def test_a_drifted_lane_with_an_open_exit_not_flat_episode_is_not_flat(
     account over.
     """
     # The market reducing leg goes out only inside the regular session (#2440).
-    _walk_clock_to(repo, FIXTURE_RTH_MS)
+    _walk_clock_to(repo, BUDGETED_RTH_MS)
     entry_ref = await _make_entry(repo, quantity=10, status="filled", filled_quantity=10.0)
     accepted = accept_exit(
         repo,
@@ -284,16 +285,24 @@ async def test_attributed_exposure_blocks_quiet_even_with_the_broker_flat(
 
 
 async def test_opposing_custody_subjects_do_not_net_to_flat(
-    repo: ClerkSqliteRepository,
+    tmp_path: Path,
 ) -> None:
     """#2382 review: lane A +10 SPY, lane B -10 SPY, broker flat.
 
     The account-wide attribution nets to zero, but each subject still holds
     exposure it can act on. Flat is per custody subject and symbol, never a sum.
     """
-    await _held_position(repo, sid=SID, run_id=RUN_ID)
-    sid_b, run_b = _register_second_spy_lane(repo)
+    clock = _clock_at(BUDGETED_RTH_MS)
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    sid_b, run_b = "legacy-short", "legacy-run"
+    repo.register_strategy_instance(strategy_instance_id=sid_b, symbol="SPY", config_hash="legacy-short")
+    seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=sid_b, lifecycle_run_id=run_b)
     await _held_position(repo, suffix="b", sid=sid_b, run_id=run_b, side="sell")
+    submit_stop_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=sid_b, lifecycle_run_id=run_b)
+    clock.advance(6_000)
+    repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
+    submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    await _held_position(repo, sid=SID, run_id=RUN_ID)
     assert repo.position(SID, "SPY") == 10.0
     assert repo.position(sid_b, "SPY") == -10.0
     assert repo.attributed_positions_by_symbol() == {"SPY": 0.0}
@@ -305,6 +314,7 @@ async def test_opposing_custody_subjects_do_not_net_to_flat(
     assert observation is not None
     assert observation.broker_work_ended and observation.intents_resolved
     assert not observation.account_flat
+    repo.close()
 
 
 async def test_an_open_uncertainty_episode_blocks_quiet_with_custody_flat(

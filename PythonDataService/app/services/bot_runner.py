@@ -642,38 +642,6 @@ class BotTaskRegistry:
 
     # ── deploy / stop ─────────────────────────────────────────────────
 
-    async def deploy(
-        self,
-        *,
-        broker: str,
-        strategy_instance_id: str,
-        strategy_key: str = "deployment_validation",
-        symbol: str,
-        exit_terms: ExitTerms,
-        use_rth: bool = True,
-        mode: Literal["log_only", "dry_run", "trade"] = "log_only",
-        quantity: int = 1,
-        carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID",
-        evidence_override: AlpacaPaperEvidenceOverride | None = None,
-        end: BotEnd | None = None,
-    ) -> BotStatusView:
-        """Deploy and start a bot; durable evidence before liveness."""
-        return (
-            await self.deploy_with_admission(
-                broker=broker,
-                strategy_instance_id=strategy_instance_id,
-                strategy_key=strategy_key,
-                symbol=symbol,
-                exit_terms=exit_terms,
-                use_rth=use_rth,
-                mode=mode,
-                quantity=quantity,
-                carryover_policy=carryover_policy,
-                evidence_override=evidence_override,
-                end=end,
-            )
-        ).bot
-
     async def deploy_with_admission(
         self,
         *,
@@ -914,7 +882,6 @@ class BotTaskRegistry:
                     detail="Refresh the bot after Clerk reconciliation settles.",
                 )
             run_gate = asyncio.Event()
-            run_gate.set()
             task = asyncio.create_task(
                 self._supervise(binding, feed, run_gate),
                 name=f"bot:{binding.strategy_instance_id}",
@@ -926,10 +893,13 @@ class BotTaskRegistry:
                 run_gate=run_gate,
             )
             self._bots[binding.strategy_instance_id] = managed
-            # Let supervision enter its exception boundary before a Start releases
-            # Clerk intake. A first effect waits on that same fence.
+            # Let supervision enter its exception boundary before launch commits.
+            # The gate keeps it from failing or making effects before the
+            # budgeted run has durable launch evidence.
             await asyncio.sleep(0)
             await commit_deploy_launch(binding)
+            run_gate.set()
+            await asyncio.sleep(0)
         except BaseException as exc:
             if task is None:
                 # No supervise task ever held the run, so nothing else will
@@ -2379,6 +2349,7 @@ class BotTaskRegistry:
         """Run the bot; on ANY exit record a typed durable duty outcome, then reap."""
         sid = binding.strategy_instance_id
         try:
+            await run_gate.wait()
             source_bars = self._authority_for(binding).source_bars()
             await execute_bot_run(
                 binding,

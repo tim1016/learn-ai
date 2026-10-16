@@ -12,7 +12,6 @@ import pytest
 
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite import reads, schema
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.custody_subjects import manual_operator_subject_id
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
     DEFAULT_RECENT_FILL_LIMIT,
@@ -23,7 +22,7 @@ from app.broker.alpaca.clerk.sqlite.economic_projection import (
     _to_execution_row,
     _to_fill_record,
 )
-from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
+from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExecutionSliceFilledFacts,
     UncertaintyRaisedFacts,
@@ -46,7 +45,8 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 )
 from app.broker.contract.models import BrokerOrderLeg
 from app.lean_sidecar.trading_calendar import SessionWindow, session_window_for_date
-from tests.broker.alpaca.clerk.sqlite.conftest import _broker_order_fixture, _clock_at
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import accept_budgeted_test_enter, submit_budgeted_test_run
+from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _broker_order_fixture, _clock_at
 from tests.broker.alpaca.clerk.sqlite.test_reconcile import _FakeRead, _FakeTrade, _position
 
 _ACCOUNT_ID = "PA-S2-ECONOMICS"
@@ -63,20 +63,20 @@ def _repository(tmp_path: Path) -> tuple[ClerkSqliteRepository, EnterSubmission]
     repo = ClerkSqliteRepository.initialize(
         account_id=_ACCOUNT_ID,
         artifacts_root=tmp_path,
-        clock=_clock_at(1_786_368_000_000),
+        clock=_clock_at(NOON),
     )
     repo.register_strategy_instance(
         strategy_instance_id=_SID,
         symbol="GOOGL",
         config_hash="s2-economic-config",
     )
-    submit_start_run(
+    submit_budgeted_test_run(
         repo,
         account_id=_ACCOUNT_ID,
         strategy_instance_id=_SID,
         lifecycle_run_id=_RUN_ID,
     )
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id=_ACCOUNT_ID,
         strategy_instance_id=_SID,

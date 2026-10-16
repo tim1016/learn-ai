@@ -22,7 +22,6 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk.option_effects import OptionEffectRefusal, OptionEntryEvidence
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_option_enter
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.option_admission import OptionEntryRefused, work_out_option_entry
@@ -33,6 +32,7 @@ from app.options.deadlines import CloseTerms
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
 from app.schemas.action_plan import ActionPlan
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 
 _NOW = NOON + 1_000
 _CALL = OptionContract.of(root="SPY", expiry_date=date(2026, 9, 18), right="call", strike=585)
@@ -90,7 +90,7 @@ def _accepted(tmp_path: Path, entry: OptionEntryFacts) -> tuple[str, str, Option
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path, clock=lambda: _NOW)
     try:
         repo.register_strategy_instance(strategy_instance_id="spy-calls", symbol="SPY", config_hash="h1")
-        submit_start_run(repo, account_id="PA-TEST", strategy_instance_id="spy-calls", lifecycle_run_id="run-1")
+        seed_historical_run_started(repo, account_id="PA-TEST", strategy_instance_id="spy-calls", lifecycle_run_id="run-1")
         accepted = accept_option_enter(
             repo, account_id="PA-TEST", strategy_instance_id="spy-calls", decision_id="d-1", lifecycle_run_id="run-1",
             entry=entry,

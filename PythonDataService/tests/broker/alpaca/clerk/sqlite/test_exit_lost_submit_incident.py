@@ -18,8 +18,6 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
-from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
@@ -31,7 +29,9 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.errors import BrokerUnavailable
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_enter, submit_budgeted_test_run
 from tests.broker.alpaca.clerk.sqlite.conftest import (
+    NOON,
     _broker_leg,
     _clock_at,
     _FakeTradePort,
@@ -58,11 +58,11 @@ def repo(tmp_path: Path) -> Iterator[ClerkSqliteRepository]:
     r = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID,
         artifacts_root=tmp_path,
-        clock=_clock_at(1_700_000_000_000),
+        clock=_clock_at(NOON),
         lease_ttl_ms=300_000,
     )
     r.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
-    submit_start_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    submit_budgeted_test_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     yield r
     r.close()
 
@@ -76,7 +76,7 @@ async def _replay_incident(
     window (the ENTER voids), then an EXIT accepted over that dead entry.
     Returns ``(entry_order_ref, exit_effect_operation_id)``.
     """
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -159,7 +159,7 @@ async def _make_working_entry(
     repo: ClerkSqliteRepository, *, decision_id: str
 ) -> str:
     """A healthy ENTRY: acknowledged by the broker, carrying a broker order id."""
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -180,7 +180,7 @@ async def _void_lost_entry(repo: ClerkSqliteRepository, *, decision_id: str) -> 
         submit_error=BrokerUnavailable("websocket drop swallowed the submit response"),
         lookup_absent=True,
     )
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -363,7 +363,7 @@ async def test_a_durable_fill_outweighs_an_absent_lookup(
         submit_error=BrokerUnavailable("websocket drop swallowed the submit response"),
         lookup_absent=True,
     )
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -411,7 +411,7 @@ async def test_live_absence_also_voids_the_entry_s_own_enter(
         submit_error=BrokerUnavailable("websocket drop swallowed the submit response"),
         lookup_absent=True,
     )
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,

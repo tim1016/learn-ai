@@ -28,11 +28,12 @@ from app.utils.timestamps import now_ms_utc
 from tests.broker.alpaca.clerk.sqlite.test_runtime import _binding
 from tests.broker.alpaca.clerk.sqlite.test_stopped_run_entries import (
     _OpenOrdersBroker,
+    _source_bar,
     _working_enter,
 )
 
 # #2596: these ENTERs run on the default clock; keep it inside a session.
-pytestmark = pytest.mark.usefixtures("wall_clock_in_session", "legacy_run_registration")
+pytestmark = pytest.mark.usefixtures("wall_clock_in_session", "budgeted_run_registration")
 # The execution lease is a different fence; keep it out of the way while the
 # Clerk clock jumps.
 _EXECUTION_LEASE_TTL_MS = 10**12
@@ -76,6 +77,7 @@ async def _owned_working_enter(
         purpose=EffectPurpose.ENTER,
         action_plan=binding.action_plan,
         quantity=binding.quantity,
+        retained_source_bar=_source_bar(facade),
     )
     return receipt.child_order_refs[0]
 
@@ -261,7 +263,8 @@ async def test_an_owner_registered_during_the_grace_pass_keeps_the_run(
 
     await facade.reconcile_account(trigger="AUTOMATIC")
     run_owner: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-    await facade.register_strategy_run(_binding(), run_owner=run_owner)
+    async with facade.intake:
+        facade.run_ownership.hold(strategy_instance_id=sid, lifecycle_run_id=_binding().run_id, owner=run_owner)
     await facade.reconcile_account(trigger="AUTOMATIC")
 
     assert repo.active_run(sid) is not None

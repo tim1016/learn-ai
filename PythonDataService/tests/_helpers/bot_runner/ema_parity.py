@@ -17,8 +17,9 @@ from decimal import Decimal
 from pathlib import Path
 
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
-from app.lean_sidecar.trading_calendar import session_close_ms_utc
+from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open_ms_utc
 from app.marketdata.feed import MarketDataBar
+from app.utils.session_anchors import et_date_at_ms
 
 _EMA_FIRST_EXIT_MS = 1_770_393_600_000
 _LEAN_CELLS = Path(__file__).resolve().parents[2] / "fixtures/golden/cross-engine-studies/cells"
@@ -71,6 +72,20 @@ def ema_bars_through_a_last_bar_enter() -> list[MarketDataBar]:
         symbol="QQQ",
         stop_after_ms=session_close_ms_utc(EMA_LAST_BAR_ENTER_DAY) - 1,
     )
+
+
+def ema_bars_in_fee_pinned_week(bars: list[MarketDataBar]) -> list[MarketDataBar]:
+    """Keep the retained prices and bar sequence on a week with pinned equity fees."""
+    monday = date(2026, 9, 21)
+    shift = session_open_ms_utc(monday) - session_open_ms_utc(et_date_at_ms(bars[0].end_ms))
+    return [
+        bar.model_copy(update={
+            "start_ms": bar.start_ms + shift,
+            "end_ms": bar.end_ms + shift,
+            "fetched_at_ms": bar.fetched_at_ms + shift,
+        })
+        for bar in bars
+    ]
 
 
 def _ema_signal_evaluation_id(bar_close_ms: int, *, symbol: str = "SPY") -> str:

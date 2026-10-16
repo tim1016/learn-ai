@@ -28,8 +28,7 @@ import pytest
 
 from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
-from app.broker.alpaca.clerk.sqlite.enter import submit_enter
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.exit_resolution import (
     EXIT_REDRIVE_DECISION_PREFIX,
@@ -64,8 +63,9 @@ from app.services.broker_v2_panel.bot_page_projection import _CUSTODY_ENTRIES
 from app.utils.session_anchors import et_date_at_ms
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite import test_safe_flatten_execution as safe_flatten
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_enter, submit_budgeted_test_run
 from tests.broker.alpaca.clerk.sqlite.conftest import (
-    FIXTURE_RTH_MS,
+    BUDGETED_RTH_MS,
     _clock_at,
     _make_held_position,
     _TestClock,
@@ -117,8 +117,8 @@ from tests.broker.alpaca.clerk.sqlite.test_unknown_order_attestation import (
 )
 
 # The session these tests cross, and the one after it, from the canonical calendar: an
-# ordinary Wednesday (2023-11-15) and the Thursday that follows it.
-SESSION_DAY = et_date_at_ms(FIXTURE_RTH_MS)
+# ordinary Wednesday (2026-09-16) and the Thursday that follows it.
+SESSION_DAY = et_date_at_ms(BUDGETED_RTH_MS)
 CLOSE_MS = session_close_ms_utc(SESSION_DAY)
 NEXT_OPEN_MS = session_open_ms_utc(next_trading_day(SESSION_DAY))
 # The closing order leaves the Clerk this long before the close: inside the session, and too
@@ -358,14 +358,14 @@ async def test_a_clerk_restarted_the_next_morning_still_holds_the_order_and_says
     passes after it. The notice recorded the evening before is still the
     only one.
     """
-    clock = _clock_at(FIXTURE_RTH_MS)
+    clock = _clock_at(BUDGETED_RTH_MS)
     repo = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
     )
     repo.register_strategy_instance(
         exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=SID, symbol="SPY", config_hash="h1"
     )
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     alpaca = _Alpaca(repo, clock, submits=("never_arrives",))
     exit_id = await _a_running_bot_loses_its_exit_just_before_the_close(repo, alpaca)
     await _passes_across_the_close(repo, _the_sweep(repo, alpaca))
@@ -786,7 +786,7 @@ async def _another_bot_holds_ten_spy(repo: ClerkSqliteRepository, sid: str, run_
     repo.register_strategy_instance(
         exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=sid, symbol="SPY", config_hash=f"h-{sid}"
     )
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=sid, lifecycle_run_id=run_id)
+    submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=sid, lifecycle_run_id=run_id)
     return await _make_held_position(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=sid, run_id=run_id,
         decision_id=f"{sid}-enter-1", execution_id=f"{sid}-exec-1",
@@ -1038,7 +1038,7 @@ async def test_an_order_sent_to_a_simulated_port_still_fails_and_releases_past_i
     repo, clock = crashed_with_exposure
     simulation = _Simulation(clock)
     _walk_clock_to(repo, CLOSE_MS - LOST_BEFORE_THE_CLOSE_MS)
-    entered = await submit_enter(
+    entered = await submit_budgeted_test_enter(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="enter-1",
         lifecycle_run_id=RUN_ID, leg=safe_flatten._leg(quantity=10, side="buy"), trade=simulation,
     )
@@ -1092,7 +1092,7 @@ async def test_a_simulated_decision_exit_that_recorded_no_price_is_refused_never
     repo, clock = crashed_with_exposure
     simulation = _Simulation(clock)
     _walk_clock_to(repo, CLOSE_MS - LOST_BEFORE_THE_CLOSE_MS)
-    entered = await submit_enter(
+    entered = await submit_budgeted_test_enter(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="enter-1",
         lifecycle_run_id=RUN_ID, leg=safe_flatten._leg(quantity=10, side="buy"), trade=simulation,
     )
@@ -1120,14 +1120,14 @@ async def test_a_store_rebuilt_from_its_mirror_holds_the_same_order_and_tells_th
     tmp_path: Path,
 ) -> None:
     """The held state is ledger rows and their folds: a store replayed from its mirror equals the one that lived it."""
-    clock = _clock_at(FIXTURE_RTH_MS)
+    clock = _clock_at(BUDGETED_RTH_MS)
     repo = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
     )
     repo.register_strategy_instance(
         exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=SID, symbol="SPY", config_hash="h1"
     )
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     alpaca = _Alpaca(repo, clock, submits=("never_arrives",))
     exit_id = await _a_running_bot_loses_its_exit_just_before_the_close(repo, alpaca)
     await _passes_across_the_close(repo, _the_sweep(repo, alpaca))

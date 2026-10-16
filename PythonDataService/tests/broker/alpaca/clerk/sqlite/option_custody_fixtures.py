@@ -20,7 +20,6 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.contract_terms import (
     ContractTerms,
     bind_order_contract,
@@ -41,6 +40,7 @@ from app.broker.alpaca.clerk.sqlite.models import CommandCreated, TransitionInpu
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.engine.live.order_identity import build_bot_order_namespace, build_order_ref, mint_intent_id
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _clock_at, _TestClock
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 
 OPTION_ORDER_ACCEPTED = "TEST_OPTION_ORDER_ACCEPTED"
 OPTION_CLOSING_ORDER_ACCEPTED = "TEST_OPTION_CLOSING_ORDER_ACCEPTED"
@@ -101,7 +101,7 @@ def open_option_books(
         repo.register_strategy_instance(
             strategy_instance_id=strategy_instance_id, symbol=symbol, config_hash="option-custody"
         )
-        submit_start_run(
+        seed_historical_run_started(
             repo,
             account_id=account_id,
             strategy_instance_id=strategy_instance_id,

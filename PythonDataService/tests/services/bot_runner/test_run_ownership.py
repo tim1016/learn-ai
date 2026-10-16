@@ -20,7 +20,7 @@ from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSw
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.services.bot_runner import BotTaskRegistry
-from tests._helpers.bot_runner.custody import admission_guard_for
+from tests._helpers.bot_runner.custody import admission_guard_for, deploy_bot
 from tests._helpers.bot_runner.market import _tradable_market_liveness
 from tests._helpers.bot_runner.resume import (
     _STRATEGY_INSTANCE_ID,
@@ -31,7 +31,7 @@ from tests._helpers.bot_runner.resume import (
 )
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
-pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+pytestmark = pytest.mark.usefixtures("budgeted_run_registration")
 
 
 def _compose(
@@ -51,7 +51,7 @@ def _compose(
 
 
 async def _deploy(registry: BotTaskRegistry) -> None:
-    await registry.deploy(
+    await deploy_bot(registry,
         exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
         strategy_instance_id=_STRATEGY_INSTANCE_ID,
         strategy_key="ema_crossover_signal",

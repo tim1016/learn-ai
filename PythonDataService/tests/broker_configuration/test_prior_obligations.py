@@ -17,9 +17,8 @@ import pytest
 from app.broker.alpaca.clerk.account_authority import custody_account_id_for
 from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite.activation import ActivationRecord, ActivationStore
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.database_verification import verify_database
-from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
+from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
 from app.broker.alpaca.clerk.sqlite.manual_orders import accept_manual_order
@@ -38,6 +37,10 @@ from app.services.bot_binding_repository import (
     BrokerBotBinding,
     alpaca_v1_action_plan,
     live_state_binding_repository,
+)
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import (
+    accept_budgeted_test_enter,
+    submit_budgeted_test_run,
 )
 
 ACCOUNT_ID = "PA-PRIOR"
@@ -142,18 +145,17 @@ def _start_a_bot(repository: ClerkSqliteRepository) -> None:
     repository.register_strategy_instance(
         strategy_instance_id=SID, symbol=SYMBOL, config_hash="config-hash"
     )
-    submit_start_run(
+    submit_budgeted_test_run(
         repository,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
         lifecycle_run_id=RUN_ID,
-        clock=lambda: NOW_MS,
     )
 
 
 def _accept_an_enter(repository: ClerkSqliteRepository) -> EnterSubmission:
     _start_a_bot(repository)
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repository,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,

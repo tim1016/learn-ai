@@ -12,14 +12,10 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.sqlite.commands import (
-    submit_retire_strategy_instance,
-    submit_start_run,
-    submit_stop_run,
-)
-from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+from app.broker.alpaca.clerk.sqlite.commands import submit_retire_strategy_instance, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerOrderLeg
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import accept_budgeted_test_enter, submit_budgeted_test_run
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
 
 SID = "retired-bot"
@@ -36,8 +32,8 @@ def _retired_bot_with_one_order(tmp_path: Path, broker_state: str) -> ClerkSqlit
     """A bot whose run stopped and whose effect ended, holding nothing but one order the broker shows in ``broker_state``."""
     repo = ClerkSqliteRepository.initialize(account_id="PA-LIVE-CUSTODY", artifacts_root=tmp_path, clock=_TestClock(NOON))
     repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="seal")
-    submit_start_run(repo, account_id=repo.account_id, strategy_instance_id=SID, lifecycle_run_id="run-1", clock=repo.clock)
-    accepted = accept_enter(
+    submit_budgeted_test_run(repo, account_id=repo.account_id, strategy_instance_id=SID, lifecycle_run_id="run-1", clock=repo.clock)
+    accepted = accept_budgeted_test_enter(
         repo, account_id=repo.account_id, strategy_instance_id=SID, lifecycle_run_id="run-1", decision_id="enter-1",
         leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
     )

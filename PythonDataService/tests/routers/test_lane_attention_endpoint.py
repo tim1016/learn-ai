@@ -24,7 +24,6 @@ from app.broker.alpaca.clerk.active_authority import (
 )
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.exit_recovery import RecoveryResult, record_exit_recovery
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -44,6 +43,7 @@ from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite import test_safe_flatten_execution as safe_flatten
 from tests.broker.alpaca.clerk.sqlite import test_unknown_order_attestation as settling
 from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 
 ACCOUNT = "PA-BELL-1"
 _T0 = 1_788_040_000_000  # a fixed int64 ms UTC
@@ -399,13 +399,12 @@ async def test_a_stopped_bot_still_holding_is_one_line_with_flatten_and_finished
 ) -> None:
     """H13/H34: old flat bots are Finished, never attention; only the bot
     nobody manages is a line, and a running bot manages its own shares."""
-    from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT, artifacts_root=tmp_path, clock=_Clock())
     try:
         for sid in ("held", "running", "finished"):
             repo.register_strategy_instance(strategy_instance_id=sid, symbol="SPY", config_hash="h1", config_json=_TRADE_CONFIG)
-        submit_start_run(repo, account_id=ACCOUNT, strategy_instance_id="running", lifecycle_run_id="r1", clock=repo.clock)
+        seed_historical_run_started(repo, account_id=ACCOUNT, strategy_instance_id="running", lifecycle_run_id="r1")
         _hold_position(repo, "held", 5)
         _hold_position(repo, "running", 1)
 
@@ -495,7 +494,7 @@ def _a_bot_on_the_real_clerk(tmp_path: Path) -> tuple[ClerkSqliteRepository, set
         exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=settling.SID, symbol="SPY", config_hash="h1",
         config_json=_TRADE_CONFIG,
     )
-    submit_start_run(
+    seed_historical_run_started(
         repo, account_id=settling.ACCOUNT_ID, strategy_instance_id=settling.SID, lifecycle_run_id=settling.RUN_ID
     )
     return repo, settling._AlpacaAccount(repo, clock, submits=("never_arrives",))
@@ -752,7 +751,6 @@ async def test_the_desks_notice_of_an_ended_bot_offers_flatten_when_the_clerks_o
     gate accepts. A pass the gate would refuse still sends the owner to
     Reconcile now first.
     """
-    from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
     from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
     from app.services.broker_v2_panel import sqlite_roster_status
 
@@ -761,8 +759,8 @@ async def test_the_desks_notice_of_an_ended_bot_offers_flatten_when_the_clerks_o
     monkeypatch.setattr(sqlite_roster_status, "live_artifacts_root", lambda: tmp_path)
     repo.register_strategy_instance(strategy_instance_id="paper-0", symbol="SPY", config_hash="h1", config_json=_TRADE_CONFIG)
     if run_still_active:
-        submit_start_run(
-            repo, account_id=ACCOUNT, strategy_instance_id="paper-0", lifecycle_run_id="run-paper-0", clock=repo.clock
+        seed_historical_run_started(
+            repo, account_id=ACCOUNT, strategy_instance_id="paper-0", lifecycle_run_id="run-paper-0"
         )
     _end_uncleanly(tmp_path, "paper-0", at_ms=_T0, kind="CRASHED" if run_still_active else "EXITED_UNVERIFIED")
     _hold_position(repo, "paper-0", 3)
@@ -794,7 +792,6 @@ async def test_a_bot_resumed_while_the_desk_is_being_read_gets_no_run_ended_noti
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """#2839: the desk classed its ended bots before it read their passes, so a bot resumed in between was told its run had ended."""
-    from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
     from app.engine.live.bot_lifecycle_state import (
         BotLifecyclePhase,
         BotLifecycleStateRecord,
@@ -812,8 +809,8 @@ async def test_a_bot_resumed_while_the_desk_is_being_read_gets_no_run_ended_noti
     read_pass = facade.published_pass
 
     async def resumed_while_the_pass_is_read(strategy_instance_id: str):
-        submit_start_run(
-            repo, account_id=ACCOUNT, strategy_instance_id="paper-0", lifecycle_run_id="run-resumed", clock=repo.clock
+        seed_historical_run_started(
+            repo, account_id=ACCOUNT, strategy_instance_id="paper-0", lifecycle_run_id="run-resumed"
         )
         stable_bot_lifecycle_state_path(tmp_path, "paper-0").write_text(BotLifecycleStateRecord(
             phase=BotLifecyclePhase.ON_DUTY, active_run_id="run-resumed", last_transition_at_ms=_T0 + 1_000,
@@ -840,14 +837,13 @@ async def test_a_crashed_bot_whose_run_row_is_still_active_but_holds_shares_is_o
 ) -> None:
     """Review A3: Home files a crashed bot as stopped (its crash outcome),
     so the attention read iterates the same group, not ``active_run``."""
-    from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
     from app.services.broker_v2_panel import sqlite_roster_status
 
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT, artifacts_root=tmp_path, clock=_Clock())
     monkeypatch.setattr(sqlite_roster_status, "live_artifacts_root", lambda: tmp_path)
     try:
         repo.register_strategy_instance(strategy_instance_id="crashed", symbol="SPY", config_hash="h1", config_json=_TRADE_CONFIG)
-        submit_start_run(repo, account_id=ACCOUNT, strategy_instance_id="crashed", lifecycle_run_id="run-crashed", clock=repo.clock)
+        seed_historical_run_started(repo, account_id=ACCOUNT, strategy_instance_id="crashed", lifecycle_run_id="run-crashed")
         _end_uncleanly(tmp_path, "crashed", at_ms=_T0, kind="CRASHED")
         _hold_position(repo, "crashed", 1)
 

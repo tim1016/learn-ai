@@ -18,8 +18,8 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk.sqlite import failed_enter_entries, reads, stopped_run_entries
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
-from app.broker.alpaca.clerk.sqlite.enter import resolve_enter_submission, submit_enter
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
+from app.broker.alpaca.clerk.sqlite.enter import resolve_enter_submission
 from app.broker.alpaca.clerk.sqlite.failed_enter_entries import (
     cancel_working_entries_of_failed_enters,
 )
@@ -34,7 +34,8 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
 )
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
-from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at, _FakeTradePort, _walk_clock_to
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_enter, submit_budgeted_test_run
+from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _clock_at, _FakeTradePort, _walk_clock_to
 
 ACCOUNT_ID = "PA-FAILED-ENTER"
 SID = "spy-bot"
@@ -44,11 +45,11 @@ RUN_ID = "run-1"
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Iterator[ClerkSqliteRepository]:
-    clock = _clock_at(1_700_000_000_000)
+    clock = _clock_at(NOON)
     r = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
     r.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
     r.register_strategy_instance(strategy_instance_id=OTHER, symbol="QQQ", config_hash="h2")
-    submit_start_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    submit_budgeted_test_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     yield r
     r.close()
 
@@ -113,7 +114,7 @@ class _VenueThatTookTheOrder:
 
 async def _an_entry_voided_as_never_sent(repo: ClerkSqliteRepository, venue: _VenueThatTookTheOrder) -> str:
     """The send gets no answer and the broker shows no such order through the grace: the ENTER is voided."""
-    sent = await submit_enter(
+    sent = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -204,7 +205,7 @@ async def test_an_entry_under_a_still_open_enter_is_never_this_steps_to_cancel(
     repo: ClerkSqliteRepository,
 ) -> None:
     """Its own machine — the POST, the resolver, the wait — still owns the order."""
-    sent = await submit_enter(
+    sent = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -257,7 +258,7 @@ async def test_the_worklist_is_sought_from_the_entry_state_index_and_touches_no_
     repo: ClerkSqliteRepository,
 ) -> None:
     """Every pass reads this worklist: it must cost an index seek, not a walk of history."""
-    sent = await submit_enter(
+    sent = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,

@@ -19,9 +19,8 @@ from app.broker.alpaca.clerk.sqlite import schema
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
 from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms, risk_fill_sequence
-from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter, submit_enter
+from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import (
     AccountHoldRaisedFacts,
@@ -48,6 +47,8 @@ from app.schemas.exit_terms import ExitTerms
 from app.services.session_authority import et_minute_of_day_ms
 from tests._helpers.session_clock import pin_wall_clock_in_session
 from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import accept_budgeted_test_enter, submit_budgeted_test_enter
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 from tests.broker.alpaca.documented_examples import documented
 
 
@@ -519,7 +520,7 @@ async def _make_held_position(
     quantity: float = 10.0,
 ) -> str:
     """Filled entry with an exact execution slice -> attributed +quantity."""
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=account_id,
         strategy_instance_id=strategy_instance_id,
@@ -545,7 +546,11 @@ async def _fill_entry(
     filled = _broker_order_fixture(
         submission.order_ref, status="filled", quantity=quantity,
         filled_quantity=quantity, filled_avg_price=100.0,
-    )
+    ).model_copy(update={
+        "submitted_at_ms": repo.clock(), "created_at_ms": repo.clock(),
+        "updated_at_ms": repo.clock() + 600, "observed_at_ms": repo.clock() + 600,
+        "filled_at_ms": repo.clock() + 600,
+    })
     fold_order_evidence(repo, effect_operation_id=submission.effect_operation_id, order=filled)
     sink = SqliteTradeUpdateEvidenceSink(
         repo=repo, intake=ReentrantAsyncLock(), reconciler=_AssertingNoReconciler()
@@ -553,7 +558,7 @@ async def _fill_entry(
     await sink.record_lifecycle_event(
         client_order_id=submission.order_ref,
         event=BrokerOrderEvent(
-            event_type="fill", occurred_at_ms=1_700_000_000_600,
+            event_type="fill", occurred_at_ms=repo.clock(),
             price=100, quantity=quantity, execution_id=execution_id,
         ),
         event_key=f"execution:{execution_id}",
@@ -693,12 +698,11 @@ def _start_legacy_run(
     repo.register_strategy_instance(
         strategy_instance_id=strategy_instance_id, symbol=symbol, config_hash="h1"
     )
-    submit_start_run(
+    seed_historical_run_started(
         repo,
         account_id=ENVELOPE_ACCOUNT_ID,
         strategy_instance_id=strategy_instance_id,
         lifecycle_run_id=run_id,
-        clock=clock,
     )
 
 
@@ -751,6 +755,7 @@ DAY_PNL_SYMBOL = "SPY"
 
 # 2026-09-08 is a Tuesday; the 7th is Labor Day, so "yesterday" is Friday the 4th.
 NOON = et_minute_of_day_ms(date(2026, 9, 8), 12 * 60)
+BUDGETED_RTH_MS = et_minute_of_day_ms(date(2026, 9, 16), 10 * 60)
 TODAY_OPEN = et_minute_of_day_ms(date(2026, 9, 8), 9 * 60 + 30)
 YESTERDAY_NOON = et_minute_of_day_ms(date(2026, 9, 4), 12 * 60)
 YESTERDAY_OPEN = et_minute_of_day_ms(date(2026, 9, 4), 9 * 60 + 30)
@@ -762,19 +767,18 @@ def day_pnl_clock() -> _TestClock:
 
 
 def initialize_day_pnl_repo(artifacts_root: Path, clock: _TestClock) -> ClerkSqliteRepository:
-    """One authority with a registered, running instance — every stamp from the clock."""
+    """Pre-cutover custody for fee-history tests that begin before any fee read."""
     clerk = ClerkSqliteRepository.initialize(
         account_id=DAY_PNL_ACCOUNT_ID, artifacts_root=artifacts_root, clock=clock
     )
     clerk.register_strategy_instance(
         strategy_instance_id=DAY_PNL_SID, symbol=DAY_PNL_SYMBOL, config_hash="day-pnl-config"
     )
-    submit_start_run(
+    seed_historical_run_started(
         clerk,
         account_id=DAY_PNL_ACCOUNT_ID,
         strategy_instance_id=DAY_PNL_SID,
         lifecycle_run_id=DAY_PNL_RUN_ID,
-        clock=clock,
     )
     return clerk
 
@@ -792,7 +796,7 @@ def day_pnl_repo(
 def _accept_day_pnl_enter(
     repo: ClerkSqliteRepository, *, decision_id: str
 ) -> EnterSubmission:
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id=DAY_PNL_ACCOUNT_ID,
         strategy_instance_id=DAY_PNL_SID,

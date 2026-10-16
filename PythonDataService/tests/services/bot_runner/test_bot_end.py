@@ -46,7 +46,7 @@ from app.services.bot_runner import (
 )
 from app.utils.et_words import et_when_words
 from app.utils.timestamps import now_ms_utc
-from tests._helpers.bot_runner.custody import _SID, _T0, _custody_proof, _registry
+from tests._helpers.bot_runner.custody import _SID, _T0, _custody_proof, _registry, deploy_bot
 from tests._helpers.bot_runner.doubles import _CustodyClerk, _FakeFeed
 from tests._helpers.canary_admission import admit_canary_pairing
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
@@ -124,7 +124,7 @@ def _binding_bytes(tmp_path: Path, sid: str = _SID) -> bytes:
 async def _deploy(
     registry: BotTaskRegistry, sid: str = _SID, *, end: BotEnd | None = _END, mode: str = "log_only",
 ) -> None:
-    await registry.deploy(
+    await deploy_bot(registry,
         exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=sid, symbol="SPY", end=end, mode=mode,
     )
 

@@ -24,14 +24,14 @@ from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
 from app.broker.contract.models import OrderType, TimeInForce
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.source_bar_ledger import SourceBarLedger
-from tests._helpers.bot_runner.custody import _SID, _T0
+from tests._helpers.bot_runner.custody import _SID, _T0, budget_consent_for_test
 from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeFeed
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite.conftest import _FakeReadPort, _FakeTradePort
 
 from ._support import _SESSION_OPEN_MS, _green_bar
 
-pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+pytestmark = pytest.mark.usefixtures("budgeted_run_registration")
 
 # 09:59 and 10:00 ET on 2024-01-02 — inside the regular session, and so also
 # inside the broker's declared 04:00–20:00 ET extended window. The second bar
@@ -56,6 +56,7 @@ def _extended_binding(account_id: str) -> BrokerBotBinding:
         action_plan=alpaca_v1_action_plan("SPY"),
         run_id="run-current",
         created_at_ms=_T0,
+        budget_consent=budget_consent_for_test(mode="trade"),
     )
 
 

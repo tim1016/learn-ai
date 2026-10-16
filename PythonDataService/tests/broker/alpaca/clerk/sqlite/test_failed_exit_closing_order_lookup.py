@@ -30,7 +30,7 @@ import pytest
 
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite import reconcile as reconcile_module
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
 from app.broker.alpaca.clerk.sqlite.exit_resolution import flatten_send_refusal
 from app.broker.alpaca.clerk.sqlite.models import OrderResource
@@ -47,6 +47,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import EXIT_STUCK_REASON_CODE, P
 from app.broker.alpaca.clerk.sqlite.unknown_order_attestation import OrderOutcomeAttestation
 from app.broker.contract.models import BrokerPosition
 from tests.broker.alpaca.clerk.sqlite.conftest import _TestClock, _walk_clock_to
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 from tests.broker.alpaca.clerk.sqlite.test_exit_lost_closing_order_resend import (
     FIVE_MINUTES_OF_PASSES,
     RESEND_AFTER_MS,
@@ -68,6 +69,7 @@ from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
     _held_position,
     _position,
     crashed_with_exposure,  # noqa: F401 -- the repository, in the regular session, these tests reuse
+    historical_crashed_with_exposure,  # noqa: F401 -- pre-cutover custody used by the later-run replay
 )
 from tests.broker.alpaca.clerk.sqlite.test_unknown_order_attestation import _open_episode
 
@@ -340,7 +342,7 @@ async def test_a_closing_order_whose_position_the_operator_discharged_is_not_cre
 
 
 async def test_a_discharge_does_not_end_the_lookups_of_a_closing_order_created_after_it(
-    crashed_with_exposure,  # noqa: F811
+    historical_crashed_with_exposure,  # noqa: F811
 ) -> None:
     """A discharge accounts for the orders that came before it, and for no later one.
 
@@ -350,7 +352,7 @@ async def test_a_discharge_does_not_end_the_lookups_of_a_closing_order_created_a
     order is looked up as any other is: its fill is found and credited once,
     and the first order's, which the discharge wrote off, is not credited.
     """
-    repo, clock = crashed_with_exposure
+    repo, clock = historical_crashed_with_exposure
     alpaca = _Alpaca(repo, clock, submits=("arrives_unanswered", "arrives_unanswered"))
     facade, current_context = await _stopped_bot_offered_its_flatten(repo, account=alpaca, trade=alpaca)
     discharged = await _its_flatten_fails_after_its_own_order_fills_unseen(repo, alpaca, facade, current_context)
@@ -359,7 +361,7 @@ async def test_a_discharge_does_not_end_the_lookups_of_a_closing_order_created_a
     )
     assert (await _one_pass(repo, facade)).verdict == "clean"
 
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=A_LATER_RUN_ID)
+    seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=A_LATER_RUN_ID)
     await _held_position(
         repo, decision_id="enter-2", lifecycle_run_id=A_LATER_RUN_ID, execution_id="exec-2"
     )

@@ -27,20 +27,25 @@ from app.broker.alpaca.clerk.live_envelope import LIVE_ENVELOPE_CASH_EXCEEDED, L
 from app.broker.alpaca.clerk.models import EffectOperationReceipt, EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.program_leg import PRICING_BAR_MISMATCH, ProgramLegPolicy
 from app.broker.alpaca.clerk.shadow_broker import compose_shadow_ports
-from app.broker.alpaca.clerk.sqlite.enter import submit_enter
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
+from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade, _order_pricing_bar
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade, _order_pricing_bar, _strategy_display_name
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide, OrderType
 from app.marketdata.feed import MarketDataBar
 from app.schemas.deployment_budget import DeployBudgetConsent
 from app.services import market_liveness
 from app.services.bot_binding_authority import SyntheticBindingAuthority
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
+from app.services.bot_carryover import configuration_hash, immutable_configuration_payload
 from app.services.session_authority import et_minute_of_day_ms
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
+from tests._helpers.bot_runner.custody import budget_consent_for_test
 from tests._helpers.market_quotes import publish_quotes
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_enter
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _FakeReadPort, _FakeTradePort, _TestClock
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS
 from tests.broker.alpaca.clerk.sqlite.test_exit import _broker_order, _FakeTrade
 from tests.broker.alpaca.clerk.sqlite.test_runtime_program_leg import _binding
@@ -53,7 +58,7 @@ from tests.broker.alpaca.clerk.sqlite.test_two_bots_one_symbol import (
 from tests.broker.alpaca.clerk.test_shadow_broker import DAY, MINUTE_MS, _Clock, _LiveRead
 
 # #2596: these ENTERs run on the default clock; keep it inside a session.
-pytestmark = pytest.mark.usefixtures("wall_clock_in_session", "legacy_run_registration")
+pytestmark = pytest.mark.usefixtures("wall_clock_in_session", "budgeted_run_registration")
 SIGNAL = "SPY"
 TRADED = "QQQ"
 _TRADES_QQQ = alpaca_v1_action_plan(TRADED)
@@ -188,7 +193,7 @@ async def test_a_broker_sent_exit_goes_out_with_no_bar_of_the_traded_asset(tmp_p
     binding = _binding(use_rth=True).model_copy(update={"action_plan": _TRADES_QQQ})
     await facade.register_strategy_run(binding)
     try:
-        held = await submit_enter(
+        held = await submit_budgeted_test_enter(
             repo, account_id="PA-TEST", strategy_instance_id=binding.strategy_instance_id, decision_id="enter-1",
             lifecycle_run_id=binding.run_id, leg=BrokerOrderLeg(symbol=TRADED, side="buy", quantity=10),
             trade=_FakeTrade(submit_result=_broker_order("placeholder", symbol=TRADED)),
@@ -212,20 +217,40 @@ async def test_a_broker_sent_exit_goes_out_with_no_bar_of_the_traded_asset(tmp_p
 
 
 async def test_a_bot_that_trades_another_asset_can_be_started_again(tmp_path: Path) -> None:
-    """A Resume registers the same bot again, and it must still match its own registration.
-
-    The Clerk registers a bot under the symbol it trades. Comparing the next
-    registration against the symbol it listens to would refuse every Resume.
-    """
+    """A historical Resume keeps the traded asset; v2 requires a fresh identity."""
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
     facade = SqliteAlpacaClerkFacade(repo=repo, read=_FakeReadPort(), trade=_FakeTradePort(), account_mode="paper")
     binding = _binding(use_rth=True).model_copy(update={"action_plan": _TRADES_QQQ})
     try:
-        await facade.register_strategy_run(binding)
-        await facade.register_strategy_run(binding)
+        repo.register_strategy_instance(
+            strategy_instance_id=binding.strategy_instance_id, symbol=TRADED,
+            config_hash=configuration_hash(binding), strategy_key=binding.strategy_key,
+            display_name=_strategy_display_name(binding.strategy_key),
+            config_json=canonicalize(immutable_configuration_payload(binding)), exit_terms=binding.exit_terms,
+        )
+        seed_historical_run_started(
+            repo, account_id=repo.account_id, strategy_instance_id=binding.strategy_instance_id,
+            lifecycle_run_id=binding.run_id,
+        )
+        submit_stop_run(
+            repo, account_id=repo.account_id, strategy_instance_id=binding.strategy_instance_id,
+            lifecycle_run_id=binding.run_id, operator_reason="resume_with_budget",
+        )
+        seed_historical_run_started(
+            repo, account_id=repo.account_id, strategy_instance_id=binding.strategy_instance_id,
+            lifecycle_run_id="resumed-run",
+        )
 
         registered = repo.strategy_instance(binding.strategy_instance_id)
         assert registered is not None and registered["symbol"] == TRADED
+        active = repo.active_run(binding.strategy_instance_id)
+        assert active is not None and active.lifecycle_run_id == "resumed-run"
+        submit_stop_run(
+            repo, account_id=repo.account_id, strategy_instance_id=binding.strategy_instance_id,
+            lifecycle_run_id="resumed-run", operator_reason="retire_historical_resume",
+        )
+        with pytest.raises(BudgetUnavailable, match="fresh deployment identity"):
+            await facade.register_strategy_run(binding.model_copy(update={"run_id": "v2-run"}))
     finally:
         repo.close()
 
@@ -257,7 +282,8 @@ async def test_a_live_shadow_fills_at_the_traded_assets_close_and_never_without_
         program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
     )
     binding = _binding(use_rth=True).model_copy(
-        update={"sealed_account_id": _SHADOW_ACCOUNT, "action_plan": _TRADES_QQQ}
+        update={"sealed_account_id": _SHADOW_ACCOUNT, "action_plan": _TRADES_QQQ,
+                "budget_consent": budget_consent_for_test(world="shadow")}
     )
     await facade.register_strategy_run(binding)
 
@@ -320,7 +346,8 @@ async def test_a_live_shadow_sell_with_no_bar_of_its_minute_fills_at_the_newest_
         program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
     )
     binding = _binding(use_rth=True).model_copy(
-        update={"sealed_account_id": _SHADOW_ACCOUNT, "action_plan": _TRADES_QQQ}
+        update={"sealed_account_id": _SHADOW_ACCOUNT, "action_plan": _TRADES_QQQ,
+                "budget_consent": budget_consent_for_test(world="shadow")}
     )
     await facade.register_strategy_run(binding)
     try:
@@ -372,7 +399,8 @@ async def _shadow_holding_qqq(tmp_path: Path, *, exit_ms: int, clock: _Clock) ->
         program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
     )
     binding = _binding(use_rth=True).model_copy(
-        update={"sealed_account_id": _SHADOW_ACCOUNT, "action_plan": _TRADES_QQQ}
+        update={"sealed_account_id": _SHADOW_ACCOUNT, "action_plan": _TRADES_QQQ,
+                "budget_consent": budget_consent_for_test(world="shadow")}
     )
     await facade.register_strategy_run(binding)
     bought = await facade.execute_for_instance(
@@ -399,7 +427,8 @@ async def test_an_older_price_never_buys_on_an_account_that_fills_its_own_orders
         program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
     )
     binding = _binding(use_rth=True).model_copy(
-        update={"sealed_account_id": _SHADOW_ACCOUNT, "action_plan": _TRADES_QQQ}
+        update={"sealed_account_id": _SHADOW_ACCOUNT, "action_plan": _TRADES_QQQ,
+                "budget_consent": budget_consent_for_test(world="shadow")}
     )
     await facade.register_strategy_run(binding)
     try:

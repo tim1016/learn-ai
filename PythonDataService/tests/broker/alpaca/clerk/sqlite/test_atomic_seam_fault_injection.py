@@ -35,25 +35,25 @@ from typing import Any
 import pytest
 
 from app.broker.alpaca.clerk.account_authority import AccountAuthorityIdentityError
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.decision_receipts import (
     AtomicDecisionReceipt,
     DecisionReceiptConflictError,
     DecisionReceiptResource,
     append_atomic_decision_receipt_row,
 )
-from app.broker.alpaca.clerk.sqlite.enter import (
-    accept_enter,
-    resolve_enter_submission,
-    submit_enter,
-)
+from app.broker.alpaca.clerk.sqlite.enter import resolve_enter_submission
 from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
-from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import (
+    accept_budgeted_test_enter,
+    submit_budgeted_test_enter,
+    submit_budgeted_test_run,
+)
+from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _clock_at
 
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
@@ -62,10 +62,10 @@ RUN_ID = "run-1"
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Iterator[ClerkSqliteRepository]:
-    clock = _clock_at(1_700_000_000_000)
+    clock = _clock_at(NOON)
     r = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
     r.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
-    submit_start_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    submit_budgeted_test_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     yield r
     r.close()
 
@@ -173,7 +173,7 @@ async def test_crash_after_atomic_accept_leaves_no_orphan_and_no_duplicate_broke
     effect -- not an orphan -- and recovery must never contact the broker
     twice for it."""
     receipt = _atomic_receipt(decision_id="dec-1")
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -207,7 +207,7 @@ async def test_crash_after_atomic_accept_leaves_no_orphan_and_no_duplicate_broke
 
     # A genuine retry of the identical decision post-recovery is the same
     # content-addressed command: no new effect, no new broker contact.
-    retry = accept_enter(
+    retry = accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -235,7 +235,7 @@ async def test_unknown_acknowledgement_recovers_same_effect_operation_id_without
     second order."""
     receipt = _atomic_receipt(decision_id="dec-1")
     lost = _FakeTrade(submit_error=BrokerUnavailable("timeout", broker="alpaca"), lookup_absent=True)
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -334,7 +334,7 @@ def test_commit_first_transition_shortcut_surfaces_diverging_decision_receipt_as
     the test above already covers) now durably surfaces that divergence as
     a conflict instead."""
     original = _atomic_receipt(decision_id="dec-1", bar_ref="decision-bar:test:SPY:1")
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -351,7 +351,7 @@ def test_commit_first_transition_shortcut_surfaces_diverging_decision_receipt_as
 
     diverging = _atomic_receipt(decision_id="dec-1", bar_ref="decision-bar:test:SPY:999")
     with pytest.raises(DurableConflictError):
-        accept_enter(
+        accept_budgeted_test_enter(
             repo,
             account_id=ACCOUNT_ID,
             strategy_instance_id=SID,

@@ -29,8 +29,7 @@ import pytest
 
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.account_open_work import MAX_OPEN_ORDER_SNAPSHOT
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
-from app.broker.alpaca.clerk.sqlite.enter import submit_enter
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.exit_recovery import RECOVERY_LEFT_TO_THE_OPERATOR
 from app.broker.alpaca.clerk.sqlite.facts import (
@@ -82,13 +81,19 @@ from app.schemas.bot_end import BotEnd
 from app.utils.et_words import et_when_words
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite import test_safe_flatten_execution as safe_flatten
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import (
+    accept_budgeted_test_enter,
+    submit_budgeted_test_enter,
+    submit_budgeted_test_run,
+)
 from tests.broker.alpaca.clerk.sqlite.conftest import (
-    FIXTURE_RTH_MS,
+    BUDGETED_RTH_MS,
     _clock_at,
     _make_held_position,
     _TestClock,
     _walk_clock_to,
 )
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 from tests.broker.alpaca.clerk.sqlite.test_exit_lost_closing_order_resend import (
     FIVE_MINUTES_OF_PASSES,
     SWEEP_INTERVAL_MS,
@@ -370,7 +375,7 @@ def _open_episode(repo: ClerkSqliteRepository, reason_code: str) -> dict | None:
 
 def _elsewhere(
     order_id: str, *, symbol: str = "SPY", side: str = "sell", status: str = "new",
-    client_order_id: str | None = None, filled_quantity: float = 0.0, submitted_at_ms: int = FIXTURE_RTH_MS,
+    client_order_id: str | None = None, filled_quantity: float = 0.0, submitted_at_ms: int = BUDGETED_RTH_MS,
 ) -> BrokerOrder:
     """An order at Alpaca the Clerk did not place, sent since the closing order was unless dated otherwise."""
     return safe_flatten._broker_order(
@@ -696,16 +701,29 @@ async def _another_bots_buy_the_clerk_has_not_folded(repo: ClerkSqliteRepository
     10, and the Clerk's records still say this bot's 10 and none for the
     other.
     """
-    exit_id = await _a_stopped_bot_whose_closing_order_was_lost(repo, alpaca, wait_passed=False)
     repo.register_strategy_instance(
         exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=ANOTHER_BOT, symbol="SPY", config_hash="h2"
     )
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=ANOTHER_BOT, lifecycle_run_id="run-2")
-    bought = await submit_enter(
+    submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=ANOTHER_BOT, lifecycle_run_id="run-2")
+    alpaca._fates.clear()
+    bought = await submit_budgeted_test_enter(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=ANOTHER_BOT, decision_id="enter-2",
         lifecycle_run_id="run-2", leg=safe_flatten._leg(quantity=10, side="buy"), trade=alpaca,
     )
     assert bought.order_ref is not None
+    first_entry_ref = await safe_flatten._held_position(repo)
+    alpaca._fates.append("arrives_unanswered")
+    accepted = accept_exit(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="program-exit-1",
+        lifecycle_run_id=RUN_ID, entry_order_ref=first_entry_ref,
+    )
+    assert accepted.effect_operation_id is not None
+    exit_id = accepted.effect_operation_id
+    await resolve_exit(repo, effect_operation_id=exit_id, trade=alpaca, pricing=UNPRICEABLE_RECOVERY, read=None)
+    submit_stop_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID, operator_reason="operator_stop",
+    )
     alpaca.fills(_closing_order(repo).client_order_id)
     alpaca.fills_a_buy(bought.order_ref)
     assert repo.position(ANOTHER_BOT, "SPY") == 0.0, "the Clerk has not folded the other bot's fill"
@@ -721,7 +739,7 @@ async def _a_buy_resting_since_before_the_order_was_sent(repo: ClerkSqliteReposi
     symbol's orders since; and it has ended, so it is not among the open
     orders either.
     """
-    resting = _elsewhere(BY_HAND_ORDER_ID, side="buy", submitted_at_ms=FIXTURE_RTH_MS - 86_400_000)
+    resting = _elsewhere(BY_HAND_ORDER_ID, side="buy", submitted_at_ms=BUDGETED_RTH_MS - 86_400_000)
     alpaca.open_orders = [resting]
     exit_id = await _a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
     alpaca.fills(_closing_order(repo).client_order_id)
@@ -847,7 +865,7 @@ def _the_open_order_page_is_full(alpaca: _AlpacaAccount, _closing: str) -> None:
 
 def _the_symbol_has_more_orders_since_than_the_clerk_reads(alpaca: _AlpacaAccount, _closing: str) -> None:
     alpaca.ended_orders = [
-        _elsewhere(f"spy-{index}", side="buy", status="canceled", submitted_at_ms=FIXTURE_RTH_MS + index)
+        _elsewhere(f"spy-{index}", side="buy", status="canceled", submitted_at_ms=BUDGETED_RTH_MS + index)
         for index in range(MAX_SYMBOL_ORDER_PAGES * MAX_OPEN_ORDER_SNAPSHOT + 1)
     ]
 
@@ -873,7 +891,7 @@ def _a_buy_is_working_on_the_symbol(alpaca: _AlpacaAccount, _closing: str) -> No
 
 
 def _a_buy_sent_the_day_before_is_still_working(alpaca: _AlpacaAccount, _closing: str) -> None:
-    alpaca.open_orders = [_elsewhere("resting-buy", side="buy", submitted_at_ms=FIXTURE_RTH_MS - 86_400_000)]
+    alpaca.open_orders = [_elsewhere("resting-buy", side="buy", submitted_at_ms=BUDGETED_RTH_MS - 86_400_000)]
 
 
 def _a_buy_is_sent_after_the_open_orders_were_read(alpaca: _AlpacaAccount, _closing: str) -> None:
@@ -1323,11 +1341,11 @@ async def test_orders_the_clerk_did_not_place_are_shown_and_recorded_each_by_its
     exit_id = await _a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
     alpaca.ended_orders = [
         _elsewhere("another-buy", side="buy", status="canceled", filled_quantity=4.0),
-        _elsewhere("by-hand", status="canceled", submitted_at_ms=FIXTURE_RTH_MS - 1),
-        _elsewhere("a-buy", side="buy", status="expired", submitted_at_ms=FIXTURE_RTH_MS - 2),
+        _elsewhere("by-hand", status="canceled", submitted_at_ms=BUDGETED_RTH_MS - 1),
+        _elsewhere("a-buy", side="buy", status="expired", submitted_at_ms=BUDGETED_RTH_MS - 2),
         # Not this order's symbol, and from before it was sent: neither is asked about, filled as they are.
         _elsewhere("qqq", symbol="QQQ", status="filled", filled_quantity=10.0),
-        _elsewhere("long-ago", status="filled", filled_quantity=10.0, submitted_at_ms=FIXTURE_RTH_MS - 86_400_000),
+        _elsewhere("long-ago", status="filled", filled_quantity=10.0, submitted_at_ms=BUDGETED_RTH_MS - 86_400_000),
     ]
     alpaca.holds = 14.0
     facade = _facade(repo, alpaca)
@@ -1441,12 +1459,25 @@ async def test_a_bots_scheduled_end_sells_nothing_once_its_closing_order_is_sett
         repo.register_strategy_instance(
             exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=ANOTHER_BOT, symbol="SPY", config_hash="h2"
         )
-        submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=ANOTHER_BOT, lifecycle_run_id="run-2")
+        submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=ANOTHER_BOT, lifecycle_run_id="run-2")
+        accept_budgeted_test_enter(
+            repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="enter-1",
+            lifecycle_run_id=RUN_ID, leg=safe_flatten._leg(quantity=10, side="buy"),
+        )
         await _make_held_position(
             repo, account_id=ACCOUNT_ID, strategy_instance_id=ANOTHER_BOT, run_id="run-2",
             decision_id="enter-2", execution_id="exec-2",
         )
-    exit_id = await _the_runner_sends_the_exit(repo, alpaca)
+        first_entry_ref = await safe_flatten._held_position(repo)
+        accepted = accept_exit(
+            repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="program-exit-1",
+            lifecycle_run_id=RUN_ID, entry_order_ref=first_entry_ref,
+        )
+        assert accepted.effect_operation_id is not None
+        exit_id = accepted.effect_operation_id
+        await resolve_exit(repo, effect_operation_id=exit_id, trade=alpaca, pricing=UNPRICEABLE_RECOVERY, read=None)
+    else:
+        exit_id = await _the_runner_sends_the_exit(repo, alpaca)
     schedule.ends[SID] = ScheduledEnd(
         strategy_instance_id=SID, end=BotEnd(end_at_ms=repo.clock(), end_action="SELL")
     )
@@ -1607,7 +1638,7 @@ async def test_a_replaced_sale_is_read_through_to_the_order_that_replaced_it(
     exit_id = await _a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
     alpaca.ended_orders = [
         _elsewhere("replaced-sell", status="replaced").model_copy(update={"replaced_by": "its-replacement"}),
-        _elsewhere("its-replacement", status="canceled", submitted_at_ms=FIXTURE_RTH_MS + 1),
+        _elsewhere("its-replacement", status="canceled", submitted_at_ms=BUDGETED_RTH_MS + 1),
     ]
 
     await _settle(_facade(repo, alpaca), _context_of(repo, SID), ABSENT)
@@ -1633,7 +1664,7 @@ async def test_the_symbols_orders_since_are_read_a_page_at_a_time_to_their_end(
     repo, clock = crashed_with_exposure
     alpaca = _AlpacaAccount(repo, clock, submits=("never_arrives",))
     exit_id = await _a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
-    newest_ms = FIXTURE_RTH_MS + 10_000
+    newest_ms = BUDGETED_RTH_MS + 10_000
     page = MAX_OPEN_ORDER_SNAPSHOT
     alpaca.ended_orders = [
         # Newest first as listed: orders 499 and 500, either side of the page's end, share a millisecond.
@@ -1659,14 +1690,13 @@ async def test_the_symbols_orders_since_are_read_a_page_at_a_time_to_their_end(
 
 
 async def _a_stopped_bot_whose_cover_was_lost(
-    repo: ClerkSqliteRepository, alpaca: _AlpacaAccount, *, wait_passed: bool = True
+    repo: ClerkSqliteRepository, alpaca: _AlpacaAccount, *, entry_ref: str, wait_passed: bool = True
 ) -> str:
     """A bot short 10 SPY decided to exit, its buy to cover timed out, and it was stopped.
 
     Returns the EXIT's effect, ``unknown``. Alpaca is short the same 10.
     """
     alpaca.holds = -10.0
-    entry_ref = await safe_flatten._held_position(repo, side="sell")
     accepted = accept_exit(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="program-exit-1",
         lifecycle_run_id=RUN_ID, entry_order_ref=entry_ref,
@@ -1689,8 +1719,22 @@ async def _a_stopped_bot_whose_cover_was_lost(
     return exit_id
 
 
+@pytest.fixture
+async def historical_short_with_exposure(tmp_path: Path):
+    """An old short, recorded before the long-only budgeted launch rule."""
+    clock = _clock_at(BUDGETED_RTH_MS)
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
+    )
+    repo.register_strategy_instance(exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=SID, symbol="SPY", config_hash="h1")
+    seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    entry_ref = await safe_flatten._held_position(repo, side="sell")
+    yield repo, clock, entry_ref
+    repo.close()
+
+
 async def test_a_lost_buy_that_covers_a_short_is_offered_checked_and_settled_in_words_about_a_short(
-    crashed_with_exposure,  # noqa: F811
+    historical_short_with_exposure,
 ) -> None:
     """The regression (#2854 review): the uncertain closing order is a buy that covers a short of 10 SPY.
 
@@ -1699,9 +1743,9 @@ async def test_a_lost_buy_that_covers_a_short_is_offered_checked_and_settled_in_
     is still held. The choice, the check's lines and both episodes the exit
     ends under speak of a short, and of buying it back or writing it off.
     """
-    repo, clock = crashed_with_exposure
+    repo, clock, entry_ref = historical_short_with_exposure
     alpaca = _AlpacaAccount(repo, clock, submits=("never_arrives",))
-    exit_id = await _a_stopped_bot_whose_cover_was_lost(repo, alpaca)
+    exit_id = await _a_stopped_bot_whose_cover_was_lost(repo, alpaca, entry_ref=entry_ref)
     facade, current_context = _facade(repo, alpaca), _context_of(repo, SID)
     (order,) = repo.unknown_exit_orders(SID)
 
@@ -1752,7 +1796,7 @@ async def test_a_lost_buy_that_covers_a_short_is_offered_checked_and_settled_in_
 
 
 async def test_a_short_bought_back_by_hand_settles_a_lost_cover_and_each_order_is_said_by_its_own_side(
-    crashed_with_exposure,  # noqa: F811
+    historical_short_with_exposure,
 ) -> None:
     """The lost order is a buy that covers a short of 10 SPY, and the operator bought the 10 back by hand.
 
@@ -1763,13 +1807,13 @@ async def test_a_short_bought_back_by_hand_settles_a_lost_cover_and_each_order_i
     quantities on the record. A sale tried by hand that expired with nothing
     filled is listed beside them, by what it did.
     """
-    repo, clock = crashed_with_exposure
+    repo, clock, entry_ref = historical_short_with_exposure
     alpaca = _AlpacaAccount(repo, clock, submits=("never_arrives",))
-    exit_id = await _a_stopped_bot_whose_cover_was_lost(repo, alpaca)
+    exit_id = await _a_stopped_bot_whose_cover_was_lost(repo, alpaca, entry_ref=entry_ref)
     alpaca.ended_orders = [
         _elsewhere(BY_HAND_ORDER_ID, side="buy", status="filled", filled_quantity=10.0),
-        _elsewhere("a-sale", side="sell", status="canceled", filled_quantity=3.0, submitted_at_ms=FIXTURE_RTH_MS - 1),
-        _elsewhere("a-sell", side="sell", status="expired", submitted_at_ms=FIXTURE_RTH_MS - 2),
+        _elsewhere("a-sale", side="sell", status="canceled", filled_quantity=3.0, submitted_at_ms=BUDGETED_RTH_MS - 1),
+        _elsewhere("a-sell", side="sell", status="expired", submitted_at_ms=BUDGETED_RTH_MS - 2),
     ]
     alpaca.holds = -3.0
     facade = _facade(repo, alpaca)
@@ -2602,7 +2646,7 @@ async def test_an_entry_whose_outcome_is_unknown_is_never_offered_for_settling(
 ) -> None:
     """Exits only (owner decision on #2854): a lost entry is voided by the Clerk itself."""
     repo, _clock = crashed_with_exposure
-    await submit_enter(
+    await submit_budgeted_test_enter(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="enter-lost",
         lifecycle_run_id=RUN_ID, leg=safe_flatten._leg(quantity=10, side="buy"),
         trade=_ExactLookup(submit_error=BrokerUnavailable("the submit timed out")),
@@ -2825,14 +2869,14 @@ async def test_a_mirror_rebuild_replays_an_order_taken_up_by_its_alpaca_id(tmp_p
     with the price of its fill and Alpaca's time for it, and is rebuilt the
     same.
     """
-    clock = _clock_at(FIXTURE_RTH_MS)
+    clock = _clock_at(BUDGETED_RTH_MS)
     repo = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
     )
     repo.register_strategy_instance(
         exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=SID, symbol="SPY", config_hash="h1"
     )
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     alpaca = _AlpacaAccount(repo, clock, submits=("arrives_unanswered",))
     exit_id, it_is_this_order = await _a_stopped_bot_whose_closing_order_alpaca_has_unseen(repo, alpaca)
     closing = _closing_order(repo)
@@ -2866,14 +2910,14 @@ async def test_a_mirror_rebuild_replays_an_order_taken_up_by_its_alpaca_id(tmp_p
 
 async def test_a_mirror_rebuild_replays_a_settled_order(tmp_path: Path) -> None:
     """The ledger's mirror alone rebuilds the settled EXIT, both episodes it ended under and the position, row for row."""
-    clock = _clock_at(FIXTURE_RTH_MS)
+    clock = _clock_at(BUDGETED_RTH_MS)
     repo = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
     )
     repo.register_strategy_instance(
         exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=SID, symbol="SPY", config_hash="h1"
     )
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     alpaca = _AlpacaAccount(repo, clock, submits=("never_arrives",))
     exit_id = await _a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
     await _settle(_facade(repo, alpaca), _context_of(repo, SID), ABSENT)

@@ -259,7 +259,7 @@ def test_migration_then_mirror_rebuild_keeps_the_simulated_retag(tmp_path: Path)
     later disaster rebuild replays the same legacy transitions — the rebuilt
     authority must land on the same simulated classification."""
     repo, accepted = _repository_for_strategy(
-        tmp_path, strategy_instance_id="migrate-rebuild-bot", symbol="SPY"
+        tmp_path, strategy_instance_id="migrate-rebuild-bot", symbol="SPY", historical=True
     )
     order_ref = _legacy_shadow_fill((repo, accepted))
     db_path = repo.db_path

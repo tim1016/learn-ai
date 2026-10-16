@@ -7,7 +7,6 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.broker.alpaca.clerk.active_runtime import ActiveClerkRuntime
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker_configuration import budget_authority
@@ -15,6 +14,7 @@ from app.broker_configuration.service import BrokerConfigurationService
 from app.routers import broker_configuration as routes
 from app.services.bot_runner import LaneStopOutcome, LaneStoppedBot
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 from tests.broker.alpaca.clerk.sqlite.test_runtime import _Broker
 from tests.broker_configuration.conftest import paper_profile
 
@@ -29,7 +29,7 @@ async def upgrade_client(service: BrokerConfigurationService, tmp_path: Path, mo
     service.acknowledge_effective(profile_id=profile.profile.profile_id, revision=1, account_id="PA-UPGRADE", expected_selection_generation=0)
     repo = ClerkSqliteRepository.initialize(account_id="PA-UPGRADE", artifacts_root=tmp_path / "custody", clock=_TestClock(NOON))
     repo.register_strategy_instance(strategy_instance_id="old", symbol="SPY", config_hash="old-seal")
-    submit_start_run(repo, account_id=repo.account_id, strategy_instance_id="old", lifecycle_run_id="run", clock=repo.clock)
+    seed_historical_run_started(repo, account_id=repo.account_id, strategy_instance_id="old", lifecycle_run_id="run")
     broker = _Broker()
     facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
     runtime = ActiveClerkRuntime(authority_kind="sqlite", clerk=facade, _sqlite_repository=repo, account_id=repo.account_id)

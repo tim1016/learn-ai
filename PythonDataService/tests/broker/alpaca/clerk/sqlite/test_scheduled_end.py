@@ -32,7 +32,7 @@ from app.broker.alpaca.clerk.account_authority import canonical_alpaca_account_i
 from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime, set_active_clerk_runtime
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY, RecoveryPricing
 from app.broker.alpaca.clerk.sqlite import scheduled_end
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
 from app.broker.alpaca.clerk.sqlite.exit_resolution import (
     EXIT_REDRIVE_DECISION_PREFIX,
@@ -68,7 +68,7 @@ from app.schemas.bot_end import BotEnd
 from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
 from app.services.broker_v2_panel import lane_summary
 from app.utils.timestamps import to_ms_utc
-from tests._helpers.bot_runner.custody import _custody_proof
+from tests._helpers.bot_runner.custody import _custody_proof, deploy_bot
 from tests._helpers.bot_runner.custody import _registry as _runner_registry
 from tests._helpers.bot_runner.doubles import _CustodyClerk, _FakeFeed
 from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
@@ -83,6 +83,7 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
     _make_held_position,
     _walk_clock_to,
 )
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 from tests.broker.alpaca.clerk.sqlite.test_exit_send_session import _live_touch
 from tests.broker.alpaca.clerk.sqlite.test_two_bots_one_symbol import _wash_trade_rejection
 
@@ -171,7 +172,7 @@ def repo(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[ClerkSqlite
         account_id=account_id, artifacts_root=tmp_path, clock=_clock_at(_at(_WEDNESDAY, 10)), lease_ttl_ms=300_000,
     )
     r.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
-    submit_start_run(r, account_id=account_id, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    seed_historical_run_started(r, account_id=account_id, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     yield r
     r.close()
 
@@ -713,7 +714,7 @@ async def _deployed_in_the_runner(repo: ClerkSqliteRepository, root: Path) -> tu
     caller starts under the runner's run id.
     """
     runner = _runner_registry(root, _FakeFeed([], mode="hold"))
-    deployed = await runner.deploy(
+    deployed = await deploy_bot(runner,
         exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_LIVE_SID, symbol="SPY",
         end=_end("SELL").end,
     )
@@ -760,12 +761,12 @@ async def test_the_raw_stop_route_naming_another_run_leaves_the_running_process_
     a redeploy, is replayed -- 202, that earlier STOP. Neither touches the running process,
     its intent or its end."""
     runner, run_id = await _deployed_in_the_runner(repo, tmp_path / "runner")
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=_LIVE_SID, lifecycle_run_id="an-earlier-run")
+    seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=_LIVE_SID, lifecycle_run_id="an-earlier-run")
     submit_stop_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=_LIVE_SID, lifecycle_run_id="an-earlier-run",
         operator_reason="operator stop",
     )
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=_LIVE_SID, lifecycle_run_id=run_id)
+    seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=_LIVE_SID, lifecycle_run_id=run_id)
 
     async with _the_raw_route(repo, runner) as client:
         refused = await client.post(
@@ -957,7 +958,7 @@ async def test_a_retry_of_the_raw_stop_whose_process_stop_failed_stops_the_proce
     retries. The retry used to find the run already stopped and answer 202 with the process
     still consuming bars; it now redoes the Stop, and the process is stopped."""
     runner, run_id = await _deployed_in_the_runner(repo, tmp_path / "runner")
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=_LIVE_SID, lifecycle_run_id=run_id)
+    seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=_LIVE_SID, lifecycle_run_id=run_id)
     _the_disk_fails_the_first_stopped_write(monkeypatch)
     body = {"lifecycle_run_id": run_id, "operator_reason": "operator stop"}
 
@@ -989,7 +990,7 @@ async def test_a_raw_stop_naming_the_account_as_the_fleet_does_finishes_a_panel_
     panel's STOP and answer 404, the process still consuming bars; it now replays the panel's
     STOP and stops the process."""
     runner, run_id = await _deployed_in_the_runner(repo, tmp_path / "runner")
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=_LIVE_SID, lifecycle_run_id=run_id)
+    seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=_LIVE_SID, lifecycle_run_id=run_id)
     _the_disk_fails_the_first_stopped_write(monkeypatch)
 
     async with _the_raw_route(repo, runner) as client:
@@ -1036,12 +1037,12 @@ async def test_a_retry_of_the_panels_stop_of_an_earlier_run_leaves_the_running_p
     replays that run's STOP. It used to stop whatever process the bot ran -- the later run's --
     and cancel its end; it now touches nothing of the later run."""
     runner, run_id = await _deployed_in_the_runner(repo, tmp_path / "runner")
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=_LIVE_SID, lifecycle_run_id="an-earlier-run")
+    seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=_LIVE_SID, lifecycle_run_id="an-earlier-run")
     submit_stop_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=_LIVE_SID, lifecycle_run_id="an-earlier-run",
         operator_reason="operator stop",
     )
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=_LIVE_SID, lifecycle_run_id=run_id)
+    seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=_LIVE_SID, lifecycle_run_id=run_id)
 
     async with _the_raw_route(repo, runner) as client:
         replayed = await client.post(

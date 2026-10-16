@@ -47,7 +47,7 @@ from app.broker.contract.models import (
     BrokerPosition,
 )
 from app.utils.timestamps import now_ms_utc
-from tests._helpers.bot_runner.custody import _SID, _registry, admission_guard_for
+from tests._helpers.bot_runner.custody import _SID, _registry, admission_guard_for, deploy_bot
 from tests._helpers.bot_runner.doubles import _FakeFeed, _SqliteRuntimeBroker
 from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
 from tests._helpers.canary_admission import admit_canary_pairing
@@ -59,7 +59,7 @@ from tests.services.bot_runner._support import (
     _wait_for,
 )
 
-pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+pytestmark = pytest.mark.usefixtures("budgeted_run_registration")
 
 
 class _QueueFeed(_FakeFeed):
@@ -241,7 +241,7 @@ async def _run_late_fill_case(
     base = _WIN_START_MS + 60_000
     deployed = False
     try:
-        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade")
+        await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade")
         deployed = True
         for bar in (_green_bar(base), _green_bar(base + 60_000)):
             feed.q.put_nowait(bar)

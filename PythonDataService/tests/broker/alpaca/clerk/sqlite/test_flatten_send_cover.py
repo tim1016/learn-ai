@@ -11,14 +11,15 @@ reconciliation that offers the Flatten and the send.
 from __future__ import annotations
 
 import math
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY, ConfirmedRecoveryLimit
 from app.broker.alpaca.clerk.sqlite.account_open_work import MAX_OPEN_ORDER_SNAPSHOT
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.exit import (
     accept_exit,
     accept_recovery_exit,
@@ -53,7 +54,9 @@ from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, BrokerPosition, OrderSide
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite import test_safe_flatten_execution as safe_flatten
-from tests.broker.alpaca.clerk.sqlite.conftest import _make_held_position, _walk_clock_to
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_run
+from tests.broker.alpaca.clerk.sqlite.conftest import BUDGETED_RTH_MS, _clock_at, _make_held_position, _walk_clock_to
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
     ACCOUNT_ID,
     RUN_ID,
@@ -63,6 +66,15 @@ from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
 
 SIBLING_SID = "sibling-bot"
 SIBLING_RUN_ID = "sibling-run-1"
+
+
+@pytest.fixture
+def historical_short_repo(tmp_path: Path) -> Iterator[ClerkSqliteRepository]:
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_at(BUDGETED_RTH_MS))
+    repo.register_strategy_instance(exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=SID, symbol="SPY", config_hash="h1")
+    seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    yield repo
+    repo.close()
 
 
 class _Account:
@@ -412,10 +424,10 @@ async def test_a_confirmed_limit_the_account_does_not_cover_is_refused_and_nothi
 
 
 async def test_a_flatten_of_a_short_alpaca_covers_buys_it_back(
-    crashed_with_exposure,  # noqa: F811
+    historical_short_repo: ClerkSqliteRepository,
 ) -> None:
     """The mirrored rule end to end: the bot is short 10 SPY, Alpaca is short 10, and the Flatten buys 10."""
-    repo, _clock = crashed_with_exposure
+    repo = historical_short_repo
     account, trade = _Account(holds=-10.0), safe_flatten._FakeTrade()
     facade, current_context = await _stopped_bot_offered_its_flatten(
         repo, account=account, trade=trade, entry_side="sell"
@@ -430,10 +442,10 @@ async def test_a_flatten_of_a_short_alpaca_covers_buys_it_back(
 
 
 async def test_a_flatten_of_a_short_alpaca_does_not_cover_is_refused_and_nothing_is_bought(
-    crashed_with_exposure,  # noqa: F811
+    historical_short_repo: ClerkSqliteRepository,
 ) -> None:
     """Alpaca is short only 6 by the time the buy is sent: buying 10 would leave the account long 4."""
-    repo, _clock = crashed_with_exposure
+    repo = historical_short_repo
     account, trade = _Account(holds=-10.0), safe_flatten._FakeTrade()
     facade, current_context = await _stopped_bot_offered_its_flatten(
         repo, account=account, trade=trade, entry_side="sell"
@@ -462,7 +474,7 @@ async def _two_stopped_bots_on_spy(
     repo.register_strategy_instance(
         exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=SIBLING_SID, symbol="SPY", config_hash="h2"
     )
-    submit_start_run(
+    submit_budgeted_test_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SIBLING_SID, lifecycle_run_id=SIBLING_RUN_ID
     )
     await _make_held_position(

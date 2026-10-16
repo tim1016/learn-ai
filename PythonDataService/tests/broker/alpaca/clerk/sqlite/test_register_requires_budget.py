@@ -36,7 +36,7 @@ def _consent(*, cents: int = 50_000, world: str = "real_paper", risk_revision: i
 
 def _deploy_of(repo: ClerkSqliteRepository, consent: DeployBudgetConsent | None) -> BrokerBotBinding:
     binding = _binding().model_copy(update={"strategy_instance_id": SID, "sealed_account_id": repo.account_id})
-    return binding if consent is None else binding.model_copy(update={"budget_consent": consent})
+    return binding.model_copy(update={"budget_consent": consent})
 
 
 def _facade(

@@ -12,7 +12,6 @@ from app.broker.alpaca.clerk.sqlite.day_pnl import (
     observed_day_pnl,
     risk_evidence_ready,
 )
-from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.fee_evidence import FEE_EVIDENCE_MAX_AGE_MS
 from app.broker.alpaca.clerk.sqlite.live_envelope_sync import LiveEnvelopeSync
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
@@ -20,6 +19,7 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.risk_admission import current_risk_readiness, require_current_risk_admission
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
 from app.broker.contract.models import BrokerOrderLeg
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import accept_budgeted_test_enter, submit_budgeted_test_run
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     DAY_PNL_RUN_ID,
     DAY_PNL_SID,
@@ -94,7 +94,7 @@ async def test_new_unknown_fee_evidence_blocks_enter_after_a_healthy_tick(tmp_pa
         complete_fee_evidence(repo, (undated,))
         before = len(repo.custody_transitions())
         with pytest.raises(AdmissionBlockedError) as refused:
-            accept_enter(repo, account_id=repo.account_id, strategy_instance_id="a",
+            accept_budgeted_test_enter(repo, account_id=repo.account_id, strategy_instance_id="a",
                 decision_id="after-unknown-fee", lifecycle_run_id="run-a",
                 leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1), reference_price=100, envelope=sync.envelope)
         assert refused.value.decision.reason_code == LIVE_ENVELOPE_UNOBSERVED
@@ -164,7 +164,6 @@ def test_late_observed_fee_replaces_provision_without_double_debiting_account_eq
 
 def test_fee_at_midnight_stays_in_canonical_fee_evidence(tmp_path: Path) -> None:
     from app.broker.alpaca.clerk.et_day import et_day_window_ms
-    from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
     from tests.broker.alpaca.clerk.sqlite.conftest import DAY_PNL_ACCOUNT_ID
 
     midnight, _ = et_day_window_ms(NOON)
@@ -172,7 +171,7 @@ def test_fee_at_midnight_stays_in_canonical_fee_evidence(tmp_path: Path) -> None
     repo = ClerkSqliteRepository.initialize(account_id=DAY_PNL_ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
     try:
         repo.register_strategy_instance(strategy_instance_id=DAY_PNL_SID, symbol="SPY", config_hash="risk-midnight")
-        submit_start_run(repo, account_id=repo.account_id, strategy_instance_id=DAY_PNL_SID, lifecycle_run_id=DAY_PNL_RUN_ID, clock=clock)
+        submit_budgeted_test_run(repo, account_id=repo.account_id, strategy_instance_id=DAY_PNL_SID, lifecycle_run_id=DAY_PNL_RUN_ID, clock=clock)
         complete_fee_evidence(repo)
         accepted = _accept_day_pnl_enter(repo, decision_id="midnight-fee")
         _append_day_pnl_slice(repo, accepted, execution_id="midnight-buy", side="BUY", quantity=10, price=100, occurred_at_ms=midnight)

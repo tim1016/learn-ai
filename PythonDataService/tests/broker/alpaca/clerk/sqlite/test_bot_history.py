@@ -23,9 +23,9 @@ from app.broker.alpaca.clerk.sqlite.bot_history import (
     read_custody_history,
 )
 from app.broker.alpaca.clerk.sqlite.budget_projection import RevisionMemo, project_bot_results
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
-from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
+from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission
 from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
 from app.broker.alpaca.clerk.sqlite.exit_resolution import EXIT_REDRIVE_DECISION_PREFIX
 from app.broker.alpaca.clerk.sqlite.exit_watchdog import BrokerSymbolView
@@ -40,7 +40,9 @@ from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.errors import BrokerOrderRejected
 from app.broker.contract.models import BrokerOrderEvent, BrokerOrderLeg
 from tests.broker.alpaca.clerk.sqlite import test_safe_flatten_execution as safe_flatten
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import accept_budgeted_test_enter
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _covering_read, _TestClock, _walk_clock_to
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 from tests.broker.alpaca.clerk.sqlite.test_budget_claims import _record_sale
 from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS, _deploy, _gate, _new_budget_repo
 from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
@@ -55,7 +57,7 @@ from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
 
 
 def _enter(repo: ClerkSqliteRepository, sid: str, run: str, key: str, **gate: object) -> EnterSubmission:
-    return accept_enter(
+    return accept_budgeted_test_enter(
         repo, account_id=repo.account_id, strategy_instance_id=sid, decision_id=key,
         lifecycle_run_id=run, leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
         reference_price=100, **gate,  # type: ignore[arg-type]
@@ -85,13 +87,13 @@ def old_bot(tmp_path: Path):
     repo = ClerkSqliteRepository.initialize(account_id="OLD-PAPER", artifacts_root=tmp_path, clock=_TestClock(NOON))
     record_fee_evidence(repo, [], checked_at_ms=NOON, history_complete=True)
     repo.register_strategy_instance(strategy_instance_id="old", symbol="SPY", config_hash="seal-old", exit_terms=TERMS)
-    submit_start_run(repo, account_id=repo.account_id, strategy_instance_id="old", lifecycle_run_id="r1", clock=repo.clock)
+    seed_historical_run_started(repo, account_id=repo.account_id, strategy_instance_id="old", lifecycle_run_id="r1", clock=repo.clock)
     traded = _enter(repo, "old", "r1", "enter-1")
     _ack(repo, traded, "filled")
     _append_slice(repo, traded, execution_id="buy-1", quantity=1, source_event_at_ms=NOON - 10, fee=0)
     _record_sale(repo, traded, key="sell-1", price=110, at_ms=NOON - 9)
     submit_stop_run(repo, account_id=repo.account_id, strategy_instance_id="old", lifecycle_run_id="r1", clock=repo.clock)
-    submit_start_run(repo, account_id=repo.account_id, strategy_instance_id="old", lifecycle_run_id="r2", clock=repo.clock)
+    seed_historical_run_started(repo, account_id=repo.account_id, strategy_instance_id="old", lifecycle_run_id="r2", clock=repo.clock)
     refused = _enter(repo, "old", "r2", "enter-2")
     _ack(repo, refused, "rejected")
     bought = _enter(repo, "old", "r2", "enter-3")

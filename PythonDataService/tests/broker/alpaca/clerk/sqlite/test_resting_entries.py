@@ -19,9 +19,9 @@ import pytest
 from app.broker.alpaca.clerk.models import EffectOperationState
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite import reads, reconcile
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.deadline_keeper import DeadlineKeeper
-from app.broker.alpaca.clerk.sqlite.enter import accept_option_enter, submit_accepted_enter, submit_enter
+from app.broker.alpaca.clerk.sqlite.enter import accept_option_enter, submit_accepted_enter
 from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryStanding
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
@@ -47,8 +47,9 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import FAILED_ENTER_FILLE
 from app.broker.contract.errors import BrokerOrderRejected, BrokerUnavailable
 from app.broker.contract.models import OrderSide, OrderType
 from app.broker.contract.options import OptionPositionIntent
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_enter, submit_budgeted_test_run
 from tests.broker.alpaca.clerk.sqlite.conftest import (
-    FIXTURE_RTH_MS,
+    BUDGETED_RTH_MS,
     _broker_leg,
     _FakeReadPort,
     _FakeTradePort,
@@ -748,13 +749,13 @@ async def test_the_pass_leaves_an_entry_inside_its_wait_in_the_market(paper: Pap
 
 async def _a_stopped_stock_run_with_a_working_entry(root: Path) -> list[tuple[str, str, str]]:
     """One pass over a stock-only account whose stopped run left an entry working; the log it wrote."""
-    clock = _TestClock(FIXTURE_RTH_MS)
+    clock = _TestClock(BUDGETED_RTH_MS)
     repo = ClerkSqliteRepository.initialize(account_id="PA-STOCK", artifacts_root=root, clock=clock)
     try:
         repo.register_strategy_instance(strategy_instance_id="spy-bot", symbol="SPY", config_hash="h1")
-        submit_start_run(repo, account_id="PA-STOCK", strategy_instance_id="spy-bot", lifecycle_run_id="run-1")
+        submit_budgeted_test_run(repo, account_id="PA-STOCK", strategy_instance_id="spy-bot", lifecycle_run_id="run-1")
         venue = _FakeTradePort()
-        await submit_enter(
+        await submit_budgeted_test_enter(
             repo, account_id="PA-STOCK", strategy_instance_id="spy-bot", decision_id="d-1", lifecycle_run_id="run-1",
             leg=_broker_leg(), trade=venue,
         )
@@ -787,7 +788,7 @@ async def test_a_stock_only_account_is_recorded_the_same_with_the_step_and_witho
 
 
 async def test_on_books_with_no_option_entry_the_step_reads_nothing_and_writes_nothing(tmp_path: Path) -> None:
-    repo = ClerkSqliteRepository.initialize(account_id="PA-STOCK", artifacts_root=tmp_path, clock=_TestClock(FIXTURE_RTH_MS))
+    repo = ClerkSqliteRepository.initialize(account_id="PA-STOCK", artifacts_root=tmp_path, clock=_TestClock(BUDGETED_RTH_MS))
     try:
         before = repo.last_custody_sequence()
 
@@ -847,11 +848,11 @@ class _StepsCounted:
 
 async def _a_stock_account_with_a_working_entry(root: Path, *, transitions: int) -> ClerkSqliteRepository:
     """A stock-only account whose one bot has an entry working, and ``transitions`` more records in its log."""
-    clock = _TestClock(FIXTURE_RTH_MS)
+    clock = _TestClock(BUDGETED_RTH_MS)
     repo = ClerkSqliteRepository.initialize(account_id="PA-STOCK", artifacts_root=root, clock=clock)
     repo.register_strategy_instance(strategy_instance_id="spy-bot", symbol="SPY", config_hash="h1")
-    submit_start_run(repo, account_id="PA-STOCK", strategy_instance_id="spy-bot", lifecycle_run_id="run-1")
-    sent = await submit_enter(
+    submit_budgeted_test_run(repo, account_id="PA-STOCK", strategy_instance_id="spy-bot", lifecycle_run_id="run-1")
+    sent = await submit_budgeted_test_enter(
         repo, account_id="PA-STOCK", strategy_instance_id="spy-bot", decision_id="d-1", lifecycle_run_id="run-1",
         leg=_broker_leg(), trade=_FakeTradePort(),
     )

@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 import app.broker.alpaca.clerk.sqlite.runtime as clerk_runtime
+from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 from app.broker.alpaca.clerk.models import ChannelHealth, EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
@@ -29,6 +30,7 @@ from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_acti
 from app.services.market_liveness import compose_market_liveness
 from app.services.source_bar_ledger import RetainedSourceBar
 from app.utils.timestamps import Clock, now_ms_utc, ny_datetime, to_ms_utc
+from tests._helpers.bot_runner.custody import budget_consent_for_test
 from tests._helpers.bot_runner.market import clock_read_before_the_close
 from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
 from tests.broker.alpaca.clerk.sqlite.conftest import (
@@ -39,7 +41,7 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
 from tests.broker.alpaca.clerk.sqlite.test_exit import _make_entry
 
 # #2596: these ENTERs run on the default clock; keep it inside a session.
-pytestmark = pytest.mark.usefixtures("wall_clock_in_session", "legacy_run_registration")
+pytestmark = pytest.mark.usefixtures("wall_clock_in_session", "budgeted_run_registration")
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
 RUN_ID = "run-1"
@@ -102,6 +104,9 @@ def _binding(*, use_rth: bool, account_id: str = ACCOUNT_ID) -> BrokerBotBinding
         action_plan=alpaca_v1_action_plan("SPY"),
         run_id=RUN_ID,
         created_at_ms=1,
+        budget_consent=budget_consent_for_test(
+            world="synthetic" if account_id.startswith("sim:") else "real_paper"
+        ),
     )
 
 
@@ -873,30 +878,36 @@ async def test_a_market_enter_with_time_to_reach_the_broker_before_the_close_sti
     assert (leg.order_type, leg.time_in_force, leg.extended_hours) == (OrderType.MARKET, TimeInForce.DAY, False)
 
 
-async def test_explicit_terms_survive_a_crash_after_registration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_explicit_terms_survive_a_crash_after_deploy_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from app.schemas.exit_terms import ExitTermsInput
     from app.services.bot_carryover import configuration_hash
 
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=lambda: _bar(10, 0, phase='RTH').end_ms)
     terms = ExitTermsInput(exit_allowance_bps=37, band_multiple=3, spread_cap_bps=70).seal()
-    binding = _binding(use_rth=True).model_copy(update={'exit_terms': terms})
+    binding = _binding(use_rth=True).model_copy(update={
+        'exit_terms': terms, 'budget_consent': budget_consent_for_test(),
+    })
     assert configuration_hash(binding) == configuration_hash(_binding(use_rth=True))
     facade = SqliteAlpacaClerkFacade(repo=repo, read=_FakeReadPort(), trade=_FakeTradePort(), account_mode='paper', program_leg_policy=_EXTENDED_POLICY)
-    register = repo.register_strategy_instance
+    commit = clerk_runtime.submit_budgeted_deploy
 
-    def crash_after_commit(**kwargs: object) -> None:
-        register(**kwargs)
-        raise RuntimeError('simulated crash after registration commit')
+    def crash_after_commit(*args: object, **kwargs: object) -> None:
+        receipt = commit(*args, **kwargs)
+        assert receipt.created
+        raise RuntimeError('simulated crash after Deploy commit')
 
-    monkeypatch.setattr(repo, 'register_strategy_instance', crash_after_commit)
+    monkeypatch.setattr(clerk_runtime, 'submit_budgeted_deploy', crash_after_commit)
     with pytest.raises(RuntimeError, match='simulated crash'):
         await facade.register_strategy_run(binding)
+    monkeypatch.setattr(clerk_runtime, 'submit_budgeted_deploy', commit)
     repo.close()
     reopened = ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=lambda: _bar(10, 0, phase='RTH').end_ms)
     try:
         restarted = SqliteAlpacaClerkFacade(repo=reopened, read=_FakeReadPort(), trade=_FakeTradePort(), account_mode='paper', program_leg_policy=_EXTENDED_POLICY)
-        await restarted.register_strategy_run(binding)
         assert reopened.exit_terms(SID) == terms
+        assert reopened.deployment_budget(SID) is not None
+        with pytest.raises(BudgetUnavailable, match='Recover its stored result'):
+            await restarted.register_strategy_run(binding)
         changed = binding.model_copy(update={'run_id': 'run-next', 'exit_terms': terms.model_copy(update={'exit_allowance_bps': 99})})
         with pytest.raises(StrategyRegistrationConflictError, match='custody-sealed exit terms'):
             await restarted.register_strategy_run(changed)

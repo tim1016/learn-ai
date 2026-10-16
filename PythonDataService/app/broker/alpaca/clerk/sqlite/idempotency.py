@@ -50,8 +50,8 @@ class UnknownStrategyInstanceError(Exception):
 
 def require_strategy_instance(repo: ClerkSqliteRepository, strategy_instance_id: str) -> None:
     """Called from inside a ``build_transition`` closure — i.e. already under
-    the repository's write lock — never before it (see ``commands.py``'s
-    ``submit_start_run`` docstring for why that ordering matters).
+    the repository's write lock — never before it, so a concurrent caller
+    cannot change registration between the check and the append.
 
     Existence-only: does not reject a retired instance. Whether a retired bot
     may still be targeted is admission gating (R6, #1380), not this check.

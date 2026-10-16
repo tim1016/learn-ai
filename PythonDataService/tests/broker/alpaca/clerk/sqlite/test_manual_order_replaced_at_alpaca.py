@@ -265,10 +265,10 @@ async def test_a_replaced_manual_order_ends_when_its_replacement_is_cancelled(
 ) -> None:
     """The chain's live order is cancelled; the manual effect ends and bots may enter."""
     repo, _clock = clocked_repo
+    sid_b, _run_b = _register_second_spy_lane(repo)
     website = _Website(repo=repo)
     manual = await _buy_limit(repo, website)
     order_ref, effect_id = manual.leg.order_ref, manual.leg.effect_operation_id
-    sid_b, _run_b = _register_second_spy_lane(repo)
     assert _another_bots_entry(repo, sid_b) == (False, "MANUAL_ORDER_OUTSTANDING")
 
     replaced, replacement = _replace_at_alpaca(repo, website, order_ref)
@@ -313,10 +313,10 @@ async def test_the_live_replacement_in_the_open_orders_snapshot_is_not_a_foreign
     manual order is still outstanding.
     """
     repo, _clock = clocked_repo
+    sid_b, _run_b = _register_second_spy_lane(repo)
     website = _Website(repo=repo)
     manual = await _buy_limit(repo, website)
     order_ref, effect_id = manual.leg.order_ref, manual.leg.effect_operation_id
-    sid_b, _run_b = _register_second_spy_lane(repo)
     _replaced, replacement = _replace_at_alpaca(repo, website, order_ref)
 
     result = await _reconciliation_pass(repo, website, open_orders=[replacement])
@@ -365,10 +365,10 @@ async def test_a_rejected_replacement_leaves_the_working_original_in_custody(clo
     and a Clerk cancel goes to the original, the order actually working.
     """
     repo, _clock = clocked_repo
+    sid_b, _run_b = _register_second_spy_lane(repo)
     website = _Website(repo=repo)
     manual = await _buy_limit(repo, website)
     order_ref, effect_id = manual.leg.order_ref, manual.leg.effect_operation_id
-    sid_b, _run_b = _register_second_spy_lane(repo)
     original = website.orders[order_ref]
     rejected = _replacement_of(original, repo, replacement_id=_B, status="rejected")
     website.replacements[_B] = rejected
@@ -445,10 +445,10 @@ async def test_fills_a_replacement_carries_from_its_original_never_move_the_chai
     refused, no ending -- and a Clerk cancel DELETEs A, the order working.
     """
     repo, _clock = clocked_repo
+    sid_b, _run_b = _register_second_spy_lane(repo)
     website = _Website(repo=repo)
     manual = await _buy_limit(repo, website)
     order_ref, effect_id = manual.leg.order_ref, manual.leg.effect_operation_id
-    sid_b, _run_b = _register_second_spy_lane(repo)
     a_partial = _original_partially_filled(repo, website, order_ref, filled_quantity=2)
     await _frame(repo, a_partial, event_type="partial_fill", execution_id="exec-a", quantity=2)
     pending_b = _replacement_carrying(a_partial, repo, status=carried_status, filled_quantity=2)
@@ -489,10 +489,10 @@ async def test_an_original_that_fills_before_its_replacement_reaches_the_venue_e
     nothing.
     """
     repo, _clock = clocked_repo
+    sid_b, _run_b = _register_second_spy_lane(repo)
     website = _Website(repo=repo)
     manual = await _buy_limit(repo, website)
     order_ref, effect_id = manual.leg.order_ref, manual.leg.effect_operation_id
-    sid_b, _run_b = _register_second_spy_lane(repo)
     a_partial = _original_partially_filled(repo, website, order_ref, filled_quantity=2)
     await _frame(repo, a_partial, event_type="partial_fill", execution_id="exec-a1", quantity=2)
     pending_b = _replacement_carrying(a_partial, repo, status="pending_new", filled_quantity=2)
@@ -528,10 +528,10 @@ async def test_the_replacements_own_execution_moves_the_chain_to_it(
     the exact executions across the chain cover it.
     """
     repo, _clock = clocked_repo
+    sid_b, _run_b = _register_second_spy_lane(repo)
     website = _Website(repo=repo)
     manual = await _buy_limit(repo, website)
     order_ref, effect_id = manual.leg.order_ref, manual.leg.effect_operation_id
-    sid_b, _run_b = _register_second_spy_lane(repo)
     a_partial = _original_partially_filled(repo, website, order_ref, filled_quantity=2)
     await _frame(repo, a_partial, event_type="partial_fill", execution_id="exec-a", quantity=2)
     carried_quantity = 2 if carried else 0
@@ -573,10 +573,10 @@ async def test_a_two_hop_chain_ends_once_credits_the_fill_once_and_its_late_fram
     are neither foreign nor able to restate anything.
     """
     repo, _clock = clocked_repo
+    sid_b, _run_b = _register_second_spy_lane(repo)
     website = _Website(repo=repo)
     manual = await _buy_limit(repo, website)
     order_ref, effect_id = manual.leg.order_ref, manual.leg.effect_operation_id
-    sid_b, _run_b = _register_second_spy_lane(repo)
 
     replaced_a, replacement_b = _replace_at_alpaca(repo, website, order_ref)
     await _frame(repo, replaced_a, event_type="replaced")
@@ -611,10 +611,10 @@ async def test_a_two_hop_chain_ends_once_credits_the_fill_once_and_its_late_fram
 async def test_a_replayed_ending_of_a_replaced_leg_holds_nothing(clocked_repo) -> None:  # noqa: F811
     """A reconnecting stream replays the replacement's ``canceled`` after the leg ended."""
     repo, _clock = clocked_repo
+    sid_b, _run_b = _register_second_spy_lane(repo)
     website = _Website(repo=repo)
     manual = await _buy_limit(repo, website)
     order_ref, effect_id = manual.leg.order_ref, manual.leg.effect_operation_id
-    sid_b, _run_b = _register_second_spy_lane(repo)
     replaced, replacement = _replace_at_alpaca(repo, website, order_ref)
     await _frame(repo, replaced, event_type="replaced")
     cancelled = _ended(replacement, repo, status="canceled")
@@ -752,6 +752,7 @@ async def test_a_clerk_cancel_of_a_replaced_order_cancels_the_live_replacement(
 ) -> None:
     """Not refused as terminal: the leg lives on, so the DELETE goes to the head."""
     repo, _clock = clocked_repo
+    sid_b, _run_b = _register_second_spy_lane(repo)
     website = _Website(repo=repo)
     manual = await _buy_limit(repo, website)
     order_ref, effect_id = manual.leg.order_ref, manual.leg.effect_operation_id
@@ -767,7 +768,7 @@ async def test_a_clerk_cancel_of_a_replaced_order_cancels_the_live_replacement(
     assert terminal["transition_kind"] == "MANUAL_ORDER_CANCELED"
     assert _owner_reads(repo).ending == "Cancelled."
     assert not repo.has_nonterminal_manual_order()
-    assert _another_bots_entry(repo, _register_second_spy_lane(repo)[0]) == (True, None)
+    assert _another_bots_entry(repo, sid_b) == (True, None)
 
 
 class _FlakyHeadWebsite(_Website):

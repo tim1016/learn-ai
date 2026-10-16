@@ -15,7 +15,6 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk.live_envelope import ENVELOPE_ADMISSION_REASON_CODES
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     Capability,
@@ -34,7 +33,8 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LossHoldCause,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_folds import account_hold_envelope
-from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at, _make_held_position
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_run
+from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _clock_at, _make_held_position
 
 ACCOUNT_ID = "PA-LOSS"
 SID = "loss-bot"
@@ -52,7 +52,7 @@ CAUSE = LossHoldCause(
 @pytest.fixture
 def repo(tmp_path: Path) -> Iterator[ClerkSqliteRepository]:
     clerk = ClerkSqliteRepository.initialize(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_at(1_700_000_000_000)
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_at(NOON)
     )
     clerk.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
     yield clerk
@@ -62,7 +62,7 @@ def repo(tmp_path: Path) -> Iterator[ClerkSqliteRepository]:
 @pytest.fixture
 async def registered_long(repo: ClerkSqliteRepository) -> tuple[str, ReductionIntent]:
     """A registered instance holding a proved long, plus a reduction of it."""
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     await _make_held_position(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, run_id=RUN_ID)
     assert repo.position(SID, "SPY") > 0
     return SID, ReductionIntent(symbol="SPY", side="SELL", quantity=1)

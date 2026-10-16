@@ -26,9 +26,8 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     ConfirmedRecoveryShape,
     RecoveryPricing,
 )
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
-from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import (
     ExitSubmission,
     RecoveryRunActiveError,
@@ -65,20 +64,28 @@ from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.contract.errors import BrokerRequestInvalid, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg, OrderSide, OrderType, TimeInForce
+from app.lean_sidecar.trading_calendar import next_trading_day, session_open_ms_utc
 from app.schemas.market_liveness import TopOfBookQuote
+from app.utils.session_anchors import et_date_at_ms
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import (
+    accept_budgeted_test_enter,
+    submit_budgeted_test_enter,
+    submit_budgeted_test_run,
+)
 from tests.broker.alpaca.clerk.sqlite.conftest import (
-    FIXTURE_RTH_MS,
+    NOON,
     _clock_at,
     _covering_read,
     _walk_clock_to,
 )
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
 RUN_ID = "run-1"
-NEXT_OPEN_MS = 1_700_145_060_000  # 2023-11-16 09:31 ET, the session after FIXTURE_RTH_MS
-AFTER_HOURS_MS = FIXTURE_RTH_MS + 7 * 3_600_000 + 13 * 60_000  # 17:13 ET, POST, that day
-POST_CLOSE_MS = FIXTURE_RTH_MS + 10 * 3_600_000  # 20:00 ET, the declared close, that day
+NEXT_OPEN_MS = session_open_ms_utc(next_trading_day(et_date_at_ms(NOON))) + 60_000
+AFTER_HOURS_MS = NOON + 5 * 3_600_000 + 13 * 60_000  # 17:13 ET, POST, that day
+POST_CLOSE_MS = NOON + 8 * 3_600_000  # 20:00 ET, the declared close, that day
 
 
 def _live_touch_pricing() -> RecoveryPricing:
@@ -114,12 +121,22 @@ def repo(tmp_path: Path) -> Iterator[ClerkSqliteRepository]:
     # Inside the regular session: every EXIT's reducing leg passes the
     # send-time session rule (#2440), so a test about the EXIT machine sends
     # its market DAY leg. A test about the session sets the clock itself.
-    clock = _clock_at(FIXTURE_RTH_MS)
+    clock = _clock_at(NOON)
     r = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
     )
     r.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
-    submit_start_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    submit_budgeted_test_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    yield r
+    r.close()
+
+
+@pytest.fixture
+def historical_repo(tmp_path: Path) -> Iterator[ClerkSqliteRepository]:
+    """Pre-budget custody for sibling entries created before their admission fence."""
+    r = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_at(NOON))
+    r.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
+    seed_historical_run_started(r, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     yield r
     r.close()
 
@@ -283,7 +300,7 @@ async def _make_entry(
             filled_avg_price=100.0 if filled_quantity > 0 else None,
         )
     )
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=sid,
@@ -408,7 +425,7 @@ async def test_accept_exit_links_resolution_custody_without_reparenting_origin(
 
 
 async def test_accept_exit_captures_every_same_symbol_sibling_entry(
-    repo: ClerkSqliteRepository,
+    historical_repo: ClerkSqliteRepository,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A strategy can no longer *create* two live sibling entries through the
@@ -422,6 +439,7 @@ async def test_accept_exit_captures_every_same_symbol_sibling_entry(
     must still be captured and attributed correctly. Bypass the fence only
     for the second entry to model that ledger state.
     """
+    repo = historical_repo
     first = await _make_entry(repo, decision_id="enter-1", quantity=5, status="filled", filled_quantity=5)
     monkeypatch.setattr(
         "app.broker.alpaca.clerk.sqlite.enter.require_admission", lambda *args, **kwargs: None
@@ -492,7 +510,7 @@ async def test_accept_exit_captures_every_same_symbol_sibling_entry(
 
 
 async def test_every_reduction_targets_the_newest_entry_and_an_exit_on_any_sibling_owns_the_symbol(
-    repo: ClerkSqliteRepository,
+    historical_repo: ClerkSqliteRepository,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """#2642: the one rule a program EXIT, an ended run's close, the safe
@@ -502,6 +520,7 @@ async def test_every_reduction_targets_the_newest_entry_and_an_exit_on_any_sibli
     sibling still owns the whole symbol, so the answer says so instead of
     offering the newer entry as a second reduction's target.
     """
+    repo = historical_repo
     assert newest_reducible_entry(repo, SID, "SPY") is None
     first = await _make_entry(repo, decision_id="enter-1", quantity=5, status="filled", filled_quantity=5)
     monkeypatch.setattr(
@@ -540,7 +559,7 @@ async def test_active_exit_fences_a_concurrent_new_enter(
     assert accepted.effect_operation_id is not None
 
     with pytest.raises(AdmissionBlockedError) as raised:
-        await submit_enter(
+        await submit_budgeted_test_enter(
             repo,
             account_id=ACCOUNT_ID,
             strategy_instance_id=SID,
@@ -599,7 +618,7 @@ async def test_accept_exit_rejects_an_entry_order_belonging_to_a_different_bot(
     repo: ClerkSqliteRepository,
 ) -> None:
     repo.register_strategy_instance(strategy_instance_id="qqq-bot", symbol="QQQ", config_hash="h2")
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id="qqq-bot", lifecycle_run_id="run-q")
+    submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id="qqq-bot", lifecycle_run_id="run-q")
     entry_ref = await _make_entry(repo)
 
     with pytest.raises(UnknownEntryOrderError):
@@ -663,7 +682,7 @@ async def test_capture_decision_against_active_exit_persists_losing_evaluation_r
     # No EXIT active for a strategy with none in flight -- nothing to link
     # against; the caller should proceed with the normal accept path.
     repo.register_strategy_instance(strategy_instance_id="qqq-bot", symbol="QQQ", config_hash="h2")
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id="qqq-bot", lifecycle_run_id="run-q")
+    submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id="qqq-bot", lifecycle_run_id="run-q")
     assert (
         repo.capture_decision_against_active_exit(
             strategy_instance_id="qqq-bot",
@@ -1363,7 +1382,7 @@ async def test_reducing_order_resolves_without_flattening_folds_a_precise_failur
     )
     assert uncertainty is not None
     with pytest.raises(AdmissionBlockedError) as exc_info:
-        accept_enter(
+        accept_budgeted_test_enter(
             repo,
             account_id=ACCOUNT_ID,
             strategy_instance_id=SID,
@@ -1736,19 +1755,23 @@ def _raise_stale_snapshot(repo: ClerkSqliteRepository) -> None:
 
 
 async def _filled_entry_with_position(
-    repo: ClerkSqliteRepository, *, sid: str = SID, run_id: str = RUN_ID
+    repo: ClerkSqliteRepository, *, sid: str = SID, run_id: str = RUN_ID, entry_ref: str | None = None
 ) -> tuple[str, BrokerOrder]:
     """Entry filled 10 @ 100 with an exact execution slice → attributed +10."""
-    entry_ref = await _make_entry(
-        repo, sid=sid, run_id=run_id, status="filled", filled_quantity=10
-    )
+    if entry_ref is None:
+        entry_ref = await _make_entry(
+            repo, sid=sid, run_id=run_id, status="filled", filled_quantity=10
+        )
     recovered = _broker_order(entry_ref, status="filled", filled_quantity=10, filled_avg_price=100)
+    order = repo.order(entry_ref)
+    assert order is not None
+    fold_order_evidence(repo, effect_operation_id=order.effect_operation_id, order=recovered)
     sink = SqliteTradeUpdateEvidenceSink(repo=repo, intake=ReentrantAsyncLock(), reconciler=_NoReconciler())
     await sink.record_lifecycle_event(
         client_order_id=entry_ref,
         event=BrokerOrderEvent(
             event_type="fill",
-            occurred_at_ms=1_700_000_000_600,
+            occurred_at_ms=repo.clock(),
             price=100,
             quantity=10,
             execution_id=f"exec-{entry_ref}",
@@ -1826,9 +1849,11 @@ async def test_resolve_accepted_exit_defers_whole_cohort_without_a_crash(
     """Done-when property: N same-clock exits under a stale snapshot -> N deferrals, zero raises."""
     sid2, run2 = "spy-bot-2", "run-2"
     repo.register_strategy_instance(strategy_instance_id=sid2, symbol="SPY", config_hash="h2")
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=sid2, lifecycle_run_id=run2)
-    entry_1, recovered_1 = await _filled_entry_with_position(repo)
-    entry_2, recovered_2 = await _filled_entry_with_position(repo, sid=sid2, run_id=run2)
+    submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=sid2, lifecycle_run_id=run2)
+    first = await _make_entry(repo, status="new")
+    second = await _make_entry(repo, sid=sid2, run_id=run2, status="new")
+    entry_1, recovered_1 = await _filled_entry_with_position(repo, entry_ref=first)
+    entry_2, recovered_2 = await _filled_entry_with_position(repo, sid=sid2, run_id=run2, entry_ref=second)
     _raise_stale_snapshot(repo)
 
     for sid, run_id, entry_ref, recovered in (
@@ -1856,7 +1881,7 @@ async def test_accept_recovery_exit_captures_reduction_without_active_run(
     repo: ClerkSqliteRepository,
 ) -> None:
     entry_ref, recovered = await _filled_entry_with_position(repo)
-    _walk_clock_to(repo, FIXTURE_RTH_MS)
+    _walk_clock_to(repo, NOON)
     submit_stop_run(
         repo,
         account_id=ACCOUNT_ID,
@@ -1983,7 +2008,7 @@ async def test_a_market_recovery_reduction_left_unsent_past_the_close_folds_rele
 
     Never sent, nothing of it can be at the broker. A reduction that was sent
     and whose answer was lost keeps custody past the close instead (#2854)."""
-    _walk_clock_to(repo, FIXTURE_RTH_MS)
+    _walk_clock_to(repo, NOON)
     entry_ref, recovered = await _filled_entry_with_position(repo)
     submit_stop_run(
         repo,
@@ -2014,7 +2039,7 @@ async def test_a_market_recovery_reduction_left_unsent_past_the_close_folds_rele
     assert interrupted.submit_calls == []
     assert any(order.role == "REDUCING" for order in repo.orders_for_strategy(SID))
 
-    _walk_clock_to(repo, FIXTURE_RTH_MS + 6 * 3_600_000 + 5 * 60_000)  # 16:05 ET
+    _walk_clock_to(repo, NOON + 4 * 3_600_000 + 5 * 60_000)  # 16:05 ET
     after_close = _FakeTrade(lookup_results=[None])
     await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=after_close, pricing=UNPRICEABLE_RECOVERY, read=None)
 
@@ -2269,7 +2294,7 @@ async def test_a_reducing_order_with_unproven_identity_is_never_released_by_the_
     under a null broker identity, absence is *not* proven — the entry must not
     be released for a fresh EXIT that would mint a different client id while
     the original might still execute."""
-    _walk_clock_to(repo, FIXTURE_RTH_MS)
+    _walk_clock_to(repo, NOON)
     entry_ref, recovered = await _filled_entry_with_position(repo)
     submit_stop_run(
         repo,
@@ -2316,7 +2341,7 @@ async def test_a_reducing_order_with_unproven_identity_is_never_released_by_the_
         recovery_window_limit=None,
     )
 
-    _walk_clock_to(repo, FIXTURE_RTH_MS + 6 * 3_600_000 + 5 * 60_000)  # 16:05 ET
+    _walk_clock_to(repo, NOON + 4 * 3_600_000 + 5 * 60_000)  # 16:05 ET
     after_close = _FakeTrade(lookup_results=[None])
     await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=after_close, pricing=UNPRICEABLE_RECOVERY, read=None)
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.facts import AttributedResidueDischargedFacts
 from app.broker.alpaca.clerk.sqlite.folds import DEFAULT_FOLD_REGISTRY
 from app.broker.alpaca.clerk.sqlite.lane_quiet import observe_account_quiet
@@ -42,7 +42,9 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 )
 from app.broker.contract.errors import BrokerUnavailable
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
-from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_run
+from tests.broker.alpaca.clerk.sqlite.conftest import BUDGETED_RTH_MS, _clock_at
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 from tests.broker.alpaca.clerk.sqlite.test_reconcile import (  # noqa: F401  (fixture import)
     ACCOUNT_ID,
     WATCHDOG_RUN,
@@ -211,24 +213,30 @@ async def test_a_write_off_refused_for_want_of_a_notice_names_every_notice_that_
     assert len(allowing) == 4 and all(code in str(refused.value) for code in allowing)
 
 
-async def test_a_netted_account_discharges_only_the_residue(clocked_repo) -> None:  # noqa: F811
+async def test_a_netted_account_discharges_only_the_residue(tmp_path) -> None:
     """A's stale +10 beside B's real -10: the broker shows -10, and discharging
     A's residue is exactly what restores broker = attribution."""
-    repo, _clock = clocked_repo
+    clock = _clock_at(BUDGETED_RTH_MS)
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
     other_sid, other_run = "wd-bot-b", "wd-run-b"
     repo.register_strategy_instance(exit_terms=DEPLOY_EXIT_TERMS,
         strategy_instance_id=other_sid, symbol="SPY", config_hash="wd-h2"
     )
-    submit_start_run(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=other_sid, lifecycle_run_id=other_run
-    )
+    seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=other_sid, lifecycle_run_id=other_run)
     await _held_position(repo, suffix="b", sid=other_sid, run_id=other_run, side="sell")
+    submit_stop_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=other_sid, lifecycle_run_id=other_run)
+    clock.advance(6_000)
+    repo.register_strategy_instance(exit_terms=DEPLOY_EXIT_TERMS,
+        strategy_instance_id=WATCHDOG_SID, symbol="SPY", config_hash="wd-h1"
+    )
+    submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=WATCHDOG_SID, lifecycle_run_id=WATCHDOG_RUN)
     await _stranded(repo)
 
     await _discharge(repo, _FakeRead(positions=[_position("SPY", quantity=10.0, side="short")]))
 
     assert repo.position(WATCHDOG_SID, "SPY") == 0.0
     assert repo.position(other_sid, "SPY") == -10.0
+    repo.close()
 
 
 def test_the_fold_refuses_a_residue_the_ledger_does_not_hold() -> None:
@@ -265,14 +273,14 @@ def test_the_fold_refuses_a_residue_the_ledger_does_not_hold() -> None:
 
 
 async def test_a_mirror_rebuild_replays_the_discharge(tmp_path) -> None:
-    clock = _clock_at(FIXTURE_RTH_MS)
+    clock = _clock_at(BUDGETED_RTH_MS)
     repo = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
     )
     repo.register_strategy_instance(exit_terms=DEPLOY_EXIT_TERMS,
         strategy_instance_id=WATCHDOG_SID, symbol="SPY", config_hash="wd-h1"
     )
-    submit_start_run(
+    submit_budgeted_test_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=WATCHDOG_SID,
         lifecycle_run_id=WATCHDOG_RUN,
     )

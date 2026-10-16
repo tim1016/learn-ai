@@ -52,11 +52,13 @@ from app.schemas.decision_explanation import DecisionBarRecord, DecisionExplanat
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_carryover import configuration_hash, immutable_configuration_payload
 from app.services.strategy_validation_manifest import strategy_registry_seeds
+from tests._helpers.bot_runner.custody import budget_consent_for_test
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import budgeted_test_envelope, retain_budgeted_test_bar
 from tests.broker.alpaca.clerk.sqlite.conftest import _TestClock
 
 # #2596: these ENTERs run on the default clock; keep it inside a session.
-pytestmark = pytest.mark.usefixtures("wall_clock_in_session", "legacy_run_registration")
+pytestmark = pytest.mark.usefixtures("wall_clock_in_session", "budgeted_run_registration")
 class _Broker:
     broker_id = "alpaca"
 
@@ -141,6 +143,7 @@ def _binding() -> BrokerBotBinding:
         carryover_policy="FORBID",
         sealed_account_id="PA-TEST",
         action_plan=alpaca_v1_action_plan("SPY"),
+        budget_consent=budget_consent_for_test(),
         run_id="run-1",
         created_at_ms=1,
     )
@@ -258,16 +261,17 @@ async def test_custody_projection_is_unproven_before_the_first_sweep(tmp_path: P
 
 def _finished_bot(repo: ClerkSqliteRepository, sid: str) -> None:
     """A registered bot whose one run started and stopped: quiet, flat, nothing working."""
-    from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+    from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
+    from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 
     repo.register_strategy_instance(strategy_instance_id=sid, symbol="SPY", config_hash="h1")
-    submit_start_run(repo, account_id="PA-TEST", strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}")
+    seed_historical_run_started(repo, account_id="PA-TEST", strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}")
     submit_stop_run(repo, account_id="PA-TEST", strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}")
 
 
 async def test_a_reconciliation_cut_covers_each_bot_until_that_bot_moves(tmp_path: Path) -> None:
     """One pass proves every quiet bot's custody; a bot's own new transition ends that for it alone."""
-    from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+    from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
     broker = _CountingBroker()
@@ -281,7 +285,7 @@ async def test_a_reconciliation_cut_covers_each_bot_until_that_bot_moves(tmp_pat
     assert facade.reconciliation_covers(cut, "sid-1")
     assert facade.reconciliation_covers(cut, "sid-2")
 
-    submit_start_run(repo, account_id="PA-TEST", strategy_instance_id="sid-2", lifecycle_run_id="run-again")
+    seed_historical_run_started(repo, account_id="PA-TEST", strategy_instance_id="sid-2", lifecycle_run_id="run-again")
 
     assert facade.reconciliation_covers(cut, "sid-1")
     assert not facade.reconciliation_covers(cut, "sid-2")
@@ -291,7 +295,7 @@ async def test_a_reconciliation_cut_covers_each_bot_until_that_bot_moves(tmp_pat
 async def test_a_bot_that_moves_while_the_pass_runs_is_newer_than_its_cut(tmp_path: Path) -> None:
     """The cut is the ledger point the pass began after, so the pass cannot vouch for a
     transition written while it was observing the broker."""
-    from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+    from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
 
@@ -301,7 +305,7 @@ async def test_a_bot_that_moves_while_the_pass_runs_is_newer_than_its_cut(tmp_pa
         async def list_positions(self) -> list:
             if not self.started:
                 self.started = True
-                submit_start_run(repo, account_id="PA-TEST", strategy_instance_id="sid-1", lifecycle_run_id="mid")
+                seed_historical_run_started(repo, account_id="PA-TEST", strategy_instance_id="sid-1", lifecycle_run_id="mid")
             return await super().list_positions()
 
     broker = _BotStartsMidPass()
@@ -334,7 +338,7 @@ async def test_a_reconciliation_cut_never_covers_another_ledger(tmp_path: Path) 
 async def test_published_custody_is_the_latest_passs_proof_with_no_pass_of_its_own(tmp_path: Path) -> None:
     """#2607: a stop at a bot's end is proven by the pass that ended it. The read
     contacts no broker; a bot that moved after that pass has no such proof."""
-    from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+    from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
     broker = _CountingBroker()
@@ -351,7 +355,7 @@ async def test_published_custody_is_the_latest_passs_proof_with_no_pass_of_its_o
     assert (proof.strategy_instance_id, proof.reconciliation_verdict) == ("sid-1", "clean")
     assert broker.read_calls == after_pass, "a proof read reached the broker port"
 
-    submit_start_run(repo, account_id="PA-TEST", strategy_instance_id="sid-2", lifecycle_run_id="run-again")
+    seed_historical_run_started(repo, account_id="PA-TEST", strategy_instance_id="sid-2", lifecycle_run_id="run-again")
 
     assert await facade.published_custody("sid-1") is not None
     assert await facade.published_custody("sid-2") is None
@@ -363,7 +367,7 @@ async def test_published_custody_covers_a_bot_that_moved_before_the_passs_final_
 ) -> None:
     """The pass's own writes for a bot -- the STOP at its end, its cancels, its sale --
     land before its final broker comparison, so that pass proves them (#2607)."""
-    from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+    from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
 
@@ -373,7 +377,7 @@ async def test_published_custody_covers_a_bot_that_moved_before_the_passs_final_
         async def list_positions(self) -> list:
             if not self.started:
                 self.started = True
-                submit_start_run(repo, account_id="PA-TEST", strategy_instance_id="sid-1", lifecycle_run_id="mid")
+                seed_historical_run_started(repo, account_id="PA-TEST", strategy_instance_id="sid-1", lifecycle_run_id="mid")
             return await super().list_positions()
 
     broker = _BotStartsMidPass()
@@ -459,7 +463,7 @@ async def test_published_pass_is_dated_at_its_verdict_never_at_its_publish(tmp_p
 
 async def test_published_pass_stops_vouching_for_a_bot_that_moved_or_once_it_is_old(tmp_path: Path) -> None:
     """A pass vouches for a bot only while it is recent and saw the bot's every record (#2839)."""
-    from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+    from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 
     clock = _TestClock(_PASS_AT_MS)
     repo = ClerkSqliteRepository.initialize(
@@ -472,7 +476,7 @@ async def test_published_pass_stops_vouching_for_a_bot_that_moved_or_once_it_is_
     await facade.reconcile_once()
     seen_through = repo.last_custody_sequence()
 
-    submit_start_run(repo, account_id="PA-TEST", strategy_instance_id="moved", lifecycle_run_id="run-again")
+    seed_historical_run_started(repo, account_id="PA-TEST", strategy_instance_id="moved", lifecycle_run_id="run-again")
 
     # The moved bot's pass is the same pass, with the same time: it no longer vouches.
     assert await facade.published_pass("moved") == PublishedPass(
@@ -621,9 +625,13 @@ async def test_registration_precedes_live_enter_and_caller_cancellation_keeps_cu
             purpose=EffectPurpose.ENTER,
             action_plan=binding.action_plan,
             quantity=binding.quantity,
+            retained_source_bar=retain_budgeted_test_bar(repo, root=tmp_path),
         )
     )
-    await broker.submit_started.wait()
+    try:
+        await asyncio.wait_for(broker.submit_started.wait(), timeout=2)
+    except TimeoutError:
+        raise AssertionError(repr(await task)) from None
 
     effect = repo.effect_operation("effect:spy-bot:decision-1")
     assert effect is not None
@@ -718,6 +726,7 @@ async def test_parked_enter_submit_does_not_block_trade_update_fold(tmp_path: Pa
             purpose=EffectPurpose.ENTER,
             action_plan=binding.action_plan,
             quantity=binding.quantity,
+            retained_source_bar=retain_budgeted_test_bar(repo, root=tmp_path),
         )
     )
     await broker.submit_started.wait()
@@ -760,6 +769,7 @@ async def test_runtime_close_drains_shielded_effect_before_closing_repository(
             purpose=EffectPurpose.ENTER,
             action_plan=binding.action_plan,
             quantity=binding.quantity,
+            retained_source_bar=retain_budgeted_test_bar(repo, root=tmp_path),
         )
     )
     await broker.submit_started.wait()
@@ -1013,6 +1023,7 @@ async def test_cancel_verified_working_entry_records_intent_before_broker_contac
         purpose=EffectPurpose.ENTER,
         action_plan=binding.action_plan,
         quantity=binding.quantity,
+        retained_source_bar=retain_budgeted_test_bar(repo, root=tmp_path),
     )
     order_ref = receipt.child_order_refs[0]
     broker.live_status = broker_state
@@ -1062,6 +1073,7 @@ async def test_cancel_verified_working_orders_refuses_unowned_duplicate_and_othe
             purpose=EffectPurpose.ENTER,
             action_plan=binding.action_plan,
             quantity=binding.quantity,
+            retained_source_bar=retain_budgeted_test_bar(repo, root=tmp_path),
         )
         [order_ref] = receipt.child_order_refs
 
@@ -1112,6 +1124,7 @@ async def test_parked_cancellation_does_not_block_trade_update_fold(tmp_path: Pa
         purpose=EffectPurpose.ENTER,
         action_plan=binding.action_plan,
         quantity=binding.quantity,
+        retained_source_bar=retain_budgeted_test_bar(repo, root=tmp_path),
     )
     sink = SqliteTradeUpdateEvidenceSink(repo=repo, intake=facade.intake, reconciler=facade)
     broker.cancel_started.clear()
@@ -1160,6 +1173,7 @@ async def test_start_admission_snapshot_does_not_hold_intake_across_the_yield(tm
                 purpose=EffectPurpose.ENTER,
                 action_plan=binding.action_plan,
                 quantity=binding.quantity,
+                retained_source_bar=retain_budgeted_test_bar(repo, root=tmp_path),
             )
         )
         await broker.submit_started.wait()
@@ -1333,6 +1347,7 @@ async def test_execute_for_instance_uses_its_symbols_market_data_health(
         purpose=EffectPurpose.ENTER,
         action_plan=binding.action_plan,
         quantity=binding.quantity,
+        retained_source_bar=retain_budgeted_test_bar(repo, root=tmp_path),
     )
 
     assert receipt.state is EffectOperationState.SUBMITTED
@@ -1354,6 +1369,7 @@ async def test_execute_for_instance_uses_its_symbols_market_data_health(
         purpose=EffectPurpose.ENTER,
         action_plan=aapl_binding.action_plan,
         quantity=aapl_binding.quantity,
+        retained_source_bar=retain_budgeted_test_bar(repo, root=tmp_path, symbol="AAPL", run_id="run-aapl"),
     )
 
     assert aapl_receipt.state is EffectOperationState.REJECTED
@@ -1404,6 +1420,7 @@ async def test_execute_for_instance_enter_resumes_once_streams_recover(
         purpose=EffectPurpose.ENTER,
         action_plan=binding.action_plan,
         quantity=binding.quantity,
+        retained_source_bar=retain_budgeted_test_bar(repo, root=tmp_path),
     )
 
     recovered_facade = SqliteAlpacaClerkFacade(
@@ -1412,6 +1429,7 @@ async def test_execute_for_instance_enter_resumes_once_streams_recover(
         read=broker,
         trade=broker,
         stream_health=_gate(market_data_healthy=True, execution_healthy=True),
+        live_envelope=budgeted_test_envelope(repo),
     )
     receipt = await recovered_facade.execute_for_instance(
         strategy_instance_id=binding.strategy_instance_id,
@@ -1420,6 +1438,7 @@ async def test_execute_for_instance_enter_resumes_once_streams_recover(
         purpose=EffectPurpose.ENTER,
         action_plan=binding.action_plan,
         quantity=binding.quantity,
+        retained_source_bar=retain_budgeted_test_bar(repo, root=tmp_path),
     )
 
     assert receipt.state != EffectOperationState.REJECTED
@@ -1437,9 +1456,9 @@ async def test_working_order_refs_for_proof_includes_a_live_reducing_order(
     live. (The ENTRY-only STOP cancel set is gone since #2362: the
     reconciliation step cancels a stopped run's entries.)
     """
-    from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
     from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
     from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at
+    from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
     from tests.broker.alpaca.clerk.sqlite.test_exit import (
         ACCOUNT_ID,
         RUN_ID,
@@ -1456,7 +1475,7 @@ async def test_working_order_refs_for_proof_includes_a_live_reducing_order(
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_at(FIXTURE_RTH_MS)
     )
     repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
 
     entry_ref = await _make_entry(repo, quantity=10, status="filled", filled_quantity=10.0)
     accepted = accept_exit(
@@ -1554,6 +1573,7 @@ async def test_sqlite_trade_update_redelivery_and_regression_are_idempotent(
         purpose=EffectPurpose.ENTER,
         action_plan=binding.action_plan,
         quantity=binding.quantity,
+        retained_source_bar=retain_budgeted_test_bar(repo, root=tmp_path),
     )
     order_ref = receipt.child_order_refs[0]
     observed = await broker.get_order_by_client_order_id(order_ref)
@@ -1772,10 +1792,11 @@ async def test_an_unfoldable_order_pause_refuses_enter_as_a_receipt_and_lifts_on
         return await facade.execute_for_instance(
             strategy_instance_id=binding.strategy_instance_id,
             run_id=binding.run_id,
-            decision_id=decision_id,
-            purpose=EffectPurpose.ENTER,
-            action_plan=binding.action_plan,
-            quantity=binding.quantity,
+                decision_id=decision_id,
+                purpose=EffectPurpose.ENTER,
+                action_plan=binding.action_plan,
+                quantity=binding.quantity,
+                retained_source_bar=retain_budgeted_test_bar(repo, root=tmp_path),
         )
 
     try:

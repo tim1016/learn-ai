@@ -37,9 +37,7 @@ from app.broker.alpaca.clerk.account_authority import (
 from app.broker.alpaca.clerk.models import EffectPurpose
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.shadow_broker import compose_shadow_ports
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
-from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.repository import DEFAULT_CLAIM_TTL_MS, ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.stopped_run_entries import entries_owed_a_cancel
@@ -51,7 +49,12 @@ from app.lean_sidecar.trading_calendar import next_trading_day, session_open_ms_
 from app.services.session_authority import et_minute_of_day_ms
 from app.services.source_bar_ledger import SourceBarLedger
 from app.utils.timestamps import Clock, now_ms_utc
+from tests._helpers.bot_runner.custody import budget_consent_for_test
 from tests._helpers.session_clock import IN_SESSION_DAY, pin_wall_clock_at, pin_wall_clock_in_session
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import (
+    accept_budgeted_test_enter,
+    submit_budgeted_test_run,
+)
 from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at, _TestClock
 from tests.broker.alpaca.clerk.sqlite.test_reconcile import (
     ACCOUNT_ID,
@@ -72,7 +75,7 @@ from tests.broker.alpaca.clerk.sqlite.test_stopped_run_entries import (
 )
 from tests.broker.alpaca.clerk.test_shadow_broker import DAY, _Clock, _LiveRead, _retain
 
-pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+pytestmark = pytest.mark.usefixtures("budgeted_run_registration")
 
 # A second bot on the same account: what a new Deploy would register.
 NEXT_DEPLOY_SID = "spy-bot-next"
@@ -95,8 +98,8 @@ def _crash_holding_the_send_claim(tmp_path: Path, clock: _TestClock) -> tuple[st
     try:
         repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
         repo.register_strategy_instance(strategy_instance_id=NEXT_DEPLOY_SID, symbol="SPY", config_hash="h2")
-        submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
-        accepted = accept_enter(
+        submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+        accepted = accept_budgeted_test_enter(
             repo,
             account_id=ACCOUNT_ID,
             strategy_instance_id=SID,
@@ -159,7 +162,7 @@ async def test_sent_but_unrecorded_working_entry_is_found_and_cancelled_never_re
     tmp_path: Path,
 ) -> None:
     """Crash point 1, order still working: the stopped run's entry is cancelled."""
-    clock = _clock_at(1_700_000_000_000)
+    clock = _clock_at(session_open_ms_utc(IN_SESSION_DAY) + 60_000)
     order_ref, effect_id = _crash_holding_the_send_claim(tmp_path, clock)
     clock.advance(31_000)
     broker = _BrokerWhileDown()
@@ -195,7 +198,7 @@ async def test_sent_but_unrecorded_fill_blocks_every_entry_until_it_is_booked(
     tmp_path: Path,
 ) -> None:
     """Crash point 1, order filled: no new Deploy can buy while the fill is unbooked."""
-    clock = _clock_at(1_700_000_000_000)
+    clock = _clock_at(session_open_ms_utc(IN_SESSION_DAY) + 60_000)
     order_ref, effect_id = _crash_holding_the_send_claim(tmp_path, clock)
     clock.advance(31_000)
     filled = _broker_order(
@@ -230,7 +233,7 @@ async def test_sent_but_unrecorded_fill_blocks_every_entry_until_it_is_booked(
 
 async def test_recorded_but_unsent_entry_is_voided_never_sent(tmp_path: Path) -> None:
     """Crash point 2: the broker never saw it, so recovery voids it without sending."""
-    clock = _clock_at(1_700_000_000_000)
+    clock = _clock_at(session_open_ms_utc(IN_SESSION_DAY) + 60_000)
     order_ref, effect_id = _crash_holding_the_send_claim(tmp_path, clock)
     clock.advance(1_000)
     trade = _FakeTrade(lookup_absent=True)
@@ -438,7 +441,9 @@ async def test_a_live_shadow_decision_exit_re_driven_after_a_process_death_fills
         repo=repo, read=ports.read, trade=ports.trade, authority_kind="shadow", account_mode="live",
         program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
     )
-    binding = _sim_binding(use_rth=True, account_id=f"shadow:{_SHADOW_LIVE_ACCOUNT}")
+    binding = _sim_binding(use_rth=True, account_id=f"shadow:{_SHADOW_LIVE_ACCOUNT}").model_copy(
+        update={"budget_consent": budget_consent_for_test(world="shadow")}
+    )
     await facade.register_strategy_run(binding)
     try:
         bought = await facade.execute_for_instance(
@@ -514,7 +519,9 @@ async def test_a_dry_run_decision_exit_re_driven_after_a_process_death_fills_at_
     facade = SqliteAlpacaClerkFacade(
         repo=repo, read=broker, trade=broker, authority_kind="synthetic", account_mode="paper"
     )
-    binding = _sim_binding(use_rth=True, account_id=sim_account)
+    binding = _sim_binding(use_rth=True, account_id=sim_account).model_copy(
+        update={"budget_consent": budget_consent_for_test(world="synthetic")}
+    )
     await facade.register_strategy_run(binding)
     try:
         bought = await facade.execute_for_instance(

@@ -57,6 +57,8 @@ from tests._helpers.bot_runner.custody import (
     _flat_start_guard,
     _lifecycle_json,
     _registry,
+    budget_consent_for_test,
+    deploy_bot,
 )
 from tests._helpers.bot_runner.doubles import _FakeFeed
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
@@ -140,7 +142,7 @@ async def test_deploy_produces_running_task_and_durable_on_duty_evidence(tmp_pat
     feed = _FakeFeed([_bar(_T0)], mode="hold")
     registry = _registry(tmp_path, feed)
 
-    view = await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    view = await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     assert view.running is True
     assert view.phase == "ON_DUTY"
@@ -171,7 +173,7 @@ async def test_deploy_produces_running_task_and_durable_on_duty_evidence(tmp_pat
 async def test_process_fact_requires_current_registry_liveness_proof(tmp_path: Path) -> None:
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
-    view = await registry.deploy(
+    view = await deploy_bot(registry,
         exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
         strategy_instance_id=_SID,
         symbol="SPY",
@@ -235,7 +237,7 @@ async def test_start_preview_and_execution_share_the_same_admission_policy(
     assert preview.allowed is False
     assert preview.reason_code == "MARKET_DATA_STALE"
     with pytest.raises(MarketDataFeedUnavailableError) as refused:
-        await registry.deploy(
+        await deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             symbol="SPY",
@@ -265,7 +267,7 @@ async def test_start_allows_idle_connected_feed_to_establish_subscription(
     )
 
     assert preview.allowed is True
-    started = await registry.deploy(
+    started = await deploy_bot(registry,
         exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
         strategy_instance_id=_SID,
         symbol="SPY",
@@ -316,7 +318,7 @@ async def test_start_preview_and_execution_share_boot_recovery_refusal(
     assert preview.allowed is False
     assert preview.reason_code == "BOOT_RECOVERY_INCOMPLETE"
     with pytest.raises(BootRecoveryIncompleteError) as refused:
-        await registry.deploy(
+        await deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             symbol="SPY",
@@ -355,7 +357,7 @@ async def test_start_preview_and_execution_share_unresolved_recovery_refusal(
     assert preview.allowed is False
     assert preview.reason_code == "RECOVERY_UNCERTAIN"
     with pytest.raises(RecoveryUncertainError) as refused:
-        await registry.deploy(
+        await deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             symbol="SPY",
@@ -423,7 +425,7 @@ async def test_start_refuses_cleanly_when_clerk_evidence_never_stabilizes(
     )
 
     with pytest.raises(RunAdmissionRefusedError, match="stable Clerk custody"):
-        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     assert not (tmp_path / "live_state" / _SID / "broker_binding.json").exists()
 
@@ -451,6 +453,7 @@ async def test_start_timestamps_activation_after_custody_reconciliation(
         exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
         strategy_instance_id=_SID,
         symbol="SPY",
+        budget_consent=budget_consent_for_test(),
     )
 
     assert started.admission.evaluated_at_ms == _T0 + 10_000
@@ -469,6 +472,7 @@ async def test_a_bot_is_bound_to_the_asset_its_deploy_names_as_traded(tmp_path: 
         strategy_instance_id=_SID,
         symbol="SPY",
         traded_symbol="QQQ",
+        budget_consent=budget_consent_for_test(),
     )
 
     binding = registry.binding_for_control("alpaca", _SID)
@@ -551,10 +555,10 @@ async def test_the_admission_preview_judges_the_bot_the_deploy_would_bind(tmp_pa
 async def test_deploy_while_running_is_refused(tmp_path: Path) -> None:
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     with pytest.raises(BotAlreadyRunningError):
-        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     await registry.stop("alpaca", _SID)
 
@@ -573,6 +577,7 @@ async def test_deploy_after_stop_with_changed_configuration_is_refused(
         exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
         strategy_instance_id=_SID,
         symbol="SPY",
+        budget_consent=budget_consent_for_test(),
     )
     original_binding_bytes = (
         tmp_path / "live_state" / _SID / "strategy_instance.json"
@@ -600,7 +605,7 @@ async def test_deploy_without_feed_is_typed_503(tmp_path: Path) -> None:
     registry = _registry(tmp_path, None)
 
     with pytest.raises(MarketDataFeedUnavailableError):
-        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
 
 @pytest.mark.asyncio
@@ -608,14 +613,14 @@ async def test_deploy_rejects_unsafe_strategy_instance_id(tmp_path: Path) -> Non
     registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
 
     with pytest.raises(InvalidStrategyInstanceIdError):
-        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id="../escape", symbol="SPY")
+        await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id="../escape", symbol="SPY")
 
 
 @pytest.mark.asyncio
 async def test_stop_writes_durable_intent_and_off_duty_evidence(tmp_path: Path) -> None:
     feed = _FakeFeed([_bar(_T0)], mode="hold")
     registry = _registry(tmp_path, feed)
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     view = await registry.stop("alpaca", _SID, reason="drill")
 
@@ -655,6 +660,7 @@ async def test_stop_does_not_finalize_or_reap_a_task_that_survives_cancellation(
         strategy_key="deployment_validation",
         symbol="SPY",
         mode="log_only",
+        budget_consent=budget_consent_for_test(),
     )
 
     status = await registry.stop(broker="alpaca", strategy_instance_id=_SID)
@@ -673,7 +679,7 @@ async def test_stop_does_not_finalize_or_reap_a_task_that_survives_cancellation(
 async def test_crash_records_typed_evidence_and_reaps(tmp_path: Path) -> None:
     feed = _FakeFeed([_bar(_T0)], mode="crash", error=RuntimeError("boom"))
     registry = _registry(tmp_path, feed)
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     await _wait_for(lambda: not registry.status("alpaca", _SID).running)
 
@@ -696,7 +702,7 @@ async def test_crash_records_typed_evidence_and_reaps(tmp_path: Path) -> None:
 async def test_feed_death_records_feed_death_crash(tmp_path: Path) -> None:
     feed = _FakeFeed([_bar(_T0)], mode="crash", error=MarketDataFeedError("gateway lost"))
     registry = _registry(tmp_path, feed)
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     await _wait_for(lambda: not registry.status("alpaca", _SID).running)
 
@@ -724,7 +730,7 @@ async def test_refused_warmup_records_its_own_reason_and_stops_the_run(
         error=MarketDataFeedError("refused during warmup", reason=reason),
     )
     registry = _registry(tmp_path, feed)
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     await _wait_for(lambda: not registry.status("alpaca", _SID).running)
 
@@ -754,7 +760,7 @@ async def test_refused_before_deciding_records_its_own_reason_and_stops_the_run(
         error=MarketDataFeedError("refused on data it never decided on", reason=reason),
     )
     registry = _registry(tmp_path, feed)
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     await _wait_for(lambda: not registry.status("alpaca", _SID).running)
 
@@ -776,7 +782,7 @@ async def test_other_typed_feed_refusals_keep_the_feed_death_code(tmp_path: Path
         error=MarketDataFeedError("minute not recovered", reason="DECISION_BAR_MISSED"),
     )
     registry = _registry(tmp_path, feed)
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     await _wait_for(lambda: not registry.status("alpaca", _SID).running)
 
@@ -805,7 +811,7 @@ async def test_count_complete_interruption_keeps_the_run_running(
     registry = _registry(tmp_path, feed)
 
     with caplog.at_level("INFO", logger="app.services.bot_runtime"):
-        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
         await _wait_for(
             lambda: len([r for r in caplog.records if getattr(r, "action", None) == "bot_decision"]) == 2
@@ -823,7 +829,7 @@ async def test_count_complete_interruption_keeps_the_run_running(
 async def test_kill_without_stop_intent_is_exited_unverified(tmp_path: Path) -> None:
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     managed_task = registry._bots[_SID].task
     managed_task.cancel()  # a kill: no stop intent recorded
@@ -842,7 +848,7 @@ async def test_kill_without_stop_intent_is_exited_unverified(tmp_path: Path) -> 
 async def test_bar_stream_end_is_exited_unverified(tmp_path: Path) -> None:
     feed = _FakeFeed([_bar(_T0)], mode="finite")
     registry = _registry(tmp_path, feed)
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     await _wait_for(lambda: not registry.status("alpaca", _SID).running)
 
@@ -921,7 +927,7 @@ async def test_unresolved_intent_mid_sweep_evaluation_reports_wait_not_intervene
     assert preview.allowed is False
     assert preview.reason_code == "RECOVERY_SWEEP_EVALUATING"
     with pytest.raises(RecoverySweepEvaluatingError) as refused:
-        await registry.deploy(
+        await deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             symbol="SPY",
@@ -995,7 +1001,7 @@ async def test_archive_reproves_custody_and_refuses_to_strand_exposure(
     feed = _FakeFeed([_bar(_T0)], mode="crash", error=RuntimeError("boom"))
     custody = _CustodyThatAcquiresExposure()
     registry = _registry(tmp_path, feed, start_custody_guard=custody)
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     await _wait_for(lambda: not registry.status("alpaca", _SID).running)
 
     custody.exposed = True
@@ -1052,7 +1058,7 @@ async def test_archive_refuses_as_unprovable_when_alpaca_cannot_be_read(tmp_path
     feed = _FakeFeed([_bar(_T0)], mode="crash", error=RuntimeError("boom"))
     custody = _CustodyWhenAlpacaCannotBeRead()
     registry = _registry(tmp_path, feed, start_custody_guard=custody)
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     await _wait_for(lambda: not registry.status("alpaca", _SID).running)
 
     custody.unreadable = True
@@ -1078,7 +1084,7 @@ async def test_archive_refuses_a_stopped_bot_whose_run_never_settled(
     from app.services.broker_v2_panel.action_execution_service import ActionNotAvailableError
 
     registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     def _terminal_commit_fails(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("terminal duty record did not commit")
@@ -1118,7 +1124,7 @@ async def test_archive_refuses_when_the_clerk_cannot_prove_flatness(
     feed = _FakeFeed([_bar(_T0)], mode="crash", error=RuntimeError("boom"))
     custody = _CustodyThatFreezes()
     registry = _registry(tmp_path, feed, start_custody_guard=custody)
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     await _wait_for(lambda: not registry.status("alpaca", _SID).running)
 
     custody.frozen = True
