@@ -97,6 +97,9 @@ async def _replayed_view(run: RunDetail) -> StrategyViewResponse:
     """Join an in-flight replay, or replay against the current lake in a worker thread."""
     key = (run.id, run.program_version, run.evidence_provenance_json)
     replay = _view_replays.get(key)
+    if replay is not None and replay.done():
+        _view_replays.pop(key)
+        replay = None
     if replay is None:
         replay = asyncio.ensure_future(asyncio.to_thread(build_backtest_run_strategy_view, run))
         _view_replays[key] = replay
@@ -106,6 +109,7 @@ async def _replayed_view(run: RunDetail) -> StrategyViewResponse:
 
 
 def _settle_replay(key: tuple[object, ...], done: asyncio.Future[StrategyViewResponse]) -> None:
-    _view_replays.pop(key, None)
+    if _view_replays.get(key) is done:
+        _view_replays.pop(key)
     if not done.cancelled():
         done.exception()  # consume a failed replay even if every reader left

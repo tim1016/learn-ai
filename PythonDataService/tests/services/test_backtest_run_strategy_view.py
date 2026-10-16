@@ -432,5 +432,10 @@ async def test_a_replay_in_flight_is_joined_and_a_later_read_rechecks_the_lake(
     assert (first_view, second_view) == (view, view)
     assert built == [7]
 
+    # The request must recheck even before the completed replay's callback removes it.
+    key = (saved_run.id, saved_run.program_version, saved_run.evidence_provenance_json)
+    completed = asyncio.get_running_loop().create_future()
+    completed.set_result(view)
+    backtest_runs._view_replays[key] = completed
     assert await backtest_runs._replayed_view(saved_run) == view
     assert built == [7, 7]
