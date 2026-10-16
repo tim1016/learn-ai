@@ -3,9 +3,9 @@
 This is the operator procedure for qualifying option orders this system sends to
 Alpaca. The run records below cover a bought call, a debit spread and the
 owner's dashboard credit-order sign check on Paper, plus flat and overlapping
-credit-spread bot passes and a flat-account iron-condor pass. The iron-condor
-overlap and isolated short-leg buy-back still need their checks.
-The overlapping credit entries' buying-power comparisons remain unknown.
+credit-spread and iron-condor bot passes. The isolated short-leg buy-back
+still needs its check. The overlapping credit and condor entries'
+buying-power comparisons remain unknown.
 This runbook sets one Paper
 account aside, turns one temporary setting
 on for its Clerk, runs the orders through their whole life, sets what Alpaca
@@ -1190,3 +1190,85 @@ remained off. The following rehearsal changed the window from its default
 override was absent. With nothing promoted, section 9 requires removing both
 temporary overrides and verifying the setting-off refusal when this
 continuing experiment ends.
+
+## Run record: 2026-10-16, narrower-window condor overlap attempt (#3225)
+
+The owner requested continuation and any remaining shapes. The bounded
+Paper pass used up to two Deployment Validation bots, $70 each, one SPY
+October 19 condor per bot, one contract per leg and $1 wings. Shorts were
+four listed strikes below and above the money. With all bots stopped and
+flat, the supported quote window was narrowed from its default 10 to 4;
+the previous override was absent. Two plans then reserved at most 72
+candidate lines within the unchanged 84-line allowance. IBKR remained the
+enabled, read-only market-data provider.
+
+The narrower rules priced in Dry Run, which stopped flat without a signal
+at 1792173916361 ms UTC. This was a pricing rehearsal under section 6, not
+another simulated round trip; the earlier D rehearsal had completed that
+cycle. Paper used the existing terms: 8% widest leg gap, 20-second entry
+wait, 10% whole-structure cost limit and 45-minute expiry-close lead.
+
+The first bot entered a $758/$759 put spread and $767/$768 call spread at
+`-0.58`, then closed all four legs as one market order at `+0.62`. The second
+bot was deployed while the first held, but had no signal before that close.
+This initial cycle therefore did not prove overlap. At 1792174347169 ms UTC
+the account was flat, and both bots continued waiting within the same scope.
+The first bot's free balance was $65.66 after $4 premium loss and $0.34
+estimated fees.
+
+Alpaca's cash and option buying power began at $99,917.74. Held, they were
+$99,975.64 and $99,875.64; closed, both were $99,913.54. The complete entry
+pair judged over-reserved by $0.08 offline: $42.18 committed against a
+$42.10 buying-power fall. This is unused entry fee provision, classified
+as fee posting; final posted October 16 fees remain due. Nothing was unread
+in the private bundle covering 1792173916375 through 1792174347169 ms UTC.
+Its sanitized recording is
+`tests/fixtures/alpaca/option_paper_recordings/3225-D2a-condor-before-overlap-20261016`.
+
+### Both condors held together and closed
+
+Both bots later entered the same October 19 $757/$758 put spread and
+$766/$767 call spread at `-0.58` each. Their simultaneous holdings were
+observed at 1792175089635 ms UTC: Alpaca reported +2 of each bought contract
+and -2 of each sold contract. Each bot then closed its four legs as one
+market order at `+0.61`, giving 16 attributed leg executions in this overlap
+window. The bots stopped flat at 1792175232778 and 1792175233510 ms UTC.
+The first released $62.32 after its two cycles ($7 premium loss and $0.68
+estimated fees); the second released $66.66 ($3 premium loss and $0.34
+estimated fees).
+
+| Observation | Alpaca cash | Option buying power |
+|---|---:|---:|
+| Before the overlapping entries | $99,913.54 | $99,913.54 |
+| Both condors held | $100,029.34 | $99,829.34 |
+| Both whole-structure closes filled | $99,907.14 | $99,907.14 |
+
+The account held a $200 requirement while both condors were open and
+released it on close. The $6.40 cash reduction includes $6 premium loss and
+$0.40 of observed cash charges; it is not the final posted fee total.
+The captured account polls did not isolate a one-condor intermediate state.
+Both comparisons remain **unknown, `OTHER_ORDER_MOVED`**. Each recorded the
+combined $200 requirement change and $84.20 buying-power fall while its own
+commitment was $42.18; neither is a clean per-entry pair and neither is
+promoted to an offline judgment. Nothing was unread in either private
+bundle, covering 1792174347169 through 1792175259780 ms UTC. Their shared
+journal is preserved once as
+`tests/fixtures/alpaca/option_paper_recordings/3225-D2-condor-overlap-20261016`.
+The reader tests pin the two signed entries, two whole-structure exits,
+each leg's execution and activity identity, combined positions and money.
+
+At 1792175274150 ms UTC, direct Alpaca reads showed no positions or working
+orders, and the roster showed no running or exposed bot. The temporary
+several-leg setting and quote-window override were removed, only the Paper
+lane recreated, and its container confirmed both absent. The default window
+is 10 again; the quote allowance remains 84, IBKR enabled/read-only, and
+judgment and Live options off. Deploy again refused the four-leg plan
+because the several-leg setting was off. Nothing was promoted.
+
+The Mac was locked, so Alpaca's dashboard could not be rechecked at teardown
+and no new isolated buy-back ticket was prepared. Broker API flatness and
+the local Deploy refusal were verified; the dashboard check and isolated
+buy-back remain outstanding. Final posted October 16 fees, clean overlap
+buying-power judgments, resting-entry deadline cancellation, partial fills,
+cancel/fill races and recovery of a resting entry are not established by
+this pass.

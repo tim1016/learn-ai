@@ -430,6 +430,8 @@ _RESTARTED = "B4-spread-restart-scheduled-close"
 _CREDIT_FLAT = "3225-C1-credit-flat-20261016"
 _CREDIT_OVERLAP = "3225-C2-credit-overlap-20261016"
 _CONDOR_FLAT = "3225-D1-condor-flat-20261016"
+_CONDOR_BEFORE_OVERLAP = "3225-D2a-condor-before-overlap-20261016"
+_CONDOR_OVERLAP = "3225-D2-condor-overlap-20261016"
 _BUYBACK_MISSED = "C3-buyback-window-missed"
 _SPREAD_LONG, _SPREAD_SHORT = "SPY261016C00768000", "SPY261016C00773000"
 # step -> (long legs, short legs, the net limit each order was sent at (None: a market order), the net price each
@@ -449,6 +451,15 @@ _STRUCTURE_PASSES: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[str |
     _CONDOR_FLAT: (
         ("SPY261019P00758000", "SPY261019C00769000"), ("SPY261019P00759000", "SPY261019C00768000"),
         ("-0.52", None), ("-0.52", "0.56"),
+    ),
+    # The second bot had no entry signal before this first cycle closed; this window proves no overlap.
+    _CONDOR_BEFORE_OVERLAP: (
+        ("SPY261019P00758000", "SPY261019C00768000"), ("SPY261019P00759000", "SPY261019C00767000"),
+        ("-0.58", None), ("-0.58", "0.62"),
+    ),
+    _CONDOR_OVERLAP: (
+        ("SPY261019P00757000", "SPY261019C00767000"), ("SPY261019P00758000", "SPY261019C00766000"),
+        ("-0.58", "-0.58", None, None), ("-0.58", "-0.58", "0.61", "0.61"),
     ),
     # The owner did not submit the isolated buy-back before the strategy's exit; both legs closed together.
     _BUYBACK_MISSED: (("SPY261019C00770000",), ("SPY261019C00769000",), ("-0.29", None), ("-0.29", "0.3")),
@@ -565,21 +576,27 @@ def test_a_spreads_debit_and_credit_move_cash_and_option_buying_power_together_b
     ]
 
 
-@pytest.mark.parametrize("step", [_OVERLAP, _CREDIT_OVERLAP])
-def test_two_bots_spreads_held_at_once_are_one_account_position_of_two_of_each_leg(step: str) -> None:
-    (long_leg,), (short_leg,), _, _ = _STRUCTURE_PASSES[step]
+@pytest.mark.parametrize(
+    ("step", "observed_quantities"),
+    [(_OVERLAP, (1.0, 2.0)), (_CREDIT_OVERLAP, (1.0, 2.0)), (_CONDOR_OVERLAP, (2.0,))],
+)
+def test_two_bots_structures_held_at_once_are_one_account_position_of_two_of_each_leg(
+    step: str, observed_quantities: tuple[float, ...],
+) -> None:
+    long_legs, short_legs, _, _ = _STRUCTURE_PASSES[step]
     held_over_time = [
         {position.symbol: position.quantity for position in map(from_alpaca_position, _body(line))}
         for line in _lines(step, "positions")
     ]
 
     assert held_over_time[0] == {} and held_over_time[-1] == {}
-    # One structure, then both, then the first one's exit leaves the second: the account does not say whose.
-    assert {(held.get(long_leg), held.get(short_leg)) for held in held_over_time} == {
-        (None, None),
-        (1.0, -1.0),
-        (2.0, -2.0),
+    # The condor polls captured both held together, without an intermediate one-structure account reading.
+    expected = {
+        tuple(sorted({**dict.fromkeys(long_legs, qty), **dict.fromkeys(short_legs, -qty)}.items()))
+        for qty in observed_quantities
     }
+    expected.add(())
+    assert {tuple(sorted(held.items())) for held in held_over_time} == expected
 
 
 @pytest.mark.parametrize(
@@ -587,6 +604,7 @@ def test_two_bots_spreads_held_at_once_are_one_account_position_of_two_of_each_l
     [
         (_CREDIT_FLAT, "99923.44", "30.95", "69.05", "1.10"),
         (_CONDOR_FLAT, "99923.04", "51.90", "48.10", "4.20"),
+        (_CONDOR_BEFORE_OVERLAP, "99917.74", "57.90", "42.10", "4.20"),
         (_BUYBACK_MISSED, "99918.84", "28.95", "71.05", "1.10"),
     ],
 )
@@ -631,6 +649,16 @@ def test_two_credit_spreads_each_add_premium_and_requirement_then_release_the_wh
     assert both == (first[0] + Decimal("27.95"), first[1] - Decimal("72.05"))
     assert both[0] - both[1] == Decimal("200.00")
     assert closed == (before[0] - Decimal("0.20"), before[1] - Decimal("0.20"))
+
+
+def test_two_condors_add_their_combined_premium_and_requirement_then_release_the_whole_requirement() -> None:
+    """#3225: two $58 credits, two $61 closes, and $0.10 observed cash charge per parent order."""
+    before, both, closed = _account_figures(_CONDOR_OVERLAP)
+
+    assert before == (Decimal("99913.54"), Decimal("99913.54"))
+    assert both == (before[0] + Decimal("115.80"), before[1] - Decimal("84.20"))
+    assert both[0] - both[1] == Decimal("200.00")
+    assert closed == (before[0] - Decimal("6.40"), before[1] - Decimal("6.40"))
 
 
 def test_the_clerks_own_scheduled_close_sends_a_spread_held_through_a_restart_out_at_ten_to_four_as_one_order() -> None:
