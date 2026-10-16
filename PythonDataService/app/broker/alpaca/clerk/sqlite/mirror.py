@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.broker.alpaca.clerk.sqlite.errors import ClerkSqliteError
 from app.broker.alpaca.clerk.sqlite.hashchain import GENESIS, compute_row_hash
 from app.broker.alpaca.paths import fsync_directory
 from app.utils.timestamps import Clock
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 _TAIL_BLOCK_BYTES = 64 * 1024
 
 
-class MirrorChainBroken(Exception):
+class MirrorChainBroken(ClerkSqliteError):
     """A sequence gap, duplicate-with-different-hash, or hash mismatch.
 
     It fails closed rather than importing ambiguous data. Callers must not
@@ -202,8 +203,23 @@ class MirrorFile:
     def _read_records(self) -> list[dict[str, Any]]:
         if not self._path.is_file():
             return []
-        with self._path.open(encoding="utf-8") as handle:
-            return [json.loads(stripped) for raw in handle if (stripped := raw.strip())]
+        records: list[dict[str, Any]] = []
+        with self._path.open("rb") as handle:
+            for line_number, raw in enumerate(handle, start=1):
+                if not raw.strip():
+                    continue
+                try:
+                    record = json.loads(raw)
+                except (ValueError, UnicodeError) as exc:
+                    raise MirrorChainBroken(
+                        f"mirror {self._path} line {line_number} is unreadable: {exc}"
+                    ) from exc
+                if not isinstance(record, dict):
+                    raise MirrorChainBroken(
+                        f"mirror {self._path} line {line_number} must be a JSON object"
+                    )
+                records.append(record)
+        return records
 
     def has_finalize(self, sequence: int) -> bool:
         """Does ``sequence`` have a matching FINALIZE line?"""

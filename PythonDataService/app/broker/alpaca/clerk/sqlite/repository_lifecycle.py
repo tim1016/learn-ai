@@ -413,7 +413,6 @@ def _read_control_row(db_path: Path) -> tuple[sqlite3.Connection, sqlite3.Row]:
 
 def _validate_control_identity(
     *,
-    conn: sqlite3.Connection,
     control_row: sqlite3.Row,
     registry: EstablishedAccountsRegistry,
     account_id: str,
@@ -438,18 +437,10 @@ def _validate_control_identity(
             f"{db_path} embeds account_id {control_row['account_id']!r}, "
             f"requested {account_id!r}"
         )
-    if control_row["schema_version"] < schema.SCHEMA_VERSION:
-        try:
-            schema.migrate_schema(conn, from_version=control_row["schema_version"])
-        except ValueError as exc:
-            raise SchemaVersionMismatch(
-                f"{db_path} schema_version={control_row['schema_version']}, "
-                f"expected {schema.SCHEMA_VERSION}: {exc}"
-            ) from exc
-    elif control_row["schema_version"] > schema.SCHEMA_VERSION:
+    if not schema.is_upgradable_to_current(control_row["schema_version"]):
         raise SchemaVersionMismatch(
-            f"{db_path} schema_version={control_row['schema_version']}, "
-            f"expected {schema.SCHEMA_VERSION}"
+            f"{db_path} has no registered migration from schema_version={control_row['schema_version']} "
+            f"to {schema.SCHEMA_VERSION}"
         )
 
 
@@ -575,7 +566,6 @@ def _open_repository_unfenced(
     conn, control_row = _read_control_row(db_path)
     try:
         _validate_control_identity(
-            conn=conn,
             control_row=control_row,
             registry=registry,
             account_id=account_id,
@@ -593,6 +583,9 @@ def _open_repository_unfenced(
         )
         finalized_sequences = mirror.reconcile(chain_payloads, clock=clock)
         _require_every_finalized_sequence_committed(conn, db_path, finalized_sequences)
+
+        if control_row["schema_version"] < schema.SCHEMA_VERSION:
+            schema.migrate_schema(conn, from_version=control_row["schema_version"])
 
         owner = lease_owner or writes.default_lease_owner()
         now = clock()
