@@ -21,15 +21,12 @@ from typing import Any
 
 import pytest
 
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import (
     ACTION_ENTER,
     EnterSubmission,
     _enter_identity,
-    accept_enter,
     fold_order_evidence,
     resolve_enter_submission,
-    submit_enter,
 )
 from app.broker.alpaca.clerk.sqlite.facts import OrderFillObservedFacts
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
@@ -56,7 +53,12 @@ from app.broker.contract.errors import (
     BrokerUnavailable,
 )
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
-from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import (
+    accept_budgeted_test_enter,
+    submit_budgeted_test_enter,
+    submit_budgeted_test_run,
+)
+from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _clock_at
 
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
@@ -65,10 +67,10 @@ RUN_ID = "run-1"
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Iterator[ClerkSqliteRepository]:
-    clock = _clock_at(1_700_000_000_000)
+    clock = _clock_at(NOON)
     r = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
     r.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
-    submit_start_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    submit_budgeted_test_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     yield r
     r.close()
 
@@ -228,7 +230,7 @@ def test_accept_alone_commits_accepted_state_before_any_broker_attempt(
     operation in ``accepted`` — not ``in_progress`` — since no broker or
     local work has begun yet. ``in_progress`` is reserved for the moment a
     broker attempt (or its resolution) actually starts."""
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -258,7 +260,7 @@ async def test_intent_commits_before_the_broker_is_ever_called(repo: ClerkSqlite
         seen_orders_row_at_submit_time["order"] = repo.order(client_order_id)
 
     trade = _FakeTrade(on_submit=on_submit)
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -277,7 +279,7 @@ async def test_failed_reservation_produces_no_broker_call(repo: ClerkSqliteRepos
     """A durable conflict (same identity, different payload) must never reach
     the broker — no broker call for a reservation that fails."""
     trade = _FakeTrade()
-    await submit_enter(
+    await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -288,7 +290,7 @@ async def test_failed_reservation_produces_no_broker_call(repo: ClerkSqliteRepos
     )
 
     with pytest.raises(DurableConflictError):
-        await submit_enter(
+        await submit_budgeted_test_enter(
             repo,
             account_id=ACCOUNT_ID,
             strategy_instance_id=SID,
@@ -322,7 +324,7 @@ def test_concurrent_duplicate_enter_produces_exactly_one_broker_intent(
         barrier.wait()
         try:
             results[index] = asyncio.run(
-                submit_enter(
+                submit_budgeted_test_enter(
                     repo,
                     account_id=ACCOUNT_ID,
                     strategy_instance_id=SID,
@@ -357,7 +359,7 @@ def test_accept_enter_blocks_second_decision_while_open(
     That means this same result applies when the two decision IDs arrive from
     separate runtime tasks: only the first can create an effect operation.
     """
-    first = accept_enter(
+    first = accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -367,7 +369,7 @@ def test_accept_enter_blocks_second_decision_while_open(
     )
 
     with pytest.raises(AdmissionBlockedError) as exc_info:
-        accept_enter(
+        accept_budgeted_test_enter(
             repo,
             account_id=ACCOUNT_ID,
             strategy_instance_id=SID,
@@ -387,7 +389,7 @@ async def test_definitive_broker_rejection_folds_failed_not_unknown(
     """A non-``BrokerUnavailable`` ``BrokerError`` is a DEFINITIVE failure —
     never left ``unknown``, per the preserved JSONL-clerk discipline."""
     trade = _FakeTrade(submit_error=BrokerRequestInvalid("bad request", broker="alpaca"))
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -418,7 +420,7 @@ async def test_cancelled_submit_retains_unknown_custody_before_claim_release(
 
     trade = BlockingTrade()
     task = asyncio.create_task(
-        submit_enter(
+        submit_budgeted_test_enter(
             repo,
             account_id=ACCOUNT_ID,
             strategy_instance_id=SID,
@@ -454,7 +456,7 @@ async def test_submit_ack_with_a_mismatched_client_order_id_folds_uncertain_not_
     by-identity resolution find the real outcome, instead of a raw
     exception from folding evidence under the wrong ``order_ref``."""
     trade = _FakeTrade(submit_client_order_id_override="some-other-order-entirely")
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -476,7 +478,7 @@ async def test_lost_response_resolves_immediately_when_order_is_found(
     repo: ClerkSqliteRepository,
 ) -> None:
     trade = _FakeTrade(submit_error=BrokerUnavailable("timeout", broker="alpaca"))
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -497,7 +499,7 @@ async def test_lost_response_absent_within_grace_stays_unknown_not_failed(
     """A first absent lookup must not be treated as terminal — the order may
     still be in flight at the broker."""
     trade = _FakeTrade(submit_error=BrokerUnavailable("timeout", broker="alpaca"), lookup_absent=True)
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -515,14 +517,14 @@ async def test_absence_past_the_grace_window_resolves_failed(tmp_path: Path) -> 
     bumped well past that same 30s so the artificial clock jump exercises
     only the grace-window math, not an incidental execution-lease expiry —
     the two are unrelated 30s windows that happen to share a default."""
-    clock = _clock_at(1_700_000_000_000)
+    clock = _clock_at(NOON)
     r = ClerkSqliteRepository.initialize(
         account_id="PA-GRACE", artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
     )
     r.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
-    submit_start_run(r, account_id="PA-GRACE", strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    submit_budgeted_test_run(r, account_id="PA-GRACE", strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     trade = _FakeTrade(submit_error=BrokerUnavailable("timeout", broker="alpaca"), lookup_absent=True)
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         r,
         account_id="PA-GRACE",
         strategy_instance_id=SID,
@@ -546,7 +548,7 @@ async def test_absence_past_the_grace_window_resolves_failed(tmp_path: Path) -> 
 async def test_lookup_error_does_not_restart_the_original_uncertainty_grace(
     tmp_path: Path,
 ) -> None:
-    clock = _clock_at(1_700_000_000_000)
+    clock = _clock_at(NOON)
     r = ClerkSqliteRepository.initialize(
         account_id="PA-GRACE-LOOKUP",
         artifacts_root=tmp_path,
@@ -554,13 +556,13 @@ async def test_lookup_error_does_not_restart_the_original_uncertainty_grace(
         lease_ttl_ms=300_000,
     )
     r.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
-    submit_start_run(
+    submit_budgeted_test_run(
         r,
         account_id="PA-GRACE-LOOKUP",
         strategy_instance_id=SID,
         lifecycle_run_id=RUN_ID,
     )
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         r,
         account_id="PA-GRACE-LOOKUP",
         strategy_instance_id=SID,
@@ -599,13 +601,13 @@ async def test_same_owner_concurrent_resolves_fold_the_terminal_outcome_once(
     tmp_path: Path,
 ) -> None:
     """An overlapping same-process resolver is fenced before broker contact."""
-    clock = _clock_at(1_700_000_000_000)
+    clock = _clock_at(NOON)
     r = ClerkSqliteRepository.initialize(
         account_id="PA-RACE", artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
     )
     r.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
-    submit_start_run(r, account_id="PA-RACE", strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
-    accepted = accept_enter(
+    submit_budgeted_test_run(r, account_id="PA-RACE", strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    accepted = accept_budgeted_test_enter(
         r,
         account_id="PA-RACE",
         strategy_instance_id=SID,
@@ -655,7 +657,7 @@ async def test_kill_before_broker_contact_recovery_finds_one_accepted_operation_
 ) -> None:
     """Simulates a crash after the intent commits but before ``trade.submit``
     is ever called: recovery resolves by client_order_id and never resubmits."""
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -677,7 +679,7 @@ async def test_resolving_an_acknowledged_nonterminal_order_refreshes_evidence(
     repo: ClerkSqliteRepository,
 ) -> None:
     trade = _FakeTrade()
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -695,7 +697,7 @@ async def test_resolve_lookup_broker_error_folds_admission_blocking_unknown(
     repo: ClerkSqliteRepository,
 ) -> None:
     """A lookup error is nonterminal but must fail closed for later ENTERs."""
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -710,7 +712,7 @@ async def test_resolve_lookup_broker_error_folds_admission_blocking_unknown(
     order = repo.order(accepted.order_ref)
     assert order is not None and order.broker_order_id is None
     with pytest.raises(AdmissionBlockedError) as exc_info:
-        accept_enter(
+        accept_budgeted_test_enter(
             repo,
             account_id=ACCOUNT_ID,
             strategy_instance_id=SID,
@@ -724,7 +726,7 @@ async def test_resolve_lookup_broker_error_folds_admission_blocking_unknown(
 async def test_exact_duplicate_ack_clears_lookup_error_uncertainty(
     repo: ClerkSqliteRepository,
 ) -> None:
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -750,7 +752,7 @@ async def test_exact_duplicate_ack_clears_lookup_error_uncertainty(
     recovered = repo.effect_operation(submission.effect_operation_id)
     assert recovered is not None and recovered.state == "in_progress"
     with pytest.raises(AdmissionBlockedError) as exc_info:
-        accept_enter(
+        accept_budgeted_test_enter(
             repo,
             account_id=ACCOUNT_ID,
             strategy_instance_id=SID,
@@ -768,7 +770,7 @@ async def test_resolve_stays_unknown_on_a_mismatched_client_order_id(
     resolved must never be folded as this order's evidence — stays
     ``unknown`` rather than fabricating a terminal outcome from someone
     else's order."""
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -799,33 +801,27 @@ async def test_fills_fold_into_namespace_attributed_exposure_not_account_netting
     independently attributed positions, never netted against each other."""
     other_sid = "qqq-bot"
     repo.register_strategy_instance(strategy_instance_id=other_sid, symbol="SPY", config_hash="h2")
+    submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=other_sid, lifecycle_run_id=RUN_ID)
 
-    trade_a = _FakeTrade(submit_result=_broker_order("will-be-replaced", filled_quantity=3, filled_avg_price=500.0))
-    submission_a = await submit_enter(
+    submission_a = accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
         decision_id="dec-a",
         lifecycle_run_id=RUN_ID,
         leg=_leg(quantity=3),
-        trade=trade_a,
     )
 
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=other_sid, lifecycle_run_id=RUN_ID)
-    trade_b = _FakeTrade(submit_result=_broker_order("will-be-replaced", filled_quantity=5, filled_avg_price=501.0))
-    submission_b = await submit_enter(
+    submission_b = accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=other_sid,
         decision_id="dec-b",
         lifecycle_run_id=RUN_ID,
         leg=_leg(quantity=5),
-        trade=trade_b,
     )
 
-    # A synchronous submit response may contain an aggregate filled total,
-    # but the execution websocket is the capture authority. No order-level
-    # fill is derived until the recovery/reconciliation path observes it.
+    # Both budgeted entries are accepted before either order reports a fill.
     assert repo.position(SID, "SPY") == 0.0
     assert repo.position(other_sid, "SPY") == 0.0
     assert submission_a.effect_operation_id is not None
@@ -838,7 +834,7 @@ async def test_fills_fold_into_namespace_attributed_exposure_not_account_netting
     fold_order_evidence(
         repo,
         effect_operation_id=submission_b.effect_operation_id,
-        order=_broker_order(submission_b.order_ref, filled_quantity=5, filled_avg_price=501.0),
+        order=_broker_order(submission_b.order_ref, order_id="broker-order-2", filled_quantity=5, filled_avg_price=501.0),
     )
     assert repo.position(SID, "SPY") == 3.0
     assert repo.position(other_sid, "SPY") == 5.0
@@ -849,7 +845,7 @@ async def test_fills_fold_into_namespace_attributed_exposure_not_account_netting
 async def test_position_symbols_are_normalized_at_write_and_read_boundaries(
     repo: ClerkSqliteRepository,
 ) -> None:
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -897,7 +893,7 @@ async def test_duplicate_fill_observation_does_not_double_count(
     """Re-observing the same broker order state twice (e.g. a redundant
     reconciliation poll) must not double the attributed exposure."""
     trade = _FakeTrade(submit_result=_broker_order("x", filled_quantity=4, filled_avg_price=500.0))
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -922,7 +918,7 @@ async def test_out_of_order_broker_state_event_does_not_regress_orders_broker_st
     """Annex §3c: an event whose source timestamp is older than the value already
     recorded must not regress ``orders.broker_state``."""
     trade = _FakeTrade(submit_result=_broker_order("x", status="accepted", updated_at_ms=1_700_000_001_000))
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -949,7 +945,7 @@ def test_fill_quantity_with_no_avg_price_withholds_ack_and_folds_uncertain(
     ``NOT NULL``). Acking anyway would close the door on ever re-observing
     that fill, so both the fill and the ack are withheld and the effect
     stays ``unknown`` for a later resolution to retry."""
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -976,7 +972,7 @@ def test_partial_fill_delta_price_is_the_weighted_average_not_the_cumulative_one
     average over the *whole* order, not a per-delta price. 2 shares @ $10
     then a cumulative 5 @ $20 average means the second delta (3 shares) must
     be priced at $26.666... (``(5*20 - 2*10) / 3``), not copied as $20."""
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -1006,7 +1002,7 @@ def test_fractional_residual_reobservation_does_not_create_a_spurious_fill(
     differs only by float64 residue must not create a second fill row or
     drift the attributed position — the FILL_QTY_EPSILON-pinned gate, not a
     bare ``delta_qty <= 0``."""
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -1038,7 +1034,7 @@ def test_fill_is_durable_before_ack_so_a_crash_between_them_recovers_cleanly(
     already be durable and the order must still look un-acked
     (``broker_order_id is None``). Recovery re-polls every nonterminal effect
     and safely reconstructs the missing acknowledgement."""
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -1082,7 +1078,7 @@ async def test_ack_with_no_source_timestamp_does_not_crash_or_regress_broker_sta
     ``None`` source timestamp must never crash the annex §3c idempotency guard,
     and must never be treated as newer than an already-recorded real one."""
     trade = _FakeTrade(submit_result=_broker_order("x", status="accepted", updated_at_ms=1_700_000_000_900))
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -1106,7 +1102,7 @@ async def test_ack_with_no_source_timestamp_does_not_crash_or_regress_broker_sta
 
 def test_accept_rejects_a_colon_in_strategy_instance_id(repo: ClerkSqliteRepository) -> None:
     with pytest.raises(InvalidIdentityError):
-        accept_enter(
+        accept_budgeted_test_enter(
             repo,
             account_id=ACCOUNT_ID,
             strategy_instance_id="a:b",
@@ -1118,7 +1114,7 @@ def test_accept_rejects_a_colon_in_strategy_instance_id(repo: ClerkSqliteReposit
 
 def test_accept_rejects_a_colon_in_decision_id(repo: ClerkSqliteRepository) -> None:
     with pytest.raises(InvalidIdentityError):
-        accept_enter(
+        accept_budgeted_test_enter(
             repo,
             account_id=ACCOUNT_ID,
             strategy_instance_id=SID,
@@ -1130,7 +1126,7 @@ def test_accept_rejects_a_colon_in_decision_id(repo: ClerkSqliteRepository) -> N
 
 def test_accept_rejects_a_colon_in_lifecycle_run_id(repo: ClerkSqliteRepository) -> None:
     with pytest.raises(InvalidIdentityError):
-        accept_enter(
+        accept_budgeted_test_enter(
             repo,
             account_id=ACCOUNT_ID,
             strategy_instance_id=SID,
@@ -1144,7 +1140,7 @@ def test_accept_on_unknown_strategy_instance_is_a_typed_error_not_a_raw_500(
     repo: ClerkSqliteRepository,
 ) -> None:
     with pytest.raises(UnknownStrategyInstanceError):
-        accept_enter(
+        accept_budgeted_test_enter(
             repo,
             account_id=ACCOUNT_ID,
             strategy_instance_id="never-registered",
@@ -1157,7 +1153,7 @@ def test_accept_on_unknown_strategy_instance_is_a_typed_error_not_a_raw_500(
 def test_accept_binds_the_active_run_onto_command_and_effect_operation(
     repo: ClerkSqliteRepository,
 ) -> None:
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -1179,7 +1175,7 @@ def test_evidence_transitions_carry_the_same_run_id_as_the_accept(
     ``run_id`` as the ``ENTER_ACCEPTED`` transition that created the effect
     operation — otherwise the hash-chained log loses run attribution for
     exactly the rows that carry fills and acks (CodeRabbit)."""
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -1211,7 +1207,7 @@ async def test_uncertain_and_failed_transitions_also_carry_the_run_id(
     assert active is not None
 
     rejected = _FakeTrade(submit_error=BrokerRequestInvalid("bad request", broker="alpaca"))
-    failed_submission = await submit_enter(
+    failed_submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -1221,7 +1217,7 @@ async def test_uncertain_and_failed_transitions_also_carry_the_run_id(
         trade=rejected,
     )
     lost = _FakeTrade(submit_error=BrokerUnavailable("timeout", broker="alpaca"), lookup_absent=True)
-    uncertain_submission = await submit_enter(
+    uncertain_submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -1249,7 +1245,7 @@ def test_accept_rejects_when_no_active_run_matches_lifecycle_run_id(
     strategy_instance_id that exists. Nothing new is written on rejection."""
     before = len(repo.custody_transitions())
     with pytest.raises(NoActiveRunError):
-        accept_enter(
+        accept_budgeted_test_enter(
             repo,
             account_id=ACCOUNT_ID,
             strategy_instance_id=SID,
@@ -1265,7 +1261,7 @@ async def test_submit_enter_never_calls_broker_when_no_active_run_matches(
 ) -> None:
     trade = _FakeTrade()
     with pytest.raises(NoActiveRunError):
-        await submit_enter(
+        await submit_budgeted_test_enter(
             repo,
             account_id=ACCOUNT_ID,
             strategy_instance_id=SID,
@@ -1294,7 +1290,7 @@ async def test_accept_enter_rejects_when_an_account_clerk_uncertainty_blocks_new
     )
     before = len(repo.custody_transitions())
     with pytest.raises(AdmissionBlockedError) as exc_info:
-        accept_enter(
+        accept_budgeted_test_enter(
             repo,
             account_id=ACCOUNT_ID,
             strategy_instance_id=SID,
@@ -1311,7 +1307,7 @@ async def test_accept_enter_unaffected_by_a_different_bots_uncertainty(
 ) -> None:
     other_sid = "qqq-bot"
     repo.register_strategy_instance(strategy_instance_id=other_sid, symbol="QQQ", config_hash="h2")
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=other_sid, lifecycle_run_id="run-q")
+    submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=other_sid, lifecycle_run_id="run-q")
     raise_uncertainty(
         repo,
         strategy_instance_id=other_sid,
@@ -1322,7 +1318,7 @@ async def test_accept_enter_unaffected_by_a_different_bots_uncertainty(
         next_step="ns",
     )
 
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -1340,7 +1336,7 @@ async def test_lost_submit_atomically_blocks_more_exposure_until_exact_recovery(
         submit_error=BrokerUnavailable("timeout", broker="alpaca"),
         lookup_absent=True,
     )
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -1357,7 +1353,7 @@ async def test_lost_submit_atomically_blocks_more_exposure_until_exact_recovery(
     assert uncertainty is not None
 
     with pytest.raises(AdmissionBlockedError) as exc_info:
-        accept_enter(
+        accept_budgeted_test_enter(
             repo,
             account_id=ACCOUNT_ID,
             strategy_instance_id=SID,
@@ -1381,7 +1377,7 @@ async def test_lost_submit_atomically_blocks_more_exposure_until_exact_recovery(
         is None
     )
     with pytest.raises(AdmissionBlockedError) as exc_info:
-        accept_enter(
+        accept_budgeted_test_enter(
             repo,
             account_id=ACCOUNT_ID,
             strategy_instance_id=SID,
@@ -1404,13 +1400,13 @@ def test_fold_order_evidence_advances_each_effect_while_another_strategy_remains
     other_sid = "qqq-bot"
     other_run_id = "run-qqq"
     repo.register_strategy_instance(strategy_instance_id=other_sid, symbol="QQQ", config_hash="h2")
-    submit_start_run(
+    submit_budgeted_test_run(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=other_sid,
         lifecycle_run_id=other_run_id,
     )
-    first = accept_enter(
+    first = accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -1418,7 +1414,7 @@ def test_fold_order_evidence_advances_each_effect_while_another_strategy_remains
         lifecycle_run_id=RUN_ID,
         leg=_leg(),
     )
-    second = accept_enter(
+    second = accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=other_sid,
@@ -1491,7 +1487,7 @@ async def test_submit_enter_claims_the_operation_before_broker_contact(
             repo.claim_effect_operation(effect_operation_id=f"effect:{SID}:dec-1", owner="other-process")
 
     trade = _FakeTrade(on_submit=assert_claimed)
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -1520,7 +1516,7 @@ async def test_expired_submit_attempt_cannot_fold_its_late_broker_response(
     # holds it". It is still a claim error: ``submit_accepted_enter`` has no handler for
     # either and the lease is healthy.
     with pytest.raises(ClaimLostAfterBrokerIO):
-        await submit_enter(
+        await submit_budgeted_test_enter(
             repo,
             account_id=ACCOUNT_ID,
             strategy_instance_id=SID,
@@ -1544,7 +1540,7 @@ async def test_resolve_enter_submission_fails_closed_when_operation_claimed_else
 ) -> None:
     """Two concurrent recovery sweeps for the same order must not both reach
     the broker: the second one's claim attempt loses to the live owner."""
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -1568,7 +1564,7 @@ async def test_market_preflight_refusal_after_acceptance_never_contacts_broker(
     from app.broker.alpaca.clerk.sqlite.enter import EntrySubmissionRefusal, submit_accepted_enter
 
     leg = _leg()
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
         lifecycle_run_id=RUN_ID, decision_id="market-expired", leg=leg,
     )
@@ -1595,7 +1591,7 @@ async def test_market_preflight_refusal_after_acceptance_never_contacts_broker(
 def test_working_order_keeps_market_data_demand_until_failed(repo: ClerkSqliteRepository) -> None:
     from app.broker.alpaca.clerk.sqlite.order_evidence import fold_failed
 
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
         lifecycle_run_id=RUN_ID, decision_id="monitored-order", leg=_leg(),
     )
@@ -1614,7 +1610,7 @@ def test_working_order_keeps_market_data_demand_until_failed(repo: ClerkSqliteRe
 async def test_preflight_exception_is_a_known_local_refusal(repo: ClerkSqliteRepository) -> None:
     from app.broker.alpaca.clerk.sqlite.enter import submit_accepted_enter
 
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
         lifecycle_run_id=RUN_ID, decision_id="preflight-error", leg=_leg(),
     )
@@ -1645,7 +1641,7 @@ def test_deployed_symbol_demand_survives_stop_until_retirement(repo: ClerkSqlite
 
 def test_live_custody_demand_precedes_idle_deployments(repo: ClerkSqliteRepository) -> None:
     repo.register_strategy_instance(strategy_instance_id="idle-bot", symbol="AAA", config_hash="h")
-    accept_enter(
+    accept_budgeted_test_enter(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
         lifecycle_run_id=RUN_ID, decision_id="custody-priority", leg=_leg(),
     )
