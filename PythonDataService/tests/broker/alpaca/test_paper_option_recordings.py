@@ -433,6 +433,7 @@ _CONDOR_FLAT = "3225-D1-condor-flat-20261016"
 _CONDOR_BEFORE_OVERLAP = "3225-D2a-condor-before-overlap-20261016"
 _CONDOR_OVERLAP = "3225-D2-condor-overlap-20261016"
 _BUYBACK_MISSED = "C3-buyback-window-missed"
+_BUYBACK_RETRY_MISSED = "3225-C4-buyback-retry-window-missed-20261016"
 _SPREAD_LONG, _SPREAD_SHORT = "SPY261016C00768000", "SPY261016C00773000"
 # step -> (long legs, short legs, the net limit each order was sent at (None: a market order), the net price each
 # order filled at as Alpaca states it). Entries and exits are in the order they were sent.
@@ -463,6 +464,7 @@ _STRUCTURE_PASSES: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[str |
     ),
     # The owner did not submit the isolated buy-back before the strategy's exit; both legs closed together.
     _BUYBACK_MISSED: (("SPY261019C00770000",), ("SPY261019C00769000",), ("-0.29", None), ("-0.29", "0.3")),
+    _BUYBACK_RETRY_MISSED: (("SPY261019C00767000",), ("SPY261019C00766000",), ("-0.32", None), ("-0.32", "0.35")),
 }
 _STRUCTURE_PASS = pytest.mark.parametrize("step", sorted(_STRUCTURE_PASSES))
 # The steps whose recordings keep the activity feed. B4's was left out on purpose (6 MB of polls).
@@ -606,6 +608,7 @@ def test_two_bots_structures_held_at_once_are_one_account_position_of_two_of_eac
         (_CONDOR_FLAT, "99923.04", "51.90", "48.10", "4.20"),
         (_CONDOR_BEFORE_OVERLAP, "99917.74", "57.90", "42.10", "4.20"),
         (_BUYBACK_MISSED, "99918.84", "28.95", "71.05", "1.10"),
+        (_BUYBACK_RETRY_MISSED, "99907.14", "31.95", "68.05", "3.10"),
     ],
 )
 def test_a_credit_structure_adds_premium_to_cash_and_holds_its_width_until_the_whole_structure_closes(
