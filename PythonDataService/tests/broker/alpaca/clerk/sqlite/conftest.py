@@ -20,7 +20,7 @@ from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, appen
 from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
 from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms, risk_fill_sequence
-from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
+from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import (
     AccountHoldRaisedFacts,
@@ -47,7 +47,7 @@ from app.schemas.exit_terms import ExitTerms
 from app.services.session_authority import et_minute_of_day_ms
 from tests._helpers.session_clock import pin_wall_clock_in_session
 from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
-from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_enter
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import accept_budgeted_test_enter, submit_budgeted_test_enter
 from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 from tests.broker.alpaca.documented_examples import documented
 
@@ -792,7 +792,7 @@ def day_pnl_repo(
 def _accept_day_pnl_enter(
     repo: ClerkSqliteRepository, *, decision_id: str
 ) -> EnterSubmission:
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id=DAY_PNL_ACCOUNT_ID,
         strategy_instance_id=DAY_PNL_SID,
