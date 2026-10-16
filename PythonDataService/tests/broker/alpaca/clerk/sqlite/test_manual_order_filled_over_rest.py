@@ -252,10 +252,10 @@ async def test_a_manual_order_filled_only_over_rest_ends_on_its_executions_from_
     is credited again.
     """
     repo, _clock = clocked_repo
+    sid_b, _run_b = _register_second_spy_lane(repo)
     website = _Website(repo=repo)
     manual = await _buy_limit(repo, website)
     order_ref, effect_id = manual.leg.order_ref, manual.leg.effect_operation_id
-    sid_b, _run_b = _register_second_spy_lane(repo)
     original = website.orders[order_ref]
     filled = _filled(original, repo, filled_quantity=5, avg=99.87)
     website.orders[order_ref] = filled
@@ -341,10 +341,10 @@ async def test_a_second_replacement_that_fills_before_the_clerk_sees_its_chain_e
     redelivery of C's frame once the chain is known credits nothing again.
     """
     repo, _clock = clocked_repo
+    sid_b, _run_b = _register_second_spy_lane(repo)
     website = _Website(repo=repo)
     manual = await _buy_limit(repo, website)
     order_ref, effect_id = manual.leg.order_ref, manual.leg.effect_operation_id
-    sid_b, _run_b = _register_second_spy_lane(repo)
     _replaced_a, replacement_b = _replace_at_alpaca(repo, website, order_ref)
     replaced_b = replacement_b.model_copy(update={"status": "replaced", "replaced_by": _C})
     website.replacements[_B] = replaced_b
@@ -442,10 +442,10 @@ async def test_a_filled_leg_whose_executions_cannot_be_read_yet_is_retried_until
     the execution and ends it, replacing the cumulative with the exact one.
     """
     repo, clock = clocked_repo
+    sid_b, _run_b = _register_second_spy_lane(repo)
     website = _Website(repo=repo)
     manual = await _buy_limit(repo, website)
     order_ref, effect_id = manual.leg.order_ref, manual.leg.effect_operation_id
-    sid_b, _run_b = _register_second_spy_lane(repo)
     original = website.orders[order_ref]
     website.orders[order_ref] = _filled(original, repo, filled_quantity=5, avg=99.90)
     feed = _ActivityFeed()
@@ -816,9 +816,9 @@ async def test_another_legs_open_coverage_conflict_never_holds_back_a_clean_leg(
     credited and the leg ends; the other bot's entry is admitted.
     """
     repo, _clock = clocked_repo
+    sid_b, _ = _register_second_spy_lane(repo)
     website = _Website(repo=repo)
     first = await _buy_limit(repo, website)
-    sid_b, _ = _register_second_spy_lane(repo)
     first_ref = first.leg.order_ref
     assert first_ref is not None
     first_filled = _filled(website.orders[first_ref], repo, filled_quantity=5, avg=99.90)

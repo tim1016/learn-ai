@@ -114,10 +114,10 @@ async def test_an_under_credited_chain_ends_on_its_exact_executions_once_the_hea
     the coverage conflict clear, and the leg ends -- no operator.
     """
     repo, clock = clocked_repo
+    sid_b, _run_b = _register_second_spy_lane(repo)
     website = _Website(repo=repo)
     manual = await _buy_limit(repo, website)
     order_ref, effect_id = manual.leg.order_ref, manual.leg.effect_operation_id
-    sid_b, _run_b = _register_second_spy_lane(repo)
     now = repo.clock()
     a_partial = website.orders[order_ref].model_copy(update={
         "status": "partially_filled", "filled_quantity": 2, "filled_avg_price": 99.90,

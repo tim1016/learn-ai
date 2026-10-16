@@ -164,12 +164,12 @@ async def test_a_manual_limit_alpaca_ends_unfilled_ends_its_effect_and_bots_may_
     effect, and the next pass lets another bot's entry through.
     """
     repo, _clock = clocked_repo
+    sid_b, _run_b = _register_second_spy_lane(repo)
     time_in_force, terminal_kind, leg_state, ticket_state, owner_copy = _ENDINGS[ending]
     website = _AlpacaWebsite(repo=repo)
     manual = await _buy_limit(repo, website, time_in_force=time_in_force)
     order_ref, effect_id = manual.leg.order_ref, manual.leg.effect_operation_id
     assert order_ref is not None and effect_id is not None
-    sid_b, _run_b = _register_second_spy_lane(repo)
     assert _another_bots_entry(repo, sid_b) == (False, "MANUAL_ORDER_OUTSTANDING")
 
     ended = _ended_at_alpaca(repo, website, order_ref, ending)
@@ -237,6 +237,7 @@ async def test_a_partly_filled_manual_limit_cancelled_at_alpaca_keeps_its_fill_a
     clocked_repo, route: str,  # noqa: F811
 ) -> None:
     repo, _clock = clocked_repo
+    sid_b, _run_b = _register_second_spy_lane(repo)
     website = _AlpacaWebsite(repo=repo)
     manual = await _buy_limit(repo, website, quantity=5)
     order_ref, effect_id = manual.leg.order_ref, manual.leg.effect_operation_id
@@ -256,7 +257,7 @@ async def test_a_partly_filled_manual_limit_cancelled_at_alpaca_keeps_its_fill_a
     assert repo.attributed_positions_by_symbol() == pytest.approx({"SPY": 3.0}, abs=1e-9, rel=0)
     assert len(_manual_endings(repo, order_ref)) == 1
     assert _owner_reads(repo).ending == "Cancelled at Alpaca with 3 of 5 shares filled."
-    assert _another_bots_entry(repo, _register_second_spy_lane(repo)[0]) == (True, None)
+    assert _another_bots_entry(repo, sid_b) == (True, None)
 
 
 async def test_a_cancel_frame_that_outruns_its_fill_never_ends_the_order_short_of_its_shares(
@@ -444,6 +445,7 @@ async def test_a_manual_order_left_working_over_an_order_alpaca_already_ended_is
     order up by its exact identity on each pass; that lookup now ends it.
     """
     repo, _clock = clocked_repo
+    sid_b, _run_b = _register_second_spy_lane(repo)
     website = _AlpacaWebsite(repo=repo)
     manual = await _buy_limit(repo, website)
     order_ref, effect_id = manual.leg.order_ref, manual.leg.effect_operation_id
@@ -459,7 +461,6 @@ async def test_a_manual_order_left_working_over_an_order_alpaca_already_ended_is
     ))
     assert repo.effect_operation(effect_id).state == "in_progress"
     assert repo.has_nonterminal_manual_order()
-    sid_b, _run_b = _register_second_spy_lane(repo)
 
     await _reconciliation_pass(repo, website)
 
