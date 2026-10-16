@@ -11,7 +11,7 @@
         @if (plotted.shade; as shade) { <polygon class="drawdown-span" [attr.points]="shade" /> }
         <polyline [attr.points]="plotted.line" />
         @for (point of plotted.points; track point.openMs) {
-          <circle [attr.cx]="point.x" [attr.cy]="point.y" r="4" [attr.aria-label]="point.label"
+          <circle [attr.cx]="point.x" [attr.cy]="point.y" r="4"
             (click)="point.openMs === null ? null : ask(point.openMs, $event)"><title>{{ point.label }}</title></circle>
         }
       </svg>

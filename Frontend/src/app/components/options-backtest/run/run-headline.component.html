@@ -16,7 +16,7 @@
       @if (figures().trade_win_rate; as rate) {
         <dd class="big">{{ rate.display_percent_1_place }}%</dd>
         <dd class="sub">{{ rate.rounded_to_6_places }} rounded to 6 places · {{ rate.numerator }} of {{ rate.denominator }}</dd>
-        <meter class="win-track" min="0" max="1" [attr.value]="rate.rounded_to_6_places"></meter>
+        <dd><meter class="win-track" min="0" max="1" [attr.value]="rate.rounded_to_6_places"></meter></dd>
       } @else {
         <dd class="big">No trades</dd>
       }
