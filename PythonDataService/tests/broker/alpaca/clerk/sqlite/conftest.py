@@ -546,7 +546,11 @@ async def _fill_entry(
     filled = _broker_order_fixture(
         submission.order_ref, status="filled", quantity=quantity,
         filled_quantity=quantity, filled_avg_price=100.0,
-    )
+    ).model_copy(update={
+        "submitted_at_ms": repo.clock(), "created_at_ms": repo.clock(),
+        "updated_at_ms": repo.clock() + 600, "observed_at_ms": repo.clock() + 600,
+        "filled_at_ms": repo.clock() + 600,
+    })
     fold_order_evidence(repo, effect_operation_id=submission.effect_operation_id, order=filled)
     sink = SqliteTradeUpdateEvidenceSink(
         repo=repo, intake=ReentrantAsyncLock(), reconciler=_AssertingNoReconciler()

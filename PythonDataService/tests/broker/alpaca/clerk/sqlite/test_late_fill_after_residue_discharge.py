@@ -28,10 +28,9 @@ from typing import cast
 import pytest
 
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.economic_projection import SqliteEconomicProjectionReader
 from app.broker.alpaca.clerk.sqlite.economic_projection_models import EconomicSnapshot
-from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
 from app.broker.alpaca.clerk.sqlite.facts import AttributedResidueDischargedFacts, ExecutionSliceFilledFacts
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
@@ -55,7 +54,9 @@ from app.broker.capture.journal import CaptureJournal
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite import test_safe_flatten_execution as safe_flatten
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_enter, submit_budgeted_test_run
 from tests.broker.alpaca.clerk.sqlite.conftest import _TestClock, _walk_clock_to
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 from tests.broker.alpaca.clerk.sqlite.test_exit_lost_closing_order_resend import (
     FIVE_MINUTES_OF_PASSES,
     RESEND_AFTER_MS,
@@ -90,6 +91,7 @@ from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
     RUN_ID,
     SID,
     crashed_with_exposure,  # noqa: F401 -- the repository, in the regular session, these tests reuse
+    historical_crashed_with_exposure,  # noqa: F401 -- old short custody and later-run replay
 )
 from tests.broker.alpaca.clerk.test_trade_evidence import _authorization_source, _Capture, _no_backoff
 
@@ -341,7 +343,7 @@ async def test_a_late_fill_delivered_again_changes_nothing(
 
 
 async def test_a_fill_of_an_order_created_after_the_discharge_is_credited(
-    crashed_with_exposure,  # noqa: F811
+    historical_crashed_with_exposure,  # noqa: F811
 ) -> None:
     """A discharge accounts for the orders that came before it, and for no later one.
 
@@ -350,11 +352,11 @@ async def test_a_fill_of_an_order_created_after_the_discharge_is_credited(
     both closing orders' fills arrive. The first, written off by the
     discharge, moves nothing; the second closes the 10 the bot holds.
     """
-    repo, clock = crashed_with_exposure
+    repo, clock = historical_crashed_with_exposure
     alpaca = _Alpaca(repo, clock, submits=("arrives_unanswered", "arrives_unanswered"))
     facade, written_off = await _a_lost_closing_order_is_written_off(repo, alpaca)
 
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=A_LATER_RUN_ID)
+    seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=A_LATER_RUN_ID)
     await safe_flatten._held_position(
         repo, decision_id="enter-2", lifecycle_run_id=A_LATER_RUN_ID, execution_id="exec-2"
     )
@@ -518,10 +520,10 @@ async def test_the_rest_of_a_closing_order_that_arrives_after_its_position_was_d
 
 
 async def test_a_short_bots_closing_buy_that_arrives_after_its_position_was_discharged_is_not_credited(
-    crashed_with_exposure,  # noqa: F811
+    historical_crashed_with_exposure,  # noqa: F811
 ) -> None:
     """The other side: a bot short 10 whose closing BUY covered unseen would be left attributed +10."""
-    repo, clock = crashed_with_exposure
+    repo, clock = historical_crashed_with_exposure
     alpaca = _Alpaca(repo, clock, submits=("arrives_unanswered",))
     alpaca.holds = -10.0
     facade, current_context = await _stopped_bot_offered_its_flatten(
@@ -575,7 +577,7 @@ def _the_bots_stream(repo: ClerkSqliteRepository) -> SqliteTradeUpdateEvidenceSi
 
 async def _an_entry_fails_while_its_order_is_live(repo: ClerkSqliteRepository, *, side: str = "buy") -> OrderResource:
     """The bot's entry for 10 SPY is recorded as failed; Alpaca has the order, and it has not filled."""
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="enter-lost",
         lifecycle_run_id=RUN_ID, leg=safe_flatten._leg(quantity=10, side=side),
         trade=_DuplicateIdTrade(repo, fill_first=False),
@@ -620,7 +622,7 @@ async def _a_position_is_opened(
     decision_id: str | None = None,
 ) -> None:
     """``sid`` enters 10 of ``symbol``, and the entry's fill arrives on the stream."""
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=sid, decision_id=decision_id or f"enter-{symbol}",
         lifecycle_run_id=run_id, leg=safe_flatten._leg(symbol=symbol, quantity=10, side=side),
         trade=safe_flatten._FakeTrade(),
@@ -682,7 +684,7 @@ async def _a_pass_against_a_flat_account(repo: ClerkSqliteRepository) -> str:
 
 @pytest.mark.parametrize("side", ["buy", "sell"])
 async def test_an_entrys_fill_that_arrives_after_its_position_was_discharged_is_not_credited(
-    crashed_with_exposure,  # noqa: F811
+    historical_crashed_with_exposure,  # noqa: F811
     side: str,
 ) -> None:
     """Not closing orders alone: a discharge accounts for what any order of the bot's in the symbol did before it.
@@ -693,7 +695,7 @@ async def test_an_entrys_fill_that_arrives_after_its_position_was_discharged_is_
     credited, and fenced as a position the bot holds. It is recorded, the
     bot holds nothing, and no notice says it does -- long or short.
     """
-    repo, _clock = crashed_with_exposure
+    repo, _clock = historical_crashed_with_exposure
     lost = await _an_entry_fails_while_its_order_is_live(repo, side=side)
     await _a_position_is_opened_and_then_discharged(repo, side=side)
 
@@ -765,7 +767,7 @@ async def test_an_entrys_fill_not_proven_to_come_after_the_discharges_read_is_no
 
 
 async def test_an_entrys_fill_executed_between_two_discharges_is_not_credited(
-    crashed_with_exposure,  # noqa: F811
+    historical_crashed_with_exposure,  # noqa: F811
 ) -> None:
     """The newest discharge is the one that counts: its read is the last word on what the bot held.
 
@@ -773,12 +775,12 @@ async def test_an_entrys_fill_executed_between_two_discharges_is_not_credited(
     and discharged too. The lost entry's execution is timed after the first
     read and before the second, so the second read counted it: not credited.
     """
-    repo, _clock = crashed_with_exposure
+    repo, _clock = historical_crashed_with_exposure
     lost = await _an_entry_fails_while_its_order_is_live(repo)
     await _a_position_is_opened_and_then_discharged(repo)
     first_read_at_ms = _the_discharge_read_the_account_at(repo)
     _walk_clock_to(repo, repo.clock() + 60_000)
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=A_LATER_RUN_ID)
+    seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=A_LATER_RUN_ID)
     await _a_position_is_opened_and_then_discharged(repo, run_id=A_LATER_RUN_ID, decision_id="enter-SPY-again")
     executed_at_ms = first_read_at_ms + DISCHARGE_READ_CLOCK_ALLOWANCE_MS + 1
     assert executed_at_ms < _the_discharge_read_the_account_at(repo)
@@ -802,7 +804,7 @@ async def test_an_entry_credited_and_then_discharged_before_a_pass_fenced_it_is_
     and the bot holding none of it: it raises no notice.
     """
     repo, _clock = crashed_with_exposure
-    await submit_enter(
+    await submit_budgeted_test_enter(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="enter-raced",
         lifecycle_run_id=RUN_ID, leg=safe_flatten._leg(quantity=10),
         trade=_DuplicateIdTrade(repo, fill_first=True),
@@ -871,7 +873,7 @@ async def test_another_bots_discharge_in_the_symbol_withholds_nothing_of_this_bo
     repo.register_strategy_instance(
         exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=SIBLING_SID, symbol="SPY", config_hash="h2"
     )
-    submit_start_run(
+    submit_budgeted_test_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SIBLING_SID, lifecycle_run_id=SIBLING_RUN_ID
     )
     await _a_position_is_opened_and_then_discharged(repo, sid=SIBLING_SID, run_id=SIBLING_RUN_ID)
@@ -904,7 +906,7 @@ async def test_another_bots_discharge_does_not_end_the_lookups_of_this_bots_clos
     repo.register_strategy_instance(
         exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=SIBLING_SID, symbol="SPY", config_hash="h2"
     )
-    submit_start_run(
+    submit_budgeted_test_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SIBLING_SID, lifecycle_run_id=SIBLING_RUN_ID
     )
     await _a_position_is_opened(repo, sid=SIBLING_SID, run_id=SIBLING_RUN_ID)
@@ -951,7 +953,7 @@ async def test_the_bots_discharge_in_another_symbol_withholds_nothing_in_this_on
     [("on_the_stream", "EXECUTION_SLICE_FILLED"), ("in_a_reconnects_replay", "ORDER_FILL_OBSERVED")],
 )
 async def test_a_rebuild_from_the_mirror_withholds_the_same_credit_and_keeps_the_same_record(
-    crashed_with_exposure,  # noqa: F811
+    historical_crashed_with_exposure,  # noqa: F811
     tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,
     arrives: str,
@@ -964,14 +966,14 @@ async def test_a_rebuild_from_the_mirror_withholds_the_same_credit_and_keeps_the
     rebuilt from the mirror alone holds the same transitions, the same 10,
     the same fills and the same orders.
     """
-    repo, clock = crashed_with_exposure
+    repo, clock = historical_crashed_with_exposure
     alpaca = _AlpacaListingItsClosedOrders(repo, clock, submits=("arrives_unanswered",))
     facade, closing = await _a_lost_closing_order_is_written_off(repo, alpaca)
     if arrives == "on_the_stream":
         await _its_fill_arrives_on_the_stream(_the_stream(repo, facade), closing)
     else:
         await _a_reconnect_replays_the_closed_orders(repo, facade, alpaca)
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=A_LATER_RUN_ID)
+    seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=A_LATER_RUN_ID)
     await safe_flatten._held_position(
         repo, decision_id="enter-2", lifecycle_run_id=A_LATER_RUN_ID, execution_id="exec-2"
     )
@@ -1133,7 +1135,7 @@ async def test_the_books_read_again_right_after_a_write_off(
 
 
 async def test_a_re_entry_after_a_write_off_closes_only_its_own_lot(
-    crashed_with_exposure,  # noqa: F811
+    historical_crashed_with_exposure,  # noqa: F811
 ) -> None:
     """#2975, end to end: the bot's next position in the asset is not the written-off lot's cost.
 
@@ -1144,12 +1146,12 @@ async def test_a_re_entry_after_a_write_off_closes_only_its_own_lot(
     executions no longer added up to its attributed position and the P&L was
     unavailable, or the sale booked the written-off lot's cost.
     """
-    repo, clock = crashed_with_exposure
+    repo, clock = historical_crashed_with_exposure
     alpaca = _Alpaca(repo, clock, submits=("arrives_unanswered", "arrives_unanswered"))
     facade, _written_off = await _a_lost_closing_order_is_written_off(repo, alpaca)
     assert _the_bots_money(repo).exposure == {}
 
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=A_LATER_RUN_ID)
+    seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=A_LATER_RUN_ID)
     await safe_flatten._held_position(
         repo, decision_id="enter-2", lifecycle_run_id=A_LATER_RUN_ID, execution_id="exec-2"
     )
@@ -1164,7 +1166,7 @@ async def test_a_re_entry_after_a_write_off_closes_only_its_own_lot(
     later = await _its_flatten_fails_after_its_own_order_fills_unseen(repo, alpaca, facade, _context_of(repo, SID))
     stream = _the_stream(repo, facade)
 
-    await _its_fill_arrives_on_the_stream(stream, later)
+    await _its_fill_arrives_on_the_stream(stream, later, executed_at_ms=repo.clock())
     assert repo.position(SID, "SPY") == 0
 
     money = _the_bots_money(repo)

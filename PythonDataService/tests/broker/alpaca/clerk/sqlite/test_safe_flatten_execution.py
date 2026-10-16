@@ -279,6 +279,19 @@ def crashed_with_exposure(tmp_path: Path):
     repo.close()
 
 
+@pytest.fixture
+def historical_crashed_with_exposure(tmp_path: Path):
+    """A pre-cutover Start retained for old short custody and later-run replay."""
+    clock = _clock_at(BUDGETED_RTH_MS)
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
+    )
+    repo.register_strategy_instance(exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=SID, symbol="SPY", config_hash="h1")
+    seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    yield repo, clock
+    repo.close()
+
+
 async def _reconciled_flatten_plan(repo: ClerkSqliteRepository):
     """Operator flow: Reconcile now -> presented plan (production path)."""
     await reconcile_account(

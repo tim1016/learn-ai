@@ -43,14 +43,8 @@ from app.broker.alpaca.clerk.program_leg import LegShape, ProgramLeg
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
-from app.broker.alpaca.clerk.sqlite.enter import (
-    EnterSubmission,
-    EntrySubmissionRefusal,
-    accept_enter,
-    submit_accepted_enter,
-    submit_enter,
-)
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
+from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, EntrySubmissionRefusal, submit_accepted_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.exit_recovery import DEFAULT_RECOVERY_INTERVAL_MS
 from app.broker.alpaca.clerk.sqlite.facts import OrderSubmitFailedFacts
@@ -94,8 +88,15 @@ from app.services import market_liveness
 from app.services.bot_binding_authority import SyntheticBindingAuthority
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.source_bar_ledger import RetainedSourceBar
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import (
+    accept_budgeted_test_enter,
+    submit_budgeted_test_enter,
+    submit_budgeted_test_run,
+)
 from tests.broker.alpaca.clerk.sqlite.conftest import (
+    BUDGETED_RTH_MS,
     NOON,
+    _clock_at,
     _FakeTradePort,
     _fill_entry,
     _make_held_position,
@@ -103,6 +104,7 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
     _walk_clock_to,
     complete_fee_evidence,
 )
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS, _deploy, _gate, _new_budget_repo
 from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
 from tests.broker.alpaca.clerk.sqlite.test_exit import POST_CLOSE_MS
@@ -314,7 +316,7 @@ async def test_an_enter_refused_as_a_wash_trade_fails_and_the_bot_may_enter_agai
     try:
         _deploy(repo, "b", 50_000)
         leg = BrokerOrderLeg(symbol="SPY", side="buy", quantity=2)
-        accepted = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="b", decision_id="b-1",
+        accepted = accept_budgeted_test_enter(repo, account_id=repo.account_id, strategy_instance_id="b", decision_id="b-1",
                                 lifecycle_run_id="run-b", leg=leg, reference_price=100, envelope=_gate())
 
         result = await submit_accepted_enter(repo, accepted=accepted, leg=leg,
@@ -329,7 +331,7 @@ async def test_an_enter_refused_as_a_wash_trade_fails_and_the_bot_may_enter_agai
         assert facts.broker_error_code == _ILLUSTRATIVE_CODE
         assert facts.why == f"Alpaca refused the order: {_WASH_TRADE_MESSAGE}"
         assert facts.opposite_open_order_refs == []
-        again = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="b", decision_id="b-2",
+        again = accept_budgeted_test_enter(repo, account_id=repo.account_id, strategy_instance_id="b", decision_id="b-2",
                              lifecycle_run_id="run-b", leg=leg, reference_price=100, envelope=_gate())
         assert again.created
     finally:
@@ -339,8 +341,24 @@ async def test_an_enter_refused_as_a_wash_trade_fails_and_the_bot_may_enter_agai
 def _register_spy_lane(repo: ClerkSqliteRepository, sid: str) -> str:
     run_id = f"{sid}-run"
     repo.register_strategy_instance(strategy_instance_id=sid, symbol="SPY", config_hash=f"{sid}-h")
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=sid, lifecycle_run_id=run_id)
+    if repo.budget_authority_version() == 1:
+        seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=sid, lifecycle_run_id=run_id)
+    else:
+        submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=sid, lifecycle_run_id=run_id)
     return run_id
+
+
+@pytest.fixture
+def historical_clocked_repo(tmp_path: Path):
+    """Pre-budget account for an older filled-order refusal record."""
+    clock = _clock_at(BUDGETED_RTH_MS)
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    repo.register_strategy_instance(strategy_instance_id=WATCHDOG_SID, symbol="SPY", config_hash="wd-h1")
+    seed_historical_run_started(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=WATCHDOG_SID, lifecycle_run_id=WATCHDOG_RUN
+    )
+    yield repo, clock
+    repo.close()
 
 
 def test_a_refusals_facts_omit_an_absent_code_so_every_earlier_row_hashes_the_same() -> None:
@@ -394,7 +412,7 @@ async def _refused_enter_facts(
     repo: ClerkSqliteRepository, sid: str, run_id: str, refusal: BrokerError,
 ) -> OrderSubmitFailedFacts:
     """``sid`` sends a 5-share SPY buy that Alpaca refuses with ``refusal``; its durable record."""
-    result = await submit_enter(repo, account_id=ACCOUNT_ID, strategy_instance_id=sid, decision_id=f"{sid}-buy",
+    result = await submit_budgeted_test_enter(repo, account_id=ACCOUNT_ID, strategy_instance_id=sid, decision_id=f"{sid}-buy",
                                 lifecycle_run_id=run_id, leg=_leg(quantity=5),
                                 trade=_FakeTradePort(submit_error=refusal))
     assert result.effect_operation_id is not None and result.order_ref is not None
@@ -472,7 +490,7 @@ async def test_an_opposite_order_is_open_unless_it_provably_never_reached_alpaca
     run_b = _register_spy_lane(repo, "b")
     lost = BrokerUnavailable("response lost", broker="alpaca")
     refused = _alpaca_answer(422, 42210000, "qty must be > 0")
-    sent = await submit_enter(repo, account_id=ACCOUNT_ID, strategy_instance_id="b", decision_id="b-buy",
+    sent = await submit_budgeted_test_enter(repo, account_id=ACCOUNT_ID, strategy_instance_id="b", decision_id="b-buy",
                               lifecycle_run_id=run_b, leg=_leg(quantity=5),
                               trade=_FakeTrade(submit_error=refused if b_buy == "refused" else lost, lookup_error=lost))
     assert sent.effect_operation_id is not None and sent.order_ref is not None
@@ -488,7 +506,7 @@ async def test_an_opposite_order_is_open_unless_it_provably_never_reached_alpaca
 @pytest.mark.parametrize("code", [_ILLUSTRATIVE_CODE, 40310001, None])
 @pytest.mark.parametrize("other_order", ["none", "same_side_working", "opposite_side_filled"])
 async def test_a_refusal_with_no_opposite_order_open_never_names_another_order(
-    clocked_repo,  # noqa: F811
+    historical_clocked_repo,
     code: int | None,
     other_order: str,
 ) -> None:
@@ -498,10 +516,10 @@ async def test_a_refusal_with_no_opposite_order_open_never_names_another_order(
     names another order only while one on the other side is open: C's buy
     working on the same side, or A's sell that already filled, is not one.
     """
-    repo, _clock = clocked_repo
+    repo, _clock = historical_clocked_repo
     if other_order == "same_side_working":
         run_c = _register_spy_lane(repo, "c")
-        await submit_enter(repo, account_id=ACCOUNT_ID, strategy_instance_id="c", decision_id="c-buy",
+        await submit_budgeted_test_enter(repo, account_id=ACCOUNT_ID, strategy_instance_id="c", decision_id="c-buy",
                            lifecycle_run_id=run_c, leg=_leg(quantity=3), trade=_FakeTrade())
     elif other_order == "opposite_side_filled":
         await _a_sells(repo, fills=True)
@@ -547,7 +565,7 @@ async def test_an_enter_that_never_reached_the_book_releases_its_cash_claim(
     try:
         _deploy(repo, "b", 50_000)
         leg = BrokerOrderLeg(symbol="SPY", side="buy", quantity=2)
-        accepted = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="b", decision_id="b-1",
+        accepted = accept_budgeted_test_enter(repo, account_id=repo.account_id, strategy_instance_id="b", decision_id="b-1",
                                 lifecycle_run_id="run-b", leg=leg, reference_price=100, envelope=_gate())
         if refusal == "broker_wash_trade":
             await submit_accepted_enter(repo, accepted=accepted, leg=leg,
@@ -594,7 +612,7 @@ async def _a_sells_into_bs_working_buy(
     """A holds 10 SPY; B's 5-share buy is working; Alpaca refuses A's sell as a potential wash trade."""
     ref_a = await _held_position(repo)
     sid_b, run_b = _register_second_spy_lane(repo)
-    working_b = await submit_enter(repo, account_id=ACCOUNT_ID, strategy_instance_id=sid_b, decision_id="b-buy",
+    working_b = await submit_budgeted_test_enter(repo, account_id=ACCOUNT_ID, strategy_instance_id=sid_b, decision_id="b-buy",
                                    lifecycle_run_id=run_b, leg=_leg(quantity=5), trade=_FakeTrade())
     await _as_sell_is_refused(repo, ref_a, program_leg=program_leg)
     return working_b
@@ -675,6 +693,7 @@ async def test_a_refused_exit_is_sent_again_on_the_first_pass_after_the_other_bo
         clock.advance(DEFAULT_RECOVERY_INTERVAL_MS)
     assert redrive.submitted_legs == []
     filled_b = await _fill_entry(repo, working_b, quantity=5, execution_id="b-exec")
+    assert repo.open_opposite_side_orders(symbol="SPY", side=OrderSide.SELL) == ()
     await reconcile_account(repo, read=_FakeRead(orders=[filled_b], positions=[_position("SPY", quantity=15.0)]),
                             trade=redrive, pricing=UNPRICEABLE_RECOVERY)
 
@@ -697,7 +716,7 @@ async def test_a_refused_exit_is_not_sent_into_another_buy_opened_since_the_refu
     working_b = await _a_sells_into_bs_working_buy(repo)
     filled_b = await _fill_entry(repo, working_b, quantity=5, execution_id="b-exec")
     run_c = _register_spy_lane(repo, "c")
-    working_c = await submit_enter(repo, account_id=ACCOUNT_ID, strategy_instance_id="c", decision_id="c-buy",
+    working_c = await submit_budgeted_test_enter(repo, account_id=ACCOUNT_ID, strategy_instance_id="c", decision_id="c-buy",
                                    lifecycle_run_id=run_c, leg=_leg(quantity=3), trade=_FakeTrade())
     c_working = _broker_order(working_c.order_ref or "", order_id=f"bo-{working_c.order_ref}",
                               status="new", quantity=3.0)
@@ -1062,7 +1081,7 @@ class _OneAccount:
 
     def accept_a_and_fill(self, *, quantity: int = 1, filled: int = 1) -> EnterSubmission:
         """Bot A's ENTER, accepted, and ``filled`` of its shares recorded -- after the last reading."""
-        entry = accept_enter(self.repo, account_id=self.repo.account_id, strategy_instance_id="a", decision_id="a-1",
+        entry = accept_budgeted_test_enter(self.repo, account_id=self.repo.account_id, strategy_instance_id="a", decision_id="a-1",
             lifecycle_run_id="run-a", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=quantity),
             reference_price=100, envelope=self.clerk.live_envelope)
         _append_slice(self.repo, entry, execution_id="a-fill-1", quantity=filled, source_event_at_ms=self.clock())
@@ -1193,7 +1212,7 @@ async def test_a_fill_during_a_cadence_reading_makes_the_next_entry_wait_not_dro
     and enters -- rather than finding no reading and being dropped.
     """
     repo = one_account.repo
-    entry_a = accept_enter(repo, account_id=repo.account_id, strategy_instance_id="a", decision_id="a-1",
+    entry_a = accept_budgeted_test_enter(repo, account_id=repo.account_id, strategy_instance_id="a", decision_id="a-1",
         lifecycle_run_id="run-a", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
         reference_price=100, envelope=one_account.clerk.live_envelope)
 
