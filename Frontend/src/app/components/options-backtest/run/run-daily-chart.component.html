@@ -1,0 +1,37 @@
+<section class="daily-chart" aria-label="Equity and daily profit and loss">
+  <div class="heading">
+    <div>
+      <h3>Equity path</h3>
+      <p>Session-end equity, starting at the setup’s cash. The shaded span marks the largest dollar drawdown.</p>
+    </div>
+  </div>
+  @if (curve(); as plotted) {
+    <div class="equity-wrap">
+      <svg class="equity" viewBox="0 0 1000 160" preserveAspectRatio="none" role="img" aria-label="Session-end equity curve">
+        @if (plotted.shade; as shade) { <polygon class="drawdown-span" [attr.points]="shade" /> }
+        <polyline [attr.points]="plotted.line" />
+        @for (point of plotted.points; track point.openMs) {
+          <circle [attr.cx]="point.x" [attr.cy]="point.y" r="4" [attr.aria-label]="point.label"
+            (click)="point.openMs === null ? null : ask(point.openMs, $event)"><title>{{ point.label }}</title></circle>
+        }
+      </svg>
+    </div>
+  }
+  <div class="daily-label"><strong>Daily profit and loss</strong><span>Choose a bar to inspect the session</span></div>
+  <div class="key"><span class="key-gain"></span> Gain <span class="key-loss"></span> Loss <span class="key-idle"></span> No trade</div>
+  @if (bars().length > 0) {
+    <div class="plot-scroll">
+      <div class="plot" [style.grid-template-columns]="columns()">
+        <div class="zero-line"></div>
+        @for (bar of bars(); track bar.openMs) {
+          <button type="button" class="bar" [class.loss]="bar.loss" [class.idle]="bar.noTrade"
+            [style.--bar-height]="bar.heightCss" [title]="bar.label" [attr.aria-label]="bar.buttonLabel"
+            (click)="ask(bar.openMs, $event)"><span></span></button>
+        }
+      </div>
+    </div>
+    <div class="dates"><span>{{ firstDate() }}</span><span>{{ lastDate() }}</span></div>
+  } @else {
+    <p>No session results were recorded.</p>
+  }
+</section>

@@ -39988,6 +39988,10 @@
       "OptionsBacktestDrawdownResponse": {
         "description": "The largest fall of equity from its running peak, measured at the end of each session.",
         "properties": {
+          "display_percent_1_place": {
+            "title": "Display Percent 1 Place",
+            "type": "string"
+          },
           "fall_ratio": {
             "$ref": "#/components/schemas/OptionsBacktestDollarRateResponse"
           },
@@ -40028,6 +40032,7 @@
           "trough_equity_usd",
           "fall_usd",
           "fall_ratio",
+          "display_percent_1_place",
           "trough_session_open_ms"
         ],
         "title": "OptionsBacktestDrawdownResponse",
@@ -40056,6 +40061,34 @@
           "count"
         ],
         "title": "OptionsBacktestEntryRefusalCountResponse",
+        "type": "object"
+      },
+      "OptionsBacktestEquityPointResponse": {
+        "description": "The starting cash or one session-end equity point for the run chart.",
+        "properties": {
+          "equity_usd": {
+            "title": "Equity Usd",
+            "type": "string"
+          },
+          "session_open_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Open Ms"
+          }
+        },
+        "required": [
+          "session_open_ms",
+          "equity_usd"
+        ],
+        "title": "OptionsBacktestEquityPointResponse",
         "type": "object"
       },
       "OptionsBacktestEventResponse": {
@@ -40754,6 +40787,10 @@
             "title": "Denominator",
             "type": "string"
           },
+          "display_percent_1_place": {
+            "title": "Display Percent 1 Place",
+            "type": "string"
+          },
           "numerator": {
             "title": "Numerator",
             "type": "string"
@@ -40766,7 +40803,8 @@
         "required": [
           "numerator",
           "denominator",
-          "rounded_to_6_places"
+          "rounded_to_6_places",
+          "display_percent_1_place"
         ],
         "title": "OptionsBacktestRateResponse",
         "type": "object"
@@ -41140,6 +41178,13 @@
             "title": "Entries Refused For Cash",
             "type": "integer"
           },
+          "equity_curve": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsBacktestEquityPointResponse"
+            },
+            "title": "Equity Curve",
+            "type": "array"
+          },
           "exits_by_reason": {
             "items": {
               "$ref": "#/components/schemas/OptionsBacktestExitCountResponse"
@@ -41310,6 +41355,7 @@
           "legs_without_a_starting_price",
           "re_entries_lost",
           "by_day",
+          "equity_curve",
           "by_month"
         ],
         "title": "OptionsBacktestRunFiguresResponse",

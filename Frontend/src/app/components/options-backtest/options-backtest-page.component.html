@@ -19,51 +19,53 @@
     <p-tabpanels>
       <p-tabpanel value="backtest">
         <div class="workbench">
-          <div class="form" data-span="8">
-            @if (importNotice(); as notice) {
-              <div class="notice" [class.notice--error]="notice.kind === 'refused'" [attr.role]="notice.kind === 'refused' ? 'alert' : 'status'">
-                <p>{{ notice.title }}</p>
-                @if (notice.reasons.length > 0) {
-                  <ul>
-                    @for (reason of notice.reasons; track reason) { <li>{{ reason }}</li> }
-                  </ul>
-                }
-              </div>
-            }
-            @if (limitsProblem(); as why) {
-              <div class="notice" role="status">
-                <p>The server's limits could not be read ({{ why }}), so the page does not check them. The server will judge every setup.</p>
-                <button type="button" class="again" (click)="retryLimits()">Try again</button>
-              </div>
-            }
-            @if (clock(); as sessionClock) {
-              <div class="pair">
-                <app-options-backtest-instrument-card [underlying]="setupForm.underlying" [problem]="underlyingProblem()" />
-                <app-options-backtest-duration-card [range]="range()" [optionPricesFromMs]="pricesFromMs()" [problem]="rangeProblem()" [rangeChange]="rangeNote()" (changed)="rangeChanged($event)" />
-              </div>
-              <app-options-backtest-entry-card [form]="setupForm" [clock]="sessionClock" [problems]="fieldProblems()" />
-              <app-options-backtest-legs-card
-                [form]="setupForm" [squareOff]="setupForm.squareOff" [squareOffProblem]="squareOffProblem()" [builderForm]="builderForm"
-                [problems]="fieldProblems()" [limits]="limits()" (add)="addLeg()" (legCopied)="copyLeg($event)" (legRemoved)="removeLeg($event)" (legFocused)="showInReadBack($event)" />
-              <app-options-backtest-costs-card [form]="setupForm" [problems]="fieldProblems()" />
-            } @else if (clockProblem(); as problem) {
-              <div class="notice notice--error" role="alert">
-                <p>{{ problem }}</p>
-                <button type="button" class="again" (click)="retryClock()">Try again</button>
-              </div>
-            } @else {
-              <p class="notice" role="status">Reading the session times…</p>
-            }
-          </div>
-          <div class="rail" data-span="4">
-            @if (activeTab() === 'backtest') {
-              <app-options-backtest-bottom-bar
-                [nameField]="saveForm.name" [canSave]="canSave()" [saving]="saving()" [nameProblem]="nameProblem()"
-                [hint]="saveHint()" [status]="saveStatus()" [canCheck]="canCheck()" [canStart]="canStart()" [runHint]="runHint()" (save)="save()" (check)="checkData()" (start)="start()" (height)="barHeight.set($event)" />
-            }
-            @if (clock() !== null) {
-              <div #readBackPane class="rail__read"><app-options-backtest-summary [state]="summary()" (retry)="retrySummary()" /></div>
-            }
+          <div class="setup-layout">
+            <div class="form" data-span="8">
+              @if (importNotice(); as notice) {
+                <div class="notice" [class.notice--error]="notice.kind === 'refused'" [attr.role]="notice.kind === 'refused' ? 'alert' : 'status'">
+                  <p>{{ notice.title }}</p>
+                  @if (notice.reasons.length > 0) {
+                    <ul>
+                      @for (reason of notice.reasons; track reason) { <li>{{ reason }}</li> }
+                    </ul>
+                  }
+                </div>
+              }
+              @if (limitsProblem(); as why) {
+                <div class="notice" role="status">
+                  <p>The server's limits could not be read ({{ why }}), so the page does not check them. The server will judge every setup.</p>
+                  <button type="button" class="again" (click)="retryLimits()">Try again</button>
+                </div>
+              }
+              @if (clock(); as sessionClock) {
+                <div class="pair">
+                  <app-options-backtest-instrument-card [underlying]="setupForm.underlying" [problem]="underlyingProblem()" />
+                  <app-options-backtest-duration-card [range]="range()" [optionPricesFromMs]="pricesFromMs()" [problem]="rangeProblem()" [rangeChange]="rangeNote()" (changed)="rangeChanged($event)" />
+                </div>
+                <app-options-backtest-entry-card [form]="setupForm" [clock]="sessionClock" [problems]="fieldProblems()" />
+                <app-options-backtest-legs-card
+                  [form]="setupForm" [squareOff]="setupForm.squareOff" [squareOffProblem]="squareOffProblem()" [builderForm]="builderForm"
+                  [problems]="fieldProblems()" [limits]="limits()" (add)="addLeg()" (legCopied)="copyLeg($event)" (legRemoved)="removeLeg($event)" (legFocused)="showInReadBack($event)" />
+                <app-options-backtest-costs-card [form]="setupForm" [problems]="fieldProblems()" />
+              } @else if (clockProblem(); as problem) {
+                <div class="notice notice--error" role="alert">
+                  <p>{{ problem }}</p>
+                  <button type="button" class="again" (click)="retryClock()">Try again</button>
+                </div>
+              } @else {
+                <p class="notice" role="status">Reading the session times…</p>
+              }
+            </div>
+            <div class="rail" data-span="4">
+              @if (activeTab() === 'backtest') {
+                <app-options-backtest-bottom-bar
+                  [nameField]="saveForm.name" [canSave]="canSave()" [saving]="saving()" [nameProblem]="nameProblem()"
+                  [hint]="saveHint()" [status]="saveStatus()" [canCheck]="canCheck()" [canStart]="canStart()" [runHint]="runHint()" (save)="save()" (check)="checkData()" (start)="start()" (height)="barHeight.set($event)" />
+              }
+              @if (clock() !== null) {
+                <div #readBackPane class="rail__read"><app-options-backtest-summary [state]="summary()" (retry)="retrySummary()" /></div>
+              }
+            </div>
           </div>
           <div class="results">
             @if (check().kind !== 'idle') {

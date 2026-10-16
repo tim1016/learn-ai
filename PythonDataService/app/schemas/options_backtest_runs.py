@@ -24,7 +24,7 @@ from app.options_backtest.run_stamps import RunStamps
 from app.options_backtest.saved_runs import FailureItem, Headline, RunFailure, RunRecord, StoredRun
 from app.options_backtest.saved_setups import SETUP_NAME_PATTERN
 from app.options_backtest.setup import OptionsBacktestSetup
-from app.options_backtest.statistics import DayRow, Drawdown, MonthRow, Ratio, RunSummary
+from app.options_backtest.statistics import DayRow, Drawdown, MonthRow, Ratio, RunSummary, equity_path
 from app.schemas.options_backtest import served_setup
 from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_day_end_ms, et_midnight_ms
 
@@ -209,6 +209,7 @@ class OptionsBacktestRateResponse(BaseModel):
     numerator: str
     denominator: str
     rounded_to_6_places: str
+    display_percent_1_place: str
 
     @classmethod
     def from_ratio(cls, ratio: Ratio) -> Self:
@@ -216,6 +217,7 @@ class OptionsBacktestRateResponse(BaseModel):
             numerator=exact(ratio.numerator),
             denominator=exact(ratio.denominator),
             rounded_to_6_places=exact(ratio.rounded_to_6_places()),
+            display_percent_1_place=exact(ratio.percent_1_place()),
         )
 
 
@@ -242,6 +244,7 @@ class OptionsBacktestDrawdownResponse(BaseModel):
     trough_equity_usd: str
     fall_usd: str
     fall_ratio: OptionsBacktestDollarRateResponse
+    display_percent_1_place: str
     # ``None`` when the peak is the starting cash, before the first session.
     peak_session_open_ms: Ms | None = None
     trough_session_open_ms: Ms
@@ -253,6 +256,7 @@ class OptionsBacktestDrawdownResponse(BaseModel):
             trough_equity_usd=exact(drawdown.trough_equity_usd),
             fall_usd=exact(drawdown.fall_usd),
             fall_ratio=OptionsBacktestDollarRateResponse.from_ratio(drawdown.fall_ratio),
+            display_percent_1_place=exact(drawdown.fall_ratio.percent_1_place()),
             peak_session_open_ms=drawdown.peak_session_open_ms,
             trough_session_open_ms=drawdown.trough_session_open_ms,
         )
@@ -452,6 +456,13 @@ class OptionsBacktestRunStampsResponse(BaseModel):
         )
 
 
+class OptionsBacktestEquityPointResponse(BaseModel):
+    """The starting cash or one session-end equity point for the run chart."""
+
+    session_open_ms: Ms | None
+    equity_usd: str
+
+
 class OptionsBacktestRunFiguresResponse(BaseModel):
     """Every figure of a complete run, each named for what it counts. A trade is one leg round trip."""
 
@@ -496,6 +507,7 @@ class OptionsBacktestRunFiguresResponse(BaseModel):
     # this overlaps them and is not to be added to them.
     re_entries_lost: int
     by_day: list[OptionsBacktestDayRowResponse]
+    equity_curve: list[OptionsBacktestEquityPointResponse]
     by_month: list[OptionsBacktestMonthRowResponse]
     # Whether the cash could have carried the run, apart from every figure above, which it never changes. ``None`` on
     # each reads "not recorded": the run was stored before they were.
@@ -515,6 +527,7 @@ class OptionsBacktestRunFiguresResponse(BaseModel):
         def drawdown(each: Drawdown | None) -> OptionsBacktestDrawdownResponse | None:
             return None if each is None else OptionsBacktestDrawdownResponse.from_drawdown(each)
 
+        path = equity_path(summary.by_day, summary.starting_cash_usd)
         return cls(
             sessions_tested=summary.sessions_tested,
             sessions_traded=summary.sessions_traded,
@@ -561,6 +574,13 @@ class OptionsBacktestRunFiguresResponse(BaseModel):
             legs_without_a_starting_price=summary.legs_without_a_starting_price,
             re_entries_lost=summary.re_entries_lost,
             by_day=[OptionsBacktestDayRowResponse.from_row(row) for row in summary.by_day],
+            equity_curve=[
+                OptionsBacktestEquityPointResponse(
+                    session_open_ms=point.session_open_ms,
+                    equity_usd=exact(point.equity_usd),
+                )
+                for point in path
+            ],
             by_month=[OptionsBacktestMonthRowResponse.from_row(row) for row in summary.by_month],
             capital_evidence=None
             if summary.capital_evidence is None

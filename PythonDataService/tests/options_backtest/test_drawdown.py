@@ -20,7 +20,7 @@ from app.engine.results.statistics import max_drawdown
 from app.lean_sidecar.trading_calendar import expected_sessions
 from app.options_backtest.results import ExitReason, LegTrade, SessionStatus
 from app.options_backtest.session_result import SessionResult
-from app.options_backtest.statistics import Drawdown, Ratio, summarize_run
+from app.options_backtest.statistics import Drawdown, Ratio, equity_path, summarize_run
 from tests.options_backtest._results import a_session, a_trade
 from tests.options_backtest._run_data import OPEN_MS, D
 
@@ -76,6 +76,23 @@ def test_with_two_peaks_the_worst_fall_is_measured_from_the_peak_before_it() -> 
     assert summary.drawdown_by_fraction.fall_ratio == Ratio(D("500"), D("1500"))
     assert summary.drawdown_by_fraction.fall_ratio.exact() is None
     assert summary.drawdown_by_fraction.fall_ratio.rounded_to_6_places() == D("0.333333")
+
+
+def test_equity_path_keeps_the_start_and_each_session_end_used_by_drawdown() -> None:
+    sessions, start = _curve(1000, [200, -300, 600, -150])
+    summary = summarize_run(sessions, starting_cash_usd=start)
+
+    path = equity_path(summary.by_day, summary.starting_cash_usd)
+
+    assert [(point.session_open_ms, point.equity_usd) for point in path] == [
+        (None, D("1000")),
+        (sessions[0].session_open_ms, D("1200")),
+        (sessions[1].session_open_ms, D("900")),
+        (sessions[2].session_open_ms, D("1500")),
+        (sessions[3].session_open_ms, D("1350")),
+    ]
+    assert summary.drawdown_by_dollars is not None
+    assert summary.drawdown_by_dollars.trough_equity_usd == path[2].equity_usd
 
 
 def test_the_worst_fall_in_dollars_and_the_worst_as_a_fraction_can_be_different_falls() -> None:

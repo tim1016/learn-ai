@@ -242,12 +242,20 @@ def test_the_figures_are_exact_strings_and_rates_come_in_three_parts_with_one_ro
     for rate in (figures.daily_win_rate, figures.trade_win_rate):
         assert rate is not None
         assert (rate.numerator, rate.denominator, rate.rounded_to_6_places) == ("1", "3", "0.333333")
+        assert rate.display_percent_1_place == "33.3"
     drawdown = figures.drawdown_by_fraction
     assert drawdown is not None
     assert (drawdown.peak_equity_usd, drawdown.trough_equity_usd, drawdown.fall_usd) == ("10000", "9930.75", "69.25")
     assert drawdown.fall_ratio.rounded_to_6_places == "0.006925"
+    assert drawdown.display_percent_1_place == "0.7"
     assert drawdown.peak_session_open_ms is None, "the peak is the starting cash, before any session"
     assert drawdown.trough_session_open_ms == session_window_for_date(THU).open_ms_utc
+    assert figures.equity_curve[0].session_open_ms is None
+    assert figures.equity_curve[0].equity_usd == "10000"
+    assert [point.session_open_ms for point in figures.equity_curve[1:]] == [
+        day.session_open_ms for day in figures.by_day
+    ]
+    assert figures.equity_curve[-1].equity_usd == figures.ending_cash_usd
 
 
 def test_the_counts_and_the_by_reason_lists_list_every_member_in_the_enums_order(result: RunResult) -> None:

@@ -9,3 +9,12 @@ p { margin: 0 0 var(--space-2); font-size: var(--fs-sm); }
 .num { text-align: right !important; font-variant-numeric: tabular-nums; }
 .own { background: var(--accent-faint); }
 .tag { margin-inline-start: var(--space-2); border: 1px solid var(--border-strong); border-radius: var(--radius-pill); padding: 0 var(--space-2); color: var(--text-secondary); }
+.impact { display: grid; gap: 3px; max-width: 60rem; margin: var(--space-3) 0 var(--space-4); }
+.impact-axis { display: flex; justify-content: space-between; padding-left: 6rem; color: var(--text-secondary); font-size: var(--fs-xs); }
+.impact-row { display: grid; grid-template-columns: 5.5rem 1fr; gap: var(--space-2); align-items: center; padding: 2px var(--space-1); border-radius: var(--radius); }
+.impact-row.own-row { background: var(--accent-faint); }
+.impact-label { font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+.impact-label small { display: block; color: var(--accent-text); }
+.impact-track { height: .85rem; position: relative; background: linear-gradient(to right, transparent calc(50% - 1px), var(--border-strong) calc(50% - 1px), var(--border-strong) calc(50% + 1px), transparent calc(50% + 1px)); }
+.impact-track span { position: absolute; height: 100%; left: 50%; background: var(--bull); border-radius: 0 3px 3px 0; }
+.impact-track span.loss { left: auto; right: 50%; background: var(--bear); border-radius: 3px 0 0 3px; }

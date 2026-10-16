@@ -6,9 +6,9 @@ p { margin: 0; }
 :host ::ng-deep .p-tabpanels { padding: 0; background: transparent; }
 :host ::ng-deep .p-tabpanel { display: block; padding: var(--page-pad-y) 0; background: transparent; }
 
-// The shared 12-column grid: the form on eight, the run rail on four, and what a run says under both. The rail follows the page
-// while the form scrolls; the shell frees <main> of its scroller for this route so that sticky has a page to follow.
-.workbench { @include page-grid.layout; max-width: 96rem; }
+// Keep the sticky rail inside the setup layout so it scrolls away before the full-width run results begin.
+.workbench { display: grid; gap: var(--space-4); max-width: 96rem; min-width: 0; }
+.setup-layout { @include page-grid.layout; }
 .form { display: grid; gap: var(--space-4); min-width: 0; }
 .pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); align-items: start; min-width: 0; }
 .rail { position: sticky; top: calc(var(--topbar-h) + var(--space-4)); display: grid; gap: var(--space-3); grid-template-rows: auto minmax(0, 1fr); max-height: calc(100dvh - var(--topbar-h) - var(--space-6)); min-width: 0; }
@@ -30,7 +30,7 @@ p { margin: 0; }
 // Under 1100px the mixin gives a four-column item half the row. The rail takes the whole row under the form instead, and the
 // actions in it become the bar kept in view.
 @container page-grid (max-width: 1100px) {
-  .workbench > .rail[data-span] { grid-column: span 12; position: static; max-height: none; }
+  .setup-layout > .rail[data-span] { grid-column: span 12; position: static; max-height: none; }
   .bar-spacer { display: block; }
 }
 @container page-grid (max-width: 720px) {

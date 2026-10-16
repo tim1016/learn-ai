@@ -6,3 +6,11 @@ h3 { margin: 0 0 var(--space-2); font-size: var(--fs-md); font-weight: var(--fw-
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .look { background: none; border: 1px solid var(--border-strong); color: var(--accent-text); border-radius: var(--radius); padding: 0 var(--space-3); font: inherit; cursor: pointer; }
 .look:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.hint { margin: 0; color: var(--text-secondary); font-size: var(--fs-xs); }
+.month-heatmap { display: grid; grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr)); gap: var(--space-2); }
+.month-heat { position: relative; isolation: isolate; display: grid; gap: var(--space-1); padding: var(--space-3); min-height: 4rem; border: 1px solid var(--border-light); border-radius: var(--radius); font-variant-numeric: tabular-nums; }
+.month-heat::before { content: ''; position: absolute; inset: 0; z-index: -1; background: var(--bull); opacity: var(--strength); }
+.month-heat.loss::before { background: var(--bear); }
+.month-heat.flat::before { background: var(--border-strong); opacity: .25; }
+.month-heat span { font-size: var(--fs-sm); font-weight: var(--fw-semi); }
+.month-heat small { color: var(--text-secondary); font-size: var(--fs-xs); }

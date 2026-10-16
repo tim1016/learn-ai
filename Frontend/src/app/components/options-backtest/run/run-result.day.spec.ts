@@ -35,10 +35,10 @@ async function renderResult() {
 const dayRegion = () => screen.getByRole('region', { name: 'One day' });
 
 describe('the result of a run, looking closely', () => {
-  it('has the trades and then one day under the tables of days and months, in that order', async () => {
+  it('puts the visual monthly summary above the day audit, then trades and one day', async () => {
     const { view } = await renderResult();
 
-    const order = ['app-options-backtest-run-day-table', 'app-options-backtest-run-month-table', 'app-options-backtest-run-trades', 'app-options-backtest-session-view'].map((selector) => view.container.querySelector(selector));
+    const order = ['app-options-backtest-run-month-table', 'app-options-backtest-run-day-table', 'app-options-backtest-run-trades', 'app-options-backtest-session-view'].map((selector) => view.container.querySelector(selector));
     order.slice(1).forEach((each, at) => expect(order[at]?.compareDocumentPosition(each as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING));
   });
 

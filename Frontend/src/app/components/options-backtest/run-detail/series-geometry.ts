@@ -1,6 +1,5 @@
 /**
- * THE ONE FILE of the Options Backtest page that turns a price string into a number, and the only file the money lint
- * does not read (`CHART_GEOMETRY` in `eslint.config.mjs`).
+ * One of two display-only geometry files the money lint does not read (`CHART_GEOMETRY` in `eslint.config.mjs`).
  *
  * Why it exists: a chart's price axis is geometry, and geometry needs numbers. A point is placed at a height, a level is
  * drawn across at a height, a fill's marker sits at a height. Nothing else here may do that, and nothing this file makes
@@ -10,7 +9,7 @@
  *
  * A number is exact only to about fifteen digits, and the server's text is exact for ever, so the number can differ from
  * the text in a far decimal place. That does not matter for a position on a screen a few hundred pixels tall. It would
- * matter anywhere else, which is why this is the only place.
+ * matter anywhere else, which is why this is confined to chart geometry.
  */
 
 const PLAIN_DECIMAL = /^-?\d+(\.\d+)?$/;

@@ -5,6 +5,16 @@
       The run replayed at several starting cashes, at the setup’s own slippage. It shows how many entries a smaller cash refuses and a larger one fills.
       No level is called safe.
     </p>
+    <div class="cash-bars" role="img" aria-label="Entries filled and refused at each starting cash">
+      <div class="cash-key"><span class="filled-key"></span> Filled <span class="refused-key"></span> Refused for cash</div>
+      @for (bar of bars(); track bar.starting_cash_usd) {
+        <div class="cash-row" [class.own-row]="bar.is_setups_own" [title]="bar.title">
+          <span class="cash-multiple">{{ bar.multiple }}× @if (bar.is_setups_own) { <small>setup</small> }</span>
+          <div class="cash-track"><span [style.width]="bar.filledCss"></span></div>
+          <span class="cash-count">{{ bar.entries_filled }} filled / {{ bar.entries_refused_for_cash }} refused</span>
+        </div>
+      }
+    </div>
     <div class="table-wrap">
       <table class="ladder">
         <caption class="sr-only">The run replayed at each starting cash</caption>

@@ -1,7 +1,35 @@
 <section class="figures" aria-label="Headline figures">
   <h3>Headline figures</h3>
   <dl class="tiles">
-    <div class="tile"><dt>Net profit</dt><dd class="big">{{ figures().net_profit_usd | authoredUsd }}</dd></div>
+    <div class="tile primary" [class.negative]="loss()"><dt>Net profit</dt><dd class="big">{{ figures().net_profit_usd | authoredUsd }}</dd></div>
+    <div class="tile core">
+      <dt>Profit factor <span class="counts">gross profit over gross loss</span></dt>
+      @if (figures().profit_factor; as factor) {
+        <dd class="big">{{ factor.rounded_to_6_places }}</dd>
+        <dd class="sub">rounded to 6 places · {{ factor.numerator_usd | authoredUsd }} over {{ factor.denominator_usd | authoredUsd }}</dd>
+      } @else {
+        <dd class="big">No losing trade</dd>
+      }
+    </div>
+    <div class="tile core">
+      <dt>Trade win rate <span class="counts">trades won of trades</span></dt>
+      @if (figures().trade_win_rate; as rate) {
+        <dd class="big">{{ rate.display_percent_1_place }}%</dd>
+        <dd class="sub">{{ rate.rounded_to_6_places }} rounded to 6 places · {{ rate.numerator }} of {{ rate.denominator }}</dd>
+        <meter class="win-track" min="0" max="1" [attr.value]="rate.rounded_to_6_places"></meter>
+      } @else {
+        <dd class="big">No trades</dd>
+      }
+    </div>
+    <div class="tile core">
+      <dt>Max drawdown <span class="counts">session-end equity</span></dt>
+      @if (figures().drawdown_by_dollars; as fall) {
+        <dd class="big">{{ fall.fall_usd | authoredUsd }}</dd>
+        <dd class="sub">{{ fall.display_percent_1_place }}% of the peak</dd>
+      } @else {
+        <dd class="big">No drawdown</dd>
+      }
+    </div>
     <div class="tile"><dt>Ending cash</dt><dd class="big">{{ figures().ending_cash_usd | authoredUsd }}</dd></div>
     <div class="tile">
       <dt>Trades</dt>
@@ -9,30 +37,12 @@
       <dd class="sub">won {{ figures().trades_won }} · lost {{ figures().trades_lost }} · break-even {{ figures().trades_break_even }}</dd>
     </div>
     <div class="tile">
-      <dt>Trade win rate <span class="counts">trades won of trades</span></dt>
-      @if (figures().trade_win_rate; as rate) {
-        <dd class="big">{{ rate.rounded_to_6_places }}</dd>
-        <dd class="sub">rounded to 6 places · {{ rate.numerator }} of {{ rate.denominator }}</dd>
-      } @else {
-        <dd class="big">No trades</dd>
-      }
-    </div>
-    <div class="tile">
       <dt>Daily win rate <span class="counts">profitable sessions of traded sessions</span></dt>
       @if (figures().daily_win_rate; as rate) {
-        <dd class="big">{{ rate.rounded_to_6_places }}</dd>
-        <dd class="sub">rounded to 6 places · {{ rate.numerator }} of {{ rate.denominator }}</dd>
+        <dd class="big">{{ rate.display_percent_1_place }}%</dd>
+        <dd class="sub">{{ rate.rounded_to_6_places }} rounded to 6 places · {{ rate.numerator }} of {{ rate.denominator }}</dd>
       } @else {
         <dd class="big">No traded sessions</dd>
-      }
-    </div>
-    <div class="tile">
-      <dt>Profit factor <span class="counts">gross profit over gross loss</span></dt>
-      @if (figures().profit_factor; as factor) {
-        <dd class="big">{{ factor.rounded_to_6_places }}</dd>
-        <dd class="sub">rounded to 6 places · {{ factor.numerator_usd | authoredUsd }} over {{ factor.denominator_usd | authoredUsd }}</dd>
-      } @else {
-        <dd class="big">No losing trade</dd>
       }
     </div>
     <div class="tile"><dt>Total fees</dt><dd class="big">{{ figures().total_fees_usd | authoredUsd }}</dd></div>

@@ -1,13 +1,14 @@
 @if (run().banner; as banner) { <app-options-backtest-run-banner [banner]="banner" /> }
 @if (run().figures; as figures) {
   <app-options-backtest-run-headline [figures]="figures" />
+  <app-options-backtest-run-daily-chart [rows]="figures.by_day" [equityCurve]="figures.equity_curve" [drawdown]="figures.drawdown_by_dollars ?? null" (openDay)="day.set($event)" />
+  @if (run().slippage_tolerance; as tolerance) { <app-options-backtest-slippage-tolerance [tolerance]="tolerance" [points]="run().slippage" /> }
+  <app-options-backtest-run-month-table [rows]="figures.by_month" />
+  <app-options-backtest-cash-ladder [figures]="figures" />
   <app-options-backtest-run-drawdown [figures]="figures" />
   <app-options-backtest-capital-evidence [figures]="figures" />
   <app-options-backtest-run-sessions [figures]="figures" />
-  @if (run().slippage_tolerance; as tolerance) { <app-options-backtest-slippage-tolerance [tolerance]="tolerance" [points]="run().slippage" /> }
-  <app-options-backtest-cash-ladder [figures]="figures" />
   <app-options-backtest-run-day-table [rows]="figures.by_day" (openDay)="day.set($event)" />
-  <app-options-backtest-run-month-table [rows]="figures.by_month" />
 } @else {
   <p class="note" role="alert">This run is complete but the server sent no figures for it.</p>
 }
