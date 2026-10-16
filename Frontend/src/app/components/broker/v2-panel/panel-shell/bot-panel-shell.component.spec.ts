@@ -369,7 +369,7 @@ const RECONCILE_ACTION = {
 } satisfies PanelAction;
 
 /** A crashed bot still holding 2.5 QQQ, with no header action (the backend's
- * rule): the stranded-position warning is where it is flattened (H30–H31). */
+ * rule): the stranded-position warning is where it is flattened (#2794). */
 function strandedPanel(overrides: Partial<BotPanelView> = {}): BotPanelView {
   return {
     ...PANEL,
@@ -927,7 +927,7 @@ describe('BotPanelShellComponent', () => {
     expect(screen.getByText('run-current')).toBeTruthy();
   });
 
-  describe('every safe-flatten trigger routes into the warning (H30)', () => {
+  describe('every safe-flatten trigger routes into the warning (#2794)', () => {
     async function renderWith(snapshot: BotPanelLiveSnapshot) {
       const view = await render(BotPanelShellComponent, {
         inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
@@ -1270,7 +1270,7 @@ describe('BotPanelShellComponent', () => {
     });
 
     /** Flatten the stranded bot from its warning, the one way a flatten
-     * starts: reconcile, a fresh panel, then the checked plan (H30). */
+     * starts: reconcile, a fresh panel, then the checked plan (#2794). */
     async function prepareFlatten(): Promise<ComponentFixture<BotPanelShellComponent>> {
       mockService.getPanel
         .mockResolvedValueOnce(strandedPanel())
@@ -1600,7 +1600,7 @@ describe('BotPanelShellComponent', () => {
       // A durably accepted EXIT whose reducing order is still pending — a
       // broker lookup outage, a transiently blocked REDUCE — has sent nothing,
       // and telling the operator otherwise is the one thing worse than the
-      // outage itself (Codex review 2026-09-19).
+      // outage itself.
       const observedAtMs = Date.now();
       mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot());
       brokersMock.checkSqliteRecoveryActionInFull.mockImplementation(async () => EXTENDED_CHECK_WITH_READING(observedAtMs));
@@ -1816,7 +1816,7 @@ describe('BotPanelShellComponent', () => {
     expect(slot.content()).toBeNull();
   });
 
-  it('prices the tape from the last IBKR bar and never reads a Polygon snapshot (H15)', async () => {
+  it('prices the tape from the last IBKR bar and never reads a Polygon snapshot (#2595)', async () => {
     const bar = (startMs: number, close: string) => ({
       start_ms: startMs, end_ms: startMs + 5_000, open: close, high: close, low: close, close,
       volume: 10, source: 'ibkr' as const,
@@ -2544,7 +2544,7 @@ describe('BotPanelShellComponent', () => {
       ]);
     });
 
-    it('moves the keyboard to the outcome after a command (story 48)', async () => {
+    it('moves the keyboard to the outcome after a command (#2794)', async () => {
       await renderPage({ ...PANEL, mode: 'trade', actions: [RECONCILE_ACTION], primary_action: 'reconcile_now' });
 
       await userEvent.click(screen.getByRole('button', { name: 'Check against Alpaca' }));
@@ -2553,7 +2553,7 @@ describe('BotPanelShellComponent', () => {
       expect(document.activeElement?.textContent).toContain('Reconciliation requested.');
     });
 
-    it('flattens on one confirmation: reconcile, fresh panel, checked plan, then send (H30)', async () => {
+    it('flattens on one confirmation: reconcile, fresh panel, checked plan, then send (#2794)', async () => {
       const getPanel = vi.fn()
         .mockResolvedValueOnce(strandedPanel())
         .mockResolvedValueOnce(strandedPanel({ actions: [RECONCILE_ACTION, PREPARE_SAFE_FLATTEN_ACTION] }))

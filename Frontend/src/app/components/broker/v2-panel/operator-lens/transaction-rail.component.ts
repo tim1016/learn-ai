@@ -17,7 +17,7 @@ import { TransactionEvidenceTimelineComponent } from './transaction-evidence-tim
  * Transaction rail.
  *
  * Renders one selected transaction's six stations. Five states each as
- * icon + text + color — never color alone (AXE / WCAG AA). Station receipts
+ * icon + text + color. Station receipts
  * expand inline; raw evidence is fetched only when requested and remains in
  * the station accordion as a formatted timeline.
  *

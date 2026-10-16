@@ -185,7 +185,7 @@ const EXTENDED_FLATTEN_QUOTE_REFRESH_MS = 2_000;
 export const CURRENT_RUN_POLL_MS = 5_000;
 
 /** The commands of a safe flatten: from anywhere on the page, each opens the
- * stranded-position warning's one confirmation (H30). */
+ * stranded-position warning's one confirmation (#2794). */
 const SAFE_FLATTEN_ACTION_IDS: ReadonlySet<PanelAction['action_id']> = new Set([
   'prepare_safe_flatten',
   'execute_safe_flatten',
@@ -244,7 +244,7 @@ const RUN_TAPE_PADDING_MS = 15 * 60_000;
  *   history chart (a finished run's own window), the strategy view
  *   (re-read on each new decision).
  * - Action execution, each command owned by the bot it was sent to (#2471),
- *   including the one-confirmation Flatten sequence (hurdle H30) and the
+ *   including the one-confirmation Flatten sequence (#2794) and the
  *   ticket that settles an uncertain closing order (#2854).
  */
 @Component({
@@ -540,7 +540,7 @@ export class BotPanelShellComponent {
     Object.values(this.panel()?.exposure ?? {}).some((quantity) => quantity !== 0),
   );
 
-  /** A stopped bot that still holds shares has no one managing them (H31). */
+  /** A stopped bot that still holds shares has no one managing them (#2794). */
   protected readonly stranded = computed(() => this.panel()?.health.running === false && this.holdsShares());
 
   /** The flatten sequence's steps on this bot, once the owner confirmed one.
@@ -846,7 +846,7 @@ export class BotPanelShellComponent {
         }
         this.actionReceipt.set(receipt);
         this.messageService.add(actionOutcomeToast(receipt.outcome, receipt.message, receipt.remediation));
-        // The outcome takes the keyboard once it is on screen (story 48).
+        // The outcome takes the keyboard once it is on screen (#2794).
         afterNextRender(() => this.receiptView()?.focus(), { injector: this.injector });
       },
     };
@@ -1117,7 +1117,7 @@ export class BotPanelShellComponent {
   }
 
   /**
-   * Flatten a stopped bot's stranded position on one confirmation (H30).
+   * Flatten a stopped bot's stranded position on one confirmation (#2794).
    *
    * The owner confirmed exactly this symbol and quantity; the sequence
    * reconciles, prepares, checks the plan sells precisely that, and sends it
@@ -1193,7 +1193,7 @@ export class BotPanelShellComponent {
   /**
    * Every safe-flatten trigger on the page — the Checks fold, a blocker's
    * move, the header — opens the stranded-position warning's confirmation,
-   * so a flatten always runs as the one confirmed sequence (H30). With no
+   * so a flatten always runs as the one confirmed sequence (#2794). With no
    * position to offer, or a flatten already under way, nothing opens and the
    * owner is told why.
    */
@@ -1365,8 +1365,7 @@ export class BotPanelShellComponent {
       // own evidence. A durably accepted EXIT whose reducing order has not
       // reached Alpaca — a lookup outage, a transiently blocked REDUCE — is
       // pending, not sent, and saying otherwise would tell an operator their
-      // exposure is on its way out when nothing has left (Codex review
-      // 2026-09-19).
+      // exposure is on its way out when nothing has left.
       const reachedBroker = result.orders.some((order) => order.broker_order_id !== null);
       const message = !result.applied
         ? 'This flatten had already been sent; the durable result was replayed.'
