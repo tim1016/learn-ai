@@ -334,7 +334,8 @@ class AdmissionBatcher:
             self._loop.stop()
 
         asyncio.run_coroutine_threadsafe(_stop(), self._loop)
-        if not self._thread.join(timeout=5.0):
+        self._thread.join(timeout=5.0)
+        if self._thread.is_alive():
             logger.error("the admission loop did not stop within 5s of close; its thread is abandoned")
 
 
