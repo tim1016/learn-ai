@@ -29,14 +29,14 @@ from app.engine.execution.portfolio import Portfolio
 from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_program import EvaluationMode, Settlement
-from tests._helpers.bot_runner.custody import _SID, _registry, admission_guard_for
+from tests._helpers.bot_runner.custody import _SID, _registry, admission_guard_for, deploy_bot
 from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeFeed, _SqliteRuntimeBroker
 from tests._helpers.canary_admission import admit_canary_pairing
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 from ._support import _RTH_MS, _WIN_START_MS, _bar, _green_bar, _red_bar, _wait_for
 
-pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+pytestmark = pytest.mark.usefixtures("budgeted_run_registration")
 
 # The evidence namespace a trade-mode run's source-bar ledger is opened
 # under, and so the prefix of every retained bar's stable ``bar_ref``.
@@ -73,7 +73,7 @@ async def test_real_trade_runner_routes_enter_and_exit_through_sqlite_facade(
     )
     set_alpaca_clerk(clerk)
     try:
-        await registry.deploy(
+        await deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             symbol="SPY",
@@ -126,7 +126,7 @@ async def test_sqlite_trade_bot_records_every_evaluated_bar_for_panel_health(
     registry = _registry(tmp_path, feed)
     set_alpaca_clerk(clerk)
     try:
-        await registry.deploy(
+        await deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             strategy_key="deployment_validation",
@@ -214,13 +214,20 @@ async def test_sqlite_trade_bot_records_every_evaluated_bar_for_panel_health(
             [("in_window", True), ("green_streak", False)],
             [("in_window", True), ("session_end", False), ("exit_countdown", False)],
         ]
-        # Decision receipts are product evidence, not custody. The only new
-        # authority transitions are the run's required duty boundaries.
+        # Decision receipts are product evidence, not custody. Budget setup,
+        # Deploy, and stop are the only custody transitions around these bars.
         transition_kinds = [
             row["transition_kind"]
             for row in repo.custody_transitions()[len(transitions_before_decisions) :]
         ]
-        assert transition_kinds == ["RUN_STARTED", "RUN_STOPPED"]
+        assert transition_kinds == [
+            "BUDGET_AUTHORITY_CUTOVER",
+            "ACCOUNT_RISK_LIMITS_APPLIED",
+            "FEE_EVIDENCE_OBSERVED",
+            "EXIT_TERMS_SEALED",
+            "DEPLOY_COMMITTED",
+            "RUN_STOPPED",
+        ]
     finally:
         set_alpaca_clerk(None)
         repo.close()
@@ -244,7 +251,7 @@ async def test_sqlite_trade_bot_does_not_label_an_uncertain_effect_as_entered(
     registry = _registry(tmp_path, feed)
     set_alpaca_clerk(clerk)
     try:
-        await registry.deploy(
+        await deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             strategy_key="deployment_validation",
@@ -281,7 +288,7 @@ async def test_sqlite_trade_bot_records_a_rejected_enter_as_a_blocked_decision(
     registry = _registry(tmp_path, feed)
     set_alpaca_clerk(clerk)
     try:
-        await registry.deploy(
+        await deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             strategy_key="deployment_validation",
@@ -346,7 +353,7 @@ async def test_decision_receipt_failure_prevents_the_broker_effect(
     )
     set_alpaca_clerk(clerk)
     try:
-        await registry.deploy(
+        await deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             strategy_key="deployment_validation",

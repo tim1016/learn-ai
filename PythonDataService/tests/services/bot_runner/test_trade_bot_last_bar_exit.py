@@ -19,6 +19,7 @@ The shared replay clock drives session rules at the fed bar, including the final
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -30,6 +31,7 @@ import app.services.bot_trade_strategy as bot_trade_strategy
 import app.services.feed_continuity_policy as feed_continuity_policy
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
+from app.broker.alpaca.clerk.sqlite.day_pnl import risk_fill_sequence
 from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
@@ -37,18 +39,19 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import raise_uncertainty
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, BrokerPosition, OrderSide, OrderType
+from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.closing_bar import CLOSING_BAR_REASON_CODE
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.source_bar_ledger import SourceBarLedger
-from tests._helpers.bot_runner.custody import _SID, _T0
+from tests._helpers.bot_runner.custody import _SID, _T0, budget_consent_for_test
 from tests._helpers.bot_runner.doubles import _FakeFeed, _SqliteRuntimeBroker
 from tests._helpers.bot_runner.market import clock_read_before_the_close, patch_wall_clock_to_the_fed_bar
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 from ._support import _green_bar, _trade_bar
 
-pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+pytestmark = pytest.mark.usefixtures("budgeted_run_registration")
 
 _ACCOUNT_ID = "PA-TEST"
 # Two greens enter before the program's close-minus-15-minute barrier.
@@ -133,11 +136,31 @@ def _regular_hours_binding() -> BrokerBotBinding:
         action_plan=alpaca_v1_action_plan("SPY"),
         run_id="run-current",
         created_at_ms=_T0,
+        budget_consent=budget_consent_for_test(mode="trade"),
     )
 
 
+def _refresh_cash_with_bar(monkeypatch: pytest.MonkeyPatch, facade: SqliteAlpacaClerkFacade) -> None:
+    """Model the account's regular cash cadence as the replay clock advances."""
+    drain = bot_trade_strategy._drain_bar
+
+    def drain_with_cash(strategy: object, context: object, bar: TradeBar) -> None:
+        gate = facade.live_envelope
+        assert gate is not None
+        observation = gate.latest_observation()
+        assert observation is not None
+        gate.publish(replace(
+            observation,
+            observed_at_ms=bar.end_ms,
+            risk_fill_sequence=risk_fill_sequence(facade.repository),
+        ))
+        drain(strategy, context, bar)
+
+    monkeypatch.setattr(bot_trade_strategy, "_drain_bar", drain_with_cash)
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("day", [date(2024, 1, 2), date(2024, 11, 29)])
+@pytest.mark.parametrize("day", [date(2026, 9, 22), date(2026, 11, 27)])
 @pytest.mark.parametrize("clock_read_before_close", [False, True])
 async def test_a_regular_hours_exit_decided_on_the_last_bar_is_not_sent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, day: date, clock_read_before_close: bool,
@@ -170,6 +193,7 @@ async def test_a_regular_hours_exit_decided_on_the_last_bar_is_not_sent(
     )
     binding = _regular_hours_binding()
     await facade.register_strategy_run(binding)
+    _refresh_cash_with_bar(monkeypatch, facade)
     feed = _FakeFeed(
         [
             _green_bar(first_green_end_ms),
@@ -215,7 +239,7 @@ async def test_an_accepted_exit_the_broker_cannot_prove_is_committed_with_no_str
     EXIT waiting for another strategy bar. The Clerk's own reconcile pass is
     what re-drives it.
     """
-    day = date(2024, 1, 2)
+    day = date(2026, 9, 22)
     close_ms = session_close_ms_utc(day)
     first_green_end_ms = close_ms - 17 * 60_000
     enter_end_ms = close_ms - 16 * 60_000
@@ -251,6 +275,7 @@ async def test_an_accepted_exit_the_broker_cannot_prove_is_committed_with_no_str
     )
     binding = _regular_hours_binding()
     await facade.register_strategy_run(binding)
+    _refresh_cash_with_bar(monkeypatch, facade)
     feed = _FakeFeed(
         [
             _green_bar(first_green_end_ms),

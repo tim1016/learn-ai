@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
-from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -23,34 +22,14 @@ from app.services.bot_binding_repository import (
 )
 from app.services.bot_dry_run import DryRunActivity, DryRunActivityJournal
 from app.services.bot_registry_projection import read_dry_run_activity
-from tests._helpers.bot_runner.custody import _SID, _T0, _registry
+from tests._helpers.bot_runner.custody import _SID, _T0, _registry, budget_consent_for_test, deploy_bot
 from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeFeed
-from tests._helpers.bot_runner.ema_parity import (
-    _ema_parity_bars_through_first_exit,
-)
+from tests._helpers.bot_runner.ema_parity import _ema_parity_bars_through_first_exit, ema_bars_in_fee_pinned_week
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 from ._support import _install_fake_clerk, _wait_for
 
-pytestmark = pytest.mark.usefixtures("legacy_run_registration")
-
-# The Monday of a trading week whose regulatory fee rates are all pinned.
-_FEE_PINNED_MONDAY = date(2026, 9, 21)
-
-
-def _in_a_fee_pinned_week(bars: list[MarketDataBar]) -> list[MarketDataBar]:
-    """Move a February LEAN stream, prices and session-relative times intact, into a fee-pinned week.
-
-    February predates the pinned CAT fee rate, so a funded Dry Run could not
-    price a fill there. The stream starts on a Monday, as the target week does.
-    """
-    from app.lean_sidecar.trading_calendar import session_open_ms_utc
-    from app.utils.session_anchors import et_date_at_ms
-
-    shift = session_open_ms_utc(_FEE_PINNED_MONDAY) - session_open_ms_utc(et_date_at_ms(bars[0].end_ms))
-    return [bar.model_copy(update={"start_ms": bar.start_ms + shift, "end_ms": bar.end_ms + shift,
-        "fetched_at_ms": bar.fetched_at_ms + shift}) for bar in bars]
-
+pytestmark = pytest.mark.usefixtures("budgeted_run_registration")
 
 @pytest.fixture
 def _isolated_synthetic_authority() -> None:
@@ -112,7 +91,7 @@ async def test_dry_run_records_simulated_round_trip_with_zero_broker_writes(
     # Dry-run mechanics test reusing the LEAN-parity bars fixture; the
     # deploy runs stamped corpus_coverage=UNCOVERED (ADR 0054), which is
     # irrelevant to what it proves.
-    bars = _in_a_fee_pinned_week(_ema_parity_bars_through_first_exit())
+    bars = ema_bars_in_fee_pinned_week(_ema_parity_bars_through_first_exit())
     from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
     from app.broker.alpaca.clerk.sqlite import runtime as clerk_runtime
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -219,7 +198,7 @@ async def test_dry_run_refuses_a_decision_taken_after_its_delivery_allowance(
     feed = _FakeFeed(bars, mode="hold")
     registry = _registry(tmp_path, feed)
 
-    await registry.deploy(
+    await deploy_bot(registry,
         exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
         strategy_instance_id=_SID,
         strategy_key="ema_crossover_signal",
@@ -270,7 +249,7 @@ async def test_dry_run_refuses_a_market_enter_decided_on_the_last_bar(
     from app.utils.session_anchors import et_date_at_ms
     from tests._helpers.bot_runner.ema_parity import ema_bars_through_a_last_bar_enter
 
-    bars = _in_a_fee_pinned_week(ema_bars_through_a_last_bar_enter())
+    bars = ema_bars_in_fee_pinned_week(ema_bars_through_a_last_bar_enter())
     close_ms = session_close_ms_utc(et_date_at_ms(bars[-1].end_ms))
     # The synthetic Clerk's clock reads the instant the last bar's decision
     # lands, 0.6 s after the close; every earlier bucket decides no action.
@@ -368,6 +347,7 @@ async def test_dry_run_deploy_at_an_uncovered_parameter_point_is_admitted_and_st
         symbol="SPY",
         mode="dry_run",
         quantity=1,
+        budget_consent=budget_consent_for_test(mode="dry_run"),
         strategy_params={"gap": 0.0, "gap_bps": 0.0, "rsi_min": 30.0, "rsi_max": 70.0},
         strategy_param_origins={
             "gap": "deploy_override",

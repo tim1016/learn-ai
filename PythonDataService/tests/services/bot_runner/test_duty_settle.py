@@ -21,7 +21,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -32,6 +32,7 @@ from app.broker.alpaca.clerk.active_authority import (
     activate_shadow_clerk_authority,
     select_active_clerk_runtime,
 )
+from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 from app.broker.alpaca.clerk.models import EffectPurpose
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
@@ -42,6 +43,7 @@ from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSw
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.run_ownership import NO_RUNNER_REASON
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.sqlite.simulated_account import SimulatedAccountProjection
 from app.broker.alpaca.clerk.sqlite.uncertainty import raise_account_hold
 from app.broker.alpaca.clerk.synthesized_orders import (
     SYNTHESIZED_ORDER_LEDGER_FILENAME,
@@ -52,7 +54,7 @@ from app.services.bot_lifecycle_projection import AlpacaLifecycleProjector
 from app.services.bot_runner import BotTaskRegistry
 from app.services.bot_runner_errors import BotRunnerError
 from app.services.source_bar_ledger import SourceBarLedger
-from tests._helpers.bot_runner.custody import admission_guard_for
+from tests._helpers.bot_runner.custody import admission_guard_for, deploy_bot
 from tests._helpers.bot_runner.market import _tradable_market_liveness
 from tests._helpers.bot_runner.resume import (
     _STRATEGY_INSTANCE_ID,
@@ -68,7 +70,7 @@ from tests.broker.alpaca.clerk.sqlite.conftest import _broker_leg, _broker_order
 from tests.broker.alpaca.clerk.test_active_authority import _LiveBroker
 from tests.broker.alpaca.clerk.test_shadow_broker import _LiveRead, _retain
 
-pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+pytestmark = pytest.mark.usefixtures("budgeted_run_registration")
 
 _SID = _STRATEGY_INSTANCE_ID
 _LIVE_ACCOUNT_ID = "9LIVE0001"
@@ -139,7 +141,7 @@ def _current_clerk_guard():
 
 
 async def _deploy(registry: BotTaskRegistry) -> None:
-    await registry.deploy(
+    await deploy_bot(registry,
         exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
         strategy_instance_id=_SID,
         strategy_key="ema_crossover_signal",
@@ -373,6 +375,17 @@ async def _rehearse_until_the_bot_dies(
     return registry
 
 
+def _shadow_budget_gate(sealed: ClerkSqliteRepository, runner_root: Path) -> tuple[LiveEnvelopeGate, SimulatedAccountProjection]:
+    simulation = SimulatedAccountProjection(repo=sealed, artifacts_root=runner_root)
+    gate = LiveEnvelopeGate(values=None, custody_is_simulated=True)
+    now = sealed.clock()
+    gate.publish(replace(
+        simulation.observe(reference_cash=1_000_000, observed_at_ms=now, now_ms=now),
+        risk_revision=sealed.account_risk_policy().revision,
+    ))
+    return gate, simulation
+
+
 def _traded(*purposes: EffectPurpose) -> _RehearsalSeed:
     """The Clerk's own ENTER (and EXIT) of 1 SPY under the bot's run, each
     filled by the Shadow broker from its bound decision bar."""
@@ -381,6 +394,7 @@ def _traded(*purposes: EffectPurpose) -> _RehearsalSeed:
         ports = compose_shadow_ports(
             live_read=_LiveRead(), live_account_id=_LIVE_ACCOUNT_ID, artifacts_root=runner_root
         )
+        gate, simulation = _shadow_budget_gate(sealed, runner_root)
         facade = SqliteAlpacaClerkFacade(
             repo=sealed,
             read=ports.read,
@@ -388,6 +402,8 @@ def _traded(*purposes: EffectPurpose) -> _RehearsalSeed:
             authority_kind="shadow",
             account_mode="live",
             program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
+            live_envelope=gate,
+            simulation=simulation,
         )
         evidence = SourceBarLedger(
             artifacts_root=runner_root, account_id=shadow_evidence_account_id_for_strategy(_SID)
@@ -411,8 +427,9 @@ def _traded(*purposes: EffectPurpose) -> _RehearsalSeed:
     return seed
 
 
-async def _a_working_order(sealed: ClerkSqliteRepository, run_id: str, _runner_root: Path) -> None:
+async def _a_working_order(sealed: ClerkSqliteRepository, run_id: str, runner_root: Path) -> None:
     """An entry the broker accepted and never filled."""
+    gate, _simulation = _shadow_budget_gate(sealed, runner_root)
     await submit_enter(
         sealed,
         account_id=_SEALED_ACCOUNT_ID,
@@ -421,6 +438,8 @@ async def _a_working_order(sealed: ClerkSqliteRepository, run_id: str, _runner_r
         lifecycle_run_id=run_id,
         leg=_broker_leg(quantity=1),
         trade=_FakeTradePort(),
+        envelope=gate,
+        reference_price=100,
     )
 
 

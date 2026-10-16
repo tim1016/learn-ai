@@ -50,7 +50,7 @@ from app.services.broker_v2_panel import budget_deploy
 from app.services.option_model_inputs import ModelInputsBeingRead
 from app.services.option_search import OptionSearches, OptionSearchLane
 from app.services.option_watch import get_option_watch_list
-from tests._helpers.bot_runner.custody import _SID, _T0, _registry
+from tests._helpers.bot_runner.custody import _SID, _T0, _registry, deploy_bot
 from tests._helpers.bot_runner.doubles import _FakeFeed
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
@@ -86,7 +86,7 @@ from ._option_floor import (
 )
 from ._support import _bar, _wait_for
 
-pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+pytestmark = pytest.mark.usefixtures("budgeted_run_registration")
 
 CALL = CALL_585.occ_symbol
 
@@ -1638,7 +1638,7 @@ async def test_a_run_whose_option_plan_is_refused_is_recorded_under_the_refusals
     the refusal's code, not the name of a Python exception, and the bot is left stopped."""
     feed = _FakeFeed([_bar(_T0)], mode="crash", error=OptionPlanRefused(refusal, "its option plan cannot be traded here"))
     registry = _registry(tmp_path, feed)
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     await _wait_for(lambda: not registry.status("alpaca", _SID).running)
 
@@ -1656,7 +1656,7 @@ async def test_a_run_ended_by_a_refused_wait_for_its_entrys_outcome_is_recorded_
     refusal's code, not the name of a Python exception, and the bot is left stopped."""
     refused = EntryOutcomeWaitRefused(ENTRY_OUTCOME_LIMIT_TOO_FAR, "the wait limit was too far ahead")
     registry = _registry(tmp_path, _FakeFeed([_bar(_T0)], mode="crash", error=refused))
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     await _wait_for(lambda: not registry.status("alpaca", _SID).running)
 

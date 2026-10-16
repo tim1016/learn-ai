@@ -19,7 +19,7 @@ from app.services.bot_runner import (
     RunAdmissionRefusedError,
     fleet_lane_start_gate,
 )
-from tests._helpers.bot_runner.custody import _SID
+from tests._helpers.bot_runner.custody import _SID, deploy_bot
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 
@@ -40,7 +40,7 @@ async def test_a_drained_lane_refuses_every_new_start_before_admission(
     """With no feed at all, the drained refusal — not a feed error — answers."""
     registry = _registry(tmp_path, gate=lambda: True)
     with pytest.raises(RunAdmissionRefusedError, match="drained"):
-        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
 
 async def test_the_gate_stays_silent_until_the_lane_learns_its_drain(
@@ -51,10 +51,10 @@ async def test_the_gate_stays_silent_until_the_lane_learns_its_drain(
     drained = False
     registry = _registry(tmp_path, gate=lambda: drained)
     with pytest.raises(MarketDataFeedUnavailableError):
-        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     drained = True
     with pytest.raises(RunAdmissionRefusedError, match="drained"):
-        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
 
 @pytest.mark.parametrize(
@@ -73,5 +73,5 @@ async def test_the_fleet_refusal_code_reaches_the_start_error(
         lane_start_gates=(fleet_lane_start_gate(lambda: reason),),
     )
     with pytest.raises(RunAdmissionRefusedError) as refused:
-        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     assert refused.value.reason_code == reason

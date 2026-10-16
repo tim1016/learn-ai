@@ -29,7 +29,7 @@ from app.services.bot_binding_repository import (
 from app.services.decision_session import RunDecisionSession
 from app.services.market_liveness import compose_market_liveness, unknown_market_liveness
 from app.services.source_bar_ledger import SourceBarLedger
-from tests._helpers.bot_runner.custody import _SID, _T0, _registry
+from tests._helpers.bot_runner.custody import _SID, _T0, _registry, deploy_bot
 from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeFeed
 from tests._helpers.bot_runner.market import _tradable_market_liveness
 from tests._helpers.canary_admission import admit_canary_pairing
@@ -69,7 +69,7 @@ async def test_unknown_liveness_blocks_entry(
     registry = _registry(tmp_path, _FakeFeed(bars, mode="hold"))
     set_alpaca_clerk(clerk)
     try:
-        await registry.deploy(
+        await deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             strategy_key="deployment_validation",
@@ -140,7 +140,7 @@ async def test_halted_liveness_blocks_entry(
     registry = _registry(tmp_path, _FakeFeed(bars, mode="hold"))
     set_alpaca_clerk(clerk)
     try:
-        await registry.deploy(
+        await deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             strategy_key="deployment_validation",
@@ -232,7 +232,7 @@ async def test_blocked_entry_is_rolled_back_and_can_re_enter(
     registry = _registry(tmp_path, _FakeFeed(bars, mode="hold"))
     set_alpaca_clerk(clerk)
     try:
-        await registry.deploy(
+        await deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             strategy_key="deployment_validation",
@@ -365,7 +365,7 @@ async def test_extended_hours_entry_is_proven_by_the_authoritys_declared_window(
     only because the gate consulted the Clerk's declared window.
 
     Calls ``run_trade_bot`` directly rather than through
-    ``BotTaskRegistry.deploy()``: Start admission is a separate gate with
+    ``BotTaskRegistry.deploy_with_admission()``: Start admission is a separate gate with
     its own market-data-readiness requirements unrelated to what this test
     targets (the per-bar ENTER liveness gate's window)."""
     repo = ClerkSqliteRepository.initialize(account_id="PA-ALPACA-EXEC", artifacts_root=tmp_path / "clerk")

@@ -22,7 +22,7 @@ from app.lean_sidecar.closing_bar import CLOSING_BAR_REASON_CODE
 from app.lean_sidecar.trading_calendar import next_trading_day, session_open_ms_utc
 from app.marketdata.feed import MarketDataBar
 from app.utils.session_anchors import et_date_at_ms
-from tests._helpers.bot_runner.custody import _SID, _registry
+from tests._helpers.bot_runner.custody import _SID, _registry, deploy_bot
 from tests._helpers.bot_runner.doubles import _FakeClerk, _FakeEffectResult, _FakeFeed
 from tests._helpers.canary_admission import admit_canary_pairing
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
@@ -108,7 +108,7 @@ async def test_rejected_exit_is_rolled_back_and_retried(
     registry = _registry(tmp_path, _FakeFeed(bars, mode="hold"))
     set_alpaca_clerk(clerk)
     try:
-        await registry.deploy(
+        await deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             strategy_key="deployment_validation",
@@ -212,7 +212,7 @@ async def test_signal_strategy_decides_on_the_first_live_bucket_after_warmup_bac
         feed = _WarmableFeed(live_bars, warmup_bars, mode="hold")
         registry = _registry(tmp_path, feed)
 
-        await registry.deploy(
+        await deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             strategy_key="rsi_mean_reversion",
@@ -274,7 +274,7 @@ async def test_final_rth_bucket_decides_at_once_but_its_enter_is_not_sent(
         feed = _WarmableFeed(live_bars, warmup_bars, mode="hold")
         registry = _registry(tmp_path, feed)
 
-        await registry.deploy(
+        await deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             strategy_key="rsi_mean_reversion",
@@ -325,7 +325,7 @@ async def test_a_closing_bar_exit_is_not_sent_and_fires_on_the_next_sessions_fir
         feed = _WarmableFeed(live_bars, warmup_bars, mode="hold")
         registry = _registry(tmp_path, feed)
 
-        await registry.deploy(
+        await deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=_SID,
             strategy_key="rsi_mean_reversion",

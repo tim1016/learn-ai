@@ -40,13 +40,13 @@ from app.marketdata.feed import MarketDataBar
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.source_bar_ledger import SourceBarLedger
 from app.utils.session_anchors import et_date_at_ms
-from tests._helpers.bot_runner.custody import _SID, _T0
+from tests._helpers.bot_runner.custody import _SID, _T0, budget_consent_for_test
 from tests._helpers.bot_runner.doubles import _FakeFeed, _SqliteRuntimeBroker
-from tests._helpers.bot_runner.ema_parity import EMA_LAST_BAR_ENTER_DAY, ema_bars_through_a_last_bar_enter
+from tests._helpers.bot_runner.ema_parity import ema_bars_in_fee_pinned_week, ema_bars_through_a_last_bar_enter
 from tests._helpers.bot_runner.market import clock_read_before_the_close, patch_wall_clock_to_the_fed_bar
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
-pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+pytestmark = pytest.mark.usefixtures("budgeted_run_registration")
 
 _ACCOUNT_ID = "PA-TEST"
 # A live decision lands this long after its bar closes (the issue's estimate).
@@ -82,6 +82,7 @@ def _regular_hours_binding(symbol: str) -> BrokerBotBinding:
         action_plan=alpaca_v1_action_plan(symbol),
         run_id="run-current",
         created_at_ms=_T0,
+        budget_consent=budget_consent_for_test(mode="trade"),
     )
 
 
@@ -143,10 +144,11 @@ async def test_a_regular_hours_enter_decided_on_the_last_bar_is_refused_and_noth
     that reads 15:59:59.4 when the 16:00 decision lands -- now meet the
     closing-bar screen first, which reads only the calendar.
     """
-    close_ms = session_close_ms_utc(EMA_LAST_BAR_ENTER_DAY)
+    bars = ema_bars_in_fee_pinned_week(ema_bars_through_a_last_bar_enter())
+    close_ms = session_close_ms_utc(et_date_at_ms(bars[-1].end_ms))
 
     broker, receipts = await _run(
-        tmp_path, monkeypatch, ema_bars_through_a_last_bar_enter(), decision_delay_ms=decision_delay_ms
+        tmp_path, monkeypatch, bars, decision_delay_ms=decision_delay_ms
     )
 
     assert broker.submitted_legs == []
