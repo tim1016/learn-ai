@@ -509,7 +509,7 @@ async def test_a_study_runs_from_lock_to_an_approved_golden_configuration_over_h
     assert deploy["symbol"] == symbol and "symbol" not in deploy["parameters"]
     # The published research retains the acknowledged chance evidence with the qualification (#3015).
     research = harness.approval.requests[-1].research
-    assert "CHANCE_WITHIN_NOISE" in research["weakness"] and research["research_override"] is True
+    assert "CHANCE_CLEARLY_ADVERSE" in research["weakness"] and research["research_override"] is True
     assert research["chance"]["policy_schema"] == "golden-search-chance-approval/v2"
     listed = await client.get(f"{BASE}/studies", params={"symbol": symbol})
     assert [row["id"] for row in listed.json()] == [study["id"]] and listed.json()[0]["qualification_id"] is not None

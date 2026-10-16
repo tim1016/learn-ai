@@ -101,6 +101,8 @@ for (const phase of ['running', 'finished', 'holding'] satisfies BotPhase[]) {
       expect(hidden, `${panel} scrolls inside itself`).toBeLessThanOrEqual(1);
     }
 
+    // Open the saved build details so even a finished bot has enough content to scroll.
+    await page.getByRole('button', { name: 'Build proof', exact: true }).click();
     // The right half scrolls as one; the window, the header and the chart stay put.
     const scrolled = await page.locator('.bot-board__side').evaluate((side) => {
       side.scrollTo({ top: side.scrollHeight });

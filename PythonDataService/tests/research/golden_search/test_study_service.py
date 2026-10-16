@@ -130,7 +130,7 @@ async def test_lifecycle_runs_from_lock_to_an_approved_golden_configuration(conn
     row = await driver.advance(row, "continue")
     detail = await driver.detail(row)
     assert detail["state"] == "awaiting_candidate"
-    validation = detail["results"]["validation"]
+    validation = row.results["validation"]
     assert [fold["status"] for fold in validation["folds"]] == ["completed", "completed"]
     assert all(fold["incumbent_test_metrics"] is not None for fold in validation["folds"])
     # The charts read the stored folds: each fold's retention is the verdict's, and the trades add up to its count.
@@ -854,7 +854,7 @@ async def test_outside_research_on_the_final_interval_makes_its_history_unknown(
     research = driver.approval.requests[-1].research
     # The enrolled study's weak final comparison rides beside the exposure weakness, and its evidence is
     # retained with the qualification (#3015).
-    assert research["research_override"] and research["weakness"] == ["EXPOSURE_HISTORY_UNKNOWN", "CHANCE_WITHIN_NOISE"]
+    assert research["research_override"] and research["weakness"] == ["EXPOSURE_HISTORY_UNKNOWN", "CHANCE_CLEARLY_ADVERSE"]
     assert research["chance"]["components"]["comparison"]["status"] == "measured"
     assert research["chance"]["policy_schema"] == "golden-search-chance-approval/v2"
 
@@ -956,11 +956,9 @@ async def test_a_fit_that_failed_the_final_test_needs_the_written_acceptance_and
     detail = await driver.detail(row)
     fits = {fit["key"]: fit for fit in detail["results"]["exam"]["fits"]}
     assert (fits["all_period"]["outcome"], fits["recent"]["outcome"]) == ("meets_rules", "does_not_meet_rules")
-    # Both fits' final comparisons sit inside the fake landscape's noise, so the chance weakness rides beside
-    # the exam codes — the passing fit's acknowledgement covers it (#3015).
-    assert [item["code"] for item in fits["all_period"]["weakness"]] == ["CHANCE_WITHIN_NOISE"]
-    # The comparison and the profitability are both inside the noise: one code, one acknowledgement naming both.
-    assert [item["code"] for item in fits["recent"]["weakness"]] == ["EXAM_DOES_NOT_MEET_RULES", "CHANCE_WITHIN_NOISE"]
+    # V2 distinguishes adverse evidence from noise; both still require the explicit acknowledgement (#3015).
+    assert [item["code"] for item in fits["all_period"]["weakness"]] == ["CHANCE_CLEARLY_ADVERSE"]
+    assert [item["code"] for item in fits["recent"]["weakness"]] == ["EXAM_DOES_NOT_MEET_RULES", "CHANCE_CLEARLY_ADVERSE"]
     # The study reads by its strongest result until a fit is named.
     assert detail["exam_outcome"] == "meets_rules" and detail["guidance"]["headline"] == "Approve the settings you want to use"
 
@@ -968,7 +966,7 @@ async def test_a_fit_that_failed_the_final_test_needs_the_written_acceptance_and
         await driver.command(row, "approve", {**APPROVE, "candidate_key": "recent"})
     assert weak.value.code == "WEAKNESS_ACKNOWLEDGEMENT_REQUIRED"
     row = await driver.advance(row, "approve", {**APPROVE, "acknowledge_research_weakness": True})
-    assert row.state == "approved" and driver.approval.requests[-1].research["weakness"] == ["CHANCE_WITHIN_NOISE"]
+    assert row.state == "approved" and driver.approval.requests[-1].research["weakness"] == ["CHANCE_CLEARLY_ADVERSE"]
 
 
 async def test_a_study_kept_after_two_fits_ran_says_how_many_ran_and_promises_no_approval(driver: Driver, symbol: str) -> None:
@@ -1278,6 +1276,10 @@ async def test_defaults_offer_the_ready_default_qualification_as_the_incumbent(
     assert ready["seed"] == registry != point
     assert ready["exposure"]["state"] in ("not_opened", "previously_used", "history_unknown")
     plan = {key: value for key, value in ready.items() if key not in ("final_months", "final_sessions_cut", "range_note", "incumbent_label", "incumbent_sentence", "exposure")}
+    # Keep this plan inside the seeded lake so missing history cannot mask the qualified-seed gate.
+    seeded = plan_request(symbol)
+    for key in ("development_start_ms", "development_end_ms", "final_start_ms", "final_end_ms", "training_months", "test_months"):
+        plan[key] = seeded[key]
     leaked = await service.preflight({**plan, "seed": point}, roots=driver.roots)
     assert [item["code"] for item in leaked["refusals"]] == ["SEED_IS_QUALIFIED"]
 
