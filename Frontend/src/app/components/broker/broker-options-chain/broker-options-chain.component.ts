@@ -406,6 +406,7 @@ export class BrokerOptionsChainComponent {
     const requestSeq = this.repriceRequestSeq;
     const promises: Promise<void>[] = [];
     const missingGreeks: string[] = [];
+    let startedBatch = false;
     for (const q of snap.quotes) {
       const mid = midOrNull(q);
       if (q.greeks_source === 'none' || q.iv === null || q.iv <= 0 || mid === null) {
@@ -417,6 +418,10 @@ export class BrokerOptionsChainComponent {
       const lastInput = this.engineInputByKey.get(key);
       if (lastInput !== undefined && sameEngineInput(lastInput, input)) {
         continue;
+      }
+      if (!startedBatch) {
+        this.engineError.set(null);
+        startedBatch = true;
       }
       this.engineInputByKey.set(key, input);
       this.engineGreeksByKey.update((current) => {
@@ -472,7 +477,6 @@ export class BrokerOptionsChainComponent {
         next.set(key, { delta: result.delta, gamma: result.gamma });
         return next;
       });
-      this.engineError.set(null);
     } catch (error) {
       if (!stillCurrent()) return;
       this.engineInputByKey.delete(key);

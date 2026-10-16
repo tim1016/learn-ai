@@ -121,3 +121,19 @@ it('does not let an older IV result overwrite the current comparison at the same
   await Promise.resolve();
   expect(component.rows()[0].callEngineDelta).toBe(0.7);
 });
+
+it('keeps a failed strike visible when another strike succeeds later in the same batch', async () => {
+  let finishSuccess: ((result: { success: boolean; delta: number; gamma: number }) => void) | undefined;
+  const priceOption = vi.fn()
+    .mockResolvedValueOnce({ success: false, error: 'Strike 500 failed' })
+    .mockImplementationOnce(() => new Promise<{ success: boolean; delta: number; gamma: number }>((resolve) => { finishSuccess = resolve; }));
+  const { component, offer } = await renderWithEngine(priceOption);
+  const snapshot = chainSnapshot();
+  snapshot.quotes.push({ ...snapshot.quotes[0], strike: 501 });
+
+  offer(snapshot);
+  await waitFor(() => expect(component.engineError()).toBeInstanceOf(Error));
+  finishSuccess?.({ success: true, delta: 0.7, gamma: 0.03 });
+  await waitFor(() => expect(component.rows()[1].callEngineDelta).toBe(0.7));
+  expect(component.engineError()).toBeInstanceOf(Error);
+});
