@@ -67,7 +67,7 @@ from app.services.sqlite_clerk_compat import (
     custody_account_id_for_route,
 )
 from app.utils.timestamps import now_ms_utc
-from tests._helpers.bot_runner.custody import admission_guard_for
+from tests._helpers.bot_runner.custody import admission_guard_for, deploy_bot
 from tests._helpers.bot_runner.doubles import _FakeFeed
 from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
 from tests._helpers.canary_admission import admit_canary_pairing
@@ -80,7 +80,7 @@ from tests.broker.alpaca.clerk.live_envelope_fixtures import (
 )
 from tests.broker.v2panel.conftest import _FakeDeployRegistry
 
-pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+pytestmark = pytest.mark.usefixtures("budgeted_run_registration")
 
 SID = "ema-shadow-1"
 # A calendar-derived instant, never a wall-clock read: 10:00 ET on a known
@@ -207,7 +207,7 @@ async def test_shadow_runner_can_deploy_stop_and_deploy_fresh(
 ) -> None:
     """A real Shadow launch must cross the SQLite-to-runner projection boundary."""
     _app, runtime = shadow_app
-    deployed = await shadow_registry.deploy(
+    deployed = await deploy_bot(shadow_registry,
         exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=SID, symbol="SPY", mode="trade"
     )
     assert deployed.running is True
@@ -217,7 +217,7 @@ async def test_shadow_runner_can_deploy_stop_and_deploy_fresh(
     stopped = await shadow_registry.stop("alpaca", SID)
     assert stopped.phase == "OFF_DUTY"
     assert runtime.sqlite_repository.active_run(SID) is None
-    resumed = await shadow_registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=SID + "-fresh", symbol="SPY", mode="trade")
+    resumed = await deploy_bot(shadow_registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=SID + "-fresh", symbol="SPY", mode="trade")
     assert resumed.running is True
     assert resumed.active_run_id != deployed.active_run_id
     assert runtime.sqlite_repository.active_run(SID + "-fresh").lifecycle_run_id == resumed.active_run_id
@@ -264,7 +264,7 @@ async def test_shadow_failed_activation_recovers_without_reusing_the_existing_bi
             staticmethod(unavailable_repository),
         )
         with pytest.raises(ActivationFailedCleanupProvenError):
-            await shadow_registry.deploy(
+            await deploy_bot(shadow_registry,
                 exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=SID, symbol="SPY", mode="trade"
             )
 
@@ -283,7 +283,7 @@ async def test_shadow_failed_activation_recovers_without_reusing_the_existing_bi
     assert recovered.duty_outcome.reason_code == "INTERRUPTED_BY_RESTART"
     assert shadow_registry.process_fact("alpaca", SID).state == "EXITED"
 
-    resumed = await shadow_registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=SID + "-fresh", symbol="SPY", mode="trade")
+    resumed = await deploy_bot(shadow_registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=SID + "-fresh", symbol="SPY", mode="trade")
     assert resumed.running is True
     assert resumed.active_run_id != failed_binding.run_id
     failed_run = shadow_registry.current_run("alpaca", SID)
@@ -303,7 +303,7 @@ async def test_shadow_evidence_route_reads_the_custody_namespace(
 ) -> None:
     """The public live-account route, in either spelling, reads Shadow's SQLite timeline (#2221)."""
     app, _runtime = shadow_app
-    await shadow_registry.deploy(
+    await deploy_bot(shadow_registry,
         exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
         strategy_instance_id=SID,
         symbol="SPY",
@@ -681,11 +681,11 @@ async def test_a_shadow_bots_fills_reach_its_panel_labelled_simulated(
     from app.broker.contract.models import BrokerOrderLeg
     from tests.broker.alpaca.clerk.sqlite.conftest import DAY_PNL_SID, _append_day_pnl_slice
 
-    deployed = await shadow_registry.deploy(
+    deployed = await deploy_bot(shadow_registry,
         exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=DAY_PNL_SID, symbol="SPY", mode="trade"
     )
     repo = runtime.sqlite_repository
-    assert repo is not None
+    assert repo is not None and runtime.clerk is not None
     accepted = accept_enter(
         repo,
         account_id=repo.account_id,
@@ -693,6 +693,8 @@ async def test_a_shadow_bots_fills_reach_its_panel_labelled_simulated(
         lifecycle_run_id=deployed.active_run_id,
         decision_id="shadow-fill",
         leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+        envelope=runtime.clerk.live_envelope,
+        reference_price=500,
     )
     _append_day_pnl_slice(
         repo, accepted, execution_id="shadow-buy", side="BUY", quantity=1, price=500, occurred_at_ms=repo.clock()

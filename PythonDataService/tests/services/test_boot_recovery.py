@@ -23,7 +23,6 @@ from app.broker.alpaca.clerk.account_authority import (
     synthetic_account_id_for_strategy,
 )
 from app.broker.alpaca.clerk.active_runtime import terminal_startup_recovery
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.engine.live.bot_lifecycle_state import (
@@ -54,12 +53,13 @@ from app.services.bot_runner import (
     BootRecoveryIncompleteError,
     BotTaskRegistry,
 )
-from tests._helpers.bot_runner.custody import _custody_proof, _flat_start_guard, _lifecycle_json
+from tests._helpers.bot_runner.custody import _custody_proof, _flat_start_guard, _lifecycle_json, deploy_bot
 from tests._helpers.bot_runner.doubles import _CustodyClerk, _FakeFeed, _SqliteRuntimeBroker
 from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 
-pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+pytestmark = pytest.mark.usefixtures("budgeted_run_registration")
 
 _SID = "alpaca-drill-bot"
 _T0 = 1_700_000_000_000
@@ -128,7 +128,7 @@ async def test_boot_without_lifecycle_authority_leaves_stale_binding_unprojected
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
     await registry.run_boot_recovery()
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     registry._bots[_SID].finalized = True
     registry._bots[_SID].task.cancel()
     await asyncio.sleep(0)
@@ -153,7 +153,7 @@ async def test_boot_without_lifecycle_authority_leaves_stale_binding_unprojected
     assert view.phase == "ON_DUTY"  # the stale record, rendered as-is, not repaired
     assert view.duty_outcome is None
     with pytest.raises(BootRecoveryIncompleteError) as denied:
-        await rebooted.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await deploy_bot(rebooted, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     assert denied.value.admission_decision.reason_code == "BOOT_RECOVERY_INCOMPLETE"
 
 
@@ -172,7 +172,7 @@ async def test_a_boot_still_reconnecting_to_alpaca_tells_start_to_wait_not_resta
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
     await registry.run_boot_recovery()
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     await registry.stop("alpaca", _SID)
 
     set_active_clerk_runtime(
@@ -191,7 +191,7 @@ async def test_a_boot_still_reconnecting_to_alpaca_tells_start_to_wait_not_resta
     assert report.authority_unavailable_instances == (_SID,)
 
     with pytest.raises(BootRecoveryIncompleteError) as denied:
-        await rebooted.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await deploy_bot(rebooted, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     decision = denied.value.admission_decision
     assert decision is not None
@@ -260,10 +260,10 @@ async def test_starts_refused_until_boot_sweep_completes(tmp_path: Path) -> None
     registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
 
     with pytest.raises(BootRecoveryIncompleteError):
-        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     await registry.run_boot_recovery()
-    view = await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    view = await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     assert view.running is True
     await registry.stop("alpaca", _SID)
 
@@ -278,7 +278,7 @@ async def test_failed_authority_preparation_keeps_boot_gate_closed(tmp_path: Pat
         await registry.run_boot_recovery(recover=fail_recovery)
 
     with pytest.raises(BootRecoveryIncompleteError):
-        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
 
 async def test_a_rerun_boot_sweep_that_fails_closes_the_gate_its_first_run_opened(
@@ -299,7 +299,7 @@ async def test_a_rerun_boot_sweep_that_fails_closes_the_gate_its_first_run_opene
         await registry.run_boot_recovery(recover=fail_recovery)
 
     with pytest.raises(BootRecoveryIncompleteError):
-        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
 
 async def test_a_boot_sweep_that_failed_says_restart_not_wait(tmp_path: Path) -> None:
@@ -318,7 +318,7 @@ async def test_a_boot_sweep_that_failed_says_restart_not_wait(tmp_path: Path) ->
         await registry.run_boot_recovery(recover=fail_recovery)
 
     with pytest.raises(BootRecoveryIncompleteError) as refused:
-        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     decision = refused.value.admission_decision
     assert decision is not None
@@ -594,7 +594,7 @@ async def test_boot_reconstructs_sqlite_start_committed_before_binding(
         symbol="SPY",
         config_hash="config-1",
     )
-    submit_start_run(
+    seed_historical_run_started(
         repo,
         account_id="PA-TEST",
         strategy_instance_id=_SID,
@@ -634,7 +634,7 @@ async def test_boot_sweep_records_interrupted_evidence_and_never_restarts(
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
     await registry.run_boot_recovery()
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     assert _lifecycle_json(_artifacts_root(tmp_path), _SID)["phase"] == "ON_DUTY"
     # Simulated hard stop: the process dies — tasks vanish, files survive.
     # A hard kill never runs the supervisor's finalizer, so suppress it
@@ -720,7 +720,7 @@ async def test_boot_sweep_repairs_interrupted_bot_stranded_as_running(
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
     await registry.run_boot_recovery()
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     registry._bots[_SID].finalized = True
     registry._bots[_SID].task.cancel()
     await asyncio.sleep(0)
@@ -752,7 +752,7 @@ async def test_boot_sweep_repairs_service_shutdown_stranded_as_running(
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
     await registry.run_boot_recovery()
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
 
     await registry.stop_all()
     assert registry.status("alpaca", _SID).desired_state == "RUNNING"
@@ -774,7 +774,7 @@ async def test_boot_sweep_repairs_service_shutdown_stranded_as_paused(
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
     await registry.run_boot_recovery()
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     # A retained pre-cutover sidecar is history, never a restart capability.
     registry._desired_repo(_SID).set(DesiredState.PAUSED, updated_by="legacy", now_ms=_T0)
     await registry.stop_all()
@@ -848,7 +848,7 @@ async def test_boot_sweep_refuses_corrupt_binding_for_sqlite_active_run(
         start_custody_guard=_flat_start_guard,
     )
     await registry.run_boot_recovery()
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     registry._bots[_SID].finalized = True
     registry._bots[_SID].task.cancel()
     await asyncio.sleep(0)
@@ -877,7 +877,7 @@ async def test_one_bots_corrupt_desired_state_is_left_as_it_is_and_the_lane_stil
     await registry.run_boot_recovery()
     corrupt, healthy = f"{_SID}-a", f"{_SID}-b"
     for sid in (corrupt, healthy):
-        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=sid, symbol="SPY")
+        await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=sid, symbol="SPY")
         registry._bots[sid].finalized = True
         registry._bots[sid].task.cancel()
     await asyncio.sleep(0)
@@ -1030,7 +1030,7 @@ async def test_a_live_primary_boots_with_shadow_sealed_bindings_present(
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
     await registry.run_boot_recovery()
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     shadow_sealed = registry._bots[_SID].binding.sealed_account_id
     await registry.stop("alpaca", _SID, updated_by="test")
 
@@ -1127,7 +1127,7 @@ async def test_boot_projects_a_binding_the_installed_authority_still_custodies(
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
     await registry.run_boot_recovery()
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     registry._bots[_SID].finalized = True
     registry._bots[_SID].task.cancel()
     await asyncio.sleep(0)
@@ -1201,7 +1201,7 @@ async def test_boot_never_reports_a_dry_run_binding_foreign(tmp_path: Path, monk
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
     await registry.run_boot_recovery()
-    await registry.deploy(
+    await deploy_bot(registry,
         exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
         strategy_instance_id=_SID,
         symbol="SPY",

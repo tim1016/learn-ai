@@ -33,12 +33,13 @@ from tests._helpers.bot_runner.custody import (
     _custody_proof,
     _flat_custody_snapshot,
     _flat_start_guard,
+    deploy_bot,
 )
 from tests._helpers.bot_runner.doubles import _CustodyClerk
 from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
-pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+pytestmark = pytest.mark.usefixtures("budgeted_run_registration")
 
 _SID = "alpaca-api-bot-1"
 _T0 = 1_700_000_000_000
@@ -157,7 +158,7 @@ def _client(app: FastAPI) -> httpx.AsyncClient:
 async def test_the_current_run_is_a_lazy_read_only_view(api) -> None:
     """Earlier runs are Bot history's (#2574); this read is the current run's."""
     app, registry = api
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     await registry.stop("alpaca", _SID)
     # Seed a retained pre-cutover second run as evidence, without starting it.
     historical = registry.binding_for_control("alpaca", _SID).model_copy(update={"run_id": "historical-second-run"})
@@ -206,7 +207,7 @@ async def test_scoped_run_reads_match_the_canonical_account_identity(
     app, _registry = api
     registry = _bot_registry(tmp_path / "sealed", _start_guard_sealing(sealed_account_id))
     set_bot_task_registry(registry)
-    deployed = await registry.deploy(
+    deployed = await deploy_bot(registry,
         exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode=mode
     )
     assert registry.binding_for_control("alpaca", _SID).sealed_account_id == sealed_account_id
@@ -238,7 +239,7 @@ async def test_scoped_run_read_refuses_a_legacy_unsealed_binding(
 ) -> None:
     """A binding with no sealed account is attributable to no account."""
     app, registry = api
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     unsealed = registry.binding_for_control("alpaca", _SID).model_copy(
         update={"sealed_account_id": None}
     )
@@ -265,7 +266,7 @@ async def test_scoped_dry_run_read_is_unavailable_without_a_lane_authority(
 
     configure_execution_allowances(monkeypatch)
     app, registry = api
-    await registry.deploy(
+    await deploy_bot(registry,
         exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="dry_run"
     )
     monkeypatch.setattr(sqlite_clerk_compat, "active_sqlite_facade", lambda _broker: None)

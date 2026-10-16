@@ -36,7 +36,7 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.lean_sidecar.trading_calendar import is_early_close, session_windows_ms_utc
 from app.marketdata.feed import ContinuityPolicy, MarketDataBar
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
-from tests._helpers.bot_runner.custody import _SID
+from tests._helpers.bot_runner.custody import _SID, budget_consent_for_test
 from tests._helpers.bot_runner.doubles import (
     ACCEPTED_IN_STORE,
     FAILED_AFTER_ACCEPTANCE,
@@ -52,6 +52,7 @@ from tests._helpers.bot_runner.market import (
     patch_wall_clock_to_the_fed_bar,
 )
 from tests._helpers.signal_program import anchor_session_date
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 
 
 @pytest.fixture(autouse=True)
@@ -128,6 +129,7 @@ def _binding(*, run_id: str, strategy_key: str = "ema_crossover_signal") -> Brok
         mode="trade",
         quantity=3,
         action_plan=alpaca_v1_action_plan("SPY"),
+        budget_consent=budget_consent_for_test(),
         run_id=run_id,
         created_at_ms=0,
     )
@@ -786,10 +788,18 @@ async def test_resume_names_a_crash_on_the_first_ever_decision_from_the_clerks_r
         tape = _two_cross_tape()[:_SMA_SECOND_ENTER_MINUTE]
         warmup = [bar.model_copy(update={"provenance": "history"}) for bar in tape[:_SMA_ENTER_MINUTE]]
         crash_bar = tape[_SMA_ENTER_MINUTE]
-        await clerk.register_strategy_run(_sma_binding("run-1"))
+        seed_historical_run_started(
+            repo, account_id=repo.account_id, strategy_instance_id=_SID, lifecycle_run_id="run-1",
+        )
+        clerk.active_runs[_SID] = "run-1"
+        clerk.known_runs.add((_SID, "run-1"))
         await clerk.stop_strategy_run(strategy_instance_id=_SID, run_id="run-1")
         resumed = _sma_binding("run-2")
-        await clerk.register_strategy_run(resumed)
+        seed_historical_run_started(
+            repo, account_id=repo.account_id, strategy_instance_id=_SID, lifecycle_run_id="run-2",
+        )
+        clerk.active_runs[_SID] = "run-2"
+        clerk.known_runs.add((_SID, "run-2"))
         assert _retained(repo) == []
 
         await bot_trade_strategy.run_trade_bot(

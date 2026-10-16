@@ -27,7 +27,7 @@ from app.services.lane_quiesce import (
     LaneAccountQuietSource,
     set_lane_account_quiet_source,
 )
-from tests._helpers.bot_runner.custody import _SID, _custody_proof, _registry
+from tests._helpers.bot_runner.custody import _SID, _custody_proof, _registry, deploy_bot
 from tests._helpers.bot_runner.doubles import _CustodyClerk, _FakeFeed
 from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
@@ -58,7 +58,7 @@ async def test_stop_all_bots_stops_every_bot_and_returns_the_durable_receipt(
     tmp_path: Path,
 ) -> None:
     registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
-    deployed = await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    deployed = await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     set_bot_task_registry(registry)
 
     async with _client() as client:
@@ -84,7 +84,7 @@ async def test_stop_all_bots_that_leaves_a_bot_running_refuses_with_the_receipt(
     from app.services.bot_runner import RunAdmissionRefusedError
 
     registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     real_stop = registry.stop
 
     async def refusing_stop(*_args: object, **_kwargs: object):

@@ -10,7 +10,6 @@ import pytest
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
 from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.engine.live.bot_lifecycle_state import (
@@ -27,13 +26,14 @@ from app.services.bot_lifecycle_projection import (
 )
 from app.services.bot_runner import BotTaskRegistry
 from app.utils.timestamps import now_ms_utc
-from tests._helpers.bot_runner.custody import admission_guard_for
+from tests._helpers.bot_runner.custody import admission_guard_for, deploy_bot
 from tests._helpers.bot_runner.doubles import _FakeFeed, _SqliteRuntimeBroker
 from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
 from tests._helpers.canary_admission import admit_canary_pairing
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 
-pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+pytestmark = pytest.mark.usefixtures("budgeted_run_registration")
 
 
 @pytest.fixture(autouse=True)
@@ -58,7 +58,7 @@ def test_projection_rejects_terminal_claim_while_sqlite_run_is_active(
     tmp_path: Path,
 ) -> None:
     repo = _registered_repo(tmp_path)
-    submit_start_run(
+    seed_historical_run_started(
         repo,
         account_id="PA-TEST",
         strategy_instance_id="paper-projection",
@@ -278,7 +278,7 @@ async def test_every_alpaca_mode_commits_sqlite_duty_before_projection(
     )
     admit_canary_pairing(monkeypatch, "deployment_validation", "PA-TEST")
     try:
-        deployed = await registry.deploy(
+        deployed = await deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
             strategy_instance_id=f"paper-{mode}",
             symbol="SPY",
@@ -421,7 +421,7 @@ async def test_archive_takes_a_finished_bot_off_the_roster(
     )
     admit_canary_pairing(monkeypatch, "deployment_validation", "PA-TEST")
     try:
-        await registry.deploy(
+        await deploy_bot(registry,
             exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id="paper-archive", symbol="SPY"
         )
         await registry.stop("alpaca", "paper-archive")

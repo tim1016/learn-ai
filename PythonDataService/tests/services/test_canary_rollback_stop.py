@@ -40,13 +40,13 @@ import pytest
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.models import AccountFreezeState
 from app.schemas.run_admission import ProgramBuildAdmissionFact
-from tests._helpers.bot_runner.custody import _SID, _T0, _custody_proof, _registry
+from tests._helpers.bot_runner.custody import _SID, _T0, _custody_proof, _registry, deploy_bot
 from tests._helpers.bot_runner.doubles import _CustodyClerk, _FakeFeed
 from tests._helpers.bot_runner.market import patch_fresh_live_market_liveness
 from tests._helpers.canary_admission import admit_canary_pairing
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
-pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+pytestmark = pytest.mark.usefixtures("budgeted_run_registration")
 
 
 @pytest.fixture(autouse=True)
@@ -120,7 +120,7 @@ async def _deploy_trade_bot_as_simulated_canary(
     returns.
     """
     admit_canary_pairing(monkeypatch, *admitted_pairing)
-    await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade")
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade")
     managed = registry._bots[_SID]
     managed.binding = managed.binding.model_copy(
         update={"program_build": _proven_build(), **(binding_overrides or {})}
@@ -253,7 +253,7 @@ async def test_canary_rollback_verdict_absent_for_dry_run_instance(tmp_path: Pat
     set_alpaca_clerk(clerk)
     try:
         registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
-        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="dry_run")
+        await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="dry_run")
         managed = registry._bots[_SID]
         managed.binding = managed.binding.model_copy(update={"program_build": _proven_build()})
 
