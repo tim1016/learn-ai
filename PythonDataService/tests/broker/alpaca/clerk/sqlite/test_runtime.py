@@ -43,6 +43,7 @@ from app.broker.alpaca.clerk.sqlite.runtime import (
     SqliteAlpacaClerkFacade,
     StrategyAdmissionStaleError,
 )
+from app.broker.alpaca.clerk.sqlite.uncertainty import raise_account_hold
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.errors import BrokerError
@@ -1067,6 +1068,22 @@ async def test_cancel_verified_working_orders_refuses_unowned_duplicate_and_othe
 
         assert broker.cancellations == []
         assert not any(row["transition_kind"] == "ORDER_CANCEL_REQUESTED" for row in repo.transitions_for_order(order_ref))
+    finally:
+        repo.close()
+
+
+async def test_custody_projection_keeps_an_active_account_hold_visible(tmp_path: Path) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    broker = _Broker()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
+    try:
+        raise_account_hold(repo, reason_code="STREAM_HEALTH_HOLD", evidence_refs=["stream:down"])
+
+        projection = await facade.custody_snapshot_projection("sid-1")
+
+        assert projection.hold.active is True
+        assert projection.hold.reason_code == "STREAM_HEALTH_HOLD"
+        assert broker.submissions == [] and broker.cancellations == []
     finally:
         repo.close()
 
