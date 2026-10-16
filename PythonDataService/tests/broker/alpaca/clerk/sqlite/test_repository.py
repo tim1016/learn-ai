@@ -38,6 +38,7 @@ from app.broker.alpaca.clerk.sqlite.registry import (
 )
 from app.broker.alpaca.clerk.sqlite.repository import (
     AlreadyInitialized,
+    ClerkSqliteError,
     ClerkSqliteRepository,
     DatabaseBehindMirror,
     DatabaseIdentityMismatch,
@@ -627,7 +628,10 @@ def test_non_utf8_registry_line_refuses_the_read_naming_its_line(tmp_path: Path)
         registry.latest(ACCOUNT_ID)
 
 
-def test_database_behind_its_mirror_fails_closed_on_open_without_repair(tmp_path: Path) -> None:
+@pytest.mark.parametrize("pending_migration", [False, True])
+def test_database_behind_its_mirror_fails_closed_on_open_without_repair(
+    tmp_path: Path, pending_migration: bool
+) -> None:
     """A clerk.db that lost its committed tail must not open (#3161).
 
     Startup check 9 walked only the rows the database still has, so an older
@@ -653,6 +657,17 @@ def test_database_behind_its_mirror_fails_closed_on_open_without_repair(tmp_path
     for sidecar in (Path(f"{db_path}-wal"), Path(f"{db_path}-shm")):
         sidecar.unlink(missing_ok=True)
     shutil.copyfile(behind_copy, db_path)
+    if pending_migration:
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("DROP INDEX ix_orders_entry_broker_state")
+            conn.execute("DROP TRIGGER trg_orders_effect_state_insert")
+            conn.execute("DROP TRIGGER trg_orders_effect_state_update")
+            conn.execute("ALTER TABLE orders DROP COLUMN effect_state")
+            conn.execute("UPDATE control_meta SET schema_version = 24 WHERE id = 1")
+            conn.commit()
+        finally:
+            conn.close()
     mirror_before = mirror_path.read_bytes()
     database_before = db_path.read_bytes()
 
@@ -670,6 +685,51 @@ def test_database_behind_its_mirror_fails_closed_on_open_without_repair(tmp_path
     finally:
         inspected.close()
     assert lease_owner is None
+
+
+@pytest.mark.parametrize("tail", [b'{"phase":', b'\xff\n', b'[]\n'])
+def test_open_refuses_an_unreadable_mirror_with_a_typed_error_and_preserves_it(
+    tmp_path: Path, tail: bytes
+) -> None:
+    clock = _clock_seq()
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    mirror_path = repo.mirror_path
+    repo.close()
+    with mirror_path.open("ab") as handle:
+        handle.write(tail)
+    before = mirror_path.read_bytes()
+    line_number = len(before.splitlines())
+
+    with pytest.raises(ClerkSqliteError, match=f"line {line_number}") as refused:
+        ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+
+    assert isinstance(refused.value, MirrorChainBroken)
+    assert mirror_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("conflicting_finalize", [False, True])
+def test_open_refuses_a_broken_mirror_chain_through_the_store_error_boundary(
+    tmp_path: Path, conflicting_finalize: bool
+) -> None:
+    clock = _clock_seq()
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    repo.register_strategy_instance(strategy_instance_id="spy-bot", symbol="SPY", config_hash="h1")
+    mirror_path = repo.mirror_path
+    repo.close()
+    records = [json.loads(line) for line in mirror_path.read_text().splitlines()]
+    if conflicting_finalize:
+        final = next(record for record in records if record["phase"] == "FINALIZE")
+        records.append({**final, "row_hash": "conflicting-hash"})
+    else:
+        records = [record for record in records if record["phase"] == "IDENTITY"]
+    mirror_path.write_text("".join(json.dumps(record) + "\n" for record in records))
+    before = mirror_path.read_bytes()
+
+    with pytest.raises(ClerkSqliteError) as refused:
+        ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+
+    assert isinstance(refused.value, MirrorChainBroken)
+    assert mirror_path.read_bytes() == before
 
 
 def test_open_racing_a_live_writer_is_refused_as_lease_held_not_as_behind_mirror(

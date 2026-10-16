@@ -44,6 +44,7 @@ from app.broker.alpaca.clerk.sqlite.decision_receipts import (
     append_decision_receipt_row,
     atomic_decision_receipt_conflicts_with_existing,
 )
+from app.broker.alpaca.clerk.sqlite.errors import ClerkSqliteError as ClerkSqliteError
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     active_execution_coverage_conflicts,
     execution_is_quarantined,
@@ -107,10 +108,6 @@ DB_FILENAME = "clerk.db"
 MIRROR_FILENAME = "custody_transitions.mirror"
 DEFAULT_LEASE_TTL_MS = 30_000
 DEFAULT_CLAIM_TTL_MS = ORDER_SEND_CLAIM_TTL_MS
-
-
-class ClerkSqliteError(Exception):
-    """Base for every fail-closed condition this repository can raise."""
 
 
 class AlreadyInitialized(ClerkSqliteError):

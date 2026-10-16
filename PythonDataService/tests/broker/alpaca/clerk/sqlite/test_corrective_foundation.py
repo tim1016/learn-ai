@@ -80,6 +80,9 @@ def test_future_schema_version_fails_closed_on_open(tmp_path: Path) -> None:
     with pytest.raises(SchemaVersionMismatch, match="schema_version"):
         ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
 
+    with pytest.raises(DatabaseVerificationFailed, match="schema_version"):
+        verify_database(r.db_path, expected_account_id=ACCOUNT_ID)
+
 
 def test_v8_authority_fails_closed_on_open_until_offline_upgrade(tmp_path: Path) -> None:
     """No startup path may mutate a v8 authority into v9."""
@@ -211,6 +214,7 @@ def test_read_only_verification_refuses_a_database_bound_to_another_authority(tm
 
 def test_is_upgradable_to_current_reflects_the_registered_migration_chain() -> None:
     assert schema.is_upgradable_to_current(schema.SCHEMA_VERSION) is True
+    assert schema.is_upgradable_to_current(schema.SCHEMA_VERSION + 1) is False
     assert schema.is_upgradable_to_current(13) is True
     assert schema.is_upgradable_to_current(12) is False
     assert schema.is_upgradable_to_current(6) is False

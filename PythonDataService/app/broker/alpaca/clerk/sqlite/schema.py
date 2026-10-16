@@ -848,7 +848,7 @@ def is_upgradable_to_current(version: int) -> bool:
         if seen not in SCHEMA_MIGRATIONS:
             return False
         seen += 1
-    return True
+    return seen == SCHEMA_VERSION
 
 
 def migrate_schema(conn: sqlite3.Connection, *, from_version: int) -> None:
