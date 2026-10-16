@@ -23,9 +23,8 @@ import pytest
 from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite import exit_watchdog, reads, reconcile
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.deadline_keeper import IDLE_WAKE_MS, DeadlineKeeper
-from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.off_loop import run_inline
@@ -50,8 +49,9 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 from app.broker.contract.models import OrderSide
 from app.options.simulated_fill import SimulatedFillModel
 from app.services.session_authority import et_minute_of_day_ms
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_enter, submit_budgeted_test_run
 from tests.broker.alpaca.clerk.sqlite.conftest import (
-    FIXTURE_RTH_MS,
+    BUDGETED_RTH_MS,
     _broker_leg,
     _FakeReadPort,
     _FakeTradePort,
@@ -452,10 +452,10 @@ async def test_a_stopped_dry_run_whose_run_end_close_sold_its_contract_owes_no_c
 
 async def _a_stock_account_holding_shares(root: Path, *, transitions: int) -> ClerkSqliteRepository:
     """A stock-only account whose one bot holds ten shares, and ``transitions`` more records in its log."""
-    clock = _TestClock(FIXTURE_RTH_MS)
+    clock = _TestClock(BUDGETED_RTH_MS)
     repo = ClerkSqliteRepository.initialize(account_id="PA-STOCK", artifacts_root=root, clock=clock)
     repo.register_strategy_instance(strategy_instance_id="spy-bot", symbol="SPY", config_hash="h1")
-    submit_start_run(repo, account_id="PA-STOCK", strategy_instance_id="spy-bot", lifecycle_run_id="run-1")
+    submit_budgeted_test_run(repo, account_id="PA-STOCK", strategy_instance_id="spy-bot", lifecycle_run_id="run-1")
     order_ref = await _make_held_position(
         repo, account_id="PA-STOCK", strategy_instance_id="spy-bot", run_id="run-1", quantity=10.0
     )
@@ -615,13 +615,13 @@ async def test_on_books_holding_no_option_contract_the_step_takes_no_lock(tmp_pa
 
 async def _a_stopped_stock_run_with_a_working_entry(root: Path) -> list[tuple[str, str, str]]:
     """One pass over a stock-only account whose stopped run left an entry working; the log it wrote."""
-    clock = _TestClock(FIXTURE_RTH_MS)
+    clock = _TestClock(BUDGETED_RTH_MS)
     repo = ClerkSqliteRepository.initialize(account_id="PA-STOCK", artifacts_root=root, clock=clock)
     try:
         repo.register_strategy_instance(strategy_instance_id="spy-bot", symbol="SPY", config_hash="h1")
-        submit_start_run(repo, account_id="PA-STOCK", strategy_instance_id="spy-bot", lifecycle_run_id="run-1")
+        submit_budgeted_test_run(repo, account_id="PA-STOCK", strategy_instance_id="spy-bot", lifecycle_run_id="run-1")
         venue = _FakeTradePort()
-        await submit_enter(
+        await submit_budgeted_test_enter(
             repo, account_id="PA-STOCK", strategy_instance_id="spy-bot", decision_id="d-1", lifecycle_run_id="run-1",
             leg=_broker_leg(), trade=venue,
         )
