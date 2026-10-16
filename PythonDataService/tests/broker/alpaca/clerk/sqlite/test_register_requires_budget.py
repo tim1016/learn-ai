@@ -1,8 +1,7 @@
 """A Deploy needs a budget, and a refused one leaves no bot behind (#3216).
 
-Registering a bot is an append-only custody write, so every refusal that can be
-judged before it is judged before it: a Deploy the Clerk refuses must leave no
-registered, sealed, never-started instance for the roster to list.
+New registration and budget consent fold in one custody write: a Deploy the
+Clerk refuses leaves no registered, sealed, never-started instance to list.
 """
 
 from __future__ import annotations
@@ -15,6 +14,7 @@ import pytest
 
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.live_envelope import OBSERVATION_MAX_AGE_MS, LiveEnvelopeGate
+from app.broker.alpaca.clerk.sqlite import budget_commands
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
@@ -123,3 +123,25 @@ async def test_a_deploy_command_that_already_exists_is_refused_and_writes_nothin
 
     assert len(budget_repo.custody_transitions()) == transitions
     assert budget_repo.deployment_budget(SID)["committed_cents"] == 50_000
+
+
+async def test_a_new_deploy_cannot_refuse_funding_after_registering_its_bot(
+    budget_repo, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A second check after registration could refuse on a newly stale cash reading."""
+    check_funding = budget_commands._require_funded
+    checks = 0
+
+    def fail_a_second_check(*args, **kwargs) -> None:
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            raise BudgetUnavailable("cash reading expired after registration")
+        check_funding(*args, **kwargs)
+
+    monkeypatch.setattr(budget_commands, "_require_funded", fail_a_second_check)
+    await _facade(budget_repo, gate=_gate()).register_strategy_run(_deploy_of(budget_repo, _consent()))
+
+    assert checks == 1
+    assert budget_repo.strategy_instance(SID) is not None
+    assert budget_repo.deployment_budget(SID) is not None

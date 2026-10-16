@@ -86,7 +86,7 @@ from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     GuardedBrokerTradePort,
     guard_broker_ports,
 )
-from app.broker.alpaca.clerk.sqlite.budget_commands import require_deploy_admissible, submit_budgeted_deploy
+from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
 from app.broker.alpaca.clerk.sqlite.commands import (
     CommandSubmission,
     submit_stop_run,
@@ -1005,11 +1005,9 @@ class SqliteAlpacaClerkFacade:
 
         A Deploy names its budget (``binding.budget_consent``); a binding with
         none is refused as ``DeployBudgetRequiredError`` before anything is
-        written (#3216). Registering a bot is append-only, so every refusal
-        that can be judged from what is already stored -- the sealed terms,
-        the world, the entry price and the account's cash and risk rules --
-        is judged before the bot is registered: a refused Deploy leaves no
-        registered, never-started bot behind.
+        written (#3216). A new bot's registration and budget commit fold in
+        one custody transition, so a refused Deploy leaves no registered,
+        never-started bot behind.
 
         ``run_owner`` is what holds the run in this process -- its ``done()``
         turns true once the runner has ended (#2369). It is recorded in the
@@ -1080,34 +1078,23 @@ class SqliteAlpacaClerkFacade:
                 if quote is None:
                     raise BudgetUnavailable("Wait for a fresh IBKR price, then review Deploy again.")
                 required, _ = entry_requirement(quantity=binding.quantity, price=quote.ask, at_ms=self._repo.clock())
-            if existing is None:
-                # Registering is append-only: judge the budget before it, so a
-                # Deploy the commit would refuse leaves no bot behind.
-                require_deploy_admissible(
-                    self._repo, strategy_instance_id=binding.strategy_instance_id, world=world,
-                    committed_cents=consent.committed_cents, risk_revision=consent.risk_revision,
-                    envelope=self._live_envelope, minimum_position_cost=required,
-                )
-                self._repo.register_strategy_instance(
-                    strategy_instance_id=binding.strategy_instance_id,
-                    symbol=traded_symbol,
-                    config_hash=config_hash,
-                    strategy_key=binding.strategy_key,
-                    display_name=display_name,
-                    config_json=config_json,
-                    exit_terms=binding.exit_terms,
-                )
-            terms = self._sealed_exit_terms(binding)
-            self._exit_terms[binding.strategy_instance_id] = terms
+            terms = binding.exit_terms if existing is None else self._sealed_exit_terms(binding)
+            assert terms is not None
+            registration_json = None if existing is not None else canonicalize({
+                "symbol": traded_symbol, "config_hash": config_hash,
+                "strategy_key": binding.strategy_key, "display_name": display_name,
+                "config_json": config_json, "exit_terms": terms.model_dump(mode="json"),
+            })
             submission = submit_budgeted_deploy(
                 self._repo, strategy_instance_id=binding.strategy_instance_id, lifecycle_run_id=binding.run_id,
                 world=world, committed_cents=consent.committed_cents, configuration_hash=config_hash,
                 exit_terms_hash=canonical_sha256(terms.model_dump(mode="json")),
                 risk_revision=consent.risk_revision, actor=consent.actor, request_fingerprint=consent.request_fingerprint,
-                envelope=self._live_envelope, minimum_position_cost=required,
+                envelope=self._live_envelope, minimum_position_cost=required, registration_json=registration_json,
             )
             if not submission.created:
                 raise BudgetUnavailable("This Deploy command already exists. Recover its stored result; it cannot launch again.")
+            self._exit_terms[binding.strategy_instance_id] = self._sealed_exit_terms(binding)
             self._hold_run(binding, run_owner)
 
     def _sealed_exit_terms(self, binding: BrokerBotBinding) -> ExitTerms:

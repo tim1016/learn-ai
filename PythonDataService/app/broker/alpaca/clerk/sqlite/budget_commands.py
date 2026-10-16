@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import asdict
 from decimal import Decimal
 
@@ -74,29 +75,12 @@ def _require_funded(
         raise BudgetUnavailable(str(exc)) from exc
 
 
-def require_deploy_admissible(
-    repo: ClerkSqliteRepository, *, strategy_instance_id: str, world: AuthorityKind, committed_cents: int,
-    risk_revision: int, envelope: LiveEnvelopeGate, minimum_position_cost: Decimal,
-) -> None:
-    """Refuse, as the commit would, a Deploy that can be judged before its bot is registered.
-
-    Registering a bot is a durable, append-only write. Read before it, this
-    leaves no registered, never-started bot behind a Deploy the commit would
-    have refused. The commit judges the same rules again under the write
-    lock (``submit_budgeted_deploy``); this only moves the refusal ahead.
-    """
-    _require_budget_authority(repo)
-    _require_funded(
-        repo, strategy_instance_id=strategy_instance_id, world=world, committed_cents=committed_cents,
-        risk_revision=risk_revision, envelope=envelope, minimum_position_cost=minimum_position_cost,
-    )
-
-
 def submit_budgeted_deploy(
     repo: ClerkSqliteRepository, *, strategy_instance_id: str, lifecycle_run_id: str,
     world: AuthorityKind, committed_cents: int, configuration_hash: str, exit_terms_hash: str,
     risk_revision: int, actor: str, envelope: LiveEnvelopeGate, minimum_position_cost: Decimal,
     request_fingerprint: str = "",
+    registration_json: str | None = None,
 ) -> CommandSubmission:
     """Reserve one budget and run atomically; launch outcome follows separately.
 
@@ -122,22 +106,38 @@ def submit_budgeted_deploy(
         idempotency_key=idempotency_key, payload_hash="", lifecycle_run_id=lifecycle_run_id,
         world=world, committed_cents=committed_cents, configuration_hash=configuration_hash,
         exit_terms_hash=exit_terms_hash, risk_revision=risk_revision, actor=actor,
-        request_fingerprint=request_fingerprint,
+        request_fingerprint=request_fingerprint, registration_json=registration_json,
     )
-    payload_hash = hashlib.sha256(canonicalize({**asdict(draft), "account_id": repo.account_id}).encode()).hexdigest()
+    # Registration is part of the custody transition, but the command identity
+    # stays the same when a transport retry sees the newly registered bot.
+    command_payload = asdict(draft)
+    command_payload.pop("registration_json")
+    payload_hash = hashlib.sha256(canonicalize({**command_payload, "account_id": repo.account_id}).encode()).hexdigest()
     facts = DeployCommittedFacts(**{**asdict(draft), "payload_hash": payload_hash})
     command_id = deployment_command_id(repo.account_id, strategy_instance_id)
 
     def build_transition() -> TransitionInput:
         _require_budget_authority(repo)
-        require_strategy_instance(repo, strategy_instance_id)
         instance = repo.strategy_instance(strategy_instance_id)
-        assert instance is not None
-        if instance["config_hash"] != configuration_hash:
-            raise BudgetUnavailable("The strategy configuration changed; review Deploy again.")
-        terms = repo.exit_terms(strategy_instance_id)
-        if terms is None or canonical_sha256(terms.model_dump(mode="json")) != exit_terms_hash:
-            raise BudgetUnavailable("The reviewed exit terms do not match this deployment.")
+        if registration_json is None:
+            require_strategy_instance(repo, strategy_instance_id)
+            assert instance is not None
+            if instance["config_hash"] != configuration_hash:
+                raise BudgetUnavailable("The strategy configuration changed; review Deploy again.")
+            terms = repo.exit_terms(strategy_instance_id)
+            if terms is None or canonical_sha256(terms.model_dump(mode="json")) != exit_terms_hash:
+                raise BudgetUnavailable("The reviewed exit terms do not match this deployment.")
+        else:
+            if instance is not None:
+                raise BudgetUnavailable("The deployment identity is already registered. Recover its stored result.")
+            registration = json.loads(registration_json)
+            if registration["config_hash"] != configuration_hash:
+                raise BudgetUnavailable("The strategy configuration changed; review Deploy again.")
+            from app.schemas.exit_terms import ExitTerms
+
+            terms = ExitTerms.model_validate(registration["exit_terms"])
+            if canonical_sha256(terms.model_dump(mode="json")) != exit_terms_hash:
+                raise BudgetUnavailable("The reviewed exit terms do not match this deployment.")
         if repo.latest_run(strategy_instance_id) is not None:
             raise BudgetUnavailable("Trading again requires a fresh deployment identity.")
         _require_funded(

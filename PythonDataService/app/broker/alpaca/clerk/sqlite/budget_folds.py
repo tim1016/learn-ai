@@ -13,7 +13,7 @@ from app.schemas.account_authority import account_authority_agrees
 
 
 def fold_deploy_committed(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
-    from app.broker.alpaca.clerk.sqlite.folds import _insert_command_row
+    from app.broker.alpaca.clerk.sqlite.folds import _fold_strategy_instance_registered, _insert_command_row
 
     facts = DeployCommittedFacts.from_facts_json(payload["facts_json"])
     sid = payload["strategy_instance_id"]
@@ -24,6 +24,8 @@ def fold_deploy_committed(conn: sqlite3.Connection, payload: dict[str, Any]) -> 
         raise ValueError("Budget consent must own its one lifecycle run")
     if conn.execute("SELECT 1 FROM runs WHERE strategy_instance_id = ?", (sid,)).fetchone():
         raise ValueError("A fresh Deploy requires a new deployment identity")
+    if facts.registration_json is not None:
+        _fold_strategy_instance_registered(conn, {**payload, "facts_json": facts.registration_json})
     registered = conn.execute("SELECT config_hash FROM strategy_instances WHERE strategy_instance_id = ?", (sid,)).fetchone()
     if registered is None or registered[0] != facts.configuration_hash:
         raise ValueError("Budget consent must match the immutable strategy configuration")

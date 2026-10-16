@@ -19,6 +19,7 @@ from app.broker.alpaca.clerk.live_envelope import (
 )
 from app.broker.alpaca.clerk.money import MoneyInputError
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
+from app.broker.alpaca.clerk.sqlite import folds
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
 from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
@@ -261,6 +262,65 @@ def test_a_review_the_clerk_would_refuse_and_the_clerks_recheck_say_the_same_thi
 
         assert preview.state == "unavailable" and preview.funding is not None and preview.funding.admits is False
         assert str(recheck.value) == preview.detail == preview.funding.sentence
+
+
+def _new_bot_registration(terms) -> str:
+    return canonicalize({
+        "symbol": "SPY", "config_hash": "atomic-seal", "strategy_key": "deployment_validation",
+        "display_name": "Atomic Deploy", "config_json": canonicalize({"symbol": "SPY"}),
+        "exit_terms": terms.model_dump(mode="json"),
+    })
+
+
+def _submit_new_bot(authority, *, committed_cents: int) -> None:
+    repo, runtime, _snapshot = authority
+    terms = _request().exit_terms.seal()
+    submit_budgeted_deploy(
+        repo, strategy_instance_id="atomic-bot", lifecycle_run_id="run", world="real_paper",
+        committed_cents=committed_cents, configuration_hash="atomic-seal",
+        exit_terms_hash=canonical_sha256(terms.model_dump(mode="json")), risk_revision=1,
+        actor="owner", envelope=runtime.envelope_sync.envelope, minimum_position_cost=Decimal(100),
+        registration_json=_new_bot_registration(terms),
+    )
+
+
+def test_new_bot_registration_and_budget_are_one_custody_commit(authority) -> None:
+    repo, _runtime, _snapshot = authority
+
+    _submit_new_bot(authority, committed_cents=50_000)
+
+    assert repo.strategy_instance("atomic-bot") is not None
+    assert repo.active_run("atomic-bot") is not None
+    assert repo.deployment_budget("atomic-bot") is not None
+    assert [row["transition_kind"] for row in repo.custody_transitions() if row["strategy_instance_id"] == "atomic-bot"] == [
+        "DEPLOY_COMMITTED"
+    ]
+
+
+def test_budget_refusal_does_not_register_a_new_bot(authority) -> None:
+    repo, _runtime, _snapshot = authority
+
+    with pytest.raises(BudgetUnavailable):
+        _submit_new_bot(authority, committed_cents=100_001)
+
+    assert repo.strategy_instance("atomic-bot") is None
+    assert repo.active_run("atomic-bot") is None
+    assert repo.deployment_budget("atomic-bot") is None
+
+
+def test_deploy_fold_failure_rolls_back_new_registration(authority, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo, _runtime, _snapshot = authority
+
+    def fail_command(*_args, **_kwargs) -> None:
+        raise RuntimeError("command fold failed")
+
+    monkeypatch.setattr(folds, "_insert_command_row", fail_command)
+    with pytest.raises(RuntimeError, match="command fold failed"):
+        _submit_new_bot(authority, committed_cents=50_000)
+
+    assert repo.strategy_instance("atomic-bot") is None
+    assert repo.active_run("atomic-bot") is None
+    assert repo.deployment_budget("atomic-bot") is None
 
 
 def test_confirmation_binds_amount_effective_parameters_and_risk(authority) -> None:
