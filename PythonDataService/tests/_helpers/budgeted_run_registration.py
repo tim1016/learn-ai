@@ -15,12 +15,14 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.et_day import et_day_window_ms
 from app.broker.alpaca.clerk.live_envelope import AccountObservation, LiveEnvelopeGate
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
 from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms, risk_fill_sequence
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.schemas.deployment_budget import DeployBudgetConsent
 from app.services.bot_binding_repository import BrokerBotBinding
 from tests.broker.alpaca.clerk.sqlite.conftest import complete_fee_evidence
 
@@ -54,13 +56,14 @@ def budgeted_run_registration(monkeypatch: pytest.MonkeyPatch) -> None:
                 risk_revision=risk_revision,
             )
         else:
+            window_start = et_day_window_ms(now)[0] if self.authority_kind != "sqlite" else day_pnl_window_start_ms(now)
             observation = AccountObservation(
                 observed_at_ms=now, broker_cash_usd=1_000_000, cash_available_usd=1_000_000,
                 equity_usd=1_000_000, last_equity_usd=1_000_000, position_count=0,
                 risk_revision=risk_revision, risk_fill_sequence=risk_fill_sequence(repo),
                 risk_cash_flow_evidence_complete=True,
-                risk_cash_flow_window_start_ms=day_pnl_window_start_ms(now),
-                risk_equity_window_start_ms=day_pnl_window_start_ms(now),
+                risk_cash_flow_window_start_ms=window_start,
+                risk_equity_window_start_ms=window_start,
                 simulation_session_start_ms=et_day_window_ms(now)[0] if self.authority_kind != "sqlite" else None,
             )
         gate.publish(observation)
@@ -79,6 +82,15 @@ def budgeted_run_registration(monkeypatch: pytest.MonkeyPatch) -> None:
         admission_snapshot: object = None, run_owner: object = None,
     ) -> None:
         prepare(self)
+        if binding.budget_consent is None:
+            world = authority_kind_for_account(self.account_id, account_mode=self._account_mode)
+            binding = binding.model_copy(update={"budget_consent": DeployBudgetConsent(
+                committed_cents=1_000_000,
+                risk_revision=0 if world == "synthetic" else 1,
+                actor="test-owner",
+                request_fingerprint="reviewed-test-deploy",
+                world=world,
+            )})
         original_quote_source = self._quote_source
         if original_quote_source(binding.symbol, self.repository.clock()) is None:
             self._quote_source = lambda _symbol, _now: SimpleNamespace(ask=100)

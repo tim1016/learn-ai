@@ -51,7 +51,7 @@ from tests.broker.alpaca.clerk.sqlite.test_scheduled_close import (
     _until,
 )
 
-pytestmark = pytest.mark.usefixtures("legacy_run_registration")
+pytestmark = pytest.mark.usefixtures("budgeted_run_registration")
 
 _ACCOUNT_NOT_OPEN = "OPTION_PLAN_ACCOUNT_NOT_OPEN"
 
@@ -212,4 +212,3 @@ async def test_with_live_switched_off_the_owners_flatten_of_a_stopped_bots_contr
 
     assert pressed.applied
     assert _closes_sent(account) == [SELLS_ONE_TO_CLOSE] and port.refused == []
-

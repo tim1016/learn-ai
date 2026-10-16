@@ -39,7 +39,7 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
 from tests.broker.alpaca.clerk.sqlite.test_exit import _make_entry
 
 # #2596: these ENTERs run on the default clock; keep it inside a session.
-pytestmark = pytest.mark.usefixtures("wall_clock_in_session", "legacy_run_registration")
+pytestmark = pytest.mark.usefixtures("wall_clock_in_session", "budgeted_run_registration")
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
 RUN_ID = "run-1"

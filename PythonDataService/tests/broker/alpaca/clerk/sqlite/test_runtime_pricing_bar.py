@@ -27,7 +27,6 @@ from app.broker.alpaca.clerk.live_envelope import LIVE_ENVELOPE_CASH_EXCEEDED, L
 from app.broker.alpaca.clerk.models import EffectOperationReceipt, EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.program_leg import PRICING_BAR_MISMATCH, ProgramLegPolicy
 from app.broker.alpaca.clerk.shadow_broker import compose_shadow_ports
-from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade, _order_pricing_bar
@@ -40,6 +39,7 @@ from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_acti
 from app.services.session_authority import et_minute_of_day_ms
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
 from tests._helpers.market_quotes import publish_quotes
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_enter
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _FakeReadPort, _FakeTradePort, _TestClock
 from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS
 from tests.broker.alpaca.clerk.sqlite.test_exit import _broker_order, _FakeTrade
@@ -53,7 +53,7 @@ from tests.broker.alpaca.clerk.sqlite.test_two_bots_one_symbol import (
 from tests.broker.alpaca.clerk.test_shadow_broker import DAY, MINUTE_MS, _Clock, _LiveRead
 
 # #2596: these ENTERs run on the default clock; keep it inside a session.
-pytestmark = pytest.mark.usefixtures("wall_clock_in_session", "legacy_run_registration")
+pytestmark = pytest.mark.usefixtures("wall_clock_in_session", "budgeted_run_registration")
 SIGNAL = "SPY"
 TRADED = "QQQ"
 _TRADES_QQQ = alpaca_v1_action_plan(TRADED)
@@ -188,7 +188,7 @@ async def test_a_broker_sent_exit_goes_out_with_no_bar_of_the_traded_asset(tmp_p
     binding = _binding(use_rth=True).model_copy(update={"action_plan": _TRADES_QQQ})
     await facade.register_strategy_run(binding)
     try:
-        held = await submit_enter(
+        held = await submit_budgeted_test_enter(
             repo, account_id="PA-TEST", strategy_instance_id=binding.strategy_instance_id, decision_id="enter-1",
             lifecycle_run_id=binding.run_id, leg=BrokerOrderLeg(symbol=TRADED, side="buy", quantity=10),
             trade=_FakeTrade(submit_result=_broker_order("placeholder", symbol=TRADED)),
@@ -211,18 +211,15 @@ async def test_a_broker_sent_exit_goes_out_with_no_bar_of_the_traded_asset(tmp_p
         repo.close()
 
 
-async def test_a_bot_that_trades_another_asset_can_be_started_again(tmp_path: Path) -> None:
-    """A Resume registers the same bot again, and it must still match its own registration.
-
-    The Clerk registers a bot under the symbol it trades. Comparing the next
-    registration against the symbol it listens to would refuse every Resume.
-    """
+async def test_a_bot_that_trades_another_asset_is_registered_under_that_asset(tmp_path: Path) -> None:
+    """The Clerk records the traded asset, not the bot's signal stream."""
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
     facade = SqliteAlpacaClerkFacade(repo=repo, read=_FakeReadPort(), trade=_FakeTradePort(), account_mode="paper")
     binding = _binding(use_rth=True).model_copy(update={"action_plan": _TRADES_QQQ})
     try:
         await facade.register_strategy_run(binding)
-        await facade.register_strategy_run(binding)
+        with pytest.raises(BudgetUnavailable, match="already exists"):
+            await facade.register_strategy_run(binding)
 
         registered = repo.strategy_instance(binding.strategy_instance_id)
         assert registered is not None and registered["symbol"] == TRADED
