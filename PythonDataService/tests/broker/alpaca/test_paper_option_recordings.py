@@ -430,6 +430,7 @@ _RESTARTED = "B4-spread-restart-scheduled-close"
 _CREDIT_FLAT = "3225-C1-credit-flat-20261016"
 _CREDIT_OVERLAP = "3225-C2-credit-overlap-20261016"
 _CONDOR_FLAT = "3225-D1-condor-flat-20261016"
+_BUYBACK_MISSED = "C3-buyback-window-missed"
 _SPREAD_LONG, _SPREAD_SHORT = "SPY261016C00768000", "SPY261016C00773000"
 # step -> (long legs, short legs, the net limit each order was sent at (None: a market order), the net price each
 # order filled at as Alpaca states it). Entries and exits are in the order they were sent.
@@ -449,10 +450,12 @@ _STRUCTURE_PASSES: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[str |
         ("SPY261019P00758000", "SPY261019C00769000"), ("SPY261019P00759000", "SPY261019C00768000"),
         ("-0.52", None), ("-0.52", "0.56"),
     ),
+    # The owner did not submit the isolated buy-back before the strategy's exit; both legs closed together.
+    _BUYBACK_MISSED: (("SPY261019C00770000",), ("SPY261019C00769000",), ("-0.29", None), ("-0.29", "0.3")),
 }
 _STRUCTURE_PASS = pytest.mark.parametrize("step", sorted(_STRUCTURE_PASSES))
 # The steps whose recordings keep the activity feed. B4's was left out on purpose (6 MB of polls).
-_STRUCTURE_PASS_WITH_FEED = pytest.mark.parametrize("step", [_CLEAN_PASS, _OVERLAP, _CREDIT_FLAT, _CREDIT_OVERLAP, _CONDOR_FLAT])
+_STRUCTURE_PASS_WITH_FEED = pytest.mark.parametrize("step", [step for step in _STRUCTURE_PASSES if step != _RESTARTED])
 
 
 def _fill_frames(step: str) -> list[dict[str, Any]]:
@@ -584,12 +587,13 @@ def test_two_bots_spreads_held_at_once_are_one_account_position_of_two_of_each_l
     [
         (_CREDIT_FLAT, "99923.44", "30.95", "69.05", "1.10"),
         (_CONDOR_FLAT, "99923.04", "51.90", "48.10", "4.20"),
+        (_BUYBACK_MISSED, "99918.84", "28.95", "71.05", "1.10"),
     ],
 )
 def test_a_credit_structure_adds_premium_to_cash_and_holds_its_width_until_the_whole_structure_closes(
     step: str, starting: str, cash_credit: str, buying_power_fall: str, round_trip_cost: str,
 ) -> None:
-    """#3225: both $1-wide structures hold $100, released on close; cash includes observed charges."""
+    """#3225: each $1-wide structure holds $100, released on close; cash includes observed charges."""
     before, held, closed = _account_figures(step)
 
     assert before == (Decimal(starting), Decimal(starting))

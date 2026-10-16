@@ -130,6 +130,19 @@ Check each, and write the answer in the step log (section 7).
    counts free. Setting the budget is the owner's decision, in that lane's env
    file and by recreate (section 3's commands), inside the allowance IBKR grants
    the username. It never involves the provider settings above.
+
+   When overlapping plans exceed that allowance, the supported
+   `IBKR_OPTION_WINDOW_STRIKES_EACH_SIDE` setting can narrow the candidate
+   window without raising the budget. At the default of 10, a four-leg plan
+   reserves up to 84 lines; at 4 it reserves 36, so two reserve 72. This is
+   admission's upper bound, not a measurement of subscriptions: shared
+   contracts use one line. Record the previous env-file value in the step
+   log, including whether the setting was absent. Change it while the test
+   bots are stopped and flat, then recreate the lane. Rehearse the resulting
+   rules: a narrower window may not reach a delta target. A rule in steps
+   from the money centers its window on that target strike. Keep the existing
+   budget and the IBKR provider boundary. Restore the previous window during
+   section 9's teardown, whether or not a capability is promoted.
 3. **Regular hours.** An option bot is only ever started for regular hours,
    and its orders are sent in the regular session. Begin a step with enough of
    the session left for the whole life of its orders, and do not choose a
@@ -574,10 +587,15 @@ When the experiment ends, with or without a promotion:
    be absent or `false`. Then Deploy must refuse a several-leg structure again,
    as section 4's control: a temporary setting that is still on is a rollout by
    accident.
-4. If a second lane was added only for this, leave it at rest or remove it by
+4. If the quote window was narrowed for the experiment, restore its recorded
+   previous value, or remove the override if it was previously absent. This
+   applies whether or not a capability is promoted. Recreate the lane and
+   verify its effective window before ending the experiment; combine this
+   with step 3's recreate when applicable.
+5. If a second lane was added only for this, leave it at rest or remove it by
    [section 6 of the account runbook](add-an-alpaca-account.md#6-removal), as
    the owner chooses. Do not delete its volume.
-5. Keep the bundles, the step log and the owner's go-ahead. Commit the
+6. Keep the bundles, the step log and the owner's go-ahead. Commit the
    recordings only.
 
 **Done:** the account is flat with no working order, the lane's container carries
@@ -1123,8 +1141,9 @@ read by `test_paper_option_recordings.py`. The same writer, signed-fill and
 per-leg activity tests now cover both two- and four-leg structures; the new
 recording also pins the contracts, held positions and returned buying power.
 
-**Overlap was not attempted.** Deploy reserves up to 84 candidate quote lines
-for this four-leg plan, so two such bots require 168 against the configured
+**Overlap was not attempted in this pass.** With the default window of 10
+strikes each side, Deploy reserves up to 84 candidate quote lines for this
+four-leg plan, so two such bots require 168 against the configured
 84. The owner approved only the single-bot pass. The quote allowance was not
 raised and the gate was not bypassed. This is a precondition for the missing
 overlap, not evidence that it works or that the admission check is defective.
@@ -1132,3 +1151,42 @@ The isolated short-leg buy-back and unobserved lifecycle cases also remain
 unverified. Nothing was promoted. The temporary several-leg setting was
 removed, the Paper lane recreated, and Deploy again refused the four-leg
 plan because that setting was off.
+
+## Run record: 2026-10-16, missed short-leg buy-back window (#3225)
+
+The owner directed continuation of the prepared buy-back pass: one $1-wide
+SPY call credit spread, one contract per leg and $90 allocated. The dashboard
+buy-to-close was capped at $200 before fees. If the owner did not submit in
+time, the strategy would close the whole spread.
+
+The bot entered the October 19 $769/$770 call spread at `-0.29`: sold the
+$769 call at $1.26 and bought the $770 call at $0.97. The dashboard ticket
+was prepared as **Buy to Close** one $769 call, limit $1.20, but no outside
+order was submitted before the window ended. The draft was cleared. The
+strategy closed both legs as one market order at `+0.30`: bought the $769
+call at $1.24 and sold the $770 call at $0.94. The bot stopped flat at
+1792172362778 ms UTC, releasing $88.83 after $1 premium loss and $0.17
+estimated fees. **This is another whole-spread close, not evidence of an
+isolated short-leg buy-back.**
+
+Alpaca's cash and option buying power began at $99,918.84. With the spread
+held they read $99,947.79 and $99,847.79; after closing both read $99,917.74.
+The complete offline entry pair is over-reserved by $0.05: $71.10 committed
+against a $71.05 buying-power fall, the unused entry fee provision. Final
+posted fees remain due.
+
+The private bundle covers 1792171794821 through 1792172386413 ms UTC and
+leaves nothing unread. The sanitized recording
+`tests/fixtures/alpaca/option_paper_recordings/C3-buyback-window-missed`
+pins the two whole-spread orders, four leg executions, held positions and
+released buying power in `test_paper_option_recordings.py`.
+
+The temporary several-leg Paper setting had been re-enabled for this pass.
+The experiment continued directly into the remaining condor-overlap
+rehearsal, so it was still enabled at this checkpoint; this is not a teardown
+record or a capability promotion. Buying-power judgment and Live options
+remained off. The following rehearsal changed the window from its default
+10 to 4 with all bots stopped and flat. The step log records that the old
+override was absent. With nothing promoted, section 9 requires removing both
+temporary overrides and verifying the setting-off refusal when this
+continuing experiment ends.
