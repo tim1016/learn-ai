@@ -342,6 +342,7 @@ async def test_promoting_an_orphans_read_runs_the_recovery_the_read_skipped(tmp_
     from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
     from app.services.bot_binding_authority import BindingAuthoritySelector
     from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
+    from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
     from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS
 
     sid = "promoted-orphan-read"
@@ -354,7 +355,15 @@ async def test_promoting_an_orphans_read_runs_the_recovery_the_read_skipped(tmp_
     deployed = selector.for_binding(binding)
     try:
         await deployed.ensure_recoverable()
-        await get_clerk_runtime(f"sim:{sid}").clerk.register_strategy_run(binding)
+        runtime = get_clerk_runtime(f"sim:{sid}")
+        assert runtime is not None and runtime.sqlite_repository is not None
+        runtime.sqlite_repository.register_strategy_instance(
+            strategy_instance_id=sid, symbol="SPY", config_hash="historical-orphan",
+        )
+        seed_historical_run_started(
+            runtime.sqlite_repository, account_id=f"sim:{sid}", strategy_instance_id=sid,
+            lifecycle_run_id=binding.run_id,
+        )
         # The process died with the run ACTIVE: nothing stopped it, nothing recovered it.
         await deployed.release_if_unused()
 
@@ -412,13 +421,22 @@ async def test_a_custody_guard_whose_start_registered_its_bot_keeps_the_authorit
     the runner's table before its own run-end release has taken the account's
     lock, which the guard holds.
     """
+    from types import SimpleNamespace
+
     from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
+    from app.schemas.deployment_budget import DeployBudgetConsent
 
     sid = "guard-registered"
     selector, binding = _dry_run_authority(tmp_path, sid)
+    binding = binding.model_copy(update={"budget_consent": DeployBudgetConsent(
+        committed_cents=50_000, risk_revision=0, actor="owner",
+        request_fingerprint="reviewed-guard", world="synthetic",
+    )})
     try:
         async with selector.for_binding(binding).start_custody_guard():
             opened = get_clerk_runtime(f"sim:{sid}")
+            assert opened is not None and opened.clerk is not None
+            opened.clerk._quote_source = lambda _symbol, _now: SimpleNamespace(ask=100)
             await opened.clerk.register_strategy_run(binding)
         assert get_clerk_runtime(f"sim:{sid}") is opened is not None
     finally:
