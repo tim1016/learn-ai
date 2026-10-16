@@ -6,7 +6,7 @@ capture journal of the first option orders ever sent from this system, made on
 kit. They sit beside the documented examples and replace none of them: each
 shows one account on one day, for **one bought contract, or one bull call
 spread bought and closed (alone, and twice at once by two bots), every order
-filled inside its wait**. The #3225 recordings add outside credit spreads
+filled inside its wait**. The #3225 recordings add outside and bot credit spreads
 opened with negative limits and closed by market orders. The dashboard step
 also records a resting credit order cancelled without a fill; it does not
 exercise the bot's entry deadline. Part fills and exercise are not in them. Regulatory and clearing fees
@@ -427,6 +427,8 @@ def test_a_spreads_debit_moves_cash_and_option_buying_power_together_and_the_acc
 _CLEAN_PASS = "B2-bull-call-spread-clean-pass"
 _OVERLAP = "B3-overlap-spread"
 _RESTARTED = "B4-spread-restart-scheduled-close"
+_CREDIT_FLAT = "3225-C1-credit-flat-20261016"
+_CREDIT_OVERLAP = "3225-C2-credit-overlap-20261016"
 _SPREAD_LONG, _SPREAD_SHORT = "SPY261016C00768000", "SPY261016C00773000"
 # step -> (long leg, short leg, the net limit each order was sent at (None: a market order), the net price each
 # order filled at as Alpaca states it). Entries and exits are in the order they were sent.
@@ -438,10 +440,14 @@ _SPREAD_PASSES: dict[str, tuple[str, str, tuple[str | None, ...], tuple[str, ...
     ),
     # Bought at 12:29 CDT, the Clerk restarted with it held, and its own scheduled close sent the exit at 15:50 ET.
     _RESTARTED: ("SPY261016C00768000", "SPY261016C00773000", ("2.31", None), ("2.31", "-2.43")),
+    _CREDIT_FLAT: ("SPY261019C00771000", "SPY261019C00770000", ("-0.31", None), ("-0.31", "0.32")),
+    _CREDIT_OVERLAP: (
+        "SPY261019C00771000", "SPY261019C00770000", ("-0.28", "-0.28", None, None), ("-0.28", "-0.28", "0.28", "0.28"),
+    ),
 }
 _SPREAD_PASS = pytest.mark.parametrize("step", sorted(_SPREAD_PASSES))
 # The steps whose recordings keep the activity feed. B4's was left out on purpose (6 MB of polls).
-_SPREAD_PASS_WITH_FEED = pytest.mark.parametrize("step", [_CLEAN_PASS, _OVERLAP])
+_SPREAD_PASS_WITH_FEED = pytest.mark.parametrize("step", [_CLEAN_PASS, _OVERLAP, _CREDIT_FLAT, _CREDIT_OVERLAP])
 
 
 def _fill_frames(step: str) -> list[dict[str, Any]]:
@@ -449,7 +455,7 @@ def _fill_frames(step: str) -> list[dict[str, Any]]:
 
 
 @_SPREAD_PASS
-def test_each_spread_order_sent_is_the_body_the_writer_produces_a_limit_debit_in_and_a_market_order_out(step: str) -> None:
+def test_each_spread_order_sent_is_the_body_the_writer_produces_a_signed_limit_in_and_a_market_order_out(step: str) -> None:
     long_leg, short_leg, limits, _ = _SPREAD_PASSES[step]
     posts = [line for line in _lines(step, "orders") if line["method"] == "POST"]
     assert len(posts) == len(limits)
@@ -468,7 +474,7 @@ def test_each_spread_order_sent_is_the_body_the_writer_produces_a_limit_debit_in
         # The exit is the same two legs, each the other way round, as ONE order.
         entry = [(long_leg, "buy", "buy_to_open"), (short_leg, "sell", "sell_to_open")]
         exit_ = [(long_leg, "sell", "sell_to_close"), (short_leg, "buy", "buy_to_close")]
-        assert [(leg["symbol"], leg["side"], leg["position_intent"]) for leg in sent["legs"]] == (
+        assert sorted((leg["symbol"], leg["side"], leg["position_intent"]) for leg in sent["legs"]) == sorted(
             entry if limit is not None else exit_
         )
         answer = from_alpaca_option_order(_body(post))
@@ -484,6 +490,11 @@ def test_a_spread_fill_states_what_it_paid_as_positive_and_what_it_received_as_n
 
     assert [Decimal(data["price"]) for data in fills] == [Decimal(net) for net in nets]
     for data in fills:
+        assert from_alpaca_trade_update(data).event_type == "fill"
+        read = from_alpaca_order(data["order"])
+        assert read.unreadable_fields == () and read.status == "filled"
+        assert read.quantity == read.filled_quantity == 1
+        assert Decimal(str(read.filled_avg_price)) == Decimal(data["price"])
         sides = {leg["symbol"]: leg["side"] for leg in data["order"]["legs"]}
         bought = sum(Decimal(leg["price"]) for leg in data["legs"] if sides[leg["symbol"]] == "buy")
         sold = sum(Decimal(leg["price"]) for leg in data["legs"] if sides[leg["symbol"]] == "sell")
@@ -544,11 +555,12 @@ def test_a_spreads_debit_and_credit_move_cash_and_option_buying_power_together_b
     ]
 
 
-def test_two_bots_spreads_held_at_once_are_one_account_position_of_two_of_each_leg() -> None:
-    long_leg, short_leg, _, _ = _SPREAD_PASSES[_OVERLAP]
+@pytest.mark.parametrize("step", [_OVERLAP, _CREDIT_OVERLAP])
+def test_two_bots_spreads_held_at_once_are_one_account_position_of_two_of_each_leg(step: str) -> None:
+    long_leg, short_leg, _, _ = _SPREAD_PASSES[step]
     held_over_time = [
         {position.symbol: position.quantity for position in map(from_alpaca_position, _body(line))}
-        for line in _lines(_OVERLAP, "positions")
+        for line in _lines(step, "positions")
     ]
 
     assert held_over_time[0] == {} and held_over_time[-1] == {}
@@ -558,6 +570,33 @@ def test_two_bots_spreads_held_at_once_are_one_account_position_of_two_of_each_l
         (1.0, -1.0),
         (2.0, -2.0),
     }
+
+
+def test_a_credit_spread_adds_premium_to_cash_and_holds_its_width_until_the_whole_structure_closes() -> None:
+    """#3225: the $1-wide spread receives $31, ties up $100 and closes for $32; each order also takes $0.05."""
+    before, held, closed = _account_figures(_CREDIT_FLAT)
+
+    assert before == (Decimal("99923.44"), Decimal("99923.44"))
+    assert held == (before[0] + Decimal("30.95"), before[1] - Decimal("69.05"))
+    assert held[0] - held[1] == Decimal("100.00")
+    assert closed == (before[0] - Decimal("1.10"), before[1] - Decimal("1.10"))
+    positions = [
+        {position.symbol: position.quantity for position in map(from_alpaca_position, _body(line))}
+        for line in _lines(_CREDIT_FLAT, "positions")
+    ]
+    assert positions[0] == positions[-1] == {}
+    assert {"SPY261019C00770000": -1.0, "SPY261019C00771000": 1.0} in positions
+
+
+def test_two_credit_spreads_each_add_premium_and_requirement_then_release_the_whole_requirement() -> None:
+    """#3225: two $28 credits, two $28 closes, and $0.05 cash effect per parent order."""
+    before, first, both, closed = _account_figures(_CREDIT_OVERLAP)
+
+    assert before == (Decimal("99923.24"), Decimal("99923.24"))
+    assert first == (before[0] + Decimal("27.95"), before[1] - Decimal("72.05"))
+    assert both == (first[0] + Decimal("27.95"), first[1] - Decimal("72.05"))
+    assert both[0] - both[1] == Decimal("200.00")
+    assert closed == (before[0] - Decimal("0.20"), before[1] - Decimal("0.20"))
 
 
 def test_the_clerks_own_scheduled_close_sends_a_spread_held_through_a_restart_out_at_ten_to_four_as_one_order() -> None:
@@ -586,13 +625,15 @@ def test_the_clerks_own_scheduled_close_sends_a_spread_held_through_a_restart_ou
          "-0.14", "0.16", ("0.60", "0.46"), ("0.61", "0.45"), ()),
         ("3225-dashboard-credit-sign-check-20261016", "SPY261019C00774000", "SPY261019C00775000",
          "-0.15", "0.18", ("0.51", "0.36"), ("0.55", "0.37"), ("pending_new", "new", "canceled")),
+        ("3225-C1-credit-flat-20261016", "SPY261019C00770000", "SPY261019C00771000",
+         "-0.31", "0.32", ("1.25", "0.94"), ("1.21", "0.89"), ()),
     ],
 )
 def test_paper_accepts_a_negative_limit_as_a_credit_and_a_positive_market_close_as_a_debit(
     step: str, short: str, long: str, opening_net: str, closing_net: str,
     opening_legs: tuple[str, str], closing_legs: tuple[str, str], preceding_events: tuple[str, ...],
 ) -> None:
-    """#3225: the API and owner's dashboard orders both preserve the credit/debit sign."""
+    """#3225: outside orders and the bot's flat pass preserve the credit/debit sign."""
     frames = _frames(step)
     assert [frame["event"] for frame in frames] == [*preceding_events, *(["pending_new", "new", "fill"] * 2)]
     opening, closing = [frame for frame in frames if frame["event"] == "fill"]
