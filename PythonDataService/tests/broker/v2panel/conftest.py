@@ -104,6 +104,7 @@ class _FakeDeployRegistry:
         # Custody's view of the Deploys that committed, by bot name; and the
         # refusals the next Deploys' commits raise after their name is claimed.
         self.committed: dict[str, BudgetDeployCommandReceipt] = {}
+        self.historical_runs: set[str] = set()
         self.refuse: list[BaseException] = []
         # The Deploy submission ledger lives beside the lane's bindings.
         self.artifacts_root = artifacts_root
@@ -231,6 +232,9 @@ def deploy_app(
     async def command_receipt(account_id: str, submission: DeploySubmission) -> BudgetDeployCommandReceipt | None:
         return registry.committed.get(submission.strategy_instance_id)
 
+    async def historical_run_exists(account_id: str, strategy_instance_id: str) -> bool:
+        return strategy_instance_id in registry.historical_runs
+
     def resolve_consent(account_id: str, request: AlpacaPaperDeployRequest, *, resolved_parameters: dict, **_option: object) -> DeployBudgetConsent:
         # What the owner reviewed is what is consented to, in the world the review is made in: a Dry Run's is the simulator's.
         assert request.budget is not None
@@ -241,6 +245,7 @@ def deploy_app(
         )
 
     monkeypatch.setattr(budget_deploy, "command_receipt", command_receipt)
+    monkeypatch.setattr(budget_deploy, "historical_run_exists", historical_run_exists)
     monkeypatch.setattr(budget_deploy, "resolve_consent", resolve_consent)
 
     fast_app = FastAPI()

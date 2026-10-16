@@ -578,6 +578,15 @@ async def command_receipt(account_id: str, submission: DeploySubmission) -> Budg
         return _command_receipt(runtime, account_id, submission)
 
 
+async def historical_run_exists(account_id: str, strategy_instance_id: str) -> bool:
+    """Whether custody has a run for a claim made before budget receipts existed."""
+    async with _deployment_runtime(account_id, strategy_instance_id) as runtime:
+        repo = runtime.sqlite_repository
+        assert repo is not None
+        with repo.write_fence():
+            return repo.latest_run(strategy_instance_id) is not None
+
+
 #: The receipt's words per outcome. Honest on a first read and on every
 #: recovery read alike, so no copy claims a replay (H12).
 _RECEIPT_COPY: dict[str, tuple[str, str]] = {

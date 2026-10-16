@@ -897,6 +897,20 @@ async def test_a_claim_from_before_claims_named_their_account_is_read_as_it_alwa
     assert recovered.json()["status"] == ("deployed" if committed else "not_committed")
 
 
+async def test_pre_budget_claim_with_a_custody_run_refuses_a_false_not_committed_answer(budgeted) -> None:
+    _write_claim_from_before_claims_named_an_account(
+        budgeted.registry.artifacts_root, _BODY["submission_key"], DEPLOYED_SID,
+    )
+    budgeted.registry.historical_runs.add(DEPLOYED_SID)
+
+    async with _client(budgeted.app) as client:
+        recovered = await client.get(f"{_RECOVERY}/{_BODY['submission_key']}")
+
+    assert recovered.status_code == 409
+    assert recovered.json()["detail"]["reason_code"] == "deploy_outcome_uncertain"
+    assert "may already have committed" in recovered.json()["detail"]["why"]
+
+
 # ── A minute with every name taken ──────────────────────────────────────────
 
 

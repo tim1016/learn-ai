@@ -690,6 +690,21 @@ async def deploy_submission_status(
         receipt = await _committed_receipt(account_id, claim)
         if receipt is not None:
             return receipt
+        try:
+            historical_run = await budget_deploy.historical_run_exists(account_id, claim.strategy_instance_id)
+        except BudgetUnavailable as exc:
+            raise budget_deploy.budget_error(exc) from exc
+        if historical_run:
+            raise PanelRunnerError(
+                "This Deploy's outcome needs a custody review.",
+                detail=(
+                    "The claimed bot has a run in the Clerk, but no budget Deploy receipt. "
+                    "A historical Deploy may already have committed."
+                ),
+                next_action="Inspect this bot's Clerk history before reusing the submission key or deploying again.",
+                http_status=409,
+                reason_code="deploy_outcome_uncertain",
+            )
         # A resend of the key may have begun while custody was read -- or
         # begun, renamed the key's bot and finished. Only the claim the key
         # still holds is answered ``not_committed``; a renamed one is read again.
