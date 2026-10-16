@@ -11,6 +11,7 @@ from app.broker.alpaca import adapter
 from app.broker.alpaca.clerk.models import EffectOperationState
 from app.broker.alpaca.clerk.sqlite.enter import accept_option_enter
 from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryStanding
+from app.broker.alpaca.clerk.sqlite.exit import accept_exit
 from app.broker.alpaca.clerk.sqlite.legs_out_of_step import bot_is_under_legs_out_of_step
 from app.broker.alpaca.clerk.sqlite.manual_order_replacement import resolve_captured_order
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_failed
@@ -27,6 +28,37 @@ from tests.broker.alpaca.clerk.sqlite.test_several_legs_admission import IRON_CO
 from tests.broker.alpaca.documented_examples import documented
 
 multi_paper = _multi_paper_fixture
+
+
+@pytest.mark.parametrize("event_type", ["new", "accepted", "canceled", "fill"])
+@pytest.mark.parametrize("exiting", [False, True])
+async def test_a_late_entry_parent_never_makes_the_proven_entry_or_its_exit_unknown(
+    multi_paper: SeveralLegsPaper, event_type: str, exiting: bool,
+) -> None:
+    parent = await multi_paper.resting(units=1)
+    multi_paper.venue.legs_fill(parent, (1, 1), state="filled")
+    await multi_paper.pass_()
+    if exiting:
+        accept_exit(
+            multi_paper.repo, account_id=multi_paper.repo.account_id, strategy_instance_id="a",
+            decision_id="late-parent-exit", lifecycle_run_id="run-a", entry_order_ref=parent,
+        )
+    entry_before = multi_paper.repo.effect_operation(multi_paper.repo.order(parent).effect_operation_id)
+    exit_before = multi_paper.repo.active_exit_for_order(parent)
+    sink = SqliteTradeUpdateEvidenceSink(repo=multi_paper.repo, intake=multi_paper.clerk.intake, reconciler=multi_paper.clerk)
+
+    disposition = await sink.record_lifecycle_event(
+        client_order_id=parent, event=BrokerOrderEvent(
+            event_type=event_type, occurred_at_ms=multi_paper.clock(), price=None, quantity=None,
+        ), event_key=f"late-parent-{event_type}",
+        order=adapter.from_alpaca_order(multi_paper.venue.option_orders[parent]),
+        recovery_source=None, recovery_window_limit=None,
+    )
+
+    assert disposition == "order_event"
+    assert multi_paper.repo.active_uncertainties() == []
+    assert multi_paper.repo.effect_operation(entry_before.effect_operation_id) == entry_before
+    assert multi_paper.repo.active_exit_for_order(parent) == exit_before
 
 
 async def test_another_bots_unfilled_order_fences_an_opposite_leg_until_it_is_proven_not_sent(
@@ -266,8 +298,9 @@ async def test_a_parent_fill_frame_with_no_execution_books_nothing_and_the_next_
         recovery_window_limit=None,
     )
 
-    assert disposition == "withheld_order"
+    assert disposition == "order_event"
     assert multi_paper.repo.fills_for_order(parent) == []
+    assert multi_paper.repo.active_uncertainties() == []
     await multi_paper.pass_()
     assert multi_paper.outcome(parent).standing is EntryStanding.FILLED
     assert sorted(multi_paper.held().values()) == [1.0, 1.0]
@@ -309,6 +342,7 @@ async def test_a_parents_fill_frame_credits_each_leg_exactly_through_the_real_co
     }
 
     await consumer._handle_trade_update(frame)
+    assert multi_paper.repo.active_uncertainties() == [], "a normal parent fill must not make its order unknown"
     await multi_paper.pass_()
 
     fills = [fill for leg in multi_paper.repo.order_legs(parent) for fill in multi_paper.repo.fills_for_order(leg.order_ref)]

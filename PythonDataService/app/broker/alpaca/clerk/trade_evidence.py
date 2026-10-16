@@ -241,12 +241,15 @@ class SqliteTradeUpdateEvidenceSink:
                 raise RuntimeError(f"SQLite order {order_ref!r} has no owning effect operation")
 
             if self._repo.order_legs(order_ref):
-                # A parent has no execution of its own. The exact option lookup supplies every leg.
-                fold_uncertain(
-                    self._repo, effect_operation_id=owner.effect_operation_id, order_ref=order_ref,
-                    why="The stream stated a multi-leg parent without its exact per-leg answer.",
-                )
-                return "withheld_order"
+                # A parent has no execution of its own. The consumer credits its named leg executions;
+                # the exact lookup owns the aggregate lifecycle. A normal parent frame proves no loss (#3174).
+                if not order.order_id.strip() or not order.status.strip() or order.unreadable_fields:
+                    fold_uncertain(
+                        self._repo, effect_operation_id=captured.row.effect_operation_id, order_ref=order_ref,
+                        why="The stream's multi-leg parent has unreadable identity, status or values.",
+                    )
+                    return "withheld_order"
+                return "order_event"
 
             # Before the exact slice and the ack: a frame missing our order's
             # id, status, symbol or side, or naming values it could not read,

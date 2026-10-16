@@ -3448,6 +3448,23 @@ def test_a_fresh_reconcile_now_receipt_offers_flatten_whatever_the_pass_proved()
     assert notice.explanation.endswith("Use Flatten to close this position.")
 
 
+def test_a_stopped_spread_names_the_scheduled_close_instead_of_an_unavailable_flatten() -> None:
+    positions = (
+        ProjectedPosition(strategy_instance_id=SID, symbol="SPY261016C00768000", attributed_qty=1, updated_at_ms=_NOW - 200),
+        ProjectedPosition(strategy_instance_id=SID, symbol="SPY261016C00773000", attributed_qty=-1, updated_at_ms=_NOW - 200),
+    )
+    projection = replace(_with_the_flatten_offered(_exposure_projection(orders=())), positions=positions)
+
+    outcome = adapt_sqlite_panel(_refused_panel("CRASHED"), projection).health.duty_outcome
+
+    assert outcome is not None
+    (notice,) = outcome.exposure_notices
+    assert notice.action_label == "Open bot"
+    assert "Use Flatten" not in notice.explanation
+    assert "scheduled close" in notice.explanation
+    assert "one order" in notice.explanation
+
+
 @pytest.mark.parametrize(
     "proof",
     [

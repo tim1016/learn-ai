@@ -78,7 +78,7 @@ CUSTODY_PROOF_COPY: dict[str, tuple[str, str]] = {
     ),
     "STOP_REQUIRES_FLATTEN": (
         "Stopped; flatten required",
-        "The runtime is stopped with attributed exposure. Use Flatten to resolve that exposure.",
+        "The runtime is stopped with attributed exposure. Check the position warning for the available closing path.",
     ),
     "STOPPED_CUSTODY_UNPROVABLE": (
         "Stopped; custody unprovable",

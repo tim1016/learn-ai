@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime
+from functools import partial
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -202,25 +203,27 @@ HOSTILE_ENGINE_TEXT = (
 )
 
 
+def _fake_price(*, failing: PricingEngine | None = None, **inputs: Any) -> quantlib_options._ComparePoint:
+    """Picklable engine answer, including the engine's failure across the process boundary."""
+    engine = inputs["engine"]
+    if engine is failing:
+        raise RuntimeError(HOSTILE_ENGINE_TEXT)
+    provided = engine is not PricingEngine.MONTE_CARLO
+    return quantlib_options._ComparePoint(
+        price=1.0,
+        delta=0.5,
+        gamma=0.01,
+        theta=-0.02 if provided else None,
+        vega=0.1 if provided else None,
+        rho=0.03 if provided else None,
+    )
+
+
 def _fake_engines(monkeypatch: pytest.MonkeyPatch, *, failing: PricingEngine | None = None) -> None:
     """Every QuantLib engine prices instantly, Monte Carlo without theta/vega/rho; `failing` raises instead."""
 
-    def price(**inputs: Any) -> quantlib_options._ComparePoint:
-        engine = inputs["engine"]
-        if engine is failing:
-            raise RuntimeError(HOSTILE_ENGINE_TEXT)
-        provided = engine is not PricingEngine.MONTE_CARLO
-        return quantlib_options._ComparePoint(
-            price=1.0,
-            delta=0.5,
-            gamma=0.01,
-            theta=-0.02 if provided else None,
-            vega=0.1 if provided else None,
-            rho=0.03 if provided else None,
-        )
-
     monkeypatch.setattr(quantlib_options, "_QL_AVAILABLE", True)
-    monkeypatch.setattr(quantlib_options, "_price_option_for_compare", price)
+    monkeypatch.setattr(quantlib_options, "_price_option_for_compare", partial(_fake_price, failing=failing))
 
 
 async def test_an_engine_that_raises_is_named_with_a_reason_and_the_others_still_answer(
