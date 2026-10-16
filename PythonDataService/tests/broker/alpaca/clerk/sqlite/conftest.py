@@ -19,7 +19,6 @@ from app.broker.alpaca.clerk.sqlite import schema
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
 from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms, risk_fill_sequence
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
@@ -763,19 +762,18 @@ def day_pnl_clock() -> _TestClock:
 
 
 def initialize_day_pnl_repo(artifacts_root: Path, clock: _TestClock) -> ClerkSqliteRepository:
-    """One authority with a registered, running instance — every stamp from the clock."""
+    """Pre-cutover custody for fee-history tests that begin before any fee read."""
     clerk = ClerkSqliteRepository.initialize(
         account_id=DAY_PNL_ACCOUNT_ID, artifacts_root=artifacts_root, clock=clock
     )
     clerk.register_strategy_instance(
         strategy_instance_id=DAY_PNL_SID, symbol=DAY_PNL_SYMBOL, config_hash="day-pnl-config"
     )
-    submit_start_run(
+    seed_historical_run_started(
         clerk,
         account_id=DAY_PNL_ACCOUNT_ID,
         strategy_instance_id=DAY_PNL_SID,
         lifecycle_run_id=DAY_PNL_RUN_ID,
-        clock=clock,
     )
     return clerk
 
