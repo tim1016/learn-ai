@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -34,10 +35,27 @@ from app.broker.contract.models import (
     BrokerOrderLeg,
 )
 from app.services.bot_carryover import prove_stop_outcome, read_checkpoint
+from app.services.source_bar_ledger import RetainedSourceBar
+from tests._helpers.bot_runner.custody import budget_consent_for_test
 from tests.broker.alpaca.clerk.sqlite.test_runtime import _binding, _Broker, _order
 
 # #2596: these ENTERs run on the default clock; keep it inside a session.
-pytestmark = pytest.mark.usefixtures("wall_clock_in_session", "legacy_run_registration")
+pytestmark = pytest.mark.usefixtures("wall_clock_in_session", "budgeted_run_registration")
+
+
+def _budgeted_binding(*, quantity: int = 1):
+    return _binding().model_copy(update={"quantity": quantity, "budget_consent": budget_consent_for_test()})
+
+
+def _source_bar(facade: SqliteAlpacaClerkFacade) -> RetainedSourceBar:
+    end = facade.repository.clock()
+    return RetainedSourceBar(
+        seq=1, account_id=facade.account_id, provider="ibkr", symbol="SPY",
+        bar_identity=f"ibkr:SPY:{end - 60_000}:{end}", bar_ref="test-decision-bar",
+        start_ms=end - 60_000, end_ms=end, open=Decimal("100"), high=Decimal("100"),
+        low=Decimal("100"), close=Decimal("100"), volume=1, fetched_at_ms=end,
+        session_phase="regular",
+    )
 class _OpenOrdersBroker(_Broker):
     """Alpaca's view of submitted orders: listed while open, looked up exactly.
 
@@ -103,7 +121,7 @@ def _claim_held(repo: ClerkSqliteRepository, order_ref: str) -> bool:
 
 
 async def _working_enter(facade: SqliteAlpacaClerkFacade, *, quantity: int = 1) -> str:
-    binding = _binding().model_copy(update={"quantity": quantity})
+    binding = _budgeted_binding(quantity=quantity)
     await facade.register_strategy_run(binding)
     receipt = await facade.execute_for_instance(
         strategy_instance_id=binding.strategy_instance_id,
@@ -112,12 +130,13 @@ async def _working_enter(facade: SqliteAlpacaClerkFacade, *, quantity: int = 1) 
         purpose=EffectPurpose.ENTER,
         action_plan=binding.action_plan,
         quantity=binding.quantity,
+        retained_source_bar=_source_bar(facade),
     )
     return receipt.child_order_refs[0]
 
 
 def _start_enter(facade: SqliteAlpacaClerkFacade) -> asyncio.Task:
-    binding = _binding()
+    binding = _budgeted_binding()
     return asyncio.create_task(
         facade.execute_for_instance(
             strategy_instance_id=binding.strategy_instance_id,
@@ -126,12 +145,13 @@ def _start_enter(facade: SqliteAlpacaClerkFacade) -> asyncio.Task:
             purpose=EffectPurpose.ENTER,
             action_plan=binding.action_plan,
             quantity=binding.quantity,
+            retained_source_bar=_source_bar(facade),
         )
     )
 
 
 async def _stop(facade: SqliteAlpacaClerkFacade) -> None:
-    binding = _binding()
+    binding = _budgeted_binding()
     await facade.stop_strategy_run(
         strategy_instance_id=binding.strategy_instance_id,
         run_id=binding.run_id,
@@ -300,7 +320,7 @@ async def test_stop_during_inflight_enter_post_is_not_flat_and_sweep_cancels_aft
     """#2358: the POST is in flight, the order row has no broker state yet."""
     broker = _OpenOrdersBroker()
     repo, facade = _facade(tmp_path, broker)
-    binding = _binding()
+    binding = _budgeted_binding()
     await facade.register_strategy_run(binding)
     bot_task = _start_enter(facade)
     await broker.submit_started.wait()
@@ -335,7 +355,7 @@ async def test_custody_snapshot_counts_an_inflight_enter_post_as_pending(
     """#2358: the snapshot and the STOP proof share one "unresolved" definition."""
     broker = _OpenOrdersBroker()
     repo, facade = _facade(tmp_path, broker)
-    binding = _binding()
+    binding = _budgeted_binding()
     await facade.register_strategy_run(binding)
     bot_task = _start_enter(facade)
     await broker.submit_started.wait()
@@ -361,7 +381,7 @@ async def test_stop_racing_the_sweeps_cancel_proves_flat_and_writes_checkpoint(
     broker = _OpenOrdersBroker()
     broker.release_submit.set()
     repo, facade = _facade(tmp_path, broker)
-    binding = _binding()
+    binding = _budgeted_binding()
     order_ref = await _working_enter(facade)
     await _stop(facade)
     broker.release_cancel.clear()
@@ -394,7 +414,7 @@ async def test_stop_while_the_sweeps_lookup_holds_the_claim_proves_flat(
     broker = _OpenOrdersBroker()
     broker.release_submit.set()
     repo, facade = _facade(tmp_path, broker)
-    binding = _binding()
+    binding = _budgeted_binding()
     order_ref = await _working_enter(facade)
 
     broker.park_lookup = True
@@ -430,7 +450,7 @@ async def test_stop_colliding_with_the_enter_post_claim_is_cancelled_by_a_later_
     broker = _OpenOrdersBroker()
     repo, facade = _facade(tmp_path, broker)
     sink = SqliteTradeUpdateEvidenceSink(repo=repo, intake=facade.intake, reconciler=facade)
-    binding = _binding()
+    binding = _budgeted_binding()
     await facade.register_strategy_run(binding)
     bot_task = _start_enter(facade)
     await broker.submit_started.wait()
