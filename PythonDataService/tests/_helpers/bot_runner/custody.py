@@ -15,10 +15,12 @@ from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import date
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from app.broker.alpaca.clerk import get_alpaca_clerk
+from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.active_protocol import ActiveAlpacaClerk
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
@@ -30,6 +32,8 @@ from app.broker.alpaca.clerk.models import (
 )
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
+from app.schemas.broker_bots import BotStatusView
+from app.schemas.deployment_budget import DeployBudgetConsent
 from app.schemas.exit_terms import ExitTermsInput
 from app.services.bot_runner import BotTaskRegistry
 from app.services.bot_start_admission import AdmissionCustodyCut
@@ -125,6 +129,30 @@ def _registry(
         now_ms=now_ms,
         market_liveness=_tradable_market_liveness,
     )
+
+
+def budget_consent_for_test(*, mode: str = "log_only") -> DeployBudgetConsent:
+    """A reviewed budget for a unit-test Clerk's account."""
+    clerk = get_alpaca_clerk()
+    if mode == "dry_run":
+        world = "synthetic"
+    elif clerk is None:
+        world = "real_paper"
+    else:
+        world = authority_kind_for_account(clerk.account_id, account_mode=getattr(clerk, "account_mode", "paper"))
+    return DeployBudgetConsent(
+        committed_cents=1_000_000,
+        risk_revision=0 if world == "synthetic" else 1,
+        actor="owner",
+        request_fingerprint="reviewed-test-deploy",
+        world=world,
+    )
+
+
+async def deploy_bot(registry: BotTaskRegistry, **kwargs: Any) -> BotStatusView:
+    """Return the bot view after the current budgeted admission path."""
+    consent = budget_consent_for_test(mode=kwargs.get("mode", "log_only"))
+    return (await registry.deploy_with_admission(**kwargs, budget_consent=consent)).bot
 
 
 def _lifecycle_json(tmp_path: Path, sid: str = _SID) -> dict:
