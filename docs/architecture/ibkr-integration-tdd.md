@@ -2,8 +2,8 @@
 
 **Status:** Read/evidence rationale active; order-actuation design retired by
 issue #1583 on 2026-08-19.
-**Current implementation authority:**
-[`../ibkr-integration-authority.md`](../ibkr-integration-authority.md)
+**Current provider decision:**
+[ADR 0062](adrs/0062-broker-clerk-fleet-control-plane.md)
 
 This record explains the design choices that still govern the surviving IBKR
 read integration. It is not authorization to rebuild the former paper-order or

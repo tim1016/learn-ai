@@ -55,7 +55,7 @@ Until at least one of these fires, the substrate remains JSON + Parquet + hash s
 - `PythonDataService/app/engine/live/artifacts.py` — Decision / Execution / Trade row pin.
 - `PythonDataService/app/engine/live/reconcile.py` — three-way daily reconciler (Phase 9).
 - Git history — historical design-lock round (this ADR is Resolution 1).
-- `docs/ibkr-integration-authority.md` — authoritative live-runtime status as of `master`.
+- [ADR 0062](0062-broker-clerk-fleet-control-plane.md) — current IBKR market-data and Alpaca order boundary.
 
 ## Amendment 2026-07-25 — Clerk-native transaction projection (#1219)
 
