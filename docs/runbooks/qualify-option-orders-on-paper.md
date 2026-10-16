@@ -1,9 +1,10 @@
 # Qualify option orders on a Paper account
 
 This is the operator procedure for qualifying option orders this system sends to
-Alpaca. The run records below cover a bought call and a debit spread on Paper;
-the limit credit opening-order sign and remaining shapes still need their
-checks. This runbook sets one Paper account aside, turns one temporary setting
+Alpaca. The run records below cover a bought call, a debit spread and the
+owner's dashboard credit-order sign check on Paper; the credit-spread and
+iron-condor bot passes still need their checks. This runbook sets one Paper
+account aside, turns one temporary setting
 on for its Clerk, runs the orders through their whole life, sets what Alpaca
 did beside what the Clerk worked out, and ends with the setting off again or
 with a capability promoted on the evidence. Run terminal commands from the
@@ -336,6 +337,12 @@ structure, in each shape's second pass, and a leftover hand-placed fill would
 make C's flat-account pass something other than flat. Make its bundle like any
 step's; the Clerk compares only a bot's entries, so it has no comparison, and
 it is named in the step log as a sign check.
+
+After adding both closing legs at Alpaca's dashboard, recheck both position
+intents: **Buy to Close** the sold contract and **Sell to Close** the bought
+contract. On October 16, adding the second leg reset both selectors to opening
+intents, even though the first single-leg ticket had said **Buy to Close**.
+Correct the selectors before submitting the whole-spread close.
 
 **A step** is: deploy the test bot with the structure and the four order terms,
 let it enter, see the entry through to its end, close it, and see the money
@@ -943,3 +950,38 @@ shown as fees not posted yet. The separate $2.68 historical outside-fill
 disagreement remains disclosed under #3311. IB Gateway reconnected; the Paper
 Clerk retained read-only IBKR market data and its 84-line option budget.
 Several-leg Paper orders, buying-power judgment and Live option bots were off.
+
+## Run record: 2026-10-16, the owner's dashboard credit sign check (#3225)
+
+The account began flat with no working order or running bot. The owner placed
+one SPY October 19 $774/$775 call credit spread at Alpaca's Paper dashboard:
+sell one lower call, buy one higher call. The first limit, `-0.33`, was accepted
+and rested without a fill. It was cancelled at the dashboard; both legs had
+zero filled quantity and Alpaca again reported no position or working order.
+This shows a manual cancellation, not the bot's entry-deadline cancellation.
+
+The owner submitted a fresh limit at `-0.15`, which filled at `-0.15`: the
+short leg at $0.51 and the long leg at $0.36. The owner then submitted one
+whole-spread market close with both closing intents. It filled at `+0.18`:
+the short call bought back at $0.55 and the long call sold at $0.37. Alpaca's
+dashboard showed the close filled; its API reported no positions and no open
+orders at 1792165638173 ms UTC. Alongside shape B's positive debit limit, this
+completes the separate dashboard sign check required before C and D.
+
+Cash and option buying power went from $99,926.54 to $99,923.44. The recording
+test pins the $3.10 cash decrease separately from the $3.00 net premium cost
+and the additional $0.10 cash reduction. That difference is an observation,
+not a final posted-fee attribution; the new fill day's fee check remains due.
+
+The Clerk quarantined the three outside parent orders under the existing
+#3309 gap. Each was reviewed against Alpaca and acknowledged after the account
+was flat; recovery then reported no active hold. The unrelated $2.68 historical
+outside-fill discrepancy remains #3311. No capability was promoted and Live
+option bots and buying-power judgment stayed off.
+
+The recording is `tests/fixtures/alpaca/option_paper_recordings/3225-dashboard-credit-sign-check-20261016`,
+read by `test_paper_option_recordings.py`. Its private bundle covers
+1792165220000 through 1792165705503 ms UTC. Its only unread piece is the
+expected absence of a bot named `outside-dashboard-sign-check`: these were
+outside orders, with no bot buying-power comparison. No journal evidence was
+unread or left unsanitized. This is the sign check, not a C or D Paper bot pass.
