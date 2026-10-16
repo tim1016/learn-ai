@@ -132,10 +132,8 @@ export const FOUR_TRADES: readonly LegTrade[] = [stoppedTrade(), reentryTrade(),
 export function tradesPage(changes: Partial<TradesPage> = {}): TradesPage {
   const trades = changes.trades ?? [...FOUR_TRADES];
   return {
-    run_id: 7,
     total: trades.length,
     offset: 0,
-    limit: 100,
     next_offset: null,
     trades,
     ...changes,
@@ -243,7 +241,6 @@ export const SCENE_MARKS: readonly SessionMark[] = [
  */
 export function sessionDetail(changes: Partial<SessionDetail> = {}): SessionDetail {
   return {
-    run_id: 7,
     session_open_ms: TUESDAY_OPEN,
     session_close_ms: at(12),
     status: 'traded',
@@ -288,10 +285,6 @@ export function comparedRun(changes: Partial<ComparedRun> = {}): ComparedRun {
     id: 30,
     setup_name: 'Straddle',
     created_at_ms: Date.UTC(2026, 8, 21, 15, 30, 0),
-    first_session_open_ms: sessionOpenMs('2026-09-14'),
-    last_session_open_ms: sessionOpenMs('2026-09-18'),
-    sessions_requested: 5,
-    fee_policy: 'Fees are not charged.',
     ...changes,
   };
 }
@@ -305,11 +298,11 @@ export function comparison(changes: Partial<RunComparison> = {}): RunComparison 
   return {
     underlying: 'SPY',
     a: comparedRun(),
-    b: comparedRun({ id: 33, setup_name: null, created_at_ms: Date.UTC(2026, 8, 22, 15, 30, 0), fee_policy: 'Fees were set by the owner at 0.65 a contract.' }),
+    b: comparedRun({ id: 33, setup_name: null, created_at_ms: Date.UTC(2026, 8, 22, 15, 30, 0) }),
     setting_differences: [
-      { setting: 'leg_reentry', leg_id: 'call', label: 'leg call: re-entry on stop', a: 'not set', b: 'at once, up to 1 time' },
-      { setting: 'slippage', leg_id: null, label: 'slippage', a: '0.3%', b: '0.45%' },
-      { setting: 'fees', leg_id: null, label: 'fees', a: 'Fees are not charged.', b: 'Fees were set by the owner at 0.65 a contract.' },
+      { label: 'leg call: re-entry on stop', a: 'not set', b: 'at once, up to 1 time' },
+      { label: 'slippage', a: '0.3%', b: '0.45%' },
+      { label: 'fees', a: 'Fees are not charged.', b: 'Fees were set by the owner at 0.65 a contract.' },
     ],
     range_difference: null,
     overlap: {

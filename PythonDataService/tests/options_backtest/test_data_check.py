@@ -444,14 +444,6 @@ def _range(*verdicts: SessionVerdict) -> DataCheck:
 R, N, C = SessionVerdict.READY, SessionVerdict.NEEDS_DOWNLOAD, SessionVerdict.CANNOT_BE_TESTED
 
 
-def test_the_first_and_last_session_that_can_be_tested_skip_those_that_cannot() -> None:
-    checked = _range(C, R, N, C, R, C, C)
-
-    assert checked.first_testable is not None
-    assert checked.first_testable.session_open_ms == _open(date(2026, 10, 6))
-    assert checked.last_testable is not None and checked.last_testable.session_open_ms == _open(FRI)
-
-
 def test_the_longest_unbroken_run_of_testable_sessions_is_offered_as_a_range() -> None:
     # Indices 1 to 3 are three testable sessions in a row (Tue, Wed, Thu); 5 to 6 are two. The run is Tue to Thu.
     checked = _range(C, R, N, R, C, R, R)
@@ -491,7 +483,6 @@ def test_a_range_with_nothing_testable_offers_no_range() -> None:
     checked = _range(C, C, C)
 
     assert checked.longest_testable_stretch is None
-    assert checked.first_testable is None and checked.last_testable is None
 
 
 def test_a_session_that_cannot_be_tested_breaks_a_run_of_sessions_even_when_it_is_one_in_a_stored_range() -> None:

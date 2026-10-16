@@ -121,7 +121,6 @@ class OptionsBacktestContractNeedsResponse(BaseModel):
 
 class OptionsBacktestSessionCheckResponse(BaseModel):
     session_open_ms: Ms
-    session_close_ms: Ms
     verdict: VerdictWord
     # Set on a ready session that the replay will skip, and says which rule skips it.
     skip: SkipReasonWord | None = None
@@ -138,7 +137,6 @@ class OptionsBacktestSessionCheckResponse(BaseModel):
         needs = session.contracts
         return cls(
             session_open_ms=session.session_open_ms,
-            session_close_ms=session.session_close_ms,
             verdict=session.verdict.value,  # type: ignore[arg-type]
             skip=None if session.skip is None else session.skip.value,  # type: ignore[arg-type]
             missing=[kind.value for kind in session.missing],  # type: ignore[misc]
@@ -183,13 +181,11 @@ class OptionsBacktestDataCheckResponse(BaseModel):
     option_prices_from_ms: Ms
     sessions: list[OptionsBacktestSessionCheckResponse]
     counts: OptionsBacktestDataCountsResponse
-    first_testable_session_open_ms: Ms | None = None
-    last_testable_session_open_ms: Ms | None = None
     longest_testable_stretch: OptionsBacktestTestableStretchResponse | None = None
 
     @classmethod
     def from_check(cls, check: DataCheck) -> Self:
-        first, last, stretch = check.first_testable, check.last_testable, check.longest_testable_stretch
+        stretch = check.longest_testable_stretch
         return cls(
             option_prices_from_ms=et_midnight_ms(check.option_prices_from),
             sessions=[OptionsBacktestSessionCheckResponse.from_session(session) for session in check.sessions],
@@ -198,8 +194,6 @@ class OptionsBacktestDataCheckResponse(BaseModel):
                 needs_download=check.count(SessionVerdict.NEEDS_DOWNLOAD),
                 cannot_be_tested=check.count(SessionVerdict.CANNOT_BE_TESTED),
             ),
-            first_testable_session_open_ms=None if first is None else first.session_open_ms,
-            last_testable_session_open_ms=None if last is None else last.session_open_ms,
             longest_testable_stretch=None
             if stretch is None
             else OptionsBacktestTestableStretchResponse.from_stretch(stretch),
@@ -251,7 +245,6 @@ class OptionsBacktestDrawdownResponse(BaseModel):
     # ``None`` when the peak is the starting cash, before the first session.
     peak_session_open_ms: Ms | None = None
     trough_session_open_ms: Ms
-    measured_at: Literal["session_end"]
 
     @classmethod
     def from_drawdown(cls, drawdown: Drawdown) -> Self:
@@ -262,7 +255,6 @@ class OptionsBacktestDrawdownResponse(BaseModel):
             fall_ratio=OptionsBacktestDollarRateResponse.from_ratio(drawdown.fall_ratio),
             peak_session_open_ms=drawdown.peak_session_open_ms,
             trough_session_open_ms=drawdown.trough_session_open_ms,
-            measured_at=drawdown.measured_at,
         )
 
 

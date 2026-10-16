@@ -433,9 +433,9 @@ describe('when Check data does not give an answer', () => {
   it('says the server’s reason in the panel when the catalog cannot be asked, and asks again on request', async () => {
     let down = true;
     const service = fakeService(vi, {
-      checkData: vi.fn(async (_setup, startMs: number) => {
+      checkData: vi.fn(async () => {
         if (down) throw new RunRefusedError('OPTIONS_BACKTEST_DATA_CATALOG_UNAVAILABLE', 'The data catalog cannot be asked right now.', 503);
-        return dataCheck([sessionCheck(`2026-09-14`)], { first_testable_session_open_ms: startMs });
+        return dataCheck([sessionCheck(`2026-09-14`)]);
       }),
     });
     await readyToCheck(service);

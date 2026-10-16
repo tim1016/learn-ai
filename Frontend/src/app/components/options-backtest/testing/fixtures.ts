@@ -132,17 +132,13 @@ export function summaryFor(text: string): SetupSummary {
   return { window: [`${text} window.`], legs: [], square_off: [`${text} square off.`], costs: [`${text} costs.`], notices: [], setup: exampleBody() };
 }
 
-const HOUR_MS = 60 * 60 * 1000;
-
 /** The day option prices are available from, in the checks the fake serves. */
 export const PRICES_FROM_DAY = '2025-10-15';
 
 /** One session of a Check data answer, by its New York date: ready, with every contract stored, unless changed. */
 export function sessionCheck(day: string, changes: Partial<SessionCheck> = {}): SessionCheck {
-  const open = sessionOpenMs(day);
   return {
-    session_open_ms: open,
-    session_close_ms: open + 6.5 * HOUR_MS,
+    session_open_ms: sessionOpenMs(day),
     verdict: 'ready',
     skip: null,
     missing: [],
@@ -160,8 +156,6 @@ export function dataCheck(sessions: SessionCheck[], changes: Partial<DataCheck> 
     option_prices_from_ms: etMidnightMs(PRICES_FROM_DAY),
     sessions,
     counts: { ready: count('ready'), needs_download: count('needs_download'), cannot_be_tested: count('cannot_be_tested') },
-    first_testable_session_open_ms: null,
-    last_testable_session_open_ms: null,
     longest_testable_stretch: null,
     ...changes,
   };

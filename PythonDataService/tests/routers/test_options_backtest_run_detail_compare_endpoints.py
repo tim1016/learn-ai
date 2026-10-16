@@ -78,15 +78,14 @@ async def test_two_runs_are_compared_setting_by_setting_and_on_the_sessions_they
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["underlying"] == "SPY"
-    assert (body["a"]["id"], body["a"]["setup_name"], body["a"]["sessions_requested"]) == (a, "three legs", 3)
-    assert (body["b"]["id"], body["b"]["setup_name"], body["b"]["sessions_requested"]) == (b, None, 2)
+    assert (body["a"]["id"], body["a"]["setup_name"]) == (a, "three legs")
+    assert (body["b"]["id"], body["b"]["setup_name"]) == (b, None)
     # Each run's own time of making: never the other's.
     assert (body["a"]["created_at_ms"], body["b"]["created_at_ms"]) == (A_CREATED_AT_MS, B_CREATED_AT_MS)
-    assert body["a"]["fee_policy"] == body["b"]["fee_policy"] == "Fees are $0.65 per contract traded."
     # B has only the put leg; A also has call and lag, in A's order. Nothing else differs.
     assert body["setting_differences"] == [
-        {"setting": "leg", "leg_id": "call", "label": "leg call", "a": CALL_LEG, "b": "not in this run"},
-        {"setting": "leg", "leg_id": "lag", "label": "leg lag", "a": LAG_LEG, "b": "not in this run"},
+        {"label": "leg call", "a": CALL_LEG, "b": "not in this run"},
+        {"label": "leg lag", "a": LAG_LEG, "b": "not in this run"},
     ]
     # A ran three sessions from Wednesday to Friday and B two, Wednesday and Thursday.
     assert body["range_difference"] == {

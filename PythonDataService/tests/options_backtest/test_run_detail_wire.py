@@ -17,7 +17,7 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from app.options.contract import OptionContract
-from app.options_backtest.comparison import Setting, compare
+from app.options_backtest.comparison import compare
 from app.options_backtest.market import PickRefusal
 from app.options_backtest.results import (
     CancelReason,
@@ -249,12 +249,6 @@ def test_a_trade_that_names_both_a_sale_and_a_mark_or_neither_cannot_be_made() -
             wire.OptionsBacktestTradeResponse.model_validate(broken)
 
 
-def test_the_page_size_the_server_holds_is_one_the_response_can_carry() -> None:
-    assert wire.TRADES_PAGE_DEFAULT <= wire.TRADES_PAGE_MAX
-    with pytest.raises(ValidationError):
-        wire.OptionsBacktestTradesResponse(run_id=1, total=0, offset=0, limit=wire.TRADES_PAGE_MAX + 1, trades=[])
-
-
 @pytest.mark.parametrize(
     ("words", "members"),
     [
@@ -272,7 +266,6 @@ def test_the_page_size_the_server_holds_is_one_the_response_can_carry() -> None:
         (wire.SeriesReasonWord, [member.value for member in SeriesReason]),
         (wire.SeriesStateWord, ["shown", "not_shown"]),
         (wire.FillKindWord, list(get_args(get_type_hints(ChartedFill)["kind"]))),
-        (wire.SettingWord, [member.value for member in Setting]),
         (wire.SessionStatusWord, [member.value for member in SessionStatus]),
     ],
 )
@@ -451,11 +444,7 @@ def test_a_session_is_sent_with_its_own_cash_its_own_profit_its_own_close_and_it
     sent = wire.OptionsBacktestSessionResponse.from_view(_view(scene, 0))
 
     # Wednesday: 10,000.00 before, 9,856.10 after, -143.90 of profit; a full day closes 390 minutes after it opens.
-    assert (sent.run_id, sent.session_open_ms, sent.session_close_ms) == (
-        7,
-        WED_OPEN_MS,
-        WED_OPEN_MS + 390 * MS_PER_MINUTE,
-    )
+    assert (sent.session_open_ms, sent.session_close_ms) == (WED_OPEN_MS, WED_OPEN_MS + 390 * MS_PER_MINUTE)
     assert (sent.status, sent.skip_reason) == ("traded", None)
     assert (sent.cash_before_usd, sent.cash_after_usd, sent.profit_usd) == ("10000", "9856.10", "-143.90")
     # The first event is the call leg picking its contract at m5; the last is the put's sale filling at m61.
@@ -510,7 +499,7 @@ def test_a_page_of_trades_says_its_total_where_it_began_and_where_the_rest_begin
     sent = wire.OptionsBacktestTradesResponse.from_page(page)
 
     # Five trades, this page holds the 3rd and 4th (from offset 2), and the 5th is at offset 4.
-    assert (sent.run_id, sent.total, sent.offset, sent.limit, sent.next_offset) == (7, 5, 2, 2, 4)
+    assert (sent.total, sent.offset, sent.next_offset) == (5, 2, 4)
     assert [t.trade_number for t in sent.trades] == [0, 1]
 
 
@@ -544,19 +533,8 @@ def test_two_runs_compared_are_sent_each_with_its_own_record_and_each_shared_ses
     sent = wire.OptionsBacktestComparisonResponse.from_comparison(a, b, compare(a, a_lines, b, b_lines))
 
     # Each run's own record: never the other's, never blank.
-    assert (sent.a.id, sent.a.setup_name, sent.a.created_at_ms, sent.a.fee_policy) == (
-        1,
-        "the first",
-        1_791_800_000_000,
-        "Fees are $0.65 per contract traded.",
-    )
-    assert (sent.b.id, sent.b.setup_name, sent.b.created_at_ms, sent.b.fee_policy) == (
-        2,
-        None,
-        1_791_900_000_000,
-        "Fees are not charged, so results are before fees.",
-    )
-    assert (sent.a.sessions_requested, sent.b.sessions_requested) == (4, 2)
+    assert (sent.a.id, sent.a.setup_name, sent.a.created_at_ms) == (1, "the first", 1_791_800_000_000)
+    assert (sent.b.id, sent.b.setup_name, sent.b.created_at_ms) == (2, None, 1_791_900_000_000)
     # Run a's range is 10 to 50 and b's is 20 to 40, in that order, each with its first before its last.
     assert sent.range_difference is not None
     assert (sent.range_difference.a.first_session_open_ms, sent.range_difference.a.last_session_open_ms) == (10, 50)

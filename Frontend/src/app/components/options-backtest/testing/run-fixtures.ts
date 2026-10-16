@@ -180,7 +180,6 @@ export function figures(changes: Partial<RunFigures> = {}): RunFigures {
     drawdown_by_dollars: {
       fall_usd: '412.30',
       fall_ratio: { numerator_usd: '412.30', denominator_usd: '10900.00', rounded_to_6_places: '0.037826' },
-      measured_at: 'session_end',
       peak_equity_usd: '10900.00',
       peak_session_open_ms: sessionOpenMs('2026-09-15'),
       trough_equity_usd: '10487.70',
@@ -189,7 +188,6 @@ export function figures(changes: Partial<RunFigures> = {}): RunFigures {
     drawdown_by_fraction: {
       fall_usd: '400.00',
       fall_ratio: { numerator_usd: '400.00', denominator_usd: '10000.00', rounded_to_6_places: '0.040000' },
-      measured_at: 'session_end',
       peak_equity_usd: '10000.00',
       peak_session_open_ms: null,
       trough_equity_usd: '9600.00',

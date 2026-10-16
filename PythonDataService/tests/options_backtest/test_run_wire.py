@@ -46,7 +46,7 @@ from app.options_backtest.saved_runs import (
     StoredStatus,
 )
 from app.options_backtest.setup import FeePolicy
-from app.options_backtest.statistics import Drawdown, Ratio
+from app.options_backtest.statistics import Ratio
 from app.research.persistence.schema import DDL_V20
 from app.schemas import options_backtest_runs as wire
 from tests.options_backtest._a_selling_run import a_selling_run
@@ -113,10 +113,6 @@ def _stored(result: RunResult, *, status: str = "complete") -> StoredRun:
         (
             wire.OptionsBacktestFillsBannerResponse.model_fields["fee_policy_kind"].annotation,
             list(get_args(get_type_hints(FeePolicy)["kind"])),
-        ),
-        (
-            wire.OptionsBacktestDrawdownResponse.model_fields["measured_at"].annotation,
-            list(get_args(get_type_hints(Drawdown)["measured_at"])),
         ),
         (wire.RunStatusWord, list(get_args(PresentedStatus))),
         (wire.CapitalInvalidKindWord, [member.value for member in CapitalInvalidKind]),

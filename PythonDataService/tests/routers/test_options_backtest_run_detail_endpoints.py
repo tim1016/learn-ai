@@ -156,13 +156,7 @@ async def test_the_trades_of_a_run_are_served_in_order_with_every_figure_the_sce
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert (body["run_id"], body["total"], body["offset"], body["limit"], body["next_offset"]) == (
-        run_id,
-        3,
-        0,
-        1000,
-        None,
-    )
+    assert (body["total"], body["offset"], body["next_offset"]) == (3, 0, None)
     assert [_as_worked(trade) for trade in body["trades"]] == _worked_trades()
     for trade in body["trades"]:
         assert trade["session_open_ms"] == WED_OPEN_MS and trade["multiplier"] == 100 and trade["contracts"] == 1
@@ -248,7 +242,7 @@ async def test_a_run_can_be_read_a_page_at_a_time_and_the_pages_add_up_to_every_
         offset: int | None = 0
         while offset is not None:
             page = (await c.get(f"{PREFIX}/runs/{run_id}/trades", params={"limit": 7, "offset": offset})).json()
-            assert page["total"] == whole["total"] and page["limit"] == 7 and page["offset"] == offset
+            assert page["total"] == whole["total"] and page["offset"] == offset
             pages.append(page)
             offset = page["next_offset"]
 

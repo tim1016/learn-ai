@@ -81,7 +81,7 @@ describe('comparing two runs, what differs comes first', () => {
   });
 
   it('keeps the order the server gave and shows a setting only the server named', async () => {
-    const answer = comparison({ setting_differences: [{ setting: 'leg', leg_id: 'put', label: 'leg put', a: 'not in this run', b: 'a put, 1 contract, expiring this week' }] });
+    const answer = comparison({ setting_differences: [{ label: 'leg put', a: 'not in this run', b: 'a put, 1 contract, expiring this week' }] });
     await renderCompare(serving(answer));
     await screen.findByRole('region', { name: 'Settings that differ (scrolls sideways)' });
 
