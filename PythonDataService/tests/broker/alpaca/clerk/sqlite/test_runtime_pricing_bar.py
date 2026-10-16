@@ -41,6 +41,7 @@ from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_acti
 from app.services.bot_carryover import configuration_hash, immutable_configuration_payload
 from app.services.session_authority import et_minute_of_day_ms
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
+from tests._helpers.bot_runner.custody import budget_consent_for_test
 from tests._helpers.market_quotes import publish_quotes
 from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_enter
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _FakeReadPort, _FakeTradePort, _TestClock
@@ -281,7 +282,8 @@ async def test_a_live_shadow_fills_at_the_traded_assets_close_and_never_without_
         program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
     )
     binding = _binding(use_rth=True).model_copy(
-        update={"sealed_account_id": _SHADOW_ACCOUNT, "action_plan": _TRADES_QQQ}
+        update={"sealed_account_id": _SHADOW_ACCOUNT, "action_plan": _TRADES_QQQ,
+                "budget_consent": budget_consent_for_test(world="shadow")}
     )
     await facade.register_strategy_run(binding)
 
@@ -344,7 +346,8 @@ async def test_a_live_shadow_sell_with_no_bar_of_its_minute_fills_at_the_newest_
         program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
     )
     binding = _binding(use_rth=True).model_copy(
-        update={"sealed_account_id": _SHADOW_ACCOUNT, "action_plan": _TRADES_QQQ}
+        update={"sealed_account_id": _SHADOW_ACCOUNT, "action_plan": _TRADES_QQQ,
+                "budget_consent": budget_consent_for_test(world="shadow")}
     )
     await facade.register_strategy_run(binding)
     try:
@@ -396,7 +399,8 @@ async def _shadow_holding_qqq(tmp_path: Path, *, exit_ms: int, clock: _Clock) ->
         program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
     )
     binding = _binding(use_rth=True).model_copy(
-        update={"sealed_account_id": _SHADOW_ACCOUNT, "action_plan": _TRADES_QQQ}
+        update={"sealed_account_id": _SHADOW_ACCOUNT, "action_plan": _TRADES_QQQ,
+                "budget_consent": budget_consent_for_test(world="shadow")}
     )
     await facade.register_strategy_run(binding)
     bought = await facade.execute_for_instance(
@@ -423,7 +427,8 @@ async def test_an_older_price_never_buys_on_an_account_that_fills_its_own_orders
         program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
     )
     binding = _binding(use_rth=True).model_copy(
-        update={"sealed_account_id": _SHADOW_ACCOUNT, "action_plan": _TRADES_QQQ}
+        update={"sealed_account_id": _SHADOW_ACCOUNT, "action_plan": _TRADES_QQQ,
+                "budget_consent": budget_consent_for_test(world="shadow")}
     )
     await facade.register_strategy_run(binding)
     try:

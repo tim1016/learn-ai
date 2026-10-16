@@ -104,6 +104,9 @@ def _binding(*, use_rth: bool, account_id: str = ACCOUNT_ID) -> BrokerBotBinding
         action_plan=alpaca_v1_action_plan("SPY"),
         run_id=RUN_ID,
         created_at_ms=1,
+        budget_consent=budget_consent_for_test(
+            world="synthetic" if account_id.startswith("sim:") else "real_paper"
+        ),
     )
 
 

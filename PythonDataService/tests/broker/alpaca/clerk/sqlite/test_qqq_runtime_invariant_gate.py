@@ -22,6 +22,7 @@ from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg, BrokerPosition
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
+from tests._helpers.bot_runner.custody import budget_consent_for_test
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite.test_stopped_run_entries import _source_bar
 
@@ -118,6 +119,7 @@ def _binding(strategy_instance_id: str, *, run_id: str) -> BrokerBotBinding:
         action_plan=alpaca_v1_action_plan("QQQ"),
         run_id=run_id,
         created_at_ms=1,
+        budget_consent=budget_consent_for_test(world="real_paper"),
     )
 
 

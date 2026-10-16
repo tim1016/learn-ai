@@ -22,6 +22,7 @@ from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.services.broker_v2_panel.catalog_projection_service import sqlite_catalog_rollup
 from app.services.session_authority import et_minute_of_day_ms
 from app.services.source_bar_ledger import SourceBarLedger
+from tests._helpers.bot_runner.custody import budget_consent_for_test
 from tests.broker.alpaca.clerk.sqlite.conftest import _FakeReadPort, _FakeTradePort
 from tests.broker.alpaca.clerk.sqlite.test_runtime_program_leg import (
     _EXTENDED_POLICY,
@@ -49,7 +50,10 @@ async def test_shadow_registers_a_multi_leg_plan_without_a_real_account_rollout_
         repo=repo, read=ports.read, trade=ports.trade, authority_kind="shadow", account_mode="live",
         program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
     )
-    binding = _binding(use_rth=True).model_copy(update={"sealed_account_id": ACCOUNT_ID, "action_plan": STRADDLE})
+    binding = _binding(use_rth=True).model_copy(update={
+        "sealed_account_id": ACCOUNT_ID, "action_plan": STRADDLE,
+        "budget_consent": budget_consent_for_test(world="shadow"),
+    })
     try:
         await facade.register_strategy_run(binding)
         assert repo.strategy_instance(SID) is not None
@@ -109,7 +113,9 @@ async def test_shadow_entry_and_exit_are_synthesized_from_their_bound_decision_b
         account_mode="live",
         program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
     )
-    binding = _binding(use_rth=True).model_copy(update={"sealed_account_id": ACCOUNT_ID})
+    binding = _binding(use_rth=True).model_copy(update={
+        "sealed_account_id": ACCOUNT_ID, "budget_consent": budget_consent_for_test(world="shadow"),
+    })
     await facade.register_strategy_run(binding)
     try:
         unproven = await facade.execute_for_instance(
@@ -190,7 +196,9 @@ async def test_a_shadow_fill_retains_its_exact_simulated_execution_identity(
         account_mode="live",
         program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
     )
-    binding = _binding(use_rth=True).model_copy(update={"sealed_account_id": ACCOUNT_ID})
+    binding = _binding(use_rth=True).model_copy(update={
+        "sealed_account_id": ACCOUNT_ID, "budget_consent": budget_consent_for_test(world="shadow"),
+    })
     await facade.register_strategy_run(binding)
     try:
         receipt = await facade.execute_for_instance(
@@ -245,7 +253,9 @@ async def test_shadow_fill_survives_restart_and_reconciles_to_attributed_exposur
         account_mode="live",
         program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
     )
-    binding = _binding(use_rth=True).model_copy(update={"sealed_account_id": ACCOUNT_ID})
+    binding = _binding(use_rth=True).model_copy(update={
+        "sealed_account_id": ACCOUNT_ID, "budget_consent": budget_consent_for_test(world="shadow"),
+    })
     await facade.register_strategy_run(binding)
     receipt = await facade.execute_for_instance(
         strategy_instance_id=SID,
@@ -317,7 +327,9 @@ async def test_shadow_safe_flatten_binds_retained_evidence_and_finishes_flat(
         account_mode="live",
         program_leg_policy=ProgramLegPolicy.from_read_port(ports.read),
     )
-    binding = _binding(use_rth=True).model_copy(update={"sealed_account_id": ACCOUNT_ID})
+    binding = _binding(use_rth=True).model_copy(update={
+        "sealed_account_id": ACCOUNT_ID, "budget_consent": budget_consent_for_test(world="shadow"),
+    })
     await facade.register_strategy_run(binding)
     try:
         entered = await facade.execute_for_instance(
@@ -402,7 +414,9 @@ async def _extended_enter_on_a_closed_clock(
         # must be compared on the liveness gate, nothing else.
         program_leg_policy=_EXTENDED_POLICY,
     )
-    binding = _binding(use_rth=False).model_copy(update={"sealed_account_id": ACCOUNT_ID})
+    binding = _binding(use_rth=False).model_copy(update={
+        "sealed_account_id": ACCOUNT_ID, "budget_consent": budget_consent_for_test(world="shadow"),
+    })
     await facade.register_strategy_run(binding)
     try:
         receipt = await facade.execute_for_instance(

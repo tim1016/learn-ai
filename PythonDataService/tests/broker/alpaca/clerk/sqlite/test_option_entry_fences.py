@@ -49,6 +49,7 @@ from app.options.resolver import ResolverRefusal
 from app.services import market_liveness
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.session_authority import et_minute_of_day_ms
+from tests._helpers.bot_runner.custody import budget_consent_for_test
 from tests._helpers.market_quotes import publish_quotes
 from tests.broker.alpaca.clerk.sqlite.conftest import (
     ENVELOPE_RUN_ID,
@@ -783,6 +784,7 @@ async def test_a_live_shadow_account_registers_a_bot_that_trades_options_under_i
         strategy_instance_id="options-on-shadow", strategy_key="ema_crossover_signal", broker="alpaca", symbol="SPY",
         mode="trade", quantity=1, action_plan=BUYS_ONE_CALL, run_id="run-1", created_at_ms=0,
         sealed_account_id=SHADOW_ACCOUNT, exit_terms=TERMS,
+        budget_consent=budget_consent_for_test(world="shadow"),
     )
 
     live_shadow.require_option_plan_taken(BUYS_ONE_CALL)
