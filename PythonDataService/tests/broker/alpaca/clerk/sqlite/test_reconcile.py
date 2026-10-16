@@ -36,8 +36,7 @@ from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
     GuardedBrokerReadPort,
     GuardedBrokerTradePort,
 )
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
-from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_enter
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.external_orders import (
     UNIDENTIFIED_BROKER_ORDER_ID,
@@ -87,12 +86,19 @@ from app.broker.contract.models import (
 )
 from app.lean_sidecar.trading_calendar import next_trading_day, session_window_for_date
 from app.schemas.market_liveness import TopOfBookQuote
+from app.services.session_authority import et_minute_of_day_ms
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import (
+    accept_budgeted_test_enter,
+    submit_budgeted_test_enter,
+    submit_budgeted_test_run,
+)
 from tests.broker.alpaca.clerk.sqlite.conftest import (
-    FIXTURE_RTH_MS,
+    BUDGETED_RTH_MS,
     _clock_at,
     _hold_transition,
     _walk_clock_to,
 )
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 from tests.broker.alpaca.conftest import load_alpaca_fixture_file
 
 ACCOUNT_ID = "PA-TEST"
@@ -137,7 +143,7 @@ def test_position_quantity_boundary_is_unambiguous(
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Iterator[ClerkSqliteRepository]:
-    clock = _clock_at(1_700_000_000_000)
+    clock = _clock_at(BUDGETED_RTH_MS)
     # A long lease TTL decouples the execution lease from the R4 30s grace
     # window under test — several tests advance the clock past 30s to prove
     # grace-elapsed behavior, which must not also expire the lease itself
@@ -146,7 +152,7 @@ def repo(tmp_path: Path) -> Iterator[ClerkSqliteRepository]:
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
     )
     r.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
-    submit_start_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    submit_budgeted_test_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     yield r
     r.close()
 
@@ -183,14 +189,14 @@ def _broker_order(
         stop_price=None,
         filled_avg_price=filled_avg_price,
         status=status,
-        submitted_at_ms=1_700_000_000_100,
-        created_at_ms=1_700_000_000_100,
-        updated_at_ms=1_700_000_000_500,
+        submitted_at_ms=BUDGETED_RTH_MS + 100,
+        created_at_ms=BUDGETED_RTH_MS + 100,
+        updated_at_ms=BUDGETED_RTH_MS + 500,
         filled_at_ms=None,
         canceled_at_ms=None,
         expired_at_ms=None,
         events=[],
-        observed_at_ms=1_700_000_000_500,
+        observed_at_ms=BUDGETED_RTH_MS + 500,
     )
 
 
@@ -208,7 +214,7 @@ def _position(symbol: str, *, quantity: float, side: str = "long") -> BrokerPosi
         current_price=100.0,
         unrealized_pl=0.0,
         unrealized_plpc=0.0,
-        observed_at_ms=1_700_000_000_500,
+        observed_at_ms=BUDGETED_RTH_MS + 500,
     )
 
 
@@ -376,7 +382,7 @@ async def _make_uncertain_order(
     """Drive a real ENTER through a lost submit response so the effect
     operation lands (and stays) in ``unknown`` — grace has not elapsed."""
     submit_trade = _FakeTrade(submit_error=BrokerUnavailable("timeout"), lookup_absent=True)
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=strategy_instance_id,
@@ -587,7 +593,7 @@ async def test_account_reconciliation_leaves_unknown_effect_on_broker_lookup_err
 async def test_accepted_enter_lookup_failure_blocks_admission_until_terminal_resolution(
     repo: ClerkSqliteRepository,
 ) -> None:
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -623,7 +629,7 @@ async def test_accepted_enter_lookup_failure_blocks_admission_until_terminal_res
     ]
     assert len(repeated) == 1, "an unchanged unknown outcome must not grow its operation timeline on every pass"
     with pytest.raises(AdmissionBlockedError) as exc_info:
-        accept_enter(
+        accept_budgeted_test_enter(
             repo,
             account_id=ACCOUNT_ID,
             strategy_instance_id=SID,
@@ -642,7 +648,7 @@ async def test_accepted_enter_lookup_failure_blocks_admission_until_terminal_res
     assert resolved.resolved_count == 1
     terminal = repo.effect_operation(accepted.effect_operation_id)
     assert terminal is not None and terminal.state == "failed"
-    assert accept_enter(
+    assert accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -690,7 +696,7 @@ async def test_account_reconciliation_delegates_an_exit_owned_entry_to_resolve_e
     with zero broker calls and zero audit trail, while the EXIT effect
     silently stayed unknown forever."""
     submit_trade = _FakeTrade()
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -769,7 +775,7 @@ async def test_reconcile_foreign_order_records_external_observation_without_bot_
                 "limit_price": None,
                 "stop_price": None,
                 "filled_avg_price": None,
-            "observed_at_ms": 1_700_000_000_500,
+            "observed_at_ms": BUDGETED_RTH_MS + 500,
             "acknowledged_at_ms": None,
             "ack_operator": None,
             "evidence_refs": ("external-order-1",),
@@ -932,7 +938,7 @@ async def test_reconcile_blocks_new_exposure_on_first_indeterminate_mismatch(
     author a durable account-wide blocker that fences manual submission, an
     already-active bot's next ENTER, and a different bot's ENTER — while
     cancel/reduce/reconcile stay reachable."""
-    submitted = await submit_enter(
+    submitted = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -955,7 +961,7 @@ async def test_reconcile_blocks_new_exposure_on_first_indeterminate_mismatch(
     )
     other_sid, other_run_id = "qqq-bot", "run-qqq"
     repo.register_strategy_instance(strategy_instance_id=other_sid, symbol="QQQ", config_hash="h2")
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=other_sid, lifecycle_run_id=other_run_id)
+    submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=other_sid, lifecycle_run_id=other_run_id)
 
     result = await reconcile_account(
         repo,
@@ -1007,7 +1013,7 @@ async def test_reconcile_resolves_indeterminate_mismatch_only_once_proven_equal(
     once the broker position momentarily agrees with a *stale* attributed
     read), and resolve only after a complete pass proves exact equality with
     no in-flight indeterminacy — exactly once."""
-    submitted = await submit_enter(
+    submitted = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -1123,7 +1129,7 @@ async def test_reconciliation_fences_enter_before_reading_broker_truth(
     await entered.wait()
 
     with pytest.raises(AdmissionBlockedError) as exc_info:
-        accept_enter(
+        accept_budgeted_test_enter(
             repo,
             account_id=ACCOUNT_ID,
             strategy_instance_id=SID,
@@ -1532,7 +1538,7 @@ async def test_an_answer_about_our_own_order_with_unreadable_values_stays_unknow
     answer = dict(load_alpaca_fixture_file("orders", "orders.json")[0])  # a filled SPY buy of 1
     unreadable_broker = AlpacaBroker(client=_RawOwnOrderClient({**answer, **unreadable}))  # type: ignore[arg-type]
 
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -1612,7 +1618,7 @@ async def test_an_answer_about_our_own_order_missing_its_identity_text_stays_unk
     answer = dict(load_alpaca_fixture_file("orders", "orders.json")[0])  # a filled SPY buy of 1
     unnamed = AlpacaBroker(client=_RawOwnOrderClient({**answer, field: None}))  # type: ignore[arg-type]
 
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -1707,7 +1713,7 @@ async def test_reconcile_account_resolves_every_uncertain_order_in_one_pass(
 ) -> None:
     order_ref_1 = await _make_uncertain_order(repo, decision_id="d1")
     repo.register_strategy_instance(strategy_instance_id="qqq-bot", symbol="QQQ", config_hash="h2")
-    submit_start_run(
+    submit_budgeted_test_run(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id="qqq-bot",
@@ -1819,12 +1825,12 @@ async def test_indeterminate_blocker_survives_restart_and_boot_recovery_stays_bl
     reopened repository — including the boot-recovery reconciliation path
     (:meth:`SqliteAlpacaClerkFacade.recover`) — still fenced against new
     exposure, and a later coherent snapshot must resolve it exactly once."""
-    clock = _clock_at(1_700_000_000_000)
+    clock = _clock_at(BUDGETED_RTH_MS)
     before_restart = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
     try:
         before_restart.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
-        submit_start_run(before_restart, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
-        submitted = await submit_enter(
+        submit_budgeted_test_run(before_restart, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+        submitted = await submit_budgeted_test_enter(
             before_restart,
             account_id=ACCOUNT_ID,
             strategy_instance_id=SID,
@@ -1943,7 +1949,7 @@ async def test_reconcile_account_skips_a_claim_contended_order_but_still_resolve
     the pass — the other, unrelated uncertain order still resolves."""
     contended_ref = await _make_uncertain_order(repo, decision_id="d1")
     repo.register_strategy_instance(strategy_instance_id="qqq-bot", symbol="QQQ", config_hash="h2")
-    submit_start_run(
+    submit_budgeted_test_run(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id="qqq-bot",
@@ -1986,7 +1992,7 @@ async def test_reconcile_account_defers_an_effect_whose_claim_was_lost_after_its
     folded leaves its effect non-terminal. The pass defers that one effect, as it does a
     claim held by another owner, and the effects behind it still resolve: the lease is
     healthy, so nothing about the account is lost."""
-    entry = await submit_enter(
+    entry = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -2006,7 +2012,7 @@ async def test_reconcile_account_defers_an_effect_whose_claim_was_lost_after_its
     )
     assert exit_accepted.effect_operation_id is not None
     repo.register_strategy_instance(strategy_instance_id="qqq-bot", symbol="QQQ", config_hash="h2")
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id="qqq-bot", lifecycle_run_id="run-2")
+    submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id="qqq-bot", lifecycle_run_id="run-2")
     later_ref = await _make_uncertain_order(
         repo, decision_id="d2", strategy_instance_id="qqq-bot", lifecycle_run_id="run-2"
     )
@@ -2098,7 +2104,7 @@ async def test_reconcile_missing_exit_entry_records_failure_and_finishes_pass(
 async def test_reconcile_missing_enter_order_remains_unresolved(
     repo: ClerkSqliteRepository,
 ) -> None:
-    accepted = accept_enter(
+    accepted = accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -2521,21 +2527,23 @@ async def test_started_sweep_renews_the_execution_lease_while_idle(tmp_path: Pat
 WATCHDOG_SID = "wd-bot"
 WATCHDOG_RUN = "wd-run-1"
 # The watchdog re-drives only inside the regular session (#2007), so its clock
-# starts at ``FIXTURE_RTH_MS``.
-WATCHDOG_POST_T0 = 1_700_085_600_000  # 2023-11-15 17:00 ET, after-hours
-WATCHDOG_NEXT_OPEN = 1_700_145_060_000  # 2023-11-16 09:31 ET
+# starts at ``BUDGETED_RTH_MS``.
+WATCHDOG_DAY = date(2026, 9, 16)
+WATCHDOG_POST_T0 = session_window_for_date(WATCHDOG_DAY).close_ms_utc + 3_600_000
+WATCHDOG_NEXT_OPEN = session_window_for_date(next_trading_day(WATCHDOG_DAY)).open_ms_utc + 60_000
+WATCHDOG_POST_END = et_minute_of_day_ms(WATCHDOG_DAY, 20 * 60)
 
 
 @pytest.fixture
 def clocked_repo(tmp_path: Path):
-    clock = _clock_at(FIXTURE_RTH_MS)
+    clock = _clock_at(BUDGETED_RTH_MS)
     repo = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
     )
     repo.register_strategy_instance(
         strategy_instance_id=WATCHDOG_SID, symbol="SPY", config_hash="wd-h1"
     )
-    submit_start_run(
+    submit_budgeted_test_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=WATCHDOG_SID,
         lifecycle_run_id=WATCHDOG_RUN,
     )
@@ -2558,7 +2566,7 @@ async def _held_position(
 ) -> str:
     """Filled 10-share SPY entry with an exact execution slice -> attributed +10
     (or -10 for ``side="sell"``)."""
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=sid,
@@ -2581,7 +2589,7 @@ async def _held_position(
     await sink.record_lifecycle_event(
         client_order_id=submission.order_ref,
         event=BrokerOrderEvent(
-            event_type="fill", occurred_at_ms=1_700_000_000_600,
+            event_type="fill", occurred_at_ms=BUDGETED_RTH_MS + 600,
             price=100, quantity=10, execution_id=f"wd-exec-{suffix}",
         ),
         event_key=f"execution:wd-exec-{suffix}",
@@ -2760,7 +2768,7 @@ def _aged_exit_not_flat(repo: ClerkSqliteRepository, clock: Any) -> dict[str, An
 def _register_second_spy_lane(repo: ClerkSqliteRepository) -> tuple[str, str]:
     sid, run_id = "wd-bot-b", "wd-run-b"
     repo.register_strategy_instance(strategy_instance_id=sid, symbol="SPY", config_hash="wd-h2")
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=sid, lifecycle_run_id=run_id)
+    submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=sid, lifecycle_run_id=run_id)
     return sid, run_id
 
 
@@ -2797,7 +2805,7 @@ async def test_watchdog_does_not_redrive_while_the_clerk_has_work_in_flight_on_t
     repo, clock = clocked_repo
     await _held_position(repo)
     sid_b, run_b = _register_second_spy_lane(repo)
-    accept_enter(
+    accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=sid_b,
@@ -2820,24 +2828,43 @@ async def test_watchdog_does_not_redrive_while_the_clerk_has_work_in_flight_on_t
     ]
 
 
-async def test_watchdog_redrives_a_netted_account(clocked_repo) -> None:
-    """#2343 review m2: lane A +10, lane B -10, broker flat. The broker equals
+async def test_watchdog_redrives_a_netted_account(tmp_path: Path) -> None:
+    """#2343 review m2: current lane A +10, historical lane B -10, broker flat. The broker equals
     the account-wide attribution, so A's SELL 10 keeps them equal (both -10)
     and must proceed; a zero-crossing check against the broker would defer it
     forever."""
-    repo, clock = clocked_repo
-    await _held_position(repo)
-    sid_b, run_b = _register_second_spy_lane(repo)
-    await _held_position(repo, suffix="b", sid=sid_b, run_id=run_b, side="sell")
-    assert repo.position(sid_b, "SPY") == -10.0
-    episode = _aged_exit_not_flat(repo, clock)
-    trade = _FakeTrade()
+    clock = _clock_at(BUDGETED_RTH_MS)
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
+    )
+    try:
+        sid_b, run_b = "wd-bot-b", "wd-run-b"
+        repo.register_strategy_instance(strategy_instance_id=sid_b, symbol="SPY", config_hash="wd-h2")
+        seed_historical_run_started(
+            repo, account_id=ACCOUNT_ID, strategy_instance_id=sid_b, lifecycle_run_id=run_b
+        )
+        await _held_position(repo, suffix="b", sid=sid_b, run_id=run_b, side="sell")
+        submit_stop_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=sid_b, lifecycle_run_id=run_b)
+        # The next broker cash read must be late enough to include the old fill.
+        clock.advance(6_000)
 
-    await reconcile_account(repo, read=_FakeRead(positions=[]), trade=trade, pricing=UNPRICEABLE_RECOVERY)
+        repo.register_strategy_instance(strategy_instance_id=WATCHDOG_SID, symbol="SPY", config_hash="wd-h1")
+        submit_budgeted_test_run(
+            repo, account_id=ACCOUNT_ID, strategy_instance_id=WATCHDOG_SID,
+            lifecycle_run_id=WATCHDOG_RUN,
+        )
+        await _held_position(repo)
+        assert repo.position(sid_b, "SPY") == -10.0
+        episode = _aged_exit_not_flat(repo, clock)
+        trade = _FakeTrade()
 
-    token = hashlib.sha256(episode["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
-    assert repo.get_command(f"cmd:{WATCHDOG_SID}:exit-redrive-{token}-1") is not None
-    assert len(trade.submit_calls) == 1
+        await reconcile_account(repo, read=_FakeRead(positions=[]), trade=trade, pricing=UNPRICEABLE_RECOVERY)
+
+        token = hashlib.sha256(episode["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
+        assert repo.get_command(f"cmd:{WATCHDOG_SID}:exit-redrive-{token}-1") is not None
+        assert len(trade.submit_calls) == 1
+    finally:
+        repo.close()
 
 
 async def test_watchdog_escalates_a_permanently_flat_broker_without_submitting(
@@ -2933,12 +2960,12 @@ async def test_exit_failure_budget_survives_interruption_without_counting_downti
     tmp_path: Path, interruption: str,
 ) -> None:
     """#2504: three observed minutes survive, but ten unobserved minutes do not count."""
-    clock = _clock_at(FIXTURE_RTH_MS)
+    clock = _clock_at(BUDGETED_RTH_MS)
     repo = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000,
     )
     repo.register_strategy_instance(strategy_instance_id=WATCHDOG_SID, symbol="SPY", config_hash="wd-h1")
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=WATCHDOG_SID, lifecycle_run_id=WATCHDOG_RUN)
+    submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=WATCHDOG_SID, lifecycle_run_id=WATCHDOG_RUN)
     trade = _FakeTrade()
 
     async def check_failure() -> None:
@@ -3009,7 +3036,7 @@ async def test_exit_failure_budget_survives_interruption_without_counting_downti
         repo.close()
 
 
-@pytest.mark.parametrize("day", [date(2023, 11, 17), date(2023, 11, 24)])
+@pytest.mark.parametrize("day", [date(2026, 9, 18), date(2026, 11, 27)])
 async def test_exit_failure_budget_pauses_across_weekend_and_early_close(
     clocked_repo, day: date,
 ) -> None:
@@ -3182,11 +3209,11 @@ def _raise_stale_exit_not_flat_at(repo: ClerkSqliteRepository, redrive_at_ms: in
     ("redrive_at_ms", "pricing"),
     [
         # 19:59:57: an after-hours limit could reach Alpaca after the 20:00 close.
-        pytest.param(1_700_096_397_000, _watchdog_live_pricing(), id="limit-at-the-after-hours-close"),
+        pytest.param(WATCHDOG_POST_END - 3_000, _watchdog_live_pricing(), id="limit-at-the-after-hours-close"),
         # 15:59:55 on an authority that prices nothing (a window-less or sim:
         # one): the market leg could reach Alpaca after 16:00, and nothing
         # can price the after-hours limit in its place, so it is held.
-        pytest.param(1_700_081_995_000, UNPRICEABLE_RECOVERY, id="market-at-the-regular-close"),
+        pytest.param(session_window_for_date(WATCHDOG_DAY).close_ms_utc - 5_000, UNPRICEABLE_RECOVERY, id="market-at-the-regular-close"),
     ],
 )
 async def test_watchdog_burns_no_attempt_on_a_redrive_the_send_would_refuse(
@@ -3223,7 +3250,9 @@ async def test_watchdog_waits_for_the_actual_regular_open(clocked_repo) -> None:
     repo, _clock = clocked_repo
     await _held_position(repo)
     _walk_clock_to(repo, WATCHDOG_POST_T0)
-    episode = _raise_stale_exit_not_flat_at(repo, 1_700_144_995_000)  # 2023-11-16 09:29:55 ET
+    episode = _raise_stale_exit_not_flat_at(
+        repo, session_window_for_date(next_trading_day(WATCHDOG_DAY)).open_ms_utc - 5_000
+    )
     trade = _FakeTrade()
 
     await reconcile_account(
@@ -3387,7 +3416,7 @@ async def test_watchdog_redrive_identity_is_scoped_per_episode(clocked_repo) -> 
     ) is None
 
     # A fresh entry gets stuck later: independent episode B on a new entry ref.
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=WATCHDOG_SID,
         decision_id="wd-enter-2", lifecycle_run_id=WATCHDOG_RUN,
         leg=_leg(quantity=10), trade=_FakeTrade(),
@@ -3517,7 +3546,7 @@ async def test_exit_stuck_is_resolved_once_attributed_reaches_flat(clocked_repo)
         evidence_refs=("wd-evidence",),
         cause_facts=ExitStuckCause(
             symbol="SPY", attributed_qty=10.0, redrive_count=3,
-            first_observed_at_ms=1_700_000_000_000,
+            first_observed_at_ms=BUDGETED_RTH_MS,
         ).to_mapping(),
         severity="error",
     )
