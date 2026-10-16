@@ -21,7 +21,7 @@ from app.broker.alpaca.clerk.sqlite.bot_history import project_custody_history
 from app.broker.alpaca.clerk.sqlite.contract_terms import ContractTerms
 from app.broker.alpaca.clerk.sqlite.database_verification import verify_database
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
-from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter, accept_option_enter
+from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_option_enter
 from app.broker.alpaca.clerk.sqlite.exit import newest_reducible_entry
 from app.broker.alpaca.clerk.sqlite.facts import EnterAcceptedFacts
 from app.broker.alpaca.clerk.sqlite.option_entry import (
@@ -52,7 +52,9 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
 from app.broker.alpaca.clerk.sqlite.order_projection import read_open_opposite_side_orders, read_order_details
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerOrderLeg, OrderSide
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import accept_budgeted_test_enter
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 from tests.broker.alpaca.clerk.sqlite.option_custody_fixtures import (
     ACCOUNT_ID,
     RUN_ID,
@@ -340,7 +342,7 @@ def test_which_entry_opened_this_contract_is_read_from_the_entrys_legs(books: Cl
 
 
 def test_a_one_symbol_entry_answers_its_symbols_as_it_answered_its_symbol(books: ClerkSqliteRepository) -> None:
-    one = accept_enter(
+    one = accept_budgeted_test_enter(
         books, account_id=ACCOUNT_ID, strategy_instance_id="bot-b", decision_id="d-one", lifecycle_run_id=RUN_ID,
         leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
     )
@@ -529,10 +531,9 @@ def test_a_schema_23_store_gains_the_empty_table_and_keeps_every_row(tmp_path: P
 
 def test_the_books_rebuilt_from_their_mirror_hold_the_parent_its_legs_and_their_fills(tmp_path: Path) -> None:
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=lambda: NOON)
-    from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 
     repo.register_strategy_instance(strategy_instance_id="bot-a", symbol="SPY", config_hash="several-legs")
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id="bot-a", lifecycle_run_id=RUN_ID, clock=repo.clock)
+    seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id="bot-a", lifecycle_run_id=RUN_ID, clock=repo.clock)
     accepted = _accept(repo, _received(units=2))
     _fill_leg(repo, accepted, 1, symbol=C580, side="SELL", contracts=2, price=5.31)
     _fill_leg(repo, accepted, 2, symbol=C585, side="BUY", contracts=2, price=2.24)
