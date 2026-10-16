@@ -70,6 +70,7 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
     _TestClock,
     _walk_clock_to,
 )
+from tests.broker.alpaca.clerk.sqlite.historical_run_fixture import seed_historical_run_started
 
 ACCOUNT_ID = "PA-FLATTEN"
 SID = "crashed-bot"
@@ -345,6 +346,33 @@ async def test_execute_safe_flatten_plan_refuses_expired_plans(
         )
 
 
+
+
+async def test_execute_safe_flatten_plan_refuses_when_a_resume_landed_after_recheck(tmp_path: Path) -> None:
+    """A retained historical Resume between recheck and capture cannot send a reduction."""
+    clock = _clock_at(BUDGETED_RTH_MS)
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    try:
+        repo.register_strategy_instance(exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=SID, symbol="SPY", config_hash="h1")
+        seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+        await _held_position(repo)
+        submit_stop_run(
+            repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
+            lifecycle_run_id=RUN_ID, operator_reason="crash_analog",
+        )
+        plan = await _reconciled_flatten_plan(repo)
+        seed_historical_run_started(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="run-2")
+        trade = _FakeTrade()
+
+        with pytest.raises(SafeFlattenExecutionError, match="re-activated"):
+            await execute_safe_flatten_plan(
+                repo, plan=plan, read=_covering_read(), trade=trade, intake=ReentrantAsyncLock(),
+                account_id=ACCOUNT_ID, pricing=UNPRICEABLE_RECOVERY,
+            )
+
+        assert trade.submit_calls == []
+    finally:
+        repo.close()
 
 
 async def test_execute_safe_flatten_plan_refuses_a_symbol_an_exit_already_owns(
