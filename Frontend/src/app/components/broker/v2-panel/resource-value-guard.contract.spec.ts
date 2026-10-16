@@ -87,16 +87,8 @@ const LOOSE_RESOURCE_OCCURRENCE = /(?:rxResource|httpResource|resource)\s*[<(]/g
  * `<relative-path-from-this-dir>::<identifier>` entries deliberately exempt
  * from the guard.
  *
- * - `panel-shell/bot-panel-shell.component.html::profile` — `@let profileData
- *   = profile.value()!;` is not guarded inline, but it is guarded: the whole
- *   block it lives in is `@if (isLoaded())`, and
- *   `isLoaded = computed(() => this.panel() !== null &&
- *   this.profile.hasValue())` in `bot-panel-shell.component.ts`. Every line
- *   inside that block runs only once `profile.hasValue()` is already true.
  */
-const ALLOWED = new Set<string>([
-  `${join('panel-shell', 'bot-panel-shell.component.html')}::profile`,
-]);
+const ALLOWED = new Set<string>();
 
 function sourceFiles(dir: string, extension: '.html' | '.ts'): string[] {
   const found: string[] = [];

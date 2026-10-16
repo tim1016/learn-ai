@@ -32,10 +32,6 @@ export type BotClearRequest = components['schemas']['BotClearRequest'];
 export type CohortActionResult = components['schemas']['CohortActionResult'];
 export type CohortLegResult = components['schemas']['CohortLegResult'];
 
-// ── Panel profile ────────────────────────────────────────────────────────────
-
-export type PanelProfile = components['schemas']['PanelProfile'];
-
 // ── Catalog view ─────────────────────────────────────────────────────────────
 
 export type BotCatalogView = components['schemas']['BotCatalogView'];

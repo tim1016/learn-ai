@@ -29,7 +29,6 @@
 
   @if (isLoaded()) {
     @let panelData = panel()!;
-    @let profileData = profile.value()!;
 
     <div class="bot-page">
       <!-- The bot's name, figures and actions: drawn in the account workspace's
@@ -171,7 +170,6 @@
               <h3 id="bot-orders-title" class="bot-board__title">Orders</h3>
               <app-bot-order-records
                 [panel]="panelData"
-                [profile]="profileData"
                 [broker]="broker()"
                 [clerkId]="clerkId()"
                 [accountId]="accountId()"

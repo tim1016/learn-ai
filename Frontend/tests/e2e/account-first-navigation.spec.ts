@@ -7,7 +7,6 @@ import type { AccountMoneyView } from '../../src/app/components/broker/v2-panel/
 import type {
   BotPanelLiveSnapshot,
   ChartLiveResponse,
-  PanelProfile,
 } from '../../src/app/components/broker/v2-panel/lib/broker-v2-panel.types';
 import type {
   FleetDirectoryResponse,
@@ -254,14 +253,6 @@ function gallerySnapshot(epoch: string): GalleryLiveSnapshot {
   };
 }
 
-/** The broker's panel profile a bot's page reads before it renders. */
-const PANEL_PROFILE: PanelProfile = {
-  broker: 'alpaca',
-  fee_fidelity: 'none',
-  live_bars_supported: false,
-  stations: [],
-};
-
 /** The running bot's own page: its panel and an empty live chart. A bot's
  * panel is a large contract shape, and the unit suite already owns a
  * canonical one; copying it here would give this walk its own drifting second
@@ -361,10 +352,6 @@ async function installFleetBoundary(page: Page): Promise<string[]> {
     }
     if (path === `${ACCOUNT_SCOPE(LIVE_CLERK, LIVE_ACCOUNT)}/gallery/snapshot`) {
       await route.fulfill({ json: { ...gallerySnapshot('live-epoch'), bots: [], symbols: [] } });
-      return;
-    }
-    if (path === '/api/brokers/alpaca/panel-profile') {
-      await route.fulfill({ json: PANEL_PROFILE });
       return;
     }
     if (path === `${ACCOUNT_SCOPE(PAPER_CLERK, PAPER_ACCOUNT)}/bots/${PAPER_BOT}/live-snapshot`) {

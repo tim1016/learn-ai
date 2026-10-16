@@ -30,7 +30,7 @@ import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service
 import { DUAL_PANE_CHART_FACTORY } from '../dual-pane-chart/dual-pane-chart.component';
 import { IndicatorCatalogService } from '../../../../shared/indicator-catalog/indicator-catalog.service';
 import { BotChartIndicatorService } from '../dual-pane-chart/bot-chart-indicator.service';
-import type { BotPanelView, BotPanelLiveSnapshot, BotRunView, PanelProfile } from '../lib/broker-v2-panel.types';
+import type { BotPanelView, BotPanelLiveSnapshot, BotRunView } from '../lib/broker-v2-panel.types';
 import { provideRouter } from '@angular/router';
 import { provideFleetDirectory, testLane } from '../../../../fleet/fleet-directory-testing';
 import { fakeStrategyView } from '../../../../testing/strategy-view-fixtures';
@@ -73,13 +73,6 @@ class StubEventSource {
 
 const originalEventSource = globalThis.EventSource;
 (globalThis as { EventSource?: unknown }).EventSource = StubEventSource;
-
-const PROFILE: PanelProfile = {
-  broker: 'alpaca',
-  fee_fidelity: 'none',
-  live_bars_supported: false,
-  stations: [],
-};
 
 const PANEL: BotPanelView = {
   strategy_instance_id: 'sid-001',
@@ -278,7 +271,6 @@ const chartIndicatorServiceMock = {
 
 function makeService(historyChart: ReturnType<typeof vi.fn>) {
   return {
-    getPanelProfile: vi.fn().mockResolvedValue(PROFILE),
     getLiveSnapshot: vi.fn().mockResolvedValue(liveSnapshot()),
     liveStreamUrl: vi.fn().mockReturnValue('/api/test/live-stream'),
     getCurrentRun: vi.fn().mockResolvedValue(makeRun()),

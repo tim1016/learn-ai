@@ -76,7 +76,6 @@ function panel(traded: BotPanelView['traded']): BotPanelView {
 function fakes(traded: BotPanelView['traded'], review: ReturnType<typeof vi.fn>) {
   const view = panel(traded);
   return {
-    getPanelProfile: vi.fn().mockResolvedValue({ broker: 'alpaca', fee_fidelity: 'none', live_bars_supported: false, stations: [] }),
     getLiveSnapshot: vi.fn().mockResolvedValue({
       stream_epoch: 'test-epoch',
       surface_version: 1,

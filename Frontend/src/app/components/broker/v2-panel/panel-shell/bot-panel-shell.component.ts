@@ -535,11 +535,6 @@ export class BotPanelShellComponent {
     failed: this.currentRun.error() !== undefined,
   }));
 
-  protected readonly profile = resource({
-    params: () => this.broker(),
-    loader: ({ params }) => this.panelSvc.getPanelProfile(params),
-  });
-
   /** The bot holds shares: a quantity, not money, so no dollar is read here. */
   protected readonly holdsShares = computed(() =>
     Object.values(this.panel()?.exposure ?? {}).some((quantity) => quantity !== 0),
@@ -706,16 +701,10 @@ export class BotPanelShellComponent {
   protected readonly histChartFailed = computed(() => this.histChart.error() !== undefined);
 
   protected readonly isLoaded = computed(
-    () => this.panel() !== null && this.profile.hasValue(),
+    () => this.panel() !== null,
   );
 
-  protected readonly loadError = computed(() => {
-    const liveError = this.liveStore.error();
-    if (liveError !== null) return liveError;
-    const error = this.profile.error();
-    if (error === undefined || error === null) return null;
-    return error instanceof Error ? error.message : 'Failed to load panel data.';
-  });
+  protected readonly loadError = this.liveStore.error;
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 

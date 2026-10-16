@@ -7,7 +7,7 @@ import {
   output,
   resource,
 } from '@angular/core';
-import type { BotPanelView, PanelProfile } from '../lib/broker-v2-panel.types';
+import type { BotPanelView } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { resourceTarget } from '../../../../fleet/resource-target';
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
@@ -37,7 +37,6 @@ import { JournalTailComponent } from '../operator-lens/journal-tail.component';
 })
 export class BotOrderRecordsComponent {
   readonly panel = input.required<BotPanelView>();
-  readonly profile = input.required<PanelProfile>();
   readonly broker = input.required<string>();
   readonly clerkId = input.required<string>();
   readonly accountId = input.required<string>();

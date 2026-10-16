@@ -6,7 +6,6 @@ import {
   signal,
 } from '@angular/core';
 import type {
-  PanelProfile,
   StationState,
   StationView,
   TransactionRail,
@@ -22,12 +21,8 @@ import { TransactionEvidenceTimelineComponent } from './transaction-evidence-tim
  * expand inline; raw evidence is fetched only when requested and remains in
  * the station accordion as a formatted timeline.
  *
- * Not-applicable stations come from the capability profile, not from
- * local logic. When `profile` is null the component still renders all
- * stations in `unknown_stale` state — the bot page should not render the
- * rail until the profile is loaded.
- *
- * * */
+ * Not-applicable stations come from the server's rail projection.
+ */
 @Component({
   selector: 'app-transaction-rail',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -37,7 +32,6 @@ import { TransactionEvidenceTimelineComponent } from './transaction-evidence-tim
 })
 export class TransactionRailComponent {
   readonly rail = input.required<TransactionRail>();
-  readonly profile = input<PanelProfile | null>(null);
   readonly broker = input.required<string>();
   readonly clerkId = input.required<string>();
   readonly accountId = input.required<string>();

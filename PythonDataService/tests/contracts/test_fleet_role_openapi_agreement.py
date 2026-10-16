@@ -1,31 +1,11 @@
 """Every fleet role's live OpenAPI document agrees with the committed one (#2108).
 
-Issue #2108 claimed the coordinator's two unscoped compatibility reads
-(``/api/brokers/{broker}/live-verdict`` and ``/api/brokers/{broker}/panel-profile``,
-served by ``app.routers.fleet_compatibility_reads`` only when
-``FLEET_ROLE=fleet_coordinator``) were "absent from the committed OpenAPI, so
-the frontend is typed against the wrong mount," and proposed restructuring
-``scripts/export_openapi_contract.py`` into a union document, one document per
-role, or the deployed posture.
+The committed contract is exported under ``FLEET_ROLE=combined``. Each
+role's served paths must be a subset, and shared wire shapes must agree.
 
-Measured, the claim was false: the committed contract (exported under
-``FLEET_ROLE=combined``) already describes both paths via the canonical
-``brokers`` and ``broker_v2_panel`` routers at the same paths, and the
-coordinator's own role document is a **strict subset** of the committed one —
-zero paths the committed contract lacks. Exactly two operation objects
-differed, and only because both compatibility handlers were annotated
-``-> Any``: FastAPI could not infer a response schema, so the coordinator's
-own document carried an untyped ``{"title": "..."}`` where the committed
-contract (built from the canonical routes' typed handlers) carried a real
-``$ref``. Typing the two handlers (``AlpacaLiveVerdict``, ``PanelProfile``)
-closed the gap without restructuring the exporter.
-
-This test is the actual fix, not the two-line type annotation: it makes the
-general shape of that bug — a fleet role's live document describing a route
-differently than the committed contract, or serving a route the committed
-contract does not describe at all — a **checked fact** for every future
-change, rather than something someone happens to notice while investigating
-an issue. Role gating happens at Python import time (``app/main.py`` reads
+This test makes a fleet role's live document describing a route differently
+than the committed contract, or serving a route the committed contract does
+not describe at all, a checked fact. Role gating happens at Python import time (``app/main.py`` reads
 ``FLEET_ROLE`` at module scope), so each role's document is produced by a
 real ``app.main`` import in its own subprocess — an in-process
 ``importlib.reload`` would leave stale role-gated modules in ``sys.modules``
@@ -65,9 +45,7 @@ A second review (Codex, PR #2135) found three more:
    as findings 1-2, a guarantee reading broader than what runs.
    ``CHECKED_ROLES`` is now derived from that ``Literal`` directly.
 
-The coordinator's unscoped live-verdict compatibility read, which A2
-retired to an unconditional ``410`` (#2140), was cut with the other dead
-routes (#2755); panel-profile is the one compatibility read left.
+The coordinator's unscoped compatibility reads were retired and removed.
 """
 
 from __future__ import annotations
@@ -117,17 +95,6 @@ COMMITTED_CONTRACT_PATH = REPOSITORY_ROOT / "contracts" / "openapi" / "python-da
 #: rather than being silently skipped.
 _DECLARED_ROLES = frozenset(get_args(FleetSettings.model_fields["ROLE"].annotation))
 CHECKED_ROLES = tuple(sorted(_DECLARED_ROLES - {"combined"}))
-
-#: The compatibility read this test exists because of. Asserting its
-#: presence directly (rather than only asserting "coordinator paths are a
-#: subset of committed") is what stops an empty or gutted compatibility
-#: router from passing this test vacuously -- a coordinator serving zero
-#: paths is trivially a subset of anything.
-EXPECTED_COORDINATOR_COMPAT_ROUTES = frozenset(
-    {
-        ("/api/brokers/{broker}/panel-profile", "get"),
-    }
-)
 
 _HTTP_METHODS = frozenset({"get", "post", "put", "delete", "patch", "options", "head"})
 
@@ -337,26 +304,13 @@ def role_openapi_documents() -> dict[str, dict[str, Any]]:
     return {role: _export_role_openapi_document(role) for role in CHECKED_ROLES}
 
 
-def test_role_documents_are_nonempty_and_the_coordinator_serves_its_compat_routes(
+def test_role_documents_are_nonempty(
     role_openapi_documents: dict[str, dict[str, Any]],
 ) -> None:
-    """Guards against a vacuous pass. A coordinator (or clerk) document with
-    zero paths would trivially satisfy "is a subset of the committed
-    contract" -- this asserts each role actually served a real, non-trivial
-    surface, and specifically that the coordinator's document contains the
-    compatibility read this test exists to pin (removing a route from
-    ``fleet_compatibility_reads.router`` must fail this, not just shrink a
-    subset check that would still pass)."""
+    """A role with zero paths would vacuously be a subset of the contract."""
     for role, document in role_openapi_documents.items():
         served = set(_operations_by_path_method(document))
         assert served, f"FLEET_ROLE={role} served zero paths -- the import produced an empty app"
-
-    coordinator_served = set(_operations_by_path_method(role_openapi_documents["fleet_coordinator"]))
-    missing = EXPECTED_COORDINATOR_COMPAT_ROUTES - coordinator_served
-    assert not missing, (
-        f"fleet_coordinator no longer serves the compatibility read(s) {missing}; "
-        "was a route removed from app/routers/fleet_compatibility_reads.py?"
-    )
 
 
 def test_role_served_paths_are_a_subset_of_the_committed_contract(
@@ -394,12 +348,8 @@ def test_shared_operations_agree_with_the_committed_contract(
     two ``None``s that happen to match either.
 
     Deliberately narrow to that wire contract, not whole operation objects.
-    ``operationId``, ``summary``, ``description`` and ``tags`` are
-    legitimately different between a compat alias
-    (``get_legacy_panel_profile``, tagged ``fleet-compatibility-reads``) and
-    the canonical route it delegates to (``get_panel_profile``, tagged
-    ``broker-v2-panel``) -- different function names and different router tags
-    are not divergence, they are two names for the same wire contract.
+    ``operationId``, ``summary``, ``description`` and ``tags`` can differ
+    between role mounts of a shared path without changing its wire contract.
     Comparing whole operation objects would make this test permanently red
     for exactly the routes it exists to protect. Responses, parameters, and
     the request body are what the frontend's codegen actually consumes.

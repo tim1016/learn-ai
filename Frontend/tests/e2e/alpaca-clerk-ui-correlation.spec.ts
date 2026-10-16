@@ -16,7 +16,6 @@ import {
   HISTORICAL_SNAPSHOT_STATE,
   PAGE_LOAD_COUNT,
   PRESENTED_ACTION_ID,
-  PROFILE,
   REVISION_SEQUENCE,
   STATION_BUTTON_NAME,
   STRATEGY_INSTANCE_ID,
@@ -411,10 +410,6 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
             message: 'Unexpected lifecycle request.',
           },
         });
-        return;
-      }
-      if (path === '/api/brokers/alpaca/panel-profile') {
-        await route.fulfill({ json: PROFILE });
         return;
       }
       if (path === `${CLERK_SCOPE}/account`) {

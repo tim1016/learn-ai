@@ -31,7 +31,6 @@ import type {
   BotRunView,
   PanelAction,
   PanelActionResult,
-  PanelProfile,
 } from '../lib/broker-v2-panel.types';
 import { provideRouter, Router } from '@angular/router';
 import {
@@ -89,13 +88,6 @@ beforeEach(() => {
   });
   chartMocks.createChart.mockClear();
 });
-
-const PROFILE: PanelProfile = {
-  broker: 'alpaca',
-  fee_fidelity: 'none',
-  live_bars_supported: false,
-  stations: [],
-};
 
 const PANEL: BotPanelView = {
   strategy_instance_id: 'sid-001',
@@ -560,7 +552,6 @@ const STOPPED_BUDGET: DeploymentBudgetView = {
 
 const mockService = {
   getBudget: vi.fn().mockResolvedValue(RUNNING_BUDGET),
-  getPanelProfile: vi.fn().mockResolvedValue(PROFILE),
   getPanel: vi.fn().mockResolvedValue(PANEL),
   getLiveSnapshot: vi.fn().mockResolvedValue(liveSnapshot()),
   liveStreamUrl: vi.fn().mockReturnValue('/api/test/live-stream'),

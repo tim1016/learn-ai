@@ -34,7 +34,6 @@ import type {
   PanelAction,
   PanelActionRequest,
   PanelActionResult,
-  PanelProfile,
   PanelQuiesceActionId,
   StrategyViewResponse,
 } from './broker-v2-panel.types';
@@ -173,14 +172,6 @@ export class BrokerV2PanelService {
       throw new Error('The command payload idempotency key must match its frozen target.');
     }
     return commandBodyOf(withCommand(target, capability, target.idempotencyKey), payload);
-  }
-
-  getPanelProfile(broker: string): Promise<PanelProfile> {
-    // Retained-legacy broker-level read (delivery B inventory); clerk scoping
-    // for it would ride a future catalog entry, not this delivery.
-    return firstValueFrom(
-      this.http.get<PanelProfile>(`/api/brokers/${encodeURIComponent(broker)}/panel-profile`),
-    );
   }
 
   deployBudgetBot(target: ResourceTarget, body: DeploySubmissionBody & { budget: DeploymentBudgetInput }): Promise<BudgetDeployReceipt> {
