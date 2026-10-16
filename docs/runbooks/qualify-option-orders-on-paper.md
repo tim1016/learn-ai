@@ -2,8 +2,10 @@
 
 This is the operator procedure for qualifying option orders this system sends to
 Alpaca. The run records below cover a bought call, a debit spread and the
-owner's dashboard credit-order sign check on Paper; the credit-spread and
-iron-condor bot passes still need their checks. This runbook sets one Paper
+owner's dashboard credit-order sign check on Paper, plus flat and overlapping
+credit-spread bot passes; the iron-condor passes still need their checks.
+The overlapping credit entries' buying-power comparisons remain unknown.
+This runbook sets one Paper
 account aside, turns one temporary setting
 on for its Clerk, runs the orders through their whole life, sets what Alpaca
 did beside what the Clerk worked out, and ends with the setting off again or
@@ -985,3 +987,90 @@ read by `test_paper_option_recordings.py`. Its private bundle covers
 expected absence of a bot named `outside-dashboard-sign-check`: these were
 outside orders, with no bot buying-power comparison. No journal evidence was
 unread or left unsanitized. This is the sign check, not a C or D Paper bot pass.
+
+## Run record: 2026-10-16, shape C on a flat account (#3225)
+
+After the dashboard sign check and the owner's fresh go-ahead, Deployment
+Validation ran one $1-wide SPY October 19 bear-call spread with $90 allocated.
+The account began flat. The terms were an 8% maximum leg bid-ask gap, a
+20-second entry wait, a whole-structure cost limit of 10% of allocated cash,
+and a 45-minute expiry-close lead. IBKR supplied the live data; only the
+temporary several-leg Paper setting was enabled. Buying-power judgment and
+Live option bots remained off.
+
+The strategy entered after two consecutive green bars. Its one `mleg` limit
+order sold the $770 call and bought the $771 call at `-0.31`; both legs filled
+once, at $1.25 and $0.94. Three decision bars later, its one `mleg` market
+close bought the short at $1.21 and sold the long at $0.89, a `+0.32` debit.
+The bot was stopped flat at 1792168878820 ms UTC, before another entry.
+
+| Reading | Cash | Option buying power |
+|---|---:|---:|
+| Before entry | $99,923.44 | $99,923.44 |
+| Spread held | $99,954.39 | $99,854.39 |
+| After close | $99,922.34 | $99,922.34 |
+
+The complete entry pair judges **over-reserved** offline: the bot set aside
+$69.10, the account requirement grew by $100, and Alpaca's option buying power
+fell by $69.05. The received $31 premium explains the $69 requirement net of
+premium; the $0.05 difference between commitment and the observed fall is the
+unused part of the $0.10 entry fee provision. This is classified as a fee
+posting, not a payoff-rule error. No tolerance or calculation was changed.
+The round trip's $1.10 cash decrease is separate from the bot's $1.18 loss
+including estimated fees; final posted fees for October 16 remain due.
+
+The bundle covers 1792167934490 through 1792168902914 ms UTC, with two orders,
+one complete comparison and nothing unread. Its sanitized recording is
+`tests/fixtures/alpaca/option_paper_recordings/3225-C1-credit-flat-20261016`,
+read by `test_paper_option_recordings.py`: writer round trips, signed fills,
+per-leg execution attribution, held positions and return of buying power.
+This records the flat pass only; it does not establish an overlap, a resting
+entry's deadline cancellation, a partial fill, a cancel/fill race or a restart.
+
+## Run record: 2026-10-16, shape C with two bots holding at once (#3225)
+
+Two Deployment Validation bots each received $90, with the same structure and
+terms as the flat pass. The first bot initially entered at `-0.31` and closed
+at `+0.30` before the second produced an entry signal; that cycle is not an
+overlap. The account was flat at 1792169383683 ms UTC, the beginning of the
+recorded overlap window.
+
+Both then entered the $770/$771 call spread at `-0.28`, each as one limit
+order. The fills were 3.389 seconds apart. Alpaca showed two short $770 calls
+and two long $771 calls while each bot held one of each. Both exited three
+decision bars later, each as one market order at `+0.28`, with all eight leg
+executions attributed from their respective parent frames. The bots were
+stopped flat at 1792169916190 and 1792169916870 ms UTC. Alpaca reported no
+positions or open orders at 1792169935373 ms UTC; cash and option buying power
+both read $99,923.04.
+
+| Reading | Cash | Option buying power |
+|---|---:|---:|
+| Before the overlapping entries | $99,923.24 | $99,923.24 |
+| First spread held | $99,951.19 | $99,851.19 |
+| Both spreads held | $99,979.14 | $99,779.14 |
+| Both closed | $99,923.04 | $99,923.04 |
+
+Each filled entry added a $100 requirement and $27.95 cash: its $28 credit
+less the observed $0.05 cash fee effect. The equal opening and closing net
+premiums left a $0.20 round-trip cash reduction across the four orders. These
+same-direction spreads received no account offset. Final posted fees remain
+due; the cash observations do not substitute for them.
+
+**Neither entry has a clean buying-power comparison.** The first records
+`OTHER_ORDER_MOVED`: its readings span both entries, a $200 requirement change
+and $144.10 buying-power fall against its own $72.10 commitment. The second
+records `FIRST_READING_NOT_READY`: its before-reading had not finished when
+its order was sent. Both remain unknown offline. They prove that these
+readings cannot isolate each entry, not that the payoff rule or reservation
+is wrong; nothing was changed to force a judgment.
+
+Both private bundles cover 1792169383683 through 1792169917088 ms UTC and
+leave nothing unread. One sanitized copy of their shared account journal is
+`tests/fixtures/alpaca/option_paper_recordings/3225-C2-credit-overlap-20261016`,
+read by `test_paper_option_recordings.py`. It preserves both bots' orders,
+separate leg executions, the combined positions, and released requirement.
+The overlap and whole-spread closes are shown. A clean overlap buying-power
+judgment and the other unobserved lifecycle cases remain unverified. No
+capability was promoted; the temporary several-leg Paper setting was removed
+and the Paper lane recreated after both bots stopped flat.
