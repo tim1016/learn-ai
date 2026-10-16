@@ -415,31 +415,84 @@ export type OptionCountTerm = 'entry_wait_seconds' | 'expiry_close_lead_minutes'
 /** The four terms, in the order the How step lays them out. */
 export const ORDER_TERMS = ['gap_limit_percent', 'entry_wait_seconds', 'cost_limit_percent', 'expiry_close_lead_minutes'] as const;
 
-/** A decimal as the routes read one written: a sign, digits, a fraction, a power of ten. `.3` and `1e1` are both read. */
-const WRITTEN_DECIMAL = /^\s*(?=-?\.?\d)-?(\d*)\.?(\d*)(?:e([+-]?\d+))?\s*$/i;
+/** A decimal as the routes read one written: a sign, digits, a fraction, a power of ten. */
+const WRITTEN_DECIMAL = /^\s*([+-]?)(?=\d|\.\d)(\d*)(?:\.(\d*))?(?:e([+-]?\d+))?\s*$/i;
 
-/** The decimal places a written number has once its trailing zeros are dropped, as the routes count them. */
-function decimalPlaces(whole: string, fraction: string, exponent: number): number {
-  const digits = whole + fraction;
-  const significant = digits.replace(/0+$/, '');
-  return significant === '' ? 0 : Math.max(0, fraction.length - (digits.length - significant.length) - exponent);
+interface WrittenDecimal {
+  readonly sign: -1 | 0 | 1;
+  readonly digits: string;
+  readonly finestPlace: bigint;
+}
+
+/**
+ * Read a decimal's digits without rounding it through JavaScript's binary number.
+ * Formula: finestPlace = exponent - fractionDigits + trailingZeros.
+ * Reference: PythonDataService/app/options/bounds.py::_written.
+ * Canonical implementation: PythonDataService/app/options/bounds.py.
+ * Validated against: option-structure.bounds.parity.spec.ts and tests/options/test_bounds_browser_parity.py.
+ */
+function readDecimal(written: string): WrittenDecimal | null {
+  const parts = WRITTEN_DECIMAL.exec(written);
+  if (parts === null) return null;
+  const fraction = parts[3] ?? '';
+  const raw = (parts[2] + fraction).replace(/^0+/, '');
+  if (raw === '') return { sign: 0, digits: '', finestPlace: 0n };
+  const digits = raw.replace(/0+$/, '');
+  return {
+    sign: parts[1] === '-' ? -1 : 1,
+    digits,
+    finestPlace: BigInt(parts[4] ?? '0') - BigInt(fraction.length) + BigInt(raw.length - digits.length),
+  };
+}
+
+/**
+ * Compare normalized decimal digits without expanding a very large exponent.
+ * Formula: compare signs, then digit order, then right-padded significands.
+ * Reference: PythonDataService/app/options/bounds.py::Bounds.fault (Decimal comparisons).
+ * Canonical implementation: PythonDataService/app/options/bounds.py.
+ * Validated against: option-structure.bounds.parity.spec.ts and tests/options/test_bounds_browser_parity.py.
+ */
+function compareDecimal(left: WrittenDecimal, right: WrittenDecimal): number {
+  if (left.sign !== right.sign) return Math.sign(left.sign - right.sign);
+  if (left.sign === 0) return 0;
+  const leftOrder = left.finestPlace + BigInt(left.digits.length);
+  const rightOrder = right.finestPlace + BigInt(right.digits.length);
+  if (leftOrder !== rightOrder) return left.sign * (leftOrder < rightOrder ? -1 : 1);
+  const width = Math.max(left.digits.length, right.digits.length);
+  for (let index = 0; index < width; index++) {
+    const difference = Number(left.digits[index] ?? '0') - Number(right.digits[index] ?? '0');
+    if (difference !== 0) return left.sign * Math.sign(difference);
+  }
+  return 0;
 }
 
 /**
  * Whether a number as written is one the server takes for a box: inside the
  * range the catalogue gives the box, ends counted as it says, and no finer
- * than its step. A step is read as a count of decimal places (`1` is a whole
- * number, `0.000001` six places), which is every step the catalogue names.
- * The text is only read here: what is sent is what the owner typed.
+ * than its step. The text is only read here: what is sent is what the owner typed.
+ *
+ * Formula: compare signed decimal digits and powers of ten; require the value's finest place >= the step's.
+ * Reference: PythonDataService/app/options/bounds.py::Bounds.fault.
+ * Canonical implementation: PythonDataService/app/options/bounds.py.
+ * Validated against: option-structure.bounds.parity.spec.ts and tests/options/test_bounds_browser_parity.py.
  */
 function insideBounds(written: string, bounds: OptionValueBounds): boolean {
-  const parts = WRITTEN_DECIMAL.exec(written);
-  const value = Number(written);
-  if (parts === null || !Number.isFinite(value)) return false;
-  const places = bounds.step === null ? null : (bounds.step.split('.')[1] ?? '').length;
-  if (places !== null && decimalPlaces(parts[1], parts[2], Number(parts[3] ?? 0)) > places) return false;
-  if (bounds.min !== null && (bounds.min_included ? value < Number(bounds.min) : value <= Number(bounds.min))) return false;
-  return bounds.max === null || (bounds.max_included ? value <= Number(bounds.max) : value < Number(bounds.max));
+  const value = readDecimal(written);
+  if (value === null) return false;
+  const minimum = bounds.min === null ? null : readDecimal(bounds.min);
+  const maximum = bounds.max === null ? null : readDecimal(bounds.max);
+  const step = bounds.step === null ? null : readDecimal(bounds.step);
+  if ((bounds.min !== null && minimum === null) || (bounds.max !== null && maximum === null)
+    || (bounds.step !== null && (step === null || step.sign !== 1))) return false;
+  if (minimum !== null) {
+    const relation = compareDecimal(value, minimum);
+    if (relation < 0 || (relation === 0 && !bounds.min_included)) return false;
+  }
+  if (maximum !== null) {
+    const relation = compareDecimal(value, maximum);
+    if (relation > 0 || (relation === 0 && !bounds.max_included)) return false;
+  }
+  return step === null || value.sign === 0 || value.finestPlace >= step.finestPlace;
 }
 
 /**
