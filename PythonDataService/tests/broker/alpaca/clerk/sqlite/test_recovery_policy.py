@@ -917,7 +917,7 @@ def _discharge(context: RecoveryPolicyContext) -> RecoveryCapability:
 def test_rare_live_order_blocks_reduction_without_offering_unsafe_cancel(broker_state: str) -> None:
     order = ProjectedOrder(
         order_ref="order:live", client_order_id="client:live", broker_order_id="broker:live",
-        role="ENTRY", broker_state=broker_state, submitted_at_ms=_NOW_MS - 10_000,
+        role="ENTRY", broker_state=broker_state,
         updated_at_ms=_NOW_MS - 1_000, may_fill=True,
     )
     context = _stopped_holding(current_orders=(order,))

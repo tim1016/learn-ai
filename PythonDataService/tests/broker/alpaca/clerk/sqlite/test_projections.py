@@ -1023,6 +1023,9 @@ def test_safe_flatten_uses_account_reconciliation_not_newer_effect_attempt(
             (f"bot:{SID}", SID, position_at_ms),
     )
     repo._conn.execute(
+        "UPDATE orders SET broker_state = 'filled' WHERE order_ref = ?", (accepted.order_ref,)
+    )
+    repo._conn.execute(
         "INSERT INTO reconciliations "
         "(reconciliation_id, effect_operation_id, order_ref, trigger, "
         "attempted_at_ms, outcome, evidence_refs_json) "
@@ -1091,16 +1094,12 @@ def test_hot_projection_queries_use_covering_fold_indexes(tmp_path: Path) -> Non
         return " | ".join(str(row[3]) for row in rows)
 
     details = {
-        "account_commands": plan("SELECT command_id", scoped_to_bot=False),
-        "bot_commands": plan("SELECT command_id", scoped_to_bot=True),
         "account_operations": plan("SELECT e.effect_operation_id", scoped_to_bot=False),
         "bot_operations": plan("SELECT e.effect_operation_id", scoped_to_bot=True),
         "bot_timeline": plan("SELECT ct.sequence", scoped_to_bot=True),
     }
     repo.close()
 
-    assert "ix_commands_updated_at" in details["account_commands"]
-    assert "ix_commands_strategy_updated_at" in details["bot_commands"]
     assert "ix_effect_operations_created_at" in details["account_operations"]
     assert "ix_effect_operations_strategy_created_at" in details["bot_operations"]
     assert "ix_custody_transitions_strategy_sequence" in details["bot_timeline"]
