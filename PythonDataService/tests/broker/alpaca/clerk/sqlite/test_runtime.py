@@ -1034,6 +1034,43 @@ async def test_cancel_verified_working_entry_records_intent_before_broker_contac
     repo.close()
 
 
+async def test_cancel_verified_working_orders_refuses_unowned_duplicate_and_other_bot_refs_before_contact(
+    tmp_path: Path,
+) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    broker = _Broker()
+    broker.release_submit.set()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
+    binding = _binding()
+    try:
+        await facade.register_strategy_run(binding)
+        receipt = await facade.execute_for_instance(
+            strategy_instance_id=binding.strategy_instance_id,
+            run_id=binding.run_id,
+            decision_id="decision-cancel-guards",
+            purpose=EffectPurpose.ENTER,
+            action_plan=binding.action_plan,
+            quantity=binding.quantity,
+        )
+        [order_ref] = receipt.child_order_refs
+
+        with pytest.raises(ValueError, match="duplicates"):
+            await facade.cancel_verified_working_orders(
+                strategy_instance_id=binding.strategy_instance_id, order_refs=(order_ref, order_ref)
+            )
+        with pytest.raises(ValueError, match="not an owned ENTRY"):
+            await facade.cancel_verified_working_orders(
+                strategy_instance_id=binding.strategy_instance_id, order_refs=("unknown-ref",)
+            )
+        with pytest.raises(ValueError, match="not owned by strategy"):
+            await facade.cancel_verified_working_orders(strategy_instance_id="another-bot", order_refs=(order_ref,))
+
+        assert broker.cancellations == []
+        assert not any(row["transition_kind"] == "ORDER_CANCEL_REQUESTED" for row in repo.transitions_for_order(order_ref))
+    finally:
+        repo.close()
+
+
 async def test_parked_cancellation_does_not_block_trade_update_fold(tmp_path: Path) -> None:
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
     broker = _Broker()
