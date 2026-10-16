@@ -49,6 +49,22 @@ const BLOCKED: BotPanelView['mission_verdict'] = {
 };
 
 describe('BotHealthGroupsComponent (#2794)', () => {
+  it('renders each backend health line with its state, value and explanation', async () => {
+    await render(BotHealthGroupsComponent, {
+      inputs: { health: {
+        run: [{ key: 'orders', label: 'Orders sent', state: 'attention', value: 'Not recorded', note: 'Run evidence is unreadable.', at_ms: null }],
+        account: [{ key: 'holds', label: 'Holds', state: 'ok', value: 'None', note: null, at_ms: null }],
+      } },
+    });
+
+    const run = screen.getByRole('list', { name: 'During this run' });
+    const line = within(run).getByText('Orders sent').closest('li');
+    expect(line?.getAttribute('data-state')).toBe('attention');
+    expect(line?.textContent).toContain('Not recorded');
+    expect(line?.textContent).toContain('Run evidence is unreadable.');
+    expect(within(screen.getByRole('list', { name: 'Account right now' })).getByText('Holds')).toBeTruthy();
+  });
+
   it('reads the market for both symbols when the bot trades something other than what it listens to (#2912)', async () => {
     const pulse = fakeBotPanelView().market_pulse;
     await render(BotHealthGroupsComponent, {

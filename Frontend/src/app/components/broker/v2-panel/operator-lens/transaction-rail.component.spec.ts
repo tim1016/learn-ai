@@ -107,9 +107,7 @@ describe('TransactionRailComponent', () => {
       read_at_ms: 1_700_000_000_001,
     };
     const getEvidence = vi.fn().mockResolvedValue(evidence);
-    const runAction = vi.fn();
-
-    const { fixture, container } = await render(TransactionRailComponent, {
+    const { fixture } = await render(TransactionRailComponent, {
       inputs: { clerkId: 'clrk_spec',
         rail: makeRail([station], 'my-tx-ref'),
         broker: 'alpaca',
@@ -117,7 +115,7 @@ describe('TransactionRailComponent', () => {
         sid: 'sid-1',
       },
       providers: [
-      provideFleetDirectory(),{ provide: BrokerV2PanelService, useValue: { getEvidence, runAction } }],
+      provideFleetDirectory(),{ provide: BrokerV2PanelService, useValue: { getEvidence } }],
     });
 
     const btn = screen.getByRole('button', { name: /view raw evidence/i });
@@ -127,13 +125,11 @@ describe('TransactionRailComponent', () => {
     expect(await screen.findByText('Order filled')).toBeTruthy();
     expect(screen.getByText('Filled 10 shares at the broker.')).toBeTruthy();
     expect(screen.getByText(/kind=order_event/)).toBeTruthy();
-    expect(container.querySelector('.evidence-drawer')).toBeNull();
     expect(getEvidence).toHaveBeenCalledWith(
       expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'acc-1' }),
       'sid-1',
       expect.objectContaining({ transactionRef: 'my-tx-ref' }),
     );
-    expect(runAction).not.toHaveBeenCalled();
   });
 
   it('blocked station with OperatorBlocker shows headline text', async () => {

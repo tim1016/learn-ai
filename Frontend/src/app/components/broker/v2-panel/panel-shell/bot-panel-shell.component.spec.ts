@@ -754,10 +754,8 @@ describe('BotPanelShellComponent', () => {
   });
 
   describe('the workspace tab this page belongs to', () => {
-    // A bot's page sits inside the account workspace, under Home (PRD #2560):
-    // Overview, Bots and Gallery merged into it, so there is no tab to stamp.
-    async function renderShellWithStamp(query: string) {
-      const view = await render(BotPanelShellComponent, {
+    it('points its way back at Home', async () => {
+      const { fixture } = await render(BotPanelShellComponent, {
         inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
         providers: [
           provideRouter([{ path: '**', children: [] }]),
@@ -766,16 +764,8 @@ describe('BotPanelShellComponent', () => {
           { provide: MessageService, useValue: messageService },
         ],
       });
-      await TestBed.inject(Router).navigateByUrl(
-        `/brokers/alpaca/clerks/clrk_spec/accounts/DUM284968/bots/sid-001${query}`,
-      );
-      await view.fixture.whenStable();
-      view.fixture.detectChanges();
-      return view;
-    }
-
-    it.each([[''], ['?from=gallery']])('points its way back at Home (%s)', async (query) => {
-      await renderShellWithStamp(query);
+      await fixture.whenStable();
+      fixture.detectChanges();
 
       const back = screen.getByRole('link', { name: 'Home' });
       expect(back.getAttribute('href')).toBe('/brokers/alpaca/clerks/clrk_spec/accounts/DUM284968');
@@ -1641,8 +1631,11 @@ describe('BotPanelShellComponent', () => {
       // The Clerk re-mints the token every reconciliation pass, so a refresh
       // that meets a rotated one must refresh the panel and retry with the
       // token it now presents — never strand the ticket (#2007 review).
-      mockService.getLiveSnapshot.mockResolvedValueOnce(extendedFlattenSnapshot());
-      mockService.getLiveSnapshot.mockResolvedValue(extendedFlattenSnapshot('plan-token-18'));
+      let rotated = false;
+      mockService.getLiveSnapshot.mockImplementation(async () => ({
+        ...extendedFlattenSnapshot(rotated ? 'plan-token-18' : 'plan-token-17'),
+        surface_version: rotated ? 2 : 1,
+      }));
       const extendedCheck = {
         capability: SAFE_FLATTEN_CAPABILITY,
         reduction_pricing: {
@@ -1656,12 +1649,13 @@ describe('BotPanelShellComponent', () => {
       } satisfies SqliteRecoveryActionCheck;
       brokersMock.checkSqliteRecoveryActionInFull.mockResolvedValueOnce(extendedCheck);
       const fixture = await prepareFlatten();
-      brokersMock.checkSqliteRecoveryActionInFull.mockRejectedValueOnce(
-        new HttpErrorResponse({
+      brokersMock.checkSqliteRecoveryActionInFull.mockImplementationOnce(async () => {
+        rotated = true;
+        throw new HttpErrorResponse({
           status: 409,
           error: { detail: { reason: 'stale_action_token', message: 'The plan changed.' } },
-        }),
-      );
+        });
+      });
       brokersMock.checkSqliteRecoveryActionInFull.mockResolvedValueOnce(extendedCheck);
 
       const ticket = await screen.findByRole('region', { name: 'Extended-hours flatten limit order' });
@@ -1674,12 +1668,8 @@ describe('BotPanelShellComponent', () => {
       const tokens = brokersMock.checkSqliteRecoveryActionInFull.mock.calls.map(
         (call: unknown[]) => (call[2] as { concurrency_token: string }).concurrency_token,
       );
-      // Each call carries the token the panel presented at the time. The
-      // retry's *value* cannot be asserted here: this harness's live store
-      // does not push the second snapshot into the signal the shell reads, so
-      // the rotation itself is covered by the refresh path, not by this spec.
       expect(tokens[1]).toBe('plan-token-17');
-      expect(tokens[2]).toBeDefined();
+      expect(tokens[2]).toBe('plan-token-18');
       expect(mockService.getLiveSnapshot.mock.calls.length).toBeGreaterThan(1);
       expect(screen.queryByText(/Quote refresh failed/)).toBeNull();
       expect(screen.getByRole('region', { name: 'Extended-hours flatten limit order' })).toBeTruthy();

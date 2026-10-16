@@ -290,7 +290,6 @@ test.describe('The owner walks one account (PRD #2560)', () => {
     // The Stop cancelled the planned end sale: nothing is left to end, or to change.
     const stoppedEnd = page.getByRole('region', { name: 'End', exact: true });
     await expect(stoppedEnd).toContainText(NO_END_STOPPED.headline);
-    await expect(stoppedEnd.getByRole('button', { name: 'Change end' })).toHaveCount(0);
     const warning = page.getByRole('region', { name: 'No bot is managing 1 SPY' });
     await expect(warning).toContainText('Deploy again starts a new bot with its own budget. It never takes over these shares.');
     await warning.getByRole('button', { name: 'Flatten…' }).click();

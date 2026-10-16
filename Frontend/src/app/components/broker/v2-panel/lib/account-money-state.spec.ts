@@ -33,13 +33,6 @@ describe('accountMoneyState', () => {
     expect(accountMoneyState({ capable: true, view, error: undefined })).toEqual({ kind: 'ready', view });
   });
 
-  it('keeps the last answer through a reload rather than blanking it', () => {
-    const view = fakeAccountMoney();
-
-    // A resource that is reloading still reports its value, and no error.
-    expect(accountMoneyState({ capable: true, view, error: undefined }).kind).toBe('ready');
-  });
-
   it.each(['unavailable', 'legacy'] as const)('says an answered %s state in the backend’s own words, never $0', (state) => {
     const view = unavailableAccountMoney('No daily loss limit is set for this account. Set one in Settings.', state);
 
