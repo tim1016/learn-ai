@@ -6,9 +6,10 @@ capture journal of the first option orders ever sent from this system, made on
 kit. They sit beside the documented examples and replace none of them: each
 shows one account on one day, for **one bought contract, or one bull call
 spread bought and closed (alone, and twice at once by two bots), every order
-filled inside its wait**. The #3225 recording adds one outside credit spread
-opened with a negative limit and closed at once. A resting or part-filled
-order, a cancel and an exercise are not in them. Regulatory and clearing fees
+filled inside its wait**. The #3225 recordings add outside credit spreads
+opened with negative limits and closed by market orders. The dashboard step
+also records a resting credit order cancelled without a fill; it does not
+exercise the bot's entry deadline. Part fills and exercise are not in them. Regulatory and clearing fees
 are: the 2026-10-14 steps' activity feed carries 2026-10-13's fees. The
 2026-10-16 recording carries the outside credit spread's four leg fills and
 eight fee rows. The capture proves their presence then, not their first posting time.
@@ -578,24 +579,34 @@ def test_the_clerks_own_scheduled_close_sends_a_spread_held_through_a_restart_ou
     assert close_fill["position_qtys"] == {_SPREAD_LONG: "0", _SPREAD_SHORT: "0"}
 
 
-def test_paper_accepts_a_negative_limit_as_a_credit_and_a_positive_market_close_as_a_debit() -> None:
-    """#3225: an outside Paper API order shows the credit sign before a bot may send one."""
-    step = "3225-credit-sign-check"
+@pytest.mark.parametrize(
+    "step,short,long,opening_net,closing_net,opening_legs,closing_legs,preceding_events",
+    [
+        ("3225-credit-sign-check", "SPY261016C00776000", "SPY261016C00777000",
+         "-0.14", "0.16", ("0.60", "0.46"), ("0.61", "0.45"), ()),
+        ("3225-dashboard-credit-sign-check-20261016", "SPY261019C00774000", "SPY261019C00775000",
+         "-0.15", "0.18", ("0.51", "0.36"), ("0.55", "0.37"), ("pending_new", "new", "canceled")),
+    ],
+)
+def test_paper_accepts_a_negative_limit_as_a_credit_and_a_positive_market_close_as_a_debit(
+    step: str, short: str, long: str, opening_net: str, closing_net: str,
+    opening_legs: tuple[str, str], closing_legs: tuple[str, str], preceding_events: tuple[str, ...],
+) -> None:
+    """#3225: the API and owner's dashboard orders both preserve the credit/debit sign."""
     frames = _frames(step)
-    assert [frame["event"] for frame in frames] == ["pending_new", "new", "fill"] * 2
+    assert [frame["event"] for frame in frames] == [*preceding_events, *(["pending_new", "new", "fill"] * 2)]
     opening, closing = [frame for frame in frames if frame["event"] == "fill"]
-    short, long = "SPY261016C00776000", "SPY261016C00777000"
 
     assert [(frame["order"]["order_class"], frame["order"]["type"]) for frame in (opening, closing)] == [
         ("mleg", "limit"), ("mleg", "market")
     ]
-    assert Decimal(opening["order"]["limit_price"]) == Decimal("-0.14")
-    assert Decimal(opening["price"]) == Decimal(opening["order"]["filled_avg_price"]) == Decimal("-0.14")
-    assert Decimal(closing["price"]) == Decimal(closing["order"]["filled_avg_price"]) == Decimal("0.16")
+    assert Decimal(opening["order"]["limit_price"]) == Decimal(opening_net) < 0
+    assert Decimal(opening["price"]) == Decimal(opening["order"]["filled_avg_price"]) == Decimal(opening_net)
+    assert Decimal(closing["price"]) == Decimal(closing["order"]["filled_avg_price"]) == Decimal(closing_net) > 0
 
     for frame, sides, amounts in (
-        (opening, ((short, "sell", "sell_to_open"), (long, "buy", "buy_to_open")), ("0.60", "0.46")),
-        (closing, ((short, "buy", "buy_to_close"), (long, "sell", "sell_to_close")), ("0.61", "0.45")),
+        (opening, ((short, "sell", "sell_to_open"), (long, "buy", "buy_to_open")), opening_legs),
+        (closing, ((short, "buy", "buy_to_close"), (long, "sell", "sell_to_close")), closing_legs),
     ):
         # The trade-update consumer reads its embedded parent with this reader. Alpaca's stream
         # states a misleading parent side, so the stricter REST option-order reader does not apply.
@@ -603,8 +614,8 @@ def test_paper_accepts_a_negative_limit_as_a_credit_and_a_positive_market_close_
         assert read_order.unreadable_fields == ()
         assert read_order.status == "filled"
         assert read_order.quantity == read_order.filled_quantity == 1
-        assert read_order.limit_price == (-0.14 if frame is opening else None)
-        assert read_order.filled_avg_price == (-0.14 if frame is opening else 0.16)
+        assert read_order.limit_price == (float(opening_net) if frame is opening else None)
+        assert read_order.filled_avg_price == float(opening_net if frame is opening else closing_net)
         assert frame["order"]["status"] == "filled"
         assert frame["order"]["filled_qty"] == frame["order"]["qty"] == "1"
         assert [(leg["symbol"], leg["side"], leg["position_intent"]) for leg in frame["order"]["legs"]] == list(sides)
@@ -614,3 +625,40 @@ def test_paper_accepts_a_negative_limit_as_a_credit_and_a_positive_market_close_
     assert opening["position_qtys"] == {short: "-1", long: "1"}
     assert closing["position_qtys"] == {short: "0", long: "0"}
     assert _body(_lines(step, "positions")[-1]) == []
+
+
+def test_dashboard_credit_order_can_rest_and_be_cancelled_without_a_fill() -> None:
+    """#3225: this is a dashboard cancellation, not the bot's entry-deadline path."""
+    step = "3225-dashboard-credit-sign-check-20261016"
+    frames = _frames(step)
+    assert len(frames) == 9
+    first_attempt = frames[:3]
+    assert [frame["event"] for frame in first_attempt] == ["pending_new", "new", "canceled"]
+    assert len({frame["order"]["id"] for frame in first_attempt}) == 1
+    assert first_attempt[-1]["order"]["id"] != frames[3]["order"]["id"]
+    for frame in first_attempt:
+        read = from_alpaca_order(frame["order"])
+        assert read.unreadable_fields == ()
+        assert read.quantity == 1 and read.filled_quantity == 0
+        assert read.limit_price == -0.33 and read.filled_avg_price is None
+        assert from_alpaca_trade_update(frame).event_type == frame["event"]
+    assert from_alpaca_order(first_attempt[-1]["order"]).status == "canceled"
+    assert _body(_lines(step, "orders")[0])[0]["status"] == "new"
+    assert _body(_lines(step, "orders")[-1]) == []
+
+
+def test_dashboard_credit_round_trip_cash_change_is_recorded_separately_from_net_premiums() -> None:
+    """#3225: the extra cash reduction is observed, not a final posted-fee attribution."""
+    step = "3225-dashboard-credit-sign-check-20261016"
+    figures = _account_figures(step)
+    assert figures[0] == (Decimal("99926.54"), Decimal("99926.54"))
+    assert figures[-1] == (Decimal("99923.44"), Decimal("99923.44"))
+    opening, closing = [frame for frame in _frames(step) if frame["event"] == "fill"]
+    contracts = [from_alpaca_option_contract(_body(line)) for line in _lines(step, "option_contracts")]
+    assert {contract.symbol for contract in contracts} == {leg["symbol"] for leg in opening["legs"]}
+    assert all(contract.multiplier == Decimal("100") for contract in contracts)
+    premium_cost = (Decimal(opening["price"]) + Decimal(closing["price"])) * contracts[0].multiplier
+    cash_cost = figures[0][0] - figures[-1][0]
+    assert premium_cost == Decimal("3.00")
+    assert cash_cost == Decimal("3.10")
+    assert cash_cost - premium_cost == Decimal("0.10")
