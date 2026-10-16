@@ -25,9 +25,7 @@ from app.broker.alpaca.clerk.active_runtime import ActiveClerkRuntime
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite import deadline_keeper
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.deadline_keeper import DeadlineKeeper, Nudge
-from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryStanding
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, run_inline, to_thread
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, ExecutionLeaseLost
@@ -40,8 +38,9 @@ from app.broker.alpaca.clerk.sqlite.resting_entries import (
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.errors import BrokerUnavailable
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_enter, submit_budgeted_test_run
 from tests.broker.alpaca.clerk.sqlite.conftest import (
-    FIXTURE_RTH_MS,
+    BUDGETED_RTH_MS,
     _broker_leg,
     _FakeReadPort,
     _FakeTradePort,
@@ -437,12 +436,12 @@ async def test_a_stock_only_accounts_clerk_asks_alpaca_nothing_and_writes_nothin
         with books.write_fence() as conn:
             return [tuple(row) for row in conn.execute("SELECT * FROM custody_transitions ORDER BY sequence").fetchall()]
 
-    clock = _TestClock(FIXTURE_RTH_MS)
+    clock = _TestClock(BUDGETED_RTH_MS)
     repo = ClerkSqliteRepository.initialize(account_id="PA-STOCK", artifacts_root=tmp_path, clock=clock)
     repo.register_strategy_instance(strategy_instance_id="spy-bot", symbol="SPY", config_hash="h1")
-    submit_start_run(repo, account_id="PA-STOCK", strategy_instance_id="spy-bot", lifecycle_run_id="run-1")
+    submit_budgeted_test_run(repo, account_id="PA-STOCK", strategy_instance_id="spy-bot", lifecycle_run_id="run-1")
     venue = _FakeTradePort()
-    sent = await submit_enter(
+    sent = await submit_budgeted_test_enter(
         repo, account_id="PA-STOCK", strategy_instance_id="spy-bot", decision_id="d-1", lifecycle_run_id="run-1",
         leg=_broker_leg(), trade=venue,
     )
