@@ -1,4 +1,4 @@
-"""A Deploy that names no budget is refused, typed, before a bot is named or registered (#3216)."""
+"""A Deploy that names no budget fails request validation before a bot is named (#3216)."""
 
 from __future__ import annotations
 
@@ -6,8 +6,6 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-from app.schemas.broker_bots import AlpacaDeploySubmission
-from app.services.broker_v2_panel import panel_deploy
 from app.services.broker_v2_panel.deploy_submissions import DeploySubmissionLedger
 from tests.broker.v2panel.conftest import _BODY
 from tests.broker.v2panel.fixtures import ACCT
@@ -28,7 +26,7 @@ def _client(fast_app) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test")
 
 
-async def test_a_deploy_with_no_budget_is_refused_with_its_code_and_names_no_bot(
+async def test_a_deploy_with_no_budget_is_refused_by_the_wire_schema_and_names_no_bot(
     deploy_with_the_pairing_admitted,
 ) -> None:
     fast_app, registry = deploy_with_the_pairing_admitted
@@ -37,33 +35,29 @@ async def test_a_deploy_with_no_budget_is_refused_with_its_code_and_names_no_bot
         refused = await client.post(_BOTS, json=_NO_BUDGET)
         recovered = await client.get(f"{_RECOVERY}/{_NO_BUDGET['submission_key']}")
 
-    assert refused.status_code == 409
-    detail = refused.json()["detail"]
-    assert detail["reason_code"] == "deploy_budget_required"
-    assert detail["outcome"] == "conflict" and detail["receipt_id"] is None
-    # Nothing was claimed or started under the key, so the client may use it again.
-    assert detail["submission_settled"] is True
+    assert refused.status_code == 422
+    assert any(error["loc"] == ["body", "budget"] for error in refused.json()["detail"])
     assert registry.deploy_calls == []
     assert not (registry.artifacts_root / "deploy_submissions").exists()
     assert recovered.status_code == 404
 
 
-async def test_a_resend_with_no_budget_of_a_key_an_earlier_send_claimed_is_not_settled(
+async def test_a_resend_with_no_budget_does_not_change_a_previously_claimed_key(
     deploy_with_the_pairing_admitted,
 ) -> None:
-    """A key recorded before budgets were required may have started its bot: the refusal leaves it to the recovery read."""
+    """Schema validation cannot renew or erase a key recorded before budgets were required."""
     fast_app, registry = deploy_with_the_pairing_admitted
-    request = AlpacaDeploySubmission.model_validate(_NO_BUDGET)
-    DeploySubmissionLedger(registry.artifacts_root).claim(
-        submission_key=request.submission_key, account_id=ACCT, symbol=request.symbol, strategy_key=request.strategy_key,
-        request_fingerprint=panel_deploy._submission_fingerprint(ACCT, request),
+    ledger = DeploySubmissionLedger(registry.artifacts_root)
+    claimed = ledger.claim(
+        submission_key=_NO_BUDGET["submission_key"], account_id=ACCT,
+        symbol=_NO_BUDGET["symbol"], strategy_key=_NO_BUDGET["strategy_key"],
+        request_fingerprint="legacy-no-budget-fingerprint",
         replaces_strategy_instance_id=None, now_ms=1_790_000_000_000,
     )
 
     async with _client(fast_app) as client:
         refused = await client.post(_BOTS, json=_NO_BUDGET)
 
-    assert refused.status_code == 409
-    assert refused.json()["detail"]["reason_code"] == "deploy_budget_required"
-    assert refused.json()["detail"]["submission_settled"] is False
+    assert refused.status_code == 422
+    assert ledger.by_key(_NO_BUDGET["submission_key"]) == claimed
     assert registry.deploy_calls == []

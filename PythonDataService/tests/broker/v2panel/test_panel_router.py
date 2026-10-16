@@ -1317,7 +1317,6 @@ async def test_a_performer_failure_and_its_replay_never_put_its_exception_text_o
         action = next(item for item in panel.json()["actions"] if item["action_id"] == "reconcile_now")
         request = {
             "action_id": "reconcile_now",
-            "revision": panel.json()["revision"],
             "concurrency_token": action["concurrency_token"],
             "idempotency_key": "performer-fails",
         }
@@ -2073,7 +2072,6 @@ async def test_one_unreadable_decision_receipt_is_its_own_row_and_never_takes_th
             f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/actions",
             json={
                 "action_id": "reconcile_now",
-                "revision": panel.json()["revision"],
                 "concurrency_token": action["concurrency_token"],
                 "idempotency_key": "with-an-unreadable-receipt",
             },
@@ -2134,7 +2132,6 @@ async def test_an_incoherent_custody_and_economics_cut_is_a_typed_503_on_the_pag
             f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/actions",
             json={
                 "action_id": "reconcile_now",
-                "revision": panel.json()["revision"],
                 "concurrency_token": action["concurrency_token"],
                 "idempotency_key": "on-an-incoherent-cut",
             },
