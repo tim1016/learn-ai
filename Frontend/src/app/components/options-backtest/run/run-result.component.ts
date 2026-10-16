@@ -8,6 +8,7 @@ import { CapitalEvidenceComponent } from './capital-evidence.component';
 import { CashLadderComponent } from './cash-ladder.component';
 import { RunBannerComponent } from './run-banner.component';
 import { RunDayTableComponent } from './run-day-table.component';
+import { RunDailyChartComponent } from './run-daily-chart.component';
 import { RunDrawdownComponent } from './run-drawdown.component';
 import { RunHeadlineComponent } from './run-headline.component';
 import { RunMonthTableComponent } from './run-month-table.component';
@@ -32,6 +33,7 @@ import { SlippageToleranceComponent } from './slippage-tolerance.component';
     SlippageToleranceComponent,
     CashLadderComponent,
     RunDayTableComponent,
+    RunDailyChartComponent,
     RunMonthTableComponent,
     RunTradesComponent,
     SessionViewComponent,

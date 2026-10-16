@@ -2,6 +2,15 @@
   <h3>Slippage tolerance</h3>
   <p class="sentence">{{ sentence() }}</p>
   @if (points().length > 0) {
+    <div class="impact" role="img" aria-label="Net profit across slippage assumptions; left of center is a loss, right is a gain">
+      <div class="impact-axis"><span>Loss</span><span>Gain</span></div>
+      @for (bar of bars(); track bar.slippage_percent) {
+        <div class="impact-row" [class.own-row]="bar.is_setups_own" [title]="bar.label">
+          <span class="impact-label">{{ bar.slippage_percent }}% @if (bar.is_setups_own) { <small>setup</small> }</span>
+          <div class="impact-track"><span [class.loss]="bar.loss" [style.width]="bar.widthCss"></span></div>
+        </div>
+      }
+    </div>
     <div class="table-wrap">
       <table class="ladder">
         <caption class="sr-only">The run replayed at each slippage</caption>

@@ -1,7 +1,8 @@
-import { ChangeDetectionStrategy, Component, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import type { RunFigures } from '../options-backtest.types';
+import { isLoss } from './run-chart-scale';
 
 /**
  * The figures an owner judges a setup by. Every one is the server's: a dollar
@@ -18,4 +19,5 @@ import type { RunFigures } from '../options-backtest.types';
 })
 export class RunHeadlineComponent {
   readonly figures = input.required<RunFigures>();
+  protected readonly loss = computed(() => isLoss(this.figures().net_profit_usd));
 }

@@ -23,6 +23,7 @@ const SHOWN = '$9,007,199,254,740,993.01';
 
 const fall = (peak: number | null): Drawdown => ({
   fall_usd: BIG,
+  display_percent_1_place: '50.0',
   fall_ratio: { numerator_usd: BIG, denominator_usd: BIG, rounded_to_6_places: '0.500000' },
   peak_equity_usd: BIG,
   peak_session_open_ms: peak,
@@ -45,6 +46,7 @@ function runOfBigDollars(): RunDetail {
       profit_factor: { numerator_usd: BIG, denominator_usd: BIG, rounded_to_6_places: '1.000000' },
       drawdown_by_dollars: fall(sessionOpenMs('2026-09-15')),
       drawdown_by_fraction: fall(null),
+      equity_curve: figures().equity_curve.map((point) => ({ ...point, equity_usd: BIG })),
       by_day: DAY_ROWS.map(day),
       by_month: MONTH_ROWS.map(month),
       // An unfunded close, so that the free cash it left is on the screen too.
@@ -78,6 +80,7 @@ const cashRows = () => [...screen.getByRole('region', { name: 'Cash ladder' }).q
 const PLACES: readonly (readonly [string, () => string | string[], string | string[]])[] = [
   ['the banner’s price step', () => reads(screen.getByRole('note', { name: 'How these figures were made' }).querySelectorAll('p')[2] ?? null), `Slippage assumed: 0.3%. Price step: ${SHOWN}.`],
   ['net profit', () => reads(tile('Net profit')), `Net profit ${SHOWN}`],
+  ['headline max drawdown', () => reads(tile(/^Max drawdown/)), `Max drawdown session-end equity ${SHOWN} 50.0% of the peak`],
   ['ending cash', () => reads(tile('Ending cash')), `Ending cash ${SHOWN}`],
   ['total fees', () => reads(tile('Total fees')), `Total fees ${SHOWN}`],
   ['slippage paid', () => reads(tile('Slippage paid')), `Slippage paid ${SHOWN}`],
@@ -88,6 +91,14 @@ const PLACES: readonly (readonly [string, () => string | string[], string | stri
   ['the peak equity of the largest fall as a fraction', () => reads(line(falls()[1], 'Peak equity')), `Peak equity: ${SHOWN} before the first session`],
   ['the trough equity of the largest fall in dollars', () => reads(line(falls()[0], 'Trough equity')), `Trough equity: ${SHOWN} at the end of 2026-09-17`],
   ['the trough equity of the largest fall as a fraction', () => reads(line(falls()[1], 'Trough equity')), `Trough equity: ${SHOWN} at the end of 2026-09-17`],
+  ['the equity chart point tooltips', () => [...screen.getByRole('region', { name: 'Equity and daily profit and loss' }).querySelectorAll('svg title')].map((item) => reads(item)), [
+    `Starting cash: ${SHOWN}`,
+    `2026-09-14: equity ${SHOWN}`,
+    `2026-09-15: equity ${SHOWN}`,
+    `2026-09-16: equity ${SHOWN}`,
+    `2026-09-17: equity ${SHOWN}`,
+    `2026-09-18: equity ${SHOWN}`,
+  ]],
   ['the net profit of each rung of the slippage ladder', ladder, LADDER.map(() => SHOWN)],
   ['the net profit of each day', () => column('By day', 7), DAY_ROWS.map(() => SHOWN)],
   ['the fees of each day', () => column('By day', 8), DAY_ROWS.map(() => SHOWN)],

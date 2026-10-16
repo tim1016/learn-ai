@@ -1,5 +1,14 @@
 <section class="table-section" aria-label="By month">
   <h3>By month</h3>
+  <p class="hint">Monthly net profit. Darker tiles mean larger gains or losses; hover for the exact result.</p>
+  <div class="month-heatmap" role="img" aria-label="Monthly net profit heatmap">
+    @for (month of heat(); track month.label) {
+      <div class="month-heat" [class.loss]="month.loss" [class.flat]="month.strength === '0'"
+        [style.--strength]="month.strength" [title]="month.title">
+        <span>{{ month.label }}</span><small>{{ month.sessions_traded }} traded</small>
+      </div>
+    }
+  </div>
   <p-table [value]="labelled()" dataKey="label" size="small" sortField="label" [sortOrder]="1" [tableStyle]="{ 'min-width': '44rem' }">
     <ng-template #header>
       <tr>

@@ -108,8 +108,8 @@ describe('money in the closer look', () => {
   it('says at its top why the geometry file exists and that nothing it makes is printed', () => {
     const header = (FILES.find((file) => file.name === GEOMETRY)?.text ?? '').split('*/')[0].replace(/\s*\n\s*\*\s*/g, ' ');
 
-    expect(header).toContain('THE ONE FILE');
-    expect(header).toContain('the only file the money lint');
+    expect(header).toContain('display-only geometry');
+    expect(header).toContain('the money lint does not read');
     expect(header).toContain('nothing this file makes is');
   });
 });

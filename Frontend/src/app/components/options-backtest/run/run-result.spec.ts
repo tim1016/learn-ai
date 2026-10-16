@@ -87,12 +87,12 @@ describe('the headline figures', () => {
   it('names what each win rate counts, shows the server’s rounded figure marked as rounded, and the two whole numbers beside it', async () => {
     await renderResult();
 
-    expect(reads(tile(/^Trade win rate/))).toBe('Trade win rate trades won of trades 0.583333 rounded to 6 places · 7 of 12');
-    expect(reads(tile(/^Daily win rate/))).toBe('Daily win rate profitable sessions of traded sessions 0.625000 rounded to 6 places · 5 of 8');
+    expect(reads(tile(/^Trade win rate/))).toBe('Trade win rate trades won of trades 58.3% 0.583333 rounded to 6 places · 7 of 12');
+    expect(reads(tile(/^Daily win rate/))).toBe('Daily win rate profitable sessions of traded sessions 62.5% 0.625000 rounded to 6 places · 5 of 8');
   });
 
   it('shows the rounded rate the server gave, and works out none: an inconsistent figure is shown as it came', async () => {
-    await renderResult({}, { trade_win_rate: { numerator: '7', denominator: '12', rounded_to_6_places: '0.999999' } });
+    await renderResult({}, { trade_win_rate: { numerator: '7', denominator: '12', rounded_to_6_places: '0.999999', display_percent_1_place: '100.0' } });
 
     expect(reads(tile(/^Trade win rate/))).toContain('0.999999');
     expect(reads(tile(/^Trade win rate/))).not.toContain('0.583333');

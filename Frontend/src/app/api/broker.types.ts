@@ -22634,6 +22634,8 @@ export interface components {
          * @description The largest fall of equity from its running peak, measured at the end of each session.
          */
         OptionsBacktestDrawdownResponse: {
+            /** Display Percent 1 Place */
+            display_percent_1_place: string;
             fall_ratio: components["schemas"]["OptionsBacktestDollarRateResponse"];
             /** Fall Usd */
             fall_usd: string;
@@ -22655,6 +22657,16 @@ export interface components {
              * @enum {string}
              */
             reason: "other_side" | "second_expiry" | "cover_did_not_trade" | "cover_not_yet_held" | "sale_at_zero";
+        };
+        /**
+         * OptionsBacktestEquityPointResponse
+         * @description The starting cash or one session-end equity point for the run chart.
+         */
+        OptionsBacktestEquityPointResponse: {
+            /** Equity Usd */
+            equity_usd: string;
+            /** Session Open Ms */
+            session_open_ms: number | null;
         };
         /**
          * OptionsBacktestEventResponse
@@ -22952,6 +22964,8 @@ export interface components {
         OptionsBacktestRateResponse: {
             /** Denominator */
             denominator: string;
+            /** Display Percent 1 Place */
+            display_percent_1_place: string;
             /** Numerator */
             numerator: string;
             /** Rounded To 6 Places */
@@ -23063,6 +23077,8 @@ export interface components {
             entries_refused_by_reason?: components["schemas"]["OptionsBacktestEntryRefusalCountResponse"][] | null;
             /** Entries Refused For Cash */
             entries_refused_for_cash: number;
+            /** Equity Curve */
+            equity_curve: components["schemas"]["OptionsBacktestEquityPointResponse"][];
             /** Exits By Reason */
             exits_by_reason: components["schemas"]["OptionsBacktestExitCountResponse"][];
             /** Gross Loss Usd */

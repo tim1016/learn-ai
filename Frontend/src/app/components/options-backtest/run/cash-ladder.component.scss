@@ -10,3 +10,16 @@ p { margin: 0 0 var(--space-2); font-size: var(--fs-sm); }
 .num { text-align: right !important; font-variant-numeric: tabular-nums; }
 .own { background: var(--accent-faint); }
 .tag { margin-inline-start: var(--space-2); border: 1px solid var(--border-strong); border-radius: var(--radius-pill); padding: 0 var(--space-2); color: var(--text-secondary); }
+.cash-bars { display: grid; gap: var(--space-1); max-width: 65rem; margin: var(--space-3) 0 var(--space-4); }
+.cash-key { display: flex; align-items: center; gap: var(--space-1); color: var(--text-secondary); font-size: var(--fs-xs); }
+.cash-key span { width: .55rem; height: .55rem; display: inline-block; border-radius: 2px; margin-left: var(--space-2); }
+.filled-key { background: var(--bull); }
+.refused-key { background: var(--border-strong); }
+.cash-row { display: grid; grid-template-columns: 6rem minmax(8rem, 1fr) 11rem; align-items: center; gap: var(--space-2); border-radius: var(--radius); padding: var(--space-1); }
+.cash-row.own-row { background: var(--accent-faint); }
+.cash-multiple, .cash-count { font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+.cash-multiple small { color: var(--accent-text); }
+.cash-track { height: .8rem; background: var(--border-strong); border-radius: var(--radius-pill); overflow: hidden; }
+.cash-track span { display: block; height: 100%; background: var(--bull); }
+.cash-count { color: var(--text-secondary); text-align: right; }
+@media (max-width: 640px) { .cash-row { grid-template-columns: 4rem 1fr; } .cash-count { grid-column: 2; text-align: left; } }

@@ -7,8 +7,9 @@ import noMoneyAliasArithmetic from "./eslint-rules/no-money-alias-arithmetic.mjs
 // ---------------------------------------------------------------------------
 // No money arithmetic in the browser (PRD #2560 D12).
 //
-// Python authors every dollar string and every slice width; the browser only
-// renders them. Two layers enforce that, and
+// Python authors every dollar string and financial figure; the browser renders
+// them and, in the two chart geometry helpers below, maps them to positions.
+// Two layers enforce that, and
 // `scripts/verify-money-arithmetic-lint-guard.cjs` proves each one fires.
 //
 // 1. Everywhere (every non-spec `.ts` and template): no arithmetic, unary
@@ -133,9 +134,12 @@ const moneySurfaces = (extension) => [
   `src/app/components/options-backtest/run-detail/**/*.${extension}`,
 ];
 
-// The one file that may turn a price string into a number: it places a point on a chart's price axis and prints nothing
-// (see its header). Every other file of the Options Backtest page stays under the money rules above.
-const CHART_GEOMETRY = "src/app/components/options-backtest/run-detail/series-geometry.ts";
+// ADR 0068 permits display geometry. These two files map authored prices or dollars to chart positions and print no
+// computed financial figures; every other Options Backtest file stays under the money rules above.
+const CHART_GEOMETRY = [
+  "src/app/components/options-backtest/run-detail/series-geometry.ts",
+  "src/app/components/options-backtest/run/run-chart-scale.ts",
+];
 
 export default tseslint.config(
   {
@@ -209,7 +213,7 @@ export default tseslint.config(
   // No money arithmetic, layer 1: everywhere (see the note at the top).
   {
     files: ["src/app/**/*.ts"],
-    ignores: ["**/*.spec.ts", CHART_GEOMETRY],
+    ignores: ["**/*.spec.ts", ...CHART_GEOMETRY],
     rules: { "no-restricted-syntax": ["error", ...TS_MONEY_ARITHMETIC] },
   },
   {
@@ -220,7 +224,7 @@ export default tseslint.config(
   // than merge, so each block restates layer 1's selectors.
   {
     files: moneySurfaces("ts"),
-    ignores: ["**/*.spec.ts", CHART_GEOMETRY],
+    ignores: ["**/*.spec.ts", ...CHART_GEOMETRY],
     plugins: { "learn-ai": { rules: { "no-money-alias-arithmetic": noMoneyAliasArithmetic } } },
     rules: {
       "no-implicit-coercion": ["error", { boolean: false }],

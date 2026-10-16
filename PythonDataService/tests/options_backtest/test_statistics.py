@@ -915,6 +915,12 @@ def test_a_ratio_divides_by_something_above_zero() -> None:
         Ratio(D("1"), D("-2"))
 
 
+def test_a_ratio_display_percent_rounds_the_exact_fraction() -> None:
+    assert Ratio(D(217), D(471)).percent_1_place() == D("46.1")
+    assert Ratio(D("960"), D("10837.90")).percent_1_place() == D("8.9")
+    assert Ratio(D(1), D(16)).percent_1_place() == D("6.2")
+
+
 def test_a_ratio_does_not_depend_on_the_decimal_context_it_is_asked_in() -> None:
     with localcontext(Context(prec=3)):
         assert Ratio(D("245.75"), D("180.50")).rounded_to_6_places() == D("1.361496")

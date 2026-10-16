@@ -4,6 +4,7 @@ Formula: net profit        = Σ trade profit, a trade's profit being after its f
     gross profit / loss = Σ profit of the won trades / Σ -profit of the lost trades (a positive number)
     profit factor       = gross profit / gross loss, none when no trade lost
     daily win rate      = profitable sessions / traded sessions;  trade win rate = won trades / trades
+    displayed percent   = round_half_even(1000 · numerator / denominator) / 10
     equity after session k = starting cash + Σ profit of sessions 1..k, marked legs at their marks
     drawdown            = the largest fall of equity below its running peak, the peak starting at the starting
                           cash: in dollars (peak - trough) and as a fraction (peak - trough) / peak
@@ -19,8 +20,8 @@ Validated against: tests/options_backtest/test_statistics.py and tests/options_b
   ``atol=1e-12, rtol=0``.
 
 Everything is exact ``Decimal`` dollars and whole counts; nothing is a float. A rate is a ``Ratio`` of two numbers and
-nothing is rounded: ``rounded_to_6_places`` gives the one rounded figure for display, half-even, and says so in its
-name. The drawdown is measured on the equity at the end of each session, and not inside a day.
+nothing is rounded: ``rounded_to_6_places`` gives one rounded quotient for display, while ``percent_1_place`` rounds
+the exact ratio directly to a percent. The drawdown is measured on the equity at the end of each session, not inside a day.
 
 What the cash could carry is a verdict apart from these totals, which keep every session at its mark. The capital
 evidence, the cash ladder and the stamps a run carries beside them come from ``capital_evidence.py``,
@@ -97,6 +98,12 @@ class Ratio:
         with localcontext(fills.EXACT):
             return Decimal(scaled).scaleb(-_PLACES)
 
+    def percent_1_place(self) -> Decimal:
+        """The ratio as a one-place percent, rounded from the exact fraction rather than its displayed quotient."""
+        tenths = round(Fraction(self.numerator) * 1000 / Fraction(self.denominator))
+        with localcontext(fills.EXACT):
+            return Decimal(tenths).scaleb(-1)
+
 
 @dataclass(frozen=True)
 class Drawdown:
@@ -138,6 +145,30 @@ class DayRow:
     trades_won: int
     trades_lost: int
     trades_break_even: int
+
+
+@dataclass(frozen=True)
+class EquityPoint:
+    """Starting cash or the equity after one session, in exact dollars."""
+
+    session_open_ms: int | None
+    equity_usd: Decimal
+
+
+def equity_path(days: Sequence[DayRow], starting_cash_usd: Decimal) -> tuple[EquityPoint, ...]:
+    """The starting cash and each session-end equity, including no-trade and marked sessions.
+
+    Formula: equity_k = starting_cash + Σ(day net profit_i), i = 1..k.
+    Reference: the owner's session-end equity definition in #3030, shared with drawdown below.
+    Canonical implementation: this file.
+    Validated against: tests/options_backtest/test_drawdown.py and tests/options_backtest/test_run_wire.py.
+    """
+    points = [EquityPoint(None, starting_cash_usd)]
+    equity = starting_cash_usd
+    for day in days:
+        equity = _sum([equity, day.net_profit_usd])
+        points.append(EquityPoint(day.session_open_ms, equity))
+    return tuple(points)
 
 
 @dataclass(frozen=True)
@@ -273,19 +304,15 @@ def _slippage_paid(trade: LegTrade) -> Decimal:
 
 
 def _drawdowns(
-    sessions: Sequence[SessionResult], starting_cash_usd: Decimal
+    days: Sequence[DayRow], starting_cash_usd: Decimal
 ) -> tuple[Drawdown | None, Drawdown | None]:
     """The worst fall by fraction and the worst by dollars, the earliest winning a tie."""
-    # Points are (session, equity after it); the starting cash is a point before the first session.
-    points: list[tuple[SessionResult | None, Decimal]] = [(None, starting_cash_usd)]
-    equity = starting_cash_usd
-    for session in sessions:
-        equity = _sum([equity, session.pnl_usd])
-        points.append((session, equity))
+    points = equity_path(days, starting_cash_usd)
     peak_at, peak = 0, starting_cash_usd
     worst_by_fraction: tuple[Fraction, int, int] | None = None
     worst_by_dollars: tuple[Decimal, int, int] | None = None
-    for at, (_, after) in enumerate(points):
+    for at, point in enumerate(points):
+        after = point.equity_usd
         if after > peak:
             peak_at, peak = at, after
             continue
@@ -300,9 +327,11 @@ def _drawdowns(
             worst_by_dollars = (fall, peak_at, at)
 
     def describe(peak_at: int, trough_at: int) -> Drawdown:
-        peak_session, peak_equity = points[peak_at]
-        trough_session, trough_equity = points[trough_at]
-        assert trough_session is not None  # a trough comes after a peak, so it is a session
+        peak_point = points[peak_at]
+        trough_point = points[trough_at]
+        peak_equity = peak_point.equity_usd
+        trough_equity = trough_point.equity_usd
+        assert trough_point.session_open_ms is not None  # a trough comes after a peak, so it is a session
         with localcontext(fills.EXACT):
             fall = peak_equity - trough_equity
         return Drawdown(
@@ -310,8 +339,8 @@ def _drawdowns(
             trough_equity_usd=trough_equity,
             fall_usd=fall,
             fall_ratio=Ratio(fall, peak_equity),
-            peak_session_open_ms=None if peak_session is None else peak_session.session_open_ms,
-            trough_session_open_ms=trough_session.session_open_ms,
+            peak_session_open_ms=peak_point.session_open_ms,
+            trough_session_open_ms=trough_point.session_open_ms,
         )
 
     return (
@@ -376,7 +405,7 @@ def summarize_run(sessions: Sequence[SessionResult], *, starting_cash_usd: Decim
     net_profit = _sum(trade.pnl_usd for trade in trades)
     profitable = sum(1 for session in traded if session.pnl_usd > 0)
     days = tuple(_day_row(session) for session in sessions)
-    by_fraction, by_dollars = _drawdowns(sessions, starting_cash_usd)
+    by_fraction, by_dollars = _drawdowns(days, starting_cash_usd)
     return RunSummary(
         sessions_tested=len(sessions),
         sessions_traded=len(traded),

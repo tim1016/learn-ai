@@ -36,8 +36,11 @@ const MONEY_SURFACES = [
   "src/app/components/options-backtest/run-detail/session/session-view.component",
 ];
 
-// The one file of the Options Backtest page that may turn a price string into a number, for a chart's price axis (#3030).
-const CHART_GEOMETRY = "src/app/components/options-backtest/run-detail/series-geometry";
+// ADR 0068 permits these two display-only chart geometry files to read authored decimal strings.
+const CHART_GEOMETRY = [
+  "src/app/components/options-backtest/run-detail/series-geometry",
+  "src/app/components/options-backtest/run/run-chart-scale",
+];
 const COERCION_OF_A_PRICE = "export const axisPrice = (point: { close_usd: string }) => Number(point.close_usd);";
 
 /** Shapes that must be refused everywhere. */
@@ -88,15 +91,17 @@ const ALLOWED = [
   // A broker-authored number (a quote, not a `*_usd` string) may still be
   // formatted by a numeric pipe away from the money surfaces.
   [ANYWHERE, "html", "<p>{{ quote.bid | currency: 'USD' }}</p>"],
-  // The chart's geometry file is read by nothing in the money lint: it makes the numbers a price axis needs.
-  [CHART_GEOMETRY, "ts", COERCION_OF_A_PRICE],
+  // The geometry helpers are read by neither money-lint layer: their numbers only position chart marks.
+  ...CHART_GEOMETRY.map((file) => [file, "ts", COERCION_OF_A_PRICE]),
 ];
 
-/** Files beside the geometry file that must still refuse the same coercion: the exclusion is for one file, not the folder. */
+/** Files beside the geometry helpers must still refuse the same coercion. */
 const NOT_EXCLUDED = [
   "src/app/components/options-backtest/run-detail/timeline-plan",
   "src/app/components/options-backtest/run-detail/session/timeline-chart.component",
   "src/app/components/options-backtest/run-detail/series-geometry.extra",
+  "src/app/components/options-backtest/run/run-daily-chart.component",
+  "src/app/components/options-backtest/run/run-chart-scale.extra",
 ];
 
 async function moneyMessages(eslint, file, extension, code) {
@@ -140,7 +145,7 @@ async function main() {
   console.log(
     `money arithmetic lint guard passed (${REFUSED_ANYWHERE.length} shapes everywhere, `
       + `${REFUSED_ON_MONEY_SURFACES.length} on ${MONEY_SURFACES.length} money surfaces, ${ALLOWED.length} allowed, `
-      + `${NOT_EXCLUDED.length} files beside the chart geometry file still refused)`,
+      + `${NOT_EXCLUDED.length} files beside the chart geometry helpers still refused)`,
   );
 }
 
