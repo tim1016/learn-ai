@@ -751,6 +751,7 @@ DAY_PNL_SYMBOL = "SPY"
 
 # 2026-09-08 is a Tuesday; the 7th is Labor Day, so "yesterday" is Friday the 4th.
 NOON = et_minute_of_day_ms(date(2026, 9, 8), 12 * 60)
+BUDGETED_RTH_MS = et_minute_of_day_ms(date(2026, 9, 16), 10 * 60)
 TODAY_OPEN = et_minute_of_day_ms(date(2026, 9, 8), 9 * 60 + 30)
 YESTERDAY_NOON = et_minute_of_day_ms(date(2026, 9, 4), 12 * 60)
 YESTERDAY_OPEN = et_minute_of_day_ms(date(2026, 9, 4), 9 * 60 + 30)

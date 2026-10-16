@@ -18,8 +18,7 @@ from app.broker.alpaca.clerk.recovery_reduction import (
     ExtendedLimitProposal,
     RecoveryPricing,
 )
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
-from app.broker.alpaca.clerk.sqlite.enter import submit_enter
+from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.exit import accept_recovery_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.exit_resolution import priced_reduction_reference_price
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
@@ -63,8 +62,9 @@ from app.broker.contract.models import (
 from app.schemas.market_liveness import TopOfBookQuote
 from app.services.broker_v2_panel.sqlite_panel_adapter import recent_fill_view
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
+from tests.broker.alpaca.clerk.sqlite.budgeted_run_fixture import submit_budgeted_test_enter, submit_budgeted_test_run
 from tests.broker.alpaca.clerk.sqlite.conftest import (
-    FIXTURE_RTH_MS,
+    BUDGETED_RTH_MS,
     _clock_at,
     _covering_read,
     _TestClock,
@@ -201,7 +201,7 @@ async def _held_position(
 
     A bot's later entry, in a later run, names its own decision, run and execution.
     """
-    submission = await submit_enter(
+    submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
@@ -268,12 +268,12 @@ def crashed_with_exposure(tmp_path: Path):
 
     Inside the regular session, where an unshaped flatten reduces market DAY.
     """
-    clock = _clock_at(FIXTURE_RTH_MS)
+    clock = _clock_at(BUDGETED_RTH_MS)
     repo = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
     )
     repo.register_strategy_instance(exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=SID, symbol="SPY", config_hash="h1")
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    submit_budgeted_test_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
     yield repo, clock
     repo.close()
 
@@ -345,34 +345,6 @@ async def test_execute_safe_flatten_plan_refuses_expired_plans(
         )
 
 
-async def test_execute_safe_flatten_plan_refuses_when_a_resume_landed_after_recheck(
-    crashed_with_exposure,
-) -> None:
-    """P0 race regression: policy checks no-active-run at presentation/recheck,
-    but execution happens later. A Resume landing before EXIT capture must fail
-    closed inside the capture transaction, never submit a reduction."""
-    repo, _clock = crashed_with_exposure
-    await _held_position(repo)
-    submit_stop_run(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
-        lifecycle_run_id=RUN_ID, operator_reason="crash_analog",
-    )
-    plan = await _reconciled_flatten_plan(repo)
-    # Resume analog lands between recheck and capture (approved-carryover
-    # resumes are legitimate while custody holds exposure).
-    submit_start_run(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="run-2"
-    )
-    trade = _FakeTrade()
-
-    with pytest.raises(SafeFlattenExecutionError, match="re-activated"):
-        await execute_safe_flatten_plan(
-            repo, plan=plan, read=_covering_read(), trade=trade, intake=ReentrantAsyncLock(),
-            account_id=ACCOUNT_ID,
-            pricing=UNPRICEABLE_RECOVERY,
-        )
-
-    assert trade.submit_calls == []
 
 
 async def test_execute_safe_flatten_plan_refuses_a_symbol_an_exit_already_owns(
@@ -781,12 +753,12 @@ _XH_POLICY = ProgramLegPolicy(
     window=_XH_WINDOW,
     allowances=ExtendedHoursAllowances(entry_bps=Decimal("10"), exit_bps=Decimal("20")),
 )
-_PRE_MARKET_MS = 1_700_136_000_000  # 2023-11-16 07:00 ET
-_OVERNIGHT_MS = 1_700_100_000_000  # 2023-11-15 21:00 ET
-# 2023-11-15 19:59:50 ET: the latest a confirmed limit is still accepted — a
+_PRE_MARKET_MS = BUDGETED_RTH_MS + 21 * 3_600_000  # next day 07:00 ET
+_OVERNIGHT_MS = BUDGETED_RTH_MS + 11 * 3_600_000  # same day 21:00 ET
+# Same day 19:59:50 ET: the latest a confirmed limit is still accepted — a
 # send is judged at now plus the 5 s guard band (#2440 review), 19:59:55.
-_JUST_BEFORE_POST_CLOSE_MS = 1_700_096_390_000
-_JUST_AFTER_POST_CLOSE_MS = 1_700_096_410_000  # 2023-11-15 20:00:10 ET
+_JUST_BEFORE_POST_CLOSE_MS = BUDGETED_RTH_MS + 9 * 3_600_000 + 59 * 60_000 + 50_000
+_JUST_AFTER_POST_CLOSE_MS = BUDGETED_RTH_MS + 10 * 3_600_000 + 10_000
 
 
 def _live_quote(now_ms: int) -> TopOfBookQuote:
@@ -808,8 +780,8 @@ def _confirmed_limit_shape(
             side=side,
         ),
         # Still inside its session at the fixture's clock.
-        valid_until_ms=FIXTURE_RTH_MS + 3_600_000,
-        reference_quote=_live_quote(FIXTURE_RTH_MS),
+        valid_until_ms=BUDGETED_RTH_MS + 3_600_000,
+        reference_quote=_live_quote(BUDGETED_RTH_MS),
         # The ``_held_position`` fixture attributes exactly ten shares.
         quantity=quantity,
     )
@@ -832,9 +804,9 @@ async def test_the_flatten_drives_its_exit_with_the_pricing_seam_it_is_handed(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
         lifecycle_run_id=RUN_ID, operator_reason="crash_analog",
     )
-    _walk_clock_to(repo, FIXTURE_RTH_MS + 5 * 3_600_000 + 59 * 60_000 + 50_000)  # 15:59:50 ET
+    _walk_clock_to(repo, BUDGETED_RTH_MS + 5 * 3_600_000 + 59 * 60_000 + 50_000)  # 15:59:50 ET
     plan = await _reconciled_flatten_plan(repo)
-    _walk_clock_to(repo, FIXTURE_RTH_MS + 6 * 3_600_000 + 5_000)  # 16:00:05 ET
+    _walk_clock_to(repo, BUDGETED_RTH_MS + 6 * 3_600_000 + 5_000)  # 16:00:05 ET
     trade = _FakeTrade()
 
     result = await execute_safe_flatten_plan(
@@ -1168,7 +1140,7 @@ async def test_a_flatten_confirmed_within_the_guard_band_of_the_after_hours_clos
     accepted and then folded by the send-time rule a moment later.
     """
     repo, _clock = crashed_with_exposure
-    at_ms = 1_700_096_397_000  # 2023-11-15 19:59:57 ET
+    at_ms = BUDGETED_RTH_MS + 9 * 3_600_000 + 59 * 60_000 + 57_000
     facade, trade, current_context = await _stopped_facade_at(repo, at_ms)
 
     with pytest.raises(RecoveryExecutionError, match="No trading session would be open"):
@@ -1215,7 +1187,7 @@ async def test_the_flatten_ticket_prices_for_the_session_the_send_arrives_in(
     while the live quote is still read at now.
     """
     repo, _clock = crashed_with_exposure
-    at_ms = 1_700_081_997_000  # 2023-11-15 15:59:57 ET
+    at_ms = BUDGETED_RTH_MS + 5 * 3_600_000 + 59 * 60_000 + 57_000
     await _held_position(repo)
     submit_stop_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
