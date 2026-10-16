@@ -59,7 +59,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     SettlementChoice,
     UnknownOrderSettlement,
 )
-from app.broker.alpaca.clerk.sqlite.reads import WORKING_BROKER_STATES
+from app.broker.alpaca.clerk.sqlite.reads import CANCELLABLE_ENTRY_BROKER_STATES
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     OPTION_EXPIRED_NOT_SETTLED_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
@@ -94,13 +94,6 @@ FRESH_EVIDENCE_MAX_AGE_MS = 30_000
 #: The sweep publishes a pass about every 15 s, so one older than this means
 #: it has stopped: its verdict proves nothing about the account now.
 SWEEP_LIVENESS_BOUND_MS = 60_000
-# The orders a verified cancel lists and a flatten waits on: imported rather
-# than restated. Not the orders that count as live custody
-# (`reads.LIVE_CUSTODY_BROKER_STATES`): one held for an auction, suspended,
-# pending a replace, calculated or stopped can still fill, so the catalog
-# keeps its bot live and `needed` below reads `may_fill`, but this policy does
-# not offer to cancel it (#3216).
-_WORKING_BROKER_STATES = WORKING_BROKER_STATES
 
 
 class RecoveryPolicyError(Exception):
@@ -533,15 +526,16 @@ def _working_orders(ctx: RecoveryPolicyContext) -> tuple[ProjectedOrder, ...]:
     working = (
         order
         for order in ctx.current_orders
-        if order.broker_order_id is not None
-        and (order.broker_state or "").lower() in _WORKING_BROKER_STATES
+        if order.role == "ENTRY"
+        and order.broker_order_id is not None
+        and (order.broker_state or "").lower() in CANCELLABLE_ENTRY_BROKER_STATES
     )
     unique = {order.order_ref: order for order in working}
     return tuple(sorted(unique.values(), key=lambda order: order.order_ref))
 
 
 def _orders_that_may_fill(ctx: RecoveryPolicyContext) -> tuple[ProjectedOrder, ...]:
-    """Every nonterminal order in this custody cut, including states not offered for manual cancel."""
+    """Every nonterminal order in this custody cut, including those without broker identity."""
     unique = {order.order_ref: order for order in ctx.current_orders if order.may_fill}
     return tuple(sorted(unique.values(), key=lambda order: order.order_ref))
 
@@ -757,8 +751,8 @@ def _decision(ctx: RecoveryPolicyContext, action_id: RecoveryActionId) -> _Decis
                 (order.order_ref, order.broker_order_id, order.broker_state, order.updated_at_ms)
                 for order in orders
             ],
-            # Needed while any order may still fill, verified or not: one the
-            # broker has not acknowledged, or one held or pending replace.
+            # Needed while any order may still fill, including one the broker
+            # has not acknowledged with a durable identity yet.
             needed=any(order.may_fill for order in ctx.current_orders),
         )
     if action_id == "prepare_safe_flatten":

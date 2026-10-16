@@ -26,8 +26,8 @@ SID = "retired-bot"
 
 #: The states the broker may still act on an order in, as the Clerk has always read them.
 USUAL = ("new", "accepted", "pending_new", "partially_filled", "pending_cancel")
-#: The states an order can still fill from, though it is not "working": held for an auction, suspended,
-#: pending a replace, calculated, or stopped.
+#: Less common states in which an order can still fill: held for an auction,
+#: suspended, pending a replace, calculated, or stopped.
 RARE = ("accepted_for_bidding", "pending_replace", "suspended", "calculated", "stopped")
 ENDED = ("filled", "canceled", "expired", "rejected")
 

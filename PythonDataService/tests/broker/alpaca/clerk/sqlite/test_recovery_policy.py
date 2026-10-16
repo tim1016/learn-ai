@@ -914,7 +914,7 @@ def _discharge(context: RecoveryPolicyContext) -> RecoveryCapability:
 
 
 @pytest.mark.parametrize("broker_state", ["suspended", "accepted_for_bidding", "pending_replace", "calculated", "stopped"])
-def test_rare_live_order_blocks_reduction_without_offering_unsafe_cancel(broker_state: str) -> None:
+def test_rare_live_order_offers_verified_cancel_before_reduction(broker_state: str) -> None:
     order = ProjectedOrder(
         order_ref="order:live", client_order_id="client:live", broker_order_id="broker:live",
         role="ENTRY", broker_state=broker_state,
@@ -924,16 +924,45 @@ def test_rare_live_order_blocks_reduction_without_offering_unsafe_cancel(broker_
     catalog = {action.action_id: action for action in build_recovery_catalog(context)}
 
     cancel = catalog["cancel_verified_working_orders"]
-    assert cancel.needed and not cancel.available
+    assert cancel.needed and cancel.available
+    assert [item.reference for item in cancel.evidence] == ["order:order:live"]
     flatten = catalog["prepare_safe_flatten"]
     assert flatten.available is False
-    assert flatten.unavailable_reason_code == "LIVE_ORDER_MAY_STILL_FILL"
-    assert "Cancel verified" not in flatten.next_step
+    assert flatten.unavailable_reason_code == "WORKING_ORDERS_REQUIRE_CANCEL_FIRST"
+    assert "Cancel verified" in flatten.next_step
 
     discharge = _discharge(_residue_context(current_orders=(order,)))
     assert discharge.available is False
-    assert discharge.unavailable_reason_code == "LIVE_ORDER_MAY_STILL_FILL"
-    assert "Cancel verified" not in discharge.next_step
+    assert discharge.unavailable_reason_code == "WORKING_ORDERS_REQUIRE_CANCEL_FIRST"
+    assert "Cancel verified" in discharge.next_step
+
+
+def test_live_exit_order_blocks_reduction_without_offering_entry_cancel() -> None:
+    order = ProjectedOrder(
+        order_ref="order:exit", client_order_id="client:exit", broker_order_id="broker:exit",
+        role="REDUCING", broker_state="suspended",
+        updated_at_ms=_NOW_MS - 1_000, may_fill=True,
+    )
+    catalog = {action.action_id: action for action in build_recovery_catalog(_stopped_holding(current_orders=(order,)))}
+
+    cancel = catalog["cancel_verified_working_orders"]
+    assert cancel.needed and not cancel.available
+    assert cancel.evidence == ()
+    flatten = catalog["prepare_safe_flatten"]
+    assert flatten.unavailable_reason_code == "LIVE_ORDER_MAY_STILL_FILL"
+
+
+def test_terminal_entry_order_does_not_offer_cancel() -> None:
+    order = ProjectedOrder(
+        order_ref="order:ended", client_order_id="client:ended", broker_order_id="broker:ended",
+        role="ENTRY", broker_state="canceled",
+        updated_at_ms=_NOW_MS - 1_000, may_fill=False,
+    )
+    catalog = {action.action_id: action for action in build_recovery_catalog(_stopped_holding(current_orders=(order,)))}
+
+    cancel = catalog["cancel_verified_working_orders"]
+    assert not cancel.needed and not cancel.available
+    assert cancel.evidence == ()
 
 
 @pytest.mark.parametrize("reason_code", ["EXIT_NOT_FLAT", "EXIT_STUCK"])

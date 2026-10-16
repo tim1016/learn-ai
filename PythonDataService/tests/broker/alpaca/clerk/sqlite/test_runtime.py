@@ -68,6 +68,7 @@ class _Broker:
         self.release_cancel.set()
         self.submissions: list[str] = []
         self.cancellations: list[str] = []
+        self.live_status = "accepted"
 
     async def list_orders(self, **_kwargs: Any) -> list[BrokerOrder]:
         return []
@@ -98,7 +99,7 @@ class _Broker:
         )
         if f"broker-{client_order_id}" in self.cancellations:
             return order.model_copy(update={"status": "canceled", "canceled_at_ms": 11, "updated_at_ms": 11})
-        return order
+        return order.model_copy(update={"status": self.live_status})
 
 
 def _order(client_order_id: str, leg: BrokerOrderLeg) -> BrokerOrder:
@@ -991,8 +992,10 @@ async def test_the_clerks_decision_receipt_carries_the_explanation_it_was_handed
     repo.close()
 
 
+@pytest.mark.parametrize("broker_state", ["accepted", "suspended", "pending_replace", "canceled"])
 async def test_cancel_verified_working_entry_records_intent_before_broker_contact(
     tmp_path: Path,
+    broker_state: str,
 ) -> None:
     repo = ClerkSqliteRepository.initialize(
         account_id="PA-TEST",
@@ -1012,6 +1015,10 @@ async def test_cancel_verified_working_entry_records_intent_before_broker_contac
         quantity=binding.quantity,
     )
     order_ref = receipt.child_order_refs[0]
+    broker.live_status = broker_state
+    with repo.write_fence() as conn:
+        conn.execute("UPDATE orders SET broker_state = ? WHERE order_ref = ?", (broker_state, order_ref))
+        conn.commit()
 
     orders = await facade.cancel_verified_working_orders(
         strategy_instance_id=binding.strategy_instance_id,
@@ -1019,19 +1026,22 @@ async def test_cancel_verified_working_entry_records_intent_before_broker_contac
     )
 
     assert orders[0].broker_state == "canceled"
-    assert broker.cancellations == [f"broker-{order_ref}"]
+    assert broker.cancellations == ([] if broker_state == "canceled" else [f"broker-{order_ref}"])
     transitions = repo.transitions_for_order(order_ref)
-    cancel_index = next(
-        index
-        for index, transition in enumerate(transitions)
-        if transition["transition_kind"] == "ORDER_CANCEL_REQUESTED"
-    )
-    confirmed_index = next(
-        index
-        for index, transition in enumerate(transitions)
-        if transition["transition_kind"] == "ENTRY_TERMINAL_CONFIRMED"
-    )
-    assert cancel_index < confirmed_index
+    if broker_state == "canceled":
+        assert not any(transition["transition_kind"] == "ORDER_CANCEL_REQUESTED" for transition in transitions)
+    else:
+        cancel_index = next(
+            index
+            for index, transition in enumerate(transitions)
+            if transition["transition_kind"] == "ORDER_CANCEL_REQUESTED"
+        )
+        confirmed_index = next(
+            index
+            for index, transition in enumerate(transitions)
+            if transition["transition_kind"] == "ENTRY_TERMINAL_CONFIRMED"
+        )
+        assert cancel_index < confirmed_index
     repo.close()
 
 

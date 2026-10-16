@@ -220,24 +220,13 @@ def strategy_instances(conn: sqlite3.Connection) -> list[dict]:
     return [dict(row) for row in rows]
 
 
-#: Alpaca order states in which the broker is working an order the Clerk can
-#: ask it to cancel: what the recovery policy lists as a verified working
-#: order, and what it holds a flatten behind. One definition, imported by the
-#: recovery policy rather than restated there. It is narrower than
-#: :data:`LIVE_CUSTODY_BROKER_STATES`: an order held for an auction, suspended,
-#: pending a replace, calculated or stopped can still fill, and is live
-#: custody, but the policy does not offer to cancel it.
-WORKING_BROKER_STATES: frozenset[str] = frozenset(
-    {"new", "accepted", "pending_new", "partially_filled", "pending_cancel"}
-)
-
 #: Alpaca order states in which an owned ENTRY can still fill, so an ENTRY in
 #: one of them outliving its run must be cancelled. The operator's
 #: ``cancel_verified_working_orders`` and the reconciliation sweep's
 #: stopped-run step (:func:`entry_orders_owed_a_cancel`) read this one
 #: definition, so the two cancellers cannot disagree about which orders are
-#: still live. Wider than :data:`WORKING_BROKER_STATES`: an auction-bound,
-#: suspended, replace-pending, calculated or stopped order can still fill.
+#: still live, including auction-bound, suspended, replace-pending, calculated
+#: and stopped orders.
 CANCELLABLE_ENTRY_BROKER_STATES: frozenset[str] = frozenset(
     {
         "new",
