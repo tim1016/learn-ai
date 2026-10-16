@@ -1445,14 +1445,18 @@ async def test_a_malformed_bot_id_is_a_404_on_every_bot_read_not_a_503(api, surf
 
 
 @pytest.fixture()
-def budget_api(api):
-    """The panel harness with its account authority serving the money reads, as an account that has not switched to budgets."""
-    app, repo = api
+def budget_api(api, tmp_path: Path):
+    """Read a retained pre-budget run through the panel's account authority."""
+    app, _budgeted_repo = api
+    repo = ClerkSqliteRepository.initialize(account_id=ACCT, artifacts_root=tmp_path / "legacy-budget")
+    repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="config-1")
+    seed_historical_run_started(repo, account_id=ACCT, strategy_instance_id=SID, lifecycle_run_id=_run_id(SID))
     runtime = get_active_clerk_runtime()
     assert runtime is not None
     runtime._sqlite_repository = repo
     runtime.account_authority_kind = "real_paper"
-    return app, repo
+    yield app, repo
+    repo.close()
 
 
 @pytest.mark.parametrize("sid", ["%2E%2E", "%20padded"], ids=["traversal-segment", "padded"])

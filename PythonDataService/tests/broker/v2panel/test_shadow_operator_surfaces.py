@@ -325,7 +325,7 @@ async def test_shadow_evidence_route_reads_the_custody_namespace(
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["account_id"] == route_account
-    assert "STRATEGY_INSTANCE_REGISTERED" in {
+    assert {"DEPLOY_COMMITTED", "DEPLOY_LAUNCHED"} <= {
         entry["kind"] for entry in body["entries"]
     }
 
