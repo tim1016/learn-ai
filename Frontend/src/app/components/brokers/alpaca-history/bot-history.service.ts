@@ -6,6 +6,7 @@ import type { components } from '../../../api/broker.types';
 import type { BotHistoryUrl } from '../../../fleet/account-workspace';
 import type { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import { laneDisplayNameText } from '../../../fleet/fleet-directory.types';
+import { isUsEquitySymbol } from '../../../shared/symbol-catalog/us-equity-symbol';
 import type { LaneModeChip } from '../../../services/alpaca-live-verdict.service';
 
 /** One page of every bot across every account (#2574), as the coordinator
@@ -49,10 +50,6 @@ export const BOT_HISTORY_WORLDS: readonly { readonly id: BotHistoryWorld; readon
   { id: 'dry_run', label: 'Dry Run' },
 ];
 
-/** A symbol the coordinator accepts: its `US_EQUITY_SYMBOL_PATTERN`
- * (`app/broker/contract/models.py`), checked here so a malformed one in the
- * URL is treated as unset rather than refused. */
-const US_EQUITY_SYMBOL = /^[A-Z]{1,5}(?:[.-][A-Z])?$/;
 /** The longest bot id the coordinator accepts. */
 const MAX_BOT_ID_LENGTH = 128;
 
@@ -70,7 +67,7 @@ export function botHistoryQuery(
     account: values.account && isKnownAccount(values.account) ? values.account : null,
     status: BOT_HISTORY_STATUSES.find((status) => status.id === values.status)?.id ?? null,
     world: BOT_HISTORY_WORLDS.find((world) => world.id === values.world)?.id ?? null,
-    symbol: US_EQUITY_SYMBOL.test(symbol) ? symbol : null,
+    symbol: isUsEquitySymbol(symbol) ? symbol : null,
     bot: bot.length > 0 && bot.length <= MAX_BOT_ID_LENGTH ? bot : null,
     page: Number.isInteger(page) && page >= 1 ? page : 1,
   };

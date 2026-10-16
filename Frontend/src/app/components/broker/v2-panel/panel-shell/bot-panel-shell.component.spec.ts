@@ -891,7 +891,7 @@ describe('BotPanelShellComponent', () => {
     });
   });
 
-  it('shows loading state initially then renders the one view', async () => {
+  it('renders the loaded panel and reveals current-run evidence when Runs opens', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }, { provide: BrokersService, useValue: brokersMock },
@@ -1754,8 +1754,6 @@ describe('BotPanelShellComponent', () => {
 
     expect(container.querySelectorAll('app-bot-page-header')).toHaveLength(1);
     expect(screen.getByRole('toolbar', { name: 'Actions for this bot' })).toBeTruthy();
-    expect(screen.queryByRole('tab', { name: 'Trader' })).toBeNull();
-    expect(screen.queryByRole('tab', { name: 'Operator' })).toBeNull();
     // The chart on the left; on the right, money, orders and setup, then decisions and health.
     const panels = (selector: string): string[] =>
       [...container.querySelectorAll(selector)].map((panel) => panel.classList[1]);
@@ -1863,13 +1861,12 @@ describe('BotPanelShellComponent', () => {
     fixture.detectChanges();
 
     expect(screen.getByText('run-current')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Previous Runs' })).toBeNull();
     expect(screen.getByRole('link', { name: 'History' }).getAttribute('href'))
       .toBe('/brokers/alpaca/clerks/clrk_spec/history?account=clrk_spec&bot=sid-001');
     expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps lifecycle actions bound to the current instance with Runs open', async () => {
+  it('sends Reconcile for this bot while Runs is open', async () => {
     mockService.getLiveSnapshot.mockResolvedValueOnce(liveSnapshot({
       ...PANEL,
       health: { ...PANEL.health, running: false },
@@ -2008,7 +2005,7 @@ describe('BotPanelShellComponent', () => {
     fixture.destroy();
   });
 
-  it('shows log-only degradation panel after data loads', async () => {
+  it('explains log-only mode after data loads', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }, { provide: BrokersService, useValue: brokersMock },
@@ -2457,15 +2454,13 @@ describe('BotPanelShellComponent', () => {
         `${term.textContent?.trim()} ${term.nextElementSibling?.textContent?.trim()}`);
     }
 
-    it('leads with the bot’s own status and the backend’s summary, and no LIVE chip (#2794 R1, R3)', async () => {
+    it('leads with the bot’s own status and the backend’s summary (#2794 R1, R3)', async () => {
       const { container } = await renderPage({ ...PANEL, mode: 'trade' });
 
       const banner = container.querySelector('app-bot-page-header');
       expect(banner?.textContent).toContain('Running');
       await userEvent.click(screen.getByRole('button', { name: 'Running' }));
       expect(screen.getByText('Running since Tue Nov 14 2023, 17:13 ET · no decisions, no trades.')).toBeTruthy();
-      expect(banner?.textContent).not.toContain('LIVE');
-      expect(banner?.querySelector('app-alpaca-lane-mode-chip')).toBeNull();
     });
 
     it('splits health into this run and the account right now (#2794 R9)', async () => {

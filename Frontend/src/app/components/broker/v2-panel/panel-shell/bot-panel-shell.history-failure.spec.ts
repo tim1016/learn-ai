@@ -1,7 +1,5 @@
-/** #2202 (PRD #2201 §11.2): a focused regression spec for the Polygon
- * history failure path, kept OUT of `bot-panel-shell.component.spec.ts`
- * (already ~61 KB / 32 cases) so this file and the shard it lands in both
- * stay inside the two-minute test-gate budget.
+/** #2202: a focused regression spec for the Polygon history failure path,
+ * kept separate so the history failures stay easy to verify.
  *
  * Before the fix, `bot-panel-shell.component.html` read
  * `histChart.value() ?? null` while `histChart` was in its error state. That
@@ -25,7 +23,7 @@ import { of } from 'rxjs';
 import { BotPanelShellComponent } from './bot-panel-shell.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { BrokersService } from '../../../../services/brokers.service';
-import { fakeChartFeed } from '../../../../testing/bot-panel-fixtures';
+import { fakeBotPanelView, fakeChartFeed } from '../../../../testing/bot-panel-fixtures';
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
 import { DUAL_PANE_CHART_FACTORY } from '../dual-pane-chart/dual-pane-chart.component';
 import { IndicatorCatalogService } from '../../../../shared/indicator-catalog/indicator-catalog.service';
@@ -74,114 +72,20 @@ class StubEventSource {
 const originalEventSource = globalThis.EventSource;
 (globalThis as { EventSource?: unknown }).EventSource = StubEventSource;
 
+const panelDefaults = fakeBotPanelView({ bot_page: null });
 const PANEL: BotPanelView = {
+  ...panelDefaults,
   strategy_instance_id: 'sid-001',
   strategy_key: 'ema_crossover',
   strategy_label: 'Ema Crossover',
-  broker: 'alpaca',
   account_id: 'DUM284968',
   symbol: 'QQQ',
   mode: 'log_only',
-  sealed_program: null,
-  program_build: {
-    state: 'NOT_APPLICABLE',
-    program_key: 'ema_crossover',
-    verified_at_ms: 1_753_800_000_000,
-    explanation: 'No Signal Program build proof supplied.',
-  },
-
-  updated_at_ms: 1_753_800_000_000,
-  revision: 1,
-  market_pulse: {
-    session: 'OPEN',
-    market_state: 'TRADABLE',
-    market_liveness_reason: 'Fresh test evidence proves tradability.',
-    market_liveness_observed_at_ms: 1_700_000_001_000,
-    halted_symbol: null,
-    feed_state: 'LIVE',
-    latest_bar_at_ms: 1_700_000_000_000,
-    age_ms: 1_000,
-    source: 'ibkr',
-    expected_cadence_ms: 60_000,
-    headline: 'Market data live',
-    explanation: 'The feed is current.',
-    next_step: null,
-    attention_required: false,
-    observed_at_ms: 1_700_000_001_000,
-  },
-  feed_continuity: {
-    provider_label: 'IBKR market data',
-    run_id: 'run-1',
-    state: 'continuous',
-    state_label: 'Continuous',
-    explanation: 'No IBKR delivery interruptions have been recorded in this run.',
-    interruption_count: 0,
-    recovery_count: 0,
-    unresolved_count: 0,
-    decision_impact_count: 0,
-    last_interruption_at_ms: null,
-    last_recovery_at_ms: null,
-    latest_bar_at_ms: 1_700_000_000_000,
-    events: [],
-  },
-  mission_verdict: {
-    state: 'working',
-    label: 'Working',
-    explanation: 'The runtime is on duty.',
-    next_action: 'Monitor decisions.',
-    evaluated_at_ms: 1_753_800_000_000,
-  },
-  execution_policy: 'Observation only.',
-  health: {
-    strategy_instance_id: 'sid-001',
-    phase: 'ON_DUTY',
-    phase_label: 'On duty',
-    desired_state: 'RUNNING',
-    desired_state_label: 'Running',
-    running: true,
-    duty_outcome: null,
-    last_decision_at_ms: null,
-    decision_stale: false,
-    last_bar_at_ms: null,
-  },
-  clerk: {
-    account_id: 'DUM284968',
-    hold_active: false,
-    hold_reason: 'NO_HOLD',
-    hold_reason_label: 'No hold',
-    hold_reason_explanation: 'No hold active.',
-    hold_since_ms: null,
-    freeze_active: false,
-    freeze_category: null,
-    freeze_label: 'No account freeze',
-    freeze_explanation: 'Account truth is current.',
-    freeze_next_step: null,
-    freeze_observed_at_ms: null,
-    reconciliation_verdict: null,
-    reconciliation_verdict_label: null,
-    last_sweep_at_ms: null,
-    outstanding_intents: 0,
-    channels: [],
-  },
-  rail: { transaction_ref: null, stations: [] },
+  program_build: { ...panelDefaults.program_build, program_key: 'ema_crossover' },
+  market_pulse: { ...panelDefaults.market_pulse, source: 'ibkr' },
+  health: { ...panelDefaults.health, strategy_instance_id: 'sid-001' },
+  clerk: { ...panelDefaults.clerk, account_id: 'DUM284968' },
   journal_tail_ref: '/api/brokers/alpaca/clerks/clrk_spec/accounts/DUM284968/bots/sid-001/journal',
-  journal_tail_seq: null,
-  actions: [],
-  primary_action: null,
-  status: 'running',
-  exit_terms: null,
-  readiness_checks: [],
-  readiness_ready_count: 0,
-  readiness_blocked_count: 0,
-  exposure: {},
-  working_orders: [],
-  recent_decisions: [],
-  recent_fills: [],
-  fills_today: 0,
-  realized_pnl_today: 0.0,
-  open_pnl: null,
-  open_pnl_usd: null,
-  open_pnl_direction: null,
 };
 
 const LIVE_CHART = {

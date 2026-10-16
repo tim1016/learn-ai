@@ -1,6 +1,7 @@
 import type { components } from '../../../../api/broker.types';
 import { optionExpiryAnchorMs, optionExpiryDate } from '../../../../shared/option-contract/option-expiry-date';
 import { formatReceiptLabel } from '../../../../shared/pipes/receipt-label.pipe';
+import { isUsEquitySymbol } from '../../../../shared/symbol-catalog/us-equity-symbol';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
 import type {
   OptionStructureCatalogue,
@@ -522,12 +523,9 @@ export function orderTermsInWords(terms: OptionOrderTerms, defaults: OptionOrder
 
 // ── The form's own lines ────────────────────────────────────────────────────
 
-/** A symbol the preview route takes: the server's own pattern for a US stock or ETF. */
-const SYMBOL = /^[A-Z]{1,5}(?:[.-][A-Z])?$/;
-
 /** What the What step still needs of an option bot, as its header says it, or `null`. */
 export function optionsMissing(options: DeployOptionSettings): string | null {
-  if (!SYMBOL.test(options.underlying)) return 'Needs a valid symbol';
+  if (!isUsEquitySymbol(options.underlying)) return 'Needs a valid symbol';
   return options.legs.length === 0 ? 'Choose a structure' : null;
 }
 
@@ -555,7 +553,7 @@ export interface OptionPreviewSubject {
  * never one of the server's states.
  */
 export function previewNotAsked(subject: OptionPreviewSubject): string | null {
-  if (!SYMBOL.test(subject.underlying)) return 'Nothing is asked yet: “Options on” needs a symbol.';
+  if (!isUsEquitySymbol(subject.underlying)) return 'Nothing is asked yet: “Options on” needs a symbol.';
   if (!isWholeCount(subject.structures)) return 'Nothing is asked yet: the position size in How is not a whole number of structures.';
   if (subject.terms === null || subject.offered === null) return 'Nothing is asked yet: the option order terms are still being read.';
   return orderTermsSet(subject.terms, subject.offered)
@@ -574,7 +572,7 @@ export function previewRequest(previewKey: string, subject: OptionPreviewSubject
   return {
     preview_key: previewKey,
     underlying: subject.underlying,
-    ...(SYMBOL.test(subject.listensTo) ? { listens_to: subject.listensTo } : {}),
+    ...(isUsEquitySymbol(subject.listensTo) ? { listens_to: subject.listensTo } : {}),
     structure: subject.structure,
     legs: [...subject.legs],
     structures: subject.structures,
