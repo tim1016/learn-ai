@@ -83,7 +83,7 @@ describe('while the limits cannot be had', () => {
     expect(notice.textContent).toContain('The server will judge every setup.');
     await openExample('Nine legs');
     await screen.findByRole('article', { name: 'Leg 9' });
-    typeInto('Contracts', '5000');
+    fireEvent.input(screen.getByRole('textbox', { name: 'Contracts' }), { target: { value: '5000' } });
     expect(isDisabled(addLegButton())).toBe(false);
     addLeg();
     await screen.findByRole('article', { name: 'Leg 10' });
