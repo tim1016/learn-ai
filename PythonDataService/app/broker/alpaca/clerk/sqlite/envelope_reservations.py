@@ -190,7 +190,7 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
         # price converts as historical REAL evidence (clerk.money).
         "SELECT r.quantity AS quantity, COALESCE(r.exact_reference_price,r.reference_price) AS reference_price, "
         "r.exact_reference_price IS NOT NULL AS provision_recorded, r.fee_provision_cents, "
-        "e.strategy_instance_id, o.order_ref, f.fill_id, f.qty, f.price, f.fee, "
+        "e.strategy_instance_id, o.order_ref, o.broker_state, f.fill_id, f.qty, f.price, f.fee, f.side AS fill_side, "
         f"{ORDER_ENDED_SQL} AS ended, "
         # NULL for an order in shares, which is every order bound to no contract.
         f"{ORDER_CONTRACT_MULTIPLIER_SQL} AS contract_multiplier, "
@@ -214,6 +214,17 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
     with money_context():
         for order_ref, fills in by_order.items():
             first = fills[0]
+            accepted = conn.execute(
+                "SELECT facts_json FROM custody_transitions WHERE order_ref=? "
+                "AND transition_kind='ENTER_ACCEPTED' ORDER BY sequence LIMIT 1", (order_ref,),
+            ).fetchone()
+            if accepted is not None:
+                import json
+
+                option = json.loads(accepted[0]).get("option", {})
+                if option.get("options_attempt") is not None:
+                    claims.append(_session_leg_claim(conn, first, fills, seen_before_ms=seen_before_ms))
+                    continue
             if order_ref in parents:
                 claims.append(_structure_claim(conn, first, seen_before_ms=seen_before_ms))
                 continue
@@ -244,6 +255,39 @@ def entry_cash_claims(conn: sqlite3.Connection, *, seen_before_ms: int) -> tuple
                 unfilled_cost=unfilled_cost, unseen_fill_cost=unseen_cost, _fee=fee,
             ))
     return tuple(claims)
+
+
+def _session_leg_claim(
+    conn: sqlite3.Connection, reserved: sqlite3.Row, fills: list[sqlite3.Row], *, seen_before_ms: int,
+) -> EntryCashClaim:
+    """A leg's explicit portfolio reservation, held whole until its opening ends.
+
+    Formula: pending claim = reserved portfolio dollars + fee provision;
+      unseen cash paid = sum(qty * price * multiplier + fee) for BUY fills.
+    Reference: ADR 0076 custody reservation; ADR 0078 covered session legs.
+    Canonical implementation: this composition; ``clerk.money.notional``.
+    Validated against: tests/broker/alpaca/clerk/test_options_leg_custody.py.
+    """
+    unseen = ZERO
+    for fill in fills:
+        if fill["fill_id"] is None or fill["execution_recorded_at_ms"] < seen_before_ms:
+            continue
+        # A sale is cash coming in, accounted by the existing unseen-sales
+        # projection, and never creates an additional cash-out claim here.
+        if fill["fill_side"].upper() == "BUY":
+            fee = ZERO if fill["fee"] is None else normalize_money(fill["fee"])
+            unseen += notional(fill["qty"], fill["price"], multiplier=fill["contract_multiplier"]) + fee
+    from app.broker.alpaca.clerk.sqlite.reads import order_fills_short_of_broker_cumulative
+
+    terminal = reserved["ended"] or (reserved["broker_state"] or "").lower() == "filled"
+    working = not terminal or order_fills_short_of_broker_cumulative(conn, reserved["order_ref"])
+    provision = Decimal(reserved["fee_provision_cents"]).scaleb(-2)
+    return EntryCashClaim(
+        strategy_instance_id=reserved["strategy_instance_id"], order_ref=reserved["order_ref"],
+        unfilled_cost=normalize_money(reserved["reference_price"]) - provision if working else ZERO,
+        unseen_fill_cost=unseen,
+        _fee=provision if working else ZERO,
+    )
 
 
 def _structure_claim(conn: sqlite3.Connection, reserved: sqlite3.Row, *, seen_before_ms: int) -> EntryCashClaim:

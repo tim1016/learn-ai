@@ -825,6 +825,13 @@ def _option_choice_of(binding: BrokerBotBinding) -> TradesOptions | None:
     nobody chose. It is refused by name, never answered as a bot in the
     underlying's shares.
     """
+    if binding.options_bot is not None:
+        raise PanelRunnerError(
+            "This bot follows a golden Options setup.",
+            detail="Its session rules cannot be represented by a Signal bot option structure.",
+            next_action="Choose Options bot in Deploy and select its approved setup.",
+            http_status=409, reason_code="OPTIONS_SETUP_DEPLOY_REQUIRED",
+        )
     if not is_option_plan(binding.action_plan):
         return None
     terms = binding.option_order_terms

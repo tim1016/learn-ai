@@ -1,0 +1,28 @@
+<section class="golden-approval">
+  <h3>Golden setup</h3>
+  @if (golden(); as version) {
+    <p><strong>{{ version.status | receiptLabel }}</strong> · {{ version.status_explanation }}</p>
+    <p>Approved by {{ version.approved_by }}: {{ version.note }}</p>
+    @for (limitation of version.evidence.limitations; track limitation) { <p class="note">{{ limitation }}</p> }
+    @if (version.status === 'ready') { <p>Choose this version in an account’s Deploy a bot → Options bot.</p> }
+    @if (version.status !== 'revoked') {
+      <label [for]="noteId()">Reason to revoke this version</label>
+      <textarea [id]="noteId()" [formField]="noteForm" rows="2"></textarea>
+      <div class="actions">
+        @if (version.status === 'stale') { <button type="button" [disabled]="busy()" (click)="act('reprove')">Re-prove from retained evidence</button> }
+        <button type="button" [disabled]="busy() || noteForm().invalid()" (click)="act('revoke')">Revoke golden setup</button>
+      </div>
+    }
+  } @else if (versions.isLoading()) {
+    <p>Reading golden setups…</p>
+  } @else if (readProblem(); as why) {
+    <p class="problem">{{ why }}</p><button type="button" (click)="versions.reload()">Try again</button>
+  } @else {
+    <p>Approve the exact setup and evidence of this run. Later edits need a new approval. Golden means owner-approved; it does not mean optimal.</p>
+    <label [for]="noteId()">Approval note</label>
+    <textarea [id]="noteId()" [formField]="noteForm" rows="2"></textarea>
+    <button type="button" [disabled]="busy() || noteForm().invalid()" (click)="act('approve')">Approve golden setup</button>
+  }
+  @if (busy()) { <p>Checking retained data and replaying the exact setup. This may take a moment…</p> }
+  @if (problem(); as why) { <p class="problem">{{ why }}</p> }
+</section>

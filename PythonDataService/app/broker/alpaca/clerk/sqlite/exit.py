@@ -79,6 +79,10 @@ class OptionCloseTakesNoPricedLeg(ValueError):
         )
 
 
+class OptionsProtectionRequired(ValueError):
+    """A bought allocation cannot leave before its sold exposure settles."""
+
+
 def exit_effect_operation_id(*, strategy_instance_id: str, decision_id: str) -> str:
     """The effect an EXIT decided as ``decision_id`` is recorded under, whether or not it exists yet."""
     return f"effect:{_exit_identity_key(strategy_instance_id, decision_id)}"
@@ -115,6 +119,45 @@ class ReducibleEntry:
     order_ref: str
     exit_owned: bool
     """An EXIT already working on this symbol owns its reduction."""
+    allocation: bool = False
+    """A session allocation owns only its own executions, rather than the symbol."""
+
+
+def reducible_entries(
+    repo: ClerkSqliteRepository, strategy_instance_id: str, symbol: str,
+    *, include_flat: bool = False,
+) -> tuple[ReducibleEntry, ...]:
+    """Every session allocation still exposed, or the legacy whole-symbol target.
+
+    An unanswered opening stays reducible even before its first fill. Sold
+    allocations come first, so their buy-backs can release bought protection.
+    ``include_flat`` is for re-driving a previously captured idempotent close.
+    """
+    from app.broker.alpaca.clerk.options_legs import allocation_positions
+    from app.broker.alpaca.clerk.sqlite.entry_outcome import entry_outcome
+
+    entries = [
+        order for order in repo.entry_orders_for_strategy(strategy_instance_id)
+        if symbol.upper() in (held.upper() for held in entry_order_symbols(repo, order.order_ref))
+    ]
+    if not entries:
+        return ()
+    allocated = [(order, option_entry_of_order(repo, order.order_ref)) for order in entries]
+    if not any(getattr(option, "options_attempt", None) is not None for _, option in allocated):
+        return (ReducibleEntry(
+            entries[-1].order_ref,
+            any(repo.active_exit_for_order(order.order_ref) is not None for order in entries),
+        ),)
+    targets: list[tuple[bool, ReducibleEntry]] = []
+    for order, option in reversed(allocated):
+        if getattr(option, "options_attempt", None) is None:
+            continue
+        if not include_flat and not any(allocation_positions(repo, strategy_instance_id, order.order_ref).values()) and entry_outcome(repo, order.order_ref).proven:
+            continue
+        targets.append((option.the_leg.position != "short", ReducibleEntry(
+            order.order_ref, repo.active_exit_for_order(order.order_ref) is not None, allocation=True,
+        )))
+    return tuple(target for _, target in sorted(targets, key=lambda item: item[0]))
 
 
 def newest_reducible_entry(
@@ -126,6 +169,10 @@ def newest_reducible_entry(
     EXIT, an ended run's close, the operator's safe flatten and the stuck-EXIT
     watchdog.
 
+    Session options use their own allocation rather than the whole symbol:
+    the next unclosed sold allocation comes first, then bought allocations.
+    Settled flat allocations are omitted; an unknown opening stays visible.
+
     * **Newest**: the entry updated last, the order ``entry_orders_for_strategy``
       reads them in, so a re-run of the same step keys the same EXIT.
     * **An EXIT owns the whole symbol**: it cancel-proves every live sibling
@@ -135,17 +182,8 @@ def newest_reducible_entry(
       waits or refuses. The owned entries are never filtered out: that left an
       older sibling as the target of a second reduction.
     """
-    entries = [
-        order
-        for order in repo.entry_orders_for_strategy(strategy_instance_id)
-        if symbol.upper() in (held.upper() for held in entry_order_symbols(repo, order.order_ref))
-    ]
-    if not entries:
-        return None
-    return ReducibleEntry(
-        order_ref=entries[-1].order_ref,
-        exit_owned=any(repo.active_exit_for_order(order.order_ref) is not None for order in entries),
-    )
+    targets = reducible_entries(repo, strategy_instance_id, symbol)
+    return targets[0] if targets else None
 
 
 def _exit_cancellable_entries(
@@ -240,16 +278,22 @@ def _accept_exit_capture(
         run_id = resolve_run_id(target)
         symbol = entry_order_symbols(repo, target.order_ref)[0]
         option_entry = option_entry_of_order(repo, target.order_ref)
+        if getattr(option_entry, "options_attempt", None) is not None:
+            from app.broker.alpaca.clerk.options_legs import protection_refusal
+
+            if refused := protection_refusal(repo, strategy_instance_id, target.order_ref):
+                raise OptionsProtectionRequired(refused)
         closes_an_option = option_entry is not None
         if closes_an_option and recorded is not None and recorded.shape != regular_session_shape(recorded.shape.side):
             raise OptionCloseTakesNoPricedLeg
         entry_order_refs: list[str] = []
-        for candidate in _exit_cancellable_entries(
+        candidates = [target] if getattr(option_entry, "options_attempt", None) is not None else _exit_cancellable_entries(
             repo,
             strategy_instance_id=strategy_instance_id,
             symbol=symbol,
             target_order_ref=target.order_ref,
-        ):
+        )
+        for candidate in candidates:
             require_owned_entry_order(
                 repo,
                 strategy_instance_id=strategy_instance_id,
@@ -575,9 +619,11 @@ __all__ = [
     "OPTION_CLOSE_TAKES_NO_LIMIT",
     "ExitSubmission",
     "OptionCloseTakesNoPricedLeg",
+    "OptionsProtectionRequired",
     "ReducibleEntry",
     "accept_exit",
     "newest_reducible_entry",
+    "reducible_entries",
     "resolve_accepted_exit",
     "resolve_exit",
 ]

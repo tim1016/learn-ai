@@ -62,7 +62,7 @@ export class HomeFinishedComponent {
       /** Why the bot has no page to open, in the backend's words; `null` when it has one. */
       noPage: bot.page_unavailable_reason ?? null,
       page: accountWorkspaceBotRoute(this.account(), bot.strategy_instance_id).commands,
-      again: accountWorkspaceDeployAgainRoute(this.account(), bot.strategy_instance_id),
+      again: accountWorkspaceDeployAgainRoute(this.account(), bot.strategy_instance_id, bot.options_bot?.golden_setup_id),
       againLabel: `Deploy again from ${bot.strategy_instance_id}`,
       selectLabel: HOME_CLEAR_COPY.select(bot.strategy_instance_id),
     })),

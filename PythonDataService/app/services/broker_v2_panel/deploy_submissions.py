@@ -110,6 +110,8 @@ class DeploySubmission(BaseModel):
 
 def bot_name_prefix(symbol: str, strategy_key: str) -> str:
     """``<symbol>-<strategy code>``, lowercase: every name's fixed part."""
+    if strategy_key == "options_rules":
+        return f"{symbol.lower()}-opt"
     registration = _STRATEGY_REGISTRY.get(strategy_key)
     if registration is None or not registration.deploy_code:
         raise BotNameUnavailable(

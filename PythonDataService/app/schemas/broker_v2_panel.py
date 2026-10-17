@@ -50,6 +50,7 @@ from app.schemas.bot_history import BotHistoryStatus
 from app.schemas.bot_page import BotPageView
 from app.schemas.exit_terms import ExitTerms
 from app.schemas.operator_blocker import OperatorBlocker, OperatorConfirmationCopy
+from app.schemas.options_bot import OptionsBotConfiguration
 from app.schemas.run_admission import ProgramBuildAdmissionFact
 from app.schemas.signal_program_seal import SealedBotProgram
 from app.schemas.strategy_view import DecisionExplanationView
@@ -184,6 +185,8 @@ class BotCatalogView(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    bot_kind: Literal["signal", "options"] = "signal"
+    options_bot: OptionsBotConfiguration | None = None
     strategy_instance_id: str
     strategy_key: str
     strategy_label: str
@@ -686,6 +689,8 @@ class BotPanelView(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    bot_kind: Literal["signal", "options"] = "signal"
+    options_bot: OptionsBotConfiguration | None = None
     strategy_instance_id: str
     strategy_key: str
     strategy_label: str

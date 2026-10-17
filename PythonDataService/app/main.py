@@ -1342,6 +1342,12 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
         tags=["research-golden-qualifications"],
         dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
     )
+    from app.routers import golden_option_setups
+
+    app.include_router(
+        golden_option_setups.router, prefix="/api/research/golden-option-setups",
+        tags=["research-golden-option-setups"], dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
+    )
     # Parameter Grid Search (PRD #1926): the research surface plus its jobs-boundary entry.
     app.include_router(grid_search.router, prefix="/api/research/grid-search", tags=["research-grid-search"])
     app.include_router(grid_search.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
@@ -1471,6 +1477,9 @@ if _ROLE_RUNS_CLERK:
 # history). Account-scoped reads and control actions on live broker state, so
 # every route requires the always-on data-plane control secret.
 if _ROLE_RUNS_CLERK:
+    from app.routers import options_bots
+
+    app.include_router(options_bots.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
     app.include_router(
         broker_v2_panel.router,
         dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,

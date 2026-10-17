@@ -20,13 +20,14 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import SWEEP_LIVENESS_BOUND_
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.marketdata.feed import MarketDataFeed
 from app.research.golden_search.qualifications import Coverage
-from app.schemas.action_plan import ActionPlan, traded_market_symbol
+from app.schemas.action_plan import BotActionPlan, traded_market_symbol
 from app.schemas.bot_end import BotEnd
 from app.schemas.broker_bots import AlpacaPaperEvidenceOverride, BotStatusView
 from app.schemas.deployment_budget import DeployBudgetConsent
 from app.schemas.exit_terms import ExitTerms
 from app.schemas.market_liveness import MarketLivenessFact
 from app.schemas.option_order_terms import SealedOptionOrderTerms
+from app.schemas.options_bot import OptionsBotConfiguration
 from app.schemas.run_admission import (
     ExtendedHoursAdmissionFact,
     ExtendedHoursAdmissionState,
@@ -110,7 +111,7 @@ class StartRequest:
     quantity: int
     carryover_policy: Literal["FORBID", "ALLOW"]
     evidence_override: AlpacaPaperEvidenceOverride | None
-    action_plan: ActionPlan
+    action_plan: BotActionPlan
     # `None`, not `{}` — a binding's `strategy_params` must stay absent (not
     # an empty dict) so the hash-backward-compatibility rule in
     # bot_binding_repository.py's ``BrokerBotBinding`` holds all the way
@@ -131,6 +132,7 @@ class StartRequest:
     # The four order terms an option bot is deployed with (ADR 0076 decision
     # 24). ``None`` for every bot in shares.
     option_order_terms: SealedOptionOrderTerms | None = None
+    options_bot: OptionsBotConfiguration | None = None
     budget_consent: DeployBudgetConsent | None = None
     # The owner's end for this deployment (#2607): recorded in the bot's
     # desired state at activation, never in the binding, so it enters no
@@ -252,7 +254,7 @@ def make_start_request(
     quantity: int,
     carryover_policy: Literal["FORBID", "ALLOW"],
     evidence_override: AlpacaPaperEvidenceOverride | None,
-    action_plan: ActionPlan,
+    action_plan: BotActionPlan,
     exit_terms: ExitTerms | None,
     strategy_params: dict[str, Any] | None = None,
     strategy_param_origins: dict[str, ParameterOrigin] | None = None,
@@ -260,6 +262,7 @@ def make_start_request(
     end: BotEnd | None = None,
     traded_asset_acknowledgement: UntestedTradedAssetAcknowledgement | None = None,
     option_order_terms: SealedOptionOrderTerms | None = None,
+    options_bot: OptionsBotConfiguration | None = None,
 ) -> StartRequest:
     """Build the one typed request shared by preview and execution."""
     return StartRequest(
@@ -280,6 +283,7 @@ def make_start_request(
         end=end,
         traded_asset_acknowledgement=traded_asset_acknowledgement,
         option_order_terms=option_order_terms,
+        options_bot=options_bot,
     )
 
 
@@ -531,6 +535,7 @@ def new_run_binding(request: StartRequest, *, now_ms: int) -> BrokerBotBinding:
         traded_asset_acknowledgement=request.traded_asset_acknowledgement,
         action_plan=request.action_plan,
         option_order_terms=request.option_order_terms,
+        options_bot=request.options_bot,
         strategy_params=request.strategy_params,
         exit_terms=request.exit_terms,
         strategy_param_origins=request.strategy_param_origins,
@@ -564,7 +569,7 @@ def seal_binding_to_custody_snapshot(
 def log_run_launch(
     binding: BrokerBotBinding,
     *,
-    reason: Literal["deploy"],
+    reason: Literal["deploy", "resume"],
 ) -> None:
     """Emit the common structured launch event for Deploy."""
     logger.info(
@@ -655,20 +660,25 @@ class BotStartAdmission:
                 observed_at_ms = self._now_ms()
                 process = self._process_fact(binding, observed_at_ms)
                 feed = self._feed_resolver()
-                validation = await resolve_strategy_validation_fact(
-                    self._validation_fact,
-                    binding,
-                    observed_at_ms,
-                )
+                if binding.options_bot is not None:
+                    from app.services.options_bot_admission import options_start_facts
+
+                    program_build, validation = await options_start_facts(binding, verified_at_ms=observed_at_ms)
+                else:
+                    validation = await resolve_strategy_validation_fact(
+                        self._validation_fact,
+                        binding,
+                        observed_at_ms,
+                    )
                 # Golden Search coverage reads the research database too
                 # (#2696); the seal and the proof below are synchronous.
-                coverage = await self._coverage(binding)
+                coverage = None if binding.options_bot is not None else await self._coverage(binding)
                 # Golden Validation may read the research database. Re-capture
                 # after that await so newer market-clock evidence cannot look
                 # as though it came from the future.
                 observed_at_ms = self._now_ms()
                 seal_failure: SignalProgramSealError | None = None
-                if binding.sealed_program is None:
+                if binding.sealed_program is None and binding.options_bot is None:
                     try:
                         sealed_program = build_start_program_seal(
                             binding,
@@ -679,11 +689,12 @@ class BotStartAdmission:
                     except SignalProgramSealError as exc:
                         sealed_program, seal_failure = None, exc
                     binding = binding.model_copy(update={"sealed_program": sealed_program})
-                program_build = (
-                    unsealed_program_build(binding.strategy_key, observed_at_ms, seal_failure)
-                    if seal_failure is not None
-                    else prove_running_program_build(binding, verified_at_ms=observed_at_ms, coverage=coverage)
-                )
+                if binding.options_bot is None:
+                    program_build = (
+                        unsealed_program_build(binding.strategy_key, observed_at_ms, seal_failure)
+                        if seal_failure is not None
+                        else prove_running_program_build(binding, verified_at_ms=observed_at_ms, coverage=coverage)
+                    )
                 binding = binding.model_copy(update={"program_build": program_build})
 
                 def market_data(symbol: str) -> MarketDataAdmissionFact:
@@ -701,6 +712,7 @@ class BotStartAdmission:
                     configuration_hash=configuration_hash(binding),
                     sealed_account_id=binding.sealed_account_id or "",
                     mode=binding.mode,
+                    schedules_options_sessions=binding.options_bot is not None,
                     program_build=program_build,
                     validation=validation,
                     runtime=runtime,

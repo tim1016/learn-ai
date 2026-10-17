@@ -472,6 +472,36 @@
       "path_template": "/accounts/{account_id}/manual-orders/preview",
       "requires_account": true
     },
+    "options_bot_deploy": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/options-bots/deploy",
+      "requires_account": true
+    },
+    "options_bot_deploy_submission_read": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/options-bots/deploy-submissions/{submission_key}",
+      "requires_account": true
+    },
+    "options_bot_resume": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/options-bots/{sid}/resume",
+      "requires_account": true
+    },
+    "options_bot_resume_review": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/options-bots/{sid}/resume-review",
+      "requires_account": true
+    },
+    "options_bot_review": {
+      "method": "POST",
+      "path_template": "/accounts/{account_id}/options-bots/review",
+      "requires_account": true
+    },
+    "options_bot_session_read": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/options-bots/{sid}/session",
+      "requires_account": true
+    },
     "paper_access_confirm": {
       "method": "POST",
       "path_template": "/accounts/{account_id}/strategies/{program_key}/paper-access/confirm",

@@ -118,6 +118,7 @@ from app.broker.alpaca.clerk.sqlite.contract_terms import is_option_contract_sym
 from app.broker.alpaca.clerk.sqlite.exit import (
     ExitSubmission,
     OptionCloseTakesNoPricedLeg,
+    OptionsProtectionRequired,
     accept_recovery_exit,
     newest_reducible_entry,
     resolve_accepted_exit,
@@ -150,7 +151,7 @@ from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop, run_inline
 from app.broker.alpaca.clerk.sqlite.open_replacement import replacement_ready
-from app.broker.alpaca.clerk.sqlite.option_entry import order_contract
+from app.broker.alpaca.clerk.sqlite.option_entry import option_entry_of_order, order_contract
 from app.broker.alpaca.clerk.sqlite.option_event_books import outside_order_in_the_way
 from app.broker.alpaca.clerk.sqlite.order_projection import OrderProjectionReadError
 from app.broker.alpaca.clerk.sqlite.repository import (
@@ -496,6 +497,13 @@ async def _recover_stale_exit(
     target = await run(lambda: newest_reducible_entry(repo, sid, cause.symbol))
     if target is None:
         return RecoveryResult("hold", "RECOVERY_ENTRY_UNAVAILABLE", "No releasable entry evidence is available for this exit.")
+    remaining = stale.remaining
+    if target.allocation:
+        from app.broker.alpaca.clerk.options_legs import allocation_positions
+
+        remaining = await run(lambda: allocation_positions(repo, sid, target.order_ref).get(cause.symbol, 0))
+        if not position_quantity_is_nonzero(remaining):
+            return RecoveryResult("hold", "RECOVERY_ENTRY_UNAVAILABLE", "The opening outcome must settle before its close is sized.")
     # Read the instant after repository hops, immediately before quote/liveness.
     now_ms = repo.clock()
     touch = (
@@ -504,8 +512,8 @@ async def _recover_stale_exit(
         else pricing.read(cause.symbol, now_ms, strategy_instance_id=sid)
     )
     try:
-        shape = touch.price(side=reducing_side(stale.remaining),
-                            symbol=cause.symbol, quantity=stale.remaining, now_ms=now_ms)
+        shape = touch.price(side=reducing_side(remaining),
+                            symbol=cause.symbol, quantity=remaining, now_ms=now_ms)
     except ProgramLegRefused as exc:
         logger.info("deferred a stuck-EXIT re-drive: no reduction can be priced", extra={
             "action": "exit_redrive_unpriceable", "account_id": repo.account_id,
@@ -548,6 +556,8 @@ async def _recover_stale_exit(
     except OptionCloseTakesNoPricedLeg as exc:
         # Refused before anything was accepted: an option position is closed by a market order only.
         return RecoveryResult("hold", exc.refusal.reason_code, exc.refusal.explanation)
+    except OptionsProtectionRequired as exc:
+        return RecoveryResult("hold", "OPTIONS_PROTECTION_REQUIRED", str(exc))
     except (OperationClaimError, AdmissionBlockedError, DurableConflictError):
         return RecoveryResult("hold", "RECOVERY_CUSTODY_BUSY", "Another custody operation owns this exit; the Clerk will check again.")
 
@@ -659,7 +669,13 @@ def _accept_admissible_redrive(
     parking it in ``accepted``, armed to sell once the hold cleared.) ``None``
     means the strategy became attributed-flat since the scan.
     """
-    remaining = repo.position(strategy_instance_id, symbol)
+    option = option_entry_of_order(repo, entry_order_ref)
+    if getattr(option, "options_attempt", None) is not None:
+        from app.broker.alpaca.clerk.options_legs import allocation_positions
+
+        remaining = allocation_positions(repo, strategy_instance_id, entry_order_ref).get(symbol, 0)
+    else:
+        remaining = repo.position(strategy_instance_id, symbol)
     if not position_quantity_is_nonzero(remaining):
         return None
     if repo.active_exit_for_strategy(strategy_instance_id) is not None:

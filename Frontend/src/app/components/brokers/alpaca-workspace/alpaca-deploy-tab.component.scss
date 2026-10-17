@@ -26,3 +26,6 @@ app-alpaca-deploy-workflow {
 .deploy-tab-context--error strong {
   color: var(--bear);
 }
+:host .bot-kind-choice { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; margin-bottom: 1.5rem; }
+:host .bot-kind-choice button { padding: .6rem 1rem; border: 1px solid var(--surface-border); border-radius: .4rem; background: var(--surface-card); color: var(--text-color); cursor: pointer; }
+:host .bot-kind-choice button.selected { border-color: var(--primary-color); color: var(--primary-color); }

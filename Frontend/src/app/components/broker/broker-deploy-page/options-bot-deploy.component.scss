@@ -1,0 +1,15 @@
+:host { display: block; }
+.options-deploy { color: var(--text-color); }
+header { margin-bottom: 1.5rem; }
+h1 { font-size: 1.5rem; margin: 0 0 .5rem; }
+h2 { font-size: 1.1rem; margin: 0 0 1rem; }
+.deploy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 25rem), 1fr)); gap: 1rem; }
+.card { padding: 1.2rem; background: var(--surface-card); border: 1px solid var(--surface-border); border-radius: .65rem; }
+label { display: block; margin: .75rem 0 .4rem; font-weight: 500; }
+select, input { width: 100%; padding: .65rem; color: var(--text-color); background: var(--surface-ground); border: 1px solid var(--surface-border); border-radius: .4rem; font: inherit; margin-bottom: .75rem; }
+button { padding: .65rem .9rem; color: var(--text-color); background: var(--surface-card); border: 1px solid var(--surface-border); border-radius: .4rem; cursor: pointer; margin-top: .5rem; }
+button:disabled { opacity: .5; cursor: default; }
+fieldset { margin: .5rem 0; padding: 0; border: 0; }
+p { line-height: 1.5; }
+.note { color: var(--text-color-secondary); font-size: .875rem; }
+.problem { color: var(--red-500, #ef4444); }

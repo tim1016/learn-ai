@@ -99,9 +99,11 @@ from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
 from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite.ended_run_close import Holding, decision_id_under, holding_of_entry
 from app.broker.alpaca.clerk.sqlite.exit import (
+    OptionsProtectionRequired,
+    ReducibleEntry,
     accept_recovery_exit,
     exit_effect_operation_id,
-    newest_reducible_entry,
+    reducible_entries,
 )
 from app.broker.alpaca.clerk.sqlite.exit_resolution import (
     SCHEDULED_CLOSE_DECISION_PREFIX,
@@ -269,7 +271,10 @@ def held_contracts(
             continue
         for position in own:
             try:
-                held.append(_held_contract(repo, position, now_ms))
+                targets = reducible_entries(repo, position.strategy_instance_id, position.symbol)
+                if not targets:
+                    raise LookupError("a held option contract has no remaining allocation")
+                held.extend(_held_contract(repo, position, now_ms, target) for target in targets)
             except (LookupError, ValueError, AssertionError):
                 # What an entry's own facts raise when they are missing or cannot be read back.
                 unread.add(position.strategy_instance_id)
@@ -310,11 +315,12 @@ def _a_close_can_be_owed(own: Sequence[reads.HeldOptionContract], now_ms: int) -
     return False
 
 
-def _held_contract(repo: ClerkSqliteRepository, position: reads.HeldOptionContract, now_ms: int) -> HeldContract:
+def _held_contract(
+    repo: ClerkSqliteRepository, position: reads.HeldOptionContract, now_ms: int, target: ReducibleEntry,
+) -> HeldContract:
     sid, symbol = position.strategy_instance_id, position.symbol
-    target = newest_reducible_entry(repo, sid, symbol)
-    entry = None if target is None else option_entry_of_order(repo, target.order_ref)
-    if target is None or entry is None:
+    entry = option_entry_of_order(repo, target.order_ref)
+    if entry is None:
         # A contract is held only through an entry order of its own bot in that contract.
         raise LookupError(f"{sid} holds {symbol} and no option entry of its own opened it")
     # The entry's own terms. One accepted before entries kept theirs is held to the starting ones.
@@ -334,12 +340,14 @@ def _held_contract(repo: ClerkSqliteRepository, position: reads.HeldOptionContra
     return HeldContract(
         strategy_instance_id=sid,
         symbol=symbol,
-        quantity=position.quantity,
+        quantity=(
+            _allocation_quantity(repo, sid, target.order_ref, symbol) if target.allocation else position.quantity
+        ),
         entry_order_ref=target.order_ref,
         owed=owed,
         missed=missed,
         holding=holding,
-        unfinished=_unfinished_close(repo, sid) if concerns_the_clerk else None,
+        unfinished=_unfinished_close(repo, sid, target.order_ref if target.allocation else None) if concerns_the_clerk else None,
         left_to_owner=concerns_the_clerk and automatic_exit_stopped(repo, sid),
         expired=past_last_session(OptionContract.from_occ_symbol(symbol).expiry_date, now_ms),
         last_exit_taken_at_ms=None if newest_exit is None else newest_exit["clerk_observed_at_ms"],
@@ -350,9 +358,17 @@ def _is_a_scheduled_close(effect: EffectOperationResource) -> bool:
     return effect.command_id.startswith(f"cmd:{effect.strategy_instance_id}:{SCHEDULED_CLOSE_DECISION_PREFIX}")
 
 
-def _unfinished_close(repo: ClerkSqliteRepository, strategy_instance_id: str) -> str | None:
+def _allocation_quantity(repo: ClerkSqliteRepository, sid: str, entry_order_ref: str, symbol: str) -> float:
+    from app.broker.alpaca.clerk.options_legs import allocation_positions
+
+    return allocation_positions(repo, sid, entry_order_ref).get(symbol, 0)
+
+
+def _unfinished_close(
+    repo: ClerkSqliteRepository, strategy_instance_id: str, entry_order_ref: str | None = None,
+) -> str | None:
     """The bot's working EXIT when it is a scheduled close, of today's session or an earlier one."""
-    active = repo.active_exit_for_strategy(strategy_instance_id)
+    active = repo.active_exit_for_strategy(strategy_instance_id) if entry_order_ref is None else repo.active_exit_for_order(entry_order_ref)
     return active.effect_operation_id if active is not None and _is_a_scheduled_close(active) else None
 
 
@@ -426,7 +442,7 @@ async def drive_scheduled_closes(
             if no_pass_on_a_timer:
                 worked.setdefault(item.unfinished, item)
         elif item.to_be_taken(now_ms) or (no_pass_on_a_timer and item.to_be_taken_again(now_ms)):
-            worked.setdefault(f"{item.strategy_instance_id}:{item.symbol}", item)
+            worked.setdefault(f"{item.strategy_instance_id}:{item.entry_order_ref}", item)
     answers = await asyncio.gather(*(one(item) for item in worked.values()), return_exceptions=True)
     for answer in answers:
         if isinstance(answer, BaseException):
@@ -509,7 +525,7 @@ async def _take_or_drive(
         await resolve_exit(
             repo, effect_operation_id=effect_operation_id, trade=trade, pricing=pricing, read=None, off_loop=run
         )
-    except (OperationClaimError, AdmissionBlockedError) as held_up:
+    except (OperationClaimError, AdmissionBlockedError, OptionsProtectionRequired) as held_up:
         if being_cancelled():
             raise asyncio.CancelledError from None
         logger.info(

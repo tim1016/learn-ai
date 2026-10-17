@@ -35,6 +35,7 @@ from pydantic import (
     Field,
     SerializerFunctionWrapHandler,
     Tag,
+    TypeAdapter,
     field_validator,
     model_serializer,
     model_validator,
@@ -407,12 +408,33 @@ def _require_strike_references_resolve(legs: list[OptionEntryLeg]) -> None:
             path.append(following)
 
 
-def traded_instrument(action_plan: ActionPlan) -> StockInstrument | OptionInstrument:
+class OptionsSessionActionPlan(BaseModel):
+    """An Options bot manages the legs of its sealed setup, rather than one structure (ADR 0079)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["options_session"]
+    underlying: Annotated[str, Field(pattern=r"^[A-Z]{1,5}$")]
+    setup_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
+
+BotActionPlan = ActionPlan | OptionsSessionActionPlan
+_BOT_ACTION_PLAN = TypeAdapter(BotActionPlan)
+
+
+def parse_bot_action_plan(value: object) -> BotActionPlan:
+    """Read the plan's own declared decision model, including historical structure plans."""
+    return _BOT_ACTION_PLAN.validate_python(value)
+
+
+def traded_instrument(action_plan: BotActionPlan) -> StockInstrument | OptionInstrument:
     """What this plan trades: the one instrument its entry legs are in, by type and identity.
 
     The one answer to "what does this bot trade". A bot's binding symbol is
     its Signal stream; what it trades is read here, never guessed from that.
     """
+    if isinstance(action_plan, OptionsSessionActionPlan):
+        return OptionInstrument(kind="option", underlying=action_plan.underlying)
     instruments = {(leg.instrument.kind, leg.instrument.underlying.upper()) for leg in action_plan.on_enter}
     if len(instruments) != 1:
         raise ValueError(
@@ -422,16 +444,18 @@ def traded_instrument(action_plan: ActionPlan) -> StockInstrument | OptionInstru
     return action_plan.on_enter[0].instrument
 
 
-def is_option_plan(action_plan: ActionPlan) -> bool:
+def is_option_plan(action_plan: BotActionPlan) -> bool:
     """Whether the plan's entry is in option contracts. A plan cannot mix them with a stock leg.
 
     The one answer to "does this bot trade options", for every layer: the
     Clerk, the binding, the start rule and Deploy again all ask it here.
     """
-    return any(isinstance(leg, OptionEntryLeg) for leg in action_plan.on_enter)
+    return isinstance(action_plan, OptionsSessionActionPlan) or any(
+        isinstance(leg, OptionEntryLeg) for leg in action_plan.on_enter
+    )
 
 
-def trades_the_signals_shares(action_plan: ActionPlan, signal_symbol: str) -> bool:
+def trades_the_signals_shares(action_plan: BotActionPlan, signal_symbol: str) -> bool:
     """Whether the plan trades shares of the symbol the bot listens to.
 
     Decided by the instrument's type and identity, not by comparing tickers:
@@ -441,7 +465,7 @@ def trades_the_signals_shares(action_plan: ActionPlan, signal_symbol: str) -> bo
     return instrument.kind == "stock" and instrument.underlying.upper() == signal_symbol.upper()
 
 
-def traded_market_symbol(action_plan: ActionPlan, signal_symbol: str) -> str | None:
+def traded_market_symbol(action_plan: BotActionPlan, signal_symbol: str) -> str | None:
     """The second symbol a bot needs live: the one its orders are in, when that is not the symbol it listens to.
 
     ``None`` when they are one symbol, which one check covers. Start admission
@@ -484,13 +508,18 @@ class TradedInstrumentView(BaseModel):
         return view
 
     @classmethod
-    def of(cls, action_plan: ActionPlan, *, signal_symbol: str) -> TradedInstrumentView | None:
+    def of(cls, action_plan: BotActionPlan, *, signal_symbol: str) -> TradedInstrumentView | None:
         """The plan's traded instrument, or ``None`` when the bot trades the shares it listens to."""
         if trades_the_signals_shares(action_plan, signal_symbol):
             return None
         instrument = traded_instrument(action_plan)
         if instrument.kind == "stock":
             return cls(kind=instrument.kind, symbol=instrument.underlying.upper())
+        if isinstance(action_plan, OptionsSessionActionPlan):
+            return cls(
+                kind="option", symbol=instrument.underlying, label="Options setup",
+                in_a_sentence="an Options setup on",
+            )
         # The catalogue builds plans, so it imports this module: read where it is used.
         from app.options.structure_catalogue import in_a_sentence, label
 

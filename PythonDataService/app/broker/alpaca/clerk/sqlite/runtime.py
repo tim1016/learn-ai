@@ -58,6 +58,13 @@ from app.broker.alpaca.clerk.option_effects import (
     is_option_plan,
     option_plan_taken,
 )
+from app.broker.alpaca.clerk.options_legs import (
+    OptionsLegInstruction,
+    OptionsLegSnapshot,
+    attempt_entry,
+    leg_snapshot,
+    sealed_instruction,
+)
 from app.broker.alpaca.clerk.program_leg import (
     PRICING_BAR_MISMATCH,
     PRICING_BAR_UNAVAILABLE,
@@ -205,6 +212,7 @@ from app.broker.alpaca.clerk.sqlite.option_events import (
     end_option_at_the_owners_word,
 )
 from app.broker.alpaca.clerk.sqlite.option_owner_ending import OwnerEndingRequest
+from app.broker.alpaca.clerk.sqlite.options_leg_admission import work_out_session_leg
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     is_working_order,
     trade_port_folds_simulated_evidence,
@@ -669,6 +677,7 @@ class SqliteAlpacaClerkFacade:
         # states the quote directly.
         self._quote_source = quote_source or prepared_top_of_book
         self._effect_tasks: dict[tuple[str, str], asyncio.Task[EffectOperationReceipt]] = {}
+        self._options_task_identities: dict[tuple[str, str], tuple[object, ...]] = {}
         # Latest verdict from the reconciliation sweep -- the sole automatic
         # reconciler (#1776). Panel reads project this instead of forcing
         # their own reconciliation. Process-local by design: it is a cache of
@@ -1116,6 +1125,8 @@ class SqliteAlpacaClerkFacade:
         refusal = self._option_plan_account_refusal()
         if refusal is not None:
             raise OptionPlanRefused(OptionEffectRefusal.ACCOUNT_NOT_OPEN, refusal)
+        if getattr(action_plan, "kind", None) == "options_session":
+            return action_plan.underlying
         return option_plan_taken(action_plan, real_account=self._is_a_real_account).underlying
 
     def require_option_plan_taken(self, action_plan: ActionPlan) -> None:
@@ -1370,6 +1381,46 @@ class SqliteAlpacaClerkFacade:
         async with self._intake:
             self._repo.record_deploy_launched(strategy_instance_id=binding.strategy_instance_id, lifecycle_run_id=binding.run_id)
 
+    def options_entries_enabled(self, strategy_instance_id: str) -> bool:
+        budget = self._repo.deployment_budget(strategy_instance_id)
+        return budget is not None and budget.get("options_entries_enabled") != 0
+
+    def options_resume_run_state(self, strategy_instance_id: str, lifecycle_run_id: str) -> str | None:
+        """Recover a committed Resume even when the runner's projection was never written."""
+        with self._repo.write_fence() as conn:
+            row = conn.execute(
+                "SELECT state FROM runs WHERE strategy_instance_id=? AND lifecycle_run_id=?",
+                (strategy_instance_id, lifecycle_run_id),
+            ).fetchone()
+        return None if row is None else row[0]
+
+    async def record_options_resume_launch(self, binding: BrokerBotBinding) -> None:
+        await self.record_deployment_launch(binding)
+
+    async def resume_options_strategy_run(
+        self, binding: BrokerBotBinding, *, admission_snapshot: ClerkCustodySnapshot,
+        run_owner: RunOwner | None = None,
+    ) -> None:
+        """Admit explicit recovery under a new fence without resetting deployment money."""
+        from app.broker.alpaca.clerk.sqlite.options_resume import submit_options_resume
+        from app.services.bot_carryover import configuration_hash
+
+        async with self._intake:
+            if binding.options_bot is None or binding.sealed_account_id != self.account_id:
+                raise StrategyRegistrationConflictError("Only an Options bot sealed on this account can resume here.")
+            self._require_current_admission_snapshot(binding, admission_snapshot)
+            config = self._repo.bot_config(binding.strategy_instance_id)
+            if config is None or config.config_hash != configuration_hash(binding):
+                raise StrategyRegistrationConflictError("The resumed Options bot must retain its sealed configuration.")
+            refused = self._option_plan_account_refusal(only_closes=True)
+            if refused is not None:
+                raise OptionPlanRefused(OptionEffectRefusal.ACCOUNT_NOT_OPEN, refused)
+            self._sealed_exit_terms(binding)
+            submission = submit_options_resume(self._repo, binding, envelope=self._live_envelope)
+            if not submission.created:
+                raise BudgetUnavailable("This Options resume already exists; recover its stored outcome.")
+            self._hold_run(binding, run_owner)
+
     def _hold_run(self, binding: BrokerBotBinding, run_owner: RunOwner | None) -> None:
         if run_owner is not None:
             self._run_ownership.hold(
@@ -1616,6 +1667,13 @@ class SqliteAlpacaClerkFacade:
         ``option_effects``): the contract its rules picked and the quotes it
         read. A bot in shares hands neither.
         """
+        import json
+
+        registered = self._repo.bot_config(strategy_instance_id)
+        if getattr(action_plan, "kind", None) == "options_session" or (
+            registered is not None and json.loads(registered.config_json).get("options_bot") is not None
+        ):
+            raise ValueError("a session options bot executes a sealed leg through execute_options_leg")
         key = (strategy_instance_id, decision_id)
         if decision_evidence is not None and decision_evidence.evaluation_id != decision_id:
             raise ValueError("decision_id must equal the Signal Program evaluation_id")
@@ -1644,6 +1702,64 @@ class SqliteAlpacaClerkFacade:
             task.add_done_callback(lambda completed: self._clear_effect_task(key, completed))
         return await asyncio.shield(task)
 
+    def options_leg_snapshot(
+        self, strategy_instance_id: str, leg_id: str, attempt_id: str,
+    ) -> OptionsLegSnapshot:
+        return leg_snapshot(self._repo, strategy_instance_id, leg_id, attempt_id)
+
+    async def execute_options_leg(
+        self, *, strategy_instance_id: str, run_id: str, decision_id: str,
+        leg_id: str, attempt_id: str, purpose: EffectPurpose,
+        option_entry: OptionEntryEvidence | None = None,
+        option_exit: OptionExitEvidence | None = None,
+    ) -> EffectOperationReceipt:
+        """Execute one sealed leg while retaining the account's existing custody gates."""
+        instruction = sealed_instruction(self._repo, strategy_instance_id, leg_id, attempt_id)
+        if option_entry is not None:
+            import json
+
+            from app.schemas.option_order_terms import SealedOptionOrderTerms
+
+            config = self._repo.bot_config(strategy_instance_id)
+            assert config is not None
+            sealed_terms = SealedOptionOrderTerms.model_validate(json.loads(config.config_json)["option_order_terms"])
+            option_entry = replace(
+                option_entry, leg_gap_limit_percent=sealed_terms.gap_limit_percent,
+                cost_limit_percent=sealed_terms.cost_limit_percent, terms=sealed_terms.close,
+            )
+        key = (strategy_instance_id, decision_id)
+        task = self._effect_tasks.get(key)
+        identity = (run_id, purpose, leg_id, attempt_id, None if option_entry is None else tuple(sorted(option_entry.picked.items())))
+        if task is not None and not task.done() and self._options_task_identities.get(key) != identity:
+            raise ValueError("an in-flight options decision was repeated with a different leg or contract")
+        if task is None or task.done():
+            self._options_task_identities[key] = identity
+            task = asyncio.create_task(self._execute_effect(
+                strategy_instance_id=strategy_instance_id, run_id=run_id, decision_id=decision_id,
+                purpose=purpose, action_plan=instruction, quantity=instruction.leg.contracts,
+                option_entry=option_entry, option_exit=option_exit,
+            ), name=f"alpaca-options-leg:{strategy_instance_id}:{leg_id}")
+            self._effect_tasks[key] = task
+            task.add_done_callback(lambda completed: self._clear_effect_task(key, completed))
+        return await asyncio.shield(task)
+
+    async def cancel_options_leg_entry(
+        self, strategy_instance_id: str, run_id: str, leg_id: str, attempt_id: str,
+    ) -> OptionsLegSnapshot:
+        """Cancel and prove an exact leg opening; a partial allocation remains held."""
+        from app.broker.alpaca.clerk.sqlite.idempotency import require_active_run
+
+        async with self._intake:
+            sealed_instruction(self._repo, strategy_instance_id, leg_id, attempt_id)
+            require_active_run(self._repo, strategy_instance_id, run_id)
+            found = attempt_entry(self._repo, strategy_instance_id, leg_id, attempt_id)
+        if found is not None:
+            await cancel_and_prove_owned_entry(
+                self._repo, entry_order_ref=found[0], trade=self._trade,
+                off_loop=self._intake.off_loop, reason="OPTIONS_PARTIAL_ENTRY_CANCEL", say_once=True,
+            )
+        return self.options_leg_snapshot(strategy_instance_id, leg_id, attempt_id)
+
     def _clear_effect_task(
         self,
         key: tuple[str, str],
@@ -1651,6 +1767,7 @@ class SqliteAlpacaClerkFacade:
     ) -> None:
         if self._effect_tasks.get(key) is completed:
             self._effect_tasks.pop(key)
+            self._options_task_identities.pop(key, None)
         if completed.cancelled():
             logger.error(
                 "A shielded SQLite Clerk effect task was unexpectedly cancelled",
@@ -1946,7 +2063,8 @@ class SqliteAlpacaClerkFacade:
                 reason_code=reason_code, explanation=explanation, next_step=next_step,
             )
 
-        if isinstance(quantity, bool) or not isinstance(quantity, int) or not 1 <= quantity <= 100:
+        maximum = 1000 if isinstance(action_plan, OptionsLegInstruction) else 100
+        if isinstance(quantity, bool) or not isinstance(quantity, int) or not 1 <= quantity <= maximum:
             # Checked before anything is written: a receipt cannot carry a quantity outside these,
             # and a contract is not traded in parts.
             raise ValueError(f"an option effect is for a whole number of structures, 1 to 100; got {quantity!r}")
@@ -1991,6 +2109,10 @@ class SqliteAlpacaClerkFacade:
                         # request under the first one's name, as it is for an entry in shares. Only
                         # the price may differ on an honest retry: its quotes are newer.
                         raise DurableConflictError(already)
+                    if first is not None and isinstance(action_plan, OptionsLegInstruction):
+                        attribution = getattr(first, "options_attempt", None)
+                        if attribution is None or attribution.leg_id != action_plan.leg.leg_id or attribution.attempt_id != action_plan.attempt_id:
+                            raise DurableConflictError(already)
                     return receipt(already.state, () if existing is None else (existing.order_ref,))
                 if not_listed is not None and not_listed is not _LISTING_NOT_ASKED:
                     logger.info(
@@ -2008,10 +2130,23 @@ class SqliteAlpacaClerkFacade:
                         explanation=not_listed.explanation,
                         next_step=_ENTRY_NOT_RETRIED,
                     )
-                worked_out = work_out_option_entry(
-                    action_plan, evidence=option_entry, units=quantity, now_ms=self._repo.clock(),
-                    real_account=self._is_a_real_account,
-                )
+                if isinstance(action_plan, OptionsLegInstruction):
+                    previous = attempt_entry(
+                        self._repo, strategy_instance_id, action_plan.leg.leg_id, action_plan.attempt_id,
+                    )
+                    if previous is not None:
+                        return rejected(
+                            reason_code="OPTIONS_ATTEMPT_ALREADY_OPENED",
+                            explanation="This leg attempt already has an opening order; read its existing outcome.",
+                        )
+                    worked_out = work_out_session_leg(
+                        self._repo, strategy_instance_id, action_plan, option_entry, now_ms=self._repo.clock(),
+                    )
+                else:
+                    worked_out = work_out_option_entry(
+                        action_plan, evidence=option_entry, units=quantity, now_ms=self._repo.clock(),
+                        real_account=self._is_a_real_account,
+                    )
                 if isinstance(worked_out, OptionEntryRefused):
                     logger.info(
                         "an option entry was refused before custody",
@@ -2118,7 +2253,7 @@ class SqliteAlpacaClerkFacade:
                         next_step=_ENTRY_NOT_RETRIED,
                     )
             else:
-                in_progress = self._answer_from_active_exit(
+                in_progress = None if isinstance(action_plan, OptionsLegInstruction) else self._answer_from_active_exit(
                     strategy_instance_id=strategy_instance_id, run_id=run_id, decision_id=decision_id,
                     purpose=purpose, action_plan=action_plan, quantity=quantity, atomic_receipt=atomic_receipt,
                 )
@@ -2127,14 +2262,33 @@ class SqliteAlpacaClerkFacade:
                 # The contract to close is the one the bot's own entry opened:
                 # the one it holds, or with nothing held its newest entry's,
                 # whose EXIT then proves flat. The plan's rules are not asked.
-                opened = option_entry_contracts(self._repo, strategy_instance_id)
-                held = [
-                    symbol for symbol in opened
-                    if position_quantity_is_nonzero(self._repo.position(strategy_instance_id, symbol))
-                ]
-                closing = held[0] if held else (opened[0] if opened else None)
-                target = None if closing is None else newest_reducible_entry(self._repo, strategy_instance_id, closing)
-                entry = None if target is None else option_entry_of_order(self._repo, target.order_ref)
+                if isinstance(action_plan, OptionsLegInstruction):
+                    found = attempt_entry(self._repo, strategy_instance_id, action_plan.leg.leg_id, action_plan.attempt_id)
+                    if found is None:
+                        return rejected(reason_code="OPTIONS_ATTEMPT_NOT_OPENED", explanation="This attempt has no recorded entry to close.")
+                    target_order_ref, entry = found
+                    active_exit = self._repo.active_exit_for_order(target_order_ref)
+                    if active_exit is not None:
+                        return receipt(active_exit.state, (target_order_ref,))
+                    from app.broker.alpaca.clerk.options_legs import allocation_positions, protection_refusal
+                    from app.broker.alpaca.clerk.sqlite.exit import ReducibleEntry
+
+                    if refused := protection_refusal(self._repo, strategy_instance_id, target_order_ref):
+                        return rejected(reason_code="OPTIONS_PROTECTION_STILL_REQUIRED", explanation=refused)
+                    positions = allocation_positions(self._repo, strategy_instance_id, target_order_ref)
+                    opened = [entry.contract_terms.symbol]
+                    held = [symbol for symbol, count in positions.items() if count]
+                    closing = held[0] if held else opened[0]
+                    target = ReducibleEntry(target_order_ref, exit_owned=False)
+                else:
+                    opened = option_entry_contracts(self._repo, strategy_instance_id)
+                    held = [
+                        symbol for symbol in opened
+                        if position_quantity_is_nonzero(self._repo.position(strategy_instance_id, symbol))
+                    ]
+                    closing = held[0] if held else (opened[0] if opened else None)
+                    target = None if closing is None else newest_reducible_entry(self._repo, strategy_instance_id, closing)
+                    entry = None if target is None else option_entry_of_order(self._repo, target.order_ref)
                 contracts = () if entry is None else tuple(terms.symbol for terms in entry.leg_terms)
                 if len(held) > 1 and (not isinstance(entry, MultiLegOptionEntryFacts) or set(held) - set(contracts)):
                     # A receipt must cover every held contract. Disjoint one-leg entries have no recorded structure.
@@ -2435,7 +2589,7 @@ class SqliteAlpacaClerkFacade:
         option_entry: OptionEntryEvidence | None = None,
         option_exit: OptionExitEvidence | None = None,
     ) -> EffectOperationReceipt | _AwaitReading:
-        if is_option_plan(action_plan):
+        if isinstance(action_plan, OptionsLegInstruction) or is_option_plan(action_plan):
             # An entry in option contracts is worked out from quotes, not from
             # a bar, and is its own path from here (ADR 0076).
             try:
@@ -3640,6 +3794,8 @@ def _strategy_display_name(strategy_key: str) -> str:
     """Resolve the engine-owned immutable presentation label for one strategy."""
     from app.services.strategy_validation_manifest import strategy_registry_seeds
 
+    if strategy_key == "options_rules":
+        return "Options bot"
     for strategy in strategy_registry_seeds():
         if strategy.strategy_key == strategy_key:
             return strategy.display_name
@@ -3678,6 +3834,9 @@ def _effect_receipt(
     next_step: str | None = None,
 ) -> EffectOperationReceipt:
     from app.broker.alpaca.clerk.models import AlpacaEffectOperation
+
+    if isinstance(action_plan, OptionsLegInstruction):
+        action_plan = action_plan.session_plan
 
     mapped = {
         "reserved": EffectOperationState.ACCEPTED,

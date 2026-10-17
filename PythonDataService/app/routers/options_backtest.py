@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 from typing import Annotated
 
+import asyncpg
 from fastapi import APIRouter, HTTPException, Path, Response, status
 
 from app.options_backtest import saved_setups
@@ -28,6 +29,9 @@ from app.options_backtest.setup import (
     MAX_STRIKE_STEPS,
     OptionsBacktestSetup,
 )
+from app.options_bots.golden import qualification_status
+from app.options_bots.golden_proof import GoldenProofError, current_rules_digest, setup_sha256
+from app.options_bots.golden_repository import events, records_for_setups
 from app.research.persistence.db import with_connection
 from app.schemas.options_backtest import (
     OptionsBacktestLimitsResponse,
@@ -84,8 +88,29 @@ async def get_limits() -> OptionsBacktestLimitsResponse:
 @router.get("/setups", response_model=list[SavedSetupResponse])
 async def list_setups() -> list[SavedSetupResponse]:
     """The two shipped examples, then the saved setups, newest first. One that cannot be opened says why."""
-    listed = await with_connection(saved_setups.list_setups)
-    return [SavedSetupResponse.from_saved(saved) for saved in listed]
+    return await with_connection(_listed_setups)
+
+
+async def _listed_setups(conn: asyncpg.Connection) -> list[SavedSetupResponse]:
+    listed = await saved_setups.list_setups(conn)
+    hashes = {saved.name: setup_sha256(saved.setup) for saved in listed if saved.setup is not None}
+    records = await records_for_setups(conn, list(hashes.values()))
+    try:
+        running = await asyncio.to_thread(current_rules_digest)
+    except GoldenProofError:
+        running = None
+    by_hash: dict[str, tuple[str, str, str]] = {}
+    for record in records:
+        status, explanation = qualification_status(record, await events(conn, record.id), running_digest=running)
+        if record.setup_sha256 not in by_hash or (status == "ready" and by_hash[record.setup_sha256][1] != "ready"):
+            by_hash[record.setup_sha256] = (record.id, status, explanation)
+    result: list[SavedSetupResponse] = []
+    for saved in listed:
+        view = SavedSetupResponse.from_saved(saved)
+        if summary := by_hash.get(hashes.get(saved.name, "")):
+            view.golden_setup_id, view.golden_status, view.golden_status_explanation = summary
+        result.append(view)
+    return result
 
 
 @router.put("/setups/{name}", response_model=SavedSetupResponse, responses=_IS_AN_EXAMPLE)

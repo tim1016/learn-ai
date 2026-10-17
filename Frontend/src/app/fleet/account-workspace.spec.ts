@@ -163,6 +163,12 @@ describe('the links Home hands out', () => {
     expect(accountWorkspaceLocation(`${link.commands.join('/')}?from=sid-1`)).toEqual({ ...LOCATION, tab: 'deploy' });
   });
 
+  it('opens the Options workflow with its exact golden setup for an ended Options bot', () => {
+    const link = accountWorkspaceDeployAgainRoute(ACCOUNT, 'sid-options', 'approved-setup');
+    expect(link.queryParams).toEqual({ options_setup: 'approved-setup' });
+    expect(link.commands).toEqual(['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9', 'deploy']);
+  });
+
   it.each([
     ['bot' as const, 'sid-1', ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9', 'bots', 'sid-1']],
     ['activity' as const, null, ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9', 'activity']],

@@ -16,6 +16,7 @@ if TYPE_CHECKING:
         ReconciliationVerdict,
     )
     from app.broker.alpaca.clerk.option_effects import OptionEntryEvidence, OptionExitEvidence
+    from app.broker.alpaca.clerk.options_legs import OptionsLegSnapshot
     from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
     from app.broker.alpaca.clerk.sqlite.commands import CommandSubmission
     from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryOnTheBooks, SettledEntry
@@ -114,6 +115,17 @@ class ActiveAlpacaClerk(Protocol):
         """Confirm a budgeted run's task launch before intake is released."""
         ...
 
+    async def resume_options_strategy_run(
+        self, binding: BrokerBotBinding, *, admission_snapshot: ClerkCustodySnapshot,
+        run_owner: RunOwner | None = None,
+    ) -> None: ...
+
+    def options_entries_enabled(self, strategy_instance_id: str) -> bool: ...
+
+    def options_resume_run_state(self, strategy_instance_id: str, lifecycle_run_id: str) -> str | None: ...
+
+    async def record_options_resume_launch(self, binding: BrokerBotBinding) -> None: ...
+
     async def stop_strategy_run(
         self,
         *,
@@ -153,6 +165,21 @@ class ActiveAlpacaClerk(Protocol):
         receipt was not a refusal; a stock decision is never asked.
         """
         ...
+
+    async def execute_options_leg(
+        self, *, strategy_instance_id: str, run_id: str, decision_id: str,
+        leg_id: str, attempt_id: str, purpose: EffectPurpose,
+        option_entry: OptionEntryEvidence | None = None,
+        option_exit: OptionExitEvidence | None = None,
+    ) -> EffectOperationReceipt: ...
+
+    def options_leg_snapshot(
+        self, strategy_instance_id: str, leg_id: str, attempt_id: str,
+    ) -> OptionsLegSnapshot: ...
+
+    async def cancel_options_leg_entry(
+        self, strategy_instance_id: str, run_id: str, leg_id: str, attempt_id: str,
+    ) -> OptionsLegSnapshot: ...
 
     def require_option_plan_taken(self, action_plan: ActionPlan) -> None:
         """Raise the typed refusal of an option plan this account does not take (ADR 0076)."""

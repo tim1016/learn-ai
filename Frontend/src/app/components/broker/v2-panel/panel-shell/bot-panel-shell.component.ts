@@ -91,6 +91,7 @@ import { BotHealthGroupsComponent } from '../bot-page/bot-health-groups.componen
 import { BotOptionBuyingPowerComponent } from '../bot-page/bot-option-buying-power.component';
 import { BotOrderRecordsComponent } from '../bot-page/bot-order-records.component';
 import { BotSetupComponent } from '../bot-page/bot-setup.component';
+import { OptionsBotSessionComponent } from '../bot-page/options-bot-session.component';
 import { OperatorRunHistoryComponent } from '../bot-run-history/operator-run-history.component';
 import { DeploymentBudgetComponent } from '../../deployment-budget/deployment-budget.component';
 import { RunFillsListComponent } from '../bot-page/run-fills-list.component';
@@ -266,6 +267,7 @@ const RUN_TAPE_PADDING_MS = 15 * 60_000;
     BotPageHeaderComponent,
     BotPageNoticesComponent,
     BotSetupComponent,
+    OptionsBotSessionComponent,
     BotToolbarComponent,
     OperatorRunHistoryComponent,
     RouterLink,
@@ -320,11 +322,12 @@ export class BotPanelShellComponent {
   // ── The bot page's lead and toolbar (#2794) ──────────────────────────────
 
   /** Deploy again for this bot, under the routed account. */
-  protected readonly deployAgain = computed(() => accountWorkspaceDeployAgainRoute({
-    broker: this.broker(),
-    clerkId: this.clerkId(),
-    accountId: this.accountId(),
-  }, this.sid()));
+  protected readonly deployAgain = computed(() => {
+    const destination = accountWorkspaceDeployAgainRoute({
+      broker: this.broker(), clerkId: this.clerkId(), accountId: this.accountId(),
+    }, this.sid(), this.panel()?.options_bot?.golden_setup_id);
+    return destination;
+  });
 
   /** Where Manual order goes; whether the toolbar offers it is the backend's word (#2794 R2). */
   protected readonly manualOrderNavigation = computed(() => {
@@ -368,6 +371,9 @@ export class BotPanelShellComponent {
     () => freezeLaneFence(this.fleetDirectory.lane(this.broker(), this.clerkId())),
     () => `${this.broker()}::${this.clerkId()}`,
   );
+  protected readonly optionsTarget = computed(() => fencedTarget(this.target(), this.openFence()));
+  protected readonly optionsPending = signal(false);
+  protected refreshOptionsBot(): void { void this.liveStore.refresh(); }
 
   // ── Internal state ────────────────────────────────────────────────────────
 
@@ -642,6 +648,7 @@ export class BotPanelShellComponent {
   });
 
   private readonly panelLoaded = computed(() => this.panel() !== null);
+  private readonly isOptionsBot = computed(() => this.panel()?.bot_kind === 'options');
   /** What the strategy view reflects from the live panel: its newest decision
    * and the bot's status, so a run that stops without deciding again still
    * gets its "Ended" line. */
@@ -660,7 +667,7 @@ export class BotPanelShellComponent {
    * binding generation fences commands, not reads. Waits for the panel so its
    * first read already covers the decisions the panel lists. */
   protected readonly strategyView = resource({
-    params: () => (this.panelLoaded() ? {
+    params: () => (this.panelLoaded() && !this.isOptionsBot() ? {
       broker: this.broker(),
       clerkId: this.clerkId(),
       accountId: this.accountId(),

@@ -2186,6 +2186,47 @@
         "title": "ApplyRequest",
         "type": "object"
       },
+      "ApproveGoldenOptionSetupRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_setup_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Setup Sha256"
+          },
+          "idempotency_key": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$",
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "note": {
+            "maxLength": 4000,
+            "minLength": 3,
+            "title": "Note",
+            "type": "string"
+          },
+          "run_id": {
+            "maximum": 9.223372036854776e+18,
+            "minimum": 1.0,
+            "title": "Run Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "idempotency_key",
+          "run_id",
+          "note"
+        ],
+        "title": "ApproveGoldenOptionSetupRequest",
+        "type": "object"
+      },
       "ArtifactDetail": {
         "description": "Full receipt for one catalog row: identity, hashes, and byte metadata.",
         "properties": {
@@ -4197,6 +4238,15 @@
             "title": "Account Id",
             "type": "string"
           },
+          "bot_kind": {
+            "default": "signal",
+            "enum": [
+              "signal",
+              "options"
+            ],
+            "title": "Bot Kind",
+            "type": "string"
+          },
           "broker": {
             "title": "Broker",
             "type": "string"
@@ -4313,6 +4363,16 @@
               }
             ],
             "title": "Open Pnl"
+          },
+          "options_bot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionsBotConfiguration"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "page_unavailable_reason": {
             "anyOf": [
@@ -4585,6 +4645,50 @@
           "parameters"
         ],
         "title": "BotDeployPrefill",
+        "type": "object"
+      },
+      "BotDutyOutcomeView": {
+        "additionalProperties": false,
+        "description": "Durable terminal duty evidence rendered by the operator surface.",
+        "properties": {
+          "kind": {
+            "enum": [
+              "STOPPED",
+              "HALTED",
+              "CRASHED",
+              "FAILED_LAUNCH",
+              "EXITED_UNVERIFIED",
+              "RETIRED"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "recorded_at_ms": {
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          }
+        },
+        "required": [
+          "kind",
+          "reason_code",
+          "recorded_at_ms"
+        ],
+        "title": "BotDutyOutcomeView",
         "type": "object"
       },
       "BotEndInput": {
@@ -5355,6 +5459,15 @@
             "title": "Actions",
             "type": "array"
           },
+          "bot_kind": {
+            "default": "signal",
+            "enum": [
+              "signal",
+              "options"
+            ],
+            "title": "Bot Kind",
+            "type": "string"
+          },
           "bot_page": {
             "anyOf": [
               {
@@ -5498,6 +5611,16 @@
               }
             ],
             "title": "Open Pnl Usd"
+          },
+          "options_bot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionsBotConfiguration"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "primary_action": {
             "anyOf": [
@@ -5925,6 +6048,189 @@
           "terminal_outcome"
         ],
         "title": "BotRunView",
+        "type": "object"
+      },
+      "BotStatusView": {
+        "properties": {
+          "active_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Run Id"
+          },
+          "binding_created_at_ms": {
+            "title": "Binding Created At Ms",
+            "type": "integer"
+          },
+          "bot_kind": {
+            "default": "signal",
+            "enum": [
+              "signal",
+              "options"
+            ],
+            "title": "Bot Kind",
+            "type": "string"
+          },
+          "broker": {
+            "title": "Broker",
+            "type": "string"
+          },
+          "carryover_policy": {
+            "default": "FORBID",
+            "enum": [
+              "FORBID",
+              "ALLOW"
+            ],
+            "title": "Carryover Policy",
+            "type": "string"
+          },
+          "desired_state": {
+            "enum": [
+              "RUNNING",
+              "STOPPED"
+            ],
+            "title": "Desired State",
+            "type": "string"
+          },
+          "duty_outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BotDutyOutcomeView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidence_override": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AlpacaPaperEvidenceOverride"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_transition_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Transition At Ms"
+          },
+          "mode": {
+            "enum": [
+              "log_only",
+              "dry_run",
+              "trade"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "options_bot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionsBotConfiguration"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "phase": {
+            "enum": [
+              "OFF_DUTY",
+              "ON_DUTY",
+              "RETIRED"
+            ],
+            "title": "Phase",
+            "type": "string"
+          },
+          "quantity": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantity"
+          },
+          "running": {
+            "title": "Running",
+            "type": "boolean"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "strategy_key": {
+            "default": "deployment_validation",
+            "title": "Strategy Key",
+            "type": "string"
+          },
+          "strategy_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Label"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "traded": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TradedInstrumentView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "traded_asset_acknowledgement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UntestedTradedAssetAcknowledgement"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "broker",
+          "symbol",
+          "mode",
+          "quantity",
+          "running",
+          "phase",
+          "desired_state",
+          "active_run_id",
+          "duty_outcome",
+          "binding_created_at_ms",
+          "last_transition_at_ms"
+        ],
+        "title": "BotStatusView",
         "type": "object"
       },
       "BreachProbability": {
@@ -18028,6 +18334,233 @@
           "fixtures"
         ],
         "title": "GoldenFixturesCatalog",
+        "type": "object"
+      },
+      "GoldenOptionSetupEventView": {
+        "properties": {
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "reproved",
+              "revoked"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "rules_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rules Digest"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "rules_digest",
+          "reason",
+          "actor",
+          "created_at_ms"
+        ],
+        "title": "GoldenOptionSetupEventView",
+        "type": "object"
+      },
+      "GoldenOptionSetupEvidence": {
+        "properties": {
+          "first_session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "First Session Open Ms",
+            "type": "integer"
+          },
+          "last_session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Last Session Open Ms",
+            "type": "integer"
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Limitations",
+            "type": "array"
+          },
+          "net_profit_usd": {
+            "title": "Net Profit Usd",
+            "type": "string"
+          },
+          "sessions_tested": {
+            "title": "Sessions Tested",
+            "type": "integer"
+          },
+          "slippage_percent": {
+            "title": "Slippage Percent",
+            "type": "string"
+          },
+          "starting_cash_usd": {
+            "title": "Starting Cash Usd",
+            "type": "string"
+          },
+          "trades": {
+            "title": "Trades",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "first_session_open_ms",
+          "last_session_open_ms",
+          "sessions_tested",
+          "trades",
+          "net_profit_usd",
+          "starting_cash_usd",
+          "slippage_percent",
+          "limitations"
+        ],
+        "title": "GoldenOptionSetupEvidence",
+        "type": "object"
+      },
+      "GoldenOptionSetupRefusal": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "GoldenOptionSetupRefusal",
+        "type": "object"
+      },
+      "GoldenOptionSetupView": {
+        "properties": {
+          "approved_by": {
+            "title": "Approved By",
+            "type": "string"
+          },
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenOptionSetupEventView"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/GoldenOptionSetupEvidence"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "proof": {
+            "title": "Proof",
+            "type": "object"
+          },
+          "proof_sha256": {
+            "title": "Proof Sha256",
+            "type": "string"
+          },
+          "rules_digest": {
+            "title": "Rules Digest",
+            "type": "string"
+          },
+          "setup": {
+            "$ref": "#/components/schemas/OptionsBacktestSetup-Output"
+          },
+          "setup_sha256": {
+            "title": "Setup Sha256",
+            "type": "string"
+          },
+          "source_run_id": {
+            "title": "Source Run Id",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "stale",
+              "revoked"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "status_explanation": {
+            "title": "Status Explanation",
+            "type": "string"
+          },
+          "underlying": {
+            "title": "Underlying",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "underlying",
+          "setup",
+          "setup_sha256",
+          "source_run_id",
+          "rules_digest",
+          "proof_sha256",
+          "status",
+          "status_explanation",
+          "created_at_ms",
+          "approved_by",
+          "note",
+          "evidence",
+          "proof",
+          "events"
+        ],
+        "title": "GoldenOptionSetupView",
         "type": "object"
       },
       "GoldenQualificationDeployOffer": {
@@ -42586,6 +43119,247 @@
         "title": "OptionsBacktestTradesResponse",
         "type": "object"
       },
+      "OptionsBotConfiguration": {
+        "additionalProperties": false,
+        "description": "An exact approved setup, independent of a mutable saved setup name.",
+        "properties": {
+          "golden_setup_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Golden Setup Id",
+            "type": "string"
+          },
+          "rules_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Rules Digest",
+            "type": "string"
+          },
+          "setup": {
+            "$ref": "#/components/schemas/OptionsBacktestSetup-Output"
+          },
+          "setup_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Setup Sha256",
+            "type": "string"
+          },
+          "version": {
+            "const": 1,
+            "default": 1,
+            "title": "Version"
+          }
+        },
+        "required": [
+          "golden_setup_id",
+          "setup_sha256",
+          "rules_digest",
+          "setup"
+        ],
+        "title": "OptionsBotConfiguration",
+        "type": "object"
+      },
+      "OptionsBotLegView": {
+        "properties": {
+          "average_fill_price": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average Fill Price"
+          },
+          "entries_filled": {
+            "title": "Entries Filled",
+            "type": "integer"
+          },
+          "held_contract": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Held Contract"
+          },
+          "held_contracts": {
+            "title": "Held Contracts",
+            "type": "integer"
+          },
+          "leg_id": {
+            "title": "Leg Id",
+            "type": "string"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "reentries_left": {
+            "title": "Reentries Left",
+            "type": "integer"
+          },
+          "side": {
+            "enum": [
+              "buy",
+              "sell"
+            ],
+            "title": "Side",
+            "type": "string"
+          },
+          "stop_level": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Level"
+          }
+        },
+        "required": [
+          "leg_id",
+          "side",
+          "phase",
+          "entries_filled",
+          "reentries_left",
+          "held_contracts"
+        ],
+        "title": "OptionsBotLegView",
+        "type": "object"
+      },
+      "OptionsBotSessionView": {
+        "properties": {
+          "entries_enabled": {
+            "title": "Entries Enabled",
+            "type": "boolean"
+          },
+          "entry_hold_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Hold Reason"
+          },
+          "events": {
+            "items": {
+              "type": "object"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "execution_hold_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Hold Reason"
+          },
+          "golden_setup_id": {
+            "title": "Golden Setup Id",
+            "type": "string"
+          },
+          "last_minute_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Minute Ms"
+          },
+          "legs": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsBotLegView"
+            },
+            "title": "Legs",
+            "type": "array"
+          },
+          "next_entry_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Entry Ms"
+          },
+          "pending_decisions": {
+            "title": "Pending Decisions",
+            "type": "integer"
+          },
+          "resume_allowed": {
+            "title": "Resume Allowed",
+            "type": "boolean"
+          },
+          "resume_explanation": {
+            "title": "Resume Explanation",
+            "type": "string"
+          },
+          "session_close_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Close Ms"
+          },
+          "session_open_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Open Ms"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "golden_setup_id",
+          "pending_decisions",
+          "entries_enabled",
+          "resume_allowed",
+          "resume_explanation",
+          "legs",
+          "events"
+        ],
+        "title": "OptionsBotSessionView",
+        "type": "object"
+      },
       "OptionsChainSnapshotRequest": {
         "description": "Request schema for fetching options chain snapshot",
         "properties": {
@@ -42958,6 +43732,170 @@
         "title": "OptionsContractSnapshotItem",
         "type": "object"
       },
+      "OptionsDeployRequest": {
+        "additionalProperties": false,
+        "description": "Trading rules come from the approved version; only deployment settings are authored here.",
+        "properties": {
+          "budget": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentBudgetInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "end": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BotEndInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "execution_mode": {
+            "enum": [
+              "paper",
+              "dry_run",
+              "shadow",
+              "live"
+            ],
+            "title": "Execution Mode",
+            "type": "string"
+          },
+          "exit_terms": {
+            "$ref": "#/components/schemas/ExitTermsInput"
+          },
+          "golden_setup_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Golden Setup Id",
+            "type": "string"
+          },
+          "order_terms": {
+            "$ref": "#/components/schemas/SealedOptionOrderTerms-Input"
+          }
+        },
+        "required": [
+          "golden_setup_id",
+          "execution_mode",
+          "order_terms",
+          "exit_terms"
+        ],
+        "title": "OptionsDeployRequest",
+        "type": "object"
+      },
+      "OptionsDeploySubmission": {
+        "additionalProperties": false,
+        "properties": {
+          "budget": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentBudgetInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "end": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BotEndInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "execution_mode": {
+            "enum": [
+              "paper",
+              "dry_run",
+              "shadow",
+              "live"
+            ],
+            "title": "Execution Mode",
+            "type": "string"
+          },
+          "exit_terms": {
+            "$ref": "#/components/schemas/ExitTermsInput"
+          },
+          "golden_setup_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Golden Setup Id",
+            "type": "string"
+          },
+          "order_terms": {
+            "$ref": "#/components/schemas/SealedOptionOrderTerms-Input"
+          },
+          "submission_key": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$",
+            "title": "Submission Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "golden_setup_id",
+          "execution_mode",
+          "order_terms",
+          "exit_terms",
+          "submission_key"
+        ],
+        "title": "OptionsDeploySubmission",
+        "type": "object"
+      },
+      "OptionsDeploymentReview": {
+        "properties": {
+          "allowed": {
+            "title": "Allowed",
+            "type": "boolean"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/DeploymentBudgetPreview"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "first_eligible_session_open_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Eligible Session Open Ms"
+          },
+          "golden": {
+            "$ref": "#/components/schemas/GoldenOptionSetupView"
+          },
+          "rules_summary": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Rules Summary",
+            "type": "array"
+          }
+        },
+        "required": [
+          "golden",
+          "budget",
+          "allowed",
+          "explanation",
+          "rules_summary"
+        ],
+        "title": "OptionsDeploymentReview",
+        "type": "object"
+      },
       "OptionsExpirationsRequest": {
         "description": "Request schema for listing unique options expiration dates",
         "properties": {
@@ -43053,6 +43991,32 @@
           "success"
         ],
         "title": "OptionsExpirationsResponse",
+        "type": "object"
+      },
+      "OptionsResumeRequest": {
+        "additionalProperties": false,
+        "description": "An explicit recovery command; its key never authorizes a second active run.",
+        "properties": {
+          "budget": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeploymentBudgetInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "idempotency_key": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$",
+            "title": "Idempotency Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "idempotency_key"
+        ],
+        "title": "OptionsResumeRequest",
         "type": "object"
       },
       "OrderSide": {
@@ -48096,6 +49060,21 @@
         "title": "RemoveAction",
         "type": "object"
       },
+      "ReproveGoldenOptionSetupRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "idempotency_key": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$",
+            "title": "Idempotency Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "idempotency_key"
+        ],
+        "title": "ReproveGoldenOptionSetupRequest",
+        "type": "object"
+      },
       "ReproveQualificationRequest": {
         "additionalProperties": false,
         "properties": {
@@ -48636,6 +49615,28 @@
           "created_at_ms"
         ],
         "title": "RevisionResponse",
+        "type": "object"
+      },
+      "RevokeGoldenOptionSetupRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "idempotency_key": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$",
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 4000,
+            "minLength": 3,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "idempotency_key",
+          "reason"
+        ],
+        "title": "RevokeGoldenOptionSetupRequest",
         "type": "object"
       },
       "RevokeQualificationRequest": {
@@ -50292,6 +51293,44 @@
           "example": {
             "title": "Example",
             "type": "boolean"
+          },
+          "golden_setup_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Golden Setup Id"
+          },
+          "golden_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ready",
+                  "stale",
+                  "revoked"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Golden Status"
+          },
+          "golden_status_explanation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Golden Status Explanation"
           },
           "name": {
             "title": "Name",
@@ -55732,6 +56771,8 @@
           "MANUAL_TICKET_COMPLETED",
           "MANUAL_TICKET_PAUSED_UNKNOWN",
           "MANUAL_TICKET_RESERVED",
+          "OPTIONS_RUN_LAUNCHED",
+          "OPTIONS_RUN_RESUMED",
           "OPTION_POSITION_ENDED",
           "ORDER_CANCEL_REQUESTED",
           "ORDER_CANCEL_UNCERTAIN",
@@ -66146,6 +67187,500 @@
         ]
       }
     },
+    "/api/brokers/{broker}/accounts/{account_id}/options-bots/deploy": {
+      "post": {
+        "operationId": "deploy_api_brokers__broker__accounts__account_id__options_bots_deploy_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "const": "alpaca",
+              "title": "Broker"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OptionsDeploySubmission"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetDeployCommandReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Deploy",
+        "tags": [
+          "options-bots"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/options-bots/deploy-submissions/{submission_key}": {
+      "get": {
+        "operationId": "submission_api_brokers__broker__accounts__account_id__options_bots_deploy_submissions__submission_key__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "const": "alpaca",
+              "title": "Broker"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "submission_key",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$",
+              "title": "Submission Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/BudgetDeployCommandReceipt"
+                    },
+                    {
+                      "$ref": "#/components/schemas/DeploySubmissionUncommitted"
+                    }
+                  ],
+                  "title": "Response Submission Api Brokers  Broker  Accounts  Account Id  Options Bots Deploy Submissions  Submission Key  Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Submission",
+        "tags": [
+          "options-bots"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/options-bots/review": {
+      "post": {
+        "operationId": "review_api_brokers__broker__accounts__account_id__options_bots_review_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "const": "alpaca",
+              "title": "Broker"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OptionsDeployRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsDeploymentReview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Review",
+        "tags": [
+          "options-bots"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/options-bots/{sid}/resume": {
+      "post": {
+        "operationId": "resume_api_brokers__broker__accounts__account_id__options_bots__sid__resume_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "const": "alpaca",
+              "title": "Broker"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OptionsResumeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotStatusView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resume",
+        "tags": [
+          "options-bots"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/options-bots/{sid}/resume-review": {
+      "post": {
+        "operationId": "resume_review_api_brokers__broker__accounts__account_id__options_bots__sid__resume_review_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "const": "alpaca",
+              "title": "Broker"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/DeploymentBudgetInput"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentBudgetPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resume Review",
+        "tags": [
+          "options-bots"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/options-bots/{sid}/session": {
+      "get": {
+        "operationId": "session_api_brokers__broker__accounts__account_id__options_bots__sid__session_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "const": "alpaca",
+              "title": "Broker"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsBotSessionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session",
+        "tags": [
+          "options-bots"
+        ]
+      }
+    },
     "/api/brokers/{broker}/accounts/{account_id}/strategies/{program_key}/paper-access/confirm": {
       "post": {
         "operationId": "confirm_strategy_paper_access_api_brokers__broker__accounts__account_id__strategies__program_key__paper_access_confirm_post",
@@ -71588,6 +73123,560 @@
           }
         },
         "summary": "Fleet Account Money Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/options-bots/deploy": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/options-bots/deploy (bot_action).",
+        "operationId": "fleet_options_bot_deploy_api_brokers__broker__clerks__clerk_id__accounts__account_id__options_bots_deploy_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Options Bot Deploy",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/options-bots/deploy-submissions/{submission_key}": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/options-bots/deploy-submissions/{submission_key} (bot_panel_read).",
+        "operationId": "fleet_options_bot_deploy_submission_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__options_bots_deploy_submissions__submission_key__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "submission_key",
+            "required": true,
+            "schema": {
+              "title": "Submission Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Options Bot Deploy Submission Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/options-bots/review": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/options-bots/review (deploy).",
+        "operationId": "fleet_options_bot_review_api_brokers__broker__clerks__clerk_id__accounts__account_id__options_bots_review_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Options Bot Review",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/options-bots/{sid}/resume": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/options-bots/{sid}/resume (bot_action).",
+        "operationId": "fleet_options_bot_resume_api_brokers__broker__clerks__clerk_id__accounts__account_id__options_bots__sid__resume_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Options Bot Resume",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/options-bots/{sid}/resume-review": {
+      "post": {
+        "description": "Fleet-routed POST /accounts/{account_id}/options-bots/{sid}/resume-review (deploy).",
+        "operationId": "fleet_options_bot_resume_review_api_brokers__broker__clerks__clerk_id__accounts__account_id__options_bots__sid__resume_review_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Options Bot Resume Review",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/options-bots/{sid}/session": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/options-bots/{sid}/session (bot_panel_read).",
+        "operationId": "fleet_options_bot_session_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__options_bots__sid__session_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Options Bot Session Read",
         "tags": [
           "broker-clerks"
         ]
@@ -78026,6 +80115,477 @@
         "summary": "Get Backtest Run Strategy View",
         "tags": [
           "research-backtest-runs"
+        ]
+      }
+    },
+    "/api/research/golden-option-setups": {
+      "get": {
+        "operationId": "list_golden_setups_api_research_golden_option_setups_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GoldenOptionSetupView"
+                  },
+                  "title": "Response List Golden Setups Api Research Golden Option Setups Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenOptionSetupRefusal"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenOptionSetupRefusal"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenOptionSetupRefusal"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "List Golden Setups",
+        "tags": [
+          "research-golden-option-setups"
+        ]
+      }
+    },
+    "/api/research/golden-option-setups/approve": {
+      "post": {
+        "operationId": "approve_golden_setup_api_research_golden_option_setups_approve_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveGoldenOptionSetupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenOptionSetupView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenOptionSetupRefusal"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenOptionSetupRefusal"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenOptionSetupRefusal"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Approve Golden Setup",
+        "tags": [
+          "research-golden-option-setups"
+        ]
+      }
+    },
+    "/api/research/golden-option-setups/{qualification_id}": {
+      "get": {
+        "operationId": "get_golden_setup_api_research_golden_option_setups__qualification_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "qualification_id",
+            "required": true,
+            "schema": {
+              "pattern": "^ogs_[a-f0-9]{32}$",
+              "title": "Qualification Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenOptionSetupView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenOptionSetupRefusal"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenOptionSetupRefusal"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenOptionSetupRefusal"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get Golden Setup",
+        "tags": [
+          "research-golden-option-setups"
+        ]
+      }
+    },
+    "/api/research/golden-option-setups/{qualification_id}/reprove": {
+      "post": {
+        "operationId": "reprove_golden_setup_api_research_golden_option_setups__qualification_id__reprove_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "qualification_id",
+            "required": true,
+            "schema": {
+              "pattern": "^ogs_[a-f0-9]{32}$",
+              "title": "Qualification Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReproveGoldenOptionSetupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenOptionSetupView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenOptionSetupRefusal"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenOptionSetupRefusal"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenOptionSetupRefusal"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Reprove Golden Setup",
+        "tags": [
+          "research-golden-option-setups"
+        ]
+      }
+    },
+    "/api/research/golden-option-setups/{qualification_id}/revoke": {
+      "post": {
+        "operationId": "revoke_golden_setup_api_research_golden_option_setups__qualification_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "qualification_id",
+            "required": true,
+            "schema": {
+              "pattern": "^ogs_[a-f0-9]{32}$",
+              "title": "Qualification Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeGoldenOptionSetupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenOptionSetupView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenOptionSetupRefusal"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenOptionSetupRefusal"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenOptionSetupRefusal"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Revoke Golden Setup",
+        "tags": [
+          "research-golden-option-setups"
         ]
       }
     },

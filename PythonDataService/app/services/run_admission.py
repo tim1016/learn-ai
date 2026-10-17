@@ -207,7 +207,7 @@ def evaluate_run_admission(
     # custody, further below in the non-dry-run block) — `canary_gate_applies`
     # only turns this check on once the build is already PROVEN, so it never
     # pre-empts the PROGRAM_BUILD_UNPROVEN gate's own reason code.
-    if canary_gate_applies(
+    if not bot.schedules_options_sessions and canary_gate_applies(
         mode=bot.mode, program_build_state=bot.program_build.state
     ) and not canary_pairing_admitted(
         program_key=bot.program_build.program_key, account_id=bot.sealed_account_id
@@ -326,11 +326,15 @@ def evaluate_run_admission(
     # mode ever existed.
     if bot.mode != "dry_run":
         window = bot.start_window
-        if window is not None and window.state == "CLOSED":
+        if window is not None and window.state == "CLOSED" and not bot.schedules_options_sessions:
             return decide(allowed=False, reason_code="DEPLOY_WINDOW_CLOSED",
                           explanation="Regular-session bots may start from pre-market open through the regular close.",
                           next_step=start_window_next_step(window, now_ms=evaluated_at_ms))
-        permitted_liveness = {"TRADABLE", "CLOSED"} if window is not None and window.state == "PREMARKET" else {"TRADABLE"}
+        permitted_liveness = (
+            {"TRADABLE", "CLOSED"}
+            if bot.schedules_options_sessions or (window is not None and window.state == "PREMARKET")
+            else {"TRADABLE"}
+        )
         for side in sides:
             liveness = side.market_liveness
             symbol_halted = liveness.symbol_status is not None and liveness.symbol_status.state == "HALTED"

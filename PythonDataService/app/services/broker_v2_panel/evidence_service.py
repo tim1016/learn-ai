@@ -186,6 +186,12 @@ _SQLITE_TRANSITION_COPY: Final[dict[str, tuple[str, str]]] = {
         "Deployment launch recorded",
         "The authorized deployment's runner was installed. Its current state is shown separately.",
     ),
+    "OPTIONS_RUN_RESUMED": (
+        "Options bot recovery accepted", "The original setup, positions and lifetime money are retained for this recovered run.",
+    ),
+    "OPTIONS_RUN_LAUNCHED": (
+        "Options bot resumed", "The recovered duty may manage its recorded session under the Clerk's current permissions.",
+    ),
     "ACCOUNT_RISK_LIMITS_APPLIED": (
         "Account risk limits applied",
         "The reviewed loss limits now govern new entries. Existing exit terms and standing holds remain.",

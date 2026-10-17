@@ -199,6 +199,7 @@ class DeleteOutcome(StrEnum):
     DELETED = "deleted"
     NOT_FOUND = "not_found"
     RUNNING = "running"
+    RETAINED = "retained"
 
 
 def fee_policy_text(setup: OptionsBacktestSetup) -> str:
@@ -693,6 +694,12 @@ async def delete_run(conn: asyncpg.Connection, run_id: int, *, is_live: IsLive) 
             return DeleteOutcome.NOT_FOUND
         if row["status"] == "running" and is_live(row["job_id"]) is not False:
             return DeleteOutcome.RUNNING
+        if row["status"] == "complete":
+            retained = await conn.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM research_golden_option_setups WHERE source_run_id = $1)", run_id
+            )
+            if retained:
+                return DeleteOutcome.RETAINED
         await conn.execute("DELETE FROM research_options_backtest_runs WHERE id = $1", run_id)
         return DeleteOutcome.DELETED
 

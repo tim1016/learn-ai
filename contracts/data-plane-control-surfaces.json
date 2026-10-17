@@ -6,6 +6,7 @@
   "/api/brokers",
   "/api/data-lake",
   "/api/jobs-internal/pool/drain",
+  "/api/research/golden-option-setups",
   "/api/research/golden-qualifications",
   "/api/research/golden-search",
   "/api/research/golden-validations",

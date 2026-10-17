@@ -461,7 +461,7 @@ def query_only_snapshot(db_path: Path) -> Iterator[sqlite3.Connection]:
 
 # Each commitment with its run's state. A stopped one's row carries what its
 # Stop released, folded from the Stop's facts (``budget_folds.release_stopped_budget``).
-_COMMITMENTS = "SELECT b.*, r.state AS run_state FROM deployment_budgets b JOIN runs r ON r.run_id=b.run_id"
+_COMMITMENTS = "SELECT b.*, r.state AS run_state FROM deployment_budgets b JOIN runs r ON r.run_id=COALESCE(b.active_run_id,b.run_id)"
 
 
 def _why_short(conn: sqlite3.Connection, sid: str, fills: Sequence[FillRecord], short: Sequence[OpenLot]) -> str:
@@ -559,7 +559,7 @@ def value_release(conn: sqlite3.Connection, *, run_id: str, fees: BudgetFees) ->
     instant; ``RELEASE_VALUATION_FAILURES`` names every such unknown.
     Formula: ``account_money.release_at_stop`` over ``_deployment_budget``.
     """
-    commitment = conn.execute(_COMMITMENTS + " WHERE b.run_id=?", (run_id,)).fetchone()
+    commitment = conn.execute(_COMMITMENTS + " WHERE COALESCE(b.active_run_id,b.run_id)=?", (run_id,)).fetchone()
     if commitment is None:
         raise BudgetUnavailable("This run has no budget to release.")
     if not fees.known:
@@ -580,7 +580,7 @@ def _project(
     if not fees.known:
         raise BudgetUnavailable("Fee evidence is unresolved: " + "; ".join(fees.unresolved))
     legacy = conn.execute(
-        "SELECT r.strategy_instance_id FROM runs r LEFT JOIN deployment_budgets b ON b.run_id=r.run_id "
+        "SELECT r.strategy_instance_id FROM runs r LEFT JOIN deployment_budgets b ON COALESCE(b.active_run_id,b.run_id)=r.run_id "
         "WHERE r.state='ACTIVE' AND b.run_id IS NULL LIMIT 1"
     ).fetchone()
     if legacy is not None:

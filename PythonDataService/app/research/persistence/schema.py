@@ -54,7 +54,7 @@ from __future__ import annotations
 
 import asyncpg
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 # Arbitrary but fixed: serializes concurrent first-use across FastAPI's loop
 # and the worker loop so CREATE IF NOT EXISTS never races itself.
 _ADVISORY_LOCK_KEY = 0x1926_0001
@@ -1023,6 +1023,46 @@ DDL_V20: tuple[str, ...] = (
     """,
 )
 
+DDL_V21: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS research_golden_option_setups (
+        id                  TEXT PRIMARY KEY,
+        name                TEXT NOT NULL,
+        source_run_id       BIGINT NOT NULL REFERENCES research_options_backtest_runs (id) ON DELETE RESTRICT,
+        setup_json          JSONB NOT NULL,
+        setup_sha256        TEXT NOT NULL,
+        rules_digest        TEXT NOT NULL,
+        proof_json          JSONB NOT NULL,
+        proof_sha256        TEXT NOT NULL,
+        evidence_json       JSONB NOT NULL,
+        note                TEXT NOT NULL,
+        approved_by         TEXT NOT NULL,
+        created_at_ms       BIGINT NOT NULL CHECK (created_at_ms >= 0 AND created_at_ms <= 253402300799999),
+        command_id          TEXT NOT NULL UNIQUE,
+        command_sha256      TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS research_golden_option_setup_events (
+        id                  BIGSERIAL PRIMARY KEY,
+        qualification_id    TEXT NOT NULL REFERENCES research_golden_option_setups (id) ON DELETE RESTRICT,
+        kind                TEXT NOT NULL CHECK (kind IN ('reproved', 'revoked')),
+        rules_digest        TEXT NULL,
+        proof_json          JSONB NULL,
+        reason              TEXT NULL,
+        actor               TEXT NOT NULL,
+        created_at_ms       BIGINT NOT NULL CHECK (created_at_ms >= 0 AND created_at_ms <= 253402300799999),
+        command_id          TEXT NOT NULL UNIQUE,
+        command_sha256      TEXT NOT NULL,
+        CHECK ((kind = 'reproved' AND rules_digest IS NOT NULL AND proof_json IS NOT NULL AND reason IS NULL)
+            OR (kind = 'revoked' AND rules_digest IS NULL AND proof_json IS NULL AND reason IS NOT NULL))
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_golden_option_setups_source ON research_golden_option_setups (source_run_id)
+    """,
+)
+
 VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (1, DDL_V1),
     (2, DDL_V2),
@@ -1044,6 +1084,7 @@ VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (18, DDL_V18),
     (19, DDL_V19),
     (20, DDL_V20),
+    (21, DDL_V21),
 )
 
 

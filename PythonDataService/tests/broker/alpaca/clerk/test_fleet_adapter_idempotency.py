@@ -37,6 +37,8 @@ def test_the_posts_that_route_as_reads_are_exactly_the_plans_previews_and_checks
         "bot_budget_preview",
         "bot_end_preview",
         "bot_option_structure_preview",
+        "options_bot_review",
+        "options_bot_resume_review",
         "paper_access_plan",
         "custody_recovery_check",
         "custody_bot_recovery_check",

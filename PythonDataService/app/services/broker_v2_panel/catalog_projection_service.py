@@ -171,6 +171,8 @@ def unreadable_catalog_view(
     """
     restoring = isinstance(failure, DryRunRestoringError)
     return BotCatalogView(
+        bot_kind=status.bot_kind,
+        options_bot=status.options_bot,
         strategy_instance_id=status.strategy_instance_id,
         strategy_key=status.strategy_key,
         strategy_label=_strategy_label_for(status),
@@ -328,6 +330,8 @@ def compose_catalog_view(
     """
     world = bot_world(world, status.mode)
     return BotCatalogView(
+        bot_kind=status.bot_kind,
+        options_bot=status.options_bot,
         strategy_instance_id=status.strategy_instance_id,
         strategy_key=status.strategy_key,
         strategy_label=_strategy_label_for(status),

@@ -11,7 +11,16 @@
   </section>
 } @else if (target(); as target) {
   @if (accountId(); as accountId) {
-    <app-alpaca-deploy-workflow [target]="target" [accountId]="accountId" [fence]="fence()" [laneReviewRequired]="laneReviewRequired()" />
+    <div class="bot-kind-choice">
+      <strong>What do you want to deploy?</strong>
+      <button type="button" [class.selected]="botKind() === 'signal'" [disabled]="optionsOutstanding()" (click)="botKind.set('signal')">Signal bot</button>
+      <button type="button" [class.selected]="botKind() === 'options'" [disabled]="optionsOutstanding()" (click)="botKind.set('options')">Options bot</button>
+    </div>
+    @if (botKind() === 'options') {
+      <app-options-bot-deploy [target]="target" [accountId]="accountId" [fence]="fence()" [laneReviewRequired]="laneReviewRequired()" (outstandingChange)="optionsOutstanding.set($event)" />
+    } @else {
+      <app-alpaca-deploy-workflow [target]="target" [accountId]="accountId" [fence]="fence()" [laneReviewRequired]="laneReviewRequired()" />
+    }
   }
 } @else {
   <section class="deploy-tab-context" role="status" aria-label="Loading Alpaca deploy context">

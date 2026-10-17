@@ -1056,10 +1056,17 @@ def decide_capability(
     subject_id: str | None = None,
     reduction_intent: ReductionIntent | None = None,
     continuation_ticket_id: str | None = None,
+    session_leg_id: str | None = None,
 ) -> CapabilityDecision:
     """Author both preview and execution policy from the same typed snapshot."""
     if (strategy_instance_id is None) == (subject_id is None):
         raise ValueError("capability evaluation requires exactly one custody subject")
+    if session_leg_id is not None:
+        from app.broker.alpaca.clerk.options_legs import sealed_instruction
+
+        if strategy_instance_id is None or capability is not Capability.NEW_EXPOSURE:
+            raise ValueError("a session leg applies only to its bot's new exposure")
+        sealed_instruction(repo, strategy_instance_id, session_leg_id, "admission")
 
     if capability in (Capability.CANCEL, Capability.RECONCILE):
         return CapabilityDecision(allowed=True, capability=capability)
@@ -1072,12 +1079,8 @@ def decide_capability(
                 reason_code="RECONCILIATION_IN_PROGRESS",
                 why="Account reconciliation is proving fresh broker truth.",
             )
-        active_exit = (
-            repo.active_exit_for_strategy(strategy_instance_id)
-            if strategy_instance_id is not None
-            else None
-        )
-        if active_exit is not None:
+        active_exit = _active_exit_for_admission(repo, strategy_instance_id, session_leg_id)
+        if active_exit is not None and not _other_session_leg_effect(repo, active_exit.effect_operation_id, session_leg_id):
             return CapabilityDecision(
                 allowed=False,
                 capability=capability,
@@ -1161,6 +1164,7 @@ def decide_capability(
                 effect
                 for effect in repo.reconcilable_effect_operations()
                 if effect.strategy_instance_id == strategy_instance_id and effect.kind == "ENTER"
+                and not _other_session_leg_effect(repo, effect.effect_operation_id, session_leg_id)
             ),
             None,
         )
@@ -1174,8 +1178,8 @@ def decide_capability(
                     "custody lifecycle for this strategy."
                 ),
             )
-        working_entry = _working_entry_order(repo, strategy_instance_id=strategy_instance_id)
-        if working_entry is not None:
+        working_entry = _working_entry_order(repo, strategy_instance_id=strategy_instance_id, session_leg_id=session_leg_id)
+        if working_entry is not None and not _other_session_leg_effect(repo, working_entry.effect_operation_id, session_leg_id):
             return CapabilityDecision(
                 allowed=False,
                 capability=capability,
@@ -1186,7 +1190,7 @@ def decide_capability(
                     "so the next entry waits until that order has ended."
                 ),
             )
-        if _has_attributed_exposure(repo, strategy_instance_id=strategy_instance_id):
+        if session_leg_id is None and _has_attributed_exposure(repo, strategy_instance_id=strategy_instance_id):
             return CapabilityDecision(
                 allowed=False,
                 capability=capability,
@@ -1218,7 +1222,9 @@ def decide_capability(
 ENTRY_ORDER_WORKING_REASON_CODE = "ENTRY_ORDER_WORKING"
 
 
-def _working_entry_order(repo: ClerkSqliteRepository, *, strategy_instance_id: str) -> OrderResource | None:
+def _working_entry_order(
+    repo: ClerkSqliteRepository, *, strategy_instance_id: str, session_leg_id: str | None = None,
+) -> OrderResource | None:
     """An entry order of this bot that the books show working at the broker, whatever its ENTER's state.
 
     ``ENTER_IN_PROGRESS`` above reads the ENTER's own state, and an ENTER
@@ -1230,7 +1236,29 @@ def _working_entry_order(repo: ClerkSqliteRepository, *, strategy_instance_id: s
     case that made the question general (#2961).
     """
     with repo.write_fence() as conn:
+        if session_leg_id is not None:
+            from app.broker.alpaca.clerk.sqlite.order_evidence import is_working_order
+
+            return next((
+                order for order in repo.entry_orders_for_strategy(strategy_instance_id)
+                if not _other_session_leg_effect(repo, order.effect_operation_id, session_leg_id)
+                and is_working_order(order)
+            ), None)
         return reads.working_entry_order_for_strategy(conn, strategy_instance_id)
+
+
+def _active_exit_for_admission(
+    repo: ClerkSqliteRepository, strategy_instance_id: str | None, session_leg_id: str | None,
+) -> EffectOperationResource | None:
+    if strategy_instance_id is None:
+        return None
+    if session_leg_id is None:
+        return repo.active_exit_for_strategy(strategy_instance_id)
+    return next((
+        exit_effect for entry in repo.entry_orders_for_strategy(strategy_instance_id)
+        if not _other_session_leg_effect(repo, entry.effect_operation_id, session_leg_id)
+        and (exit_effect := repo.active_exit_for_order(entry.order_ref)) is not None
+    ), None)
 
 
 def _outside_option_order_in_the_way(
@@ -1318,6 +1346,7 @@ def require_capability(
     subject_id: str | None = None,
     reduction_intent: ReductionIntent | None = None,
     continuation_ticket_id: str | None = None,
+    session_leg_id: str | None = None,
 ) -> None:
     decision = decide_capability(
         repo,
@@ -1326,6 +1355,7 @@ def require_capability(
         subject_id=subject_id,
         reduction_intent=reduction_intent,
         continuation_ticket_id=continuation_ticket_id,
+        session_leg_id=session_leg_id,
     )
     if not decision.allowed:
         raise AdmissionBlockedError(decision)
@@ -1339,11 +1369,26 @@ def admit_new_exposure(repo: ClerkSqliteRepository, *, strategy_instance_id: str
     )
 
 
-def require_admission(repo: ClerkSqliteRepository, *, strategy_instance_id: str) -> None:
+def require_admission(repo: ClerkSqliteRepository, *, strategy_instance_id: str, session_leg_id: str | None = None) -> None:
     require_capability(
         repo,
         capability=Capability.NEW_EXPOSURE,
         strategy_instance_id=strategy_instance_id,
+        session_leg_id=session_leg_id,
+    )
+
+
+def _other_session_leg_effect(repo: ClerkSqliteRepository, effect_id: str, leg_id: str | None) -> bool:
+    if leg_id is None:
+        return False
+    from app.broker.alpaca.clerk.sqlite.option_entry import option_entry_of_order
+
+    entries = [order for order in repo.orders_for_effect_operation(effect_id) if order.role == "ENTRY"]
+    return bool(entries) and all(
+        (entry := option_entry_of_order(repo, order.order_ref)) is not None
+        and (attribution := getattr(entry, "options_attempt", None)) is not None
+        and attribution.leg_id != leg_id
+        for order in entries
     )
 
 

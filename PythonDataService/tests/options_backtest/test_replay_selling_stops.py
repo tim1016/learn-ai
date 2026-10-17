@@ -16,7 +16,6 @@ from typing import Any
 
 import pytest
 
-from app.options_backtest import replay as replay_module
 from app.options_backtest.cover_book import Held
 from app.options_backtest.describe import describe_setup
 from app.options_backtest.results import (
@@ -28,6 +27,7 @@ from app.options_backtest.results import (
     SessionStatus,
 )
 from app.options_backtest.session_clock import SessionClock
+from app.options_bots import session as session_module
 from tests.options_backtest._market import (
     D,
     TableMarket,
@@ -758,14 +758,14 @@ def test_the_replay_never_asks_the_book_for_a_plan_when_no_bought_leg_of_a_setup
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     asked = 0
-    real_plan = replay_module.leaving_plan
+    real_plan = session_module.leaving_plan
 
     def counting(held: Held, leaving: Any) -> tuple[str, ...]:
         nonlocal asked
         asked += 1
         return real_plan(held, leaving)
 
-    monkeypatch.setattr(replay_module, "leaving_plan", counting)
+    monkeypatch.setattr(session_module, "leaving_plan", counting)
 
     # A stop on the sold leg alone, and a setup that buys only.
     replay(setup(*_put_spread(short={"stop": STOP_25})), _stopped_sold_leg_market())

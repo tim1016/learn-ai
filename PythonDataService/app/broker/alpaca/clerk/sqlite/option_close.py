@@ -30,10 +30,20 @@ def captured_positions(
     repo: ClerkSqliteRepository, strategy_instance_id: str, entries: Sequence[OrderResource],
 ) -> dict[str, float]:
     """Every captured symbol, including zero holdings. The caller holds the custody fence."""
-    return {
-        symbol: repo.position(strategy_instance_id, symbol)
-        for entry in entries for symbol in entry_order_symbols(repo, entry.order_ref)
-    }
+    from app.broker.alpaca.clerk.options_legs import allocation_positions
+
+    positions: dict[str, float] = {}
+    for entry in entries:
+        option = option_entry_of_order(repo, entry.order_ref)
+        if option is not None and getattr(option, "options_attempt", None) is not None:
+            for symbol, quantity in allocation_positions(repo, strategy_instance_id, entry.order_ref).items():
+                positions[symbol] = positions.get(symbol, 0) + quantity
+        else:
+            positions.update({
+                symbol: repo.position(strategy_instance_id, symbol)
+                for symbol in entry_order_symbols(repo, entry.order_ref)
+            })
+    return positions
 
 
 def captured_option_legs(

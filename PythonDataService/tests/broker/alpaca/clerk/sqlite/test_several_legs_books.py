@@ -484,8 +484,8 @@ def test_schema_24_adds_the_one_table_and_it_is_empty_on_books_that_took_no_orde
     repo = open_option_books(tmp_path)
     try:
         accept_option_order(repo, terms=ContractTerms(C590, 100), side="buy", contracts=1, decision_id="d-one")
-        assert schema.SCHEMA_VERSION == 25
-        assert _rows(repo, "SELECT schema_version FROM control_meta") == [(25,)]
+        assert schema.SCHEMA_VERSION == 26
+        assert _rows(repo, "SELECT schema_version FROM control_meta") == [(26,)]
         assert _rows(repo, "SELECT COUNT(*) FROM option_order_legs") == [(0,)]
     finally:
         repo.close()
@@ -507,6 +507,8 @@ def test_a_schema_23_store_gains_the_empty_table_and_keeps_every_row(tmp_path: P
         conn.execute("DROP TRIGGER trg_orders_effect_state_update")
         conn.execute("DROP INDEX ix_orders_entry_broker_state")
         conn.execute("ALTER TABLE orders DROP COLUMN effect_state")
+        for column in ("active_run_id", "active_resume_command_id", "options_entries_enabled"):
+            conn.execute(f"ALTER TABLE deployment_budgets DROP COLUMN {column}")
         for trigger in ("trg_option_order_legs_never_edited", "trg_option_order_legs_never_deleted"):
             conn.execute(f"DROP TRIGGER {trigger}")
         conn.execute("DROP TABLE option_order_legs")
@@ -523,10 +525,10 @@ def test_a_schema_23_store_gains_the_empty_table_and_keeps_every_row(tmp_path: P
         for moved in ("control_meta",):
             before.pop(moved), after.pop(moved)
         assert after == before
-        assert _rows(reopened, "SELECT schema_version FROM control_meta") == [(25,)]
+        assert _rows(reopened, "SELECT schema_version FROM control_meta") == [(26,)]
     finally:
         reopened.close()
-    assert verify_database(database, expected_account_id=ACCOUNT_ID).schema_version == 25
+    assert verify_database(database, expected_account_id=ACCOUNT_ID).schema_version == 26
 
 
 def test_the_books_rebuilt_from_their_mirror_hold_the_parent_its_legs_and_their_fills(tmp_path: Path) -> None:

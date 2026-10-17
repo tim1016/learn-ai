@@ -10,6 +10,7 @@
   <span class="home-tile__chip">{{ groupWords() }}</span>
 </header>
 <p class="home-tile__meta">
+  <span class="home-tile__chip">{{ bot.bot_kind === 'options' ? 'Options' : 'Signal' }}</span>
   <app-bot-instrument class="home-tile__symbol" [symbol]="bot.symbol" [traded]="bot.traded" />
   · {{ bot.strategy_label }} · {{ bot.world_label }}
 </p>

@@ -1,8 +1,9 @@
-import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 
 import { AlpacaDeployWorkflowComponent } from '../../broker/broker-deploy-page/alpaca-deploy-workflow.component';
+import { OptionsBotDeployComponent } from '../../broker/broker-deploy-page/options-bot-deploy.component';
 import { AlpacaDeskAccountDataService } from '../alpaca-desk/alpaca-desk-account-data.service';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import { laneFenceDrifted } from '../../../fleet/lane-fence';
@@ -30,12 +31,16 @@ const DEPLOY_WITHOUT_ACCOUNT = 'Alpaca has not confirmed this account yet.';
 @Component({
   selector: 'app-alpaca-deploy-tab',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AlpacaDeployWorkflowComponent],
+  imports: [AlpacaDeployWorkflowComponent, OptionsBotDeployComponent],
   templateUrl: './alpaca-deploy-tab.component.html',
   styleUrl: './alpaca-deploy-tab.component.scss',
 })
 export class AlpacaDeployTabComponent {
   private readonly route = inject(ActivatedRoute);
+  protected readonly botKind = signal<'signal' | 'options'>(
+    this.route.snapshot.queryParamMap.has('options_setup') || this.route.snapshot.queryParamMap.has('options_submission') ? 'options' : 'signal',
+  );
+  protected readonly optionsOutstanding = signal(false);
   private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly accountData = inject(AlpacaDeskAccountDataService);
   private readonly routeParams = toSignal(this.route.paramMap, {

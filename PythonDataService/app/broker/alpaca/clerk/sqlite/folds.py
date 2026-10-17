@@ -1616,6 +1616,18 @@ def _fold_simulation_baseline(conn: sqlite3.Connection, payload: dict[str, Any])
     fold_simulation_baseline(conn, payload)
 
 
+def _fold_options_run_resumed(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    from app.broker.alpaca.clerk.sqlite.options_resume import fold_options_run_resumed
+
+    fold_options_run_resumed(conn, payload)
+
+
+def _fold_options_run_launched(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    from app.broker.alpaca.clerk.sqlite.options_resume import fold_options_run_launched
+
+    fold_options_run_launched(conn, payload)
+
+
 DEFAULT_FOLD_REGISTRY = FoldRegistry()
 DEFAULT_FOLD_REGISTRY.register("BUDGET_AUTHORITY_CUTOVER", fold_budget_authority_cutover)
 DEFAULT_FOLD_REGISTRY.register("FEE_EVIDENCE_OBSERVED", _fold_fee_evidence)
@@ -1627,6 +1639,8 @@ DEFAULT_FOLD_REGISTRY.register("RUN_STARTED", _fold_run_started)
 
 DEFAULT_FOLD_REGISTRY.register("DEPLOY_COMMITTED", fold_deploy_committed)
 DEFAULT_FOLD_REGISTRY.register("DEPLOY_LAUNCHED", fold_deploy_launched)
+DEFAULT_FOLD_REGISTRY.register("OPTIONS_RUN_RESUMED", _fold_options_run_resumed)
+DEFAULT_FOLD_REGISTRY.register("OPTIONS_RUN_LAUNCHED", _fold_options_run_launched)
 DEFAULT_FOLD_REGISTRY.register("RUN_STOPPED", _fold_run_stopped)
 DEFAULT_FOLD_REGISTRY.register("COMMAND_REJECTED", _fold_command_rejected)
 DEFAULT_FOLD_REGISTRY.register("ENTER_ACCEPTED", _fold_enter_accepted)

@@ -55,6 +55,7 @@ from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
 from app.engine.live.order_identity import build_bot_order_namespace, build_order_ref
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.marketdata.feed import FeedContinuityEvent
+from app.options_bots.golden_proof import setup_sha256
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
     BotHealthCard,
@@ -66,6 +67,7 @@ from app.schemas.broker_v2_panel import (
     StationView,
 )
 from app.schemas.live_runs import BotDutyOutcomeView
+from app.schemas.options_bot import OptionsBotConfiguration
 from app.schemas.run_admission import (
     CORPUS_UNCOVERED_EXPLANATION,
     CORPUS_UNCOVERED_NEXT_STEP,
@@ -116,6 +118,7 @@ from tests.broker.v2panel.fixtures import (
     home_facts,
     order_ref,
 )
+from tests.options_backtest.setup_fixtures import setup as options_setup
 
 _NOW = 1_700_000_000_000
 
@@ -3602,3 +3605,20 @@ def test_operator_stop_keeps_its_own_copy_even_with_exposure() -> None:
     outcome = panel.health.duty_outcome.model_copy(update={"kind": "STOPPED"})
     panel = panel.model_copy(update={"health": panel.health.model_copy(update={"duty_outcome": outcome})})
     assert _notices(panel, replace(_exposure_projection(orders=()), positions=_held(3))) == []
+
+
+def test_options_panel_preserves_approved_configuration_without_a_signal_program_claim() -> None:
+    setup = options_setup()
+    configuration = OptionsBotConfiguration(
+        golden_setup_id="ogs_test", setup=setup, setup_sha256=setup_sha256(setup), rules_digest="b" * 64,
+    )
+    status = _status(strategy_key="options_rules").model_copy(update={
+        "bot_kind": "options", "options_bot": configuration, "strategy_label": "My approved Options setup",
+    })
+
+    panel = _panel(status, _clerk_status(), exposure={})
+
+    assert panel.bot_kind == "options"
+    assert panel.options_bot == configuration
+    assert panel.sealed_program is None
+    assert panel.traded_asset_warning is None

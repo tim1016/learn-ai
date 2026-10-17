@@ -193,7 +193,8 @@ class BotRunTerminalRecorder:
         ):
             return
         try:
-            await commit_stop_before_task_cancel(binding, reason=reason_code)
+            stop_reason = f"options_interrupted:{reason_code}" if binding.options_bot is not None else reason_code
+            await commit_stop_before_task_cancel(binding, reason=stop_reason)
         except Exception:
             logger.exception(
                 "Bot terminal evidence could not commit SQLite STOP",

@@ -431,7 +431,10 @@ previously refused, reissue it after fixing the stated cause. Never treat
 ## 5. Launch a bot
 
 1. Select the account card and click **Deploy a bot** in the account header.
-2. Choose a strategy. **Accepted evidence** means its validation passed; it
+2. Choose **Signal bot** or **Options bot**. Signal bots follow a strategy's
+   signals and may trade shares or option structures. Options bots follow a
+   Golden setup's daily premium, stop and re-entry rules (see below).
+   For a Signal bot, choose a strategy. **Accepted evidence** means its validation passed; it
    does not mean this account has permission to run it.
 3. If the strategy is not yet allowed on the account, click **Allow on Paper**
    (or **Allow on Shadow**) below the strategy. Review the exact strategy, and
@@ -455,10 +458,40 @@ previously refused, reissue it after fixing the stated cause. Never treat
 7. Inspect the bot's commitment, free budget, fee evidence and outstanding claims.
    **Stop** ends its decisions but does not prove flatness. Resolve remaining
    exposure through guarded **Flatten** or existing order recovery. **Deploy
-   again** opens a fresh review and identity; Pause, Resume and re-arm are retired.
+   again** opens a fresh review and identity. Signal bots have no Resume;
+   interrupted Options bots use the recovery procedure below.
 
-Permissions live in the lane volume at `canary_admission/events.json`, alongside
-custody state. Recreating a container preserves them. Do not place the ledger
+### Options bots: approve, deploy and recover
+
+1. Complete the intended run in **Options Backtest**, open **Review golden
+   setup**, read its setup and evidence, and record an approval note. Choose
+   **Approve golden setup**. The approval belongs to those exact tested rules
+   and quantities; editing a saved setup requires a new approval.
+2. In the intended account's **Deploy a bot**, choose **Options bot** and the
+   approved version. Select the execution mode, review the order terms and
+   budget, then choose **Deploy Options bot**. A late deployment waits for
+   the next eligible session. The setup repeats daily until stopped or its
+   deployment ends.
+3. Open the bot page to check its confirmed contracts, actual average fills,
+   stop levels and remaining re-entries. A partial opening cancels the rest
+   and manages only confirmed contracts. A lost deployment response is
+   recovered through **Check deployment status**, including after reload;
+   do not create a second deployment to resolve an unknown result.
+4. After an interruption, reconcile the account and open its bot page.
+   **Resume position management** restores the session with entries disabled.
+   To permit entries and re-entries, choose **Review budget for new entries**,
+   review its remaining free balance and current limits, then **Resume
+   Options bot with entries**. Live requires the displayed typed confirmation.
+   Recovery keeps the original capital, lifetime results and recorded counts.
+   An intentional Stop or completed deployment end cannot be resumed.
+5. A revoked or stale Golden setup holds new entries and re-entries while
+   stops and daily closes continue. Re-prove a stale setup from its retained
+   evidence; a revoked version needs a new approval. Unknown order outcomes
+   remain under Clerk reconciliation and never authorize a replacement order.
+
+Signal Program permissions live in the lane volume at
+`canary_admission/events.json`, alongside custody state. Recreating a container
+preserves them. Do not place the ledger
 in the container's disposable `/app/artifacts/canary_admission` directory.
 An account permission uses the actual account number; the internal
 `shadow:<account-number>` custody namespace resolves the same account permission.

@@ -30,6 +30,7 @@ from app.schemas.deployment_budget import DeploymentBudgetInput
 from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.live_runs import BotDutyOutcomeView
 from app.schemas.option_deploy import DeployTrades, TradesAnotherStock, TradesOptions, TradesTheSignal
+from app.schemas.options_bot import OptionsBotConfiguration
 from app.schemas.run_admission import RunAdmissionDecision
 from app.schemas.strategy_params_schema import StrategyParamsSchema
 from app.schemas.traded_asset_acknowledgement import (
@@ -573,6 +574,8 @@ class AlpacaPaperDeployView(BaseModel):
 
 
 class BotStatusView(BaseModel):
+    bot_kind: Literal["signal", "options"] = "signal"
+    options_bot: OptionsBotConfiguration | None = None
     """One bot's roster row: broker-tagged binding + artifact-derived state."""
 
     model_config = ConfigDict(frozen=True)

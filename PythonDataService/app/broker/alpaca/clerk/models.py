@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.broker.contract.models import BrokerActivity, BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 from app.schemas.account_authority import AuthorityKind
-from app.schemas.action_plan import ActionPlan, OptionEntryLeg, StockEntryLeg
+from app.schemas.action_plan import BotActionPlan, OptionEntryLeg, StockEntryLeg
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 EpochMs = Annotated[
@@ -72,11 +72,15 @@ class AlpacaEffectOperation(BaseModel):
     run_id: str = Field(min_length=1, max_length=128)
     decision_id: str = Field(min_length=1, max_length=256)
     purpose: EffectPurpose
-    action_plan: ActionPlan
-    quantity: int = Field(ge=1, le=100)
+    action_plan: BotActionPlan
+    quantity: int = Field(ge=1, le=1000)
 
     @model_validator(mode="after")
     def _requires_one_stock_entry_and_matching_close(self) -> AlpacaEffectOperation:
+        if getattr(self.action_plan, "kind", None) == "options_session":
+            return self
+        if self.quantity > 100:
+            raise ValueError("a Signal bot effect has a size of at most 100")
         if self.action_plan.on_enter and all(isinstance(leg, OptionEntryLeg) for leg in self.action_plan.on_enter):
             # The plan's own rules already hold an option structure to one
             # order's legs, each closed exactly once.

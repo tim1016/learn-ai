@@ -103,8 +103,11 @@ def project_bot_status(
     """Compose one typed roster row from durable artifacts and task liveness."""
     duty_outcome = duty_outcome_view(lifecycle)
     return BotStatusView(
+        bot_kind="options" if binding.options_bot is not None else "signal",
+        options_bot=binding.options_bot,
         strategy_instance_id=binding.strategy_instance_id,
         strategy_key=binding.strategy_key,
+        strategy_label="Options bot" if binding.options_bot is not None else None,
         broker=binding.broker,
         symbol=binding.symbol,
         traded=TradedInstrumentView.of(binding.action_plan, signal_symbol=binding.symbol),

@@ -13,6 +13,7 @@ import type { RunDetail, RunListItem, ServedSetup, SetupSummary } from '../optio
 import { RUN_POLL_MS } from '../run-poll';
 import { progressView } from '../run-words';
 import { JobProgressComponent } from './job-progress.component';
+import { GoldenSetupApprovalComponent } from './golden-setup-approval.component';
 import { RunFailureComponent } from './run-failure.component';
 import { RunResultComponent } from './run-result.component';
 
@@ -36,6 +37,7 @@ import { RunResultComponent } from './run-result.component';
     TimestampDisplayComponent,
     SetupSentencesComponent,
     JobProgressComponent,
+    GoldenSetupApprovalComponent,
     RunFailureComponent,
     RunResultComponent,
   ],
@@ -64,6 +66,7 @@ export class RunPanelComponent {
   private readonly readFailure = signal<string | null>(null);
   private generation = 0;
   protected readonly detail = this.record.asReadonly();
+  protected readonly goldenReviewRun = signal<number | null>(null);
   protected readonly readProblem = this.readFailure.asReadonly();
   /** What the run is: the record read last, or the record it was given until one has been read. */
   protected readonly status = computed(() => this.detail()?.status ?? this.run().status);

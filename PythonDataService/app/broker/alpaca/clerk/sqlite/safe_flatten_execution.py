@@ -38,9 +38,11 @@ from app.broker.alpaca.clerk.program_leg import LegRefusal
 from app.broker.alpaca.clerk.recovery_reduction import ConfirmedRecoveryShape, RecoveryPricing
 from app.broker.alpaca.clerk.sqlite.exit import (
     OptionCloseTakesNoPricedLeg,
+    OptionsProtectionRequired,
     RecoveryRunActiveError,
     accept_recovery_exit,
-    newest_reducible_entry,
+    exit_effect_operation_id,
+    reducible_entries,
     resolve_accepted_exit,
 )
 from app.broker.alpaca.clerk.sqlite.exit_resolution import (
@@ -130,7 +132,22 @@ async def execute_safe_flatten_plan(
     decision_token = hashlib.sha256(plan.version_token.encode("utf-8")).hexdigest()[:16]
     submitted: list[OrderResource] = []
     accepted_effect_operation_ids: list[str] = []
-    for leg in plan.legs:
+    work = []
+    for leg in sorted(plan.legs, key=lambda item: item.side != "buy"):
+        targets = reducible_entries(repo, leg.strategy_instance_id, leg.symbol)
+        remaining = {target.order_ref for target in targets}
+        # Keep this plan's already captured allocations too: a retry after a
+        # lost answer re-drives its exact exits, even after one filled flat.
+        for target in reducible_entries(repo, leg.strategy_instance_id, leg.symbol, include_flat=True):
+            decision_id = f"{RECOVERY_FLATTEN_DECISION_PREFIX}{decision_token}"
+            if target.allocation:
+                decision_id += "-" + hashlib.sha256(target.order_ref.encode("utf-8")).hexdigest()[:16]
+            effect_id = exit_effect_operation_id(strategy_instance_id=leg.strategy_instance_id, decision_id=decision_id)
+            if target.order_ref in remaining or (target.allocation and repo.effect_operation(effect_id) is not None):
+                work.append((leg, target, decision_id, effect_id))
+        if not targets and not any(item[0] == leg for item in work):
+            raise SafeFlattenExecutionError(f"No owned entry order proves a reduction target for {leg.symbol!r}.")
+    for leg, target, decision_id, effect_id in work:
         # Re-check expiry before each leg so a long, multi-leg run cannot submit
         # a later reduction on a check of the account that has gone stale: the
         # plan expires with the receipt or the Clerk's pass it rests on (#2839).
@@ -139,12 +156,12 @@ async def execute_safe_flatten_plan(
                 "The prepared reduction plan expired; prepare a fresh plan."
             )
         async with intake:
-            target = newest_reducible_entry(repo, leg.strategy_instance_id, leg.symbol)
-            if target is None:
-                raise SafeFlattenExecutionError(
-                    f"No owned entry order proves a reduction target for {leg.symbol!r}."
-                )
-            if target.exit_owned:
+            own_retry = target.allocation and repo.effect_operation(effect_id) is not None
+            current = (
+                repo.active_exit_for_order(target.order_ref) is not None if target.allocation
+                else any(item.exit_owned for item in reducible_entries(repo, leg.strategy_instance_id, leg.symbol))
+            )
+            if current and not own_retry:
                 raise SafeFlattenExecutionError(
                     f"An exit is already reducing {leg.symbol}; wait for its outcome, "
                     "then prepare a fresh plan."
@@ -154,7 +171,7 @@ async def execute_safe_flatten_plan(
                     repo,
                     account_id=account_id,
                     strategy_instance_id=leg.strategy_instance_id,
-                    decision_id=f"{RECOVERY_FLATTEN_DECISION_PREFIX}{decision_token}",
+                    decision_id=decision_id,
                     entry_order_ref=target.order_ref,
                     # Re-asserted inside the capture transaction: recovery
                     # policy refused presentation with RUN_STILL_ACTIVE, but a
@@ -174,6 +191,8 @@ async def execute_safe_flatten_plan(
                 raise SafeFlattenExecutionError(
                     f"{exc.refusal.explanation} {exc.refusal.next_step}", refusal=exc.refusal
                 ) from exc
+            except OptionsProtectionRequired as exc:
+                raise SafeFlattenExecutionError(str(exc) + " Wait for the buy-back, then prepare a fresh flatten.") from exc
         resolved = await resolve_accepted_exit(
             repo, accepted=accepted, trade=trade, pricing=pricing, read=read
         )
