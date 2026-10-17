@@ -37,13 +37,19 @@ for (const manual of [
     await expect(book.locator('#glossary')).toBeInViewport();
     expect(await book.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
 
+    await book.getByRole('button', { name: 'Browse chapters' }).click();
+    await book.getByRole('searchbox').fill('no-matching-chapter');
+    await expect(chapterLinks).toHaveCount(0);
     await page.emulateMedia({ media: 'print' });
     await expect(print).toBeHidden();
     await expect(page.locator('app-top-bar')).toBeHidden();
     await expect(book.locator('article h2')).toHaveCount(allLinks.length);
     await expect(book.locator('article h2').first()).toBeVisible();
     await expect(book.locator('article h2').last()).toBeVisible();
+    await expect(chapterLinks).toHaveCount(allLinks.length);
+    await expect(book.getByRole('status')).toBeHidden();
     await page.emulateMedia({ media: 'screen' });
+    await expect(book.getByRole('searchbox')).toHaveValue('no-matching-chapter');
     await page.setViewportSize({ width: 1280, height: 900 });
     await book.locator('.companion').click();
     await expect(page).toHaveURL(manual.other);
@@ -57,4 +63,17 @@ test('a failed manual download cannot print an empty document', async ({ page })
   await page.goto('/docs/options-backtest-manual');
   await expect(page.getByRole('button', { name: 'Print / Save PDF' })).toBeDisabled();
   await expect(page.locator('app-trader-manual .md-error')).toBeVisible();
+});
+
+test('an inline chapter link updates the address, selected chapter and browser history', async ({ page }) => {
+  await page.route('**/api/**', route => route.fulfill({ status: 503, json: {} }));
+  await page.goto('/docs/broker-manual#fees');
+  const book = page.locator('app-trader-manual');
+  await book.getByRole('link', { name: 'matching fees to the account' }).click();
+
+  await expect(page).toHaveURL('/docs/broker-manual#reconcile');
+  await expect(book.locator('#reconcile')).toBeInViewport();
+  await expect(book.locator('nav a[href="/docs/broker-manual#reconcile"]')).toHaveAttribute('aria-current', 'location');
+  await page.goBack();
+  await expect(page).toHaveURL('/docs/broker-manual#fees');
 });

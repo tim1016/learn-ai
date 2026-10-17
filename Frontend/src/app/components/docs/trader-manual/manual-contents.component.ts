@@ -17,12 +17,14 @@ export class ManualContentsComponent {
   protected readonly query = signal('');
   protected readonly groups = computed(() => {
     const words = this.query().toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
-    const chapters = this.chapters().filter(chapter => {
+    const chapters = this.chapters().map(chapter => {
       const text = `${chapter.title} ${chapter.description} ${chapter.group}`.toLocaleLowerCase();
-      return words.every(word => text.includes(word));
+      return { ...chapter, matches: words.every(word => text.includes(word)) };
     });
     return [...new Set(chapters.map(chapter => chapter.group))].map(title => ({
       title, chapters: chapters.filter(chapter => chapter.group === title),
+      visible: chapters.some(chapter => chapter.group === title && chapter.matches),
     }));
   });
+  protected readonly noMatches = computed(() => this.groups().every(group => !group.visible));
 }

@@ -5,18 +5,19 @@
     <input #search id="manual-search" type="search" placeholder="Try fees, stops or expiry" [value]="query()" (input)="query.set(search.value)" />
   </div>
   @for (group of groups(); track group.title) {
-    <section class="chapter-group">
+    <section class="chapter-group" [style.display]="group.visible ? null : 'none'">
       <h2>{{ group.title }}</h2>
       <ol>
         @for (chapter of group.chapters; track chapter.id) {
-          <li><a [routerLink]="route()" [fragment]="chapter.id" [attr.aria-current]="active() === chapter.id ? 'location' : null" (click)="chapterPicked.emit(chapter.id)">
+          <li [style.display]="chapter.matches ? null : 'none'"><a [routerLink]="route()" [fragment]="chapter.id" [attr.aria-current]="active() === chapter.id ? 'location' : null" (click)="chapterPicked.emit(chapter.id)">
             {{ chapter.title }}
             @if (query().trim()) { <span>{{ chapter.description }}</span> }
           </a></li>
         }
       </ol>
     </section>
-  } @empty {
+  }
+  @if (noMatches()) {
     <p class="empty" role="status">No chapter matches “{{ query() }}”. Try a shorter word, such as fees or expiry.</p>
   }
   @if (query()) { <button type="button" (click)="query.set('')">Show all chapters</button> }

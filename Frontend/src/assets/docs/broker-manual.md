@@ -90,7 +90,7 @@ Premium, collateral, spread and slippage are different from the fee rows above. 
 
 ### Choose a backtest fee policy deliberately
 
-**Estimated** uses the app's dated option-fee model. **Per contract** uses your chosen charge on each fill. **Not charged** deliberately omits fees. Those choices do not change the broker's invoice. The backtest also rounds estimates per fill, which can differ from daily aggregation. Continue with [matching fees to the account](#reconcile).
+**Estimated** uses the app's dated option-fee model. **Per contract** uses your chosen charge on each fill. **Not charged** deliberately omits fees. Those choices do not change the broker's invoice. The backtest also rounds estimates per fill, which can differ from daily aggregation. Continue with [matching fees to the account](/docs/broker-manual#reconcile).
 
 ## 5. Data and account costs {#data-and-account-costs}
 
