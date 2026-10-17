@@ -15,7 +15,8 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
+from concurrent.futures import Future
 from uuid import UUID
 
 import asyncpg
@@ -245,7 +246,9 @@ def test_the_call_bound_is_preserved_as_the_outage_taxonomy() -> None:
     assert elapsed < 5.0, "the bound fired promptly, not at some outer timeout"
 
 
-def test_closing_fails_everything_still_parked_with_the_typed_outage(caplog: pytest.LogCaptureFixture) -> None:
+def test_closing_fails_everything_still_parked_with_the_typed_outage(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Teardown never leaves a waiter to its own bound (#3047 review)."""
     in_flight = threading.Event()
 
@@ -254,7 +257,17 @@ def test_closing_fails_everything_still_parked_with_the_typed_outage(caplog: pyt
         await asyncio.sleep(3600)  # the lookup outlives the close, cancellably
         return frozenset()
 
-    batcher = AdmissionBatcher(pool_max_size=1, lookup=held)
+    schedule = asyncio.run_coroutine_threadsafe
+
+    def start_before_return(coro: Coroutine[object, object, None], loop: asyncio.AbstractEventLoop) -> Future[None]:
+        future = schedule(coro, loop)
+        future.result(timeout=5.0)
+        return future
+
+    # Force the loop to finish startup before the constructing thread resumes.
+    with monkeypatch.context() as patch:
+        patch.setattr(asyncio, "run_coroutine_threadsafe", start_before_return)
+        batcher = AdmissionBatcher(pool_max_size=1, lookup=held)
     failures: dict[int, BaseException | bool] = {}
     completed = {1: threading.Event(), 2: threading.Event()}
 

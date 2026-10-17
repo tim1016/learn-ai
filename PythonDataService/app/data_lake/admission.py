@@ -205,10 +205,10 @@ class AdmissionBatcher:
         self._batch_sizes: Counter[int] = Counter()
         self._last_query_ms = 0.0
         self._loop = asyncio.new_event_loop()
+        self._serve_task: asyncio.Future[None] | None = None
         self._thread = threading.Thread(target=self._loop.run_forever, name="admission-loop", daemon=True)
         self._thread.start()
         self._serve_boot = asyncio.run_coroutine_threadsafe(self._start(), self._loop)
-        self._serve_task: asyncio.Future[None] | None = None
 
     async def _start(self) -> None:
         self._wakeup = asyncio.Event()
