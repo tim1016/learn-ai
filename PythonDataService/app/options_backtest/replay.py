@@ -86,6 +86,7 @@ from app.options_backtest.cover_book import (
     may_leave,
 )
 from app.options_backtest.market import MinuteBar, Picked, PickRefused, SessionMarket
+from app.options_backtest.observation import HeldMark, MinuteObservation
 from app.options_backtest.results import (
     ENTRY_REFUSAL_EVENTS,
     EntryRefusal,
@@ -160,7 +161,8 @@ class _Taken:
 
 
 def replay_session(
-    setup: OptionsBacktestSetup, market: SessionMarket, *, cash_usd: Decimal, fee_for: FeeFor
+    setup: OptionsBacktestSetup, market: SessionMarket, *, cash_usd: Decimal, fee_for: FeeFor,
+    observer: Callable[[MinuteObservation], None] | None = None,
 ) -> SessionOutcome:
     """Replay ``setup`` over one session's ``market``, starting with ``cash_usd``.
 
@@ -175,12 +177,16 @@ def replay_session(
     ``decimal.Inexact`` and is never rounded. ``fee_for`` and the market's methods (``underlying_close``,
     ``pick`` and ``option_bar``) are the caller's code and run in the decimal context the caller had
     when it called, so a fee that rounds to the cent or a picker that rounds to a strike is ordinary use.
+
+    An optional ``observer`` receives immutable session-open and minute-close facts, after that
+    close's fills and decisions. It reads no additional bars and cannot supply decisions or marks.
+    A missing contemporaneous held mark stays missing; ordinary replay settlement is unchanged.
     """
     if market.session_open_ms % MS_PER_MINUTE or market.session_close_ms % MS_PER_MINUTE:
         raise ValueError("a session opens and closes on a whole minute: bars are named by the minute they close")
     caller_context = getcontext().copy()
     with localcontext(fills.EXACT):
-        return _Session(setup, market, fee_for, cash_usd, caller_context).run()
+        return _Session(setup, market, fee_for, cash_usd, caller_context, observer).run()
 
 
 def _skipped(reason: SkipReason) -> SessionOutcome:
@@ -197,6 +203,7 @@ class _Session(OptionsSession):
         fee_for: FeeFor,
         cash_usd: Decimal,
         caller_context: Context,
+        observer: Callable[[MinuteObservation], None] | None,
     ) -> None:
         super().__init__(setup, market)
         self.fee_for = fee_for
@@ -204,13 +211,19 @@ class _Session(OptionsSession):
         self.start_cash = self.cash = cash_usd
         self.trades: list[LegTrade] = []
         self.money_steps: list[MoneyStep] = []
+        self.observer = observer
 
     def run(self) -> SessionOutcome:
         if not self.setup.window_fits(session_open_ms=self.open_ms, session_close_ms=self.close_ms):
+            self._observe_flat_session()
             return _skipped(SkipReason.WINDOW_DOES_NOT_FIT)
         self._start(self.entry_ms)
         if self.state.skipped is not None:
+            self._observe_flat_session()
             return _skipped(self.state.skipped)
+        if self.observer is not None:
+            for t in range(self.open_ms, self.entry_ms + MS_PER_MINUTE, MS_PER_MINUTE):
+                self._observe_minute(t, {})
         for t in range(self.entry_ms + MS_PER_MINUTE, self.close_ms + MS_PER_MINUTE, MS_PER_MINUTE):
             self._minute(t)
         self._mark_what_is_held()
@@ -223,6 +236,31 @@ class _Session(OptionsSession):
         bars = self._read_held_bars(t)
         self._fill_closes(t, bars)
         self._advance_rules(t, bars)
+        self._observe_minute(t, bars)
+
+    def _observe_flat_session(self) -> None:
+        if self.observer is not None:
+            for t in range(self.open_ms, self.close_ms + MS_PER_MINUTE, MS_PER_MINUTE):
+                self._observe_minute(t, {})
+
+    def _observe_minute(self, t: int, bars: dict[str, MinuteBar | None]) -> None:
+        """Observe post-fill/post-decision holdings using bars already read by the replay."""
+        if self.observer is None:
+            return
+        marks: list[HeldMark] = []
+        for leg in self.legs:
+            if leg.phase is _Phase.HELD:
+                position = _position_of(leg)
+                bar = bars.get(leg.setup.leg_id)
+                marks.append(HeldMark(
+                    leg.setup.leg_id, position.entry.contract,
+                    position.entry.contracts * (-1 if position.entry.side == "sell" else 1),
+                    position.entry.multiplier, None if bar is None else bar.close,
+                    position.close is not None,
+                ))
+        observation = MinuteObservation(t, self.cash, self._money()[1], tuple(marks))
+        with localcontext(self.caller_context):
+            self.observer(observation)
 
     # --- fills that are due -----------------------------------------------------------------------
 

@@ -54,7 +54,7 @@ from __future__ import annotations
 
 import asyncpg
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 # Arbitrary but fixed: serializes concurrent first-use across FastAPI's loop
 # and the worker loop so CREATE IF NOT EXISTS never races itself.
 _ADVISORY_LOCK_KEY = 0x1926_0001
@@ -1063,6 +1063,55 @@ DDL_V21: tuple[str, ...] = (
     """,
 )
 
+
+DDL_V22: tuple[str, ...] = (
+    """CREATE TABLE IF NOT EXISTS research_options_search_studies (
+        id TEXT PRIMARY KEY, underlying TEXT NOT NULL, setup_name TEXT NOT NULL,
+        phase TEXT NOT NULL CHECK (phase IN ('research','compare','final','approval','approved','retained')),
+        status TEXT NOT NULL CHECK (status IN ('idle','queued','running','interrupted','cancelled','completed')),
+        revision BIGINT NOT NULL DEFAULT 0, attempt BIGINT NOT NULL DEFAULT 0, job_id TEXT NULL,
+        document JSONB NOT NULL, created_at_ms BIGINT NOT NULL, updated_at_ms BIGINT NOT NULL,
+        finished_at_ms BIGINT NULL, failure_reason TEXT NULL, incomplete BOOLEAN NOT NULL DEFAULT FALSE,
+        CHECK (created_at_ms BETWEEN 0 AND 253402300799999),
+        CHECK (updated_at_ms BETWEEN 0 AND 253402300799999)
+    )""",
+    """CREATE TABLE IF NOT EXISTS research_options_search_commands (
+        study_id TEXT NOT NULL REFERENCES research_options_search_studies(id) ON DELETE RESTRICT,
+        command_id TEXT NOT NULL, request_hash TEXT NOT NULL, response JSONB NOT NULL,
+        created_at_ms BIGINT NOT NULL, PRIMARY KEY(study_id,command_id)
+    )""",
+    """CREATE TABLE IF NOT EXISTS research_options_search_evaluations (
+        study_id TEXT NOT NULL REFERENCES research_options_search_studies(id) ON DELETE RESTRICT,
+        key TEXT NOT NULL, identity JSONB NOT NULL, result JSONB NULL,
+        execution_attempts INTEGER NOT NULL CHECK (execution_attempts>=0), PRIMARY KEY(study_id,key)
+    )""",
+    """CREATE TABLE IF NOT EXISTS research_options_search_trials (
+        id BIGSERIAL PRIMARY KEY,
+        study_id TEXT NOT NULL REFERENCES research_options_search_studies(id) ON DELETE RESTRICT,
+        record JSONB NOT NULL, created_at_ms BIGINT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS research_options_search_exposures (
+        id BIGSERIAL PRIMARY KEY, underlying TEXT NOT NULL, start_ms BIGINT NOT NULL, end_ms BIGINT NOT NULL,
+        owner_id TEXT NOT NULL, created_at_ms BIGINT NOT NULL,
+        UNIQUE(owner_id,start_ms,end_ms), CHECK(start_ms>=0 AND end_ms>start_ms AND end_ms<=253402300799999)
+    )""",
+    """CREATE INDEX IF NOT EXISTS idx_options_search_exposure
+        ON research_options_search_exposures(underlying,start_ms,end_ms)""",
+    """CREATE TABLE IF NOT EXISTS research_options_search_approvals (
+        study_id TEXT PRIMARY KEY REFERENCES research_options_search_studies(id) ON DELETE RESTRICT,
+        qualification_id TEXT NOT NULL UNIQUE REFERENCES research_golden_option_setups(id) ON DELETE RESTRICT,
+        manifest JSONB NOT NULL, manifest_sha256 TEXT NOT NULL
+    )""",
+    *tuple(
+        f"CREATE TRIGGER {table}_immutable BEFORE UPDATE OR DELETE ON {table} "
+        "FOR EACH ROW EXECUTE FUNCTION reject_golden_search_ledger_mutation()"
+        for table in (
+            "research_options_search_commands", "research_options_search_trials",
+            "research_options_search_exposures", "research_options_search_approvals",
+        )
+    ),
+)
+
 VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (1, DDL_V1),
     (2, DDL_V2),
@@ -1085,6 +1134,7 @@ VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (19, DDL_V19),
     (20, DDL_V20),
     (21, DDL_V21),
+    (22, DDL_V22),
 )
 
 

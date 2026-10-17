@@ -69,3 +69,42 @@ A research-runtime restart fences its own generations and closes its
 jobs' sweep protection; it never auto-resumes them. Each interrupted study
 is resumed through its own Finish (resume) command — new job id, same
 durable identity, recorded cells skipped.
+
+## Qualifying Options Golden Search capacity
+
+`OPTIONS_SEARCH_WORKER_COUNT` is a separate operator limit, initially **1**.
+It cannot exceed `RESEARCH_WORKER_COUNT`. Signal/Grid qualification does not
+qualify Options: minute risk traces and contract inventories have different
+memory and storage costs. The owner UI cannot change either limit. A study's
+scientific identity excludes worker width, so an interrupted study resumes
+at a lower qualified width without changing its frozen selection procedure.
+
+Before increasing the Options limit:
+
+1. Run `tests/research/options_golden_search/test_dispatch.py` with slow tests
+   included. The real worker matrix compares every retained session, minute
+   observation, exact cash amount and derived metric at widths 1/2/4/8.
+   A synthetic matrix establishes repeatability; it does not qualify host
+   capacity.
+2. On the target research profile, use a retained representative Options
+   study with eight legs, re-entries, strict held-minute marks, all declared
+   stress scenarios, and complete approval ladders. Repeat a cold run and a
+   warm-cache run at each proposed width while a separate Signal or Grid
+   study shares the pool. Preserve the existing global task, result-byte,
+   database, PID, CPU and memory bounds.
+3. Record elapsed time, peak process/cgroup memory, retained snapshot and
+   evidence bytes, pool payload/result peaks, lost/retried starts and
+   operational service latency in the qualification issue or PR. Compare
+   hashes of trials, fold winners, exact results and final qualification
+   evidence with width 1. Do not infer usable capacity from evaluation
+   count alone.
+4. Exercise cancellation, a killed worker, duplicate/stale delivery and
+   resume. Durable results must be reused; lost starts count toward the
+   frozen physical-attempt bound, and no incomplete procedure reaches
+   Compare or a normal approval.
+5. Confirm operational headroom under the concurrent load. A passing
+   synthetic matrix without measurements on this deployment leaves its
+   qualified Options width at 1. Drain and restart before applying an
+   explicitly qualified larger Options limit. Roll back by draining and
+   setting `OPTIONS_SEARCH_WORKER_COUNT=1`; retain the study and exposure
+   evidence.

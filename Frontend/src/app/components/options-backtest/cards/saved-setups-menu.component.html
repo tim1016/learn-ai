@@ -24,6 +24,7 @@
                 @if (item.example) { <span class="tag">Example</span> } @else if (item.saved_at_ms; as savedAt) { <app-timestamp-display [value]="savedAt" mode="local" granularity="short-date" /> }
               </span>
             </button>
+            <a [href]="searchLink(item.name)">Options Golden Search</a>
           } @else {
             <div class="blocked">
               <span class="name">{{ item.name }}</span>

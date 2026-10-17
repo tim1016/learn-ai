@@ -54,7 +54,7 @@ COORDINATOR_LOCK_CLASSID = 0x1926
 COORDINATOR_LOCK_OBJID = 0x0002
 SINGLETON_ROW_ID = "coordinator"
 
-ResearchKind = Literal["golden_search", "grid_search", "walk_forward", "recency"]
+ResearchKind = Literal["golden_search", "grid_search", "walk_forward", "recency", "options_golden_search"]
 
 
 class CoordinatorHeldElsewhere(RuntimeError):

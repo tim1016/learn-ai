@@ -1,0 +1,50 @@
+<section class="card locked"><h3>{{ study().setup_name }}</h3><app-asset-identity [symbol]="study().underlying" size="xs" />
+  <p>Locked protocol <code>{{ study().protocol_hash }}</code> · Revision {{ study().revision }}</p>
+  <p>{{ study().phase | receiptLabel }} · {{ study().status | receiptLabel }}</p>
+  <p>Exposure: {{ study().exposure.classification | receiptLabel }}. {{ study().exposure.explanation }}</p>
+  @if (study().failure_reason; as reason) { <p class="problem">{{ reason }}</p> }
+  <a routerLink="/options-golden-search" [queryParams]="{ setup_name: study().setup_name, parent_study_id: study().id }">Fork a linked plan from this saved setup</a>
+</section>
+@if (step() <= 2) {
+  <section class="card"><h3>Locked plan receipt</h3><p>These exact settings were frozen before research. Fork a linked plan to change them.</p>
+    @for (item of study().protocol_summary; track item.label) { <p><strong>{{ item.label }}</strong>: {{ item.value }}</p> }
+  </section>
+}
+@if (step() === 3) {
+  <section class="card"><h3>Research</h3><p>The locked plan survives closing this browser. Resume explicitly after interruption. Cancel keeps evidence already committed.</p>
+    <p>Stage: {{ study().progress.stage | receiptLabel }}</p>
+    <dl class="metrics">
+      <div><dt>Completed / queued / running evaluations</dt><dd>{{ study().progress.completed }} / {{ study().progress.queued }} / {{ study().progress.running }}</dd></div>
+      <div><dt>Execution attempts / cache hits</dt><dd>{{ study().progress.execution_attempts }} / {{ study().progress.cache_hits }}</dd></div>
+      <div><dt>Spent / reserved evaluations</dt><dd>{{ study().progress.spent }} / {{ study().progress.reserved }}</dd></div>
+    </dl><p>{{ study().progress.capacity_message }}</p>
+    <div class="actions"><button type="button" class="primary" [disabled]="!allowed('run_research')" (click)="ask('run_research')">Run research</button><button type="button" [disabled]="!allowed('cancel')" (click)="ask('cancel')">Cancel</button><button type="button" [disabled]="!allowed('resume')" (click)="ask('resume')">Resume</button></div>
+    @for (gate of study().gate_outcomes; track gate.gate_id) { <p><strong>{{ gate.gate_id | receiptLabel }} · {{ gate.status | receiptLabel }}</strong>: {{ gate.reason }}</p> }
+  </section>
+}
+@if (step() === 4) {
+  <section class="card"><h3>Development and forward evidence</h3><p>The original is retained independently. Reduce the tested shortlist before final exposure. Every final candidate is chosen before its final outcomes are shown.</p>
+    @for (candidate of study().candidates; track candidate.candidate_hash) {
+      @if (!candidate.is_original) { <label><input type="checkbox" [checked]="selectedHashes().includes(candidate.candidate_hash)" [disabled]="!allowed('open_final') || candidate.verdict !== 'meets_rules'" (change)="toggleFinalist(candidate.candidate_hash, $event)" /> Include {{ candidate.label }} in final test</label> }
+      <app-options-search-candidate [candidate]="candidate" [studyId]="study().id" window="development" [sessionLoader]="sessionLoader()" />
+    } @empty { <p>No complete shortlist is available. Research may finish with no eligible point.</p> }
+    <p>Opening final test freezes these exact candidates and records these dates as exposed, even if computation fails. This comparison chooses after final test from several candidates; it is not an unbiased single-candidate confirmation.</p>
+    <button type="button" class="primary" [disabled]="!allowed('open_final')" (click)="ask('open_final')">Freeze shortlist and open final test</button>
+  </section>
+}
+@if (step() === 5) {
+  <section class="card"><h3>Final outcomes and approval</h3><p>These are final results. Development and forward totals remain separate. Approval publishes one exact immutable version and starts no bot.</p>
+    @for (candidate of study().final_results; track candidate.candidate_hash) { <app-options-search-candidate [candidate]="candidate" [studyId]="study().id" window="final" [sessionLoader]="sessionLoader()" /> } @empty { <p>Final outcomes are not available. Open final test from Compare when the server allows it.</p> }
+    @if (study().final_results.length > 0) {
+      <label>Exact candidate to approve<select [formField]="fields.hash"><option value="">Choose a candidate</option>@for (candidate of study().final_results; track candidate.candidate_hash) { <option [value]="candidate.candidate_hash">{{ candidate.label }}</option> }</select></label>
+      <label>Owner review comment<textarea [formField]="fields.comment"></textarea></label>
+      @if (approvalCandidate(); as candidate) {
+        <p>{{ candidate.verdict | receiptLabel }}. Owner exceptions preserve all failed rules and exposure labels permanently.</p>
+        @for (gate of candidate.gate_outcomes; track gate.gate_id) { @if (gate.status !== 'passed' && gate.status !== 'meets_rules') { <p class="warning">{{ gate.gate_id | receiptLabel }}: actual {{ gate.actual ?? 'Unavailable' }}; required {{ gate.required ?? 'Unavailable' }}. {{ gate.reason }}</p> } }
+      }
+      <div class="actions"><button type="button" [disabled]="!allowed('keep_original')" (click)="ask('keep_original')">Keep original</button><button type="button" class="primary" [disabled]="!canApprove()" (click)="ask('approve')">Approve exact golden version</button><button type="button" [disabled]="!canExcept()" (click)="ask('approve_exception')">Approve owner exception</button></div>
+      <p>A nonblank comment is required for exceptions. Missing inputs and failed repeatability cannot be overridden.</p>
+    }
+    @if (study().qualification_id; as id) { <p>Golden version <code>{{ id }}</code> · {{ study().qualification_status | receiptLabel }}</p><p>Deploy is a separate action under the existing broker gates.</p> }
+  </section>
+}

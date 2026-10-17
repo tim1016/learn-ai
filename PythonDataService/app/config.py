@@ -364,6 +364,16 @@ class Settings(BaseSettings):
     # opt-in per deployment and always bounded, never the whole budget as
     # resident work.
     RESEARCH_WORKER_COUNT: int = Field(default=1, ge=1, le=8)
+    # Options width is independently qualified; stock capacity measurements do not authorize it (ADR 0080).
+    OPTIONS_SEARCH_WORKER_COUNT: int = Field(default=1, ge=1, le=8)
+
+    @field_validator("OPTIONS_SEARCH_WORKER_COUNT")
+    @classmethod
+    def _options_width_fits_pool(cls, value: int, info: ValidationInfo) -> int:
+        if value > info.data.get("RESEARCH_WORKER_COUNT", 1):
+            raise ValueError("Options search width cannot exceed the shared research worker profile")
+        return value
+
     RESEARCH_DISPATCH_WINDOW: int = Field(default=8, ge=1, le=64)
     # The research process's PostgreSQL envelope (#3047, PRD #3034 slice 12).
     # Admission verdicts share one dedicated loop whose pool holds at most

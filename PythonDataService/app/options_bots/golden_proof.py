@@ -11,7 +11,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import date
 from decimal import Decimal
 from enum import Enum
@@ -28,7 +28,7 @@ from app.data_lake.path_policy import LeanMinuteBarPath, OptionListingPath, Opti
 from app.engine.data.lean_format import LeanMinuteDataReader
 from app.lean_sidecar.trading_calendar import CALENDAR_IDENTITY, CALENDAR_PACKAGE_VERSION
 from app.options.contract import OptionContract
-from app.options_backtest.data import Captured
+from app.options_backtest.data import Captured, RunData
 from app.options_backtest.lake_data import (
     LakeRunData,
     UnderlyingDayUnreadable,
@@ -38,7 +38,7 @@ from app.options_backtest.lake_data import (
 )
 from app.options_backtest.market import MinuteBar
 from app.options_backtest.picking import Listing
-from app.options_backtest.run import RunResult, run_sessions
+from app.options_backtest.run import RunResult, RunStopped, run_sessions
 from app.options_backtest.setup import OptionsBacktestSetup
 from app.research.golden_search.proof import BlobStore, default_blob_store
 from app.schemas.signal_program_seal import semantic_payload_hash
@@ -97,7 +97,7 @@ def _source_digest() -> str:
                 "session_clock.py", "session_market.py", "session_levels.py", "session_series.py", "results.py",
                 "classification.py", "needs.py", "statistics.py", "capital_evidence.py", "cash_ladder.py",
                 "run_stamps.py", "lake_data.py",
-                "sessions.py", "limits.py", "market.py", "session_result.py",
+                "sessions.py", "limits.py", "market.py", "session_result.py", "observation.py",
             )
         ),
         *(_APP_ROOT / "options_bots").glob("session*.py"),
@@ -200,18 +200,43 @@ class ArchivedRunData:
         )
 
 
-def _replay(source: RunResult, data: LakeRunData | ArchivedRunData) -> RunResult:
+def _require_not_stopped(should_stop: Callable[[], bool] | None, sessions_done: int = 0) -> None:
+    if should_stop is not None and should_stop():
+        raise RunStopped(sessions_done)
+
+
+def _replay(
+    source: RunResult, data: RunData, *, should_stop: Callable[[], bool] | None = None,
+    on_session: Callable[[int, int, date], None] | None = None,
+) -> RunResult:
+    callbacks: dict[str, Any] = {}
+    if should_stop is not None:
+        callbacks["should_stop"] = should_stop
+    if on_session is not None:
+        callbacks["on_session"] = on_session
     return run_sessions(
         source.setup,
         tuple(et_date_at_ms(session.session_open_ms) for session in source.sessions),
         data,
         slippage_ladder=tuple(point.slippage_percent for point in source.slippage),
         cash_ladder=tuple(level.multiple for level in (source.summary.cash_ladder or ())),
+        **callbacks,
     )
 
 
-def build_proof(source: RunResult, *, blobs: BlobStore | None = None, lake_root: Path | None = None) -> dict[str, Any]:
-    """Replay lake inputs and independently restore their bytes; publish no proof on mismatch."""
+def build_proof(
+    source: RunResult, *, blobs: BlobStore | None = None, lake_root: Path | None = None,
+    source_data: RunData | None = None, should_stop: Callable[[], bool] | None = None,
+    on_session: Callable[[int, int, date], None] | None = None,
+) -> dict[str, Any]:
+    """Reproduce the complete run twice, using retained inputs when a frozen reader is supplied.
+
+    The manual path archives and verifies the selected lake bytes as before.
+    The retained-study path requires those exact blobs already to exist and
+    never consults the lake. Both independently decode a second replay from
+    the source run's pins, and compare complete outcomes and input identities.
+    """
+    _require_not_stopped(should_stop)
     rules_digest = current_rules_digest()
     if not source.sessions or source.summary.stamps is None:
         raise GoldenProofError("This run has no recorded rules or sessions. Run the setup again before approval.")
@@ -221,22 +246,32 @@ def build_proof(source: RunResult, *, blobs: BlobStore | None = None, lake_root:
     manifest = input_manifest(source)
     if not manifest:
         raise GoldenProofError("This run read no market inputs and cannot qualify a trading setup.")
-    root = option_read_root(lake_root)
-    for relative, expected in manifest.items():
-        payload = read_committed_bytes(root / relative)
-        if hashlib.sha256(payload).hexdigest() != expected:
-            raise GoldenProofError("An input changed since the selected run. Nothing was approved.")
-        if store.put(payload) != expected:
-            raise GoldenProofError("An input could not be archived under its recorded identity.")
+    if source_data is None:
+        root = option_read_root(lake_root)
+        for relative, expected in manifest.items():
+            _require_not_stopped(should_stop)
+            payload = read_committed_bytes(root / relative)
+            if hashlib.sha256(payload).hexdigest() != expected:
+                raise GoldenProofError("An input changed since the selected run. Nothing was approved.")
+            if store.put(payload) != expected:
+                raise GoldenProofError("An input could not be archived under its recorded identity.")
+        source_data = LakeRunData(source.setup.underlying, lake_root=lake_root)
+    else:
+        for expected in manifest.values():
+            _require_not_stopped(should_stop)
+            # BlobStore verifies every digest on read and refuses missing or corrupt bytes.
+            store.get(expected)
     expected_outcome = result_sha256(source)
-    lake_result = _replay(source, LakeRunData(source.setup.underlying, lake_root=lake_root))
-    if result_sha256(lake_result) != expected_outcome:
+    replayed = _replay(source, source_data, should_stop=should_stop, on_session=on_session)
+    if result_sha256(replayed) != expected_outcome:
         raise GoldenProofError("The current replay does not reproduce the selected run's recorded outcomes.")
-    restored = _replay(source, ArchivedRunData(source.setup.underlying, manifest, store))
+    restored = _replay(source, ArchivedRunData(source.setup.underlying, manifest, store),
+                       should_stop=should_stop, on_session=on_session)
     if result_sha256(restored) != expected_outcome:
         raise GoldenProofError("Replaying archived inputs does not reproduce the selected run's recorded outcomes.")
     if current_rules_digest() != rules_digest:
         raise GoldenProofError("The Options rules changed while the proof was running.")
+    _require_not_stopped(should_stop, len(source.sessions))
     return {
         "schema_version": 1,
         "rules_digest": rules_digest,

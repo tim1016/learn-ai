@@ -227,26 +227,34 @@ def _optional_money(value: Decimal | None) -> Decimal | None:
 async def create_run(conn: asyncpg.Connection, new: NewRun) -> int:
     """Make a ``running`` run for a job and return its id; ``DuplicateJob`` when that job already has one."""
     try:
-        return await conn.fetchval(
-            """
-            INSERT INTO research_options_backtest_runs (
-                created_at_ms, job_id, status, setup_name, setup_json, underlying, first_session_open_ms,
-                last_session_open_ms, sessions_requested, fee_policy_text, calendar_identity, calendar_package_version
-            ) VALUES ($1, $2, 'running', $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11)
-            RETURNING id
-            """,
-            new.created_at_ms,
-            new.job_id,
-            new.setup_name,
-            new.setup.model_dump_json(),
-            new.setup.underlying,
-            new.first_session_open_ms,
-            new.last_session_open_ms,
-            new.sessions_requested,
-            fee_policy_text(new.setup),
-            CALENDAR_IDENTITY,
-            CALENDAR_PACKAGE_VERSION,
-        )
+        from app.research.options_golden_search.repository import reserve_exposure
+
+        async with conn.transaction():
+            await reserve_exposure(
+                conn, new.setup.underlying, new.first_session_open_ms,
+                new.last_session_open_ms + 1, f"backtest:{new.job_id}",
+            )
+            run_id = await conn.fetchval(
+                """
+                INSERT INTO research_options_backtest_runs (
+                    created_at_ms, job_id, status, setup_name, setup_json, underlying, first_session_open_ms,
+                    last_session_open_ms, sessions_requested, fee_policy_text, calendar_identity, calendar_package_version
+                ) VALUES ($1, $2, 'running', $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11)
+                RETURNING id
+                """,
+                new.created_at_ms,
+                new.job_id,
+                new.setup_name,
+                new.setup.model_dump_json(),
+                new.setup.underlying,
+                new.first_session_open_ms,
+                new.last_session_open_ms,
+                new.sessions_requested,
+                fee_policy_text(new.setup),
+                CALENDAR_IDENTITY,
+                CALENDAR_PACKAGE_VERSION,
+            )
+            return run_id
     except asyncpg.UniqueViolationError as exc:
         raise DuplicateJob(f"job {new.job_id} already has a run") from exc
 

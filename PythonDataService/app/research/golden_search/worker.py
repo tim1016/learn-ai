@@ -347,6 +347,11 @@ def _run_one_task(
 
             run_recency_run_task(task, out=out, ask_admission=ask_admission, cancel_flag=cancel_flag, state=state)
             return
+        if kind == "options_golden_search":
+            from app.research.options_golden_search.dispatch import run_options_task
+
+            run_options_task(task, out=out, ask_admission=ask_admission, cancel_flag=cancel_flag, state=state)
+            return
         if kind == "benchmark_eval":
             from app.research.benchmark import run_benchmark_eval_task
 

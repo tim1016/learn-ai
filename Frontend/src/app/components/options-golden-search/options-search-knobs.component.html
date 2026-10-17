@@ -1,0 +1,41 @@
+<p>Vary a setting to search it. Leaving it fixed preserves the saved rule. Search order changes the order of work; it never changes the score.</p>
+@for (group of groups(); track group.id) {
+  <details open class="card">
+    <summary>{{ group.label }} · {{ group.changes }} settings varied</summary>
+    @for (row of group.knobs; track row.knob.path) {
+      @let knob = row.knob;
+      @let i = row.index;
+      @if (rows()[i]; as draft) {
+        <section class="knob-row">
+          <div><strong>{{ knob.label }}</strong><p>Current: {{ displayValue(knob.current_value) | receiptLabel }}</p><small>{{ knob.help }}</small></div>
+          <label><input type="checkbox" [formField]="fields[i].vary" /> Vary in search</label>
+          @if (draft.vary) {
+            @if (knob.value_type === 'category' || knob.value_type === 'boolean') {
+              <fieldset><legend>Include rule: Off/On, or choose categories</legend>
+                @for (option of draft.options; track $index; let j = $index) {
+                  <label><input type="checkbox" [formField]="fields[i].options[j].selected" /> {{ option.shape === 'rule' || option.shape === 'time' ? 'On candidate' : option.label | receiptLabel }}</label>
+                  @if (option.selected && option.shape === 'rule') {
+                    <label>Rule kind<select [formField]="fields[i].options[j].kind">@for (kind of kinds(knob); track kind) { <option [value]="kind">{{ kind | receiptLabel }}</option> }</select></label>
+                    @if (knob.path.endsWith('reentry_on_stop')) { <label>Re-entry count<input type="number" [formField]="fields[i].options[j].count" /></label> }
+                    @else { <label>Rule value<input type="text" inputmode="decimal" [formField]="fields[i].options[j].amount" /></label> }
+                  }
+                  @if (option.selected && option.shape === 'time') {
+                    <label>Session anchor<select [formField]="fields[i].options[j].anchor"><option value="open">After open</option><option value="close">Before close</option></select></label>
+                    <label>Offset in minutes<input type="number" [formField]="fields[i].options[j].minutes" /></label>
+                  }
+                }
+                @if (draft.options[0]?.shape === 'off') { <button type="button" (click)="addOn(i)">Add another On candidate</button> }
+              </fieldset>
+            } @else {
+              <label>Candidate values, comma separated<input type="text" [formField]="fields[i].values" /></label>
+              @if (knob.path.endsWith('.offset_ms')) { <small>Whole minutes from the saved session anchor. Calendar rules handle early closes and DST.</small> }
+              @else { <small>Legal range: {{ knob.min ?? 'server validated' }} to {{ knob.max ?? 'server validated' }} · Step: {{ knob.step ?? 'server validated' }}</small> }
+            }
+            <label>Search order (10 first)<input type="number" [formField]="fields[i].priority" /></label>
+          } @else { <span class="muted">Held at saved value</span> }
+        </section>
+      }
+    }
+  </details>
+}
+<p>More settings create more combinations. The server checks quantization and dependencies before lock. Vary a whole optional rule or its child settings; they cannot both be dimensions.</p>

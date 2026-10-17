@@ -145,6 +145,17 @@ no receipt; expired-lease capture reconciles interrupted publications.
 
 > **Shared artifact seam under the four research-run rows above.** Their storage goes through one `app/research/artifact/` module (descriptor-backed `ArtifactStore`). ADR 0072 Decision 3 records why the layouts stay separate and hashing is opt-in per phase.
 
+## Options Golden Search qualification
+
+Options studies (#3332, ADR 0080) live in Python's `app/research/options_golden_search/`.
+The canonical Options replay publishes non-mutating minute observations; the study's
+metrics and policy own fixed-capital risk and whole-setup qualification. The existing
+research runtime/writer/fence/pool own execution and durable evidence. A retained
+snapshot reader admits only recorded bytes or explicit absence. The existing Golden
+Options authority publishes the exact setup with ordinary replay proof and a retained
+study manifest. Neither study workers nor approval acquire broker or Clerk authority.
+The API/Angular workbench transports and renders server-authored outcomes.
+
 ## Retirement register and remaining deprecated paths
 
 | Path | Role today | Replacement | Migration plan reference |

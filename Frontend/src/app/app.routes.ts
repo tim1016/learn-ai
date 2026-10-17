@@ -229,6 +229,14 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "options-golden-search",
+    loadComponent: () => import("./components/options-golden-search/options-golden-search-page.component").then((m) => m.OptionsGoldenSearchPageComponent),
+  },
+  {
+    path: "options-golden-search/:studyId",
+    loadComponent: () => import("./components/options-golden-search/options-golden-search-page.component").then((m) => m.OptionsGoldenSearchPageComponent),
+  },
+  {
     path: "options-backtest",
     loadComponent: () =>
       import("./components/options-backtest/options-backtest-page.component").then(

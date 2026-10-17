@@ -64,6 +64,7 @@ public class JobsApiTests
     [InlineData("recency_chart")]
     [InlineData("golden_search")]
     [InlineData("options_backtest")]
+    [InlineData("options_golden_search")]
     public void ResolveControlSecretHeader_UnprotectedJobType_ReturnsNullEvenWithASecretConfigured(string type)
     {
         var config = BuildConfig("shh-its-a-secret");

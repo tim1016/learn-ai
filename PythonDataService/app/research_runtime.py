@@ -307,6 +307,13 @@ app.include_router(
     dependencies=[Depends(require_data_plane_control_secret)],
 )
 
+from app.routers import options_golden_search  # noqa: E402
+
+app.include_router(
+    options_golden_search.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"],
+    dependencies=[Depends(require_data_plane_control_secret)],
+)
+
 install_fleet_control_error_handler(app)
 # The same host fence every served app installs: the runtime answers the
 # compose network's names for it, nothing else.
