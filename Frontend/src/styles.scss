@@ -1,6 +1,7 @@
 @use './app/styles/tokens';
 @use './app/styles/eyebrow-heading' as *;
 @use './app/styles/bot-manual-print';
+@use './app/styles/trader-manual-print';
 @use './app/styles/golden-search-print';
 
 // Plain CSS pass-through. The url(...) form sidesteps Sass's @import
