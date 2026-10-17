@@ -9,7 +9,7 @@ distance that holds all year, named for it.
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -124,6 +124,9 @@ class SavedSetupResponse(BaseModel):
     saved_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     setup: OptionsBacktestSetup | None = None
     cannot_open_reason: str | None = None
+    golden_setup_id: str | None = None
+    golden_status: Literal["ready", "stale", "revoked"] | None = None
+    golden_status_explanation: str | None = None
 
     @model_validator(mode="after")
     def _either_the_setup_or_why_not(self) -> Self:

@@ -1123,6 +1123,24 @@ class ClerkSqliteRepository(
             if budget is None:
                 raise BudgetUnavailable("No deployment consent exists for this run.")
             run = self.active_run(strategy_instance_id)
+            if budget.get("active_resume_command_id") is not None:
+                if run is None or run.lifecycle_run_id != lifecycle_run_id or budget["active_run_id"] != run.run_id:
+                    raise BudgetUnavailable("A stopped Options run cannot launch again.")
+                command = self.get_command(budget["active_resume_command_id"])
+                if command is None:
+                    raise BudgetUnavailable("The Options resume command is missing.")
+                if command.state == "succeeded":
+                    return
+                if command.state != "accepted":
+                    raise BudgetUnavailable("The Options resume already ended.")
+                self.append_transition(TransitionInput(
+                    strategy_instance_id=strategy_instance_id, run_id=run.run_id,
+                    command_id=command.command_id, transition_kind="OPTIONS_RUN_LAUNCHED",
+                    custody_owner="ACCOUNT_CLERK", execution_authority="ACCOUNT_CLERK",
+                    operation_state="succeeded", clerk_observed_at_ms=self.clock(),
+                    summary_code="OPTIONS_RUN_LAUNCHED", facts_json="{}",
+                ))
+                return
             if run is None or run.lifecycle_run_id != lifecycle_run_id or budget["released_at_ms"] is not None:
                 raise BudgetUnavailable("A stopped deployment cannot launch again.")
             if budget["launched_at_ms"] is not None:

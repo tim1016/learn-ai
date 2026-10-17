@@ -660,6 +660,9 @@ def test_database_behind_its_mirror_fails_closed_on_open_without_repair(
     if pending_migration:
         conn = sqlite3.connect(db_path)
         try:
+            from tests.broker.alpaca.clerk.sqlite.conftest import remove_v26_options_resume_for_legacy_fixture
+
+            remove_v26_options_resume_for_legacy_fixture(conn)
             conn.execute("DROP INDEX ix_orders_entry_broker_state")
             conn.execute("DROP TRIGGER trg_orders_effect_state_insert")
             conn.execute("DROP TRIGGER trg_orders_effect_state_update")

@@ -1,0 +1,53 @@
+<section class="options-session">
+  <h3>Options bot session</h3>
+  @if (session.hasValue()) { @let state = session.value();
+    <p>{{ state.entries_enabled ? 'Entries enabled' : 'New entries and re-entries held' }}</p>
+    @if (state.entry_hold_reason; as why) { <p class="problem">{{ why }}</p> }
+    @if (state.execution_hold_reason; as why) { <p class="problem">{{ why }}</p> }
+    <dl>
+      @if (state.session_open_ms; as opened) { <div><dt>Trading session</dt><dd><app-timestamp-display [value]="opened" mode="date-et" granularity="date" /></dd></div> }
+      @if (state.last_minute_ms; as minute) { <div><dt>Last completed minute</dt><dd><app-timestamp-display [value]="minute" mode="local" /></dd></div> }
+      @if (state.next_entry_ms; as next) { <div><dt>Next eligible entry</dt><dd><app-timestamp-display [value]="next" mode="local" /></dd></div> }
+      <div><dt>Pending decisions</dt><dd>{{ state.pending_decisions }}</dd></div>
+    </dl>
+    <div class="legs">
+      @for (leg of legs(); track leg.leg_id) {
+        <article>
+          <strong>{{ leg.leg_id }}</strong> · {{ leg.side | receiptLabel }} · {{ leg.phase | receiptLabel }}
+          @if (leg.contract; as contract) { <p><app-option-contract [contract]="contract" size="xs" /></p> }
+          <p>Held: {{ leg.held_contracts }} · Filled entries: {{ leg.entries_filled }} · Re-entries left: {{ leg.reentries_left }}</p>
+          @if (leg.average_fill_price) { <p>Average confirmed fill: {{ leg.average_fill_price | authoredUsd }}</p> }
+          @if (leg.stop_level) { <p>Stop level: {{ leg.stop_level | authoredUsd }}</p> }
+        </article>
+      }
+    </div>
+    <p>{{ state.resume_explanation }}</p>
+    @if (state.resume_allowed) {
+      <div class="actions">
+        <button type="button" [disabled]="!mayResume()" (click)="resume(false)">Resume position management</button>
+        <button type="button" [disabled]="!mayResume()" (click)="reviewEntries()">Review budget for new entries</button>
+      </div>
+      @if (reviewed(); as review) {
+        <p>{{ review.detail }}</p><p>{{ review.risk_limits_summary }}</p>
+        @if (review.budget_usd) { <p>Entry budget: {{ review.budget_usd | authoredUsd }}</p> }
+        @if (review.confirmation_text; as phrase) {
+          <label for="options-resume-confirmation">Type {{ phrase }} to confirm</label>
+          <input id="options-resume-confirmation" type="text" [formField]="confirmationForm" autocomplete="off" />
+        }
+        <button type="button" [disabled]="!mayResumeEntries()" (click)="resume(true)">Resume Options bot with entries</button>
+      }
+    }
+  } @else if (session.isLoading()) { <p>Reading this session…</p> }
+  @let lane = fenceVerdict();
+  @if (!lane.ok) { <p class="problem">{{ lane.message }}</p> }
+  @if (readProblem(); as why) { <p class="problem">{{ why }}</p><button type="button" (click)="session.reload()">Read session again</button> }
+  @if (busy()) { <p>Checking the account and retained session…</p> }
+  @if (problem(); as why) { <p class="problem">{{ why }}</p> }
+  @if (retryNeeded()) { <button type="button" [disabled]="locked() || !fenceVerdict().ok" (click)="retry()">Retry the same Resume request</button> }
+  @if (outcome(); as message) { <p>{{ message }}</p> }
+  <details>
+    <summary>Tested rules and assumptions</summary>
+    @if (words.hasValue()) { <app-options-backtest-setup-sentences [summary]="words.value()" /> }
+    <p>Live orders use confirmed fills. Backtest prices and cost assumptions remain research evidence.</p>
+  </details>
+</section>

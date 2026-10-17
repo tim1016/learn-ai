@@ -285,10 +285,11 @@ export function accountWorkspaceHistoryLink(
 export function accountWorkspaceDeployAgainRoute(
   account: BoundAccountWorkspaceAddress,
   sid: string,
+  optionsSetupId?: string | null,
 ): AccountWorkspaceLink {
   return {
     commands: [...workspaceRoute(account), 'deploy'],
-    queryParams: { [DEPLOY_AGAIN_QUERY_PARAM]: sid },
+    queryParams: optionsSetupId ? { options_setup: optionsSetupId } : { [DEPLOY_AGAIN_QUERY_PARAM]: sid },
   };
 }
 

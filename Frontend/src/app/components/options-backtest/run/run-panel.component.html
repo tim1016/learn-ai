@@ -18,7 +18,13 @@
       <app-options-backtest-job-progress [view]="progress()" [cancelling]="cancelling()" [cancelProblem]="cancelProblem()" (cancelRequested)="cancel()" />
     }
     @case ('complete') {
-      @if (detail(); as done) { <app-options-backtest-run-result [run]="done" /> } @else if (readProblem() === null) { <p class="words" role="status">Reading the result…</p> }
+      @if (detail(); as done) {
+        <app-options-backtest-run-result [run]="done" />
+        @if (done.setup) {
+          <button type="button" class="again" (click)="goldenReviewRun.set(done.id)">Review golden setup</button>
+          @if (goldenReviewRun() === done.id) { <app-golden-option-setup-approval [runId]="done.id" /> }
+        }
+      } @else if (readProblem() === null) { <p class="words" role="status">Reading the result…</p> }
     }
     @case ('failed') {
       @if (failure(); as why) { <app-options-backtest-run-failure [failure]="why" /> } @else { <p class="words" role="status">The run failed, and the server did not say why.</p> }

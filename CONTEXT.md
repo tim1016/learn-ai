@@ -1782,6 +1782,18 @@ What a bot trades when it trades options (PRD #2913). Decision records: ADR 0012
 - **Refused run (option bot)** — a run ended by name as it starts, before it asks for a bar: its account's Clerk does not take an option plan (a Live account's, or a plan of several legs on any account), its watched window cannot fit the Clerk's line budget, or its Clerk has no option quotes of its own because it reads its market status from a shared source.
 - **Contract reference (in a Dry Run)** — IBKR's own listing of the contract. A simulated broker has none of its own.
 
+## Options bot deployment (resolved 2026-10-17)
+
+- **Signal bot** — a bot whose trading decisions come from a Signal Program. It
+  may trade shares or option structures.
+- **Options bot** — a bot whose trading decisions follow option-leg rules for
+  session timing, premium momentum, stop loss and re-entry. Distinct from a
+  Signal bot trading an option structure, called an "option bot" in older
+  sections.
+- **Golden setup** — an owner-approved version of an exact tested options setup,
+  retaining the selected backtest evidence reviewed for that version. Later edits
+  do not inherit its approval; "golden" means owner-approved, never optimal.
+
 ## Options Backtest (resolved 2026-10-12)
 
 **Lineage: neutral.**

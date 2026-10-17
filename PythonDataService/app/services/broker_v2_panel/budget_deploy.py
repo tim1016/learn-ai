@@ -73,7 +73,7 @@ from app.engine.live.identity import INSTANCE_ID_PATTERN
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.options.requirement import ContractAtMultiplier, incremental_account_requirement, with_contracts
 from app.schemas.account_authority import AuthorityKind
-from app.schemas.action_plan import ActionPlan, traded_instrument
+from app.schemas.action_plan import BotActionPlan, traded_instrument
 from app.schemas.broker_bots import AlpacaPaperDeployRequest
 from app.schemas.deployment_budget import (
     AccountMoneyView,
@@ -90,6 +90,7 @@ from app.schemas.deployment_budget import (
 )
 from app.schemas.exit_terms import ExitTerms
 from app.schemas.option_deploy import OptionDeployReview
+from app.schemas.options_deploy import OptionsDeployRequest
 from app.services.broker_v2_panel.account_picture_read import read_account_picture
 from app.services.broker_v2_panel.bot_custody import bot_clerk_runtime, bot_is_known
 from app.services.broker_v2_panel.deploy_submissions import DeploySubmission, bot_name_note
@@ -99,6 +100,81 @@ from app.services.broker_v2_panel.sqlite_panel_source import home_roster
 from app.services.market_liveness import prepared_top_of_book, status_stream_connected
 
 logger = logging.getLogger(__name__)
+
+
+def preview_options_session_budget(
+    account_id: str, request: OptionsDeployRequest, *, setup_sha256: str, rules_digest: str,
+) -> DeploymentBudgetPreview:
+    """Reserve a scheduled bot's budget; future option entries are priced at their actual decision (ADR 0079)."""
+    runtime = _primary(account_id)
+    world, _ = _request_world(runtime, request)
+    repo = runtime.sqlite_repository
+    assert repo is not None
+    amount = None if request.budget is None else consent_cents(request.budget.amount_usd)
+    with repo.write_fence():
+        now = repo.clock()
+        if world == "synthetic":
+            observation, money, revision = None, None, 0
+        else:
+            observation, policy = _account_admission(repo, runtime, now_ms=now)
+            money, revision = _read_account_money(repo, observation), policy.revision
+        answer = deploy_funding_answer(
+            None if money is None else money.budget, amount_cents=amount, need=None,
+            broker_buying_power=None, observed_at_ms=now if observation is None else observation.observed_at_ms,
+            now_ms=now, simulated=world == "synthetic",
+        )
+        refusal = None
+        if amount is None:
+            refusal = "Enter the cash budget to reserve for this Options bot."
+        elif request.budget.risk_revision != revision:
+            refusal = "Risk limits changed. Review the current limits and budget again."
+        elif not answer.free_budget.is_known or not answer.account_headroom.is_known or answer.admits is False:
+            refusal = answer.sentence
+        token = None if refusal else canonical_sha256({
+            "request": request.fingerprint(account=runtime.selected_account_id, world=world),
+            "setup_sha256": setup_sha256, "rules_digest": rules_digest,
+        })
+        return DeploymentBudgetPreview(
+            state="unavailable" if refusal else "ready",
+            detail=refusal or (
+                "This cash budget can be reserved. Each option entry is priced and admitted when its rules trigger; "
+                "this review does not claim a future entry will fit."
+            ),
+            world=world, observed_at_ms=now if observation is None else observation.observed_at_ms,
+            budget_usd=None if amount is None else dollars(amount),
+            unreserved_usd=None if money is None else dollars(money.budget.unreserved_cents),
+            risk_revision=revision,
+            risk_limits_summary=(
+                "Private simulated cash; real-account loss limits do not apply."
+                if world == "synthetic" else "The account's current cash, risk and custody gates apply to every entry."
+            ),
+            review_token=token,
+            confirmation_text=f"DEPLOY {account_id} ${dollars(amount)}" if world == "real_live" and token else None,
+            money_after=None if money is None else _money_view(
+                repo, observation, world=world, account_id=account_id, money=money,
+                new_cents=amount if refusal is None else None,
+            ),
+        )
+
+
+def resolve_options_session_consent(
+    account_id: str, request: OptionsDeployRequest, *, setup_sha256: str, rules_digest: str,
+) -> DeployBudgetConsent:
+    preview = preview_options_session_budget(
+        account_id, request, setup_sha256=setup_sha256, rules_digest=rules_digest,
+    )
+    budget = request.budget
+    if budget is None or preview.state != "ready" or budget.review_token != preview.review_token:
+        raise BudgetUnavailable("Review this Options setup's current budget before deploying.")
+    if preview.confirmation_text is not None and budget.live_confirmation != preview.confirmation_text:
+        raise BudgetUnavailable("Enter the live deployment confirmation shown in the review.")
+    runtime = _primary(account_id)
+    return DeployBudgetConsent(
+        committed_cents=consent_cents(budget.amount_usd), risk_revision=budget.risk_revision,
+        actor=get_broker_configuration_service().owner().owner_id,
+        request_fingerprint=request.fingerprint(account=runtime.selected_account_id, world=preview.world),
+        world=preview.world,
+    )
 
 
 #: What an account that has not switched to budgets says in place of its
@@ -651,7 +727,7 @@ class _EntryConfiguration(BaseModel):
     """Only custody-sealed quantity and traded asset contribute to this money read."""
     symbol: str = Field(min_length=1)
     quantity: int = Field(strict=True, gt=0)
-    action_plan: ActionPlan | None = None
+    action_plan: BotActionPlan | None = None
 
     @property
     def order_symbol(self) -> str:

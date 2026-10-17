@@ -83,10 +83,17 @@ def complete_fee_evidence(repo: ClerkSqliteRepository, activities: tuple[BrokerA
 
 def remove_v25_order_state_for_legacy_fixture(conn: sqlite3.Connection) -> None:
     """Restore orders before the effect-state mirror was added."""
+    remove_v26_options_resume_for_legacy_fixture(conn)
     conn.execute("DROP TRIGGER trg_orders_effect_state_insert")
     conn.execute("DROP TRIGGER trg_orders_effect_state_update")
     conn.execute("DROP INDEX ix_orders_entry_broker_state")
     conn.execute("ALTER TABLE orders DROP COLUMN effect_state")
+
+
+def remove_v26_options_resume_for_legacy_fixture(conn: sqlite3.Connection) -> None:
+    """Restore the original deployment budget before active-run pointers."""
+    for column in ("options_entries_enabled", "active_resume_command_id", "active_run_id"):
+        conn.execute(f"ALTER TABLE deployment_budgets DROP COLUMN {column}")
 
 
 def remove_budget_schema_for_legacy_fixture(conn: sqlite3.Connection) -> None:

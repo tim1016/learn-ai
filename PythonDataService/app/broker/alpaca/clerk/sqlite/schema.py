@@ -37,7 +37,7 @@ from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
 from app.broker.alpaca.clerk.sqlite.option_order_legs import SCHEMA_V24_DDL, SCHEMA_V24_STATEMENTS
 from app.broker.alpaca.clerk.sqlite.simulated_execution_schema import SCHEMA_V14_STATEMENTS
 
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 
 PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA journal_mode = WAL",
@@ -725,6 +725,13 @@ SCHEMA_V25_STATEMENTS: tuple[str, ...] = (
     "ON orders(role, lower(broker_state), effect_state, order_ref)",
 )
 SCHEMA_V25_DDL = "\n".join(f"{statement};" for statement in SCHEMA_V25_STATEMENTS)
+SCHEMA_V26_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE deployment_budgets ADD COLUMN active_run_id TEXT REFERENCES runs(run_id)",
+    "ALTER TABLE deployment_budgets ADD COLUMN active_resume_command_id TEXT REFERENCES commands(command_id)",
+    "ALTER TABLE deployment_budgets ADD COLUMN options_entries_enabled INTEGER "
+    "CHECK(options_entries_enabled IS NULL OR options_entries_enabled IN (0,1))",
+)
+SCHEMA_V26_DDL = "\n".join(f"{statement};" for statement in SCHEMA_V26_STATEMENTS)
 SCHEMA_DDL = (
     SCHEMA_V9_DDL
     + "\n\n"
@@ -758,6 +765,8 @@ SCHEMA_DDL = (
     + SCHEMA_V24_DDL
     + "\n"
     + SCHEMA_V25_DDL
+    + "\n"
+    + SCHEMA_V26_DDL
 ).rstrip("\n")
 
 
@@ -832,6 +841,7 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     # several legs (#2913); same statements as the fresh block.
     23: SCHEMA_V24_STATEMENTS,
     24: SCHEMA_V25_STATEMENTS,
+    25: SCHEMA_V26_STATEMENTS,
 }
 
 

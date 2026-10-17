@@ -38,6 +38,7 @@ import type {
 import { formatReceiptLabel } from '../../../shared/pipes/receipt-label.pipe';
 import { AlpacaDeskAccountDataService } from '../alpaca-desk/alpaca-desk-account-data.service';
 import { AlpacaHomeComponent } from './alpaca-home.component';
+import { goldenSetup } from '../../options-backtest/testing/golden-fixture';
 
 const ACCOUNT_URL = `/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/${TEST_ACCOUNT_ID}`;
 
@@ -508,6 +509,17 @@ describe('AlpacaHomeComponent', () => {
     expect(within(fold).getByRole('link', { name: 'see cleared bots in History' }).getAttribute('href')).toBe(
       `/brokers/alpaca/clerks/${TEST_CLERK_ID}/history?status=cleared`,
     );
+  });
+
+  it('re-deploys a finished Options bot through its approved setup', async () => {
+    const golden = goldenSetup();
+    await renderHome({ getCatalog: () => Promise.resolve(catalog().map((bot) => bot.strategy_instance_id === 'old-bot'
+      ? { ...bot, bot_kind: 'options', options_bot: {
+        version: 1, golden_setup_id: golden.id, setup: golden.setup,
+        setup_sha256: golden.setup_sha256, rules_digest: golden.rules_digest,
+      } } : bot)) });
+    const link = await screen.findByRole('link', { name: 'Deploy again from old-bot' });
+    expect(link.getAttribute('href')).toBe(`${ACCOUNT_URL}/deploy?options_setup=${golden.id}`);
   });
 
   it('says what needs the owner in one line, with its severity in words and its one fix', async () => {

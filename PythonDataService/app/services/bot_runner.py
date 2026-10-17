@@ -84,7 +84,7 @@ from app.marketdata.feed import (
     MarketDataFeed,
     MarketDataFeedError,
 )
-from app.schemas.action_plan import ActionPlan
+from app.schemas.action_plan import BotActionPlan
 from app.schemas.bot_end import BotEnd, BotEndInput, BotEndView
 from app.schemas.broker_bots import (
     AlpacaPaperEvidenceOverride,
@@ -96,6 +96,8 @@ from app.schemas.canary_admission import CanaryRollbackDecision
 from app.schemas.deployment_budget import DeployBudgetConsent
 from app.schemas.exit_terms import ExitTerms
 from app.schemas.option_order_terms import SealedOptionOrderTerms
+from app.schemas.options_bot import OptionsBotConfiguration
+from app.schemas.options_deploy import OptionsResumeRequest
 from app.schemas.run_admission import (
     RunAdmissionDecision,
     RunProcessAdmissionFact,
@@ -129,8 +131,10 @@ from app.services.bot_clerk_lifecycle import (
     ActiveClerkUnavailableError,
     ClerkAdmissionTokenStaleError,
     commit_deploy_launch,
+    commit_options_resume_launch,
     commit_stop_before_task_cancel,
     register_alpaca_duty_run,
+    register_options_resumed_duty_run,
     stop_interrupted_alpaca_duty_run,
 )
 from app.services.bot_dry_run import DryRunActivity
@@ -319,7 +323,7 @@ async def _nothing_to_repair() -> tuple[str, ...]:
     return ()
 
 
-def _plan_to_start(action_plan: ActionPlan | None, *, traded_symbol: str | None, symbol: str) -> ActionPlan:
+def _plan_to_start(action_plan: BotActionPlan | None, *, traded_symbol: str | None, symbol: str) -> BotActionPlan:
     """The plan a start is for: the one handed over, or the shares of what the bot trades.
 
     A caller says what the bot trades once: a plan, or a traded symbol,
@@ -659,8 +663,9 @@ class BotTaskRegistry:
         # terms sealed with it (ADR 0076 decision 24). Given, ``quantity`` is
         # whole structures and ``traded_symbol`` is not said. ``None`` trades
         # shares, as above.
-        action_plan: ActionPlan | None = None,
+        action_plan: BotActionPlan | None = None,
         option_order_terms: SealedOptionOrderTerms | None = None,
+        options_bot: OptionsBotConfiguration | None = None,
         use_rth: bool = True,
         mode: Literal["log_only", "dry_run", "trade"] = "log_only",
         quantity: int = 1,
@@ -694,9 +699,10 @@ class BotTaskRegistry:
             action_plan=action_plan, use_rth=use_rth, option_order_terms=option_order_terms,
         )
         # Execution only: a preview comes before the owner accepts.
-        require_traded_asset_acknowledgement(
-            mode=mode, action_plan=action_plan, signal_symbol=symbol, acknowledgement=traded_asset_acknowledgement,
-        )
+        if options_bot is None:
+            require_traded_asset_acknowledgement(
+                mode=mode, action_plan=action_plan, signal_symbol=symbol, acknowledgement=traded_asset_acknowledgement,
+            )
         self._confined_instance_dir(strategy_instance_id)
         request = make_start_request(
             broker=broker,
@@ -716,6 +722,7 @@ class BotTaskRegistry:
             end=end,
             traded_asset_acknowledgement=traded_asset_acknowledgement,
             option_order_terms=option_order_terms,
+            options_bot=options_bot,
         )
         # #2668/#2670: answered before the bot's operation lock, which a boot
         # restoration of this Dry Run may hold while it waits out a lease --
@@ -747,8 +754,9 @@ class BotTaskRegistry:
         symbol: str,
         traded_symbol: str | None = None,
         traded_asset_acknowledgement: UntestedTradedAssetAcknowledgement | None = None,
-        action_plan: ActionPlan | None = None,
+        action_plan: BotActionPlan | None = None,
         option_order_terms: SealedOptionOrderTerms | None = None,
+        options_bot: OptionsBotConfiguration | None = None,
         use_rth: bool = True,
         mode: Literal["log_only", "dry_run", "trade"] = "log_only",
         quantity: int = 1,
@@ -787,6 +795,7 @@ class BotTaskRegistry:
             budget_consent=budget_consent,
             traded_asset_acknowledgement=traded_asset_acknowledgement,
             option_order_terms=option_order_terms,
+            options_bot=options_bot,
         )
         # #2668/#2670: answered before the bot's operation lock, which a boot
         # restoration of this Dry Run may hold while it waits out a lease --
@@ -823,13 +832,92 @@ class BotTaskRegistry:
         log_run_launch(binding, reason="deploy")
         return self.status(binding.broker, binding.strategy_instance_id)
 
+    async def resume_options_bot(
+        self, broker: str, strategy_instance_id: str, request: OptionsResumeRequest,
+    ) -> BotStatusView:
+        """Explicitly continue interrupted Options rules with their original custody (ADR 0079)."""
+        from app.broker.alpaca.clerk.budgets import BudgetUnavailable
+        from app.options_bots.recovery_commands import claim_recovery
+        from app.services.options_bot_admission import options_start_facts
+        from app.services.options_bot_resume_budget import resolve_options_resume_consent
+
+        for refuse_if_gated in self._lane_start_gates:
+            refuse_if_gated(strategy_instance_id)
+        self._confined_instance_dir(strategy_instance_id)
+        await self._answer_dry_run_restoration_at_start(strategy_instance_id, recheck=True)
+        async with graduation_mutation_fence(), self._operation_lock(strategy_instance_id):
+            binding = self.binding_for_control(broker, strategy_instance_id)
+            if binding.options_bot is None:
+                raise RunAdmissionRefusedError("Explicit Resume is available only for an interrupted Options bot.", reason_code="OPTIONS_RESUME_NOT_STARTED")
+            now = self._now_ms()
+            try:
+                command = claim_recovery(
+                    self._confined_instance_dir(strategy_instance_id), prior_run_id=binding.run_id,
+                    request=request, now_ms=now,
+                )
+            except ValueError as exc:
+                raise RunAdmissionRefusedError(str(exc), reason_code="OPTIONS_RESUME_NOT_STARTED") from exc
+            if binding.run_id == command.run_id and self._bindings.read_run(strategy_instance_id, command.run_id) is not None:
+                return self.status(broker, strategy_instance_id)
+            status = self.status(broker, strategy_instance_id)
+            if self._is_running(strategy_instance_id):
+                raise BotAlreadyRunningError("This Options bot already has a running duty.", reason_code="OPTIONS_RESUME_NOT_STARTED")
+            if binding.run_id != command.prior_run_id:
+                raise RunAdmissionRefusedError("This Resume command belongs to an earlier run. Refresh this bot.", reason_code="OPTIONS_RESUME_NOT_STARTED")
+            if status.duty_outcome is None or status.duty_outcome.kind not in {"CRASHED", "EXITED_UNVERIFIED"}:
+                raise RunAdmissionRefusedError("Resume requires an interrupted Options bot. A deliberately stopped bot stays stopped.", reason_code="OPTIONS_RESUME_NOT_STARTED")
+            runtime_fact = await self._start_runtime_fact(strategy_instance_id, now)
+            desired = self._desired_repo(strategy_instance_id).read()
+            feed = self._feed_resolver()
+            proof, _validation = await options_start_facts(binding, verified_at_ms=now)
+            async with self._start_custody_guard(binding) as (custody, _policy, exit_terms):
+                if custody.account_id != binding.sealed_account_id:
+                    raise RunAdmissionRefusedError("This Options bot belongs to another custody account.", reason_code="OPTIONS_RESUME_NOT_STARTED")
+                from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
+
+                authority = get_clerk_runtime(custody.account_id)
+                recorded = None if authority is None else authority.clerk.options_resume_run_state(strategy_instance_id, command.run_id)
+                if recorded == "STOPPED":
+                    raise RunAdmissionRefusedError(
+                        "The previous recovery attempt was stopped before launch. Review Resume again with a fresh command.",
+                        reason_code="OPTIONS_RESUME_NOT_STARTED",
+                    )
+                if recorded is not None:
+                    raise RecoveryUncertainError(
+                        "The previous Resume committed but its runner outcome is unproven. Reconcile this account before retrying."
+                    )
+                if runtime_fact.state != "READY":
+                    raise RunAdmissionRefusedError(runtime_fact.explanation, detail=runtime_fact.next_step, reason_code="OPTIONS_RESUME_NOT_STARTED")
+                if desired is not None and desired.end is not None and (
+                    desired.end.carried_out_at_ms is not None or desired.end.end_at_ms <= now
+                ):
+                    raise RunAdmissionRefusedError("This deployment has reached its chosen end.", reason_code="OPTIONS_RESUME_NOT_STARTED")
+                if feed is None:
+                    raise MarketDataFeedUnavailableError("The IBKR market-data feed is unavailable.", reason_code="OPTIONS_RESUME_NOT_STARTED")
+                if request.budget is not None and proof.state != "PROVEN":
+                    raise RunAdmissionRefusedError(proof.explanation, reason_code="OPTIONS_RESUME_NOT_STARTED")
+                try:
+                    consent = await resolve_options_resume_consent(binding, request.budget)
+                except BudgetUnavailable as exc:
+                    raise RunAdmissionRefusedError(str(exc), reason_code="OPTIONS_RESUME_NOT_STARTED") from exc
+                resumed = binding.model_copy(update={
+                    "run_id": command.run_id, "created_at_ms": command.created_at_ms,
+                    "budget_consent": consent, "program_build": proof, "exit_terms": exit_terms,
+                })
+                await self._activate_binding(
+                    resumed, feed, now=now, reason="resume", admission_snapshot=custody,
+                    end=None if desired is None else desired.pending_end(),
+                )
+            log_run_launch(resumed, reason="resume")
+            return self.status(broker, strategy_instance_id)
+
     async def _activate_binding(
         self,
         binding: BrokerBotBinding,
         feed: MarketDataFeed,
         *,
         now: int,
-        reason: Literal["deploy"],
+        reason: Literal["deploy", "resume"],
         admission_snapshot: ClerkCustodySnapshot | None = None,
         end: BotEnd | None = None,
     ) -> None:
@@ -852,9 +940,16 @@ class BotTaskRegistry:
         # ended; the Clerk's sweep retires the run once it is done (#2369).
         run_owner: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         try:
-            await register_alpaca_duty_run(
-                binding, admission_snapshot=admission_snapshot, run_owner=run_owner
-            )
+            if reason == "resume":
+                if admission_snapshot is None:
+                    raise ActiveClerkUnavailableError("Options recovery requires fresh Clerk custody.")
+                await register_options_resumed_duty_run(
+                    binding, admission_snapshot=admission_snapshot, run_owner=run_owner,
+                )
+            else:
+                await register_alpaca_duty_run(
+                    binding, admission_snapshot=admission_snapshot, run_owner=run_owner
+                )
         except (ActiveClerkUnavailableError, ClerkAdmissionTokenStaleError) as exc:
             raise RunAdmissionRefusedError(
                 str(exc),
@@ -897,7 +992,10 @@ class BotTaskRegistry:
             # The gate keeps it from failing or making effects before the
             # budgeted run has durable launch evidence.
             await asyncio.sleep(0)
-            await commit_deploy_launch(binding)
+            if reason == "resume":
+                await commit_options_resume_launch(binding)
+            else:
+                await commit_deploy_launch(binding)
             run_gate.set()
             await asyncio.sleep(0)
         except BaseException as exc:
@@ -1433,7 +1531,7 @@ class BotTaskRegistry:
         program_build_state = (
             binding.program_build.state if binding.program_build is not None else "NOT_APPLICABLE"
         )
-        if not canary_gate_applies(mode=binding.mode, program_build_state=program_build_state):
+        if binding.options_bot is not None or not canary_gate_applies(mode=binding.mode, program_build_state=program_build_state):
             return outcome, None
         return outcome, evaluate_canary_rollback(
             strategy_instance_id=binding.strategy_instance_id,

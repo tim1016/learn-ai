@@ -38,6 +38,7 @@ APPLIED_VERSION_DIGESTS: dict[int, str] = {
     18: "81e46d16b20848a1",
     19: "d0a8cb7cc114a7bb",
     20: "c4a8170ac6c104c2",
+    21: "e87dc94cde1d5e6d",
 }
 
 
@@ -391,4 +392,4 @@ async def test_version_20_arrives_on_top_of_version_19_and_leaves_a_saved_setup_
 
     assert await _option_run_tables(scratch_db) == _OPTION_RUN_TABLES
     assert await scratch_db.fetchval("SELECT saved_at_ms FROM research_options_backtest_setups WHERE name = 'kept'") == 5
-    assert await scratch_db.fetchval("SELECT max(version) FROM research_schema_migrations") == 20
+    assert await scratch_db.fetchval("SELECT max(version) FROM research_schema_migrations") == SCHEMA_VERSION

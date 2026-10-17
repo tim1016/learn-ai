@@ -1,0 +1,16 @@
+:host { display: block; }
+h3 { font-size: 1rem; margin-top: 0; }
+p { line-height: 1.5; }
+dl { margin: .75rem 0; }
+dl div { display: flex; justify-content: space-between; gap: .75rem; margin: .35rem 0; }
+dt { color: var(--text-color-secondary); }
+dd { margin: 0; }
+.legs article { border-top: 1px solid var(--surface-border); padding: .75rem 0; font-size: .875rem; }
+.legs p { margin: .35rem 0; }
+.actions { display: flex; gap: .5rem; flex-wrap: wrap; }
+button { padding: .55rem .75rem; color: var(--text-color); background: var(--surface-card); border: 1px solid var(--surface-border); border-radius: .4rem; cursor: pointer; }
+button:disabled { opacity: .5; cursor: default; }
+label { display: block; margin-top: .75rem; }
+input { padding: .5rem; margin: .5rem 0; width: 100%; color: var(--text-color); background: var(--surface-ground); border: 1px solid var(--surface-border); border-radius: .4rem; }
+details { border-top: 1px solid var(--surface-border); padding-top: 1rem; margin-top: 1rem; }
+.problem { color: var(--red-500, #ef4444); }

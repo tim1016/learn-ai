@@ -445,7 +445,7 @@ def _short_of_cash(
     return candidates, {}
 
 
-def admit_opening(held: Held, candidates: Iterable[Candidate], *, cash: Decimal, closing: Iterable[str]) -> Admission:
+def admit_opening(held: Held, candidates: Iterable[Candidate], *, cash: Decimal | None, closing: Iterable[str]) -> Admission:
     """Judge the opening fills of one minute together, in four steps, over the candidates in listed order.
 
     1. Other side: a candidate in a contract another leg holds on the other side is refused.
@@ -466,6 +466,10 @@ def admit_opening(held: Held, candidates: Iterable[Candidate], *, cash: Decimal,
     ``closing`` keeps using the cover it has until its buy-back fills. For a group with no sold candidate and
     nothing sold held, the last step is exactly "refused when the cost is more than the cash".
 
+    ``cash=None`` asks only the three structural questions: a live Clerk
+    then admits cash through its revision-bound deployment budget authority.
+    Every research replay supplies its actual cash and asks all four.
+
     Raises ``ValueError`` for a candidate of a leg the setup does not list, of a leg that already holds, or
     named twice, and for a pending close of a leg that holds nothing.
     """
@@ -482,13 +486,13 @@ def admit_opening(held: Held, candidates: Iterable[Candidate], *, cash: Decimal,
     closing_ids = frozenset(closing)
     if not_held := sorted(closing_ids - holding_ids):
         raise ValueError(f"legs {not_held} hold nothing, so no close of theirs can be pending")
-    on_hand = require_everyday(cash, what="the cash an opening group is judged against")
+    on_hand = None if cash is None else require_everyday(cash, what="the cash an opening group is judged against")
 
     steps: tuple[_Step, ...] = (
         partial(_other_side, held),
         partial(_second_expiry, held),
         partial(_without_cover, held, closing_ids),
-        partial(_short_of_cash, held, on_hand),
+        *((partial(_short_of_cash, held, on_hand),) if on_hand is not None else ()),
     )
     standing = ordered
     reasons: dict[str, OpeningRefusal] = {}

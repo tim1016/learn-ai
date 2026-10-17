@@ -27,11 +27,12 @@ from typing import Literal
 
 from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
 from app.broker.alpaca.clerk.sqlite.exit import (
+    OptionsProtectionRequired,
     RecoveryRunActiveError,
     ReducibleEntry,
     accept_recovery_exit,
     exit_effect_operation_id,
-    newest_reducible_entry,
+    reducible_entries,
     resolve_accepted_exit,
 )
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
@@ -79,11 +80,17 @@ def bot_holdings(repo: ClerkSqliteRepository, strategy_instance_id: str, *, deci
     ]
     holdings: list[Holding] = []
     for symbol in held:
-        target = newest_reducible_entry(repo, strategy_instance_id, symbol)
-        if target is None:
-            continue
-        holdings.append(holding_of_entry(repo, strategy_instance_id, symbol, target, decision_prefix=decision_prefix))
+        for target in reducible_entries(repo, strategy_instance_id, symbol):
+            holdings.append(holding_of_entry(repo, strategy_instance_id, symbol, target, decision_prefix=decision_prefix))
+    holdings.sort(key=lambda item: option_entry_side(repo, item.close.entry_order_ref) != "short")
     return holdings
+
+
+def option_entry_side(repo: ClerkSqliteRepository, entry_order_ref: str) -> str | None:
+    from app.broker.alpaca.clerk.sqlite.option_entry import option_entry_of_order
+
+    entry = option_entry_of_order(repo, entry_order_ref)
+    return entry.the_leg.position if getattr(entry, "options_attempt", None) is not None else None
 
 
 def decision_id_under(decision_prefix: str, entry_order_ref: str) -> str:
@@ -161,7 +168,7 @@ async def drive_close(
         )
     except RecoveryRunActiveError:
         return CloseDeferred.RUN_ACTIVE
-    except (OperationClaimError, AdmissionBlockedError):
+    except (OperationClaimError, AdmissionBlockedError, OptionsProtectionRequired):
         return CloseDeferred.BUSY
 
 

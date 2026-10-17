@@ -30,8 +30,9 @@ from app.engine.live.bot_lifecycle_state import (
     BotLifecycleStateRepo,
     stable_bot_lifecycle_state_path,
 )
-from app.schemas.action_plan import ActionPlan, TradedInstrumentView
+from app.schemas.action_plan import TradedInstrumentView, parse_bot_action_plan
 from app.schemas.broker_bots import BotDutyOutcomeView, BotStatusView
+from app.schemas.options_bot import OptionsBotConfiguration
 from app.schemas.traded_asset_acknowledgement import UntestedTradedAssetAcknowledgement
 from app.services.bot_binding_repository import live_state_binding_repository
 from app.services.bot_registry_projection import (
@@ -54,6 +55,8 @@ class DeclaredConfiguration:
     mode: Literal["log_only", "dry_run", "trade"]
     quantity: int | None
     carryover_policy: Literal["FORBID", "ALLOW"]
+    bot_kind: Literal["signal", "options"] = "signal"
+    options_bot: OptionsBotConfiguration | None = None
     # What the bot listens to, as its own configuration states it. ``None``
     # for a configuration that names no symbol; the caller then has only the
     # Clerk's registration, which is what the bot trades.
@@ -95,10 +98,24 @@ def declared_configuration(strategy_instance_id: str, config_json: str) -> Decla
         mode=mode,
         quantity=int(quantity) if quantity is not None else None,
         carryover_policy=carryover_policy,
+        bot_kind="options" if declared.get("options_bot") is not None else "signal",
+        options_bot=_declared_options_configuration(strategy_instance_id, declared),
         signal_symbol=signal_symbol if isinstance(signal_symbol, str) and signal_symbol else None,
         traded=_declared_traded_instrument(strategy_instance_id, declared),
         traded_asset_acknowledgement=_declared_acknowledgement(strategy_instance_id, declared),
     )
+
+
+def _declared_options_configuration(strategy_instance_id: str, declared: dict) -> OptionsBotConfiguration | None:
+    recorded = declared.get("options_bot")
+    if recorded is None:
+        return None
+    try:
+        return OptionsBotConfiguration.model_validate(recorded)
+    except ValueError as exc:
+        raise SqliteCatalogProjectionUnavailable(
+            f"Bot '{strategy_instance_id}' has an unreadable approved Options setup in its immutable configuration."
+        ) from exc
 
 
 def _declared_acknowledgement(
@@ -128,7 +145,7 @@ def _declared_traded_instrument(strategy_instance_id: str, declared: dict) -> Tr
     if plan is None or not isinstance(signal_symbol, str):
         return None
     try:
-        return TradedInstrumentView.of(ActionPlan.model_validate(plan), signal_symbol=signal_symbol)
+        return TradedInstrumentView.of(parse_bot_action_plan(plan), signal_symbol=signal_symbol)
     except ValueError as exc:
         raise SqliteCatalogProjectionUnavailable(
             f"Bot '{strategy_instance_id}' has an unreadable Action Plan in its immutable SQLite configuration."
@@ -355,6 +372,8 @@ def build_terminal_roster_status(
             f"Bot '{strategy_instance_id}' is not retired and has no terminal roster row."
         )
     return BotStatusView(
+        bot_kind=declared.bot_kind,
+        options_bot=declared.options_bot,
         strategy_instance_id=strategy_instance_id,
         strategy_key=config.strategy_key,
         strategy_label=config.display_name,
@@ -390,6 +409,8 @@ def build_roster_status(
     if outcome is not None:
         running = False
     return BotStatusView(
+        bot_kind=declared.bot_kind,
+        options_bot=declared.options_bot,
         strategy_instance_id=strategy_instance_id,
         strategy_key=config.strategy_key,
         strategy_label=config.display_name,

@@ -18,6 +18,7 @@
           @if (item.setup; as setup) {
             <button type="button" class="open" [disabled]="!canOpen()" [attr.aria-current]="item.name === selected() ? 'true' : null" (click)="choose(item)">
               <span class="name">{{ item.name }}</span>
+              @if (item.golden_setup_id) { <span class="tag" [title]="item.golden_status_explanation ?? ''">Golden setup{{ item.golden_status === 'ready' ? '' : ' · ' + item.golden_status }}</span> }
               <span class="meta">
                 <app-asset-identity [symbol]="setup.underlying" size="xs" [logo]="false" />
                 @if (item.example) { <span class="tag">Example</span> } @else if (item.saved_at_ms; as savedAt) { <app-timestamp-display [value]="savedAt" mode="local" granularity="short-date" /> }

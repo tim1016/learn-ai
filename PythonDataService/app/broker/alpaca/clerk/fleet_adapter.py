@@ -448,6 +448,12 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             account=True,
         ),
         _op("bot_budget_preview", "POST", "/accounts/{account_id}/bots/budget-preview", capability=Capability.DEPLOY, idempotency=_READ, account=True),
+        _op("options_bot_review", "POST", "/accounts/{account_id}/options-bots/review", capability=Capability.DEPLOY, idempotency=_READ, account=True),
+        _op("options_bot_deploy", "POST", "/accounts/{account_id}/options-bots/deploy", capability=Capability.BOT_ACTION, idempotency=_ONE_SHOT, account=True),
+        _op("options_bot_deploy_submission_read", "GET", "/accounts/{account_id}/options-bots/deploy-submissions/{submission_key}", capability=Capability.BOT_PANEL_READ, account=True),
+        _op("options_bot_resume", "POST", "/accounts/{account_id}/options-bots/{sid}/resume", capability=Capability.BOT_ACTION, idempotency=_ONE_SHOT, account=True),
+        _op("options_bot_resume_review", "POST", "/accounts/{account_id}/options-bots/{sid}/resume-review", capability=Capability.DEPLOY, idempotency=_READ, account=True),
+        _op("options_bot_session_read", "GET", "/accounts/{account_id}/options-bots/{sid}/session", capability=Capability.BOT_PANEL_READ, account=True),
         _op("bot_budget_read", "GET", "/accounts/{account_id}/bots/{sid}/budget", capability=Capability.BOT_PANEL_READ, account=True),
         _op("account_money_read", "GET", "/accounts/{account_id}/money", capability=Capability.BOT_PANEL_READ, account=True),
         # Every bot this account ran, with its Dry Runs (#2574). Read on

@@ -331,6 +331,7 @@ def _require_enter_fences(
     strategy_instance_id: str,
     lifecycle_run_id: str,
     envelope: LiveEnvelopeGate | None,
+    session_leg_id: str | None = None,
 ) -> RunResource:
     """The fences every ENTER passes before the envelope is asked, in their one order; returns the active run.
 
@@ -345,8 +346,16 @@ def _require_enter_fences(
     """
     require_strategy_instance(repo, strategy_instance_id)
     active = require_active_run(repo, strategy_instance_id, lifecycle_run_id)
-    require_admission(repo, strategy_instance_id=strategy_instance_id)
+    if session_leg_id is None:
+        require_admission(repo, strategy_instance_id=strategy_instance_id)
+    else:
+        require_admission(repo, strategy_instance_id=strategy_instance_id, session_leg_id=session_leg_id)
     budget = repo.deployment_budget(strategy_instance_id)
+    if budget is not None and budget.get("options_entries_enabled") == 0:
+        raise AdmissionBlockedError(CapabilityDecision(
+            allowed=False, capability=Capability.NEW_EXPOSURE, reason_code="OPTIONS_RESUME_MANAGE_ONLY",
+            why="This Options bot resumed to manage held positions. Entry spending has not been restored.",
+        ))
     if repo.budget_authority_version() >= 2 and budget is None:
         raise AdmissionBlockedError(CapabilityDecision(
             allowed=False, capability=Capability.NEW_EXPOSURE, reason_code=BUDGET_COMMITMENT_MISSING,
@@ -464,7 +473,8 @@ def accept_option_enter(
             if max(entry.cancel_at_ms, repo.clock()) + OPTION_ENTRY_CANCEL_PROOF_ROOM_MS > proven_by_ms:
                 raise OptionEntryProofWindowClosed
         active = _require_enter_fences(
-            repo, strategy_instance_id=strategy_instance_id, lifecycle_run_id=lifecycle_run_id, envelope=envelope
+            repo, strategy_instance_id=strategy_instance_id, lifecycle_run_id=lifecycle_run_id, envelope=envelope,
+            session_leg_id=None if getattr(entry, "options_attempt", None) is None else entry.options_attempt.leg_id,
         )
         reservation = (
             None
@@ -537,6 +547,10 @@ def _reserved(entry: OptionEntry) -> tuple[int, Decimal]:
     """
     if isinstance(entry, MultiLegOptionEntryFacts):
         return entry.units, entry.unit_set_aside
+    if entry.options_attempt is not None:
+        # Portfolio-leg rows keep the whole commitment, including fees. Its
+        # dedicated claim reader separates the provision exactly once.
+        return 1, Decimal(entry.money.entry_commitment_cents).scaleb(-2)
     if entry.order.limit_price is None:
         raise ValueError("an option entry is a limit order at its natural price")
     return entry.order.quantity, entry.order.limit_price

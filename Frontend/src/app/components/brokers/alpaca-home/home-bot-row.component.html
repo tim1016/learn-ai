@@ -8,6 +8,7 @@
     <a class="home-row__sid" [routerLink]="botLink()">{{ bot.strategy_instance_id }}</a>
   </span>
   <span class="home-row__meta">
+    <span class="home-row__chip">{{ bot.bot_kind === 'options' ? 'Options' : 'Signal' }}</span>
     {{ bot.strategy_label }} · <app-bot-instrument class="home-row__symbol" [symbol]="bot.symbol" [traded]="bot.traded" />
   </span>
 </div>

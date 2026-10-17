@@ -992,7 +992,7 @@ class ClerkSqliteRepositoryReadApi:
         from app.broker.alpaca.clerk.sqlite import budget_projection
 
         with self._write_lock:
-            if self._conn.execute("SELECT 1 FROM deployment_budgets WHERE run_id=?", (run_id,)).fetchone() is None:
+            if self._conn.execute("SELECT 1 FROM deployment_budgets WHERE COALESCE(active_run_id,run_id)=?", (run_id,)).fetchone() is None:
                 return None
             try:
                 fees = self.fee_attribution(now_ms=self.clock(), require_fresh_evidence=False)

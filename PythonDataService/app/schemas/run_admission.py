@@ -343,6 +343,7 @@ class StartRunFacts(BaseModel):
     # defaulted — every construction site must be explicit about which tier
     # it is admitting into.
     mode: Literal["log_only", "dry_run", "trade"]
+    schedules_options_sessions: bool = False
     program_build: ProgramBuildAdmissionFact
     validation: StrategyValidationAdmissionFact
     runtime: StartRuntimeAdmissionFact

@@ -22,6 +22,11 @@ import type { BotPanelLiveSnapshot, BotPanelView, RecentDecisionView } from '../
 import type { StrategyChartOverlay } from '../strategy-view/strategy-chart-overlay';
 import { STRATEGY_CHART_FACTORY } from '../strategy-view/strategy-chart.component';
 import { BotPanelShellComponent } from './bot-panel-shell.component';
+import { OptionsBotDeployService } from '../../broker-deploy-page/options-bot-deploy.service';
+import { OptionsBacktestService } from '../../../options-backtest/options-backtest.service';
+import { goldenSetup } from '../../../options-backtest/testing/golden-fixture';
+import { summaryFor } from '../../../options-backtest/testing/fixtures';
+import { DUAL_PANE_CHART_FACTORY } from '../dual-pane-chart/dual-pane-chart.component';
 
 vi.mock('lightweight-charts', () => ({
   createSeriesMarkers: vi.fn().mockReturnValue({ setMarkers: vi.fn() }),
@@ -132,6 +137,45 @@ describe('BotPanelShellComponent — strategy view (#2639)', () => {
 
   afterAll(() => {
     globalThis.EventSource = originalEventSource;
+  });
+
+  it('shows Options session state and the underlying tape without requesting a Signal Program view', async () => {
+    const getStrategyView = vi.fn();
+    const panels = service(getStrategyView);
+    const golden = goldenSetup();
+    const tapeFactory = () => ({
+      addSeries: vi.fn().mockReturnValue({ setData: vi.fn(), update: vi.fn(), applyOptions: vi.fn() }),
+      applyOptions: vi.fn(), remove: vi.fn(), timeScale: () => ({
+        fitContent: vi.fn(), width: () => 0, timeToCoordinate: () => null,
+        subscribeSizeChange: vi.fn(), subscribeVisibleLogicalRangeChange: vi.fn(), options: () => ({ barSpacing: 6 }),
+      }),
+    });
+    panels.getLiveSnapshot.mockResolvedValue({ ...snapshot(1), panel: fakeBotPanelView({
+      strategy_instance_id: 'sid-001', account_id: 'DUM284968', bot_kind: 'options',
+      options_bot: { golden_setup_id: golden.id, setup: golden.setup, setup_sha256: golden.setup_sha256, rules_digest: golden.rules_digest },
+    }) });
+    const { fixture } = await render(BotPanelShellComponent, {
+      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      providers: [
+        provideRouter([]),
+        provideFleetDirectory({ observed_at_ms: 1_757_000_000_000, clerks: [testLane({ clerk_id: 'clrk_spec' })] }),
+        { provide: STRATEGY_CHART_FACTORY, useValue: charts.create }, ...fakeStrategyViewDataPlane(vi).providers,
+        { provide: DUAL_PANE_CHART_FACTORY, useValue: tapeFactory },
+        { provide: BrokerV2PanelService, useValue: panels },
+        { provide: BrokersService, useValue: { checkSqliteRecoveryAction: vi.fn() } },
+        { provide: MessageService, useValue: { add: vi.fn() } },
+        { provide: OptionsBacktestService, useValue: { describe: async () => summaryFor('Tested setup') } },
+        { provide: OptionsBotDeployService, useValue: { session: async () => ({
+          strategy_instance_id: 'sid-001', golden_setup_id: golden.id, pending_decisions: 0,
+          entries_enabled: true, resume_allowed: false, resume_explanation: 'The Options bot is running.', legs: [], events: [],
+        }) } },
+      ],
+    });
+    await settle(fixture);
+
+    expect(screen.getByRole('heading', { name: 'Options bot session' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Underlying price tape' })).toBeTruthy();
+    expect(getStrategyView).not.toHaveBeenCalled();
   });
 
   it('re-reads the strategy view when the live panel lists a newer decision, keeping the chart meanwhile', async () => {

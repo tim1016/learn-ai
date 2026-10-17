@@ -622,8 +622,9 @@ def _bots_that_traded(conn: sqlite3.Connection, symbol: str) -> list[str]:
 def _bot_book(conn: sqlite3.Connection, sid: str, contract: OptionContract, records: Sequence[FillRecord]) -> _BotBook:
     """One bot's open lots of ``contract``, each named by the ledger sequence of the fill that opened it.
 
-    The lots are FIFO's own (``fifo_pnl.compute_fifo_pnl``); nothing here
-    matches a fill to a lot again.
+    The lots are FIFO's own (``fifo_pnl.compute_fifo_pnl``). Session attempts
+    are walked separately so an explicit newer-leg close cannot consume an
+    older leg's settlement allocation (ADR 0079).
 
     **A position the owner wrote off** left the books and closed no lot, so
     the fills hold more than the position does. When the difference is
@@ -637,8 +638,18 @@ def _bot_book(conn: sqlite3.Connection, sid: str, contract: OptionContract, reco
     lot at all: which lots are its own is not known.
     """
     symbol = contract.occ_symbol
-    fifo = compute_fifo_pnl(records)
-    open_lots = [lot for lot in fifo.open_lots if lot.symbol == symbol]
+    batches = [records]
+    config = conn.execute("SELECT config_json FROM bot_config WHERE strategy_instance_id=?", (sid,)).fetchone()
+    if config is not None and json.loads(config[0]).get("options_bot") is not None:
+        from app.broker.alpaca.clerk.options_legs import allocation_records
+
+        entry_refs = conn.execute(
+            "SELECT o.order_ref FROM orders o JOIN effect_operations e ON e.effect_operation_id=o.effect_operation_id "
+            "WHERE e.strategy_instance_id=? AND o.role='ENTRY' ORDER BY e.created_at_ms,o.order_ref", (sid,),
+        ).fetchall()
+        batches = [allocation_records(conn, sid, row[0], records) for row in entry_refs]
+    walks = [(compute_fifo_pnl(batch), batch) for batch in batches]
+    open_lots = [lot for fifo, _batch in walks for lot in fifo.open_lots if lot.symbol == symbol]
     signed = sum(int(lot.exact_qty) * (1 if lot.side is OrderSide.BUY else -1) for lot in open_lots)
     # A lot an event closed was closed by no order: only a close by an order can come between an
     # event and the reading of its row.
@@ -648,7 +659,7 @@ def _bot_book(conn: sqlite3.Connection, sid: str, contract: OptionContract, reco
             sides_at.setdefault(record.filled_at_ms, set()).add(record.side)
     closed = tuple(
         (lot.opened_at_ms, lot.closed_at_ms, _SOLD if OrderSide.BUY in sides_at[lot.closed_at_ms] else _BOUGHT)
-        for lot in fifo.closed_lots
+        for fifo, _batch in walks for lot in fifo.closed_lots
         if lot.symbol == symbol and lot.closed_at_ms in sides_at
     )
     nothing_known = _BotBook(sid=sid, lots=(), opened_by={}, closed=closed)
@@ -664,14 +675,20 @@ def _bot_book(conn: sqlite3.Connection, sid: str, contract: OptionContract, reco
     lots: list[HeldOptionLot] = []
     written_off: list[HeldOptionLot] = []
     opened_by: dict[int, str] = {}
-    in_order = iter(records)
+    openings = []
+    for fifo, batch in walks:
+        in_order = iter(batch)
+        for lot in fifo.open_lots:
+            if lot.symbol != symbol:
+                continue
+            opening = next(
+                (fill for fill in in_order if fill.symbol == symbol and fill.side is lot.side and fill.filled_at_ms == lot.opened_at_ms), None
+            )
+            if opening is None:
+                return nothing_known
+            openings.append((lot, opening))
     still_written_off = abs(beyond)
-    for lot in open_lots:
-        opening = next(
-            (fill for fill in in_order if fill.side is lot.side and fill.filled_at_ms == lot.opened_at_ms), None
-        )
-        if opening is None:
-            return nothing_known
+    for lot, opening in sorted(openings, key=lambda pair: (pair[0].opened_at_ms, pair[1].ledger_sequence)):
         sign = 1 if lot.side is OrderSide.BUY else -1
         quantity = int(lot.exact_qty)
         gone = min(quantity, still_written_off)

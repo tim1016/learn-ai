@@ -49,6 +49,7 @@ would race it, and one already sent may have filled.
 
 from __future__ import annotations
 
+import json
 import logging
 from functools import partial
 
@@ -78,7 +79,22 @@ def ended_dry_runs(repo: ClerkSqliteRepository) -> list[str]:
         instance["strategy_instance_id"]
         for instance in repo.strategy_instances()
         if repo.active_run(instance["strategy_instance_id"]) is None
+        and not _interrupted_options_run(repo, instance["strategy_instance_id"])
     ]
+
+
+def _interrupted_options_run(repo: ClerkSqliteRepository, strategy_instance_id: str) -> bool:
+    """ADR 0079: interrupted Options simulations await explicit session recovery."""
+    from app.broker.alpaca.clerk.sqlite.commands import run_stop_reason
+
+    config = repo.bot_config(strategy_instance_id)
+    latest = repo.latest_run(strategy_instance_id)
+    if config is None or latest is None or json.loads(config.config_json).get("options_bot") is None:
+        return False
+    reason = run_stop_reason(repo, strategy_instance_id=strategy_instance_id, lifecycle_run_id=latest.lifecycle_run_id)
+    return reason in {"INTERRUPTED_BY_RESTART", "service_restart_recovery", "runner_gone", "no_runner"} or (
+        reason is not None and reason.startswith("options_interrupted:")
+    )
 
 
 def closes_owed_for(repo: ClerkSqliteRepository, strategy_instance_id: str) -> list[OwedClose]:

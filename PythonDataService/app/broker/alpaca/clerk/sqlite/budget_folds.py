@@ -80,7 +80,14 @@ def release_stopped_budget(conn: sqlite3.Connection, payload: dict[str, Any], fa
     if conn.execute("SELECT schema_version FROM control_meta WHERE id=1").fetchone()[0] < 20:
         # The explicitly offline v9 historical replay precedes this feature.
         return
-    row = conn.execute("SELECT command_id,launched_at_ms,released_at_ms FROM deployment_budgets WHERE run_id=?", (payload["run_id"],)).fetchone()
+    row = conn.execute("SELECT command_id,launched_at_ms,released_at_ms,active_resume_command_id FROM deployment_budgets WHERE COALESCE(active_run_id,run_id)=?", (payload["run_id"],)).fetchone()
+    if row is not None and row["active_resume_command_id"] is not None:
+        command = conn.execute("SELECT state FROM commands WHERE command_id=?", (row["active_resume_command_id"],)).fetchone()
+        if command is not None and command[0] == "accepted":
+            from app.broker.alpaca.clerk.sqlite.folds import _attach_command_receipt
+
+            conn.execute("UPDATE commands SET state='failed',updated_at_ms=? WHERE command_id=?", (payload["recorded_at_ms"], row["active_resume_command_id"]))
+            _attach_command_receipt(conn, command_id=row["active_resume_command_id"], terminal_state="failed", payload=payload)
     if row is None or row["released_at_ms"] is not None:
         return
     conn.execute(

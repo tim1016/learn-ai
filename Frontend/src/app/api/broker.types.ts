@@ -1706,6 +1706,108 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/accounts/{account_id}/options-bots/deploy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Deploy */
+        post: operations["deploy_api_brokers__broker__accounts__account_id__options_bots_deploy_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/accounts/{account_id}/options-bots/deploy-submissions/{submission_key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Submission */
+        get: operations["submission_api_brokers__broker__accounts__account_id__options_bots_deploy_submissions__submission_key__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/accounts/{account_id}/options-bots/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Review */
+        post: operations["review_api_brokers__broker__accounts__account_id__options_bots_review_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/accounts/{account_id}/options-bots/{sid}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resume */
+        post: operations["resume_api_brokers__broker__accounts__account_id__options_bots__sid__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/accounts/{account_id}/options-bots/{sid}/resume-review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resume Review */
+        post: operations["resume_review_api_brokers__broker__accounts__account_id__options_bots__sid__resume_review_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/accounts/{account_id}/options-bots/{sid}/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Session */
+        get: operations["session_api_brokers__broker__accounts__account_id__options_bots__sid__session_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/accounts/{account_id}/strategies/{program_key}/paper-access/confirm": {
         parameters: {
             query?: never;
@@ -2943,6 +3045,126 @@ export interface paths {
          * @description Fleet-routed GET /accounts/{account_id}/money (bot_panel_read).
          */
         get: operations["fleet_account_money_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__money_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/options-bots/deploy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Options Bot Deploy
+         * @description Fleet-routed POST /accounts/{account_id}/options-bots/deploy (bot_action).
+         */
+        post: operations["fleet_options_bot_deploy_api_brokers__broker__clerks__clerk_id__accounts__account_id__options_bots_deploy_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/options-bots/deploy-submissions/{submission_key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Options Bot Deploy Submission Read
+         * @description Fleet-routed GET /accounts/{account_id}/options-bots/deploy-submissions/{submission_key} (bot_panel_read).
+         */
+        get: operations["fleet_options_bot_deploy_submission_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__options_bots_deploy_submissions__submission_key__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/options-bots/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Options Bot Review
+         * @description Fleet-routed POST /accounts/{account_id}/options-bots/review (deploy).
+         */
+        post: operations["fleet_options_bot_review_api_brokers__broker__clerks__clerk_id__accounts__account_id__options_bots_review_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/options-bots/{sid}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Options Bot Resume
+         * @description Fleet-routed POST /accounts/{account_id}/options-bots/{sid}/resume (bot_action).
+         */
+        post: operations["fleet_options_bot_resume_api_brokers__broker__clerks__clerk_id__accounts__account_id__options_bots__sid__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/options-bots/{sid}/resume-review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fleet Options Bot Resume Review
+         * @description Fleet-routed POST /accounts/{account_id}/options-bots/{sid}/resume-review (deploy).
+         */
+        post: operations["fleet_options_bot_resume_review_api_brokers__broker__clerks__clerk_id__accounts__account_id__options_bots__sid__resume_review_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/options-bots/{sid}/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Options Bot Session Read
+         * @description Fleet-routed GET /accounts/{account_id}/options-bots/{sid}/session (bot_panel_read).
+         */
+        get: operations["fleet_options_bot_session_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__options_bots__sid__session_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5180,6 +5402,91 @@ export interface paths {
         get: operations["get_backtest_run_strategy_view_api_research_backtest_runs__run_id__strategy_view_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/golden-option-setups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Golden Setups */
+        get: operations["list_golden_setups_api_research_golden_option_setups_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/golden-option-setups/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve Golden Setup */
+        post: operations["approve_golden_setup_api_research_golden_option_setups_approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/golden-option-setups/{qualification_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Golden Setup */
+        get: operations["get_golden_setup_api_research_golden_option_setups__qualification_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/golden-option-setups/{qualification_id}/reprove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reprove Golden Setup */
+        post: operations["reprove_golden_setup_api_research_golden_option_setups__qualification_id__reprove_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/golden-option-setups/{qualification_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke Golden Setup */
+        post: operations["revoke_golden_setup_api_research_golden_option_setups__qualification_id__revoke_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7741,6 +8048,17 @@ export interface components {
             /** Expected Selection Generation */
             expected_selection_generation: number;
         };
+        /** ApproveGoldenOptionSetupRequest */
+        ApproveGoldenOptionSetupRequest: {
+            /** Expected Setup Sha256 */
+            expected_setup_sha256?: string | null;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Note */
+            note: string;
+            /** Run Id */
+            run_id: number;
+        };
         /**
          * ArtifactDetail
          * @description Full receipt for one catalog row: identity, hashes, and byte metadata.
@@ -8528,6 +8846,12 @@ export interface components {
         BotCatalogView: {
             /** Account Id */
             account_id: string;
+            /**
+             * Bot Kind
+             * @default signal
+             * @enum {string}
+             */
+            bot_kind?: "signal" | "options";
             /** Broker */
             broker: string;
             /** Day Pnl */
@@ -8563,6 +8887,7 @@ export interface components {
             needs_attention: boolean;
             /** Open Pnl */
             open_pnl: number | null;
+            options_bot?: components["schemas"]["OptionsBotConfiguration"] | null;
             /** Page Unavailable Reason */
             page_unavailable_reason?: string | null;
             /**
@@ -8649,6 +8974,23 @@ export interface components {
             /** Traded Symbol */
             traded_symbol?: string | null;
             trades?: components["schemas"]["TradesOptions-Output"] | null;
+        };
+        /**
+         * BotDutyOutcomeView
+         * @description Durable terminal duty evidence rendered by the operator surface.
+         */
+        BotDutyOutcomeView: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "STOPPED" | "HALTED" | "CRASHED" | "FAILED_LAUNCH" | "EXITED_UNVERIFIED" | "RETIRED";
+            /** Reason Code */
+            reason_code: string;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /** Run Id */
+            run_id?: string | null;
         };
         /**
          * BotEndInput
@@ -8948,6 +9290,12 @@ export interface components {
             account_id: string;
             /** Actions */
             actions: components["schemas"]["PanelAction"][];
+            /**
+             * Bot Kind
+             * @default signal
+             * @enum {string}
+             */
+            bot_kind?: "signal" | "options";
             bot_page?: components["schemas"]["BotPageView"] | null;
             /** Broker */
             broker: string;
@@ -8983,6 +9331,7 @@ export interface components {
             open_pnl_direction: ("gain" | "loss" | "flat") | null;
             /** Open Pnl Usd */
             open_pnl_usd: string | null;
+            options_bot?: components["schemas"]["OptionsBotConfiguration"] | null;
             /** Primary Action */
             primary_action: ("archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "end_expired_option" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline") | null;
             program_build: components["schemas"]["ProgramBuildAdmissionFact"];
@@ -9092,6 +9441,64 @@ export interface components {
             /** Strategy Instance Id */
             strategy_instance_id: string;
             terminal_outcome: components["schemas"]["BotRunTerminalOutcomeView"] | null;
+        };
+        /** BotStatusView */
+        BotStatusView: {
+            /** Active Run Id */
+            active_run_id: string | null;
+            /** Binding Created At Ms */
+            binding_created_at_ms: number;
+            /**
+             * Bot Kind
+             * @default signal
+             * @enum {string}
+             */
+            bot_kind?: "signal" | "options";
+            /** Broker */
+            broker: string;
+            /**
+             * Carryover Policy
+             * @default FORBID
+             * @enum {string}
+             */
+            carryover_policy?: "FORBID" | "ALLOW";
+            /**
+             * Desired State
+             * @enum {string}
+             */
+            desired_state: "RUNNING" | "STOPPED";
+            duty_outcome: components["schemas"]["BotDutyOutcomeView"] | null;
+            evidence_override?: components["schemas"]["AlpacaPaperEvidenceOverride"] | null;
+            /** Last Transition At Ms */
+            last_transition_at_ms: number | null;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "log_only" | "dry_run" | "trade";
+            options_bot?: components["schemas"]["OptionsBotConfiguration"] | null;
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "OFF_DUTY" | "ON_DUTY" | "RETIRED";
+            /** Quantity */
+            quantity: number | null;
+            /** Running */
+            running: boolean;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /**
+             * Strategy Key
+             * @default deployment_validation
+             */
+            strategy_key?: string;
+            /** Strategy Label */
+            strategy_label?: string | null;
+            /** Symbol */
+            symbol: string;
+            traded?: components["schemas"]["TradedInstrumentView"] | null;
+            traded_asset_acknowledgement?: components["schemas"]["UntestedTradedAssetAcknowledgement"] | null;
         };
         /**
          * BreachProbability
@@ -14086,6 +14493,86 @@ export interface components {
             /** Fixtures */
             fixtures: components["schemas"]["FixtureSummary"][];
             validation?: components["schemas"]["ValidationSummary"] | null;
+        };
+        /** GoldenOptionSetupEventView */
+        GoldenOptionSetupEventView: {
+            /** Actor */
+            actor: string;
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Id */
+            id: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "reproved" | "revoked";
+            /** Reason */
+            reason: string | null;
+            /** Rules Digest */
+            rules_digest: string | null;
+        };
+        /** GoldenOptionSetupEvidence */
+        GoldenOptionSetupEvidence: {
+            /** First Session Open Ms */
+            first_session_open_ms: number;
+            /** Last Session Open Ms */
+            last_session_open_ms: number;
+            /** Limitations */
+            limitations: string[];
+            /** Net Profit Usd */
+            net_profit_usd: string;
+            /** Sessions Tested */
+            sessions_tested: number;
+            /** Slippage Percent */
+            slippage_percent: string;
+            /** Starting Cash Usd */
+            starting_cash_usd: string;
+            /** Trades */
+            trades: number;
+        };
+        /** GoldenOptionSetupRefusal */
+        GoldenOptionSetupRefusal: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+        };
+        /** GoldenOptionSetupView */
+        GoldenOptionSetupView: {
+            /** Approved By */
+            approved_by: string;
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Events */
+            events: components["schemas"]["GoldenOptionSetupEventView"][];
+            evidence: components["schemas"]["GoldenOptionSetupEvidence"];
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Note */
+            note: string;
+            /** Proof */
+            proof: Record<string, never>;
+            /** Proof Sha256 */
+            proof_sha256: string;
+            /** Rules Digest */
+            rules_digest: string;
+            setup: components["schemas"]["OptionsBacktestSetup-Output"];
+            /** Setup Sha256 */
+            setup_sha256: string;
+            /** Source Run Id */
+            source_run_id: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ready" | "stale" | "revoked";
+            /** Status Explanation */
+            status_explanation: string;
+            /** Underlying */
+            underlying: string;
         };
         /**
          * GoldenQualificationDeployOffer
@@ -23620,6 +24107,80 @@ export interface components {
             trades: components["schemas"]["OptionsBacktestTradeResponse"][];
         };
         /**
+         * OptionsBotConfiguration
+         * @description An exact approved setup, independent of a mutable saved setup name.
+         */
+        OptionsBotConfiguration: {
+            /** Golden Setup Id */
+            golden_setup_id: string;
+            /** Rules Digest */
+            rules_digest: string;
+            setup: components["schemas"]["OptionsBacktestSetup-Output"];
+            /** Setup Sha256 */
+            setup_sha256: string;
+            /**
+             * Version
+             * @default 1
+             * @constant
+             */
+            version?: 1;
+        };
+        /** OptionsBotLegView */
+        OptionsBotLegView: {
+            /** Average Fill Price */
+            average_fill_price?: string | null;
+            /** Entries Filled */
+            entries_filled: number;
+            /** Held Contract */
+            held_contract?: string | null;
+            /** Held Contracts */
+            held_contracts: number;
+            /** Leg Id */
+            leg_id: string;
+            /** Phase */
+            phase: string;
+            /** Reentries Left */
+            reentries_left: number;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "buy" | "sell";
+            /** Stop Level */
+            stop_level?: string | null;
+        };
+        /** OptionsBotSessionView */
+        OptionsBotSessionView: {
+            /** Entries Enabled */
+            entries_enabled: boolean;
+            /** Entry Hold Reason */
+            entry_hold_reason?: string | null;
+            /** Events */
+            events: Record<string, never>[];
+            /** Execution Hold Reason */
+            execution_hold_reason?: string | null;
+            /** Golden Setup Id */
+            golden_setup_id: string;
+            /** Last Minute Ms */
+            last_minute_ms?: number | null;
+            /** Legs */
+            legs: components["schemas"]["OptionsBotLegView"][];
+            /** Next Entry Ms */
+            next_entry_ms?: number | null;
+            /** Pending Decisions */
+            pending_decisions: number;
+            /** Resume Allowed */
+            resume_allowed: boolean;
+            /** Resume Explanation */
+            resume_explanation: string;
+            /** Session Close Ms */
+            session_close_ms?: number | null;
+            /** Session Open Ms */
+            session_open_ms?: number | null;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+        };
+        /**
          * OptionsChainSnapshotRequest
          * @description Request schema for fetching options chain snapshot
          */
@@ -23819,6 +24380,52 @@ export interface components {
             ticker?: string | null;
         };
         /**
+         * OptionsDeployRequest
+         * @description Trading rules come from the approved version; only deployment settings are authored here.
+         */
+        OptionsDeployRequest: {
+            budget?: components["schemas"]["DeploymentBudgetInput"] | null;
+            end?: components["schemas"]["BotEndInput"] | null;
+            /**
+             * Execution Mode
+             * @enum {string}
+             */
+            execution_mode: "paper" | "dry_run" | "shadow" | "live";
+            exit_terms: components["schemas"]["ExitTermsInput"];
+            /** Golden Setup Id */
+            golden_setup_id: string;
+            order_terms: components["schemas"]["SealedOptionOrderTerms-Input"];
+        };
+        /** OptionsDeploySubmission */
+        OptionsDeploySubmission: {
+            budget?: components["schemas"]["DeploymentBudgetInput"] | null;
+            end?: components["schemas"]["BotEndInput"] | null;
+            /**
+             * Execution Mode
+             * @enum {string}
+             */
+            execution_mode: "paper" | "dry_run" | "shadow" | "live";
+            exit_terms: components["schemas"]["ExitTermsInput"];
+            /** Golden Setup Id */
+            golden_setup_id: string;
+            order_terms: components["schemas"]["SealedOptionOrderTerms-Input"];
+            /** Submission Key */
+            submission_key: string;
+        };
+        /** OptionsDeploymentReview */
+        OptionsDeploymentReview: {
+            /** Allowed */
+            allowed: boolean;
+            budget: components["schemas"]["DeploymentBudgetPreview"];
+            /** Explanation */
+            explanation: string;
+            /** First Eligible Session Open Ms */
+            first_eligible_session_open_ms?: number | null;
+            golden: components["schemas"]["GoldenOptionSetupView"];
+            /** Rules Summary */
+            rules_summary: string[];
+        };
+        /**
          * OptionsExpirationsRequest
          * @description Request schema for listing unique options expiration dates
          */
@@ -23863,6 +24470,15 @@ export interface components {
             expirations?: number[];
             /** Success */
             success: boolean;
+        };
+        /**
+         * OptionsResumeRequest
+         * @description An explicit recovery command; its key never authorizes a second active run.
+         */
+        OptionsResumeRequest: {
+            budget?: components["schemas"]["DeploymentBudgetInput"] | null;
+            /** Idempotency Key */
+            idempotency_key: string;
         };
         /**
          * OrderSide
@@ -25780,6 +26396,11 @@ export interface components {
              */
             kind: "remove";
         };
+        /** ReproveGoldenOptionSetupRequest */
+        ReproveGoldenOptionSetupRequest: {
+            /** Idempotency Key */
+            idempotency_key: string;
+        };
         /** ReproveQualificationRequest */
         ReproveQualificationRequest: {
             /** Idempotencykey */
@@ -25972,6 +26593,13 @@ export interface components {
             revision: number;
             /** Schema Version */
             schema_version: number;
+        };
+        /** RevokeGoldenOptionSetupRequest */
+        RevokeGoldenOptionSetupRequest: {
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Reason */
+            reason: string;
         };
         /** RevokeQualificationRequest */
         RevokeQualificationRequest: {
@@ -26634,6 +27262,12 @@ export interface components {
             cannot_open_reason?: string | null;
             /** Example */
             example: boolean;
+            /** Golden Setup Id */
+            golden_setup_id?: string | null;
+            /** Golden Status */
+            golden_status?: ("ready" | "stale" | "revoked") | null;
+            /** Golden Status Explanation */
+            golden_status_explanation?: string | null;
             /** Name */
             name: string;
             /** Saved At Ms */
@@ -28780,7 +29414,7 @@ export interface components {
          * TimelineTransitionKind
          * @enum {string}
          */
-        TimelineTransitionKind: "ACCOUNT_HOLD_RAISED" | "ACCOUNT_HOLD_REFRESHED" | "ACCOUNT_HOLD_RESOLVED" | "ACCOUNT_RISK_LIMITS_APPLIED" | "ATTRIBUTED_RESIDUE_DISCHARGED" | "BUDGET_AUTHORITY_CUTOVER" | "COMMAND_REJECTED" | "CUSTODY_SUBJECT_REGISTERED" | "DEPLOY_COMMITTED" | "DEPLOY_LAUNCHED" | "ENTER_ACCEPTED" | "ENTER_SUBMISSION_REFUSED" | "ENTER_UNFILLED" | "ENTRY_BUYING_POWER_COMPARED" | "ENTRY_NEVER_ACCEPTED" | "ENTRY_SETTLED" | "ENTRY_TERMINAL_CONFIRMED" | "EXECUTION_COVERAGE_CHAIN_TOTAL_PROVEN" | "EXECUTION_COVERAGE_QUARANTINED" | "EXECUTION_COVERAGE_RESOLVED" | "EXECUTION_COVERAGE_SUPERSEDED" | "EXECUTION_SLICE_FILLED" | "EXIT_ACCEPTED" | "EXIT_ATTRIBUTED_FLAT" | "EXIT_MARKET_HOLD" | "EXIT_NOT_FLAT" | "EXIT_RECOVERY_EVALUATED" | "EXIT_REDUCING_ORDER_CREATED" | "EXIT_TERMS_SEALED" | "EXIT_TERMS_UPGRADE_COMPLETED" | "EXTERNAL_ORDER_ACKNOWLEDGED" | "EXTERNAL_ORDER_OBSERVED" | "FEE_EVIDENCE_OBSERVED" | "FEE_OPTION_CONTRACT_OBSERVED" | "MANUAL_ORDER_ACCEPTED" | "MANUAL_ORDER_CANCELED" | "MANUAL_ORDER_CANCEL_ACCEPTED" | "MANUAL_ORDER_CANCEL_CONFIRMED" | "MANUAL_ORDER_CANCEL_TERMINAL" | "MANUAL_ORDER_FILLED" | "MANUAL_ORDER_REPLACED" | "MANUAL_ORDER_TERMINAL" | "MANUAL_TICKET_CANCELED" | "MANUAL_TICKET_COMPLETED" | "MANUAL_TICKET_PAUSED_UNKNOWN" | "MANUAL_TICKET_RESERVED" | "OPTION_POSITION_ENDED" | "ORDER_CANCEL_REQUESTED" | "ORDER_CANCEL_UNCERTAIN" | "ORDER_FILL_OBSERVED" | "ORDER_OUTCOME_ATTESTED" | "ORDER_SUBMIT_ACKED" | "ORDER_SUBMIT_FAILED" | "ORDER_SUBMIT_REQUESTED" | "ORDER_SUBMIT_UNCERTAIN" | "RECONCILIATION_ATTEMPTED" | "RUN_STARTED" | "RUN_STOPPED" | "SIMULATION_SESSION_BASELINE" | "STRATEGY_INSTANCE_REGISTERED" | "STRATEGY_INSTANCE_RETIRED" | "UNCERTAINTY_RAISED" | "UNCERTAINTY_REFRESHED" | "UNCERTAINTY_RESOLVED";
+        TimelineTransitionKind: "ACCOUNT_HOLD_RAISED" | "ACCOUNT_HOLD_REFRESHED" | "ACCOUNT_HOLD_RESOLVED" | "ACCOUNT_RISK_LIMITS_APPLIED" | "ATTRIBUTED_RESIDUE_DISCHARGED" | "BUDGET_AUTHORITY_CUTOVER" | "COMMAND_REJECTED" | "CUSTODY_SUBJECT_REGISTERED" | "DEPLOY_COMMITTED" | "DEPLOY_LAUNCHED" | "ENTER_ACCEPTED" | "ENTER_SUBMISSION_REFUSED" | "ENTER_UNFILLED" | "ENTRY_BUYING_POWER_COMPARED" | "ENTRY_NEVER_ACCEPTED" | "ENTRY_SETTLED" | "ENTRY_TERMINAL_CONFIRMED" | "EXECUTION_COVERAGE_CHAIN_TOTAL_PROVEN" | "EXECUTION_COVERAGE_QUARANTINED" | "EXECUTION_COVERAGE_RESOLVED" | "EXECUTION_COVERAGE_SUPERSEDED" | "EXECUTION_SLICE_FILLED" | "EXIT_ACCEPTED" | "EXIT_ATTRIBUTED_FLAT" | "EXIT_MARKET_HOLD" | "EXIT_NOT_FLAT" | "EXIT_RECOVERY_EVALUATED" | "EXIT_REDUCING_ORDER_CREATED" | "EXIT_TERMS_SEALED" | "EXIT_TERMS_UPGRADE_COMPLETED" | "EXTERNAL_ORDER_ACKNOWLEDGED" | "EXTERNAL_ORDER_OBSERVED" | "FEE_EVIDENCE_OBSERVED" | "FEE_OPTION_CONTRACT_OBSERVED" | "MANUAL_ORDER_ACCEPTED" | "MANUAL_ORDER_CANCELED" | "MANUAL_ORDER_CANCEL_ACCEPTED" | "MANUAL_ORDER_CANCEL_CONFIRMED" | "MANUAL_ORDER_CANCEL_TERMINAL" | "MANUAL_ORDER_FILLED" | "MANUAL_ORDER_REPLACED" | "MANUAL_ORDER_TERMINAL" | "MANUAL_TICKET_CANCELED" | "MANUAL_TICKET_COMPLETED" | "MANUAL_TICKET_PAUSED_UNKNOWN" | "MANUAL_TICKET_RESERVED" | "OPTIONS_RUN_LAUNCHED" | "OPTIONS_RUN_RESUMED" | "OPTION_POSITION_ENDED" | "ORDER_CANCEL_REQUESTED" | "ORDER_CANCEL_UNCERTAIN" | "ORDER_FILL_OBSERVED" | "ORDER_OUTCOME_ATTESTED" | "ORDER_SUBMIT_ACKED" | "ORDER_SUBMIT_FAILED" | "ORDER_SUBMIT_REQUESTED" | "ORDER_SUBMIT_UNCERTAIN" | "RECONCILIATION_ATTEMPTED" | "RUN_STARTED" | "RUN_STOPPED" | "SIMULATION_SESSION_BASELINE" | "STRATEGY_INSTANCE_REGISTERED" | "STRATEGY_INSTANCE_RETIRED" | "UNCERTAINTY_RAISED" | "UNCERTAINTY_REFRESHED" | "UNCERTAINTY_RESOLVED";
         /** TimingCellResponse */
         TimingCellResponse: {
             /** Average Return */
@@ -33646,6 +34280,230 @@ export interface operations {
             };
         };
     };
+    deploy_api_brokers__broker__accounts__account_id__options_bots_deploy_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: "alpaca";
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OptionsDeploySubmission"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetDeployCommandReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submission_api_brokers__broker__accounts__account_id__options_bots_deploy_submissions__submission_key__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: "alpaca";
+                account_id: string;
+                submission_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetDeployCommandReceipt"] | components["schemas"]["DeploySubmissionUncommitted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_api_brokers__broker__accounts__account_id__options_bots_review_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: "alpaca";
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OptionsDeployRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsDeploymentReview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resume_api_brokers__broker__accounts__account_id__options_bots__sid__resume_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: "alpaca";
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OptionsResumeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotStatusView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resume_review_api_brokers__broker__accounts__account_id__options_bots__sid__resume_review_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: "alpaca";
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["DeploymentBudgetInput"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentBudgetPreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_api_brokers__broker__accounts__account_id__options_bots__sid__session_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: "alpaca";
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsBotSessionView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     confirm_strategy_paper_access_api_brokers__broker__accounts__account_id__strategies__program_key__paper_access_confirm_post: {
         parameters: {
             query?: never;
@@ -35972,6 +36830,236 @@ export interface operations {
                 broker: string;
                 clerk_id: string;
                 account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_options_bot_deploy_api_brokers__broker__clerks__clerk_id__accounts__account_id__options_bots_deploy_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_options_bot_deploy_submission_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__options_bots_deploy_submissions__submission_key__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                submission_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_options_bot_review_api_brokers__broker__clerks__clerk_id__accounts__account_id__options_bots_review_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_options_bot_resume_api_brokers__broker__clerks__clerk_id__accounts__account_id__options_bots__sid__resume_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_options_bot_resume_review_api_brokers__broker__clerks__clerk_id__accounts__account_id__options_bots__sid__resume_review_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never> | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_options_bot_session_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__options_bots__sid__session_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
             };
             cookie?: never;
         };
@@ -39475,6 +40563,317 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_golden_setups_api_research_golden_option_setups_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                source_run_id?: number | null;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenOptionSetupView"][];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenOptionSetupRefusal"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenOptionSetupRefusal"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenOptionSetupRefusal"];
+                };
+            };
+        };
+    };
+    approve_golden_setup_api_research_golden_option_setups_approve_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApproveGoldenOptionSetupRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenOptionSetupView"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenOptionSetupRefusal"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenOptionSetupRefusal"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenOptionSetupRefusal"];
+                };
+            };
+        };
+    };
+    get_golden_setup_api_research_golden_option_setups__qualification_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                qualification_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenOptionSetupView"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenOptionSetupRefusal"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenOptionSetupRefusal"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenOptionSetupRefusal"];
+                };
+            };
+        };
+    };
+    reprove_golden_setup_api_research_golden_option_setups__qualification_id__reprove_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                qualification_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReproveGoldenOptionSetupRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenOptionSetupView"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenOptionSetupRefusal"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenOptionSetupRefusal"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenOptionSetupRefusal"];
+                };
+            };
+        };
+    };
+    revoke_golden_setup_api_research_golden_option_setups__qualification_id__revoke_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                qualification_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevokeGoldenOptionSetupRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenOptionSetupView"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenOptionSetupRefusal"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenOptionSetupRefusal"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenOptionSetupRefusal"];
                 };
             };
         };

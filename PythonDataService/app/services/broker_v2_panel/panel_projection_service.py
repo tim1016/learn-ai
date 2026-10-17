@@ -684,6 +684,8 @@ def build_panel(
     )
 
     return BotPanelView(
+        bot_kind=status.bot_kind,
+        options_bot=status.options_bot,
         strategy_instance_id=status.strategy_instance_id,
         strategy_key=status.strategy_key,
         strategy_label=(
@@ -696,7 +698,7 @@ def build_panel(
         symbol=status.symbol,
         traded=status.traded,
         traded_asset_warning=(
-            None if status.traded is None else UntestedTradedAssetWarning.for_symbols(
+            None if status.traded is None or status.bot_kind == "options" else UntestedTradedAssetWarning.for_symbols(
                 status.symbol, status.traded.symbol, acceptance_required=False,
             )
         ),

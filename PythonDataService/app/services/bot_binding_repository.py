@@ -34,7 +34,9 @@ from app.engine.live.identity import strategy_instance_artifact_dir
 from app.engine.live.run_status import _atomic_write_json
 from app.schemas.action_plan import (
     ActionPlan,
+    BotActionPlan,
     CloseLegExit,
+    OptionsSessionActionPlan,
     StockEntryLeg,
     StockInstrument,
     is_option_plan,
@@ -46,6 +48,7 @@ from app.schemas.canary_admission import CanaryRollbackDecision
 from app.schemas.deployment_budget import DeployBudgetConsent
 from app.schemas.exit_terms import ExitTerms
 from app.schemas.option_order_terms import SealedOptionOrderTerms, strip_absent_option_order_terms
+from app.schemas.options_bot import OPTIONS_BOT_KEY, OptionsBotConfiguration, strip_absent_options_bot
 from app.schemas.run_admission import ProgramBuildAdmissionFact
 from app.schemas.signal_program_seal import ParameterOrigin, SealedBotProgram
 from app.schemas.traded_asset_acknowledgement import (
@@ -130,7 +133,8 @@ class BrokerBotBinding(BaseModel):
     # ``None`` for every bot that trades the symbol it listens to; the
     # configuration hash leaves an absent one out (``exclude_none``).
     traded_asset_acknowledgement: UntestedTradedAssetAcknowledgement | None = None
-    action_plan: ActionPlan
+    action_plan: BotActionPlan
+    options_bot: OptionsBotConfiguration | None = None
     # The four order terms an option bot was deployed with, fixed for its
     # life (ADR 0076 decision 24). ``None`` for every bot in shares; the
     # configuration hash leaves absent ones out (``exclude_none``).
@@ -160,12 +164,27 @@ class BrokerBotBinding(BaseModel):
     @model_serializer(mode="wrap")
     def _omit_absent_option_order_terms(self, handler: SerializerFunctionWrapHandler):
         """A bot in shares is dumped exactly as it was before the terms existed."""
-        return strip_absent_option_order_terms(handler(self))
+        return strip_absent_options_bot(strip_absent_option_order_terms(handler(self)))
 
     @model_validator(mode="after")
     def _only_an_option_plan_carries_option_order_terms(self) -> BrokerBotBinding:
         if self.option_order_terms is not None and not is_option_plan(self.action_plan):
             raise ValueError("option order terms belong to a bot that trades option contracts; this plan trades shares")
+        if isinstance(self.action_plan, OptionsSessionActionPlan):
+            if self.options_bot is None or self.strategy_key != OPTIONS_BOT_KEY:
+                raise ValueError("An Options session plan requires its approved Options bot configuration.")
+            if (
+                self.action_plan.setup_sha256 != self.options_bot.setup_sha256
+                or self.symbol != self.options_bot.setup.underlying
+                or self.action_plan.underlying != self.symbol
+            ):
+                raise ValueError("The Options bot plan, underlying and approved setup must agree.")
+            if self.option_order_terms is None or not self.use_rth or self.quantity != 1:
+                raise ValueError("An Options bot needs order terms, regular sessions and its tested quantities.")
+            if self.strategy_params is not None or self.sealed_program is not None:
+                raise ValueError("An Options bot has a golden setup, not Signal Program parameters or a signal seal.")
+        elif self.options_bot is not None:
+            raise ValueError("An Options bot configuration requires an Options session plan.")
         return self
 
 
@@ -185,7 +204,8 @@ class StrategyInstanceRecord(BaseModel):
     carryover_policy: Literal["FORBID", "ALLOW"]
     evidence_override: AlpacaPaperEvidenceOverride | None = None
     traded_asset_acknowledgement: UntestedTradedAssetAcknowledgement | None = None
-    action_plan: ActionPlan
+    action_plan: BotActionPlan
+    options_bot: OptionsBotConfiguration | None = None
     option_order_terms: SealedOptionOrderTerms | None = None
     strategy_params: dict[str, Any] | None = None
     exit_terms: ExitTerms | None = Field(default=None, exclude=True)
@@ -202,7 +222,9 @@ class StrategyInstanceRecord(BaseModel):
         refuse to read every bot deployed since. A bot in shares has no
         option order terms, and is written without them for the same reason.
         """
-        return strip_absent_option_order_terms(strip_absent_traded_asset_acknowledgement(handler(self)))
+        return strip_absent_options_bot(
+            strip_absent_option_order_terms(strip_absent_traded_asset_acknowledgement(handler(self)))
+        )
 
     @classmethod
     def from_binding(cls, binding: BrokerBotBinding) -> StrategyInstanceRecord:
@@ -218,6 +240,7 @@ class StrategyInstanceRecord(BaseModel):
             evidence_override=binding.evidence_override,
             traded_asset_acknowledgement=binding.traded_asset_acknowledgement,
             action_plan=binding.action_plan,
+            options_bot=binding.options_bot,
             option_order_terms=binding.option_order_terms,
             strategy_params=binding.strategy_params,
             sealed_account_id=binding.sealed_account_id,
@@ -350,7 +373,7 @@ class BotBindingRepository:
         self,
         binding: BrokerBotBinding,
         *,
-        launch_reason: Literal["deploy"],
+        launch_reason: Literal["deploy", "resume"],
     ) -> None:
         """Durably append one run, then make it the instance's current run."""
         instance_dir = self._instance_dir_for(binding.strategy_instance_id)
@@ -655,7 +678,7 @@ class BotBindingRepository:
     ) -> None:
         proof = binding.program_build
         seal = binding.sealed_program
-        if proof is None or proof.state != "PROVEN" or seal is None:
+        if proof is None or proof.state != "PROVEN" or (seal is None and binding.options_bot is None):
             return
         # ``ProgramBuildAdmissionFact``'s own model validator guarantees that
         # a PROVEN fact always carries all four proof fields, so there is no
@@ -663,7 +686,7 @@ class BotBindingRepository:
         candidate = ProgramBuildRunEvidence(
             strategy_instance_id=binding.strategy_instance_id,
             run_id=binding.run_id,
-            sealed_program_hash=seal.bot_configuration_hash,
+            sealed_program_hash=seal.bot_configuration_hash if seal is not None else configuration_hash(binding),
             program_version=proof.program_version,
             golden_trace_root=proof.golden_trace_root,
             running_artifact_digest=proof.running_artifact_digest,
@@ -777,6 +800,7 @@ class BotBindingRepository:
             evidence_override=instance.evidence_override,
             traded_asset_acknowledgement=instance.traded_asset_acknowledgement,
             action_plan=instance.action_plan,
+            options_bot=instance.options_bot,
             option_order_terms=instance.option_order_terms,
             strategy_params=instance.strategy_params,
             strategy_param_origins=parameter_origins,

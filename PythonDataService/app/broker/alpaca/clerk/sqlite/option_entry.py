@@ -131,6 +131,19 @@ class OptionOrderTermsFacts(BaseModel):
         return CloseTerms(**self.model_dump())
 
 
+class OptionsAttemptFacts(BaseModel):
+    """A session leg allocation: immutable attribution beside the accepted order."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    leg_id: str = Field(min_length=1, max_length=32)
+    attempt_id: str = Field(min_length=1, max_length=128)
+    setup_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    # A separate portfolio admission reserves incremental collateral and paid
+    # premium; sale proceeds remain unavailable until the account observes them.
+    reservation_before_fees_cents: int = Field(ge=0)
+
+
 def _leg_facts(prepared: PreparedEntry) -> tuple[OptionEntryLegFacts, ...]:
     """Each leg of a prepared entry as its facts keep it, in the structure's own leg order."""
     return tuple(
@@ -200,6 +213,7 @@ class OptionEntryFacts(BaseModel):
     # time plus the owner's entry wait. The deadline is the entry's, never a leg's.
     cancel_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     terms: OptionOrderTermsFacts | None = None
+    options_attempt: OptionsAttemptFacts | None = None
 
     @model_validator(mode="after")
     def _the_order_is_for_the_one_leg(self) -> OptionEntryFacts:
@@ -260,6 +274,8 @@ class OptionEntryFacts(BaseModel):
         so an entry accepted before it could rest is written as it was.
         """
         facts = self.model_dump(mode="json")
+        if self.options_attempt is None:
+            facts.pop("options_attempt")
         if self.terms is None:
             del facts["cancel_at_ms"], facts["terms"]
         return facts

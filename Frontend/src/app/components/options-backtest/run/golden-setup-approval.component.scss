@@ -1,0 +1,11 @@
+:host { display: block; }
+.golden-approval { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--surface-border); }
+h3 { margin: 0 0 .75rem; }
+p { line-height: 1.5; }
+.note { color: var(--text-color-secondary); font-size: .875rem; }
+label { display: block; margin-bottom: .4rem; }
+textarea { display: block; width: 100%; max-width: 44rem; padding: .65rem; margin-bottom: .75rem; color: var(--text-color); background: var(--surface-card); border: 1px solid var(--surface-border); border-radius: .4rem; font: inherit; }
+button { padding: .55rem .85rem; color: var(--text-color); background: var(--surface-card); border: 1px solid var(--surface-border); border-radius: .4rem; cursor: pointer; }
+button:disabled { opacity: .5; cursor: default; }
+.actions { display: flex; gap: .75rem; flex-wrap: wrap; }
+.problem { color: var(--red-500, #ef4444); }

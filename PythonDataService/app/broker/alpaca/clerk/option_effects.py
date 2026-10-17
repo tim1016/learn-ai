@@ -218,6 +218,10 @@ def option_plan_taken(action_plan: ActionPlan, *, real_account: bool) -> TakenOp
     Whether an account takes option plans at all is asked before this, by
     the account. Raises ``OptionPlanRefused``.
     """
+    from app.broker.alpaca.clerk.options_legs import OptionsLegInstruction
+
+    if isinstance(action_plan, OptionsLegInstruction):
+        return TakenOptionPlan(legs=action_plan.on_enter, underlying=action_plan.setup.underlying)
     legs = tuple(leg for leg in action_plan.on_enter if isinstance(leg, OptionEntryLeg))
     if len(legs) != len(action_plan.on_enter) or any(isinstance(leg, StockEntryLeg) for leg in action_plan.on_enter):
         raise OptionPlanRefused(

@@ -84,6 +84,26 @@ async def commit_deploy_launch(binding: BrokerBotBinding) -> None:
     await clerk.record_deployment_launch(binding)
 
 
+async def register_options_resumed_duty_run(
+    binding: BrokerBotBinding, *, admission_snapshot: ClerkCustodySnapshot, run_owner: RunOwner,
+) -> None:
+    """Restore a stopped Options deployment without resetting its lifetime money."""
+    clerk = _clerk_for_binding(binding)
+    if clerk is None:
+        raise ActiveClerkUnavailableError("The Options bot's Clerk is unavailable.")
+    try:
+        await clerk.resume_options_strategy_run(binding, admission_snapshot=admission_snapshot, run_owner=run_owner)
+    except ClerkAdmissionSnapshotStaleError as exc:
+        raise ClerkAdmissionTokenStaleError(str(exc)) from exc
+
+
+async def commit_options_resume_launch(binding: BrokerBotBinding) -> None:
+    clerk = _clerk_for_binding(binding)
+    if clerk is None:
+        raise ActiveClerkUnavailableError("The Options bot's Clerk is unavailable.")
+    await clerk.record_options_resume_launch(binding)
+
+
 async def commit_stop_before_task_cancel(
     binding: BrokerBotBinding,
     *,

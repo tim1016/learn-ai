@@ -102,6 +102,11 @@ async def execute_bot_run(
     source_bars: SourceBarLedger | None,
 ) -> None:
     """Execute one binding's configured mode behind its terminal stop fence."""
+    if binding.options_bot is not None:
+        from app.options_bots.runtime import run_options_bot
+
+        await run_options_bot(binding, feed, instance_dir=instance_dir, source_bars=source_bars, run_gate=run_gate)
+        return
     run_feed = DecisionFenceFeed(feed, run_gate) if run_gate is not None else feed
     if binding.mode == "trade":
         if source_bars is None:

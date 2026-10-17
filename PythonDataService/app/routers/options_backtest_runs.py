@@ -178,6 +178,14 @@ async def delete_the_run(run_id: RunId) -> Response:
                 "message": f"Run {run_id} is still running. Cancel it first, or wait for it to end.",
             },
         )
+    if outcome is DeleteOutcome.RETAINED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "OPTIONS_BACKTEST_RUN_RETAINED_BY_GOLDEN_SETUP",
+                "message": "This run is retained as evidence for a Golden Options setup and cannot be deleted.",
+            },
+        )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
