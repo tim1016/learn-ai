@@ -12,8 +12,8 @@ import { legsFull } from '../setup-limits';
 /**
  * One row that reads left to right: Buy or Sell, call or put, contracts, expiry,
  * strike, and Add leg. A sold leg needs a bought leg of its kind to cover it, which
- * the server judges and a line under the row says. A leg's contract cannot be edited
- * once it is added, so what is out of range is said here, before the leg exists.
+ * the server judges and a line under the row says. The added card keeps its
+ * contract choices editable; the builder checks the initial choices here.
  */
 @Component({
   selector: 'app-options-backtest-leg-builder-card',

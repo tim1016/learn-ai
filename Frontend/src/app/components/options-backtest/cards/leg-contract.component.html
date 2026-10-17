@@ -1,0 +1,41 @@
+<div class="ticket" [class.ticket--sell]="leg().side === 'sell'">
+  <div class="identity">
+    <div class="identity__contract">
+      <app-asset-identity [symbol]="underlying()" size="sm" [logo]="false" />
+      <select class="right" [formField]="legForm().right" [attr.aria-label]="name() + ' option type'">
+        <option value="call">Call</option><option value="put">Put</option>
+      </select>
+    </div>
+    <button type="button" class="side-flip" [attr.aria-label]="'Flip ' + name() + ' to ' + nextSide()" (click)="flipSide()">
+      <span class="side-flip__rotor" [class.side-flip__rotor--sell]="leg().side === 'sell'" aria-hidden="true">
+        <span class="side-flip__face side-flip__face--buy">Buy <i class="pi pi-sync"></i></span>
+        <span class="side-flip__face side-flip__face--sell">Sell <i class="pi pi-sync"></i></span>
+      </span>
+      <span class="side-flip__hint">Flip to {{ nextSide() }}</span>
+    </button>
+  </div>
+
+  <section class="strike" [attr.aria-label]="name() + ' strike selection'">
+    <div class="strike__heading"><span>Strike selection</span><button type="button" class="reset" [disabled]="steps() === 0" (click)="chooseStrike(0)" [attr.aria-label]="'Reset ' + name() + ' to ATM'">Reset to ATM</button></div>
+    <div class="strike__stepper">
+      <button type="button" [disabled]="!canChoose(stepperOrigin() - 1)" [attr.aria-label]="name() + ' lower strike'" (click)="moveStrike(-1)"><i class="pi pi-minus" aria-hidden="true"></i></button>
+      <strong>{{ strikeLabel() }}</strong>
+      <button type="button" [disabled]="!canChoose(stepperOrigin() + 1)" [attr.aria-label]="name() + ' higher strike'" (click)="moveStrike(1)"><i class="pi pi-plus" aria-hidden="true"></i></button>
+    </div>
+    <div class="strike__ladder" role="group" [attr.aria-label]="name() + ' nearby strikes'">
+      @for (step of nearbyStrikes; track step) {
+        <button type="button" [class.atm]="step === 0" [class.selected]="steps() === step" [disabled]="!canChoose(step)" [attr.aria-pressed]="steps() === step" [attr.aria-label]="name() + (step === 0 ? ' ATM strike' : ' strike offset ' + step)" (click)="chooseStrike(step)">{{ step === 0 ? 'ATM' : step > 0 ? '+' + step : step }}</button>
+      }
+    </div>
+    <div class="strike__axis"><span>Lower strikes</span><span>Higher strikes</span></div>
+    <label class="exact-offset">Exact offset <input type="number" step="1" [value]="stepInput()" [attr.min]="minimumSteps()" [attr.max]="limits()?.max_strike_steps ?? null" [attr.aria-label]="name() + ' strike offset'" (input)="typeStrike($event)" /><span>steps from ATM</span></label>
+  </section>
+
+  <div class="terms">
+    <label>Contracts<input type="number" step="1" [formField]="legForm().contracts" [attr.aria-label]="name() + ' contracts'" /></label>
+    <label class="expiry">Expiry<select [formField]="legForm().expiryKind" [attr.aria-label]="name() + ' expiry'" [title]="expiryHint()">@for (choice of expiries; track choice.value) { <option [value]="choice.value">{{ choice.label }}</option> }</select></label>
+    @if (leg().expiryKind === 'min_days') { <label>Days<input type="number" step="1" [formField]="legForm().expiryDays" [attr.aria-label]="name() + ' minimum expiry days'" /></label> }
+  </div>
+  <p class="note">Each step selects the next listed strike. The price is resolved for each historical session.</p>
+  @if (leg().side === 'sell') { <p class="cover"><i class="pi pi-shield" aria-hidden="true"></i> Needs a bought {{ leg().right }} to cover it. The setup checks quantity and expiry.</p> }
+</div>

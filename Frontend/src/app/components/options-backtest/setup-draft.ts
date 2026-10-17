@@ -24,9 +24,9 @@ const DEFAULT_EXIT_MINUTES_BEFORE_CLOSE = 15;
 const DEFAULT_NO_REENTRY_MINUTES_BEFORE_CLOSE = 60;
 
 /**
- * One leg as the page edits it. The contract (side, right, contracts, expiry,
- * strike) is fixed when the leg is added; the three rules are switched on and
- * off, and a rule that is off keeps its fields but sends nothing.
+ * One leg as the page edits it. Contract choices remain editable on its card;
+ * the stable id keeps its rules attached. A rule that is switched off keeps
+ * its fields but sends nothing.
  */
 export interface LegDraft {
   id: string;

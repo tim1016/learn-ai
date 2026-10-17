@@ -68,6 +68,10 @@ function buildLeg(leg: LegDraft, problems: Map<string, string>): LegRequest | nu
   const value = (text: string, field: 'stopLossValue' | 'momentumValue'): string | null =>
     decimalText(text) ?? note(field, 'Enter a number, such as 25.');
 
+  if (!Number.isSafeInteger(leg.contracts) || leg.contracts < 1) note('contracts', 'Enter a whole number of contracts, 1 or more.');
+  if (leg.expiryKind === 'min_days' && (!Number.isSafeInteger(leg.expiryDays) || leg.expiryDays < 0)) note('expiry', 'Enter a whole number of days, 0 or more.');
+  if (leg.strikeKind === 'atm_offset' && (!Number.isSafeInteger(leg.strikeSteps) || leg.strikeSteps === 0)) note('strike', 'Enter a whole number of strike steps, or reset to ATM.');
+
   const stopLoss = leg.stopLossOn ? value(leg.stopLossValue, 'stopLossValue') : null;
   const momentum = leg.momentumOn ? value(leg.momentumValue, 'momentumValue') : null;
   const reentryCount = leg.reentryOn ? wholeNumber(leg.reentryCount, 0, Number.MAX_SAFE_INTEGER) : null;
