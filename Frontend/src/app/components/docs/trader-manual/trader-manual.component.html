@@ -1,0 +1,44 @@
+@let guide = book();
+<section class="handbook" [class.handbook--broker]="manual() === 'broker'">
+  <div class="toolbar">
+    <span><i class="pi pi-book" aria-hidden="true"></i> Documentation <span class="divider">/</span> Trader manuals</span>
+    <button type="button" [disabled]="!canPrint()" (click)="print()"><i class="pi pi-print" aria-hidden="true"></i> Print / Save PDF</button>
+  </div>
+  <header class="cover">
+    <div class="cover-copy">
+      <h1>{{ guide.title }}</h1>
+      <p class="introduction">{{ guide.introduction }}</p>
+      <div class="cover-actions">
+        <a class="start" [routerLink]="guide.route" [fragment]="guide.chapters[0].id">Start the walkthrough</a>
+        <a class="open-tool" [routerLink]="guide.destination">{{ guide.destinationLabel }} <i class="pi pi-external-link" aria-hidden="true"></i></a>
+      </div>
+    </div>
+    <aside class="practice">
+      <i class="pi pi-compass" aria-hidden="true"></i>
+      <h2>A small first step</h2>
+      <p>{{ guide.practice }}</p>
+      <span>No trading experience needed. New terms are explained as you go.</span>
+    </aside>
+    <ol class="journey" aria-label="Your learning path">
+      @for (stage of guide.stages; track stage.title; let position = $index) {
+        <li><span class="stage-number">{{ position + 1 }}</span><div><strong>{{ stage.title }}</strong><span>{{ stage.description }}</span></div></li>
+      }
+    </ol>
+  </header>
+  <div class="reading-layout">
+    <aside class="chapter-rail" [class.chapter-rail--open]="contentsOpen()">
+      <button class="browse" type="button" (click)="contentsOpen.set(!contentsOpen())" [attr.aria-expanded]="contentsOpen()">{{ contentsOpen() ? 'Close chapter list' : 'Browse chapters' }} <i class="pi pi-list" aria-hidden="true"></i></button>
+      <app-manual-contents [chapters]="guide.chapters" [route]="guide.route" [active]="fragment()" (chapterPicked)="contentsOpen.set(false)" />
+      <a class="companion" [routerLink]="guide.companion"><i class="pi pi-book" aria-hidden="true"></i><span>Read alongside<br /><strong>{{ guide.companionLabel }}</strong></span></a>
+    </aside>
+    <article class="reading" [attr.aria-label]="guide.title">
+      <div class="reading-note"><i class="pi pi-info-circle" aria-hidden="true"></i><p>Read in order for your first visit. Use the chapter finder when you need a particular answer. Print includes the whole manual.</p></div>
+      <app-markdown-viewer [src]="guide.source" [scrollTo]="fragment()" />
+      <footer class="end-note">
+        <strong>Keep learning with the app open.</strong>
+        <p>Return to any chapter as you practice. A useful result is one you can explain.</p>
+        <a [routerLink]="guide.destination">{{ guide.destinationLabel }}</a>
+      </footer>
+    </article>
+  </div>
+</section>

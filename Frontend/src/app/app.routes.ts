@@ -280,6 +280,16 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "docs/options-backtest-manual",
+    loadComponent: () => import("./components/docs/trader-manual/trader-manual.component").then(m => m.TraderManualComponent),
+    data: { manual: 'options', stickyContent: true },
+  },
+  {
+    path: "docs/broker-manual",
+    loadComponent: () => import("./components/docs/trader-manual/trader-manual.component").then(m => m.TraderManualComponent),
+    data: { manual: 'broker', stickyContent: true },
+  },
+  {
     path: "docs/bot-business-manual",
     loadComponent: () =>
       import("./components/docs/bot-manual/bot-manual.component").then(

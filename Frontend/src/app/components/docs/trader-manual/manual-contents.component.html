@@ -1,0 +1,23 @@
+<nav aria-label="Manual chapters">
+  <label for="manual-search">Find a chapter</label>
+  <div class="search">
+    <i class="pi pi-search" aria-hidden="true"></i>
+    <input #search id="manual-search" type="search" placeholder="Try fees, stops or expiry" [value]="query()" (input)="query.set(search.value)" />
+  </div>
+  @for (group of groups(); track group.title) {
+    <section class="chapter-group">
+      <h2>{{ group.title }}</h2>
+      <ol>
+        @for (chapter of group.chapters; track chapter.id) {
+          <li><a [routerLink]="route()" [fragment]="chapter.id" [attr.aria-current]="active() === chapter.id ? 'location' : null" (click)="chapterPicked.emit(chapter.id)">
+            {{ chapter.title }}
+            @if (query().trim()) { <span>{{ chapter.description }}</span> }
+          </a></li>
+        }
+      </ol>
+    </section>
+  } @empty {
+    <p class="empty" role="status">No chapter matches “{{ query() }}”. Try a shorter word, such as fees or expiry.</p>
+  }
+  @if (query()) { <button type="button" (click)="query.set('')">Show all chapters</button> }
+</nav>

@@ -1,4 +1,5 @@
 <app-page-header title="Options Backtest" icon="pi-sliders-h">
+  <a slot="actions" pButton size="small" severity="secondary" [outlined]="true" href="/docs/options-backtest-manual"><i class="pi pi-book" aria-hidden="true"></i><span>Manual</span></a>
   <app-options-backtest-saved-setups-menu
     slot="actions" [setups]="setups()" [status]="libraryStatus()" [error]="libraryProblem()" [selected]="loadedName()"
     [canOpen]="clock() !== null" [message]="deleteProblem()"
