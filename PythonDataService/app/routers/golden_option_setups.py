@@ -19,6 +19,7 @@ from app.schemas.golden_option_setups import (
     ReproveGoldenOptionSetupRequest,
     RevokeGoldenOptionSetupRequest,
 )
+from app.schemas.options_backtest_runs import RUN_ID_MAX
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -46,9 +47,12 @@ _ERRORS = (GoldenSetupError, ProofMismatchError, OSError, asyncpg.PostgresError,
 
 
 @router.get("", response_model=list[GoldenOptionSetupView], responses=_REFUSALS)
-async def list_golden_setups(module: Service, limit: Annotated[int, Query(ge=1, le=1000)] = 200) -> list[GoldenOptionSetupView]:
+async def list_golden_setups(
+    module: Service, limit: Annotated[int, Query(ge=1, le=1000)] = 200,
+    source_run_id: Annotated[int | None, Query(ge=1, le=RUN_ID_MAX)] = None,
+) -> list[GoldenOptionSetupView]:
     try:
-        return await module.list(limit=limit)
+        return await module.list(limit=limit, source_run_id=source_run_id)
     except _ERRORS as exc:
         raise _refusal(exc) from exc
 

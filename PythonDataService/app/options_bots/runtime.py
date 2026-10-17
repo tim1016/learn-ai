@@ -115,8 +115,8 @@ class OptionsBotDuty:
         finally:
             await self.close()
 
-    async def _permission(self, minute: int) -> bool:
-        if self._qualified_minute != minute:
+    async def _permission(self, minute: int, *, fresh: bool = False) -> bool:
+        if fresh or self._qualified_minute != minute:
             self._qualified_minute = minute
             try:
                 qualified = await asyncio.wait_for(self.qualify(self.config.golden_setup_id), timeout=5)
@@ -253,8 +253,13 @@ class OptionsBotDuty:
         market_ready = minute >= self.window.exit_ms or minute == state.last_minute_ms
         if not market_ready and minute != state.last_minute_ms:
             try:
-                await self._market.prepare(minute, contracts=retained, held_contracts=held)
+                candidate_hold = await self._market.prepare(
+                    minute, contracts=retained, held_contracts=held, include_candidates=allowed,
+                )
                 self.journal.note(market_hold=None)
+                if candidate_hold is not None:
+                    self.journal.note(entry_hold_reason=candidate_hold)
+                    allowed = False
                 market_ready = True
             except OptionsMarketUnavailable as exc:
                 self.journal.note(market_hold=str(exc), entry_hold_reason=str(exc))
@@ -326,16 +331,8 @@ class OptionsBotDuty:
                         self.journal.finish(row.decision_id)
                         continue
                     late = now >= decision.decided_at_ms + ENTRY_DECISION_LIFETIME_MS
-                    if not allowed or late:
-                        if not row.dispatched:
-                            self.journal.finish(
-                                row.decision_id,
-                                discarded=True,
-                                explanation="Entry held by qualification, data or its decision deadline.",
-                            )
-                            continue
-                        evidence = None
-                    else:
+                    evidence = None
+                    if allowed and not late:
                         if not self._cover_ready(decision):
                             continue
                         try:
@@ -347,6 +344,16 @@ class OptionsBotDuty:
                         except OptionsMarketUnavailable as exc:
                             self.journal.finish(row.decision_id, discarded=True, explanation=str(exc))
                             continue
+                        allowed = await self._permission(decision.decided_at_ms, fresh=True)
+                    if not allowed or late:
+                        if not row.dispatched:
+                            self.journal.finish(
+                                row.decision_id,
+                                discarded=True,
+                                explanation="Entry held by qualification, data or its decision deadline.",
+                            )
+                            continue
+                        evidence = None
                     if self._run_gate is not None and not self._run_gate.is_set():
                         return
                     self.journal.dispatching(row.decision_id)

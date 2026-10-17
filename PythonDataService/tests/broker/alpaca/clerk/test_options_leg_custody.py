@@ -208,3 +208,34 @@ async def test_eight_leg_portfolio_keeps_each_broker_order_within_its_shape(sess
     for number in range(8):
         assert (await _close(account, "leg_" + str(number), CALL)).state is EffectOperationState.FLAT
     assert account.held() == {}
+
+
+@pytest.mark.parametrize("close,price", [("580", 0.0), ("590.25", 5.25)])
+@pytest.mark.parametrize("closed_leg", [None, "first", "second"])
+async def test_settlement_closes_each_same_contract_attempt(
+    session_clerk: _DryRun, close: str, price: float, closed_leg: str | None,
+) -> None:
+    from app.broker.alpaca.clerk.options_legs import allocation_book
+    from tests.broker.alpaca.clerk.sqlite.test_dry_run_option_expiry import _keeps_spy
+    from tests.broker.alpaca.clerk.sqlite.test_option_close_fences import SATURDAY_NOON, _wait_until
+
+    account = session_clerk
+    await _enter(account, "first", CALL)
+    account.wait(1000)
+    await account.read_account()
+    await _enter(account, "second", CALL)
+    account.wait(1000)
+    if closed_leg is not None:
+        assert (await _close(account, closed_leg, CALL)).state is EffectOperationState.FLAT
+    _keeps_spy(account, close)
+    _wait_until(account, SATURDAY_NOON)
+
+    await account.clerk.reconcile_once()
+
+    assert account.held() == {}
+    for leg_id in ("first", "second"):
+        snapshot = account.clerk.options_leg_snapshot(SID, leg_id, "session-1")
+        assert snapshot.held_quantity == 0
+        expected_price = 2.0 if leg_id == closed_leg else price
+        assert [(fill.quantity, fill.price, fill.side) for fill in snapshot.close_fills] == [(1.0, expected_price, "sell")]
+    assert allocation_book(account.repo, SID, _setup())[0].holdings == ()

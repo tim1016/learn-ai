@@ -26,6 +26,7 @@ const SESSION: OptionsBotSession = {
 };
 
 async function setup(state: OptionsBotSession = SESSION) {
+  const directory = provideFleetDirectory({ observed_at_ms: 1791828000000, clerks: [testLane({ clerk_id: 'clrk_spec', effective_binding_generation: 3, routing_epoch: 4 })] });
   const session = vi.fn().mockResolvedValue(state);
   const resume = vi.fn().mockResolvedValue({ running: true });
   const reviewResume = vi.fn().mockImplementation(async (_target, _sid, budget: DeploymentBudgetInput | null): Promise<DeploymentBudgetPreview> => ({
@@ -36,16 +37,29 @@ async function setup(state: OptionsBotSession = SESSION) {
   const result = await render(OptionsBotSessionComponent, {
     inputs: { target: TARGET, sid: 'spy-options-1', configuration: CONFIGURATION, revision: 1 },
     providers: [
-      provideFleetDirectory({ observed_at_ms: 1791828000000, clerks: [testLane({ clerk_id: 'clrk_spec', effective_binding_generation: 3, routing_epoch: 4 })] }),
+      directory,
       { provide: OptionsBacktestService, useValue: { describe: async () => summaryFor('Tested setup') } },
       { provide: OptionsBotDeployService, useValue: { session, resume, reviewResume } },
     ],
   });
   await screen.findByText('This interrupted bot can resume its retained session.');
-  return { ...result, session, resume, reviewResume };
+  return { ...result, session, resume, reviewResume, directory };
 }
 
 describe('Options session recovery', () => {
+  it('refuses Resume when the lane moves beyond the inherited frozen target', async () => {
+    const { directory, fixture, resume } = await setup();
+    directory.rebind({ observed_at_ms: 1791828000001, clerks: [testLane({ clerk_id: 'clrk_spec', effective_binding_generation: 4, routing_epoch: 5 })] });
+    await directory.useValue.refresh?.();
+    await fixture.whenStable();
+
+    const button = screen.getByRole('button', { name: 'Resume position management' });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(button);
+    expect(resume).not.toHaveBeenCalled();
+    expect(screen.getByText(/lane was rebound while the action was open/)).toBeTruthy();
+  });
+
   it('shows a pending close refusal and clears it when that decision settles', async () => {
     const reason = 'call: The close needs a fresh quote. The same close decision will be retried.';
     const { session, rerender } = await setup({ ...SESSION, pending_decisions: 1, execution_hold_reason: reason });

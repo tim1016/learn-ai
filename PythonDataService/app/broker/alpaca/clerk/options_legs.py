@@ -1,8 +1,8 @@
 """Sealed options-session leg instructions and exact allocation custody.
 
-Formula: an allocation holds its opening executions plus the reducing
-  executions linked to that opening; protection is the canonical cover book.
-Reference: ADR 0076 (execution custody) and ADR 0078 (session leg rules).
+Formula: an allocation holds its opening executions plus linked reductions
+  and settlement quantities attributed to its opening lots.
+Reference: ADR 0076 (execution custody) and ADR 0079 (session leg rules).
 Canonical implementation: this allocation composition; ``options_backtest/cover_book.py``
   owns cover and ``options/requirement.py`` owns collateral.
 Validated against: tests/broker/alpaca/clerk/test_options_leg_custody.py.
@@ -11,7 +11,9 @@ Validated against: tests/broker/alpaca/clerk/test_options_leg_custody.py.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import sqlite3
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import TYPE_CHECKING, Literal
 
@@ -22,6 +24,7 @@ from app.options_backtest.setup import LEG_ID_PATTERN, LegSetup, OptionsBacktest
 from app.schemas.action_plan import CloseLegExit, OptionInstrument, OptionsSessionActionPlan
 
 if TYPE_CHECKING:
+    from app.broker.alpaca.clerk.fills import FillRecord
     from app.broker.alpaca.clerk.sqlite.entry_outcome import EntryStanding
     from app.broker.alpaca.clerk.sqlite.option_decision_fills import OptionDecisionFill
     from app.broker.alpaca.clerk.sqlite.option_entry import OptionEntryFacts
@@ -138,32 +141,67 @@ def attempt_entry(
     return entries[0] if entries else None
 
 
-def allocation_positions(
+def _allocation_records(
     repo: ClerkSqliteRepository, strategy_instance_id: str, entry_order_ref: str,
-) -> dict[str, float]:
-    """Actual fills of one allocation and its linked reductions, without sibling netting."""
+) -> tuple[FillRecord, ...]:
+    """One opening's effective fills, including its exact share of settlement lots."""
     from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
 
     with repo._write_lock:
-        reducing = {
-            row[0] for row in repo._conn.execute(
-                "SELECT reduction.order_ref FROM operation_order_links opening "
-                "JOIN effect_operations effect ON effect.effect_operation_id=opening.effect_operation_id "
-                "JOIN operation_order_links reduction ON reduction.effect_operation_id=effect.effect_operation_id "
-                "WHERE opening.order_ref=? AND opening.role='ENTRY' "
-                "AND effect.kind='EXIT' AND reduction.role='REDUCING'", (entry_order_ref,),
-            )
-        }
-        refs = {entry_order_ref, *reducing}
         records = effective_fill_records(
             repo._conn, account_id=repo.account_id, strategy_instance_ids=(strategy_instance_id,),
         )
-        held: dict[str, Decimal] = {}
-        for fill in records:
-            if fill.order_ref in refs and not fill.credit_withheld:
-                quantity = normalize_money(fill.quantity) * (1 if fill.side.value == "buy" else -1)
-                held[fill.symbol] = held.get(fill.symbol, Decimal(0)) + quantity
-        return {symbol: float(quantity) for symbol, quantity in held.items()}
+        return allocation_records(repo._conn, strategy_instance_id, entry_order_ref, records)
+
+
+def allocation_records(
+    conn: sqlite3.Connection, strategy_instance_id: str, entry_order_ref: str, records: Sequence[FillRecord],
+) -> tuple[FillRecord, ...]:
+    """Slice effective executions on the caller's custody cut by the original opening."""
+    from app.broker.alpaca.clerk.sqlite.option_event_folds import OptionPositionEndedFacts
+
+    reducing = {
+        row[0] for row in conn.execute(
+            "SELECT reduction.order_ref FROM operation_order_links opening "
+            "JOIN effect_operations effect ON effect.effect_operation_id=opening.effect_operation_id "
+            "JOIN operation_order_links reduction ON reduction.effect_operation_id=effect.effect_operation_id "
+            "WHERE opening.order_ref=? AND opening.role='ENTRY' "
+            "AND effect.kind='EXIT' AND reduction.role='REDUCING'", (entry_order_ref,),
+        )
+    }
+    refs = {entry_order_ref, *reducing}
+    settlements: dict[str, int] = {}
+    for row in conn.execute(
+        "SELECT facts_json FROM custody_transitions "
+        "WHERE strategy_instance_id=? AND transition_kind='OPTION_POSITION_ENDED' ORDER BY sequence",
+        (strategy_instance_id,),
+    ):
+        ended = OptionPositionEndedFacts.from_facts_json(row[0])
+        quantity = sum(
+            lot["contracts"] for lot in ended.allocation
+            if lot["owner"] == strategy_instance_id and lot.get("opened_by") == entry_order_ref
+        )
+        if quantity:
+            settlements[ended.option_order_ref] = quantity
+    allocated = []
+    for fill in records:
+        if fill.order_ref in refs:
+            allocated.append(fill)
+        elif fill.order_ref in settlements:
+            allocated.append(replace(fill, quantity=float(settlements[fill.order_ref])))
+    return tuple(allocated)
+
+
+def allocation_positions(
+    repo: ClerkSqliteRepository, strategy_instance_id: str, entry_order_ref: str,
+) -> dict[str, float]:
+    """Actual fills of one allocation, without sibling netting."""
+    held: dict[str, Decimal] = {}
+    for fill in _allocation_records(repo, strategy_instance_id, entry_order_ref):
+        if not fill.credit_withheld:
+            quantity = normalize_money(fill.quantity) * (1 if fill.side.value == "buy" else -1)
+            held[fill.symbol] = held.get(fill.symbol, Decimal(0)) + quantity
+    return {symbol: float(quantity) for symbol, quantity in held.items()}
 
 
 def allocation_book(
@@ -201,7 +239,7 @@ def leg_snapshot(
     repo: ClerkSqliteRepository, strategy_instance_id: str, leg_id: str, attempt_id: str,
 ) -> OptionsLegSnapshot:
     from app.broker.alpaca.clerk.sqlite.entry_outcome import entry_outcome
-    from app.broker.alpaca.clerk.sqlite.option_decision_fills import option_fills_of_decision
+    from app.broker.alpaca.clerk.sqlite.option_decision_fills import OptionDecisionFill
 
     with repo.write_fence():
         found = attempt_entry(repo, strategy_instance_id, leg_id, attempt_id)
@@ -214,23 +252,9 @@ def leg_snapshot(
         assert effect is not None
         command = repo.get_command(effect.command_id)
         assert command is not None
-        opening = option_fills_of_decision(
-            repo, strategy_instance_id=strategy_instance_id, durable_decision_id=command.idempotency_key.split(":", 1)[1],
-            how_simulated={},
-        )
-        close_decisions = repo._conn.execute(
-            "SELECT command.idempotency_key FROM operation_order_links link "
-            "JOIN effect_operations effect ON effect.effect_operation_id=link.effect_operation_id "
-            "JOIN commands command ON command.command_id=effect.command_id "
-            "WHERE link.order_ref=? AND effect.kind='EXIT' ORDER BY effect.created_at_ms", (order_ref,),
-        ).fetchall()
-        closed = tuple(
-            fill for row in close_decisions
-            for fill in option_fills_of_decision(
-                repo, strategy_instance_id=strategy_instance_id,
-                durable_decision_id=row[0].split(":", 1)[1], how_simulated={},
-            )
-        )
+        records = _allocation_records(repo, strategy_instance_id, order_ref)
+        opening = tuple(OptionDecisionFill.from_record(fill) for fill in records if fill.order_ref == order_ref)
+        closed = tuple(OptionDecisionFill.from_record(fill) for fill in records if fill.order_ref != order_ref)
         positions = allocation_positions(repo, strategy_instance_id, order_ref)
         held = positions.get(entry.contract_terms.symbol, 0)
         if not float(held).is_integer():

@@ -27,7 +27,7 @@ export class GoldenSetupApprovalComponent {
   private readonly changed = signal<GoldenOptionSetup | null>(null);
   protected readonly versions = resource({
     params: () => this.runId(),
-    loader: () => this.service.list(),
+    loader: ({ params }) => this.service.list(params),
   });
   protected readonly golden = computed(() => {
     const changed = this.changed();

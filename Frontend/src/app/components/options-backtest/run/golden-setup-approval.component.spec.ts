@@ -27,11 +27,12 @@ describe('Golden setup approval', () => {
   });
 
   it('re-proves a stale version and then records an explicit revocation', async () => {
+    const list = vi.fn().mockImplementation(async (runId?: number) => runId === 7 ? [goldenSetup({ status: 'stale' })] : []);
     const reprove = vi.fn().mockResolvedValue(goldenSetup());
     const revoke = vi.fn().mockResolvedValue(goldenSetup({ status: 'revoked', status_explanation: 'New entries are blocked.' }));
     await render(GoldenSetupApprovalComponent, {
       inputs: { runId: 7 }, providers: [{ provide: GoldenOptionSetupsService, useValue: {
-        list: async () => [goldenSetup({ status: 'stale' })], reprove, revoke,
+        list, reprove, revoke,
       } }],
     });
     fireEvent.click(await screen.findByRole('button', { name: 'Re-prove from retained evidence' }));

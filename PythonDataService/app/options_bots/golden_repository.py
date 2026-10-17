@@ -78,9 +78,13 @@ _EVENT_COLUMNS = """id, qualification_id, kind, rules_digest, proof_json::text A
     reason, actor, created_at_ms, command_id, command_sha256"""
 
 
-async def list_records(conn: asyncpg.Connection, *, limit: int = 200) -> tuple[GoldenRecord, ...]:
+async def list_records(
+    conn: asyncpg.Connection, *, limit: int = 200, source_run_id: int | None = None,
+) -> tuple[GoldenRecord, ...]:
     rows = await conn.fetch(
-        f"SELECT {_COLUMNS} FROM research_golden_option_setups ORDER BY created_at_ms DESC, id DESC LIMIT $1", limit
+        f"SELECT {_COLUMNS} FROM research_golden_option_setups "
+        "WHERE ($2::bigint IS NULL OR source_run_id=$2) ORDER BY created_at_ms DESC, id DESC LIMIT $1",
+        limit, source_run_id,
     )
     return tuple(_record(row) for row in rows)
 
@@ -172,8 +176,8 @@ async def insert_event(conn: asyncpg.Connection, event: GoldenEvent) -> GoldenEv
 
 
 class PostgresGoldenStore:
-    async def list(self, *, limit: int = 200) -> tuple[GoldenRecord, ...]:
-        return await with_connection(list_records, limit=limit)
+    async def list(self, *, limit: int = 200, source_run_id: int | None = None) -> tuple[GoldenRecord, ...]:
+        return await with_connection(list_records, limit=limit, source_run_id=source_run_id)
 
     async def get(self, qualification_id: str) -> GoldenRecord | None:
         return await with_connection(get_record, qualification_id)

@@ -7,6 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.options_backtest.setup import OptionsBacktestSetup
+from app.schemas.options_backtest_runs import RUN_ID_MAX
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 COMMAND_KEY_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$"
@@ -19,7 +20,7 @@ class _Request(BaseModel):
 
 
 class ApproveGoldenOptionSetupRequest(_Request):
-    run_id: int = Field(ge=1, le=2**63 - 1)
+    run_id: int = Field(ge=1, le=RUN_ID_MAX)
     expected_setup_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     note: str = Field(min_length=3, max_length=4000)
 

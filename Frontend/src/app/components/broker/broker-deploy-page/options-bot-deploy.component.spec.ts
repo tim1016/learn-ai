@@ -6,12 +6,12 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { resourceTarget } from '../../../fleet/resource-target';
-import { GoldenOptionSetupsService } from '../../options-backtest/golden-option-setups.service';
+import { GoldenOptionSetupsService, type GoldenOptionSetup } from '../../options-backtest/golden-option-setups.service';
 import { OptionsBacktestService } from '../../options-backtest/options-backtest.service';
 import { goldenSetup } from '../../options-backtest/testing/golden-fixture';
 import { summaryFor } from '../../options-backtest/testing/fixtures';
 import { BrokerV2PanelService, type BudgetDeployReceipt } from '../v2-panel/lib/broker-v2-panel.service';
-import { DEPLOY_VIEW } from './alpaca-deploy-workflow.fixtures';
+import { DEPLOY_VIEW, LIVE_DEPLOY_VIEW } from './alpaca-deploy-workflow.fixtures';
 import { OPTION_CATALOGUE } from './option-structure/option-structure.fixtures';
 import { OptionsBotDeployComponent } from './options-bot-deploy.component';
 import { OptionsBotDeployService, type OptionsDeploymentReview, type OptionsDeployRequest } from './options-bot-deploy.service';
@@ -36,25 +36,29 @@ function reviewed(request: OptionsDeployRequest): OptionsDeploymentReview {
   };
 }
 
-async function setup() {
-  const review = vi.fn().mockImplementation(async (_target, request: OptionsDeployRequest) => reviewed(request));
+async function setup(options: { live?: boolean; selectedId?: string; versions?: GoldenOptionSetup[] } = {}) {
+  const review = vi.fn().mockImplementation(async (_target, request: OptionsDeployRequest) => {
+    const result = reviewed(request);
+    return options.live ? { ...result, budget: { ...result.budget, world: 'real_live', confirmation_text: 'DEPLOY PA9 $10000.00' } } : result;
+  });
   const deploy = vi.fn().mockResolvedValue(RECEIPT);
   const submission = vi.fn().mockResolvedValue(RECEIPT);
+  const get = vi.fn().mockResolvedValue(goldenSetup());
   const result = await render(OptionsBotDeployComponent, {
     inputs: { target: TARGET, accountId: 'PA9', fence: { bindingGeneration: 3, routingEpoch: 4 } },
     providers: [
       provideRouter([]),
-      { provide: ActivatedRoute, useValue: { snapshot: { queryParamMap: convertToParamMap({}) } } },
-      { provide: GoldenOptionSetupsService, useValue: { list: async () => [goldenSetup()] } },
+      { provide: ActivatedRoute, useValue: { snapshot: { queryParamMap: convertToParamMap(options.selectedId ? { options_setup: options.selectedId } : {}) } } },
+      { provide: GoldenOptionSetupsService, useValue: { list: async () => options.versions ?? [goldenSetup()], get } },
       { provide: OptionsBacktestService, useValue: { describe: async () => summaryFor('Tested setup') } },
-      { provide: BrokerV2PanelService, useValue: { getDeployView: async () => DEPLOY_VIEW, getOptionStructures: async () => OPTION_CATALOGUE } },
+      { provide: BrokerV2PanelService, useValue: { getDeployView: async () => options.live ? LIVE_DEPLOY_VIEW : DEPLOY_VIEW, getOptionStructures: async () => OPTION_CATALOGUE } },
       { provide: OptionsBotDeployService, useValue: { review, deploy, submission } },
     ],
   });
   vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
-  await userEvent.selectOptions(await screen.findByLabelText('Approved tested version'), goldenSetup().id);
+  if (!options.selectedId) await userEvent.selectOptions(await screen.findByLabelText('Approved tested version'), goldenSetup().id);
   await waitFor(() => expect((screen.getByLabelText('Dollar budget (USD)') as HTMLInputElement).value).toBe('10000'));
-  return { ...result, review, deploy, submission };
+  return { ...result, review, deploy, submission, get };
 }
 
 async function reviewSetup(): Promise<void> {
@@ -64,6 +68,29 @@ async function reviewSetup(): Promise<void> {
 }
 
 describe('Options deployment', () => {
+  it('loads an older selected approval even when the recent list does not contain it', async () => {
+    const { get } = await setup({ selectedId: goldenSetup().id, versions: [] });
+    await reviewSetup();
+    expect(get).toHaveBeenCalledWith(goldenSetup().id);
+    expect((screen.getByLabelText('Approved tested version') as HTMLSelectElement).value).toBe(goldenSetup().id);
+    expect((screen.getByRole('button', { name: 'Deploy Options bot' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('requires fresh typed Live consent after changed order terms are reviewed', async () => {
+    await setup({ live: true });
+    await userEvent.selectOptions(screen.getByLabelText('Execution mode'), 'live');
+    await reviewSetup();
+    await userEvent.type(screen.getByLabelText('Type DEPLOY PA9 $10000.00 to confirm'), 'DEPLOY PA9 $10000.00');
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Deploy Options bot' }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.input(screen.getByLabelText(/Entry wait/), { target: { value: '25' } });
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Deploy Options bot' })).toBeNull());
+
+    await reviewSetup();
+
+    expect((screen.getByLabelText('Type DEPLOY PA9 $10000.00 to confirm') as HTMLInputElement).value).toBe('');
+    expect((screen.getByRole('button', { name: 'Deploy Options bot' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it('reviews current risk revision and deploys the exact Golden version with the frozen account fence', async () => {
     const { review, deploy } = await setup();
     await reviewSetup();

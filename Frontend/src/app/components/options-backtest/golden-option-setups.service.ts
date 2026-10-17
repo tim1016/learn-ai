@@ -12,8 +12,13 @@ const BASE = '/api/research/golden-option-setups';
 export class GoldenOptionSetupsService {
   private readonly http = inject(HttpClient);
 
-  list(): Promise<GoldenOptionSetup[]> {
-    return firstValueFrom(this.http.get<GoldenOptionSetup[]>(BASE));
+  list(sourceRunId?: number): Promise<GoldenOptionSetup[]> {
+    return firstValueFrom(this.http.get<GoldenOptionSetup[]>(BASE,
+      sourceRunId === undefined ? {} : { params: { source_run_id: sourceRunId } }));
+  }
+
+  get(id: string): Promise<GoldenOptionSetup> {
+    return firstValueFrom(this.http.get<GoldenOptionSetup>(`${BASE}/${encodeURIComponent(id)}`));
   }
 
   approve(runId: number, note: string, idempotencyKey: string): Promise<GoldenOptionSetup> {

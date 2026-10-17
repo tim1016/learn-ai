@@ -40,6 +40,8 @@ async def test_qualification_retains_source_evidence_and_commands_cannot_be_repu
         stored = await repository.insert_record(conn, record)
         retried = await repository.insert_record(conn, replace(record, id="ogs_retry_" + unique))
         assert stored.id == retried.id == record.id
+        assert await repository.list_records(conn, source_run_id=run_id) == (stored,)
+        assert await repository.list_records(conn, source_run_id=0) == ()
         assert await delete_run(conn, run_id, is_live=lambda _job: False) == DeleteOutcome.RETAINED
         assert await conn.fetchval("SELECT count(*) FROM research_options_backtest_run_sessions WHERE run_id=$1", run_id) == len(result.sessions)
         with pytest.raises(CommandConflict):

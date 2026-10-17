@@ -25,6 +25,7 @@ from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_re
 from app.broker.alpaca.clerk.sqlite.enter import enter_command_id
 
 if TYPE_CHECKING:
+    from app.broker.alpaca.clerk.fills import FillRecord
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
     from app.broker.alpaca.clerk.synthesized_orders import SynthesizedOptionFill
 
@@ -50,6 +51,20 @@ class OptionDecisionFill:
     # no simulation answered.
     fill_model: str | None = None
     quote_age_ms: int | None = None
+
+    @classmethod
+    def from_record(
+        cls, record: FillRecord, simulated: SynthesizedOptionFill | None = None,
+    ) -> OptionDecisionFill:
+        if record.multiplier is None:
+            raise ValueError("an option fill requires its contract multiplier")
+        return cls(
+            order_ref=record.order_ref, contract=record.symbol, multiplier=record.multiplier,
+            side=record.side.value, quantity=record.quantity, price=record.fill_price,
+            filled_at_ms=record.filled_at_ms,
+            fill_model=None if simulated is None or simulated.fill_model is None else simulated.fill_model.value,
+            quote_age_ms=None if simulated is None else simulated.quote_age_ms,
+        )
 
 
 def option_fills_of_decision(
@@ -85,20 +100,7 @@ def option_fills_of_decision(
     for record in records:
         if record.order_ref not in own or record.multiplier is None:
             continue
-        simulated = how_simulated.get(record.order_ref)
-        fills.append(
-            OptionDecisionFill(
-                order_ref=record.order_ref,
-                contract=record.symbol,
-                multiplier=record.multiplier,
-                side=record.side.value,
-                quantity=record.quantity,
-                price=record.fill_price,
-                filled_at_ms=record.filled_at_ms,
-                fill_model=None if simulated is None or simulated.fill_model is None else simulated.fill_model.value,
-                quote_age_ms=None if simulated is None else simulated.quote_age_ms,
-            )
-        )
+        fills.append(OptionDecisionFill.from_record(record, how_simulated.get(record.order_ref)))
     return tuple(fills)
 
 

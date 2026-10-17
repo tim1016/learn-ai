@@ -228,7 +228,9 @@ class IbkrOptionsSessionMarket:
         *,
         contracts: Sequence[OptionContract] = (),
         held_contracts: Sequence[OptionContract] = (),
-    ) -> None:
+        include_candidates: bool = True,
+    ) -> str | None:
+        """Publish required contract bars; an optional candidate failure holds entries only."""
         if at_ms % MS_PER_MINUTE or not self.session_open_ms < at_ms <= self.session_close_ms or at_ms > self._clock():
             raise ValueError("prepare needs a completed minute of this calendar session")
         self.client.require_connected()
@@ -252,13 +254,13 @@ class IbkrOptionsSessionMarket:
                     leg.leg_id: pick_contract(leg, listing=listing, trading_date=day, underlying_price=underlying)
                     for leg in self.setup.legs
                 }
-                if underlying is not None
+                if underlying is not None and include_candidates
                 else {}
             )
             wanted = {
                 contract.occ_symbol: contract
                 for contract in (
-                    *contracts,
+                    *(contracts if include_candidates else ()),
                     *held_contracts,
                     *(pick.contract for pick in picks.values() if isinstance(pick, Picked)),
                 )
@@ -271,22 +273,33 @@ class IbkrOptionsSessionMarket:
                 if contract.occ_symbol not in self._listed:
                     raise OptionsMarketUnavailable(f"IBKR no longer lists selected contract {contract.occ_symbol}")
             self._ask_for_quotes(tuple(wanted.values()), held_contracts)
+            required = {contract.occ_symbol for contract in (held_contracts or contracts)}
             tasks = [asyncio.create_task(self._read(self._listed[symbol].ibkr_contract, at_ms)) for symbol in wanted]
             try:
-                values = await asyncio.gather(*tasks)
+                values = await asyncio.gather(*tasks, return_exceptions=True)
             except (Exception, asyncio.CancelledError):
                 for task in tasks:
                     task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
                 raise
+            bars: dict[str, MinuteBar | None] = {}
+            candidate_hold = None
+            for symbol, value in zip(wanted, values, strict=True):
+                if isinstance(value, BaseException):
+                    if not isinstance(value, Exception) or symbol in required or not held_contracts:
+                        raise value
+                    candidate_hold = f"New entries are held because candidate {symbol}'s trade minute is unavailable: {value}"
+                else:
+                    bars[symbol] = value
             if generation != (self.client.connection_generation, self.client.data_loss_epoch):
                 raise OptionsMarketUnavailable("IBKR reconnected while this decision minute was being read")
             self._at_ms, self._underlying, self._picks, self._bars = (
                 at_ms,
                 underlying,
                 picks,
-                dict(zip(wanted, values, strict=True)),
+                bars,
             )
+            return candidate_hold
         except OptionsMarketUnavailable:
             raise
         except Exception as exc:

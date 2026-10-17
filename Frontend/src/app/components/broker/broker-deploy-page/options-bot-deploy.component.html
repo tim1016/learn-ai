@@ -10,13 +10,13 @@
         <label for="options-golden-setup">Approved tested version</label>
         <select id="options-golden-setup" [formField]="ticket.goldenId">
           <option value="">Choose a golden setup</option>
-          @if (versions.hasValue()) {
-            @for (version of versions.value(); track version.id) {
+          @if (versionChoices().length) {
+            @for (version of versionChoices(); track version.id) {
               <option [value]="version.id" [disabled]="version.status !== 'ready'">{{ version.name }} · run {{ version.source_run_id }} · {{ version.status }}</option>
             }
           }
         </select>
-        @if (versions.hasValue() && versions.value().length === 0) { <p>Approve a completed run in Options Backtest to create a golden setup.</p> }
+        @if (versions.hasValue() && versionChoices().length === 0) { <p>Approve a completed run in Options Backtest to create a golden setup.</p> }
         @if (golden(); as version) {
           <app-asset-identity [symbol]="version.underlying" size="sm" />
           <p>{{ version.status_explanation }}</p>

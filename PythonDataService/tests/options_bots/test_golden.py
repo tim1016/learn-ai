@@ -29,8 +29,9 @@ class MemoryGoldenStore:
         self.records: dict[str, GoldenRecord] = {}
         self.history: list[GoldenEvent] = []
 
-    async def list(self, *, limit: int = 200) -> tuple[GoldenRecord, ...]:
-        return tuple(self.records.values())[:limit]
+    async def list(self, *, limit: int = 200, source_run_id: int | None = None) -> tuple[GoldenRecord, ...]:
+        records = (record for record in self.records.values() if source_run_id is None or record.source_run_id == source_run_id)
+        return tuple(sorted(records, key=lambda record: (record.created_at_ms, record.id), reverse=True))[:limit]
 
     async def get(self, qualification_id: str) -> GoldenRecord | None:
         return self.records.get(qualification_id)
@@ -169,3 +170,22 @@ async def test_http_approval_and_unknown_version_have_typed_contracts(source: So
         missing = await client.get("/api/research/golden-option-setups/ogs_" + "0" * 32)
         assert missing.status_code == 404
         assert missing.json()["detail"]["code"] == "GOLDEN_SETUP_NOT_FOUND"
+
+
+async def test_run_filter_finds_approval_beyond_the_recent_list(source: SourceRun) -> None:
+    module = _module(source)
+    approved = await module.approve(_approve())
+    record = module.store.records[approved.id]
+    for number in range(201):
+        newer = replace(record, id=f"ogs_{number:032x}", source_run_id=1000 + number, created_at_ms=record.created_at_ms + number + 1)
+        module.store.records[newer.id] = newer
+    app = FastAPI()
+    app.include_router(golden_option_setups.router, prefix="/api/research/golden-option-setups")
+    app.dependency_overrides[golden_option_setups.service] = lambda: module
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        recent = await client.get("/api/research/golden-option-setups")
+        assert approved.id not in {item["id"] for item in recent.json()}
+        filtered = await client.get("/api/research/golden-option-setups", params={"source_run_id": 123})
+
+        assert filtered.status_code == 200
+        assert [item["id"] for item in filtered.json()] == [approved.id]

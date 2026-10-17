@@ -60,7 +60,7 @@ class GoldenSetupError(ValueError):
 
 
 class GoldenStore(Protocol):
-    async def list(self, *, limit: int = 200) -> tuple[GoldenRecord, ...]: ...
+    async def list(self, *, limit: int = 200, source_run_id: int | None = None) -> tuple[GoldenRecord, ...]: ...
     async def get(self, qualification_id: str) -> GoldenRecord | None: ...
     async def by_command(self, command_id: str) -> GoldenRecord | None: ...
     async def events(self, qualification_id: str) -> tuple[GoldenEvent, ...]: ...
@@ -155,8 +155,8 @@ class GoldenOptionsSetups:
             ],
         )
 
-    async def list(self, *, limit: int = 200) -> list[GoldenOptionSetupView]:
-        return [await self._view(record) for record in await self.store.list(limit=limit)]
+    async def list(self, *, limit: int = 200, source_run_id: int | None = None) -> list[GoldenOptionSetupView]:
+        return [await self._view(record) for record in await self.store.list(limit=limit, source_run_id=source_run_id)]
 
     async def _get(self, qualification_id: str) -> GoldenRecord:
         record = await self.store.get(qualification_id)

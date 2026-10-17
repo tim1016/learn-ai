@@ -2213,7 +2213,7 @@
             "type": "string"
           },
           "run_id": {
-            "maximum": 9.223372036854776e+18,
+            "maximum": 9007199254740991.0,
             "minimum": 1.0,
             "title": "Run Id",
             "type": "integer"
@@ -80132,6 +80132,24 @@
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source_run_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 9007199254740991,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source Run Id"
             }
           },
           {

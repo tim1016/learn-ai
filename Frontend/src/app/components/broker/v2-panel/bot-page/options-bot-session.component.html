@@ -1,7 +1,6 @@
 <section class="options-session">
   <h3>Options bot session</h3>
-  @if (session.hasValue()) {
-    @let state = session.value();
+  @if (session.hasValue()) { @let state = session.value();
     <p>{{ state.entries_enabled ? 'Entries enabled' : 'New entries and re-entries held' }}</p>
     @if (state.entry_hold_reason; as why) { <p class="problem">{{ why }}</p> }
     @if (state.execution_hold_reason; as why) { <p class="problem">{{ why }}</p> }

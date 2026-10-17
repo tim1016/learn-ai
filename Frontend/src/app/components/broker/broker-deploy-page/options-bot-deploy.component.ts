@@ -81,14 +81,25 @@ export class OptionsBotDeployComponent {
     loader: ({ params }) => this.panels.getOptionStructures(params),
   });
   protected readonly versions = resource({ loader: () => this.goldenService.list() });
-  protected readonly golden = computed(() => this.versions.hasValue()
-    ? this.versions.value().find((item) => item.id === this.fields().goldenId) ?? null : null);
+  private readonly selectedVersion = resource({
+    params: () => {
+      const id = this.fields().goldenId;
+      return id && (!this.versions.hasValue() || !this.versions.value().some((item) => item.id === id)) ? id : undefined;
+    },
+    loader: ({ params }) => this.goldenService.get(params),
+  });
+  protected readonly versionChoices = computed(() => {
+    const recent = this.versions.hasValue() ? this.versions.value() : [];
+    const selected = this.selectedVersion.hasValue() ? this.selectedVersion.value() : null;
+    return selected !== null && !recent.some((item) => item.id === selected.id) ? [selected, ...recent] : recent;
+  });
+  protected readonly golden = computed(() => this.versionChoices().find((item) => item.id === this.fields().goldenId) ?? null);
   protected readonly setupWords = resource({
     params: () => this.golden()?.setup,
     loader: ({ params }) => this.backtests.describe(params),
   });
   protected readonly loadProblem = computed(() => {
-    const error = this.versions.error() ?? this.context.error() ?? this.catalogue.error();
+    const error = this.selectedVersion.error() ?? this.versions.error() ?? this.context.error() ?? this.catalogue.error();
     return error === undefined ? null : extractServerMessage(error, 'The setup or account deployment settings could not be read.');
   });
   protected readonly modes = computed(() => this.context.hasValue() ? this.context.value().execution_modes : []);
@@ -133,7 +144,11 @@ export class OptionsBotDeployComponent {
     });
     effect(() => {
       const golden = this.golden();
-      if (golden !== null) untracked(() => this.fields.update((fields) => ({ ...fields, amount: golden.evidence.starting_cash_usd, confirmation: '' })));
+      if (golden !== null) untracked(() => this.fields.update((fields) => ({ ...fields, amount: golden.evidence.starting_cash_usd })));
+    });
+    effect(() => {
+      this.currentReview();
+      untracked(() => this.fields.update((fields) => ({ ...fields, confirmation: '' })));
     });
     effect(() => {
       if (!this.context.hasValue()) return;
@@ -149,7 +164,7 @@ export class OptionsBotDeployComponent {
     }
   }
 
-  protected reload(): void { this.versions.reload(); this.context.reload(); this.catalogue.reload(); }
+  protected reload(): void { this.versions.reload(); this.selectedVersion.reload(); this.context.reload(); this.catalogue.reload(); }
 
   protected async review(): Promise<void> {
     const request = this.request();

@@ -397,6 +397,88 @@ async def test_revoked_approval_and_manage_only_clerk_keep_exit_management(tmp_p
     journal.close()
 
 
+async def test_revocation_blocks_unsent_covered_entry_in_the_same_minute(tmp_path: Path) -> None:
+    binding = _binding(setup(leg("cover"), leg("call", side="sell")))
+    clock = Clock(at(5) + MINUTE_GRACE_MS)
+    clerk = Clerk(clock)
+    duty, journal, qualified = _duty(tmp_path, binding, clock, clerk)
+    try:
+        await duty.tick()
+        assert [call["leg_id"] for call in clerk.calls] == ["cover"]
+        [pending] = journal.decisions(pending_only=True)
+        assert pending.decision.leg_id == "call" and not pending.dispatched
+        qualified.revoked = True
+        clock.now += 1_000
+
+        await duty.tick()
+
+        assert [call["leg_id"] for call in clerk.calls] == ["cover"]
+        assert journal.status()["entry_hold_reason"]
+        assert journal.decisions(pending_only=True) == ()
+    finally:
+        await duty.close()
+        journal.close()
+
+
+@pytest.mark.parametrize("entries_enabled", [False, True])
+@pytest.mark.parametrize("waiting", [False, True])
+async def test_unused_candidate_history_cannot_block_held_stop(tmp_path: Path, entries_enabled: bool, waiting: bool) -> None:
+    from app.broker.ibkr.options_session_market import IbkrOptionsSessionMarket
+    from app.options.resolver import Chain, FeedState, WatchedContract
+    from app.services.option_watch import OptionWatchList
+    from tests.broker.ibkr.test_options_session_market import _Client, _listed
+
+    held, unused = CALL, contract("call", "505")
+    clock = Clock(at(5) + MINUTE_GRACE_MS)
+    written = setup(leg(stop=("percent", "25")))
+    if waiting:
+        data = setup(leg(stop=("percent", "25")), leg("waiting", momentum=("percent_up", "25"))).model_dump(mode="json")
+        data["legs"][1]["strike"] = {"kind": "atm_offset", "steps": 1}
+        written = type(written).model_validate(data)
+    binding = _binding(written)
+    clerk, qualified = Clerk(clock), Qualifier(binding)
+
+    def market_factory(window: Any) -> IbkrOptionsSessionMarket:
+        quote = HeldQuote(QuoteSide(D("1.99"), clock()), QuoteSide(D(2), clock()), QuoteDataType.LIVE, 1)
+        source = SimpleNamespace(
+            option_feed=lambda: FeedState(1, None),
+            option_chain=lambda _symbol: Chain((), {c.occ_symbol: WatchedContract(quote, None) for c in (held, unused)}),
+        )
+        market = IbkrOptionsSessionMarket(
+            binding.options_bot.setup, session_open_ms=window.open_ms, session_close_ms=window.close_ms,
+            client=_Client(), watch=OptionWatchList(clock=clock), quotes=lambda: source, clock=clock,
+        )
+        market._stock, market._listing_loaded = SimpleNamespace(conId=1), True
+        market._listed = {held.occ_symbol: _listed(held, 2), unused.occ_symbol: _listed(unused, 3)}
+
+        async def read(ib_contract: Any, minute: int) -> MinuteBar:
+            if ib_contract.conId == 3 and minute >= at(7):
+                raise OptionsMarketUnavailable("Unused candidate history is unavailable")
+            price = D(505 if minute >= at(7) else 500) if ib_contract.conId == 1 else D(1 if minute >= at(7) else 2)
+            return MinuteBar(minute, price, price, price, price)
+
+        market._read = read
+        return market
+
+    journal = OptionsBotJournal(tmp_path, strategy_instance_id=binding.strategy_instance_id, setup_sha256=binding.options_bot.setup_sha256)
+    duty = OptionsBotDuty(binding, clerk, journal, market_factory=market_factory, qualify=qualified, clock=clock)
+    try:
+        await duty.tick()
+        clock.minute(6)
+        await duty.tick()
+        qualified.revoked, clerk.enabled = not entries_enabled, entries_enabled
+        clock.minute(7)
+
+        await duty.tick()
+
+        assert [call["purpose"] for call in clerk.calls] == [EffectPurpose.ENTER, EffectPurpose.EXIT]
+        assert journal.state.last_minute_ms == at(7)
+        assert journal.state.legs[0].position.close.reason == "stop"
+    finally:
+        await duty.close()
+        journal.close()
+
+
 async def test_clock_close_survives_missing_trade_observations(tmp_path: Path) -> None:
     binding, clock = _binding(setup(leg())), Clock(at(5) + MINUTE_GRACE_MS)
     clerk = Clerk(clock)

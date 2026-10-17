@@ -111,6 +111,8 @@ describe('the lane fence is frozen, never read at command time', () => {
 const INPUT_ALLOWED = new Set<string>([
   // Workflow passes deployTarget(), stamped with the desk's frozen fence.
   join('components', 'broker', 'broker-deploy-page', 'deploy-paper-access.component.ts'),
+  // BotPanelShell passes optionsTarget(), stamped with its frozen openFence.
+  join('components', 'broker', 'v2-panel', 'bot-page', 'options-bot-session.component.ts'),
 ]);
 
 describe('an input()-derived command target is fenced before it is minted', () => {
