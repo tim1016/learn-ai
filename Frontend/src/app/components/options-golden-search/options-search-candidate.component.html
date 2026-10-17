@@ -1,0 +1,51 @@
+<article class="card candidate">
+  <header><h3>{{ candidate().label }} @if (candidate().is_original) { <span class="tag">Original</span> }</h3><strong [class.problem]="candidate().verdict === 'could_not_evaluate'">{{ candidate().verdict | receiptLabel }}</strong></header>
+  <code>{{ candidate().candidate_hash }}</code>
+  <dl class="metrics">
+    <div><dt>Net profit after costs</dt><dd>{{ candidate().net_profit_usd ?? 'Unavailable' }} USD</dd></div>
+    <div><dt>Maximum minute-close drawdown (% of starting capital)</dt><dd>{{ candidate().drawdown_percent ?? 'Unavailable' }}% · {{ candidate().drawdown_usd ?? 'Unavailable' }} USD</dd></div>
+    <div><dt>Annualized daily Sharpe</dt><dd>{{ candidate().sharpe ?? 'Unavailable' }}</dd></div>
+    <div><dt>Completed traded setup sessions</dt><dd>{{ candidate().completed_sessions ?? 'Unavailable' }}</dd></div>
+    <div><dt>Recovery</dt><dd>{{ candidate().recovery }}</dd></div>
+  </dl>
+  <details><summary>Show me why</summary>
+    @for (gate of candidate().gate_outcomes; track gate.gate_id) {
+      <p><strong>{{ gate.gate_id | receiptLabel }} · {{ gate.status | receiptLabel }}</strong><br />Actual {{ gate.actual ?? 'Unavailable' }} · Required {{ gate.required ?? 'Unavailable' }}<br />{{ gate.reason }}</p>
+    }
+    @for (item of candidate().evidence; track item.label) { <p><strong>{{ item.label }}</strong>: {{ item.value }}</p> }
+  </details>
+  <details (toggle)="toggleChart($event)"><summary>Equity and drawdown charts</summary>
+    @if (chartOpen()) {
+    @if (candidate().equity.length === 0) { <p>No verified risk path was recorded.</p> } @else {
+      @for (line of lines(); track line.title) {
+        <h4>{{ line.title }}</h4><svg class="curve" viewBox="0 0 1000 160" preserveAspectRatio="none"><polyline [attr.points]="line.line" />
+          @for (point of line.points; track point.at) { <circle [attr.cx]="point.x" [attr.cy]="point.y" r="2"><title>{{ point.title }}</title></circle> }
+        </svg>
+      }
+      <p>Minute closes cannot establish tick-level worst loss.</p>
+    }
+    }
+  </details>
+  <details><summary>Monthly results</summary>
+    <table><thead><tr><th>Month</th><th>Net profit (USD)</th><th>Completed sessions</th></tr></thead><tbody>
+      @for (month of candidate().monthly; track month.month_ms) { <tr><td><app-timestamp-display [value]="month.month_ms" mode="date-et" /></td><td>{{ month.net_profit_usd }}</td><td>{{ month.completed_sessions }}</td></tr> }
+    </tbody></table>
+  </details>
+  <details [open]="sessionsOpen()" (toggle)="toggleSessions($event)"><summary>Session, leg and attempt evidence</summary>
+    @if (sessionsOpen()) {
+    @for (session of candidate().sessions; track session.session_open_ms) {
+      <details [open]="openSessions().has(session.session_open_ms)" (toggle)="toggleSession(session, $event)"><summary><app-timestamp-display [value]="session.session_open_ms" mode="date-et" /> · {{ session.status | receiptLabel }} · {{ session.net_profit_usd }} USD</summary><p>{{ session.detail }}</p>
+        @if (openSessions().has(session.session_open_ms)) {
+          @let read = sessionReads().get(session.session_open_ms);
+          @if (read?.kind === 'loading') { <p>Loading exact leg attempts…</p> }
+          @if (read?.kind === 'error') { <p class="problem">{{ read?.kind === 'error' ? read.message : '' }}</p><button type="button" (click)="loadSession(session)">Retry leg attempts</button> }
+          @if (read?.kind !== 'loading' && read?.kind !== 'error') { <div class="table-scroll"><table><thead><tr><th>Leg</th><th>Attempt</th><th>Contract</th><th>Side</th><th>Quantity</th><th>Entry</th><th>Exit</th><th>Entry price (USD)</th><th>Exit price (USD)</th><th>Entry fee (USD)</th><th>Exit fee (USD)</th><th>Net profit (USD)</th><th>Exit reason</th></tr></thead><tbody>
+          @for (attempt of sessionDetail(session).attempts; track attempt.leg_id + ':' + attempt.attempt) {
+            <tr><td>{{ attempt.leg_id }}</td><td>{{ attempt.attempt }}</td><td><code>{{ attempt.contract }}</code></td><td>{{ attempt.side | receiptLabel }}</td><td>{{ attempt.contracts }}</td><td><app-timestamp-display [value]="attempt.entry_ms" mode="et" /></td><td><app-timestamp-display [value]="attempt.exit_ms" mode="et" /></td><td>{{ attempt.entry_price_usd }}</td><td>{{ attempt.exit_price_usd }}</td><td>{{ attempt.entry_fee_usd }}</td><td>{{ attempt.exit_fee_usd }}</td><td>{{ attempt.net_profit_usd }}</td><td>{{ attempt.exit_reason | receiptLabel }}</td></tr>
+          } @empty { <tr><td colspan="13">No completed leg attempts were recorded for this session.</td></tr> }
+        </tbody></table></div> } }
+      </details>
+    } @empty { <p>No session detail is available.</p> }
+    }
+  </details>
+</article>

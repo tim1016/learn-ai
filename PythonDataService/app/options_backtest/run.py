@@ -41,13 +41,14 @@ from datetime import date
 from decimal import Decimal, localcontext
 from itertools import pairwise
 
-from app.lean_sidecar.trading_calendar import SessionWindow, expected_sessions, session_window_for_date
+from app.lean_sidecar.trading_calendar import expected_sessions, session_window_for_date
 from app.options.contract import OptionContract
 from app.options_backtest import fills
 from app.options_backtest.capital_evidence import CapitalSession, capital_evidence
 from app.options_backtest.cash_ladder import DEFAULT_CASH_LADDER, CashLevel, ladder_levels
 from app.options_backtest.data import RunData
 from app.options_backtest.fees import FeeRateNotPublished, fee_for_policy, unpublished_fee_types
+from app.options_backtest.market import SessionMarket
 from app.options_backtest.needs import session_needs
 from app.options_backtest.replay import replay_session
 from app.options_backtest.results import SessionOutcome, SessionStatus
@@ -206,7 +207,8 @@ class _CashLevel:
         )
 
 
-def _check_the_run_can_start(setup: OptionsBacktestSetup, sessions: Sequence[date]) -> None:
+def validate_run_sessions(setup: OptionsBacktestSetup, sessions: Sequence[date]) -> None:
+    """Validate ordered calendar sessions and fee availability before any replay reads data."""
     if not sessions:
         raise ValueError("a run needs at least one session")
     if any(later <= earlier for earlier, later in pairwise(sessions)):
@@ -263,7 +265,7 @@ class _Run:
         """
         window = session_window_for_date(day)
         if self.setup.window_fits(session_open_ms=window.open_ms_utc, session_close_ms=window.close_ms_utc):
-            outcomes, at_cash, pins = self._replay_with_data(day, window)
+            outcomes, at_cash, pins = self._replay_with_data(day)
         else:
             # Nothing is read for a session the window rule skips, so that a data check that needs nothing there agrees.
             skipped = replay_session(self.setup, window_only_market(day), cash_usd=self.own.cash, fee_for=self.fee_for)
@@ -288,39 +290,9 @@ class _Run:
         return tuple(level.result() for level in self.cash_levels.values())
 
     def _replay_with_data(
-        self, day: date, window: SessionWindow
+        self, day: date
     ) -> tuple[dict[Decimal, SessionOutcome], dict[Decimal, SessionOutcome], SessionPins]:
-        underlying, listing = self.data.underlying_day(day), self.data.listing(day)
-        if underlying is None or listing is None:
-            raise SessionDataMissing(day, underlying=underlying is None, listing=listing is None, contracts=())
-        # A one-shot iterable would be read once and then look empty, so what is handed in is held before it is used.
-        bars = tuple(underlying.value)
-        listed = replace(listing.value, contracts=tuple(listing.value.contracts))
-        if listed.underlying != self.setup.underlying:
-            raise ValueError(
-                f"the listing for {day} is of {listed.underlying}, and the setup trades {self.setup.underlying}"
-            )
-        bars_by_close(bars, trading_date=day, what="the underlying")  # refuse a malformed day before using it
-        needs = session_needs(
-            self.setup,
-            trading_date=day,
-            session_open_ms=window.open_ms_utc,
-            session_close_ms=window.close_ms_utc,
-            underlying=bars,
-            listing=listed,
-        )
-        needed = sorted(needs.contracts, key=lambda contract: contract.occ_symbol)
-        captured = {contract: self.data.option_day(contract, day) for contract in needed}
-        absent = tuple(contract for contract in needed if captured[contract] is None)
-        if absent:
-            raise SessionDataMissing(day, underlying=False, listing=False, contracts=absent)
-        days = {contract: found for contract, found in captured.items() if found is not None}
-        market = DayMarket(
-            day,
-            underlying=bars,
-            listing=listed,
-            option_days={contract: found.value for contract, found in days.items()},
-        )
+        market, pins = load_session_market(self.setup, day, self.data)
         replayed = replay_session(self.setup, market, cash_usd=self.own.cash, fee_for=self.fee_for)
         # A skipped session is skipped at every slippage: the window and the underlying do not depend on it.
         outcomes = {
@@ -336,12 +308,57 @@ class _Run:
             else replay_session(self.setup, market, cash_usd=level.carried.cash, fee_for=self.fee_for)
             for cash, level in self.cash_levels.items()
         }
-        pins = SessionPins(
-            underlying.sha256,
-            listing.sha256,
-            tuple(PinnedDay(contract, found.sha256) for contract, found in days.items()),
-        )
         return outcomes, at_cash, pins
+
+
+def load_session_market(
+    setup: OptionsBacktestSetup, day: date, data: RunData,
+) -> tuple[SessionMarket, SessionPins]:
+    """Load the canonical replay's admitted session data without executing any ladder.
+
+    Both ordinary runs and research use this exact discovery and validation boundary.
+    Window-ineligible sessions read no data and retain empty pins.
+    """
+    window = session_window_for_date(day)
+    if not setup.window_fits(session_open_ms=window.open_ms_utc, session_close_ms=window.close_ms_utc):
+        return window_only_market(day), SessionPins(None, None, ())
+    underlying, listing = data.underlying_day(day), data.listing(day)
+    if underlying is None or listing is None:
+        raise SessionDataMissing(day, underlying=underlying is None, listing=listing is None, contracts=())
+    # A one-shot iterable would be read once and then look empty, so what is handed in is held before it is used.
+    bars = tuple(underlying.value)
+    listed = replace(listing.value, contracts=tuple(listing.value.contracts))
+    if listed.underlying != setup.underlying:
+        raise ValueError(
+            f"the listing for {day} is of {listed.underlying}, and the setup trades {setup.underlying}"
+        )
+    bars_by_close(bars, trading_date=day, what="the underlying")  # refuse a malformed day before using it
+    needs = session_needs(
+        setup,
+        trading_date=day,
+        session_open_ms=window.open_ms_utc,
+        session_close_ms=window.close_ms_utc,
+        underlying=bars,
+        listing=listed,
+    )
+    needed = sorted(needs.contracts, key=lambda contract: contract.occ_symbol)
+    captured = {contract: data.option_day(contract, day) for contract in needed}
+    absent = tuple(contract for contract in needed if captured[contract] is None)
+    if absent:
+        raise SessionDataMissing(day, underlying=False, listing=False, contracts=absent)
+    days = {contract: found for contract, found in captured.items() if found is not None}
+    market = DayMarket(
+        day,
+        underlying=bars,
+        listing=listed,
+        option_days={contract: found.value for contract, found in days.items()},
+    )
+    pins = SessionPins(
+        underlying.sha256,
+        listing.sha256,
+        tuple(PinnedDay(contract, found.sha256) for contract, found in days.items()),
+    )
+    return market, pins
 
 
 def run_sessions(
@@ -364,7 +381,7 @@ def run_sessions(
     session whose data is not captured and ``FeeRateNotPublished`` before anything is read when the setup's fees are
     estimated and some session is on a date the fee model has no rate for.
     """
-    _check_the_run_can_start(setup, sessions)
+    validate_run_sessions(setup, sessions)
     run = _Run(setup, data, slippage_ladder, cash_ladder)
     kept: list[SessionResult] = []
     for done, day in enumerate(sessions):

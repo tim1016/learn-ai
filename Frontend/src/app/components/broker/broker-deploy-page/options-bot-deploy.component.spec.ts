@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { resourceTarget } from '../../../fleet/resource-target';
 import { GoldenOptionSetupsService, type GoldenOptionSetup } from '../../options-backtest/golden-option-setups.service';
 import { OptionsBacktestService } from '../../options-backtest/options-backtest.service';
-import { goldenSetup } from '../../options-backtest/testing/golden-fixture';
+import { exceptionGoldenSetup, goldenSetup } from '../../options-backtest/testing/golden-fixture';
 import { summaryFor } from '../../options-backtest/testing/fixtures';
 import { BrokerV2PanelService, type BudgetDeployReceipt } from '../v2-panel/lib/broker-v2-panel.service';
 import { DEPLOY_VIEW, LIVE_DEPLOY_VIEW } from './alpaca-deploy-workflow.fixtures';
@@ -68,6 +68,15 @@ async function reviewSetup(): Promise<void> {
 }
 
 describe('Options deployment', () => {
+  it('keeps the permanent owner exception visible in the chooser and deployment review', async () => {
+    await setup({ versions: [exceptionGoldenSetup()] });
+    expect(screen.getByRole('option', { name: /Owner exception/ })).toBeTruthy();
+    expect(screen.getByText('Owner exception', { exact: true })).toBeTruthy();
+    expect(screen.getByText(/The final Sharpe hurdle was not met/)).toBeTruthy();
+    expect(screen.getByText(/The final interval was used in recorded research/)).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Review source Options study' })).toBeTruthy();
+  });
+
   it('loads an older selected approval even when the recent list does not contain it', async () => {
     const { get } = await setup({ selectedId: goldenSetup().id, versions: [] });
     await reviewSetup();

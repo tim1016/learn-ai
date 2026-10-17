@@ -1,4 +1,5 @@
 <app-page-header title="Golden Search" icon="pi-search-plus">
+  <a slot="actions" routerLink="/options-golden-search">Options Golden Search</a>
   <a slot="actions" routerLink="/docs/golden-search-manual" [queryParams]="{ study: studyId() }">Operating manual</a>
   @if (studyId(); as id) { <a slot="actions" [routerLink]="['/golden-search', id]" [queryParams]="{ view: 'report' }">Presentation report</a> }
 </app-page-header>

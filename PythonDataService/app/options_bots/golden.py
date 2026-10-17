@@ -109,6 +109,15 @@ def qualification_status(
             proved_digest = event.rules_digest or ""
     if running_digest is None or proved_digest != running_digest:
         return "stale", "The Options rules changed or cannot be identified. Re-prove this version before new entries."
+    if record.evidence.get("options_search_study_id"):
+        from app.research.options_golden_search.identity import execution_identity
+
+        try:
+            identity = execution_identity()
+        except (ValueError, GoldenProofError):
+            identity = None
+        if identity is None or record.evidence.get("execution_identity") != identity:
+            return "stale", "The search qualification identity changed. Its historical verdict is retained; a new study approval is required."
     return "ready", "This exact tested setup is owner-approved and its repeatability proof matches the running rules."
 
 

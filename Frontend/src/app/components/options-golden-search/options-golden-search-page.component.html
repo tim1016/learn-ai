@@ -1,0 +1,36 @@
+<app-page-header title="Options Golden Search" icon="pi-search-plus"><a slot="actions" routerLink="/golden-search">Signal Golden Search</a><a slot="actions" routerLink="/options-backtest">Options setups</a></app-page-header>
+<main class="workbench">
+  <nav class="steps">@for (label of steps; track label; let i = $index) { <button type="button" [class.active]="step() === i" [disabled]="study() === null && i > 2" (click)="chooseStep(i)">{{ i + 1 }}. {{ label }}</button> }</nav>
+  @if (error(); as message) { <p class="notice problem">{{ message }}</p> }
+  @if (loading()) { <p>Loading the exact saved evidence…</p> }
+  @if (study(); as value) {
+    <div class="actions"><button type="button" [disabled]="busy()" (click)="refresh()">Refresh study</button><a class="action-link" routerLink="/options-golden-search">New study and history</a></div>
+    <app-options-search-study [study]="value" [step]="step()" [busy]="busy()" [sessionLoader]="sessionLoader" (action)="command($event)" />
+  } @else {
+    @if (step() === 0) {
+      <section class="card"><h2>Improve a saved Options setup</h2>@if (parent_study_id(); as parent) { <p>This new plan forks study <a [routerLink]="['/options-golden-search', parent]">{{ parent }}</a>.</p> }<p>We judge all these legs together. Structure, quantities, starting capital and contract-selection rules stay fixed for this study.</p>
+        @if (libraryError(); as message) { <p class="problem">{{ message }}</p><button type="button" (click)="library.reload()">Retry saved setups</button> }
+        <div class="controls"><label>Saved setup<select [formField]="fields.name"><option value="">Choose saved setup</option>@for (item of savedSetups(); track item.name) { <option [value]="item.name" [disabled]="item.setup === null || item.setup === undefined">{{ item.name }}{{ item.cannot_open_reason ? ' · ' + item.cannot_open_reason : '' }}</option> }</select></label><button type="button" [disabled]="selection().name === '' || loading()" (click)="chooseSetup()">Use saved setup</button></div>
+      </section>
+      @if (declarations(); as declaration) {
+        <section class="card"><h3>{{ declaration.setup_name }}</h3><app-asset-identity [symbol]="declaration.setup.underlying" size="xs" /><p>Starting capital: {{ declaration.setup.starting_cash_usd }} USD · Saved version {{ declaration.setup.version ?? 1 }}</p>
+          <p>Original identity <code>{{ declaration.setup_hash }}</code></p><p>Saved slippage: {{ declaration.setup.slippage_percent ?? '0.3' }}% · Fees: {{ declaration.setup.fees.kind | receiptLabel }} {{ declaration.setup.fees.per_contract_usd ?? '' }}</p>
+          <div class="leg-cards">@for (leg of declaration.setup.legs; track leg.leg_id) { <article class="card"><h4>Leg {{ leg.leg_id }}</h4><p>{{ leg.side ?? 'buy' | receiptLabel }} {{ leg.contracts }} {{ leg.right | receiptLabel }} contracts</p><p>Expiry rule: {{ leg.expiry.kind | receiptLabel }} · Strike rule: {{ leg.strike.kind | receiptLabel }}</p></article> }</div>
+          <a routerLink="/options-backtest">Edit structure in the setup editor</a><p>Selecting one leg from a multi-leg setup requires saving a separate setup.</p><button type="button" class="primary" (click)="chooseStep(1)">Choose search settings</button>
+        </section>
+      }
+      <section class="card"><h3>Saved studies</h3>
+        @if (historyError(); as message) { <p class="problem">{{ message }}</p><button type="button" (click)="history.reload()">Retry study history</button> }
+        <div class="history-list">@for (item of studies(); track item.id) { <a [routerLink]="['/options-golden-search', item.id]">{{ item.setup_name }} · {{ item.status | receiptLabel }}</a> } @empty { @if (!history.isLoading() && historyError() === null) { <p>No Options studies are recorded.</p> } }</div>
+      </section>
+    }
+    @if (declarations(); as declaration) {
+      <div [hidden]="step() !== 1"><app-options-search-knobs [knobs]="declaration.knobs" (changed)="knobs.set($event)" /><button type="button" (click)="chooseStep(2)">Rules and history</button></div>
+      <div [hidden]="step() !== 2"><app-options-search-rules [declarations]="declaration" [preflight]="preflight()" [range]="range()" (rangeChanged)="range.set($event)" (changed)="rules.set($event)" />
+        <div class="actions"><button type="button" [disabled]="request() === null || busy()" (click)="checkPlan()">Check plan</button><button type="button" class="primary" [disabled]="!canLock()" (click)="lock()">Lock plan</button></div>
+        @if (request() === null) { <p>Vary at least one setting and choose both history dates before checking the plan.</p> }
+        @if (preflight(); as checkedPlan) { <p>Lock freezes setup, values, search order, rules, calendar windows, cost scenarios, snapshot and budgets. Receipt <code>{{ checkedPlan.preflight_hash }}</code>. Changes require a separate linked study.</p> }
+      </div>
+    } @else if (step() !== 0 && !loading()) { <p>Choose and load a saved setup first.</p><button type="button" (click)="chooseStep(0)">Choose setup</button> }
+  }
+</main>

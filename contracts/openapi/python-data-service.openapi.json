@@ -2186,6 +2186,35 @@
         "title": "ApplyRequest",
         "type": "object"
       },
+      "ApprovalReview": {
+        "additionalProperties": false,
+        "properties": {
+          "blocked_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked Reason"
+          },
+          "failures": {
+            "items": {
+              "$ref": "#/components/schemas/GateOutcome"
+            },
+            "title": "Failures",
+            "type": "array"
+          }
+        },
+        "required": [
+          "failures",
+          "blocked_reason"
+        ],
+        "title": "ApprovalReview",
+        "type": "object"
+      },
       "ApproveGoldenOptionSetupRequest": {
         "additionalProperties": false,
         "properties": {
@@ -7395,6 +7424,158 @@
         "title": "CanaryRollbackDecision",
         "type": "object"
       },
+      "Candidate": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_hash": {
+            "title": "Candidate Hash",
+            "type": "string"
+          },
+          "completed_sessions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed Sessions"
+          },
+          "drawdown_fraction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Drawdown Fraction"
+          },
+          "drawdown_percent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Drawdown Percent"
+          },
+          "drawdown_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Drawdown Usd"
+          },
+          "equity": {
+            "items": {
+              "$ref": "#/components/schemas/EquityPoint"
+            },
+            "title": "Equity",
+            "type": "array"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceItem"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "gate_outcomes": {
+            "items": {
+              "$ref": "#/components/schemas/GateOutcome"
+            },
+            "title": "Gate Outcomes",
+            "type": "array"
+          },
+          "is_original": {
+            "title": "Is Original",
+            "type": "boolean"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "monthly": {
+            "items": {
+              "$ref": "#/components/schemas/MonthResult"
+            },
+            "title": "Monthly",
+            "type": "array"
+          },
+          "net_profit_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net Profit Usd"
+          },
+          "recovery": {
+            "title": "Recovery",
+            "type": "string"
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/SessionResult"
+            },
+            "title": "Sessions",
+            "type": "array"
+          },
+          "sharpe": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sharpe"
+          },
+          "verdict": {
+            "enum": [
+              "meets_rules",
+              "does_not_meet_rules",
+              "not_enough_evidence",
+              "could_not_evaluate"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "candidate_hash",
+          "label",
+          "is_original",
+          "verdict",
+          "net_profit_usd",
+          "drawdown_usd",
+          "drawdown_fraction",
+          "drawdown_percent",
+          "sharpe",
+          "completed_sessions",
+          "recovery",
+          "gate_outcomes",
+          "evidence",
+          "monthly",
+          "equity",
+          "sessions"
+        ],
+        "title": "Candidate",
+        "type": "object"
+      },
       "CaptureReceiptModel": {
         "description": "What the on-demand lake capture did for this request.\n\n``status`` is the closed contract of\n``app.services.return_distribution_service.CaptureStatus``; clients\nmust render every state (the generated union type enforces it).",
         "properties": {
@@ -10556,6 +10737,86 @@
         "title": "CollateralGroupView",
         "type": "object"
       },
+      "Command": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_hash": {
+            "anyOf": [
+              {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Hash"
+          },
+          "candidate_hashes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxLength": 11,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Hashes"
+          },
+          "command": {
+            "enum": [
+              "run_research",
+              "cancel",
+              "resume",
+              "open_final",
+              "approve",
+              "approve_exception",
+              "keep_original"
+            ],
+            "title": "Command",
+            "type": "string"
+          },
+          "comment": {
+            "default": "",
+            "maxLength": 10000,
+            "title": "Comment",
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 0.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "idempotency_key": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "waived_gate_ids": {
+            "default": [],
+            "items": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxLength": 10000,
+            "title": "Waived Gate Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "command",
+          "expected_revision",
+          "idempotency_key"
+        ],
+        "title": "Command",
+        "type": "object"
+      },
       "CommandResponse": {
         "description": "The durable command resource (R2). Mirrors ``CommandResource`` 1:1,\nplus a backend-authored ``disabled_tooltip`` for a non-terminal command\nso a future UI slice needs no extra round trip to render \"already\nrequested\".",
         "properties": {
@@ -10844,6 +11105,85 @@
           "value"
         ],
         "title": "ConstOperand",
+        "type": "object"
+      },
+      "CostScenario": {
+        "additionalProperties": false,
+        "properties": {
+          "fee_multiplier": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "default": "1",
+            "title": "Fee Multiplier"
+          },
+          "fee_per_contract_usd": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "gt": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fee Per Contract Usd"
+          },
+          "key": {
+            "pattern": "^[a-z][a-z0-9_]{0,31}$",
+            "title": "Key",
+            "type": "string"
+          },
+          "slippage_multiplier": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "default": "1",
+            "title": "Slippage Multiplier"
+          },
+          "slippage_percent": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "gt": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slippage Percent"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "title": "CostScenario",
         "type": "object"
       },
       "CoverageDay": {
@@ -12686,6 +13026,45 @@
         "title": "DecisionExplanationView",
         "type": "object"
       },
+      "Declarations": {
+        "additionalProperties": false,
+        "properties": {
+          "defaults": {
+            "$ref": "#/components/schemas/PlanDefaults"
+          },
+          "history_bounds": {
+            "$ref": "#/components/schemas/HistoryBounds"
+          },
+          "knobs": {
+            "items": {
+              "$ref": "#/components/schemas/KnobDeclaration"
+            },
+            "title": "Knobs",
+            "type": "array"
+          },
+          "setup": {
+            "$ref": "#/components/schemas/OptionsBacktestSetup-Output"
+          },
+          "setup_hash": {
+            "title": "Setup Hash",
+            "type": "string"
+          },
+          "setup_name": {
+            "title": "Setup Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "setup_name",
+          "setup",
+          "setup_hash",
+          "knobs",
+          "history_bounds",
+          "defaults"
+        ],
+        "title": "Declarations",
+        "type": "object"
+      },
       "DeltaStrike": {
         "additionalProperties": false,
         "description": "The strike whose delta is nearest a target.\n\n``target`` is the size of the delta, a positive number below one. The\nleg's call or put gives it its sign: 0.30 on a put means a delta of -0.30.",
@@ -13714,6 +14093,25 @@
           "right"
         ],
         "title": "DifferenceBps",
+        "type": "object"
+      },
+      "Dispatch": {
+        "additionalProperties": false,
+        "properties": {
+          "stage_token": {
+            "title": "Stage Token",
+            "type": "string"
+          },
+          "study_id": {
+            "title": "Study Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "study_id",
+          "stage_token"
+        ],
+        "title": "Dispatch",
         "type": "object"
       },
       "DistributionStatsModel": {
@@ -15094,6 +15492,30 @@
         "title": "EquityLongPosition",
         "type": "object"
       },
+      "EquityPoint": {
+        "additionalProperties": false,
+        "properties": {
+          "drawdown_usd": {
+            "title": "Drawdown Usd",
+            "type": "string"
+          },
+          "equity_usd": {
+            "title": "Equity Usd",
+            "type": "string"
+          },
+          "timestamp_ms": {
+            "title": "Timestamp Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "timestamp_ms",
+          "equity_usd",
+          "drawdown_usd"
+        ],
+        "title": "EquityPoint",
+        "type": "object"
+      },
       "ErrorDetailResponse": {
         "properties": {
           "detail": {
@@ -15283,6 +15705,25 @@
           "has_more_detail"
         ],
         "title": "EvidenceEntry",
+        "type": "object"
+      },
+      "EvidenceItem": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "value"
+        ],
+        "title": "EvidenceItem",
         "type": "object"
       },
       "EvidencePage": {
@@ -15846,6 +16287,25 @@
           "text"
         ],
         "title": "ExplainedValueView",
+        "type": "object"
+      },
+      "Exposure": {
+        "additionalProperties": false,
+        "properties": {
+          "classification": {
+            "title": "Classification",
+            "type": "string"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "classification",
+          "explanation"
+        ],
+        "title": "Exposure",
         "type": "object"
       },
       "ExposureNoticeView": {
@@ -18140,6 +18600,59 @@
         "title": "GateEvaluationResponse",
         "type": "object"
       },
+      "GateOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "actual": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual"
+          },
+          "gate_id": {
+            "title": "Gate Id",
+            "type": "string"
+          },
+          "overridable": {
+            "default": true,
+            "title": "Overridable",
+            "type": "boolean"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "required": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "gate_id",
+          "status",
+          "actual",
+          "required",
+          "reason"
+        ],
+        "title": "GateOutcome",
+        "type": "object"
+      },
       "GateRefusal": {
         "description": "Why a gate was not saved or judged, in the owner's words.",
         "properties": {
@@ -18396,6 +18909,44 @@
       },
       "GoldenOptionSetupEvidence": {
         "properties": {
+          "execution_identity": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Identity"
+          },
+          "exposure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Exposure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "failed_rules": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/GateOutcome"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed Rules"
+          },
           "first_session_open_ms": {
             "maximum": 253402300799999.0,
             "minimum": 0.0,
@@ -18415,9 +18966,43 @@
             "title": "Limitations",
             "type": "array"
           },
+          "metric_identity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metric Identity"
+          },
           "net_profit_usd": {
             "title": "Net Profit Usd",
             "type": "string"
+          },
+          "options_search_study_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Options Search Study Id"
+          },
+          "selection_count": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selection Count"
           },
           "sessions_tested": {
             "title": "Sessions Tested",
@@ -18431,9 +19016,42 @@
             "title": "Starting Cash Usd",
             "type": "string"
           },
+          "study_manifest_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Study Manifest Sha256"
+          },
           "trades": {
             "title": "Trades",
             "type": "integer"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "enum": [
+                  "meets_rules",
+                  "owner_exception"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdict"
+          },
+          "waived_gate_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Waived Gate Ids",
+            "type": "array"
           }
         },
         "required": [
@@ -30115,6 +30733,83 @@
         "title": "HistoricalExecutionRecoveryReceiptResponse",
         "type": "object"
       },
+      "History": {
+        "additionalProperties": false,
+        "properties": {
+          "end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "final_months": {
+            "default": 6,
+            "maximum": 60.0,
+            "minimum": 1.0,
+            "title": "Final Months",
+            "type": "integer"
+          },
+          "start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Start Ms",
+            "type": "integer"
+          },
+          "test_months": {
+            "default": 2,
+            "maximum": 60.0,
+            "minimum": 1.0,
+            "title": "Test Months",
+            "type": "integer"
+          },
+          "train_months": {
+            "default": 6,
+            "maximum": 120.0,
+            "minimum": 1.0,
+            "title": "Train Months",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start_ms",
+          "end_ms"
+        ],
+        "title": "History",
+        "type": "object"
+      },
+      "HistoryBounds": {
+        "additionalProperties": false,
+        "properties": {
+          "end_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Ms"
+          },
+          "start_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Ms"
+          }
+        },
+        "required": [
+          "start_ms",
+          "end_ms"
+        ],
+        "title": "HistoryBounds",
+        "type": "object"
+      },
       "HoldState": {
         "additionalProperties": false,
         "description": "The account-level exposure-hold state, journal-derived (S6).\n\nA hold is active when a ``HOLD_SET`` or ``UNEXPLAINED_ORDER`` line has no\nlater ``HOLD_CLEARED``. The latter keeps a crash between the observation and\nits companion HOLD_SET receipt fail-closed. ``reason_code`` is code-like\n(rendered through ``receiptLabel`` on the UI); ``reason`` is backend-authored\nwhat/why prose (rendered unpiped). When not held, every field but ``active``\nis ``None``.",
@@ -31659,6 +32354,61 @@
         "title": "IvProvenancePayload",
         "type": "object"
       },
+      "JobAccepted": {
+        "additionalProperties": false,
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "queued",
+            "default": "queued",
+            "title": "Status"
+          },
+          "study_id": {
+            "title": "Study Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "study_id"
+        ],
+        "title": "JobAccepted",
+        "type": "object"
+      },
+      "JobRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "job_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Job Id",
+            "type": "string"
+          },
+          "stage_token": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Stage Token",
+            "type": "string"
+          },
+          "study_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Study Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "study_id",
+          "stage_token",
+          "job_id"
+        ],
+        "title": "JobRequest",
+        "type": "object"
+      },
       "JsonValue": {},
       "KindDistributionModel": {
         "properties": {
@@ -31696,6 +32446,136 @@
           "stats"
         ],
         "title": "KindDistributionModel",
+        "type": "object"
+      },
+      "Knob": {
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "default": "search",
+            "enum": [
+              "search",
+              "fixed"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "priority": {
+            "default": 5,
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Priority",
+            "type": "integer"
+          },
+          "values": {
+            "items": {},
+            "maxLength": 5000,
+            "minLength": 1,
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "path",
+          "values"
+        ],
+        "title": "Knob",
+        "type": "object"
+      },
+      "KnobDeclaration": {
+        "additionalProperties": false,
+        "properties": {
+          "current_value": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "help": {
+            "title": "Help",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "leg_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leg Id"
+          },
+          "legal_values": {
+            "items": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Legal Values",
+            "type": "array"
+          },
+          "max": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max"
+          },
+          "min": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          },
+          "value_type": {
+            "enum": [
+              "integer",
+              "decimal",
+              "boolean",
+              "category"
+            ],
+            "title": "Value Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "label",
+          "leg_id",
+          "current_value",
+          "value_type",
+          "legal_values",
+          "help"
+        ],
+        "title": "KnobDeclaration",
         "type": "object"
       },
       "LaneAccountQuietRead": {
@@ -32965,6 +33845,80 @@
         "title": "LeanTradeStatsResponse",
         "type": "object"
       },
+      "LegAttempt": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "contract": {
+            "title": "Contract",
+            "type": "string"
+          },
+          "contracts": {
+            "title": "Contracts",
+            "type": "integer"
+          },
+          "entry_fee_usd": {
+            "title": "Entry Fee Usd",
+            "type": "string"
+          },
+          "entry_ms": {
+            "title": "Entry Ms",
+            "type": "integer"
+          },
+          "entry_price_usd": {
+            "title": "Entry Price Usd",
+            "type": "string"
+          },
+          "exit_fee_usd": {
+            "title": "Exit Fee Usd",
+            "type": "string"
+          },
+          "exit_ms": {
+            "title": "Exit Ms",
+            "type": "integer"
+          },
+          "exit_price_usd": {
+            "title": "Exit Price Usd",
+            "type": "string"
+          },
+          "exit_reason": {
+            "title": "Exit Reason",
+            "type": "string"
+          },
+          "leg_id": {
+            "title": "Leg Id",
+            "type": "string"
+          },
+          "net_profit_usd": {
+            "title": "Net Profit Usd",
+            "type": "string"
+          },
+          "side": {
+            "title": "Side",
+            "type": "string"
+          }
+        },
+        "required": [
+          "leg_id",
+          "attempt",
+          "contract",
+          "side",
+          "contracts",
+          "entry_ms",
+          "exit_ms",
+          "entry_price_usd",
+          "exit_price_usd",
+          "entry_fee_usd",
+          "exit_fee_usd",
+          "net_profit_usd",
+          "exit_reason"
+        ],
+        "title": "LegAttempt",
+        "type": "object"
+      },
       "LegDescriptionResponse": {
         "properties": {
           "leg_id": {
@@ -33324,6 +34278,50 @@
         "title": "LegSetup",
         "type": "object"
       },
+      "Limits": {
+        "additionalProperties": false,
+        "properties": {
+          "evaluation_cap": {
+            "default": 5000,
+            "maximum": 5000.0,
+            "minimum": 1.0,
+            "title": "Evaluation Cap",
+            "type": "integer"
+          },
+          "max_artifact_bytes": {
+            "default": 1073741824,
+            "minimum": 1.0,
+            "title": "Max Artifact Bytes",
+            "type": "integer"
+          },
+          "max_elapsed_ms": {
+            "default": 86400000,
+            "minimum": 1.0,
+            "title": "Max Elapsed Ms",
+            "type": "integer"
+          },
+          "max_execution_attempts": {
+            "default": 10000,
+            "minimum": 1.0,
+            "title": "Max Execution Attempts",
+            "type": "integer"
+          },
+          "max_snapshot_bytes": {
+            "default": 10737418240,
+            "minimum": 1.0,
+            "title": "Max Snapshot Bytes",
+            "type": "integer"
+          },
+          "max_snapshot_files": {
+            "default": 100000,
+            "minimum": 1.0,
+            "title": "Max Snapshot Files",
+            "type": "integer"
+          }
+        },
+        "title": "Limits",
+        "type": "object"
+      },
       "LiveEnvelopePayload": {
         "additionalProperties": false,
         "description": "The four current account bounds; retired session counts are rejected.\n\nHistorical revisions retain their full hash-bearing representation in storage.\nThe configuration API projects only the fields a trader can currently edit.",
@@ -33673,6 +34671,32 @@
           "detail"
         ],
         "title": "LiveSnapshotUnavailableResponse",
+        "type": "object"
+      },
+      "LockRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "preflight_hash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Preflight Hash",
+            "type": "string"
+          },
+          "request": {
+            "$ref": "#/components/schemas/PlanRequest"
+          }
+        },
+        "required": [
+          "request",
+          "preflight_hash",
+          "idempotency_key"
+        ],
+        "title": "LockRequest",
         "type": "object"
       },
       "LogicNode-Input": {
@@ -35407,6 +36431,30 @@
           "created_at_ms"
         ],
         "title": "MonteCarloResult",
+        "type": "object"
+      },
+      "MonthResult": {
+        "additionalProperties": false,
+        "properties": {
+          "completed_sessions": {
+            "title": "Completed Sessions",
+            "type": "integer"
+          },
+          "month_ms": {
+            "title": "Month Ms",
+            "type": "integer"
+          },
+          "net_profit_usd": {
+            "title": "Net Profit Usd",
+            "type": "string"
+          }
+        },
+        "required": [
+          "month_ms",
+          "net_profit_usd",
+          "completed_sessions"
+        ],
+        "title": "MonthResult",
         "type": "object"
       },
       "NamedStructure": {
@@ -45421,6 +46469,151 @@
         "title": "PerformanceHorizonResponse",
         "type": "object"
       },
+      "PlanDefaults": {
+        "additionalProperties": false,
+        "properties": {
+          "evaluation_cap": {
+            "default": 5000,
+            "title": "Evaluation Cap",
+            "type": "integer"
+          },
+          "final_months": {
+            "default": 6,
+            "title": "Final Months",
+            "type": "integer"
+          },
+          "finalist_count": {
+            "default": 3,
+            "title": "Finalist Count",
+            "type": "integer"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/SearchPolicyRequest-Output"
+          },
+          "rationale": {
+            "title": "Rationale",
+            "type": "string"
+          },
+          "test_months": {
+            "default": 2,
+            "title": "Test Months",
+            "type": "integer"
+          },
+          "train_months": {
+            "default": 6,
+            "title": "Train Months",
+            "type": "integer"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "rationale",
+          "policy"
+        ],
+        "title": "PlanDefaults",
+        "type": "object"
+      },
+      "PlanRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "budget": {
+            "$ref": "#/components/schemas/Limits"
+          },
+          "expected_setup_hash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Expected Setup Hash",
+            "type": "string"
+          },
+          "finalist_count": {
+            "default": 3,
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Finalist Count",
+            "type": "integer"
+          },
+          "history": {
+            "$ref": "#/components/schemas/History"
+          },
+          "knobs": {
+            "items": {
+              "$ref": "#/components/schemas/Knob"
+            },
+            "title": "Knobs",
+            "type": "array"
+          },
+          "method": {
+            "default": "zoom",
+            "enum": [
+              "zoom",
+              "grid"
+            ],
+            "title": "Method",
+            "type": "string"
+          },
+          "pair_audits": {
+            "default": [],
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            },
+            "title": "Pair Audits",
+            "type": "array"
+          },
+          "parent_study_id": {
+            "anyOf": [
+              {
+                "pattern": "^os_[a-f0-9]{40}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Study Id"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/SearchPolicyRequest-Input"
+          },
+          "setup_name": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Setup Name",
+            "type": "string"
+          },
+          "stress": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CostScenario"
+            },
+            "title": "Stress",
+            "type": "array"
+          },
+          "zoom": {
+            "$ref": "#/components/schemas/ZoomSettings"
+          }
+        },
+        "required": [
+          "setup_name",
+          "expected_setup_hash",
+          "knobs",
+          "history"
+        ],
+        "title": "PlanRequest",
+        "type": "object"
+      },
       "PnLPercent": {
         "additionalProperties": false,
         "description": "Compares the open trade's unrealized PnL (as fraction of entry price)\nagainst a threshold. Read as ``(current_close - entry_price) / entry_price``.\nValues are unitless fractions, *not* percent \u2014 use ``-0.01`` for \"-1%\".\n\nReturns False when no position is open. Survival rules using this\nprimitive are the standard form of stop-loss / profit-target in the\nspec layer.",
@@ -45613,6 +46806,120 @@
           "prediction_set_id"
         ],
         "title": "PredictionRef",
+        "type": "object"
+      },
+      "Preflight": {
+        "additionalProperties": false,
+        "properties": {
+          "blockers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Blockers",
+            "type": "array"
+          },
+          "can_lock": {
+            "title": "Can Lock",
+            "type": "boolean"
+          },
+          "combination_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Combination Count"
+          },
+          "drawdown_limit_usd": {
+            "title": "Drawdown Limit Usd",
+            "type": "string"
+          },
+          "estimated_setup_sessions": {
+            "title": "Estimated Setup Sessions",
+            "type": "integer"
+          },
+          "exposure": {
+            "title": "Exposure",
+            "type": "string"
+          },
+          "identity": {
+            "title": "Identity",
+            "type": "string"
+          },
+          "invalid_combination_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invalid Combination Count"
+          },
+          "legal_combination_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Legal Combination Count"
+          },
+          "mark_coverage": {
+            "title": "Mark Coverage",
+            "type": "string"
+          },
+          "preflight_hash": {
+            "title": "Preflight Hash",
+            "type": "string"
+          },
+          "required_evaluations": {
+            "title": "Required Evaluations",
+            "type": "integer"
+          },
+          "reserved_evaluations": {
+            "title": "Reserved Evaluations",
+            "type": "integer"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          },
+          "windows": {
+            "items": {
+              "$ref": "#/components/schemas/WindowReview"
+            },
+            "title": "Windows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "preflight_hash",
+          "can_lock",
+          "blockers",
+          "warnings",
+          "drawdown_limit_usd",
+          "combination_count",
+          "legal_combination_count",
+          "invalid_combination_count",
+          "required_evaluations",
+          "reserved_evaluations",
+          "estimated_setup_sessions",
+          "mark_coverage",
+          "exposure",
+          "identity",
+          "windows"
+        ],
+        "title": "Preflight",
         "type": "object"
       },
       "PriceRangeView": {
@@ -46270,6 +47577,60 @@
           "dirty"
         ],
         "title": "ProgramBuildGitProvenance",
+        "type": "object"
+      },
+      "Progress": {
+        "additionalProperties": false,
+        "properties": {
+          "cache_hits": {
+            "default": 0,
+            "title": "Cache Hits",
+            "type": "integer"
+          },
+          "capacity_message": {
+            "default": "Width one; broader capacity requires qualification.",
+            "title": "Capacity Message",
+            "type": "string"
+          },
+          "completed": {
+            "default": 0,
+            "title": "Completed",
+            "type": "integer"
+          },
+          "execution_attempts": {
+            "default": 0,
+            "title": "Execution Attempts",
+            "type": "integer"
+          },
+          "queued": {
+            "default": 0,
+            "title": "Queued",
+            "type": "integer"
+          },
+          "reserved": {
+            "default": 0,
+            "title": "Reserved",
+            "type": "integer"
+          },
+          "running": {
+            "default": 0,
+            "title": "Running",
+            "type": "integer"
+          },
+          "spent": {
+            "default": 0,
+            "title": "Spent",
+            "type": "integer"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage"
+        ],
+        "title": "Progress",
         "type": "object"
       },
       "ProjectedCommandResponse": {
@@ -51619,6 +52980,141 @@
         "title": "SearchOwnerResponse",
         "type": "object"
       },
+      "SearchPolicyRequest-Input": {
+        "additionalProperties": false,
+        "properties": {
+          "max_drawdown_percent": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "default": "20",
+            "title": "Max Drawdown Percent"
+          },
+          "max_recovery_sessions": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Recovery Sessions"
+          },
+          "min_activity_per_year": {
+            "default": 50,
+            "minimum": 1.0,
+            "title": "Min Activity Per Year",
+            "type": "integer"
+          },
+          "min_daily_observations": {
+            "default": 30,
+            "minimum": 2.0,
+            "title": "Min Daily Observations",
+            "type": "integer"
+          },
+          "min_final_sessions": {
+            "default": 30,
+            "minimum": 1.0,
+            "title": "Min Final Sessions",
+            "type": "integer"
+          },
+          "min_forward_sessions": {
+            "default": 30,
+            "minimum": 1.0,
+            "title": "Min Forward Sessions",
+            "type": "integer"
+          },
+          "min_sharpe": {
+            "default": 1,
+            "title": "Min Sharpe",
+            "type": "number"
+          },
+          "risk_free_daily_return": {
+            "default": 0,
+            "title": "Risk Free Daily Return",
+            "type": "number"
+          },
+          "stress_gate": {
+            "default": false,
+            "title": "Stress Gate",
+            "type": "boolean"
+          }
+        },
+        "title": "SearchPolicyRequest",
+        "type": "object"
+      },
+      "SearchPolicyRequest-Output": {
+        "additionalProperties": false,
+        "properties": {
+          "max_drawdown_percent": {
+            "default": "20",
+            "title": "Max Drawdown Percent",
+            "type": "string"
+          },
+          "max_recovery_sessions": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Recovery Sessions"
+          },
+          "min_activity_per_year": {
+            "default": 50,
+            "minimum": 1.0,
+            "title": "Min Activity Per Year",
+            "type": "integer"
+          },
+          "min_daily_observations": {
+            "default": 30,
+            "minimum": 2.0,
+            "title": "Min Daily Observations",
+            "type": "integer"
+          },
+          "min_final_sessions": {
+            "default": 30,
+            "minimum": 1.0,
+            "title": "Min Final Sessions",
+            "type": "integer"
+          },
+          "min_forward_sessions": {
+            "default": 30,
+            "minimum": 1.0,
+            "title": "Min Forward Sessions",
+            "type": "integer"
+          },
+          "min_sharpe": {
+            "default": 1,
+            "title": "Min Sharpe",
+            "type": "number"
+          },
+          "risk_free_daily_return": {
+            "default": 0,
+            "title": "Risk Free Daily Return",
+            "type": "number"
+          },
+          "stress_gate": {
+            "default": false,
+            "title": "Stress Gate",
+            "type": "boolean"
+          }
+        },
+        "title": "SearchPolicyRequest",
+        "type": "object"
+      },
       "SeasonalityMonthResponse": {
         "properties": {
           "median_compounded_return": {
@@ -51899,6 +53395,42 @@
           "close_minute_et"
         ],
         "title": "SessionClockResponse",
+        "type": "object"
+      },
+      "SessionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/LegAttempt"
+            },
+            "title": "Attempts",
+            "type": "array"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "net_profit_usd": {
+            "title": "Net Profit Usd",
+            "type": "string"
+          },
+          "session_open_ms": {
+            "title": "Session Open Ms",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_open_ms",
+          "net_profit_usd",
+          "status",
+          "detail"
+        ],
+        "title": "SessionResult",
         "type": "object"
       },
       "SessionTime": {
@@ -55860,6 +57392,190 @@
         "title": "StrategyViewValueSpec",
         "type": "object"
       },
+      "StudyDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "allowed_commands": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Commands",
+            "type": "array"
+          },
+          "approval_reviews": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ApprovalReview"
+            },
+            "title": "Approval Reviews",
+            "type": "object"
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/Candidate"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "dispatch": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Dispatch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exposure": {
+            "$ref": "#/components/schemas/Exposure"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "final_results": {
+            "items": {
+              "$ref": "#/components/schemas/Candidate"
+            },
+            "title": "Final Results",
+            "type": "array"
+          },
+          "gate_outcomes": {
+            "items": {
+              "$ref": "#/components/schemas/GateOutcome"
+            },
+            "title": "Gate Outcomes",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/Progress"
+          },
+          "protocol_hash": {
+            "title": "Protocol Hash",
+            "type": "string"
+          },
+          "protocol_summary": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceItem"
+            },
+            "title": "Protocol Summary",
+            "type": "array"
+          },
+          "qualification_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Qualification Id"
+          },
+          "qualification_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Qualification Status"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "setup_name": {
+            "title": "Setup Name",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "underlying": {
+            "title": "Underlying",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "phase",
+          "status",
+          "protocol_hash",
+          "setup_name",
+          "underlying",
+          "progress",
+          "candidates",
+          "final_results",
+          "gate_outcomes",
+          "exposure",
+          "allowed_commands",
+          "dispatch",
+          "failure_reason",
+          "qualification_id",
+          "qualification_status"
+        ],
+        "title": "StudyDetail",
+        "type": "object"
+      },
+      "StudySummary": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "setup_name": {
+            "title": "Setup Name",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "underlying": {
+            "title": "Underlying",
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "title": "Updated At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "setup_name",
+          "underlying",
+          "phase",
+          "status",
+          "updated_at_ms"
+        ],
+        "title": "StudySummary",
+        "type": "object"
+      },
       "Subtract-Input": {
         "additionalProperties": false,
         "properties": {
@@ -59461,6 +61177,40 @@
         "title": "WarmupJoinView",
         "type": "object"
       },
+      "WindowReview": {
+        "additionalProperties": false,
+        "properties": {
+          "end_ms": {
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "required_traded_sessions": {
+            "title": "Required Traded Sessions",
+            "type": "integer"
+          },
+          "scheduled_sessions": {
+            "title": "Scheduled Sessions",
+            "type": "integer"
+          },
+          "start_ms": {
+            "title": "Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "label",
+          "start_ms",
+          "end_ms",
+          "scheduled_sessions",
+          "required_traded_sessions"
+        ],
+        "title": "WindowReview",
+        "type": "object"
+      },
       "WindowSummary": {
         "additionalProperties": false,
         "description": "Calendar breakdown of a requested backtest window.\n\n``requested_end_date`` is inclusive \u2014 sessions are evaluated over\nthe closed interval ``[requested_start_date, requested_end_date]``,\nmatching the runner's ``set_end_date`` semantics (the named end day\nis the last bar the engine sees, not the first one it skips).",
@@ -59559,6 +61309,34 @@
           "observed_at_ms"
         ],
         "title": "WorkingOrderView",
+        "type": "object"
+      },
+      "ZoomSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "passes": {
+            "default": 2,
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Passes",
+            "type": "integer"
+          },
+          "points": {
+            "default": 5,
+            "maximum": 9.0,
+            "minimum": 3.0,
+            "title": "Points",
+            "type": "integer"
+          },
+          "refinements": {
+            "default": 2,
+            "maximum": 4.0,
+            "minimum": 0.0,
+            "title": "Refinements",
+            "type": "integer"
+          }
+        },
+        "title": "ZoomSettings",
         "type": "object"
       },
       "_BarsSpecModel": {
@@ -79185,6 +80963,47 @@
         ]
       }
     },
+    "/api/jobs-internal/options-golden-search": {
+      "post": {
+        "operationId": "dispatch_api_jobs_internal_options_golden_search_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dispatch",
+        "tags": [
+          "jobs-internal"
+        ]
+      }
+    },
     "/api/jobs-internal/pool/drain": {
       "post": {
         "description": "The operator's capacity handoff (#3048 AC 10): stop assignments, finish or interrupt, reap.\n\nA drain stops new assignments, waits bounded for owned work to\ncomplete, interrupts what cannot, and reaps the children \u2014 the\ncapacity change (a restart at the new profile) finds no orphans and\nno running pool. On a process with no shared pool it reports that\nhonestly instead of pretending. The wait and the reaping run off the\nevent loop: a probe or a progress poll must never freeze behind them.",
@@ -84674,6 +86493,457 @@
         "summary": "Save Setup",
         "tags": [
           "research-options-backtest"
+        ]
+      }
+    },
+    "/api/research/options-golden-search/declarations": {
+      "get": {
+        "operationId": "declarations_api_research_options_golden_search_declarations_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "setup_name",
+            "required": true,
+            "schema": {
+              "maxLength": 80,
+              "minLength": 1,
+              "title": "Setup Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Declarations"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Declarations",
+        "tags": [
+          "research-options-golden-search"
+        ]
+      }
+    },
+    "/api/research/options-golden-search/preflight": {
+      "post": {
+        "operationId": "preflight_api_research_options_golden_search_preflight_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preflight"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preflight",
+        "tags": [
+          "research-options-golden-search"
+        ]
+      }
+    },
+    "/api/research/options-golden-search/studies": {
+      "get": {
+        "operationId": "history_api_research_options_golden_search_studies_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/StudySummary"
+                  },
+                  "title": "Response History Api Research Options Golden Search Studies Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "History",
+        "tags": [
+          "research-options-golden-search"
+        ]
+      },
+      "post": {
+        "operationId": "create_api_research_options_golden_search_studies_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LockRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudyDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create",
+        "tags": [
+          "research-options-golden-search"
+        ]
+      }
+    },
+    "/api/research/options-golden-search/studies/{study_id}": {
+      "get": {
+        "operationId": "detail_api_research_options_golden_search_studies__study_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "study_id",
+            "required": true,
+            "schema": {
+              "pattern": "^os_[a-f0-9]{40}$",
+              "title": "Study Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudyDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Detail",
+        "tags": [
+          "research-options-golden-search"
+        ]
+      }
+    },
+    "/api/research/options-golden-search/studies/{study_id}/candidates/{candidate_hash}/sessions/{session_open_ms}": {
+      "get": {
+        "operationId": "session_evidence_api_research_options_golden_search_studies__study_id__candidates__candidate_hash__sessions__session_open_ms__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "study_id",
+            "required": true,
+            "schema": {
+              "pattern": "^os_[a-f0-9]{40}$",
+              "title": "Study Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "candidate_hash",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-f0-9]{64}$",
+              "title": "Candidate Hash",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "session_open_ms",
+            "required": true,
+            "schema": {
+              "maximum": 253402300799999,
+              "minimum": 0,
+              "title": "Session Open Ms",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window",
+            "required": false,
+            "schema": {
+              "default": "development",
+              "enum": [
+                "development",
+                "final"
+              ],
+              "title": "Window",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Evidence",
+        "tags": [
+          "research-options-golden-search"
+        ]
+      }
+    },
+    "/api/research/options-golden-search/studies/{study_id}/commands": {
+      "post": {
+        "operationId": "command_api_research_options_golden_search_studies__study_id__commands_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "study_id",
+            "required": true,
+            "schema": {
+              "pattern": "^os_[a-f0-9]{40}$",
+              "title": "Study Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Command"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudyDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Command",
+        "tags": [
+          "research-options-golden-search"
         ]
       }
     },

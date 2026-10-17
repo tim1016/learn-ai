@@ -10,6 +10,7 @@ import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { refusalBody } from '../../../shared/errors/refusal-body';
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
+import { OptionsQualificationEvidenceComponent } from '../../options-backtest/options-qualification-evidence.component';
 import { GoldenOptionSetupsService } from '../../options-backtest/golden-option-setups.service';
 import { OptionsBacktestService } from '../../options-backtest/options-backtest.service';
 import { SetupSentencesComponent } from '../../options-backtest/cards/setup-sentences.component';
@@ -33,7 +34,7 @@ interface ReviewedDeployment {
 @Component({
   selector: 'app-options-bot-deploy',
   imports: [
-    AssetIdentityComponent, AuthoredUsdPipe, DeployLaunchReceiptComponent, DeployOptionOrderTermsComponent,
+    AssetIdentityComponent, AuthoredUsdPipe, OptionsQualificationEvidenceComponent, DeployLaunchReceiptComponent, DeployOptionOrderTermsComponent,
     FormField, FundingAnswerComponent, MoneyBarComponent, SetupSentencesComponent, TimestampDisplayComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,

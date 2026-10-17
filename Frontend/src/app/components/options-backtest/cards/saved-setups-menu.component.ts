@@ -59,6 +59,10 @@ export class SavedSetupsMenuComponent {
     panel.style.top = `${bottom + MENU_GAP_PX}px`;
   }
 
+  protected searchLink(name: string): string {
+    return `/options-golden-search?setup_name=${encodeURIComponent(name)}`;
+  }
+
   protected choose(item: SavedSetup): void {
     this.opened.emit(item);
     closePopover(this.panel().nativeElement);

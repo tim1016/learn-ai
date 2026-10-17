@@ -5036,6 +5036,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs-internal/options-golden-search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Dispatch */
+        post: operations["dispatch_api_jobs_internal_options_golden_search_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs-internal/pool/drain": {
         parameters: {
             query?: never;
@@ -6415,6 +6432,109 @@ export interface paths {
          * @description Delete the saved setup. None by that name is a 404, and an example's name is a 409.
          */
         delete: operations["delete_setup_api_research_options_backtest_setups__name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/options-golden-search/declarations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Declarations */
+        get: operations["declarations_api_research_options_golden_search_declarations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/options-golden-search/preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preflight */
+        post: operations["preflight_api_research_options_golden_search_preflight_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/options-golden-search/studies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** History */
+        get: operations["history_api_research_options_golden_search_studies_get"];
+        put?: never;
+        /** Create */
+        post: operations["create_api_research_options_golden_search_studies_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/options-golden-search/studies/{study_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Detail */
+        get: operations["detail_api_research_options_golden_search_studies__study_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/options-golden-search/studies/{study_id}/candidates/{candidate_hash}/sessions/{session_open_ms}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Session Evidence */
+        get: operations["session_evidence_api_research_options_golden_search_studies__study_id__candidates__candidate_hash__sessions__session_open_ms__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/options-golden-search/studies/{study_id}/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Command */
+        post: operations["command_api_research_options_golden_search_studies__study_id__commands_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -8047,6 +8167,13 @@ export interface components {
         ApplyRequest: {
             /** Expected Selection Generation */
             expected_selection_generation: number;
+        };
+        /** ApprovalReview */
+        ApprovalReview: {
+            /** Blocked Reason */
+            blocked_reason: string | null;
+            /** Failures */
+            failures: components["schemas"]["GateOutcome"][];
         };
         /** ApproveGoldenOptionSetupRequest */
         ApproveGoldenOptionSetupRequest: {
@@ -9959,6 +10086,44 @@ export interface components {
             /** Strategy Instance Id */
             strategy_instance_id: string;
         };
+        /** Candidate */
+        Candidate: {
+            /** Candidate Hash */
+            candidate_hash: string;
+            /** Completed Sessions */
+            completed_sessions: number | null;
+            /** Drawdown Fraction */
+            drawdown_fraction: string | null;
+            /** Drawdown Percent */
+            drawdown_percent: string | null;
+            /** Drawdown Usd */
+            drawdown_usd: string | null;
+            /** Equity */
+            equity: components["schemas"]["EquityPoint"][];
+            /** Evidence */
+            evidence: components["schemas"]["EvidenceItem"][];
+            /** Gate Outcomes */
+            gate_outcomes: components["schemas"]["GateOutcome"][];
+            /** Is Original */
+            is_original: boolean;
+            /** Label */
+            label: string;
+            /** Monthly */
+            monthly: components["schemas"]["MonthResult"][];
+            /** Net Profit Usd */
+            net_profit_usd: string | null;
+            /** Recovery */
+            recovery: string;
+            /** Sessions */
+            sessions: components["schemas"]["SessionResult"][];
+            /** Sharpe */
+            sharpe: number | null;
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "meets_rules" | "does_not_meet_rules" | "not_enough_evidence" | "could_not_evaluate";
+        };
         /**
          * CaptureReceiptModel
          * @description What the on-demand lake capture did for this request.
@@ -11231,6 +11396,32 @@ export interface components {
             /** Underlying */
             underlying: string;
         };
+        /** Command */
+        Command: {
+            /** Candidate Hash */
+            candidate_hash?: string | null;
+            /** Candidate Hashes */
+            candidate_hashes?: string[] | null;
+            /**
+             * Command
+             * @enum {string}
+             */
+            command: "run_research" | "cancel" | "resume" | "open_final" | "approve" | "approve_exception" | "keep_original";
+            /**
+             * Comment
+             * @default
+             */
+            comment?: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Waived Gate Ids
+             * @default []
+             */
+            waived_gate_ids?: string[];
+        };
         /**
          * CommandResponse
          * @description The durable command resource (R2). Mirrors ``CommandResource`` 1:1,
@@ -11341,6 +11532,25 @@ export interface components {
             kind: "Const";
             /** Value */
             value: number;
+        };
+        /** CostScenario */
+        CostScenario: {
+            /**
+             * Fee Multiplier
+             * @default 1
+             */
+            fee_multiplier?: number | string;
+            /** Fee Per Contract Usd */
+            fee_per_contract_usd?: (number | string) | null;
+            /** Key */
+            key: string;
+            /**
+             * Slippage Multiplier
+             * @default 1
+             */
+            slippage_multiplier?: number | string;
+            /** Slippage Percent */
+            slippage_percent?: (number | string) | null;
         };
         /**
          * CoverageDay
@@ -12293,6 +12503,18 @@ export interface components {
             /** Values */
             values: components["schemas"]["ExplainedValueView"][];
         };
+        /** Declarations */
+        Declarations: {
+            defaults: components["schemas"]["PlanDefaults"];
+            history_bounds: components["schemas"]["HistoryBounds"];
+            /** Knobs */
+            knobs: components["schemas"]["KnobDeclaration"][];
+            setup: components["schemas"]["OptionsBacktestSetup-Output"];
+            /** Setup Hash */
+            setup_hash: string;
+            /** Setup Name */
+            setup_name: string;
+        };
         /**
          * DeltaStrike
          * @description The strike whose delta is nearest a target.
@@ -12674,6 +12896,13 @@ export interface components {
             kind: "DifferenceBps";
             left: components["schemas"]["IndicatorRef"];
             right: components["schemas"]["IndicatorRef"];
+        };
+        /** Dispatch */
+        Dispatch: {
+            /** Stage Token */
+            stage_token: string;
+            /** Study Id */
+            study_id: string;
         };
         /**
          * DistributionStatsModel
@@ -13274,6 +13503,15 @@ export interface components {
              */
             kind: "EQUITY_LONG";
         };
+        /** EquityPoint */
+        EquityPoint: {
+            /** Drawdown Usd */
+            drawdown_usd: string;
+            /** Equity Usd */
+            equity_usd: string;
+            /** Timestamp Ms */
+            timestamp_ms: number;
+        };
         /** ErrorDetailResponse */
         ErrorDetailResponse: {
             /**
@@ -13334,6 +13572,13 @@ export interface components {
             source_event_at_ms?: number | null;
             /** Summary */
             summary: string;
+        };
+        /** EvidenceItem */
+        EvidenceItem: {
+            /** Label */
+            label: string;
+            /** Value */
+            value: string;
         };
         /**
          * EvidencePage
@@ -13559,6 +13804,13 @@ export interface components {
             text: string;
             /** Value */
             value: number | null;
+        };
+        /** Exposure */
+        Exposure: {
+            /** Classification */
+            classification: string;
+            /** Explanation */
+            explanation: string;
         };
         /**
          * ExposureNoticeView
@@ -14403,6 +14655,24 @@ export interface components {
                 [key: string]: (boolean | null)[];
             };
         };
+        /** GateOutcome */
+        GateOutcome: {
+            /** Actual */
+            actual: string | null;
+            /** Gate Id */
+            gate_id: string;
+            /**
+             * Overridable
+             * @default true
+             */
+            overridable?: boolean;
+            /** Reason */
+            reason: string;
+            /** Required */
+            required: string | null;
+            /** Status */
+            status: string;
+        };
         /**
          * GateRefusal
          * @description Why a gate was not saved or judged, in the owner's words.
@@ -14514,22 +14784,41 @@ export interface components {
         };
         /** GoldenOptionSetupEvidence */
         GoldenOptionSetupEvidence: {
+            /** Execution Identity */
+            execution_identity?: {
+                [key: string]: string;
+            } | null;
+            exposure?: components["schemas"]["Exposure"] | null;
+            /** Failed Rules */
+            failed_rules?: components["schemas"]["GateOutcome"][] | null;
             /** First Session Open Ms */
             first_session_open_ms: number;
             /** Last Session Open Ms */
             last_session_open_ms: number;
             /** Limitations */
             limitations: string[];
+            /** Metric Identity */
+            metric_identity?: string | null;
             /** Net Profit Usd */
             net_profit_usd: string;
+            /** Options Search Study Id */
+            options_search_study_id?: string | null;
+            /** Selection Count */
+            selection_count?: number | null;
             /** Sessions Tested */
             sessions_tested: number;
             /** Slippage Percent */
             slippage_percent: string;
             /** Starting Cash Usd */
             starting_cash_usd: string;
+            /** Study Manifest Sha256 */
+            study_manifest_sha256?: string | null;
             /** Trades */
             trades: number;
+            /** Verdict */
+            verdict?: ("meets_rules" | "owner_exception") | null;
+            /** Waived Gate Ids */
+            waived_gate_ids?: string[];
         };
         /** GoldenOptionSetupRefusal */
         GoldenOptionSetupRefusal: {
@@ -18988,6 +19277,35 @@ export interface components {
             /** Uncertainty Id */
             uncertainty_id: string;
         };
+        /** History */
+        History: {
+            /** End Ms */
+            end_ms: number;
+            /**
+             * Final Months
+             * @default 6
+             */
+            final_months?: number;
+            /** Start Ms */
+            start_ms: number;
+            /**
+             * Test Months
+             * @default 2
+             */
+            test_months?: number;
+            /**
+             * Train Months
+             * @default 6
+             */
+            train_months?: number;
+        };
+        /** HistoryBounds */
+        HistoryBounds: {
+            /** End Ms */
+            end_ms: number | null;
+            /** Start Ms */
+            start_ms: number | null;
+        };
         /**
          * HoldState
          * @description The account-level exposure-hold state, journal-derived (S6).
@@ -19712,6 +20030,28 @@ export interface components {
             /** Variance Contribution Synthetic */
             variance_contribution_synthetic: number;
         };
+        /** JobAccepted */
+        JobAccepted: {
+            /** Job Id */
+            job_id: string;
+            /**
+             * Status
+             * @default queued
+             * @constant
+             */
+            status?: "queued";
+            /** Study Id */
+            study_id: string;
+        };
+        /** JobRequest */
+        JobRequest: {
+            /** Job Id */
+            job_id: string;
+            /** Stage Token */
+            stage_token: string;
+            /** Study Id */
+            study_id: string;
+        };
         JsonValue: unknown;
         /** KindDistributionModel */
         KindDistributionModel: {
@@ -19725,6 +20065,49 @@ export interface components {
             /** Normal Expected Counts */
             normal_expected_counts: number[];
             stats: components["schemas"]["DistributionStatsModel"];
+        };
+        /** Knob */
+        Knob: {
+            /**
+             * Mode
+             * @default search
+             * @enum {string}
+             */
+            mode?: "search" | "fixed";
+            /** Path */
+            path: string;
+            /**
+             * Priority
+             * @default 5
+             */
+            priority?: number;
+            /** Values */
+            values: unknown[];
+        };
+        /** KnobDeclaration */
+        KnobDeclaration: {
+            current_value: components["schemas"]["JsonValue"];
+            /** Help */
+            help: string;
+            /** Label */
+            label: string;
+            /** Leg Id */
+            leg_id: string | null;
+            /** Legal Values */
+            legal_values: components["schemas"]["JsonValue"][];
+            /** Max */
+            max?: string | null;
+            /** Min */
+            min?: string | null;
+            /** Path */
+            path: string;
+            /** Step */
+            step?: string | null;
+            /**
+             * Value Type
+             * @enum {string}
+             */
+            value_type: "integer" | "decimal" | "boolean" | "category";
         };
         /**
          * LaneAccountQuietRead
@@ -20469,6 +20852,35 @@ export interface components {
              */
             win_rate?: number;
         };
+        /** LegAttempt */
+        LegAttempt: {
+            /** Attempt */
+            attempt: number;
+            /** Contract */
+            contract: string;
+            /** Contracts */
+            contracts: number;
+            /** Entry Fee Usd */
+            entry_fee_usd: string;
+            /** Entry Ms */
+            entry_ms: number;
+            /** Entry Price Usd */
+            entry_price_usd: string;
+            /** Exit Fee Usd */
+            exit_fee_usd: string;
+            /** Exit Ms */
+            exit_ms: number;
+            /** Exit Price Usd */
+            exit_price_usd: string;
+            /** Exit Reason */
+            exit_reason: string;
+            /** Leg Id */
+            leg_id: string;
+            /** Net Profit Usd */
+            net_profit_usd: string;
+            /** Side */
+            side: string;
+        };
         /** LegDescriptionResponse */
         LegDescriptionResponse: {
             /** Leg Id */
@@ -20583,6 +20995,39 @@ export interface components {
             stop_loss?: components["schemas"]["StopLoss-Output"] | null;
             /** Strike */
             strike: components["schemas"]["AtTheMoney"] | components["schemas"]["StepsFromTheMoney"];
+        };
+        /** Limits */
+        Limits: {
+            /**
+             * Evaluation Cap
+             * @default 5000
+             */
+            evaluation_cap?: number;
+            /**
+             * Max Artifact Bytes
+             * @default 1073741824
+             */
+            max_artifact_bytes?: number;
+            /**
+             * Max Elapsed Ms
+             * @default 86400000
+             */
+            max_elapsed_ms?: number;
+            /**
+             * Max Execution Attempts
+             * @default 10000
+             */
+            max_execution_attempts?: number;
+            /**
+             * Max Snapshot Bytes
+             * @default 10737418240
+             */
+            max_snapshot_bytes?: number;
+            /**
+             * Max Snapshot Files
+             * @default 100000
+             */
+            max_snapshot_files?: number;
         };
         /**
          * LiveEnvelopePayload
@@ -20733,6 +21178,14 @@ export interface components {
          */
         LiveSnapshotUnavailableResponse: {
             detail: components["schemas"]["LiveSnapshotUnavailableDetail"];
+        };
+        /** LockRequest */
+        LockRequest: {
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Preflight Hash */
+            preflight_hash: string;
+            request: components["schemas"]["PlanRequest"];
         };
         /** LogicNode */
         "LogicNode-Input": {
@@ -21344,6 +21797,15 @@ export interface components {
             };
             /** Warnings */
             warnings?: string[];
+        };
+        /** MonthResult */
+        MonthResult: {
+            /** Completed Sessions */
+            completed_sessions: number;
+            /** Month Ms */
+            month_ms: number;
+            /** Net Profit Usd */
+            net_profit_usd: string;
         };
         /**
          * NamedStructure
@@ -25027,6 +25489,78 @@ export interface components {
             /** Win Rate */
             win_rate?: number | null;
         };
+        /** PlanDefaults */
+        PlanDefaults: {
+            /**
+             * Evaluation Cap
+             * @default 5000
+             */
+            evaluation_cap?: number;
+            /**
+             * Final Months
+             * @default 6
+             */
+            final_months?: number;
+            /**
+             * Finalist Count
+             * @default 3
+             */
+            finalist_count?: number;
+            policy: components["schemas"]["SearchPolicyRequest-Output"];
+            /** Rationale */
+            rationale: string;
+            /**
+             * Test Months
+             * @default 2
+             */
+            test_months?: number;
+            /**
+             * Train Months
+             * @default 6
+             */
+            train_months?: number;
+            /** Version */
+            version: string;
+        };
+        /** PlanRequest */
+        PlanRequest: {
+            budget?: components["schemas"]["Limits"];
+            /** Expected Setup Hash */
+            expected_setup_hash: string;
+            /**
+             * Finalist Count
+             * @default 3
+             */
+            finalist_count?: number;
+            history: components["schemas"]["History"];
+            /** Knobs */
+            knobs: components["schemas"]["Knob"][];
+            /**
+             * Method
+             * @default zoom
+             * @enum {string}
+             */
+            method?: "zoom" | "grid";
+            /**
+             * Pair Audits
+             * @default []
+             */
+            pair_audits?: [
+                string,
+                string
+            ][];
+            /** Parent Study Id */
+            parent_study_id?: string | null;
+            policy?: components["schemas"]["SearchPolicyRequest-Input"];
+            /** Setup Name */
+            setup_name: string;
+            /**
+             * Stress
+             * @default []
+             */
+            stress?: components["schemas"]["CostScenario"][];
+            zoom?: components["schemas"]["ZoomSettings"];
+        };
         /**
          * PnLPercent
          * @description Compares the open trade's unrealized PnL (as fraction of entry price)
@@ -25146,6 +25680,39 @@ export interface components {
             lookup?: "exact_bar_close" | "next_after_bar_close";
             /** Prediction Set Id */
             prediction_set_id: string;
+        };
+        /** Preflight */
+        Preflight: {
+            /** Blockers */
+            blockers: string[];
+            /** Can Lock */
+            can_lock: boolean;
+            /** Combination Count */
+            combination_count: number | null;
+            /** Drawdown Limit Usd */
+            drawdown_limit_usd: string;
+            /** Estimated Setup Sessions */
+            estimated_setup_sessions: number;
+            /** Exposure */
+            exposure: string;
+            /** Identity */
+            identity: string;
+            /** Invalid Combination Count */
+            invalid_combination_count: number | null;
+            /** Legal Combination Count */
+            legal_combination_count: number | null;
+            /** Mark Coverage */
+            mark_coverage: string;
+            /** Preflight Hash */
+            preflight_hash: string;
+            /** Required Evaluations */
+            required_evaluations: number;
+            /** Reserved Evaluations */
+            reserved_evaluations: number;
+            /** Warnings */
+            warnings: string[];
+            /** Windows */
+            windows: components["schemas"]["WindowReview"][];
         };
         /**
          * PriceRangeView
@@ -25423,6 +25990,51 @@ export interface components {
             commit_sha: string;
             /** Dirty */
             dirty: boolean;
+        };
+        /** Progress */
+        Progress: {
+            /**
+             * Cache Hits
+             * @default 0
+             */
+            cache_hits?: number;
+            /**
+             * Capacity Message
+             * @default Width one; broader capacity requires qualification.
+             */
+            capacity_message?: string;
+            /**
+             * Completed
+             * @default 0
+             */
+            completed?: number;
+            /**
+             * Execution Attempts
+             * @default 0
+             */
+            execution_attempts?: number;
+            /**
+             * Queued
+             * @default 0
+             */
+            queued?: number;
+            /**
+             * Reserved
+             * @default 0
+             */
+            reserved?: number;
+            /**
+             * Running
+             * @default 0
+             */
+            running?: number;
+            /**
+             * Spent
+             * @default 0
+             */
+            spent?: number;
+            /** Stage */
+            stage: string;
         };
         /** ProjectedCommandResponse */
         ProjectedCommandResponse: {
@@ -27360,6 +27972,96 @@ export interface components {
             /** Phase */
             phase: string | null;
         };
+        /** SearchPolicyRequest */
+        "SearchPolicyRequest-Input": {
+            /**
+             * Max Drawdown Percent
+             * @default 20
+             */
+            max_drawdown_percent?: number | string;
+            /** Max Recovery Sessions */
+            max_recovery_sessions?: number | null;
+            /**
+             * Min Activity Per Year
+             * @default 50
+             */
+            min_activity_per_year?: number;
+            /**
+             * Min Daily Observations
+             * @default 30
+             */
+            min_daily_observations?: number;
+            /**
+             * Min Final Sessions
+             * @default 30
+             */
+            min_final_sessions?: number;
+            /**
+             * Min Forward Sessions
+             * @default 30
+             */
+            min_forward_sessions?: number;
+            /**
+             * Min Sharpe
+             * @default 1
+             */
+            min_sharpe?: number;
+            /**
+             * Risk Free Daily Return
+             * @default 0
+             */
+            risk_free_daily_return?: number;
+            /**
+             * Stress Gate
+             * @default false
+             */
+            stress_gate?: boolean;
+        };
+        /** SearchPolicyRequest */
+        "SearchPolicyRequest-Output": {
+            /**
+             * Max Drawdown Percent
+             * @default 20
+             */
+            max_drawdown_percent?: string;
+            /** Max Recovery Sessions */
+            max_recovery_sessions?: number | null;
+            /**
+             * Min Activity Per Year
+             * @default 50
+             */
+            min_activity_per_year?: number;
+            /**
+             * Min Daily Observations
+             * @default 30
+             */
+            min_daily_observations?: number;
+            /**
+             * Min Final Sessions
+             * @default 30
+             */
+            min_final_sessions?: number;
+            /**
+             * Min Forward Sessions
+             * @default 30
+             */
+            min_forward_sessions?: number;
+            /**
+             * Min Sharpe
+             * @default 1
+             */
+            min_sharpe?: number;
+            /**
+             * Risk Free Daily Return
+             * @default 0
+             */
+            risk_free_daily_return?: number;
+            /**
+             * Stress Gate
+             * @default false
+             */
+            stress_gate?: boolean;
+        };
         /** SeasonalityMonthResponse */
         SeasonalityMonthResponse: {
             /** Median Compounded Return */
@@ -27445,6 +28147,19 @@ export interface components {
             close_minute_et: number;
             /** Open Minute Et */
             open_minute_et: number;
+        };
+        /** SessionResult */
+        SessionResult: {
+            /** Attempts */
+            attempts?: components["schemas"]["LegAttempt"][];
+            /** Detail */
+            detail: string;
+            /** Net Profit Usd */
+            net_profit_usd: string;
+            /** Session Open Ms */
+            session_open_ms: number;
+            /** Status */
+            status: string;
         };
         /**
          * SessionTime
@@ -29114,6 +29829,61 @@ export interface components {
             /** Variable */
             variable: string;
         };
+        /** StudyDetail */
+        StudyDetail: {
+            /** Allowed Commands */
+            allowed_commands: string[];
+            /** Approval Reviews */
+            approval_reviews?: {
+                [key: string]: components["schemas"]["ApprovalReview"];
+            };
+            /** Candidates */
+            candidates: components["schemas"]["Candidate"][];
+            dispatch: components["schemas"]["Dispatch"] | null;
+            exposure: components["schemas"]["Exposure"];
+            /** Failure Reason */
+            failure_reason: string | null;
+            /** Final Results */
+            final_results: components["schemas"]["Candidate"][];
+            /** Gate Outcomes */
+            gate_outcomes: components["schemas"]["GateOutcome"][];
+            /** Id */
+            id: string;
+            /** Phase */
+            phase: string;
+            progress: components["schemas"]["Progress"];
+            /** Protocol Hash */
+            protocol_hash: string;
+            /** Protocol Summary */
+            protocol_summary?: components["schemas"]["EvidenceItem"][];
+            /** Qualification Id */
+            qualification_id: string | null;
+            /** Qualification Status */
+            qualification_status: string | null;
+            /** Revision */
+            revision: number;
+            /** Setup Name */
+            setup_name: string;
+            /** Status */
+            status: string;
+            /** Underlying */
+            underlying: string;
+        };
+        /** StudySummary */
+        StudySummary: {
+            /** Id */
+            id: string;
+            /** Phase */
+            phase: string;
+            /** Setup Name */
+            setup_name: string;
+            /** Status */
+            status: string;
+            /** Underlying */
+            underlying: string;
+            /** Updated At Ms */
+            updated_at_ms: number;
+        };
         /** Subtract */
         "Subtract-Input": {
             /**
@@ -30512,6 +31282,19 @@ export interface components {
              */
             state: "contiguous" | "filled" | "refused";
         };
+        /** WindowReview */
+        WindowReview: {
+            /** End Ms */
+            end_ms: number;
+            /** Label */
+            label: string;
+            /** Required Traded Sessions */
+            required_traded_sessions: number;
+            /** Scheduled Sessions */
+            scheduled_sessions: number;
+            /** Start Ms */
+            start_ms: number;
+        };
         /**
          * WindowSummary
          * @description Calendar breakdown of a requested backtest window.
@@ -30558,6 +31341,24 @@ export interface components {
             status: string;
             /** Symbol */
             symbol: string;
+        };
+        /** ZoomSettings */
+        ZoomSettings: {
+            /**
+             * Passes
+             * @default 2
+             */
+            passes?: number;
+            /**
+             * Points
+             * @default 5
+             */
+            points?: number;
+            /**
+             * Refinements
+             * @default 2
+             */
+            refinements?: number;
         };
         /**
          * _BarsSpecModel
@@ -40032,6 +40833,39 @@ export interface operations {
             };
         };
     };
+    dispatch_api_jobs_internal_options_golden_search_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JobRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobAccepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     drain_research_worker_pool_api_jobs_internal_pool_drain_post: {
         parameters: {
             query?: never;
@@ -43224,6 +44058,247 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    declarations_api_research_options_golden_search_declarations_get: {
+        parameters: {
+            query: {
+                setup_name: string;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Declarations"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preflight_api_research_options_golden_search_preflight_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Preflight"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    history_api_research_options_golden_search_studies_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudySummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_api_research_options_golden_search_studies_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LockRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudyDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    detail_api_research_options_golden_search_studies__study_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                study_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudyDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_evidence_api_research_options_golden_search_studies__study_id__candidates__candidate_hash__sessions__session_open_ms__get: {
+        parameters: {
+            query?: {
+                window?: "development" | "final";
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                study_id: string;
+                candidate_hash: string;
+                session_open_ms: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    command_api_research_options_golden_search_studies__study_id__commands_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                study_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Command"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudyDetail"];
                 };
             };
             /** @description Validation Error */

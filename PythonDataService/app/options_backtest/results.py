@@ -14,6 +14,8 @@ from decimal import Decimal, localcontext
 from enum import StrEnum
 from typing import Literal
 
+from pydantic import TypeAdapter
+
 from app.options.contract import OptionContract
 from app.options_backtest import fills
 
@@ -319,3 +321,7 @@ class SessionOutcome:
     def event_counts(self) -> dict[EventKind, int]:
         """How many times each thing happened."""
         return dict(Counter(event.kind for event in self.events))
+
+
+# Resolve the dataclass graph in its defining namespace, including forward annotations.
+SESSION_OUTCOME_ADAPTER = TypeAdapter(SessionOutcome)

@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.options_backtest.setup import OptionsBacktestSetup
 from app.schemas.options_backtest_runs import RUN_ID_MAX
+from app.schemas.options_golden_search import Exposure, GateOutcome
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 COMMAND_KEY_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$"
@@ -50,6 +51,7 @@ class ReproveGoldenOptionSetupRequest(_Request):
 
 
 class GoldenOptionSetupEvidence(BaseModel):
+    waived_gate_ids: list[str] = Field(default_factory=list)
     first_session_open_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     last_session_open_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     sessions_tested: int
@@ -58,6 +60,14 @@ class GoldenOptionSetupEvidence(BaseModel):
     starting_cash_usd: str
     slippage_percent: str
     limitations: list[str]
+    options_search_study_id: str | None = None
+    study_manifest_sha256: str | None = None
+    verdict: Literal["meets_rules", "owner_exception"] | None = None
+    failed_rules: list[GateOutcome] | None = None
+    selection_count: int | None = Field(default=None, ge=1)
+    exposure: Exposure | None = None
+    metric_identity: str | None = None
+    execution_identity: dict[str, str] | None = None
 
 
 class GoldenOptionSetupEventView(BaseModel):

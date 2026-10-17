@@ -1,0 +1,64 @@
+<section class="card">
+  <h3>Suggested starting limits</h3>
+  <p>{{ declarations().defaults.rationale }} Preset {{ declarations().defaults.version }}. {{ changedPreset() ? 'You edited the suggested limits.' : 'Suggested limits are unchanged.' }}</p>
+  <div class="controls">
+    <label>Maximum minute-close drawdown (% of starting capital)<input type="text" inputmode="decimal" [formField]="fields.drawdown" /></label>
+    <p>Dollar limit: {{ preflight()?.drawdown_limit_usd ?? 'Check plan to calculate' }} USD</p>
+    <label>Annualized daily Sharpe floor<input type="number" step="0.1" [formField]="fields.sharpe" /></label>
+    <label>Completed traded setup sessions per year<input type="number" [formField]="fields.activity" /></label>
+    <label>Daily observations per scored window<input type="number" [formField]="fields.observations" /></label>
+    <label>Pooled forward completed sessions<input type="number" [formField]="fields.forward" /></label>
+    <label>Final completed sessions<input type="number" [formField]="fields.final" /></label>
+    <label><input type="checkbox" [formField]="fields.recoveryOn" /> Limit recovery time</label>
+    @if (model().recoveryOn) { <label>Maximum recovery sessions<input type="number" [formField]="fields.recovery" /></label> }
+    <label>Daily risk-free return<input type="number" step="0.0001" [formField]="fields.riskFree" /></label>
+  </div>
+  <p>Net profit must be positive after costs. Eligible candidates rank by exact net dollars. These limits do not establish confidence or future profitability.</p>
+  <p>Sharpe uses fixed-capital daily returns, including legitimate zero-trade days. Annualization assumes usual time scaling; serial correlation can weaken that interpretation.</p>
+</section>
+<section class="card">
+  <h3>History and budget</h3>
+  <app-date-range-picker [from]="range().from" [to]="range().to" [bounds]="bounds()" [exactRanges]="true" label="Options study history" (changed)="rangeChanged.emit($event)" />
+  <div class="controls">
+    <label>Training months<input type="number" [formField]="fields.trainMonths" /></label>
+    <label>Forward test months<input type="number" [formField]="fields.testMonths" /></label>
+    <label>Final test months<input type="number" [formField]="fields.finalMonths" /></label>
+    <label>Finalists plus frozen original<input type="number" [formField]="fields.finalists" /></label>
+    <label>Evaluation cap<input type="number" [formField]="fields.budget" /></label>
+    <label>Method<select [formField]="fields.method"><option value="zoom">Zoom</option><option value="grid">Grid</option></select></label>
+  </div>
+  @if (model().method === 'zoom') {
+    <div class="controls">
+      <label>Zoom points<input type="number" [formField]="fields.zoomPoints" /></label>
+      <label>Refinements<input type="number" [formField]="fields.zoomRefinements" /></label>
+      <label>Passes<input type="number" [formField]="fields.zoomPasses" /></label>
+    </div>
+    <p>Zoom is local and search-order sensitive. It can miss improvements requiring several settings to change together.</p>
+  } @else { <p>Grid must fit its complete authorized search space inside the reserved budget.</p> }
+  <details><summary>Predeclared pair audit</summary><p>Audit one pair for interactions. Both settings must vary. Audit evaluations consume the frozen budget.</p><div class="controls">
+    <label>First setting<select [formField]="fields.pairFirst"><option value="">No pair audit</option>@for (knob of declarations().knobs; track knob.path) { <option [value]="knob.path">{{ knob.label }}</option> }</select></label>
+    <label>Second setting<select [formField]="fields.pairSecond"><option value="">Choose setting</option>@for (knob of declarations().knobs; track knob.path) { <option [value]="knob.path">{{ knob.label }}</option> }</select></label>
+  </div></details>
+</section>
+<section class="card">
+  <h3>Costs and stress</h3><p>Base costs come from the saved setup. Stress is advisory unless its gate is enabled before lock. A zero base cost needs an explicit positive stress policy accepted by the server.</p>
+  <div class="controls">
+    <label><input type="checkbox" [formField]="fields.slippageStress" /> Slippage stress</label>
+    @if (model().slippageStress) { <label>Slippage multiplier<input type="text" inputmode="decimal" [formField]="fields.slippageMultiplier" /></label><label>If saved slippage is zero: stressed slippage (%)<input type="text" inputmode="decimal" [formField]="fields.slippageAbsolute" /></label> }
+    <label><input type="checkbox" [formField]="fields.feeStress" /> Fee stress</label>
+    @if (model().feeStress) { <label>Fee multiplier<input type="text" inputmode="decimal" [formField]="fields.feeMultiplier" /></label><label>If saved fees are zero: stressed fee per contract (USD)<input type="text" inputmode="decimal" [formField]="fields.feeAbsolute" /></label> }
+    <label><input type="checkbox" [formField]="fields.stressGate" /> Require stressed-cost rules too</label>
+  </div>
+</section>
+@if (preflight(); as checked) {
+  <section class="card"><h3>Server preflight</h3>
+    @for (message of checked.blockers; track message) { <p class="problem">{{ message }}</p> }
+    @for (message of checked.warnings; track message) { <p class="warning">{{ message }}</p> }
+    <p>{{ checked.combination_count ?? 'Unknown' }} combinations · {{ checked.legal_combination_count ?? 'Unknown' }} legal · {{ checked.invalid_combination_count ?? 'Unknown' }} invalid</p>
+    <p>{{ checked.required_evaluations }} evaluations required · {{ checked.reserved_evaluations }} reserved · {{ checked.estimated_setup_sessions }} setup-session replays</p>
+    <p>Marks: {{ checked.mark_coverage }}</p><p>Exposure: {{ checked.exposure }}</p><p>Code and data identity: <code>{{ checked.identity }}</code></p>
+    <table><thead><tr><th>Window</th><th>From</th><th>Until</th><th>Scheduled sessions</th><th>Required traded sessions</th></tr></thead><tbody>
+      @for (window of checked.windows; track window.label) { <tr><td>{{ window.label }}</td><td><app-timestamp-display [value]="window.start_ms" mode="date-et" /></td><td><app-timestamp-display [value]="window.end_ms" mode="date-et" /></td><td>{{ window.scheduled_sessions }}</td><td>{{ window.required_traded_sessions }}</td></tr> }
+    </tbody></table>
+  </section>
+}

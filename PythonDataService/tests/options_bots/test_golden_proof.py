@@ -128,3 +128,83 @@ def test_canonical_fee_calculation_changes_invalidate_the_rules_identity(monkeyp
 
     monkeypatch.setattr(Path, "read_bytes", read_with_changed_calculation)
     assert golden_proof._source_digest() != before
+
+
+async def _retained_reader(source: RunResult, blobs: BlobStore, tmp_lake: Path):
+    from app.data_lake.admission import read_committed_bytes
+    from app.research.options_golden_search.snapshots import Snapshot, SnapshotRunData
+
+    manifest = input_manifest(source)
+    size = 0
+    for relative, expected in manifest.items():
+        payload = await asyncio.to_thread(read_committed_bytes, raw_root(tmp_lake) / relative)
+        assert blobs.put(payload) == expected
+        size += len(payload)
+    snapshot = Snapshot(manifest=manifest, absent=(), retained_bytes=size)
+    return SnapshotRunData(source.setup.underlying, snapshot, blobs)
+
+
+@respx.mock
+async def test_retained_study_proof_survives_lake_repair_without_reading_mutable_inputs(
+    fake_catalog: FakeCatalog, tmp_lake: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = await _run(fake_catalog, tmp_lake)
+    blobs = BlobStore(tmp_path / "study-proof")
+    retained = await _retained_reader(source, blobs, tmp_lake)
+    relative = next(path for path in input_manifest(source) if path.startswith("equity/"))
+    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), relative, b"repaired lake inputs", admit=True)
+
+    def mutable_lake_is_forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("A retained study proof must not consult the current lake")
+
+    monkeypatch.setattr(golden_proof, "option_read_root", mutable_lake_is_forbidden)
+    progress = []
+    proof = await asyncio.to_thread(build_proof, source, blobs=blobs, source_data=retained,
+                                    on_session=lambda done, total, day: progress.append((done, total, day)))
+    assert proof["result_sha256"] == result_sha256(source)
+    assert proof["manifest"] == input_manifest(source)
+    assert progress == [(1, 1, FRIDAY), (1, 1, FRIDAY)]
+
+
+@pytest.mark.parametrize("stop_after_replay", [1, 2])
+@respx.mock
+async def test_retained_proof_cancellation_is_checked_during_replays_and_before_return(
+    fake_catalog: FakeCatalog, tmp_lake: Path, tmp_path: Path, stop_after_replay: int,
+) -> None:
+    from app.options_backtest.run import RunStopped
+
+    source = await _run(fake_catalog, tmp_lake)
+    blobs = BlobStore(tmp_path / "cancel-proof")
+    retained = await _retained_reader(source, blobs, tmp_lake)
+    completions = []
+    with pytest.raises(RunStopped):
+        await asyncio.to_thread(build_proof, source, blobs=blobs, source_data=retained,
+            on_session=lambda done, total, day: completions.append(day),
+            should_stop=lambda: len(completions) >= stop_after_replay)
+    assert completions == [FRIDAY] * stop_after_replay
+
+
+@respx.mock
+async def test_retained_proof_requires_existing_verified_blob_even_when_lake_still_holds_it(
+    fake_catalog: FakeCatalog, tmp_lake: Path, tmp_path: Path,
+) -> None:
+    source = await _run(fake_catalog, tmp_lake)
+    blobs = BlobStore(tmp_path / "missing-proof")
+    retained = await _retained_reader(source, blobs, tmp_lake)
+    digest = next(iter(input_manifest(source).values()))
+    (blobs.root / digest[:2] / digest).unlink()
+    with pytest.raises(ProofMismatchError, match="missing"):
+        await asyncio.to_thread(build_proof, source, blobs=blobs, source_data=retained)
+
+
+def test_minute_observation_calculation_changes_invalidate_the_options_rules_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    before = golden_proof._source_digest()
+    original = Path.read_bytes
+    changed = golden_proof._APP_ROOT / "options_backtest/observation.py"
+
+    def read_with_changed_observation(path: Path) -> bytes:
+        content = original(path)
+        return content + b"\n# Changed minute-equity rule bytes\n" if path == changed else content
+
+    monkeypatch.setattr(Path, "read_bytes", read_with_changed_observation)
+    assert golden_proof._source_digest() != before

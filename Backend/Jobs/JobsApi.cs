@@ -49,6 +49,7 @@ public static class JobsApi
         ["golden_search"] = "/api/jobs-internal/golden-search",
         // Options Backtest (#3030): Python owns the run and its saved rows; this row is transport only.
         ["options_backtest"] = "/api/jobs-internal/options-backtest",
+        ["options_golden_search"] = "/api/jobs-internal/options-golden-search",
         // The data-lake backfill worker lives on the data-lake router rather
         // than /api/jobs-internal/*; it accepts the same caller-minted job_id
         // this method injects below, so the framework (state, events, cancel,

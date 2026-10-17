@@ -286,3 +286,20 @@ async def _reconcile_after_transport_failure(payload: dict[str, Any], exc: Excep
         status_code=status.HTTP_502_BAD_GATEWAY,
         detail=f"the research runtime did not accept the dispatch ({type(exc).__name__}); no study attempt started",
     )
+
+
+async def forward_options_search_job(payload: dict[str, Any]) -> dict[str, Any]:
+    """Forward an Options dispatch; a timeout joins only its matching durable live binding."""
+    try:
+        response = await _post_runtime_dispatch("/api/jobs-internal/options-golden-search", payload)
+    except httpx.HTTPError as exc:
+        from app.research.options_golden_search import repository as options_repo
+        from app.research.persistence import lifecycle
+        from app.research.persistence.db import with_connection
+
+        row = await with_connection(options_repo.get, str(payload["study_id"]))
+        live = await asyncio.to_thread(lifecycle.job_is_live, str(payload["job_id"]))
+        if row.get("job_id") == payload["job_id"] and live is True:
+            return {"study_id": row["id"], "job_id": payload["job_id"], "status": "queued"}
+        raise HTTPException(502, "The runtime did not confirm a live Options study dispatch; retry its command receipt.") from exc
+    return _answer_of(response)
