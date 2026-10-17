@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -108,9 +109,13 @@ async def by_command(conn: asyncpg.Connection, command_id: str) -> GoldenRecord 
 
 
 async def events(conn: asyncpg.Connection, qualification_id: str) -> tuple[GoldenEvent, ...]:
+    return await events_for(conn, (qualification_id,))
+
+
+async def events_for(conn: asyncpg.Connection, qualification_ids: Sequence[str]) -> tuple[GoldenEvent, ...]:
     rows = await conn.fetch(
-        f"SELECT {_EVENT_COLUMNS} FROM research_golden_option_setup_events WHERE qualification_id = $1 ORDER BY id",
-        qualification_id,
+        f"SELECT {_EVENT_COLUMNS} FROM research_golden_option_setup_events WHERE qualification_id = ANY($1::text[]) ORDER BY id",
+        qualification_ids,
     )
     return tuple(_event(row) for row in rows)
 
@@ -187,6 +192,9 @@ class PostgresGoldenStore:
 
     async def events(self, qualification_id: str) -> tuple[GoldenEvent, ...]:
         return await with_connection(events, qualification_id)
+
+    async def events_for(self, qualification_ids: Sequence[str]) -> tuple[GoldenEvent, ...]:
+        return await with_connection(events_for, qualification_ids)
 
     async def event_by_command(self, command_id: str) -> GoldenEvent | None:
         return await with_connection(event_by_command, command_id)

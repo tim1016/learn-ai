@@ -248,28 +248,21 @@ class OptionsBotDuty:
                 data_gap=True, entry_hold_reason="A decision minute was missed. New entries are held for this session."
             )
             allowed = False
-        retained, held = self._contracts()
-        self._market.watch_contracts(retained, held_contracts=held)
-        market_ready = minute >= self.window.exit_ms or minute == state.last_minute_ms
-        if not market_ready and minute != state.last_minute_ms:
-            try:
-                candidate_hold = await self._market.prepare(
-                    minute, contracts=retained, held_contracts=held, include_candidates=allowed,
-                )
-                self.journal.note(market_hold=None)
-                if candidate_hold is not None:
-                    self.journal.note(entry_hold_reason=candidate_hold)
-                    allowed = False
-                market_ready = True
-            except OptionsMarketUnavailable as exc:
-                self.journal.note(market_hold=str(exc), entry_hold_reason=str(exc))
-                allowed = False
-        if market_ready:
-            step = self._session.advance(minute, outcomes, allow_entries=allowed, observed_at_ms=now)
+        if state.last_minute_ms is not None:
+            step = self._session.advance(state.last_minute_ms, outcomes, allow_entries=allowed, observed_at_ms=now)
             self.journal.commit(state, step)
-        elif state.last_minute_ms is not None:
-            step = self._session.advance(state.last_minute_ms, outcomes, allow_entries=False, observed_at_ms=now)
-            self.journal.commit(state, step)
+            outcomes = ()
+        minutes = (
+            (minute,) if state.last_minute_ms is None or state.last_minute_ms == minute
+            else range(state.last_minute_ms + MS_PER_MINUTE, minute + MS_PER_MINUTE, MS_PER_MINUTE)
+        )
+        market_ready = False
+        for completed in minutes:
+            market_ready, allowed = await self._advance_minute(completed, outcomes, allowed=allowed, now=now)
+            if not market_ready:
+                if minute >= self.window.exit_ms:
+                    market_ready, allowed = await self._advance_minute(minute, outcomes, allowed=False, now=now)
+                break
         await self._deliver(allowed and market_ready, now)
         self.journal.note(phase="managing" if any(leg.position is not None for leg in state.legs) else "running")
         if state.started and all(leg.phase is Phase.DONE for leg in state.legs) and self._settled():
@@ -280,6 +273,33 @@ class OptionsBotDuty:
                 next_session=asdict(self.window), next_entry_ms=self.window.entry_ms, data_gap=False, phase="waiting"
             )
             self._qualified_minute = None
+
+    async def _advance_minute(
+        self, minute: int, outcomes: tuple[ExecutionOutcome, ...], *, allowed: bool, now: int,
+    ) -> tuple[bool, bool]:
+        assert self._session is not None
+        state = self._session.state
+        retained, held = self._contracts()
+        self._market.watch_contracts(retained, held_contracts=held)
+        ready = minute >= self.window.exit_ms or minute == state.last_minute_ms
+        if not ready:
+            try:
+                candidate_hold = await self._market.prepare(
+                    minute, contracts=retained, held_contracts=held, include_candidates=allowed,
+                )
+                self.journal.note(market_hold=None)
+                if candidate_hold is not None:
+                    self.journal.note(entry_hold_reason=candidate_hold)
+                    allowed = False
+                ready = True
+            except OptionsMarketUnavailable as exc:
+                self.journal.note(market_hold=str(exc), entry_hold_reason=str(exc))
+                allowed = False
+        at_ms = minute if ready else state.last_minute_ms
+        if at_ms is not None:
+            step = self._session.advance(at_ms, outcomes, allow_entries=allowed and ready, observed_at_ms=now)
+            self.journal.commit(state, step)
+        return ready, allowed
 
     def _settled(self) -> bool:
         for row in self.journal.decisions(session_open_ms=self.window.open_ms):

@@ -497,6 +497,65 @@ async def test_clock_close_survives_missing_trade_observations(tmp_path: Path) -
     journal.close()
 
 
+@pytest.mark.parametrize("history_failure", [False, True])
+async def test_missed_minute_stop_is_managed_before_a_later_price_recovery(tmp_path: Path, history_failure: bool) -> None:
+    binding = _binding(setup(leg(stop=("percent", "25"))))
+    clock = Clock(at(5) + MINUTE_GRACE_MS)
+    clerk = Clerk(clock)
+    duty, journal, _qualified = _duty(tmp_path, binding, clock, clerk)
+    try:
+        await duty.tick()
+        clock.minute(6)
+        await duty.tick()
+        if history_failure:
+            duty._market.fail = True
+            clock.minute(7)
+            await duty.tick()
+            duty._market.fail = False
+        clock.minute(9)
+
+        await duty.tick()
+
+        assert [call["purpose"] for call in clerk.calls] == [EffectPurpose.ENTER, EffectPurpose.EXIT]
+        assert journal.state.legs[0].position.close.decided_at_ms == at(7)
+        assert journal.state.last_minute_ms == at(9)
+        assert journal.status()["data_gap"]
+    finally:
+        await duty.close()
+        journal.close()
+
+
+async def test_backfilled_stop_bars_do_not_precede_a_late_confirmed_entry(tmp_path: Path) -> None:
+    binding = _binding(setup(leg(stop=("percent", "25"))))
+    clock = Clock(at(5) + MINUTE_GRACE_MS)
+    clerk = Clerk(clock)
+    clerk.fill_quantity, clerk.terminal = 0, False
+    duty, journal, _qualified = _duty(tmp_path, binding, clock, clerk)
+    try:
+        await duty.tick()
+        clock.minute(6)
+        await duty.tick()
+        [attempt] = clerk.snapshots
+        clock.minute(9)
+        duty._market.prices[9] = D("1.40")
+        clerk.snapshots[attempt] = replace(
+            clerk.snapshots[attempt], standing=EntryStanding.FILLED, held_quantity=1,
+            entry_fills=(_fill(CALL, 1, 2.0, at(9)),),
+        )
+
+        await duty.tick()
+
+        assert journal.state.legs[0].position.close is None
+        assert [call["purpose"] for call in clerk.calls] == [EffectPurpose.ENTER]
+        clock.minute(10)
+        duty._market.prices[10] = D("1.40")
+        await duty.tick()
+        assert clerk.calls[-1]["purpose"] is EffectPurpose.EXIT
+    finally:
+        await duty.close()
+        journal.close()
+
+
 async def test_daily_cycle_starts_fresh_counters_only_after_actual_flat_proof(tmp_path: Path) -> None:
     binding, clock = _binding(setup(leg())), Clock(at(5) + MINUTE_GRACE_MS)
     clerk = Clerk(clock)

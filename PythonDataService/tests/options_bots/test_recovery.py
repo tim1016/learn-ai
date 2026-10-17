@@ -22,6 +22,30 @@ from tests.broker.alpaca.clerk.test_options_leg_custody import (
 pytestmark = pytest.mark.usefixtures("budgeted_run_registration")
 
 
+async def test_interrupted_session_no_longer_offers_resume_after_its_end(session_clerk: _DryRun) -> None:  # noqa: F811
+    from app.engine.live.desired_state import DesiredState
+    from app.schemas.bot_end import BotEnd
+    from app.services.options_bot_status import options_session_view
+
+    account = session_clerk
+    await account.clerk.record_deployment_launch(account.binding)
+    registry = BotTaskRegistry(account.artifacts_root, feed_resolver=lambda: _ResumeFeed(), now_ms=account.clock, boot_recovery_required=False)
+    registry._bindings.record_launch(account.binding, launch_reason="deploy")
+    registry._desired_repo(SID).set(
+        DesiredState.RUNNING, updated_by="owner", now_ms=account.clock(),
+        end=BotEnd(end_at_ms=account.clock() + 1_000, end_action="SELL"),
+    )
+    await account.clerk.stop_strategy_run(strategy_instance_id=SID, run_id=RUN, reason="options_interrupted:TEST_CRASH")
+    registry._terminal.finalize(account.binding, kind="CRASHED", reason_code="TEST_CRASH")
+    assert options_session_view(registry, "alpaca", SID).resume_allowed
+    account.wait(1_000)
+
+    state = options_session_view(registry, "alpaca", SID)
+
+    assert not state.resume_allowed
+    assert "end" in state.resume_explanation.lower()
+
+
 async def test_registry_resumes_interrupted_options_with_original_custody_and_retries_stay_terminal(
     session_clerk: _DryRun, monkeypatch: pytest.MonkeyPatch,  # noqa: F811
 ) -> None:

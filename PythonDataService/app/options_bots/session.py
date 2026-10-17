@@ -561,6 +561,8 @@ class OptionsSession:
         for leg in self.legs:
             if leg.phase is Phase.HELD:
                 position = _position_of(leg)
+                if t <= position.entry.bar_close_ms:
+                    continue
                 bar = self._option_bar(position.attempt.contract, t)
                 bars[leg.setup.leg_id] = bar
                 if bar is not None:

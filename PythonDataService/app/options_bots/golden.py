@@ -64,6 +64,7 @@ class GoldenStore(Protocol):
     async def get(self, qualification_id: str) -> GoldenRecord | None: ...
     async def by_command(self, command_id: str) -> GoldenRecord | None: ...
     async def events(self, qualification_id: str) -> tuple[GoldenEvent, ...]: ...
+    async def events_for(self, qualification_ids: Sequence[str]) -> tuple[GoldenEvent, ...]: ...
     async def event_by_command(self, command_id: str) -> GoldenEvent | None: ...
     async def insert(self, record: GoldenRecord) -> GoldenRecord: ...
     async def append(self, event: GoldenEvent) -> GoldenEvent: ...
@@ -129,14 +130,20 @@ class GoldenOptionsSetups:
 
     async def _view(self, record: GoldenRecord) -> GoldenOptionSetupView:
         events = await self.store.events(record.id)
+        return self._project(record, events, running_digest=await self._running_digest())
+
+    async def _running_digest(self) -> str | None:
         try:
-            running = await asyncio.to_thread(self.rules_digest)
+            return await asyncio.to_thread(self.rules_digest)
         except GoldenProofError:
-            running = None
+            return None
+
+    @staticmethod
+    def _project(record: GoldenRecord, events: Sequence[GoldenEvent], *, running_digest: str | None) -> GoldenOptionSetupView:
         setup = OptionsBacktestSetup.model_validate(record.setup)
         if setup_sha256(setup) != record.setup_sha256 or proof_sha256(record.proof) != record.proof_sha256:
             raise GoldenSetupError("EVIDENCE_UNREADABLE", "The retained approval does not match its recorded identity.")
-        status, explanation = qualification_status(record, events, running_digest=running)
+        status, explanation = qualification_status(record, events, running_digest=running_digest)
         effective_proof = record.proof
         for event in events:
             if event.kind == "reproved" and event.proof is not None:
@@ -156,7 +163,14 @@ class GoldenOptionsSetups:
         )
 
     async def list(self, *, limit: int = 200, source_run_id: int | None = None) -> list[GoldenOptionSetupView]:
-        return [await self._view(record) for record in await self.store.list(limit=limit, source_run_id=source_run_id)]
+        records = await self.store.list(limit=limit, source_run_id=source_run_id)
+        if not records:
+            return []
+        history, running = await asyncio.gather(self.store.events_for([record.id for record in records]), self._running_digest())
+        events: dict[str, list[GoldenEvent]] = {record.id: [] for record in records}
+        for event in history:
+            events[event.qualification_id].append(event)
+        return [self._project(record, events[record.id], running_digest=running) for record in records]
 
     async def _get(self, qualification_id: str) -> GoldenRecord:
         record = await self.store.get(qualification_id)

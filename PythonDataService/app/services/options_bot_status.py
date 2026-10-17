@@ -22,7 +22,8 @@ def options_session_view(registry: BotTaskRegistry, broker: str, sid: str) -> Op
         finally:
             journal.close()
     status = registry.status(broker, sid)
-    resumable = status.duty_outcome is not None and status.duty_outcome.kind in {"CRASHED", "EXITED_UNVERIFIED"}
+    ended = registry.bot_end(broker, sid).status in {"ending", "ended"}
+    resumable = not ended and status.duty_outcome is not None and status.duty_outcome.kind in {"CRASHED", "EXITED_UNVERIFIED"}
     runtime = get_clerk_runtime(binding.sealed_account_id) if binding.sealed_account_id is not None else None
     entries_enabled = status.running and runtime is not None and runtime.clerk.options_entries_enabled(sid)
     legs = []
@@ -48,7 +49,8 @@ def options_session_view(registry: BotTaskRegistry, broker: str, sid: str) -> Op
         pending_decisions=notes.get("pending_decisions", 0), entries_enabled=entries_enabled,
         resume_allowed=resumable,
         resume_explanation=(
-            "Resume restores recorded positions and remaining re-entries; entry spending needs a fresh review."
+            "This deployment has reached its chosen end. Resume is unavailable."
+            if ended else "Resume restores recorded positions and remaining re-entries; entry spending needs a fresh review."
             if resumable else "Resume is available after an interruption. Intentional Stop stays stopped."
         ),
         legs=legs, events=notes.get("events", []),

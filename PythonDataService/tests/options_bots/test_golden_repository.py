@@ -51,6 +51,7 @@ async def test_qualification_retains_source_evidence_and_commands_cannot_be_repu
         revoked = await repository.insert_event(conn, event)
         retry_event = await repository.insert_event(conn, event)
         assert revoked.id == retry_event.id
+        assert await repository.events_for(conn, (record.id,)) == (revoked,)
         assert (await repository.get_record(conn, record.id)).proof == proof
         await save_setup(conn, "setup-" + unique, result.setup, saved_at_ms=3)
         listed = await _listed_setups(conn)

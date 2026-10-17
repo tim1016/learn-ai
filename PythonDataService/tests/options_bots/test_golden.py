@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -41,6 +42,9 @@ class MemoryGoldenStore:
 
     async def events(self, qualification_id: str) -> tuple[GoldenEvent, ...]:
         return tuple(event for event in self.history if event.qualification_id == qualification_id)
+
+    async def events_for(self, qualification_ids: Sequence[str]) -> tuple[GoldenEvent, ...]:
+        return tuple(event for event in self.history if event.qualification_id in qualification_ids)
 
     async def event_by_command(self, command_id: str) -> GoldenEvent | None:
         return next((event for event in self.history if event.command_id == command_id), None)
@@ -189,3 +193,31 @@ async def test_run_filter_finds_approval_beyond_the_recent_list(source: SourceRu
 
         assert filtered.status_code == 200
         assert [item["id"] for item in filtered.json()] == [approved.id]
+
+
+async def test_catalog_shares_one_running_digest_and_bulk_event_read(source: SourceRun) -> None:
+    module = _module(source)
+    for number in range(3):
+        approved = await module.approve(_approve(idempotency_key=f"approve-list-{number}"))
+    await module.revoke(approved.id, RevokeGoldenOptionSetupRequest(reason="Owner withdrew approval", idempotency_key="revoke-list-version"))
+    digest_reads = 0
+    event_reads = 0
+    prior_events = module.store.events
+
+    def digest() -> str:
+        nonlocal digest_reads
+        digest_reads += 1
+        return "rules-v1"
+
+    async def events(qualification_id: str) -> tuple[GoldenEvent, ...]:
+        nonlocal event_reads
+        event_reads += 1
+        return await prior_events(qualification_id)
+
+    module.rules_digest, module.store.events = digest, events
+
+    listed = await module.list()
+
+    assert sorted(item.status for item in listed) == ["ready", "ready", "revoked"]
+    assert digest_reads == 1
+    assert event_reads == 0
