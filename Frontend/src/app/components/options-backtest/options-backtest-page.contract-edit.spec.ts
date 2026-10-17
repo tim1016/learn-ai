@@ -96,4 +96,28 @@ describe('editing a contract on its leg card', () => {
     press('Leg 1 lower strike');
     await waitFor(() => expect(lastBody(service).legs[0].strike).toEqual({ kind: 'atm_offset', steps: SERVED_LIMITS.max_strike_steps - 1 }));
   });
+
+  it.each([
+    { field: 'contracts', invalid: '6', valid: '5', expected: { contracts: 5 } },
+    { field: 'minimum expiry days', invalid: '11', valid: '10', expected: { expiry: { kind: 'min_days', days: 10 } } },
+    { field: 'strike offset', invalid: '4', valid: '3', expected: { strike: { kind: 'atm_offset', steps: 3 } } },
+    { field: 'strike offset', invalid: '-4', valid: '-3', expected: { strike: { kind: 'atm_offset', steps: -3 } } },
+  ])('keeps $field = $invalid out of requests and accepts the served boundary', async ({ field, invalid, valid, expected }) => {
+    const service = fakeService(vi, {
+      limits: vi.fn(async () => ({ ...SERVED_LIMITS, max_contracts_per_leg: 5, max_expiry_days: 10, max_strike_steps: 3 })),
+    });
+    await renderPage(service);
+    addLeg();
+    await userEvent.selectOptions(screen.getByLabelText('Leg 1 expiry'), 'min_days');
+    await waitFor(() => expect(lastBody(service).legs[0].expiry.kind).toBe('min_days'));
+    const calls = service.describe.mock.calls.length;
+
+    typeInto(`Leg 1 ${field}`, invalid);
+    await lettingGo();
+
+    expect(service.describe.mock.calls.length).toBe(calls);
+    expect(inLeg(1).getByRole('alert').textContent).toMatch(/whole number/);
+    typeInto(`Leg 1 ${field}`, valid);
+    await waitFor(() => expect(lastBody(service).legs[0]).toMatchObject(expected));
+  });
 });

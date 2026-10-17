@@ -150,7 +150,7 @@ export class OptionsBacktestPageComponent {
   /** The request body for the setup as it stands, or the problems that stop one. */
   private readonly built = computed(() => {
     const clock = this.clock();
-    return clock === null ? null : buildSetup(this.draft(), clock);
+    return clock === null ? null : buildSetup(this.draft(), clock, this.limits());
   });
   private readonly body = computed(() => {
     const built = this.built();
