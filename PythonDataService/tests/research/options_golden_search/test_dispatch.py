@@ -25,8 +25,9 @@ from tests.options_bots.test_golden_proof import _run
 
 
 @respx.mock
+@pytest.mark.parametrize("missing_option_day", [False, True])
 async def test_spawned_worker_reproduces_all_exact_evidence_from_retained_inputs(
-    fake_catalog: FakeCatalog, tmp_lake: Path, tmp_path: Path,
+    fake_catalog: FakeCatalog, tmp_lake: Path, tmp_path: Path, missing_option_day: bool,
 ) -> None:
     source = await _run(fake_catalog, tmp_lake)
     blobs = BlobStore(tmp_path / "blobs")
@@ -36,7 +37,10 @@ async def test_spawned_worker_reproduces_all_exact_evidence_from_retained_inputs
         payload = await asyncio.to_thread(read_committed_bytes, raw_root(tmp_lake) / relative)
         assert blobs.put(payload) == expected
         retained += len(payload)
-    snapshot = Snapshot(manifest=manifest, absent=(), retained_bytes=retained)
+    absent = tuple(path for path in manifest if path.startswith("option/") and "/listing/" not in path) if missing_option_day else ()
+    assert not missing_option_day or absent
+    snapshot = Snapshot(manifest={path: digest for path, digest in manifest.items() if path not in absent},
+                        absent=absent, retained_bytes=retained)
     window = Window(key="development", start_ms=FRIDAY_OPEN_MS, end_ms=FRIDAY_OPEN_MS + 86_400_000,
                     session_ms=(FRIDAY_OPEN_MS,), annualization_sessions=251, activity_floor=1)
     expected = evaluate_setup(source.setup, window, SnapshotRunData("SPY", snapshot, blobs))
@@ -55,6 +59,7 @@ async def test_spawned_worker_reproduces_all_exact_evidence_from_retained_inputs
     message = await asyncio.to_thread(execute)
     delivered = item.outcome_of(message)
     assert delivered.result == expected
+    assert bool(delivered.result.input_failures) == missing_option_day
 
 
 @respx.mock

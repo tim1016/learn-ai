@@ -38,12 +38,20 @@
     @if (study().final_results.length > 0) {
       <label>Exact candidate to approve<select [formField]="fields.hash"><option value="">Choose a candidate</option>@for (candidate of study().final_results; track candidate.candidate_hash) { <option [value]="candidate.candidate_hash">{{ candidate.label }}</option> }</select></label>
       <label>Owner review comment<textarea [formField]="fields.comment"></textarea></label>
-      @if (approvalCandidate(); as candidate) {
-        <p>{{ candidate.verdict | receiptLabel }}. Owner exceptions preserve all failed rules and exposure labels permanently.</p>
-        @for (gate of candidate.gate_outcomes; track gate.gate_id) { @if (gate.status !== 'passed' && gate.status !== 'meets_rules') { <p class="warning">{{ gate.gate_id | receiptLabel }}: actual {{ gate.actual ?? 'Unavailable' }}; required {{ gate.required ?? 'Unavailable' }}. {{ gate.reason }}</p> } }
-      }
+      @if (approvalReview(); as review) {
+        @if (review.blocked_reason; as reason) { <p class="problem">{{ reason }}</p> }
+        @if (review.failures.length > 0) {
+          <fieldset><legend>Explicit owner exception acknowledgements</legend><p>Review every procedure, development, final and exposure failure. Each acknowledgement stays in the approved evidence.</p>
+            @for (gate of review.failures; track gate.gate_id) {
+              <section><p><strong>{{ gate.gate_id | receiptLabel }} · {{ gate.status | receiptLabel }}</strong>: actual {{ gate.actual ?? 'Unavailable' }}; required {{ gate.required ?? 'Unavailable' }}. {{ gate.reason }}</p>
+                <label><input type="checkbox" [checked]="acknowledged().has(gate.gate_id)" [disabled]="review.blocked_reason !== null" (change)="acknowledge(gate.gate_id, $event)" /> Acknowledge {{ gate.gate_id | receiptLabel }}</label>
+              </section>
+            }
+          </fieldset>
+        } @else if (review.blocked_reason === null) { <p>All applicable approval rules meet the frozen limits.</p> }
+      } @else { <p>Complete approval evidence is not available. Refresh the study before approving.</p> }
       <div class="actions"><button type="button" [disabled]="!allowed('keep_original')" (click)="ask('keep_original')">Keep original</button><button type="button" class="primary" [disabled]="!canApprove()" (click)="ask('approve')">Approve exact golden version</button><button type="button" [disabled]="!canExcept()" (click)="ask('approve_exception')">Approve owner exception</button></div>
-      <p>A nonblank comment is required for exceptions. Missing inputs and failed repeatability cannot be overridden.</p>
+      <p>A nonblank comment and every listed acknowledgement are required for exceptions. Missing inputs and failed repeatability cannot be overridden.</p>
     }
     @if (study().qualification_id; as id) { <p>Golden version <code>{{ id }}</code> · {{ study().qualification_status | receiptLabel }}</p><p>Deploy is a separate action under the existing broker gates.</p> }
   </section>

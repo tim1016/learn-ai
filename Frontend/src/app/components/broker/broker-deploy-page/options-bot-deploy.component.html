@@ -12,7 +12,7 @@
           <option value="">Choose a golden setup</option>
           @if (versionChoices().length) {
             @for (version of versionChoices(); track version.id) {
-              <option [value]="version.id" [disabled]="version.status !== 'ready'">{{ version.name }} · run {{ version.source_run_id }} · {{ version.status }}</option>
+              <option [value]="version.id" [disabled]="version.status !== 'ready'">{{ version.name }}{{ version.evidence.verdict === 'owner_exception' ? ' · Owner exception' : '' }} · run {{ version.source_run_id }} · {{ version.status }}</option>
             }
           }
         </select>
@@ -20,6 +20,7 @@
         @if (golden(); as version) {
           <app-asset-identity [symbol]="version.underlying" size="sm" />
           <p>{{ version.status_explanation }}</p>
+          <app-options-qualification-evidence [evidence]="version.evidence" />
           <p>Tested <app-timestamp-display [value]="version.evidence.first_session_open_ms" mode="date-et" granularity="date" /> – <app-timestamp-display [value]="version.evidence.last_session_open_ms" mode="date-et" granularity="date" /> · {{ version.evidence.trades }} trades</p>
           <p>Tested starting capital {{ version.evidence.starting_cash_usd | authoredUsd }}. Contract quantities and trading rules stay fixed.</p>
           @if (setupWords.hasValue()) { <app-options-backtest-setup-sentences [summary]="setupWords.value()" /> }

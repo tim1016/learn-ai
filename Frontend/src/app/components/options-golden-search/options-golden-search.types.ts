@@ -79,6 +79,7 @@ export interface GateOutcome {
   readonly actual: string | null;
   readonly required: string | null;
   readonly reason: string;
+  readonly overridable?: boolean;
 }
 export interface LegAttempt {
   readonly leg_id: string;
@@ -130,6 +131,11 @@ export interface StudyCommand {
   readonly candidate_hashes?: readonly string[];
   readonly candidate_hash?: string;
   readonly comment?: string;
+  readonly waived_gate_ids?: readonly string[];
+}
+export interface ApprovalReview {
+  readonly failures: readonly GateOutcome[];
+  readonly blocked_reason: string | null;
 }
 export interface OptionsStudy {
   readonly id: string;
@@ -137,6 +143,7 @@ export interface OptionsStudy {
   readonly phase: string;
   readonly status: string;
   readonly protocol_hash: string;
+  readonly approval_reviews: Readonly<Record<string, ApprovalReview>>;
   readonly protocol_summary: readonly { readonly label: string; readonly value: string }[];
   readonly setup_name: string;
   readonly underlying: string;

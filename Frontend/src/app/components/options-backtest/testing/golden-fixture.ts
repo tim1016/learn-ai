@@ -15,3 +15,11 @@ export function goldenSetup(changes: Partial<GoldenOptionSetup> = {}): GoldenOpt
     }, ...changes,
   };
 }
+
+export function exceptionGoldenSetup(): GoldenOptionSetup {
+  const version = goldenSetup();
+  return { ...version, evidence: { ...version.evidence, verdict: 'owner_exception',
+    options_search_study_id: 'os_' + 'd'.repeat(40),
+    exposure: { classification: 'previously_used', explanation: 'The final interval was used in recorded research.' },
+    failed_rules: [{ gate_id: 'final:sharpe', status: 'does_not_meet_rules', actual: '0.4', required: '1.0', reason: 'The final Sharpe hurdle was not met.' }], waived_gate_ids: ['final:sharpe', 'final:exposure'] } };
+}

@@ -11,6 +11,7 @@
   "/api/research/golden-search",
   "/api/research/golden-validations",
   "/api/research/options-backtest/past-chain",
+  "/api/research/options-golden-search",
   "/api/strategy-gates",
   "/api/strategy-validation"
  ],

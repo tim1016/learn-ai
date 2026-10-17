@@ -89,7 +89,26 @@ def combine(outcomes: tuple[RuleOutcome, ...]) -> Verdict:
     return Verdict(status=status, outcomes=outcomes)
 
 
-def validate_exception(verdicts: tuple[Verdict, ...], waived_rules: tuple[str, ...], comment: str) -> None:
+class ExceptionOutcome(Protocol):
+    @property
+    def scope(self) -> str: ...
+
+    @property
+    def rule(self) -> str: ...
+
+    @property
+    def status(self) -> str: ...
+
+    @property
+    def overridable(self) -> bool: ...
+
+
+class ExceptionVerdict(Protocol):
+    @property
+    def outcomes(self) -> tuple[ExceptionOutcome, ...]: ...
+
+
+def validate_exception(verdicts: tuple[ExceptionVerdict, ...], waived_rules: tuple[str, ...], comment: str) -> None:
     """An exception acknowledges each scoped failure and cannot waive technical defects."""
     if not comment.strip():
         raise ValueError("owner exception needs a comment")

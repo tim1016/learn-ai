@@ -8168,6 +8168,13 @@ export interface components {
             /** Expected Selection Generation */
             expected_selection_generation: number;
         };
+        /** ApprovalReview */
+        ApprovalReview: {
+            /** Blocked Reason */
+            blocked_reason: string | null;
+            /** Failures */
+            failures: components["schemas"]["GateOutcome"][];
+        };
         /** ApproveGoldenOptionSetupRequest */
         ApproveGoldenOptionSetupRequest: {
             /** Expected Setup Sha256 */
@@ -11409,6 +11416,11 @@ export interface components {
             expected_revision: number;
             /** Idempotency Key */
             idempotency_key: string;
+            /**
+             * Waived Gate Ids
+             * @default []
+             */
+            waived_gate_ids?: string[];
         };
         /**
          * CommandResponse
@@ -14649,6 +14661,11 @@ export interface components {
             actual: string | null;
             /** Gate Id */
             gate_id: string;
+            /**
+             * Overridable
+             * @default true
+             */
+            overridable?: boolean;
             /** Reason */
             reason: string;
             /** Required */
@@ -14767,22 +14784,41 @@ export interface components {
         };
         /** GoldenOptionSetupEvidence */
         GoldenOptionSetupEvidence: {
+            /** Execution Identity */
+            execution_identity?: {
+                [key: string]: string;
+            } | null;
+            exposure?: components["schemas"]["Exposure"] | null;
+            /** Failed Rules */
+            failed_rules?: components["schemas"]["GateOutcome"][] | null;
             /** First Session Open Ms */
             first_session_open_ms: number;
             /** Last Session Open Ms */
             last_session_open_ms: number;
             /** Limitations */
             limitations: string[];
+            /** Metric Identity */
+            metric_identity?: string | null;
             /** Net Profit Usd */
             net_profit_usd: string;
+            /** Options Search Study Id */
+            options_search_study_id?: string | null;
+            /** Selection Count */
+            selection_count?: number | null;
             /** Sessions Tested */
             sessions_tested: number;
             /** Slippage Percent */
             slippage_percent: string;
             /** Starting Cash Usd */
             starting_cash_usd: string;
+            /** Study Manifest Sha256 */
+            study_manifest_sha256?: string | null;
             /** Trades */
             trades: number;
+            /** Verdict */
+            verdict?: ("meets_rules" | "owner_exception") | null;
+            /** Waived Gate Ids */
+            waived_gate_ids?: string[];
         };
         /** GoldenOptionSetupRefusal */
         GoldenOptionSetupRefusal: {
@@ -29797,6 +29833,10 @@ export interface components {
         StudyDetail: {
             /** Allowed Commands */
             allowed_commands: string[];
+            /** Approval Reviews */
+            approval_reviews?: {
+                [key: string]: components["schemas"]["ApprovalReview"];
+            };
             /** Candidates */
             candidates: components["schemas"]["Candidate"][];
             dispatch: components["schemas"]["Dispatch"] | null;

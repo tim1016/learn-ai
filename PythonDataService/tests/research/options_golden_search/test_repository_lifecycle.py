@@ -19,6 +19,7 @@ from app.research.options_golden_search import service
 from app.research.options_golden_search.planning import freeze_protocol
 from app.research.options_golden_search.protocol import Knob
 from app.research.persistence.fence import StaleAttemptError
+from app.research.runs.hashing import hash_payload
 from app.schemas.options_golden_search import Command, History, PlanRequest
 from app.utils.session_anchors import et_midnight_ms
 from tests.options_backtest._market import leg, setup
@@ -37,6 +38,36 @@ async def _running(conn: asyncpg.Connection, unique: str) -> dict[str, Any]:
     row.update(status="queued", stage_token="token", job_id="job")
     await repo.save(conn, row)
     return await repo.claim(conn, row["id"], "token", "job")
+
+
+async def test_each_authorized_stage_gets_its_own_deadline_after_owner_review(
+    conn: asyncpg.Connection, unique: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = 1_000_000
+    monkeypatch.setattr(repo, "now_ms_utc", lambda: clock)
+    row = await _running(conn, unique)
+    limit = row["protocol"]["budget"]["max_elapsed_ms"]
+    assert row["execution_deadline_ms"] == clock + limit
+    for phase in ("final", "approval"):
+        clock += 2 * limit
+        row.update(phase=phase, status="queued", stage_token=phase, job_id=phase)
+        await repo.save(conn, row)
+        row = await repo.claim(conn, row["id"], phase, phase)
+        assert row["execution_deadline_ms"] == clock + limit
+
+
+async def test_resume_of_exhausted_stage_cannot_reset_its_execution_deadline(
+    conn: asyncpg.Connection, unique: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = 1_000_000
+    monkeypatch.setattr(repo, "now_ms_utc", lambda: clock)
+    row = await _running(conn, unique)
+    deadline = row["execution_deadline_ms"]
+    clock = deadline + 1
+    row.update(status="queued", stage_token="resume", job_id="resume")
+    await repo.save(conn, row)
+    resumed = await repo.claim(conn, row["id"], "resume", "resume")
+    assert resumed["execution_deadline_ms"] == deadline < clock
 
 
 async def test_concurrent_lock_retry_returns_one_receipt_and_rejects_changed_request(
@@ -167,6 +198,21 @@ def _connect_commands(monkeypatch: pytest.MonkeyPatch, conn: asyncpg.Connection)
 
     monkeypatch.setattr(repo, "connection", connection)
     monkeypatch.setattr(service, "execution_identity", lambda: {"selection": "test"})
+
+
+async def test_empty_waiver_default_preserves_existing_command_receipts(
+    conn: asyncpg.Connection, unique: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = _command_record(unique)
+    await repo.create(conn, row, "lock", "request")
+    request = Command(command="cancel", expected_revision=0, idempotency_key="existing")
+    legacy_hash = hash_payload(request.model_dump(mode="json", exclude={"idempotency_key", "waived_gate_ids"}))
+    await repo.record_command(conn, row["id"], request.idempotency_key, legacy_hash, row)
+    _connect_commands(monkeypatch, conn)
+    retried = await service.command(row["id"], request)
+    assert retried.id == row["id"] and retried.revision == row["revision"]
+    with pytest.raises(repo.Conflict, match="different request"):
+        await service.command(row["id"], request.model_copy(update={"waived_gate_ids": ("final:sharpe",)}))
 
 
 async def test_open_final_commits_shortlist_exposure_dispatch_and_retry_receipt_together(

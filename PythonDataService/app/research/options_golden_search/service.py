@@ -203,7 +203,10 @@ async def detail(study_id: str) -> StudyDetail:
 
 
 async def command(study_id: str, request: Command) -> StudyDetail:
-    request_hash = hash_payload(request.model_dump(mode="json", exclude={"idempotency_key"}))
+    excluded = {"idempotency_key"}
+    if not request.waived_gate_ids:
+        excluded.add("waived_gate_ids")
+    request_hash = hash_payload(request.model_dump(mode="json", exclude=excluded))
     async with repo.edit(study_id) as (conn, value):
         prior = await repo.command_receipt(conn, study_id, request.idempotency_key, request_hash)
         if prior is not None:
@@ -258,7 +261,7 @@ def protocol_summary(protocol: OptionsSearchProtocol) -> list[dict[str, str]]:
     for window in [protocol.development, *[w for fold in protocol.folds for w in (fold.training, fold.forward)], protocol.final]:
         rows.append({"label": window.key, "value": f"{window.start_ms} to {window.end_ms} UTC ms; {len(window.session_ms)} sessions; activity floor {window.activity_floor}"})
     rows.extend([{"label": "Snapshot", "value": protocol.snapshot_id}, {"label": "Executable identity", "value": repo.dumps(protocol.identities)},
-        {"label": "Work bounds", "value": repo.dumps(protocol.budget.model_dump(mode="json"))},
+        {"label": "Work bounds (elapsed limit per executable stage; retries share deadline)", "value": repo.dumps(protocol.budget.model_dump(mode="json"))},
         {"label": "Cost scenarios", "value": repo.dumps([s.model_dump(mode="json") for s in protocol.stress])}])
     return rows
 

@@ -131,6 +131,7 @@ def publication(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         work_progress=lambda count: None,
         cache_hits=0,
     )
+    state.request_row = row
     state.run = lambda: approval.approve(copy.deepcopy(row), evaluator)
     return state
 
@@ -141,6 +142,7 @@ def test_approval_publishes_exact_version_and_study_manifest_together(publicatio
     assert len(publication.records) == len(publication.manifests) == 1
     assert publication.records[0].source_run_id == 42
     assert publication.records[0].evidence["selection_count"] == 1
+    assert publication.records[0].evidence["execution_identity"] == publication.row["protocol"]["identities"]
     assert publication.proof_calls == 1
 
 
@@ -189,3 +191,18 @@ def test_cancel_or_revision_change_during_proof_cannot_publish(publication: Simp
     with pytest.raises(StaleAttemptError):
         publication.run()
     assert publication.records == publication.manifests == []
+
+
+def test_owner_exception_persists_exact_acknowledged_gate_ids_in_manifest_and_golden_evidence(publication: SimpleNamespace) -> None:
+    import json
+
+    for row in (publication.request_row, publication.row):
+        row["exposure"]["classification"] = "previously_used"
+        row["approval_request"].update(command="approve_exception", waived_gate_ids=["final:exposure"], comment="I explicitly accept the previously used final history.")
+    publication.run()
+    manifest = json.loads(publication.manifests[0][2])
+    assert manifest["exception"] is True
+    assert manifest["waived_gate_ids"] == ["final:exposure"]
+    assert manifest["failed_rules"][0]["gate_id"] == "final:exposure"
+    assert publication.records[0].evidence["waived_gate_ids"] == ["final:exposure"]
+    assert publication.records[0].evidence["verdict"] == "owner_exception"

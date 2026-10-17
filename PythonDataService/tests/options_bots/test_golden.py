@@ -143,6 +143,77 @@ async def test_running_rule_change_holds_entry_until_successful_reproof_without_
     assert (await module.ready(approved.id)).setup_sha256 == approved.setup_sha256
 
 
+@pytest.mark.parametrize("changed", ["selection", "options_rules", "calendar", "calendar_package", "environment"])
+async def test_search_qualification_retains_full_identity_staleness_after_execution_reproof(
+    source: SourceRun, monkeypatch: pytest.MonkeyPatch, changed: str,
+) -> None:
+    from app.research.options_golden_search import identity
+
+    original = {"selection": "selection-v1", "options_rules": "rules-v1", "calendar": "calendar-v1",
+                "calendar_package": "calendar-package-v1", "environment": "environment-v1"}
+    current = dict(original)
+    monkeypatch.setattr(identity, "execution_identity", lambda: dict(current))
+    module = _module(source)
+    approved = await module.approve(_approve())
+    record = module.store.records[approved.id]
+    module.store.records[approved.id] = replace(record, evidence={**record.evidence,
+        "options_search_study_id": "study", "metric_identity": original["selection"], "execution_identity": original})
+    assert (await module.ready(approved.id)).status == "ready"
+    current[changed] += "-changed"
+    module.rules_digest = lambda: current["options_rules"]
+    module.reprove_run = lambda _source, proof: {**proof, "rules_digest": current["options_rules"]}
+    reproved = await module.reprove(approved.id, ReproveGoldenOptionSetupRequest(idempotency_key="reprove-search"))
+    assert reproved.status == "stale"
+    assert "new study approval" in reproved.status_explanation
+    assert (await module.store.get(approved.id)).evidence["execution_identity"] == original
+    with pytest.raises(GoldenSetupError) as held:
+        await module.ready(approved.id)
+    assert held.value.code == "GOLDEN_SETUP_STALE"
+
+
+async def test_search_qualification_without_complete_identity_is_stale(
+    source: SourceRun, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.research.options_golden_search import identity
+
+    monkeypatch.setattr(identity, "execution_identity", lambda: {"selection": "selection-v1"})
+    module = _module(source)
+    approved = await module.approve(_approve())
+    record = module.store.records[approved.id]
+    module.store.records[approved.id] = replace(record, evidence={**record.evidence,
+        "options_search_study_id": "study", "metric_identity": "selection-v1"})
+    assert (await module.get(approved.id)).status == "stale"
+
+
+async def test_http_search_approval_preserves_study_identity_and_exception_evidence(
+    source: SourceRun, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.research.options_golden_search import identity
+
+    execution = {"selection": "selection-v1", "options_rules": "rules-v1", "calendar": "calendar-v1",
+                 "calendar_package": "calendar-package-v1", "environment": "environment-v1"}
+    monkeypatch.setattr(identity, "execution_identity", lambda: dict(execution))
+    module = _module(source)
+    approved = await module.approve(_approve())
+    record = module.store.records[approved.id]
+    search = {"options_search_study_id": "os_" + "1" * 40, "study_manifest_sha256": "2" * 64,
+              "verdict": "owner_exception", "failed_rules": [{"gate_id": "final:exposure",
+                  "status": "not_enough_evidence", "actual": "previously_used", "required": "not_opened",
+                  "reason": "Prior history exposure acknowledged.", "overridable": True}], "selection_count": 4,
+              "exposure": {"classification": "previously_used", "explanation": "Prior use is permanently retained."},
+              "metric_identity": execution["selection"], "execution_identity": execution}
+    module.store.records[approved.id] = replace(record, evidence={**record.evidence, **search})
+    app = FastAPI()
+    app.include_router(golden_option_setups.router, prefix="/api/research/golden-option-setups")
+    app.dependency_overrides[golden_option_setups.service] = lambda: module
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/research/golden-option-setups/" + approved.id)
+    assert response.status_code == 200
+    evidence = response.json()["evidence"]
+    assert {key: evidence.get(key) for key in search} == search
+    assert evidence["sessions_tested"] == record.evidence["sessions_tested"]
+
+
 async def test_revocation_is_durable_blocks_reproof_and_cannot_be_overridden_by_retry(source: SourceRun) -> None:
     module = _module(source)
     approved = await module.approve(_approve())

@@ -2,6 +2,7 @@
   <h3>Golden setup</h3>
   @if (golden(); as version) {
     <p><strong>{{ version.status | receiptLabel }}</strong> · {{ version.status_explanation }}</p>
+    <app-options-qualification-evidence [evidence]="version.evidence" />
     <p>Approved by {{ version.approved_by }}: {{ version.note }}</p>
     @for (limitation of version.evidence.limitations; track limitation) { <p class="note">{{ limitation }}</p> }
     @if (version.status === 'ready') { <p>Choose this version in an account’s Deploy a bot → Options bot.</p> }

@@ -113,10 +113,10 @@ def qualification_status(
         from app.research.options_golden_search.identity import execution_identity
 
         try:
-            metric_identity = execution_identity()["selection"]
+            identity = execution_identity()
         except (ValueError, GoldenProofError):
-            metric_identity = None
-        if record.evidence.get("metric_identity") != metric_identity:
+            identity = None
+        if identity is None or record.evidence.get("execution_identity") != identity:
             return "stale", "The search qualification identity changed. Its historical verdict is retained; a new study approval is required."
     return "ready", "This exact tested setup is owner-approved and its repeatability proof matches the running rules."
 

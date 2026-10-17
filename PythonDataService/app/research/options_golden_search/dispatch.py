@@ -23,7 +23,7 @@ from app.research.golden_search.shared_pool import (
     shared_worker_pool,
 )
 from app.research.golden_search.worker import WorkerDispatchContext
-from app.research.options_golden_search.evaluator import EvaluationResult
+from app.research.options_golden_search.evaluator import EvaluationResult, with_input_failures
 from app.research.options_golden_search.metrics import evidence_from_json, evidence_to_json, summarize_evidence
 from app.research.options_golden_search.protocol import Window
 
@@ -73,7 +73,8 @@ class ReadyOptions:
         metrics = summarize_evidence(sessions, starting_capital_usd=setup.starting_cash_usd,
             annualization_sessions=window.annualization_sessions,
             risk_free_daily_return=float(self.payload.get("risk_free_daily_return", 0)))
-        result = EvaluationResult(sessions, pins, metrics, len(window.session_ms))
+        input_failures = tuple(wire.get("input_failures", ()))
+        result = EvaluationResult(sessions, pins, with_input_failures(metrics, input_failures), len(window.session_ms), input_failures)
         return OptionsDelivery(self.key, self.attempt, self.task_gen, result, tuple(wire["actual_reads"]))
 
 
@@ -152,7 +153,8 @@ def run_options_task(task: Mapping[str, Any], *, out: Any,
         checkpoint("search", cursor_kind="durable_completions", cursor=state["completed"])
         out.write({"type": "result", "key": task["key"],
                    "options_result": {"sessions": [evidence_to_json(s) for s in result.sessions],
-                       "pins": pins_to_wire(result.pins), "actual_reads": sorted(data.actual_reads)}, **_residency_fields(state)})
+                       "pins": pins_to_wire(result.pins), "input_failures": result.input_failures,
+                       "actual_reads": sorted(data.actual_reads)}, **_residency_fields(state)})
     except BaseException as exc:  # terminal child sink: every failure is an explicit delivered answer
         out.write({"type": "failed", "key": str(task.get("key", "?")),
                    "error": f"{type(exc).__name__}: {exc}", **_residency_fields(state)})

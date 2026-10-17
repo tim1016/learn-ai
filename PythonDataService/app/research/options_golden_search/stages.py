@@ -13,7 +13,7 @@ from app.options_bots.golden_proof import setup_sha256
 from app.research.golden_search.proof import BlobStore, default_blob_store
 from app.research.options_golden_search import repository as repo
 from app.research.options_golden_search.dispatch import pins_from_wire, pins_to_wire
-from app.research.options_golden_search.evaluator import EvaluationResult, evaluate_setup
+from app.research.options_golden_search.evaluator import EvaluationResult, evaluate_setup, with_input_failures
 from app.research.options_golden_search.identity import execution_identity
 from app.research.options_golden_search.metrics import (
     evidence_from_json,
@@ -110,10 +110,12 @@ class StudyEvaluator:
         sessions = tuple(evidence_from_json(s) for s in payload["sessions"])
         metrics = summarize_evidence(sessions,starting_capital_usd=self.protocol.setup.starting_cash_usd,
             annualization_sessions=window.annualization_sessions,risk_free_daily_return=self.protocol.policy.risk_free_daily_return)
+        input_failures = tuple(payload.get("input_failures", ()))
+        metrics = with_input_failures(metrics, input_failures)
         if hash_payload(exact_data(metrics)) != stored["metrics_sha256"] or metric_summary(metrics) != stored["metrics"]:
             raise ValueError("Retained trace no longer reproduces its recorded qualification metrics.")
         pins = pins_from_wire(payload["pins"])
-        return EvaluationResult(sessions,pins,metrics,len(window.session_ms))
+        return EvaluationResult(sessions,pins,metrics,len(window.session_ms),input_failures)
 
     def __call__(self, setup, window: Window, scenario: str) -> Evaluation:
         return self.evaluate_batch([(setup,window,scenario)])[0]
@@ -146,7 +148,7 @@ class StudyEvaluator:
 
         def persist(key: str, result: EvaluationResult, actual_reads: list[str], task_gen: int) -> None:
             payload = json.dumps({"sessions": [evidence_to_json(session) for session in result.sessions],
-                "pins": pins_to_wire(result.pins)}, separators=(",", ":"), allow_nan=False).encode()
+                "pins": pins_to_wire(result.pins), "input_failures": result.input_failures}, separators=(",", ":"), allow_nan=False).encode()
             counts = run_sync(with_connection(repo.counters, self.row["id"]))
             retained_bytes = counts["evidence_bytes"]
             if retained_bytes + len(payload) > self.protocol.budget.max_artifact_bytes:
@@ -326,10 +328,8 @@ def final(row: dict[str, Any], evaluator: StudyEvaluator, *, on_result: Callable
             stress_result = evaluator.result_for(stressed,protocol.final)
             stress_verdict = classify(stress_result.metrics,protocol.policy,protocol.final,"stress")
             view["evidence"].append({"label":"Cost stress "+scenario.key,"value":str(stress_result.metrics.net_profit_usd)+" USD; "+stress_verdict.status})
-            if protocol.policy.stress_gate:
-                view["gate_outcomes"].extend(gates(stress_verdict,"final:"+scenario.key))
             # Technical inability to execute a mandatory stress replay is never a performance exception.
-            if stress_verdict.status=="could_not_evaluate":
+            if protocol.policy.stress_gate or stress_verdict.status=="could_not_evaluate":
                 view["gate_outcomes"].extend(gates(stress_verdict,"final:"+scenario.key))
         statuses = [v["status"] for v in view["gate_outcomes"]]
         for status in ("could_not_evaluate","does_not_meet_rules","not_enough_evidence","meets_rules"):

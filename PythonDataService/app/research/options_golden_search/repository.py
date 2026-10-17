@@ -134,8 +134,11 @@ async def claim(conn: asyncpg.Connection, study_id: str, token: str, job_id: str
         value = await get(conn, study_id, lock=True)
         if value["status"] != "queued" or value.get("stage_token") != token or value.get("job_id") != job_id:
             raise Conflict("The job no longer owns this stage.")
-        if value.get("execution_deadline_ms") is None:
+        # Each executable stage has its own elapsed bound; retries share it,
+        # while owner review between stages consumes none of the next bound.
+        if value.get("execution_deadline_ms") is None or value.get("execution_deadline_phase") != value["phase"]:
             value["execution_deadline_ms"] = now_ms_utc() + value["protocol"]["budget"]["max_elapsed_ms"]
+            value["execution_deadline_phase"] = value["phase"]
             await save(conn,value,bump=False)
         row = await conn.fetchrow(
             f"UPDATE {TABLE} SET attempt=attempt+1,status='running' WHERE id=$1 RETURNING *", study_id,

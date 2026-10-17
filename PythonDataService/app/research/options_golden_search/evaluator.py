@@ -12,7 +12,7 @@ An incomplete session or missing held-minute mark stops before any synthetic set
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, localcontext
 
 from app.options_backtest import fills
@@ -22,7 +22,7 @@ from app.options_backtest.fees import fee_for_policy
 from app.options_backtest.observation import MinuteObservation
 from app.options_backtest.replay import replay_session
 from app.options_backtest.results import Fill, SessionStatus, SkipReason
-from app.options_backtest.run import RunStopped, load_session_market, validate_run_sessions
+from app.options_backtest.run import RunStopped, SessionDataMissing, load_session_market, validate_run_sessions
 from app.options_backtest.session_result import SessionPins
 from app.options_backtest.setup import OptionsBacktestSetup
 from app.research.options_golden_search.metrics import QualificationMetrics, SessionEvidence, summarize_evidence
@@ -36,6 +36,12 @@ class EvaluationResult:
     pins: tuple[SessionPins, ...]
     metrics: QualificationMetrics
     scheduled_sessions: int
+    input_failures: tuple[str, ...] = ()
+
+
+def with_input_failures(metrics: QualificationMetrics, failures: tuple[str, ...]) -> QualificationMetrics:
+    """Retain missing-artifact diagnostics without inventing a session or daily return."""
+    return replace(metrics, technical_failures=(*metrics.technical_failures, *failures))
 
 
 def evaluate_setup(
@@ -59,11 +65,16 @@ def evaluate_setup(
     cash = setup.starting_cash_usd
     kept: list[SessionEvidence] = []
     pins: list[SessionPins] = []
+    input_failures: tuple[str, ...] = ()
     observed_minutes = 0
     for index, day in enumerate(days):
         if should_stop is not None and should_stop():
             raise RunStopped(index)
-        market, session_pins = load_session_market(setup, day, data)
+        try:
+            market, session_pins = load_session_market(setup, day, data)
+        except SessionDataMissing as exc:
+            input_failures = (str(exc),)
+            break
         if market.session_open_ms != window.session_ms[index]:
             raise ValueError("window session anchors differ from the canonical calendar")
         observations: list[MinuteObservation] = []
@@ -96,4 +107,4 @@ def evaluate_setup(
         kept, starting_capital_usd=setup.starting_cash_usd,
         annualization_sessions=window.annualization_sessions, risk_free_daily_return=risk_free_daily_return,
     )
-    return EvaluationResult(tuple(kept), tuple(pins), metrics, len(days))
+    return EvaluationResult(tuple(kept), tuple(pins), with_input_failures(metrics, input_failures), len(days), input_failures)

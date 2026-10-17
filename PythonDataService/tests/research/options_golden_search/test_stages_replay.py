@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -16,7 +17,7 @@ from app.research.options_golden_search.approval import verify_recorded_study
 from app.research.options_golden_search.evaluator import EvaluationResult, evaluate_setup
 from app.research.options_golden_search.planning import freeze_protocol
 from app.research.options_golden_search.policy import classify
-from app.research.options_golden_search.protocol import Knob, OptionsSearchProtocol, Policy, Window
+from app.research.options_golden_search.protocol import CostScenario, Knob, OptionsSearchProtocol, Policy, Window
 from app.research.options_golden_search.search import Evaluation
 from app.research.options_golden_search.stages import final, research
 from app.research.runs.hashing import hash_payload
@@ -105,6 +106,26 @@ def _row(protocol: OptionsSearchProtocol) -> dict[str, Any]:
             "exposure": {"classification": "not_opened", "explanation": "test"}, "allowed_commands": [],
             "dispatch": None, "stage_token": None, "failure_reason": None, "qualification_id": None,
             "qualification_status": None}
+
+
+def test_enabled_stress_gate_retains_each_technical_failure_once(experiment) -> None:
+    original, data = experiment
+    window = original.final.model_copy(update={"session_ms": original.final.session_ms[:1]})
+    protocol = original.model_copy(update={"final": window, "stress": (CostScenario(key="fees", fee_multiplier="2"),),
+        "policy": original.policy.model_copy(update={"stress_gate": True})})
+    evaluator = ReplayEvaluator(protocol, data)
+    base = evaluator(protocol.setup, window, "base")
+    stressed = evaluator(protocol.setup, window, "fees")
+    evidence = evaluator.results[stressed.evidence_id]
+    evaluator.results[stressed.evidence_id] = replace(evidence,
+        metrics=replace(evidence.metrics, technical_failures=("missing stress mark",)))
+    row = _row(protocol)
+    row.update(research={"selection": {"points": {}}}, finalists=[base.point_hash])
+    result = final(row, evaluator)
+    outcomes = result["final_results"][0]["gate_outcomes"]
+    keys = [outcome["gate_id"] for outcome in outcomes]
+    assert len(keys) == len(set(keys))
+    assert result["final_results"][0]["verdict"] == "could_not_evaluate"
 
 
 def test_research_compare_and_final_use_real_whole_setup_evidence_with_valid_typed_views(

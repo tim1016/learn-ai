@@ -1,0 +1,11 @@
+@if (evidence().verdict === 'owner_exception') {
+  <section>
+    <p><strong>Owner exception</strong> · This version retains its failed rules permanently.</p>
+    @if (evidence().exposure; as exposure) { <p>Final history exposure: {{ exposure.classification | receiptLabel }}. {{ exposure.explanation }}</p> }
+    @for (failure of evidence().failed_rules; track failure.gate_id) {
+      <p><strong>{{ failure.gate_id | receiptLabel }}</strong>: actual {{ failure.actual ?? 'Unavailable' }}; required {{ failure.required ?? 'Unavailable' }}. {{ failure.reason }}</p>
+    }
+    @for (identifier of evidence().waived_gate_ids; track identifier) { <p>Acknowledged exception: {{ identifier | receiptLabel }}</p> }
+    @if (evidence().options_search_study_id; as id) { <a [href]="'/options-golden-search/' + id">Review source Options study</a> }
+  </section>
+}

@@ -12,11 +12,27 @@ from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.options_backtest.run import RunStopped, run_sessions
 from app.options_backtest.setup import OptionsBacktestSetup
 from app.research.options_golden_search.evaluator import evaluate_setup
-from app.research.options_golden_search.protocol import Window
+from app.research.options_golden_search.policy import classify
+from app.research.options_golden_search.protocol import Policy, Window
 from tests.options_backtest._run_data import FRI, THU, WED, open_ms
 from tests.research.options_golden_search._evidence import scene
 
 D = Decimal
+
+
+@pytest.mark.parametrize("missing_index", [0, 1])
+def test_missing_option_day_is_retained_technical_evidence_without_inventing_a_daily_return(missing_index: int) -> None:
+    written, data = scene((WED, THU, FRI), exits=("2", "3", "4"))
+    missing_day = (WED, THU, FRI)[missing_index]
+    data._options = {key: value for key, value in data._options.items() if key[1] != missing_day}
+    window = _window((WED, THU, FRI))
+    result = evaluate_setup(written, window, data)
+    assert len(result.sessions) == missing_index
+    assert result.metrics.daily_observation_count == missing_index
+    assert len(result.input_failures) == 1 and "not captured" in result.input_failures[0]
+    assert result.metrics.technical_failures
+    assert classify(result.metrics, Policy(), window, "development").status == "could_not_evaluate"
+    assert all(question[1] <= missing_day for question in data.asked)
 
 
 def _window(days: Sequence[date]) -> Window:

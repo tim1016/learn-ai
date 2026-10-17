@@ -2186,6 +2186,35 @@
         "title": "ApplyRequest",
         "type": "object"
       },
+      "ApprovalReview": {
+        "additionalProperties": false,
+        "properties": {
+          "blocked_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked Reason"
+          },
+          "failures": {
+            "items": {
+              "$ref": "#/components/schemas/GateOutcome"
+            },
+            "title": "Failures",
+            "type": "array"
+          }
+        },
+        "required": [
+          "failures",
+          "blocked_reason"
+        ],
+        "title": "ApprovalReview",
+        "type": "object"
+      },
       "ApproveGoldenOptionSetupRequest": {
         "additionalProperties": false,
         "properties": {
@@ -10767,6 +10796,17 @@
             "minLength": 1,
             "title": "Idempotency Key",
             "type": "string"
+          },
+          "waived_gate_ids": {
+            "default": [],
+            "items": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxLength": 10000,
+            "title": "Waived Gate Ids",
+            "type": "array"
           }
         },
         "required": [
@@ -18578,6 +18618,11 @@
             "title": "Gate Id",
             "type": "string"
           },
+          "overridable": {
+            "default": true,
+            "title": "Overridable",
+            "type": "boolean"
+          },
           "reason": {
             "title": "Reason",
             "type": "string"
@@ -18864,6 +18909,44 @@
       },
       "GoldenOptionSetupEvidence": {
         "properties": {
+          "execution_identity": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Identity"
+          },
+          "exposure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Exposure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "failed_rules": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/GateOutcome"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed Rules"
+          },
           "first_session_open_ms": {
             "maximum": 253402300799999.0,
             "minimum": 0.0,
@@ -18883,9 +18966,43 @@
             "title": "Limitations",
             "type": "array"
           },
+          "metric_identity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metric Identity"
+          },
           "net_profit_usd": {
             "title": "Net Profit Usd",
             "type": "string"
+          },
+          "options_search_study_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Options Search Study Id"
+          },
+          "selection_count": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selection Count"
           },
           "sessions_tested": {
             "title": "Sessions Tested",
@@ -18899,9 +19016,42 @@
             "title": "Starting Cash Usd",
             "type": "string"
           },
+          "study_manifest_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Study Manifest Sha256"
+          },
           "trades": {
             "title": "Trades",
             "type": "integer"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "enum": [
+                  "meets_rules",
+                  "owner_exception"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdict"
+          },
+          "waived_gate_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Waived Gate Ids",
+            "type": "array"
           }
         },
         "required": [
@@ -57251,6 +57401,13 @@
             },
             "title": "Allowed Commands",
             "type": "array"
+          },
+          "approval_reviews": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ApprovalReview"
+            },
+            "title": "Approval Reviews",
+            "type": "object"
           },
           "candidates": {
             "items": {

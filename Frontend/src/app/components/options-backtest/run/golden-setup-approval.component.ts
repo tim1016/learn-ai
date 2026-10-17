@@ -3,11 +3,12 @@ import { disabled, FormField, form, minLength, required } from '@angular/forms/s
 
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { extractServerMessage } from '../../broker/operation-error';
+import { OptionsQualificationEvidenceComponent } from '../options-qualification-evidence.component';
 import { GoldenOptionSetupsService, type GoldenOptionSetup } from '../golden-option-setups.service';
 
 @Component({
   selector: 'app-golden-option-setup-approval',
-  imports: [FormField, ReceiptLabelPipe],
+  imports: [FormField, ReceiptLabelPipe, OptionsQualificationEvidenceComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './golden-setup-approval.component.html',
   styleUrl: './golden-setup-approval.component.scss',

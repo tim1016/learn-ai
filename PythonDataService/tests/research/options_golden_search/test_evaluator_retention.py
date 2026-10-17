@@ -20,12 +20,15 @@ from tests.research.options_golden_search.test_evaluator import _window
 from tests.research.options_golden_search.test_protocol_search import protocol
 
 
+@pytest.mark.parametrize("missing_option_day", [False, True])
 def test_large_batch_releases_replay_graphs_and_loads_selected_exact_evidence(
-    tmp_path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path, monkeypatch: pytest.MonkeyPatch, missing_option_day: bool,
 ) -> None:
     from app.services import research_runtime_client
 
     setup, data = scene((WED,), exits=("2",))
+    if missing_option_day:
+        data._options.clear()
     window = _window((WED,))
     snapshot = Snapshot(manifest={}, absent=(), retained_bytes=0)
     plan = protocol().model_copy(update={"setup": setup, "snapshot_id": snapshot.snapshot_id, "knobs": (Knob(path=f"legs.{setup.legs[0].leg_id}.stop_loss", values=(None, {"kind": "percent", "value": "10"})),)})
@@ -100,6 +103,7 @@ def test_large_batch_releases_replay_graphs_and_loads_selected_exact_evidence(
     restored = evaluator.result_for(answers[-1], window)
     expected = evaluate_setup(requests[-1][0], window, data)
     assert restored == expected
+    assert bool(restored.input_failures) == missing_option_day
     assert evaluator.evaluate_batch(requests) == answers
     assert computations == 64
     evaluator.verify_only = True

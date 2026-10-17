@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
@@ -63,6 +63,7 @@ class Command(Model):
     candidate_hashes: tuple[str, ...] | None = Field(default=None, max_length=11)
     candidate_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     comment: str = Field(default="", max_length=10000)
+    waived_gate_ids: tuple[Annotated[str, Field(min_length=1, max_length=256)], ...] = Field(default=(), max_length=10000)
 
 
 class JobRequest(Model):
@@ -147,6 +148,7 @@ class GateOutcome(Model):
     actual: str | None
     required: str | None
     reason: str
+    overridable: bool = True
 
 
 class EvidenceItem(Model):
@@ -240,6 +242,11 @@ class StudySummary(Model):
     updated_at_ms: int
 
 
+class ApprovalReview(Model):
+    failures: list[GateOutcome]
+    blocked_reason: str | None
+
+
 class StudyDetail(Model):
     id: str
     revision: int
@@ -259,7 +266,12 @@ class StudyDetail(Model):
     qualification_id: str | None
     qualification_status: str | None
     protocol_summary: list[EvidenceItem] = Field(default_factory=list)
+    approval_reviews: dict[str, ApprovalReview] = Field(default_factory=dict)
 
     @classmethod
     def from_record(cls, record: dict[str, Any]) -> StudyDetail:
-        return cls.model_validate({name: record.get(name, [] if name == "protocol_summary" else None) for name in cls.model_fields})
+        from app.research.options_golden_search.projections import approval_reviews
+
+        fields = {name: record.get(name, [] if name == "protocol_summary" else None) for name in cls.model_fields if name != "approval_reviews"}
+        fields["approval_reviews"] = approval_reviews(record)
+        return cls.model_validate(fields)

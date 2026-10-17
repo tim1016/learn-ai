@@ -13,7 +13,7 @@ from app.research.options_golden_search.policy import Verdict
 
 def gates(verdict: Verdict, evidence_scope: str | None = None) -> list[dict[str, Any]]:
     return [{"gate_id": f"{evidence_scope or out.scope}:{out.rule}", "status": out.status,"actual":out.actual,
-        "required":out.threshold,"reason":out.reason or ("Meets the locked rule." if out.status=="meets_rules" else "Does not meet the locked rule.")}
+        "required":out.threshold,"overridable":out.overridable,"reason":out.reason or ("Meets the locked rule." if out.status=="meets_rules" else "Does not meet the locked rule.")}
         for out in verdict.outcomes]
 
 
@@ -79,3 +79,21 @@ def session_detail(session: Any) -> dict[str, Any]:
         "entry_fee_usd":str(trade.entry_fee_usd),"exit_fee_usd":str(trade.exit_fee_usd),
         "net_profit_usd":str(trade.pnl_usd),"exit_reason":trade.exit_reason.value} for trade in session.outcome.trades]
     return result
+
+
+def approval_reviews(row: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Project the same complete failure set the approval command must acknowledge."""
+    from app.research.options_golden_search.approval import approval_failures
+
+    reviews = {}
+    for candidate in row.get("final_results", []):
+        digest = candidate["candidate_hash"]
+        try:
+            failures = approval_failures(row, digest)
+        except ValueError as error:
+            reviews[digest] = {"failures": [], "blocked_reason": str(error)}
+            continue
+        technical = any(gate["status"] == "could_not_evaluate" or not gate.get("overridable", True) for gate in failures)
+        reviews[digest] = {"failures": failures,
+            "blocked_reason": "Technical invalidity cannot receive an owner exception." if technical else None}
+    return reviews

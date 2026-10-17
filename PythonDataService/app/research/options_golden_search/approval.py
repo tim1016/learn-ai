@@ -1,6 +1,7 @@
 """Publish study evidence and an exact Options version in one fenced transaction (#3332)."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from app.options_backtest import saved_runs
@@ -10,6 +11,7 @@ from app.options_bots.golden import LIMITATIONS
 from app.options_bots.golden_proof import build_proof, proof_sha256, setup_sha256
 from app.options_bots.golden_repository import GoldenRecord
 from app.research.options_golden_search import repository as repo
+from app.research.options_golden_search.policy import validate_exception
 from app.research.options_golden_search.protocol import OptionsSearchProtocol, materialize
 from app.research.options_golden_search.snapshots import SnapshotRunData
 from app.research.persistence.db import run_sync, with_connection
@@ -37,16 +39,40 @@ def approval_failures(row: dict[str, Any], digest: str) -> list[dict[str, Any]]:
     return [g for g in outcomes if g["status"]!="meets_rules"]
 
 
+@dataclass(frozen=True)
+class _ExceptionRule:
+    scope: str
+    rule: str
+    status: str
+    overridable: bool
+
+
+@dataclass(frozen=True)
+class _ExceptionReview:
+    outcomes: tuple[_ExceptionRule, ...]
+
+
 def validate_approval(row: dict[str, Any], request: Command) -> None:
     if request.candidate_hash is None:
         raise ValueError("Choose one exact final candidate before approval.")
-    failed = approval_failures(row,request.candidate_hash)
-    if any(g["status"]=="could_not_evaluate" for g in failed):
+    failed = approval_failures(row, request.candidate_hash)
+    if any(g["status"] == "could_not_evaluate" or not g.get("overridable", True) for g in failed):
         raise ValueError("Technical invalidity cannot receive an owner exception.")
-    if request.command=="approve" and failed:
-        raise ValueError("Normal approval requires all declared rules and fresh recorded final evidence.")
-    if request.command=="approve_exception" and not request.comment.strip():
-        raise ValueError("An owner exception requires a nonblank comment acknowledging every failed rule.")
+    if request.command == "approve":
+        if failed:
+            raise ValueError("Normal approval requires all declared rules and fresh recorded final evidence.")
+        if request.waived_gate_ids:
+            raise ValueError("Normal approval cannot waive rules.")
+    if request.command == "approve_exception":
+        if not request.comment.strip():
+            raise ValueError("An owner exception requires a nonblank comment acknowledging every failed rule.")
+        outcomes = []
+        for gate in failed:
+            scope, separator, rule = gate["gate_id"].rpartition(":")
+            if not separator or not scope or not rule:
+                raise ValueError("A failed rule lacks an unambiguous scoped identity.")
+            outcomes.append(_ExceptionRule(scope, rule, gate["status"], gate.get("overridable", True)))
+        validate_exception((_ExceptionReview(tuple(outcomes)),), request.waived_gate_ids, request.comment)
 
 
 def approve(row: dict[str, Any], evaluator) -> dict[str, Any]:
@@ -134,20 +160,25 @@ def approve(row: dict[str, Any], evaluator) -> dict[str, Any]:
         "evaluations":rows,"finalists":row["finalists"],"final_results":row["final_results"],
         "procedure_outcomes":row["gate_outcomes"],"exposure":row["exposure"],
         "approved_point":digest,"selection_count":len(row["finalists"]),"exception":request.command=="approve_exception",
-        "failed_rules":approval_failures(row,digest),"comment":request.comment,"execution_proof_sha256":proof_sha256(proof)}
+        "failed_rules":approval_failures(row,digest),"waived_gate_ids":list(request.waived_gate_ids),
+        "comment":request.comment,"execution_proof_sha256":proof_sha256(proof)}
     manifest_hash = hash_payload(manifest)
     record = GoldenRecord(id="ogs_"+hash_payload({"study":row["id"],"command":request.idempotency_key})[:40],
         name=row["setup_name"],source_run_id=source_id,setup=setup.model_dump(mode="json"),setup_sha256=digest,
         rules_digest=proof["rules_digest"],proof=proof,proof_sha256=proof_sha256(proof),
         evidence={"options_search_study_id":row["id"],"study_manifest_sha256":manifest_hash,
             "verdict":"owner_exception" if request.command=="approve_exception" else "meets_rules",
-            "failed_rules":manifest["failed_rules"],"selection_count":len(row["finalists"]),"exposure":row["exposure"],
-            "metric_identity":protocol.identities["selection"],"starting_cash_usd":str(setup.starting_cash_usd),
+            "failed_rules":manifest["failed_rules"],"waived_gate_ids":manifest["waived_gate_ids"],
+            "selection_count":len(row["finalists"]),"exposure":row["exposure"],
+            "metric_identity":protocol.identities["selection"],"execution_identity":dict(protocol.identities),
+            "starting_cash_usd":str(setup.starting_cash_usd),
             "net_profit_usd":str(result.summary.net_profit_usd),
             "first_session_open_ms":result.sessions[0].session_open_ms,
             "last_session_open_ms":result.sessions[-1].session_open_ms,
             "sessions_tested":result.summary.sessions_tested,"trades":result.summary.trades,
-            "slippage_percent":str(setup.slippage_percent),"limitations":list(LIMITATIONS)},
+            "slippage_percent":str(setup.slippage_percent),"limitations":[
+                "Golden means owner-approved for this exact tested setup; search does not establish global optimality or future profitability.",
+                *LIMITATIONS[1:]]},
         note=request.comment or "Approved exact Options Golden Search candidate.",approved_by="owner",created_at_ms=now_ms_utc(),
         command_id="search:"+row["id"]+":"+request.idempotency_key,command_sha256=hash_payload(request.model_dump(mode="json")))
     async def publish(conn):

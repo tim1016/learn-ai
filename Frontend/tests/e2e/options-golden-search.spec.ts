@@ -75,8 +75,15 @@ test('keeps failed performance rules visible and requires a deliberate owner exc
   await workbench.getByLabel('Owner review comment').fill('   ');
   await expect(exception).toBeDisabled();
   await workbench.getByLabel('Owner review comment').fill('Accepted the failed Sharpe hurdle and previously used interval.');
+  await expect(exception).toBeDisabled();
+  const acknowledgements = workbench.getByRole('checkbox', { name: /^Acknowledge / });
+  await expect(acknowledgements).toHaveCount(4);
+  for (const checkbox of (await acknowledgements.all()).slice(0, 3)) await checkbox.check();
+  await expect(exception).toBeDisabled();
+  await acknowledgements.last().check();
+  await page.screenshot({ path: 'test-results/options-golden-search-exception-acknowledged.png', fullPage: true });
   await exception.click();
-  expect(world.commands[0]).toMatchObject({ command: 'approve_exception', expected_revision: 7, comment: 'Accepted the failed Sharpe hurdle and previously used interval.' });
+  expect(world.commands[0]).toMatchObject({ command: 'approve_exception', expected_revision: 7, comment: 'Accepted the failed Sharpe hurdle and previously used interval.', waived_gate_ids: ['forward_0:activity', 'development:sharpe', 'final:sharpe', 'final:exposure'] });
   expect(world.unexpected).toEqual([]);
 });
 
