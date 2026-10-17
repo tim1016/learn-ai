@@ -255,6 +255,8 @@ async def test_an_ask_that_will_not_wait_is_answered_at_once_while_another_looku
     app = _app()
     waiting = asyncio.ensure_future(_post(_ask(wait=True), app=app))
     assert await asyncio.to_thread(hung.reached["Polygon"].wait, 5)
+    # The vendors run on separate pools; reaching Polygon does not mean FRED has started.
+    assert await asyncio.to_thread(hung.reached["FRED"].wait, 5)
 
     response = await _post(_ask(wait=False), app=app)
     asked_while_it_hung = hung.asked
