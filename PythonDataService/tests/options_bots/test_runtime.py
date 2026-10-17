@@ -540,7 +540,7 @@ async def test_backfilled_stop_bars_do_not_precede_a_late_confirmed_entry(tmp_pa
         duty._market.prices[9] = D("1.40")
         clerk.snapshots[attempt] = replace(
             clerk.snapshots[attempt], standing=EntryStanding.FILLED, held_quantity=1,
-            entry_fills=(_fill(CALL, 1, 2.0, at(9)),),
+            entry_fills=(_fill(CALL, 1, 2.0, at(9) + 1),),
         )
 
         await duty.tick()
