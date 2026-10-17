@@ -1,5 +1,5 @@
 import { afterNextRender, ChangeDetectionStrategy, Component, computed, DestroyRef, effect, ElementRef, inject, Injector, input, linkedSignal, resource, signal, untracked, viewChild } from '@angular/core';
-import { applyEach, disabled, form } from '@angular/forms/signals';
+import { applyEach, disabled, form, max, min } from '@angular/forms/signals';
 import { ButtonModule } from 'primeng/button';
 import { Tab, TabList, TabPanel, TabPanels, Tabs } from 'primeng/tabs';
 
@@ -128,6 +128,10 @@ export class OptionsBacktestPageComponent {
     disabled(path.noReentryClock, { when: ({ valueOf }) => !valueOf(path.noReentryOn) });
     disabled(path.perContractFee, { when: ({ valueOf }) => valueOf(path.feeKind) !== 'per_contract' });
     applyEach(path.legs, (leg) => {
+      min(leg.contracts, 1);
+      max(leg.contracts, () => this.limits()?.max_contracts_per_leg);
+      min(leg.expiryDays, 0);
+      max(leg.expiryDays, () => this.limits()?.max_expiry_days);
       disabled(leg.stopLossKind, { when: ({ valueOf }) => !valueOf(leg.stopLossOn) });
       disabled(leg.stopLossValue, { when: ({ valueOf }) => !valueOf(leg.stopLossOn) });
       disabled(leg.momentumKind, { when: ({ valueOf }) => !valueOf(leg.momentumOn) });
@@ -146,7 +150,7 @@ export class OptionsBacktestPageComponent {
   /** The request body for the setup as it stands, or the problems that stop one. */
   private readonly built = computed(() => {
     const clock = this.clock();
-    return clock === null ? null : buildSetup(this.draft(), clock);
+    return clock === null ? null : buildSetup(this.draft(), clock, this.limits());
   });
   private readonly body = computed(() => {
     const built = this.built();

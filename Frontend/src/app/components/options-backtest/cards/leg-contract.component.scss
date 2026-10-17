@@ -1,0 +1,38 @@
+:host { display: block; min-width: 0; }
+.ticket { --ticket-ink: var(--bull); display: grid; gap: var(--space-4); }
+.ticket--sell { --ticket-ink: var(--bear); }
+.identity { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.identity__contract { display: grid; gap: var(--space-1); }
+input, select, button { font: inherit; }
+input, select { min-width: 0; color: var(--text-primary); background: var(--bg-sunken); border: 1px solid var(--border-strong); border-radius: var(--radius); padding: .5rem .65rem; }
+.right { font-size: 1.65rem; font-weight: var(--fw-semi); border: 0; background: transparent; padding: 0 1.25rem 0 0; cursor: pointer; }
+button { cursor: pointer; }
+button:disabled { opacity: .4; cursor: default; }
+.side-flip { flex: none; width: 6.75rem; padding: 0; background: none; border: 0; color: var(--text-secondary); perspective: 500px; }
+.side-flip__rotor { position: relative; display: block; height: 3rem; transform-style: preserve-3d; transition: transform .45s cubic-bezier(.2, .7, .2, 1); }
+.side-flip__rotor--sell { transform: rotateY(180deg); }
+.side-flip__face { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: .65rem; border: 1px solid currentColor; border-radius: var(--radius-md); font-size: 1.1rem; font-weight: var(--fw-semi); backface-visibility: hidden; }
+.side-flip__face--buy { color: var(--bull); background: color-mix(in srgb, var(--bull) 12%, var(--bg-surface)); }
+.side-flip__face--sell { color: var(--bear); background: color-mix(in srgb, var(--bear) 12%, var(--bg-surface)); transform: rotateY(180deg); }
+.side-flip__face i { font-size: .85rem; }
+.side-flip__hint { display: block; margin-top: .35rem; font-size: var(--fs-xs); }
+.strike { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border-light); background: var(--bg-sunken); border-radius: var(--radius-md); }
+.strike__heading, .strike__axis { display: flex; align-items: center; justify-content: space-between; color: var(--text-secondary); font-size: var(--fs-xs); gap: var(--space-2); }
+.reset { padding: 0; border: 0; background: none; color: var(--accent-text); font-size: var(--fs-xs); }
+.strike__stepper { display: grid; grid-template-columns: 2rem minmax(0, 1fr) 2rem; align-items: center; gap: var(--space-2); padding-block: var(--space-2); }
+.strike__stepper strong { text-align: center; font-size: 1.1rem; font-weight: var(--fw-semi); font-variant-numeric: tabular-nums; }
+.strike__stepper button { display: grid; place-items: center; width: 2rem; height: 2rem; padding: 0; color: var(--text-primary); background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: var(--radius); }
+.strike__stepper i { font-size: .7rem; }
+.strike__ladder { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
+.strike__ladder button { min-width: 0; padding: .55rem 0; border: 1px solid transparent; border-top: 2px solid var(--border-strong); border-radius: 0 0 var(--radius-sm) var(--radius-sm); color: var(--text-secondary); background: var(--bg-surface); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+.strike__ladder .atm { border-top-color: var(--text-secondary); }
+.strike__ladder .selected { border-color: var(--ticket-ink); color: var(--text-primary); background: color-mix(in srgb, var(--ticket-ink) 18%, var(--bg-surface)); }
+.exact-offset { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-top: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--border-light); font-size: var(--fs-xs); color: var(--text-secondary); }
+.exact-offset input { width: 4rem; padding: .35rem .4rem; font-variant-numeric: tabular-nums; }
+.terms { display: flex; gap: var(--space-3); flex-wrap: wrap; }
+.terms label { display: grid; gap: var(--space-1); flex: 0 1 5rem; min-width: 0; color: var(--text-secondary); font-size: var(--fs-xs); }
+.terms .expiry { flex: 1 1 8rem; }
+.terms input, .terms select { width: 100%; box-sizing: border-box; font-size: var(--fs-sm); }
+.note, .cover { margin: 0; font-size: var(--fs-xs); line-height: 1.5; color: var(--text-subtle); }
+.cover { display: flex; align-items: baseline; gap: var(--space-2); color: var(--text-secondary); border-inline-start: 2px solid var(--ticket-ink); padding-inline-start: var(--space-3); }
+@media (prefers-reduced-motion: reduce) { .side-flip__rotor { transition: none; } }

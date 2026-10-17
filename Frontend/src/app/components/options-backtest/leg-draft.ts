@@ -24,9 +24,9 @@ export function newLegBuilder(): LegBuilder {
 }
 
 /**
- * Why the row cannot be added as a leg, by field; empty when it can. A leg's
- * contract cannot be edited once the leg is added, so the builder says what is
- * out of range before the leg exists. The ranges are the server's own
+ * Why the row cannot be added as a leg, by field; empty when it can. The
+ * builder checks the initial choices before adding the editable card.
+ * The ranges are the server's own
  * (`limits`); without them only the shape of a whole number is checked.
  */
 export function builderProblems(builder: LegBuilder, limits: SetupLimits | null): ReadonlyMap<BuilderField, string> {
@@ -91,7 +91,7 @@ export function nextLegId(right: OptionRight, takenIds: readonly string[]): stri
   return `${right}_${count}`;
 }
 
-/** The leg's contract in one line, from the choices made in the builder. */
+/** The leg's current contract in one line. */
 export function contractLine(leg: LegDraft): string {
   const right = leg.right === 'call' ? 'Call' : 'Put';
   const side = leg.side === 'sell' ? 'Sell' : 'Buy';

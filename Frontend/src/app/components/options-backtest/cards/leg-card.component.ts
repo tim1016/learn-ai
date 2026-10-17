@@ -7,9 +7,10 @@ import { MOMENTUM_CHOICES, REENTRY_CHOICES, STOP_LOSS_CHOICES } from '../choices
 import { PillChoiceComponent } from '../controls/pill-choice.component';
 import { SwitchComponent } from '../controls/switch.component';
 import { contractLine } from '../leg-draft';
-import type { ReentryKind } from '../options-backtest.types';
+import type { ReentryKind, SetupLimits } from '../options-backtest.types';
 import type { LegDraft } from '../setup-draft';
 import { legKey, NO_PROBLEMS, type FieldProblems, type LegField } from '../setup-problems';
+import { LegContractComponent } from './leg-contract.component';
 
 const ON_MOMENTUM_REASON = 'On momentum can be chosen once Simple momentum is on: it asks the momentum rule again.';
 
@@ -25,7 +26,7 @@ const CONTRACT_FIELDS: readonly LegField[] = ['leg', 'contracts', 'expiry', 'str
  */
 @Component({
   selector: 'app-options-backtest-leg-card',
-  imports: [FormField, InputText, ButtonModule, PillChoiceComponent, SwitchComponent],
+  imports: [FormField, InputText, ButtonModule, PillChoiceComponent, SwitchComponent, LegContractComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './leg-card.component.html',
   styleUrls: ['../options-backtest-card.scss', './leg-card.component.scss'],
@@ -36,6 +37,8 @@ export class LegCardComponent {
   readonly position = input.required<number>();
   readonly problems = input<FieldProblems>(NO_PROBLEMS);
   readonly canCopy = input(true);
+  readonly underlying = input.required<string>();
+  readonly limits = input<SetupLimits | null>(null);
   readonly copied = output();
   readonly removed = output();
   /** Something in the card took the keyboard, so the page can show where this leg is read back. */

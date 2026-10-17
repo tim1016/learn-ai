@@ -1,15 +1,17 @@
-<article class="card leg" [attr.aria-label]="name()" [attr.aria-describedby]="contractProblem() === null ? null : problemId('contract')" (focusin)="focused.emit()">
+<article class="card leg" [class.leg--sell]="leg().side === 'sell'" [attr.aria-label]="name()" [attr.aria-describedby]="contractProblem() === null ? null : problemId('contract')" (focusin)="focused.emit()">
   <header class="leg__head">
     <span class="leg__number" aria-hidden="true">{{ position() + 1 }}</span>
     <div class="leg__title">
       <h3 #heading tabindex="-1">{{ name() }}</h3>
-      <p class="leg__line">{{ line() }}</p>
+      <p class="leg__line sr-only">{{ line() }}</p>
     </div>
     <button pButton type="button" severity="secondary" [text]="true" size="small" [disabled]="!canCopy()" [attr.aria-label]="'Copy ' + name()" (click)="copied.emit()"><i class="pi pi-copy" aria-hidden="true"></i></button>
     <button #deleteButton pButton type="button" severity="danger" [text]="true" size="small" [attr.aria-label]="'Delete ' + name()" (click)="removed.emit()"><i class="pi pi-trash" aria-hidden="true"></i></button>
   </header>
+  <app-options-backtest-leg-contract [legForm]="legForm()" [name]="name()" [underlying]="underlying()" [limits]="limits()" />
   @if (contractProblem(); as message) { <p class="problem" role="alert" [id]="problemId('contract')">{{ message }}</p> }
 
+  <h4 class="rules-title">Trade rules</h4>
   <div class="rule">
     <app-options-backtest-switch [formField]="legForm().stopLossOn" label="Stop loss" [accessibleName]="name() + ' stop loss'" />
     @if (leg().stopLossOn) {

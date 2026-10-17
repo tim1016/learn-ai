@@ -1,4 +1,5 @@
-import type { LegRequest, SessionClock, SessionTimeWire, SetupRequest } from './options-backtest.types';
+import type { LegRequest, SessionClock, SessionTimeWire, SetupLimits, SetupRequest } from './options-backtest.types';
+import { builderProblems } from './leg-draft';
 import { FIELD, legKey, type FieldProblems } from './setup-problems';
 import { heldAnchorFor, type HeldAnchor, type LegDraft, type SetupDraft } from './setup-draft';
 import { exitAfterEntry, storedTime, type TimeRole } from './session-time';
@@ -14,7 +15,7 @@ export type BuildResult =
  * the text the owner typed, trimmed; whatever cannot be read is a problem at
  * its field, and then there is no body to send.
  */
-export function buildSetup(draft: SetupDraft, clock: SessionClock): BuildResult {
+export function buildSetup(draft: SetupDraft, clock: SessionClock, limits: SetupLimits | null = null): BuildResult {
   const problems = new Map<string, string>();
   const fail = (key: string, message: string): null => {
     problems.set(key, message);
@@ -38,7 +39,7 @@ export function buildSetup(draft: SetupDraft, clock: SessionClock): BuildResult 
   const slippage = decimal(draft.slippage, FIELD.slippage, '0.3');
   const cash = decimal(draft.cash, FIELD.cash, '10000');
   const fee = draft.feeKind === 'per_contract' ? decimal(draft.perContractFee, FIELD.perContractFee, '0.65') : null;
-  const legs = draft.legs.map((leg) => buildLeg(leg, problems));
+  const legs = draft.legs.map((leg) => buildLeg(leg, problems, limits));
 
   if (problems.size > 0 || entry === null || exit === null || slippage === null || cash === null) return { ok: false, problems };
   return {
@@ -59,7 +60,7 @@ export function buildSetup(draft: SetupDraft, clock: SessionClock): BuildResult 
   };
 }
 
-function buildLeg(leg: LegDraft, problems: Map<string, string>): LegRequest | null {
+function buildLeg(leg: LegDraft, problems: Map<string, string>, limits: SetupLimits | null): LegRequest | null {
   const start = problems.size;
   const note = (field: Parameters<typeof legKey>[1], message: string): null => {
     problems.set(legKey(leg.id, field), message);
@@ -67,6 +68,15 @@ function buildLeg(leg: LegDraft, problems: Map<string, string>): LegRequest | nu
   };
   const value = (text: string, field: 'stopLossValue' | 'momentumValue'): string | null =>
     decimalText(text) ?? note(field, 'Enter a number, such as 25.');
+
+  const contractProblems = builderProblems({
+    ...leg,
+    contracts: String(leg.contracts),
+    expiryDays: String(leg.expiryDays),
+    strikeSteps: String(leg.strikeSteps),
+  }, limits);
+  const contractFields = { contracts: 'contracts', expiryDays: 'expiry', strikeSteps: 'strike' } as const;
+  for (const [field, message] of contractProblems) note(contractFields[field], message);
 
   const stopLoss = leg.stopLossOn ? value(leg.stopLossValue, 'stopLossValue') : null;
   const momentum = leg.momentumOn ? value(leg.momentumValue, 'momentumValue') : null;

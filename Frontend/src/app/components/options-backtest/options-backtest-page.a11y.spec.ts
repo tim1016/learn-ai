@@ -70,7 +70,7 @@ describe('where the keyboard goes when a leg changes', () => {
 
   it('goes to the first builder field instead, when Add leg cannot be pressed until something there is put right', async () => {
     await renderWithLegs(1);
-    typeInto('Contracts', '5000');
+    fireEvent.input(screen.getByRole('textbox', { name: 'Contracts' }), { target: { value: '5000' } });
 
     press('Delete Leg 1');
 
