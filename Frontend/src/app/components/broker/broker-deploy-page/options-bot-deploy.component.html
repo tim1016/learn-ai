@@ -37,7 +37,21 @@
         <fieldset [disabled]="busy() || unknown()">
           <app-deploy-option-order-terms [terms]="terms()" [defaults]="orderDefaults()" [notes]="orderNotes()" [failure]="loadProblem()" (termsChange)="terms.set($event)" />
         </fieldset>
-        <p>The bot repeats on trading sessions until stopped. The setup closes positions at its daily square-off time. A late deployment waits for the next eligible session.</p>
+        <details open>
+          <summary>Per-bot exit settings</summary>
+          <p class="note">Required execution settings, fixed for this bot. These do not cap option market-order exit prices. Account defaults are unchanged.</p>
+          <label for="options-exit-allowance">Exit allowance (bps)</label>
+          <input id="options-exit-allowance" type="number" step="any" [formField]="ticket.exitAllowanceBps" />
+          <label for="options-exit-band">Band multiple</label>
+          <input id="options-exit-band" type="number" step="any" [formField]="ticket.bandMultiple" />
+          <label for="options-exit-spread">Spread cap (bps)</label>
+          <input id="options-exit-spread" type="number" step="any" [formField]="ticket.spreadCapBps" />
+          @for (error of exitTermErrors(); track error) { <p class="problem">{{ error }}</p> }
+        </details>
+        <h3>Deployment end</h3>
+        <app-bot-end-editor [(fields)]="endFields" [keepOffered]="false" [locked]="busy() || unknown()" />
+        <p class="note">At its end, the bot closes remaining positions and stops repeating.</p>
+        <p>The bot repeats on trading sessions until its end or until stopped. The setup closes positions at its daily square-off time. A late deployment waits for the next eligible session.</p>
       </section>
       <section class="card">
         <h2>3. Budget and review</h2>
@@ -46,6 +60,7 @@
         <p class="note">Starts from the tested capital. A different budget can change which entries can be funded.</p>
         <button type="button" [disabled]="!mayReview()" (click)="review()">Review setup and budget</button>
         @if (currentReview(); as reviewed) {
+          <app-bot-end-summary [end]="reviewed.end" detailed />
           <p>{{ reviewed.review.explanation }}</p><p>{{ reviewed.review.budget.detail }}</p>
           <p>{{ reviewed.review.budget.risk_limits_summary }}</p>
           @if (reviewed.review.budget.budget_usd) { <p>Set aside: <strong>{{ reviewed.review.budget.budget_usd | authoredUsd }}</strong></p> }
