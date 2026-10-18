@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from functools import lru_cache
@@ -23,8 +26,38 @@ from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
-_listing_lock = Lock()
-_snapshot_lock = Lock()
+
+
+@dataclass
+class _LockEntry:
+    lock: Lock = field(default_factory=Lock)
+    users: int = 0
+
+
+class _KeyedLocks[K]:
+    """Coalesce one resource's cache misses without retaining idle lock keys."""
+
+    def __init__(self) -> None:
+        self._guard = Lock()
+        self._entries: dict[K, _LockEntry] = {}
+
+    @contextmanager
+    def hold(self, key: K) -> Iterator[None]:
+        with self._guard:
+            entry = self._entries.setdefault(key, _LockEntry())
+            entry.users += 1
+        try:
+            with entry.lock:
+                yield
+        finally:
+            with self._guard:
+                entry.users -= 1
+                if entry.users == 0:
+                    del self._entries[key]
+
+
+_listing_locks = _KeyedLocks[tuple[str, date]]()
+_snapshot_locks = _KeyedLocks[tuple[str, int]]()
 
 
 @lru_cache(maxsize=32)
@@ -54,19 +87,19 @@ def _read_listing(underlying: str, today: date, refresh_bucket: int) -> Listing:
 def _listing(underlying: str, today: date, refresh_bucket: int) -> Listing:
     # Check the cache after acquiring the lock: edits arriving during the first
     # paginated fetch share its result rather than starting another full fetch.
-    with _listing_lock:
+    with _listing_locks.hold((underlying, today)):
         return _read_listing(underlying, today, refresh_bucket)
 
 
 def _snapshot(underlying: str, expiry_ms: int, refresh_bucket: int) -> dict:
-    with _snapshot_lock:
+    with _snapshot_locks.hold((underlying, expiry_ms)):
         return _read_snapshot(underlying, expiry_ms, refresh_bucket)
 
 
 def current_preview(request: PositionPreviewRequest, *, now_ms: int) -> PositionPreviewResponse:
     """Use the existing Options Lab vendor snapshot, keeping its quote evidence and delays visible."""
     today = et_date_at_ms(now_ms)
-    listing = _listing(request.setup.underlying, today, now_ms // 60_000)
+    listing = _listing(request.setup.underlying, today, now_ms // (15 * 60_000))
     listing = Listing(
         listing.underlying,
         today,

@@ -73,7 +73,7 @@ export class OptionsSearchPositionComponent {
     try {
       await this.setups.save(name, setup);
       const declarations = await this.searches.declarations(name);
-      if (originalHash === this.declarations().setup_hash && stamp === JSON.stringify(this.draft())) this.saved.emit(declarations);
+      if (originalHash === this.declarations().setup_hash && stamp === JSON.stringify(this.draft()) && name === this.identity().name.trim()) this.saved.emit(declarations);
       else this.problem.set('The earlier position was saved, but newer edits remain. Save them before searching.');
     } catch (error) { this.problem.set(optionsSearchErrorMessage(error, 'The edited position could not be saved.')); }
     finally { this.busy.set(false); }

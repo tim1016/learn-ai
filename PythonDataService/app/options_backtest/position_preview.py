@@ -106,7 +106,7 @@ def expiry_view(
         entry_debit_usd=plain(dollars(compute_strategy_cost(models))),
         max_profit_usd=None
         if math.isinf(extremes.max_profit)
-        else plain(max(Decimal(0), dollars(extremes.max_profit) + cash_adjustment)),
+        else plain(dollars(extremes.max_profit) + cash_adjustment),
         max_loss_usd=None
         if math.isinf(extremes.max_loss)
         else plain(max(Decimal(0), -(dollars(extremes.max_loss) + cash_adjustment))),

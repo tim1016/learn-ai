@@ -152,3 +152,25 @@ it('explains invalid position fields and restores save after the user corrects t
   fireEvent.input(offset, { target: { value: '2' } });
   await waitFor(() => expect(save).toHaveProperty('disabled', false));
 });
+
+it('keeps a setup name edited while the save declarations are pending', async () => {
+  const fake = service();
+  await page(fake, { setup_name: 'Saved two-leg setup' });
+  fireEvent.click(await screen.findByRole('button', { name: 'Flip Leg 1 to Put' }));
+  const name = screen.getByRole('textbox', { name: 'Save edited setup as' });
+  fireEvent.input(name, { target: { value: 'Earlier name' } });
+  let finish: (() => void) | undefined;
+  const pending = new Promise<void>(resolve => { finish = resolve; });
+  fake.declarations.mockImplementationOnce(async () => {
+    await pending;
+    return { ...declarations(), setup_name: 'Earlier name', setup_hash: 'e'.repeat(64) };
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Save position for search' }));
+  await waitFor(() => expect(fake.declarations).toHaveBeenLastCalledWith('Earlier name'));
+  fireEvent.input(name, { target: { value: 'Newer name' } });
+  finish?.();
+  await screen.findByText('The earlier position was saved, but newer edits remain. Save them before searching.');
+  expect(screen.getByRole('textbox', { name: 'Save edited setup as' })).toHaveProperty('value', 'Newer name');
+  expect(screen.getByRole('button', { name: 'Save position for search' })).toHaveProperty('disabled', false);
+  expect(screen.getByRole('button', { name: 'Check plan' })).toHaveProperty('disabled', true);
+});

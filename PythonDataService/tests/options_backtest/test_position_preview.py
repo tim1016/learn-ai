@@ -112,6 +112,8 @@ def test_replay_waits_for_fill_and_retains_realized_fees() -> None:
     closed = historical_preview(request(mode="replay", replay_at_ms=at(345)), data())
     assert closed.legs == []
     assert set(map(D, closed.curves[0].pnl_usd)) == {D("-2")}
+    assert D(closed.risk.max_profit_usd) == D("-2")
+    assert D(closed.risk.max_loss_usd) == D("2")
     assert any(row.kind == "close_filled" for row in closed.events)
 
 

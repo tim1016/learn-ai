@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
+from functools import lru_cache
+from threading import Event
 
 import httpx
 import pytest
@@ -18,10 +21,69 @@ from tests.options_backtest._market import at
 from tests.options_backtest.test_position_preview import contract, request
 
 
+@pytest.mark.parametrize("kind,resource", [("listing", date(2026, 10, 9)), ("snapshot", at(390))])
+def test_preview_cache_coalesces_one_resource_without_blocking_another(
+    monkeypatch: pytest.MonkeyPatch, kind: str, resource: date | int,
+) -> None:
+    entered, release = Event(), Event()
+    calls = []
+
+    @lru_cache(maxsize=8)
+    def load(*key: object) -> object:
+        calls.append(key)
+        if key[0] == "SPY":
+            entered.set()
+            assert release.wait(5)
+        return object()
+
+    monkeypatch.setattr(service, f"_read_{kind}", load)
+    read = getattr(service, f"_{kind}")
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        first = pool.submit(read, "SPY", resource, 1)
+        try:
+            assert entered.wait(2)
+            same = pool.submit(read, "SPY", resource, 1)
+            different = pool.submit(read, "AAPL", resource, 1)
+            assert different.result(timeout=2) is not None
+        finally:
+            release.set()
+        assert first.result(timeout=2) is same.result(timeout=2)
+    assert len(calls) == 2
+    assert not getattr(service, f"_{kind}_locks")._entries
+
+
+@pytest.mark.parametrize("kind,resource", [("listing", date(2026, 10, 9)), ("snapshot", at(390))])
+def test_failed_preview_cache_miss_releases_its_key_and_allows_retry(
+    monkeypatch: pytest.MonkeyPatch, kind: str, resource: date | int,
+) -> None:
+    attempts = 0
+
+    def load(*_: object) -> object:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("Vendor unavailable")
+        return object()
+
+    monkeypatch.setattr(service, f"_read_{kind}", load)
+    read = getattr(service, f"_{kind}")
+    with pytest.raises(RuntimeError, match="Vendor unavailable"):
+        read("SPY", resource, 1)
+    assert not getattr(service, f"_{kind}_locks")._entries
+    assert read("SPY", resource, 1) is not None
+    assert not getattr(service, f"_{kind}_locks")._entries
+
+
 def test_current_uses_timestamped_ask_and_never_falls_back_to_last_trade(monkeypatch: pytest.MonkeyPatch) -> None:
     call = contract("call", "500")
     listing = Listing("SPY", date(2026, 10, 9), (ListedContract(call, 100, True),), True)
-    monkeypatch.setattr(service, "_listing", lambda *_: listing)
+    listing_buckets = []
+
+    def read_listing(_: str, _today: date, refresh_bucket: int) -> Listing:
+        listing_buckets.append(refresh_bucket)
+        return listing
+
+    monkeypatch.setattr(service, "_listing", read_listing)
     row = {
         "ticker": "O:" + call.occ_symbol,
         "last_quote": {"bid": 2, "ask": 2.2, "last_updated": at(5) * 1_000_000},
@@ -32,6 +94,10 @@ def test_current_uses_timestamped_ask_and_never_falls_back_to_last_trade(monkeyp
     assert result.legs[0].premium_usd == "2.2"
     assert result.legs[0].price_at_ms == at(5)
     assert "ask" in result.legs[0].price_source
+    service.current_preview(request(source="current"), now_ms=at(7))
+    service.current_preview(request(source="current"), now_ms=at(21))
+    assert listing_buckets[0] == listing_buckets[1]
+    assert listing_buckets[2] != listing_buckets[0]
     row["last_quote"] = None
     with pytest.raises(PreviewUnavailable, match="two-sided quote"):
         service.current_preview(request(source="current"), now_ms=at(6))
