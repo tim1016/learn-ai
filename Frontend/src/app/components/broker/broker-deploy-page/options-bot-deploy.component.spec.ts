@@ -5,12 +5,14 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
+import { localWallClock } from '../../../shared/date/local-wall-clock';
+import { provideFakeDateWorld } from '../../../shared/date-picker/testing/fake-trading-calendar';
 import { resourceTarget } from '../../../fleet/resource-target';
 import { GoldenOptionSetupsService, type GoldenOptionSetup } from '../../options-backtest/golden-option-setups.service';
 import { OptionsBacktestService } from '../../options-backtest/options-backtest.service';
 import { exceptionGoldenSetup, goldenSetup } from '../../options-backtest/testing/golden-fixture';
 import { summaryFor } from '../../options-backtest/testing/fixtures';
-import { BrokerV2PanelService, type BudgetDeployReceipt } from '../v2-panel/lib/broker-v2-panel.service';
+import { BrokerV2PanelService, type BudgetDeployReceipt, type BotEndPreviewRequest } from '../v2-panel/lib/broker-v2-panel.service';
 import { DEPLOY_VIEW, LIVE_DEPLOY_VIEW } from './alpaca-deploy-workflow.fixtures';
 import { OPTION_CATALOGUE } from './option-structure/option-structure.fixtures';
 import { OptionsBotDeployComponent } from './options-bot-deploy.component';
@@ -36,29 +38,35 @@ function reviewed(request: OptionsDeployRequest): OptionsDeploymentReview {
   };
 }
 
-async function setup(options: { live?: boolean; selectedId?: string; versions?: GoldenOptionSetup[] } = {}) {
+async function setup(options: { live?: boolean; selectedId?: string; versions?: GoldenOptionSetup[]; noExitDefaults?: boolean } = {}) {
   const review = vi.fn().mockImplementation(async (_target, request: OptionsDeployRequest) => {
     const result = reviewed(request);
     return options.live ? { ...result, budget: { ...result.budget, world: 'real_live', confirmation_text: 'DEPLOY PA9 $10000.00' } } : result;
   });
   const deploy = vi.fn().mockResolvedValue(RECEIPT);
   const submission = vi.fn().mockResolvedValue(RECEIPT);
+  const previewBotEnd = vi.fn().mockImplementation(async (_target, body: BotEndPreviewRequest) => ({
+    ...DEPLOY_VIEW.default_end, ...body.end, status: body.end?.end_at_ms == null ? 'no_end' : 'scheduled',
+    headline: 'Reviewed bot end',
+  }));
   const get = vi.fn().mockResolvedValue(goldenSetup());
   const result = await render(OptionsBotDeployComponent, {
     inputs: { target: TARGET, accountId: 'PA9', fence: { bindingGeneration: 3, routingEpoch: 4 } },
     providers: [
       provideRouter([]),
+      ...provideFakeDateWorld(),
       { provide: ActivatedRoute, useValue: { snapshot: { queryParamMap: convertToParamMap(options.selectedId ? { options_setup: options.selectedId } : {}) } } },
       { provide: GoldenOptionSetupsService, useValue: { list: async () => options.versions ?? [goldenSetup()], get } },
       { provide: OptionsBacktestService, useValue: { describe: async () => summaryFor('Tested setup') } },
-      { provide: BrokerV2PanelService, useValue: { getDeployView: async () => options.live ? LIVE_DEPLOY_VIEW : DEPLOY_VIEW, getOptionStructures: async () => OPTION_CATALOGUE } },
+      { provide: BrokerV2PanelService, useValue: { getDeployView: async () => ({ ...(options.live ? LIVE_DEPLOY_VIEW : DEPLOY_VIEW),
+        ...(options.noExitDefaults ? { default_exit_terms: null } : {}) }), previewBotEnd, getOptionStructures: async () => OPTION_CATALOGUE } },
       { provide: OptionsBotDeployService, useValue: { review, deploy, submission } },
     ],
   });
   vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
   if (!options.selectedId) await userEvent.selectOptions(await screen.findByLabelText('Approved tested version'), goldenSetup().id);
   await waitFor(() => expect((screen.getByLabelText('Dollar budget (USD)') as HTMLInputElement).value).toBe('10000'));
-  return { ...result, review, deploy, submission, get };
+  return { ...result, review, deploy, submission, get, previewBotEnd };
 }
 
 async function reviewSetup(): Promise<void> {
@@ -68,6 +76,60 @@ async function reviewSetup(): Promise<void> {
 }
 
 describe('Options deployment', () => {
+  it('reviews and deploys explicit per-bot terms and a bounded end when account defaults are absent', async () => {
+    const { review, deploy, previewBotEnd } = await setup({ noExitDefaults: true });
+    expect((screen.getByRole('button', { name: 'Review setup and budget' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText('Set exit allowance, band multiple and spread cap before reviewing.')).toBeTruthy();
+    fireEvent.click(screen.getByText('Per-bot exit settings'));
+    fireEvent.input(screen.getByLabelText('Exit allowance (bps)'), { target: { value: '20' } });
+    fireEvent.input(screen.getByLabelText('Band multiple'), { target: { value: '2' } });
+    fireEvent.input(screen.getByLabelText('Spread cap (bps)'), { target: { value: '50' } });
+    fireEvent.input(screen.getByLabelText('Dollar budget (USD)'), { target: { value: '5000' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'No end — run until I stop it' }));
+    const endAtMs = 1792439940000;
+    const wall = localWallClock(endAtMs);
+    fireEvent.change(screen.getByLabelText('End date'), { target: { value: wall.date } });
+    fireEvent.input(screen.getByLabelText(/^End time/), { target: { value: wall.clock } });
+    await reviewSetup();
+    expect(previewBotEnd).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'PA9' }), {
+      execution_mode: 'paper', end: { end_at_ms: endAtMs, end_action: 'SELL' },
+    });
+    expect(review.mock.calls[1][1]).toMatchObject({
+      exit_terms: { exit_allowance_bps: 20, band_multiple: 2, spread_cap_bps: 50 },
+      end: { end_at_ms: endAtMs, end_action: 'SELL' }, budget: { amount_usd: '5000', risk_revision: 8 },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy Options bot' }));
+    await screen.findByRole('heading', { name: 'Options bot is deployed' });
+    expect(deploy.mock.calls[0][1]).toMatchObject({
+      exit_terms: review.mock.calls[1][1].exit_terms, end: review.mock.calls[1][1].end,
+      budget: { amount_usd: '5000', review_token: 'review-options-8' },
+    });
+  });
+
+  it('invalidates consent for changed exit terms or an incomplete end', async () => {
+    await setup();
+    await reviewSetup();
+    fireEvent.click(screen.getByText('Per-bot exit settings'));
+    fireEvent.input(screen.getByLabelText('Band multiple'), { target: { value: '0.5' } });
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Deploy Options bot' })).toBeNull());
+    expect((screen.getByRole('button', { name: 'Review setup and budget' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.input(screen.getByLabelText('Band multiple'), { target: { value: '3' } });
+    await reviewSetup();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'No end — run until I stop it' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Deploy Options bot' })).toBeNull());
+    expect((screen.getByRole('button', { name: 'Review setup and budget' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('shows an end refusal before budget review and never offers a deployment', async () => {
+    const { review, deploy, previewBotEnd } = await setup();
+    previewBotEnd.mockRejectedValueOnce(new HttpErrorResponse({ status: 400, error: { detail: { message: 'This end has passed.' } } }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review setup and budget' }));
+    await screen.findByText('This end has passed.');
+    expect(review).not.toHaveBeenCalled();
+    expect(deploy).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Deploy Options bot' })).toBeNull();
+  });
+
   it('keeps the permanent owner exception visible in the chooser and deployment review', async () => {
     await setup({ versions: [exceptionGoldenSetup()] });
     expect(screen.getByRole('option', { name: /Owner exception/ })).toBeTruthy();
@@ -110,7 +172,7 @@ describe('Options deployment', () => {
 
     const [target, request] = deploy.mock.calls[0];
     expect(target).toMatchObject({ accountId: 'PA9', clerkId: 'clrk_spec', bindingGeneration: 3, routingEpoch: 4 });
-    expect(request).toMatchObject({ golden_setup_id: goldenSetup().id, execution_mode: 'paper', end: null,
+    expect(request).toMatchObject({ golden_setup_id: goldenSetup().id, execution_mode: 'paper', end: { end_at_ms: null, end_action: 'SELL' },
       budget: { amount_usd: '10000', risk_revision: 8, review_token: 'review-options-8' } });
     expect(target.idempotencyKey).toBe(request.submission_key);
     expect(request).not.toHaveProperty('quantity');
@@ -136,6 +198,8 @@ describe('Options deployment', () => {
     const recover = await screen.findByRole('button', { name: 'Check deployment status' });
     await waitFor(() => expect((recover as HTMLButtonElement).disabled).toBe(false));
     expect((screen.getByLabelText('Dollar budget (USD)') as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByRole('checkbox', { name: 'No end — run until I stop it' }) as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByLabelText('Band multiple') as HTMLInputElement).disabled).toBe(true);
     fireEvent.click(recover);
     await screen.findByRole('heading', { name: 'Options bot is deployed' });
     expect(deploy).toHaveBeenCalledTimes(1);

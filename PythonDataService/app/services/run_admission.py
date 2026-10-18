@@ -65,6 +65,22 @@ def _market_sides(bot: RunAdmissionFacts) -> tuple[_MarketSide, ...]:
     )
 
 
+def _options_can_wait_for_session(bot: RunAdmissionFacts, side: _MarketSide, now_ms: int) -> bool:
+    """ADR 0079 schedules a fresh Options bot while closed; entries still need live quotes."""
+    liveness = side.market_liveness
+    clock = liveness.market_clock
+    subscription = liveness.market_data
+    return (
+        bot.operation == "START" and bot.schedules_options_sessions
+        and side.market_data.scheduled_phase == "CLOSED" and side.market_data.connected is True
+        and clock.state == "CLOSED" and 0 <= now_ms - clock.observed_at_ms <= AUTHORITY_FACT_MAX_AGE_MS
+        and subscription is not None and subscription.symbol == liveness.symbol
+        and 0 <= now_ms - subscription.observed_at_ms <= AUTHORITY_FACT_MAX_AGE_MS
+        and subscription.state in {"STARTING", "RECOVERING"}
+        and liveness.reason_code == f"MARKET_DATA_{subscription.state}"
+    )
+
+
 def _worst_age(ages_ms: Iterable[int]) -> int:
     """One age for an authority that gave several facts: a future-dated one if
     there is any, else the oldest. Either is the one that refuses the Start."""
@@ -338,7 +354,8 @@ def evaluate_run_admission(
         for side in sides:
             liveness = side.market_liveness
             symbol_halted = liveness.symbol_status is not None and liveness.symbol_status.state == "HALTED"
-            if liveness.state not in permitted_liveness or symbol_halted:
+            waiting = _options_can_wait_for_session(bot, side, evaluated_at_ms)
+            if (liveness.state not in permitted_liveness and not waiting) or symbol_halted:
                 reason_codes = {
                     "HALTED": "MARKET_LIVENESS_HALTED",
                     "CLOSED": "MARKET_LIVENESS_CLOSED",

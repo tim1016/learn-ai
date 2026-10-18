@@ -64,6 +64,7 @@ import {
 import { extractServerMessage } from '../operation-error';
 import { refusalBody, refusalProse } from '../../../shared/errors/refusal-body';
 import { botEndFields, botEndInput, type BotEndFields } from '../bot-end/bot-end-fields';
+import { EXIT_TERM_RANGES } from './exit-term-ranges';
 import { deriveActionRejection, type ActionRejection } from '../v2-panel/lib/panel-action-outcome';
 import { DeployBindingStripComponent } from './deploy-binding-strip.component';
 import { DeployConfirmStepComponent, type DeployBlocker, type DeployError } from './deploy-confirm-step.component';
@@ -119,6 +120,7 @@ import {
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
 import { mediaQuerySignal } from '../../../shared/media-query';
+import { DeployGoldenConfigurationsComponent } from './deploy-golden-configurations.component';
 
 import { sameAlpacaAccount } from '../../../services/alpaca-account-identity';
 import { GoldenSearchService } from '../../golden-search/golden-search.service';
@@ -298,13 +300,6 @@ function exitTermSettings(terms: DeployBotBody['exit_terms'] | null | undefined)
   };
 }
 
-/** Each exit term's accepted range, as the backend's `ExitTermsInput` holds it. */
-const EXIT_TERM_RANGES = {
-  exitAllowanceBps: { min: 0, max: 9999.999, message: 'Exit allowance must be between 0 and 9,999.999 bps.' },
-  bandMultiple: { min: 1, max: 10, message: 'Band multiple must be between 1 and 10×.' },
-  spreadCapBps: { min: 1, max: 1000, message: 'Spread cap must be between 1 and 1,000 bps.' },
-} as const;
-
 /** The backend's check for exit terms. It sees none at all while one is out of
  * range, so its own fix ("enter all three") is wrong for a typed term. */
 const EXIT_TERMS_GATE_ID = 'deploy.exit_terms';
@@ -406,6 +401,7 @@ type EndCheckAnswer =
     DeployTradedAcknowledgementComponent,
     DeployTradedAssetComponent,
     DeployExecutionSectionComponent,
+    DeployGoldenConfigurationsComponent,
     DeployLaunchReceiptComponent,
     DeployMoneyStepComponent,
     DeployOptionOrderTermsComponent,
@@ -737,7 +733,7 @@ export class AlpacaDeployWorkflowComponent {
   /** A Golden review authorizes one exact broker configuration, not a strategy family. */
   protected readonly goldenScopeMatchesTicket = computed(() => {
     const strategy = this.selectedStrategy();
-    if (strategy === null || !strategy.golden_validation_scope) return true;
+    if (strategy === null || !strategy.golden_validation_scope || this.goldenStillApplied()) return true;
     const ticket = this.ticket();
     return ticket.symbol.trim().toUpperCase() === strategy.validation_case_symbol
       && sameParameterValues(ticket.parameters, strategy.validation_case_parameters);
@@ -1156,6 +1152,7 @@ export class AlpacaDeployWorkflowComponent {
 
   /** What the last handoff did; kept after its parameter is cleared. */
   protected readonly goldenHandoff = signal<GoldenHandoff | null>(null);
+  protected readonly showGoldenConfigurations = signal(false);
 
   /** The applied golden settings are still exactly what the form holds, its strategy among them. */
   protected readonly goldenStillApplied = computed(() => {
@@ -1883,6 +1880,16 @@ export class AlpacaDeployWorkflowComponent {
 
   protected dismissGolden(): void {
     this.goldenHandoff.set(null);
+  }
+
+  protected async selectGoldenQualification(id: string): Promise<void> {
+    if (this.submitting() || this.outcomeUnknown() || this.receipt() !== null) return;
+    await this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { [GOLDEN_QUALIFICATION_QUERY_PARAM]: id, [DEPLOY_AGAIN_QUERY_PARAM]: null },
+      queryParamsHandling: 'merge',
+      replaceUrl: true,
+    });
   }
 
   /** A changed account abandons the attempt and refreshes the page context. */

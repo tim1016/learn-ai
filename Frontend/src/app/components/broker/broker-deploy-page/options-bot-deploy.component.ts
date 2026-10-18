@@ -1,6 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, output, resource, signal, untracked } from '@angular/core';
-import { disabled, FormField, form, pattern, required } from '@angular/forms/signals';
+import { disabled, FormField, form, max, min, pattern, required } from '@angular/forms/signals';
 import { ActivatedRoute, Router } from '@angular/router';
 
 import { accountWorkspaceBotRoute } from '../../../fleet/account-workspace';
@@ -14,10 +14,14 @@ import { OptionsQualificationEvidenceComponent } from '../../options-backtest/op
 import { GoldenOptionSetupsService } from '../../options-backtest/golden-option-setups.service';
 import { OptionsBacktestService } from '../../options-backtest/options-backtest.service';
 import { SetupSentencesComponent } from '../../options-backtest/cards/setup-sentences.component';
+import { BotEndEditorComponent } from '../bot-end/bot-end-editor.component';
+import { botEndFields, botEndInput } from '../bot-end/bot-end-fields';
+import { BotEndSummaryComponent } from '../bot-end/bot-end-summary.component';
+import { EXIT_TERM_RANGES } from './exit-term-ranges';
 import { FundingAnswerComponent } from '../funding-answer/funding-answer.component';
 import { MoneyBarComponent } from '../money-bar/money-bar.component';
 import { extractServerMessage } from '../operation-error';
-import { BrokerV2PanelService, committedReceipt, uncommittedClaim, type BudgetDeployReceipt } from '../v2-panel/lib/broker-v2-panel.service';
+import { BrokerV2PanelService, committedReceipt, uncommittedClaim, type BudgetDeployReceipt, type BotEndView } from '../v2-panel/lib/broker-v2-panel.service';
 import { canonicalJson } from './deploy-draft.store';
 import { DeployLaunchReceiptComponent } from './deploy-launch-receipt.component';
 import { DeployOptionOrderTermsComponent } from './deploy-option-order-terms.component';
@@ -29,13 +33,14 @@ interface ReviewedDeployment {
   readonly target: ResourceTarget;
   readonly request: OptionsDeployRequest;
   readonly review: OptionsDeploymentReview;
+  readonly end: BotEndView;
 }
 
 @Component({
   selector: 'app-options-bot-deploy',
   imports: [
     AssetIdentityComponent, AuthoredUsdPipe, OptionsQualificationEvidenceComponent, DeployLaunchReceiptComponent, DeployOptionOrderTermsComponent,
-    FormField, FundingAnswerComponent, MoneyBarComponent, SetupSentencesComponent, TimestampDisplayComponent,
+    BotEndEditorComponent, BotEndSummaryComponent, FormField, FundingAnswerComponent, MoneyBarComponent, SetupSentencesComponent, TimestampDisplayComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './options-bot-deploy.component.html',
@@ -58,14 +63,26 @@ export class OptionsBotDeployComponent {
   protected readonly unknown = signal(false);
   protected readonly problem = signal<string | null>(null);
   protected readonly receipt = signal<BudgetDeployReceipt | null>(null);
-  private readonly fields = signal({ goldenId: this.route.snapshot.queryParamMap.get('options_setup') ?? '', amount: '', mode: '', confirmation: '' });
+  private readonly fields = signal({ goldenId: this.route.snapshot.queryParamMap.get('options_setup') ?? '', amount: '', mode: '', confirmation: '',
+    exitAllowanceBps: null as number | null, bandMultiple: null as number | null, spreadCapBps: null as number | null,
+  });
   protected readonly ticket = form(this.fields, (ticket) => {
     disabled(ticket, () => this.busy() || this.unknown() || this.receipt() !== null);
+    for (const name of ['exitAllowanceBps', 'bandMultiple', 'spreadCapBps'] as const) {
+      required(ticket[name]);
+      min(ticket[name], EXIT_TERM_RANGES[name].min, { message: EXIT_TERM_RANGES[name].message });
+      max(ticket[name], EXIT_TERM_RANGES[name].max, { message: EXIT_TERM_RANGES[name].message });
+    }
     required(ticket.goldenId);
     required(ticket.mode);
     required(ticket.amount);
     pattern(ticket.amount, /^(?=.*[1-9])\d+(\.\d{1,2})?$/, { message: 'Enter a positive dollar amount with at most two decimal places.' });
   });
+  protected readonly endFields = signal(botEndFields({ end_at_ms: null, end_action: 'SELL' }));
+  private readonly deployEnd = computed(() => botEndInput(this.endFields(), false));
+  protected readonly exitTermErrors = computed(() => (['exitAllowanceBps', 'bandMultiple', 'spreadCapBps'] as const)
+    .flatMap((name) => this.fields()[name] === null ? [] : this.ticket[name]().errors().map((error) => error.message)));
+  private exitDefaultsRead = false;
   protected readonly terms = signal<OptionOrderTerms | null>(null);
   private readonly reviewed = signal<ReviewedDeployment | null>(null);
   private submissionKey = this.route.snapshot.queryParamMap.get('options_submission');
@@ -110,13 +127,16 @@ export class OptionsBotDeployComponent {
     const fields = this.fields();
     const golden = this.golden();
     const terms = this.terms();
-    const exitTerms = this.context.hasValue() ? this.context.value().default_exit_terms : null;
+    const end = this.deployEnd();
+    const exitTerms = fields.exitAllowanceBps === null || fields.bandMultiple === null || fields.spreadCapBps === null
+      || this.ticket.exitAllowanceBps().invalid() || this.ticket.bandMultiple().invalid() || this.ticket.spreadCapBps().invalid()
+      ? null : { exit_allowance_bps: fields.exitAllowanceBps, band_multiple: fields.bandMultiple, spread_cap_bps: fields.spreadCapBps };
     const mode = this.modes().find((item) => item.mode === fields.mode && item.availability === 'available');
-    if (golden?.status !== 'ready' || !mode || !exitTerms || !orderTermsSet(terms, this.orderDefaults())
+    if (golden?.status !== 'ready' || !mode || !exitTerms || !end || !orderTermsSet(terms, this.orderDefaults())
       || this.ticket.amount().invalid()) return null;
     return {
       golden_setup_id: golden.id, execution_mode: mode.mode, order_terms: terms, exit_terms: exitTerms,
-      budget: { amount_usd: fields.amount, risk_revision: 0 }, end: null,
+      budget: { amount_usd: fields.amount, risk_revision: 0 }, end,
     };
   });
   private readonly reviewContext = computed(() => canonicalJson({ target: this.address(), request: this.request() }));
@@ -126,6 +146,21 @@ export class OptionsBotDeployComponent {
   });
   protected readonly mayReview = computed(() => this.request() !== null && !this.busy() && !this.unknown()
     && this.receipt() === null && !this.laneReviewRequired() && laneFenceIsEnforceable(this.fence()));
+  protected readonly reviewHint = computed(() => {
+    const fields = this.fields();
+    const golden = this.golden();
+    if (golden === null) return 'Choose an approved golden setup before reviewing.';
+    if (golden.status !== 'ready') return golden.status_explanation;
+    if (!this.modes().some(mode => mode.mode === fields.mode && mode.availability === 'available')) return 'Choose an available execution mode.';
+    if (!orderTermsSet(this.terms(), this.orderDefaults())) return 'Complete the option order terms before reviewing.';
+    if (fields.exitAllowanceBps === null || fields.bandMultiple === null || fields.spreadCapBps === null) {
+      return 'Set exit allowance, band multiple and spread cap before reviewing.';
+    }
+    if (this.exitTermErrors().length) return 'Correct the highlighted exit settings before reviewing.';
+    if (this.deployEnd() === null) return 'Set a complete deployment end, or choose no end.';
+    if (this.ticket.amount().invalid()) return 'Enter a positive dollar budget with at most two decimal places.';
+    return null;
+  });
   protected readonly mayDeploy = computed(() => {
     const reviewed = this.currentReview();
     if (!this.mayReview() || !reviewed?.review.allowed || !reviewed.review.budget.review_token) return false;
@@ -139,6 +174,16 @@ export class OptionsBotDeployComponent {
   });
 
   constructor() {
+    effect(() => {
+      if (!this.context.hasValue() || this.exitDefaultsRead) return;
+      const defaults = this.context.value().default_exit_terms;
+      this.exitDefaultsRead = true;
+      if (defaults) untracked(() => this.fields.update((fields) => ({ ...fields,
+        exitAllowanceBps: fields.exitAllowanceBps ?? defaults.exit_allowance_bps,
+        bandMultiple: fields.bandMultiple ?? defaults.band_multiple,
+        spreadCapBps: fields.spreadCapBps ?? defaults.spread_cap_bps,
+      })));
+    });
     effect(() => {
       const defaults = this.orderDefaults();
       if (defaults !== null && untracked(this.terms) === null) this.terms.set(startingOrderTerms(defaults));
@@ -169,7 +214,7 @@ export class OptionsBotDeployComponent {
 
   protected async review(): Promise<void> {
     const request = this.request();
-    if (!this.mayReview() || request === null) return;
+    if (!this.mayReview() || request === null || request.end == null) return;
     const context = this.reviewContext();
     const target = this.address();
     const generation = ++this.reviewGeneration;
@@ -177,13 +222,15 @@ export class OptionsBotDeployComponent {
     this.problem.set(null);
     this.reviewed.set(null);
     try {
+      const end = await this.panels.previewBotEnd(target, { execution_mode: request.execution_mode, end: request.end });
+      if (generation !== this.reviewGeneration || context !== this.reviewContext()) return;
       const facts = await this.service.review(target, { ...request, budget: null });
       if (generation !== this.reviewGeneration || context !== this.reviewContext()) return;
       if (facts.budget.risk_revision === undefined) throw new Error('The account did not provide its current risk revision. Review again.');
       const withBudget = { ...request, budget: { amount_usd: this.fields().amount, risk_revision: facts.budget.risk_revision } };
       const review = await this.service.review(target, withBudget);
       if (generation !== this.reviewGeneration || context !== this.reviewContext()) return;
-      this.reviewed.set({ context, target, request: withBudget, review });
+      this.reviewed.set({ context, target, request: withBudget, review, end });
     } catch (error) {
       if (context === this.reviewContext()) this.problem.set(extractServerMessage(error, 'This setup and account could not be reviewed.'));
     } finally {

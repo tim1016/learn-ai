@@ -5,9 +5,15 @@ from types import SimpleNamespace
 import pytest
 
 from app.options_bots.golden import GoldenSetupError
+from app.schemas.market_liveness import (
+    MarketClockLivenessEvidence,
+    SymbolMarketDataEvidence,
+    SymbolTradingStatusEvidence,
+)
 from app.schemas.run_admission import StartWindowFact
 from app.services.broker_v2_panel.panel_deploy import _option_choice_of
 from app.services.broker_v2_panel.panel_errors import PanelRunnerError
+from app.services.market_liveness import compose_market_liveness, liveness_blocks_entry
 from app.services.options_bot_admission import options_start_facts
 from app.services.run_admission import evaluate_run_admission
 from tests.broker.alpaca.clerk.test_options_leg_custody import _session_binding, _setup
@@ -63,6 +69,45 @@ def test_scheduled_options_can_deploy_while_market_closed_but_signal_and_halts_r
     assert options.allowed
     halted = _bot(liveness_state="HALTED").model_copy(update={"schedules_options_sessions": True})
     assert not evaluate_run_admission(halted, _clerk(), evaluated_at_ms=_NOW).allowed
+
+
+@pytest.mark.parametrize(
+    ("phase", "clock", "connected", "data_state", "halted", "clock_age", "allowed"),
+    [
+        ("CLOSED", "CLOSED", True, "RECOVERING", False, 1000, True),
+        ("CLOSED", "CLOSED", True, "STARTING", False, 1000, True),
+        ("RTH", "CLOSED", True, "RECOVERING", False, 1000, False),
+        ("CLOSED", "OPEN", True, "RECOVERING", False, 1000, False),
+        ("CLOSED", "CLOSED", False, "RECOVERING", False, 1000, False),
+        ("CLOSED", "CLOSED", True, "UNAVAILABLE", False, 1000, False),
+        ("CLOSED", "CLOSED", True, "RECOVERING", True, 1000, False),
+        ("CLOSED", "CLOSED", True, "RECOVERING", False, 6000, False),
+    ],
+)
+def test_options_can_wait_for_a_session_without_weekend_ticks_but_keep_live_safety_gates(
+    phase: str, clock: str, connected: bool, data_state: str, halted: bool, clock_age: int, allowed: bool,
+) -> None:
+    data = SymbolMarketDataEvidence(
+        symbol="SPY", generation="weekend", state=data_state, observed_at_ms=_NOW - 1000,
+        reason_code=f"MARKET_DATA_{data_state}", reason="Waiting for a current quote.",
+    )
+    liveness = compose_market_liveness(
+        "SPY", now_ms=_NOW, connected=connected, connection_changed_at_ms=_NOW - 2000,
+        market_clock=MarketClockLivenessEvidence(state=clock, source="alpaca.clock", observed_at_ms=_NOW - clock_age),
+        symbol_status=SymbolTradingStatusEvidence(
+            symbol="SPY", state="HALTED" if halted else "NOT_REPORTED", source="ibkr.market_data.status", observed_at_ms=_NOW - 1000,
+        ),
+        market_data=data, require_market_data=True,
+    )
+    bot = _bot(scheduled_phase=phase).model_copy(update={
+        "schedules_options_sessions": True, "market_liveness": liveness,
+        "market_data": _bot(scheduled_phase=phase).market_data.model_copy(update={"connected": connected}),
+        "start_window": StartWindowFact(state="CLOSED"),
+    })
+    assert evaluate_run_admission(bot, _clerk(), evaluated_at_ms=_NOW).allowed is allowed
+    # The scheduler's permission never authorizes immediate entries.
+    assert liveness_blocks_entry(liveness, use_rth=True, extended_phase_proven=False, extended_session_live=False)
+    assert not evaluate_run_admission(bot.model_copy(update={"schedules_options_sessions": False}), _clerk(), evaluated_at_ms=_NOW).allowed
 
 
 def test_signal_deploy_prefill_refuses_an_options_session_with_a_typed_handoff() -> None:

@@ -254,7 +254,10 @@ async def test_a_dropped_research_connection_degrades_to_the_registry_point(monk
 # ---------------------------------------------------------------------------
 # The Deploy form and the deploy itself
 # ---------------------------------------------------------------------------
-async def test_deploy_offers_and_accepts_the_ready_default_tuple(deploy_app, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("use_default", [True, False], ids=["default", "other-approved-version"])
+async def test_deploy_offers_default_but_accepts_either_reviewed_tuple(
+    deploy_app, monkeypatch: pytest.MonkeyPatch, use_default: bool,
+) -> None:
     fast_app, registry = deploy_app
     monkeypatch.setattr("app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS", _ALLOW_BODY_STRATEGY)
     default = _judged(golden_run_id=2)
@@ -269,12 +272,13 @@ async def test_deploy_offers_and_accepts_the_ready_default_tuple(deploy_app, mon
     monkeypatch.setattr(panel_deploy, "_ready_golden_defaults", ready_defaults)
     monkeypatch.setattr(panel_deploy, "_current_golden_validation_scopes", current_scopes)
     offered = {name: value for name, value in default.qualification.params.items() if name != "symbol"}
+    selected = offered if use_default else {name: value for name, value in _point("SPY", gap=0.55).items() if name != "symbol"}
 
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         view = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/deploy?symbol=SPY")
         deployed = await client.post(
             f"/api/brokers/alpaca/accounts/{ACCT}/bots",
-            json={**_BODY, "submission_key": "golden-default-spy", "parameters": offered},
+            json={**_BODY, "submission_key": "golden-default-spy", "parameters": selected},
         )
 
     assert view.status_code == 200, view.text
@@ -284,4 +288,4 @@ async def test_deploy_offers_and_accepts_the_ready_default_tuple(deploy_app, mon
     assert strategy["validation_case_parameters"] == offered
     assert strategy["golden_validation_scope"] is True
     assert deployed.status_code == 201, deployed.text
-    assert registry.deploy_calls[0]["strategy_params"] == offered
+    assert registry.deploy_calls[0]["strategy_params"] == selected
