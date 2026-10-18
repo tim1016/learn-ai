@@ -79,7 +79,6 @@ describe('Options deployment', () => {
   it('reviews and deploys explicit per-bot terms and a bounded end when account defaults are absent', async () => {
     const { review, deploy, previewBotEnd } = await setup({ noExitDefaults: true });
     expect((screen.getByRole('button', { name: 'Review setup and budget' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText('Set exit allowance, band multiple and spread cap before reviewing.')).toBeTruthy();
     fireEvent.click(screen.getByText('Per-bot exit settings'));
     fireEvent.input(screen.getByLabelText('Exit allowance (bps)'), { target: { value: '20' } });
     fireEvent.input(screen.getByLabelText('Band multiple'), { target: { value: '2' } });

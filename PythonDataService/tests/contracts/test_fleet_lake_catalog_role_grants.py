@@ -29,6 +29,9 @@ LANE_TABLES = frozenset(
         "research_golden_qualifications",
         "research_golden_qualification_events",
         "research_golden_defaults",
+        # Options Golden versions and revocations are checked at admission (ADR 0079).
+        "research_golden_option_setups",
+        "research_golden_option_setup_events",
     }
 )
 
@@ -65,6 +68,9 @@ NEVER_GRANTED_TABLES = frozenset(
         "research_golden_search_exposures",
         "research_golden_default_history",
         "research_retired_research_windows",
+        "research_options_backtest_runs",
+        "research_options_backtest_trades",
+        "research_options_golden_search_studies",
     }
 )
 
