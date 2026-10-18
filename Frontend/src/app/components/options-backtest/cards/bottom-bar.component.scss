@@ -35,3 +35,5 @@ kbd { margin-inline-start: var(--space-2); border: 1px solid currentColor; borde
   .status:has(.bad) { white-space: normal; }
   kbd { display: none; }
 }
+
+.footer.footer--inline { position: static; box-shadow: none; }

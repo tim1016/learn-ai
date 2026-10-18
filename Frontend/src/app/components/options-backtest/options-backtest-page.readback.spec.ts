@@ -30,6 +30,16 @@ function readText(blob: Blob): Promise<string> {
   });
 }
 
+it('loads the linked saved setup and allows editing without reopening it', async () => {
+  const service = fakeService(vi, { list: vi.fn(async () => [servedSaved('Linked setup', exampleBody())]) });
+  await renderPage(service, undefined, { setupName: 'Linked setup' });
+  expect(nameField().value).toBe('Linked setup');
+  typeInto('Setup name', 'Edited linked setup');
+  await waitFor(() => expect(saveButton().disabled).toBe(false));
+  fireEvent.click(saveButton());
+  await waitFor(() => expect(service.save).toHaveBeenCalledWith('Edited linked setup', expect.objectContaining({ underlying: 'SPY' })));
+});
+
 async function openExample(): Promise<void> {
   fireEvent.click(await within(sideList()).findByRole('button', { name: new RegExp(`^${EXAMPLE_ONE_REENTRY}`) }));
   await screen.findByRole('article', { name: 'Leg 2' });

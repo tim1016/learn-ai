@@ -28,6 +28,7 @@ export interface SaveStatus {
 export class BottomBarComponent {
   readonly nameField = input.required<FieldTree<string>>();
   readonly canSave = input(false);
+  readonly fixedOnNarrow = input(true);
   readonly saving = input(false);
   /** Why the name cannot be used. */
   readonly nameProblem = input<string | null>(null);

@@ -139,9 +139,9 @@ export interface FakeDownload {
  * `jobs` is the jobs service a spec scripts; without one the page gets a jobs service that knows of no job.
  * The poll that reads a going run again is off unless `polling` is set, so a spec that is not about it never waits on a timer.
  */
-export async function renderPage(service: FakeService, download?: FakeDownload, options: { settled?: boolean; jobs?: FakeJobs; detail?: FakeRunDetail; polling?: boolean } = {}) {
+export async function renderPage(service: FakeService, download?: FakeDownload, options: { setupName?: string; settled?: boolean; jobs?: FakeJobs; detail?: FakeRunDetail; polling?: boolean } = {}) {
   const view = await render(OptionsBacktestPageComponent, {
-    inputs: { describeDebounceMs: 0 },
+    inputs: { describeDebounceMs: 0, setup_name: options.setupName },
     providers: [
       ...fakePickerWorld().providers,
       ...(options.polling === true ? [] : [{ provide: RUN_POLL_MS, useValue: 0 }]),

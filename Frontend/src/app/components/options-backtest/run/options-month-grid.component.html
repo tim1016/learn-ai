@@ -1,0 +1,18 @@
+<section class="month-board" aria-label="Monthly results grid">
+  <div class="metric-picker"><span>Color and quantity</span>@for (metric of metrics(); track metric.key) { <button type="button" [class.active]="selectedMetric().key === metric.key" (click)="selectedMetric.set(metric)">{{ metric.label }}</button> }</div>
+  <p class="legend">@if (selectedMetric().signed) { Green: gain. Red: loss. Stronger color means a larger absolute amount. } @else { Stronger blue means a larger quantity. } Each view shares one color scale across years. A dash means no recorded month; zero is shown explicitly.</p>
+  <div class="calendar-scroll"><div class="calendar" role="grid" aria-label="Results by year and month">
+    <div class="calendar-row headings" role="row"><span role="columnheader">Year</span>@for (month of months; track month) { <span role="columnheader">{{ month }}</span> }</div>
+    @for (year of years(); track year.year) {
+      <div class="calendar-row" role="row"><strong class="year" role="rowheader">{{ year.year }}</strong>@for (cell of year.months; track $index) {
+        <div class="month-slot" role="gridcell">@if (cell) {
+          <button type="button" class="month-heat" [class.loss]="cell.loss" [class.sequential]="!selectedMetric().signed" [class.flat]="cell.strength === '0'" [style.--strength]="cell.strength" [attr.aria-label]="cell.buttonLabel" (click)="selectedMonth.set(cell)">
+            <strong>@if (selectedMetric().unit === 'usd') { {{ cell.value | authoredUsd }} } @else { {{ cell.value }} }</strong>
+          </button>
+        } @else { <span class="empty" title="No recorded month">—</span> }</div>
+      }</div>
+    } @empty { <p>No monthly results were recorded.</p> }
+  </div></div>
+  @if (inspected(); as month) { <section class="month-inspector" aria-label="Selected month"><h4>{{ month.label }}</h4><dl>@for (metric of month.values; track metric.key) { <div><dt>{{ metric.label }}</dt><dd>@if (metric.unit === 'usd') { {{ metric.value | authoredUsd }} } @else { {{ metric.value }} }</dd></div> }</dl></section> }
+  <p class="legend">Choose a month to inspect all available quantities. Color is a guide to variation, not a risk rating.</p>
+</section>

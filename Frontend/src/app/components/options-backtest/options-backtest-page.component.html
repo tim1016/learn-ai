@@ -60,7 +60,7 @@
             <div class="rail" data-span="4">
               @if (activeTab() === 'backtest') {
                 <app-options-backtest-bottom-bar
-                  [nameField]="saveForm.name" [canSave]="canSave()" [saving]="saving()" [nameProblem]="nameProblem()"
+                  [fixedOnNarrow]="!resultsInView()" [nameField]="saveForm.name" [canSave]="canSave()" [saving]="saving()" [nameProblem]="nameProblem()"
                   [automaticName]="automaticName()" (nameEdited)="automaticName.set(false)" (generateName)="automaticName.set(true)"
                   [hint]="saveHint()" [status]="saveStatus()" [canCheck]="canCheck()" [canStart]="canStart()" [runHint]="runHint()" (save)="save()" (check)="checkData()" (start)="start()" (height)="barHeight.set($event)" />
               }
@@ -69,7 +69,7 @@
               }
             </div>
           </div>
-          <div class="results">
+          <div #resultsPane class="results">
             @if (check().kind !== 'idle') {
               <app-options-backtest-data-check-panel [state]="check()" [stale]="checkIsStale()" (dismissed)="dismissCheck()" (retry)="checkData()" (useStretch)="useStretch($event)" />
             }

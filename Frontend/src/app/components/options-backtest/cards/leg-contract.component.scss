@@ -34,5 +34,5 @@ button:disabled { opacity: .4; cursor: default; }
 .terms .expiry { flex: 1 1 8rem; }
 .terms input, .terms select { width: 100%; box-sizing: border-box; font-size: var(--fs-sm); }
 .note, .cover { margin: 0; font-size: var(--fs-xs); line-height: 1.5; color: var(--text-subtle); }
-.cover { display: flex; align-items: baseline; gap: var(--space-2); color: var(--text-secondary); border-inline-start: 2px solid var(--ticket-ink); padding-inline-start: var(--space-3); }
+.cover { display: flex; align-items: baseline; gap: var(--space-2); color: var(--text-secondary); }
 @media (prefers-reduced-motion: reduce) { .side-flip__rotor { transition: none; } }

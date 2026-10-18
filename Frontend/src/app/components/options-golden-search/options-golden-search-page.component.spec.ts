@@ -41,6 +41,12 @@ async function preparePlan() {
 }
 
 describe('Options Golden Search workbench', () => {
+  it('opens the selected saved setup in the editor', async () => {
+    await page(service(), { setup_name: 'Saved two-leg setup' });
+    const link = await screen.findByRole('link', { name: 'Edit setup and name in the setup editor', hidden: true });
+    expect(link.getAttribute('href')).toBe('/options-backtest?setup_name=Saved%20two-leg%20setup');
+  });
+
   it('renders lightweight study history without loading study evidence', async () => {
     const fake = service();
     const summaries = [{ id: 'saved-study', setup_name: 'Past setup', underlying: 'SPY', phase: 'compare', status: 'ready', updated_at_ms: 1791294000000 }];

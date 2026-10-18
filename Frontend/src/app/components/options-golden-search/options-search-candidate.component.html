@@ -1,6 +1,7 @@
 <article class="card candidate">
   <header><h3>{{ candidate().label }} @if (candidate().is_original) { <span class="tag">Original</span> }</h3><strong [class.problem]="candidate().verdict === 'could_not_evaluate'">{{ candidate().verdict | receiptLabel }}</strong></header>
   <code>{{ candidate().candidate_hash }}</code>
+  @if (candidate().verdict === 'could_not_evaluate') { <p class="notice problem">Partial diagnostics only. This evaluation could not be verified. These amounts and paths do not establish performance over the declared history; a held option needs a contemporaneous mark to measure its risk. Inspect the technical-validity check before drawing a conclusion.</p> }
   <dl class="metrics">
     <div><dt>Net profit after costs</dt><dd>{{ candidate().net_profit_usd ?? 'Unavailable' }} USD</dd></div>
     <div><dt>Maximum minute-close drawdown (% of starting capital)</dt><dd>{{ candidate().drawdown_percent ?? 'Unavailable' }}% · {{ candidate().drawdown_usd ?? 'Unavailable' }} USD</dd></div>
@@ -8,29 +9,28 @@
     <div><dt>Completed traded setup sessions</dt><dd>{{ candidate().completed_sessions ?? 'Unavailable' }}</dd></div>
     <div><dt>Recovery</dt><dd>{{ candidate().recovery }}</dd></div>
   </dl>
+  <details class="measure-guide"><summary>How to read these measures</summary>
+    <p>Net profit is the sum of net session results. A positive total can conceal concentrated gains and long losing stretches; inspect the monthly pattern and the equity path together.</p>
+    <p>Risk uses fixed starting capital: drawdown percent = 100 × maximum minute-close drawdown / starting capital. This differs from the ordinary backtest’s session-end percentage of its running peak.</p>
+    <p>Daily return = net session profit / fixed starting capital. Sharpe = √A × mean(r − rƒ) / sample standard deviation(r − rƒ), where A is the calendar-derived annual session count and rƒ is the frozen daily risk-free return. An unavailable Sharpe is not zero.</p>
+    <p>Completed traded sessions measure activity; they are not a count of independent bets. A rule passing its limit is an eligibility check, not a probability of future success.</p>
+  </details>
   <details><summary>Show me why</summary>
     @for (gate of candidate().gate_outcomes; track gate.gate_id) {
       <p><strong>{{ gate.gate_id | receiptLabel }} · {{ gate.status | receiptLabel }}</strong><br />Actual {{ gate.actual ?? 'Unavailable' }} · Required {{ gate.required ?? 'Unavailable' }}<br />{{ gate.reason }}</p>
     }
     @for (item of candidate().evidence; track item.label) { <p><strong>{{ item.label }}</strong>: {{ item.value }}</p> }
   </details>
-  <details (toggle)="toggleChart($event)"><summary>Equity and drawdown charts</summary>
-    @if (chartOpen()) {
-    @if (candidate().equity.length === 0) { <p>No verified risk path was recorded.</p> } @else {
-      @for (line of lines(); track line.title) {
-        <h4>{{ line.title }}</h4><svg class="curve" viewBox="0 0 1000 160" preserveAspectRatio="none"><polyline [attr.points]="line.line" />
-          @for (point of line.points; track point.at) { <circle [attr.cx]="point.x" [attr.cy]="point.y" r="2"><title>{{ point.title }}</title></circle> }
-        </svg>
-      }
-      <p>Minute closes cannot establish tick-level worst loss.</p>
-    }
-    }
-  </details>
-  <details><summary>Monthly results</summary>
-    <table><thead><tr><th>Month</th><th>Net profit (USD)</th><th>Completed sessions</th></tr></thead><tbody>
-      @for (month of candidate().monthly; track month.month_ms) { <tr><td><app-timestamp-display [value]="month.month_ms" mode="date-et" /></td><td>{{ month.net_profit_usd }}</td><td>{{ month.completed_sessions }}</td></tr> }
-    </tbody></table>
-  </details>
+  <div class="evidence-paths">
+    <app-options-evidence-chart title="Minute-close equity (USD)" explanation="Equity follows the marked account value at recorded minute closes. Rising equity means increasing account value after modeled costs; it does not describe executable liquidation prices." [points]="equity()" />
+    <app-options-evidence-chart title="Minute-close drawdown (USD)" explanation="Drawdown is the running equity peak minus current equity. Larger positive values mean deeper loss below a previous peak. Minute closes cannot establish tick-level worst loss." [points]="drawdown()" [risk]="true" />
+  </div>
+  <p class="muted">Paths may show a retained display subset. Full replay evidence determines the reported measures; the plotted range is not a substitute for the maximum-drawdown figure.</p>
+  <section class="monthly-evidence">
+    <h4>Monthly results</h4>
+    <p class="muted">New York calendar months, with one row per year. Switch between net P&L after modeled costs and completed traded sessions. Inspect consistency, concentration and quiet months together.</p>
+    <app-options-month-grid [cells]="monthCells()" [metrics]="monthMetrics" />
+  </section>
   <details [open]="sessionsOpen()" (toggle)="toggleSessions($event)"><summary>Session, leg and attempt evidence</summary>
     @if (sessionsOpen()) {
     @for (session of candidate().sessions; track session.session_open_ms) {

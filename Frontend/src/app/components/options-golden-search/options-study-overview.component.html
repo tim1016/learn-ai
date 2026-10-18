@@ -1,0 +1,46 @@
+<section class="card study-overview">
+  <h2>What this study establishes</h2>
+  <p class="muted">Read performance together with risk, activity and failed limits. A profitable candidate can still be ineligible. The saved original remains the reference.</p>
+  <ol class="evidence-cycle">
+    <li><strong>Development</strong><span>Search and select using earlier history. These returns have already influenced selection.</span></li>
+    <li><strong>Forward folds</strong><span>Test the selection procedure on later slices. Different folds may select different setups; pooled results are not one candidate’s track record.</span></li>
+    <li><strong>Final test</strong><span>Freeze the shortlist before opening final outcomes. Previously used dates cannot become fresh evidence again.</span></li>
+    <li><strong>Approval review</strong><span>Review stress costs, repeatability and exposure. An exception must remain visible in the retained evidence.</span></li>
+  </ol>
+  @if (rows().length > 0) {
+    @if (landscape(); as map) {
+      <h3>Profit against downside</h3>
+      <p class="muted">Development evidence only. Higher means more net profit; farther right means a deeper minute-close drawdown. The upper left combines higher profit with lower drawdown. Eligibility still depends on every frozen rule.</p>
+      <div class="risk-map"><div class="risk-map-scale"><span>{{ map.high }} USD profit</span><span>{{ map.low }} USD profit</span></div>
+        <svg viewBox="-20 0 1040 360" preserveAspectRatio="none" role="img" aria-label="Development net profit against maximum drawdown">
+          <line x1="0" x2="1000" y1="333" y2="333" /><line x1="0" x2="0" y1="27" y2="333" />
+          @for (point of map.points; track point.candidate.candidate_hash) { <circle [attr.cx]="point.x" [attr.cy]="point.y" [attr.r]="point.candidate.is_original ? 8 : 6" [class.original]="point.candidate.is_original" [class.failed]="point.candidate.verdict !== 'meets_rules'" [class.selected]="selectedHash() === point.candidate.candidate_hash" (click)="selectedHash.set(point.candidate.candidate_hash)"><title>{{ point.candidate.label }}: {{ point.profit }} USD profit; {{ point.risk }} USD drawdown; {{ point.candidate.verdict | receiptLabel }}</title></circle> }
+        </svg>
+      </div>
+      <div class="risk-map-axis"><span>{{ map.minRisk }} USD drawdown</span><span>{{ map.maxRisk }} USD drawdown</span></div>
+      <p class="muted">Hollow marker: original. Filled marker: variation. Red: did not pass every rule. Choose a marker or a setup below to inspect its exact coordinates. Overlapping points may share the same outcome.</p>
+      <div class="actions">@for (point of map.points; track point.candidate.candidate_hash) { <button type="button" [class.active]="selectedHash() === point.candidate.candidate_hash" (click)="selectedHash.set(point.candidate.candidate_hash)">{{ point.candidate.label }}</button> }</div>
+      @if (selected(); as point) { <p class="selected-reading"><strong>{{ point.candidate.label }}</strong>: {{ point.profit }} USD net profit, {{ point.risk }} USD maximum drawdown. {{ point.candidate.verdict | receiptLabel }}.</p> }
+    }
+    @if (landscape() === null) { <p class="notice problem">No technically verified candidate can be plotted for comparison. Partial diagnostic amounts remain below; they do not establish performance over the declared history.</p> }
+    <h3>Candidate comparison</h3>
+    <p class="muted">Profit bars share one dollar scale within this table. The center is zero. Final results use a separate interval: compare behavior and limits rather than subtracting unequal-period totals.</p>
+    <div class="table-scroll"><table><thead><tr><th>Setup</th><th>Development profit / loss</th><th>Net profit (USD)</th><th>Drawdown (% of starting capital)</th><th>Daily Sharpe</th><th>Traded sessions</th><th>Development verdict</th><th>Final net profit (USD)</th><th>Final verdict</th></tr></thead><tbody>
+      @for (row of rows(); track row.candidate.candidate_hash) {
+        <tr [class.reference-row]="row.candidate.is_original"><th scope="row">{{ row.candidate.label }} @if (row.candidate.is_original) { <span class="tag">Original</span> }</th>
+          <td class="month-track">@if (row.candidate.net_profit_usd !== null && row.candidate.verdict !== 'could_not_evaluate') { <div class="diverging"><span [class.loss]="row.loss" [style.width.%]="row.width"></span></div> } @else { Unavailable }</td>
+          <td>{{ row.candidate.net_profit_usd ?? 'Unavailable' }} @if (row.candidate.verdict === 'could_not_evaluate' && row.candidate.net_profit_usd !== null) { <small>Partial diagnostics</small> }</td><td>{{ row.candidate.drawdown_percent ?? 'Unavailable' }}</td><td>{{ row.candidate.sharpe ?? 'Unavailable' }}</td><td>{{ row.candidate.completed_sessions ?? 'Unavailable' }}</td><td>{{ row.candidate.verdict | receiptLabel }}</td><td>{{ row.final?.net_profit_usd ?? 'Not available' }} @if (row.final?.verdict === 'could_not_evaluate' && row.final.net_profit_usd !== null) { <small>Partial diagnostics</small> }</td><td>{{ row.final ? (row.final.verdict | receiptLabel) : 'Not available' }}</td>
+        </tr>
+      }
+    </tbody></table></div>
+    <p class="muted">{{ rejectedCount() }} rejected candidates retained. A missing measure means unavailable evidence, never a zero result.</p>
+  } @else { <p>Candidate evidence appears after research completes. The locked protocol and progress remain saved while the work runs.</p> }
+  @if (study().gate_outcomes.length > 0) {
+    <h3>Forward and procedure checks</h3>
+    <p class="muted">Each row is a server-evaluated check against a limit frozen before research. Training checks describe selection; forward checks describe later evidence. A fold with no eligible winner is missing procedure evidence, not a zero-return period.</p>
+    <div class="table-scroll"><table><thead><tr><th>Evidence check</th><th>Verdict</th><th>Observed</th><th>Required</th><th>Interpretation</th></tr></thead><tbody>
+      @for (gate of study().gate_outcomes; track gate.gate_id) { <tr><th scope="row">@for (part of gate.gate_id.split(':'); track $index; let last = $last) { {{ part | receiptLabel }}{{ last ? '' : ' · ' }} }</th><td>{{ gate.status | receiptLabel }}</td><td>{{ gate.actual ?? 'Unavailable' }}</td><td>{{ gate.required ?? 'Unavailable' }}</td><td>{{ gate.reason }}</td></tr> }
+    </tbody></table></div>
+  }
+  <div class="exposure-reading"><strong>History exposure: {{ study().exposure.classification | receiptLabel }}</strong><p>{{ study().exposure.explanation }}</p></div>
+</section>

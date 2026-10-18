@@ -1,0 +1,27 @@
+:host { display: block; min-width: 0; }
+.month-board { min-width: 0; }
+.metric-picker { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); font-size: var(--fs-xs); }
+.metric-picker > span { color: var(--text-secondary); margin-right: var(--space-2); }
+button { font: inherit; color: var(--text-primary); cursor: pointer; }
+.metric-picker button { background: var(--bg-surface); border: 1px solid var(--border-light); border-radius: var(--radius); padding: var(--space-2) var(--space-3); }
+.metric-picker button.active { background: var(--accent); color: var(--text-on-accent); border-color: var(--accent); }
+.legend { color: var(--text-secondary); font-size: var(--fs-xs); line-height: 1.6; margin: var(--space-3) 0; max-width: 85ch; }
+.calendar-scroll { overflow-x: auto; }
+.calendar { min-width: 56rem; font-size: var(--fs-xs); }
+.calendar-row { display: grid; grid-template-columns: 4rem repeat(12, minmax(0, 1fr)); gap: 4px; margin-bottom: 4px; }
+.headings span { padding: var(--space-2); text-align: center; color: var(--text-secondary); font-weight: var(--fw-semi); }
+.year { align-self: center; color: var(--text-secondary); }
+.month-slot { min-height: 4rem; }
+.month-heat { position: relative; isolation: isolate; width: 100%; height: 100%; padding: var(--space-2); border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--bg-surface); font-variant-numeric: tabular-nums; }
+.month-heat::before { content: ''; position: absolute; inset: 0; z-index: -1; border-radius: inherit; background: var(--bull); opacity: var(--strength); }
+.month-heat.loss::before { background: var(--bear); }
+.month-heat.sequential::before { background: var(--accent); }
+.month-heat.flat::before { background: var(--border-strong); opacity: .2; }
+.month-heat:hover { border-color: var(--text-secondary); }
+.month-heat strong { font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.empty { display: grid; place-items: center; height: 100%; color: var(--text-secondary); border: 1px dashed var(--border-light); border-radius: var(--radius); }
+.month-inspector { margin-top: var(--space-4); padding: var(--space-4); border-left: 3px solid var(--accent); background: var(--bg-sunken); }
+h4 { margin: 0 0 var(--space-3); font-size: var(--fs-sm); }
+dl { display: flex; flex-wrap: wrap; gap: var(--space-4); margin: 0; }
+dt { color: var(--text-secondary); font-size: var(--fs-xs); }
+dd { margin: var(--space-1) 0 0; font-variant-numeric: tabular-nums; font-size: var(--fs-sm); }
