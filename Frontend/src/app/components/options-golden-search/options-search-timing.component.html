@@ -1,0 +1,15 @@
+<section class="search-section">
+  <div class="section-heading"><h2>Explore timing</h2><span class="chip">Applies to all legs</span></div>
+  <p class="muted">Shift every leg from its saved schedule. Negative minutes mean earlier; positive minutes mean later.</p>
+  <div class="timing-row timing-heading"><span>Offset in minutes</span><span>Minimum</span><span>Maximum</span><span>Step</span></div>
+  @for (role of roles; track role) {
+    <div class="timing-row">
+      <div><strong>{{ role === 'entry' ? 'Entry' : 'Exit' }}</strong><small class="saved-time">Saved: {{ description(setup()[role]) }}</small></div>
+      <input type="number" [attr.aria-label]="role + ' minimum minutes'" [formField]="fields[role].min" />
+      <input type="number" [attr.aria-label]="role + ' maximum minutes'" [formField]="fields[role].max" />
+      <input type="number" [attr.aria-label]="role + ' step minutes'" [formField]="fields[role].step" />
+    </div>
+  }
+  @if (selection() === null) { <p class="problem">Use whole minutes, a positive step that divides the range, and at least two values per varied range (up to 5,000). Offsets must stay within the saved session anchor. Use 0–0 to keep timing fixed.</p> }
+  <p class="muted">Calendar checks handle early closes and DST. Session-dependent invalid combinations are reported before you start.</p>
+</section>

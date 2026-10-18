@@ -100,6 +100,14 @@ def test_large_batch_releases_replay_graphs_and_loads_selected_exact_evidence(
     assert len(answers) == len(records) == 64
     assert all(set(record["metrics"]) == set(stages._SCALAR_METRICS) for record in records.values())
     assert all("daily" not in record["metrics"] for record in records.values())
+    def refuse_trace(*args, **kwargs):
+        raise AssertionError("Compact diagnostic projection must not load retained minute traces")
+    with monkeypatch.context() as compact:
+        compact.setattr(evaluator, "load", refuse_trace)
+        for answer in answers:
+            metrics, complete = evaluator.metrics_for(answer)
+            assert metrics.net_profit_usd == answer.net_profit_usd
+            assert complete is not missing_option_day
     restored = evaluator.result_for(answers[-1], window)
     expected = evaluate_setup(requests[-1][0], window, data)
     assert restored == expected

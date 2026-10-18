@@ -19,3 +19,9 @@ The existing immutable Golden Options registry remains the approval authority. A
 ## Alternatives
 
 Reusing stock metric and seal types would mix trade units and drawdown conventions. A second session engine would let search approve different rules from execution. Hash-only snapshots lose reproducibility when the lake changes. Publishing the ordinary run alone would prove replay without proving the search qualification claim. Each alternative leaves a materially weaker authority boundary.
+
+## Selectable objective — owner decision, 2026-10-17
+
+The owner approved ranking by net profit, daily Sharpe, or lower starting-capital drawdown, independently of the mandatory eligibility limits. The objective is frozen in policy and applies to training selection and development shortlisting; final data never chooses it. Existing protocols retain net-profit ranking and their original identity. Synced timing ranges shift the shared saved entry and exit schedules in whole minutes, relative to their existing calendar anchors, so all legs move together. A failing candidate remains inspectable but cannot become a recommended winner merely by scoring well on the objective.
+
+The owner subsequently approved shared trading-rule exploration by default, with independent per-leg customization. A shared stop-loss, momentum or re-entry rule is one frozen dimension containing a complete stable-leg-ID map per candidate, rather than one dimension per leg; this prevents an unintended Cartesian product. The saved seed can retain different rules per leg, while new shared candidates apply the same rule to every leg. Shared and individual dimensions for the same rule cannot coexist.

@@ -16,6 +16,7 @@ class Model(BaseModel):
 
 
 class SearchPolicyRequest(Model):
+    rank_by: Literal["net_profit", "sharpe", "drawdown"] = "net_profit"
     max_drawdown_percent: Decimal = Field(default=Decimal(20), ge=0, le=100)
     min_sharpe: float = 1
     min_activity_per_year: int = Field(default=50, ge=1)

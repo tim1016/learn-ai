@@ -16,7 +16,7 @@ from app.options_bots.golden_proof import setup_sha256
 from app.research.options_golden_search.approval import verify_recorded_study
 from app.research.options_golden_search.evaluator import EvaluationResult, evaluate_setup
 from app.research.options_golden_search.planning import freeze_protocol
-from app.research.options_golden_search.policy import classify
+from app.research.options_golden_search.policy import Metrics, classify
 from app.research.options_golden_search.protocol import CostScenario, Knob, OptionsSearchProtocol, Policy, Window
 from app.research.options_golden_search.search import Evaluation
 from app.research.options_golden_search.stages import final, research
@@ -63,6 +63,10 @@ class ReplayEvaluator:
         return Evaluation(point_hash=digest, net_profit_usd=result.metrics.net_profit_usd,
                           max_drawdown_fraction=result.metrics.max_drawdown_fraction, sharpe=result.metrics.sharpe,
                           eligible=verdict.eligible, evidence_id=key)
+
+    def metrics_for(self, evaluation: Evaluation) -> tuple[Metrics, bool]:
+        result = self.results[evaluation.evidence_id]
+        return result.metrics, len(result.sessions) == result.scheduled_sessions
 
     def result_for(self, evaluation: Evaluation, window: Window) -> EvaluationResult:
         return self.results[evaluation.evidence_id]
@@ -164,10 +168,20 @@ def test_no_eligible_training_point_is_a_recorded_scientific_failure_never_a_zer
 ) -> None:
     original, data = experiment
     protocol = original.model_copy(update={"policy": original.policy.model_copy(update={"min_sharpe": 1e9})})
-    row = research(_row(protocol), ReplayEvaluator(protocol, data))
+    evaluator = ReplayEvaluator(protocol, data)
+    full_result_for = evaluator.result_for
+    def baseline_only(evaluation: Evaluation, window: Window) -> EvaluationResult:
+        assert evaluation.point_hash == setup_sha256(protocol.setup), "Rejected diagnostics must not load a full trace"
+        return full_result_for(evaluation, window)
+    evaluator.result_for = baseline_only
+    row = research(_row(protocol), evaluator)
     assert all(fold["status"] == "no_eligible_point" and fold["forward"] is None for fold in row["research"]["folds"])
     assert any(outcome["status"] == "does_not_meet_rules" for outcome in row["gate_outcomes"])
     assert any(outcome["gate_id"] == "pooled_forward:coverage" for outcome in row["gate_outcomes"])
+    rejected = [candidate for candidate in row["candidates"] if not candidate["is_original"]]
+    assert rejected and all(candidate["verdict"] != "meets_rules" for candidate in rejected)
+    assert all(candidate["gate_outcomes"] for candidate in rejected)
+    assert all(not candidate["equity"] and not candidate["sessions"] for candidate in rejected)
 
 
 def test_technical_interruption_cannot_advance_a_partial_research_batch_to_compare(

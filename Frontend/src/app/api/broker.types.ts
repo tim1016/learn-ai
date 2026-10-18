@@ -28007,6 +28007,12 @@ export interface components {
              */
             min_sharpe?: number;
             /**
+             * Rank By
+             * @default net_profit
+             * @enum {string}
+             */
+            rank_by?: "net_profit" | "sharpe" | "drawdown";
+            /**
              * Risk Free Daily Return
              * @default 0
              */
@@ -28051,6 +28057,12 @@ export interface components {
              * @default 1
              */
             min_sharpe?: number;
+            /**
+             * Rank By
+             * @default net_profit
+             * @enum {string}
+             */
+            rank_by?: "net_profit" | "sharpe" | "drawdown";
             /**
              * Risk Free Daily Return
              * @default 0

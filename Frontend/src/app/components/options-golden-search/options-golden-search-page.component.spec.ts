@@ -1,5 +1,5 @@
 import { provideRouter } from '@angular/router';
-import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -27,12 +27,11 @@ async function preparePlan() {
   await user.selectOptions(screen.getByRole('combobox', { name: 'Saved setup' }), 'Saved two-leg setup');
   await user.click(screen.getByRole('button', { name: 'Use saved setup' }));
   await screen.findByText(/Original identity/);
-  await user.click(screen.getByRole('button', { name: 'Choose search settings' }));
-  await user.click(screen.getAllByRole('checkbox', { name: 'Vary in search' })[0]);
-  const values = screen.getByRole('textbox', { name: 'Candidate values, comma separated' });
-  await user.clear(values);
-  await user.type(values, '20,25');
-  await user.click(screen.getByRole('button', { name: 'Rules and history' }));
+  await user.click(screen.getByText('Additional settings to vary'));
+  const stop = within(screen.getByRole('region', { name: 'Stop loss' }));
+  await user.click(stop.getByRole('button', { name: 'Explore' }));
+  for (const [label, value] of [['Minimum', '20'], ['Maximum', '25'], ['Step', '5']]) fireEvent.input(stop.getByRole('textbox', { name: label }), { target: { value } });
+
   const dateFields = screen.getAllByRole('textbox').filter((field) => field.closest('app-date-range-picker') !== null);
   fireEvent.change(dateFields[0], { target: { value: '2024-01-02' } });
   fireEvent.blur(dateFields[0]);
@@ -46,7 +45,7 @@ describe('Options Golden Search workbench', () => {
     const fake = service();
     const summaries = [{ id: 'saved-study', setup_name: 'Past setup', underlying: 'SPY', phase: 'compare', status: 'ready', updated_at_ms: 1791294000000 }];
     const view = await render(OptionsGoldenSearchPageComponent, { providers: [provideRouter([]), ...provideFakeDateWorld(), { provide: OptionsBacktestService, useValue: { list: async () => [] } }, { provide: OptionsGoldenSearchService, useValue: { ...fake, list: async () => summaries } }] });
-    expect(await screen.findByRole('link', { name: 'Past setup · Ready' })).toBeTruthy();
+    expect(await screen.findByRole('link', { name: 'Past setup' })).toBeTruthy();
     expect(fake.get).not.toHaveBeenCalled();
     view.fixture.destroy();
   });
@@ -57,9 +56,10 @@ describe('Options Golden Search workbench', () => {
     await waitFor(() => expect(check).toHaveProperty('disabled', false));
     await user.click(check);
     await screen.findByText('Dollar limit: 2000 USD');
-    expect(fake.preflight).toHaveBeenCalledWith(expect.objectContaining({ knobs: [{ path: 'legs.call.stop_loss.value', values: ['20', '25'], priority: 5, mode: 'search' }], history: expect.objectContaining({ start_ms: 1704171600000, end_ms: 1789790400000 }), policy: expect.objectContaining({ max_drawdown_percent: '20' }) }));
-    const lock = screen.getByRole('button', { name: 'Lock plan' });
+    expect(fake.preflight).toHaveBeenCalledWith(expect.objectContaining({ knobs: [{ path: 'all_legs.stop_loss', values: [{ call: { kind: 'percent', value: '20.0000' }, put: { kind: 'percent', value: '20.0000' } }, { call: { kind: 'percent', value: '25.0000' }, put: { kind: 'percent', value: '25.0000' } }], priority: 5, mode: 'search' }], history: expect.objectContaining({ start_ms: 1704171600000, end_ms: 1789790400000 }), policy: expect.objectContaining({ max_drawdown_percent: '20' }) }));
+    const lock = screen.getByRole('button', { name: 'Start search' });
     expect(lock).toHaveProperty('disabled', false);
+    await user.click(screen.getByText('Evidence requirements and additional limits'));
     const floor = screen.getByRole('spinbutton', { name: 'Annualized daily Sharpe floor' });
     await user.clear(floor);
     await user.type(floor, '2');

@@ -53038,6 +53038,16 @@
             "title": "Min Sharpe",
             "type": "number"
           },
+          "rank_by": {
+            "default": "net_profit",
+            "enum": [
+              "net_profit",
+              "sharpe",
+              "drawdown"
+            ],
+            "title": "Rank By",
+            "type": "string"
+          },
           "risk_free_daily_return": {
             "default": 0,
             "title": "Risk Free Daily Return",
@@ -53100,6 +53110,16 @@
             "default": 1,
             "title": "Min Sharpe",
             "type": "number"
+          },
+          "rank_by": {
+            "default": "net_profit",
+            "enum": [
+              "net_profit",
+              "sharpe",
+              "drawdown"
+            ],
+            "title": "Rank By",
+            "type": "string"
           },
           "risk_free_daily_return": {
             "default": 0,

@@ -23,8 +23,8 @@ from app.research.options_golden_search.metrics import (
     summarize_evidence,
 )
 from app.research.options_golden_search.planning import budget_plan, pooled_window
-from app.research.options_golden_search.policy import classify
-from app.research.options_golden_search.projections import candidate, exact_data, gates
+from app.research.options_golden_search.policy import Metrics, classify
+from app.research.options_golden_search.projections import candidate, exact_data, gates, rejected_candidate
 from app.research.options_golden_search.protocol import (
     CostScenario,
     OptionsSearchProtocol,
@@ -242,6 +242,14 @@ class StudyEvaluator:
         run_sync(with_connection(repo.trial,self.row["id"],self.row["attempt"],
             {"window":window.key,"trial":trial.model_dump(mode="json")}))
 
+    def metrics_for(self, evaluation: Evaluation) -> tuple[Metrics, bool]:
+        self.check()
+        stored = run_sync(with_connection(repo.get_evaluation, self.row["id"], evaluation.evidence_id))
+        if stored["result"] is None:
+            raise ValueError("The rejected Options evaluation has no retained metric summary.")
+        record = stored["result"]
+        return summary_metrics(record["metrics"]), record["complete"]
+
     def result_for(self, evaluation: Evaluation, window: Window) -> EvaluationResult:
         stored = run_sync(with_connection(repo.get_evaluation, self.row["id"], evaluation.evidence_id))
         if stored["result"] is None:
@@ -261,6 +269,12 @@ def research(row: dict[str, Any], evaluator: StudyEvaluator) -> dict[str, Any]:
         result = evaluator.result_for(selected_eval,protocol.development)
         verdict = classify(result.metrics,protocol.policy,protocol.development,"development")
         candidates.append(candidate(result,verdict,selected_eval.point_hash,original=selected_eval.point_hash==baseline.point_hash))
+    for rejected in selection.rejected:
+        if rejected.point_hash == baseline.point_hash:
+            continue
+        metrics, complete = evaluator.metrics_for(rejected)
+        verdict = classify(metrics, protocol.policy, protocol.development, "development", complete=complete)
+        candidates.append(rejected_candidate(metrics, verdict, rejected.point_hash))
     folds = []
     outcomes = []
     forward_evidence = []

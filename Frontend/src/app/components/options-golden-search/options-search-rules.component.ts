@@ -31,8 +31,8 @@ export class OptionsSearchRulesComponent {
   readonly preflight = input<Preflight | null>(null);
   readonly range = input.required<DateRange>();
   readonly rangeChanged = output<DateRange>();
-  readonly changed = output<RuleSelection>();
-  protected readonly model = signal({ drawdown: '20', sharpe: 1, activity: 50, observations: 30, forward: 30, final: 30, recoveryOn: false, recovery: 60, riskFree: 0, method: 'zoom', trainMonths: 6, testMonths: 2, finalMonths: 6, budget: 5000, finalists: 3, slippageStress: true, feeStress: true, stressGate: false, slippageMultiplier: '2', feeMultiplier: '2', slippageAbsolute: '', feeAbsolute: '', zoomPoints: 5, zoomRefinements: 2, zoomPasses: 2, pairFirst: '', pairSecond: '' });
+  readonly changed = output<RuleSelection | null>();
+  protected readonly model = signal({ rankBy: 'net_profit', drawdown: '20', sharpe: 1, activity: 50, observations: 30, forward: 30, final: 30, recoveryOn: false, recovery: 60, riskFree: 0, method: 'zoom', trainMonths: 6, testMonths: 2, finalMonths: 6, budget: 5000, finalists: 3, slippageStress: true, feeStress: true, stressGate: false, slippageMultiplier: '2', feeMultiplier: '2', slippageAbsolute: '', feeAbsolute: '', zoomPoints: 5, zoomRefinements: 2, zoomPasses: 2, pairFirst: '', pairSecond: '' });
   protected readonly fields = form(this.model, (path) => {
     for (const field of [path.activity, path.forward, path.final, path.recovery, path.trainMonths, path.testMonths, path.finalMonths, path.budget, path.finalists, path.zoomPasses]) min(field, 1);
     min(path.observations, 2); min(path.zoomPoints, 3); min(path.zoomRefinements, 0);
@@ -55,9 +55,10 @@ export class OptionsSearchRulesComponent {
     });
     effect(() => {
       const value = this.model();
+      if (this.fields().invalid()) { this.changed.emit(null); return; }
       this.changed.emit({
         method: value.method === 'grid' ? 'grid' : 'zoom',
-        policy: { max_drawdown_percent: value.drawdown, min_sharpe: value.sharpe, min_activity_per_year: value.activity, min_daily_observations: value.observations, min_forward_sessions: value.forward, min_final_sessions: value.final, max_recovery_sessions: value.recoveryOn ? value.recovery : null, risk_free_daily_return: value.riskFree, stress_gate: value.stressGate },
+        policy: { rank_by: value.rankBy === 'sharpe' ? 'sharpe' : value.rankBy === 'drawdown' ? 'drawdown' : 'net_profit', max_drawdown_percent: value.drawdown, min_sharpe: value.sharpe, min_activity_per_year: value.activity, min_daily_observations: value.observations, min_forward_sessions: value.forward, min_final_sessions: value.final, max_recovery_sessions: value.recoveryOn ? value.recovery : null, risk_free_daily_return: value.riskFree, stress_gate: value.stressGate },
         train_months: value.trainMonths, test_months: value.testMonths, final_months: value.finalMonths,
         budget: { evaluation_cap: value.budget }, finalist_count: value.finalists,
         stress: [...(value.slippageStress ? [{ key: 'slippage', slippage_multiplier: value.slippageMultiplier, fee_multiplier: '1', ...(value.slippageAbsolute.trim() !== '' ? { slippage_percent: value.slippageAbsolute.trim() } : {}) }] : []), ...(value.feeStress ? [{ key: 'fees', slippage_multiplier: '1', fee_multiplier: value.feeMultiplier, ...(value.feeAbsolute.trim() !== '' ? { fee_per_contract_usd: value.feeAbsolute.trim() } : {}) }] : [])],

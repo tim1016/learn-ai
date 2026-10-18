@@ -14,6 +14,7 @@ export interface SearchKnob {
   readonly help: string;
 }
 export interface SearchPolicy {
+  readonly rank_by?: 'net_profit' | 'sharpe' | 'drawdown';
   readonly max_drawdown_percent: string;
   readonly min_sharpe: number;
   readonly risk_free_daily_return: number;
