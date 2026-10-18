@@ -233,3 +233,13 @@ def test_shared_seed_preserves_different_saved_rules_and_validates_each_leg():
         validate_value(original, "all_legs.stop_loss", {"call_a": None, "put_b": {"kind": "percent", "value": "30"}})
     with pytest.raises(ValueError, match="below 100"):
         validate_value(original, "all_legs.stop_loss", {leg.leg_id: {"kind": "percent", "value": "100"} for leg in original.legs})
+
+
+def test_decimal_candidate_identity_v2_preserves_the_saved_seed_and_deduplicates_range_spellings():
+    knobs = [Knob(path="legs.call_a.stop_loss.value", values=("10.0000", "20.0000"))]
+    p = protocol(knobs=knobs, candidate_identity_version=2)
+    assert point_hash(materialize(p, {knobs[0].path: "10.0000"})) == point_hash(p.setup)
+    assert str(materialize(p, {knobs[0].path: "20.0000"}).legs[0].stop_loss.value) == "20"
+    legacy = protocol(knobs=knobs)
+    assert str(materialize(legacy, {knobs[0].path: "20.0000"}).legs[0].stop_loss.value) == "20.0000"
+    assert "candidate_identity_version" not in legacy.model_dump(mode="json")

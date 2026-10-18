@@ -116,6 +116,15 @@ class Fold(FrozenModel):
 
 class OptionsSearchProtocol(FrozenModel):
     version: Literal[1] = 1
+    candidate_identity_version: Literal[1, 2] = 1
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        if self.candidate_identity_version == 1:
+            data.pop("candidate_identity_version", None)
+        return data
+
     setup: OptionsBacktestSetup
     knobs: tuple[Knob, ...]
     method: Literal["zoom", "grid"] = "zoom"
@@ -305,6 +314,18 @@ def materialize(protocol: OptionsSearchProtocol, point: dict[str, Any]) -> Optio
         else:
             _, pieces = _location(protocol.setup, knob.path)
             _assign(data, pieces, value)
+    for original, leg in (zip(protocol.setup.legs, data["legs"], strict=True) if protocol.candidate_identity_version == 2 else ()):
+        for name in ("stop_loss", "momentum"):
+            rule = leg.get(name)
+            if rule is None:
+                continue
+            amount = Decimal(rule["value"])
+            saved = getattr(original, name)
+            if saved is not None and amount == saved.value:
+                rule["value"] = str(saved.value)
+            else:
+                text = format(amount, "f")
+                rule["value"] = text.rstrip("0").rstrip(".") if "." in text else text
     return OptionsBacktestSetup.model_validate(data)
 
 

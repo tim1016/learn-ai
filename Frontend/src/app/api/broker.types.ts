@@ -29872,6 +29872,11 @@ export interface components {
             qualification_id: string | null;
             /** Qualification Status */
             qualification_status: string | null;
+            /**
+             * Rejected Candidate Count
+             * @default 0
+             */
+            rejected_candidate_count?: number;
             /** Revision */
             revision: number;
             /** Setup Name */

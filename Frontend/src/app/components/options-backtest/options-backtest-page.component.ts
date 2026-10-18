@@ -237,8 +237,8 @@ export class OptionsBacktestPageComponent {
   protected readonly barHeight = signal(0);
   private readonly lastSave = signal<{ readonly name: string; readonly stamp: string; readonly status: SaveStatus } | null>(null);
   private readonly stamp = computed(() => `${this.saveModel().name}\n${JSON.stringify(this.body())}`);
-  protected readonly nameProblem = computed(() => nameProblem(this.saveModel().name, this.limits()));
-  protected readonly canSave = computed(() => this.readBack() !== null && this.saveModel().name !== '' && this.nameProblem() === null && !this.saving());
+  protected readonly nameProblem = computed(() => nameProblem(this.saveModel().name, this.limits()) ?? (this.automaticName() && this.loadedName() !== this.saveModel().name && this.setups().some((setup) => setup.name === this.saveModel().name) ? 'A setup already uses this generated name. Choose a different name, or open the saved setup to edit it.' : null));
+  protected readonly canSave = computed(() => this.readBack() !== null && this.saveModel().name !== '' && this.nameProblem() === null && (!this.automaticName() || this.libraryStatus() === 'ready') && !this.saving());
   /** What the last save said, until the name or the setup changes: then it no longer describes what is on screen. */
   protected readonly saveStatus = computed(() => {
     const last = this.lastSave();
@@ -246,6 +246,7 @@ export class OptionsBacktestPageComponent {
   });
   protected readonly saveHint = computed(() => {
     if (this.saveModel().name === '') return 'Name the setup to save it.';
+    if (this.automaticName() && this.libraryStatus() !== 'ready') return 'Load saved setups before saving a generated name, so an existing setup cannot be replaced accidentally.';
     return this.readBack() === null ? 'Save is available once the setup reads back cleanly.' : null;
   });
 

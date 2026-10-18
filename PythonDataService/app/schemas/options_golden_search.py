@@ -249,6 +249,7 @@ class ApprovalReview(Model):
 
 
 class StudyDetail(Model):
+    rejected_candidate_count: int = 0
     id: str
     revision: int
     phase: str
@@ -273,6 +274,6 @@ class StudyDetail(Model):
     def from_record(cls, record: dict[str, Any]) -> StudyDetail:
         from app.research.options_golden_search.projections import approval_reviews
 
-        fields = {name: record.get(name, [] if name == "protocol_summary" else None) for name in cls.model_fields if name != "approval_reviews"}
+        fields = {name: record.get(name, [] if name == "protocol_summary" else 0 if name == "rejected_candidate_count" else None) for name in cls.model_fields if name != "approval_reviews"}
         fields["approval_reviews"] = approval_reviews(record)
         return cls.model_validate(fields)

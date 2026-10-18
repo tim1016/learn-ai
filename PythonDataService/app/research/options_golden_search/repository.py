@@ -278,6 +278,15 @@ async def get_evaluation(conn: asyncpg.Connection, study_id: str, key: str) -> d
             "execution_attempts": row["execution_attempts"]}
 
 
+async def evaluation_summaries(conn: asyncpg.Connection, study_id: str, keys: list[str]) -> dict[str, dict[str, Any]]:
+    rows = await conn.fetch(
+        """SELECT key, result->'metrics' AS metrics, (result->>'complete')::boolean AS complete
+        FROM research_options_search_evaluations WHERE study_id=$1 AND key=ANY($2::text[]) AND result IS NOT NULL""",
+        study_id, keys,
+    )
+    return {row["key"]: {"metrics": json.loads(row["metrics"]), "complete": row["complete"]} for row in rows}
+
+
 async def counters(conn: asyncpg.Connection, study_id: str) -> dict[str, int]:
     row = await conn.fetchrow(
         """SELECT count(*) AS reserved, count(result) AS completed,

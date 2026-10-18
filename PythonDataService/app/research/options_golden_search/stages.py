@@ -32,13 +32,15 @@ from app.research.options_golden_search.protocol import (
     apply_scenario,
     materialize,
 )
-from app.research.options_golden_search.search import Evaluation, run_search
+from app.research.options_golden_search.search import Evaluation, SearchResult, ranking, run_search
 from app.research.options_golden_search.service import allowed
 from app.research.options_golden_search.snapshots import Snapshot, SnapshotRunData
 from app.research.persistence.db import run_sync, with_connection
 from app.research.runs.hashing import hash_payload
 
 logger = logging.getLogger(__name__)
+
+REJECTED_DIAGNOSTIC_LIMIT = 50
 
 
 _SCALAR_METRICS = ("net_profit_usd", "max_drawdown_fraction", "sharpe", "sharpe_unavailable_reason",
@@ -242,19 +244,27 @@ class StudyEvaluator:
         run_sync(with_connection(repo.trial,self.row["id"],self.row["attempt"],
             {"window":window.key,"trial":trial.model_dump(mode="json")}))
 
-    def metrics_for(self, evaluation: Evaluation) -> tuple[Metrics, bool]:
+    def metrics_for(self, evaluations: list[Evaluation]) -> dict[str, tuple[Metrics, bool]]:
         self.check()
-        stored = run_sync(with_connection(repo.get_evaluation, self.row["id"], evaluation.evidence_id))
-        if stored["result"] is None:
-            raise ValueError("The rejected Options evaluation has no retained metric summary.")
-        record = stored["result"]
-        return summary_metrics(record["metrics"]), record["complete"]
+        stored = run_sync(with_connection(repo.evaluation_summaries, self.row["id"], [item.evidence_id for item in evaluations]))
+        if set(stored) != {item.evidence_id for item in evaluations}:
+            raise ValueError("A rejected Options evaluation has no retained metric summary.")
+        self.check()
+        return {key: (summary_metrics(record["metrics"]), record["complete"]) for key, record in stored.items()}
 
     def result_for(self, evaluation: Evaluation, window: Window) -> EvaluationResult:
         stored = run_sync(with_connection(repo.get_evaluation, self.row["id"], evaluation.evidence_id))
         if stored["result"] is None:
             raise ValueError("The selected Options evaluation has no complete retained evidence.")
         return self.load(stored["result"], window)
+
+
+def selection_record(result: SearchResult, previous: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Retain the frozen evidence shape when verifying studies recorded before bounded diagnostics."""
+    value = result.model_dump(mode="json")
+    if previous is not None and "rejected" in previous:
+        value["rejected"] = [item.model_dump(mode="json") for item in result.rejected]
+    return value
 
 
 def research(row: dict[str, Any], evaluator: StudyEvaluator) -> dict[str, Any]:
@@ -269,12 +279,18 @@ def research(row: dict[str, Any], evaluator: StudyEvaluator) -> dict[str, Any]:
         result = evaluator.result_for(selected_eval,protocol.development)
         verdict = classify(result.metrics,protocol.policy,protocol.development,"development")
         candidates.append(candidate(result,verdict,selected_eval.point_hash,original=selected_eval.point_hash==baseline.point_hash))
-    for rejected in selection.rejected:
-        if rejected.point_hash == baseline.point_hash:
-            continue
-        metrics, complete = evaluator.metrics_for(rejected)
+    rejected = [item for item in selection.rejected if item.point_hash != baseline.point_hash]
+    previous = row.get("research") if evaluator.verify_only else None
+    if previous is not None:
+        indexed = {item.point_hash: item for item in rejected}
+        shown = [indexed[item["candidate_hash"]] for item in row["candidates"] if item["candidate_hash"] in indexed]
+    else:
+        shown = sorted(rejected, key=lambda item: ranking(item, protocol.policy.rank_by))[:REJECTED_DIAGNOSTIC_LIMIT]
+    summaries = evaluator.metrics_for(shown) if shown else {}
+    for item in shown:
+        metrics, complete = summaries[item.evidence_id]
         verdict = classify(metrics, protocol.policy, protocol.development, "development", complete=complete)
-        candidates.append(rejected_candidate(metrics, verdict, rejected.point_hash))
+        candidates.append(rejected_candidate(metrics, verdict, item.point_hash))
     folds = []
     outcomes = []
     forward_evidence = []
@@ -283,7 +299,7 @@ def research(row: dict[str, Any], evaluator: StudyEvaluator) -> dict[str, Any]:
         evaluator(protocol.setup,fold.training,"base")
         evaluator(protocol.setup,fold.forward,"base")
         fit = run_search(protocol,fold.training,evaluator)
-        item: dict[str, Any] = {"index":fold.index,"selection":fit.model_dump(mode="json")}
+        item: dict[str, Any] = {"index":fold.index,"selection":selection_record(fit, previous["folds"][fold.index]["selection"] if previous else None)}
         if fit.winner is None:
             item.update(status="no_eligible_point",forward=None)
             outcomes.append({"gate_id":f"forward_{fold.index}:selection","status":"does_not_meet_rules","actual":None,"required":"eligible training winner","reason":"No setting met the training rules. This is not a zero-return fold."})
@@ -306,8 +322,8 @@ def research(row: dict[str, Any], evaluator: StudyEvaluator) -> dict[str, Any]:
         outcomes.extend(gates(classify(metrics,protocol.policy,window,"pooled_forward")))
     else:
         outcomes.append({"gate_id":"pooled_forward:coverage","status":"not_enough_evidence","actual":str(len(forward_evidence)),"required":str(len(protocol.folds)),"reason":"Procedure evidence requires every declared forward fold."})
-    row.update(phase="compare",status="completed",candidates=candidates,gate_outcomes=outcomes,
-        research={"selection":selection.model_dump(mode="json"),"folds":folds},dispatch=None,stage_token=None)
+    row.update(phase="compare",status="completed",candidates=candidates,gate_outcomes=outcomes,rejected_candidate_count=len(rejected),
+        research={"selection":selection_record(selection, previous["selection"] if previous else None),"folds":folds},dispatch=None,stage_token=None)
     return row
 
 

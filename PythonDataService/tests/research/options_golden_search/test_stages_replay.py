@@ -18,7 +18,7 @@ from app.research.options_golden_search.evaluator import EvaluationResult, evalu
 from app.research.options_golden_search.planning import freeze_protocol
 from app.research.options_golden_search.policy import Metrics, classify
 from app.research.options_golden_search.protocol import CostScenario, Knob, OptionsSearchProtocol, Policy, Window
-from app.research.options_golden_search.search import Evaluation
+from app.research.options_golden_search.search import Evaluation, run_search
 from app.research.options_golden_search.stages import final, research
 from app.research.runs.hashing import hash_payload
 from app.schemas.options_golden_search import StudyDetail
@@ -64,9 +64,9 @@ class ReplayEvaluator:
                           max_drawdown_fraction=result.metrics.max_drawdown_fraction, sharpe=result.metrics.sharpe,
                           eligible=verdict.eligible, evidence_id=key)
 
-    def metrics_for(self, evaluation: Evaluation) -> tuple[Metrics, bool]:
-        result = self.results[evaluation.evidence_id]
-        return result.metrics, len(result.sessions) == result.scheduled_sessions
+    def metrics_for(self, evaluations: list[Evaluation]) -> dict[str, tuple[Metrics, bool]]:
+        return {item.evidence_id: (self.results[item.evidence_id].metrics,
+            len(self.results[item.evidence_id].sessions) == self.results[item.evidence_id].scheduled_sessions) for item in evaluations}
 
     def result_for(self, evaluation: Evaluation, window: Window) -> EvaluationResult:
         return self.results[evaluation.evidence_id]
@@ -232,3 +232,30 @@ def test_retained_reconstruction_rejects_tampered_rule_or_final_evidence(
     with pytest.raises(ValueError, match="do not reproduce"):
         verify_recorded_study(row, evaluator)
     assert evaluator.verify_only is False
+
+
+@pytest.mark.parametrize("rejected_field", [False, True])
+def test_legacy_selection_evidence_shapes_still_verify(reviewed_experiment, rejected_field):
+    row, evaluator = reviewed_experiment
+    row = copy.deepcopy(row)
+    windows = [evaluator.protocol.development, *[fold.training for fold in evaluator.protocol.folds]]
+    selections = [row["research"]["selection"], *[fold["selection"] for fold in row["research"]["folds"]]]
+    for selection, window in zip(selections, windows, strict=True):
+        if rejected_field:
+            result = run_search(evaluator.protocol, window, evaluator)
+            selection["rejected"] = [item.model_dump(mode="json") for item in result.rejected]
+        else:
+            selection.pop("rejected", None)
+    verify_recorded_study(row, evaluator)
+
+
+def test_rejected_diagnostics_are_bounded_but_keep_the_total(experiment, monkeypatch):
+    from app.research.options_golden_search import stages
+
+    original, data = experiment
+    plan = original.model_copy(update={"policy": original.policy.model_copy(update={"min_sharpe": 1e9}),
+        "knobs": (Knob(path="legs.call.stop_loss.value", values=("20", "30", "40")),)})
+    monkeypatch.setattr(stages, "REJECTED_DIAGNOSTIC_LIMIT", 1)
+    row = research(_row(plan), ReplayEvaluator(plan, data))
+    assert len([item for item in row["candidates"] if not item["is_original"]]) == 1
+    assert row["rejected_candidate_count"] == 3

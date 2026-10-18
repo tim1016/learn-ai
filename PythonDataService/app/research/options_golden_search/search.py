@@ -48,7 +48,7 @@ class Trial(FrozenModel):
 class SearchResult(FrozenModel):
     winner: Evaluation | None
     eligible: tuple[Evaluation, ...]
-    rejected: tuple[Evaluation, ...] = ()
+    rejected: tuple[Evaluation, ...] = Field(default=(), exclude=True)
     trials: tuple[Trial, ...]
     points: dict[str, dict[str, Any]]
     unique_evaluations: int

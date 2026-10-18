@@ -1,4 +1,4 @@
-import { provideRouter } from '@angular/router';
+import { Router, provideRouter } from '@angular/router';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
@@ -65,6 +65,28 @@ describe('Options Golden Search workbench', () => {
     await user.type(floor, '2');
     expect(lock).toHaveProperty('disabled', true);
     expect(screen.queryByText('Dollar limit: 2000 USD')).toBeNull();
+  });
+
+  it('dispatches research before navigation can create a new page instance', async () => {
+    const { fake, user, view } = await preparePlan();
+    const navigate = vi.spyOn(view.fixture.debugElement.injector.get(Router), 'navigate').mockResolvedValue(true);
+    await user.click(screen.getByRole('button', { name: 'Check plan' }));
+    await user.click(screen.getByRole('button', { name: 'Start search' }));
+    await waitFor(() => expect(navigate).toHaveBeenCalled());
+    expect(fake.command.mock.invocationCallOrder[0]).toBeLessThan(navigate.mock.invocationCallOrder[0]);
+  });
+
+  it('offers the actual shared dimensions for pair audits', async () => {
+    const { fake, user } = await preparePlan();
+    const momentum = within(screen.getByRole('region', { name: 'Entry momentum' }));
+    await user.click(momentum.getByRole('button', { name: 'Explore' }));
+    for (const [label, value] of [['Minimum', '20'], ['Maximum', '25'], ['Step', '5']]) fireEvent.input(momentum.getByRole('textbox', { name: label }), { target: { value } });
+    await user.click(screen.getByText('Search budget and advanced settings'));
+    await user.click(screen.getByText('Predeclared pair audit'));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'First setting' }), 'all_legs.stop_loss');
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Second setting' }), 'all_legs.momentum');
+    await user.click(screen.getByRole('button', { name: 'Check plan' }));
+    expect(fake.preflight).toHaveBeenCalledWith(expect.objectContaining({ pair_audits: [['all_legs.stop_loss', 'all_legs.momentum']] }));
   });
 
   it('sends the durable revision and reuses the command intent after a transport failure', async () => {

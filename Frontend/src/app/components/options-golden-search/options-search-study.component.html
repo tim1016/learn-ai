@@ -29,6 +29,7 @@
     @if (rejected().length > 0) {
       <details (toggle)="toggleRejected($event)"><summary>{{ rejected().length }} candidates did not pass — inspect limits</summary>
         @if (showRejected()) {
+          <p>Showing {{ rejected().length }} of {{ study().rejected_candidate_count ?? rejected().length }} rejected candidates, ordered by the frozen objective. Full evaluations remain retained.</p>
           <div class="table-scroll"><table><thead><tr><th>Candidate</th><th>Net profit (USD)</th><th>Drawdown (%)</th><th>Sharpe</th><th>Failed limits</th></tr></thead><tbody>
             @for (item of rejected(); track item.candidate_hash) { <tr><td>{{ item.label }}<br /><code>{{ item.candidate_hash }}</code></td><td>{{ item.net_profit_usd }}</td><td>{{ item.drawdown_percent }}</td><td>{{ item.sharpe }}</td><td>@for (gate of item.gate_outcomes; track gate.gate_id) { @if (gate.status !== 'meets_rules') { <p>{{ gate.reason }} ({{ gate.actual }} / {{ gate.required }})</p> } }</td></tr> }
           </tbody></table></div>

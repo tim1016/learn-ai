@@ -39,9 +39,9 @@
     <p>Zoom is local and search-order sensitive. It can miss improvements requiring several settings to change together.</p>
   } @else { <p>Grid must fit its complete authorized search space inside the reserved budget.</p> }
   <details><summary>Predeclared pair audit</summary><p>Audit one pair for interactions. Both settings must vary. Audit evaluations consume the frozen budget.</p><div class="controls">
-    <label>First setting<select [formField]="fields.pairFirst"><option value="">No pair audit</option>@for (knob of declarations().knobs; track knob.path) { <option [value]="knob.path">{{ knob.label }}</option> }</select></label>
-    <label>Second setting<select [formField]="fields.pairSecond"><option value="">Choose setting</option>@for (knob of declarations().knobs; track knob.path) { <option [value]="knob.path">{{ knob.label }}</option> }</select></label>
-  </div></details>
+    <label>First setting<select [formField]="fields.pairFirst"><option value="">No pair audit</option>@for (knob of dimensions(); track knob.path) { <option [value]="knob.path">{{ knob.label }}</option> }</select></label>
+    <label>Second setting<select [formField]="fields.pairSecond"><option value="">Choose setting</option>@for (knob of dimensions(); track knob.path) { <option [value]="knob.path">{{ knob.label }}</option> }</select></label>
+  </div>@if (!pairValid()) { <p class="problem">Choose two different settings currently varied in this search, or select No pair audit.</p> }</details>
   </details>
 </section>
 <details class="search-section"><summary>Costs and stress</summary><p>Base costs come from the saved setup. Stress is advisory unless its gate is enabled before lock. A zero base cost needs an explicit positive stress policy accepted by the server.</p>

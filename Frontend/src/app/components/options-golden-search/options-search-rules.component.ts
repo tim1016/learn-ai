@@ -28,6 +28,7 @@ export interface RuleSelection {
 })
 export class OptionsSearchRulesComponent {
   readonly declarations = input.required<SearchDeclarations>();
+  readonly dimensions = input<readonly { path: string; label: string }[]>([]);
   readonly preflight = input<Preflight | null>(null);
   readonly range = input.required<DateRange>();
   readonly rangeChanged = output<DateRange>();
@@ -42,6 +43,7 @@ export class OptionsSearchRulesComponent {
     const bounds = this.declarations().history_bounds;
     return { ...UNBOUNDED, min: bounds.start_ms === null ? null : etIsoDate(bounds.start_ms), max: bounds.end_ms === null ? null : etIsoDate(bounds.end_ms - 1), minReason: 'Pinned Options history begins here.', maxReason: 'Pinned Options history ends here.', unknown: bounds.start_ms === null || bounds.end_ms === null ? 'The server has not established retained history bounds. Preflight must verify coverage.' : null };
   });
+  protected readonly pairValid = computed(() => this.model().pairFirst === '' || (this.model().pairFirst !== this.model().pairSecond && [this.model().pairFirst, this.model().pairSecond].every((path) => this.dimensions().some((dimension) => dimension.path === path))));
   protected readonly changedPreset = computed(() => {
     const defaults = this.declarations().defaults;
     const value = this.model();
@@ -55,7 +57,7 @@ export class OptionsSearchRulesComponent {
     });
     effect(() => {
       const value = this.model();
-      if (this.fields().invalid()) { this.changed.emit(null); return; }
+      if (this.fields().invalid() || !this.pairValid()) { this.changed.emit(null); return; }
       this.changed.emit({
         method: value.method === 'grid' ? 'grid' : 'zoom',
         policy: { rank_by: value.rankBy === 'sharpe' ? 'sharpe' : value.rankBy === 'drawdown' ? 'drawdown' : 'net_profit', max_drawdown_percent: value.drawdown, min_sharpe: value.sharpe, min_activity_per_year: value.activity, min_daily_observations: value.observations, min_forward_sessions: value.forward, min_final_sessions: value.final, max_recovery_sessions: value.recoveryOn ? value.recovery : null, risk_free_daily_return: value.riskFree, stress_gate: value.stressGate },
@@ -63,7 +65,7 @@ export class OptionsSearchRulesComponent {
         budget: { evaluation_cap: value.budget }, finalist_count: value.finalists,
         stress: [...(value.slippageStress ? [{ key: 'slippage', slippage_multiplier: value.slippageMultiplier, fee_multiplier: '1', ...(value.slippageAbsolute.trim() !== '' ? { slippage_percent: value.slippageAbsolute.trim() } : {}) }] : []), ...(value.feeStress ? [{ key: 'fees', slippage_multiplier: '1', fee_multiplier: value.feeMultiplier, ...(value.feeAbsolute.trim() !== '' ? { fee_per_contract_usd: value.feeAbsolute.trim() } : {}) }] : [])],
         zoom: { points: value.zoomPoints, refinements: value.zoomRefinements, passes: value.zoomPasses },
-        pair_audits: value.pairFirst !== '' && value.pairSecond !== '' ? [[value.pairFirst, value.pairSecond]] : [],
+        pair_audits: value.pairFirst !== '' ? [[value.pairFirst, value.pairSecond]] : [],
       });
     });
   }

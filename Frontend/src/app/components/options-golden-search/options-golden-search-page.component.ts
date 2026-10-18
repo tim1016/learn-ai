@@ -45,6 +45,7 @@ export class OptionsGoldenSearchPageComponent {
   protected readonly range = signal<DateRange>({ from: '', to: '' });
   protected readonly knobs = signal<readonly KnobSelection[] | null>([]);
   protected readonly timing = signal<readonly KnobSelection[] | null>([]);
+  protected readonly dimensions = computed(() => [...(this.timing() ?? []), ...(this.knobs() ?? [])].map((dimension) => ({ path: dimension.path, label: dimension.path.replace('all_legs.', 'All legs · ').replaceAll('_', ' ').replaceAll('.', ' · ') })));
   protected readonly objectiveLabel = computed(() => this.rules()?.policy.rank_by === 'sharpe' ? 'Risk-adjusted return' : this.rules()?.policy.rank_by === 'drawdown' ? 'Lower drawdown' : 'Net profit');
   protected readonly rules = signal<RuleSelection | null>(null);
   protected readonly checked = signal<{ readonly stamp: string; readonly value: Preflight } | null>(null);
@@ -142,9 +143,9 @@ export class OptionsGoldenSearchPageComponent {
       this.acceptStudy(study);
       this.step.set(3);
       this.history.reload();
-      await this.router.navigate(['/options-golden-search', study.id]);
       this.busy.set(false);
       await this.command({ command: 'run_research' });
+      await this.router.navigate(['/options-golden-search', study.id]);
     } catch (error) {
       this.error.set(optionsSearchErrorMessage(error, 'The plan could not be locked.'));
     } finally { this.busy.set(false); }
@@ -157,6 +158,7 @@ export class OptionsGoldenSearchPageComponent {
     try {
       const study = await this.service.get(id);
       if (generation !== this.generation) return;
+      if (this.study()?.id === study.id && (this.study()?.revision ?? 0) > study.revision) return;
       this.acceptStudy(study);
       this.step.set(study.final_results.length > 0 ? 5 : study.candidates.length > 0 ? 4 : 3);
     } catch (error) {

@@ -23,7 +23,7 @@
         </section>
         @if (declarations(); as declaration) {
           <app-options-search-timing [setup]="declaration.setup" (changed)="timing.set($event)" />
-          <app-options-search-rules [declarations]="declaration" [preflight]="preflight()" [range]="range()" (rangeChanged)="range.set($event)" (changed)="rules.set($event)" />
+          <app-options-search-rules [declarations]="declaration" [dimensions]="dimensions()" [preflight]="preflight()" [range]="range()" (rangeChanged)="range.set($event)" (changed)="rules.set($event)" />
           <details class="search-section"><summary>Additional settings to vary</summary><app-options-search-knobs [setup]="declaration.setup" (changed)="knobs.set($event)" /></details>
         }
       </div>

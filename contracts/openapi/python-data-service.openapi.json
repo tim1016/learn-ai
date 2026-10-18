@@ -57518,6 +57518,11 @@
             ],
             "title": "Qualification Status"
           },
+          "rejected_candidate_count": {
+            "default": 0,
+            "title": "Rejected Candidate Count",
+            "type": "integer"
+          },
           "revision": {
             "title": "Revision",
             "type": "integer"

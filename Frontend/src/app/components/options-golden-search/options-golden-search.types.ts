@@ -139,6 +139,7 @@ export interface ApprovalReview {
   readonly blocked_reason: string | null;
 }
 export interface OptionsStudy {
+  readonly rejected_candidate_count?: number;
   readonly id: string;
   readonly revision: number;
   readonly phase: string;

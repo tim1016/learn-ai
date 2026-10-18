@@ -321,6 +321,16 @@ describe('saving', () => {
 });
 
 describe('automatic setup naming', () => {
+  it('refuses to overwrite a different saved setup under a colliding generated name', async () => {
+    const label = generatedSetupName(draftFromSetup(noReentryExampleBody(), SESSION_CLOCK));
+    const service = fakeService(vi, { list: vi.fn(async () => [...servedExamples(), servedSaved(label, exampleBody())]) });
+    await renderPage(service);
+    fireEvent.click(await within(sideList()).findByRole('button', { name: new RegExp(`^${EXAMPLE_NO_REENTRY}`) }));
+    await screen.findByText('A setup already uses this generated name. Choose a different name, or open the saved setup to edit it.');
+    expect(screen.getByRole('button', { name: 'Save setup' })).toHaveProperty('disabled', true);
+    expect(service.save).not.toHaveBeenCalled();
+  });
+
   it('preserves a reopened saved name even when it matches the generated label', async () => {
     const setup = exampleBody();
     const label = generatedSetupName(draftFromSetup(setup, SESSION_CLOCK));
