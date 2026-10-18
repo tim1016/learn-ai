@@ -2,7 +2,8 @@ import { ChangeDetectionStrategy, Component, computed, effect, input, signal, un
 
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { formatTimestampDisplay, TimestampDisplayComponent } from '../../shared/timestamp';
-import { equityCoordinates } from '../options-backtest/run/run-chart-scale';
+import { OptionsMonthGridComponent, type MonthCell, type MonthMetric } from '../options-backtest/run/options-month-grid.component';
+import { OptionsEvidenceChartComponent } from '../options-backtest/run/options-evidence-chart.component';
 import { optionsSearchErrorMessage } from './options-golden-search.service';
 import type { EvidenceWindow, SearchCandidate, SessionLoader, SessionResult } from './options-golden-search.types';
 
@@ -11,7 +12,7 @@ type SessionRead = { readonly kind: 'loading' } | { readonly kind: 'ready'; read
 /** Exact values remain in labels and tables; shared chart geometry only positions the lines. */
 @Component({
   selector: 'app-options-search-candidate',
-  imports: [ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [ReceiptLabelPipe, TimestampDisplayComponent, OptionsEvidenceChartComponent, OptionsMonthGridComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './options-search-candidate.component.html',
   styleUrl: './options-golden-search.component.scss',
@@ -31,17 +32,12 @@ export class OptionsSearchCandidateComponent {
         this.sessionReads.set(new Map());
         this.openSessions.set(new Set());
         this.sessionsOpen.set(false);
-        this.chartOpen.set(false);
+
       });
     });
   }
-  protected readonly chartOpen = signal(false);
   protected readonly sessionsOpen = signal(false);
   protected readonly openSessions = signal<ReadonlySet<number>>(new Set());
-
-  protected toggleChart(event: Event): void {
-    if (event.target instanceof HTMLDetailsElement) this.chartOpen.set(event.target.open);
-  }
 
   protected toggleSessions(event: Event): void {
     if (event.target instanceof HTMLDetailsElement && event.target.parentElement?.classList.contains('candidate')) this.sessionsOpen.set(event.target.open);
@@ -78,13 +74,14 @@ export class OptionsSearchCandidateComponent {
     this.sessionReads.update((reads) => new Map([...reads, [session, read]]));
   }
 
-  protected readonly lines = computed(() => {
-    const points = this.candidate().equity;
-    const equity = equityCoordinates(points.map((point) => point.equity_usd));
-    const drawdown = equityCoordinates(points.map((point) => point.drawdown_usd));
-    return [
-      { title: 'Minute-close equity (USD)', line: equity.map((point) => `${point.x},${point.y}`).join(' '), points: points.map((point, index) => ({ ...equity[index], at: point.timestamp_ms, title: `${formatTimestampDisplay(point.timestamp_ms, { mode: 'et' })}: ${point.equity_usd} USD` })) },
-      { title: 'Minute-close drawdown (USD)', line: drawdown.map((point) => `${point.x},${point.y}`).join(' '), points: points.map((point, index) => ({ ...drawdown[index], at: point.timestamp_ms, title: `${formatTimestampDisplay(point.timestamp_ms, { mode: 'et' })}: ${point.drawdown_usd} USD` })) },
-    ];
-  });
+  protected readonly equity = computed(() => this.candidate().equity.map((point) => ({ timestamp_ms: point.timestamp_ms, value: point.equity_usd })));
+  protected readonly drawdown = computed(() => this.candidate().equity.map((point) => ({ timestamp_ms: point.timestamp_ms, value: point.drawdown_usd })));
+  protected readonly monthMetrics: readonly MonthMetric[] = [
+    { key: 'pnl', label: 'Net P&L', unit: 'usd', signed: true },
+    { key: 'sessions', label: 'Traded sessions', unit: 'count', signed: false },
+  ];
+  protected readonly monthCells = computed<readonly MonthCell[]>(() => this.candidate().monthly.map((row) => {
+    const [year, month] = formatTimestampDisplay(row.month_ms, { mode: 'date-et' }).split('-');
+    return { year: Number(year), month: Number(month), values: { pnl: row.net_profit_usd, sessions: String(row.completed_sessions) } };
+  }));
 }

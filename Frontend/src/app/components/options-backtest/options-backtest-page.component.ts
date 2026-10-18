@@ -96,6 +96,8 @@ export class OptionsBacktestPageComponent {
 
   /** How long the setup rests, in milliseconds, before it is read back. Specs set 0. */
   readonly describeDebounceMs = input(300);
+  readonly setup_name = input<string | undefined>(undefined);
+  private openedFromLink: string | undefined;
 
   /** What the server holds a setup to. Until it is read, or when it cannot be, the page checks none of it and the server judges. */
   private readonly limitsRead = resource({ loader: () => this.service.limits() });
@@ -142,6 +144,8 @@ export class OptionsBacktestPageComponent {
     });
   });
   private readonly legsCard = viewChild(LegsCardComponent);
+  private readonly resultsPane = viewChild<ElementRef<HTMLElement>>('resultsPane');
+  protected readonly resultsInView = signal(false);
   private readonly readBackPane = viewChild<ElementRef<HTMLElement>>('readBackPane');
   /** The leg that took the keyboard while the read-back had no sentences. It is shown the once the read-back has them. */
   private legAwaitingReadBack: string | null = null;
@@ -274,6 +278,26 @@ export class OptionsBacktestPageComponent {
   protected readonly canStart = computed(() => this.asking() !== null && !this.launch.busy());
 
   constructor() {
+    const destroyRef = inject(DestroyRef);
+    afterNextRender(() => {
+      const results = this.resultsPane()?.nativeElement;
+      if (results === undefined || typeof IntersectionObserver === 'undefined') return;
+      const observer = new IntersectionObserver((entries) => this.resultsInView.set(entries.some((entry) => entry.isIntersecting)));
+      observer.observe(results);
+      destroyRef.onDestroy(() => observer.disconnect());
+    });
+    effect(() => {
+      const name = this.setup_name();
+      const clock = this.clock();
+      const setups = this.setups();
+      if (!name || clock === null || this.libraryStatus() !== 'ready' || this.openedFromLink === name) return;
+      untracked(() => {
+        this.openedFromLink = name;
+        const item = setups.find((setup) => setup.name === name);
+        if (item?.setup) this.open(item);
+        else this.importNotice.set({ kind: 'refused', title: `“${name}” could not be opened.`, reasons: [item?.cannot_open_reason ?? 'This saved setup is no longer in the library. Choose another saved setup.'] });
+      });
+    });
     effect(() => {
       const name = this.generatedName();
       if (this.automaticName()) untracked(() => this.saveModel.set({ name }));

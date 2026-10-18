@@ -1,13 +1,14 @@
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
 
-import { formatAuthoredUsd } from '../../../shared/pipes/authored-usd.pipe';
+import { AuthoredUsdPipe, formatAuthoredUsd } from '../../../shared/pipes/authored-usd.pipe';
 import { formatTimestampDisplay } from '../../../shared/timestamp';
 import type { DayRow, Drawdown, RunFigures } from '../options-backtest.types';
 import { dayRequestFrom, type DayRequest } from '../run-detail/day-request';
-import { equityCoordinates, isLoss, scaledBarPercents } from './run-chart-scale';
+import { equityPlot, isLoss, scaledBarPercents } from './run-chart-scale';
 
 @Component({
   selector: 'app-options-backtest-run-daily-chart',
+  imports: [AuthoredUsdPipe],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './run-daily-chart.component.html',
   styleUrl: './run-daily-chart.component.scss',
@@ -20,8 +21,9 @@ export class RunDailyChartComponent {
 
   protected readonly curve = computed(() => {
     const points = this.equityCurve() ?? [];
-    if (points.length === 0) return null;
-    const coordinates = equityCoordinates(points.map((point) => point.equity_usd));
+    const scale = equityPlot(points.map((point) => point.equity_usd));
+    if (scale === null) return null;
+    const coordinates = scale.coordinates;
     const plotted = points.map((point, index) => ({
       ...coordinates[index],
       openMs: point.session_open_ms,
@@ -35,6 +37,8 @@ export class RunDailyChartComponent {
     const trough = plotted.find((point) => point.openMs === troughMs);
     return {
       points: plotted,
+      high: scale.high,
+      low: scale.low,
       line: plotted.map((point) => `${point.x},${point.y}`).join(' '),
       shade: peak && trough ? `${peak.x},0 ${trough.x},0 ${trough.x},160 ${peak.x},160` : null,
     };

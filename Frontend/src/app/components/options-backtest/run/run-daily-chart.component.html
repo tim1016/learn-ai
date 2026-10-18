@@ -6,7 +6,7 @@
     </div>
   </div>
   @if (curve(); as plotted) {
-    <div class="equity-wrap">
+    <div class="equity-frame"><div class="equity-scale"><span>{{ plotted.high | authoredUsd }}</span><span>{{ plotted.low | authoredUsd }}</span></div><div class="equity-wrap">
       <svg class="equity" viewBox="0 0 1000 160" preserveAspectRatio="none" role="img" aria-label="Session-end equity curve">
         @if (plotted.shade; as shade) { <polygon class="drawdown-span" [attr.points]="shade" /> }
         <polyline [attr.points]="plotted.line" />
@@ -15,7 +15,8 @@
             (click)="point.openMs === null ? null : ask(point.openMs, $event)"><title>{{ point.label }}</title></circle>
         }
       </svg>
-    </div>
+    </div></div>
+    <p>USD on the vertical axis; observations are equally spaced in session order. The scale fits this run. Session closes can hide deeper intraday losses. Hover a point for its exact equity.</p>
   }
   <div class="daily-label"><strong>Daily profit and loss</strong><span>Choose a bar to inspect the session</span></div>
   <div class="key"><span class="key-gain"></span> Gain <span class="key-loss"></span> Loss <span class="key-idle"></span> No trade</div>

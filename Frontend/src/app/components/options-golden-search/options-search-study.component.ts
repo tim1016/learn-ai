@@ -4,6 +4,7 @@ import { RouterLink } from '@angular/router';
 
 import { AssetIdentityComponent } from '../../shared/asset-identity';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
+import { OptionsStudyOverviewComponent } from './options-study-overview.component';
 import { OptionsSearchCandidateComponent } from './options-search-candidate.component';
 import type { OptionsStudy, SearchCommand, SessionLoader } from './options-golden-search.types';
 
@@ -17,7 +18,7 @@ export interface StudyAction {
 
 @Component({
   selector: 'app-options-search-study',
-  imports: [AssetIdentityComponent, FormField, ReceiptLabelPipe, RouterLink, OptionsSearchCandidateComponent],
+  imports: [AssetIdentityComponent, FormField, ReceiptLabelPipe, RouterLink, OptionsSearchCandidateComponent, OptionsStudyOverviewComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './options-search-study.component.html',
   styleUrl: './options-golden-search.component.scss',
@@ -28,6 +29,8 @@ export class OptionsSearchStudyComponent {
   readonly busy = input(false);
   readonly action = output<StudyAction>();
   readonly sessionLoader = input<SessionLoader | null>(null);
+  protected readonly inspectedRejectedHash = signal<string | null>(null);
+  protected readonly inspectedRejected = computed(() => this.rejected().find((candidate) => candidate.candidate_hash === this.inspectedRejectedHash()) ?? null);
   protected readonly selection = signal({ hash: '', comment: '' });
   protected readonly fields = form(this.selection);
   protected readonly shortlist = signal<readonly string[] | null>(null);

@@ -1,0 +1,17 @@
+<figure [class.risk]="risk()">
+  <figcaption><h4>{{ title() }}</h4><p>{{ explanation() }}</p></figcaption>
+  @if (plot(); as chart) {
+    <div class="plot">
+      <div class="scale"><span>{{ chart.high }} USD</span><span>{{ chart.low }} USD</span></div>
+      <svg viewBox="0 0 1000 160" preserveAspectRatio="none" role="img" [attr.aria-label]="title()">
+        <line x1="0" x2="1000" y1="12" y2="12" /><line x1="0" x2="1000" y1="148" y2="148" />
+        <polyline [attr.points]="chart.line" />
+        @if (inspected(); as point) { <circle [attr.cx]="point.x" [attr.cy]="point.y" r="4" /> }
+      </svg>
+    </div>
+    <div class="dates"><app-timestamp-display [value]="chart.first" mode="date-et" /><app-timestamp-display [value]="chart.last" mode="date-et" /></div>
+    <label>Inspect recorded observation<input type="range" min="0" [max]="lastIndex()" [value]="selected()" (input)="inspect($event)" /></label>
+    @if (inspected(); as point) { <output><app-timestamp-display [value]="point.timestamp_ms" mode="et" /><strong>{{ point.value }} USD</strong></output> }
+    <p class="reading">Observations are equally spaced; market closures are compressed. The vertical scale fits this path. Compare dollar labels, not line heights across charts.</p>
+  } @else { <p class="empty">No verified risk path was recorded. Missing evidence cannot establish safety.</p> }
+</figure>

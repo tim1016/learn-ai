@@ -1,14 +1,25 @@
 @if (run().banner; as banner) { <app-options-backtest-run-banner [banner]="banner" /> }
 @if (run().figures; as figures) {
+  <section class="analysis-intro">
+    <h2>Read the result as evidence</h2>
+    <p>Start with the profit path, then test whether capital and execution could support it. These are historical simulated fills under this setup’s rules and costs.</p>
+    <div class="reading-sequence"><div><strong>Return and consistency</strong><p>Net profit sums the completed trade results after modeled costs. Read the equity path and monthly pattern for concentration and losing stretches.</p></div><div><strong>Capital and downside</strong><p>Drawdown is loss below a previous equity peak. Here it is measured at session closes and divided by the running peak; Options Golden Search uses minute closes and fixed starting capital.</p></div><div><strong>Execution and coverage</strong><p>Compare fees, slippage and unfilled sessions. Open a daily bar or trade to inspect the exact contracts, fills and reasons behind the result.</p></div></div>
+  </section>
+  <section class="analysis-chapter"><h2>Return and consistency</h2>
   <app-options-backtest-run-headline [figures]="figures" />
   <app-options-backtest-run-daily-chart [rows]="figures.by_day" [equityCurve]="figures.equity_curve" [drawdown]="figures.drawdown_by_dollars ?? null" (openDay)="day.set($event)" />
-  @if (run().slippage_tolerance; as tolerance) { <app-options-backtest-slippage-tolerance [tolerance]="tolerance" [points]="run().slippage" /> }
   <app-options-backtest-run-month-table [rows]="figures.by_month" />
-  <app-options-backtest-cash-ladder [figures]="figures" />
-  <app-options-backtest-run-drawdown [figures]="figures" />
+  </section>
+  <section class="analysis-chapter"><h2>Capital and downside</h2><p class="chapter-note">Profitability alone does not establish that a setup can be funded or survive a losing path. Read the capital receipts and the peak-to-trough evidence together.</p>
   <app-options-backtest-capital-evidence [figures]="figures" />
+  <app-options-backtest-run-drawdown [figures]="figures" />
+  <app-options-backtest-cash-ladder [figures]="figures" />
+  </section>
+  <section class="analysis-chapter"><h2>Execution and coverage</h2><p class="chapter-note">A session that did not trade is not a winning or losing trade. Inspect exclusions and cost tolerance before treating totals as representative of the requested history.</p>
+  @if (run().slippage_tolerance; as tolerance) { <app-options-backtest-slippage-tolerance [tolerance]="tolerance" [points]="run().slippage" /> }
   <app-options-backtest-run-sessions [figures]="figures" />
   <app-options-backtest-run-day-table [rows]="figures.by_day" (openDay)="day.set($event)" />
+  </section>
 } @else {
   <p class="note" role="alert">This run is complete but the server sent no figures for it.</p>
 }

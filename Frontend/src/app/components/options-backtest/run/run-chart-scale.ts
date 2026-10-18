@@ -52,12 +52,21 @@ export function filledSharePercent(filled: number, refused: number): string {
 }
 
 export function equityCoordinates(values: readonly string[]): { x: number; y: number }[] {
-  if (values.length === 0) return [];
+  return equityPlot(values)?.coordinates ?? [];
+}
+
+/** Axis labels come from exact bounds, never from rounded pixel coordinates (ADR 0068). */
+export function equityPlot(values: readonly string[]) {
+  if (values.length === 0) return null;
   const amounts = scaledDecimals(values);
   const low = amounts.reduce((lowest, amount) => amount < lowest ? amount : lowest);
   const high = amounts.reduce((highest, amount) => amount > highest ? amount : highest);
-  return amounts.map((amount, index) => ({
-    x: Number(roundedPart(BigInt(index) * 1000n, BigInt(Math.max(1, amounts.length - 1)))),
-    y: high === low ? 80 : 12 + Number(roundedPart(136n * (high - amount), high - low)),
-  }));
+  return {
+    low: values[amounts.indexOf(low)],
+    high: values[amounts.indexOf(high)],
+    coordinates: amounts.map((amount, index) => ({
+      x: Number(roundedPart(BigInt(index) * 1000n, BigInt(Math.max(1, amounts.length - 1)))),
+      y: high === low ? 80 : 12 + Number(roundedPart(136n * (high - amount), high - low)),
+    })),
+  };
 }

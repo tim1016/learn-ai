@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/angular';
+import { render, screen, waitFor, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { provideRouter } from '@angular/router';
 import { describe, expect, it, vi } from 'vitest';
@@ -83,6 +83,10 @@ it('keeps failing candidates inspectable without offering them for final selecti
   expect(screen.queryByRole('checkbox', { name: 'Include Failed timing candidate in final test' })).toBeNull();
   const user = userEvent.setup();
   await user.click(screen.getByText('1 candidates did not pass — inspect limits'));
-  await screen.findByText('Failed timing candidate');
+  const rejected = screen.getByText('1 candidates did not pass — inspect limits').closest('details');
+  if (rejected === null) throw new Error('Rejected evidence panel is missing.');
+  expect(await within(rejected).findByText('Failed timing candidate')).toBeTruthy();
+  await user.click(within(rejected).getByRole('button', { name: 'Inspect evidence' }));
+  expect(within(rejected).getByRole('heading', { name: 'Failed timing candidate' })).toBeTruthy();
   expect(screen.getByText('Drawdown exceeds the frozen limit. (25 / 20)')).toBeTruthy();
 });

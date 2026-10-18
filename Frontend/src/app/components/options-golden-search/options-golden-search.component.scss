@@ -73,3 +73,40 @@ a { color: var(--accent-text); }
 .problem, .search-section p.problem, .search-summary p.problem { color: var(--bear); }
 @media (max-width: 1000px) { .search-editor, .search-summary { grid-column: span 12; } .search-summary { position: static; } }
 @media (max-width: 540px) { .search-editor { padding: var(--space-4); } .setup-picker { flex-direction: column; align-items: stretch; } .search-editor .controls { grid-template-columns: 1fr; } .timing-row { gap: var(--space-2); } .timing-row input { padding-inline: .3rem; } .saved-time { overflow-wrap: anywhere; } }
+
+.candidate > header { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: var(--space-3); }
+.candidate > code { display: block; color: var(--text-secondary); margin-bottom: var(--space-5); }
+.candidate .metrics { border-block: 1px solid var(--border-light); padding-top: var(--space-4); font-variant-numeric: tabular-nums; }
+.candidate .metrics dd { overflow-wrap: anywhere; font-size: var(--fs-lg); }
+.candidate p { max-width: 78ch; line-height: 1.65; }
+.evidence-paths { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); margin-block: var(--space-5); }
+.monthly-evidence { margin-block: var(--space-5); }
+.monthly-evidence h4 { margin-bottom: var(--space-2); }
+.month-track { min-width: 8rem; width: 30%; }
+.diverging { height: 1rem; position: relative; background: var(--bg-sunken); }
+.diverging::before { content: ''; position: absolute; left: 50%; height: 100%; border-left: 1px solid var(--border-strong); }
+.diverging span { position: absolute; height: 100%; left: 50%; background: var(--bull); }
+.diverging span.loss { left: auto; right: 50%; background: var(--bear); }
+.measure-guide { padding: var(--space-3) 0; }
+@media (max-width: 1000px) { .evidence-paths { grid-template-columns: 1fr; } }
+.study-overview h2 { font-size: var(--fs-lg); margin: 0 0 var(--space-3); }
+.study-overview p { max-width: 80ch; line-height: 1.65; }
+.evidence-cycle { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 0; list-style-position: inside; border-block: 1px solid var(--border-light); margin-block: var(--space-5); }
+.evidence-cycle li { padding: var(--space-4); font-size: var(--fs-sm); }
+.evidence-cycle li + li { border-left: 1px solid var(--border-light); }
+.evidence-cycle span { display: block; color: var(--text-secondary); line-height: 1.65; margin-top: var(--space-3); }
+.reference-row { background: var(--bg-sunken); }
+.exposure-reading { margin-top: var(--space-5); padding-left: var(--space-4); border-left: 3px solid var(--warn); }
+@media (max-width: 900px) { .evidence-cycle { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 540px) { .evidence-cycle { grid-template-columns: 1fr; } .evidence-cycle li + li { border-left: 0; border-top: 1px solid var(--border-light); } }
+.risk-map { display: grid; grid-template-columns: minmax(6rem, auto) minmax(0, 1fr); gap: var(--space-4); padding: var(--space-4); border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--bg-sunken); }
+.risk-map svg { height: 270px; width: 100%; overflow: visible; }
+.risk-map line { stroke: var(--border-strong); vector-effect: non-scaling-stroke; }
+.risk-map circle { fill: var(--accent); stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; cursor: pointer; }
+.risk-map circle.failed { fill: var(--bear); stroke: var(--bear); }
+.risk-map circle.original { fill: var(--bg-sunken); stroke-width: 3; }
+.risk-map circle.selected { stroke: var(--text-primary); stroke-width: 4; }
+.risk-map-scale { display: flex; flex-direction: column; justify-content: space-between; padding-block: 20px; max-width: 12rem; overflow-wrap: anywhere; }
+.risk-map-scale, .risk-map-axis { font-size: var(--fs-xs); font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.risk-map-axis { display: flex; justify-content: space-between; gap: var(--space-3); margin: var(--space-2) 0 var(--space-4); }
+.selected-reading { padding: var(--space-3); background: var(--bg-sunken); border-left: 3px solid var(--accent); }

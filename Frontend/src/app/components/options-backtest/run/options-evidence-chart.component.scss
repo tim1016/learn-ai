@@ -1,0 +1,20 @@
+:host { display: block; min-width: 0; }
+figure { margin: 0; padding: var(--space-4); background: var(--bg-sunken); border-radius: var(--radius); }
+h4 { margin: 0 0 var(--space-2); font-size: var(--fs-md); }
+p { color: var(--text-secondary); font-size: var(--fs-sm); line-height: 1.6; max-width: 76ch; margin: 0 0 var(--space-3); }
+.plot { display: grid; grid-template-columns: minmax(6rem, auto) minmax(0, 1fr); gap: var(--space-3); margin-top: var(--space-4); }
+.scale { display: flex; flex-direction: column; justify-content: space-between; padding-block: 12px; font-size: var(--fs-xs); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; max-width: 12rem; }
+svg { width: 100%; height: 180px; overflow: visible; }
+line { stroke: var(--border-light); vector-effect: non-scaling-stroke; }
+polyline { fill: none; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+circle { fill: var(--accent); }
+.risk polyline { stroke: var(--bear); }
+.risk circle { fill: var(--bear); }
+.dates, output { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-2); font-size: var(--fs-xs); color: var(--text-secondary); }
+.dates { margin: var(--space-2) 0 var(--space-4); }
+label { display: grid; gap: var(--space-2); font-size: var(--fs-xs); color: var(--text-secondary); }
+input { width: 100%; accent-color: var(--accent); }
+output { margin: var(--space-2) 0; font-variant-numeric: tabular-nums; }
+output strong { color: var(--text-primary); overflow-wrap: anywhere; }
+.reading { margin: var(--space-3) 0 0; font-size: var(--fs-xs); }
+@media (max-width: 540px) { .plot { grid-template-columns: 6rem minmax(0, 1fr); } }
