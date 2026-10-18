@@ -37,5 +37,5 @@
     @if (leg().expiryKind === 'min_days') { <label>Days<input type="number" step="1" [formField]="legForm().expiryDays" [attr.aria-label]="name() + ' minimum expiry days'" /></label> }
   </div>
   <p class="note">Each step selects the next listed strike. The price is resolved for each historical session.</p>
-  @if (leg().side === 'sell') { <p class="cover"><i class="pi pi-shield" aria-hidden="true"></i> Needs a bought {{ leg().right }} to cover it. The setup checks quantity and expiry.</p> }
+  @if (leg().side === 'sell') { <p class="cover"><i class="pi pi-info-circle" aria-hidden="true"></i> At entry, each sold {{ leg().right }} must be covered by a bought {{ leg().right }} with the same expiry, already held or filling in the same minute.</p> }
 </div>
