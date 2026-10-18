@@ -1,5 +1,5 @@
 @if (ready()) {
-  <app-options-backtest-legs-card [desk]="true" [form]="fields" [squareOff]="fields.squareOff" [builderForm]="builderFields" [limits]="servedLimits()" (add)="add()" (legCopied)="copy($event)" (legRemoved)="remove($event)"><app-options-position-preview [setup]="setup()" [startingDate]="startingDate()" /></app-options-backtest-legs-card>
+  <app-options-backtest-legs-card [desk]="true" [form]="fields" [squareOff]="fields.squareOff" [builderForm]="builderFields" [limits]="servedLimits()" [problems]="fieldProblems()" [squareOffProblem]="squareOffProblem()" (add)="add()" (legCopied)="copy($event)" (legRemoved)="remove($event)"><app-options-position-preview [setup]="setup()" [startingDate]="startingDate()" /></app-options-backtest-legs-card>
   @if (changed()) {
     <div class="save-position"><p>These leg edits change the starting setup. Save them before checking or starting the search.</p><label>Save edited setup as<input [formField]="identityFields.name" /></label><button type="button" [disabled]="setup() === null || busy() || identity().name.trim() === ''" (click)="save()">{{ busy() ? 'Saving…' : 'Save position for search' }}</button></div>
   }

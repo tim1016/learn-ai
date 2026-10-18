@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from app.options_backtest.picking import ListedContract, Listing
 from app.options_backtest.position_preview import PreviewUnavailable
 from app.routers.options_position_preview import router
+from app.schemas.http_errors import ErrorDetailResponse
 from app.services import options_position_preview as service
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from tests.options_backtest._market import at
@@ -61,6 +62,11 @@ def test_bad_current_quotes_are_not_priced(monkeypatch: pytest.MonkeyPatch, quot
 async def test_route_returns_data_refusal_and_validates_temporal_bounds() -> None:
     app = FastAPI()
     app.include_router(router)
+    operation = app.openapi()["paths"]["/position-preview"]["post"]
+    for code in ("409", "503"):
+        assert operation["responses"][code]["content"]["application/json"]["schema"]["$ref"].endswith(
+            "/ErrorDetailResponse"
+        )
 
     class Missing:
         async def preview(self, _):
@@ -71,8 +77,27 @@ async def test_route_returns_data_refusal_and_validates_temporal_bounds() -> Non
         body = request().model_dump(mode="json")
         response = await client.post("/position-preview", json=body)
         assert response.status_code == 409
+        ErrorDetailResponse.model_validate(response.json())
         assert response.json()["detail"] == "No entry-minute price is stored"
         body["trading_date_ms"] = MAX_TIMESTAMP_MS + 1
         assert (await client.post("/position-preview", json=body)).status_code == 422
         body.update(source="current", trading_date_ms=None, mode="replay")
         assert (await client.post("/position-preview", json=body)).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_route_publishes_retryable_failure_without_internal_error_text() -> None:
+    app = FastAPI()
+    app.include_router(router)
+
+    class Unreadable:
+        async def preview(self, _):
+            raise RuntimeError("private-storage-path")
+
+    app.dependency_overrides[service.get_position_preview_service] = Unreadable
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/position-preview", json=request().model_dump(mode="json"))
+    assert response.status_code == 503
+    body = ErrorDetailResponse.model_validate(response.json())
+    assert "Retry" in body.detail
+    assert "private-storage-path" not in body.detail

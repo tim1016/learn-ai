@@ -133,3 +133,22 @@ it('blocks the checked plan on leg edits and uses the newly saved setup identity
   await waitFor(() => expect(screen.queryByRole('button', { name: 'Save position for search' })).toBeNull());
   expect(start).toHaveProperty('disabled', true);
 });
+
+
+it('explains invalid position fields and restores save after the user corrects them', async () => {
+  await page(service(), { setup_name: 'Saved two-leg setup' });
+  const contracts = await screen.findByRole('spinbutton', { name: 'Leg 1 contracts' });
+  fireEvent.input(contracts, { target: { value: '0' } });
+  await screen.findByText(/Enter a whole number of contracts/);
+  const save = screen.getByRole('button', { name: 'Save position for search' });
+  expect(save).toHaveProperty('disabled', true);
+  fireEvent.input(contracts, { target: { value: '2' } });
+  await waitFor(() => expect(save).toHaveProperty('disabled', false));
+  expect(screen.queryByText(/Enter a whole number of contracts/)).toBeNull();
+  const offset = screen.getByRole('spinbutton', { name: 'Leg 1 strike offset' });
+  fireEvent.input(offset, { target: { value: '1.5' } });
+  await screen.findByText(/Enter a whole number of steps/);
+  expect(save).toHaveProperty('disabled', true);
+  fireEvent.input(offset, { target: { value: '2' } });
+  await waitFor(() => expect(save).toHaveProperty('disabled', false));
+});

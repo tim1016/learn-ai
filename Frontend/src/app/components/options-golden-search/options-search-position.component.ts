@@ -6,6 +6,7 @@ import { builderProblems, newLegBuilder, withLegAdded, withLegCopied, withLegRem
 import { OptionsBacktestService } from '../options-backtest/options-backtest.service';
 import { PositionPreviewComponent } from '../options-backtest/position/position-preview.component';
 import { buildSetup } from '../options-backtest/setup-build';
+import { FIELD, NO_PROBLEMS } from '../options-backtest/setup-problems';
 import { draftFromSetup, newSetupDraft } from '../options-backtest/setup-draft';
 import { optionsSearchErrorMessage, OptionsGoldenSearchService } from './options-golden-search.service';
 import type { SearchDeclarations } from './options-golden-search.types';
@@ -42,6 +43,8 @@ export class OptionsSearchPositionComponent {
   private original = '';
   protected readonly changed = computed(() => this.ready() && this.original !== JSON.stringify(this.draft()));
   protected readonly built = computed(() => this.clock.hasValue() ? buildSetup(this.draft(), this.clock.value(), this.servedLimits()) : null);
+  protected readonly fieldProblems = computed(() => { const built = this.built(); return built && !built.ok ? built.problems : NO_PROBLEMS; });
+  protected readonly squareOffProblem = computed(() => this.fieldProblems().get(FIELD.squareOff) ?? null);
   protected readonly setup = computed(() => { const built = this.built(); return built?.ok ? built.body : null; });
 
   constructor() {
