@@ -4,3 +4,8 @@
 @container page-grid (min-width: 1160px) {
   .leg-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+.position-desk--active { display: grid; grid-template-columns: minmax(17rem, 21rem) minmax(0, 1fr); gap: var(--space-4); align-items: start; container-type: inline-size; }
+.position-desk--active .leg-grid { grid-template-columns: minmax(0, 1fr); }
+.position-chart { min-width: 0; position: sticky; top: calc(var(--topbar-h) + var(--space-3)); }
+@media (max-width: 1000px) { .position-desk--active { grid-template-columns: minmax(0, 1fr); } .position-chart { position: static; } }

@@ -1,3 +1,4 @@
+import { ruleSwitch } from './testing/page-actions';
 import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -364,7 +365,7 @@ describe('typed times', () => {
     const service = fakeService(vi);
     await renderPage(service);
     addLeg();
-    fireEvent.click(screen.getByRole('switch', { name: 'No re-entry after' }));
+    fireEvent.click(ruleSwitch('No re-entry after'));
 
     typeInto('No re-entry after time', '12:00');
     await waitFor(() => expect(service.describe.mock.lastCall?.[0]).toMatchObject({ no_reentry_after: { anchor: 'open', offset_ms: (12 * 60 - OPEN) * 60_000 } }));
@@ -426,7 +427,7 @@ describe('the read-back beside the leg cards', () => {
     second.getBoundingClientRect = () => ({ top: 500, bottom: 560 }) as DOMRect;
     const pageScroll = vi.spyOn(window, 'scrollTo');
 
-    fireEvent.focusIn(screen.getByRole('switch', { name: 'Leg 2 stop loss' }));
+    fireEvent.focusIn(ruleSwitch('Leg 2 stop loss'));
 
     expect(pane.scrollTop).toBe(360);
     expect(pageScroll).not.toHaveBeenCalled();
@@ -464,7 +465,7 @@ describe('the read-back beside the leg cards', () => {
       typeInto('Slippage (percent)', '0.5');
       await waitFor(() => expect(blocks(summary)).toHaveLength(0));
 
-      fireEvent.focusIn(screen.getByRole('switch', { name: 'Leg 2 stop loss' }));
+      fireEvent.focusIn(ruleSwitch('Leg 2 stop loss'));
       expect(pane.scrollTop).toBe(0);
       gate.release?.();
 

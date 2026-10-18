@@ -1,0 +1,5 @@
+:host { display: block; min-width: 0; }
+.save-position { display: flex; gap: var(--space-3); align-items: end; flex-wrap: wrap; padding: var(--space-3); border: 1px solid var(--border-strong); border-radius: var(--radius); }
+p { margin: 0; color: var(--text-secondary); font-size: var(--fs-sm); }
+label { display: grid; gap: var(--space-1); font-size: var(--fs-xs); color: var(--text-secondary); }
+input, button { padding: var(--space-2); font: inherit; color: var(--text-primary); background: var(--bg-surface); border: 1px solid var(--border-strong); border-radius: var(--radius); }

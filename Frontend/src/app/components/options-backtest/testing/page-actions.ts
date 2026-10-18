@@ -19,7 +19,7 @@ export function press(name: string): void {
 }
 
 export function flip(name: string): void {
-  fireEvent.click(screen.getByRole('switch', { name }));
+  fireEvent.click(ruleSwitch(name));
 }
 
 /** Add a leg for `right`: pick the pill, then press Add leg. */
@@ -101,4 +101,13 @@ export function expectTradingDatesInNewYork(container: ParentNode): void {
   const dates = [...container.querySelectorAll('app-timestamp-display')].filter((stamp) => /^\d{4}-\d{2}-\d{2}$/.test(reads(stamp)));
   expect(dates.length).toBeGreaterThan(0);
   for (const date of dates) expect(date.getAttribute('data-timestamp-mode')).toBe('date-et');
+}
+
+/** Expand a leg's trade rules before interacting with one of its switches. */
+export function ruleSwitch(name: string): HTMLElement {
+  const control = screen.getByRole('switch', { name, hidden: true });
+  const details = control.closest('details');
+  const summary = details?.querySelector('summary');
+  if (details && !details.open && summary) fireEvent.click(summary);
+  return control;
 }

@@ -3,7 +3,7 @@
 Formula: POP (Probability of Profit) and EV (Expected Value) under the BS-M lognormal model. Per-leg payoff curves at expiry; max profit, max loss and breakevens of the expiry payoff, read at price 0, at the strikes and from the net long call quantity above the highest strike (the payoff is piecewise linear, so no price window enters); current-time PnL by composing per-leg theoretical values from `bs_greeks.py`; Greek curves per-spot grid; per-leg diagnostic table. Aggregates into a strategy-level response shape consumed by Strategy Lab.
 Reference: Hull, Options Futures and Other Derivatives (10e), §11–12 (payoff diagrams), §19 (Greek Letters); composes the canonical Python options authorities (`bs_greeks.py`, `quantlib_pricer.py`, `volatility/solver.py`).
 Canonical implementation: this file (`AnalyzeOptionsStrategy`). The Frontend `OptionsStrategyLabComponent` consumes this response and is now a passthrough since Phase 1.2 (commit 451394d).
-Validated against: PythonDataService/tests/test_strategy_engine.py (POP, EV, strategy Greeks across spreads, single-legs, time-decay; max profit, max loss and breakevens hand-derived). The browser copy of the payoff extremes and breakevens, `Frontend/src/app/utils/strategy-payoff.ts` (ADR 0068 exception 1), is checked against this file by `tests/contracts/test_strategy_payoff_parity_fixture.py`.
+Validated against: PythonDataService/tests/test_strategy_engine.py (POP, EV, strategy Greeks across spreads, single-legs, time-decay; max profit, max loss and breakevens hand-derived). Cash-adjusted roots are validated by tests/options_backtest/test_position_preview.py. The browser copy of the payoff extremes and breakevens, `Frontend/src/app/utils/strategy-payoff.ts` (ADR 0068 exception 1), is checked against this file by `tests/contracts/test_strategy_payoff_parity_fixture.py`.
 
 All probability math lives here — Black-Scholes lognormal model
 for POP (Probability of Profit) and EV (Expected Value).
@@ -100,14 +100,17 @@ def _tail_slope(legs: list[StrategyLeg]) -> float:
     return float(sum((1 if leg.position == "long" else -1) * leg.quantity for leg in legs if leg.option_type == "call"))
 
 
-def find_breakevens(legs: list[StrategyLeg]) -> list[float]:
+def find_breakevens(legs: list[StrategyLeg], *, cash_adjustment: float = 0.0) -> list[float]:
     """Prices above zero where the expiry payoff changes sign, over the whole payoff.
 
     A price where the payoff only touches zero and turns back is not one. Where
     the payoff sits at zero over a stretch and then leaves it on the other side,
-    the breakeven is the price where it first reaches zero.
+    the breakeven is the price where it first reaches zero. A constant per-share
+    cash adjustment retains realized cash and fees when inspecting an open position.
     """
     knots = _payoff_knots(legs)
+    if cash_adjustment:
+        knots = [(price, 0.0 if abs(pnl + cash_adjustment) <= _PAYOFF_ZERO else pnl + cash_adjustment) for price, pnl in knots]
     tail_slope = _tail_slope(legs)
 
     breakevens: list[float] = []

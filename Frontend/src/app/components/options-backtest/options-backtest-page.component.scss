@@ -36,3 +36,6 @@ p { margin: 0; }
 @container page-grid (max-width: 720px) {
   .pair { grid-template-columns: minmax(0, 1fr); }
 }
+
+.rail[data-span='12'] { position: static; max-height: none; grid-template-columns: minmax(16rem, 1fr) minmax(0, 2fr); align-items: start; }
+@media (max-width: 1000px) { .rail[data-span='12'] { grid-template-columns: 1fr; } }

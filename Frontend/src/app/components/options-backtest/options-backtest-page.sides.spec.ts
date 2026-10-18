@@ -1,3 +1,4 @@
+import { ruleSwitch } from './testing/page-actions';
 import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -178,7 +179,7 @@ describe('opening a stored setup that sells', () => {
     await screen.findByRole('article', { name: 'Leg 2' });
 
     expect(screen.getByLabelText<HTMLInputElement>('Leg 2 stop loss value').value).toBe('150');
-    expect((screen.getByRole('switch', { name: 'Leg 2 stop loss' }) as HTMLInputElement).checked).toBe(true);
+    expect((ruleSwitch('Leg 2 stop loss') as HTMLInputElement).checked).toBe(true);
   });
 });
 

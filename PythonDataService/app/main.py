@@ -72,6 +72,7 @@ from app.routers import (
     options,
     options_backtest,
     options_backtest_chain,
+    options_position_preview,
     quantlib_options,
     recency,
     research_divergence,
@@ -1313,6 +1314,7 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     app.include_router(tickers.router, prefix="/api/tickers", tags=["tickers"])
     app.include_router(trading_calendar.router, prefix="/api/calendar", tags=["calendar"])
     app.include_router(news.router, prefix="/api/news", tags=["news"])
+    app.include_router(options_position_preview.router, prefix="/api/research/options-backtest", tags=["research-options-backtest"])
     app.include_router(strategy.router, prefix="/api/strategy", tags=["strategy"])
     app.include_router(spec_strategy.router, prefix="/api/spec-strategy", tags=["spec-strategy"])
     app.include_router(recency.router, prefix="/api/research/recency", tags=["research-recency"])

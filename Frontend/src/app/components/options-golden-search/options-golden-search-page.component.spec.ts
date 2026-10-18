@@ -1,3 +1,7 @@
+import type { SetupRequest } from '../options-backtest/options-backtest.types';
+import { PositionPreviewService } from '../options-backtest/position/position-preview.service';
+import { quietPositionPreview } from '../options-backtest/position/testing';
+import { readBackOf, SESSION_CLOCK, SERVED_LIMITS } from '../options-backtest/testing/fixtures';
 import { Router, provideRouter } from '@angular/router';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
@@ -16,8 +20,9 @@ function service() {
 
 async function page(fake = service(), inputs = {}) {
   const declaration = declarations();
-  const view = await render(OptionsGoldenSearchPageComponent, { inputs, providers: [provideRouter([]), ...provideFakeDateWorld(), { provide: OptionsBacktestService, useValue: { list: async () => [servedSaved(declaration.setup_name, declaration.setup)] } }, { provide: OptionsGoldenSearchService, useValue: fake }] });
-  return { view, fake };
+  const setups = { sessionClock: async () => SESSION_CLOCK, limits: async () => SERVED_LIMITS, list: async () => [servedSaved(declaration.setup_name, declaration.setup)], save: vi.fn(async (name: string, body: SetupRequest) => servedSaved(name, readBackOf(body))) };
+  const view = await render(OptionsGoldenSearchPageComponent, { inputs, providers: [{ provide: PositionPreviewService, useValue: quietPositionPreview }, provideRouter([]), ...provideFakeDateWorld(), { provide: OptionsBacktestService, useValue: setups }, { provide: OptionsGoldenSearchService, useValue: fake }] });
+  return { view, fake, setups };
 }
 
 async function preparePlan() {
@@ -50,7 +55,7 @@ describe('Options Golden Search workbench', () => {
   it('renders lightweight study history without loading study evidence', async () => {
     const fake = service();
     const summaries = [{ id: 'saved-study', setup_name: 'Past setup', underlying: 'SPY', phase: 'compare', status: 'ready', updated_at_ms: 1791294000000 }];
-    const view = await render(OptionsGoldenSearchPageComponent, { providers: [provideRouter([]), ...provideFakeDateWorld(), { provide: OptionsBacktestService, useValue: { list: async () => [] } }, { provide: OptionsGoldenSearchService, useValue: { ...fake, list: async () => summaries } }] });
+    const view = await render(OptionsGoldenSearchPageComponent, { providers: [{ provide: PositionPreviewService, useValue: quietPositionPreview }, provideRouter([]), ...provideFakeDateWorld(), { provide: OptionsBacktestService, useValue: { list: async () => [] } }, { provide: OptionsGoldenSearchService, useValue: { ...fake, list: async () => summaries } }] });
     expect(await screen.findByRole('link', { name: 'Past setup' })).toBeTruthy();
     expect(fake.get).not.toHaveBeenCalled();
     view.fixture.destroy();
@@ -107,4 +112,24 @@ describe('Options Golden Search workbench', () => {
     expect(fake.command.mock.calls[0]).toEqual(fake.command.mock.calls[1]);
     expect(fake.command).toHaveBeenCalledWith('study-1', expect.objectContaining({ command: 'run_research', expected_revision: 4, idempotency_key: expect.any(String) }));
   });
+});
+
+
+it('blocks the checked plan on leg edits and uses the newly saved setup identity', async () => {
+  const { fake, setups, user } = await preparePlan();
+  await user.click(screen.getByRole('button', { name: 'Check plan' }));
+  const start = screen.getByRole('button', { name: 'Start search' });
+  await waitFor(() => expect(start).toHaveProperty('disabled', false));
+  await user.click(screen.getByRole('button', { name: 'Flip Leg 1 to Put' }));
+  expect(start).toHaveProperty('disabled', true);
+  expect(screen.getByRole('button', { name: 'Check plan' })).toHaveProperty('disabled', true);
+  const changed = { ...declarations(), setup_name: 'Edited position', setup_hash: 'e'.repeat(64), setup: { ...declarations().setup, legs: declarations().setup.legs.map(leg => ({ ...leg, right: 'put' as const })) } };
+  fake.declarations.mockResolvedValue(changed);
+  const name = screen.getByRole('textbox', { name: 'Save edited setup as' });
+  fireEvent.input(name, { target: { value: 'Edited position' } });
+  await user.click(screen.getByRole('button', { name: 'Save position for search' }));
+  await waitFor(() => expect(fake.declarations).toHaveBeenLastCalledWith('Edited position'));
+  expect(setups.save).toHaveBeenCalledWith('Edited position', expect.objectContaining({ legs: expect.arrayContaining([expect.objectContaining({ leg_id: 'call', right: 'put' })]) }));
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Save position for search' })).toBeNull());
+  expect(start).toHaveProperty('disabled', true);
 });

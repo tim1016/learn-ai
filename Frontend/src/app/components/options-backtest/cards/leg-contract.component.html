@@ -5,6 +5,7 @@
       <select class="right" [formField]="legForm().right" [attr.aria-label]="name() + ' option type'">
         <option value="call">Call</option><option value="put">Put</option>
       </select>
+      @if (compact()) { <button type="button" class="right-flip" [attr.aria-label]="'Flip ' + name() + ' to ' + (leg().right === 'call' ? 'Put' : 'Call')" (click)="flipRight()">Flip to {{ leg().right === 'call' ? 'Put' : 'Call' }}</button> }
     </div>
     <button type="button" class="side-flip" [attr.aria-label]="'Flip ' + name() + ' to ' + nextSide()" (click)="flipSide()">
       <span class="side-flip__rotor" [class.side-flip__rotor--sell]="leg().side === 'sell'" aria-hidden="true">

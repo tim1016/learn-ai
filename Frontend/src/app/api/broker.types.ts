@@ -6202,6 +6202,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/options-backtest/position-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Position Preview */
+        post: operations["position_preview_api_research_options_backtest_position_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/options-backtest/runs": {
         parameters: {
             query?: never;
@@ -25625,6 +25642,116 @@ export interface components {
          * @enum {string}
          */
         PortfolioHistoryRange: "1D" | "30D" | "60D";
+        /** PositionPreviewCurve */
+        PositionPreviewCurve: {
+            /** Leg Id */
+            leg_id?: string | null;
+            /** Pnl Usd */
+            pnl_usd: string[];
+        };
+        /** PositionPreviewEvent */
+        PositionPreviewEvent: {
+            /** At Ms */
+            at_ms: number;
+            /** Detail */
+            detail?: string | null;
+            /** Kind */
+            kind: string;
+            /** Leg Id */
+            leg_id: string;
+        };
+        /** PositionPreviewLeg */
+        PositionPreviewLeg: {
+            /** Contracts */
+            contracts: number;
+            /** Expiry Ms */
+            expiry_ms: number;
+            /** Leg Id */
+            leg_id: string;
+            /** Premium Usd */
+            premium_usd: string;
+            /** Price At Ms */
+            price_at_ms: number;
+            /** Price Source */
+            price_source: string;
+            /**
+             * Right
+             * @enum {string}
+             */
+            right: "call" | "put";
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "buy" | "sell";
+            /** Strike Usd */
+            strike_usd: string;
+            /** Symbol */
+            symbol: string;
+        };
+        /** PositionPreviewRequest */
+        PositionPreviewRequest: {
+            /**
+             * Mode
+             * @default position
+             * @enum {string}
+             */
+            mode?: "position" | "replay";
+            /** Replay At Ms */
+            replay_at_ms?: number | null;
+            setup: components["schemas"]["OptionsBacktestSetup-Input"];
+            /**
+             * Source
+             * @default historical
+             * @enum {string}
+             */
+            source?: "historical" | "current";
+            /** Trading Date Ms */
+            trading_date_ms?: number | null;
+        };
+        /** PositionPreviewResponse */
+        PositionPreviewResponse: {
+            /** At Ms */
+            at_ms: number;
+            /** Curves */
+            curves: components["schemas"]["PositionPreviewCurve"][];
+            /** Events */
+            events?: components["schemas"]["PositionPreviewEvent"][];
+            /** Legs */
+            legs: components["schemas"]["PositionPreviewLeg"][];
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "position" | "replay";
+            /** Notes */
+            notes: string[];
+            /** Prices Usd */
+            prices_usd: string[];
+            risk: components["schemas"]["PositionPreviewRisk"] | null;
+            /** Session Close Ms */
+            session_close_ms?: number | null;
+            /** Session Open Ms */
+            session_open_ms?: number | null;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "historical" | "current";
+            /** Spot Usd */
+            spot_usd: string;
+        };
+        /** PositionPreviewRisk */
+        PositionPreviewRisk: {
+            /** Breakevens Usd */
+            breakevens_usd: string[];
+            /** Entry Debit Usd */
+            entry_debit_usd: string;
+            /** Max Loss Usd */
+            max_loss_usd: string | null;
+            /** Max Profit Usd */
+            max_profit_usd: string | null;
+        };
         /**
          * PredictionComparison
          * @description Compare a per-bar prediction value against a constant threshold.
@@ -43567,6 +43694,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OptionsBacktestRefusalBody"];
+                };
+            };
+        };
+    };
+    position_preview_api_research_options_backtest_position_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PositionPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PositionPreviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
