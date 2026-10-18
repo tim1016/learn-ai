@@ -109,7 +109,7 @@ describe('Use this setup', () => {
     expect(screen.getByText('The setup of that run was loaded. The dates were not changed.')).toBeTruthy();
   });
 
-  it('leaves the dates as they were, and empties the name and the highlight of a saved setup, because the form is no longer that setup', async () => {
+  it('leaves the dates as they were, and replaces the saved name with a generated name and clears the highlight, because the form is no longer that setup', async () => {
     const service = fakeService(vi, { runs: vi.fn(async () => [COMPLETE]), run: vi.fn(async () => runDetail({ ...COMPLETE, setup: ran() })) });
     await renderPage(service);
     await openExample();
@@ -125,7 +125,7 @@ describe('Use this setup', () => {
 
     await waitFor(() => expect((screen.getByLabelText('Slippage (percent)') as HTMLInputElement).value).toBe('0.45'));
     expect(dateFields()).toEqual({ from: '2026-09-14', to: '2026-09-18' });
-    expect((screen.getByLabelText('Setup name') as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('Setup name') as HTMLInputElement).value).toContain('AAPL, Buy');
     expect(within(screen.getByRole('complementary', { name: 'Saved setups' })).getAllByRole('button').filter((button) => button.getAttribute('aria-current') === 'true')).toHaveLength(0);
   });
 

@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { SetupRefusedError } from './options-backtest.service';
 import type { SavedSetup } from './options-backtest.types';
+import { generatedSetupName } from './setup-name';
+import { draftFromSetup } from './setup-draft';
 import { formatClockText } from './session-time';
 import { EXAMPLE_NO_REENTRY, EXAMPLE_ONE_REENTRY, exampleBody, noReentryExampleBody, readBackOf, servedExamples, servedSaved, SESSION_CLOCK } from './testing/fixtures';
 import { choose, flip, press, typeInto } from './testing/page-actions';
@@ -75,7 +77,7 @@ describe('the saved setups list', () => {
 });
 
 describe('opening a setup', () => {
-  it('puts an example into the form, its times as clock times, and leaves the name empty', async () => {
+  it('puts an example into the form, its times as clock times, and generates a setup name', async () => {
     await renderPage(fakeService(vi));
 
     fireEvent.click(await within(sideList()).findByRole('button', { name: new RegExp(`^${EXAMPLE_ONE_REENTRY}`) }));
@@ -88,7 +90,7 @@ describe('opening a setup', () => {
     expect((screen.getByRole('radio', { name: 'Complete' }) as HTMLInputElement).checked).toBe(true);
     expect((screen.getByRole('switch', { name: 'Leg 1 stop loss' }) as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText('Leg 1 stop loss value') as HTMLInputElement).value).toBe('25');
-    expect((screen.getByLabelText('Setup name') as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('Setup name') as HTMLInputElement).value).toContain('SPY, Buy');
   });
 
   it('opens the no-re-entry example with its re-entry rule and its cutoff off, and sends back exactly its JSON', async () => {
@@ -226,7 +228,7 @@ describe('a save that finishes after another setup was opened', () => {
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
     expect(openButton('Mine').getAttribute('aria-current')).toBeNull();
     expect(openButton(EXAMPLE_NO_REENTRY).getAttribute('aria-current')).toBe('true');
-    expect((screen.getByLabelText('Setup name') as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('Setup name') as HTMLInputElement).value).toContain('SPY, Buy');
     expect(within(bar()).queryByText(/Saved/)).toBeNull();
   });
 });
@@ -315,5 +317,42 @@ describe('saving', () => {
     const sent = service.save.mock.lastCall?.[1];
     // The server reads a rule that is off back as an explicit null.
     expect(sent?.legs[0]?.stop_loss).toBeNull();
+  });
+});
+
+describe('automatic setup naming', () => {
+  it('refuses to overwrite a different saved setup under a colliding generated name', async () => {
+    const label = generatedSetupName(draftFromSetup(noReentryExampleBody(), SESSION_CLOCK));
+    const service = fakeService(vi, { list: vi.fn(async () => [...servedExamples(), servedSaved(label, exampleBody())]) });
+    await renderPage(service);
+    fireEvent.click(await within(sideList()).findByRole('button', { name: new RegExp(`^${EXAMPLE_NO_REENTRY}`) }));
+    await screen.findByText('A setup already uses this generated name. Choose a different name, or open the saved setup to edit it.');
+    expect(screen.getByRole('button', { name: 'Save setup' })).toHaveProperty('disabled', true);
+    expect(service.save).not.toHaveBeenCalled();
+  });
+
+  it('preserves a reopened saved name even when it matches the generated label', async () => {
+    const setup = exampleBody();
+    const label = generatedSetupName(draftFromSetup(setup, SESSION_CLOCK));
+    await renderPage(fakeService(vi, { list: vi.fn(async () => [servedSaved(label, setup)]) }));
+    fireEvent.click(await within(sideList()).findByRole('button', { name: new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`) }));
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Setup name' })).toHaveProperty('value', label));
+    typeInto('Entry time', '10:00');
+    expect(screen.getByRole('textbox', { name: 'Setup name' })).toHaveProperty('value', label);
+    expect(screen.getByText('Custom name preserved.')).toBeTruthy();
+  });
+
+  it('updates a generated name with setup edits, preserves a custom edit and can return to automatic naming', async () => {
+    await renderPage(fakeService(vi));
+    fireEvent.click(await within(sideList()).findByRole('button', { name: new RegExp(`^${EXAMPLE_NO_REENTRY}`) }));
+    const name = screen.getByRole('textbox', { name: 'Setup name' });
+    await waitFor(() => expect(name).toHaveProperty('value', expect.stringContaining('SPY, Buy')));
+    fireEvent.input(name, { target: { value: 'My custom research setup' } });
+    typeInto('Entry time', '10:00');
+    expect(name).toHaveProperty('value', 'My custom research setup');
+    press('Use generated name');
+    await waitFor(() => expect(name).toHaveProperty('value', expect.stringContaining('1000-')));
+    typeInto('Entry time', '10:05');
+    await waitFor(() => expect(name).toHaveProperty('value', expect.stringContaining('1005-')));
   });
 });

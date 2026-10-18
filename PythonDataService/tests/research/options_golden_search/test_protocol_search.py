@@ -174,3 +174,72 @@ def test_zero_saved_costs_require_positive_explicit_stress_and_preserve_exact_am
     assert scenario.effective_fee_multiplier == 1
     estimated = apply_scenario(original, CostScenario(key="fees", fee_multiplier=Decimal(2)))
     assert estimated.fees.kind == "estimated"
+
+
+@pytest.mark.parametrize("method", ["grid", "zoom"])
+@pytest.mark.parametrize("objective,winner", [("net_profit", "20"), ("sharpe", "30"), ("drawdown", "40")])
+def test_frozen_objective_selects_only_passing_candidates(method, objective, winner):
+    p = protocol(method=method, policy=Policy(rank_by=objective))
+    def evaluate(s, w, c):
+        value = int(s.legs[0].stop_loss.value)
+        profit, drawdown, sharpe = {10: (1, "0.2", 1), 20: (30, "0.15", 2),
+                                    30: (20, "0.1", 4), 40: (10, "0.05", 3)}[value]
+        return result(s, str(profit)).model_copy(update={"max_drawdown_fraction": Decimal(drawdown), "sharpe": sharpe})
+    searched = run_search(p, p.development, evaluate)
+    assert materialize(p, searched.points[searched.winner.point_hash]).legs[0].stop_loss.value == Decimal(winner)
+    assert searched.eligible[0].point_hash == searched.winner.point_hash
+    refused = run_search(p, p.development, lambda s, w, c: evaluate(s, w, c).model_copy(update={"eligible": False}))
+    assert refused.winner is None and not refused.eligible
+
+
+def test_legacy_profit_protocol_identity_and_new_objective_round_trip():
+    from app.research.options_golden_search.protocol import OptionsSearchProtocol
+
+    p = protocol()
+    data = p.model_dump(mode="json")
+    assert "rank_by" not in data["policy"]
+    assert OptionsSearchProtocol.model_validate(data).protocol_hash == p.protocol_hash
+    ranked = protocol(policy=Policy(rank_by="sharpe"))
+    assert ranked.protocol_hash != p.protocol_hash
+    assert OptionsSearchProtocol.model_validate(ranked.model_dump(mode="json")).policy.rank_by == "sharpe"
+
+
+def test_shared_rule_is_one_axis_without_cross_leg_combinations():
+    values = tuple({leg: {"kind": "percent", "value": amount} for leg in ("call_a", "put_b")} for amount in ("20", "30"))
+    p = protocol(knobs=[Knob(path="all_legs.stop_loss", values=values)])
+    visited = []
+    def evaluate(s, w, c):
+        visited.append(tuple(leg.stop_loss.value for leg in s.legs))
+        return result(s, str(s.legs[0].stop_loss.value))
+    run_search(p, p.development, evaluate)
+    assert visited == [(Decimal(10), Decimal(10)), (Decimal(20), Decimal(20)), (Decimal(30), Decimal(30))]
+    with pytest.raises(ValueError, match="shared rule and its individual"):
+        protocol(knobs=[Knob(path="all_legs.stop_loss", values=values), Knob(path="legs.call_a.stop_loss.value", values=("10", "20"))])
+    with pytest.raises(ValueError, match="every stable leg"):
+        protocol(knobs=[Knob(path="all_legs.stop_loss", values=({"call_a": None}, {"call_a": {"kind": "percent", "value": "20"}}))])
+
+
+def test_shared_seed_preserves_different_saved_rules_and_validates_each_leg():
+    from app.research.options_golden_search.protocol import read_path, validate_value
+
+    original = setup()
+    data = original.model_dump(mode="json")
+    data["legs"][1]["stop_loss"]["value"] = "15"
+    original = OptionsBacktestSetup.model_validate(data)
+    saved = read_path(original, "all_legs.stop_loss")
+    assert saved["call_a"]["value"] == "10" and saved["put_b"]["value"] == "15"
+    validate_value(original, "all_legs.stop_loss", saved)
+    with pytest.raises(ValueError, match="same rule"):
+        validate_value(original, "all_legs.stop_loss", {"call_a": None, "put_b": {"kind": "percent", "value": "30"}})
+    with pytest.raises(ValueError, match="below 100"):
+        validate_value(original, "all_legs.stop_loss", {leg.leg_id: {"kind": "percent", "value": "100"} for leg in original.legs})
+
+
+def test_decimal_candidate_identity_v2_preserves_the_saved_seed_and_deduplicates_range_spellings():
+    knobs = [Knob(path="legs.call_a.stop_loss.value", values=("10.0000", "20.0000"))]
+    p = protocol(knobs=knobs, candidate_identity_version=2)
+    assert point_hash(materialize(p, {knobs[0].path: "10.0000"})) == point_hash(p.setup)
+    assert str(materialize(p, {knobs[0].path: "20.0000"}).legs[0].stop_loss.value) == "20"
+    legacy = protocol(knobs=knobs)
+    assert str(materialize(legacy, {knobs[0].path: "20.0000"}).legs[0].stop_loss.value) == "20.0000"
+    assert "candidate_identity_version" not in legacy.model_dump(mode="json")

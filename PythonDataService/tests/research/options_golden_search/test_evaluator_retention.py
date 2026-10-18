@@ -74,6 +74,8 @@ def test_large_batch_releases_replay_graphs_and_loads_selected_exact_evidence(
             return {"reserved": len(records), "completed": sum(bool(record) for record in records.values()),
                     "execution_attempts": computations,
                     "evidence_bytes": sum(record["evidence_bytes"] for record in records.values() if record)}
+        if func is repo.evaluation_summaries:
+            return {key: {"metrics": records[key]["metrics"], "complete": records[key]["complete"]} for key in args[1]}
         if func is repo.get_evaluation:
             if args[1] not in records:
                 raise LookupError("missing")
@@ -100,6 +102,15 @@ def test_large_batch_releases_replay_graphs_and_loads_selected_exact_evidence(
     assert len(answers) == len(records) == 64
     assert all(set(record["metrics"]) == set(stages._SCALAR_METRICS) for record in records.values())
     assert all("daily" not in record["metrics"] for record in records.values())
+    def refuse_trace(*args, **kwargs):
+        raise AssertionError("Compact diagnostic projection must not load retained minute traces")
+    with monkeypatch.context() as compact:
+        compact.setattr(evaluator, "load", refuse_trace)
+        summaries = evaluator.metrics_for(answers)
+        for answer in answers:
+            metrics, complete = summaries[answer.evidence_id]
+            assert metrics.net_profit_usd == answer.net_profit_usd
+            assert complete is not missing_option_day
     restored = evaluator.result_for(answers[-1], window)
     expected = evaluate_setup(requests[-1][0], window, data)
     assert restored == expected

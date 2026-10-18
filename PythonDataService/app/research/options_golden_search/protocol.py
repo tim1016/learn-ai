@@ -11,7 +11,7 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer, model_validator
 
 from app.options_backtest.setup import OptionsBacktestSetup
 from app.research.runs.hashing import hash_payload
@@ -24,6 +24,7 @@ class FrozenModel(BaseModel):
 
 class Policy(FrozenModel):
     version: Literal[1] = 1
+    rank_by: Literal["net_profit", "sharpe", "drawdown"] = "net_profit"
     max_drawdown_fraction: Decimal = Field(default=Decimal("0.2"), ge=0, le=1)
     min_sharpe: float = 1.0
     min_activity_per_year: int = Field(default=50, ge=1)
@@ -33,6 +34,14 @@ class Policy(FrozenModel):
     max_recovery_sessions: int | None = Field(default=None, ge=1)
     risk_free_daily_return: float = 0.0
     stress_gate: bool = False
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        # Preserve the identity of protocols frozen before selectable objectives.
+        if self.rank_by == "net_profit":
+            data.pop("rank_by", None)
+        return data
 
 
 class Limits(FrozenModel):
@@ -107,6 +116,15 @@ class Fold(FrozenModel):
 
 class OptionsSearchProtocol(FrozenModel):
     version: Literal[1] = 1
+    candidate_identity_version: Literal[1, 2] = 1
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        if self.candidate_identity_version == 1:
+            data.pop("candidate_identity_version", None)
+        return data
+
     setup: OptionsBacktestSetup
     knobs: tuple[Knob, ...]
     method: Literal["zoom", "grid"] = "zoom"
@@ -139,6 +157,11 @@ class OptionsSearchProtocol(FrozenModel):
             raise ValueError("declare each knob once and vary at least one")
         if any(a != b and (a.startswith(b + ".") or b.startswith(a + ".")) for a in paths for b in paths):
             raise ValueError("a rule and its child setting cannot both be dimensions")
+        for path in paths:
+            if path.startswith("all_legs."):
+                rule = _shared_rule(path)
+                if any(other.startswith("legs.") and len(other.split(".")) >= 3 and other.split(".")[2] == rule for other in paths):
+                    raise ValueError("a shared rule and its individual leg rules cannot both be dimensions")
         for knob in self.knobs:
             original = read_path(self.setup, knob.path)
             if knob.mode == "fixed" and hash_payload(original) != hash_payload(knob.model_dump(mode="json")["values"][0]):
@@ -189,6 +212,9 @@ def _location(setup: OptionsBacktestSetup, path: str) -> tuple[dict[str, Any], l
 
 
 def read_path(setup: OptionsBacktestSetup, path: str) -> Any:
+    if path.startswith("all_legs."):
+        rule = _shared_rule(path)
+        return {leg.leg_id: read_path(setup, f"legs.{leg.leg_id}.{rule}") for leg in setup.legs}
     data, pieces = _location(setup, path)
     current: Any = data
     for piece in pieces:
@@ -196,6 +222,13 @@ def read_path(setup: OptionsBacktestSetup, path: str) -> Any:
             raise ValueError(f"{path}: absent rule must be varied as an explicit rule category")
         current = current[int(piece)] if isinstance(current, list) else current[piece]
     return current
+
+
+def _shared_rule(path: str) -> str:
+    pieces = path.split(".")
+    if len(pieces) != 2 or pieces[1] not in {"stop_loss", "momentum", "reentry_on_stop"}:
+        raise ValueError(f"unsupported shared rule: {path}")
+    return pieces[1]
 
 
 def _assign(data: dict[str, Any], pieces: list[str], value: Any) -> None:
@@ -218,6 +251,15 @@ def validate_value(setup: OptionsBacktestSetup, path: str, value: Any) -> None:
     """Validate scalar typing and local rule constraints without rejecting legal dependency combinations."""
     from app.options_backtest.setup import Momentum, ReentryOnStop, SessionTime, StopLoss
 
+    if path.startswith("all_legs."):
+        rule = _shared_rule(path)
+        if not isinstance(value, dict) or set(value) != {leg.leg_id for leg in setup.legs}:
+            raise ValueError("a shared candidate must name every stable leg exactly once")
+        if len({hash_payload(item) for item in value.values()}) != 1 and value != read_path(setup, path):
+            raise ValueError("a shared candidate must apply the same rule to all legs")
+        for leg_id, item in value.items():
+            validate_value(setup, f"legs.{leg_id}.{rule}", item)
+        return
     data, pieces = _location(setup, path)
     field = pieces[-1]
     if field == "offset_ms" and (type(value) is not int or value < 0 or value % 60000):
@@ -265,8 +307,25 @@ def materialize(protocol: OptionsSearchProtocol, point: dict[str, Any]) -> Optio
                 raise ValueError(f"{knob.path}: point leaves its frozen categories")
         else:
             continue
-        _, pieces = _location(protocol.setup, knob.path)
-        _assign(data, pieces, value)
+        if knob.path.startswith("all_legs."):
+            rule = _shared_rule(knob.path)
+            for leg in data["legs"]:
+                leg[rule] = value[leg["leg_id"]]
+        else:
+            _, pieces = _location(protocol.setup, knob.path)
+            _assign(data, pieces, value)
+    for original, leg in (zip(protocol.setup.legs, data["legs"], strict=True) if protocol.candidate_identity_version == 2 else ()):
+        for name in ("stop_loss", "momentum"):
+            rule = leg.get(name)
+            if rule is None:
+                continue
+            amount = Decimal(rule["value"])
+            saved = getattr(original, name)
+            if saved is not None and amount == saved.value:
+                rule["value"] = str(saved.value)
+            else:
+                text = format(amount, "f")
+                rule["value"] = text.rstrip("0").rstrip(".") if "." in text else text
     return OptionsBacktestSetup.model_validate(data)
 
 

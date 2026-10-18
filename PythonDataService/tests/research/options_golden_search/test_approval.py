@@ -139,3 +139,21 @@ def test_read_review_and_command_share_the_exact_complete_failure_set_and_batch_
 def test_normal_approval_cannot_smuggle_a_waiver() -> None:
     with pytest.raises(ValueError, match="cannot waive"):
         validate_approval(_row(), _command("approve", "", ("final:profit",)))
+
+
+def test_implicit_final_shortlist_excludes_rejected_diagnostics_and_enforces_budget():
+    from app.options_bots.golden_proof import setup_sha256
+    from app.research.options_golden_search.approval import final_shortlist
+    from tests.research.options_golden_search.test_protocol_search import protocol
+
+    plan = protocol(finalist_count=1)
+    baseline = setup_sha256(plan.setup)
+    candidates = [{"candidate_hash": baseline, "is_original": True, "verdict": "does_not_meet_rules"},
+                  {"candidate_hash": "eligible", "is_original": False, "verdict": "meets_rules"},
+                  *[{"candidate_hash": str(index), "is_original": False, "verdict": "does_not_meet_rules"} for index in range(200)]]
+    assert final_shortlist(candidates, plan, None) == [baseline, "eligible"]
+    with pytest.raises(ValueError, match="eligible"):
+        final_shortlist(candidates, plan, ("0",))
+    candidates.append({"candidate_hash": "second", "is_original": False, "verdict": "meets_rules"})
+    with pytest.raises(ValueError, match="bounded"):
+        final_shortlist(candidates, plan, None)

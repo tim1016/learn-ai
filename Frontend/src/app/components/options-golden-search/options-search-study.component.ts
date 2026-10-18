@@ -31,6 +31,9 @@ export class OptionsSearchStudyComponent {
   protected readonly selection = signal({ hash: '', comment: '' });
   protected readonly fields = form(this.selection);
   protected readonly shortlist = signal<readonly string[] | null>(null);
+  protected readonly recommendations = computed(() => this.study().candidates.filter((candidate) => candidate.is_original || candidate.verdict === 'meets_rules'));
+  protected readonly rejected = computed(() => this.study().candidates.filter((candidate) => !candidate.is_original && candidate.verdict !== 'meets_rules'));
+  protected readonly showRejected = signal(false);
   protected readonly selectedHashes = computed(() => this.shortlist() ?? this.study().candidates.filter((candidate) => !candidate.is_original && candidate.verdict === 'meets_rules').map((candidate) => candidate.candidate_hash));
   protected readonly approvalCandidate = computed(() => this.study().final_results.find((candidate) => candidate.candidate_hash === this.selection().hash) ?? null);
   protected readonly approvalReview = computed(() => this.study().approval_reviews[this.selection().hash] ?? null);
@@ -66,6 +69,10 @@ export class OptionsSearchStudyComponent {
 
   protected allowed(command: SearchCommand): boolean {
     return !this.busy() && this.study().allowed_commands.includes(command);
+  }
+
+  protected toggleRejected(event: Event): void {
+    if (event.target instanceof HTMLDetailsElement) this.showRejected.set(event.target.open);
   }
 
   protected toggleFinalist(hash: string, event: Event): void {

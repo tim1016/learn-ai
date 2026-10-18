@@ -41,6 +41,9 @@ export class BottomBarComponent {
   /** What Check data and Start wait for, or that a backtest is going. */
   readonly runHint = input<string | null>(null);
   readonly save = output();
+  readonly nameEdited = output();
+  readonly generateName = output();
+  readonly automaticName = input(true);
   readonly check = output();
   readonly start = output();
   /** The bar's height, to keep the end of the page clear of it while it is fixed to the window. */

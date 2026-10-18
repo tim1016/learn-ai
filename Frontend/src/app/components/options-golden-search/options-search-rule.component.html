@@ -1,0 +1,11 @@
+<section class="rule" [attr.aria-label]="label()">
+  <div class="rule-heading"><div><h3>{{ label() }}</h3><p class="saved">Saved: {{ saved() }}</p></div><div class="mode"><button type="button" [class.selected]="!draft().vary" (click)="mode(false)">Keep saved</button><button type="button" [class.selected]="draft().vary" (click)="mode(true)">Explore</button></div></div>
+  @if (draft().vary) {
+    <label class="rule-kind">{{ draft().key === 'stop_loss' ? 'Stop type' : draft().key === 'no_reentry_after' ? 'Session anchor' : 'Trigger' }}<select [formField]="field().kind">@for (kind of kinds(); track kind.value) { <option [value]="kind.value">{{ kind.label }}</option> }</select></label>
+    <div class="range-fields"><label>Minimum<input type="text" inputmode="decimal" [formField]="field().minimum" /></label><label>Maximum<input type="text" inputmode="decimal" [formField]="field().maximum" /></label><label>Step<input type="text" inputmode="decimal" [formField]="field().step" /></label></div>
+    <label class="off-choice"><input type="checkbox" [formField]="field().off" />{{ draft().key === 'stop_loss' ? 'Also test without a stop loss' : draft().key === 'momentum' ? 'Also test without entry momentum' : draft().key === 'reentry_on_stop' ? 'Also test with no re-entry' : 'Also test without a cutoff' }}</label>
+    @if (values(); as choices) { <p class="values-heading">{{ choices.length }} values the search will test</p><div class="values">@for (value of choices.slice(0, 10); track $index) { <span>{{ choiceLabel(value) }}</span> }@if (choices.length > 10) { <span>and {{ choices.length - 10 }} more</span> }</div> }
+    @else { <p class="problem">Enter a positive step that divides the range, with at least two values (including Off if selected). Maximum 5,000 values. {{ draft().key === 'reentry_on_stop' ? 'Use whole counts from 1 to 20.' : draft().key === 'no_reentry_after' ? 'Use whole minutes from 0 to 1,439.' : 'Use up to four decimal places.' }}</p> }
+    @if (priority()) { <label class="rule-kind">Search priority (10 first)<input type="number" [formField]="field().priority" /></label> }
+  }
+</section>

@@ -76,3 +76,13 @@ describe('Options search evidence and approval', () => {
     await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Include Candidate one in final test' })).toHaveProperty('checked', false));
   });
 });
+
+it('keeps failing candidates inspectable without offering them for final selection', async () => {
+  const failed = candidate({ candidate_hash: 'f'.repeat(64), label: 'Failed timing candidate', verdict: 'does_not_meet_rules', gate_outcomes: [{ gate_id: 'development:drawdown', status: 'does_not_meet_rules', actual: '25', required: '20', reason: 'Drawdown exceeds the frozen limit.' }] });
+  await render(OptionsSearchStudyComponent, { inputs: { study: study({ candidates: [candidate(), failed], allowed_commands: ['open_final'] }), step: 4 }, providers: [provideRouter([])] });
+  expect(screen.queryByRole('checkbox', { name: 'Include Failed timing candidate in final test' })).toBeNull();
+  const user = userEvent.setup();
+  await user.click(screen.getByText('1 candidates did not pass — inspect limits'));
+  await screen.findByText('Failed timing candidate');
+  expect(screen.getByText('Drawdown exceeds the frozen limit. (25 / 20)')).toBeTruthy();
+});

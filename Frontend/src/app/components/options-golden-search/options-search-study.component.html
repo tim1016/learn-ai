@@ -5,11 +5,9 @@
   @if (study().failure_reason; as reason) { <p class="problem">{{ reason }}</p> }
   <a routerLink="/options-golden-search" [queryParams]="{ setup_name: study().setup_name, parent_study_id: study().id }">Fork a linked plan from this saved setup</a>
 </section>
-@if (step() <= 2) {
-  <section class="card"><h3>Locked plan receipt</h3><p>These exact settings were frozen before research. Fork a linked plan to change them.</p>
-    @for (item of study().protocol_summary; track item.label) { <p><strong>{{ item.label }}</strong>: {{ item.value }}</p> }
-  </section>
-}
+<details class="card"><summary>Locked plan receipt</summary><p>These exact settings were frozen before research. Fork a linked plan to change them.</p>
+  @for (item of study().protocol_summary; track item.label) { <p><strong>{{ item.label }}</strong>: {{ item.value }}</p> }
+</details>
 @if (step() === 3) {
   <section class="card"><h3>Research</h3><p>The locked plan survives closing this browser. Resume explicitly after interruption. Cancel keeps evidence already committed.</p>
     <p>Stage: {{ study().progress.stage | receiptLabel }}</p>
@@ -24,10 +22,20 @@
 }
 @if (step() === 4) {
   <section class="card"><h3>Development and forward evidence</h3><p>The original is retained independently. Reduce the tested shortlist before final exposure. Every final candidate is chosen before its final outcomes are shown.</p>
-    @for (candidate of study().candidates; track candidate.candidate_hash) {
+    @for (candidate of recommendations(); track candidate.candidate_hash) {
       @if (!candidate.is_original) { <label><input type="checkbox" [checked]="selectedHashes().includes(candidate.candidate_hash)" [disabled]="!allowed('open_final') || candidate.verdict !== 'meets_rules'" (change)="toggleFinalist(candidate.candidate_hash, $event)" /> Include {{ candidate.label }} in final test</label> }
       <app-options-search-candidate [candidate]="candidate" [studyId]="study().id" window="development" [sessionLoader]="sessionLoader()" />
     } @empty { <p>No complete shortlist is available. Research may finish with no eligible point.</p> }
+    @if (rejected().length > 0) {
+      <details (toggle)="toggleRejected($event)"><summary>{{ rejected().length }} candidates did not pass — inspect limits</summary>
+        @if (showRejected()) {
+          <p>Showing {{ rejected().length }} of {{ study().rejected_candidate_count ?? rejected().length }} rejected candidates, ordered by the frozen objective. Full evaluations remain retained.</p>
+          <div class="table-scroll"><table><thead><tr><th>Candidate</th><th>Net profit (USD)</th><th>Drawdown (%)</th><th>Sharpe</th><th>Failed limits</th></tr></thead><tbody>
+            @for (item of rejected(); track item.candidate_hash) { <tr><td>{{ item.label }}<br /><code>{{ item.candidate_hash }}</code></td><td>{{ item.net_profit_usd }}</td><td>{{ item.drawdown_percent }}</td><td>{{ item.sharpe }}</td><td>@for (gate of item.gate_outcomes; track gate.gate_id) { @if (gate.status !== 'meets_rules') { <p>{{ gate.reason }} ({{ gate.actual }} / {{ gate.required }})</p> } }</td></tr> }
+          </tbody></table></div>
+        }
+      </details>
+    }
     <p>Opening final test freezes these exact candidates and records these dates as exposed, even if computation fails. This comparison chooses after final test from several candidates; it is not an unbiased single-candidate confirmation.</p>
     <button type="button" class="primary" [disabled]="!allowed('open_final')" (click)="ask('open_final')">Freeze shortlist and open final test</button>
   </section>

@@ -61,6 +61,7 @@
               @if (activeTab() === 'backtest') {
                 <app-options-backtest-bottom-bar
                   [nameField]="saveForm.name" [canSave]="canSave()" [saving]="saving()" [nameProblem]="nameProblem()"
+                  [automaticName]="automaticName()" (nameEdited)="automaticName.set(false)" (generateName)="automaticName.set(true)"
                   [hint]="saveHint()" [status]="saveStatus()" [canCheck]="canCheck()" [canStart]="canStart()" [runHint]="runHint()" (save)="save()" (check)="checkData()" (start)="start()" (height)="barHeight.set($event)" />
               }
               @if (clock() !== null) {

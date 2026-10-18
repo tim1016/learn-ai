@@ -33,6 +33,7 @@ import { buildSetup } from './setup-build';
 import { draftFromSetup, newSetupDraft, withDefaultTimes, type SetupDraft } from './setup-draft';
 import { readSetupFile, setupFileBlob, setupFileName } from './setup-file';
 import { nameProblem } from './setup-limits';
+import { generatedSetupName } from './setup-name';
 import { describeDetail, FIELD, NO_PROBLEMS, type FieldProblems } from './setup-problems';
 import { SetupSummaryChecker } from './setup-summary-checker';
 
@@ -228,14 +229,16 @@ export class OptionsBacktestPageComponent {
 
   // Saving.
   protected readonly saveModel = signal({ name: '' });
+  protected readonly automaticName = signal(true);
+  private readonly generatedName = computed(() => generatedSetupName(this.draft()));
   protected readonly saveForm = form(this.saveModel);
   protected readonly saving = signal(false);
   /** How tall the bar of actions is, which the end of the page leaves clear when the bar is fixed to the window. */
   protected readonly barHeight = signal(0);
   private readonly lastSave = signal<{ readonly name: string; readonly stamp: string; readonly status: SaveStatus } | null>(null);
   private readonly stamp = computed(() => `${this.saveModel().name}\n${JSON.stringify(this.body())}`);
-  protected readonly nameProblem = computed(() => nameProblem(this.saveModel().name, this.limits()));
-  protected readonly canSave = computed(() => this.readBack() !== null && this.saveModel().name !== '' && this.nameProblem() === null && !this.saving());
+  protected readonly nameProblem = computed(() => nameProblem(this.saveModel().name, this.limits()) ?? (this.automaticName() && this.loadedName() !== this.saveModel().name && this.setups().some((setup) => setup.name === this.saveModel().name) ? 'A setup already uses this generated name. Choose a different name, or open the saved setup to edit it.' : null));
+  protected readonly canSave = computed(() => this.readBack() !== null && this.saveModel().name !== '' && this.nameProblem() === null && (!this.automaticName() || this.libraryStatus() === 'ready') && !this.saving());
   /** What the last save said, until the name or the setup changes: then it no longer describes what is on screen. */
   protected readonly saveStatus = computed(() => {
     const last = this.lastSave();
@@ -243,6 +246,7 @@ export class OptionsBacktestPageComponent {
   });
   protected readonly saveHint = computed(() => {
     if (this.saveModel().name === '') return 'Name the setup to save it.';
+    if (this.automaticName() && this.libraryStatus() !== 'ready') return 'Load saved setups before saving a generated name, so an existing setup cannot be replaced accidentally.';
     return this.readBack() === null ? 'Save is available once the setup reads back cleanly.' : null;
   });
 
@@ -270,6 +274,10 @@ export class OptionsBacktestPageComponent {
   protected readonly canStart = computed(() => this.asking() !== null && !this.launch.busy());
 
   constructor() {
+    effect(() => {
+      const name = this.generatedName();
+      if (this.automaticName()) untracked(() => this.saveModel.set({ name }));
+    });
     effect(() => {
       const body = this.body();
       untracked(() => this.checker.show(body));
@@ -350,6 +358,7 @@ export class OptionsBacktestPageComponent {
     this.setupReplacements += 1;
     this.draft.set(draftFromSetup(setup, clock));
     this.saveModel.set({ name: '' });
+    this.automaticName.set(true);
     this.names.clear();
     this.importNotice.set({ kind: 'loaded', title: 'The setup of that run was loaded. The dates were not changed.', reasons: [] });
     this.activeTab.set('backtest');
@@ -378,6 +387,7 @@ export class OptionsBacktestPageComponent {
     const opened = draftFromSetup(item.setup, clock);
     this.draft.set(opened);
     this.saveModel.set({ name: item.example ? '' : item.name });
+    this.automaticName.set(item.example);
     this.names.set(item.name, bodyJsonOf(opened, clock));
     this.importNotice.set(null);
   }
@@ -491,6 +501,7 @@ export class OptionsBacktestPageComponent {
     // The form is made from the setup as the server read the file, so what the file left out is filled in by the server.
     this.draft.set(draftFromSetup(described.setup, clock));
     this.saveModel.set({ name: '' });
+    this.automaticName.set(true);
     this.names.clear();
     this.importNotice.set({ kind: 'loaded', title: `${file.name} was loaded.`, reasons: [] });
   }

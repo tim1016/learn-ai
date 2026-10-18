@@ -1,36 +1,52 @@
-import { render, screen, waitFor } from '@testing-library/angular';
+import { fireEvent, render, screen, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { OptionsSearchKnobsComponent } from './options-search-knobs.component';
 import { declarations } from './testing';
 
-describe('Options search knob intent', () => {
-  it('holds saved rules until varied and supports explicit Off plus independently edited On candidates', async () => {
+const set = (region: HTMLElement, label: string, value: string) => fireEvent.input(within(region).getByRole('textbox', { name: label }), { target: { value } });
+
+describe('rule-based search controls', () => {
+  it('defaults to keeping every leg saved, then emits one synchronized dimension with exact decimal values and Off', async () => {
     const changed = vi.fn();
-    const knob = declarations().knobs[1];
-    await render(OptionsSearchKnobsComponent, { inputs: { knobs: [knob] }, on: { changed } });
+    await render(OptionsSearchKnobsComponent, { inputs: { setup: declarations().setup }, on: { changed } });
     expect(changed).toHaveBeenLastCalledWith([]);
     const user = userEvent.setup();
-    await user.click(screen.getByRole('checkbox', { name: 'Vary in search' }));
-    await user.click(screen.getByRole('button', { name: 'Add another On candidate' }));
-    const counts = screen.getAllByRole('spinbutton', { name: 'Re-entry count' });
-    await user.clear(counts[1]);
-    await user.type(counts[1], '2');
-    await user.selectOptions(screen.getAllByRole('combobox', { name: 'Rule kind' })[1], 'on_momentum');
-    await waitFor(() => expect(changed).toHaveBeenLastCalledWith([{ path: knob.path, priority: 5, mode: 'search', values: expect.arrayContaining([null, { kind: 'at_once', count: 1 }, { kind: 'on_momentum', count: 2 }]) }]));
-    await user.click(screen.getByRole('checkbox', { name: 'Vary in search' }));
+    const stop = screen.getByRole('region', { name: 'Stop loss' });
+    await user.click(within(stop).getByRole('button', { name: 'Explore' }));
+    set(stop, 'Minimum', '0.1'); set(stop, 'Maximum', '0.3'); set(stop, 'Step', '0.1');
+    await user.click(within(stop).getByRole('checkbox', { name: 'Also test without a stop loss' }));
+    expect(changed).toHaveBeenLastCalledWith([{ path: 'all_legs.stop_loss', priority: 5, mode: 'search', values: [
+      { call: { kind: 'percent', value: '0.1000' }, put: { kind: 'percent', value: '0.1000' } },
+      { call: { kind: 'percent', value: '0.2000' }, put: { kind: 'percent', value: '0.2000' } },
+      { call: { kind: 'percent', value: '0.3000' }, put: { kind: 'percent', value: '0.3000' } },
+      { call: null, put: null },
+    ] }]);
+    set(stop, 'Step', '0');
+    expect(changed).toHaveBeenLastCalledWith(null);
+    await user.click(within(stop).getByRole('button', { name: 'Keep saved' }));
     expect(changed).toHaveBeenLastCalledWith([]);
   });
 
-  it('converts shared timing offsets from whole-minute controls to millisecond candidates', async () => {
+  it('copies shared exploration into each leg and preserves independent edits across tab and scope changes', async () => {
     const changed = vi.fn();
-    await render(OptionsSearchKnobsComponent, { inputs: { knobs: [{ ...declarations().knobs[0], path: 'entry.offset_ms', leg_id: null, label: 'Entry offset', value_type: 'integer', current_value: 300000 }] }, on: { changed } });
+    await render(OptionsSearchKnobsComponent, { inputs: { setup: declarations().setup }, on: { changed } });
     const user = userEvent.setup();
-    await user.click(screen.getByRole('checkbox', { name: 'Vary in search' }));
-    const values = screen.getByRole('textbox', { name: 'Candidate values, comma separated' });
-    await user.clear(values);
-    await user.type(values, '5,10');
-    await waitFor(() => expect(changed).toHaveBeenLastCalledWith([{ path: 'entry.offset_ms', priority: 5, mode: 'search', values: [300000, 600000] }]));
+    const stop = () => screen.getByRole('region', { name: 'Stop loss' });
+    await user.click(within(stop()).getByRole('button', { name: 'Explore' }));
+    set(stop(), 'Minimum', '20'); set(stop(), 'Maximum', '25'); set(stop(), 'Step', '5');
+    await user.click(screen.getByRole('button', { name: 'Customize by leg' }));
+    set(stop(), 'Maximum', '30');
+    await user.click(screen.getByRole('button', { name: /Buy 1 ATM put/ }));
+    expect(within(stop()).getByRole('textbox', { name: 'Maximum' })).toHaveProperty('value', '25');
+    expect(changed).toHaveBeenLastCalledWith(expect.arrayContaining([
+      expect.objectContaining({ path: 'legs.call.stop_loss', values: [{ kind: 'percent', value: '20.0000' }, { kind: 'percent', value: '25.0000' }, { kind: 'percent', value: '30.0000' }] }),
+      expect.objectContaining({ path: 'legs.put.stop_loss', values: [{ kind: 'percent', value: '20.0000' }, { kind: 'percent', value: '25.0000' }] }),
+    ]));
+    await user.click(screen.getByRole('button', { name: 'All legs together' }));
+    await user.click(screen.getByRole('button', { name: 'Customize by leg' }));
+    await user.click(screen.getByRole('button', { name: /Buy 1 ATM call/ }));
+    expect(within(stop()).getByRole('textbox', { name: 'Maximum' })).toHaveProperty('value', '30');
   });
 });

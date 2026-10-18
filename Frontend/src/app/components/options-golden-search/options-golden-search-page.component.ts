@@ -2,6 +2,8 @@ import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, injec
 import { form, FormField } from '@angular/forms/signals';
 import { Router, RouterLink } from '@angular/router';
 
+import { TimestampDisplayComponent } from '../../shared/timestamp';
+import { OptionsSearchTimingComponent } from './options-search-timing.component';
 import { AssetIdentityComponent } from '../../shared/asset-identity';
 import type { DateRange } from '../../shared/date-picker';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
@@ -14,11 +16,11 @@ import { OptionsSearchStudyComponent, type StudyAction } from './options-search-
 import { OptionsGoldenSearchService, OptionsSearchDispatchError, optionsSearchErrorMessage } from './options-golden-search.service';
 import type { OptionsStudy, PlanRequest, Preflight, SearchCommand, SearchDeclarations, SessionLoader } from './options-golden-search.types';
 
-const STEPS = ['Setup', 'Search settings', 'Rules and history', 'Research', 'Compare and final test', 'Approval'];
+const STEPS = ['Research', 'Compare and final test', 'Approval'];
 
 @Component({
   selector: 'app-options-golden-search-page',
-  imports: [AssetIdentityComponent, FormField, PageHeaderComponent, ReceiptLabelPipe, RouterLink, OptionsSearchStudyComponent, OptionsSearchKnobsComponent, OptionsSearchRulesComponent],
+  imports: [TimestampDisplayComponent, OptionsSearchTimingComponent, AssetIdentityComponent, FormField, PageHeaderComponent, ReceiptLabelPipe, RouterLink, OptionsSearchStudyComponent, OptionsSearchKnobsComponent, OptionsSearchRulesComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './options-golden-search-page.component.html',
   styleUrl: './options-golden-search.component.scss',
@@ -41,7 +43,10 @@ export class OptionsGoldenSearchPageComponent {
   protected readonly busy = signal(false);
   protected readonly loading = signal(false);
   protected readonly range = signal<DateRange>({ from: '', to: '' });
-  protected readonly knobs = signal<readonly KnobSelection[]>([]);
+  protected readonly knobs = signal<readonly KnobSelection[] | null>([]);
+  protected readonly timing = signal<readonly KnobSelection[] | null>([]);
+  protected readonly dimensions = computed(() => [...(this.timing() ?? []), ...(this.knobs() ?? [])].map((dimension) => ({ path: dimension.path, label: dimension.path.replace('all_legs.', 'All legs · ').replaceAll('_', ' ').replaceAll('.', ' · ') })));
+  protected readonly objectiveLabel = computed(() => this.rules()?.policy.rank_by === 'sharpe' ? 'Risk-adjusted return' : this.rules()?.policy.rank_by === 'drawdown' ? 'Lower drawdown' : 'Net profit');
   protected readonly rules = signal<RuleSelection | null>(null);
   protected readonly checked = signal<{ readonly stamp: string; readonly value: Preflight } | null>(null);
   protected readonly library = resource({ loader: () => this.setupsService.list() });
@@ -54,8 +59,8 @@ export class OptionsGoldenSearchPageComponent {
     const declarations = this.declarations();
     const rules = this.rules();
     const range = rangeInstants(this.range());
-    if (declarations === null || rules === null || range === null || this.knobs().length === 0) return null;
-    return { setup_name: declarations.setup_name, expected_setup_hash: declarations.setup_hash, ...(this.parent_study_id() ? { parent_study_id: this.parent_study_id() } : {}), knobs: this.knobs(), method: rules.method, policy: rules.policy, history: { ...range, train_months: rules.train_months, test_months: rules.test_months, final_months: rules.final_months }, budget: rules.budget, finalist_count: rules.finalist_count, stress: rules.stress, zoom: rules.zoom, pair_audits: rules.pair_audits };
+    if (declarations === null || rules === null || range === null || this.timing() === null || this.knobs() === null || ((this.knobs()?.length ?? 0) === 0 && this.timing()?.length === 0)) return null;
+    return { setup_name: declarations.setup_name, expected_setup_hash: declarations.setup_hash, ...(this.parent_study_id() ? { parent_study_id: this.parent_study_id() } : {}), knobs: [...(this.timing() ?? []), ...(this.knobs() ?? [])], method: rules.method, policy: rules.policy, history: { ...range, train_months: rules.train_months, test_months: rules.test_months, final_months: rules.final_months }, budget: rules.budget, finalist_count: rules.finalist_count, stress: rules.stress, zoom: rules.zoom, pair_audits: rules.pair_audits };
   });
   protected readonly preflight = computed(() => this.checked()?.stamp === JSON.stringify(this.request()) ? this.checked()?.value ?? null : null);
   protected readonly canLock = computed(() => this.request() !== null && this.preflight()?.can_lock === true && !this.busy());
@@ -101,6 +106,7 @@ export class OptionsGoldenSearchPageComponent {
     this.declarations.set(null);
     this.checked.set(null);
     this.knobs.set([]);
+    this.timing.set([]);
     this.rules.set(null);
     try {
       const declarations = await this.service.declarations(name);
@@ -136,6 +142,9 @@ export class OptionsGoldenSearchPageComponent {
       const study = await this.service.create(request, checked.preflight_hash, this.key(`lock:${checked.preflight_hash}`));
       this.acceptStudy(study);
       this.step.set(3);
+      this.history.reload();
+      this.busy.set(false);
+      await this.command({ command: 'run_research' });
       await this.router.navigate(['/options-golden-search', study.id]);
     } catch (error) {
       this.error.set(optionsSearchErrorMessage(error, 'The plan could not be locked.'));
@@ -149,6 +158,7 @@ export class OptionsGoldenSearchPageComponent {
     try {
       const study = await this.service.get(id);
       if (generation !== this.generation) return;
+      if (this.study()?.id === study.id && (this.study()?.revision ?? 0) > study.revision) return;
       this.acceptStudy(study);
       this.step.set(study.final_results.length > 0 ? 5 : study.candidates.length > 0 ? 4 : 3);
     } catch (error) {

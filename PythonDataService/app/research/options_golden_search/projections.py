@@ -8,7 +8,7 @@ from typing import Any
 from app.options_backtest import fills
 from app.research.options_golden_search.evaluator import EvaluationResult
 from app.research.options_golden_search.metrics import QualificationMetrics
-from app.research.options_golden_search.policy import Verdict
+from app.research.options_golden_search.policy import Metrics, Verdict
 
 
 def gates(verdict: Verdict, evidence_scope: str | None = None) -> list[dict[str, Any]]:
@@ -47,7 +47,6 @@ def candidate(result: EvaluationResult, verdict: Verdict, digest: str, *, origin
                 if point.equity_usd is not None:
                     peak = max(peak,point.equity_usd)
                     equity.append({"timestamp_ms":point.at_ms,"equity_usd":str(point.equity_usd),"drawdown_usd":str(peak-point.equity_usd)})
-        percent = str(m.max_drawdown_fraction * 100)
     from app.engine.results.equity_downsample import EquityCurvePoint, build_equity_curve_envelope
     raw_points = len(equity)
     envelope = build_equity_curve_envelope(
@@ -59,11 +58,26 @@ def candidate(result: EvaluationResult, verdict: Verdict, digest: str, *, origin
     equity = [point for point in equity if point["timestamp_ms"] in kept]
     return {"candidate_hash":digest,"label":"Original saved setup" if original else "Candidate "+digest[:8],"is_original":original,
         "verdict":verdict.status,"net_profit_usd":str(m.net_profit_usd),"drawdown_usd":str(m.max_drawdown_usd),
-        "drawdown_fraction":str(m.max_drawdown_fraction),"drawdown_percent":percent,"sharpe":m.sharpe,
+        "drawdown_fraction":str(m.max_drawdown_fraction),"drawdown_percent":_drawdown_percent(m.max_drawdown_fraction),"sharpe":m.sharpe,
         "completed_sessions":m.completed_traded_sessions,"recovery":("Still recovering: at least " if m.ongoing_recovery else "Longest underwater spell: ")+str(m.recoveries[-1].below_peak_sessions if m.ongoing_recovery and m.recoveries else m.max_recovery_sessions)+" sessions",
         "gate_outcomes":gates(verdict),"evidence":[{"label":"Display curve","value":f"{len(equity)} of {raw_points} minute observations; full retained trace determines every metric."}, *[{"label":name.replace("_"," "),"value":str(value)} for name,value in exact_data(m).items() if not isinstance(value,list | dict)]],
         "monthly":[{"month_ms":month.first_session_open_ms,"net_profit_usd":str(month.net_profit_usd),"completed_sessions":month.completed_sessions} for month in m.monthly],
         "equity":equity,"sessions":[session_summary(session) for session in result.sessions]}
+
+
+def _drawdown_percent(fraction: Decimal) -> str:
+    with localcontext(fills.EXACT):
+        return str(fraction * 100)
+
+
+def rejected_candidate(metrics: Metrics, verdict: Verdict, digest: str) -> dict[str, Any]:
+    """Diagnostic scalar view; full traces remain retained without loading them for this table."""
+    return {"candidate_hash": digest, "label": "Candidate " + digest[:8], "is_original": False,
+        "verdict": verdict.status, "net_profit_usd": str(metrics.net_profit_usd), "drawdown_usd": None,
+        "drawdown_fraction": str(metrics.max_drawdown_fraction), "drawdown_percent": _drawdown_percent(metrics.max_drawdown_fraction),
+        "sharpe": metrics.sharpe, "completed_sessions": metrics.completed_traded_sessions,
+        "recovery": "Recovery ongoing" if metrics.ongoing_recovery else f"Longest underwater spell: {metrics.max_recovery_sessions} sessions",
+        "gate_outcomes": gates(verdict), "evidence": [], "monthly": [], "equity": [], "sessions": []}
 
 
 def session_summary(session: Any) -> dict[str, Any]:

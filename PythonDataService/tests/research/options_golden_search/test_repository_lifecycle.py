@@ -330,3 +330,17 @@ async def test_history_summaries_exclude_retained_heavy_study_document(conn: asy
     summary = next(item for item in await repo.summaries(conn) if item["id"] == row["id"])
     assert set(summary) == {"id", "setup_name", "underlying", "phase", "status", "updated_at_ms"}
     assert summary["setup_name"] == row["setup_name"]
+
+
+async def test_batched_diagnostic_query_returns_only_scalar_summaries(conn: asyncpg.Connection, unique: str) -> None:
+    row = await _running(conn, unique)
+    for index in range(2):
+        key = f"summary-{index}"
+        await repo.reserve(conn, row["id"], row["attempt"], key, {"point": index}, cap=2)
+        await repo.begin_execution(conn, row["id"], row["attempt"], key, max_attempts=1)
+        await repo.complete(conn, row["id"], row["attempt"], key,
+            {"metrics": {"net_profit_usd": str(index)}, "complete": index == 0, "evidence_blob": "retained-separately"})
+    assert await repo.evaluation_summaries(conn, row["id"], ["summary-0", "summary-1"]) == {
+        "summary-0": {"metrics": {"net_profit_usd": "0"}, "complete": True},
+        "summary-1": {"metrics": {"net_profit_usd": "1"}, "complete": False},
+    }

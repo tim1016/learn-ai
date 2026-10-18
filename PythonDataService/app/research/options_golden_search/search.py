@@ -1,8 +1,8 @@
 """Deterministic complete Grid and coordinate Zoom selection for full Options setups.
 
-Formula: eligible candidates maximize exact net dollars; display ties order by
-  lower starting-capital drawdown, higher Sharpe, then setup hash. A Zoom move
-  preserves the incumbent on an exact net-dollar objective tie.
+Formula: eligible candidates maximize exact net dollars or Sharpe, or minimize
+  starting-capital drawdown, as frozen in policy. Ties use profit, drawdown,
+  Sharpe and setup hash. Zoom preserves the incumbent on a primary-objective tie.
 Reference: https://github.com/tim1016/learn-ai/issues/3332.
 Canonical implementation: this file.
 Validated against: tests/research/options_golden_search/test_protocol_search.py.
@@ -48,6 +48,7 @@ class Trial(FrozenModel):
 class SearchResult(FrozenModel):
     winner: Evaluation | None
     eligible: tuple[Evaluation, ...]
+    rejected: tuple[Evaluation, ...] = Field(default=(), exclude=True)
     trials: tuple[Trial, ...]
     points: dict[str, dict[str, Any]]
     unique_evaluations: int
@@ -55,9 +56,12 @@ class SearchResult(FrozenModel):
     limitation: str | None = None
 
 
-def ranking(evaluation: Evaluation) -> tuple[Decimal, Decimal, float, str]:
-    """Primary exact profit objective with deterministic presentation tie-breaks."""
-    return (-evaluation.net_profit_usd, evaluation.max_drawdown_fraction,
+def ranking(evaluation: Evaluation, rank_by: str = "net_profit") -> tuple[Decimal | float, Decimal, Decimal, float, str]:
+    """Frozen primary objective followed by deterministic presentation tie-breaks."""
+    primary = (evaluation.max_drawdown_fraction if rank_by == "drawdown" else
+               -(evaluation.sharpe if evaluation.sharpe is not None else float("-inf")) if rank_by == "sharpe" else
+               -evaluation.net_profit_usd)
+    return (primary, -evaluation.net_profit_usd, evaluation.max_drawdown_fraction,
             -(evaluation.sharpe if evaluation.sharpe is not None else float("-inf")), evaluation.point_hash)
 
 
@@ -130,9 +134,10 @@ def run_search(protocol: OptionsSearchProtocol, window: Window,
         viable = [(point, result) for point, result in batch if result is not None and result.eligible]
         if not viable:
             return
-        point, best = min(viable, key=lambda item: ranking(item[1]))
-        if (incumbent is None or not incumbent.eligible or best.net_profit_usd > incumbent.net_profit_usd
-                or (protocol.method == "grid" and ranking(best) < ranking(incumbent))):
+        point, best = min(viable, key=lambda item: ranking(item[1], protocol.policy.rank_by))
+        best_rank = ranking(best, protocol.policy.rank_by)
+        if (incumbent is None or not incumbent.eligible or best_rank[0] < ranking(incumbent, protocol.policy.rank_by)[0]
+                or (protocol.method == "grid" and best_rank < ranking(incumbent, protocol.policy.rank_by))):
             incumbent, incumbent_point = best, dict(point)
 
     if protocol.method == "grid":
@@ -161,9 +166,10 @@ def run_search(protocol: OptionsSearchProtocol, window: Window,
     for a, b in protocol.pair_audits:
         candidates = [{**incumbent_point, a: va, b: vb} for va, vb in product(by_path[a].values, by_path[b].values)]
         choose(visit_batch(candidates, f"pair:{a}:{b}"))
-    eligible = tuple(sorted((result for result in cache.values() if result.eligible), key=ranking))
+    eligible = tuple(sorted((result for result in cache.values() if result.eligible), key=lambda result: ranking(result, protocol.policy.rank_by)))
     return SearchResult(winner=incumbent if incumbent is not None and incumbent.eligible else None,
-        eligible=eligible, trials=tuple(trials), points=points, unique_evaluations=len(cache),
+        eligible=eligible, rejected=tuple(result for result in cache.values() if not result.eligible),
+        trials=tuple(trials), points=points, unique_evaluations=len(cache),
         limitation="Coordinate Zoom is local and order-sensitive; simultaneous changes can be missed." if protocol.method == "zoom" else None)
 
 

@@ -28007,6 +28007,12 @@ export interface components {
              */
             min_sharpe?: number;
             /**
+             * Rank By
+             * @default net_profit
+             * @enum {string}
+             */
+            rank_by?: "net_profit" | "sharpe" | "drawdown";
+            /**
              * Risk Free Daily Return
              * @default 0
              */
@@ -28051,6 +28057,12 @@ export interface components {
              * @default 1
              */
             min_sharpe?: number;
+            /**
+             * Rank By
+             * @default net_profit
+             * @enum {string}
+             */
+            rank_by?: "net_profit" | "sharpe" | "drawdown";
             /**
              * Risk Free Daily Return
              * @default 0
@@ -29860,6 +29872,11 @@ export interface components {
             qualification_id: string | null;
             /** Qualification Status */
             qualification_status: string | null;
+            /**
+             * Rejected Candidate Count
+             * @default 0
+             */
+            rejected_candidate_count?: number;
             /** Revision */
             revision: number;
             /** Setup Name */

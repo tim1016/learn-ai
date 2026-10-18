@@ -82,7 +82,7 @@ def build_protocol(request: PlanRequest, setup: Any) -> OptionsSearchProtocol:
     with localcontext(fills.EXACT):
         policy["max_drawdown_fraction"] = request.policy.max_drawdown_percent / 100
     return freeze_protocol(setup, request.knobs, **request.history.model_dump(), policy=Policy(**policy),
-        identities=execution_identity(), method=request.method, budget=request.budget, finalist_count=request.finalist_count,
+        identities=execution_identity(), candidate_identity_version=2, method=request.method, budget=request.budget, finalist_count=request.finalist_count,
         stress=request.stress, zoom=request.zoom, pair_audits=request.pair_audits)
 
 
@@ -229,14 +229,8 @@ async def command(study_id: str, request: Command) -> StudyDetail:
             if value["phase"] == "research" and request.command in {"run_research", "resume"}:
                 await repo.reserve_exposure(conn,value["underlying"],protocol.development.start_ms,protocol.development.end_ms,value["id"])
             if request.command == "open_final":
-                candidates = {c["candidate_hash"]:c for c in value["candidates"]}
-                selected = tuple(candidates) if request.candidate_hashes is None else request.candidate_hashes
-                if len(set(selected)) != len(selected) or not set(selected) <= set(candidates):
-                    raise ValueError("Finalists must be distinct members of the recorded development shortlist.")
-                value["finalists"] = list(selected)
-                baseline = setup_sha256(protocol.setup)
-                if baseline not in value["finalists"]:
-                    value["finalists"].append(baseline)
+                from app.research.options_golden_search.approval import final_shortlist
+                value["finalists"] = final_shortlist(value["candidates"], protocol, request.candidate_hashes)
                 classification = await repo.reserve_exposure(conn,value["underlying"],protocol.final.start_ms,protocol.final.end_ms,value["id"])
                 value["exposure"] = {"classification": classification,"explanation": "Not opened in recorded research." if classification=="not_opened" else "This history was used or its earlier use is unknown; approval must retain an explicit exposure exception."}
                 value["phase"] = "final"

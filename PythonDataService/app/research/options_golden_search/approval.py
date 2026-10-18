@@ -21,6 +21,16 @@ from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import now_ms_utc
 
 
+def final_shortlist(candidates: list[dict[str, Any]], protocol: OptionsSearchProtocol, requested: tuple[str, ...] | None) -> list[str]:
+    """Admit only bounded eligible recommendations and always retain the frozen baseline."""
+    baseline = setup_sha256(protocol.setup)
+    eligible = {candidate["candidate_hash"] for candidate in candidates if candidate["is_original"] or candidate["verdict"] == "meets_rules"}
+    selected = tuple(candidate["candidate_hash"] for candidate in candidates if candidate["candidate_hash"] in eligible) if requested is None else requested
+    if len(set(selected)) != len(selected) or not set(selected) <= eligible or len(set(selected) - {baseline}) > protocol.finalist_count:
+        raise ValueError("Finalists must be distinct eligible members of the bounded development shortlist.")
+    return [*selected, *([] if baseline in selected else [baseline])]
+
+
 def approval_failures(row: dict[str, Any], digest: str) -> list[dict[str, Any]]:
     expected = row["finalists"]
     actual = [candidate["candidate_hash"] for candidate in row["final_results"]]

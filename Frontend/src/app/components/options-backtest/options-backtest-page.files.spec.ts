@@ -66,7 +66,7 @@ describe('export', () => {
     expect(JSON.parse(text ?? '')).toEqual(readBackOf(exampleBody()));
   });
 
-  it('is named for the underlying when the setup has no name yet', async () => {
+  it('uses the generated setup name when exporting a new setup', async () => {
     const files = download();
     await renderPage(fakeService(vi), files);
     await openExample();
@@ -74,7 +74,7 @@ describe('export', () => {
 
     press('Export setup');
 
-    expect(files.save.mock.calls[0]?.[1]).toBe('SPY setup.json');
+    expect(files.save.mock.calls[0]?.[1]).toBe('SPY, Buy 1 ATM call and Buy 1 ATM put, 0935-1514 ET.json');
   });
 
   it('goes stale with the setup: after an edit it waits for the server to read the new body', async () => {
@@ -96,7 +96,7 @@ describe('import', () => {
 
     chooseFile(JSON.stringify(written));
 
-    await waitFor(() => expect((screen.getByLabelText('Setup name') as HTMLInputElement).value).toBe(''));
+    await waitFor(() => expect((screen.getByLabelText('Setup name') as HTMLInputElement).value).toContain('AAPL, Buy'));
     await screen.findByRole('article', { name: 'Leg 2' });
     expect(service.describe).toHaveBeenCalledWith(written);
     expect((screen.getByLabelText('Slippage (percent)') as HTMLInputElement).value).toBe('0.45');
@@ -218,7 +218,7 @@ describe('import', () => {
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
     const row = await within(sideList()).findByRole('button', { name: /^Mine/ });
     expect(row.getAttribute('aria-current')).toBeNull();
-    expect((screen.getByLabelText('Setup name') as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('Setup name') as HTMLInputElement).value).toContain('AAPL, Buy');
     expect((screen.getByLabelText('Slippage (percent)') as HTMLInputElement).value).toBe('0.3');
   });
 
