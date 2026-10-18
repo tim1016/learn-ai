@@ -24,6 +24,7 @@ import { LegCardComponent } from './leg-card.component';
   styleUrls: ['../options-backtest-card.scss', './legs-card.component.scss'],
 })
 export class LegsCardComponent {
+  readonly desk = input(false);
   readonly form = input.required<FieldTree<SetupDraft>>();
   readonly squareOff = input.required<FieldTree<SquareOff>>();
   readonly squareOffProblem = input<string | null>(null);

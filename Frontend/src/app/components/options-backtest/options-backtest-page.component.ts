@@ -19,6 +19,7 @@ import { SavedSetupsMenuComponent, type LibraryStatus } from './cards/saved-setu
 import { SummaryComponent } from './cards/summary.component';
 import { HistoryTabComponent } from './history/history-tab.component';
 import { PastChainTabComponent } from './past-chain/past-chain-tab.component';
+import { PositionPreviewComponent } from './position/position-preview.component';
 import { RunPanelComponent } from './run/run-panel.component';
 import { DataCheckFlow } from './data-check-flow';
 import { NO_DATES, rangeInstants, rangeOfStretch, type RangeChange } from './duration';
@@ -68,6 +69,7 @@ interface ImportNotice {
     InstrumentCardComponent,
     EntryCardComponent,
     LegsCardComponent,
+    PositionPreviewComponent,
     CostsCardComponent,
     DurationCardComponent,
     DataCheckPanelComponent,
@@ -157,7 +159,7 @@ export class OptionsBacktestPageComponent {
     const clock = this.clock();
     return clock === null ? null : buildSetup(this.draft(), clock, this.limits());
   });
-  private readonly body = computed(() => {
+  protected readonly body = computed(() => {
     const built = this.built();
     return built?.ok === true ? built.body : null;
   });

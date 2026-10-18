@@ -12,9 +12,11 @@ import type { LegDraft } from '../setup-draft';
   imports: [FormField, AssetIdentityComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './leg-contract.component.html',
+  host: { '[class.compact]': 'compact()' },
   styleUrl: './leg-contract.component.scss',
 })
 export class LegContractComponent {
+  readonly compact = input(false);
   readonly legForm = input.required<FieldTree<LegDraft, number>>();
   readonly name = input.required<string>();
   readonly underlying = input.required<string>();
@@ -37,6 +39,10 @@ export class LegContractComponent {
     return steps === 0 ? 'At the money' : `${Math.abs(steps)} ${Math.abs(steps) === 1 ? 'strike' : 'strikes'} ${steps > 0 ? 'above' : 'below'} ATM`;
   });
   protected readonly nearbyStrikes = [-3, -2, -1, 0, 1, 2, 3];
+
+  protected flipRight(): void {
+    this.legForm().right().value.update(right => right === 'call' ? 'put' : 'call');
+  }
 
   protected flipSide(): void {
     this.legForm().side().value.update(side => side === 'buy' ? 'sell' : 'buy');

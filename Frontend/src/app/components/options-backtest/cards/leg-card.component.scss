@@ -17,3 +17,6 @@
   .rule app-options-backtest-switch { min-width: 0; }
   .rule input[type='text'] { width: 4.5rem; }
 }
+
+.trade-rules { min-width: 0; }
+.trade-rules summary { cursor: pointer; }

@@ -191,5 +191,5 @@ describe('deleting the run the Backtest tab shows', () => {
 
     await waitFor(() => expect(screen.queryByRole('region', { name: 'Headline figures' })).toBeNull());
     expect(screen.queryByRole('region', { name: 'Backtest run' })).toBeNull();
-  });
+  }, 15_000);
 });

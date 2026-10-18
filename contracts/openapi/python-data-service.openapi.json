@@ -46736,6 +46736,355 @@
         "title": "PortfolioHistoryRange",
         "type": "string"
       },
+      "PositionPreviewCurve": {
+        "properties": {
+          "leg_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leg Id"
+          },
+          "pnl_usd": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pnl Usd",
+            "type": "array"
+          }
+        },
+        "required": [
+          "pnl_usd"
+        ],
+        "title": "PositionPreviewCurve",
+        "type": "object"
+      },
+      "PositionPreviewEvent": {
+        "properties": {
+          "at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "At Ms",
+            "type": "integer"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "leg_id": {
+            "title": "Leg Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "at_ms",
+          "leg_id",
+          "kind"
+        ],
+        "title": "PositionPreviewEvent",
+        "type": "object"
+      },
+      "PositionPreviewLeg": {
+        "properties": {
+          "contracts": {
+            "title": "Contracts",
+            "type": "integer"
+          },
+          "expiry_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Expiry Ms",
+            "type": "integer"
+          },
+          "leg_id": {
+            "title": "Leg Id",
+            "type": "string"
+          },
+          "premium_usd": {
+            "title": "Premium Usd",
+            "type": "string"
+          },
+          "price_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Price At Ms",
+            "type": "integer"
+          },
+          "price_source": {
+            "title": "Price Source",
+            "type": "string"
+          },
+          "right": {
+            "enum": [
+              "call",
+              "put"
+            ],
+            "title": "Right",
+            "type": "string"
+          },
+          "side": {
+            "enum": [
+              "buy",
+              "sell"
+            ],
+            "title": "Side",
+            "type": "string"
+          },
+          "strike_usd": {
+            "title": "Strike Usd",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "leg_id",
+          "symbol",
+          "side",
+          "right",
+          "contracts",
+          "strike_usd",
+          "expiry_ms",
+          "premium_usd",
+          "price_at_ms",
+          "price_source"
+        ],
+        "title": "PositionPreviewLeg",
+        "type": "object"
+      },
+      "PositionPreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "default": "position",
+            "enum": [
+              "position",
+              "replay"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "replay_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replay At Ms"
+          },
+          "setup": {
+            "$ref": "#/components/schemas/OptionsBacktestSetup-Input"
+          },
+          "source": {
+            "default": "historical",
+            "enum": [
+              "historical",
+              "current"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "trading_date_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trading Date Ms"
+          }
+        },
+        "required": [
+          "setup"
+        ],
+        "title": "PositionPreviewRequest",
+        "type": "object"
+      },
+      "PositionPreviewResponse": {
+        "properties": {
+          "at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "At Ms",
+            "type": "integer"
+          },
+          "curves": {
+            "items": {
+              "$ref": "#/components/schemas/PositionPreviewCurve"
+            },
+            "title": "Curves",
+            "type": "array"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/PositionPreviewEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "legs": {
+            "items": {
+              "$ref": "#/components/schemas/PositionPreviewLeg"
+            },
+            "title": "Legs",
+            "type": "array"
+          },
+          "mode": {
+            "enum": [
+              "position",
+              "replay"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Notes",
+            "type": "array"
+          },
+          "prices_usd": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Prices Usd",
+            "type": "array"
+          },
+          "risk": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PositionPreviewRisk"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_close_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Close Ms"
+          },
+          "session_open_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Open Ms"
+          },
+          "source": {
+            "enum": [
+              "historical",
+              "current"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "spot_usd": {
+            "title": "Spot Usd",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "mode",
+          "at_ms",
+          "spot_usd",
+          "legs",
+          "prices_usd",
+          "curves",
+          "risk",
+          "notes"
+        ],
+        "title": "PositionPreviewResponse",
+        "type": "object"
+      },
+      "PositionPreviewRisk": {
+        "properties": {
+          "breakevens_usd": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Breakevens Usd",
+            "type": "array"
+          },
+          "entry_debit_usd": {
+            "title": "Entry Debit Usd",
+            "type": "string"
+          },
+          "max_loss_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Loss Usd"
+          },
+          "max_profit_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Profit Usd"
+          }
+        },
+        "required": [
+          "entry_debit_usd",
+          "max_profit_usd",
+          "max_loss_usd",
+          "breakevens_usd"
+        ],
+        "title": "PositionPreviewRisk",
+        "type": "object"
+      },
       "PredictionComparison": {
         "additionalProperties": false,
         "description": "Compare a per-bar prediction value against a constant threshold.",
@@ -85741,6 +86090,67 @@
           }
         },
         "summary": "Get Past Chain Expiry",
+        "tags": [
+          "research-options-backtest"
+        ]
+      }
+    },
+    "/api/research/options-backtest/position-preview": {
+      "post": {
+        "operationId": "position_preview_api_research_options_backtest_position_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PositionPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PositionPreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetailResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorDetailResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Position Preview",
         "tags": [
           "research-options-backtest"
         ]

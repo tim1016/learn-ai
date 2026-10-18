@@ -275,7 +275,8 @@ async def test_path_parameters_reach_the_same_agent_route_locally_and_over_http(
         )
 
     operation = dataclasses.replace(
-        next(iter(ALPACA_OPERATIONS)), method="GET", agent_path_template="/probe/{value}"
+        next(iter(ALPACA_OPERATIONS)), method="GET", agent_path_template="/probe/{value}",
+        stream=OperationStream.NONE,
     )
     delivery_request = DeliveryRequest(
         broker="alpaca", clerk_id="clerk", operation=operation, path_params={"value": value},

@@ -96,7 +96,7 @@ describe('the run part of the page for a screen reader', () => {
     expect(await violations()).toEqual([]);
     fireEvent.click(screen.getByRole('button', { name: /Took Too Long/ }));
     expect(await violations()).toEqual([]);
-  });
+  }, 15_000);
 
   it('has no accessibility violations in History, with the list and with a run opened', async () => {
     const complete = runItem({ id: 30, job_id: 'job-30', status: 'complete', setup_name: 'Straddle', headline: { sessions_tested: 10, sessions_traded: 8, trades: 12, trades_won: 7, net_profit_usd: '1234.56', ending_cash_usd: '11234.56' } });

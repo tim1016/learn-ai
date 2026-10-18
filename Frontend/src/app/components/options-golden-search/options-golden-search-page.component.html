@@ -17,11 +17,12 @@
           @if (loading()) { <p>Loading the saved setup…</p> }
           @if (declarations(); as declaration) {
             <div class="setup-meta"><app-asset-identity [symbol]="declaration.setup.underlying" size="xs" /><span class="chip">{{ declaration.setup.legs.length }} legs</span><span class="chip">{{ declaration.setup.starting_cash_usd }} USD starting capital</span></div>
-            <p class="muted">Structure, quantities and contract selection stay fixed.</p>
+            <p class="muted">Edit the starting position below. Once the search starts, its structure and contract choices stay fixed.</p>
             <details><summary>View saved setup</summary><p>{{ declaration.setup_name }}</p><p>Original identity <code>{{ declaration.setup_hash }}</code></p><div class="leg-cards">@for (leg of declaration.setup.legs; track leg.leg_id) { <article><h3>Leg {{ leg.leg_id }}</h3><p>{{ (leg.side ?? 'buy') | receiptLabel }} {{ leg.contracts }} {{ leg.right | receiptLabel }}</p><p>{{ leg.expiry.kind | receiptLabel }} · {{ leg.strike.kind | receiptLabel }}</p></article> }</div><a routerLink="/options-backtest" [queryParams]="{ setup_name: declaration.setup_name }">Edit setup and name in the setup editor</a></details>
           } @else { <p class="muted">Choose a setup to configure timing, objectives and limits.</p> }
         </section>
         @if (declarations(); as declaration) {
+          <app-options-search-position [declarations]="declaration" [startingDate]="range().from" (dirty)="positionDirty.set($event)" (saved)="positionSaved($event)" />
           <app-options-search-timing [setup]="declaration.setup" (changed)="timing.set($event)" />
           <app-options-search-rules [declarations]="declaration" [dimensions]="dimensions()" [preflight]="preflight()" [range]="range()" (rangeChanged)="range.set($event)" (changed)="rules.set($event)" />
           <details class="search-section"><summary>Additional settings to vary</summary><app-options-search-knobs [setup]="declaration.setup" (changed)="knobs.set($event)" /></details>

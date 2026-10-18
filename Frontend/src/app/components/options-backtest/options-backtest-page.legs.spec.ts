@@ -1,3 +1,4 @@
+import { ruleSwitch } from './testing/page-actions';
 import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
@@ -28,7 +29,7 @@ describe('building a setup', () => {
 
     const headings = screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent);
 
-    expect(headings).toEqual(['Instrument', 'Duration', 'Entry settings', 'Legs', 'Costs', 'In plain words']);
+    expect(headings).toEqual(['Instrument', 'Duration', 'Entry settings', 'Legs', 'Position payoff', 'Costs', 'In plain words']);
   });
 
   it('sends exactly the shipped example when the owner builds it by hand', async () => {
@@ -147,7 +148,7 @@ describe('a leg’s three rules', () => {
       expect(screen.queryByRole('group', { name: group })).toBeNull();
     }
     for (const rule of ['Leg 1 stop loss', 'Leg 1 simple momentum', 'Leg 1 re-entry on SL']) {
-      expect((screen.getByRole('switch', { name: rule }) as HTMLInputElement).checked).toBe(false);
+      expect((ruleSwitch(rule) as HTMLInputElement).checked).toBe(false);
     }
   });
 });

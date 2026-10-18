@@ -1,3 +1,4 @@
+import { ruleSwitch } from './testing/page-actions';
 import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -85,10 +86,10 @@ describe('opening a setup', () => {
     await screen.findByRole('article', { name: 'Leg 2' });
     expect((screen.getByLabelText('Entry time') as HTMLInputElement).value).toBe(formatClockText(OPEN + 5));
     expect((screen.getByLabelText('Exit time') as HTMLInputElement).value).toBe(formatClockText(CLOSE - 46));
-    expect((screen.getByRole('switch', { name: 'No re-entry after' }) as HTMLInputElement).checked).toBe(true);
+    expect((ruleSwitch('No re-entry after') as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText('No re-entry after time') as HTMLInputElement).value).toBe(formatClockText(CLOSE - 60));
     expect((screen.getByRole('radio', { name: 'Complete' }) as HTMLInputElement).checked).toBe(true);
-    expect((screen.getByRole('switch', { name: 'Leg 1 stop loss' }) as HTMLInputElement).checked).toBe(true);
+    expect((ruleSwitch('Leg 1 stop loss') as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText('Leg 1 stop loss value') as HTMLInputElement).value).toBe('25');
     expect((screen.getByLabelText('Setup name') as HTMLInputElement).value).toContain('SPY, Buy');
   });
@@ -100,7 +101,7 @@ describe('opening a setup', () => {
     fireEvent.click(await within(sideList()).findByRole('button', { name: new RegExp(`^${EXAMPLE_NO_REENTRY}`) }));
 
     await screen.findByRole('article', { name: 'Leg 2' });
-    expect((screen.getByRole('switch', { name: 'No re-entry after' }) as HTMLInputElement).checked).toBe(false);
+    expect((ruleSwitch('No re-entry after') as HTMLInputElement).checked).toBe(false);
     for (const leg of [1, 2]) {
       expect((screen.getByRole('switch', { name: `Leg ${leg} re-entry on SL` }) as HTMLInputElement).checked).toBe(false);
       expect((screen.getByRole('switch', { name: `Leg ${leg} stop loss` }) as HTMLInputElement).checked).toBe(true);

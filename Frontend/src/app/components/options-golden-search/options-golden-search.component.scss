@@ -110,3 +110,6 @@ a { color: var(--accent-text); }
 .risk-map-scale, .risk-map-axis { font-size: var(--fs-xs); font-variant-numeric: tabular-nums; color: var(--text-secondary); }
 .risk-map-axis { display: flex; justify-content: space-between; gap: var(--space-3); margin: var(--space-2) 0 var(--space-4); }
 .selected-reading { padding: var(--space-3); background: var(--bg-sunken); border-left: 3px solid var(--accent); }
+
+.search-layout { grid-template-columns: minmax(0, 1fr); }
+.search-summary { position: static; }

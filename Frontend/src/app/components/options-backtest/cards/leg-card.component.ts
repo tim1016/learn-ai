@@ -32,6 +32,7 @@ const CONTRACT_FIELDS: readonly LegField[] = ['leg', 'contracts', 'expiry', 'str
   styleUrls: ['../options-backtest-card.scss', './leg-card.component.scss'],
 })
 export class LegCardComponent {
+  readonly compact = input(false);
   readonly legForm = input.required<FieldTree<LegDraft, number>>();
   /** Zero-based; the card says "Leg 1" for 0. */
   readonly position = input.required<number>();

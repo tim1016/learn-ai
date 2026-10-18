@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, injec
 import { form, FormField } from '@angular/forms/signals';
 import { Router, RouterLink } from '@angular/router';
 
+import { OptionsSearchPositionComponent } from './options-search-position.component';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
 import { OptionsSearchTimingComponent } from './options-search-timing.component';
 import { AssetIdentityComponent } from '../../shared/asset-identity';
@@ -20,7 +21,7 @@ const STEPS = ['Research', 'Compare and final test', 'Approval'];
 
 @Component({
   selector: 'app-options-golden-search-page',
-  imports: [TimestampDisplayComponent, OptionsSearchTimingComponent, AssetIdentityComponent, FormField, PageHeaderComponent, ReceiptLabelPipe, RouterLink, OptionsSearchStudyComponent, OptionsSearchKnobsComponent, OptionsSearchRulesComponent],
+  imports: [OptionsSearchPositionComponent, TimestampDisplayComponent, OptionsSearchTimingComponent, AssetIdentityComponent, FormField, PageHeaderComponent, ReceiptLabelPipe, RouterLink, OptionsSearchStudyComponent, OptionsSearchKnobsComponent, OptionsSearchRulesComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './options-golden-search-page.component.html',
   styleUrl: './options-golden-search.component.scss',
@@ -37,6 +38,7 @@ export class OptionsGoldenSearchPageComponent {
   protected readonly step = signal(0);
   protected readonly selection = signal({ name: '' });
   protected readonly fields = form(this.selection);
+  protected readonly positionDirty = signal(false);
   protected readonly declarations = signal<SearchDeclarations | null>(null);
   protected readonly study = signal<OptionsStudy | null>(null);
   protected readonly error = signal<string | null>(null);
@@ -59,7 +61,7 @@ export class OptionsGoldenSearchPageComponent {
     const declarations = this.declarations();
     const rules = this.rules();
     const range = rangeInstants(this.range());
-    if (declarations === null || rules === null || range === null || this.timing() === null || this.knobs() === null || ((this.knobs()?.length ?? 0) === 0 && this.timing()?.length === 0)) return null;
+    if (this.positionDirty() || declarations === null || rules === null || range === null || this.timing() === null || this.knobs() === null || ((this.knobs()?.length ?? 0) === 0 && this.timing()?.length === 0)) return null;
     return { setup_name: declarations.setup_name, expected_setup_hash: declarations.setup_hash, ...(this.parent_study_id() ? { parent_study_id: this.parent_study_id() } : {}), knobs: [...(this.timing() ?? []), ...(this.knobs() ?? [])], method: rules.method, policy: rules.policy, history: { ...range, train_months: rules.train_months, test_months: rules.test_months, final_months: rules.final_months }, budget: rules.budget, finalist_count: rules.finalist_count, stress: rules.stress, zoom: rules.zoom, pair_audits: rules.pair_audits };
   });
   protected readonly preflight = computed(() => this.checked()?.stamp === JSON.stringify(this.request()) ? this.checked()?.value ?? null : null);
@@ -116,6 +118,16 @@ export class OptionsGoldenSearchPageComponent {
     } finally {
       if (generation === this.generation) this.loading.set(false);
     }
+  }
+
+  protected positionSaved(declarations: SearchDeclarations): void {
+    this.declarations.set(declarations);
+    this.selection.set({ name: declarations.setup_name });
+    this.positionDirty.set(false);
+    this.checked.set(null);
+    this.knobs.set([]);
+    this.timing.set([]);
+    this.library.reload();
   }
 
   protected async checkPlan(): Promise<void> {

@@ -1,3 +1,5 @@
+import { PositionPreviewService } from '../position/position-preview.service';
+import { quietPositionPreview } from '../position/testing';
 import { render } from '@testing-library/angular';
 import { screen } from '@testing-library/angular';
 import type { Mock, vi as Vi } from 'vitest';
@@ -143,6 +145,7 @@ export async function renderPage(service: FakeService, download?: FakeDownload, 
   const view = await render(OptionsBacktestPageComponent, {
     inputs: { describeDebounceMs: 0, setup_name: options.setupName },
     providers: [
+      { provide: PositionPreviewService, useValue: quietPositionPreview },
       ...fakePickerWorld().providers,
       ...(options.polling === true ? [] : [{ provide: RUN_POLL_MS, useValue: 0 }]),
       { provide: OptionsBacktestService, useValue: service },

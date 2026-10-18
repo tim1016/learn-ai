@@ -1,0 +1,17 @@
+@if (plot(); as chart) {
+  <p class="axis-title">Profit / loss at expiry (USD)</p>
+  <div class="graph">
+    <div class="scale"><span>{{ chart.high | authoredUsd }}</span><span>{{ chart.low | authoredUsd }}</span></div>
+    <svg viewBox="70 0 920 165" preserveAspectRatio="none" role="img" aria-label="Combined position and individual legs at expiry">
+      <line x1="80" x2="980" [attr.y1]="chart.zero" [attr.y2]="chart.zero" class="zero" />
+      @for (curve of chart.curves; track curve.leg_id; let index = $index) {
+        <polyline [attr.points]="curve.points" [class.combined]="curve.leg_id === null" [class.individual]="curve.leg_id !== null" [class.alternate]="index % 2 === 0" />
+      }
+      <line [attr.x1]="chart.selectedX" [attr.x2]="chart.selectedX" y1="10" y2="150" class="inspection" />
+    </svg>
+  </div>
+  <div class="price-axis"><span>{{ chart.first | authoredUsd }}</span><span>Underlying price at expiry (USD)</span><span>{{ chart.last | authoredUsd }}</span></div>
+  <div class="legend"><span class="combined-key">Combined position</span><button type="button" (click)="showLegs.update(toggle)">{{ showLegs() ? 'Hide' : 'Show' }} individual legs</button></div>
+  <label class="inspect">Inspect underlying price<input type="range" min="0" [max]="preview().prices_usd.length - 1" [value]="selected()" (input)="inspect($event)" /></label>
+  <p class="readout" aria-live="polite">At {{ inspected().price | authoredUsd }} → combined expiry P&amp;L {{ inspected().pnl | authoredUsd }}</p>
+}

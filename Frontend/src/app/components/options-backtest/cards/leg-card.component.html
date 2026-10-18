@@ -8,10 +8,10 @@
     <button pButton type="button" severity="secondary" [text]="true" size="small" [disabled]="!canCopy()" [attr.aria-label]="'Copy ' + name()" (click)="copied.emit()"><i class="pi pi-copy" aria-hidden="true"></i></button>
     <button #deleteButton pButton type="button" severity="danger" [text]="true" size="small" [attr.aria-label]="'Delete ' + name()" (click)="removed.emit()"><i class="pi pi-trash" aria-hidden="true"></i></button>
   </header>
-  <app-options-backtest-leg-contract [legForm]="legForm()" [name]="name()" [underlying]="underlying()" [limits]="limits()" />
+  <app-options-backtest-leg-contract [compact]="compact()" [legForm]="legForm()" [name]="name()" [underlying]="underlying()" [limits]="limits()" />
   @if (contractProblem(); as message) { <p class="problem" role="alert" [id]="problemId('contract')">{{ message }}</p> }
 
-  <h4 class="rules-title">Trade rules</h4>
+  <details class="trade-rules" [open]="!compact()"><summary class="rules-title">Trade rules</summary>
   <div class="rule">
     <app-options-backtest-switch [formField]="legForm().stopLossOn" label="Stop loss" [accessibleName]="name() + ' stop loss'" />
     @if (leg().stopLossOn) {
@@ -48,4 +48,5 @@
     }
     @if (reentryProblem(); as message) { <p class="problem" role="alert" [id]="problemId('reentry')">{{ message }}</p> }
   </div>
+  </details>
 </article>
