@@ -146,6 +146,21 @@ export class OptionsBotDeployComponent {
   });
   protected readonly mayReview = computed(() => this.request() !== null && !this.busy() && !this.unknown()
     && this.receipt() === null && !this.laneReviewRequired() && laneFenceIsEnforceable(this.fence()));
+  protected readonly reviewHint = computed(() => {
+    const fields = this.fields();
+    const golden = this.golden();
+    if (golden === null) return 'Choose an approved golden setup before reviewing.';
+    if (golden.status !== 'ready') return golden.status_explanation;
+    if (!this.modes().some(mode => mode.mode === fields.mode && mode.availability === 'available')) return 'Choose an available execution mode.';
+    if (!orderTermsSet(this.terms(), this.orderDefaults())) return 'Complete the option order terms before reviewing.';
+    if (fields.exitAllowanceBps === null || fields.bandMultiple === null || fields.spreadCapBps === null) {
+      return 'Set exit allowance, band multiple and spread cap before reviewing.';
+    }
+    if (this.exitTermErrors().length) return 'Correct the highlighted exit settings before reviewing.';
+    if (this.deployEnd() === null) return 'Set a complete deployment end, or choose no end.';
+    if (this.ticket.amount().invalid()) return 'Enter a positive dollar budget with at most two decimal places.';
+    return null;
+  });
   protected readonly mayDeploy = computed(() => {
     const reviewed = this.currentReview();
     if (!this.mayReview() || !reviewed?.review.allowed || !reviewed.review.budget.review_token) return false;

@@ -344,6 +344,7 @@ export type CandidateDetail = Omit<Schemas['GoldenSearchCandidateDetail'], 'poin
  * `unverifiable` means its status could not be read.
  */
 export type QualificationDeployOffer = Omit<Schemas['GoldenQualificationDeployOffer'], 'parameters'> & { parameters: Point };
+export type GoldenQualificationSummary = Schemas['GoldenQualificationSummary'];
 
 /** Statuses whose stage run still owns (or is waiting for) a worker. */
 export const LIVE_STATUSES: readonly PresentedStatus[] = ['queued', 'running'];

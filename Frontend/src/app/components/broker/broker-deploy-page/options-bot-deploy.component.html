@@ -59,6 +59,7 @@
         <input id="options-bot-budget" type="text" inputmode="decimal" [formField]="ticket.amount" />
         <p class="note">Starts from the tested capital. A different budget can change which entries can be funded.</p>
         <button type="button" [disabled]="!mayReview()" (click)="review()">Review setup and budget</button>
+        @if (reviewHint(); as hint) { <p class="note">{{ hint }}</p> }
         @if (currentReview(); as reviewed) {
           <app-bot-end-summary [end]="reviewed.end" detailed />
           <p>{{ reviewed.review.explanation }}</p><p>{{ reviewed.review.budget.detail }}</p>

@@ -1,0 +1,35 @@
+<section class="qualified-configuration">
+  <label for="saved-signal-configuration">Saved signal configuration</label>
+  <select id="saved-signal-configuration" [value]="selectedId()" [disabled]="locked() || rechecking() || versions.isLoading()" (change)="select($event.target)">
+    <option value="">Choose a saved golden configuration</option>
+    @for (choice of choices(); track choice.id) {
+      <option [value]="choice.id">{{ choice.label }} · {{ choice.symbol }} · run {{ choice.golden_run_id }}{{ choice.is_default ? ' · Current default' : '' }} · {{ choice.status }}</option>
+    }
+  </select>
+  @if (versions.isLoading()) { <p>Reading saved configurations…</p> }
+  @if (loadProblem(); as why) {
+    <p role="alert">{{ why }}</p>
+    <button type="button" (click)="versions.reload()">Read saved configurations again</button>
+  } @else if (versions.hasValue() && choices().length === 0) {
+    <p>No Golden Search configurations have been approved yet. The strategy's qualified configuration is available below.</p>
+  }
+  @if (version(); as chosen) {
+    <h3><app-asset-identity [symbol]="chosen.symbol" size="xs" /> {{ chosen.label }}</h3>
+    <p>{{ chosen.status_explanation }}</p>
+    <p>{{ chosen.note }}</p>
+    <p>Approved <app-timestamp-display [value]="chosen.created_at_ms" /></p>
+    <dl>
+      @for (parameter of parameters(); track parameter.label) {
+        <div><dt>{{ parameter.label }}</dt><dd>{{ parameter.value }}</dd></div>
+      }
+    </dl>
+    @if (!offered()) { <p>This strategy is not offered on this account.</p> }
+    @if (chosen.status === 'stale') {
+      <button type="button" [disabled]="locked() || rechecking()" (click)="recheck()">Revalidate saved configuration</button>
+      <p>Replays its saved evidence against the current program. The recorded results must match before it can be used.</p>
+    }
+    <button type="button" [disabled]="locked() || rechecking() || versions.isLoading() || !offered() || chosen.status !== 'ready'" (click)="apply()">Use selected golden configuration</button>
+  }
+  @if (rechecking()) { <p role="status">Revalidating saved evidence…</p> }
+  @if (problem(); as why) { <p role="alert">{{ why }}</p> }
+</section>

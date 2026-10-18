@@ -13,6 +13,7 @@ import type {
   DefaultsLayout,
   GoldenSearchDefaults,
   GoldenSearchPreflight,
+  GoldenQualificationSummary,
   PlanCharts,
   ProtocolRequest,
   QualificationDeployOffer,
@@ -195,6 +196,16 @@ export class GoldenSearchService {
   /** What Deploy may apply for an approved qualification, with its current status. */
   async deployOffer(qualificationId: string): Promise<QualificationDeployOffer> {
     return firstValueFrom(this.http.get<QualificationDeployOffer>(`${this.qualificationsBase}/${encodeURIComponent(qualificationId)}/deploy-offer`));
+  }
+
+  listQualifications(): Promise<GoldenQualificationSummary[]> {
+    return firstValueFrom(this.http.get<GoldenQualificationSummary[]>(this.qualificationsBase, { params: { limit: 500 } }));
+  }
+
+  reproveQualification(id: string, idempotencyKey: string): Promise<GoldenQualificationSummary> {
+    return firstValueFrom(this.http.post<GoldenQualificationSummary>(`${this.qualificationsBase}/${encodeURIComponent(id)}/reprove`, {
+      idempotency_key: idempotencyKey,
+    }));
   }
 
   private async dispatch(study: StudyDetail): Promise<CommandOutcome> {

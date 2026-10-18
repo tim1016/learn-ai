@@ -120,6 +120,7 @@ import {
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-picker.component';
 import { mediaQuerySignal } from '../../../shared/media-query';
+import { DeployGoldenConfigurationsComponent } from './deploy-golden-configurations.component';
 
 import { sameAlpacaAccount } from '../../../services/alpaca-account-identity';
 import { GoldenSearchService } from '../../golden-search/golden-search.service';
@@ -400,6 +401,7 @@ type EndCheckAnswer =
     DeployTradedAcknowledgementComponent,
     DeployTradedAssetComponent,
     DeployExecutionSectionComponent,
+    DeployGoldenConfigurationsComponent,
     DeployLaunchReceiptComponent,
     DeployMoneyStepComponent,
     DeployOptionOrderTermsComponent,
@@ -731,7 +733,7 @@ export class AlpacaDeployWorkflowComponent {
   /** A Golden review authorizes one exact broker configuration, not a strategy family. */
   protected readonly goldenScopeMatchesTicket = computed(() => {
     const strategy = this.selectedStrategy();
-    if (strategy === null || !strategy.golden_validation_scope) return true;
+    if (strategy === null || !strategy.golden_validation_scope || this.goldenStillApplied()) return true;
     const ticket = this.ticket();
     return ticket.symbol.trim().toUpperCase() === strategy.validation_case_symbol
       && sameParameterValues(ticket.parameters, strategy.validation_case_parameters);
@@ -1150,6 +1152,7 @@ export class AlpacaDeployWorkflowComponent {
 
   /** What the last handoff did; kept after its parameter is cleared. */
   protected readonly goldenHandoff = signal<GoldenHandoff | null>(null);
+  protected readonly showGoldenConfigurations = signal(false);
 
   /** The applied golden settings are still exactly what the form holds, its strategy among them. */
   protected readonly goldenStillApplied = computed(() => {
@@ -1877,6 +1880,16 @@ export class AlpacaDeployWorkflowComponent {
 
   protected dismissGolden(): void {
     this.goldenHandoff.set(null);
+  }
+
+  protected async selectGoldenQualification(id: string): Promise<void> {
+    if (this.submitting() || this.outcomeUnknown() || this.receipt() !== null) return;
+    await this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { [GOLDEN_QUALIFICATION_QUERY_PARAM]: id, [DEPLOY_AGAIN_QUERY_PARAM]: null },
+      queryParamsHandling: 'merge',
+      replaceUrl: true,
+    });
   }
 
   /** A changed account abandons the attempt and refreshes the page context. */

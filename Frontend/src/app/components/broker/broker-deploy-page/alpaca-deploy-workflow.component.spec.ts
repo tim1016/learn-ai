@@ -1692,6 +1692,34 @@ describe('AlpacaDeployWorkflowComponent — Golden Search handoff (#2696)', () =
     return openAt(service, { [GOLDEN_QUALIFICATION_QUERY_PARAM]: id }, [{ provide: GoldenSearchService, useValue: { deployOffer } }]);
   }
 
+  it('selects a saved non-default golden version and submits its exact settings in a broker world', async () => {
+    const offered = goldenDeployOffer();
+    const service = mockService({ ...GOLDEN_VIEW, strategies: [VALIDATION_STRATEGY, {
+      ...EMA_KNOBS_STRATEGY, golden_validation_scope: true,
+      validation_case_symbol: offered.symbol, validation_case_parameters: { gap: 0.2 },
+    }] });
+    const deployOffer = vi.fn().mockResolvedValue(offered);
+    await openAt(service, {}, [{ provide: GoldenSearchService, useValue: {
+      deployOffer,
+      listQualifications: async () => [{ id: offered.qualification_id, program_key: offered.program_key,
+        symbol: offered.symbol, parameters: offered.parameters, status: 'ready', status_explanation: offered.explanation,
+        is_default: false, note: 'Earlier approved settings', golden_run_id: 7, created_at_ms: 1759300000000, research: {} }],
+    } }]);
+    await formShown();
+    await openStep('What');
+    fireEvent.click(screen.getByRole('button', { name: 'Saved golden configurations' }));
+    const choices = await screen.findByLabelText('Saved signal configuration');
+    await screen.findByRole('option', { name: /run 7/ });
+    fireEvent.change(choices, { target: { value: offered.qualification_id } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Use selected golden configuration' }));
+    await screen.findByRole('status', { name: 'Golden configuration' });
+    await chooseMoney();
+    await vi.waitFor(() => expect(deployButton().disabled).toBe(false));
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
+    expect(submittedBody(service)).toMatchObject({ execution_mode: 'paper', symbol: offered.symbol, parameters: offered.parameters });
+  });
+
   it('applies a ready qualification’s strategy, symbol and exact settings together, says so, and clears the link', async () => {
     const service = mockService(GOLDEN_VIEW);
     const offer = pendingOffer();

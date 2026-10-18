@@ -94,6 +94,11 @@
             [strategyKey]="ticket().strategyKey"
             (strategyKeyChange)="setStrategyKey($event)"
           />
+          <button type="button" (click)="showGoldenConfigurations.set(!showGoldenConfigurations())">Saved golden configurations</button>
+          @if (showGoldenConfigurations()) {
+            <app-deploy-golden-configurations [strategies]="view.strategies" [locked]="submitting() || outcomeUnknown()"
+              (selected)="selectGoldenQualification($event)" (refreshed)="reload()" />
+          }
           @if (selectedStrategy(); as strategy) {
             <app-deploy-paper-access
               [target]="deployTarget(view.account_id)"

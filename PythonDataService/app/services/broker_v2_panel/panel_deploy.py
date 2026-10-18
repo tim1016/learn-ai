@@ -263,6 +263,8 @@ async def get_alpaca_paper_deploy_view(
     account_id: str,
     symbol: str | None = None,
     exit_terms: ExitTermsInput | None = None,
+    *,
+    request: AlpacaPaperDeployRequest | None = None,
 ) -> AlpacaPaperDeployView:
     """Author the closed paper-deployment form and its current launch verdict.
 
@@ -312,6 +314,9 @@ async def get_alpaca_paper_deploy_view(
         golden_validation_unread = False
     except GoldenValidationEvidenceUnreadable:
         current_scopes, golden_validation_unread = {}, True
+    ordered_scopes = _prefer_default_scopes(current_scopes, golden_defaults)
+    if request is not None:
+        ordered_scopes = _prefer_requested_scope(ordered_scopes, request)
     return build_alpaca_paper_deploy_view(
         account,
         clerk,
@@ -319,10 +324,28 @@ async def get_alpaca_paper_deploy_view(
         default_exit_terms=exit_terms or (None if context is None else context.default_exit_terms),
         symbol=symbol,
         custody_world=custody_world,
-        golden_validation_scopes=_prefer_default_scopes(current_scopes, golden_defaults),
+        golden_validation_scopes=ordered_scopes,
         golden_defaults=golden_defaults,
         golden_validation_unread=golden_validation_unread,
     )
+
+
+def _prefer_requested_scope(
+    scopes: dict[str, tuple[GoldenValidationScope, ...]],
+    request: AlpacaPaperDeployRequest,
+) -> dict[str, tuple[GoldenValidationScope, ...]]:
+    """Review the exact accepted tuple selected for Deploy; a default revokes none (ADR 0074)."""
+    try:
+        resolved = resolve_deploy_strategy_params(request.strategy_key, request.symbol, request.parameters)
+    except ValueError:
+        # The ordinary preflight authors the parameter refusal.
+        return scopes
+    expected = {**resolved.effective, "symbol": request.symbol}
+    candidates = scopes.get(request.strategy_key, ())
+    matched = tuple(scope for scope in candidates if scope.symbol == request.symbol and scope.parameters == expected)
+    if not matched:
+        return scopes
+    return {**scopes, request.strategy_key: matched + tuple(scope for scope in candidates if scope not in matched)}
 
 
 async def preview_alpaca_deployment_budget(
@@ -946,7 +969,7 @@ async def _deploy_preflight(
     accepts, and a traded asset Alpaca cannot trade is refused at the first
     review rather than at the final click.
     """
-    view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol, request.exit_terms)
+    view = await get_alpaca_paper_deploy_view(broker, account_id, request.symbol, request.exit_terms, request=request)
     resolved = _require_alpaca_deploy_request(view, request)
     await _require_tradable_traded_asset(broker, request)
     return view, resolved
