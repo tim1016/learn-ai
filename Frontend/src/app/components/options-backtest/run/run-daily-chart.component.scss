@@ -26,5 +26,5 @@ p { margin: var(--space-1) 0 0; color: var(--text-secondary); font-size: var(--f
 .bar:hover span { filter: brightness(1.4); }
 .dates { display: flex; justify-content: space-between; color: var(--text-secondary); font-size: var(--fs-xs); margin-top: var(--space-1); }
 
-.equity-frame { display: grid; grid-template-columns: minmax(5rem, auto) minmax(0, 1fr); gap: var(--space-3); }
-.equity-scale { display: flex; flex-direction: column; justify-content: space-between; padding-block: 26px 12px; font-size: var(--fs-xs); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.equity-frame { display: grid; grid-template-columns: minmax(5rem, 7rem) minmax(0, 1fr); gap: var(--space-3); }
+.equity-scale { display: flex; flex-direction: column; justify-content: space-between; padding-block: 26px 12px; font-size: var(--fs-xs); color: var(--text-secondary); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
