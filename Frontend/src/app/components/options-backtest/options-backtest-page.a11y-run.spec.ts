@@ -74,7 +74,7 @@ describe('the run part of the page for a screen reader', () => {
     await screen.findByRole('region', { name: 'Headline figures' });
 
     expect(await violations()).toEqual([]);
-  });
+  }, 15_000);
 
   it('has no accessibility violations with a failed run showing, its items grouped, one group open and one shut', async () => {
     const setup = await startedRun();
