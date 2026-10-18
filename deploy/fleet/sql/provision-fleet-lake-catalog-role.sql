@@ -84,6 +84,8 @@ REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM fleet_lake_catalog;
 --      app/research/golden_search/qualifications.py's
 --      load_qualification_evidence), which read the qualifications, their
 --      re-proof/revocation events and the default pointers.
+--    * Options Golden setups (ADR 0079): admission and runtime read the
+--      immutable approved version and its re-proof/revocation events.
 --    Adding or removing a table is a deliberate edit to both this list and
 --    the contract that pins it (test_fleet_lake_catalog_role_grants.py).
 GRANT SELECT ON TABLE
@@ -94,5 +96,7 @@ GRANT SELECT ON TABLE
     public.research_golden_qualifications,
     public.research_golden_qualification_events,
     public.research_golden_defaults,
+    public.research_golden_option_setups,
+    public.research_golden_option_setup_events,
     public.research_schema_migrations
 TO fleet_lake_catalog;
