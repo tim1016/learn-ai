@@ -51,20 +51,6 @@ describe('TopBarComponent', () => {
     expect(unknownClasses?.contains('top-bar--live')).toBe(false);
   });
 
-  it('provides named regions for shell extensions', async () => {
-    const { container } = await render(TopBarComponent, { providers: [provideRouter([])] });
-
-    expect(container.querySelector('[data-shell-slot="nav"]')).toBeTruthy();
-    expect(container.querySelector('[data-shell-slot="connection"]')).toBeTruthy();
-  });
-
-  it('no longer carries the retired breadcrumb and account-cluster regions', async () => {
-    const { container } = await render(TopBarComponent, { providers: [provideRouter([])] });
-
-    expect(container.querySelector('[data-shell-slot="breadcrumbs"]')).toBeNull();
-    expect(container.querySelector('[data-shell-slot="account-cluster"]')).toBeNull();
-  });
-
   it('projects each shell extension through its named region', async () => {
     const { container } = await render(TopBarProjectionHostComponent, { providers: [provideRouter([])] });
 

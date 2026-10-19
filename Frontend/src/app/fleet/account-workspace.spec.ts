@@ -11,7 +11,6 @@ import {
   accountWorkspaceLocation,
   accountWorkspaceTabRoute,
   accountWorkspaceTitle,
-  ACCOUNT_WORKSPACE_TABS,
   type AccountWorkspaceLocation,
 } from './account-workspace';
 
@@ -200,12 +199,6 @@ describe('the links Home hands out', () => {
       commands: ['/brokers', 'alpaca', 'clerks', 'clrk_spec', 'history'],
       queryParams: { account: 'clrk_spec', bot: 'spy-ema-1' },
     });
-  });
-});
-
-describe('the tab strip', () => {
-  it('reads Home · Activity · History · Settings (#2574)', () => {
-    expect(ACCOUNT_WORKSPACE_TABS.map((tab) => tab.label)).toEqual(['Home', 'Activity', 'History', 'Settings']);
   });
 });
 

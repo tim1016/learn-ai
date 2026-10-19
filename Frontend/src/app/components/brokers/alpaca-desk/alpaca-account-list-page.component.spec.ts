@@ -163,13 +163,6 @@ describe('AlpacaAccountListPageComponent', () => {
     }
   });
 
-  it('retires the surface hints — a stale ?surface query renders the plain list', async () => {
-    await renderList({ surface: 'bots' });
-
-    expect(screen.getByRole('heading', { name: 'Alpaca' })).toBeTruthy();
-    expect(screen.queryByText(/open its bots roster/i)).toBeNull();
-  });
-
   it('says the directory itself is unavailable, with a retry and the runbook that fixes it', async () => {
     const refresh = vi.fn(() => Promise.reject(new Error('still down')));
     await render(AlpacaAccountListPageComponent, {

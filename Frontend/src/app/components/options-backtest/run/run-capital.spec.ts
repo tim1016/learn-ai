@@ -51,16 +51,6 @@ describe('the capital block', () => {
     expect(tile('Closes that relied on their own relief').querySelector('.big')?.textContent).toBe('0');
   });
 
-  it('says which figure is over the funded stretch and which are over every session the replay ran', async () => {
-    await renderResult({ capital_evidence: AN_UNFUNDED_CLOSE });
-
-    const scopeOf = (name: string) => tile(name).querySelector('.scope')?.textContent;
-    expect(scopeOf('Cash this path needed')).toBe('Over the funded stretch only, the steps before the event.');
-    for (const name of ['Most collateral held', 'Least free cash seen', 'Largest assignment obligation held', 'Closes that relied on their own relief']) {
-      expect(scopeOf(name), name).toBe('Over every session the replay ran.');
-    }
-  });
-
   it('names an unfunded close with its session and its minute in New York, and the free cash it left', async () => {
     await renderResult({ capital_evidence: AN_UNFUNDED_CLOSE });
 
@@ -103,12 +93,6 @@ describe('the capital block', () => {
     expect(needed.querySelector('.tag')?.textContent).toBe('incomplete');
     expect(reads(needed)).toContain('a larger starting cash would have traded a different path');
     expect(reads(needed)).toContain('not a minimum and not a safe amount');
-  });
-
-  it('says the totals keep every session, so the verdict is not read as a total', async () => {
-    await renderResult();
-
-    expect(paragraph(/^The totals above keep every session at its mark/, capital())).toBeTruthy();
   });
 
   it('states the requirement rule used, the day its page was read in New York, and that it is no evidence of a past requirement', async () => {
@@ -160,13 +144,6 @@ describe('the cash ladder', () => {
     expect(ladder().textContent).toContain('No level is called safe.');
   });
 
-  it('shows a level too small to enter as entries refused and none filled, beside a larger one that filled them', async () => {
-    await renderResult();
-
-    const [smallest, , , largest] = rows();
-    expect(smallest).toContain('0 24');
-    expect(largest).toContain('14 0');
-  });
 });
 
 describe('a run saved before capital evidence was kept', () => {

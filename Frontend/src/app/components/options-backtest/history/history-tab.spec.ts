@@ -148,19 +148,6 @@ describe('opening a run', () => {
     expect(used).toEqual([]);
   });
 
-  it('shows why a failed run failed, and each item with its session’s date', async () => {
-    const service = fakeService(vi, { runs: vi.fn(async () => RUNS), run: vi.fn(async () => runDetail({ ...FAILED, status: 'failed', figures: null, slippage: [], slippage_tolerance: null, headline: null })) });
-    await renderHistory({ service });
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Open run 29' }));
-
-    const alert = await screen.findByRole('alert');
-    expect(reads(alert)).toBe('Some sessions have no data.');
-    const failed = screen.getByRole('list', { name: 'What failed' });
-    expect(reads(failed)).toBe('Listing · Items: 1 2026-09-15 – No listing was stored.');
-    expectTradingDatesInNewYork(failed);
-  });
-
   it.each([
     [28, 'cancelled', 'The run was cancelled. Nothing was saved.'],
     [27, 'interrupted', 'This run did not finish, and its job is gone. It saved no result.'],

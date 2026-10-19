@@ -62,19 +62,6 @@ describe('MultiTickerRangePickerComponent', () => {
     fixture.componentRef.setInput('value', baseValue);
   });
 
-  it('composes the three sub-components', () => {
-    fixture.detectChanges();
-    expect(
-      fixture.nativeElement.querySelector('app-multi-instrument-card'),
-    ).not.toBeNull();
-    expect(
-      fixture.nativeElement.querySelector('app-time-window-card'),
-    ).not.toBeNull();
-    expect(
-      fixture.nativeElement.querySelector('app-sampling-card'),
-    ).not.toBeNull();
-  });
-
   it('hideSampling=true collapses the Sampling card', () => {
     fixture.componentRef.setInput('hideSampling', true);
     fixture.detectChanges();

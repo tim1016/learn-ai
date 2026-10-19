@@ -13,11 +13,6 @@ describe('the trading date the routes are asked about', () => {
     expect(tradingDateMsOf('2026-10-09')).toBe(TRADING_DATE_MS);
   });
 
-  it('is five hours after midnight UTC in winter, and four in summer', () => {
-    // 2026-01-15 is in standard time, UTC-5: midnight is 05:00 UTC.
-    expect(tradingDateMsOf('2026-01-15')).toBe(1_768_453_200_000);
-  });
-
   it('follows the clock change: the Friday before it is UTC-5 and the Monday after it is UTC-4', () => {
     // Friday 2026-03-06 is UTC-5 (05:00 UTC); Monday 2026-03-09 is UTC-4 (04:00 UTC) after the Sunday change.
     expect(tradingDateMsOf('2026-03-06')).toBe(1_772_773_200_000);

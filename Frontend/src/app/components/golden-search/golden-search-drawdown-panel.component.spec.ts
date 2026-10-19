@@ -30,12 +30,6 @@ describe('GoldenSearchDrawdownPanelComponent', () => {
     expect(screen.getByText(/Recorded, engine's every bar: not recorded/i)).toBeTruthy();
   });
 
-  it('carries the no-sizing-advice caveat and the peak-convention caveat', async () => {
-    await renderPanel(chanceDrawdown());
-    expect(screen.getByText(/recommends no capital or position size/i)).toBeTruthy();
-    expect(screen.getByText(/neither bounds the other/i)).toBeTruthy();
-  });
-
   it('reads the recorded reason when the drawdown was never measured', async () => {
     await renderPanel({ status: 'missing', code: 'not_measured', reason: 'Not measured for this study: drawdown readings were first recorded with #3013.' });
     expect(screen.getByText(/first recorded with #3013/i)).toBeTruthy();

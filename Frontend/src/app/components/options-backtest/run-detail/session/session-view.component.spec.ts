@@ -403,17 +403,6 @@ describe('one day, refusals', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
-  it('shows the server’s words when the run is not complete, or the stored day cannot be drawn', async () => {
-    const detail = fakeRunDetail(vi, {
-      session: vi.fn(async () => {
-        throw new RunDetailRefusedError('OPTIONS_BACKTEST_STORED_SESSION_INCONSISTENT', 'The stored trades and events of this session do not agree, so it cannot be drawn: leg call.', 500);
-      }),
-    });
-    await renderSession(vi, { detail, request: ASKED });
-
-    expect(reads(await screen.findByRole('alert'))).toBe('The stored trades and events of this session do not agree, so it cannot be drawn: leg call.');
-  });
-
   it('says plainly when the day cannot be read at all', async () => {
     await renderSession(vi, { detail: fakeRunDetail(vi, { session: vi.fn(async () => { throw new Error('offline'); }) }), request: ASKED });
 

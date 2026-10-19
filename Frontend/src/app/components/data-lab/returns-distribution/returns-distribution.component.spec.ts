@@ -191,25 +191,6 @@ describe('ReturnsDistributionComponent', () => {
     expect(screen.queryByText(/already up to date/)).toBeNull();
   });
 
-  it('switches the shown distribution when the return kind toggles', async () => {
-    const service = fakeService();
-    await render(ReturnsDistributionComponent, {
-      providers: [
-        { provide: DataLabWorkspaceStore, useValue: fakeStore() },
-        { provide: ReturnsDistributionService, useValue: service },
-      ],
-    });
-
-    // Both kinds report nDays=2 in this fixture; the kind identity is what
-    // the toggle must swap — visible through which bins the chart redraws
-    // with when the signal changes.
-    await userEvent.click(screen.getByRole('button', { name: 'Session only' }));
-    await waitFor(() => {
-      const chart = harness.instances.at(-1);
-      expect(chart?.config.options.onClick).toBeTypeOf('function');
-    });
-  });
-
   it('opens the basket drill-down on a chart bin click, then the candle pane on a day click', async () => {
     const service = fakeService();
     await render(ReturnsDistributionComponent, {

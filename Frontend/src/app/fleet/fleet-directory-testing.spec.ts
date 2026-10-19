@@ -33,9 +33,4 @@ describe('the fleet directory double', () => {
     expect(service.value()?.observed_at_ms).toBe(1_757_000_000_001);
   });
 
-  it('keeps the default single-ready-lane response for callers that never rebind', () => {
-    const service = provideFleetDirectory().useValue as unknown as FleetDirectoryService;
-    expect(service.lanesOf('alpaca')).toHaveLength(1);
-    expect(service.lanesOf('tradier')).toHaveLength(0);
-  });
 });

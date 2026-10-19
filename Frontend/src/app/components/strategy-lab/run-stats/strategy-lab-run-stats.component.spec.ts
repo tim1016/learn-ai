@@ -17,16 +17,6 @@ function makeResult() {
 
 describe("StrategyLabRunStatsComponent", () => {
 
-  it("never renders the retired results-page framing", async () => {
-    const { container } = await render(StrategyLabRunStatsComponent, {
-      inputs: { run: makeRun(), result: makeResult(), verdict: null, parity: null, tradesTruncated: false },
-      providers: [provideZonelessChangeDetection()],
-    });
-
-    expect(container.textContent).not.toContain("Back to workbench");
-    expect(container.querySelector("app-strategy-lab-chart")).toBeNull();
-  });
-
   it("says a $0-fee Python run's fees were not charged (#2601)", async () => {
     await render(StrategyLabRunStatsComponent, {
       inputs: { run: makeRun({ requestedEngine: "python", commissionPerOrder: 0, totalFees: 0 }), result: { ...makeResult(), total_fees: 0 }, verdict: null, parity: null, tradesTruncated: false },

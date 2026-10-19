@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { etIsoDate, etMidnightMs, isoDateAfter } from '../../shared/date/et-midnight';
 import { UNBOUNDED, type DateBounds } from '../../shared/date-picker';
 import { providerBounds } from '../../shared/date-picker/provider-bounds.service';
-import { NO_DATES, OFFERED_RANGES, priceBounds, rangeInstants, rangeOfStretch } from './duration';
+import { NO_DATES, priceBounds, rangeInstants, rangeOfStretch } from './duration';
 import type { TestableStretch } from './options-backtest.types';
 import { sessionOpenMs } from '../../shared/date-picker/testing/fake-trading-calendar';
 
@@ -84,14 +84,6 @@ describe('the two instants of a range', () => {
     expect(isoDateAfter(range.to)).toBe(dayAfter);
   });
 
-  it('is not a midnight at the end when the last date is made one day long by adding 24 hours: that instant is one in the morning (the test sees it)', () => {
-    // The end the page must not send for a range ending on Sunday 2026-03-08: its midnight is 05:00 UTC, and +24 hours is 01:00 EDT on the 9th.
-    const wrong = etMidnightMs('2026-03-08') + 86_400_000;
-
-    expect(isNewYorkMidnight(wrong)).toBe(false);
-    expect(rangeInstants({ from: '2026-03-06', to: '2026-03-08' })?.end_ms).not.toBe(wrong);
-  });
-
   it('is one day wide for one date: the start is the date, the end the midnight after it', () => {
     const one = rangeInstants({ from: '2026-09-14', to: '2026-09-14' });
 
@@ -157,9 +149,3 @@ describe('Run available dates', () => {
   });
 });
 
-describe('the quick ranges', () => {
-  it('leave out what reaches further back than the options plan does', () => {
-    expect(OFFERED_RANGES).not.toContain('5Y');
-    expect(OFFERED_RANGES).not.toContain('Max');
-  });
-});

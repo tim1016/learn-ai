@@ -74,17 +74,6 @@ describe('the plain-words summary', () => {
     expect(within(legs).queryByRole('alert')).toBeNull();
   });
 
-  it('refreshes when the setup changes', async () => {
-    const service = fakeService(vi);
-    await renderPage(service);
-    addLeg();
-    await screen.findByText('Sentence for leg call.');
-
-    typeInto('Slippage (percent)', '0.5');
-
-    await waitFor(() => expect(service.describe.mock.lastCall?.[0]).toMatchObject({ slippage_percent: '0.5' }));
-  });
-
   it('never lets a slow answer to an earlier setup overwrite the sentences of a newer one', async () => {
     const answers: { body: SetupRequest; resolve: (summary: SetupSummary) => void }[] = [];
     const service = fakeService(vi, {

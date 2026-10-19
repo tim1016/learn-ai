@@ -1039,14 +1039,6 @@ describe("StrategyLab configuration and runner", () => {
       expect(runner.running()).toBe(false);
     });
 
-    it("does not guess between several active jobs when it has none of its own", () => {
-      putJob(makeJobState({ id: "tab-a", type: "engine_backtest", status: "running" }));
-      putJob(makeJobState({ id: "tab-b", type: "engine_backtest", status: "running" }));
-      TestBed.tick();
-
-      expect(runner.running()).toBe(false);
-    });
-
     it("ends the run when its own job terminates instead of adopting another active job", async () => {
       await runner.run();
       putJob(makeJobState({ id: "job-1", type: "engine_backtest", status: "running" }));

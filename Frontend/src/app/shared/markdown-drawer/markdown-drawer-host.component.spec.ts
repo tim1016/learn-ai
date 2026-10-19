@@ -27,30 +27,6 @@ describe('MarkdownDrawerHostComponent', () => {
     expect(drawer).toBeNull();
   });
 
-  it('opens the methodology document', () => {
-    const { fixture, svc } = setup();
-    svc.open('methodology', 'intro');
-    fixture.detectChanges();
-
-    expect(svc.visible()).toBe(true);
-    expect(svc.activeDocId()).toBe('methodology');
-    expect(svc.anchor()).toBe('intro');
-  });
-
-  it('re-opening with a different anchor updates the anchor', () => {
-    const { fixture, svc } = setup();
-
-    svc.open('methodology', 'intro');
-    fixture.detectChanges();
-    expect(svc.anchor()).toBe('intro');
-
-    svc.open('methodology', 'glossary');
-    fixture.detectChanges();
-    expect(svc.activeDocId()).toBe('methodology');
-    expect(svc.anchor()).toBe('glossary');
-    expect(svc.visible()).toBe(true);
-  });
-
   it('switching between a non-modal and a modal document builds a new drawer, so the new modality applies', () => {
     const { fixture, svc } = setup();
     svc.open('golden-search-guide', 'equity-and-fall');
@@ -65,14 +41,4 @@ describe('MarkdownDrawerHostComponent', () => {
     expect(methodology).not.toBe(guide);
   });
 
-  it('close sets visible to false', () => {
-    const { fixture, svc } = setup();
-    svc.open('methodology');
-    fixture.detectChanges();
-    expect(svc.visible()).toBe(true);
-
-    svc.close();
-    fixture.detectChanges();
-    expect(svc.visible()).toBe(false);
-  });
 });

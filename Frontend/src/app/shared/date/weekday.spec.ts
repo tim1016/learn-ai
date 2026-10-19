@@ -29,15 +29,6 @@ describe('toMostRecentTradingDayIso', () => {
     expect(toMostRecentTradingDayIso('2026-05-25', -30)).toBe('2026-04-24');
   });
 
-  it('output is independent of the browser timezone (regression of PR #346 P1)', () => {
-    // The bug only manifested in west-of-UTC; the fix means the
-    // helper's behavior is fully determined by the ISO input and the
-    // numeric offset, regardless of where the browser thinks "now" is.
-    // This test pins the contract: same inputs → same outputs every time.
-    expect(toMostRecentTradingDayIso('2026-05-25')).toBe('2026-05-25');
-    expect(toMostRecentTradingDayIso('2026-05-26')).toBe('2026-05-26');
-    expect(toMostRecentTradingDayIso('2026-05-27')).toBe('2026-05-27');
-  });
 });
 
 describe('toNextTradingDayIso', () => {

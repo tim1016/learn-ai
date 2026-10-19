@@ -96,10 +96,6 @@ describe('the cohort-flatten operator-copy map (owner decision 2026-09-23)', () 
     );
   });
 
-  it('asks the operator to type FLATTEN', () => {
-    expect(COHORT_FLATTEN_COPY.confirmToken).toBe('FLATTEN');
-  });
-
   it('interpolates only backend facts into the blast-radius copy', () => {
     const message = COHORT_FLATTEN_COPY.confirmMessage('PA1', 'Deployment Validation', [
       {

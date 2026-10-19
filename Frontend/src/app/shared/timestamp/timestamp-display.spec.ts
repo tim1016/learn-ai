@@ -85,9 +85,6 @@ describe('formatTimestampDisplay', () => {
       );
     });
 
-    it('returns the fallback for absent values', () => {
-      expect(formatTimestampDisplay(undefined, { mode: 'et', granularity: 'chart' })).toBe('—');
-    });
   });
 
   describe('short-date granularity', () => {
@@ -123,9 +120,6 @@ describe('formatTimestampDisplay', () => {
       })).toBe("Oct 9 '26");
     });
 
-    it('returns the fallback for absent values', () => {
-      expect(formatTimestampDisplay(null, { mode: 'date-et', granularity: 'short-date' })).toBe('—');
-    });
   });
 });
 

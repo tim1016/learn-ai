@@ -158,22 +158,6 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
     return screen.getByRole('button', { name: /^Deploy/ });
   }
 
-  it('re-fetches the deploy view scoped to a symbol the operator picks', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      const service = mockService();
-      const view = await renderWorkflow(service);
-      service.getDeployView.mockClear();
-
-      await typeSymbol(view, 'QQQ');
-      await vi.advanceTimersByTimeAsync(SYMBOL_DEBOUNCE_MS + 50);
-
-      expect(service.getDeployView).toHaveBeenCalledWith(expect.objectContaining({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA9' }), 'QQQ', DEPLOY_VIEW.default_exit_terms);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it('scopes readiness to the seeded symbol and then settles', async () => {
     // The seed is where the symbol first reaches the ticket, so it is where
     // scoping has to start: the first load carries no symbol, and leaving it

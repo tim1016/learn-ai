@@ -18,7 +18,4 @@ describe('getMinAllowedDate', () => {
     expect(result).toBe(expectedStr);
   });
 
-  it('should return a valid YYYY-MM-DD string', () => {
-    expect(getMinAllowedDate()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-  });
 });

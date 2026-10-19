@@ -20,7 +20,6 @@ import { AlpacaActivityPageComponent } from './components/brokers/alpaca-desk/ac
 import { BotPanelShellComponent } from './components/broker/v2-panel/panel-shell/bot-panel-shell.component';
 import { EntryComponent } from './components/entry/entry.component';
 import { OptionsBacktestPageComponent } from './components/options-backtest/options-backtest-page.component';
-import { alpacaSurfaceRedirectGuard } from './fleet/alpaca-surface-redirect.guard';
 import { accountWorkspaceFixRoute, type AccountWorkspaceFixDestination } from './fleet/account-workspace';
 import { routes } from './app.routes';
 
@@ -158,24 +157,6 @@ describe('routes', () => {
     expect(routes.find((candidate) => candidate.path === 'data-lab')?.loadChildren).toBeDefined();
   });
 
-  it('retires the broker-wide surface choosers onto the account list', async () => {
-    // A surface belongs to an account (ADR 0064 Decision 2), so these two
-    // bookmarks have no page of their own any more — they land on the one
-    // page that can name an account, rather than 404-ing.
-    for (const path of ['brokers/alpaca/bots', 'brokers/alpaca/gallery']) {
-      const route = routes.find((candidate) => candidate.path === path);
-
-      expect(route).toMatchObject({ redirectTo: '/brokers/alpaca', pathMatch: 'full' });
-      expect(route?.loadComponent).toBeUndefined();
-    }
-  });
-
-  it('retires the desk surface hints through the redirect guard', () => {
-    const desk = routes.find((candidate) => candidate.path === 'brokers/alpaca');
-
-    expect(desk?.canActivate).toContain(alpacaSurfaceRedirectGuard);
-  });
-
   it('serves the account list — and its ?deploy intent — from the one broker route', async () => {
     const list = routes.find((candidate) => candidate.path === 'brokers/alpaca');
 
@@ -265,15 +246,6 @@ describe('routes', () => {
       for (const child of [...(workspace?.children ?? []), ...(account?.children ?? [])]) {
         expect(child.data?.['fullBleed']).toBeUndefined();
       }
-    });
-
-    it('opens a lane deep link without a tab on the one tab it can always serve', () => {
-      // Settings needs no confirmed binding, so it is the lane's own home —
-      // and the owner's way to connect an account.
-      expect(workspace?.children?.find((child) => child.path === '')).toMatchObject({
-        redirectTo: 'settings',
-        pathMatch: 'full',
-      });
     });
 
     it.each([

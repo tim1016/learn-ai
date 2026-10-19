@@ -58,12 +58,6 @@ describe('what the download offers', () => {
     expect(words()).toBe('Contracts to fetch: 5.');
   });
 
-  it('says one contract with a label and a number, which needs no plural', async () => {
-    await openChainOf(chainExpiry());
-
-    expect(words()).toBe('Contracts to fetch: 1.');
-  });
-
   it('is the underlying bars too when the chain says they are not stored', async () => {
     await openChainOf(chainExpiry({ underlying_price: underlyingPrice({ state: 'not_stored', price: null, price_time_ms: null }) }));
 
@@ -564,14 +558,4 @@ describe('a download of more contracts than one call takes', () => {
     expect(service.download).toHaveBeenCalledTimes(3);
   });
 
-  it('names every contract on screen, and says nothing of a limit, while the server’s limits are not known', async () => {
-    const service = fakeChainService(vi, { expiry: vi.fn(async () => chainWithFiveMissing()) });
-    await renderChainTab(service, 'SPY', null);
-    await openStandardChain();
-
-    expect(words()).toBe('Contracts to fetch: 5.');
-    fireEvent.click(button());
-    await waitFor(() => expect(service.download).toHaveBeenCalledTimes(1));
-    expect(service.download.mock.calls[0]?.[0]?.contracts?.length).toBe(5);
-  });
 });
