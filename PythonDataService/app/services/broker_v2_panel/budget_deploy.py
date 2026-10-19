@@ -64,6 +64,8 @@ from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.broker.alpaca.clerk.sqlite.account_option_requirement import held_signed_contracts
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy
 from app.broker.alpaca.clerk.sqlite.day_pnl import observed_day_pnl
+from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
+from app.broker.alpaca.clerk.sqlite.reads import held_option_contracts
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.risk_admission import RiskReadiness, current_risk_readiness
 from app.broker.alpaca.clerk.sqlite.simulated_account import SimulationEvidenceUnavailable, private_dry_run_cash
@@ -1112,7 +1114,7 @@ def _money_view(
             detail="This account's money does not add up, so the bar is withheld. The fault is logged for repair.",
         )
     open_pnl, open_pnl_detail = _open_pnl(money, observation)
-    detail = "Cash plus shares at the price paid."
+    detail = _total_detail(repo, money)
     outside_disagrees = (
         world in ("real_paper", "real_live")
         and observation.position_count == 0
@@ -1148,6 +1150,24 @@ def _money_view(
             for segment in bar.segments
         ),
     )
+
+
+def _total_detail(repo: ClerkSqliteRepository, money: AccountMoney) -> str:
+    """What the bar's total is, said for what the account's bots hold (ADR 0076 decision 28).
+
+    The total is cash plus every holding at cost. A sold option's cost is the
+    premium it took in, so that premium counts against the total, and its
+    collateral moves out of cash into its bot's slice: still in the total, once.
+    """
+    with repo.write_fence() as conn:
+        held = [holding.quantity for holding in held_option_contracts(conn) if position_quantity_is_nonzero(holding.quantity)]
+    collateral = money.budget.option_collateral > 0
+    if collateral or any(quantity < 0 for quantity in held):
+        detail = "Cash plus positions at cost. A sold option's premium counts against that cost"
+        return detail + (", and its collateral is cash set aside in its bot's slice." if collateral else ".")
+    if held:
+        return "Cash plus shares and option contracts at the price paid."
+    return "Cash plus shares at the price paid."
 
 
 def _account_picture(

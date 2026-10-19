@@ -20,9 +20,10 @@ Architecture (#1258 L2 "one shared feed, in-process fan-out"):
   transparently replaced. Other ``IBKRBarStreamError`` failures are re-raised
   as ``MarketDataFeedError`` so no IBKR type escapes the port.
 * ``health()`` reads the IBKR client's connection signals synchronously.  A
-  newly active feed fails closed until its first closed minute. Thereafter,
-  raw 5-second source activity must advance within a configurable threshold
-  (default: 30 seconds). Ordinary bar gaps remain non-fatal.
+  newly active feed fails closed until its first closed minute; once its raw
+  5-second source bars arrive it reports ``warming`` beside ``stale``.
+  Thereafter, raw 5-second source activity must advance within a configurable
+  threshold (default: 30 seconds). Ordinary bar gaps remain non-fatal.
 * ``IbkrMinuteBar → MarketDataBar`` translation happens here, at the boundary.
   The translated bar carries ``feed_id="ibkr"`` as provenance.
 
@@ -89,6 +90,19 @@ class _SymbolLiveness:
     last_source_wall_ms: int | None = None
     first_bar_seen: bool = False
     active_count: int = 0
+
+    def await_first_bar(self) -> None:
+        """Withdraw the closed-minute proof, and the source watermark of the line that lost it."""
+        self.first_bar_seen = False
+        self.last_source_ms = self.last_source_wall_ms = None
+
+    def warming(self, now_ms: int, stale_threshold_ms: int) -> bool:
+        """A source bar arrived since the proof was withdrawn, within the threshold."""
+        return (
+            not self.first_bar_seen
+            and self.last_source_wall_ms is not None
+            and now_ms - self.last_source_wall_ms < stale_threshold_ms
+        )
 
 
 
@@ -187,7 +201,8 @@ class IbkrMarketDataFeed:
     stale_threshold_ms:
         How long without raw source activity before ``health()`` reports
         ``stale=True``. Default is 30 seconds. A newly active subscription is
-        stale until it emits its first closed minute.
+        stale until it emits its first closed minute, and ``warming`` while
+        its source bars arrive before then.
     """
 
     feed_id: str = "ibkr"
@@ -233,7 +248,7 @@ class IbkrMarketDataFeed:
         normalized_symbol = symbol.upper()
         liveness = self._state_for(normalized_symbol)
         if liveness.active_count == 0:
-            liveness.first_bar_seen = False
+            liveness.await_first_bar()
         liveness.active_count += 1
         logger.info(
             "MarketDataFeed consumer attached",
@@ -261,7 +276,7 @@ class IbkrMarketDataFeed:
         finally:
             liveness.active_count = max(0, liveness.active_count - 1)
             if liveness.active_count == 0:
-                liveness.first_bar_seen = False
+                liveness.await_first_bar()
             logger.info(
                 "MarketDataFeed consumer detached",
                 extra={
@@ -330,7 +345,7 @@ class IbkrMarketDataFeed:
                             yield bar
                     break
                 except IBKRBarSubscriptionStalled as exc:
-                    liveness.first_bar_seen = False
+                    liveness.await_first_bar()
                     replacements += 1
                     logger.warning(
                         "Replacing stalled IBKR real-time-bar subscription",
@@ -424,7 +439,7 @@ class IbkrMarketDataFeed:
                 return
             except (IBKRBarInterrupted, IBKRBarSubscriptionStalled) as exc:
                 await loop.open_interruption(exc)
-                liveness.first_bar_seen = False
+                liveness.await_first_bar()
                 await loop.await_recovery()
             except NotConnectedError as exc:
                 await loop.await_recovery_after_race(exc)
@@ -598,34 +613,44 @@ class IbkrMarketDataFeed:
             default=None,
         )
 
+        awaiting_first = [(name, state) for name, state in active_states if not state.first_bar_seen]
+        warming_names = [name for name, state in awaiting_first if state.warming(now, self._stale_threshold_ms)]
+        silent_first = [name for name, _ in awaiting_first if name not in warming_names]
+        stale_ages = [
+            (name, now - freshness_wall_ms)
+            for name, state in active_states
+            if state.first_bar_seen
+            and (freshness_wall_ms := state.last_source_wall_ms or state.last_bar_wall_ms) is not None
+            and now - freshness_wall_ms >= self._stale_threshold_ms
+        ]
+        warming = False
         if not connected:
             reason = "IBKR connection lost"
-        elif missing_first := [name for name, state in active_states if not state.first_bar_seen]:
+        elif silent_first:
             stale = True
             reason = (
-                f"Active IBKR feed for {', '.join(missing_first)} has not produced "
+                f"Active IBKR feed for {', '.join(silent_first)} has not produced "
                 "its first closed bar"
             )
-        else:
-            stale_ages = [
-                (name, now - freshness_wall_ms)
-                for name, state in active_states
-                if (freshness_wall_ms := state.last_source_wall_ms or state.last_bar_wall_ms)
-                is not None
-                and now - freshness_wall_ms >= self._stale_threshold_ms
-            ]
-            if stale_ages:
-                stale = True
-                stale_names = ", ".join(name for name, _ in stale_ages)
-                oldest_age_ms = max(age_ms for _, age_ms in stale_ages)
-                reason = (
-                    f"No source bar for {stale_names} in {oldest_age_ms // 1000}s "
-                    f"(threshold {self._stale_threshold_ms // 1000}s)"
-                )
+        elif stale_ages:
+            stale = True
+            stale_names = ", ".join(name for name, _ in stale_ages)
+            oldest_age_ms = max(age_ms for _, age_ms in stale_ages)
+            reason = (
+                f"No source bar for {stale_names} in {oldest_age_ms // 1000}s "
+                f"(threshold {self._stale_threshold_ms // 1000}s)"
+            )
+        elif warming_names:
+            stale = warming = True
+            reason = (
+                f"The IBKR feed for {', '.join(warming_names)} is delivering; "
+                "its first closed minute is still being assembled, and orders wait for it"
+            )
 
         return FeedHealth(
             connected=connected,
             stale=stale,
+            warming=warming,
             last_bar_ms=last_bar_ms,
             reason=reason,
             active_subscription_count=active_count,

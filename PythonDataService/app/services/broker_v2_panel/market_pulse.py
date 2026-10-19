@@ -58,7 +58,7 @@ def build_market_pulse(
     bars_expected = session == "RTH" if use_rth else session in {"PRE", "RTH", "POST", "OVERNIGHT"}
     liveness = liveness or market_liveness_fact(symbol or "", now_ms)
     feed_state = {
-        "AVAILABLE": "IDLE" if fact.stale else "LIVE",
+        "AVAILABLE": "IDLE" if fact.stale and not fact.warming else "LIVE",
         "STALE": "STALE",
         "UNAVAILABLE": "MISSING",
         "UNKNOWN": "MISSING",
@@ -152,8 +152,12 @@ def build_market_pulse(
         # Scoped to the bot's own line: the LIVE chart runs a separate IBKR
         # bar line and reports its own state on the chart (#2355).
         headline = "Bot market data live"
+        # A warming line delivers, but the order gates still wait for its
+        # first closed minute; its own reason says so.
         explanation = (
-            "The bot's feed is connected and delivering data within its expected "
+            fact.reason
+            if fact.warming and fact.reason
+            else "The bot's feed is connected and delivering data within its expected "
             "cadence. The chart reports its own bar line separately."
         )
         next_step = None

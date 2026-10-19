@@ -74,10 +74,12 @@ async function setup(options: { live?: boolean; selectedId?: string; versions?: 
     ],
   });
   vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+  const moneyChanged = vi.fn();
+  result.fixture.componentInstance.accountMoneyChanged.subscribe(moneyChanged);
   if (!options.selectedId) await userEvent.selectOptions(await screen.findByLabelText('Approved tested version'), goldenSetup().id);
   await waitFor(() => expect((screen.getByLabelText('Dollar budget (USD)') as HTMLInputElement).value).toBe('10000'));
   if (!options.endReadFails) await waitFor(() => expect(screen.getByLabelText<HTMLInputElement>('End date').value).not.toBe(''));
-  return { ...result, review, deploy, submission, get, preview, previewBotEnd, getDeployView };
+  return { ...result, review, deploy, submission, get, preview, previewBotEnd, getDeployView, moneyChanged };
 }
 
 async function reviewSetup(): Promise<void> {
@@ -289,6 +291,17 @@ describe('Options deployment', () => {
     expect(target.idempotencyKey).toBe(request.submission_key);
     expect(request).not.toHaveProperty('quantity');
     expect(request).not.toHaveProperty('strategy_key');
+  });
+
+  it('asks its host to re-read the account money once the deployment sets money aside', async () => {
+    const { moneyChanged } = await setup();
+    await reviewSetup();
+    expect(moneyChanged).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy Options bot' }));
+    await screen.findByRole('heading', { name: 'Options bot is deployed' });
+
+    await waitFor(() => expect(moneyChanged).toHaveBeenCalledTimes(1));
   });
 
   it('invalidates reviewed consent when the amount changes or the lane needs review', async () => {

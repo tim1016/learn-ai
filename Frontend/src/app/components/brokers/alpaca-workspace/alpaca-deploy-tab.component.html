@@ -17,9 +17,9 @@
       <button type="button" [class.selected]="botKind() === 'options'" [disabled]="optionsOutstanding()" (click)="botKind.set('options')">Options bot</button>
     </div>
     @if (botKind() === 'options') {
-      <app-options-bot-deploy [target]="target" [accountId]="accountId" [fence]="fence()" [laneReviewRequired]="laneReviewRequired()" (outstandingChange)="optionsOutstanding.set($event)" />
+      <app-options-bot-deploy [target]="target" [accountId]="accountId" [fence]="fence()" [laneReviewRequired]="laneReviewRequired()" (outstandingChange)="optionsOutstanding.set($event)" (accountMoneyChanged)="refreshAccountMoney()" />
     } @else {
-      <app-alpaca-deploy-workflow [target]="target" [accountId]="accountId" [fence]="fence()" [laneReviewRequired]="laneReviewRequired()" />
+      <app-alpaca-deploy-workflow [target]="target" [accountId]="accountId" [fence]="fence()" [laneReviewRequired]="laneReviewRequired()" (accountMoneyChanged)="refreshAccountMoney()" />
     }
   }
 } @else {

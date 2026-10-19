@@ -6,6 +6,7 @@ import {
   type BoundAccountWorkspaceAddress,
 } from '../../../fleet/account-workspace';
 import { BotInstrumentComponent } from '../../../shared/bot-instrument/bot-instrument.component';
+import { BotStrategyLabelComponent } from '../../../shared/bot-strategy-label/bot-strategy-label.component';
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { fmtSignedCurrency } from '../../broker/format';
 import { MoneyBarComponent } from '../../broker/money-bar/money-bar.component';
@@ -34,6 +35,7 @@ const GROUP_WORDS: Readonly<Record<HomeBot['bot']['group'], string>> = {
   imports: [
     AuthoredUsdPipe,
     BotInstrumentComponent,
+    BotStrategyLabelComponent,
     HomeBotActionComponent,
     HomeSparklineComponent,
     MoneyBarComponent,

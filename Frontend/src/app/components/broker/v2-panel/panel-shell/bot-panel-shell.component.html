@@ -209,6 +209,7 @@
               <app-bot-end-card
                 [end]="end"
                 [dryRun]="panelData.mode === 'dry_run'"
+                [optionsBot]="panelData.bot_kind === 'options'"
                 [locked]="actionPending()"
                 [save]="saveBotEnd"
                 [showChange]="false"

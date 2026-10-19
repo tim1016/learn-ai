@@ -66,6 +66,7 @@ from app.schemas.broker_v2_panel import (
     PanelActionRequest,
     PanelActionResult,
 )
+from app.schemas.options_bot import OPTIONS_BOT_KEY
 from app.schemas.run_admission import ProgramBuildAdmissionFact
 from app.services.bot_binding_repository import (
     BotBindingRepository,
@@ -243,8 +244,11 @@ def _explanation_renderer(binding: BrokerBotBinding) -> ExplanationRenderer | No
     ``None`` -- rows render without wording -- for a strategy this build no
     longer registers, declares no view, or whose saved settings no longer
     validate. The panel is the operator's control surface; a display add-on
-    must never take it down.
+    must never take it down. An Options bot follows its approved setup, not a
+    strategy view, so it has none by design and nothing is logged for it.
     """
+    if binding.strategy_key == OPTIONS_BOT_KEY:
+        return None
     try:
         view = ResolvedStrategyView.for_saved_settings(
             binding.strategy_key, binding.strategy_params, symbol=binding.symbol

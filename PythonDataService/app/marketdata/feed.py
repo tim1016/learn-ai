@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, Literal, Protocol, get_args
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
@@ -218,6 +218,10 @@ class FeedHealth(BaseModel):
     ``connected`` — the underlying broker connection is alive.
     ``stale``     — connected but required source liveness has not been proven
                     within the implementation's stale threshold.
+    ``warming``   — stale only because a delivering subscription has not
+                    closed its first minute yet. Gates that need a closed
+                    minute read ``stale`` and still refuse; a run that will
+                    share the subscription may start on it.
     ``last_bar_ms`` — ``start_ms`` of the most recently emitted bar, or ``None``
                       if no bar has been emitted yet.
     ``reason``    — human-readable detail when unhealthy (empty string when healthy).
@@ -229,10 +233,17 @@ class FeedHealth(BaseModel):
 
     connected: bool
     stale: bool
+    warming: bool = False
     last_bar_ms: int | None
     reason: str
     active_subscription_count: int
     observed_at_ms: int = Field(..., le=MAX_TIMESTAMP_MS, description="Snapshot wall-clock, int64 ms UTC.")
+
+    @model_validator(mode="after")
+    def _warming_is_a_kind_of_stale(self) -> FeedHealth:
+        if self.warming and not (self.connected and self.stale):
+            raise ValueError("A warming feed is connected and stale.")
+        return self
 
 
 # ---------------------------------------------------------------------------

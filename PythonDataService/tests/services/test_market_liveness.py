@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from app.broker.alpaca.clerk.stream_health import market_data_channel_health
 from app.broker.contract.models import BrokerClockEvidence
 from app.marketdata.feed import FeedHealth
 from app.schemas.market_liveness import (
@@ -323,6 +324,17 @@ def test_only_a_connected_unstale_feed_proves_bars_are_printing() -> None:
     assert market_data_bars_live(_health(connected=True, stale=True)) is False
     assert market_data_bars_live(_health(connected=False, stale=False)) is False
     assert market_data_bars_live(None) is False
+
+
+def test_a_warming_feed_still_refuses_every_order_gate() -> None:
+    """A warming line may start a run (Deploy), never send an order: both order gates read it as not live."""
+    warming = FeedHealth(
+        connected=True, stale=True, warming=True, last_bar_ms=None, reason="warming",
+        active_subscription_count=1, observed_at_ms=_NOW,
+    )
+
+    assert market_data_bars_live(warming) is False
+    assert market_data_channel_health(warming, now_ms=_NOW).healthy is False
 
 
 def test_a_closed_clock_needs_both_the_schedule_and_live_bars_to_admit_an_enter() -> None:

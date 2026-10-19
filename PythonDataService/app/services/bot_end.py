@@ -106,7 +106,8 @@ def resolve_bot_end(
 ) -> ResolvedBotEnd:
     """The end a Deploy or an edit records, or :class:`BotEndRefused`.
 
-    ``choice`` ``None`` is the default end. ``dry_run`` refuses KEEP;
+    ``choice`` ``None`` is the default end. ``dry_run`` refuses KEEP, and so
+    does an Options bot: its end closes every contract it holds.
     ``use_rth`` ``False`` -- a bot that also trades in extended hours --
     refuses every end, since its hours have no end rule yet.
     """
@@ -128,6 +129,12 @@ def resolve_bot_end(
             "A Dry Run can't keep its shares at its end.",
             detail="A Dry Run never ends holding; it always sells at the last price it saw.",
             next_action="Choose Sell for this Dry Run.",
+        )
+    if bot_kind == "options" and choice.end_action == "KEEP":
+        raise BotEndRefused(
+            "An Options bot can't keep its positions at its end.",
+            detail="An Options bot's end closes every option position it holds.",
+            next_action="Choose Sell for this Options bot.",
         )
     return _checked_end(choice.end_at_ms, choice.end_action, now_ms=now_ms)
 
@@ -209,18 +216,18 @@ def bot_end_view(
         )
     if recorded.carried_out_at_ms is not None:
         status: BotEndStatus = "ended"
-        done = "sold at its last price" if dry_run else _DONE_WORDS[recorded.end_action]
+        done = _DRY_RUN_DONE_WORDS[bot_kind] if dry_run else _DONE_WORDS[bot_kind][recorded.end_action]
         headline = f"Ended {et_when_words(recorded.carried_out_at_ms, now_ms=now_ms)} · {done}"
     else:
         status = "ending" if recorded.end_at_ms <= now_ms else "scheduled"
         when = et_when_words(recorded.end_at_ms, now_ms=now_ms)
-        action = _ACTION_WORDS[recorded.end_action]
+        action = _ACTION_WORDS[bot_kind][recorded.end_action]
         headline = f"Ends {when} · {action}" if status == "scheduled" else f"End reached {when} · {action}"
     return BotEndView(
         end_at_ms=recorded.end_at_ms, end_action=recorded.end_action, status=status, headline=headline,
         explanation=_explanation(
             status, recorded.end_action, et_when_words(recorded.end_at_ms, now_ms=now_ms),
-            dry_run=dry_run, running=running,
+            dry_run=dry_run, running=running, bot_kind=bot_kind,
         ),
         notice=notice, editable=editable, edit_refusal=edit_refusal, default_end_at_ms=None,
     )
@@ -236,7 +243,7 @@ def bot_end_view_waiting_for_operator(view: BotEndView, *, why: str) -> BotEndVi
     end; it is the notice.
     """
     return view.model_copy(update={
-        "headline": view.headline.removesuffix(_ACTION_WORDS[view.end_action]) + "no order sent",
+        "headline": _headline_with_last_words(view.headline, "no order sent"),
         "explanation": (
             "Its end has come and the bot is stopped. "
             "At its end the Clerk sent no order for the position the bot holds."
@@ -257,7 +264,7 @@ def bot_end_view_attested_absent_sale(view: BotEndView, *, why: str) -> BotEndVi
     the Clerk's own account of what became of that sale; it is the notice.
     """
     return view.model_copy(update={
-        "headline": view.headline.removesuffix(_DONE_WORDS[view.end_action]) + "no order sent",
+        "headline": _headline_with_last_words(view.headline, "no order sent"),
         "explanation": (
             "The Clerk stopped the bot at its end and sent the sale of its shares, but the sale's "
             "answer was lost. An operator settled that Alpaca has no such order, so the exit was "
@@ -281,8 +288,22 @@ def resolved_bot_end_view(
     )
 
 
-_ACTION_WORDS: dict[BotEndAction, str] = {"SELL": "sells", "KEEP": "keeps its shares"}
-_DONE_WORDS: dict[BotEndAction, str] = {"SELL": "sale put in", "KEEP": "kept its shares"}
+# What a headline says the end does, by the bot's kind: an Options bot's end
+# closes positions, which for a sold leg is a buy.
+_ACTION_WORDS: dict[str, dict[BotEndAction, str]] = {
+    "signal": {"SELL": "sells", "KEEP": "keeps its shares"},
+    "options": {"SELL": "closes", "KEEP": "keeps its positions"},
+}
+_DONE_WORDS: dict[str, dict[BotEndAction, str]] = {
+    "signal": {"SELL": "sale put in", "KEEP": "kept its shares"},
+    "options": {"SELL": "close put in", "KEEP": "kept its positions"},
+}
+_DRY_RUN_DONE_WORDS: dict[str, str] = {"signal": "sold at its last price", "options": "closed at its last price"}
+
+
+def _headline_with_last_words(headline: str, last_words: str) -> str:
+    """``headline`` with the words after its last " · " replaced: those name what the end does."""
+    return f"{headline.rpartition(' · ')[0]} · {last_words}"
 
 
 def _checked_end(end_at_ms: int, end_action: BotEndAction, *, now_ms: int) -> ResolvedBotEnd:
@@ -326,16 +347,42 @@ def _checked_end(end_at_ms: int, end_action: BotEndAction, *, now_ms: int) -> Re
     return ResolvedBotEnd(end=BotEnd(end_at_ms=end_at_ms, end_action=end_action), notice=notice)
 
 
-def _explanation(status: BotEndStatus, action: BotEndAction, at: str, *, dry_run: bool, running: bool) -> str:
+def _explanation(
+    status: BotEndStatus,
+    action: BotEndAction,
+    at: str,
+    *,
+    dry_run: bool,
+    running: bool,
+    bot_kind: Literal["signal", "options"] = "signal",
+) -> str:
     stopped = "" if running else "The bot is not running, but its end still stands. "
     if dry_run:
+        sells, sold = ("closes", "closed") if bot_kind == "options" else ("sells", "sold")
         return {
-            "scheduled": f"{stopped}At {at} the bot stops, and its simulation sells what it holds at the last price it saw.",
+            "scheduled": f"{stopped}At {at} the bot stops, and its simulation {sells} what it holds at the last price it saw.",
             "ending": (
-                f"Its end, {at}, has come. The bot stops, and its simulation sells what it holds at the "
+                f"Its end, {at}, has come. The bot stops, and its simulation {sells} what it holds at the "
                 "last price it saw."
             ),
-            "ended": "The bot has stopped, and its simulation sold what it held at the last price it saw.",
+            "ended": f"The bot has stopped, and its simulation {sold} what it held at the last price it saw.",
+        }[status]
+    if bot_kind == "options" and action == "SELL":
+        # An Options bot's end closes every contract it holds. KEEP is refused
+        # (resolve_bot_end); an end recorded as KEEP before then keeps its words.
+        return {
+            "scheduled": (
+                f"{stopped}At {at} the Clerk stops the bot, cancels its working orders and closes its "
+                "option positions at market."
+            ),
+            "ending": (
+                f"Its end, {at}, has come. On its next pass the Clerk stops the bot, cancels its working orders "
+                "and closes its option positions at market; a close that meets a closed market waits for the next open."
+            ),
+            "ended": (
+                "The Clerk stopped the bot at its end and put in market orders closing its option positions. "
+                "A close that meets a closed market waits for the next regular open; it never goes out after hours."
+            ),
         }[status]
     if action == "KEEP":
         return {

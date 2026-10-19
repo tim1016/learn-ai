@@ -9,7 +9,7 @@
   </span>
   <span class="home-row__meta">
     <span class="home-row__chip">{{ bot.bot_kind === 'options' ? 'Options' : 'Signal' }}</span>
-    {{ bot.strategy_label }} · <app-bot-instrument class="home-row__symbol" [symbol]="bot.symbol" [traded]="bot.traded" />
+    <app-bot-strategy-label [bot]="bot" /> · <app-bot-instrument class="home-row__symbol" [symbol]="bot.symbol" [traded]="bot.traded" />
   </span>
 </div>
 
