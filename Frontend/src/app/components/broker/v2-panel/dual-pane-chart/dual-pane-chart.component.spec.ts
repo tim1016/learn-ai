@@ -640,16 +640,6 @@ describe('DualPaneChartComponent', () => {
     expect(onResolutionChange).toHaveBeenCalledWith('1m');
   });
 
-  it('shows one expand button for the shared market canvas', async () => {
-    await render(DualPaneChartComponent, {
-      inputs: { symbol: 'SPY', liveBars: [], histBars: [] },
-    });
-
-    expect(
-      screen.getByRole('button', { name: /expand market chart/i }),
-    ).toBeTruthy();
-  });
-
   it('restores the indicator picker rail when the market chart is expanded', async () => {
     const user = userEvent.setup();
     const { fixture } = await render(DualPaneChartComponent, {

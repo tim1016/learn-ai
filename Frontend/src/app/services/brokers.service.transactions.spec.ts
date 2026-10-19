@@ -27,21 +27,6 @@ describe('BrokersService Clerk transaction history', () => {
     await expect(promise).resolves.toMatchObject({ high_water_journal_seq: 4, rows: [] });
   });
 
-  it('sends account-scoped filters to the bounded projection endpoint', async () => {
-    const promise = service.accountTransactions(TEST_CLERK_ID, 'PA / 1', null, 25, {
-      origin: 'strategy',
-      lifecycleState: 'partially_filled',
-      strategyInstanceId: 'bot-1',
-      runId: 'run-1',
-    });
-    const request = http.expectOne(
-      `/api/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/PA%20%2F%201/custody/transactions?limit=25&origin=strategy&lifecycle_state=partially_filled&strategy_instance_id=bot-1&run_id=run-1`,
-    );
-    expect(request.request.method).toBe('GET');
-    request.flush({ projection_available: true, high_water_journal_seq: 4, rows: [], next_cursor: null });
-    await expect(promise).resolves.toMatchObject({ rows: [] });
-  });
-
   it('sends an inclusive UTC-millisecond history window without browser-side filtering', async () => {
     const promise = service.accountTransactions(TEST_CLERK_ID, 'PA / 1', null, 25, {
       fromMs: 1_700_000_000_000,

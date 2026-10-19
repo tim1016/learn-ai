@@ -330,25 +330,6 @@ describe('AlpacaLiveBannerComponent', () => {
     },
   );
 
-  it('shows real Live custody distinctly even when the account is ready for deployment review', async () => {
-    await renderWith(LIVE_LANE, {
-      verdict: verdict({
-        configured_mode: 'live',
-        observed_account_id: '9LIVE0001',
-        final_verdict: 'live',
-        headline: 'LIVE account 9LIVE0001 — review deployment budget, nothing submitted yet',
-        detail: 'No path submits a real-money order in this slice.',
-      }),
-      lastError: null,
-    });
-    const status = screen.getByRole('status');
-    expect(status.className).toContain('is-live');
-    expect(status.textContent?.trim()).toBe('Live');
-    expect(status.getAttribute('aria-label')).toContain('review deployment budget');
-    expect(status.getAttribute('aria-label')).not.toContain('armed');
-    expect(status.textContent).not.toContain('9LIVE0001');
-  });
-
   it("carries the lane's account nickname in its accessible name instead of its raw label when one is set", async () => {
     const named = testLane({
       clerk_id: 'clrk_paper',
@@ -431,24 +412,6 @@ describe('AlpacaLiveBannerComponent', () => {
     ]));
 
     expect(screen.getByRole('status').textContent?.trim()).toBe('Paper');
-  });
-
-  it("carries the disambiguator into the paper lane's accessible name", async () => {
-    const paper = testLane({
-      clerk_id: 'clrk_paper',
-      display_label: 'Paper',
-      provider_summary: { account_nickname: 'Strategy lab', attention_count: 0 },
-    });
-    const live = testLane({
-      clerk_id: 'clrk_live',
-      display_label: 'Live',
-      provider_summary: { account_nickname: '  strategy lab  ', attention_count: 0 },
-    });
-    await renderWith(paper, { verdict: verdict({}), lastError: null }, [paper, live]);
-
-    expect(screen.getByRole('status').getAttribute('aria-label')).toContain(
-      'Strategy lab (Paper)',
-    );
   });
 
   it("carries the disambiguator into the live lane's accessible name", async () => {

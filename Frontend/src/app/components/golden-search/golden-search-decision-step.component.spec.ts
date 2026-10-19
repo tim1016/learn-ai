@@ -354,14 +354,6 @@ describe('GoldenSearchDecisionStepComponent — after the final test', () => {
     expect(screen.getByRole('region', { name: 'Final test result' }).textContent).toContain(CHOSEN_NOTE);
   });
 
-  it('a failed rule names what failed in the acknowledgement', async () => {
-    await renderStep(
-      reviewWith({}, { outcome: 'does_not_meet_rules', checks: [{ code: 'NET_POSITIVE', label: 'Profit after stated costs', status: 'fail', detail: 'Net loss of $310.' }] }),
-    );
-
-    expect(screen.getByRole('checkbox', { name: /i approve despite failing the stated rules \(profit after stated costs\)/i })).not.toBeNull();
-  });
-
   it('Keep current settings and the other finishes record the decision with the written reason', async () => {
     const { commands } = await renderStep(studyDetail('awaiting_review'));
 

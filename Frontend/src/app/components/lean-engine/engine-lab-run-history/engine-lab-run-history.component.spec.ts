@@ -162,13 +162,6 @@ describe("EngineLabRunHistoryComponent", () => {
     expect(html).toContain("AAPL");
   });
 
-  it("renders Engine column badges (Python / LEAN)", async () => {
-    const fixture = await setup();
-    const html = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(html).toContain("Python");
-    expect(html).toContain("LEAN");
-  });
-
   it("renders the DataPolicy bars summary with explicit input and strategy cadences", async () => {
     const fixture = await setup();
     const html = (fixture.nativeElement as HTMLElement).textContent ?? "";

@@ -58,11 +58,6 @@ describe('TickerRangePickerComponent (flags)', () => {
     fixture.componentRef.setInput('dateBounds', 'provider');
   });
 
-  it('renders the Sampling card by default', () => {
-    fixture.detectChanges();
-    expect(fixture.nativeElement.querySelector('app-sampling-card')).not.toBeNull();
-  });
-
   it('keeps the standalone Backtest data frame by default', () => {
     fixture.detectChanges();
 

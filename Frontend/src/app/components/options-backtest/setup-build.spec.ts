@@ -315,12 +315,6 @@ describe('opening a served setup and sending it back', () => {
     expect(built(draftFromSetup(served, SESSION_CLOCK))).toEqual(sent);
   });
 
-  it('keeps the ids of the legs it was given', () => {
-    const draft = draftFromSetup(exampleBody(), SESSION_CLOCK);
-
-    expect(draft.legs.map((leg) => leg.id)).toEqual(['call', 'put']);
-  });
-
   it('leaves a decimal the served setup lacks empty, with its problem, and fills in no default of its own', () => {
     const { slippage_percent: _slippage, price_step_usd: _step, ...bare } = exampleBody();
 

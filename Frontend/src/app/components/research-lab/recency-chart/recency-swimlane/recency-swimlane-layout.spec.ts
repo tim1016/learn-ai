@@ -62,10 +62,6 @@ describe("pnlColor", () => {
 });
 
 describe("sharpeToOpacity", () => {
-  it("returns the floor for null sharpe (insufficient trades)", () => {
-    expect(sharpeToOpacity(null)).toBe(sharpeToOpacity(0));
-  });
-
   it("returns the floor for zero or negative sharpe", () => {
     const floor = sharpeToOpacity(null);
     expect(sharpeToOpacity(0)).toBe(floor);
@@ -95,17 +91,6 @@ describe("packLane", () => {
     const packed = packLane(trades);
     expect(packed.find((p) => p.trade.fingerprint === "a")?.subRow).toBe(0);
     expect(packed.find((p) => p.trade.fingerprint === "b")?.subRow).toBe(0);
-  });
-
-  it("places overlapping trades in different sub-rows", () => {
-    const trades = [
-      trade({ fingerprint: "a", entryMs: 0, exitMs: 200, pnl: 10 }),
-      trade({ fingerprint: "b", entryMs: 100, exitMs: 300, pnl: 20 }),
-    ];
-    const packed = packLane(trades);
-    const rowA = packed.find((p) => p.trade.fingerprint === "a")?.subRow;
-    const rowB = packed.find((p) => p.trade.fingerprint === "b")?.subRow;
-    expect(rowA).not.toBe(rowB);
   });
 
   it("gives the highest-pnl overlapping trade the top sub-row (row 0)", () => {

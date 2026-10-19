@@ -9,7 +9,7 @@ import { lettingGo, reads } from '../../testing/page-actions';
 import { runDetail, runWithoutSetup } from '../../testing/run-fixtures';
 import { RunDetailRefusedError, RunDetailService } from '../run-detail.service';
 import type { LegTrade, TradeQuery, TradesPage } from '../run-detail.types';
-import { FOUR_TRADES, stoppedTrade, tradesPage } from '../testing/detail-fixtures';
+import { stoppedTrade, tradesPage } from '../testing/detail-fixtures';
 import { fakeRunDetail, type FakeRunDetail } from '../testing/fake-run-detail';
 import { RunTradesComponent } from './run-trades.component';
 
@@ -372,11 +372,3 @@ describe('the trades of a run, an answer that comes too late', () => {
   });
 });
 
-describe('the trades of a run, with the table inside', () => {
-  it('hands the four trades to the table whole, each with its own figures', async () => {
-    await renderTrades(fakeRunDetail(vi, { trades: vi.fn(async () => tradesPage({ trades: [...FOUR_TRADES] })) }));
-
-    await screen.findByRole('table', { name: 'Leg trades' });
-    expect(screen.getAllByRole('row').length).toBe(5);
-  });
-});

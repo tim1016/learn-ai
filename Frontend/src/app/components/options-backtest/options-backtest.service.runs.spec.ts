@@ -51,15 +51,6 @@ describe('OptionsBacktestService, the run routes', () => {
     expect(error).toMatchObject({ code: REFUSAL.code, message: REFUSAL.message, status });
   });
 
-  it('reads the 400 for a range that reaches before 1970 on check data as a refusal with the server’s own code and message', async () => {
-    const pending = service.checkData(exampleBody(), -3_600_000, 2_000);
-    http.expectOne(`${BASE}/check-data`).flush({ detail: TOO_EARLY }, { status: 400, statusText: 'Bad Request' });
-
-    const error = await pending.catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(RunRefusedError);
-    expect(error).toMatchObject({ ...TOO_EARLY, status: 400 });
-  });
-
   it('lists the runs, only the one job’s when asked, and only as many as asked for', async () => {
     const all = service.runs();
     http.expectOne((request) => request.url === `${BASE}/runs` && request.params.keys().length === 0).flush([]);

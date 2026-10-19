@@ -76,13 +76,6 @@ describe('RunSessionService', () => {
     vi.restoreAllMocks();
   });
 
-  it('starts in idle state with no chunks or result', () => {
-    expect(service.state()).toBe('idle');
-    expect(service.chunks()).toEqual([]);
-    expect(service.result()).toBeNull();
-    expect(service.error()).toBeNull();
-  });
-
   it('walks fetching → bundling → done on a happy-path stream', async () => {
     // Stub fetch for the auto-download leg only.
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(

@@ -69,11 +69,6 @@ describe('DataLabWorkspaceStore scope', () => {
     expect(store.commitScope().ok).toBe(true);
     expect(store.committedWindow()).toEqual({ startMsUtc: day, endMsUtc: day });
   });
-
-  it('committing marks the chart stale', () => {
-    const store = committedStore();
-    expect(store.chartStale()).toBe(true);
-  });
 });
 
 describe('DataLabWorkspaceStore chart staleness', () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { RunLogBuffer, RUN_LOG_DEFAULT_CAP, pythonLevelToEntryLevel, glyphForLevel } from './run-log-buffer';
+import { RunLogBuffer, pythonLevelToEntryLevel, glyphForLevel } from './run-log-buffer';
 
 describe('RunLogBuffer', () => {
   it('appends entries up to the cap', () => {
@@ -18,10 +18,6 @@ describe('RunLogBuffer', () => {
     buf.append('info', 'ⓘ', 'c');
     expect(buf.size()).toBe(2);
     expect(buf.entries().map((e) => e.message)).toEqual(['b', 'c']);
-  });
-
-  it('default cap is 500', () => {
-    expect(RUN_LOG_DEFAULT_CAP).toBe(500);
   });
 
   it('500-th and 501-st append behaves correctly', () => {

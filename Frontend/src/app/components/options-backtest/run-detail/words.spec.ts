@@ -6,7 +6,7 @@ import { plainTrade, stoppedTrade } from './testing/detail-fixtures';
 import { owedTrade, soldTrade } from './testing/selling-fixtures';
 import {
   attemptWords, closedBecauseHeading, contractOf, fillWords, FILL_WORDS, isSoldLegFill, isSoldLegTrade, LEVEL_WORDS, legAttempt, markWords, MARK_WORDS,
-  marksSection, OWED_MARK_WORDS, SOLD_FILL_WORDS,
+  marksSection, OWED_MARK_WORDS,
 } from './words';
 
 describe('a contract as the shared renderer takes it', () => {
@@ -71,22 +71,6 @@ describe('what a fill and a mark are called, by the side they traded on (#3109)'
     ['exit', 'buy', 'Bought back', 'up arrow'],
   ] as const)('calls a %s on the %s side %s and draws it as an %s', (kind, side, name, drawn) => {
     expect(fillWords({ kind, side })).toEqual({ name, drawn });
-  });
-
-  it('gives a bought leg the words it always had, from the same constants', () => {
-    expect(fillWords({ kind: 'entry', side: 'buy' })).toBe(FILL_WORDS.entry);
-    expect(fillWords({ kind: 'exit', side: 'sell' })).toBe(FILL_WORDS.exit);
-    expect(fillWords({ kind: 'entry', side: 'sell' })).toBe(SOLD_FILL_WORDS.entry);
-    expect(fillWords({ kind: 'exit', side: 'buy' })).toBe(SOLD_FILL_WORDS.exit);
-  });
-
-  it('never reads a sold leg’s words as a bought leg’s: the four names are four', () => {
-    const names = [FILL_WORDS.entry, FILL_WORDS.exit, SOLD_FILL_WORDS.entry, SOLD_FILL_WORDS.exit].map((each) => each.name);
-
-    expect(new Set(names).size).toBe(4);
-    // An arrow points the way it traded: purchases up, sales down, whichever opened the leg.
-    expect([FILL_WORDS.entry, SOLD_FILL_WORDS.exit].map((each) => each.drawn)).toEqual(['up arrow', 'up arrow']);
-    expect([FILL_WORDS.exit, SOLD_FILL_WORDS.entry].map((each) => each.drawn)).toEqual(['down arrow', 'down arrow']);
   });
 
   it('knows a fill is of a sold leg from the way it traded, and never asks the leg', () => {

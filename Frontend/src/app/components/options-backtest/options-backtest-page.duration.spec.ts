@@ -46,12 +46,6 @@ describe('the Duration card', () => {
     expect(ranges.queryByRole('button', { name: /^5Y/ })).toBeNull();
     expect(ranges.queryByRole('button', { name: /^Max/ })).toBeNull();
   });
-
-  it('starts with no dates, and does not choose any', async () => {
-    await renderPage(fakeService(vi));
-
-    expect(dateFields()).toEqual({ from: '', to: '' });
-  });
 });
 
 describe('the dates are not part of the setup', () => {

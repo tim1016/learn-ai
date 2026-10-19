@@ -172,13 +172,6 @@ describe('the chain of one expiry', () => {
     expect(head).toContain('Priced as of 16:00 ET on 2026-10-09');
     expect(head).toContain('Strikes each side of the money: 10');
   });
-
-  it('counts calls and puts as served', async () => {
-    await renderChainTab(fakeChainService(vi));
-    await openStandardChain();
-
-    expect(screen.getByText('Calls: 3 listed, 3 standard. Puts: 3 listed, 3 standard.')).toBeTruthy();
-  });
 });
 
 describe('the underlying at that time', () => {

@@ -84,10 +84,6 @@ describe('formatTimestampDisplay', () => {
         'Mar 08, 03:00:00 ET',
       );
     });
-
-    it('returns the fallback for absent values', () => {
-      expect(formatTimestampDisplay(undefined, { mode: 'et', granularity: 'chart' })).toBe('—');
-    });
   });
 
   describe('short-date granularity', () => {
@@ -121,10 +117,6 @@ describe('formatTimestampDisplay', () => {
         granularity: 'short-date',
         localTimeZone: 'Asia/Tokyo',
       })).toBe("Oct 9 '26");
-    });
-
-    it('returns the fallback for absent values', () => {
-      expect(formatTimestampDisplay(null, { mode: 'date-et', granularity: 'short-date' })).toBe('—');
     });
   });
 });

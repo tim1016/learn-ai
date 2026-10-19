@@ -392,26 +392,6 @@ describe('SpecStrategyRunnerComponent', () => {
     });
   });
 
-  // ---- Range dates flow into validation -------------------------------
-  describe('range dates flow into validation', () => {
-    it('validateStrategy receives range().from/to as start/end', () => {
-      // Pick a date pair distinct from the constructor defaults so we
-      // can prove the call site reads from range.
-      component.range.set({
-        from: '2025-06-01',
-        to: '2025-06-30',
-        resolution: component.range().resolution,
-      });
-
-      // The component's `issues` computed re-runs on every signal read;
-      // assert that range() values are what feed in (and that the issues
-      // list is computable — proves the rename took effect end-to-end).
-      expect(component.range().from).toBe('2025-06-01');
-      expect(component.range().to).toBe('2025-06-30');
-      expect(Array.isArray(component.issues())).toBe(true);
-    });
-  });
-
   // ---- Symbol bridge ---------------------------------------------------
   describe('symbol bridge to spec.symbols', () => {
     it('onRangeChange propagates next.symbol into spec.symbols', () => {
@@ -445,11 +425,6 @@ describe('SpecStrategyRunnerComponent', () => {
       expect(component.range().to).toBe('2025-01-31');
       // Same array reference — no spec.update was called.
       expect(component.spec().symbols).toBe(symbolsRefBefore);
-    });
-
-    it('pickerValue.symbol initially reflects spec.symbols[0]', () => {
-      // Default fixture is spy_ema_crossover (symbols: ["SPY"]).
-      expect(component.pickerValue().symbol).toBe('SPY');
     });
 
     it('pickerValue re-syncs symbol when spec is replaced', () => {

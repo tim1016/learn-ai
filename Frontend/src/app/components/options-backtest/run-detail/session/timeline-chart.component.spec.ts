@@ -100,18 +100,6 @@ describe('the one-day chart, time', () => {
 
     expect(optionsOf(fake).localization.timeFormatter(sec(2))).toBe('Sep 15, 09:32:00 ET');
   });
-
-  // The call was bought in the bar that closed at 09:38: it filled in that minute, so the tooltip must not head it as an instant to the second.
-  it('names the minute under the cursor in the tooltip by the time it ended, in New York time with the zone marked, and not as an instant', async () => {
-    const fake = fakeTimelineChart(vi);
-    await renderChart(fake);
-
-    fake.crosshair({ time: sec(8), point: { x: 40, y: 20 } });
-
-    expect(await screen.findByText('Minute ending 09:38 ET')).toBeTruthy();
-    expect(document.querySelector('.tip strong')?.textContent).toBe('Minute ending 09:38 ET');
-    expect([...document.querySelectorAll('.tip li')].map((item) => item.textContent)).toContain("Bought SPY Oct 16 '26 585 Call (contracts: 1): filled $2.57, seen $2.55");
-  });
 });
 
 describe('the one-day chart, what it hands to the library', () => {

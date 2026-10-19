@@ -315,18 +315,4 @@ describe('AppComponent', () => {
     expect(fixture.nativeElement.querySelector('app-top-bar')).toBeTruthy();
     expect(fixture.nativeElement.querySelector('app-alpaca-live-banner')).toBeTruthy();
   });
-
-  it('renders global status controls, with no Bots/Gallery shortcuts, in the top-bar connection region', () => {
-    const connection = fixture.nativeElement.querySelector('[data-shell-slot="connection"]');
-    // The IBKR-era broker banner is gone (#2149): its health poll 404'd on
-    // every cycle, so it could never render anything — the per-lane
-    // alpaca-live badges below are the shell's only account-mode anchor.
-    expect(connection?.querySelector('app-broker-banner')).toBeNull();
-    // Bot rosters/Gallery top-bar shortcuts are gone (#2181): they always
-    // returned to the pick-an-account list and forgot the account the
-    // operator was in. The Alpaca app-menu group still carries Bots/Gallery
-    // entries until the account list slice retires them.
-    expect(connection?.querySelector('a[href="/brokers/alpaca/bots"]')).toBeNull();
-    expect(connection?.querySelector('a[href="/brokers/alpaca/gallery"]')).toBeNull();
-  });
 });

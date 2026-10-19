@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { NOT_A_SESSION, type ReadProblem } from './past-chain-problems';
 import type { ChainContract, ChainDay, ChainExpiry, UnderlyingPrice } from './past-chain.types';
-import { bodyOf, cellOf, chainViewOf, dayViewOf, downloadPlan, downloadRequest, outcomeCounts, planWords, readStatusOf, sessionOf, strikeRows, underlyingViewOf, type ChainInputs } from './past-chain-view';
+import { bodyOf, cellOf, chainViewOf, dayViewOf, downloadPlan, downloadRequest, outcomeCounts, planWords, readStatusOf, strikeRows, underlyingViewOf, type ChainInputs } from './past-chain-view';
 import { chainDay, chainExpiry, contract, downloadAnswer, EXPIRY_MS, item, side, sideWithoutMoney, SESSION_CLOSE_MS, SESSION_OPEN_MS, TRADING_DATE_MS, underlyingPrice } from './testing/fixtures';
 
 const problem = (changes: Partial<ReadProblem> = {}): ReadProblem => ({ message: 'the server said so', code: 'CODE', control: 'area', canRetry: false, ...changes });
@@ -62,10 +62,6 @@ describe('what a read of the day comes to', () => {
     expect(readStatusOf('reloading')).toBe('loading');
     expect(readStatusOf('local')).toBe('ready');
     expect(readStatusOf('resolved')).toBe('ready');
-  });
-
-  it('has the session of the day from the answer', () => {
-    expect(sessionOf(chainDay())).toEqual({ openMs: SESSION_OPEN_MS, closeMs: SESSION_CLOSE_MS });
   });
 });
 

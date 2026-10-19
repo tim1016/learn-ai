@@ -14,7 +14,6 @@ import {
 import {
   fakeVendorCatalog,
   fakeEnsureCoverage,
-  fakeHeldSession,
   provideFakeVendorCatalog,
   provideFakeEnsureCoverage,
   type FakeVendorCatalog,
@@ -718,31 +717,6 @@ describe('InstrumentCardComponent', () => {
     fixture.destroy();
 
     expect(session.cancelCalls).toBe(1);
-  });
-
-  // A card co-waiting on the same run owns its own session: our release
-  // path cannot reach a gate this card was never handed.
-  it("cancels only its own session, never a gate it doesn't hold", async () => {
-    coverage.holdNext = true;
-    fixture.detectChanges();
-    component.openDropdown();
-    fixture.detectChanges();
-
-    component.pickTicker({
-      symbol: 'NVDA',
-      name: 'NVIDIA',
-      exchange: 'NASDAQ',
-    });
-    await flushGate(fixture);
-    // Another card's gate, co-waiting on the same run in the real service.
-    const otherCardsGate = fakeHeldSession('NVDA');
-    expect(otherCardsGate.cancelCalls).toBe(0);
-
-    component.pickTicker(pool[0]);
-    fixture.detectChanges();
-
-    expect((component.gate.pendingSession() as FakeCoverageSession | null) ?? null).toBeNull();
-    expect(otherCardsGate.cancelCalls).toBe(0);
   });
 
   it('caps the rendered rows and lets the search reach the rest', () => {

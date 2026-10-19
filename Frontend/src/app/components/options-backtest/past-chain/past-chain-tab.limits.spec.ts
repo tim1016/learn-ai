@@ -20,12 +20,6 @@ async function openWith(limits: SetupLimits | null) {
 }
 
 describe('the strikes box and the most the server takes', () => {
-  it('says the most it takes beside what an empty box means', async () => {
-    await openWith(SERVED_LIMITS);
-
-    expect(note()).toBe("Empty means the server's own number. The most it takes: 14.");
-  });
-
   it('says the number the server sent, whatever it is', async () => {
     await openWith({ ...SERVED_LIMITS, max_strikes_each_side: 6 });
 

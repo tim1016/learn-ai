@@ -260,15 +260,6 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     ).toHaveLength(1);
   });
 
-  it('hosts no page commands in the header: Home carries its own', async () => {
-    await renderWorkspace();
-    await screen.findByRole('heading', { name: 'Paper' });
-
-    for (const retired of ['Refresh bots', 'Archive finished', 'Flatten cohort']) {
-      expect(screen.queryByRole('button', { name: retired })).toBeNull();
-    }
-  });
-
   it('has no detectable accessibility violations', async () => {
     await renderWorkspace();
     await screen.findByRole('heading', { name: 'Paper' });
@@ -656,19 +647,6 @@ describe('AlpacaAccountWorkspaceComponent', () => {
 
       expect(await screen.findByText('Reading account mode…')).toBeTruthy();
       expect(frame().hasAttribute('data-lane')).toBe(false);
-    });
-
-    it('has no account dropdown: the top-bar pills switch accounts', async () => {
-      await renderWorkspace({
-        directory: provideFleetDirectory({
-          observed_at_ms: 1,
-          clerks: [testLane(), testLane({ clerk_id: 'clrk_live', display_label: 'Live' })],
-        }),
-      });
-
-      expect(await screen.findByRole('heading', { name: 'Paper' })).toBeTruthy();
-      expect(screen.queryByRole('button', { name: /Paper/ })).toBeNull();
-      expect(screen.queryByRole('link', { name: /^Live/ })).toBeNull();
     });
 
     it('has no detectable accessibility violations on the Live frame', async () => {

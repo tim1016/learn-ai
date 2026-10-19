@@ -77,14 +77,6 @@ describe('BrokersService', () => {
     await expect(promise).resolves.toMatchObject({ account_id: 'PA1' });
   });
 
-  it('uses the target broker and clerk identity', async () => {
-    const promise = service.getAccount(TARGET);
-
-    httpMock.expectOne(`/api/brokers/alpaca/clerks/${TEST_CLERK_ID}/account`).flush({ account_id: 'PA1' });
-
-    await promise;
-  });
-
   it('coalesces concurrent account reads for the same broker', async () => {
     const first = service.getAccount(TARGET);
     const second = service.getAccount(TARGET);

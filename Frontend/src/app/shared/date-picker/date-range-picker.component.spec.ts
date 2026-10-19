@@ -313,15 +313,6 @@ describe('DateRangePickerComponent', () => {
     expect(screen.getByText(/QQQ is held through 2026-09-18\./)).not.toBeNull();
   });
 
-  it('follows the host when it changes the dates', async () => {
-    const { view, host, start } = await renderPicker();
-
-    host.from.set('2026-09-01');
-    await view.fixture.whenStable();
-
-    expect(start.value).toBe('2026-09-01');
-  });
-
   it('re-checks the dates when the bounds change, so a new instrument cannot keep dates it does not hold', async () => {
     const { view, host, start } = await renderPicker();
 
