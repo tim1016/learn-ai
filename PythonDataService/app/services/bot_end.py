@@ -216,12 +216,12 @@ def bot_end_view(
         )
     if recorded.carried_out_at_ms is not None:
         status: BotEndStatus = "ended"
-        done = "sold at its last price" if dry_run else _DONE_WORDS[recorded.end_action]
+        done = _DRY_RUN_DONE_WORDS[bot_kind] if dry_run else _DONE_WORDS[bot_kind][recorded.end_action]
         headline = f"Ended {et_when_words(recorded.carried_out_at_ms, now_ms=now_ms)} · {done}"
     else:
         status = "ending" if recorded.end_at_ms <= now_ms else "scheduled"
         when = et_when_words(recorded.end_at_ms, now_ms=now_ms)
-        action = _ACTION_WORDS[recorded.end_action]
+        action = _ACTION_WORDS[bot_kind][recorded.end_action]
         headline = f"Ends {when} · {action}" if status == "scheduled" else f"End reached {when} · {action}"
     return BotEndView(
         end_at_ms=recorded.end_at_ms, end_action=recorded.end_action, status=status, headline=headline,
@@ -243,7 +243,7 @@ def bot_end_view_waiting_for_operator(view: BotEndView, *, why: str) -> BotEndVi
     end; it is the notice.
     """
     return view.model_copy(update={
-        "headline": view.headline.removesuffix(_ACTION_WORDS[view.end_action]) + "no order sent",
+        "headline": _headline_with_last_words(view.headline, "no order sent"),
         "explanation": (
             "Its end has come and the bot is stopped. "
             "At its end the Clerk sent no order for the position the bot holds."
@@ -264,7 +264,7 @@ def bot_end_view_attested_absent_sale(view: BotEndView, *, why: str) -> BotEndVi
     the Clerk's own account of what became of that sale; it is the notice.
     """
     return view.model_copy(update={
-        "headline": view.headline.removesuffix(_DONE_WORDS[view.end_action]) + "no order sent",
+        "headline": _headline_with_last_words(view.headline, "no order sent"),
         "explanation": (
             "The Clerk stopped the bot at its end and sent the sale of its shares, but the sale's "
             "answer was lost. An operator settled that Alpaca has no such order, so the exit was "
@@ -288,8 +288,22 @@ def resolved_bot_end_view(
     )
 
 
-_ACTION_WORDS: dict[BotEndAction, str] = {"SELL": "sells", "KEEP": "keeps its shares"}
-_DONE_WORDS: dict[BotEndAction, str] = {"SELL": "sale put in", "KEEP": "kept its shares"}
+# What a headline says the end does, by the bot's kind: an Options bot's end
+# closes positions, which for a sold leg is a buy.
+_ACTION_WORDS: dict[str, dict[BotEndAction, str]] = {
+    "signal": {"SELL": "sells", "KEEP": "keeps its shares"},
+    "options": {"SELL": "closes", "KEEP": "keeps its positions"},
+}
+_DONE_WORDS: dict[str, dict[BotEndAction, str]] = {
+    "signal": {"SELL": "sale put in", "KEEP": "kept its shares"},
+    "options": {"SELL": "close put in", "KEEP": "kept its positions"},
+}
+_DRY_RUN_DONE_WORDS: dict[str, str] = {"signal": "sold at its last price", "options": "closed at its last price"}
+
+
+def _headline_with_last_words(headline: str, last_words: str) -> str:
+    """``headline`` with the words after its last " · " replaced: those name what the end does."""
+    return f"{headline.rpartition(' · ')[0]} · {last_words}"
 
 
 def _checked_end(end_at_ms: int, end_action: BotEndAction, *, now_ms: int) -> ResolvedBotEnd:

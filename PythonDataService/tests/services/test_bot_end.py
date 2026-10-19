@@ -17,6 +17,7 @@ from app.services import bot_end as bot_end_service
 from app.services.bot_end import (
     BotEndRefused,
     bot_end_view,
+    bot_end_view_waiting_for_operator,
     default_bot_end,
     end_edit_refusal,
     resolve_bot_end,
@@ -329,6 +330,22 @@ def test_bot_end_view_of_a_scheduled_sale() -> None:
     assert view.end_at_ms == _at(_WEDNESDAY, 15, 59)
     assert view.end_action == "SELL"
     assert view.editable is True
+
+
+def test_an_options_bots_end_headline_says_it_closes_and_its_operator_notice_keeps_that_shape() -> None:
+    """A sold leg is bought to close, so an Options end's headline never says it sells."""
+    view = bot_end_view(
+        _scheduled(_at(_WEDNESDAY, 15, 15)), now_ms=_at(_WEDNESDAY, 10), dry_run=False, running=True,
+        use_rth=True, bot_kind="options",
+    )
+    reached = bot_end_view(
+        _scheduled(_at(_WEDNESDAY, 15, 15)), now_ms=_at(_WEDNESDAY, 16), dry_run=False, running=False,
+        use_rth=True, bot_kind="options",
+    )
+
+    assert view.headline == "Ends Wed Sep 30, 15:15 ET · closes"
+    assert bot_end_view_waiting_for_operator(reached, why="not sent").headline.endswith(" · no order sent")
+    assert "closes" not in bot_end_view_waiting_for_operator(reached, why="not sent").headline
 
 
 def test_bot_end_view_of_an_options_bot_closes_its_option_positions_not_shares() -> None:

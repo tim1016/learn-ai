@@ -1,6 +1,7 @@
 import { signal } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
+import { By } from '@angular/platform-browser';
 import { CurrentUrlService } from '../../../shell/current-url.service';
 import { fakePickerWorld } from '../../../shared/symbol-picker/testing/fake-picker-world';
 import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
@@ -9,6 +10,7 @@ import { of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { BrokerAccountSnapshot } from '../../../api/alpaca.types';
+import { AlpacaDeployWorkflowComponent } from '../../broker/broker-deploy-page/alpaca-deploy-workflow.component';
 import { AlpacaDeployTabComponent } from './alpaca-deploy-tab.component';
 import { AlpacaDeskAccountDataService } from '../alpaca-desk/alpaca-desk-account-data.service';
 import { BrokerV2PanelService, type DeployBotBody } from '../../broker/v2-panel/lib/broker-v2-panel.service';
@@ -59,9 +61,10 @@ function activatedRoute(clerkId: string) {
 
 interface AccountDataDouble {
   readonly hasAccount: boolean;
+  readonly money?: { readonly isLoading: () => boolean; readonly reload: () => boolean };
 }
 
-function accountData({ hasAccount }: AccountDataDouble) {
+function accountData({ hasAccount, money }: AccountDataDouble) {
   return {
     provide: AlpacaDeskAccountDataService,
     useValue: {
@@ -69,6 +72,7 @@ function accountData({ hasAccount }: AccountDataDouble) {
       accountId: () => 'PA9',
       fence: () => ({ bindingGeneration: 3, routingEpoch: 7 }),
       account: { hasValue: () => hasAccount, value: () => fakeAccount() },
+      money: money ?? { isLoading: () => false, reload: () => true },
     },
   };
 }
@@ -76,13 +80,14 @@ function accountData({ hasAccount }: AccountDataDouble) {
 async function renderDeployTab(options: {
   readonly lane?: Parameters<typeof testLane>[0] | null;
   readonly hasAccount?: boolean;
+  readonly money?: AccountDataDouble['money'];
 } = {}) {
-  const { lane = {}, hasAccount = true } = options;
+  const { lane = {}, hasAccount = true, money } = options;
   return render(AlpacaDeployTabComponent, {
     providers: [
       provideRouter([]),
       activatedRoute('clrk_deploy_tab'),
-      accountData({ hasAccount }),
+      accountData({ hasAccount, money }),
       lane === null
         ? provideFleetDirectory({ observed_at_ms: 1_757_000_000_000, clerks: [] })
         : provideFleetDirectory({ observed_at_ms: 1_757_000_000_000, clerks: [testLane({ clerk_id: 'clrk_deploy_tab', ...lane })] }),
@@ -217,5 +222,21 @@ describe('AlpacaDeployTabComponent', () => {
 
     expect(await screen.findByText('Deploy is unavailable.')).toBeTruthy();
     expect(screen.getByText('Alpaca has not confirmed this account yet.')).toBeTruthy();
+  });
+
+  it('re-reads the money when a form reports a receipt, and once more after a read already under way', async () => {
+    const loading = signal(true);
+    const reload = vi.fn(() => !loading());
+    const { fixture } = await renderDeployTab({ money: { isLoading: () => loading(), reload } });
+    await screen.findByRole('heading', { name: 'What' });
+    const form = fixture.debugElement.query(By.directive(AlpacaDeployWorkflowComponent)).componentInstance as AlpacaDeployWorkflowComponent;
+
+    form.accountMoneyChanged.emit();
+    expect(reload).toHaveBeenCalledTimes(1);
+    loading.set(false);
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    expect(reload).toHaveBeenCalledTimes(2);
   });
 });

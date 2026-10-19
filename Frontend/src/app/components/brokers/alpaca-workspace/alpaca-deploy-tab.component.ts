@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, signal, untracked } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 
@@ -63,6 +63,22 @@ export class AlpacaDeployTabComponent {
   protected readonly fence = this.accountData.fence;
   protected readonly laneReviewRequired = computed(() => laneFenceDrifted(this.fence(), this.lane() ?? undefined));
   protected reviewCurrentLane(): void { this.accountData.reviewCurrentLane(); }
+  /** A receipt that arrived while the money was being read: that read may
+   * predate it, so one more read follows once it settles. */
+  private readonly moneyReadOwed = signal(false);
+
+  constructor() {
+    effect(() => {
+      if (!this.moneyReadOwed() || this.accountData.money.isLoading()) return;
+      untracked(() => {
+        this.moneyReadOwed.set(false);
+        this.accountData.money.reload();
+      });
+    });
+  }
+
   /** The header's money is polled; a Deploy's receipt re-reads it now. */
-  protected refreshAccountMoney(): void { this.accountData.money.reload(); }
+  protected refreshAccountMoney(): void {
+    if (!this.accountData.money.reload()) this.moneyReadOwed.set(true);
+  }
 }

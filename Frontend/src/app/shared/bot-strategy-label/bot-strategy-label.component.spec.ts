@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import { GoldenOptionSetupsService } from '../../components/options-backtest/golden-option-setups.service';
-import { BotStrategyLabelComponent } from './bot-strategy-label.component';
+import { BotStrategyLabelComponent, SETUP_NAME_RETRY_MS } from './bot-strategy-label.component';
 
 const NAMES: Record<string, string> = { ogs_60: 'SPY setup from run 60', ogs_68: 'SPY setup from run 68' };
 
@@ -38,13 +38,23 @@ describe('BotStrategyLabelComponent', () => {
     expect(get).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps the strategy label for a setup it cannot read', async () => {
+  it('keeps the strategy label for a setup it cannot read, and asks again only after the retry interval', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
     const { provider, get } = goldenSetups();
-    const { fixture } = await render(BotStrategyLabelComponent, { inputs: { bot: optionsBot('ogs_gone') }, providers: [provider] });
+    const { fixture, rerender } = await render(BotStrategyLabelComponent, {
+      inputs: { bot: optionsBot('ogs_gone') }, providers: [provider],
+    });
     await fixture.whenStable();
-
-    expect(get).toHaveBeenCalledWith('ogs_gone');
     expect(screen.getByText('Options bot')).toBeTruthy();
+
+    // Each roster poll hands the label a new bot object for the same setup.
+    await rerender({ inputs: { bot: optionsBot('ogs_gone') } });
+    expect(get).toHaveBeenCalledTimes(1);
+    now.mockReturnValue(1_000_000 + SETUP_NAME_RETRY_MS);
+    await rerender({ inputs: { bot: optionsBot('ogs_gone') } });
+
+    expect(get).toHaveBeenCalledTimes(2);
+    now.mockRestore();
   });
 
   it('reads no setup names for a Signal bot', async () => {
