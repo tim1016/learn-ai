@@ -40,5 +40,4 @@ describe('MarkdownDrawerHostComponent', () => {
     expect(methodology).not.toBeNull();
     expect(methodology).not.toBe(guide);
   });
-
 });

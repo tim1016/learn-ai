@@ -63,7 +63,6 @@ describe('what a read of the day comes to', () => {
     expect(readStatusOf('local')).toBe('ready');
     expect(readStatusOf('resolved')).toBe('ready');
   });
-
 });
 
 describe('what the read of one expiry comes to', () => {

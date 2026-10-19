@@ -46,7 +46,6 @@ describe('the Duration card', () => {
     expect(ranges.queryByRole('button', { name: /^5Y/ })).toBeNull();
     expect(ranges.queryByRole('button', { name: /^Max/ })).toBeNull();
   });
-
 });
 
 describe('the dates are not part of the setup', () => {

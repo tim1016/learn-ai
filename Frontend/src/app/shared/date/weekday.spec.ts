@@ -28,7 +28,6 @@ describe('toMostRecentTradingDayIso', () => {
     // Mon 2026-05-25 minus 30 = Sat 2026-04-25 → Fri 2026-04-24.
     expect(toMostRecentTradingDayIso('2026-05-25', -30)).toBe('2026-04-24');
   });
-
 });
 
 describe('toNextTradingDayIso', () => {

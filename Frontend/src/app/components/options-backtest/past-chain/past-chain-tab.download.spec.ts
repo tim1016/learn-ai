@@ -557,5 +557,4 @@ describe('a download of more contracts than one call takes', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Download missing data' })).toBeNull());
     expect(service.download).toHaveBeenCalledTimes(3);
   });
-
 });

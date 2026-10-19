@@ -143,7 +143,6 @@ describe('the cash ladder', () => {
     expect(screen.getByText('setup’s own cash').closest('tr')?.classList.contains('own')).toBe(true);
     expect(ladder().textContent).toContain('No level is called safe.');
   });
-
 });
 
 describe('a run saved before capital evidence was kept', () => {

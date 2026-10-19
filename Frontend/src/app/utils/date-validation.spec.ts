@@ -17,5 +17,4 @@ describe('getMinAllowedDate', () => {
     const expectedStr = expected.toISOString().split('T')[0];
     expect(result).toBe(expectedStr);
   });
-
 });

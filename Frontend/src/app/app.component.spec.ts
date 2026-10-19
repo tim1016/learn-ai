@@ -315,5 +315,4 @@ describe('AppComponent', () => {
     expect(fixture.nativeElement.querySelector('app-top-bar')).toBeTruthy();
     expect(fixture.nativeElement.querySelector('app-alpaca-live-banner')).toBeTruthy();
   });
-
 });

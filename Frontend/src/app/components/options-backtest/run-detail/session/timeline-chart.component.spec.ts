@@ -100,7 +100,6 @@ describe('the one-day chart, time', () => {
 
     expect(optionsOf(fake).localization.timeFormatter(sec(2))).toBe('Sep 15, 09:32:00 ET');
   });
-
 });
 
 describe('the one-day chart, what it hands to the library', () => {

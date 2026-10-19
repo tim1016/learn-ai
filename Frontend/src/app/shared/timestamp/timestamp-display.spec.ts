@@ -84,7 +84,6 @@ describe('formatTimestampDisplay', () => {
         'Mar 08, 03:00:00 ET',
       );
     });
-
   });
 
   describe('short-date granularity', () => {
@@ -119,7 +118,6 @@ describe('formatTimestampDisplay', () => {
         localTimeZone: 'Asia/Tokyo',
       })).toBe("Oct 9 '26");
     });
-
   });
 });
 

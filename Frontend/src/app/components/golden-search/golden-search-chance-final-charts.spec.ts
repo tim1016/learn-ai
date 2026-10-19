@@ -71,5 +71,4 @@ describe('the final uncertainty chart specs', () => {
     expect(recorded).toContain('+$513');
     expect(recorded).not.toContain('%');
   });
-
 });

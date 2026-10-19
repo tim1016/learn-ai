@@ -32,5 +32,4 @@ describe('the fleet directory double', () => {
     expect(service.lane('alpaca', TEST_CLERK_ID)?.routing_epoch).toBe(5);
     expect(service.value()?.observed_at_ms).toBe(1_757_000_000_001);
   });
-
 });
