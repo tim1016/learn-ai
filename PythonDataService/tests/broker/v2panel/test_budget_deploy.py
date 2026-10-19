@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import replace
+from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -12,6 +13,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable, entry_requirement
 from app.broker.alpaca.clerk.live_envelope import (
+    FILL_VISIBILITY_GRACE_MS,
     OBSERVATION_MAX_AGE_MS,
     AccountObservation,
     LiveEnvelopeGate,
@@ -24,11 +26,13 @@ from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, appen
 from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
+from app.broker.alpaca.clerk.sqlite.contract_terms import ContractTerms
 from app.broker.alpaca.clerk.sqlite.day_pnl import day_pnl_window_start_ms
 from app.broker.alpaca.clerk.sqlite.fee_evidence import record_fee_evidence
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerActivity
+from app.options.contract import OptionContract
 from app.schemas.broker_bots import AlpacaDeploySubmission, AlpacaPaperDeployRequest
 from app.schemas.deployment_budget import (
     AccountMoneyView,
@@ -46,6 +50,12 @@ from app.services.broker_v2_panel import bot_custody, budget_deploy, sqlite_rost
 from app.services.broker_v2_panel.deploy_submissions import DeploySubmission
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
+from tests.broker.alpaca.clerk.sqlite.option_custody_fixtures import (
+    RUN_ID,
+    accept_option_order,
+    fill,
+    option_fold_registry,
+)
 
 
 @pytest.mark.parametrize(("model", "field", "payload"), [
@@ -158,7 +168,9 @@ def _request(symbol: str = "SPY", **updates) -> AlpacaPaperDeployRequest:
 
 @pytest.fixture
 def authority(tmp_path, monkeypatch):
-    repo = ClerkSqliteRepository.initialize(account_id="BUDGET-PAPER", artifacts_root=tmp_path, clock=_TestClock(NOON))
+    # The test-only option order kinds too, so a bot can hold contracts filled through the real fill fold.
+    repo = ClerkSqliteRepository.initialize(account_id="BUDGET-PAPER", artifacts_root=tmp_path, clock=_TestClock(NOON),
+                                            fold_registry=option_fold_registry())
     policy = AccountRiskPolicy(1, .1, 100, "profile", 1, "owner", NOON)
     commit_budget_authority_cutover(repo, actor="owner", reviewed_token="empty-account", stop_receipt="no-runs")
     append_risk_policy(repo, policy=policy, expected_revision=0)
@@ -498,14 +510,14 @@ def test_fractional_cent_consent_is_rejected_at_wire_boundary() -> None:
         DeploymentBudgetInput(amount_usd="100.001", risk_revision=0)
 
 
-def _deploy_bot(repo: ClerkSqliteRepository, gate: LiveEnvelopeGate, sid: str, *, cents: int) -> None:
-    """Register and Deploy a one-share SPY bot whose run is ``<sid>-run``."""
+def _deploy_bot(repo: ClerkSqliteRepository, gate: LiveEnvelopeGate, sid: str, *, cents: int, run_id: str | None = None) -> None:
+    """Register and Deploy a one-share SPY bot whose run is ``run_id``, ``<sid>-run`` unless given."""
     terms = _request().exit_terms.seal()
     config = {"symbol": "SPY", "quantity": 1}
     from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
     repo.register_strategy_instance(strategy_instance_id=sid, symbol="SPY", config_hash=canonical_sha256(config),
         config_json=canonicalize(config), exit_terms=terms)
-    submit_budgeted_deploy(repo, strategy_instance_id=sid, lifecycle_run_id=f"{sid}-run", world="real_paper",
+    submit_budgeted_deploy(repo, strategy_instance_id=sid, lifecycle_run_id=run_id or f"{sid}-run", world="real_paper",
         committed_cents=cents, configuration_hash=canonical_sha256(config), exit_terms_hash=canonical_sha256(terms.model_dump(mode="json")),
         risk_revision=1, actor="owner", envelope=gate, minimum_position_cost=Decimal("100.02"))
 
@@ -1308,6 +1320,63 @@ def test_a_stopped_bot_still_holding_an_option_is_still_served_what_getting_out_
     assert view.exit_estimate is not None
     assert (view.exit_estimate.net_close.state, view.exit_estimate.gross_buy_back.state) == ("unknown", "unknown")
     assert [leg.contract.occ_symbol for leg in view.exit_estimate.quotes] == [SOLD_CONTRACT]
+
+
+PUT_505 = OptionContract.of(root="SPY", expiry_date=date(2026, 12, 18), right="put", strike=505).occ_symbol
+PUT_500 = OptionContract.of(root="SPY", expiry_date=date(2026, 12, 18), right="put", strike=500).occ_symbol
+
+
+@pytest.mark.parametrize(("legs", "detail", "held_usd"), [
+    pytest.param(
+        (("buy", PUT_500, "2.00"),),
+        "Cash plus shares and option contracts at the price paid.", "200.00", id="a bought put",
+    ),
+    pytest.param(
+        (("sell", PUT_505, "5.00"), ("buy", PUT_500, "2.00")),
+        "Cash plus positions at cost. A sold option's premium counts against that cost, and its collateral is "
+        "cash set aside in its bot's slice.", "200.00", id="a credit spread",
+    ),
+    pytest.param(
+        (("buy", PUT_505, "5.00"), ("sell", PUT_500, "2.00")),
+        "Cash plus positions at cost. A sold option's premium counts against that cost.", "300.00",
+        id="a debit spread",
+    ),
+])
+async def test_the_accounts_total_is_said_for_the_option_contracts_its_bot_holds(
+    authority: tuple, monkeypatch: pytest.MonkeyPatch, legs: tuple[tuple[str, str, str], ...], detail: str,
+    held_usd: str,
+) -> None:
+    """Bot ``a`` fills one contract a leg on the $1,000.00 account, and the next reading's cash shows the premiums.
+    The total stays $1,000.00, cash plus positions at cost: a credit spread's $500.00 collateral less its $300.00
+    credit is the $200.00 its slice holds, a debit spread holds its $300.00 net debit and no collateral, and a bought
+    put the $200.00 paid (ADR 0076 decision 28)."""
+    from app.services.broker_v2_panel import exit_estimate_read
+
+    repo, runtime, snapshot = authority
+    monkeypatch.setattr(exit_estimate_read, "get_option_quotes", lambda: None)
+    gate = LiveEnvelopeGate(values=None, custody_is_simulated=False)
+    gate.publish(snapshot.observation)
+    runtime.envelope_sync.envelope = gate
+    _deploy_bot(repo, gate, "a", cents=50_000, run_id=RUN_ID)
+    for side, symbol, premium in legs:
+        order = accept_option_order(
+            repo, terms=ContractTerms(symbol=symbol, multiplier=100), side=side, contracts=1,
+            decision_id=f"a-{symbol}", strategy_instance_id="a", reference_price=premium,
+        )
+        fill(repo, order, execution_id=f"x-{symbol}", symbol=symbol, side=side.upper(), quantity=1,
+             price=float(premium), occurred_at_ms=repo.clock(), fee=0)
+        repo.clock.advance(1_000)
+    repo.clock.advance(FILL_VISIBILITY_GRACE_MS)
+    cash = 1000 + sum((100 if side == "sell" else -100) * float(premium) for side, _, premium in legs)
+    runtime.envelope_sync.reading = replace(snapshot.observation, observed_at_ms=repo.clock(), broker_cash_usd=cash,
+                                            cash_available_usd=cash, equity_usd=cash)
+
+    view = await budget_deploy.account_money_view(repo.account_id)
+
+    assert view.state == "ready" and view.detail == detail
+    assert view.total_usd == "1000.00"
+    [bot, _] = view.segments
+    assert bot.strategy_instance_id == "a" and bot.parts is not None and bot.parts.in_shares_usd == held_usd
 
 
 def test_a_dry_run_bot_shows_its_own_money_after_a_fill_without_account_evidence(tmp_path) -> None:
