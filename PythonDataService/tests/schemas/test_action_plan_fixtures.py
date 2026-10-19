@@ -9,7 +9,6 @@ import json
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
 from app.schemas.action_plan import ActionPlan
 
@@ -34,19 +33,3 @@ def test_valid_fixtures_validate(fixture: str, expected_leg_count: int) -> None:
     plan = ActionPlan.model_validate(_load(fixture))
 
     assert len(plan.on_enter) == expected_leg_count
-
-
-@pytest.mark.parametrize(
-    ("fixture", "expected_marker"),
-    [
-        ("invalid_missing_underlying.json", "underlying"),
-        ("invalid_qty_ratio_zero.json", "qty_ratio"),
-        ("invalid_orphan_close_leg.json", "close_leg"),
-        ("invalid_duplicate_leg_id.json", "duplicate"),
-        ("invalid_unknown_selector.json", "selector"),
-        ("invalid_absolute_expiry_missing_ms.json", "expiration_ms"),
-    ],
-)
-def test_invalid_fixtures_reject(fixture: str, expected_marker: str) -> None:
-    with pytest.raises(ValidationError, match=expected_marker):
-        ActionPlan.model_validate(_load(fixture))

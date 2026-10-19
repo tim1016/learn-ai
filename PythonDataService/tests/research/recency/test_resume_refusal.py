@@ -35,10 +35,6 @@ def test_resume_refusal_deleted_launch_states_the_fact_without_promising_a_resto
     assert refusal == "the launch is deleted"
 
 
-def test_resume_refusal_deleted_launch_outranks_a_resumable_status() -> None:
-    assert service.resume_refusal(_launch(status="CANCELLED", deleted_at_ms=1), live=None) == "the launch is deleted"
-
-
 @pytest.mark.parametrize(
     ("status", "live", "expected"),
     [

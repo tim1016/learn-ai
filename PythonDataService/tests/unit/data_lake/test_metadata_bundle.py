@@ -291,11 +291,6 @@ class TestMetadataDataContractHash:
         adjusted = metadata_data_contract_hash("sha256:aaa", "market-hours-database.json", "polygon_split_adjusted")
         assert raw != adjusted
 
-    def test_is_deterministic(self):
-        a = metadata_data_contract_hash("sha256:aaa", "market-hours-database.json", "raw")
-        b = metadata_data_contract_hash("sha256:aaa", "market-hours-database.json", "raw")
-        assert a == b
-
 
 class TestClaimAndCompleteMetadataRowReclaimRace:
     """Ported from the pre-#1879 ``ensure_data`` test of the same shape

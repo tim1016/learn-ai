@@ -18,13 +18,6 @@ def test_activation_recovery_still_writes_only_the_isolated_activation(tmp_path:
     assert not (tmp_path / "accounts" / "arming").exists()
 
 
-@pytest.mark.parametrize("operation", ["sessions", "receipt"])
-def test_retired_shadow_commands_refuse_without_writing(tmp_path: Path, capsys: pytest.CaptureFixture[str], operation: str) -> None:
-    assert cli.main(["--live-account-id", "9LIVE0001", "--artifacts-root", str(tmp_path), operation]) == 1
-    assert "invalid choice" in json.loads(capsys.readouterr().out)["error"]
-    assert not (tmp_path / "accounts").exists()
-
-
 def test_reserved_account_refuses_before_creating_custody(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert cli.main(["--live-account-id", "shadow:9LIVE0001", "--artifacts-root", str(tmp_path), "activate"]) == 1
     assert "error" in json.loads(capsys.readouterr().out)

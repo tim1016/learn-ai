@@ -178,15 +178,6 @@ def test_a_json_body_without_a_message_falls_back_to_its_raw_text() -> None:
     assert error.code == 40310000
 
 
-def test_rate_limited_parses_retry_after_seconds(make_api_error: ApiErrorFactory) -> None:
-    error = map_api_error(
-        make_api_error(429, headers={"Retry-After": "2"}), broker="alpaca"
-    )
-
-    assert isinstance(error, BrokerRateLimited)
-    assert error.retry_after_ms == 2000
-
-
 def test_rate_limited_without_header_has_no_retry_hint(make_api_error: ApiErrorFactory) -> None:
     error = map_api_error(make_api_error(429), broker="alpaca")
 

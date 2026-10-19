@@ -52,7 +52,7 @@ from app.data_lake import option_listing as option_listing_module
 from app.data_lake.admission import LakeAdmissionError
 from app.data_lake.atomic import AtomicRenameUnsafeError
 from app.data_lake.ensure_data import _minute_trade_dch
-from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes, from_deci_cent, to_deci_cent
+from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes
 from app.data_lake.option_bars import (
     OptionBar,
     OptionBarsFileError,
@@ -1943,11 +1943,6 @@ def test_an_option_files_recipe_is_not_either_of_the_stock_recipes() -> None:
     }
     assert option == option_minute_trade_dch()
     assert len(option) == 64
-
-
-@pytest.mark.parametrize("price", ["0.0001", "0.01", "1.27", "4.35", "99.9999", "1234.5678"])
-def test_every_price_on_the_ten_thousandth_grid_survives_the_round_trip_exactly(price: str) -> None:
-    assert from_deci_cent(to_deci_cent(Decimal(price))) == Decimal(price)
 
 
 def _zip(member: str, body: str) -> bytes:

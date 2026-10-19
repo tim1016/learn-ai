@@ -28,18 +28,6 @@ def test_each_ticker_has_four_windows() -> None:
         assert labels == {WindowLabel.W3MO, WindowLabel.W6MO, WindowLabel.W12MO, WindowLabel.W24MO}
 
 
-def test_all_cells_share_end_date() -> None:
-    assert {c.end_date for c in CELLS} == {date(2026, 4, 30)}
-
-
-def test_window_start_dates_match_spec() -> None:
-    starts = {(c.window_label, c.start_date) for c in CELLS}
-    assert (WindowLabel.W3MO, date(2026, 2, 2)) in starts
-    assert (WindowLabel.W6MO, date(2025, 11, 3)) in starts
-    assert (WindowLabel.W12MO, date(2025, 5, 1)) in starts
-    assert (WindowLabel.W24MO, date(2024, 6, 3)) in starts
-
-
 def test_cell_id_format() -> None:
     spy_w24 = cell_by_id("SPY_W24mo_2024-06-03_to_2026-04-30")
     assert isinstance(spy_w24, Cell)

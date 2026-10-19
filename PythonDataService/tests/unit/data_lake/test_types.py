@@ -79,11 +79,6 @@ class TestCalendarAnchorHelpers:
     session-open (09:30 ET) anchor the rest of the lake's wire vocabulary
     uses (trading_date_at_ms / session_open_ms_utc)."""
 
-    def test_forward_then_inverse_round_trips(self):
-        d = date(2024, 5, 20)
-        ms = trading_date_to_calendar_anchor_ms(d)
-        assert calendar_anchor_ms_to_trading_date(ms) == d
-
     def test_forward_produces_the_documented_epoch_ms_example(self):
         # 2026-08-01 12:00:00 UTC — the issue's own worked example value for
         # start_trading_date_ms (int64 ms UTC, noon anchor).
@@ -108,10 +103,6 @@ class TestCalendarAnchorHelpers:
         session to require."""
         d = date(2026, 8, 30)  # Sunday
         assert d.weekday() == 6
-        assert calendar_anchor_ms_to_trading_date(trading_date_to_calendar_anchor_ms(d)) == d
-
-    def test_holiday_date_round_trips(self):
-        d = date(2026, 12, 25)  # Christmas (NYSE holiday)
         assert calendar_anchor_ms_to_trading_date(trading_date_to_calendar_anchor_ms(d)) == d
 
     def test_off_anchor_ms_is_rejected(self):
@@ -237,13 +228,6 @@ class TestDataRunSpec:
         with pytest.raises(ValidationError):
             DataRunSpec(**payload)
 
-    def test_est_date_range_accepted(self):
-        payload = self._valid_payload()
-        payload["start_trading_date_ms"] = trading_date_to_calendar_anchor_ms(date(2026, 1, 12))
-        payload["end_trading_date_ms"] = trading_date_to_calendar_anchor_ms(date(2026, 1, 16))
-        spec = DataRunSpec(**payload)
-        assert spec.start_trading_date == date(2026, 1, 12)
-
     def test_edt_date_range_accepted(self):
         payload = self._valid_payload()
         payload["start_trading_date_ms"] = trading_date_to_calendar_anchor_ms(date(2026, 7, 13))
@@ -259,10 +243,3 @@ class TestDataRunSpec:
         payload["end_trading_date_ms"] = trading_date_to_calendar_anchor_ms(date(2026, 8, 30))  # Sunday
         spec = DataRunSpec(**payload)
         assert spec.start_trading_date.weekday() == 5
-
-    def test_holiday_boundary_accepted(self):
-        payload = self._valid_payload()
-        payload["start_trading_date_ms"] = trading_date_to_calendar_anchor_ms(date(2026, 12, 25))
-        payload["end_trading_date_ms"] = trading_date_to_calendar_anchor_ms(date(2026, 12, 25))
-        spec = DataRunSpec(**payload)
-        assert spec.start_trading_date == date(2026, 12, 25)

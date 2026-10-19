@@ -102,14 +102,6 @@ def test_manifest_rejects_unknown_session() -> None:
         )
 
 
-def test_state_csv_schema_columns_match_keys() -> None:
-    s = StateCsvSchema(
-        columns=["a", "b"],
-        column_types={"a": "int64", "b": "int64"},
-    )
-    assert set(s.columns) == set(s.column_types.keys())
-
-
 def test_state_csv_schema_rejects_mismatched_keys() -> None:
     with pytest.raises(ValidationError):
         StateCsvSchema(

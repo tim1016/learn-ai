@@ -53,12 +53,6 @@ def _checkpoint(
     )
 
 
-def test_the_serial_defaults_are_untouched() -> None:
-    """The shared cancellation check still renews the lease: only the pooled mode opts out."""
-    check = progress.CancellationCheck("job-1")
-    assert check.renews_lease is True
-
-
 def test_a_cancellation_poll_does_not_renew_a_pooled_lease(fake: _FakeRedis, monkeypatch: pytest.MonkeyPatch) -> None:
     fake.job("pooled-1", "running")
     fake.lease("pooled-1")

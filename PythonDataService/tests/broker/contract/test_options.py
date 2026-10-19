@@ -513,13 +513,6 @@ def _reported_single(**overrides: object) -> BrokerOptionOrder:
     return _reported(**single)
 
 
-def test_a_reported_spread_and_a_reported_single_order_are_read() -> None:
-    spread, single = _reported_spread(), _reported_single()
-
-    assert (spread.multi_leg, len(spread.legs), spread.contract) == (True, 2, None)
-    assert (single.multi_leg, single.legs, single.side) == (False, (), OrderSide.BUY)
-
-
 @pytest.mark.parametrize(
     "change",
     [

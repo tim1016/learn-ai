@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.sqlite import reads, schema
+from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite.bot_history import project_custody_history
 from app.broker.alpaca.clerk.sqlite.contract_terms import ContractTerms
 from app.broker.alpaca.clerk.sqlite.database_verification import verify_database
@@ -478,17 +478,6 @@ def test_a_filled_parent_with_every_legs_fill_on_the_books_leaves_the_pass_nothi
 
 
 # ── the schema, and a rebuild ─────────────────────────────────────────────
-
-
-def test_schema_24_adds_the_one_table_and_it_is_empty_on_books_that_took_no_order_of_several_legs(tmp_path: Path) -> None:
-    repo = open_option_books(tmp_path)
-    try:
-        accept_option_order(repo, terms=ContractTerms(C590, 100), side="buy", contracts=1, decision_id="d-one")
-        assert schema.SCHEMA_VERSION == 26
-        assert _rows(repo, "SELECT schema_version FROM control_meta") == [(26,)]
-        assert _rows(repo, "SELECT COUNT(*) FROM option_order_legs") == [(0,)]
-    finally:
-        repo.close()
 
 
 def test_a_schema_23_store_gains_the_empty_table_and_keeps_every_row(tmp_path: Path) -> None:

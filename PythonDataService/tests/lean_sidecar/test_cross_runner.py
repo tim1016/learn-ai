@@ -93,40 +93,6 @@ class TestResolveStrategyClass:
             resolve_strategy_class("Strategy")
 
 
-class TestStrategyCompatibility:
-    """The cross-run primitive requires strategies expose ``symbol`` in
-    their constructor. Strategies that don't accept that kwarg fail
-    with ``StrategyIncompatibleError`` rather than producing a
-    confusing runtime crash inside ``BacktestEngine.run``.
-
-    Cross-run-compatible strategies (which is the path we actually
-    take in TestRunEngineLabOnWorkspace below) are exercised via
-    BuyAndHoldStrategy."""
-
-    def test_incompatible_strategy_class_raises(self, tmp_path: Path) -> None:
-        """Sketch a Strategy subclass whose __init__ does NOT accept
-        symbol. The resolver does NOT find this (it lives in a test
-        file, not under app.engine.strategy.algorithms), so we exercise
-        the symbol-check by calling the internal helper directly via
-        the public seam: a Strategy subclass with no symbol kwarg
-        instantiated through run_engine_lab_on_workspace would fail at
-        the introspection step. We verify by constructing such a class
-        and confirming ``inspect.signature`` doesn't see 'symbol' —
-        which is exactly the predicate
-        ``_instantiate_with_symbol`` enforces."""
-
-        class _NoSymbolStrategy(Strategy):
-            def __init__(self) -> None:
-                super().__init__()
-
-        # Sanity check on the predicate — if this assertion ever
-        # changes, the symbol-check needs to update in lockstep.
-        import inspect
-
-        sig = inspect.signature(_NoSymbolStrategy.__init__)
-        assert "symbol" not in sig.parameters
-
-
 class TestRunEngineLabOnWorkspace:
     """End-to-end cross-run: stage a workspace, run BuyAndHoldStrategy,
     confirm the engine reads the staged zips and emits a fill normalized

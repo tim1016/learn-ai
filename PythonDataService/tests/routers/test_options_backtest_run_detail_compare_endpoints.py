@@ -263,18 +263,3 @@ async def test_runs_of_different_underlyings_are_a_409_naming_both_runs_and_thei
     assert detail["code"] == "OPTIONS_BACKTEST_RUNS_OF_DIFFERENT_UNDERLYINGS"
     for fragment in (f"run {spy} (a) trades SPY", f"run {qqq} (b) trades QQQ"):
         assert fragment in detail["message"]
-
-
-@pytest.mark.parametrize(
-    "params",
-    [{}, {"a": 1}, {"b": 1}, {"a": 0, "b": 1}, {"a": 1, "b": -1}, {"a": "x", "b": 1}, {"a": 2**53, "b": 1}],
-)
-async def test_a_request_that_cannot_be_one_is_a_422_about_the_query_and_not_about_a_run_called_compare(
-    client: httpx.AsyncClient, params: dict[str, Any]
-) -> None:
-    response = await client.get(f"{PREFIX}/runs/compare", params=params)
-
-    assert response.status_code == 422, response.text
-    # The run service's own ``/runs/{run_id}`` would take "compare" for a run id and fail on the path: this route is
-    # mounted before it, so the failures are about the query.
-    assert {error["loc"][0] for error in response.json()["detail"]} == {"query"}

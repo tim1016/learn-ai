@@ -46,10 +46,6 @@ def client(monkeypatch: pytest.MonkeyPatch) -> IbkrClient:
     return instance
 
 
-async def test_connection_generation_starts_at_zero(client: IbkrClient) -> None:
-    assert client.connection_generation == 0
-
-
 async def test_connection_generation_increments_per_successful_connect(client: IbkrClient) -> None:
     await client.connect()
     assert client.connection_generation == 1

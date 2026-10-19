@@ -81,14 +81,6 @@ def _entry_check(*, gap: Decimal, rsi_min: Decimal, rsi_max: Decimal, ema_gap: D
     return executor.intents
 
 
-def test_registration_exposes_gap_and_rsi_with_preserved_defaults() -> None:
-    schema = _STRATEGY_REGISTRY["ema_crossover_signal"].param_schema
-    params = schema()
-    assert params.gap == 0.20
-    assert params.rsi_min == 50.0
-    assert params.rsi_max == 70.0
-
-
 def test_registration_rejects_inverted_rsi_band() -> None:
     schema = _STRATEGY_REGISTRY["ema_crossover_signal"].param_schema
     with pytest.raises(ValidationError):

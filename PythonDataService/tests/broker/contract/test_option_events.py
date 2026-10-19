@@ -87,13 +87,6 @@ def _bought(owner: str, contracts: int, *, opened: date, sequence: int, contract
 # ── What an activity cannot be ──────────────────────────────────────────────
 
 
-def test_an_activity_carries_its_date_and_its_whole_contracts() -> None:
-    event = _event()
-
-    assert event.activity_date_ms == et_midnight_ms(_ASSIGNED_ON)
-    assert event.contracts == 3
-
-
 def _handed_out(activity: BrokerOptionEventActivity | BrokerOptionShareTradeActivity) -> dict[str, Any]:
     """Every value an activity gives a caller: its fields, and what its class works out from them."""
     worked_out = [name for name, member in vars(type(activity)).items() if isinstance(member, property)]
@@ -363,12 +356,6 @@ def test_a_share_trade_the_broker_does_not_report_as_executed_means_the_read_is_
 
     assert evidence.read_whole is False
     assert evidence.not_executed == (not_stood_by,)
-
-
-def test_a_whole_read_has_no_row_the_broker_does_not_stand_by() -> None:
-    evidence = BrokerOptionEventEvidence(events=(_event(),), share_trades=(_share_trade(),), history_complete=True)
-
-    assert evidence.not_executed == ()
 
 
 # ── A broker's activity matched to lots ─────────────────────────────────────

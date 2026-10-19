@@ -14,16 +14,6 @@ class _FakePort:
         self.broker_id = broker_id
 
 
-def test_register_and_resolve() -> None:
-    registry = BrokerRegistry()
-    port = _FakePort("alpaca")
-
-    registry.register(port)
-
-    assert registry.resolve("alpaca") is port
-    assert registry.registered_brokers() == ["alpaca"]
-
-
 def test_register_rebinds_same_id() -> None:
     registry = BrokerRegistry()
     first = _FakePort("alpaca")

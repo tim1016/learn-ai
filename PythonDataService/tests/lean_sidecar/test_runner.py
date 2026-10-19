@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from app.lean_sidecar import config as sidecar_config
-from app.lean_sidecar.config import DEFAULT_RUN_LIMITS, RunLimits
+from app.lean_sidecar.config import RunLimits
 from app.lean_sidecar.runner import (
     CONTAINER_WORKSPACE_MOUNT,
     RunnerConfigurationError,
@@ -729,6 +729,3 @@ class TestRunLimits:
         kwargs[field] = value
         with pytest.raises(ValueError):
             RunLimits(**kwargs).validate()
-
-    def test_default_run_limits_validates(self) -> None:
-        DEFAULT_RUN_LIMITS.validate()

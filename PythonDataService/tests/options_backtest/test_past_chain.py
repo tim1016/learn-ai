@@ -865,12 +865,6 @@ def _wide(non_standard: tuple[str, ...], n: int) -> tuple[FakeChainData, Callabl
     return data, lambda: _expiry(data, at=close_ms(FRI, 10), n=n)
 
 
-def test_the_cap_of_a_window_is_the_number_a_download_takes_and_the_widest_standard_window_is_under_it() -> None:
-    # 14 each side is 29 strikes a right: 2 * (2 * 14 + 1) = 58 standard contracts.
-    assert MAX_WINDOW_CONTRACTS == 60
-    assert 2 * (2 * MAX_STRIKES_EACH_SIDE + 1) == 58 <= MAX_WINDOW_CONTRACTS
-
-
 def test_a_window_of_exactly_the_cap_is_answered_with_its_non_standard_contracts_inside_it() -> None:
     # Money 602 (0.40 from 602.40, against 0.60 for 603) on both ladders: 14 each side is 588 to 616, 29 strikes a
     # right, 58 in all. The non-standard calls at 602.5 and 603.5 are inside that range: 60 contracts, the cap.

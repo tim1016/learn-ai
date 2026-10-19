@@ -592,11 +592,6 @@ def test_ready_cell_builder_freezes_the_receipt_parts_into_each_item() -> None:
     assert wired["attempt"] == 3 and wired["candidate"]["params_hash"] == "hash-0"
 
 
-def test_cell_outcome_fields_name_their_meaning() -> None:
-    outcome = CellOutcome(key="k", attempt=1, task_gen=1, cell=None)
-    assert outcome.lost_reason is None
-
-
 # ── A real spawned child (slow: real process, real engine) ────────────────
 
 

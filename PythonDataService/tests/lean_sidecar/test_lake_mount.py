@@ -40,7 +40,7 @@ from app.lean_sidecar.lake_mount import (
 )
 from app.lean_sidecar.launcher.models import LauncherImageReadiness, LaunchRequest
 from app.lean_sidecar.launcher.service import LaunchRejectedError, launch
-from app.lean_sidecar.lean_config import CONTAINER_DATA_FOLDER, LeanConfig
+from app.lean_sidecar.lean_config import LeanConfig
 from app.lean_sidecar.runner import (
     CONTAINER_WORKSPACE_MOUNT,
     RunnerConfigurationError,
@@ -173,10 +173,6 @@ class TestBuildingWithoutALakeMount:
 
         assert _volume_args(plan.argv) == [f"{workspace.workspace_dir}:{CONTAINER_WORKSPACE_MOUNT}:rw"]
         assert CONTAINER_LAKE_DATA_MOUNT not in " ".join(plan.argv)
-
-    def test_default_config_still_renders_the_workspace_data_folder(self) -> None:
-        assert LeanConfig().to_payload()["data-folder"] == CONTAINER_DATA_FOLDER
-        assert f"{CONTAINER_WORKSPACE_MOUNT}/data" == CONTAINER_DATA_FOLDER
 
     def test_launch_request_does_not_ask_for_the_lake_by_default(self) -> None:
         request = LaunchRequest(

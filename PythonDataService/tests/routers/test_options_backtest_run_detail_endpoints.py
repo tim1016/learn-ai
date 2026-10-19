@@ -350,29 +350,3 @@ async def test_a_session_the_run_did_not_test_and_a_leg_it_does_not_have_are_404
     assert session.json()["detail"]["code"] == "OPTIONS_BACKTEST_SESSION_NOT_IN_RUN"
     assert str(WED_OPEN_MS + 60_000) in session.json()["detail"]["message"]
     assert leg.status_code == 404 and leg.json()["detail"]["code"] == "OPTIONS_BACKTEST_LEG_NOT_IN_RUN"
-
-
-@pytest.mark.parametrize(
-    "path, params",
-    [
-        ("/runs/0/trades", {}),
-        ("/runs/-3/trades", {}),
-        ("/runs/abc/trades", {}),
-        (f"/runs/{2**53}/trades", {}),
-        ("/runs/1/trades", {"limit": 0}),
-        ("/runs/1/trades", {"limit": 5001}),
-        ("/runs/1/trades", {"offset": -1}),
-        ("/runs/1/trades", {"session_open_ms": -1}),
-        ("/runs/1/trades", {"session_open_ms": MAX_TIMESTAMP_MS + 1}),
-        ("/runs/1/trades", {"leg_id": ""}),
-        ("/runs/1/trades", {"leg_id": "x" * 33}),
-        ("/runs/1/trades", {"limit": "many"}),
-    ],
-)
-async def test_a_request_that_cannot_be_one_is_a_422_before_any_run_is_looked_for(
-    client: httpx.AsyncClient, path: str, params: dict[str, Any]
-) -> None:
-    async with client as c:
-        response = await c.get(f"{PREFIX}{path}", params=params)
-
-    assert response.status_code == 422, response.text

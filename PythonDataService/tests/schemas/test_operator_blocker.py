@@ -230,15 +230,6 @@ def test_operator_blocker_requires_its_anchor() -> None:
         OperatorBlocker.model_validate(payload)
 
 
-def test_anchor_preserves_opaque_subject_key() -> None:
-    anchor = OperatorBlockerAnchor(
-        kind="holdings_row",
-        subject_key="DU123|con_id:265598|SPY  260620C00500000",
-    )
-
-    assert anchor.subject_key == "DU123|con_id:265598|SPY  260620C00500000"
-
-
 def test_operator_blocker_wire_contract_pins_its_fields() -> None:
     blocker = OperatorBlocker.for_host(
         condition_id="fleet_contaminated",

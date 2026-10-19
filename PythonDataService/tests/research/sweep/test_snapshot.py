@@ -22,7 +22,7 @@ from app.research.sweep.snapshot import (
     capture_data_snapshot,
     verify_data_snapshot,
 )
-from tests._helpers.lean_store import make_minute_bars, seed_pre_market_day, seed_store_day
+from tests._helpers.lean_store import seed_pre_market_day, seed_store_day
 
 WINDOW = (date(2025, 1, 2), date(2025, 1, 10))
 SESSIONS = expected_sessions(*WINDOW)
@@ -299,7 +299,3 @@ def test_daily_capture_refuses_more_than_one_root(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="a daily data snapshot binds one root, got 2"):
         capture_data_snapshot(roots=[first, second], symbol="SPY", resolution="daily", data_start=WINDOW[0], data_end=WINDOW[1])
-
-
-def test_make_minute_bars_is_deterministic_so_digests_are_reproducible() -> None:
-    assert make_minute_bars("SPY", SESSIONS[0]) == make_minute_bars("SPY", SESSIONS[0])

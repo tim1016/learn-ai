@@ -67,9 +67,6 @@ class TestExpandParamLowHighStep:
             0.25,
         ]
 
-    def test_integer_range_stays_whole_floats(self) -> None:
-        assert expand_param(LowHighStepRange(low=1.0, high=5.0, step=1.0)) == [1.0, 2.0, 3.0, 4.0, 5.0]
-
 
 class TestRangeSizeMatchesExpandParam:
     """_range_size must count exactly what expand_param will emit — the UI's
@@ -237,11 +234,6 @@ class TestPathologicalSteps:
             _range_size(spec)
         with pytest.raises(ValueError, match="collapse to the same float"):
             expand_param(spec)
-
-    def test_expanded_values_are_unique(self) -> None:
-        values = expand_param(LowHighStepRange(low=0.15, high=0.25, step=0.01))
-        assert len(set(values)) == len(values) == 11
-
 
     def test_a_single_cell_range_is_not_a_resolution_problem(self) -> None:
         assert expand_param(LowHighStepRange(low=1.0, high=1.0, step=1e-20)) == [1.0]

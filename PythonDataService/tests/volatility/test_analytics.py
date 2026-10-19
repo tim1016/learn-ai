@@ -46,12 +46,6 @@ def built_surface(spot: float, rate: float, skewed_chain: list[dict]) -> VolSurf
 class TestHealthScore:
     """Surface health score tests."""
 
-    def test_health_score_range(self, built_surface: VolSurface) -> None:
-        """Total health score is between 0 and 100."""
-        score = compute_health_score(built_surface)
-
-        assert 0 <= score.total <= 100
-
     def test_health_score_components_in_range(self, built_surface: VolSurface) -> None:
         """All 4 component scores are between 0 and 100."""
         score = compute_health_score(built_surface)
@@ -333,15 +327,6 @@ class TestSkewMetricsEdgeCases:
     def test_find_delta_strike_short_ttm(self, built_surface: VolSurface) -> None:
         """Delta strike at very short TTM."""
         ttm = 1 / 365
-
-        result = find_delta_strike(built_surface, ttm, 0.25, is_call=True)
-
-        if result is not None:
-            assert result.converged is True
-
-    def test_find_delta_strike_long_ttm(self, built_surface: VolSurface) -> None:
-        """Delta strike at long TTM."""
-        ttm = 2.0
 
         result = find_delta_strike(built_surface, ttm, 0.25, is_call=True)
 

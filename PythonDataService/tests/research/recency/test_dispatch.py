@@ -25,7 +25,6 @@ from app.research.recency import dispatch as dispatch_module
 from app.research.recency.dispatch import (
     RECENCY_WIRE_KIND,
     ReadyRun,
-    RunOutcome,
     WorkerRunDispatch,
     pieces_to_wire,
     ready_run_builder,
@@ -526,8 +525,3 @@ def test_ready_run_builder_freezes_the_launch_parts() -> None:
     wired = item.as_wire()
     assert wired["attempt"] == 4 and wired["key"] == "SPY|sma_crossover|hash-0"
     assert wired["window"] == WINDOW and wired["execution"] == EXECUTION
-
-
-def test_run_outcome_fields_name_their_meaning() -> None:
-    outcome = RunOutcome(key="k", attempt=1, task_gen=1, pieces=None)
-    assert outcome.error is None

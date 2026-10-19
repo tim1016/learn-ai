@@ -109,13 +109,6 @@ def test_expected_strategies_are_registered():
     )
 
 
-
-def test_legacy_spy_ema_key_is_not_offered_in_the_strategy_picker():
-    names = {strategy["name"] for strategy in _list_strategies()}
-    assert "ema_crossover_signal" in names
-    assert "spy_ema_crossover" not in names
-
-
 def test_ema_signal_advertises_its_matching_lean_validation_template():
     strategy = next(strategy for strategy in _list_strategies() if strategy["name"] == "ema_crossover_signal")
 

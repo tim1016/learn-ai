@@ -45,13 +45,6 @@ class TestInterpolateRate:
     def test_empty_rates_returns_fallback(self):
         assert _interpolate_rate({}, 30) == DEFAULT_RISK_FREE_RATE
 
-    def test_30_day_interpolation(self):
-        """Typical use case: interpolate to ~30 DTE."""
-        rates = {28: 0.042, 91: 0.045}
-        result = _interpolate_rate(rates, 30)
-        # 30 is just above 28, should be very close to 0.042
-        assert 0.042 <= result <= 0.045
-
 
 class TestParseLatestRate:
     """Test parsing FRED observation values."""

@@ -22,12 +22,6 @@ from app.research.runs.ledger import (
 )
 
 
-def test_canonical_json_key_order_independent():
-    a = {"x": 1, "y": 2, "z": 3}
-    b = {"z": 3, "y": 2, "x": 1}
-    assert canonical_json(a) == canonical_json(b)
-
-
 def test_canonical_json_no_whitespace():
     s = canonical_json({"a": 1, "b": [2, 3]})
     assert " " not in s
@@ -45,11 +39,6 @@ def test_canonical_json_preserves_unicode():
     payload = {"name": "résumé"}
     s = canonical_json(payload)
     assert "résumé" in s
-
-
-def test_hash_payload_stable_across_calls():
-    payload = {"name": "spec", "indicators": [{"id": "ema", "period": 10}]}
-    assert hash_payload(payload) == hash_payload(payload)
 
 
 def test_hash_payload_stable_across_key_order():

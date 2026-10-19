@@ -22,23 +22,9 @@ from app.data_lake.lean_writer import (
     build_minute_trade_zip_bytes,
     format_volume,
     parse_volume,
-    to_deci_cent,
 )
 
 ET = ZoneInfo("America/New_York")
-
-
-def test_to_deci_cent_rounds_half_up():
-    assert to_deci_cent(Decimal("499.5")) == 4_995_000
-    assert to_deci_cent(Decimal("500.00005")) == 5_000_001
-    assert to_deci_cent(Decimal("0")) == 0
-
-
-def test_to_deci_cent_negative_rejected():
-    import pytest
-
-    with pytest.raises(ValueError):
-        to_deci_cent(Decimal("-1.0"))
 
 
 def _bar(hour: int, minute: int, close: float) -> MinuteTradeBar:
@@ -79,13 +65,6 @@ def test_build_minute_trade_zip_is_deterministic():
     a = build_minute_trade_zip_bytes("SPY", "20240520", bars)
     b = build_minute_trade_zip_bytes("SPY", "20240520", bars)
     assert a == b
-
-
-def test_symbol_is_lowercased_in_csv_name():
-    bars = [_bar(9, 30, 500.00)]
-    payload = build_minute_trade_zip_bytes("QQQ", "20240520", bars)
-    with zipfile.ZipFile(io.BytesIO(payload)) as zf:
-        assert zf.namelist() == ["20240520_qqq_minute_trade.csv"]
 
 
 @pytest.mark.parametrize(

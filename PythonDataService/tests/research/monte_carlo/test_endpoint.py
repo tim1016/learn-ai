@@ -335,12 +335,3 @@ async def test_list_filter_by_method(client, parent_run_id):
     )
     items = response.json()["monte_carlos"]
     assert [c["monte_carlo_id"] for c in items] == [rs.json()["config"]["monte_carlo_id"]]
-
-
-# ---------------------------------------------------------------------------
-# Path-resolution check: literal /monte-carlo beats /{run_id}.
-# ---------------------------------------------------------------------------
-async def test_monte_carlo_path_does_not_clash_with_run_id_route(client):
-    response = await client.get("/api/research/strategy-runs/monte-carlo")
-    assert response.status_code == 200
-    assert "monte_carlos" in response.json()

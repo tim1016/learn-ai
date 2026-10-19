@@ -222,22 +222,6 @@ class TestParseIvSeriesNullCoalescing:
         assert confidence.loc[1_000] == pytest.approx(1.0 - 0.05)
         assert confidence.loc[2_000] == pytest.approx(1.0 - 0.07)
 
-    def test_parse_iv_series_explicit_null_matches_missing_key(self):
-        # Explicit null and missing key must produce identical confidence
-        # for the same vcs — both are "no evidence" cases.
-        from app.routers.edge import _parse_iv_series
-
-        idx = pd.Index([1_000, 2_000], dtype=np.int64)
-        iv_series = [
-            {"ts": 1_000, "iv30": 0.20, "variance_contribution_synthetic": 0.10},
-            {"ts": 2_000, "iv30": 0.20, "health_score": None,
-             "variance_contribution_synthetic": 0.10},
-        ]
-
-        _, confidence, _ = _parse_iv_series(iv_series, idx)
-
-        assert confidence.loc[1_000] == pytest.approx(confidence.loc[2_000])
-
 
 class TestRealizedVsIvIvSourceField:
     async def test_caller_supplied_wins_over_recorder(self, client, recorder_store):

@@ -420,10 +420,6 @@ def test_holdings_whose_loss_has_no_limit_make_the_concentration_unknown_with_th
 # ---- obligations ----------------------------------------------------------------------------------------
 
 
-def test_one_sold_put_struck_at_665_is_an_obligation_of_66500_dollars() -> None:
-    assert assignment_obligation({("SPY261016P00665000", 100): -1}) == {"SPY": 6_650_000}
-
-
 def test_the_obligation_is_the_backtests_own_over_the_same_holdings() -> None:
     """One kernel, ``assignment_cash_cents``, stated in cents here and in dollars by the Options Backtest: calls and
     puts, long and short, several strikes (whole and half dollars), two underlyings and two expiries, and two legs

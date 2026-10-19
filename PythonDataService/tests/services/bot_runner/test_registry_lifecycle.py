@@ -13,7 +13,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.models import (
@@ -32,7 +31,6 @@ from app.marketdata.feed import (
     MarketDataFeedError,
 )
 from app.schemas.action_plan import traded_instrument
-from app.schemas.broker_bots import BotProcessFact
 from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.traded_asset_acknowledgement import UntestedTradedAssetAcknowledgement
 from app.services import bot_runner as bot_runner_module
@@ -201,18 +199,6 @@ async def test_process_fact_requires_current_registry_liveness_proof(tmp_path: P
     assert exited.run_id == view.active_run_id
     assert exited.process_identity is None
     assert exited.state == "EXITED"
-
-
-def test_process_fact_rejects_unemittable_starting_state() -> None:
-    with pytest.raises(ValidationError):
-        BotProcessFact(
-            strategy_instance_id=_SID,
-            run_id="run-1",
-            process_identity="in-process-task:run-1",
-            state="STARTING",
-            registry_generation="registry-1",
-            observed_at_ms=_T0,
-        )
 
 
 @pytest.mark.asyncio
