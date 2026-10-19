@@ -12,11 +12,16 @@ Uses the existing read-only Gateway client and its supervisor's shared quote
 lines. An explicit historical-data error, timeout or malformed bar is missing
 observation evidence, never a minute with no trade. Only a successful completed
 request can supply an empty minute. No Alpaca market data is requested.
+
+Every bot on a lane shares one Gateway client, so they share its completed-minute
+reads: IBKR answers historical requests one at a time and holds a burst for about
+five seconds, so separate reads of one minute delay every bot that triggers on it.
 """
 
 from __future__ import annotations
 
 import asyncio
+import weakref
 from collections.abc import Callable, Sequence
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
@@ -126,6 +131,64 @@ async def _history(client: IbkrClient, contract: Any, at_ms: int) -> MinuteBar |
             ib.wrapper._endReq(request_id)
 
 
+_ReadKey = tuple[int, int, int, int]
+
+
+def _observed(task: asyncio.Task[Any]) -> None:
+    # Every waiting bot receives the read's exception; this only marks it seen
+    # when all of them stopped waiting first.
+    if not task.cancelled():
+        task.exception()
+
+
+class _LaneMinuteReads:
+    """One Gateway client's completed-minute reads, shared by every bot on its lane.
+
+    A read in flight is joined and a completed one reused, keyed by connection,
+    data-loss epoch, contract and minute. A failure reaches every waiting bot but
+    is never kept, so the next preparation asks IBKR again. A bot that stops
+    waiting never cancels a read another bot still needs. At most three reads
+    are open per lane; IBKR answers them one at a time anyway.
+    """
+
+    def __init__(self) -> None:
+        self._limit = asyncio.Semaphore(_MAX_PARALLEL_HISTORY)
+        self._completed: dict[_ReadKey, MinuteBar | None] = {}
+        self._in_flight: dict[_ReadKey, asyncio.Task[MinuteBar | None]] = {}
+
+    async def read(self, client: IbkrClient, contract: Any, at_ms: int) -> MinuteBar | None:
+        key = (client.connection_generation, client.data_loss_epoch, int(contract.conId), at_ms)
+        if key in self._completed:
+            return self._completed[key]
+        task = self._in_flight.get(key)
+        if task is None:
+            task = asyncio.create_task(self._fetch(client, contract, key))
+            task.add_done_callback(_observed)
+            self._in_flight[key] = task
+        return await asyncio.shield(task)
+
+    async def _fetch(self, client: IbkrClient, contract: Any, key: _ReadKey) -> MinuteBar | None:
+        try:
+            async with self._limit:
+                result = await _history(client, contract, key[3])
+        finally:
+            del self._in_flight[key]
+        oldest = key[3] - MS_PER_MINUTE
+        self._completed = {cached: value for cached, value in self._completed.items() if cached[3] >= oldest}
+        self._completed[key] = result
+        return result
+
+
+_LANE_READS: weakref.WeakKeyDictionary[Any, _LaneMinuteReads] = weakref.WeakKeyDictionary()
+
+
+def _lane_reads(client: IbkrClient) -> _LaneMinuteReads:
+    reads = _LANE_READS.get(client)
+    if reads is None:
+        reads = _LANE_READS[client] = _LaneMinuteReads()
+    return reads
+
+
 class IbkrOptionsSessionMarket:
     """Prefetch observations, then expose the existing synchronous SessionMarket.
 
@@ -166,8 +229,6 @@ class IbkrOptionsSessionMarket:
         self._underlying: Decimal | None = None
         self._picks: dict[str, Picked | PickRefused] = {}
         self._bars: dict[str, MinuteBar | None] = {}
-        self._history_limit = asyncio.Semaphore(_MAX_PARALLEL_HISTORY)
-        self._history_cache: dict[tuple[int, int, int, int], MinuteBar | None] = {}
 
     @property
     def client(self) -> IbkrClient:
@@ -211,16 +272,7 @@ class IbkrOptionsSessionMarket:
         self._listed, self._listing_loaded = contracts, True
 
     async def _read(self, contract: Any, at_ms: int) -> MinuteBar | None:
-        key = (self.client.connection_generation, self.client.data_loss_epoch, int(contract.conId), at_ms)
-        if key in self._history_cache:
-            return self._history_cache[key]
-        async with self._history_limit:
-            result = await _history(self.client, contract, at_ms)
-        self._history_cache = {
-            cached: value for cached, value in self._history_cache.items() if cached[3] >= at_ms - MS_PER_MINUTE
-        }
-        self._history_cache[key] = result
-        return result
+        return await _lane_reads(self.client).read(self.client, contract, at_ms)
 
     async def prepare(
         self,
@@ -235,9 +287,18 @@ class IbkrOptionsSessionMarket:
             raise ValueError("prepare needs a completed minute of this calendar session")
         self.client.require_connected()
         generation = (self.client.connection_generation, self.client.data_loss_epoch)
+        # Minute reads by instrument symbol: the underlying's, then OCC option symbols.
+        reads: dict[str, asyncio.Task[MinuteBar | None]] = {}
         try:
             await self._load_listing()
-            underlying_bar = await self._read(self._stock, at_ms)
+            # Ask for the underlying first; contracts already known need no pick,
+            # so their reads travel with it instead of after it.
+            reads[self.setup.underlying] = asyncio.create_task(self._read(self._stock, at_ms))
+            for contract in (*(contracts if include_candidates else ()), *held_contracts):
+                listed = self._listed.get(contract.occ_symbol)
+                if listed is not None and contract.occ_symbol not in reads:
+                    reads[contract.occ_symbol] = asyncio.create_task(self._read(listed.ibkr_contract, at_ms))
+            underlying_bar = await reads[self.setup.underlying]
             underlying = None if underlying_bar is None else underlying_bar.close
             day = et_date_at_ms(self.session_open_ms)
             listing = Listing(
@@ -274,14 +335,10 @@ class IbkrOptionsSessionMarket:
                     raise OptionsMarketUnavailable(f"IBKR no longer lists selected contract {contract.occ_symbol}")
             self._ask_for_quotes(tuple(wanted.values()), held_contracts)
             required = {contract.occ_symbol for contract in (held_contracts or contracts)}
-            tasks = [asyncio.create_task(self._read(self._listed[symbol].ibkr_contract, at_ms)) for symbol in wanted]
-            try:
-                values = await asyncio.gather(*tasks, return_exceptions=True)
-            except (Exception, asyncio.CancelledError):
-                for task in tasks:
-                    task.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
-                raise
+            for symbol in wanted:
+                if symbol not in reads:
+                    reads[symbol] = asyncio.create_task(self._read(self._listed[symbol].ibkr_contract, at_ms))
+            values = await asyncio.gather(*(reads[symbol] for symbol in wanted), return_exceptions=True)
             bars: dict[str, MinuteBar | None] = {}
             candidate_hold = None
             for symbol, value in zip(wanted, values, strict=True):
@@ -304,6 +361,11 @@ class IbkrOptionsSessionMarket:
             raise
         except Exception as exc:
             raise OptionsMarketUnavailable(f"IBKR could not establish the completed options minute: {exc}") from exc
+        finally:
+            # Stop only this bot's waits; a lane read another bot needs continues.
+            for task in reads.values():
+                task.cancel()
+            await asyncio.gather(*reads.values(), return_exceptions=True)
 
     def _ask_for_quotes(self, candidates: Sequence[OptionContract], held: Sequence[OptionContract]) -> None:
         keys: set[str] = set()

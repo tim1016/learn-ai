@@ -284,9 +284,11 @@ class OptionsBotDuty:
         ready = minute >= self.window.exit_ms or minute == state.last_minute_ms
         if not ready:
             try:
+                started = self.clock()
                 candidate_hold = await self._market.prepare(
                     minute, contracts=retained, held_contracts=held, include_candidates=allowed,
                 )
+                self._log_prepared(minute, started)
                 self.journal.note(market_hold=None)
                 if candidate_hold is not None:
                     self.journal.note(entry_hold_reason=candidate_hold)
@@ -300,6 +302,24 @@ class OptionsBotDuty:
             step = self._session.advance(at_ms, outcomes, allow_entries=allowed and ready, observed_at_ms=now)
             self.journal.commit(state, step)
         return ready, allowed
+
+    def _log_prepared(self, minute: int, started: int) -> None:
+        prepared = self.clock()
+        # The production formatter drops ``extra``; the message carries the timings too.
+        logger.info(
+            "Options %s minute %d read %d ms after its close in %d ms",
+            self.binding.strategy_instance_id,
+            minute,
+            started - minute,
+            prepared - started,
+            extra={
+                "action": "options_minute_prepared",
+                "strategy_instance_id": self.binding.strategy_instance_id,
+                "minute_ms": minute,
+                "started_after_close_ms": started - minute,
+                "prepare_ms": prepared - started,
+            },
+        )
 
     def _settled(self) -> bool:
         for row in self.journal.decisions(session_open_ms=self.window.open_ms):
@@ -336,6 +356,24 @@ class OptionsBotDuty:
             decision.leg_id, decision.contract, decision.side, decision.contracts, decision.multiplier, Decimal(0)
         )
         return not admit_opening(held, (candidate,), cash=None, closing=()).refused
+
+    def _dispatching(self, row: PendingDecision) -> None:
+        self.journal.dispatching(row.decision_id)
+        lag = self.clock() - row.decision.decided_at_ms
+        logger.info(
+            "Options %s decision %s for minute %d reaches the Clerk %d ms after its close",
+            self.binding.strategy_instance_id,
+            row.decision_id,
+            row.decision.decided_at_ms,
+            lag,
+            extra={
+                "action": "options_decision_dispatched",
+                "strategy_instance_id": self.binding.strategy_instance_id,
+                "decision_id": row.decision_id,
+                "minute_ms": row.decision.decided_at_ms,
+                "after_close_ms": lag,
+            },
+        )
 
     async def _deliver(self, allowed: bool, now: int) -> None:
         for row in self.journal.decisions(session_open_ms=self.window.open_ms, pending_only=True):
@@ -376,7 +414,7 @@ class OptionsBotDuty:
                         evidence = None
                     if self._run_gate is not None and not self._run_gate.is_set():
                         return
-                    self.journal.dispatching(row.decision_id)
+                    self._dispatching(row)
                     receipt = await self.clerk.execute_options_leg(
                         strategy_instance_id=self.binding.strategy_instance_id,
                         run_id=self.binding.run_id,
@@ -393,7 +431,7 @@ class OptionsBotDuty:
                         explanation=receipt.explanation if rejected else None,
                     )
                 elif isinstance(decision, CancelEntry):
-                    self.journal.dispatching(row.decision_id)
+                    self._dispatching(row)
                     await self.clerk.cancel_options_leg_entry(
                         self.binding.strategy_instance_id, self.binding.run_id, decision.leg_id, row.attempt_id
                     )
@@ -408,7 +446,7 @@ class OptionsBotDuty:
                             quotes={decision.contract.occ_symbol: quote}, generation=feed.generation, read_at_ms=now
                         )
                     )
-                    self.journal.dispatching(row.decision_id)
+                    self._dispatching(row)
                     receipt = await self.clerk.execute_options_leg(
                         strategy_instance_id=self.binding.strategy_instance_id,
                         run_id=self.binding.run_id,

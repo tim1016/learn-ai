@@ -50,6 +50,7 @@ class _IB:
         self.rows: dict[int, list[Any]] = {}
         self.error: tuple[int, str] | None = None
         self.never_finishes = False
+        self.held: list[tuple[int, Any]] | None = None
         self._next = 0
 
     def getReqId(self) -> int:
@@ -65,11 +66,28 @@ class _IB:
         self.requests.append((ibkr_contract.conId, *args))
         if self.never_finishes:
             return
+        if self.held is not None:
+            self.held.append((identity, ibkr_contract))
+            return
+        self._answer(identity, ibkr_contract)
+
+    def _answer(self, identity: int, ibkr_contract: Any) -> None:
+        if identity not in self.waiters:
+            return  # cancelled: the real wrapper ignores a late answer too
         future, bars = self.waiters[identity]
         if self.error is not None:
             self.errorEvent.emit(identity, *self.error, ibkr_contract)
         bars.extend(self.rows.get(ibkr_contract.conId, []))
         future.set_result(bars)
+
+    def hold(self) -> None:
+        """Keep every request unanswered until ``release``, as IBKR does while busy."""
+        self.held = []
+
+    def release(self) -> None:
+        held, self.held = self.held or [], None
+        for identity, ibkr_contract in held:
+            self._answer(identity, ibkr_contract)
 
     def cancelHistoricalData(self, identity: int) -> None:
         self.cancelled.append(identity)
@@ -214,6 +232,127 @@ async def test_repeated_same_minute_is_cached_but_reconnect_cannot_reuse_its_gen
     await market.prepare(at(5), held_contracts=(CALL,))
     assert len(client.ib.requests) == 4
     assert any(request.held == (CALL,) for request in market_inputs[1].requests())
+
+
+async def _sent() -> None:
+    """Let every started read reach IBKR."""
+    for _ in range(20):
+        await asyncio.sleep(0)
+
+
+async def test_bots_on_one_lane_share_each_completed_minute_read(
+    market_inputs: tuple[_Client, OptionWatchList],
+) -> None:
+    client, _watch = market_inputs
+    bots = [_market(setup(leg()), market_inputs) for _ in range(3)]
+    client.ib.hold()
+
+    preparing = asyncio.gather(*(bot.prepare(at(5), contracts=(CALL,)) for bot in bots))
+    await _sent()
+    client.ib.release()
+    await preparing
+
+    assert [request[0] for request in client.ib.requests] == [1, 2]
+    assert {request[1] for request in client.ib.requests} == {"20261009-13:35:00"}
+    for bot in bots:
+        assert bot.underlying_close(at(5)) == D("500")
+        assert bot.option_bar(CALL, at(5)).close == D("2.00")
+
+
+async def test_retained_contracts_are_read_with_the_underlying_not_after_it(
+    market_inputs: tuple[_Client, OptionWatchList],
+) -> None:
+    client, _watch = market_inputs
+    market = _market(setup(leg()), market_inputs)
+    client.ib.hold()
+
+    preparing = asyncio.create_task(market.prepare(at(5), contracts=(CALL,)))
+    await _sent()
+
+    # Both reads are in flight before IBKR has answered either; the underlying goes first.
+    assert [request[0] for request in client.ib.requests] == [1, 2]
+    client.ib.release()
+    await preparing
+    assert market.option_bar(CALL, at(5)).close == D("2.00")
+
+
+async def test_a_shared_read_serves_only_its_own_minute(
+    market_inputs: tuple[_Client, OptionWatchList],
+) -> None:
+    client, _watch = market_inputs
+    first, second = _market(setup(leg()), market_inputs), _market(setup(leg()), market_inputs)
+    await first.prepare(at(5), contracts=(CALL,))
+    client.ib.rows = {1: [_raw(5, "500"), _raw(6, "501")], 2: [_raw(5, "2.00")]}
+
+    await second.prepare(at(6), contracts=(CALL,))
+
+    assert [request[1] for request in client.ib.requests] == [
+        "20261009-13:35:00",
+        "20261009-13:35:00",
+        "20261009-13:36:00",
+        "20261009-13:36:00",
+    ]
+    assert second.underlying_close(at(6)) == D("501")
+    assert second.option_bar(CALL, at(6)) is None
+    assert first.option_bar(CALL, at(5)).close == D("2.00")
+    with pytest.raises(module.OptionsMarketUnavailable, match="not been prepared"):
+        first.option_bar(CALL, at(6))
+
+
+async def test_a_shared_read_from_before_lost_data_is_never_reused(
+    market_inputs: tuple[_Client, OptionWatchList],
+) -> None:
+    client, _watch = market_inputs
+    first, second = _market(setup(leg()), market_inputs), _market(setup(leg()), market_inputs)
+    await first.prepare(at(5), contracts=(CALL,))
+    client.data_loss_epoch = 1
+    client.ib.rows = {1: [_raw(5, "502")], 2: [_raw(5, "2.10")]}
+
+    await second.prepare(at(5), contracts=(CALL,))
+
+    assert [request[0] for request in client.ib.requests] == [1, 2, 1, 2]
+    assert second.underlying_close(at(5)) == D("502")
+    assert second.option_bar(CALL, at(5)).close == D("2.10")
+
+
+async def test_a_shared_failure_reaches_every_waiting_bot_and_is_never_reused(
+    market_inputs: tuple[_Client, OptionWatchList],
+) -> None:
+    client, _watch = market_inputs
+    first, second = _market(setup(leg()), market_inputs), _market(setup(leg()), market_inputs)
+    client.ib.error = (162, "No market data permissions for this contract")
+    client.ib.hold()
+
+    preparing = asyncio.gather(first.prepare(at(5)), second.prepare(at(5)), return_exceptions=True)
+    await _sent()
+    client.ib.release()
+    outcomes = await preparing
+
+    assert all(isinstance(outcome, module.OptionsMarketUnavailable) for outcome in outcomes)
+    assert [request[0] for request in client.ib.requests] == [1]
+    client.ib.error = None
+    await second.prepare(at(5))
+    assert [request[0] for request in client.ib.requests] == [1, 1, 2]
+    assert second.underlying_close(at(5)) == D("500")
+
+
+async def test_one_bot_stopping_cannot_cancel_another_bots_shared_read(
+    market_inputs: tuple[_Client, OptionWatchList],
+) -> None:
+    client, _watch = market_inputs
+    stopping, staying = _market(setup(leg()), market_inputs), _market(setup(leg()), market_inputs)
+    client.ib.hold()
+    first = asyncio.create_task(stopping.prepare(at(5), contracts=(CALL,)))
+    second = asyncio.create_task(staying.prepare(at(5), contracts=(CALL,)))
+    await _sent()
+
+    first.cancel()
+    await asyncio.gather(first, return_exceptions=True)
+    client.ib.release()
+    await second
+
+    assert client.ib.cancelled == []
+    assert staying.option_bar(CALL, at(5)).close == D("2.00")
 
 
 async def test_quote_is_only_execution_evidence_and_never_a_substitute_for_missing_trade(
