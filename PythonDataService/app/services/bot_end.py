@@ -353,8 +353,9 @@ def _explanation(
             ),
             "ended": f"The bot has stopped, and its simulation {sold} what it held at the last price it saw.",
         }[status]
-    if bot_kind == "options":
-        # An Options bot always ends with SELL: its end closes every contract it holds.
+    if bot_kind == "options" and action == "SELL":
+        # An Options bot's end closes every contract it holds. KEEP is refused
+        # (resolve_bot_end); an end recorded as KEEP before then keeps its words.
         return {
             "scheduled": (
                 f"{stopped}At {at} the Clerk stops the bot, cancels its working orders and closes its "
