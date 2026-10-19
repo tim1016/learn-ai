@@ -9179,6 +9179,12 @@ export interface components {
          *     (:data:`EXPLICIT_NULL_END`).
          */
         BotEndPreviewRequest: {
+            /**
+             * Bot Kind
+             * @default signal
+             * @enum {string}
+             */
+            bot_kind?: "signal" | "options";
             /** End */
             end?: components["schemas"]["BotEndInput"];
             /**
@@ -25002,7 +25008,8 @@ export interface components {
          */
         OptionsDeployRequest: {
             budget?: components["schemas"]["DeploymentBudgetInput"] | null;
-            end?: components["schemas"]["BotEndInput"] | null;
+            /** End */
+            end?: components["schemas"]["BotEndInput"];
             /**
              * Execution Mode
              * @enum {string}
@@ -25016,7 +25023,8 @@ export interface components {
         /** OptionsDeploySubmission */
         OptionsDeploySubmission: {
             budget?: components["schemas"]["DeploymentBudgetInput"] | null;
-            end?: components["schemas"]["BotEndInput"] | null;
+            /** End */
+            end?: components["schemas"]["BotEndInput"];
             /**
              * Execution Mode
              * @enum {string}

@@ -4757,6 +4757,15 @@
         "additionalProperties": false,
         "description": "Check an end on the Deploy form before the bot exists.\n\n``end`` omitted previews the default end; an explicit ``null`` is refused\n(:data:`EXPLICIT_NULL_END`).",
         "properties": {
+          "bot_kind": {
+            "default": "signal",
+            "enum": [
+              "signal",
+              "options"
+            ],
+            "title": "Bot Kind",
+            "type": "string"
+          },
           "end": {
             "allOf": [
               {
@@ -45224,14 +45233,12 @@
             ]
           },
           "end": {
-            "anyOf": [
+            "allOf": [
               {
                 "$ref": "#/components/schemas/BotEndInput"
-              },
-              {
-                "type": "null"
               }
-            ]
+            ],
+            "title": "End"
           },
           "execution_mode": {
             "enum": [
@@ -45279,14 +45286,12 @@
             ]
           },
           "end": {
-            "anyOf": [
+            "allOf": [
               {
                 "$ref": "#/components/schemas/BotEndInput"
-              },
-              {
-                "type": "null"
               }
-            ]
+            ],
+            "title": "End"
           },
           "execution_mode": {
             "enum": [

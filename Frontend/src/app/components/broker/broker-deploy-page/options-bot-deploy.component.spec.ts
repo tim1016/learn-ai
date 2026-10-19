@@ -21,6 +21,7 @@ import { OPTION_CATALOGUE } from './option-structure/option-structure.fixtures';
 import { OptionsBotDeployComponent } from './options-bot-deploy.component';
 import { OptionsBotDeployService, type OptionsDeploymentReview, type OptionsDeployRequest } from './options-bot-deploy.service';
 
+const DEFAULT_OPTION_END_MS = Date.UTC(2026, 9, 20, 19, 15);
 const TARGET = resourceTarget('alpaca', 'clrk_spec', { accountId: 'PA9', bindingGeneration: 3, routingEpoch: 4 });
 const RECEIPT: BudgetDeployReceipt = {
   outcome: 'success', status: 'deployed', receipt_id: 'receipt-options-1', recorded_at_ms: 1791828000000,
@@ -41,19 +42,24 @@ function reviewed(request: OptionsDeployRequest): OptionsDeploymentReview {
   };
 }
 
-async function setup(options: { live?: boolean; selectedId?: string; versions?: GoldenOptionSetup[]; noExitDefaults?: boolean } = {}) {
+async function setup(options: { live?: boolean; selectedId?: string; versions?: GoldenOptionSetup[]; noExitDefaults?: boolean; endReadFails?: boolean } = {}) {
   const review = vi.fn().mockImplementation(async (_target, request: OptionsDeployRequest) => {
     const result = reviewed(request);
     return options.live ? { ...result, budget: { ...result.budget, world: 'real_live', confirmation_text: 'DEPLOY PA9 $10000.00' } } : result;
   });
   const deploy = vi.fn().mockResolvedValue(RECEIPT);
   const submission = vi.fn().mockResolvedValue(RECEIPT);
-  const previewBotEnd = vi.fn().mockImplementation(async (_target, body: BotEndPreviewRequest) => ({
-    ...DEPLOY_VIEW.default_end, ...body.end, status: body.end?.end_at_ms == null ? 'no_end' : 'scheduled',
-    headline: 'Reviewed bot end',
-  }));
+  const previewBotEnd = vi.fn().mockImplementation(async (_target, body: BotEndPreviewRequest) => {
+    if (options.endReadFails && body.end === undefined) {
+      throw new HttpErrorResponse({ status: 503, error: { detail: { message: 'The calendar end could not be read.' } } });
+    }
+    return { ...DEPLOY_VIEW.default_end, ...(body.end ?? { end_at_ms: DEFAULT_OPTION_END_MS, end_action: 'SELL' }),
+      status: body.end?.end_at_ms === null ? 'no_end' : 'scheduled', headline: 'Reviewed bot end' };
+  });
   const get = vi.fn().mockResolvedValue(goldenSetup());
   const preview = vi.fn().mockResolvedValue(previewAnswer());
+  const getDeployView = vi.fn().mockResolvedValue({ ...(options.live ? LIVE_DEPLOY_VIEW : DEPLOY_VIEW),
+    ...(options.noExitDefaults ? { default_exit_terms: null } : {}) });
   const result = await render(OptionsBotDeployComponent, {
     inputs: { target: TARGET, accountId: 'PA9', fence: { bindingGeneration: 3, routingEpoch: 4 } },
     providers: [
@@ -63,15 +69,15 @@ async function setup(options: { live?: boolean; selectedId?: string; versions?: 
       { provide: GoldenOptionSetupsService, useValue: { list: async () => options.versions ?? [goldenSetup()], get } },
       { provide: OptionsBacktestService, useValue: { describe: async () => summaryFor('Tested setup') } },
       { provide: PositionPreviewService, useValue: { preview } },
-      { provide: BrokerV2PanelService, useValue: { getDeployView: async () => ({ ...(options.live ? LIVE_DEPLOY_VIEW : DEPLOY_VIEW),
-        ...(options.noExitDefaults ? { default_exit_terms: null } : {}) }), previewBotEnd, getOptionStructures: async () => OPTION_CATALOGUE } },
+      { provide: BrokerV2PanelService, useValue: { getDeployView, previewBotEnd, getOptionStructures: async () => OPTION_CATALOGUE } },
       { provide: OptionsBotDeployService, useValue: { review, deploy, submission } },
     ],
   });
   vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
   if (!options.selectedId) await userEvent.selectOptions(await screen.findByLabelText('Approved tested version'), goldenSetup().id);
   await waitFor(() => expect((screen.getByLabelText('Dollar budget (USD)') as HTMLInputElement).value).toBe('10000'));
-  return { ...result, review, deploy, submission, get, preview, previewBotEnd };
+  if (!options.endReadFails) await waitFor(() => expect(screen.getByLabelText<HTMLInputElement>('End date').value).not.toBe(''));
+  return { ...result, review, deploy, submission, get, preview, previewBotEnd, getDeployView };
 }
 
 async function reviewSetup(): Promise<void> {
@@ -81,6 +87,85 @@ async function reviewSetup(): Promise<void> {
 }
 
 describe('Options deployment', () => {
+  it('pre-fills the server’s calendar-owned end and submits it without opting into no end', async () => {
+    const { review, previewBotEnd } = await setup();
+    const wall = localWallClock(DEFAULT_OPTION_END_MS);
+    expect(screen.getByLabelText<HTMLInputElement>('End date').value).toBe(wall.date);
+    expect(screen.getByLabelText<HTMLInputElement>(/^End time/).value).toBe(wall.clock);
+    expect(screen.getByRole<HTMLInputElement>('checkbox', { name: 'No end — run until I stop it' }).checked).toBe(false);
+    expect(previewBotEnd).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'PA9' }), {
+      execution_mode: 'paper', bot_kind: 'options',
+    });
+    await reviewSetup();
+    expect(review.mock.calls[1][1].end).toEqual({ end_at_ms: DEFAULT_OPTION_END_MS, end_action: 'SELL' });
+  });
+
+  it('preserves a changed deployment date and time when the account is refreshed', async () => {
+    const { fixture, previewBotEnd } = await setup();
+    fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-10-22' } });
+    fireEvent.input(screen.getByLabelText(/^End time/), { target: { value: '12:30' } });
+    previewBotEnd.mockResolvedValue({ ...DEPLOY_VIEW.default_end, end_at_ms: Date.UTC(2026, 9, 21, 19, 15) });
+    fixture.componentRef.setInput('fence', { bindingGeneration: 3, routingEpoch: 5 });
+    await waitFor(() => expect(previewBotEnd).toHaveBeenCalledTimes(2));
+    await fixture.whenStable();
+    expect(screen.getByLabelText<HTMLInputElement>('End date').value).toBe('2026-10-22');
+    expect(screen.getByLabelText<HTMLInputElement>(/^End time/).value).toBe('12:30');
+  });
+
+  it.each([false, true])('refreshes an untouched end while preserving explicit no end (no end: %s)', async (noEnd) => {
+    const { fixture, previewBotEnd } = await setup();
+    if (noEnd) await userEvent.click(screen.getByRole('checkbox', { name: 'No end — run until I stop it' }));
+    const nextEnd = Date.UTC(2026, 9, 21, 19, 15);
+    previewBotEnd.mockResolvedValue({ ...DEPLOY_VIEW.default_end, end_at_ms: nextEnd });
+    fixture.componentRef.setInput('fence', { bindingGeneration: 3, routingEpoch: 5 });
+    await waitFor(() => expect(previewBotEnd).toHaveBeenCalledTimes(2));
+    await fixture.whenStable();
+    expect(screen.getByRole<HTMLInputElement>('checkbox', { name: 'No end — run until I stop it' }).checked).toBe(noEnd);
+    const wall = localWallClock(noEnd ? DEFAULT_OPTION_END_MS : nextEnd);
+    expect(screen.getByLabelText<HTMLInputElement>('End date').value).toBe(wall.date);
+    expect(screen.getByLabelText<HTMLInputElement>(/^End time/).value).toBe(wall.clock);
+  });
+
+  it('requires a readable calendar default and offers a retry when it fails', async () => {
+    const { previewBotEnd, review } = await setup({ endReadFails: true });
+    await screen.findByText('The calendar end could not be read.');
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Review setup and budget' }).disabled).toBe(true);
+    expect(review).not.toHaveBeenCalled();
+    previewBotEnd.mockResolvedValue({ ...DEPLOY_VIEW.default_end, end_at_ms: DEFAULT_OPTION_END_MS });
+    fireEvent.click(screen.getByRole('button', { name: 'Read settings again' }));
+    await waitFor(() => expect(screen.getByLabelText<HTMLInputElement>('End date').value).not.toBe(''));
+    expect(screen.queryByText('The calendar end could not be read.')).toBeNull();
+  });
+
+  it.each([false, true])('pre-fills all three account exit defaults and reviews them (live: %s)', async (live) => {
+    const { review } = await setup({ live });
+    expect(screen.getByLabelText<HTMLInputElement>('Exit allowance (bps)').value).toBe('20');
+    expect(screen.getByLabelText<HTMLInputElement>('Band multiple').value).toBe('2');
+    expect(screen.getByLabelText<HTMLInputElement>('Spread cap (bps)').value).toBe('50');
+    if (live) await userEvent.selectOptions(screen.getByLabelText('Execution mode'), 'live');
+    await reviewSetup();
+    expect(review.mock.calls[1][1].exit_terms).toEqual(DEPLOY_VIEW.default_exit_terms);
+  });
+
+  it('inherits newly available defaults on a refreshed account read and keeps subsequent edits', async () => {
+    const { fixture, getDeployView } = await setup({ noExitDefaults: true });
+    expect(screen.getByLabelText<HTMLInputElement>('Exit allowance (bps)').value).toBe('');
+    getDeployView.mockResolvedValue(DEPLOY_VIEW);
+    fixture.componentRef.setInput('fence', { bindingGeneration: 3, routingEpoch: 5 });
+    await waitFor(() => expect(screen.getByLabelText<HTMLInputElement>('Exit allowance (bps)').value).toBe('20'));
+    expect(screen.getByLabelText<HTMLInputElement>('Band multiple').value).toBe('2');
+    expect(screen.getByLabelText<HTMLInputElement>('Spread cap (bps)').value).toBe('50');
+
+    fireEvent.input(screen.getByLabelText('Exit allowance (bps)'), { target: { value: '0' } });
+    fireEvent.input(screen.getByLabelText('Band multiple'), { target: { value: '3' } });
+    fireEvent.input(screen.getByLabelText('Spread cap (bps)'), { target: { value: '' } });
+    fixture.componentRef.setInput('fence', { bindingGeneration: 3, routingEpoch: 6 });
+    await fixture.whenStable();
+    expect(screen.getByLabelText<HTMLInputElement>('Exit allowance (bps)').value).toBe('0');
+    expect(screen.getByLabelText<HTMLInputElement>('Band multiple').value).toBe('3');
+    expect(screen.getByLabelText<HTMLInputElement>('Spread cap (bps)').value).toBe('');
+  });
+
   it('shows a server-authored position preview for the selected approved setup', async () => {
     const { preview } = await setup();
     await screen.findByRole('heading', { name: 'Historical position payoff' });
@@ -97,20 +182,21 @@ describe('Options deployment', () => {
 
   it('reviews and deploys explicit per-bot terms and a bounded end when account defaults are absent', async () => {
     const { review, deploy, previewBotEnd } = await setup({ noExitDefaults: true });
+    expect(screen.getByRole('link', { name: 'Set defaults for new bots in Settings' }).getAttribute('href'))
+      .toBe('/brokers/alpaca/clerks/clrk_spec/settings');
     expect((screen.getByRole('button', { name: 'Review setup and budget' }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByText('Per-bot exit settings'));
     fireEvent.input(screen.getByLabelText('Exit allowance (bps)'), { target: { value: '20' } });
     fireEvent.input(screen.getByLabelText('Band multiple'), { target: { value: '2' } });
     fireEvent.input(screen.getByLabelText('Spread cap (bps)'), { target: { value: '50' } });
     fireEvent.input(screen.getByLabelText('Dollar budget (USD)'), { target: { value: '5000' } });
-    fireEvent.click(screen.getByRole('checkbox', { name: 'No end — run until I stop it' }));
     const endAtMs = 1792439940000;
     const wall = localWallClock(endAtMs);
     fireEvent.change(screen.getByLabelText('End date'), { target: { value: wall.date } });
     fireEvent.input(screen.getByLabelText(/^End time/), { target: { value: wall.clock } });
     await reviewSetup();
     expect(previewBotEnd).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'PA9' }), {
-      execution_mode: 'paper', end: { end_at_ms: endAtMs, end_action: 'SELL' },
+      execution_mode: 'paper', bot_kind: 'options', end: { end_at_ms: endAtMs, end_action: 'SELL' },
     });
     expect(review.mock.calls[1][1]).toMatchObject({
       exit_terms: { exit_allowance_bps: 20, band_multiple: 2, spread_cap_bps: 50 },
@@ -133,7 +219,7 @@ describe('Options deployment', () => {
     expect((screen.getByRole('button', { name: 'Review setup and budget' }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.input(screen.getByLabelText('Band multiple'), { target: { value: '3' } });
     await reviewSetup();
-    fireEvent.click(screen.getByRole('checkbox', { name: 'No end — run until I stop it' }));
+    fireEvent.change(screen.getByLabelText('End date'), { target: { value: '' } });
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Deploy Options bot' })).toBeNull());
     expect((screen.getByRole('button', { name: 'Review setup and budget' }) as HTMLButtonElement).disabled).toBe(true);
   });
@@ -198,7 +284,7 @@ describe('Options deployment', () => {
 
     const [target, request] = deploy.mock.calls[0];
     expect(target).toMatchObject({ accountId: 'PA9', clerkId: 'clrk_spec', bindingGeneration: 3, routingEpoch: 4 });
-    expect(request).toMatchObject({ golden_setup_id: goldenSetup().id, execution_mode: 'paper', end: { end_at_ms: null, end_action: 'SELL' },
+    expect(request).toMatchObject({ golden_setup_id: goldenSetup().id, execution_mode: 'paper', end: { end_at_ms: DEFAULT_OPTION_END_MS, end_action: 'SELL' },
       budget: { amount_usd: '10000', risk_revision: 8, review_token: 'review-options-8' } });
     expect(target.idempotencyKey).toBe(request.submission_key);
     expect(request).not.toHaveProperty('quantity');

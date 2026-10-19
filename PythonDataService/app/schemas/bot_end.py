@@ -26,7 +26,7 @@ BotEndStatus = Literal["no_end", "scheduled", "ending", "ended"]
 #: The one refusal for an explicit ``"end": null``: an omitted end is the
 #: default end, and "no end" is named, never implied by a null.
 EXPLICIT_NULL_END = (
-    "end may not be null: omit it for the default end (the session close minus one minute), "
+    "end may not be null: omit it for the default end, "
     'or send {"end_at_ms": null, "end_action": "SELL"} for no end'
 )
 
@@ -93,6 +93,7 @@ class BotEndPreviewRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     execution_mode: Literal["paper", "dry_run", "shadow", "live"]
+    bot_kind: Literal["signal", "options"] = "signal"
     end: BotEndInput | SkipJsonSchema[None] = None
 
     @field_validator("end", mode="before")

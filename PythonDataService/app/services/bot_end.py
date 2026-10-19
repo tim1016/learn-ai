@@ -2,9 +2,10 @@
 
 Canonical implementation of three owner decisions (grill 2026-09-29):
 
-* **The default** is today's session close minus one minute -- 15:59 ET, or
-  12:59 ET on a half-day -- taken from the canonical calendar; once today's
-  last minute has begun, the next session's.
+* **The default** is today's session close minus one minute for Signal bots,
+  or the option expiry-close lead (45 minutes) for Options bots (ADR 0079).
+  Both use the canonical calendar; once today's cutoff has come, the next
+  session's.
 * **An end falls within the bot's trading hours.** Every Deploy is regular
   hours only (``use_rth=True``), so the end must be in the future, on a
   trading day the calendar covers, no earlier than the open and no later
@@ -32,6 +33,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date
+from typing import Literal
 
 from app.lean_sidecar.trading_calendar import (
     is_early_close,
@@ -40,6 +42,7 @@ from app.lean_sidecar.trading_calendar import (
     session_close_minute_et,
     session_window_for_date,
 )
+from app.options.deadlines import CloseTerms
 from app.schemas.bot_end import (
     BotEnd,
     BotEndAction,
@@ -82,15 +85,25 @@ class ResolvedBotEnd:
     notice: str | None = None
 
 
-def default_bot_end(now_ms: int) -> BotEnd:
-    """One minute before the close of today's session, or of the next one once that has passed."""
+def default_bot_end(now_ms: int, *, bot_kind: Literal["signal", "options"] = "signal") -> BotEnd:
+    """The next session cutoff: one minute before close for Signal, 45 for Options.
+
+    Formula: calendar session close minus the bot kind's close lead; advance once the cutoff has passed.
+    Reference: ADR 0079, deployment-end default; #2607, Signal deployment end.
+    Canonical implementation: this function, using the canonical calendar and options.deadlines.CloseTerms.
+    Validated against: tests/broker/v2panel/test_bot_end_routes.py.
+    """
+    lead_ms = CloseTerms().expiry_close_lead_ms if bot_kind == "options" else BOT_END_LEAD_MS
     day = et_date_at_ms(now_ms)
-    if not is_trading_day(day) or _last_end_ms(day) <= now_ms:
+    if not is_trading_day(day) or _last_end_ms(day, lead_ms=lead_ms) <= now_ms:
         day = next_trading_day(day)
-    return BotEnd(end_at_ms=_last_end_ms(day))
+    return BotEnd(end_at_ms=_last_end_ms(day, lead_ms=lead_ms))
 
 
-def resolve_bot_end(choice: BotEndInput | None, *, now_ms: int, dry_run: bool, use_rth: bool) -> ResolvedBotEnd:
+def resolve_bot_end(
+    choice: BotEndInput | None, *, now_ms: int, dry_run: bool, use_rth: bool,
+    bot_kind: Literal["signal", "options"] = "signal",
+) -> ResolvedBotEnd:
     """The end a Deploy or an edit records, or :class:`BotEndRefused`.
 
     ``choice`` ``None`` is the default end. ``dry_run`` refuses KEEP;
@@ -109,7 +122,7 @@ def resolve_bot_end(choice: BotEndInput | None, *, now_ms: int, dry_run: bool, u
     if hours_refusal is not None:
         raise hours_refusal
     if choice is None:
-        return ResolvedBotEnd(end=default_bot_end(now_ms))
+        return ResolvedBotEnd(end=default_bot_end(now_ms, bot_kind=bot_kind))
     if dry_run and choice.end_action == "KEEP":
         raise BotEndRefused(
             "A Dry Run can't keep its shares at its end.",
@@ -169,6 +182,7 @@ def bot_end_view(
     running: bool,
     use_rth: bool,
     notice: str | None = None,
+    bot_kind: Literal["signal", "options"] = "signal",
 ) -> BotEndView:
     """A bot's end in the owner's words, at ``now_ms``.
 
@@ -191,7 +205,7 @@ def bot_end_view(
                 else "This bot is stopped, so it has no end: a Stop cancels any end, and nothing is sold at it."
             ),
             notice=notice, editable=editable, edit_refusal=edit_refusal,
-            default_end_at_ms=default_bot_end(now_ms).end_at_ms if offers_default else None,
+            default_end_at_ms=default_bot_end(now_ms, bot_kind=bot_kind).end_at_ms if offers_default else None,
         )
     if recorded.carried_out_at_ms is not None:
         status: BotEndStatus = "ended"
@@ -254,14 +268,16 @@ def bot_end_view_attested_absent_sale(view: BotEndView, *, why: str) -> BotEndVi
     })
 
 
-def resolved_bot_end_view(resolved: ResolvedBotEnd, *, now_ms: int, dry_run: bool) -> BotEndView:
+def resolved_bot_end_view(
+    resolved: ResolvedBotEnd, *, now_ms: int, dry_run: bool, bot_kind: Literal["signal", "options"] = "signal",
+) -> BotEndView:
     """An end the Deploy form chose, before its bot exists, with the notice when its time was moved.
 
     Every Deploy is regular hours only.
     """
     return bot_end_view(
         None if resolved.end is None else RecordedEnd.scheduled(resolved.end),
-        now_ms=now_ms, dry_run=dry_run, running=True, use_rth=True, notice=resolved.notice,
+        now_ms=now_ms, dry_run=dry_run, running=True, use_rth=True, notice=resolved.notice, bot_kind=bot_kind,
     )
 
 
@@ -345,8 +361,8 @@ def _explanation(status: BotEndStatus, action: BotEndAction, at: str, *, dry_run
     }[status]
 
 
-def _last_end_ms(day: date) -> int:
-    return session_window_for_date(day).close_ms_utc - BOT_END_LEAD_MS
+def _last_end_ms(day: date, *, lead_ms: int = BOT_END_LEAD_MS) -> int:
+    return session_window_for_date(day).close_ms_utc - lead_ms
 
 
 def _full_session_last_end_ms(day: date) -> int:

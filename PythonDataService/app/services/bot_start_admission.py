@@ -19,6 +19,7 @@ from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.recovery_policy import SWEEP_LIVENESS_BOUND_MS
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.marketdata.feed import MarketDataFeed
+from app.options_bots.schedule import first_eligible_session
 from app.research.golden_search.qualifications import Coverage
 from app.schemas.action_plan import BotActionPlan, traded_market_symbol
 from app.schemas.bot_end import BotEnd
@@ -42,6 +43,7 @@ from app.schemas.signal_program_seal import ParameterOrigin
 from app.schemas.traded_asset_acknowledgement import UntestedTradedAssetAcknowledgement
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_carryover import configuration_hash
+from app.services.bot_runner_errors import RunAdmissionRefusedError
 from app.services.deploy_window import deploy_window
 from app.services.market_liveness import get_market_liveness_store, market_liveness_fact
 from app.services.run_admission import evaluate_run_admission
@@ -629,6 +631,14 @@ class BotStartAdmission:
                     "market-data feed resolved."
                 )
             activation_ms = self._now_ms()
+            if binding.options_bot is not None and request.end is not None:
+                eligible = first_eligible_session(binding.options_bot.setup, at_ms=activation_ms)
+                refusal = eligible.end_refusal(request.end.end_at_ms, now_ms=activation_ms)
+                if refusal is not None:
+                    raise RunAdmissionRefusedError(
+                        refusal, detail="The entry time changed while deployment was being admitted.",
+                        reason_code="OPTIONS_END_BEFORE_ENTRY",
+                    )
             binding = binding.model_copy(update={"created_at_ms": activation_ms})
             bot = await self._activate(binding, feed, activation_ms, custody, request.end)
         return AdmittedBotStart(bot=bot, admission=decision)

@@ -9,6 +9,8 @@ itself is read with its panel (``BotPanelView.end``).
 
 from __future__ import annotations
 
+from typing import Literal
+
 from app.config import settings
 from app.schemas.bot_end import BotEndInput, BotEndPreviewRequest, BotEndView
 from app.services.bot_end import (
@@ -31,13 +33,19 @@ from app.utils.timestamps import now_ms_utc
 BOT_END_REFUSED = "BOT_END_REFUSED"
 
 
-def resolve_deploy_end(end: BotEndInput | None, *, dry_run: bool) -> ResolvedBotEnd:
+def resolve_deploy_end(
+    end: BotEndInput | None, *, dry_run: bool, bot_kind: Literal["signal", "options"] = "signal",
+    at_ms: int | None = None,
+) -> ResolvedBotEnd:
     """The end a Deploy records, or the panel's refusal in the owner's words.
 
     Every Deploy is regular hours only (``use_rth=True``), as its end is.
     """
     try:
-        return resolve_bot_end(end, now_ms=now_ms_utc(), dry_run=dry_run, use_rth=True)
+        return resolve_bot_end(
+            end, now_ms=now_ms_utc() if at_ms is None else at_ms,
+            dry_run=dry_run, use_rth=True, bot_kind=bot_kind,
+        )
     except BotEndRefused as exc:
         raise _refused(exc) from exc
 
@@ -48,10 +56,10 @@ async def preview_bot_end(broker: str, account_id: str, request: BotEndPreviewRe
     now_ms = now_ms_utc()
     dry_run = request.execution_mode == "dry_run"
     try:
-        resolved = resolve_bot_end(request.end, now_ms=now_ms, dry_run=dry_run, use_rth=True)
+        resolved = resolve_bot_end(request.end, now_ms=now_ms, dry_run=dry_run, use_rth=True, bot_kind=request.bot_kind)
     except BotEndRefused as exc:
         raise _refused(exc) from exc
-    return resolved_bot_end_view(resolved, now_ms=now_ms, dry_run=dry_run)
+    return resolved_bot_end_view(resolved, now_ms=now_ms, dry_run=dry_run, bot_kind=request.bot_kind)
 
 
 async def edit_bot_end(broker: str, account_id: str, sid: str, choice: BotEndInput) -> BotEndView:

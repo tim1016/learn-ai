@@ -21,7 +21,11 @@ from fastapi import FastAPI
 from app.broker.alpaca.clerk.active_authority import close_synthetic_clerk_runtimes, get_clerk_runtime
 from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
-from app.lean_sidecar.trading_calendar import CALENDAR_IDENTITY, CALENDAR_PACKAGE_VERSION
+from app.lean_sidecar.trading_calendar import (
+    CALENDAR_IDENTITY,
+    CALENDAR_PACKAGE_VERSION,
+    current_trading_session_window,
+)
 from app.options.contract import OptionContract
 from app.options.quotes import HeldQuote, QuoteDataType, QuoteSide
 from app.options.resolver import FeedState
@@ -31,9 +35,11 @@ from app.options_bots.golden_proof import build_proof
 from app.options_bots.journal import OptionsBotJournal
 from app.research.golden_search.proof import BlobStore
 from app.routers import golden_option_setups, options_bots
+from app.schemas.bot_end import BotEndInput
+from app.schemas.deployment_budget import DeployBudgetConsent
 from app.services import options_bot_deploy
 from app.services.bot_binding_repository import BrokerBotBinding
-from app.services.broker_v2_panel import bot_custody, panel_scope
+from app.services.broker_v2_panel import bot_custody, panel_deploy, panel_scope
 from tests._helpers.bot_runner.custody import _registry
 from tests._helpers.bot_runner.doubles import _FakeFeed
 from tests._helpers.fake_lake_catalog import FakeCatalog
@@ -59,7 +65,8 @@ async def test_approved_setup_deploys_once_through_http_and_the_actual_registry(
         prove=partial(build_proof, blobs=BlobStore(tmp_path / "proof")),
     )
     clock = Clock(at(4))
-    registry = _registry(tmp_path / "bots", _FakeFeed([], mode="hold", observed_at_ms=clock()), now_ms=clock)
+    feed = _FakeFeed([], mode="hold", observed_at_ms=clock())
+    registry = _registry(tmp_path / "bots", feed, now_ms=clock)
 
     class LiveObservations(Market):
         def quote_feed(self) -> FeedState:
@@ -80,9 +87,11 @@ async def test_approved_setup_deploys_once_through_http_and_the_actual_registry(
     monkeypatch.setattr(options_bot_deploy, "get_bot_task_registry", lambda: registry)
     monkeypatch.setattr(bot_custody, "get_bot_task_registry", lambda: registry)
     monkeypatch.setattr(panel_scope, "get_bot_task_registry", lambda: registry)
+    monkeypatch.setattr(panel_deploy, "get_bot_task_registry", lambda: registry)
     monkeypatch.setattr(options_bot_deploy, "get_ready_setup", module.ready)
     monkeypatch.setattr(golden, "get_ready_setup", module.ready)
     monkeypatch.setattr(options_bot_deploy, "now_ms_utc", clock)
+    monkeypatch.setattr("app.services.broker_v2_panel.bot_end_panel.now_ms_utc", clock)
     monkeypatch.setattr(runtime, "OptionsBotDuty", ObservedDuty)
     app = FastAPI()
     app.include_router(golden_option_setups.router, prefix="/api/research/golden-option-setups")
@@ -106,11 +115,48 @@ async def test_approved_setup_deploys_once_through_http_and_the_actual_registry(
             assert review.status_code == 200, review.text
             assert review.json()["allowed"], review.text
             body["budget"]["review_token"] = review.json()["budget"]["review_token"]
+            clock.now = at(5) + 1
+            late_review = await client.post(base + "/review", json=body)
+            assert late_review.status_code == 409, late_review.text
+            assert "next eligible entry" in late_review.json()["detail"]["message"]
+            late_deploy = await client.post(base + "/deploy", json={**body, "submission_key": "late-cutoff-deploy"})
+            assert late_deploy.status_code == 409, late_deploy.text
+            assert "next eligible entry" in late_deploy.json()["detail"]["message"]
+            unclaimed = await client.get(base + "/deploy-submissions/late-cutoff-deploy")
+            assert unclaimed.status_code == 404, unclaimed.text
+            assert len(registry.bindings_for_broker("alpaca")) == 0
+            resolve_consent = options_bot_deploy.budget_deploy.resolve_options_session_consent
+
+            def consent_crosses_entry(*args: Any, **kwargs: Any) -> DeployBudgetConsent:
+                consent = resolve_consent(*args, **kwargs)
+                clock.now = at(5) + 1
+                feed._observed_at_ms = clock()
+                return consent
+
+            clock.now = at(5) - 1
+            with monkeypatch.context() as crossing:
+                crossing.setattr(options_bot_deploy.budget_deploy, "resolve_options_session_consent", consent_crosses_entry)
+                crossed = await client.post(base + "/deploy", json={**body, "submission_key": "crossed-entry-deploy"})
+            assert crossed.status_code == 409, crossed.text
+            assert "next eligible entry" in crossed.json()["detail"]["message"]
+            assert len(registry.bindings_for_broker("alpaca")) == 0
+            clock.now = at(4)
+            feed._observed_at_ms = clock()
             body["submission_key"] = "lifecycle-deploy"
             deployed = await client.post(base + "/deploy", json=body)
             assert deployed.status_code == 200, deployed.text
             assert deployed.json()["status"] == "deployed", deployed.text
             sid = deployed.json()["strategy_instance_id"]
+            desired = registry._desired_repo(sid).read()
+            session = current_trading_session_window(clock())
+            assert desired is not None and desired.end is not None and session is not None
+            assert desired.end.end_at_ms == session.close_ms_utc - 45 * 60_000
+            assert desired.end.end_action == "SELL"
+            await registry.edit_bot_end("alpaca", sid, BotEndInput(end_at_ms=None, end_action="SELL"), updated_by="owner")
+            assert registry.bot_end("alpaca", sid).default_end_at_ms == session.close_ms_utc - 45 * 60_000
+            await registry.edit_bot_end("alpaca", sid, BotEndInput(
+                end_at_ms=desired.end.end_at_ms, end_action=desired.end.end_action,
+            ), updated_by="owner")
             replay = await client.post(base + "/deploy", json=body)
             assert replay.status_code == 200, replay.text
             assert replay.json()["run_id"] == deployed.json()["run_id"]

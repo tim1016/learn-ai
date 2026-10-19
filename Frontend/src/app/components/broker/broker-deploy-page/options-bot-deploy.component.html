@@ -44,14 +44,18 @@
             <fieldset [disabled]="busy() || unknown()"><app-deploy-option-order-terms [terms]="terms()" [defaults]="orderDefaults()" [notes]="orderNotes()" [failure]="loadProblem()" (termsChange)="terms.set($event)" /></fieldset>
           </details>
           <details class="terms" open><summary>Per-bot exit settings</summary>
-            <p class="note">Required for this bot. These do not cap option market-order exit prices. Account defaults are unchanged.</p>
+            <p class="note">New bots start from the account’s defaults. Changes here apply only to this bot. These values do not cap option market-order exit prices.</p>
+            @if (context.hasValue() && !context.value().default_exit_terms) {
+              <p class="note">This account has no defaults for new bots, so these start empty.
+                <a [routerLink]="settingsRoute()">Set defaults for new bots in Settings</a></p>
+            }
             <label for="options-exit-allowance">Exit allowance (bps)</label><input id="options-exit-allowance" type="number" step="any" [formField]="ticket.exitAllowanceBps" />
             <label for="options-exit-band">Band multiple</label><input id="options-exit-band" type="number" step="any" [formField]="ticket.bandMultiple" />
             <label for="options-exit-spread">Spread cap (bps)</label><input id="options-exit-spread" type="number" step="any" [formField]="ticket.spreadCapBps" />
             @for (error of exitTermErrors(); track error) { <p class="problem">{{ error }}</p> }
           </details>
-          <div class="end-setting"><h3>Deployment end</h3><app-bot-end-editor [(fields)]="endFields" [keepOffered]="false" [locked]="busy() || unknown()" />
-            <p class="note">At its end, the bot closes remaining positions and stops repeating. A late deployment waits for the next eligible session.</p>
+          <div class="end-setting"><h3>Deployment end</h3><app-bot-end-editor [fields]="endFields()" (fieldsChange)="endEdited.set(true); endFields.set($event)" [keepOffered]="false" [locked]="busy() || unknown() || !endSeeded()" />
+            <p class="note">Defaults to 45 minutes before the market closes, including early-close days. At its end, the bot closes remaining positions and stops repeating. A late deployment waits for the next eligible session.</p>
           </div>
         </section>
         <section class="desk-panel review-panel">
