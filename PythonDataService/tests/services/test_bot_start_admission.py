@@ -563,6 +563,33 @@ def test_admission_uses_the_requested_symbols_health(
     assert aapl_fact.state == "STALE"
 
 
+def test_warming_subscription_during_rth_admits_a_run_that_shares_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A second Deploy on a symbol whose line is still closing its first minute starts.
+
+    Before the fix this was STALE, so every Deploy after the first on a symbol
+    was refused until that minute closed (up to two minutes).
+    """
+    _session(monkeypatch, "RTH")
+    health = FeedHealth(
+        connected=True,
+        stale=True,
+        warming=True,
+        last_bar_ms=None,
+        reason="The IBKR feed for SPY is delivering; its first closed minute is still being assembled",
+        active_subscription_count=1,
+        observed_at_ms=_NOW - 1_000,
+    )
+
+    fact = market_data_admission_fact(_Feed(health), _NOW - 1_000, use_rth=True)
+    decision = evaluate_run_admission(_start_facts(fact), _clerk(), evaluated_at_ms=_NOW)
+
+    assert (fact.state, fact.warming) == ("AVAILABLE", True)
+    assert fact.reason == health.reason
+    assert decision.reason_code != "MARKET_DATA_STALE"
+
+
 def test_stale_feed_with_no_active_subscription_is_idle_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

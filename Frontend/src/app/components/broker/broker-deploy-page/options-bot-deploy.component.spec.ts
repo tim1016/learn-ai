@@ -15,6 +15,7 @@ import { exceptionGoldenSetup, goldenSetup } from '../../options-backtest/testin
 import { summaryFor } from '../../options-backtest/testing/fixtures';
 import { PositionPreviewService } from '../../options-backtest/position/position-preview.service';
 import { previewAnswer } from '../../options-backtest/position/testing';
+import { AlpacaDeskAccountDataService } from '../../brokers/alpaca-desk/alpaca-desk-account-data.service';
 import { BrokerV2PanelService, type BudgetDeployReceipt, type BotEndPreviewRequest } from '../v2-panel/lib/broker-v2-panel.service';
 import { DEPLOY_VIEW, LIVE_DEPLOY_VIEW } from './alpaca-deploy-workflow.fixtures';
 import { OPTION_CATALOGUE } from './option-structure/option-structure.fixtures';
@@ -60,6 +61,7 @@ async function setup(options: { live?: boolean; selectedId?: string; versions?: 
   const preview = vi.fn().mockResolvedValue(previewAnswer());
   const getDeployView = vi.fn().mockResolvedValue({ ...(options.live ? LIVE_DEPLOY_VIEW : DEPLOY_VIEW),
     ...(options.noExitDefaults ? { default_exit_terms: null } : {}) });
+  const moneyReload = vi.fn();
   const result = await render(OptionsBotDeployComponent, {
     inputs: { target: TARGET, accountId: 'PA9', fence: { bindingGeneration: 3, routingEpoch: 4 } },
     providers: [
@@ -71,13 +73,14 @@ async function setup(options: { live?: boolean; selectedId?: string; versions?: 
       { provide: PositionPreviewService, useValue: { preview } },
       { provide: BrokerV2PanelService, useValue: { getDeployView, previewBotEnd, getOptionStructures: async () => OPTION_CATALOGUE } },
       { provide: OptionsBotDeployService, useValue: { review, deploy, submission } },
+      { provide: AlpacaDeskAccountDataService, useValue: { money: { reload: moneyReload } } },
     ],
   });
   vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
   if (!options.selectedId) await userEvent.selectOptions(await screen.findByLabelText('Approved tested version'), goldenSetup().id);
   await waitFor(() => expect((screen.getByLabelText('Dollar budget (USD)') as HTMLInputElement).value).toBe('10000'));
   if (!options.endReadFails) await waitFor(() => expect(screen.getByLabelText<HTMLInputElement>('End date').value).not.toBe(''));
-  return { ...result, review, deploy, submission, get, preview, previewBotEnd, getDeployView };
+  return { ...result, review, deploy, submission, get, preview, previewBotEnd, getDeployView, moneyReload };
 }
 
 async function reviewSetup(): Promise<void> {
@@ -289,6 +292,17 @@ describe('Options deployment', () => {
     expect(target.idempotencyKey).toBe(request.submission_key);
     expect(request).not.toHaveProperty('quantity');
     expect(request).not.toHaveProperty('strategy_key');
+  });
+
+  it('re-reads the account money for the header once the deployment sets money aside', async () => {
+    const { moneyReload } = await setup();
+    await reviewSetup();
+    expect(moneyReload).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy Options bot' }));
+    await screen.findByRole('heading', { name: 'Options bot is deployed' });
+
+    await waitFor(() => expect(moneyReload).toHaveBeenCalledTimes(1));
   });
 
   it('invalidates reviewed consent when the amount changes or the lane needs review', async () => {

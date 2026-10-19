@@ -319,6 +319,22 @@ def test_bot_end_view_of_a_scheduled_sale() -> None:
     assert view.editable is True
 
 
+def test_bot_end_view_of_an_options_bot_closes_its_option_positions_not_shares() -> None:
+    def explanation(*, dry_run: bool) -> str:
+        return bot_end_view(
+            _scheduled(_at(_WEDNESDAY, 15, 15)), now_ms=_at(_WEDNESDAY, 10), dry_run=dry_run, running=True,
+            use_rth=True, bot_kind="options",
+        ).explanation
+
+    assert explanation(dry_run=False) == (
+        "At Wed Sep 30, 15:15 ET the Clerk stops the bot, cancels its working orders and closes its "
+        "option positions at market."
+    )
+    assert explanation(dry_run=True) == (
+        "At Wed Sep 30, 15:15 ET the bot stops, and its simulation closes what it holds at the last price it saw."
+    )
+
+
 def test_bot_end_view_of_a_dry_run_names_the_last_price() -> None:
     view = bot_end_view(
         _scheduled(_at(_THURSDAY, 15, 59)), now_ms=_at(_WEDNESDAY, 10), dry_run=True, running=True, use_rth=True,

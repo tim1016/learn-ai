@@ -58,7 +58,7 @@ def build_market_pulse(
     bars_expected = session == "RTH" if use_rth else session in {"PRE", "RTH", "POST", "OVERNIGHT"}
     liveness = liveness or market_liveness_fact(symbol or "", now_ms)
     feed_state = {
-        "AVAILABLE": "IDLE" if fact.stale else "LIVE",
+        "AVAILABLE": "IDLE" if fact.stale and not fact.warming else "LIVE",
         "STALE": "STALE",
         "UNAVAILABLE": "MISSING",
         "UNKNOWN": "MISSING",

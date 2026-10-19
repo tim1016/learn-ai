@@ -55,6 +55,8 @@ class MarketDataAdmissionFact(BaseModel):
     reason: str | None = None
     connected: bool | None = None
     stale: bool | None = None
+    # Stale only while a delivering subscription closes its first minute.
+    warming: bool = False
     active_subscription_count: int | None = Field(default=None, ge=0)
     scheduled_phase: BarSessionPhase = "UNKNOWN"
     session_authority_source: Literal["nyse_calendar", "broker_declared_window"] | None = None

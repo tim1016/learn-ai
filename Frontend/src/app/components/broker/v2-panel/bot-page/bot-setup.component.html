@@ -2,7 +2,7 @@
   <h3 id="bot-setup-title" class="panel-title">Setup</h3>
   @let bot = panel();
   <dl class="kv">
-    <div><dt>Strategy</dt><dd>{{ bot.strategy_label }}</dd></div>
+    <div><dt>Strategy</dt><dd><app-bot-strategy-label [bot]="bot" /></dd></div>
     @if (settingLines().length > 0) {
       <div>
         <dt>Settings</dt>

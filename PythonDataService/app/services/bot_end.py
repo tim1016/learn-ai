@@ -220,7 +220,7 @@ def bot_end_view(
         end_at_ms=recorded.end_at_ms, end_action=recorded.end_action, status=status, headline=headline,
         explanation=_explanation(
             status, recorded.end_action, et_when_words(recorded.end_at_ms, now_ms=now_ms),
-            dry_run=dry_run, running=running,
+            dry_run=dry_run, running=running, bot_kind=bot_kind,
         ),
         notice=notice, editable=editable, edit_refusal=edit_refusal, default_end_at_ms=None,
     )
@@ -326,16 +326,41 @@ def _checked_end(end_at_ms: int, end_action: BotEndAction, *, now_ms: int) -> Re
     return ResolvedBotEnd(end=BotEnd(end_at_ms=end_at_ms, end_action=end_action), notice=notice)
 
 
-def _explanation(status: BotEndStatus, action: BotEndAction, at: str, *, dry_run: bool, running: bool) -> str:
+def _explanation(
+    status: BotEndStatus,
+    action: BotEndAction,
+    at: str,
+    *,
+    dry_run: bool,
+    running: bool,
+    bot_kind: Literal["signal", "options"] = "signal",
+) -> str:
     stopped = "" if running else "The bot is not running, but its end still stands. "
     if dry_run:
+        sells, sold = ("closes", "closed") if bot_kind == "options" else ("sells", "sold")
         return {
-            "scheduled": f"{stopped}At {at} the bot stops, and its simulation sells what it holds at the last price it saw.",
+            "scheduled": f"{stopped}At {at} the bot stops, and its simulation {sells} what it holds at the last price it saw.",
             "ending": (
-                f"Its end, {at}, has come. The bot stops, and its simulation sells what it holds at the "
+                f"Its end, {at}, has come. The bot stops, and its simulation {sells} what it holds at the "
                 "last price it saw."
             ),
-            "ended": "The bot has stopped, and its simulation sold what it held at the last price it saw.",
+            "ended": f"The bot has stopped, and its simulation {sold} what it held at the last price it saw.",
+        }[status]
+    if bot_kind == "options":
+        # An Options bot always ends with SELL: its end closes every contract it holds.
+        return {
+            "scheduled": (
+                f"{stopped}At {at} the Clerk stops the bot, cancels its working orders and closes its "
+                "option positions at market."
+            ),
+            "ending": (
+                f"Its end, {at}, has come. On its next pass the Clerk stops the bot, cancels its working orders "
+                "and closes its option positions at market; a close that meets a closed market waits for the next open."
+            ),
+            "ended": (
+                "The Clerk stopped the bot at its end and put in market orders closing its option positions. "
+                "A close that meets a closed market waits for the next regular open; it never goes out after hours."
+            ),
         }[status]
     if action == "KEEP":
         return {

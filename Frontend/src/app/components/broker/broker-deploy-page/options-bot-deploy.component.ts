@@ -10,6 +10,7 @@ import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { refusalBody } from '../../../shared/errors/refusal-body';
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
+import { AlpacaDeskAccountDataService } from '../../brokers/alpaca-desk/alpaca-desk-account-data.service';
 import { GoldenOptionSetupsService } from '../../options-backtest/golden-option-setups.service';
 import { OptionsBacktestService } from '../../options-backtest/options-backtest.service';
 import { BotEndEditorComponent } from '../bot-end/bot-end-editor.component';
@@ -58,6 +59,7 @@ export class OptionsBotDeployComponent {
   private readonly backtests = inject(OptionsBacktestService);
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
+  private readonly accountData = inject(AlpacaDeskAccountDataService, { optional: true });
   protected readonly busy = signal(false);
   protected readonly unknown = signal(false);
   protected readonly problem = signal<string | null>(null);
@@ -188,6 +190,11 @@ export class OptionsBotDeployComponent {
   });
 
   constructor() {
+    // The workspace header's money is polled; a Deploy that just set money
+    // aside re-reads it now.
+    effect(() => {
+      if (this.receipt() !== null) untracked(() => this.accountData?.money.reload());
+    });
     effect(() => {
       if (!this.defaultEnd.hasValue() || this.endEdited()) return;
       this.endFields.set(botEndFields(this.defaultEnd.value()));

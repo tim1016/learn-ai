@@ -61,6 +61,7 @@ import {
   accountWorkspaceTabRoute,
   type AccountWorkspaceLink,
 } from '../../../fleet/account-workspace';
+import { AlpacaDeskAccountDataService } from '../../brokers/alpaca-desk/alpaca-desk-account-data.service';
 import { extractServerMessage } from '../operation-error';
 import { refusalBody, refusalProse } from '../../../shared/errors/refusal-body';
 import { botEndFields, botEndInput, type BotEndFields } from '../bot-end/bot-end-fields';
@@ -431,6 +432,7 @@ export class AlpacaDeployWorkflowComponent {
   private termsSeeded = false;
   private readonly panelService = inject(BrokerV2PanelService);
   private readonly route = inject(ActivatedRoute);
+  private readonly accountData = inject(AlpacaDeskAccountDataService, { optional: true });
   private readonly router = inject(Router);
   private readonly destroyRef = inject(DestroyRef);
   private readonly injector = inject(Injector);
@@ -1534,6 +1536,11 @@ export class AlpacaDeployWorkflowComponent {
   }
 
   constructor() {
+    // The workspace header's money is polled; a Deploy that just set money
+    // aside re-reads it now.
+    effect(() => {
+      if (this.receipt() !== null) untracked(() => this.accountData?.money.reload());
+    });
     this.destroyRef.onDestroy(() => {
       if (this.symbolScopeTimer !== null) clearTimeout(this.symbolScopeTimer);
     });
