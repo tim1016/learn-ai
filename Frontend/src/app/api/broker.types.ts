@@ -9179,6 +9179,12 @@ export interface components {
          *     (:data:`EXPLICIT_NULL_END`).
          */
         BotEndPreviewRequest: {
+            /**
+             * Bot Kind
+             * @default signal
+             * @enum {string}
+             */
+            bot_kind?: "signal" | "options";
             /** End */
             end?: components["schemas"]["BotEndInput"];
             /**

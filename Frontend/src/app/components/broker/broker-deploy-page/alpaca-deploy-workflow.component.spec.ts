@@ -681,7 +681,17 @@ describe('AlpacaDeployWorkflowComponent — four steps (PRD #2560 D8)', () => {
     expect(account?.textContent?.trim()).toBe('The bot’s own account · DRY RUN · simulated cash');
   });
 
-  it('pre-fills exit terms from the account’s defaults, and points at Settings when it has none (H3)', async () => {
+  it.each([DEPLOY_VIEW, LIVE_DEPLOY_VIEW])('pre-fills all three exit defaults on a $account_mode signal deployment', async (view) => {
+    const terms = { exit_allowance_bps: 23, band_multiple: 3, spread_cap_bps: 60 };
+    await renderWorkflow(mockService({ ...view, default_exit_terms: terms }));
+    await openStep('How');
+    const how = within(stepRegion('How'));
+    expect(how.getByRole<HTMLInputElement>('spinbutton', { name: 'Exit allowance (bps)' }).value).toBe('23');
+    expect(how.getByRole<HTMLInputElement>('spinbutton', { name: 'Band multiple' }).value).toBe('3');
+    expect(how.getByRole<HTMLInputElement>('spinbutton', { name: 'Spread cap (bps)' }).value).toBe('60');
+  });
+
+  it('points at Settings when the account has no exit defaults (H3)', async () => {
     await renderWorkflow(mockService({ ...DEPLOY_VIEW, default_exit_terms: null }));
 
     const how = stepRegion('How');

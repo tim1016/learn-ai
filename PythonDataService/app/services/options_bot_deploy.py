@@ -9,8 +9,9 @@ from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.options_backtest.describe import describe_setup
 from app.options_backtest.session_clock import full_session_clock
 from app.options_bots.golden import get_ready_setup
-from app.options_bots.schedule import first_eligible_session
+from app.options_bots.schedule import OptionsSessionWindow, first_eligible_session
 from app.schemas.action_plan import OptionsSessionActionPlan
+from app.schemas.bot_end import BotEnd
 from app.schemas.deployment_budget import BudgetDeployCommandReceipt
 from app.schemas.golden_option_setups import GoldenOptionSetupView
 from app.schemas.options_bot import OPTIONS_BOT_KEY, OptionsBotConfiguration
@@ -44,6 +45,17 @@ def _runner() -> BotTaskRegistry:
     return registry
 
 
+def _deployment_end(request: OptionsDeployRequest, eligible: OptionsSessionWindow, *, now_ms: int) -> BotEnd | None:
+    """Refuse an end that would stop the bot before it can enter, before funding or claiming."""
+    end = resolve_deploy_end(
+        request.end, dry_run=request.execution_mode == "dry_run", bot_kind="options", at_ms=now_ms,
+    ).end
+    refusal = eligible.end_refusal(None if end is None else end.end_at_ms, now_ms=now_ms)
+    if refusal is not None:
+        raise BudgetUnavailable(refusal)
+    return end
+
+
 async def review_options_bot(
     broker: str, account_id: str, request: OptionsDeployRequest,
 ) -> OptionsDeploymentReview:
@@ -54,6 +66,7 @@ async def review_options_bot(
         budget_deploy._primary(account_id).clerk.require_option_plan_taken(_plan(configuration))
     now = now_ms_utc()
     eligible = first_eligible_session(configuration.setup, at_ms=now)
+    _deployment_end(request, eligible, now_ms=now)
     review = await asyncio.to_thread(
         budget_deploy.preview_options_session_budget, account_id, request,
         setup_sha256=golden.setup_sha256, rules_digest=golden.rules_digest,
@@ -114,6 +127,9 @@ async def deploy_options_bot(
         configuration = _configuration(golden)
         if request.execution_mode != "dry_run":
             budget_deploy._primary(account_id).clerk.require_option_plan_taken(_plan(configuration))
+        now = now_ms_utc()
+        eligible = first_eligible_session(configuration.setup, at_ms=now)
+        end = _deployment_end(request, eligible, now_ms=now)
         consent = await asyncio.to_thread(
             budget_deploy.resolve_options_session_consent, account_id, request,
             setup_sha256=golden.setup_sha256, rules_digest=golden.rules_digest,
@@ -122,10 +138,6 @@ async def deploy_options_bot(
             submission_key=request.submission_key, account_id=account_id, symbol=golden.underlying,
             strategy_key=OPTIONS_BOT_KEY, request_fingerprint=fingerprint,
             replaces_strategy_instance_id=None, now_ms=now_ms_utc(), renew=earlier,
-        )
-        end = (
-            None if request.end is None
-            else resolve_deploy_end(request.end, dry_run=request.execution_mode == "dry_run").end
         )
         try:
             await registry.deploy_with_admission(

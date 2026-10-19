@@ -95,6 +95,22 @@ describe('configuration revision draft', () => {
     expect(draftProblems({ ...liveDraft(), xh_exit_bps: 10_000 }, SLOTS)).toHaveLength(1);
   });
 
+  it.each(['paper', 'live'] as const)('holds %s exit defaults to Deploy’s spread cap range', (mode) => {
+    const draft = { ...liveDraft(), endpoint_mode: mode, exit_band_multiple: 2, exit_spread_cap_bps: 50 };
+    for (const value of [0, 0.2, 1001, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const invalid = { ...draft, exit_spread_cap_bps: value };
+      expect(draftProblems(invalid, SLOTS)).toEqual(['Exit spread cap must be between 1 and 1,000 bps.']);
+      expect(() => toRevisionContent(invalid)).toThrowError('Exit spread cap must be between 1 and 1,000 bps.');
+    }
+    for (const value of [1, 50, 1000]) {
+      const valid = { ...draft, exit_spread_cap_bps: value };
+      expect(draftProblems(valid, SLOTS)).toEqual([]);
+      expect(toRevisionContent(valid).default_exit_terms).toEqual({
+        exit_allowance_bps: draft.xh_exit_bps, band_multiple: 2, spread_cap_bps: value,
+      });
+    }
+  });
+
   it('refuses to build a live body from a draft with a missing value', () => {
     expect(() => toRevisionContent({ ...liveDraft(), loss_usd: null })).toThrowError(/loss_usd/);
   });

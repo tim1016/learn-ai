@@ -1,9 +1,9 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, output, resource, signal, untracked } from '@angular/core';
 import { disabled, FormField, form, max, min, pattern, required } from '@angular/forms/signals';
-import { ActivatedRoute, Router } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 
-import { accountWorkspaceBotRoute } from '../../../fleet/account-workspace';
+import { accountWorkspaceBotRoute, accountWorkspaceTabRoute } from '../../../fleet/account-workspace';
 import { fencedTarget, laneFenceIsEnforceable, type LaneFence } from '../../../fleet/lane-fence';
 import { sameResourceTarget, withAccount, withCommand, type ResourceTarget } from '../../../fleet/resource-target';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
@@ -39,7 +39,7 @@ interface ReviewedDeployment {
   selector: 'app-options-bot-deploy',
   imports: [
     AssetIdentityComponent, AuthoredUsdPipe, DeployLaunchReceiptComponent, DeployOptionOrderTermsComponent, OptionsBotSetupDeskComponent,
-    BotEndEditorComponent, BotEndSummaryComponent, FormField, FundingAnswerComponent, MoneyBarComponent, TimestampDisplayComponent,
+    BotEndEditorComponent, BotEndSummaryComponent, FormField, FundingAnswerComponent, MoneyBarComponent, RouterLink, TimestampDisplayComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './options-bot-deploy.component.html',
@@ -77,7 +77,8 @@ export class OptionsBotDeployComponent {
     required(ticket.amount);
     pattern(ticket.amount, /^(?=.*[1-9])\d+(\.\d{1,2})?$/, { message: 'Enter a positive dollar amount with at most two decimal places.' });
   });
-  protected readonly endFields = signal(botEndFields({ end_at_ms: null, end_action: 'SELL' }));
+  protected readonly endFields = signal({ ...botEndFields({ end_at_ms: null, end_action: 'SELL' }), noEnd: false });
+  protected readonly endSeeded = signal(false);
   private readonly deployEnd = computed(() => botEndInput(this.endFields(), false));
   protected readonly exitTermErrors = computed(() => (['exitAllowanceBps', 'bandMultiple', 'spreadCapBps'] as const)
     .flatMap((name) => this.fields()[name] === null ? [] : this.ticket[name]().errors().map((error) => error.message)));
@@ -89,6 +90,7 @@ export class OptionsBotDeployComponent {
   private reviewGeneration = 0;
 
   protected readonly address = computed(() => withAccount(fencedTarget(this.target(), this.fence()), this.accountId()), { equal: sameResourceTarget });
+  protected readonly settingsRoute = computed(() => accountWorkspaceTabRoute(this.address(), 'settings'));
   protected readonly context = resource({
     params: () => this.address(),
     loader: ({ params }) => this.panels.getDeployView(params),
@@ -116,10 +118,22 @@ export class OptionsBotDeployComponent {
     loader: ({ params }) => this.backtests.describe(params),
   });
   protected readonly loadProblem = computed(() => {
-    const error = this.selectedVersion.error() ?? this.versions.error() ?? this.context.error() ?? this.catalogue.error();
+    const error = this.selectedVersion.error() ?? this.versions.error() ?? this.context.error() ?? this.catalogue.error() ?? this.defaultEnd.error();
     return error === undefined ? null : extractServerMessage(error, 'The setup or account deployment settings could not be read.');
   });
   protected readonly modes = computed(() => this.context.hasValue() ? this.context.value().execution_modes : []);
+  private readonly defaultEndMode = computed(() => {
+    if (!this.context.hasValue()) return undefined;
+    return this.modes().find((item) => item.mode === this.fields().mode)?.mode
+      ?? (this.context.value().account_mode === 'paper' ? 'paper' : 'shadow');
+  });
+  private readonly defaultEnd = resource({
+    params: () => {
+      const mode = this.defaultEndMode();
+      return mode ? { target: this.address(), mode } : undefined;
+    },
+    loader: ({ params }) => this.panels.previewBotEnd(params.target, { execution_mode: params.mode, bot_kind: 'options' }),
+  });
   protected readonly orderDefaults = computed(() => this.catalogue.hasValue() ? this.catalogue.value().order_terms : null);
   protected readonly orderNotes = computed(() => this.catalogue.hasValue() ? this.catalogue.value().order_term_notes : null);
   private readonly request = computed<OptionsDeployRequest | null>(() => {
@@ -174,10 +188,16 @@ export class OptionsBotDeployComponent {
 
   constructor() {
     effect(() => {
+      if (!this.defaultEnd.hasValue() || this.endSeeded()) return;
+      this.endFields.set(botEndFields(this.defaultEnd.value()));
+      this.endSeeded.set(true);
+    });
+    effect(() => {
       if (!this.context.hasValue() || this.exitDefaultsRead) return;
       const defaults = this.context.value().default_exit_terms;
+      if (!defaults) return;
       this.exitDefaultsRead = true;
-      if (defaults) untracked(() => this.fields.update((fields) => ({ ...fields,
+      untracked(() => this.fields.update((fields) => ({ ...fields,
         exitAllowanceBps: fields.exitAllowanceBps ?? defaults.exit_allowance_bps,
         bandMultiple: fields.bandMultiple ?? defaults.band_multiple,
         spreadCapBps: fields.spreadCapBps ?? defaults.spread_cap_bps,
@@ -209,7 +229,7 @@ export class OptionsBotDeployComponent {
     }
   }
 
-  protected reload(): void { this.versions.reload(); this.selectedVersion.reload(); this.context.reload(); this.catalogue.reload(); }
+  protected reload(): void { this.versions.reload(); this.selectedVersion.reload(); this.context.reload(); this.catalogue.reload(); this.defaultEnd.reload(); }
 
   protected async review(): Promise<void> {
     const request = this.request();
@@ -221,7 +241,7 @@ export class OptionsBotDeployComponent {
     this.problem.set(null);
     this.reviewed.set(null);
     try {
-      const end = await this.panels.previewBotEnd(target, { execution_mode: request.execution_mode, end: request.end });
+      const end = await this.panels.previewBotEnd(target, { execution_mode: request.execution_mode, bot_kind: 'options', end: request.end });
       if (generation !== this.reviewGeneration || context !== this.reviewContext()) return;
       const facts = await this.service.review(target, { ...request, budget: null });
       if (generation !== this.reviewGeneration || context !== this.reviewContext()) return;

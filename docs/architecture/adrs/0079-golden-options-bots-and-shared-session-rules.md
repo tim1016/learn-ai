@@ -44,6 +44,15 @@ tested trade closes. The setup's contract-picking rules are shared as well:
 - A deployed Options bot repeats each trading session until stopped or its
   deployment ends. A new deployment started after entry time waits for the next
   eligible session. Recovery restores an existing session separately.
+- **Amended 2026-10-19 (owner):** Options Deploy pre-fills a deployment end
+  45 minutes before the canonical calendar's session close, on that session's
+  date. Early closes use their actual close. Once the cutoff has passed, the
+  default is the next trading session's cutoff. The deployment end closes
+  remaining positions and stops repetition; the explicit no-end choice retains
+  daily repetition. The default does not rewrite an approved setup's expiry or
+  session rules: same-day expiry remains the setup's contract-picking rule.
+  A scheduled end must follow the first eligible entry. It is checked before
+  funding and again at activation, since the entry can pass during admission.
 - Interrupted Options bots require explicit Resume after reconciliation. State
   and re-entry counts survive interruption; a restart cannot earn another entry.
 - Stale or revoked qualification blocks entries and re-entries while stops,

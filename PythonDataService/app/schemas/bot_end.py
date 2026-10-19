@@ -93,6 +93,7 @@ class BotEndPreviewRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     execution_mode: Literal["paper", "dry_run", "shadow", "live"]
+    bot_kind: Literal["signal", "options"] = "signal"
     end: BotEndInput | SkipJsonSchema[None] = None
 
     @field_validator("end", mode="before")

@@ -251,9 +251,15 @@ function exitDefaultsProblem(draft: RevisionDraft): string | null {
   if (draft.exit_band_multiple === null && draft.exit_spread_cap_bps === null) return null;
   if (draft.xh_exit_bps === null || draft.exit_band_multiple === null || draft.exit_spread_cap_bps === null)
     return 'Default exit terms need an exit allowance, band multiple and spread cap.';
-  if (!Number.isFinite(draft.exit_band_multiple) || draft.exit_band_multiple < 1 || draft.exit_band_multiple > 10)
+  if (!withinInclusive(draft.exit_band_multiple, 1, 10))
     return 'Exit band multiple must be between 1 and 10.';
-  return offsetBelow(draft.exit_spread_cap_bps, 'Exit spread cap (bps)', 10_000);
+  if (!withinInclusive(draft.exit_spread_cap_bps, 1, 1000))
+    return 'Exit spread cap must be between 1 and 1,000 bps.';
+  return null;
+}
+
+function withinInclusive(value: number, minimum: number, maximum: number): boolean {
+  return Number.isFinite(value) && value >= minimum && value <= maximum;
 }
 
 function exitDefaults(draft: RevisionDraft): Partial<RevisionContent> {

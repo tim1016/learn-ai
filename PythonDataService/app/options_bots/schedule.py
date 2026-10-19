@@ -13,6 +13,7 @@ from datetime import timedelta
 
 from app.lean_sidecar.trading_calendar import is_trading_day, session_window_for_date
 from app.options_backtest.setup import OptionsBacktestSetup
+from app.utils.et_words import et_when_words
 from app.utils.session_anchors import et_date_at_ms
 
 
@@ -22,6 +23,15 @@ class OptionsSessionWindow:
     close_ms: int
     entry_ms: int
     exit_ms: int
+
+    def end_refusal(self, end_at_ms: int | None, *, now_ms: int) -> str | None:
+        """Why an end would leave this eligible session no time to enter."""
+        if end_at_ms is None or end_at_ms > self.entry_ms:
+            return None
+        return (
+            f"The deployment end must be after this setup's next eligible entry "
+            f"({et_when_words(self.entry_ms, now_ms=now_ms)}). Change the end date or time, or choose no end."
+        )
 
 
 def first_eligible_session(setup: OptionsBacktestSetup, *, at_ms: int) -> OptionsSessionWindow:
