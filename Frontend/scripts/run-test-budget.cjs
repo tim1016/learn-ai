@@ -1,12 +1,14 @@
 "use strict";
 
-const { spawn } = require("node:child_process");
+const { execFileSync, spawn } = require("node:child_process");
 const fs = require("node:fs");
 
 // CI shards this same suite across 6 jobs (.github/workflows/ci.yml) by
 // setting TEST_SHARD_INDEX/TEST_SHARD_COUNT and NG_BUILD_MAX_WORKERS=2, then
 // passing --runner-config=vitest.ci.config.ts, which refuses to load without
-// both shard vars set. Mirror that locally instead of reinventing it: a dev
+// both shard vars set. Select the shard's specs before Angular compiles them;
+// Vitest then runs that exact selection without dealing it a second time.
+// Mirror that locally instead of reinventing it: a dev
 // who exports TEST_SHARD_INDEX/TEST_SHARD_COUNT before `npm test` gets the
 // same sharded config auto-appended, so one shard's worth of tests fits the
 // two-minute target instead of the full unsharded suite OOMing the 6G
@@ -135,8 +137,32 @@ function runTestBudget({
     `${run.subject} exceeded the hard ${limitMs / 1000}-second limit ` +
     `(the target is ${targetMs / 1000} seconds)`;
 
-  // What the limit leaves the tests once the job's earlier steps are counted.
-  const allowanceMs = limitMs - (startedAtMs - (jobStartedAtMs ?? startedAtMs));
+  const hasRunnerConfigArg = forwardedArgs.some((arg) =>
+    arg.startsWith("--runner-config="),
+  );
+  const testArgs = [...forwardedArgs];
+  if (isShardRequested && !hasRunnerConfigArg) testArgs.push(CI_RUNNER_CONFIG_ARG);
+  const preselected = isShardRequested && testArgs.includes(CI_RUNNER_CONFIG_ARG) &&
+    !testArgs.some((arg) => arg.startsWith("--include"));
+  if (preselected) {
+    try {
+      const selected = JSON.parse(execFileSync(process.execPath, [
+        "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", "scripts/verify-ci-shard-balance-guard.cjs", "--list",
+      ], { encoding: "utf8", env: { ...process.env, CI_SHARD_PRESELECTED: "0" } }));
+      if (!Array.isArray(selected) || selected.length === 0 || !selected.every((path) =>
+        typeof path === "string" && path.startsWith("src/") && path.endsWith(".spec.ts"))) {
+        throw new Error("the selected shard has an invalid spec list");
+      }
+      testArgs.push(...selected.map((path) => `--include=${path}`));
+    } catch (error) {
+      process.stderr.write(`Unable to select frontend shard specs: ${error.message}\n`);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  // The selected-spec scan shares the job's hard limit with checkout, build and tests.
+  const allowanceMs = limitMs - (Date.now() - (jobStartedAtMs ?? startedAtMs));
   if (allowanceMs <= 0) {
     process.stderr.write(
       `${exceededTheLimit} before the tests started, so they were not run. ` +
@@ -147,14 +173,6 @@ function runTestBudget({
     return;
   }
 
-  const hasRunnerConfigArg = forwardedArgs.some((arg) =>
-    arg.startsWith("--runner-config="),
-  );
-  const testArgs =
-    isShardRequested && !hasRunnerConfigArg
-      ? [...forwardedArgs, CI_RUNNER_CONFIG_ARG]
-      : forwardedArgs;
-
   const npm = process.platform === "win32" ? "npm.cmd" : "npm";
   const script = isShardRequested ? SPECS_ONLY_SCRIPT : GUARDS_THEN_SPECS_SCRIPT;
   const child = spawn(npm, ["run", script, "--", ...testArgs], {
@@ -163,6 +181,7 @@ function runTestBudget({
     env: {
       ...process.env,
       NG_BUILD_MAX_WORKERS: process.env.NG_BUILD_MAX_WORKERS ?? DEFAULT_MAX_WORKERS,
+      CI_SHARD_PRESELECTED: preselected ? "1" : "0",
     },
   });
 
