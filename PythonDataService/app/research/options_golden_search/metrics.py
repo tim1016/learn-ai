@@ -4,7 +4,8 @@ Formula: DD = max_t(running_high(equity) - equity_t) / fixed starting capital;
   x_d = net daily dollars / fixed starting capital; Sharpe = sqrt(A) mean(x-rf) / stdev(x-rf, ddof=1).
   Recovery counts distinct sessions with below-peak minute observations until that peak is regained.
 Reference: owner-defined fixed-capital, calendar annualization and recovery conventions in #3332.
-Canonical implementation: this file. Stock peak-relative/account-return metrics keep their own semantics.
+Canonical implementation: this file for minute evidence; shared daily Sharpe, annualization and ratios
+  live in app/options_backtest/daily_metrics.py. Stock account-return metrics keep their own semantics.
 Validated against: tests/research/options_golden_search/test_metrics.py and test_evaluator.py.
 
 Dollar accumulation is exact. Ratios use 50 decimal digits; Sharpe alone uses binary64.
@@ -18,15 +19,17 @@ import json
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from datetime import date
-from decimal import Context, Decimal, localcontext
+from decimal import Decimal, localcontext
 from itertools import pairwise
-from statistics import fmean, stdev
 from typing import Any
 
-from app.lean_sidecar.trading_calendar import session_window_for_date, session_windows_ms_utc
+from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.options_backtest import fills
 from app.options_backtest.capital_evidence import CapitalEvidence, CapitalSession, capital_evidence
+from app.options_backtest.daily_metrics import annualized_sharpe as _sharpe
+from app.options_backtest.daily_metrics import calendar_annualization as calendar_annualization
+from app.options_backtest.daily_metrics import decimal_ratio as _ratio
+from app.options_backtest.daily_metrics import session_economics
 from app.options_backtest.observation import MINUTE_OBSERVATION_ADAPTER, MinuteObservation
 from app.options_backtest.results import (
     ENTRY_REFUSAL_EVENTS,
@@ -39,7 +42,6 @@ from app.options_backtest.setup import MS_PER_MINUTE
 from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms
 
 METRIC_VERSION = "options-fixed-capital-minute-v1"
-_RATIO = Context(prec=50)
 
 
 @dataclass(frozen=True)
@@ -157,28 +159,6 @@ def paired_daily_comparison(
     return PairedDailyComparison(len(common), difference, difference > 0, None)
 
 
-def calendar_annualization(session_ms: Sequence[int]) -> float:
-    """Average scheduled sessions over all complete calendar years touched by the declared window.
-
-    Formula: A = Σ scheduled_sessions(year) / number_of_years.
-    Reference: owner-selected convention in #3332; canonical NYSE calendar.
-    Canonical implementation: this file.
-    Validated against: tests/research/options_golden_search/test_metrics.py.
-    """
-    if not session_ms:
-        raise ValueError("annualization needs at least one scheduled session")
-    first, last = et_date_at_ms(min(session_ms)).year, et_date_at_ms(max(session_ms)).year
-    counts = [len(session_windows_ms_utc(date(year, 1, 1), date(year, 12, 31))) for year in range(first, last + 1)]
-    return fmean(counts)
-
-
-def _ratio(numerator: Decimal, denominator: Decimal | int) -> Decimal | None:
-    if denominator == 0:
-        return None
-    with localcontext(_RATIO):
-        return numerator / denominator
-
-
 def summarize_evidence(
     sessions: Sequence[SessionEvidence], *, starting_capital_usd: Decimal,
     annualization_sessions: float, risk_free_daily_return: float = 0,
@@ -273,17 +253,13 @@ def _summarize(
         recoveries.append(RecoverySpell(peak_at, None, len(below_sessions)))
     profits = [item.net_profit_usd for item in daily if item.traded]
     daily_profits = [item.net_profit_usd for item in daily]
-    wins, losses = [p for p in profits if p > 0], [p for p in profits if p < 0]
+    economics = session_economics(profits)
+    wins, losses = economics.wins, economics.losses
     net = sum((session.outcome.pnl_usd for session in sessions), Decimal(0))
-    gross_win, gross_loss = sum(wins, Decimal(0)), -sum(losses, Decimal(0))
-    avg_win, avg_loss = _ratio(gross_win, len(wins)), _ratio(-gross_loss, len(losses))
+    gross_win, gross_loss = economics.gross_win, economics.gross_loss
+    avg_win, avg_loss = economics.average_win, economics.average_loss
     returns = [item.fixed_capital_return - risk_free for item in daily]
     sharpe, reason = _sharpe(returns, annualization)
-    win_streak = loss_streak = max_win_streak = max_loss_streak = 0
-    for pnl in profits:
-        win_streak = win_streak + 1 if pnl > 0 else 0
-        loss_streak = loss_streak + 1 if pnl < 0 else 0
-        max_win_streak, max_loss_streak = max(max_win_streak, win_streak), max(max_loss_streak, loss_streak)
     capital_result = capital_evidence(capital_sessions, starting_cash=capital) if len(capital_sessions) == len(sessions) else None
     if capital_result is not None and capital_result.ended_by is not None:
         failures.append(f"{capital_result.ended_by.session_open_ms}:capital_invalid:{capital_result.ended_by.kind.value}")
@@ -306,7 +282,7 @@ def _summarize(
         largest_winning_session_usd=max(wins, default=None), largest_losing_session_usd=min(losses, default=None),
         profit_factor=_ratio(gross_win, gross_loss),
         average_win_loss_ratio=None if avg_win is None or avg_loss is None else _ratio(avg_win, -avg_loss),
-        longest_winning_streak=max_win_streak, longest_losing_streak=max_loss_streak,
+        longest_winning_streak=economics.longest_winning_streak, longest_losing_streak=economics.longest_losing_streak,
         top_five_profit_contribution=_ratio(sum(sorted(wins, reverse=True)[:5], Decimal(0)), net) if net > 0 else None,
         profit_without_best_session_usd=None if not daily_profits else sum(daily_profits, Decimal(0)) - max(daily_profits),
         peak_relative_drawdown_fraction=peak_relative, session_end_drawdown_usd=end_drawdown,
@@ -316,18 +292,6 @@ def _summarize(
         losing_session_rate=_ratio(Decimal(len(losses)), len(profits)),
         breakeven_session_rate=_ratio(Decimal(profits.count(Decimal(0))), len(profits)),
     )
-
-
-def _sharpe(returns: Sequence[float], annualization: float) -> tuple[float | None, str | None]:
-    if len(returns) < 2:
-        return None, "insufficient_daily_observations"
-    if not all(math.isfinite(value) for value in returns):
-        return None, "numeric_range"
-    deviation = stdev(returns)
-    if deviation == 0:
-        return None, "constant_daily_returns"
-    value = math.sqrt(annualization) * fmean(returns) / deviation
-    return (value, None) if math.isfinite(value) else (None, "numeric_range")
 
 
 def evidence_to_json(evidence: SessionEvidence) -> dict[str, Any]:

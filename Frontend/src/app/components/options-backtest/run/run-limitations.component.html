@@ -1,0 +1,7 @@
+<aside aria-label="Key limitations" class="limitations">
+  @for (fact of facts(); track fact.text) { <button type="button" (click)="inspect.emit(fact.section)">{{ fact.text }}</button> }
+  @if (run().figures?.dashboard?.sharpe_unavailable_reason; as reason) { <button type="button" (click)="inspect.emit('risk')">Sharpe unavailable: {{ reason | receiptLabel }}</button> }
+  @if (run().banner?.fee_policy_kind === 'not_charged') { <strong>Fees were not charged</strong> }
+  @if (run().banner?.statements?.length) { <span>Broker acceptance is not established</span> }
+  <span>Drawdown measured at session closes</span>
+</aside>

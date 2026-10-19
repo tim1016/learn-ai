@@ -149,7 +149,10 @@ no receipt; expired-lease capture reconciles interrupted publications.
 
 Options studies (#3332, ADR 0080) live in Python's `app/research/options_golden_search/`.
 The canonical Options replay publishes non-mutating minute observations; the study's
-metrics and policy own fixed-capital risk and whole-setup qualification. The existing
+metrics and policy own minute risk and whole-setup qualification. Options daily Sharpe,
+calendar annualization and session economics share `app/options_backtest/daily_metrics.py`
+with completed-run reporting (`app/options_backtest/dashboard.py`). Saved-run drawdown
+and recovery remain session-close measurements; they do not imply minute evidence. The existing
 research runtime/writer/fence/pool own execution and durable evidence. A retained
 snapshot reader admits only recorded bytes or explicit absence. The existing Golden
 Options authority publishes the exact setup with ordinary replay proof and a retained

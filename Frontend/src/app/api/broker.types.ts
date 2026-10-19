@@ -23535,6 +23535,100 @@ export interface components {
             /** Underlying */
             underlying: string;
         };
+        /** OptionsBacktestDashboardDayResponse */
+        OptionsBacktestDashboardDayResponse: {
+            /** Display Rolling Sharpe */
+            display_rolling_sharpe?: string | null;
+            /** Month */
+            month: number;
+            /** Rolling Sharpe */
+            rolling_sharpe?: string | null;
+            /** Session Open Ms */
+            session_open_ms: number;
+            /** Underwater Usd */
+            underwater_usd: string;
+            /** Year */
+            year: number;
+        };
+        /**
+         * OptionsBacktestDashboardResponse
+         * @description Derived from the recorded daily path; no minute evidence or qualification is claimed.
+         */
+        OptionsBacktestDashboardResponse: {
+            /** Annualization Sessions */
+            annualization_sessions?: string | null;
+            /** Annualization Unavailable Reason */
+            annualization_unavailable_reason?: string | null;
+            /** Annualized Sharpe */
+            annualized_sharpe?: string | null;
+            /** Annualized Sortino */
+            annualized_sortino?: string | null;
+            /** Annualized Volatility Percent */
+            annualized_volatility_percent?: string | null;
+            /** Average Losing Session Usd */
+            average_losing_session_usd?: string | null;
+            /** Average Session Usd */
+            average_session_usd?: string | null;
+            /** Average Winning Session Usd */
+            average_winning_session_usd?: string | null;
+            /** Best Session Usd */
+            best_session_usd?: string | null;
+            /** Daily */
+            daily: components["schemas"]["OptionsBacktestDashboardDayResponse"][];
+            /** Daily Observations */
+            daily_observations: number;
+            /** Display Annualized Sharpe */
+            display_annualized_sharpe?: string | null;
+            /** Display Annualized Sortino */
+            display_annualized_sortino?: string | null;
+            /** Display Annualized Volatility Percent */
+            display_annualized_volatility_percent?: string | null;
+            /** Histogram */
+            histogram: components["schemas"]["OptionsBacktestProfitBinResponse"][];
+            /** Longest Losing Streak */
+            longest_losing_streak: number;
+            /** Longest Underwater Sessions */
+            longest_underwater_sessions: number;
+            /**
+             * Metric Version
+             * @default options-session-dashboard-v1
+             * @constant
+             */
+            metric_version?: "options-session-dashboard-v1";
+            /** Ongoing Underwater */
+            ongoing_underwater: boolean;
+            /** Payoff Ratio */
+            payoff_ratio?: string | null;
+            /** Profit Without Best Session Usd */
+            profit_without_best_session_usd?: string | null;
+            /** Recovered Session Open Ms */
+            recovered_session_open_ms?: number | null;
+            /** Recovery Sessions */
+            recovery_sessions?: number | null;
+            /**
+             * Return Basis
+             * @default daily_pnl_over_fixed_starting_capital
+             * @constant
+             */
+            return_basis?: "daily_pnl_over_fixed_starting_capital";
+            /** Return Percent */
+            return_percent?: string | null;
+            /**
+             * Risk Free Daily Return
+             * @default 0
+             */
+            risk_free_daily_return?: string;
+            /** Risk Unavailable Reason */
+            risk_unavailable_reason?: string | null;
+            /** Session Profit Factor */
+            session_profit_factor?: string | null;
+            /** Sharpe Unavailable Reason */
+            sharpe_unavailable_reason?: string | null;
+            /** Top Five Profit Percent */
+            top_five_profit_percent?: string | null;
+            /** Worst Session Usd */
+            worst_session_usd?: string | null;
+        };
         /**
          * OptionsBacktestDataCheckResponse
          * @description Which sessions of a range can be tested, from what is already stored. Nothing was fetched to answer.
@@ -23906,6 +24000,15 @@ export interface components {
             /** Message */
             message: string;
         };
+        /** OptionsBacktestProfitBinResponse */
+        OptionsBacktestProfitBinResponse: {
+            /** Count */
+            count: number;
+            /** Lower Usd */
+            lower_usd: string;
+            /** Upper Usd */
+            upper_usd: string;
+        };
         /**
          * OptionsBacktestRangeDifferenceResponse
          * @description The two runs' ranges, sent only when they differ.
@@ -24033,6 +24136,7 @@ export interface components {
             /** Cash Ladder */
             cash_ladder?: components["schemas"]["OptionsBacktestCashLevelResponse"][] | null;
             daily_win_rate?: components["schemas"]["OptionsBacktestRateResponse"] | null;
+            dashboard?: components["schemas"]["OptionsBacktestDashboardResponse"] | null;
             drawdown_by_dollars?: components["schemas"]["OptionsBacktestDrawdownResponse"] | null;
             drawdown_by_fraction?: components["schemas"]["OptionsBacktestDrawdownResponse"] | null;
             /** Ending Cash Usd */

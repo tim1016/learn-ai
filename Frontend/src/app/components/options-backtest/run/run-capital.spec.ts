@@ -187,7 +187,7 @@ describe('a run saved before capital evidence was kept', () => {
     expect(within(capital()).queryByText('Cash this path needed')).toBeNull();
     expect(within(ladder()).queryByRole('table')).toBeNull();
     // The headline and the slippage ladder are as they were.
-    expect(reads(screen.getByText('Net profit', { selector: 'dt' }).closest('.tile'))).toBe('Net profit $1,234.56');
+    expect(reads(screen.getByRole('button', { name: 'Net profit' }).closest('.tile'))).toBe('Net profit $1,234.56 After modeled costs');
     expect(screen.getByRole('table', { name: 'The run replayed at each slippage' })).toBeTruthy();
   });
 

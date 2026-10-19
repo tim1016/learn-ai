@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, input, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, inject, input, signal } from '@angular/core';
 
 import type { RunDetail } from '../options-backtest.types';
 import type { DayRequest } from '../run-detail/day-request';
@@ -12,16 +12,12 @@ import { RunDailyChartComponent } from './run-daily-chart.component';
 import { RunDrawdownComponent } from './run-drawdown.component';
 import { RunHeadlineComponent } from './run-headline.component';
 import { RunMonthTableComponent } from './run-month-table.component';
+import { RunLimitationsComponent } from './run-limitations.component';
+import { RunRiskComponent } from './run-risk.component';
 import { RunSessionsComponent } from './run-sessions.component';
 import { SlippageToleranceComponent } from './slippage-tolerance.component';
 
-/**
- * The result of a complete run, top to bottom: the banner that says how the
- * fills were made, the headline figures, the largest falls, the capital
- * evidence, the sessions and what did not trade, the slippage tolerance, the
- * cash ladder, and the day and month tables. It shows the server's figures and
- * works out none.
- */
+/** A continuous performance desk over Python-authored figures, with click-open evidence. */
 @Component({
   selector: 'app-options-backtest-run-result',
   imports: [
@@ -37,13 +33,26 @@ import { SlippageToleranceComponent } from './slippage-tolerance.component';
     RunMonthTableComponent,
     RunTradesComponent,
     SessionViewComponent,
+    RunLimitationsComponent,
+    RunRiskComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './run-result.component.html',
   styleUrl: './run-result.component.scss',
 })
 export class RunResultComponent {
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
   readonly run = input.required<RunDetail>();
   /** The day the owner last asked to look at, from a trade or from the table of days. */
   protected readonly day = signal<DayRequest | null>(null);
+  protected readonly tradesOpen = signal(false);
+
+  protected openEvidence(section: 'capital' | 'coverage' | 'risk'): void {
+    const target = this.host.nativeElement.querySelector<HTMLDetailsElement>(`[data-evidence="${section}"]`);
+    if (target) { target.open = true; target.scrollIntoView?.({ block: 'nearest' }); }
+  }
+
+  protected toggleTrades(event: Event): void {
+    if (event.target instanceof HTMLDetailsElement && event.target.open) this.tradesOpen.set(true);
+  }
 }

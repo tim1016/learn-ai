@@ -22,7 +22,7 @@ from typing import get_args, get_type_hints
 import pytest
 from pydantic import ValidationError
 
-from app.lean_sidecar.trading_calendar import session_window_for_date
+from app.lean_sidecar.trading_calendar import CALENDAR_PACKAGE_VERSION, session_window_for_date
 from app.options_backtest.capital_evidence import CapitalInvalidKind
 from app.options_backtest.data_check import (
     NOT_YET_KNOWN,
@@ -76,7 +76,7 @@ def _stored(result: RunResult, *, status: str = "complete") -> StoredRun:
         sessions_requested=4,
         fee_policy_text="Fees are $0.65 per contract traded.",
         calendar_identity="NYSE",
-        calendar_package_version="5.1.0",
+        calendar_package_version=CALENDAR_PACKAGE_VERSION,
         failure=None,
         headline=Headline(
             sessions_tested=summary.sessions_tested,
@@ -92,6 +92,17 @@ def _stored(result: RunResult, *, status: str = "complete") -> StoredRun:
         setup=result.setup,
         figures=RunFigures(summary, result.slippage, result.slippage_tolerance),
     )
+
+
+def test_saved_calendar_mismatch_is_visible_in_completed_run_detail(result: RunResult) -> None:
+    stored = _stored(result)
+    stored = replace(stored, record=replace(stored.record, calendar_package_version="superseded"))
+    detail = wire.OptionsBacktestRunDetailResponse.from_stored(stored)
+    assert detail.figures is not None and detail.figures.dashboard is not None
+    assert detail.figures.dashboard.annualized_sharpe is None
+    assert detail.figures.dashboard.annualization_sessions is None
+    assert "different trading calendar" in detail.figures.dashboard.annualization_unavailable_reason
+    assert "unclosed position" in detail.figures.dashboard.risk_unavailable_reason
 
 
 # ── The words are the enums' ─────────────────────────────────────────────
