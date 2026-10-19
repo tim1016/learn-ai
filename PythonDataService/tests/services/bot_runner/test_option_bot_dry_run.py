@@ -1836,7 +1836,8 @@ async def test_an_option_bot_whose_entry_took_its_whole_budget_reads_as_holding_
     on_the_floor: Callable[..., Floor],
 ) -> None:
     """A budget of $412.06 is the call at $4.12 and the six cents set aside for its fees, to the cent. The bot
-    buys it and holds: nothing is free, and its next entry waits for this position to be sold."""
+    buys it and holds: nothing is free, and its next entry waits for this position to be closed. What it holds
+    is an option position, and its money and its slice say so: never shares."""
     floor = await on_the_floor(budget_cents=41_206).open()
 
     await floor.run([Step(green(FIRST_GREEN_MS)), Step(green(ENTER_MS))])
@@ -1844,8 +1845,12 @@ async def test_an_option_bot_whose_entry_took_its_whole_budget_reads_as_holding_
 
     assert floor.holds() == {CALL: 1.0}
     assert view.state == "ready"
-    assert (view.headline, view.detail) == ("Holding its position", "Its next entry waits until this position is sold.")
+    assert (view.headline, view.detail) == ("Holding its position", "Its next entry waits until this position is closed.")
+    assert _lines(view)["In positions, at cost"] == "412.00"
     assert _lines(view)["Free to trade"] == "0.00"
+    assert [label for label in _lines(view) if "shares" in label] == []
+    assert view.segment is not None and view.segment.parts is not None
+    assert (view.segment.parts.held_label, view.segment.parts.in_shares_usd) == ("in positions", "412.00")
 
 
 async def test_an_option_bot_with_nothing_of_its_budget_free_waits_for_its_next_entry_and_says_why(
@@ -1864,7 +1869,7 @@ async def test_an_option_bot_with_nothing_of_its_budget_free_waits_for_its_next_
             fees=Decimal(fees), position_cost=Decimal(0), pending_orders=Decimal(0),
         )
         money = account_budget(cash=Decimal(cash), deployments=[own], order_claims=Decimal(0), fee_claims=Decimal(0))
-        return budget_deploy._next_entry(floor.runtime, repo, money, SID, risk, repo.clock())
+        return budget_deploy._next_entry(floor.runtime, repo, money, SID, risk, repo.clock(), budget_deploy._held_in(repo, SID))
 
     nothing_free, over_its_budget, a_cent_free = read_with("100"), read_with("100.50"), read_with("99.99")
 

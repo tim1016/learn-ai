@@ -28,7 +28,7 @@
       <span class="money-bar__name">{{ slice.segment.label }}</span>&ngsp;<span class="money-bar__amount">{{ slice.segment.amount_usd | authoredUsd }}</span>
       @if (slice.segment.parts; as parts) {
         &ngsp;<span class="money-bar__parts">
-          in shares {{ parts.in_shares_usd | authoredUsd }} · in entry orders
+          {{ parts.held_label }} {{ parts.in_shares_usd | authoredUsd }} · in entry orders
           {{ parts.pending_usd | authoredUsd }} · free {{ parts.free_usd | authoredUsd }}
           @if (slice.segment.shortfall_usd; as shortfall) {
             · over its budget by {{ shortfall | authoredUsd }}

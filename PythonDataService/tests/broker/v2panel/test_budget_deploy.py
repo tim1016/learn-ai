@@ -510,10 +510,18 @@ def test_fractional_cent_consent_is_rejected_at_wire_boundary() -> None:
         DeploymentBudgetInput(amount_usd="100.001", risk_revision=0)
 
 
-def _deploy_bot(repo: ClerkSqliteRepository, gate: LiveEnvelopeGate, sid: str, *, cents: int, run_id: str | None = None) -> None:
-    """Register and Deploy a one-share SPY bot whose run is ``run_id``, ``<sid>-run`` unless given."""
+# An Options bot's sealed plan: it manages the legs of its setup (ADR 0079), so it holds option positions.
+OPTIONS_PLAN = {"kind": "options_session", "underlying": "SPY", "setup_sha256": "0" * 64}
+
+
+def _deploy_bot(
+    repo: ClerkSqliteRepository, gate: LiveEnvelopeGate, sid: str, *, cents: int, plan: dict | None = None,
+    run_id: str | None = None,
+) -> None:
+    """Register and Deploy a SPY bot whose run is ``run_id``, ``<sid>-run`` unless given: one share, or ``plan``'s
+    option positions."""
     terms = _request().exit_terms.seal()
-    config = {"symbol": "SPY", "quantity": 1}
+    config = {"symbol": "SPY", "quantity": 1} | ({} if plan is None else {"action_plan": plan})
     from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
     repo.register_strategy_instance(strategy_instance_id=sid, symbol="SPY", config_hash=canonical_sha256(config),
         config_json=canonicalize(config), exit_terms=terms)
@@ -729,6 +737,37 @@ async def test_account_money_is_the_running_bot_beside_free_to_deploy(authority:
     assert view.deploy_refusal is None
 
 
+async def test_each_bots_slice_names_what_it_holds_shares_or_option_positions(authority: tuple) -> None:
+    """A Signal bot holds shares and an Options bot option positions: on one account's bar, and on each bot's
+    page, each says its own. An Options bot's money is never said to be in shares."""
+    repo, runtime, gate = _committed_view(authority)
+    _deploy_bot(repo, gate, "opts", cents=20_000, plan=OPTIONS_PLAN)
+
+    view = await budget_deploy.account_money_view(repo.account_id)
+
+    assert view.state == "ready"
+    assert {segment.strategy_instance_id: segment.parts.held_label for segment in view.segments if segment.parts} == {
+        "view": "in shares", "opts": "in positions",
+    }
+    shares, options = budget_deploy._budget_view(runtime, "view"), budget_deploy._budget_view(runtime, "opts")
+    assert ("In shares, at cost", "0.00", False) in _statement(shares)
+    assert ("In positions, at cost", "0.00", False) in _statement(options)
+    assert [line.label for line in options.statement if "shares" in line.label] == []
+    assert options.segment is not None and options.segment.parts is not None
+    assert options.segment.parts.held_label == "in positions"
+
+
+async def test_a_bot_whose_plan_cannot_be_read_withholds_the_bar_and_says_why(authority: tuple) -> None:
+    """What a bot holds is named from its sealed plan. One that cannot be read is never guessed to be shares."""
+    repo, _, gate = _committed_view(authority)
+    _deploy_bot(repo, gate, "opts", cents=20_000, plan={"kind": "options_session"})
+
+    view = await budget_deploy.account_money_view(repo.account_id)
+
+    assert view.state == "unavailable" and view.segments == ()
+    assert view.detail == "Bot opts has an unreadable Action Plan, so what it holds cannot be named."
+
+
 async def test_broker_flat_outside_fill_is_shown_as_a_record_difference(authority: tuple) -> None:
     from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
     from tests.broker.alpaca.clerk.sqlite.test_budget_claims import _external_fill, _external_order
@@ -898,7 +937,8 @@ def test_a_shortfall_is_stated_only_where_something_is_short() -> None:
                             order_claims=Decimal(0), fee_claims=Decimal(0))
     bar = money_bar(account_money(budget, unseen_fills=Decimal(0), unseen_sales=Decimal(0), holdings=(),
                                   registration_order=("slipped", "steady")))
-    slipped, steady = (budget_deploy._segment_view(segment) for segment in bar.segments[:2])
+    held = dict.fromkeys(("slipped", "steady"), budget_deploy._IN_SHARES)
+    slipped, steady = (budget_deploy._segment_view(segment, held) for segment in bar.segments[:2])
 
     assert (slipped.strategy_instance_id, slipped.shortfall_usd) == ("slipped", "5.01")
     assert (steady.strategy_instance_id, steady.shortfall_usd) == ("steady", None)
@@ -915,10 +955,10 @@ def test_a_stated_figure_is_whole_cents_never_a_truncated_one() -> None:
     with pytest.raises(ValidationError, match=r"not whole cents: '0\.005'"):
         AccountMoneyView.model_validate(overdrawn)
     with pytest.raises(ValidationError, match=r"not whole cents: 'NaN'"):
-        MoneyParts.model_validate({"in_shares_usd": "NaN", "in_shares_bps": 10_000,
+        MoneyParts.model_validate({"held_label": "in shares", "in_shares_usd": "NaN", "in_shares_bps": 10_000,
                                    "pending_usd": "0.00", "pending_bps": 0, "free_usd": "0.00", "free_bps": 0})
     with pytest.raises(ValidationError, match=r"not a dollar amount: 'abc'"):
-        MoneyParts.model_validate({"in_shares_usd": "abc", "in_shares_bps": 10_000,
+        MoneyParts.model_validate({"held_label": "in shares", "in_shares_usd": "abc", "in_shares_bps": 10_000,
                                    "pending_usd": "0.00", "pending_bps": 0, "free_usd": "0.00", "free_bps": 0})
 
 
@@ -1357,7 +1397,7 @@ async def test_the_accounts_total_is_said_for_the_option_contracts_its_bot_holds
     gate = LiveEnvelopeGate(values=None, custody_is_simulated=False)
     gate.publish(snapshot.observation)
     runtime.envelope_sync.envelope = gate
-    _deploy_bot(repo, gate, "a", cents=50_000, run_id=RUN_ID)
+    _deploy_bot(repo, gate, "a", cents=50_000, plan=OPTIONS_PLAN, run_id=RUN_ID)
     for side, symbol, premium in legs:
         order = accept_option_order(
             repo, terms=ContractTerms(symbol=symbol, multiplier=100), side=side, contracts=1,
@@ -1376,7 +1416,8 @@ async def test_the_accounts_total_is_said_for_the_option_contracts_its_bot_holds
     assert view.state == "ready" and view.detail == detail
     assert view.total_usd == "1000.00"
     [bot, _] = view.segments
-    assert bot.strategy_instance_id == "a" and bot.parts is not None and bot.parts.in_shares_usd == held_usd
+    assert bot.strategy_instance_id == "a" and bot.parts is not None
+    assert (bot.parts.held_label, bot.parts.in_shares_usd) == ("in positions", held_usd)
 
 
 def test_a_dry_run_bot_shows_its_own_money_after_a_fill_without_account_evidence(tmp_path) -> None:
@@ -1450,6 +1491,36 @@ def test_a_stopped_bot_statement_shows_what_was_released_and_what_is_still_held(
     assert view.note is None
     assert view.segment is not None and (view.segment.kind, view.segment.amount_usd, view.segment.released_usd) == (
         "stopped", "100.00", "100.00",
+    )
+
+
+def test_a_stopped_option_bot_states_its_positions_never_shares(authority: tuple) -> None:
+    repo, runtime, gate = _committed_view(authority)
+    _deploy_bot(repo, gate, "opts", cents=20_000, plan=OPTIONS_PLAN)
+    _stop(repo, "opts")
+
+    view = budget_deploy._budget_view(runtime, "opts")
+
+    assert view.state == "ready" and view.headline == "Stopped · finished"
+    assert _statement(view)[-2:] == [("Still in positions, at cost", "0.00", False), ("Still in entry orders", "0.00", False)]
+
+
+@pytest.mark.parametrize(("held", "headline", "comes_back"), [
+    (budget_deploy._IN_SHARES, "Stopped · still holds shares", "The money in its shares comes back when they are sold."),
+    (budget_deploy._IN_POSITIONS, "Stopped · still holds positions",
+     "The money in its positions comes back when they are closed."),
+], ids=["a bot in shares", "an option bot"])
+def test_a_stopped_bot_still_holding_says_what_it_holds_and_how_that_money_comes_back(
+    held: budget_deploy._HeldIn, headline: str, comes_back: str,
+) -> None:
+    """An option bot's positions are closed, not sold: buying back a sold leg is how one of them ends."""
+    from app.broker.alpaca.clerk.budgets import deployment_budget
+
+    own = deployment_budget(strategy_instance_id="held", committed_cents=100_000, active=False, realized_gross="0",
+                            fees=Decimal(0), position_cost=Decimal("412"), pending_orders=Decimal(0))
+
+    assert budget_deploy._stopped_copy(own, held) == (
+        headline, f"Its Stop did not record what it released, so that figure is an estimate from its money now. {comes_back}",
     )
 
 
@@ -1799,7 +1870,8 @@ def test_a_reading_past_its_age_limit_is_stale_on_the_page_and_the_entry_is_not_
     )
     risk = current_risk_readiness(repo, envelope=gate, now_ms=repo.clock())
 
-    entry = budget_deploy._next_entry(runtime, repo, money.budget, "view", risk, repo.clock() - OBSERVATION_MAX_AGE_MS - 1)
+    entry = budget_deploy._next_entry(runtime, repo, money.budget, "view", risk, repo.clock() - OBSERVATION_MAX_AGE_MS - 1,
+                                      budget_deploy._held_in(repo, "view"))
 
     assert entry.funding is not None and entry.funding.account_headroom.state == "stale"
     assert entry.funding.account_headroom.amount_cents == 100_000

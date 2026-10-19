@@ -36051,7 +36051,7 @@
       },
       "MoneyParts": {
         "additionalProperties": false,
-        "description": "A bot's slice, shaded. Widths are basis points of the slice itself.\n\nThey sum to 10000, or to 0 when the slice holds nothing (a flat bot\nthat overran its budget draws no part; its shortfall is reported).",
+        "description": "A bot's slice, shaded. Widths are basis points of the slice itself.\n\nThey sum to 10000, or to 0 when the slice holds nothing (a flat bot\nthat overran its budget draws no part; its shortfall is reported).\n``in_shares_*`` is what the bot holds, at cost; ``held_label`` is the\nlegend's words for it: its shares, or the option positions of a bot\nwhose plan trades contracts.",
         "properties": {
           "free_bps": {
             "maximum": 10000.0,
@@ -36061,6 +36061,14 @@
           },
           "free_usd": {
             "title": "Free Usd",
+            "type": "string"
+          },
+          "held_label": {
+            "enum": [
+              "in shares",
+              "in positions"
+            ],
+            "title": "Held Label",
             "type": "string"
           },
           "in_shares_bps": {
@@ -36085,6 +36093,7 @@
           }
         },
         "required": [
+          "held_label",
           "in_shares_usd",
           "in_shares_bps",
           "pending_usd",

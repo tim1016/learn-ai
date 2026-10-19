@@ -75,9 +75,13 @@ class MoneyParts(BaseModel):
 
     They sum to 10000, or to 0 when the slice holds nothing (a flat bot
     that overran its budget draws no part; its shortfall is reported).
+    ``in_shares_*`` is what the bot holds, at cost; ``held_label`` is the
+    legend's words for it: its shares, or the option positions of a bot
+    whose plan trades contracts.
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    held_label: Literal["in shares", "in positions"]
     in_shares_usd: str
     in_shares_bps: int = Field(ge=0, le=FULL_BAR_BPS)
     pending_usd: str

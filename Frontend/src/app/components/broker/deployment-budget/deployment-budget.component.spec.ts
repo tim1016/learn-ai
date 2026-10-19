@@ -30,7 +30,7 @@ const RUNNING: DeploymentBudgetView = {
   ],
   segment: {
     kind: 'bot', strategy_instance_id: 'spy-ema-a', label: 'spy-ema-a', amount_usd: '1012.37', share_bps: 10000, palette_index: 0,
-    parts: { in_shares_usd: '764.71', in_shares_bps: 7554, pending_usd: '0.00', pending_bps: 0, free_usd: '247.66', free_bps: 2446 },
+    parts: { held_label: 'in shares', in_shares_usd: '764.71', in_shares_bps: 7554, pending_usd: '0.00', pending_bps: 0, free_usd: '247.66', free_bps: 2446 },
   },
   note: 'The budget limits new entries. Market fills and losses can go past it.',
   observed_at_ms: 1_800_000_000_000,

@@ -21648,12 +21648,20 @@ export interface components {
          *
          *     They sum to 10000, or to 0 when the slice holds nothing (a flat bot
          *     that overran its budget draws no part; its shortfall is reported).
+         *     ``in_shares_*`` is what the bot holds, at cost; ``held_label`` is the
+         *     legend's words for it: its shares, or the option positions of a bot
+         *     whose plan trades contracts.
          */
         MoneyParts: {
             /** Free Bps */
             free_bps: number;
             /** Free Usd */
             free_usd: string;
+            /**
+             * Held Label
+             * @enum {string}
+             */
+            held_label: "in shares" | "in positions";
             /** In Shares Bps */
             in_shares_bps: number;
             /** In Shares Usd */
