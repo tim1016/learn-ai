@@ -73,6 +73,16 @@ class JobRequest(Model):
     job_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
 
 
+class HistoryCaptureJobRequest(Model):
+    request: PlanRequest
+    job_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+class HistoryCaptureAccepted(Model):
+    job_id: str
+    status: Literal["queued"] = "queued"
+
+
 class JobAccepted(Model):
     job_id: str
     study_id: str
@@ -128,6 +138,7 @@ class WindowReview(Model):
 class Preflight(Model):
     preflight_hash: str
     can_lock: bool
+    missing_history: bool = False
     blockers: list[str]
     warnings: list[str]
     drawdown_limit_usd: str

@@ -12,10 +12,12 @@ import { servedSaved } from '../options-backtest/testing/fixtures';
 import { OptionsBacktestService } from '../options-backtest/options-backtest.service';
 import { OptionsGoldenSearchPageComponent } from './options-golden-search-page.component';
 import { OptionsGoldenSearchService } from './options-golden-search.service';
+import type { PlanRequest } from './options-golden-search.types';
+import type { JobState } from '../../services/jobs.service';
 import { declarations, preflight, study } from './testing';
 
 function service() {
-  return { declarations: vi.fn(async () => declarations()), list: vi.fn(async () => []), preflight: vi.fn(async () => preflight()), create: vi.fn(async () => study()), get: vi.fn(async () => study()), command: vi.fn(async () => study()) };
+  return { declarations: vi.fn(async () => declarations()), list: vi.fn(async () => []), preflight: vi.fn(async () => preflight()), captureHistory: vi.fn(async () => 'history-job'), activeHistoryCapture: vi.fn((_request: PlanRequest): JobState | null => null), refreshHistoryCaptures: vi.fn(async () => {}), onHistoryCapture: vi.fn((_id: string, _handler: (event: { type: string; [key: string]: unknown }) => void) => () => {}), cancelHistoryCapture: vi.fn(async () => {}), create: vi.fn(async () => study()), get: vi.fn(async () => study()), command: vi.fn(async () => study()) };
 }
 
 async function page(fake = service(), inputs = {}) {
@@ -25,8 +27,8 @@ async function page(fake = service(), inputs = {}) {
   return { view, fake, setups };
 }
 
-async function preparePlan() {
-  const result = await page();
+async function preparePlan(fake = service()) {
+  const result = await page(fake);
   const user = userEvent.setup();
   await screen.findByRole('option', { name: 'Saved two-leg setup' });
   await user.selectOptions(screen.getByRole('combobox', { name: 'Saved setup' }), 'Saved two-leg setup');
@@ -76,6 +78,69 @@ describe('Options Golden Search workbench', () => {
     await user.type(floor, '2');
     expect(lock).toHaveProperty('disabled', true);
     expect(screen.queryByText('Dollar limit: 2000 USD')).toBeNull();
+  });
+
+  it('captures missing underlying and listing history from the checked plan and rechecks after the job finishes', async () => {
+    const fake = service();
+    fake.preflight.mockResolvedValueOnce({ ...preflight(), can_lock: false, missing_history: true, blockers: ['Required underlying or listing history is absent. Capture it before locking this study.'] });
+    const { user } = await preparePlan(fake);
+    await user.click(screen.getByRole('button', { name: 'Check plan' }));
+    const capture = await screen.findByRole('button', { name: 'Capture required history' });
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Start search' }).disabled).toBe(true);
+    await user.click(capture);
+    expect(fake.captureHistory).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ setup_name: 'Saved two-leg setup', history: expect.objectContaining({ start_ms: 1704171600000, end_ms: 1789790400000 }) }));
+    await waitFor(() => expect(fake.onHistoryCapture).toHaveBeenCalledWith('history-job', expect.any(Function)));
+    const onEvent = fake.onHistoryCapture.mock.calls[0][1];
+    onEvent({ type: 'job.progress', current: 3, total: 10 });
+    expect(await screen.findByText(/3 of 10 sessions/)).toBeTruthy();
+    onEvent({ type: 'job.completed' });
+    await waitFor(() => expect(fake.preflight).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Start search' }).disabled).toBe(false));
+    expect(screen.queryByRole('button', { name: 'Capture required history' })).toBeNull();
+  });
+
+  it('keeps the plan blocked and offers a retry when history capture fails', async () => {
+    const fake = service();
+    fake.preflight.mockResolvedValue({ ...preflight(), can_lock: false, missing_history: true, blockers: ['Required underlying or listing history is absent. Capture it before locking this study.'] });
+    const { user } = await preparePlan(fake);
+    await user.click(screen.getByRole('button', { name: 'Check plan' }));
+    await user.click(await screen.findByRole('button', { name: 'Capture required history' }));
+    const onEvent = fake.onHistoryCapture.mock.calls[0][1];
+    onEvent({ type: 'job.failed', message: 'The data plan does not reach that far back.' });
+    expect(await screen.findByText('The data plan does not reach that far back.')).toBeTruthy();
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Start search' }).disabled).toBe(true);
+    await user.click(screen.getByRole('button', { name: 'Capture required history' }));
+    expect(fake.captureHistory).toHaveBeenCalledTimes(2);
+  });
+
+  it('reattaches a running capture and keeps its cancel control after a plan edit', async () => {
+    const fake = service();
+    fake.activeHistoryCapture.mockImplementation(() => ({ id: 'resumed-history', type: 'options_golden_search_history', status: 'running', current: 3, total: 10 } as JobState));
+    const { user } = await preparePlan(fake);
+    await waitFor(() => expect(fake.onHistoryCapture).toHaveBeenCalledWith('resumed-history', expect.any(Function)));
+    expect(await screen.findByText(/3 of 10 sessions/)).toBeTruthy();
+    await user.click(screen.getByText('Evidence requirements and additional limits'));
+    const floor = screen.getByRole('spinbutton', { name: 'Annualized daily Sharpe floor' });
+    await user.clear(floor);
+    await user.type(floor, '2');
+    await user.click(screen.getByRole('button', { name: 'Cancel capture' }));
+    expect(fake.cancelHistoryCapture).toHaveBeenCalledWith('resumed-history');
+    expect(fake.captureHistory).not.toHaveBeenCalled();
+  });
+
+  it('does not subscribe after the page is destroyed while a capture starts', async () => {
+    const fake = service();
+    fake.preflight.mockResolvedValue({ ...preflight(), can_lock: false, missing_history: true });
+    let finish: ((id: string) => void) | undefined;
+    fake.captureHistory.mockImplementation(() => new Promise<string>((resolve) => { finish = resolve; }));
+    const { user, view } = await preparePlan(fake);
+    await user.click(screen.getByRole('button', { name: 'Check plan' }));
+    await user.click(await screen.findByRole('button', { name: 'Capture required history' }));
+    await waitFor(() => expect(fake.captureHistory).toHaveBeenCalledOnce());
+    view.fixture.destroy();
+    finish?.('history-job');
+    await Promise.resolve();
+    expect(fake.onHistoryCapture).not.toHaveBeenCalled();
   });
 
   it('dispatches research before navigation can create a new page instance', async () => {

@@ -50,6 +50,7 @@ public static class JobsApi
         // Options Backtest (#3030): Python owns the run and its saved rows; this row is transport only.
         ["options_backtest"] = "/api/jobs-internal/options-backtest",
         ["options_golden_search"] = "/api/jobs-internal/options-golden-search",
+        ["options_golden_search_history"] = "/api/jobs-internal/options-golden-search-history",
         // The data-lake backfill worker lives on the data-lake router rather
         // than /api/jobs-internal/*; it accepts the same caller-minted job_id
         // this method injects below, so the framework (state, events, cancel,
@@ -132,11 +133,7 @@ public static class JobsApi
         var http = httpFactory.CreateClient("python");
         var pythonUrl = (config["PolygonService:BaseUrl"] ?? "http://python-service:8000")
             .TrimEnd('/') + pythonPath;
-        // The data-lake router protects mutating routes (including this
-        // backfill start) with X-Data-Plane-Control-Secret — see
-        // app.security.data_plane_control on the Python side. Every other
-        // job-type route is unprotected, so the header is scoped to this
-        // one type rather than defaulted onto the shared "python" client.
+        // Protected data-writing job routes require X-Data-Plane-Control-Secret.
         var controlSecret = ResolveControlSecretHeader(type, config);
         if (controlSecret != null)
         {
@@ -387,17 +384,13 @@ public static class JobsApi
 
     /// <summary>
     /// The X-Data-Plane-Control-Secret header value to attach for this job
-    /// type's dispatch, or null if it needs none. Only "data_lake_backfill"
-    /// hits a route the Python side gates on this header (see
-    /// app.security.data_plane_control); every other job type's route is
-    /// unprotected, so they get no header rather than one defaulted onto
-    /// the shared "python" client. Returns null (not the header) when the
+    /// type's dispatch, or null if it needs none. Returns null when the
     /// secret is unconfigured, so an operator running without one gets the
     /// same "unconfigured" response from Python that a direct caller would.
     /// </summary>
     internal static string? ResolveControlSecretHeader(string type, IConfiguration config)
     {
-        if (type != "data_lake_backfill")
+        if (type is not ("data_lake_backfill" or "options_golden_search_history"))
         {
             return null;
         }

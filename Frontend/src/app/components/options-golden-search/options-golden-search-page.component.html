@@ -34,10 +34,23 @@
           <dl><dt>Setup</dt><dd>{{ declaration.setup_name }}</dd><dt>Changes</dt><dd>{{ timing()?.length ?? 0 }} timing ranges · {{ (knobs()?.length ?? 0) }} additional settings</dd><dt>Leg timing</dt><dd>All legs together</dd></dl>
           <div class="summary-count"><span class="muted">Timing and setting combinations</span><strong>{{ preflight()?.combination_count ?? 'Check plan' }}</strong><span class="muted">{{ preflight() ? 'Verified by the search planner' : 'Choose ranges and history, then check your plan.' }}</span></div>
           <dl><dt>Rank by</dt><dd>{{ objectiveLabel() }}</dd><dt>Must pass</dt><dd>Drawdown ≤ {{ rules()?.policy?.max_drawdown_percent }}%<br />{{ rules()?.policy?.min_activity_per_year }} traded sessions / year</dd></dl>
-          <button type="button" class="summary-check" [disabled]="request() === null || busy() || loading()" (click)="checkPlan()">{{ busy() ? 'Working…' : 'Check plan' }}</button>
+          <button type="button" class="summary-check" [disabled]="request() === null || busy() || loading() || capturing()" (click)="checkPlan()">{{ busy() ? 'Working…' : 'Check plan' }}</button>
           <button type="button" class="primary summary-start" [disabled]="!canLock() || loading()" (click)="lock()">Start search</button>
           @if (request() === null) { <p class="muted">Vary at least one setting and choose both history dates. Correct any invalid ranges or limits.</p> }
-          @if (preflight(); as checked) { <p class="muted">Starting freezes this plan and its evidence. Changes require a new study.</p>@for (blocker of checked.blockers; track blocker) { <p class="problem">{{ blocker }}</p> } }
+          @if (preflight(); as checked) {
+            <p class="muted">Starting freezes this plan and its evidence. Changes require a new study.</p>
+            @for (blocker of checked.blockers; track blocker) { <p class="problem">{{ blocker }}</p> }
+            @if (checked.missing_history) { <button type="button" class="summary-capture" [disabled]="busy() || capturing()" (click)="captureHistory()">Capture required history</button> }
+          }
+          @if (captureForPlan(); as capture) {
+            @if (capture.kind === 'starting' || capture.kind === 'running') {
+              <p class="capture-status">Capturing underlying and listing history@if (capture.total) { : {{ capture.current ?? 0 }} of {{ capture.total }} sessions }…</p>
+              @if (capture.message) { <p class="problem">{{ capture.message }}</p> }
+              @if (capture.kind === 'running') { <button type="button" (click)="cancelHistoryCapture()">Cancel capture</button> }
+            } @else if (capture.kind === 'checking') { <p class="capture-status">History captured. Checking the plan again…</p> }
+            @else if (capture.kind === 'failed') { <p class="problem">{{ capture.message }}</p> }
+            @else if (capture.kind === 'done') { <p class="capture-status">{{ preflight()?.missing_history ? 'Capture finished; some history is still absent.' : 'History captured. The plan was checked again.' }}</p> }
+          }
         } @else { <p class="muted">Your setup, timing ranges and limits will appear here.</p><button type="button" class="primary summary-start" disabled>Start search</button> }
         <p class="summary-note">Research only. Starting a search does not place orders.</p>
       </aside>

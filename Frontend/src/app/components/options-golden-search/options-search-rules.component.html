@@ -55,7 +55,6 @@
 </details>
 @if (preflight(); as checked) {
   <section class="card"><h3>Server preflight</h3>
-    @for (message of checked.blockers; track message) { <p class="problem">{{ message }}</p> }
     @for (message of checked.warnings; track message) { <p class="warning">{{ message }}</p> }
     <p>{{ checked.combination_count ?? 'Unknown' }} combinations · {{ checked.legal_combination_count ?? 'Unknown' }} legal · {{ checked.invalid_combination_count ?? 'Unknown' }} invalid</p>
     <p>{{ checked.required_evaluations }} evaluations required · {{ checked.reserved_evaluations }} reserved · {{ checked.estimated_setup_sessions }} setup-session replays</p>

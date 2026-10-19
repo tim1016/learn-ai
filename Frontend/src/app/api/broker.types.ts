@@ -5053,6 +5053,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs-internal/options-golden-search-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Capture History */
+        post: operations["capture_history_api_jobs_internal_options_golden_search_history_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs-internal/pool/drain": {
         parameters: {
             query?: never;
@@ -19323,6 +19340,23 @@ export interface components {
             /** Start Ms */
             start_ms: number | null;
         };
+        /** HistoryCaptureAccepted */
+        HistoryCaptureAccepted: {
+            /** Job Id */
+            job_id: string;
+            /**
+             * Status
+             * @default queued
+             * @constant
+             */
+            status?: "queued";
+        };
+        /** HistoryCaptureJobRequest */
+        HistoryCaptureJobRequest: {
+            /** Job Id */
+            job_id: string;
+            request: components["schemas"]["PlanRequest"];
+        };
         /**
          * HoldState
          * @description The account-level exposure-hold state, journal-derived (S6).
@@ -25934,6 +25968,11 @@ export interface components {
             legal_combination_count: number | null;
             /** Mark Coverage */
             mark_coverage: string;
+            /**
+             * Missing History
+             * @default false
+             */
+            missing_history?: boolean;
             /** Preflight Hash */
             preflight_hash: string;
             /** Required Evaluations */
@@ -41101,6 +41140,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobAccepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    capture_history_api_jobs_internal_options_golden_search_history_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HistoryCaptureJobRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HistoryCaptureAccepted"];
                 };
             };
             /** @description Validation Error */

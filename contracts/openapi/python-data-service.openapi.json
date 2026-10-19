@@ -30810,6 +30810,46 @@
         "title": "HistoryBounds",
         "type": "object"
       },
+      "HistoryCaptureAccepted": {
+        "additionalProperties": false,
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "queued",
+            "default": "queued",
+            "title": "Status"
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "title": "HistoryCaptureAccepted",
+        "type": "object"
+      },
+      "HistoryCaptureJobRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "job_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Job Id",
+            "type": "string"
+          },
+          "request": {
+            "$ref": "#/components/schemas/PlanRequest"
+          }
+        },
+        "required": [
+          "request",
+          "job_id"
+        ],
+        "title": "HistoryCaptureJobRequest",
+        "type": "object"
+      },
       "HoldState": {
         "additionalProperties": false,
         "description": "The account-level exposure-hold state, journal-derived (S6).\n\nA hold is active when a ``HOLD_SET`` or ``UNEXPLAINED_ORDER`` line has no\nlater ``HOLD_CLEARED``. The latter keeps a crash between the observation and\nits companion HOLD_SET receipt fail-closed. ``reason_code`` is code-like\n(rendered through ``receiptLabel`` on the UI); ``reason`` is backend-authored\nwhat/why prose (rendered unpiped). When not held, every field but ``active``\nis ``None``.",
@@ -47612,6 +47652,11 @@
           "mark_coverage": {
             "title": "Mark Coverage",
             "type": "string"
+          },
+          "missing_history": {
+            "default": false,
+            "title": "Missing History",
+            "type": "boolean"
           },
           "preflight_hash": {
             "title": "Preflight Hash",
@@ -81762,6 +81807,65 @@
           }
         },
         "summary": "Dispatch",
+        "tags": [
+          "jobs-internal"
+        ]
+      }
+    },
+    "/api/jobs-internal/options-golden-search-history": {
+      "post": {
+        "operationId": "capture_history_api_jobs_internal_options_golden_search_history_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HistoryCaptureJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryCaptureAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Capture History",
         "tags": [
           "jobs-internal"
         ]

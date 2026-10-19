@@ -97,6 +97,7 @@ async def prepare(request: PlanRequest) -> tuple[Preflight, OptionsSearchProtoco
     blockers: list[str] = []
     warnings: list[str] = []
     snapshot: dict[str, Any] | None = None
+    missing_history = False
     protocol: OptionsSearchProtocol | None = None
     budget = None
     try:
@@ -111,7 +112,8 @@ async def prepare(request: PlanRequest) -> tuple[Preflight, OptionsSearchProtoco
         if not blockers:
             captured = await asyncio.to_thread(capture_snapshot, protocol, default_blob_store())
             snapshot = captured.model_dump(mode="json")
-            if any("/listing/" in path or path.startswith("equity/") for path in captured.absent):
+            missing_history = any("/listing/" in path or path.startswith("equity/") for path in captured.absent)
+            if missing_history:
                 blockers.append("Required underlying or listing history is absent. Capture it before locking this study.")
             protocol = protocol.model_copy(update={"snapshot_id": captured.snapshot_id})
     except ValueError as exc:
@@ -126,6 +128,7 @@ async def prepare(request: PlanRequest) -> tuple[Preflight, OptionsSearchProtoco
         classification = await with_connection(repo.exposure, setup.underlying, protocol.final.start_ms, protocol.final.end_ms)
     receipt = protocol.protocol_hash if protocol and snapshot else hash_payload(request.model_dump(mode="json"))
     return Preflight(preflight_hash=receipt, can_lock=not blockers and snapshot is not None,
+        missing_history=missing_history,
         blockers=blockers, warnings=warnings, drawdown_limit_usd=dollars,
         combination_count=prod(len(k.values) for k in request.knobs if k.mode == "search"),
         legal_combination_count=None, invalid_combination_count=None,
@@ -135,6 +138,16 @@ async def prepare(request: PlanRequest) -> tuple[Preflight, OptionsSearchProtoco
         mark_coverage="Pinned artifact inventory; held-minute coverage is verified separately for each candidate.",
         exposure=classification, identity=protocol.identities["selection"] if protocol else "unavailable",
         windows=[{"label": w.key, "start_ms": w.start_ms,"end_ms": w.end_ms,"scheduled_sessions":len(w.session_ms),"required_traded_sessions":w.activity_floor} for w in windows]), protocol, snapshot
+
+
+async def history_capture_scope(request: PlanRequest) -> tuple[str, tuple[int, ...]]:
+    """Validate the current saved setup and derive exactly the sessions a study snapshot reads."""
+    setup = await setup_named(request.setup_name)
+    if setup_sha256(setup) != request.expected_setup_hash:
+        raise repo.Conflict("The saved setup changed after it was displayed. Reload it before capturing history.")
+    protocol = await asyncio.to_thread(build_protocol, request, setup)
+    sessions = tuple(sorted(set(protocol.development.session_ms) | set(protocol.final.session_ms)))
+    return setup.underlying, sessions
 
 
 def initial_record(study_id: str, request: PlanRequest, protocol: OptionsSearchProtocol, snapshot: dict[str, Any]) -> dict[str, Any]:

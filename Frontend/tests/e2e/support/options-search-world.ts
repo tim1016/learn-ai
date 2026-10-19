@@ -22,7 +22,7 @@ const DECLARATIONS: SearchDeclarations = {
   defaults: { version: 'options-starting-limits-v1', rationale: 'Policy hurdles do not establish confidence.', policy: { max_drawdown_percent: '20', min_sharpe: 1, min_activity_per_year: 50, min_daily_observations: 30, min_forward_sessions: 30, min_final_sessions: 30, max_recovery_sessions: null, risk_free_daily_return: 0, stress_gate: false }, train_months: 6, test_months: 2, final_months: 6, evaluation_cap: 5000, finalist_count: 3 },
 };
 const PREFLIGHT: Preflight = {
-  preflight_hash: 'b'.repeat(64), can_lock: true, blockers: [], warnings: ['Minute-close marks cannot establish tick-level worst loss.'],
+  preflight_hash: 'b'.repeat(64), can_lock: true, missing_history: false, blockers: [], warnings: ['Minute-close marks cannot establish tick-level worst loss.'],
   drawdown_limit_usd: '2000', combination_count: 2, legal_combination_count: 2, invalid_combination_count: 0,
   required_evaluations: 30, reserved_evaluations: 20, estimated_setup_sessions: 3000,
   mark_coverage: 'Fixture coverage admitted; individual paths still require verification.', exposure: 'No recorded final exposure in this fixture.', identity: 'frozen-browser-fixture',
