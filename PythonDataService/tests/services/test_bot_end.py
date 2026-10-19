@@ -17,6 +17,7 @@ from app.services import bot_end as bot_end_service
 from app.services.bot_end import (
     BotEndRefused,
     bot_end_view,
+    bot_end_view_waiting_for_operator,
     default_bot_end,
     end_edit_refusal,
     resolve_bot_end,
@@ -229,6 +230,18 @@ def test_resolve_bot_end_refuses_keep_on_a_dry_run() -> None:
     assert refused.next_action == "Choose Sell for this Dry Run."
 
 
+def test_resolve_bot_end_refuses_keep_for_an_options_bot() -> None:
+    """An Options bot's end closes its positions, so a KEEP would make its End say the opposite of what happens."""
+    with pytest.raises(BotEndRefused) as refused:
+        resolve_bot_end(
+            _choose(_at(_WEDNESDAY, 15, 15), "KEEP"), now_ms=_at(_WEDNESDAY, 10), dry_run=False, use_rth=True,
+            bot_kind="options",
+        )
+
+    assert str(refused.value) == "An Options bot can't keep its positions at its end."
+    assert refused.value.next_action == "Choose Sell for this Options bot."
+
+
 def test_resolve_bot_end_sells_on_a_dry_run() -> None:
     resolved = _resolve(_choose(_at(_WEDNESDAY, 15, 59)), now_ms=_at(_WEDNESDAY, 10), dry_run=True)
 
@@ -317,6 +330,38 @@ def test_bot_end_view_of_a_scheduled_sale() -> None:
     assert view.end_at_ms == _at(_WEDNESDAY, 15, 59)
     assert view.end_action == "SELL"
     assert view.editable is True
+
+
+def test_an_options_bots_end_headline_says_it_closes_and_its_operator_notice_keeps_that_shape() -> None:
+    """A sold leg is bought to close, so an Options end's headline never says it sells."""
+    view = bot_end_view(
+        _scheduled(_at(_WEDNESDAY, 15, 15)), now_ms=_at(_WEDNESDAY, 10), dry_run=False, running=True,
+        use_rth=True, bot_kind="options",
+    )
+    reached = bot_end_view(
+        _scheduled(_at(_WEDNESDAY, 15, 15)), now_ms=_at(_WEDNESDAY, 16), dry_run=False, running=False,
+        use_rth=True, bot_kind="options",
+    )
+
+    assert view.headline == "Ends Wed Sep 30, 15:15 ET · closes"
+    assert bot_end_view_waiting_for_operator(reached, why="not sent").headline.endswith(" · no order sent")
+    assert "closes" not in bot_end_view_waiting_for_operator(reached, why="not sent").headline
+
+
+def test_bot_end_view_of_an_options_bot_closes_its_option_positions_not_shares() -> None:
+    def explanation(*, dry_run: bool) -> str:
+        return bot_end_view(
+            _scheduled(_at(_WEDNESDAY, 15, 15)), now_ms=_at(_WEDNESDAY, 10), dry_run=dry_run, running=True,
+            use_rth=True, bot_kind="options",
+        ).explanation
+
+    assert explanation(dry_run=False) == (
+        "At Wed Sep 30, 15:15 ET the Clerk stops the bot, cancels its working orders and closes its "
+        "option positions at market."
+    )
+    assert explanation(dry_run=True) == (
+        "At Wed Sep 30, 15:15 ET the bot stops, and its simulation closes what it holds at the last price it saw."
+    )
 
 
 def test_bot_end_view_of_a_dry_run_names_the_last_price() -> None:

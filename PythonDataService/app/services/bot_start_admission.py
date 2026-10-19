@@ -820,12 +820,18 @@ def market_data_admission_fact(
             **session_fields,
         )
     bars_expected = session.phase == "RTH" if use_rth else session.phase in {"PRE", "RTH", "POST", "OVERNIGHT"}
-    stalled_subscription = health.stale and health.active_subscription_count > 0 and bars_expected
+    # A warming subscription is delivering and only its first minute is
+    # still open. An idle feed already admits a run with no bar at all, so
+    # refusing the run that would share a delivering line blocked every
+    # second Deploy on a symbol for up to two minutes. Orders still wait for
+    # a closed minute: their gates read ``stale``.
+    delivering = not health.stale or health.warming
+    stalled_subscription = not delivering and health.active_subscription_count > 0 and bars_expected
     state: Literal["AVAILABLE", "STALE", "UNAVAILABLE"] = (
         "UNAVAILABLE" if not health.connected else ("STALE" if stalled_subscription else "AVAILABLE")
     )
     reason = health.reason or None
-    if health.connected and health.stale and not stalled_subscription:
+    if health.connected and not delivering and not stalled_subscription:
         reason = (
             "The connected feed is idle; a new run may establish the candidate subscription."
             if health.active_subscription_count == 0
@@ -839,6 +845,7 @@ def market_data_admission_fact(
         reason=reason,
         connected=health.connected,
         stale=health.stale,
+        warming=health.warming,
         active_subscription_count=health.active_subscription_count,
         scheduled_phase=session.phase,
         session_authority_source=session.source,

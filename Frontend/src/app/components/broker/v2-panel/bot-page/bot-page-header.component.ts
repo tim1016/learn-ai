@@ -5,6 +5,7 @@ import { LANE_MODE_WORDING } from '../../../../services/alpaca-live-verdict.serv
 import { AlpacaLaneModeChipComponent } from '../../../brokers/alpaca-desk/alpaca-lane-mode-chip.component';
 import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { BotInstrumentComponent } from '../../../../shared/bot-instrument/bot-instrument.component';
+import { BotStrategyLabelComponent } from '../../../../shared/bot-strategy-label/bot-strategy-label.component';
 import { AuthoredUsdPipe } from '../../../../shared/pipes/authored-usd.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import type { BotPanelView, MarketPulseView } from '../lib/broker-v2-panel.types';
@@ -46,8 +47,8 @@ let nextSummaryId = 0;
   selector: 'app-bot-page-header',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    AlpacaLaneModeChipComponent, AssetIdentityComponent, AuthoredUsdPipe, BotInstrumentComponent, RouterLink,
-    TimestampDisplayComponent,
+    AlpacaLaneModeChipComponent, AssetIdentityComponent, AuthoredUsdPipe, BotInstrumentComponent,
+    BotStrategyLabelComponent, RouterLink, TimestampDisplayComponent,
   ],
   templateUrl: './bot-page-header.component.html',
   styleUrl: './bot-page-header.component.scss',

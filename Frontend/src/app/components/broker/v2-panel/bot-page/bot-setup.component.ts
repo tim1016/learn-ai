@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, input, model } from '@angular/core';
 
+import { BotStrategyLabelComponent } from '../../../../shared/bot-strategy-label/bot-strategy-label.component';
 import { CopyButtonComponent } from '../../../../shared/copy-button/copy-button.component';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
@@ -20,7 +21,7 @@ interface SettingLine {
 @Component({
   selector: 'app-bot-setup',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CopyButtonComponent, ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [BotStrategyLabelComponent, CopyButtonComponent, ReceiptLabelPipe, TimestampDisplayComponent],
   templateUrl: './bot-setup.component.html',
   styleUrl: './bot-setup.component.scss',
 })

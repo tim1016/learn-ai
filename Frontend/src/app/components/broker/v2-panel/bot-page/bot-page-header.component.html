@@ -4,7 +4,7 @@
     <p class="bot-header__meta">
       <a class="bot-header__back" [routerLink]="backRoute()"><span aria-hidden="true">←</span> {{ backLabel() }}</a>
       <span aria-hidden="true">·</span>
-      <span class="bot-header__strategy">{{ panel().strategy_label }}</span>
+      <app-bot-strategy-label class="bot-header__strategy" [bot]="panel()" />
       <span aria-hidden="true">·</span>
       <app-bot-instrument [symbol]="panel().symbol" [traded]="panel().traded" form="words" size="sm" />
     </p>

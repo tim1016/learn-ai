@@ -38,6 +38,8 @@ let nextEndCardId = 0;
 export class BotEndCardComponent {
   readonly end = input.required<BotEndView>();
   readonly dryRun = input(false);
+  /** An Options bot's end always closes its positions, so it offers no Keep. */
+  readonly optionsBot = input(false);
   /** Another command on this bot is on its way. */
   readonly locked = input(false);
   /** Sends the owner's choice; resolves once it is recorded, rejects with the refusal. */
@@ -46,7 +48,7 @@ export class BotEndCardComponent {
   readonly showChange = input(true);
 
   protected readonly titleId = `bot-end-${nextEndCardId++}-title`;
-  protected readonly keepOffered = computed(() => !this.dryRun());
+  protected readonly keepOffered = computed(() => !this.dryRun() && !this.optionsBot());
   protected readonly fields = signal<BotEndFields>({ date: '', clock: '', noEnd: true, action: 'SELL' });
   protected readonly saving = signal(false);
   protected readonly busy = computed(() => this.saving() || this.locked());

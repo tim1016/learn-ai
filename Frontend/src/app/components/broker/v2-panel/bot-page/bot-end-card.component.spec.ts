@@ -56,9 +56,9 @@ type Save = (choice: BotEndInput) => Promise<void>;
 async function renderCard(
   end: BotEndView,
   save = vi.fn<Save>().mockResolvedValue(),
-  { dryRun = false, locked = false }: { dryRun?: boolean; locked?: boolean } = {},
+  { dryRun = false, locked = false, optionsBot = false }: { dryRun?: boolean; locked?: boolean; optionsBot?: boolean } = {},
 ) {
-  const rendered = await render(BotEndCardComponent, { inputs: { end, save, dryRun, locked } });
+  const rendered = await render(BotEndCardComponent, { inputs: { end, save, dryRun, locked, optionsBot } });
   return { ...rendered, save };
 }
 
@@ -302,6 +302,13 @@ describe('BotEndCardComponent (#2607)', () => {
     expect(within(editor()).queryByRole('radio', { name: 'Keep its shares' })).toBeNull();
     fireEvent.click(within(editor()).getByRole('button', { name: 'Save end' }));
     await vi.waitFor(() => expect(save).toHaveBeenCalledWith({ end_at_ms: END_AT, end_action: 'SELL' }));
+  });
+
+  it('offers no Keep for an Options bot, whose end closes its positions', async () => {
+    const { fixture } = await renderCard({ ...SCHEDULED, end_action: 'SELL' }, undefined, { optionsBot: true });
+    await openEditor(fixture);
+
+    expect(within(editor()).queryByRole('radio', { name: 'Keep its shares' })).toBeNull();
   });
 
   it('sends nothing it cannot read, and says what the date needs', async () => {

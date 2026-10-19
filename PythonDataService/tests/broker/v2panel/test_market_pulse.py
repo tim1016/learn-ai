@@ -65,6 +65,7 @@ def _admission_fact(
     last_bar_ms: int | None,
     reason: str = "",
     stale: bool = False,
+    warming: bool = False,
     connected: bool | None = None,
     active_subscription_count: int = 1,
 ) -> None:
@@ -76,6 +77,7 @@ def _admission_fact(
             observed_at_ms=121_000,
             reason=reason,
             stale=stale,
+            warming=warming,
             # The real fact carries both; the panel's extended-hours
             # reconciliation reads them together (ADR 0059 D5 / #1671).
             connected=state != "UNAVAILABLE" if connected is None else connected,
@@ -260,6 +262,29 @@ def test_idle_feed_does_not_claim_to_be_live(
     assert running_pulse.feed_state == "IDLE"
     assert running_pulse.headline == "Market data idle for a running bot"
     assert running_pulse.attention_required is True
+
+
+def test_warming_feed_on_a_running_bot_is_live_not_idle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _session(monkeypatch, "RTH")
+    reason = "The IBKR feed for SPY is delivering; its first closed minute is still being assembled, and orders wait for it"
+    _admission_fact(monkeypatch, state="AVAILABLE", last_bar_ms=None, reason=reason, stale=True, warming=True)
+    feed = _Feed(
+        FeedHealth(
+            connected=True,
+            stale=True,
+            warming=True,
+            last_bar_ms=None,
+            reason="",
+            active_subscription_count=1,
+            observed_at_ms=121_000,
+        )
+    )
+
+    pulse = market_pulse.build_market_pulse(feed, now_ms=121_000, use_rth=True, bot_running=True)
+
+    assert (pulse.feed_state, pulse.attention_required, pulse.explanation) == ("LIVE", False, reason)
 
 
 def test_open_scheduled_phase_shows_fresh_symbol_halt(

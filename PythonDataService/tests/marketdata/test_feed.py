@@ -440,6 +440,56 @@ async def test_health_active_without_first_closed_bar_is_stale(
     await stream.aclose()
 
 
+@pytest.mark.asyncio
+async def test_health_delivering_line_before_its_first_minute_is_warming_until_it_goes_quiet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A line printing 5-second bars whose first minute is still open is warming, and still stale.
+
+    Once its prints stop past the threshold it is no longer warming: a quiet
+    new line reads as one that has not produced its first closed bar.
+    """
+    fixture = ScriptedLinesFeedFixture(raw_minute(RTH_MINUTE, (0, 5, 10)))
+    fixture.install(monkeypatch)
+    feed = IbkrMarketDataFeed(fixture.client)
+    stream = feed.stream_bars("SPY")
+    pending_bar = asyncio.create_task(anext(stream))
+    await fixture.wait_until_subscribed()
+    for _ in range(100):
+        if feed.health("SPY").warming:
+            break
+        await asyncio.sleep(0)
+
+    warming = feed.health("SPY")
+    fixture.clock.advance_ms(30_000)
+    quiet = feed.health("SPY")
+
+    assert (warming.stale, warming.warming, warming.last_bar_ms) == (True, True, None)
+    assert "first closed minute" in warming.reason
+    assert (quiet.stale, quiet.warming) == (True, False)
+    assert "first closed bar" in quiet.reason
+    pending_bar.cancel()
+    await asyncio.gather(pending_bar, return_exceptions=True)
+    await stream.aclose()
+
+
+def test_health_withdrawn_proof_with_no_delivery_since_is_not_warming(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stalled line's last source bar does not make its replacement, which has delivered nothing, warming."""
+    fixed_now = 1_700_001_000_000
+    monkeypatch.setattr("app.marketdata.ibkr_feed.now_ms_utc", lambda: fixed_now)
+    feed = IbkrMarketDataFeed(_fake_connected_client(connected=True, connection_lost=False))
+    state = feed._state_for("SPY")
+    state.active_count = 1
+    state.first_bar_seen = True
+    state.last_source_wall_ms = fixed_now - 1_000
+
+    state.await_first_bar()
+    health = feed.health("SPY")
+
+    assert (health.stale, health.warming) == (True, False)
+    assert "first closed bar" in health.reason
+
+
 def test_health_disconnected_reports_reason() -> None:
     client = _fake_connected_client(connected=False)
     feed = IbkrMarketDataFeed(client)
