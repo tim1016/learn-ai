@@ -1,29 +1,54 @@
-import { ChangeDetectionStrategy, Component, Injectable, Injector, computed, inject, input, resource, untracked } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  Injectable,
+  Injector,
+  computed,
+  inject,
+  input,
+  signal,
+  untracked,
+  type Signal,
+  type WritableSignal,
+} from '@angular/core';
 
 import { GoldenOptionSetupsService } from '../../components/options-backtest/golden-option-setups.service';
 
 interface LabelledBot {
-  readonly strategy_label?: string | null;
+  readonly strategy_label: string | null;
   readonly options_bot?: { readonly golden_setup_id: string } | null;
 }
 
-/** Approved setups' names, read once per page; a record's name never changes. */
+/**
+ * Approved setups' names, read once per id. A golden record is insert-only,
+ * so its name never changes; a setup approved after the page opened is read
+ * the first time a bot names it.
+ */
 @Injectable({ providedIn: 'root' })
 export class GoldenSetupNames {
   private readonly golden = inject(GoldenOptionSetupsService);
-  private readonly setups = resource({ loader: () => this.golden.list() });
+  private readonly names = new Map<string, WritableSignal<string | null>>();
 
-  /** The approved setup's name, or null while unread, unreadable or unlisted. */
-  nameFor(goldenSetupId: string): string | null {
-    if (!this.setups.hasValue()) return null;
-    return this.setups.value().find((setup) => setup.id === goldenSetupId)?.name ?? null;
+  /** The setup's name: null until it is read, and while it cannot be. */
+  nameFor(goldenSetupId: string): Signal<string | null> {
+    const known = this.names.get(goldenSetupId);
+    if (known !== undefined) return known;
+    const name = signal<string | null>(null);
+    this.names.set(goldenSetupId, name);
+    this.golden.get(goldenSetupId).then(
+      (setup) => name.set(setup.name),
+      // The label keeps the bot's strategy label; the next bot that names
+      // this setup asks again.
+      () => this.names.delete(goldenSetupId),
+    );
+    return name;
   }
 }
 
 /**
  * What a bot runs: an Options bot's approved setup by name, else the
  * backend's strategy label. Bots of one strategy on one symbol otherwise read
- * the same in every row. The names are read only once an Options bot shows.
+ * the same in every row.
  */
 @Component({
   selector: 'app-bot-strategy-label',
@@ -38,7 +63,9 @@ export class BotStrategyLabelComponent {
   protected readonly label = computed(() => {
     const bot = this.bot();
     const golden = bot.options_bot?.golden_setup_id;
-    const names = golden ? untracked(() => this.injector.get(GoldenSetupNames)) : null;
-    return (golden && names?.nameFor(golden)) || bot.strategy_label || '';
+    // The names service, and the read it starts, are reached only for an
+    // Options bot, and untracked: starting a read is not this label's state.
+    const name = golden ? untracked(() => this.injector.get(GoldenSetupNames).nameFor(golden)) : null;
+    return name?.() || bot.strategy_label || '';
   });
 }

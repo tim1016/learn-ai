@@ -577,7 +577,7 @@ def test_warming_subscription_during_rth_admits_a_run_that_shares_it(
         stale=True,
         warming=True,
         last_bar_ms=None,
-        reason="The IBKR feed for SPY is delivering; its first closed minute is still being assembled",
+        reason="The IBKR feed for SPY is delivering; its first closed minute is still being assembled, and orders wait for it",
         active_subscription_count=1,
         observed_at_ms=_NOW - 1_000,
     )

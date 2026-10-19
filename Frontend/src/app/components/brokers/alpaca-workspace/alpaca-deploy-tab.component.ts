@@ -63,4 +63,6 @@ export class AlpacaDeployTabComponent {
   protected readonly fence = this.accountData.fence;
   protected readonly laneReviewRequired = computed(() => laneFenceDrifted(this.fence(), this.lane() ?? undefined));
   protected reviewCurrentLane(): void { this.accountData.reviewCurrentLane(); }
+  /** The header's money is polled; a Deploy's receipt re-reads it now. */
+  protected refreshAccountMoney(): void { this.accountData.money.reload(); }
 }

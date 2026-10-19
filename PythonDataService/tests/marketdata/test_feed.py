@@ -473,6 +473,23 @@ async def test_health_delivering_line_before_its_first_minute_is_warming_until_i
     await stream.aclose()
 
 
+def test_health_withdrawn_proof_with_no_delivery_since_is_not_warming(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stalled line's last source bar does not make its replacement, which has delivered nothing, warming."""
+    fixed_now = 1_700_001_000_000
+    monkeypatch.setattr("app.marketdata.ibkr_feed.now_ms_utc", lambda: fixed_now)
+    feed = IbkrMarketDataFeed(_fake_connected_client(connected=True, connection_lost=False))
+    state = feed._state_for("SPY")
+    state.active_count = 1
+    state.first_bar_seen = True
+    state.last_source_wall_ms = fixed_now - 1_000
+
+    state.await_first_bar()
+    health = feed.health("SPY")
+
+    assert (health.stale, health.warming) == (True, False)
+    assert "first closed bar" in health.reason
+
+
 def test_health_disconnected_reports_reason() -> None:
     client = _fake_connected_client(connected=False)
     feed = IbkrMarketDataFeed(client)

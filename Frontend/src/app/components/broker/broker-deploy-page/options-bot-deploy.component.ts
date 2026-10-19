@@ -10,7 +10,6 @@ import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { refusalBody } from '../../../shared/errors/refusal-body';
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
-import { AlpacaDeskAccountDataService } from '../../brokers/alpaca-desk/alpaca-desk-account-data.service';
 import { GoldenOptionSetupsService } from '../../options-backtest/golden-option-setups.service';
 import { OptionsBacktestService } from '../../options-backtest/options-backtest.service';
 import { BotEndEditorComponent } from '../bot-end/bot-end-editor.component';
@@ -52,6 +51,8 @@ export class OptionsBotDeployComponent {
   readonly fence = input.required<LaneFence>();
   readonly laneReviewRequired = input(false);
   readonly outstandingChange = output<boolean>();
+  /** A receipt set money aside or released it: the host re-reads the account's money. */
+  readonly accountMoneyChanged = output();
 
   private readonly service = inject(OptionsBotDeployService);
   private readonly goldenService = inject(GoldenOptionSetupsService);
@@ -59,11 +60,14 @@ export class OptionsBotDeployComponent {
   private readonly backtests = inject(OptionsBacktestService);
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
-  private readonly accountData = inject(AlpacaDeskAccountDataService, { optional: true });
   protected readonly busy = signal(false);
   protected readonly unknown = signal(false);
   protected readonly problem = signal<string | null>(null);
   protected readonly receipt = signal<BudgetDeployReceipt | null>(null);
+  private readonly receiptState = computed(() => {
+    const receipt = this.receipt();
+    return receipt === null ? null : `${receipt.command_id}:${receipt.status}`;
+  });
   private readonly fields = signal({ goldenId: this.route.snapshot.queryParamMap.get('options_setup') ?? '', amount: '', mode: '', confirmation: '',
     exitAllowanceBps: null as number | null, bandMultiple: null as number | null, spreadCapBps: null as number | null,
   });
@@ -190,10 +194,10 @@ export class OptionsBotDeployComponent {
   });
 
   constructor() {
-    // The workspace header's money is polled; a Deploy that just set money
-    // aside re-reads it now.
+    // The workspace header's money is polled; a receipt that sets money aside
+    // or releases it asks its host to re-read it now.
     effect(() => {
-      if (this.receipt() !== null) untracked(() => this.accountData?.money.reload());
+      if (this.receiptState() !== null) untracked(() => this.accountMoneyChanged.emit());
     });
     effect(() => {
       if (!this.defaultEnd.hasValue() || this.endEdited()) return;

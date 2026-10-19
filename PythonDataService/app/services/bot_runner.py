@@ -1802,6 +1802,7 @@ class BotTaskRegistry:
                 raise refusal
             resolved = resolve_bot_end(
                 choice, now_ms=now, dry_run=binding.mode == "dry_run", use_rth=binding.use_rth,
+                bot_kind="options" if binding.options_bot is not None else "signal",
             )
             record = repo.set_end(resolved.end, updated_by=updated_by, now_ms=now)
             logger.info(

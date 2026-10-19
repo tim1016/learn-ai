@@ -106,7 +106,8 @@ def resolve_bot_end(
 ) -> ResolvedBotEnd:
     """The end a Deploy or an edit records, or :class:`BotEndRefused`.
 
-    ``choice`` ``None`` is the default end. ``dry_run`` refuses KEEP;
+    ``choice`` ``None`` is the default end. ``dry_run`` refuses KEEP, and so
+    does an Options bot: its end closes every contract it holds.
     ``use_rth`` ``False`` -- a bot that also trades in extended hours --
     refuses every end, since its hours have no end rule yet.
     """
@@ -128,6 +129,12 @@ def resolve_bot_end(
             "A Dry Run can't keep its shares at its end.",
             detail="A Dry Run never ends holding; it always sells at the last price it saw.",
             next_action="Choose Sell for this Dry Run.",
+        )
+    if bot_kind == "options" and choice.end_action == "KEEP":
+        raise BotEndRefused(
+            "An Options bot can't keep its positions at its end.",
+            detail="An Options bot's end closes every option position it holds.",
+            next_action="Choose Sell for this Options bot.",
         )
     return _checked_end(choice.end_at_ms, choice.end_action, now_ms=now_ms)
 

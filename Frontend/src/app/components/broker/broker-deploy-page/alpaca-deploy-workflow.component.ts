@@ -10,6 +10,7 @@ import {
   inject,
   input,
   resource,
+  output,
   signal,
   untracked,
   viewChild,
@@ -61,7 +62,6 @@ import {
   accountWorkspaceTabRoute,
   type AccountWorkspaceLink,
 } from '../../../fleet/account-workspace';
-import { AlpacaDeskAccountDataService } from '../../brokers/alpaca-desk/alpaca-desk-account-data.service';
 import { extractServerMessage } from '../operation-error';
 import { refusalBody, refusalProse } from '../../../shared/errors/refusal-body';
 import { botEndFields, botEndInput, type BotEndFields } from '../bot-end/bot-end-fields';
@@ -426,13 +426,14 @@ export class AlpacaDeployWorkflowComponent {
   readonly target = input.required<ResourceTarget>();
   readonly fence = input.required<LaneFence>();
   readonly laneReviewRequired = input(false);
+  /** A receipt set money aside or released it: the host re-reads the account's money. */
+  readonly accountMoneyChanged = output();
 
   private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly drafts = inject(DeployDraftStore);
   private termsSeeded = false;
   private readonly panelService = inject(BrokerV2PanelService);
   private readonly route = inject(ActivatedRoute);
-  private readonly accountData = inject(AlpacaDeskAccountDataService, { optional: true });
   private readonly router = inject(Router);
   private readonly destroyRef = inject(DestroyRef);
   private readonly injector = inject(Injector);
@@ -1501,6 +1502,11 @@ export class AlpacaDeployWorkflowComponent {
     const receipt = own?.status === 'pending' && recovered?.command_id === own.command_id ? recovered : (own ?? recovered);
     return receipt && sameAlpacaAccount(receipt.account_id, this.accountId()) ? receipt : null;
   });
+  /** One value per receipt and status, so a pending receipt that settles counts again. */
+  private readonly receiptState = computed(() => {
+    const receipt = this.shownReceipt();
+    return receipt === null ? null : `${receipt.command_id}:${receipt.status}`;
+  });
   protected readonly receiptBotLink = computed<AccountWorkspaceLink | null>(() => {
     const receipt = this.shownReceipt();
     if (receipt === null) return null;
@@ -1536,10 +1542,10 @@ export class AlpacaDeployWorkflowComponent {
   }
 
   constructor() {
-    // The workspace header's money is polled; a Deploy that just set money
-    // aside re-reads it now.
+    // The workspace header's money is polled; a receipt that sets money aside
+    // or releases it asks its host to re-read it now.
     effect(() => {
-      if (this.receipt() !== null) untracked(() => this.accountData?.money.reload());
+      if (this.receiptState() !== null) untracked(() => this.accountMoneyChanged.emit());
     });
     this.destroyRef.onDestroy(() => {
       if (this.symbolScopeTimer !== null) clearTimeout(this.symbolScopeTimer);

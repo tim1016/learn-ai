@@ -229,6 +229,18 @@ def test_resolve_bot_end_refuses_keep_on_a_dry_run() -> None:
     assert refused.next_action == "Choose Sell for this Dry Run."
 
 
+def test_resolve_bot_end_refuses_keep_for_an_options_bot() -> None:
+    """An Options bot's end closes its positions, so a KEEP would make its End say the opposite of what happens."""
+    with pytest.raises(BotEndRefused) as refused:
+        resolve_bot_end(
+            _choose(_at(_WEDNESDAY, 15, 15), "KEEP"), now_ms=_at(_WEDNESDAY, 10), dry_run=False, use_rth=True,
+            bot_kind="options",
+        )
+
+    assert str(refused.value) == "An Options bot can't keep its positions at its end."
+    assert refused.value.next_action == "Choose Sell for this Options bot."
+
+
 def test_resolve_bot_end_sells_on_a_dry_run() -> None:
     resolved = _resolve(_choose(_at(_WEDNESDAY, 15, 59)), now_ms=_at(_WEDNESDAY, 10), dry_run=True)
 

@@ -1140,6 +1140,21 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
     expect(within(receipt).queryByText(/returned unchanged/)).toBeNull();
   });
 
+  it('asks its host to re-read the account money once, when its Deploy’s receipt arrives', async () => {
+    const service = mockService();
+    const { fixture } = await renderWorkflow(service);
+    const moneyChanged = vi.fn();
+    fixture.componentInstance.accountMoneyChanged.subscribe(moneyChanged);
+    await chooseMoney();
+    expect(moneyChanged).not.toHaveBeenCalled();
+
+    fireEvent.click(deployButton());
+    await screen.findByRole('status', { name: RECEIPT.message });
+    await fixture.whenStable();
+
+    expect(moneyChanged).toHaveBeenCalledOnce();
+  });
+
   it('moves focus to the refusal when the backend declines the Deploy', async () => {
     const service = mockService();
     service.previewStartAdmission.mockResolvedValue({

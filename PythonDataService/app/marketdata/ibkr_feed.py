@@ -89,25 +89,19 @@ class _SymbolLiveness:
     last_source_ms: int | None = None
     last_source_wall_ms: int | None = None
     first_bar_seen: bool = False
-    # When the symbol last lost its closed-minute proof: a source bar after
-    # this instant shows the line it waits on is delivering.
-    first_bar_pending_since_wall_ms: int | None = None
     active_count: int = 0
 
     def await_first_bar(self) -> None:
-        """Withdraw the closed-minute proof until the next minute is delivered."""
+        """Withdraw the closed-minute proof, and the source watermark of the line that lost it."""
         self.first_bar_seen = False
-        self.first_bar_pending_since_wall_ms = now_ms_utc()
+        self.last_source_ms = self.last_source_wall_ms = None
 
     def warming(self, now_ms: int, stale_threshold_ms: int) -> bool:
-        """Source bars arrived since the proof was withdrawn, within the threshold."""
-        pending_since = self.first_bar_pending_since_wall_ms
-        source_wall = self.last_source_wall_ms
+        """A source bar arrived since the proof was withdrawn, within the threshold."""
         return (
-            pending_since is not None
-            and source_wall is not None
-            and source_wall >= pending_since
-            and now_ms - source_wall < stale_threshold_ms
+            not self.first_bar_seen
+            and self.last_source_wall_ms is not None
+            and now_ms - self.last_source_wall_ms < stale_threshold_ms
         )
 
 
@@ -650,7 +644,7 @@ class IbkrMarketDataFeed:
             stale = warming = True
             reason = (
                 f"The IBKR feed for {', '.join(warming_names)} is delivering; "
-                "its first closed minute is still being assembled"
+                "its first closed minute is still being assembled, and orders wait for it"
             )
 
         return FeedHealth(

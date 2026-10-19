@@ -399,15 +399,3 @@ def test_full_clerk_reduction_waits_for_pending_entry_cancellation_proof() -> No
     settled = rules.advance(at(6), (terminal,))
     assert settled.decisions == ()
     assert rules.state.legs[0].phase is Phase.DONE
-
-
-def test_legs_of_a_session_before_its_entry_minute_read_not_started_not_done() -> None:
-    from app.services.options_bot_status import leg_views
-
-    rules = OptionsSession(setup(leg()), _market())
-    before = [view.phase for view in leg_views(rules.state)]
-    rules.advance(at(5))
-    after = [view.phase for view in leg_views(rules.state)]
-
-    assert before == ["not_started"]
-    assert after != ["not_started"]

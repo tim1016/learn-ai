@@ -268,7 +268,8 @@ def test_warming_feed_on_a_running_bot_is_live_not_idle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _session(monkeypatch, "RTH")
-    _admission_fact(monkeypatch, state="AVAILABLE", last_bar_ms=None, stale=True, warming=True)
+    reason = "The IBKR feed for SPY is delivering; its first closed minute is still being assembled, and orders wait for it"
+    _admission_fact(monkeypatch, state="AVAILABLE", last_bar_ms=None, reason=reason, stale=True, warming=True)
     feed = _Feed(
         FeedHealth(
             connected=True,
@@ -283,7 +284,7 @@ def test_warming_feed_on_a_running_bot_is_live_not_idle(
 
     pulse = market_pulse.build_market_pulse(feed, now_ms=121_000, use_rth=True, bot_running=True)
 
-    assert (pulse.feed_state, pulse.attention_required) == ("LIVE", False)
+    assert (pulse.feed_state, pulse.attention_required, pulse.explanation) == ("LIVE", False, reason)
 
 
 def test_open_scheduled_phase_shows_fresh_symbol_halt(
