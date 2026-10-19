@@ -1,4 +1,4 @@
-"""Parity-matrix cell lookup by id."""
+"""Matrix invariants — 16 cells, 4 tickers × 4 nested windows."""
 
 from __future__ import annotations
 
@@ -7,10 +7,25 @@ from datetime import date
 import pytest
 
 from app.lean_sidecar.parity_matrix.matrix import (
+    CELLS,
     Cell,
     WindowLabel,
     cell_by_id,
 )
+
+
+def test_cells_total_count() -> None:
+    assert len(CELLS) == 16
+
+
+def test_cells_have_four_distinct_tickers() -> None:
+    assert {c.ticker for c in CELLS} == {"SPY", "QQQ", "AAPL", "TSLA"}
+
+
+def test_each_ticker_has_four_windows() -> None:
+    for ticker in ("SPY", "QQQ", "AAPL", "TSLA"):
+        labels = {c.window_label for c in CELLS if c.ticker == ticker}
+        assert labels == {WindowLabel.W3MO, WindowLabel.W6MO, WindowLabel.W12MO, WindowLabel.W24MO}
 
 
 def test_cell_id_format() -> None:
