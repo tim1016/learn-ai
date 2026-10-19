@@ -299,6 +299,22 @@ async def test_a_shared_read_serves_only_its_own_minute(
         first.option_bar(CALL, at(6))
 
 
+async def test_a_shared_read_from_before_lost_data_is_never_reused(
+    market_inputs: tuple[_Client, OptionWatchList],
+) -> None:
+    client, _watch = market_inputs
+    first, second = _market(setup(leg()), market_inputs), _market(setup(leg()), market_inputs)
+    await first.prepare(at(5), contracts=(CALL,))
+    client.data_loss_epoch = 1
+    client.ib.rows = {1: [_raw(5, "502")], 2: [_raw(5, "2.10")]}
+
+    await second.prepare(at(5), contracts=(CALL,))
+
+    assert [request[0] for request in client.ib.requests] == [1, 2, 1, 2]
+    assert second.underlying_close(at(5)) == D("502")
+    assert second.option_bar(CALL, at(5)).close == D("2.10")
+
+
 async def test_a_shared_failure_reaches_every_waiting_bot_and_is_never_reused(
     market_inputs: tuple[_Client, OptionWatchList],
 ) -> None:

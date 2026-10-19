@@ -288,22 +288,7 @@ class OptionsBotDuty:
                 candidate_hold = await self._market.prepare(
                     minute, contracts=retained, held_contracts=held, include_candidates=allowed,
                 )
-                prepared = self.clock()
-                # The production formatter drops ``extra``; the message carries the timings too.
-                logger.info(
-                    "Options %s minute %d read %d ms after its close in %d ms",
-                    self.binding.strategy_instance_id,
-                    minute,
-                    started - minute,
-                    prepared - started,
-                    extra={
-                        "action": "options_minute_prepared",
-                        "strategy_instance_id": self.binding.strategy_instance_id,
-                        "minute_ms": minute,
-                        "started_after_close_ms": started - minute,
-                        "prepare_ms": prepared - started,
-                    },
-                )
+                self._log_prepared(minute, started)
                 self.journal.note(market_hold=None)
                 if candidate_hold is not None:
                     self.journal.note(entry_hold_reason=candidate_hold)
@@ -317,6 +302,24 @@ class OptionsBotDuty:
             step = self._session.advance(at_ms, outcomes, allow_entries=allowed and ready, observed_at_ms=now)
             self.journal.commit(state, step)
         return ready, allowed
+
+    def _log_prepared(self, minute: int, started: int) -> None:
+        prepared = self.clock()
+        # The production formatter drops ``extra``; the message carries the timings too.
+        logger.info(
+            "Options %s minute %d read %d ms after its close in %d ms",
+            self.binding.strategy_instance_id,
+            minute,
+            started - minute,
+            prepared - started,
+            extra={
+                "action": "options_minute_prepared",
+                "strategy_instance_id": self.binding.strategy_instance_id,
+                "minute_ms": minute,
+                "started_after_close_ms": started - minute,
+                "prepare_ms": prepared - started,
+            },
+        )
 
     def _settled(self) -> bool:
         for row in self.journal.decisions(session_open_ms=self.window.open_ms):

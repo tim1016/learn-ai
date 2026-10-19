@@ -147,7 +147,8 @@ class _LaneMinuteReads:
     A read in flight is joined and a completed one reused, keyed by connection,
     data-loss epoch, contract and minute. A failure reaches every waiting bot but
     is never kept, so the next preparation asks IBKR again. A bot that stops
-    waiting never cancels a read another bot still needs.
+    waiting never cancels a read another bot still needs. At most three reads
+    are open per lane; IBKR answers them one at a time anyway.
     """
 
     def __init__(self) -> None:
