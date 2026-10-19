@@ -9,10 +9,12 @@ per folder and per suite,
     Test functions. A parametrized test counts once, however many cases it
     expands to. Python: every ``def test*`` / ``async def test*`` at module or
     class level (never a closure inside another function) of a ``test_*.py`` /
-    ``*_test.py`` module, which is pytest's own collection rule; it matches
-    ``pytest --collect-only`` file by file. TypeScript:
-    every ``it(``, ``test(``, ``it.each(``, ``test.each(`` call (``.only``,
-    ``.skip``, ``.todo`` and friends included).
+    ``*_test.py`` module. ``ast`` cannot tell which classes pytest collects
+    (``Test*`` names, ``TestCase`` subclasses through imports), so every class
+    body counts; on this repo that equals ``pytest --collect-only`` file by
+    file. TypeScript: every ``it(``, ``test(``, ``it.each(``, ``test.each(``,
+    ``it.for(``, ``test.for(`` call (``.only``, ``.skip``, ``.todo`` and
+    friends included).
 
 ``lines``
     Physical lines. Python counts every ``.py`` file under the test roots, so
@@ -217,7 +219,7 @@ _IDENT_CHAR = re.compile(r"[\w$]")
 
 _TS_TEST_CALL = re.compile(
     r"(?<![\w$.])(?:it|test)"
-    r"(?:\.(?:each|only|skip|todo|concurrent|sequential|fails|runIf|skipIf))*"
+    r"(?:\.(?:each|for|only|skip|todo|concurrent|sequential|fails|runIf|skipIf))*"
     r"\s*(?:<[^()]*>)?\s*[(`]"
 )
 _TS_ASSERTION_CALL = re.compile(r"(?<![\w$.])expect(?:\.soft)?\s*\(")

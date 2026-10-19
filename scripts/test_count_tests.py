@@ -142,13 +142,18 @@ class TypeScriptCountingTests(unittest.TestCase):
                 a | b
                 ${1} | ${2}
               `('tagged $a', ({ a }) => {});
+              it.for([1, 2])('for %s', (n) => {});
+              test.for`
+                a
+                ${1}
+              `('for tagged $a', ({ a }) => {});
               it.skip('skipped', () => {});
               it.only('only', () => {});
             });
             """
         )
 
-        self.assertEqual(counts.functions, 8)
+        self.assertEqual(counts.functions, 10)
 
     def test_comments_strings_and_member_calls_do_not_count(self) -> None:
         counts = _ts(
