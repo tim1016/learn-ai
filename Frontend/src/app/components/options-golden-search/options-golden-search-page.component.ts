@@ -18,6 +18,7 @@ import { OptionsGoldenSearchService, OptionsSearchDispatchError, optionsSearchEr
 import type { OptionsStudy, PlanRequest, Preflight, SearchCommand, SearchDeclarations, SessionLoader } from './options-golden-search.types';
 
 const STEPS = ['Research', 'Compare and final test', 'Approval'];
+interface CaptureState { readonly stamp: string; readonly kind: 'starting' | 'running' | 'checking' | 'done' | 'failed'; readonly jobId?: string; readonly current?: number; readonly total?: number; readonly message?: string }
 
 @Component({
   selector: 'app-options-golden-search-page',
@@ -51,6 +52,7 @@ export class OptionsGoldenSearchPageComponent {
   protected readonly objectiveLabel = computed(() => this.rules()?.policy.rank_by === 'sharpe' ? 'Risk-adjusted return' : this.rules()?.policy.rank_by === 'drawdown' ? 'Lower drawdown' : 'Net profit');
   protected readonly rules = signal<RuleSelection | null>(null);
   protected readonly checked = signal<{ readonly stamp: string; readonly value: Preflight } | null>(null);
+  protected readonly captureState = signal<CaptureState | null>(null);
   protected readonly library = resource({ loader: () => this.setupsService.list() });
   protected readonly history = resource({ loader: () => this.service.list() });
   protected readonly savedSetups = computed(() => this.library.hasValue() ? this.library.value() : []);
@@ -65,12 +67,16 @@ export class OptionsGoldenSearchPageComponent {
     return { setup_name: declarations.setup_name, expected_setup_hash: declarations.setup_hash, ...(this.parent_study_id() ? { parent_study_id: this.parent_study_id() } : {}), knobs: [...(this.timing() ?? []), ...(this.knobs() ?? [])], method: rules.method, policy: rules.policy, history: { ...range, train_months: rules.train_months, test_months: rules.test_months, final_months: rules.final_months }, budget: rules.budget, finalist_count: rules.finalist_count, stress: rules.stress, zoom: rules.zoom, pair_audits: rules.pair_audits };
   });
   protected readonly preflight = computed(() => this.checked()?.stamp === JSON.stringify(this.request()) ? this.checked()?.value ?? null : null);
-  protected readonly canLock = computed(() => this.request() !== null && this.preflight()?.can_lock === true && !this.busy());
+  protected readonly captureForPlan = computed(() => this.captureState()?.stamp === JSON.stringify(this.request()) ? this.captureState() : null);
+  protected readonly capturing = computed(() => ['starting', 'running', 'checking'].includes(this.captureState()?.kind ?? ''));
+  protected readonly canLock = computed(() => this.request() !== null && this.preflight()?.can_lock === true && !this.busy() && !this.capturing());
   private generation = 0;
   private readonly keys = new Map<string, string>();
   private readonly destroyRef = inject(DestroyRef);
+  private captureUnsubscribe: (() => void) | null = null;
 
   constructor() {
+    this.destroyRef.onDestroy(() => this.captureUnsubscribe?.());
     effect(() => {
       const id = this.studyId();
       const name = this.setup_name();
@@ -142,6 +148,52 @@ export class OptionsGoldenSearchPageComponent {
     } catch (error) {
       this.error.set(optionsSearchErrorMessage(error, 'Preflight could not verify the plan.'));
     } finally { this.busy.set(false); }
+  }
+
+  protected async captureHistory(): Promise<void> {
+    const request = this.request();
+    if (request === null || !this.preflight()?.missing_history || this.capturing()) return;
+    const stamp = JSON.stringify(request);
+    this.captureState.set({ stamp, kind: 'starting' });
+    try {
+      const jobId = await this.service.captureHistory(request);
+      this.captureState.set({ stamp, kind: 'running', jobId });
+      const unsubscribe = this.service.onHistoryCapture(jobId, (event) => {
+        if (event.type === 'job.progress') {
+          const current = typeof event['current'] === 'number' ? event['current'] : undefined;
+          const total = typeof event['total'] === 'number' ? event['total'] : undefined;
+          this.captureState.set({ stamp, kind: 'running', jobId, current, total });
+        } else if (event.type === 'job.completed') {
+          this.captureUnsubscribe?.();
+          this.captureUnsubscribe = null;
+          this.captureState.set({ stamp, kind: 'checking' });
+          if (JSON.stringify(this.request()) === stamp) {
+            void this.checkPlan().finally(() => this.captureState.set({ stamp, kind: 'done' }));
+          } else this.captureState.set({ stamp, kind: 'done' });
+        } else if (event.type === 'job.failed' || event.type === 'job.cancelled') {
+          this.captureUnsubscribe?.();
+          this.captureUnsubscribe = null;
+          this.captureState.set({ stamp, kind: 'failed', message: event.type === 'job.cancelled' ? 'History capture was cancelled.' : typeof event['message'] === 'string' ? event['message'] : 'History could not be captured.' });
+        }
+      });
+      this.captureUnsubscribe = unsubscribe;
+      if (this.captureState()?.kind !== 'running') {
+        unsubscribe();
+        this.captureUnsubscribe = null;
+      }
+    } catch (error) {
+      this.captureState.set({ stamp, kind: 'failed', message: optionsSearchErrorMessage(error, 'History capture could not start.') });
+    }
+  }
+
+  protected async cancelHistoryCapture(): Promise<void> {
+    const state = this.captureState();
+    if (state?.kind !== 'running' || !state.jobId) return;
+    try {
+      await this.service.cancelHistoryCapture(state.jobId);
+    } catch (error) {
+      this.captureState.set({ ...state, message: optionsSearchErrorMessage(error, 'The capture could not be cancelled. Check its job status.') });
+    }
   }
 
   protected async lock(): Promise<void> {

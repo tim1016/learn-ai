@@ -10,7 +10,7 @@ export function declarations(): SearchDeclarations {
   };
 }
 export function preflight(): Preflight {
-  return { preflight_hash: 'b'.repeat(64), can_lock: true, blockers: [], warnings: ['Final activity is not guaranteed.'], drawdown_limit_usd: '2000', combination_count: 2, legal_combination_count: 2, invalid_combination_count: 0, required_evaluations: 30, reserved_evaluations: 20, estimated_setup_sessions: 3000, mark_coverage: 'Verified', exposure: 'History unknown', identity: 'pinned-code-and-data', windows: [] };
+  return { preflight_hash: 'b'.repeat(64), can_lock: true, missing_history: false, blockers: [], warnings: ['Final activity is not guaranteed.'], drawdown_limit_usd: '2000', combination_count: 2, legal_combination_count: 2, invalid_combination_count: 0, required_evaluations: 30, reserved_evaluations: 20, estimated_setup_sessions: 3000, mark_coverage: 'Verified', exposure: 'History unknown', identity: 'pinned-code-and-data', windows: [] };
 }
 export function candidate(changes: Partial<SearchCandidate> = {}): SearchCandidate {
   return { candidate_hash: 'c'.repeat(64), label: 'Candidate one', is_original: false, verdict: 'meets_rules', net_profit_usd: '200.01234567890123456789', drawdown_usd: '100', drawdown_fraction: '0.01', drawdown_percent: '1', sharpe: 1.2, completed_sessions: 40, recovery: 'Recovered after 5 sessions', gate_outcomes: [], evidence: [], monthly: [], equity: [], sessions: [], ...changes };

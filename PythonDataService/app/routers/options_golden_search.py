@@ -18,6 +18,7 @@ from app.routers.research_store_unavailable import StoreUnreachableIsA503
 from app.schemas.options_golden_search import (
     Command,
     Declarations,
+    HistoryCaptureJobRequest,
     JobAccepted,
     JobRequest,
     LockRequest,
@@ -28,6 +29,7 @@ from app.schemas.options_golden_search import (
     StudySummary,
 )
 from app.utils.background_loop import CallerStoppedWaitingError
+from app.utils.session_anchors import et_date_at_ms
 
 router = APIRouter(route_class=StoreUnreachableIsA503)
 jobs_router = APIRouter(route_class=StoreUnreachableIsA503)
@@ -135,6 +137,43 @@ async def dispatch(body: JobRequest) -> JobAccepted:
         await writer_loop_call(with_connection(repo.release,body.study_id,body.job_id))
         raise
     return JobAccepted(job_id=body.job_id,study_id=body.study_id)
+
+
+@jobs_router.post("/options-golden-search-history",status_code=202)
+async def capture_history(body: HistoryCaptureJobRequest, api=Depends(get_service)) -> dict:
+    try:
+        underlying, sessions = await api.history_capture_scope(body.request)
+    except (ValueError, LookupError) as exc:
+        raise refusal(exc) from exc
+
+    def work(emit: ProgressEmitter, cancel: CancellationCheck) -> dict:
+        from app.options_backtest.chain_download import Outcome, ensure_chain_data
+        from app.options_backtest.data_check import lake_reason_words
+
+        async def capture() -> dict:
+            emit.phase("capturing_history", friendly="Capturing underlying and listing history")
+            fetched = 0
+            for index, session_ms in enumerate(sessions, start=1):
+                cancel.raise_if_cancelled()
+                day = et_date_at_ms(session_ms)
+                items = await ensure_chain_data(underlying, day, expiry=None, contracts=[])
+                for item in items:
+                    if item.outcome is Outcome.FAILED:
+                        reason = (
+                            "the underlying minute bars could not be fetched" if item.reason == "underlying_not_fetched" else
+                            "the stored underlying bars could not be read" if item.reason == "underlying_unreadable" else
+                            lake_reason_words(item.reason or "")
+                        )
+                        raise RuntimeError(f"{item.kind.value} history for {day.isoformat()} could not be captured: {reason}.")
+                    if item.outcome is Outcome.FETCHED:
+                        fetched += 1
+                emit.progress(index, len(sessions), unit="sessions")
+            return {"sessions_checked": len(sessions), "artifacts_fetched": fetched}
+
+        return asyncio.run(capture())
+
+    run_in_thread(body.job_id, work, thread_name=f"options-history-{body.job_id[:8]}")
+    return {"job_id": body.job_id, "status": "queued"}
 
 
 @router.get("/studies/{study_id}/candidates/{candidate_hash}/sessions/{session_open_ms}",response_model=SessionResult)

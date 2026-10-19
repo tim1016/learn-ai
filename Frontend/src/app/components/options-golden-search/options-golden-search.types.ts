@@ -60,6 +60,7 @@ export interface PlanRequest {
 export interface Preflight {
   readonly preflight_hash: string;
   readonly can_lock: boolean;
+  readonly missing_history: boolean;
   readonly blockers: readonly string[];
   readonly warnings: readonly string[];
   readonly drawdown_limit_usd: string;

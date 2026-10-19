@@ -41,6 +41,12 @@ describe('OptionsGoldenSearchService command boundary', () => {
     expect(startJob).toHaveBeenCalledExactlyOnceWith('options_golden_search', { study_id: 'study/one', stage_token: 'fenced-token' });
   });
 
+  it('dispatches the checked plan to the history capture job', async () => {
+    const request = { setup_name: 'Saved two-leg setup', history: { start_ms: 1704171600000, end_ms: 1789790400000 } };
+    await expect(service.captureHistory(request as Parameters<typeof service.captureHistory>[0])).resolves.toBe('job-1');
+    expect(startJob).toHaveBeenCalledExactlyOnceWith('options_golden_search_history', { request });
+  });
+
   it('preserves the committed study when job dispatch fails so it can be resumed', async () => {
     startJob.mockRejectedValue(new Error('Job service unavailable'));
     const committed = study({ dispatch: { study_id: 'study-1', stage_token: 'reserved-stage' } });

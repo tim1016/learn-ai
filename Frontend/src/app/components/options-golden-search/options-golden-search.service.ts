@@ -5,7 +5,7 @@ import { firstValueFrom } from 'rxjs';
 import { isRecord } from '../../api/operator-blocker.types';
 import { extractServerMessage } from '../broker/operation-error';
 import { readDetail } from '../options-backtest/options-backtest.service';
-import { JobsService } from '../../services/jobs.service';
+import { JobsService, type JobStreamEvent } from '../../services/jobs.service';
 import type { EvidenceWindow, OptionsStudy, PlanRequest, Preflight, SearchDeclarations, SessionResult, StudyCommand, StudySummary } from './options-golden-search.types';
 
 /** The durable command committed; its exact dispatch remains available for retry. */
@@ -27,6 +27,18 @@ export class OptionsGoldenSearchService {
 
   preflight(request: PlanRequest): Promise<Preflight> {
     return firstValueFrom(this.http.post<Preflight>(`${this.base}/preflight`, request));
+  }
+
+  captureHistory(request: PlanRequest): Promise<string> {
+    return this.jobs.startJob('options_golden_search_history', { request });
+  }
+
+  onHistoryCapture(id: string, handler: (event: JobStreamEvent) => void): () => void {
+    return this.jobs.onEvent(id, handler);
+  }
+
+  cancelHistoryCapture(id: string): Promise<void> {
+    return this.jobs.cancelJob(id);
   }
 
   create(request: PlanRequest, preflightHash: string, idempotencyKey: string): Promise<OptionsStudy> {
