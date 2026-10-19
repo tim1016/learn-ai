@@ -1,5 +1,5 @@
-<section class="preview" aria-label="Position preview">
-  <header><h2>Position payoff</h2><div class="choices"><button type="button" [class.active]="source() === 'historical'" (click)="chooseSource('historical')">Historical</button><button type="button" [class.active]="source() === 'current'" (click)="chooseSource('current')">Current market</button></div></header>
+<section class="preview" [class.preview--deploy]="forDeployment()" aria-label="Position preview">
+  <header><h2>{{ forDeployment() ? 'Historical position payoff' : 'Position payoff' }}</h2>@if (!forDeployment()) { <div class="choices"><button type="button" [class.active]="source() === 'historical'" (click)="chooseSource('historical')">Historical</button><button type="button" [class.active]="source() === 'current'" (click)="chooseSource('current')">Current market</button></div> }</header>
   @if (source() === 'historical') {
     <div class="controls"><label>Preview session (ET)<app-date-field [value]="date()" (valueChange)="date.set($event)" /></label><div class="choices"><button type="button" [class.active]="mode() === 'position'" (click)="chooseMode('position')">All selected legs</button><button type="button" [class.active]="mode() === 'replay'" (click)="chooseMode('replay')">Session replay</button></div></div>
   }
@@ -14,12 +14,13 @@
       <p class="note">{{ value.legs.length }} open legs at this minute.</p>
     }
     @if (value.curves.length > 0) { <app-options-position-payoff [preview]="value" /> }
+    @if (forDeployment()) { <p class="note">This preview selects contracts for one session. Future sessions may pick different strikes and premiums. Stops and square-off may close the position before expiry.</p> }
     @if (value.risk; as risk) {
       <dl class="risk"><div><dt>{{ value.mode === 'replay' ? 'Open-leg entry debit (+) / credit (−)' : 'Entry debit (+) / credit (−)' }}</dt><dd>{{ risk.entry_debit_usd | authoredUsd }}</dd></div><div><dt>Max expiry profit</dt><dd>{{ risk.max_profit_usd === null ? 'Unlimited' : (risk.max_profit_usd | authoredUsd) }}</dd></div><div><dt>Max expiry loss</dt><dd>{{ risk.max_loss_usd === null ? 'Unlimited' : (risk.max_loss_usd | authoredUsd) }}</dd></div></dl>
       <p class="note">Expiry breakevens: @for (price of risk.breakevens_usd; track price) { <span>{{ price | authoredUsd }} </span> } @empty { none }</p>
     }
-    <details class="contracts"><summary>Resolved contracts and price evidence</summary>@for (leg of value.legs; track leg.leg_id) { <div><strong>{{ leg.leg_id }}</strong> · {{ leg.side | receiptLabel }} {{ leg.contracts }} {{ leg.right | receiptLabel }} · strike {{ leg.strike_usd | authoredUsd }} · <app-timestamp-display [value]="leg.expiry_ms" mode="date-et" /><p>{{ leg.premium_usd }} USD / share · {{ leg.price_source }} · <app-timestamp-display [value]="leg.price_at_ms" mode="et" /></p><code>{{ leg.symbol }}</code></div> }</details>
+    <details class="contracts" [open]="forDeployment()"><summary>Resolved contracts and price evidence</summary>@for (leg of value.legs; track leg.leg_id) { <div><strong>{{ leg.leg_id }}</strong> · {{ leg.side | receiptLabel }} {{ leg.contracts }} {{ leg.right | receiptLabel }} · strike {{ leg.strike_usd | authoredUsd }} · <app-timestamp-display [value]="leg.expiry_ms" mode="date-et" /><p>{{ leg.premium_usd }} USD / share · {{ leg.price_source }} · <app-timestamp-display [value]="leg.price_at_ms" mode="et" /></p><code>{{ leg.symbol }}</code></div> }</details>
     @for (note of value.notes; track note) { <p class="note">{{ note }}</p> }
     @if (value.mode === 'replay') { <details><summary>Events through this minute</summary>@for (event of value.events; track $index) { <p class="note"><app-timestamp-display [value]="event.at_ms" mode="et" /> · {{ event.leg_id }} · {{ event.kind | receiptLabel }} @if (event.detail) { · {{ event.detail }} }</p> } @empty { <p class="note">No leg events yet.</p> }</details> }
-  } @else { <p class="note">Add valid legs and choose a historical session, or switch to Current market.</p> }
+  } @else { <p class="note">{{ forDeployment() ? 'Choose a historical session to preview this approved setup.' : 'Add valid legs and choose a historical session, or switch to Current market.' }}</p> }
 </section>

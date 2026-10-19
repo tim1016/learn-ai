@@ -1,0 +1,23 @@
+<div class="setup-desk">
+  <app-options-position-preview [setup]="golden().setup" [startingDate]="previewDate()" [forDeployment]="true" />
+
+  <section class="evidence">
+    <div class="section-heading">
+      <div><h2>Approved test evidence</h2><p>The exact saved setup and quantities are fixed for this bot.</p></div>
+    </div>
+    <div class="figures">
+      <div><span>Sessions tested</span><strong>{{ golden().evidence.sessions_tested }}</strong></div>
+      <div><span>Trades</span><strong>{{ golden().evidence.trades }}</strong></div>
+      <div><span>Historical net P&amp;L</span><strong>{{ golden().evidence.net_profit_usd | authoredUsd }}</strong></div>
+    </div>
+    <p class="period">Tested <app-timestamp-display [value]="golden().evidence.first_session_open_ms" mode="date-et" granularity="date" /> – <app-timestamp-display [value]="golden().evidence.last_session_open_ms" mode="date-et" granularity="date" /> · run {{ golden().source_run_id }}</p>
+    <app-options-qualification-evidence [evidence]="golden().evidence" />
+    @for (limitation of golden().evidence.limitations; track limitation) { <p class="limitation">{{ limitation }}</p> }
+    <details>
+      <summary>Read fixed trading rules</summary>
+      @if (summary(); as words) { <app-options-backtest-setup-sentences [summary]="words" /> }
+      @else if (summaryFailed()) { <p>The fixed trading rules could not be read.</p><button type="button" (click)="retrySummary.emit()">Retry rules</button> }
+      @else { <p>Reading the approved setup…</p> }
+    </details>
+  </section>
+</div>

@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 import type { components } from '../../src/app/api/broker.types';
 import { OPTION_CATALOGUE } from '../../src/app/components/broker/broker-deploy-page/option-structure/option-structure.fixtures';
+import { previewAnswer } from '../../src/app/components/options-backtest/position/testing';
 import { fakeBotPanelView, fakeChartFeed } from '../../src/app/testing/bot-panel-fixtures';
 import { OwnerWalkWorld, PAPER_ACCOUNT, PAPER_API, PAPER_WORKSPACE, WALKED_BOT } from './support/owner-walk-world';
 
@@ -51,6 +52,8 @@ async function optionsWorld(page: Page, loseAnswer = false) {
         square_off: ['Closes at the approved daily exit.'], costs: [], notices: [],
       };
       await route.fulfill({ json: summary });
+    } else if (path === '/api/research/options-backtest/position-preview') {
+      await route.fulfill({ json: previewAnswer() });
     } else if (path === `${PAPER_API}/bots/option-structures`) {
       await route.fulfill({ json: OPTION_CATALOGUE });
     } else if (path === `${PAPER_API}/options-bots/review`) {
@@ -105,6 +108,9 @@ async function optionsWorld(page: Page, loseAnswer = false) {
 async function reviewOptions(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Options bot', exact: true }).click();
   await page.getByLabel('Approved tested version').selectOption(GOLDEN.id);
+  await expect(page.getByRole('heading', { name: 'Historical position payoff' })).toBeVisible();
+  await expect(page.getByText('Underlying $500.00')).toBeVisible();
+  await expect(page.getByText('SPY261009C00500000')).toBeVisible();
   await expect(page.getByLabel('Dollar budget (USD)')).toHaveValue('10000');
   await page.getByRole('button', { name: 'Review setup and budget' }).click();
   await expect(page.getByRole('button', { name: 'Deploy Options bot', exact: true })).toBeEnabled();

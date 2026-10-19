@@ -22,6 +22,7 @@ export class PositionPreviewComponent {
   readonly setup = input<SetupRequest | null>(null);
   readonly startingDate = input('');
   readonly debounceMs = input(250);
+  readonly forDeployment = input(false);
   private readonly service = inject(PositionPreviewService);
   protected readonly source = signal<'historical' | 'current'>('historical');
   protected readonly mode = signal<'position' | 'replay'>('position');
@@ -52,7 +53,9 @@ export class PositionPreviewComponent {
     const error: unknown = this.read.error();
     if (error === undefined) return null;
     if (error instanceof HttpErrorResponse && typeof error.error?.detail === 'string') return error.error.detail;
-    if (error instanceof HttpErrorResponse && error.status === 422) return 'The position is not valid yet. Correct the leg choices and trading rules to preview it.';
+    if (error instanceof HttpErrorResponse && error.status === 422) return this.forDeployment()
+      ? 'This approved setup could not be previewed for the selected session. Try another session.'
+      : 'The position is not valid yet. Correct the leg choices and trading rules to preview it.';
     return 'The position preview could not be read. Try again.';
   });
 
