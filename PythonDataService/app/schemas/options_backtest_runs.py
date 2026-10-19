@@ -11,6 +11,7 @@ rounded to six places, the one rounded figure, named as rounded: ``rounded_to_6_
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from decimal import Decimal
 from typing import Annotated, Literal, Self
 
@@ -18,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.options_backtest.capital_evidence import CapitalEvidence, CapitalInvalidEvent
 from app.options_backtest.cash_ladder import CashLevel
+from app.options_backtest.dashboard import Dashboard, dashboard_statistics
 from app.options_backtest.data_check import DataCheck, Problem, SessionCheck, SessionVerdict, TestableStretch
 from app.options_backtest.describe import result_statements
 from app.options_backtest.run_stamps import RunStamps
@@ -463,6 +465,78 @@ class OptionsBacktestEquityPointResponse(BaseModel):
     equity_usd: str
 
 
+class OptionsBacktestDashboardDayResponse(BaseModel):
+    session_open_ms: Ms
+    year: int
+    month: int
+    underwater_usd: str
+    rolling_sharpe: str | None = None
+    display_rolling_sharpe: str | None = None
+
+
+class OptionsBacktestProfitBinResponse(BaseModel):
+    lower_usd: str
+    upper_usd: str
+    count: int
+
+
+class OptionsBacktestDashboardResponse(BaseModel):
+    """Derived from the recorded daily path; no minute evidence or qualification is claimed."""
+
+    metric_version: Literal["options-session-dashboard-v1"] = "options-session-dashboard-v1"
+    return_basis: Literal["daily_pnl_over_fixed_starting_capital"] = "daily_pnl_over_fixed_starting_capital"
+    risk_free_daily_return: str = "0"
+    annualization_sessions: str | None = None
+    daily_observations: int
+    risk_unavailable_reason: str | None = None
+    annualization_unavailable_reason: str | None = None
+    sharpe_unavailable_reason: str | None = None
+    annualized_sharpe: str | None = None
+    annualized_sortino: str | None = None
+    annualized_volatility_percent: str | None = None
+    display_annualized_sharpe: str | None = None
+    display_annualized_sortino: str | None = None
+    display_annualized_volatility_percent: str | None = None
+    return_percent: str | None = None
+    average_winning_session_usd: str | None = None
+    average_losing_session_usd: str | None = None
+    average_session_usd: str | None = None
+    session_profit_factor: str | None = None
+    payoff_ratio: str | None = None
+    best_session_usd: str | None = None
+    worst_session_usd: str | None = None
+    profit_without_best_session_usd: str | None = None
+    top_five_profit_percent: str | None = None
+    longest_losing_streak: int
+    recovery_sessions: int | None = None
+    recovered_session_open_ms: Ms | None = None
+    longest_underwater_sessions: int
+    ongoing_underwater: bool
+    daily: list[OptionsBacktestDashboardDayResponse]
+    histogram: list[OptionsBacktestProfitBinResponse]
+
+    @classmethod
+    def from_dashboard(cls, dashboard: Dashboard) -> Self:
+        def wire_value(value: object) -> object:
+            if isinstance(value, Decimal):
+                return exact(value)
+            if isinstance(value, float):
+                return format(Decimal(format(value, ".12g")), "f")
+            if isinstance(value, dict):
+                return {key: wire_value(item) for key, item in value.items()}
+            if isinstance(value, (list, tuple)):
+                return [wire_value(item) for item in value]
+            return value
+
+        response = cls.model_validate(wire_value(asdict(dashboard)))
+        response.display_annualized_sharpe = None if dashboard.annualized_sharpe is None else format(dashboard.annualized_sharpe, ".2f")
+        response.display_annualized_sortino = None if dashboard.annualized_sortino is None else format(dashboard.annualized_sortino, ".2f")
+        response.display_annualized_volatility_percent = None if dashboard.annualized_volatility_percent is None else format(dashboard.annualized_volatility_percent, ".1f")
+        for day, source in zip(response.daily, dashboard.daily, strict=True):
+            day.display_rolling_sharpe = None if source.rolling_sharpe is None else format(source.rolling_sharpe, ".1f")
+        return response
+
+
 class OptionsBacktestRunFiguresResponse(BaseModel):
     """Every figure of a complete run, each named for what it counts. A trade is one leg round trip."""
 
@@ -518,9 +592,13 @@ class OptionsBacktestRunFiguresResponse(BaseModel):
     # The entries refused for any reason but cash, each reason with its own count, every reason listed, zeros included.
     # ``None`` reads "not recorded": the run was stored before they were counted.
     entries_refused_by_reason: list[OptionsBacktestEntryRefusalCountResponse] | None = None
+    dashboard: OptionsBacktestDashboardResponse | None = None
 
     @classmethod
-    def from_summary(cls, summary: RunSummary) -> Self:
+    def from_summary(
+        cls, summary: RunSummary, *, first_session_open_ms: int | None = None, last_session_open_ms: int | None = None,
+        recorded_calendar: tuple[str, str] | None = None,
+    ) -> Self:
         def rate(ratio: Ratio | None) -> OptionsBacktestRateResponse | None:
             return None if ratio is None else OptionsBacktestRateResponse.from_ratio(ratio)
 
@@ -529,6 +607,10 @@ class OptionsBacktestRunFiguresResponse(BaseModel):
 
         path = equity_path(summary.by_day, summary.starting_cash_usd)
         return cls(
+            dashboard=OptionsBacktestDashboardResponse.from_dashboard(dashboard_statistics(
+                summary, first_session_open_ms=first_session_open_ms, last_session_open_ms=last_session_open_ms,
+                recorded_calendar=recorded_calendar,
+            )),
             sessions_tested=summary.sessions_tested,
             sessions_traded=summary.sessions_traded,
             sessions_no_trade=summary.sessions_no_trade,
@@ -776,7 +858,11 @@ class OptionsBacktestRunDetailResponse(OptionsBacktestRunListItemResponse):
                 fee_policy=stored.record.fee_policy_text,
                 statements=list(result_statements(setup)),
             ),
-            figures=None if figures is None else OptionsBacktestRunFiguresResponse.from_summary(figures.summary),
+            figures=None if figures is None else OptionsBacktestRunFiguresResponse.from_summary(
+                figures.summary, first_session_open_ms=stored.record.first_session_open_ms,
+                last_session_open_ms=stored.record.last_session_open_ms,
+                recorded_calendar=(stored.record.calendar_identity, stored.record.calendar_package_version),
+            ),
             slippage=[]
             if figures is None
             else [

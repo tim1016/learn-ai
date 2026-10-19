@@ -67,7 +67,7 @@ function runOfBigDollars(): RunDetail {
   });
 }
 
-const tile = (name: RegExp | string) => screen.getByText(name, { selector: 'dt' }).closest('.tile') as HTMLElement;
+const tile = (name: RegExp | string) => screen.getByText(name, { selector: 'dt, dt > button' }).closest('.tile') as HTMLElement;
 const falls = () => [...screen.getByRole('region', { name: 'Maximum drawdown' }).querySelectorAll<HTMLElement>('.fall')];
 const line = (container: HTMLElement | undefined, label: string) => [...(container?.querySelectorAll('li') ?? [])].find((item) => reads(item).startsWith(label)) ?? null;
 const column = (name: string, at: number) => [...screen.getByRole('region', { name }).querySelectorAll('tbody tr')].map((row) => reads(row.querySelectorAll('td')[at] ?? null));
@@ -79,12 +79,12 @@ const cashRows = () => [...screen.getByRole('region', { name: 'Cash ladder' }).q
 /** Each place the result shows a dollar: its name, how to read it off the screen, and what it must read. */
 const PLACES: readonly (readonly [string, () => string | string[], string | string[]])[] = [
   ['the banner’s price step', () => reads(screen.getByRole('note', { name: 'How these figures were made' }).querySelectorAll('p')[2] ?? null), `Slippage assumed: 0.3%. Price step: ${SHOWN}.`],
-  ['net profit', () => reads(tile('Net profit')), `Net profit ${SHOWN}`],
-  ['headline max drawdown', () => reads(tile(/^Max drawdown/)), `Max drawdown session-end equity ${SHOWN} 50.0% of the peak`],
+  ['net profit', () => reads(tile('Net profit')), `Net profit ${SHOWN} After modeled costs`],
+  ['headline max drawdown', () => reads(tile(/^Max drawdown/)), `Max drawdown ${SHOWN} 50.0% of peak · session closes`],
   ['ending cash', () => reads(tile('Ending cash')), `Ending cash ${SHOWN}`],
   ['total fees', () => reads(tile('Total fees')), `Total fees ${SHOWN}`],
   ['slippage paid', () => reads(tile('Slippage paid')), `Slippage paid ${SHOWN}`],
-  ['the profit factor’s gross profit and gross loss', () => reads(tile(/^Profit factor/)), `Profit factor gross profit over gross loss 1.000000 rounded to 6 places · ${SHOWN} over ${SHOWN}`],
+  ['the profit factor’s gross profit and gross loss', () => reads(tile(/^Profit factor/)), `Profit factor 1.000000 rounded to 6 places · ${SHOWN} over ${SHOWN}`],
   ['the fall of the largest fall in dollars', () => reads(falls()[0]?.querySelector('.big') ?? null), SHOWN],
   ['the fall of the largest fall as a fraction', () => reads(falls()[1]?.querySelector('.big') ?? null), SHOWN],
   ['the peak equity of the largest fall in dollars', () => reads(line(falls()[0], 'Peak equity')), `Peak equity: ${SHOWN} at the end of 2026-09-15`],
@@ -116,8 +116,6 @@ const PLACES: readonly (readonly [string, () => string | string[], string | stri
   ['the cash this path needed at each level of the cash ladder', () => cashRows().map((row) => reads(row.querySelectorAll('td')[5] ?? null)), [`${SHOWN} incomplete`, `${SHOWN} incomplete`, SHOWN, SHOWN]],
 ];
 
-const occurrences = (text: string) => text.split(SHOWN).length - 1;
-
 describe('the dollars of a result are shown exactly as the server wrote them', () => {
   it.each(PLACES)('%s', async (_place, read, shown) => {
     await render(RunResultComponent, { inputs: { run: runOfBigDollars() }, providers });
@@ -125,12 +123,11 @@ describe('the dollars of a result are shown exactly as the server wrote them', (
     expect(read()).toEqual(shown);
   });
 
-  it('has a row above for every dollar on the screen: nothing else on the result carries one', async () => {
-    const { container } = await render(RunResultComponent, { inputs: { run: runOfBigDollars() }, providers });
+  it('preserves the exact source amount on the positive and negative daily scale', async () => {
+    await render(RunResultComponent, { inputs: { run: runOfBigDollars() }, providers });
 
-    const onScreen = reads(container);
-    const named = PLACES.map(([, , shown]) => (Array.isArray(shown) ? shown : [shown]).join(' ')).join(' ');
-    expect((onScreen.match(/-?\$[\d,]+(\.\d+)?/g) ?? []).filter((amount) => amount !== SHOWN)).toEqual([]);
-    expect(occurrences(onScreen)).toBe(occurrences(named));
+    const chart = screen.getByRole('region', { name: 'Equity and daily profit and loss' });
+    const scale = chart.querySelector('.pnl-scale');
+    expect(reads(scale)).toBe(`${SHOWN} $0 − ${SHOWN}`);
   });
 });

@@ -41409,6 +41409,362 @@
         "title": "OptionsBacktestContractResponse",
         "type": "object"
       },
+      "OptionsBacktestDashboardDayResponse": {
+        "properties": {
+          "display_rolling_sharpe": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Rolling Sharpe"
+          },
+          "month": {
+            "title": "Month",
+            "type": "integer"
+          },
+          "rolling_sharpe": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rolling Sharpe"
+          },
+          "session_open_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Session Open Ms",
+            "type": "integer"
+          },
+          "underwater_usd": {
+            "title": "Underwater Usd",
+            "type": "string"
+          },
+          "year": {
+            "title": "Year",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_open_ms",
+          "year",
+          "month",
+          "underwater_usd"
+        ],
+        "title": "OptionsBacktestDashboardDayResponse",
+        "type": "object"
+      },
+      "OptionsBacktestDashboardResponse": {
+        "description": "Derived from the recorded daily path; no minute evidence or qualification is claimed.",
+        "properties": {
+          "annualization_sessions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Annualization Sessions"
+          },
+          "annualization_unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Annualization Unavailable Reason"
+          },
+          "annualized_sharpe": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Annualized Sharpe"
+          },
+          "annualized_sortino": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Annualized Sortino"
+          },
+          "annualized_volatility_percent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Annualized Volatility Percent"
+          },
+          "average_losing_session_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average Losing Session Usd"
+          },
+          "average_session_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average Session Usd"
+          },
+          "average_winning_session_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average Winning Session Usd"
+          },
+          "best_session_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Session Usd"
+          },
+          "daily": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsBacktestDashboardDayResponse"
+            },
+            "title": "Daily",
+            "type": "array"
+          },
+          "daily_observations": {
+            "title": "Daily Observations",
+            "type": "integer"
+          },
+          "display_annualized_sharpe": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Annualized Sharpe"
+          },
+          "display_annualized_sortino": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Annualized Sortino"
+          },
+          "display_annualized_volatility_percent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Annualized Volatility Percent"
+          },
+          "histogram": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsBacktestProfitBinResponse"
+            },
+            "title": "Histogram",
+            "type": "array"
+          },
+          "longest_losing_streak": {
+            "title": "Longest Losing Streak",
+            "type": "integer"
+          },
+          "longest_underwater_sessions": {
+            "title": "Longest Underwater Sessions",
+            "type": "integer"
+          },
+          "metric_version": {
+            "const": "options-session-dashboard-v1",
+            "default": "options-session-dashboard-v1",
+            "title": "Metric Version"
+          },
+          "ongoing_underwater": {
+            "title": "Ongoing Underwater",
+            "type": "boolean"
+          },
+          "payoff_ratio": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payoff Ratio"
+          },
+          "profit_without_best_session_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profit Without Best Session Usd"
+          },
+          "recovered_session_open_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovered Session Open Ms"
+          },
+          "recovery_sessions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovery Sessions"
+          },
+          "return_basis": {
+            "const": "daily_pnl_over_fixed_starting_capital",
+            "default": "daily_pnl_over_fixed_starting_capital",
+            "title": "Return Basis"
+          },
+          "return_percent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Return Percent"
+          },
+          "risk_free_daily_return": {
+            "default": "0",
+            "title": "Risk Free Daily Return",
+            "type": "string"
+          },
+          "risk_unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Risk Unavailable Reason"
+          },
+          "session_profit_factor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Profit Factor"
+          },
+          "sharpe_unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sharpe Unavailable Reason"
+          },
+          "top_five_profit_percent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Top Five Profit Percent"
+          },
+          "worst_session_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worst Session Usd"
+          }
+        },
+        "required": [
+          "daily_observations",
+          "longest_losing_streak",
+          "longest_underwater_sessions",
+          "ongoing_underwater",
+          "daily",
+          "histogram"
+        ],
+        "title": "OptionsBacktestDashboardResponse",
+        "type": "object"
+      },
       "OptionsBacktestDataCheckResponse": {
         "description": "Which sessions of a range can be tested, from what is already stored. Nothing was fetched to answer.",
         "properties": {
@@ -42317,6 +42673,29 @@
         "title": "OptionsBacktestProblemResponse",
         "type": "object"
       },
+      "OptionsBacktestProfitBinResponse": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "lower_usd": {
+            "title": "Lower Usd",
+            "type": "string"
+          },
+          "upper_usd": {
+            "title": "Upper Usd",
+            "type": "string"
+          }
+        },
+        "required": [
+          "lower_usd",
+          "upper_usd",
+          "count"
+        ],
+        "title": "OptionsBacktestProfitBinResponse",
+        "type": "object"
+      },
       "OptionsBacktestRangeDifferenceResponse": {
         "description": "The two runs' ranges, sent only when they differ.",
         "properties": {
@@ -42707,6 +43086,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/OptionsBacktestRateResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dashboard": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionsBacktestDashboardResponse"
               },
               {
                 "type": "null"

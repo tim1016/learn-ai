@@ -28,6 +28,9 @@ async function renderResult() {
       { provide: TIMELINE_COLOURS, useValue: (_host: HTMLElement, cssVar: string) => `colour(${cssVar})` },
     ],
   });
+  fireEvent.click(screen.getByText('Leg trades & session records'));
+  fireEvent.click(screen.getByText('Coverage & what did not trade'));
+  fireEvent.click(screen.getByText('Daily ledger'));
   await screen.findByRole('table', { name: 'Leg trades' });
   return { view, detail, chart };
 }

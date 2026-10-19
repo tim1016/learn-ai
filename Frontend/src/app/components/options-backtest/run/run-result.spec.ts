@@ -17,7 +17,7 @@ async function renderResult(changes: Partial<RunDetail> = {}, figureChanges: Par
 }
 
 const tile = (name: RegExp | string) => {
-  const label = screen.getByText(name, { selector: 'dt' });
+  const label = screen.getByText(name, { selector: 'dt, dt > button' });
   return label.closest('.tile') as HTMLElement;
 };
 
@@ -56,7 +56,7 @@ describe('the headline figures', () => {
   it('shows net profit, ending cash, fees and slippage paid exactly as the server wrote them', async () => {
     await renderResult();
 
-    expect(reads(tile('Net profit'))).toBe('Net profit $1,234.56');
+    expect(reads(tile('Net profit'))).toBe('Net profit $1,234.56 After modeled costs');
     expect(reads(tile('Ending cash'))).toBe('Ending cash $11,234.56');
     expect(reads(tile('Total fees'))).toBe('Total fees $46.80');
     expect(reads(tile('Slippage paid'))).toBe('Slippage paid $88.12');
@@ -66,7 +66,7 @@ describe('the headline figures', () => {
     // 9007199254740993 is the first whole number a double cannot hold; a Number() on it would show ...992.
     await renderResult({}, { net_profit_usd: '9007199254740993.01', ending_cash_usd: '-0.01', total_fees_usd: '1234567890123456.70', slippage_paid_usd: '0.10' });
 
-    expect(reads(tile('Net profit'))).toBe('Net profit $9,007,199,254,740,993.01');
+    expect(reads(tile('Net profit'))).toBe('Net profit $9,007,199,254,740,993.01 After modeled costs');
     expect(reads(tile('Ending cash'))).toBe('Ending cash -$0.01');
     expect(reads(tile('Total fees'))).toBe('Total fees $1,234,567,890,123,456.70');
     expect(reads(tile('Slippage paid'))).toBe('Slippage paid $0.10');
@@ -75,7 +75,7 @@ describe('the headline figures', () => {
   it('shows a string that is not a two-place amount as it came, rather than a rounded one', async () => {
     await renderResult({}, { net_profit_usd: '123.4567' });
 
-    expect(reads(tile('Net profit'))).toBe('Net profit 123.4567');
+    expect(reads(tile('Net profit'))).toBe('Net profit 123.4567 After modeled costs');
   });
 
   it('shows the trade count with its won, lost and break-even trades', async () => {
@@ -87,8 +87,8 @@ describe('the headline figures', () => {
   it('names what each win rate counts, shows the server’s rounded figure marked as rounded, and the two whole numbers beside it', async () => {
     await renderResult();
 
-    expect(reads(tile(/^Trade win rate/))).toBe('Trade win rate trades won of trades 58.3% 0.583333 rounded to 6 places · 7 of 12');
-    expect(reads(tile(/^Daily win rate/))).toBe('Daily win rate profitable sessions of traded sessions 62.5% 0.625000 rounded to 6 places · 5 of 8');
+    expect(reads(tile(/^Trade win rate/))).toBe('Trade win rate 58.3% · 0.583333 rounded to 6 places · 7 of 12');
+    expect(reads(tile(/^Daily win rate/))).toBe('Daily win rate 62.5% · 0.625000 rounded to 6 places · 5 of 8');
   });
 
   it('shows the rounded rate the server gave, and works out none: an inconsistent figure is shown as it came', async () => {
@@ -108,7 +108,7 @@ describe('the headline figures', () => {
   it('shows the profit factor with the two sums it is of, or says there was no losing trade', async () => {
     const { rerender } = await render(RunResultComponent, { inputs: { run: runDetail() }, providers });
 
-    expect(reads(tile(/^Profit factor/))).toBe('Profit factor gross profit over gross loss 2.612876 rounded to 6 places · $2,000.00 over $765.44');
+    expect(reads(tile(/^Profit factor/))).toBe('Profit factor 2.612876 rounded to 6 places · $2,000.00 over $765.44');
 
     await rerender({ inputs: { run: runDetail({ figures: figures({ profit_factor: null }) }) } });
 
@@ -285,7 +285,7 @@ describe('a complete run whose setup and banner the server could not open', () =
 
     expect(screen.queryByRole('note', { name: 'How these figures were made' })).toBeNull();
     expect(container.querySelector('app-options-backtest-run-banner')).toBeNull();
-    expect(reads(tile('Net profit'))).toBe('Net profit $1,234.56');
+    expect(reads(tile('Net profit'))).toBe('Net profit $1,234.56 After modeled costs');
     expect(screen.getByRole('region', { name: 'Sessions' })).toBeTruthy();
     expect(screen.getByRole('region', { name: 'By month' })).toBeTruthy();
   });

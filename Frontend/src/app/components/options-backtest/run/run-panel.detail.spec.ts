@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/angular';
+import { fireEvent, screen } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import { RunRefusedError } from '../options-backtest.service';
@@ -24,6 +24,8 @@ describe('the closer look at a run, only for a complete one', () => {
   it('shows the trades, the export and the day picker for a complete run, and reads its trades', async () => {
     const closer = await panelFor(runItem({ status: 'complete' }), runDetail());
 
+    expect(closer.trades).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('Leg trades & session records'));
     expect(await screen.findByRole('region', { name: 'Trades' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Export trades (CSV)' })).toBeTruthy();
     expect(screen.getByRole('region', { name: 'One day' })).toBeTruthy();

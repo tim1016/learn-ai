@@ -1,8 +1,7 @@
 <section class="table-section" aria-label="By month">
-  <h3>By month</h3>
-  <p class="hint">Years form the rows; months run from January to December. Switch the quantity to compare profit, trades, activity or fees across the same calendar.</p>
+  <h3>Monthly pattern</h3>
   <app-options-month-grid [cells]="monthCells()" [metrics]="metrics" />
-  <p-table [value]="labelled()" dataKey="label" size="small" sortField="label" [sortOrder]="1" [tableStyle]="{ 'min-width': '44rem' }">
+  <details><summary>Monthly ledger</summary><p-table [value]="labelled()" dataKey="label" size="small" sortField="label" [sortOrder]="1" [tableStyle]="{ 'min-width': '44rem' }">
     <ng-template #header>
       <tr>
         <th scope="col" pSortableColumn="label">Month<p-sort-icon field="label" /></th>
@@ -33,5 +32,5 @@
         </td>
       </tr>
     </ng-template>
-  </p-table>
+  </p-table></details>
 </section>

@@ -1,51 +1,29 @@
 <section class="figures" aria-label="Headline figures">
-  <h3>Headline figures</h3>
-  <dl class="tiles">
-    <div class="tile primary" [class.negative]="loss()"><dt>Net profit</dt><dd class="big">{{ figures().net_profit_usd | authoredUsd }}</dd></div>
-    <div class="tile core">
-      <dt>Profit factor <span class="counts">gross profit over gross loss</span></dt>
-      @if (figures().profit_factor; as factor) {
-        <dd class="big">{{ factor.rounded_to_6_places }}</dd>
-        <dd class="sub">rounded to 6 places · {{ factor.numerator_usd | authoredUsd }} over {{ factor.denominator_usd | authoredUsd }}</dd>
-      } @else {
-        <dd class="big">No losing trade</dd>
-      }
-    </div>
-    <div class="tile core">
-      <dt>Trade win rate <span class="counts">trades won of trades</span></dt>
-      @if (figures().trade_win_rate; as rate) {
-        <dd class="big">{{ rate.display_percent_1_place }}%</dd>
-        <dd class="sub">{{ rate.rounded_to_6_places }} rounded to 6 places · {{ rate.numerator }} of {{ rate.denominator }}</dd>
-        <dd><meter class="win-track" min="0" max="1" [attr.value]="rate.rounded_to_6_places"></meter></dd>
-      } @else {
-        <dd class="big">No trades</dd>
-      }
-    </div>
-    <div class="tile core">
-      <dt>Max drawdown <span class="counts">session-end equity</span></dt>
-      @if (figures().drawdown_by_dollars; as fall) {
-        <dd class="big">{{ fall.fall_usd | authoredUsd }}</dd>
-        <dd class="sub">{{ fall.display_percent_1_place }}% of the peak</dd>
-      } @else {
-        <dd class="big">No drawdown</dd>
-      }
-    </div>
-    <div class="tile"><dt>Ending cash</dt><dd class="big">{{ figures().ending_cash_usd | authoredUsd }}</dd></div>
-    <div class="tile">
-      <dt>Trades</dt>
-      <dd class="big">{{ figures().trades }}</dd>
-      <dd class="sub">won {{ figures().trades_won }} · lost {{ figures().trades_lost }} · break-even {{ figures().trades_break_even }}</dd>
-    </div>
-    <div class="tile">
-      <dt>Daily win rate <span class="counts">profitable sessions of traded sessions</span></dt>
-      @if (figures().daily_win_rate; as rate) {
-        <dd class="big">{{ rate.display_percent_1_place }}%</dd>
-        <dd class="sub">{{ rate.rounded_to_6_places }} rounded to 6 places · {{ rate.numerator }} of {{ rate.denominator }}</dd>
-      } @else {
-        <dd class="big">No traded sessions</dd>
-      }
-    </div>
-    <div class="tile"><dt>Total fees</dt><dd class="big">{{ figures().total_fees_usd | authoredUsd }}</dd></div>
-    <div class="tile"><dt>Slippage paid</dt><dd class="big">{{ figures().slippage_paid_usd | authoredUsd }}</dd></div>
+  <div class="heading"><h3>Performance summary</h3><span>{{ figures().sessions_tested }} observed sessions · {{ figures().sessions_traded }} traded · {{ figures().trades }} leg round trips</span></div>
+  <dl class="metrics">
+    @for (metric of summary(); track metric.key) {
+      <div class="tile" [class.primary]="metric.key === 'profit'" [class.negative]="metric.key === 'profit' && loss()">
+        <dt><button type="button" (click)="inspect(metric.key)" [attr.aria-expanded]="inspected() === metric.key">{{ metric.label }}</button></dt>
+        <dd class="big">@if (metric.value !== null) { @switch (metric.unit) { @case ('usd') { {{ metric.value | authoredUsd }} } @default { {{ metric.value }} } } } @else { <span class="unavailable">{{ metric.missing ?? 'Not recorded' }}</span> }</dd>
+        <dd class="sub">{{ metric.context }}</dd>
+      </div>
+    }
   </dl>
+  <dl class="account-line"><div class="tile"><dt>Starting cash</dt><dd>{{ figures().starting_cash_usd | authoredUsd }}</dd></div><div class="tile"><dt>Ending cash</dt><dd>{{ figures().ending_cash_usd | authoredUsd }}</dd></div><div class="tile"><dt>Total fees</dt><dd>{{ figures().total_fees_usd | authoredUsd }}</dd></div><div class="tile"><dt>Slippage paid</dt><dd>{{ figures().slippage_paid_usd | authoredUsd }}</dd></div>@if (figures().dashboard?.return_percent; as percent) { <div><dt>Return on starting cash</dt><dd>{{ percent }}%</dd></div> }</dl>
+  <p class="basis">Sharpe: daily P&L over fixed starting capital · risk-free 0%. Drawdown & recovery: session closes.</p>
+  @if (detail(); as metric) {
+    <aside class="metric-detail" aria-label="Selected statistic"><div class="heading"><h4>{{ metric.label }}</h4><button type="button" (click)="inspected.set(null)">Close</button></div><p>{{ metric.definition }}</p>
+      @if (metric.key === 'recovery' && figures().dashboard?.risk_unavailable_reason) { <p>{{ figures().dashboard?.risk_unavailable_reason }}</p> }
+      @if (metric.key === 'sharpe') { @if (figures().dashboard; as dashboard) { <dl class="calculation"><div><dt>Daily observations</dt><dd>{{ dashboard.daily_observations }}</dd></div><div><dt>Calendar sessions / year</dt><dd>{{ dashboard.annualization_sessions ?? 'Unavailable' }}</dd></div><div><dt>Risk-free daily return</dt><dd>{{ dashboard.risk_free_daily_return }}</dd></div></dl>@if (dashboard.risk_unavailable_reason) { <p>{{ dashboard.risk_unavailable_reason }}</p> }@if (dashboard.annualization_unavailable_reason) { <p>{{ dashboard.annualization_unavailable_reason }}</p> }@if (dashboard.sharpe_unavailable_reason) { <p>{{ dashboard.sharpe_unavailable_reason | receiptLabel }}</p> } } }
+    </aside>
+  }
+  <section class="economics" aria-label="Session economics"><div class="heading"><h3>Session economics</h3><span>Whole setup · after modeled costs</span></div><dl class="economics-metrics">
+    @for (metric of economics(); track metric.key) { <div class="tile" [class.loss]="metric.key === 'loss'"><dt><button type="button" (click)="inspect(metric.key)" [attr.aria-expanded]="inspected() === metric.key">{{ metric.label }}</button></dt><dd class="big">@if (metric.value !== null) { @if (metric.unit === 'usd') { {{ metric.value | authoredUsd }} } @else { {{ metric.value }}% } } @else { <span class="unavailable">{{ metric.missing }}</span> }</dd>@if (metric.bar; as width) { <dd class="bar-track"><span [style.width.%]="width"></span></dd> }<dd class="sub">{{ metric.context }}</dd></div> }
+  </dl></section>
+  <details class="exact-calculations"><summary>Leg statistics & exact calculations</summary><dl class="calculation">
+    <div class="tile"><dt>Profit factor</dt>@if (figures().profit_factor; as factor) { <dd>{{ factor.rounded_to_6_places }} rounded to 6 places · {{ factor.numerator_usd | authoredUsd }} over {{ factor.denominator_usd | authoredUsd }}</dd> } @else { <dd>No losing trade</dd> }</div>
+    <div class="tile"><dt>Trade win rate</dt>@if (figures().trade_win_rate; as rate) { <dd>{{ rate.display_percent_1_place }}% · {{ rate.rounded_to_6_places }} rounded to 6 places · {{ rate.numerator }} of {{ rate.denominator }}</dd> } @else { <dd>No trades</dd> }</div>
+    <div class="tile"><dt>Daily win rate</dt>@if (figures().daily_win_rate; as rate) { <dd>{{ rate.display_percent_1_place }}% · {{ rate.rounded_to_6_places }} rounded to 6 places · {{ rate.numerator }} of {{ rate.denominator }}</dd> } @else { <dd>No traded sessions</dd> }</div>
+    <div class="tile"><dt>Trades</dt><dd>{{ figures().trades }} won {{ figures().trades_won }} · lost {{ figures().trades_lost }} · break-even {{ figures().trades_break_even }}</dd></div>
+  </dl></details>
 </section>

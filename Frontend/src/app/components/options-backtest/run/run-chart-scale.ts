@@ -55,6 +55,36 @@ export function equityCoordinates(values: readonly string[]): { x: number; y: nu
   return equityPlot(values)?.coordinates ?? [];
 }
 
+/** Common session positions for every plot, with room for the endpoint bars. */
+export function sessionX(slot: number, sessions: number): number {
+  return 8 + (slot / Math.max(1, sessions)) * 984;
+}
+
+export function sessionPlotWidth(sessions: number): number {
+  return Math.max(900, sessions * 8);
+}
+
+/** Symmetric daily bars; these quantities are pixels, never financial values. */
+export function dailyBarGeometry(values: readonly string[]) {
+  const heights = scaledBarPercents(values, 50);
+  const width = Math.min(14, 700 / Math.max(1, values.length));
+  return values.map((value, index) => {
+    const height = Number(heights[index]) * 1.6;
+    const x = sessionX(index + 1, values.length);
+    return { x, left: x - width / 2, width, y: isLoss(value) ? 80 : 80 - height, height: height || 2 };
+  });
+}
+
+/** Exact source magnitude for a symmetric axis; only its pixels use numeric projection. */
+export function barMagnitude(values: readonly string[]): string {
+  if (values.length === 0) return '0';
+  const amounts = scaledDecimals(values).map(magnitude);
+  const highest = amounts.reduce((largest, amount) => amount > largest ? amount : largest, 0n);
+  const original = values[amounts.indexOf(highest)];
+  if (highest === 0n) return '0';
+  return original.startsWith('-') ? original.slice(1) : original;
+}
+
 /** Axis labels come from exact bounds, never from rounded pixel coordinates (ADR 0068). */
 export function equityPlot(values: readonly string[]) {
   if (values.length === 0) return null;
