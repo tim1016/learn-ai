@@ -1595,7 +1595,7 @@ Where one account's money is (PRD #2560). Python authors every figure and every 
 
 - **Home** — an account's first page: its attention lines, its **money bar**, and its bots grouped running, stopped but still holding, Dry Run and a folded **Finished** list, shown as the List or the **Wall**. It replaced the account overview, the Bots tab and the Gallery (PRD #2560 D1).
   _Avoid_: Overview, Desk, dashboard.
-- **Money bar** — one bar showing where the account's money is: a slice per running bot, striped slices **held by stopped bot**, shares held outside any bot, **account charges**, money settling into cash, and **free to deploy**. Its total is cash plus shares at the price paid; a legend names every slice with its amount. Open gains on shares are a note beside it, never on it.
+- **Money bar** — one bar showing where the account's money is: a slice per running bot, striped slices **held by stopped bot**, shares held outside any bot, **account charges**, money settling into cash, and **free to deploy**. Its total is cash plus positions at cost: shares and bought options at the price paid, less the premium taken in for sold options, whose collateral is cash set aside in the holding bot's slice; a legend names every slice with its amount. Open gains on shares are a note beside it, never on it.
   _Avoid_: allocation chart, budget chart.
 - **Free to deploy** — the money a new bot may be given: the account's cash less everything already claimed. It is the same figure Deploy lets the owner spend.
   _Avoid_: available cash, buying power (Alpaca's margin figure, under Account details).
