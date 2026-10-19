@@ -40,6 +40,25 @@ describe('MoneyBarComponent', () => {
     ]);
   });
 
+  it('names what each bot holds in the words Python sends: an option bot’s positions, never shares', async () => {
+    const [shares] = SEGMENTS;
+    // The Home roster's row: one SPY call held at $224.00.
+    const options: MoneySegment = {
+      ...shares, strategy_instance_id: 'spy-call-golden', label: 'spy-call-golden', palette_index: 2,
+      parts: {
+        held_label: 'in positions', in_shares_usd: '224.00', in_shares_bps: 2240,
+        pending_usd: '0.00', pending_bps: 0, free_usd: '775.99', free_bps: 7760,
+      },
+    };
+    await renderBar('row', [shares, options]);
+
+    const legend = screen.getByRole('list', { name: 'Where this account’s money is' });
+    const [signalBot, optionsBot] = within(legend).getAllByRole('listitem').map((item) => item.textContent?.replace(/\s+/g, ' ').trim());
+    expect(signalBot).toContain('in shares $764.71 · in entry orders $0.00');
+    expect(optionsBot).toContain('spy-call-golden $999.99 in positions $224.00 · in entry orders $0.00');
+    expect(optionsBot).not.toContain('shares');
+  });
+
   it('states how far a bot spent past its budget and what a stopped bot released and still claims', async () => {
     const [bot, stopped] = SEGMENTS;
     await renderBar('detail', [
@@ -77,7 +96,7 @@ describe('MoneyBarComponent', () => {
     const { container } = await renderBar('detail', [
       {
         ...bot, amount_usd: '0.00', share_bps: 0, shortfall_usd: '5.01',
-        parts: { in_shares_usd: '0.00', in_shares_bps: 0, pending_usd: '0.00', pending_bps: 0, free_usd: '0.00', free_bps: 0 },
+        parts: { held_label: 'in shares', in_shares_usd: '0.00', in_shares_bps: 0, pending_usd: '0.00', pending_bps: 0, free_usd: '0.00', free_bps: 0 },
       },
       { kind: 'free', label: 'free to deploy', amount_usd: '994.99', share_bps: 10_000 },
     ]);

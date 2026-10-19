@@ -11,10 +11,11 @@ import logging
 import math
 import re
 import sqlite3
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -723,11 +724,19 @@ async def budget_view(account_id: str, sid: str) -> DeploymentBudgetView:
         return _budget_view(runtime, sid)
 
 
-class _EntryConfiguration(BaseModel):
+class _TradedAsset(BaseModel):
+    """What a bot's sealed plan trades, the one fact that names what its money is held in."""
+    action_plan: BotActionPlan | None = None
+
+    @property
+    def trades_options(self) -> bool:
+        return self.action_plan is not None and is_option_plan(self.action_plan)
+
+
+class _EntryConfiguration(_TradedAsset):
     """Only custody-sealed quantity and traded asset contribute to this money read."""
     symbol: str = Field(min_length=1)
     quantity: int = Field(strict=True, gt=0)
-    action_plan: BotActionPlan | None = None
 
     @property
     def order_symbol(self) -> str:
@@ -739,9 +748,33 @@ class _EntryConfiguration(BaseModel):
         """
         return self.symbol if self.action_plan is None else traded_instrument(self.action_plan).underlying
 
-    @property
-    def trades_options(self) -> bool:
-        return self.action_plan is not None and is_option_plan(self.action_plan)
+
+@dataclass(frozen=True)
+class _HeldIn:
+    """What a bot's money is held in, in the words its slice and statement say it with.
+
+    A bot whose plan trades options holds positions, never shares: a long
+    contract, or a sold one its bought leg covers, alike.
+    """
+    part_label: Literal["in shares", "in positions"]
+    noun: str
+    undone: str
+
+
+_IN_SHARES = _HeldIn("in shares", "shares", "sold")
+_IN_POSITIONS = _HeldIn("in positions", "positions", "closed")
+
+
+def _held_in(repo: ClerkSqliteRepository, sid: str) -> _HeldIn:
+    """What bot ``sid``'s money is held in, from its sealed plan; refused when that cannot be read."""
+    config = repo.bot_config(sid)
+    if config is None:
+        raise BudgetUnavailable(f"Bot {sid} has no immutable configuration, so what it holds cannot be named.")
+    try:
+        traded = _TradedAsset.model_validate_json(config.config_json)
+    except ValidationError as exc:
+        raise BudgetUnavailable(f"Bot {sid} has an unreadable Action Plan, so what it holds cannot be named.") from exc
+    return _IN_POSITIONS if traded.trades_options else _IN_SHARES
 
 
 def _budget_view(runtime: ActiveClerkRuntime, sid: str) -> DeploymentBudgetView:
@@ -797,9 +830,10 @@ class _NextEntry:
 
 
 # Custody refusals that are this bot's own position at work, not a fault: a
-# bot that holds shares enters again only once it has sold them.
+# bot enters again only once what it holds has ended. ``{undone}`` is how:
+# shares are sold, and an option bot's positions closed.
 _HOLDING_COPY: dict[str, tuple[str, str]] = {
-    "ATTRIBUTED_EXPOSURE_EXISTS": ("Holding its position", "Its next entry waits until this position is sold."),
+    "ATTRIBUTED_EXPOSURE_EXISTS": ("Holding its position", "Its next entry waits until this position is {undone}."),
     "ENTER_IN_PROGRESS": ("Entering its position", "Its entry is still working. The next entry waits until this one finishes."),
 }
 _WAITS = "Its next entry waits"
@@ -820,12 +854,13 @@ _BROKER_BUYING_POWER_NOT_READ_HERE = Figure.unknown(
 
 def _next_entry(
     runtime: ActiveClerkRuntime, repo: ClerkSqliteRepository, projected: AccountBudget, sid: str, risk: RiskReadiness | None,
-    observed_at_ms: int,
+    observed_at_ms: int, held: _HeldIn,
 ) -> _NextEntry:
     capability = admit_new_exposure(repo, strategy_instance_id=sid)
     holding = _HOLDING_COPY.get(capability.reason_code or "")
     if holding is not None:
-        return _NextEntry(False, *holding)
+        headline, detail = holding
+        return _NextEntry(False, headline, detail.format(undone=held.undone))
     if risk is None:
         return _NextEntry(False, _WAITS, "Wait for fresh account cash and risk evidence.")
     if not risk.allowed:
@@ -872,7 +907,7 @@ def _broker_buying_power(runtime: ActiveClerkRuntime) -> Figure | None:
     return None
 
 
-def _statement(own: DeploymentBudget, entry: _NextEntry | None) -> tuple[BudgetStatementLine, ...]:
+def _statement(own: DeploymentBudget, entry: _NextEntry | None, held: _HeldIn) -> tuple[BudgetStatementLine, ...]:
     """The bot's money, in the order the owner reads it (#2560 D6).
 
     The caller holds the money context. A running bot shows where its balance
@@ -881,9 +916,10 @@ def _statement(own: DeploymentBudget, entry: _NextEntry | None) -> tuple[BudgetS
     (a fee that posted above the one modelled at the Stop, an entry filled
     above its reserved price), net and signed -- and what is still held, in
     the cents its slice on the account's bar carries. They add up to its
-    balance, less "Over its budget by": what its shares and orders cost
+    balance, less "Over its budget by": what its holdings and orders cost
     beyond that balance, the overrun a running bot names too. An estimated
-    release is its money now, so it has no "after".
+    release is its money now, so it has no "after". ``held`` names what it
+    holds: shares, or an option bot's positions.
     """
     results = (
         BudgetStatementLine(label="Budget set aside at deploy", amount_usd=dollars(own.committed_cents)),
@@ -903,7 +939,7 @@ def _statement(own: DeploymentBudget, entry: _NextEntry | None) -> tuple[BudgetS
             label = "Came back since it stopped" if since > 0 else "Charged since it stopped"
             lines.append(BudgetStatementLine(label=label, amount_usd=dollars(since)))
         lines += [
-            BudgetStatementLine(label="Still in shares, at cost", amount_usd=dollars(in_shares)),
+            BudgetStatementLine(label=f"Still in {held.noun}, at cost", amount_usd=dollars(in_shares)),
             BudgetStatementLine(label="Still in entry orders", amount_usd=dollars(in_orders)),
         ]
         if over:
@@ -911,7 +947,7 @@ def _statement(own: DeploymentBudget, entry: _NextEntry | None) -> tuple[BudgetS
         return tuple(lines)
     lines = [
         *results,
-        BudgetStatementLine(label="In shares, at cost", amount_usd=display_dollars(own.position_cost)),
+        BudgetStatementLine(label=f"In {held.noun}, at cost", amount_usd=display_dollars(own.position_cost)),
         BudgetStatementLine(label="Waiting in entry orders", amount_usd=display_dollars(own.pending_orders)),
         BudgetStatementLine(label="Free to trade", amount_usd=dollars(own.spendable_cents)),
     ]
@@ -923,7 +959,7 @@ def _statement(own: DeploymentBudget, entry: _NextEntry | None) -> tuple[BudgetS
     return tuple(lines)
 
 
-def _stopped_copy(own: DeploymentBudget) -> tuple[str, str]:
+def _stopped_copy(own: DeploymentBudget, held: _HeldIn) -> tuple[str, str]:
     """A stopped bot's headline, and what its Stop released and left claimed (#2555).
 
     A Stop that recorded no amount -- one from before they were recorded, or
@@ -938,7 +974,8 @@ def _stopped_copy(own: DeploymentBudget) -> tuple[str, str]:
     else:
         stop = f"It released ${dollars(stopped.released_cents)} when it stopped."
     if own.position_cost > 0:
-        return "Stopped · still holds shares", f"{stop} The money in its shares comes back when they are sold."
+        return (f"Stopped · still holds {held.noun}",
+                f"{stop} The money in its {held.noun} comes back when they are {held.undone}.")
     if own.pending_orders > 0:
         return "Stopped · waiting on entry orders", f"{stop} The rest comes back when its entry orders finish."
     return "Stopped · finished", f"{stop} Nothing it held is still claimed."
@@ -965,8 +1002,9 @@ def _fenced_budget_view(runtime: ActiveClerkRuntime, sid: str) -> DeploymentBudg
         money = repo.account_money(cash=read.cash, seen_before_ms=read.fills_seen_before_ms,
                                    modelled_fees_seen_before_ms=read.modelled_fees_seen_before_ms)
         own = next(item for item in money.budget.deployments if item.strategy_instance_id == sid)
-        entry = _next_entry(runtime, repo, money.budget, sid, risk, read.observed_at_ms) if own.active else None
-        headline, detail = (entry.headline, entry.detail) if entry is not None else _stopped_copy(own)
+        held = _held_in(repo, sid)
+        entry = _next_entry(runtime, repo, money.budget, sid, risk, read.observed_at_ms, held) if own.active else None
+        headline, detail = (entry.headline, entry.detail) if entry is not None else _stopped_copy(own, held)
         segment = bot_segment(money, sid)
         # What getting out costs, while the bot holds an option contract: a stopped bot's included.
         exit_cost = read_exit_estimate(repo, sid, now_ms=repo.clock())
@@ -975,8 +1013,8 @@ def _fenced_budget_view(runtime: ActiveClerkRuntime, sid: str) -> DeploymentBudg
                 state="ready", headline=headline, detail=detail,
                 strategy_instance_id=sid, world=world, committed_usd=dollars(own.committed_cents),
                 observed_at_ms=read.observed_at_ms,
-                segment=None if segment is None else _segment_view(segment),
-                statement=_statement(own, entry),
+                segment=None if segment is None else _segment_view(segment, {sid: held}),
+                statement=_statement(own, entry, held),
                 note="The budget limits new entries. Market fills and losses can go past it." if own.active else None,
                 funding=None if entry is None or entry.funding is None else FundingView.from_answer(entry.funding),
                 exit_estimate=None if exit_cost is None else exit_estimate_view(exit_cost),
@@ -1059,6 +1097,10 @@ def _money_view(
     try:
         money = money if money is not None else _read_account_money(repo, observation)
         bar = money_bar(money, new_cents=new_cents)
+        held = {
+            segment.strategy_instance_id: _held_in(repo, segment.strategy_instance_id)
+            for segment in bar.segments if segment.parts is not None
+        }
     except (BudgetUnavailable, MoneyInputError, RateNotPinnedError) as exc:
         return AccountMoneyView(state="unavailable", detail=str(exc), world=world, account_id=account_id, **broker)
     except MoneyConservationError:
@@ -1101,8 +1143,8 @@ def _money_view(
         open_pnl_usd=open_pnl, open_pnl_detail=open_pnl_detail,
         broker_position_disagreement=disagreement,
         segments=tuple(
-            _segment_view(segment).model_copy(update={"label": "outside fills not confirmed by Alpaca"})
-            if outside_disagrees and segment.kind == "outside" else _segment_view(segment)
+            _segment_view(segment, held).model_copy(update={"label": "outside fills not confirmed by Alpaca"})
+            if outside_disagrees and segment.kind == "outside" else _segment_view(segment, held)
             for segment in bar.segments
         ),
     )
@@ -1186,11 +1228,12 @@ def _segment_label(segment: BarSegment) -> str:
     raise ValueError(f"a {segment.kind} slice cannot name bot {segment.strategy_instance_id!r}")
 
 
-def _segment_view(segment: BarSegment) -> MoneySegment:
+def _segment_view(segment: BarSegment, held: Mapping[str, _HeldIn]) -> MoneySegment:
+    """``held`` names what each running bot on the bar holds, so its parts say it in true words."""
     return MoneySegment(
         kind=segment.kind, strategy_instance_id=segment.strategy_instance_id, label=_segment_label(segment),
         amount_usd=dollars(segment.cents), share_bps=segment.bps,
-        parts=None if segment.parts is None else _parts_view(segment.parts),
+        parts=None if segment.parts is None else _parts_view(segment.parts, held[segment.strategy_instance_id]),
         shortfall_usd=_shortfall_usd(segment.shortfall_cents),
         released_usd=None if segment.released_cents is None else dollars(segment.released_cents),
         released_estimated=segment.released_estimated,
@@ -1208,9 +1251,9 @@ def _shortfall_usd(cents: int | None) -> str | None:
     return None if cents is None or cents == 0 else dollars(cents)
 
 
-def _parts_view(parts: BarParts) -> MoneyParts:
+def _parts_view(parts: BarParts, held: _HeldIn) -> MoneyParts:
     return MoneyParts(
-        in_shares_usd=dollars(parts.in_shares_cents), in_shares_bps=parts.in_shares_bps,
+        held_label=held.part_label, in_shares_usd=dollars(parts.in_shares_cents), in_shares_bps=parts.in_shares_bps,
         pending_usd=dollars(parts.pending_cents), pending_bps=parts.pending_bps,
         free_usd=dollars(parts.free_cents), free_bps=parts.free_bps,
     )

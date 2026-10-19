@@ -519,6 +519,7 @@ const RUNNING_BUDGET: DeploymentBudgetView = {
   segment: {
     kind: 'bot', strategy_instance_id: 'sid-001', label: 'sid-001', amount_usd: '999.99', share_bps: 10000, palette_index: 0,
     parts: {
+      held_label: 'in shares',
       in_shares_usd: '764.71', in_shares_bps: 7647,
       pending_usd: '0.00', pending_bps: 0,
       free_usd: '235.28', free_bps: 2353,

@@ -471,6 +471,7 @@ describe('AlpacaHomeComponent', () => {
         {
           kind: 'bot', strategy_instance_id: deployed, label: deployed, amount_usd: '1000.00', share_bps: 100,
           parts: {
+            held_label: 'in shares',
             in_shares_usd: '0.00', in_shares_bps: 0, pending_usd: '0.00', pending_bps: 0,
             free_usd: '1000.00', free_bps: 10_000,
           },

@@ -297,6 +297,7 @@ export const PAPER_MONEY_RUNNING = fakeAccountMoney({
       amount_usd: PAPER_BUDGET,
       share_bps: 400,
       parts: {
+        held_label: 'in shares',
         in_shares_usd: '500.00', in_shares_bps: 5_000,
         pending_usd: '0.00', pending_bps: 0,
         free_usd: '500.00', free_bps: 5_000,

@@ -33,6 +33,7 @@ export function fakeAccountMoney(overrides: Partial<AccountMoneyView> = {}): Acc
         amount_usd: '999.99',
         share_bps: 100,
         parts: {
+          held_label: 'in shares',
           in_shares_usd: '764.71', in_shares_bps: 7647,
           pending_usd: '0.00', pending_bps: 0,
           free_usd: '235.28', free_bps: 2353,
