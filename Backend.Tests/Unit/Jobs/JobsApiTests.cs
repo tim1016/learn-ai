@@ -50,6 +50,16 @@ public class JobsApiTests
     }
 
     [Fact]
+    public void ResolveControlSecretHeader_OptionsGoldenSearchHistoryWithSecretConfigured_ReturnsTheSecret()
+    {
+        var config = BuildConfig("shh-its-a-secret");
+
+        var header = JobsApi.ResolveControlSecretHeader("options_golden_search_history", config);
+
+        Assert.Equal("shh-its-a-secret", header);
+    }
+
+    [Fact]
     public void ResolveControlSecretHeader_DataLakeBackfillWithNoSecretConfigured_ReturnsNull()
     {
         var config = BuildConfig(null);

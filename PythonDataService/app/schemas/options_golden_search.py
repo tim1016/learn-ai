@@ -78,6 +78,11 @@ class HistoryCaptureJobRequest(Model):
     job_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
 
 
+class HistoryCaptureAccepted(Model):
+    job_id: str
+    status: Literal["queued"] = "queued"
+
+
 class JobAccepted(Model):
     job_id: str
     study_id: str

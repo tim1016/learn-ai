@@ -30810,6 +30810,25 @@
         "title": "HistoryBounds",
         "type": "object"
       },
+      "HistoryCaptureAccepted": {
+        "additionalProperties": false,
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "queued",
+            "default": "queued",
+            "title": "Status"
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "title": "HistoryCaptureAccepted",
+        "type": "object"
+      },
       "HistoryCaptureJobRequest": {
         "additionalProperties": false,
         "properties": {
@@ -81407,6 +81426,24 @@
     "/api/jobs-internal/options-golden-search-history": {
       "post": {
         "operationId": "capture_history_api_jobs_internal_options_golden_search_history_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -81422,8 +81459,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "title": "Response Capture History Api Jobs Internal Options Golden Search History Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/HistoryCaptureAccepted"
                 }
               }
             },

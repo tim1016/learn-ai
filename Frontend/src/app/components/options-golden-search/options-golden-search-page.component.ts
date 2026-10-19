@@ -67,7 +67,10 @@ export class OptionsGoldenSearchPageComponent {
     return { setup_name: declarations.setup_name, expected_setup_hash: declarations.setup_hash, ...(this.parent_study_id() ? { parent_study_id: this.parent_study_id() } : {}), knobs: [...(this.timing() ?? []), ...(this.knobs() ?? [])], method: rules.method, policy: rules.policy, history: { ...range, train_months: rules.train_months, test_months: rules.test_months, final_months: rules.final_months }, budget: rules.budget, finalist_count: rules.finalist_count, stress: rules.stress, zoom: rules.zoom, pair_audits: rules.pair_audits };
   });
   protected readonly preflight = computed(() => this.checked()?.stamp === JSON.stringify(this.request()) ? this.checked()?.value ?? null : null);
-  protected readonly captureForPlan = computed(() => this.captureState()?.stamp === JSON.stringify(this.request()) ? this.captureState() : null);
+  protected readonly captureForPlan = computed(() => {
+    const capture = this.captureState();
+    return capture !== null && (['starting', 'running', 'checking'].includes(capture.kind) || capture.stamp === JSON.stringify(this.request())) ? capture : null;
+  });
   protected readonly capturing = computed(() => ['starting', 'running', 'checking'].includes(this.captureState()?.kind ?? ''));
   protected readonly canLock = computed(() => this.request() !== null && this.preflight()?.can_lock === true && !this.busy() && !this.capturing());
   private generation = 0;
@@ -77,6 +80,14 @@ export class OptionsGoldenSearchPageComponent {
 
   constructor() {
     this.destroyRef.onDestroy(() => this.captureUnsubscribe?.());
+    effect(() => {
+      const request = this.request();
+      if (request === null || this.capturing()) return;
+      const active = this.service.activeHistoryCapture(request);
+      if (active !== null && this.captureState()?.jobId !== active.id) {
+        untracked(() => this.watchHistoryCapture(active.id, JSON.stringify(request), active.current, active.total));
+      }
+    });
     effect(() => {
       const id = this.studyId();
       const name = this.setup_name();
@@ -156,33 +167,46 @@ export class OptionsGoldenSearchPageComponent {
     const stamp = JSON.stringify(request);
     this.captureState.set({ stamp, kind: 'starting' });
     try {
-      const jobId = await this.service.captureHistory(request);
-      this.captureState.set({ stamp, kind: 'running', jobId });
-      const unsubscribe = this.service.onHistoryCapture(jobId, (event) => {
-        if (event.type === 'job.progress') {
-          const current = typeof event['current'] === 'number' ? event['current'] : undefined;
-          const total = typeof event['total'] === 'number' ? event['total'] : undefined;
-          this.captureState.set({ stamp, kind: 'running', jobId, current, total });
-        } else if (event.type === 'job.completed') {
-          this.captureUnsubscribe?.();
-          this.captureUnsubscribe = null;
-          this.captureState.set({ stamp, kind: 'checking' });
-          if (JSON.stringify(this.request()) === stamp) {
-            void this.checkPlan().finally(() => this.captureState.set({ stamp, kind: 'done' }));
-          } else this.captureState.set({ stamp, kind: 'done' });
-        } else if (event.type === 'job.failed' || event.type === 'job.cancelled') {
-          this.captureUnsubscribe?.();
-          this.captureUnsubscribe = null;
-          this.captureState.set({ stamp, kind: 'failed', message: event.type === 'job.cancelled' ? 'History capture was cancelled.' : typeof event['message'] === 'string' ? event['message'] : 'History could not be captured.' });
-        }
-      });
-      this.captureUnsubscribe = unsubscribe;
-      if (this.captureState()?.kind !== 'running') {
-        unsubscribe();
-        this.captureUnsubscribe = null;
+      await this.service.refreshHistoryCaptures();
+      if (this.destroyRef.destroyed) return;
+      const active = this.service.activeHistoryCapture(request);
+      if (active !== null) {
+        this.watchHistoryCapture(active.id, stamp, active.current, active.total);
+        return;
       }
+      const jobId = await this.service.captureHistory(request);
+      if (this.destroyRef.destroyed) return;
+      this.watchHistoryCapture(jobId, stamp);
     } catch (error) {
-      this.captureState.set({ stamp, kind: 'failed', message: optionsSearchErrorMessage(error, 'History capture could not start.') });
+      if (!this.destroyRef.destroyed) this.captureState.set({ stamp, kind: 'failed', message: optionsSearchErrorMessage(error, 'History capture could not start.') });
+    }
+  }
+
+  private watchHistoryCapture(jobId: string, stamp: string, current?: number, total?: number): void {
+    this.captureUnsubscribe?.();
+    this.captureState.set({ stamp, kind: 'running', jobId, current, total });
+    const unsubscribe = this.service.onHistoryCapture(jobId, (event) => {
+      if (event.type === 'job.progress') {
+        const current = typeof event['current'] === 'number' ? event['current'] : undefined;
+        const total = typeof event['total'] === 'number' ? event['total'] : undefined;
+        this.captureState.set({ stamp, kind: 'running', jobId, current, total });
+      } else if (event.type === 'job.completed') {
+        this.captureUnsubscribe?.();
+        this.captureUnsubscribe = null;
+        this.captureState.set({ stamp, kind: 'checking' });
+        if (JSON.stringify(this.request()) === stamp) {
+          void this.checkPlan().finally(() => this.captureState.set({ stamp, kind: 'done' }));
+        } else this.captureState.set({ stamp, kind: 'done' });
+      } else if (event.type === 'job.failed' || event.type === 'job.cancelled') {
+        this.captureUnsubscribe?.();
+        this.captureUnsubscribe = null;
+        this.captureState.set({ stamp, kind: 'failed', message: event.type === 'job.cancelled' ? 'History capture was cancelled.' : typeof event['message'] === 'string' ? event['message'] : 'History could not be captured.' });
+      }
+    });
+    this.captureUnsubscribe = unsubscribe;
+    if (this.captureState()?.kind !== 'running') {
+      unsubscribe();
+      this.captureUnsubscribe = null;
     }
   }
 

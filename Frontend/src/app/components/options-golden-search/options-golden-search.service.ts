@@ -5,7 +5,7 @@ import { firstValueFrom } from 'rxjs';
 import { isRecord } from '../../api/operator-blocker.types';
 import { extractServerMessage } from '../broker/operation-error';
 import { readDetail } from '../options-backtest/options-backtest.service';
-import { JobsService, type JobStreamEvent } from '../../services/jobs.service';
+import { JobsService, type JobState, type JobStreamEvent } from '../../services/jobs.service';
 import type { EvidenceWindow, OptionsStudy, PlanRequest, Preflight, SearchDeclarations, SessionResult, StudyCommand, StudySummary } from './options-golden-search.types';
 
 /** The durable command committed; its exact dispatch remains available for retry. */
@@ -31,6 +31,16 @@ export class OptionsGoldenSearchService {
 
   captureHistory(request: PlanRequest): Promise<string> {
     return this.jobs.startJob('options_golden_search_history', { request });
+  }
+
+  activeHistoryCapture(request: PlanRequest): JobState | null {
+    return this.jobs.activeJobs().find((job) => job.type === 'options_golden_search_history'
+      && JSON.stringify(job.parameters?.['request']) === JSON.stringify(request)) ?? null;
+  }
+
+  async refreshHistoryCaptures(): Promise<void> {
+    await this.jobs.refreshActive();
+    if (this.jobs.registryError()) throw new Error('Running history captures could not be checked. Try again.');
   }
 
   onHistoryCapture(id: string, handler: (event: JobStreamEvent) => void): () => void {

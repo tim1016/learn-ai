@@ -9,10 +9,13 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+from app.broker.fleet.errors import DataPlaneControlSecretRefused
+from app.config import settings
 from app.options_backtest import chain_download
 from app.research.options_golden_search import service
 from app.routers import options_golden_search as router
 from app.schemas.options_golden_search import HistoryCaptureJobRequest, PlanRequest
+from app.security.data_plane_control import require_data_plane_control_secret
 from app.utils.session_anchors import et_midnight_ms
 
 
@@ -45,8 +48,9 @@ async def test_history_job_fetches_underlying_and_listing_for_each_study_session
     app = FastAPI()
     app.include_router(router.jobs_router, prefix="/api/jobs-internal")
     app.dependency_overrides[router.get_service] = Api
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "test-control-secret")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post("/api/jobs-internal/options-golden-search-history", json={
+        response = await client.post("/api/jobs-internal/options-golden-search-history", headers={"X-Data-Plane-Control-Secret": "test-control-secret"}, json={
             "job_id": "history-job", "request": {"setup_name": "Saved setup", "expected_setup_hash": "a" * 64,
                 "knobs": [], "history": {"start_ms": et_midnight_ms(days[0]), "end_ms": et_midnight_ms(days[-1])}},
         })
@@ -59,6 +63,40 @@ async def test_history_job_fetches_underlying_and_listing_for_each_study_session
     assert asked == list(days)
     assert progress == [(1, 2), (2, 2)]
     assert result == {"sessions_checked": 2, "artifacts_fetched": 2}
+
+
+@pytest.mark.asyncio
+async def test_history_job_requires_control_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "test-control-secret")
+    app = FastAPI()
+    app.include_router(router.jobs_router, prefix="/api/jobs-internal")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        with pytest.raises(DataPlaneControlSecretRefused):
+            await client.post("/api/jobs-internal/options-golden-search-history", json={
+                "job_id": "history-job", "request": {"setup_name": "Saved setup", "expected_setup_hash": "a" * 64,
+                    "knobs": [], "history": {"start_ms": et_midnight_ms(date(2025, 1, 2)),
+                        "end_ms": et_midnight_ms(date(2025, 1, 3))}},
+            })
+
+
+@pytest.mark.asyncio
+async def test_history_job_refuses_a_changed_saved_setup() -> None:
+    class Api:
+        async def history_capture_scope(self, _request: PlanRequest) -> tuple[str, tuple[int, ...]]:
+            raise service.repo.Conflict("The saved setup changed.")
+
+    app = FastAPI()
+    app.include_router(router.jobs_router, prefix="/api/jobs-internal")
+    app.dependency_overrides[router.get_service] = Api
+    app.dependency_overrides[require_data_plane_control_secret] = lambda: None
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/jobs-internal/options-golden-search-history", json={
+            "job_id": "history-job", "request": {"setup_name": "Saved setup", "expected_setup_hash": "a" * 64,
+                "knobs": [], "history": {"start_ms": et_midnight_ms(date(2025, 1, 2)),
+                    "end_ms": et_midnight_ms(date(2025, 1, 3))}},
+        })
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "OPTIONS_SEARCH_REFUSED"
 
 
 @pytest.mark.asyncio
@@ -96,3 +134,34 @@ async def test_history_job_reports_a_listing_failure_instead_of_completing(monke
     cancel = SimpleNamespace(raise_if_cancelled=lambda: None)
     with pytest.raises(RuntimeError, match="data plan does not reach that far back"):
         await asyncio.to_thread(scheduled, emitter, cancel)
+
+
+@pytest.mark.asyncio
+async def test_history_job_acknowledges_cancellation_during_last_download(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scope(_request: PlanRequest) -> tuple[str, tuple[int, ...]]:
+        return "SPY", (et_midnight_ms(date(2025, 1, 2)),)
+
+    cancelled = False
+    scheduled = None
+
+    async def capture(_underlying: str, _day: date, *, expiry: None, contracts: list) -> tuple:
+        nonlocal cancelled
+        cancelled = True
+        return ()
+
+    def start(_id: str, task, **_kwargs) -> None:
+        nonlocal scheduled
+        scheduled = task
+
+    def check_cancelled() -> None:
+        if cancelled:
+            raise RuntimeError("cancelled")
+
+    monkeypatch.setattr(chain_download, "ensure_chain_data", capture)
+    monkeypatch.setattr(router, "run_in_thread", start)
+    body = HistoryCaptureJobRequest.model_construct(request=PlanRequest.model_construct(), job_id="history-job")
+    await router.capture_history(body, api=SimpleNamespace(history_capture_scope=scope))
+    assert scheduled is not None
+    emitter = SimpleNamespace(phase=lambda *_args, **_kwargs: None, progress=lambda *_args, **_kwargs: pytest.fail("cancelled capture reported progress"))
+    with pytest.raises(RuntimeError, match="cancelled"):
+        await asyncio.to_thread(scheduled, emitter, SimpleNamespace(raise_if_cancelled=check_cancelled))

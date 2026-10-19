@@ -4,6 +4,7 @@ import { TestBed } from '@angular/core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { JobsService } from '../../services/jobs.service';
+import type { JobState } from '../../services/jobs.service';
 import { OptionsGoldenSearchService, optionsSearchErrorMessage } from './options-golden-search.service';
 import { study } from './testing';
 
@@ -13,9 +14,11 @@ describe('OptionsGoldenSearchService command boundary', () => {
   let service: OptionsGoldenSearchService;
   let http: HttpTestingController;
   const startJob = vi.fn(async () => 'job-1');
+  const activeJobs = vi.fn((): JobState[] => []);
   beforeEach(() => {
     startJob.mockReset().mockResolvedValue('job-1');
-    TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting(), { provide: JobsService, useValue: { startJob } }] });
+    activeJobs.mockReset().mockReturnValue([]);
+    TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting(), { provide: JobsService, useValue: { startJob, activeJobs } }] });
     service = TestBed.inject(OptionsGoldenSearchService);
     http = TestBed.inject(HttpTestingController);
   });
@@ -45,6 +48,16 @@ describe('OptionsGoldenSearchService command boundary', () => {
     const request = { setup_name: 'Saved two-leg setup', history: { start_ms: 1704171600000, end_ms: 1789790400000 } };
     await expect(service.captureHistory(request as Parameters<typeof service.captureHistory>[0])).resolves.toBe('job-1');
     expect(startJob).toHaveBeenCalledExactlyOnceWith('options_golden_search_history', { request });
+  });
+
+  it('adopts only a running capture for the same exact plan', () => {
+    const request = { setup_name: 'Saved two-leg setup', history: { start_ms: 1704171600000, end_ms: 1789790400000 } } as Parameters<typeof service.activeHistoryCapture>[0];
+    activeJobs.mockReturnValue([
+      { id: 'other-plan', type: 'options_golden_search_history', status: 'running', parameters: { request: { ...request, setup_name: 'Different setup' } }, recentLogs: [], logSeq: 0 },
+      { id: 'matching-plan', type: 'options_golden_search_history', status: 'running', parameters: { request }, recentLogs: [], logSeq: 0 },
+    ]);
+    expect(service.activeHistoryCapture(request)?.id).toBe('matching-plan');
+    expect(service.activeHistoryCapture({ ...request, setup_name: 'Unrelated setup' })).toBeNull();
   });
 
   it('preserves the committed study when job dispatch fails so it can be resumed', async () => {

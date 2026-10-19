@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from pydantic import ValidationError
@@ -18,6 +18,7 @@ from app.routers.research_store_unavailable import StoreUnreachableIsA503
 from app.schemas.options_golden_search import (
     Command,
     Declarations,
+    HistoryCaptureAccepted,
     HistoryCaptureJobRequest,
     JobAccepted,
     JobRequest,
@@ -28,12 +29,17 @@ from app.schemas.options_golden_search import (
     StudyDetail,
     StudySummary,
 )
+from app.security.data_plane_control import require_data_plane_control_secret
 from app.utils.background_loop import CallerStoppedWaitingError
 from app.utils.session_anchors import et_date_at_ms
 
 router = APIRouter(route_class=StoreUnreachableIsA503)
 jobs_router = APIRouter(route_class=StoreUnreachableIsA503)
 StudyId = Annotated[str, Path(pattern=r"^os_[a-f0-9]{40}$")]
+
+
+class HistoryCaptureService(Protocol):
+    async def history_capture_scope(self, request: PlanRequest) -> tuple[str, tuple[int, ...]]: ...
 
 
 async def get_service():
@@ -139,11 +145,12 @@ async def dispatch(body: JobRequest) -> JobAccepted:
     return JobAccepted(job_id=body.job_id,study_id=body.study_id)
 
 
-@jobs_router.post("/options-golden-search-history",status_code=202)
-async def capture_history(body: HistoryCaptureJobRequest, api=Depends(get_service)) -> dict:
+@jobs_router.post("/options-golden-search-history",response_model=HistoryCaptureAccepted,status_code=202,
+                  dependencies=[Depends(require_data_plane_control_secret)])
+async def capture_history(body: HistoryCaptureJobRequest, api: HistoryCaptureService = Depends(get_service)) -> HistoryCaptureAccepted:
     try:
         underlying, sessions = await api.history_capture_scope(body.request)
-    except (ValueError, LookupError) as exc:
+    except (repo.Conflict, ValueError, LookupError) as exc:
         raise refusal(exc) from exc
 
     def work(emit: ProgressEmitter, cancel: CancellationCheck) -> dict:
@@ -157,6 +164,7 @@ async def capture_history(body: HistoryCaptureJobRequest, api=Depends(get_servic
                 cancel.raise_if_cancelled()
                 day = et_date_at_ms(session_ms)
                 items = await ensure_chain_data(underlying, day, expiry=None, contracts=[])
+                cancel.raise_if_cancelled()
                 for item in items:
                     if item.outcome is Outcome.FAILED:
                         reason = (
@@ -173,7 +181,7 @@ async def capture_history(body: HistoryCaptureJobRequest, api=Depends(get_servic
         return asyncio.run(capture())
 
     run_in_thread(body.job_id, work, thread_name=f"options-history-{body.job_id[:8]}")
-    return {"job_id": body.job_id, "status": "queued"}
+    return HistoryCaptureAccepted(job_id=body.job_id)
 
 
 @router.get("/studies/{study_id}/candidates/{candidate_hash}/sessions/{session_open_ms}",response_model=SessionResult)

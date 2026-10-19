@@ -19340,6 +19340,17 @@ export interface components {
             /** Start Ms */
             start_ms: number | null;
         };
+        /** HistoryCaptureAccepted */
+        HistoryCaptureAccepted: {
+            /** Job Id */
+            job_id: string;
+            /**
+             * Status
+             * @default queued
+             * @constant
+             */
+            status?: "queued";
+        };
         /** HistoryCaptureJobRequest */
         HistoryCaptureJobRequest: {
             /** Job Id */
@@ -41041,7 +41052,9 @@ export interface operations {
     capture_history_api_jobs_internal_options_golden_search_history_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -41057,7 +41070,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": components["schemas"]["HistoryCaptureAccepted"];
                 };
             };
             /** @description Validation Error */
