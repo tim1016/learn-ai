@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.lean_sidecar.trading_calendar import CALENDAR_IDENTITY, CALENDAR_PACKAGE_VERSION, session_window_for_date
@@ -30,6 +31,20 @@ _REQUEST = {
                     "cost_limit_percent": "10", "expiry_close_lead_minutes": 45},
     "exit_terms": {"exit_allowance_bps": 20, "band_multiple": 2, "spread_cap_bps": 50},
 }
+
+
+@pytest.mark.parametrize("request_type", [OptionsDeployRequest, OptionsDeploySubmission])
+def test_options_deployment_refuses_explicit_null_and_keeps_no_end_explicit(
+    request_type: type[OptionsDeployRequest],
+) -> None:
+    body = {**_REQUEST, "golden_setup_id": "test-golden"}
+    if request_type is OptionsDeploySubmission:
+        body["submission_key"] = "explicit-end"
+    with pytest.raises(ValidationError, match="end may not be null"):
+        request_type.model_validate({**body, "end": None})
+    assert request_type.model_validate(body).end is None
+    no_end = BotEndInput(end_at_ms=None, end_action="SELL")
+    assert request_type.model_validate({**body, "end": no_end}).end == no_end
 
 
 @pytest.mark.parametrize(
@@ -71,7 +86,7 @@ async def test_end_before_next_entry_is_refused_before_funding_or_claiming(
     request = OptionsDeployRequest.model_validate({**_REQUEST, "golden_setup_id": golden.id})
     with pytest.raises(BudgetUnavailable, match="next eligible entry"):
         await options_bot_deploy.review_options_bot("alpaca", "PA9", request)
-    submission = OptionsDeploySubmission(**request.model_dump(), submission_key="unusable-end")
+    submission = OptionsDeploySubmission(**request.model_dump(exclude_unset=True), submission_key="unusable-end")
     with pytest.raises(BudgetUnavailable, match="next eligible entry"):
         await options_bot_deploy.deploy_options_bot("alpaca", "PA9", submission)
     assert DeploySubmissionLedger(tmp_path).recorded(

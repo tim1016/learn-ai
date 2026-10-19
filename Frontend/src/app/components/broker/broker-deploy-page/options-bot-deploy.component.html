@@ -54,7 +54,7 @@
             <label for="options-exit-spread">Spread cap (bps)</label><input id="options-exit-spread" type="number" step="any" [formField]="ticket.spreadCapBps" />
             @for (error of exitTermErrors(); track error) { <p class="problem">{{ error }}</p> }
           </details>
-          <div class="end-setting"><h3>Deployment end</h3><app-bot-end-editor [(fields)]="endFields" [keepOffered]="false" [locked]="busy() || unknown() || !endSeeded()" />
+          <div class="end-setting"><h3>Deployment end</h3><app-bot-end-editor [fields]="endFields()" (fieldsChange)="endEdited.set(true); endFields.set($event)" [keepOffered]="false" [locked]="busy() || unknown() || !endSeeded()" />
             <p class="note">Defaults to 45 minutes before the market closes, including early-close days. At its end, the bot closes remaining positions and stops repeating. A late deployment waits for the next eligible session.</p>
           </div>
         </section>

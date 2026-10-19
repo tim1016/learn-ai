@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic.json_schema import SkipJsonSchema
 
-from app.schemas.bot_end import BotEndInput
+from app.schemas.bot_end import BotEndInput, refuse_explicit_null_end
 from app.schemas.broker_bots import SUBMISSION_KEY_PATTERN
 from app.schemas.deployment_budget import DeploymentBudgetInput, DeploymentBudgetPreview
 from app.schemas.exit_terms import ExitTermsInput
@@ -26,7 +27,12 @@ class OptionsDeployRequest(BaseModel):
     budget: DeploymentBudgetInput | None = None
     order_terms: SealedOptionOrderTerms
     exit_terms: ExitTermsInput
-    end: BotEndInput | None = None
+    end: BotEndInput | SkipJsonSchema[None] = None
+
+    @field_validator("end", mode="before")
+    @classmethod
+    def _end_is_never_null(cls, value: object) -> object:
+        return refuse_explicit_null_end(value)
 
     def fingerprint(self, *, account: str, world: str) -> str:
         payload = self.model_dump(mode="json", exclude={"submission_key"})

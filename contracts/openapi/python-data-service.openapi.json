@@ -45233,14 +45233,12 @@
             ]
           },
           "end": {
-            "anyOf": [
+            "allOf": [
               {
                 "$ref": "#/components/schemas/BotEndInput"
-              },
-              {
-                "type": "null"
               }
-            ]
+            ],
+            "title": "End"
           },
           "execution_mode": {
             "enum": [
@@ -45288,14 +45286,12 @@
             ]
           },
           "end": {
-            "anyOf": [
+            "allOf": [
               {
                 "$ref": "#/components/schemas/BotEndInput"
-              },
-              {
-                "type": "null"
               }
-            ]
+            ],
+            "title": "End"
           },
           "execution_mode": {
             "enum": [

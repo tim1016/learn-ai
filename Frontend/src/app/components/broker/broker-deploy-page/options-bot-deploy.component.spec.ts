@@ -104,11 +104,26 @@ describe('Options deployment', () => {
     const { fixture, previewBotEnd } = await setup();
     fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-10-22' } });
     fireEvent.input(screen.getByLabelText(/^End time/), { target: { value: '12:30' } });
+    previewBotEnd.mockResolvedValue({ ...DEPLOY_VIEW.default_end, end_at_ms: Date.UTC(2026, 9, 21, 19, 15) });
     fixture.componentRef.setInput('fence', { bindingGeneration: 3, routingEpoch: 5 });
     await waitFor(() => expect(previewBotEnd).toHaveBeenCalledTimes(2));
     await fixture.whenStable();
     expect(screen.getByLabelText<HTMLInputElement>('End date').value).toBe('2026-10-22');
     expect(screen.getByLabelText<HTMLInputElement>(/^End time/).value).toBe('12:30');
+  });
+
+  it.each([false, true])('refreshes an untouched end while preserving explicit no end (no end: %s)', async (noEnd) => {
+    const { fixture, previewBotEnd } = await setup();
+    if (noEnd) await userEvent.click(screen.getByRole('checkbox', { name: 'No end — run until I stop it' }));
+    const nextEnd = Date.UTC(2026, 9, 21, 19, 15);
+    previewBotEnd.mockResolvedValue({ ...DEPLOY_VIEW.default_end, end_at_ms: nextEnd });
+    fixture.componentRef.setInput('fence', { bindingGeneration: 3, routingEpoch: 5 });
+    await waitFor(() => expect(previewBotEnd).toHaveBeenCalledTimes(2));
+    await fixture.whenStable();
+    expect(screen.getByRole<HTMLInputElement>('checkbox', { name: 'No end — run until I stop it' }).checked).toBe(noEnd);
+    const wall = localWallClock(noEnd ? DEFAULT_OPTION_END_MS : nextEnd);
+    expect(screen.getByLabelText<HTMLInputElement>('End date').value).toBe(wall.date);
+    expect(screen.getByLabelText<HTMLInputElement>(/^End time/).value).toBe(wall.clock);
   });
 
   it('requires a readable calendar default and offers a retry when it fails', async () => {

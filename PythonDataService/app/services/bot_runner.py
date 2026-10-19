@@ -2223,6 +2223,7 @@ class BotTaskRegistry:
             running=self._is_running(binding.strategy_instance_id),
             use_rth=binding.use_rth,
             notice=notice,
+            bot_kind="options" if binding.options_bot is not None else "signal",
         )
 
     # ── S5 boot recovery (container restart is a drilled event) ───────

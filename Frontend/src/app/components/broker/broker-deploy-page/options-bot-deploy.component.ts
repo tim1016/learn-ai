@@ -79,6 +79,7 @@ export class OptionsBotDeployComponent {
   });
   protected readonly endFields = signal({ ...botEndFields({ end_at_ms: null, end_action: 'SELL' }), noEnd: false });
   protected readonly endSeeded = signal(false);
+  protected readonly endEdited = signal(false);
   private readonly deployEnd = computed(() => botEndInput(this.endFields(), false));
   protected readonly exitTermErrors = computed(() => (['exitAllowanceBps', 'bandMultiple', 'spreadCapBps'] as const)
     .flatMap((name) => this.fields()[name] === null ? [] : this.ticket[name]().errors().map((error) => error.message)));
@@ -188,7 +189,7 @@ export class OptionsBotDeployComponent {
 
   constructor() {
     effect(() => {
-      if (!this.defaultEnd.hasValue() || this.endSeeded()) return;
+      if (!this.defaultEnd.hasValue() || this.endEdited()) return;
       this.endFields.set(botEndFields(this.defaultEnd.value()));
       this.endSeeded.set(true);
     });

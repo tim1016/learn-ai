@@ -59,7 +59,7 @@ async def preview_bot_end(broker: str, account_id: str, request: BotEndPreviewRe
         resolved = resolve_bot_end(request.end, now_ms=now_ms, dry_run=dry_run, use_rth=True, bot_kind=request.bot_kind)
     except BotEndRefused as exc:
         raise _refused(exc) from exc
-    return resolved_bot_end_view(resolved, now_ms=now_ms, dry_run=dry_run)
+    return resolved_bot_end_view(resolved, now_ms=now_ms, dry_run=dry_run, bot_kind=request.bot_kind)
 
 
 async def edit_bot_end(broker: str, account_id: str, sid: str, choice: BotEndInput) -> BotEndView:

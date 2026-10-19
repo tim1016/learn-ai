@@ -269,6 +269,19 @@ async def test_the_end_preview_refuses_an_explicit_null_end(deploy_app) -> None:
     assert "end may not be null" in response.text
 
 
+async def test_options_no_end_preview_offers_the_options_cutoff_when_adding_an_end(deploy_app) -> None:
+    app, _registry = deploy_app
+
+    async with _client(app) as client:
+        response = await client.post(f"{_BOTS}/end-preview", json={
+            "execution_mode": "paper", "bot_kind": "options", "end": _end(None),
+        })
+
+    assert response.status_code == 200, response.text
+    assert response.json()["end_at_ms"] is None
+    assert response.json()["default_end_at_ms"] == _at(15, 15)
+
+
 async def test_the_end_preview_refuses_in_plain_words_with_its_code(deploy_app) -> None:
     app, _registry = deploy_app
 

@@ -182,6 +182,7 @@ def bot_end_view(
     running: bool,
     use_rth: bool,
     notice: str | None = None,
+    bot_kind: Literal["signal", "options"] = "signal",
 ) -> BotEndView:
     """A bot's end in the owner's words, at ``now_ms``.
 
@@ -204,7 +205,7 @@ def bot_end_view(
                 else "This bot is stopped, so it has no end: a Stop cancels any end, and nothing is sold at it."
             ),
             notice=notice, editable=editable, edit_refusal=edit_refusal,
-            default_end_at_ms=default_bot_end(now_ms).end_at_ms if offers_default else None,
+            default_end_at_ms=default_bot_end(now_ms, bot_kind=bot_kind).end_at_ms if offers_default else None,
         )
     if recorded.carried_out_at_ms is not None:
         status: BotEndStatus = "ended"
@@ -267,14 +268,16 @@ def bot_end_view_attested_absent_sale(view: BotEndView, *, why: str) -> BotEndVi
     })
 
 
-def resolved_bot_end_view(resolved: ResolvedBotEnd, *, now_ms: int, dry_run: bool) -> BotEndView:
+def resolved_bot_end_view(
+    resolved: ResolvedBotEnd, *, now_ms: int, dry_run: bool, bot_kind: Literal["signal", "options"] = "signal",
+) -> BotEndView:
     """An end the Deploy form chose, before its bot exists, with the notice when its time was moved.
 
     Every Deploy is regular hours only.
     """
     return bot_end_view(
         None if resolved.end is None else RecordedEnd.scheduled(resolved.end),
-        now_ms=now_ms, dry_run=dry_run, running=True, use_rth=True, notice=resolved.notice,
+        now_ms=now_ms, dry_run=dry_run, running=True, use_rth=True, notice=resolved.notice, bot_kind=bot_kind,
     )
 
 

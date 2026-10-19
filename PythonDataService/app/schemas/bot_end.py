@@ -26,7 +26,7 @@ BotEndStatus = Literal["no_end", "scheduled", "ending", "ended"]
 #: The one refusal for an explicit ``"end": null``: an omitted end is the
 #: default end, and "no end" is named, never implied by a null.
 EXPLICIT_NULL_END = (
-    "end may not be null: omit it for the default end (the session close minus one minute), "
+    "end may not be null: omit it for the default end, "
     'or send {"end_at_ms": null, "end_action": "SELL"} for no end'
 )
 

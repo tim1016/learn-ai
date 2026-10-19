@@ -35,6 +35,7 @@ from app.options_bots.golden_proof import build_proof
 from app.options_bots.journal import OptionsBotJournal
 from app.research.golden_search.proof import BlobStore
 from app.routers import golden_option_setups, options_bots
+from app.schemas.bot_end import BotEndInput
 from app.schemas.deployment_budget import DeployBudgetConsent
 from app.services import options_bot_deploy
 from app.services.bot_binding_repository import BrokerBotBinding
@@ -151,6 +152,11 @@ async def test_approved_setup_deploys_once_through_http_and_the_actual_registry(
             assert desired is not None and desired.end is not None and session is not None
             assert desired.end.end_at_ms == session.close_ms_utc - 45 * 60_000
             assert desired.end.end_action == "SELL"
+            await registry.edit_bot_end("alpaca", sid, BotEndInput(end_at_ms=None, end_action="SELL"), updated_by="owner")
+            assert registry.bot_end("alpaca", sid).default_end_at_ms == session.close_ms_utc - 45 * 60_000
+            await registry.edit_bot_end("alpaca", sid, BotEndInput(
+                end_at_ms=desired.end.end_at_ms, end_action=desired.end.end_action,
+            ), updated_by="owner")
             replay = await client.post(base + "/deploy", json=body)
             assert replay.status_code == 200, replay.text
             assert replay.json()["run_id"] == deployed.json()["run_id"]
