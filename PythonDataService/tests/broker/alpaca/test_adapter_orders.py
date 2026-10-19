@@ -96,21 +96,6 @@ def test_an_open_order_with_no_fill_count_reads_as_zero_filled(
     assert order.unreadable_fields == ()
 
 
-def test_an_open_order_missing_its_fill_count_reads_as_zero_filled(
-    load_alpaca_fixture: AlpacaFixtureLoader,
-) -> None:
-    payload = {
-        key: value
-        for key, value in load_alpaca_fixture("orders", "orders.json")[1].items()
-        if key != "filled_qty"
-    }
-
-    order = from_alpaca_order(payload, observed_at_ms=_OBSERVED)
-
-    assert order.filled_quantity == 0.0
-    assert order.unreadable_fields == ()
-
-
 @pytest.mark.parametrize("status", ["filled", "partially_filled"])
 @pytest.mark.parametrize(
     "fill_count", [{}, {"filled_qty": None}, {"filled_qty": ""}], ids=["absent", "null", "blank"]

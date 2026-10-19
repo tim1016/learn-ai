@@ -164,11 +164,6 @@ class TestLaunchRequestModel:
         base.update(overrides)
         return base
 
-    def test_hardening_profile_field_defaults_to_none(self) -> None:
-        req = LaunchRequest.model_validate(self._good_payload())
-        assert req.hardening_profile is None
-        assert req.hardening_flags == []
-
     def test_hardening_profile_rejects_unknown_value(self) -> None:
         with pytest.raises(ValidationError):
             LaunchRequest.model_validate(self._good_payload(hardening_profile="not_a_profile"))

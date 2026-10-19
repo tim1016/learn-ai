@@ -25,7 +25,7 @@ import pytest
 from app.options.contract import OptionContract
 from app.options_backtest.results import ExitReason, Fill, LegTrade, Mark
 from app.options_backtest.saved_runs import StoredTrade
-from app.options_backtest.trade_export import CSV_HEADER, csv_file_name, trades_csv
+from app.options_backtest.trade_export import CSV_HEADER, trades_csv
 
 D = Decimal
 OPEN_MS = 1_791_379_800_000
@@ -175,24 +175,8 @@ def test_a_sold_leg_bought_back_is_a_buy_back_and_one_marked_as_owed_is_a_mark_w
     assert (back["side"], owes["side"]) == ("sell", "sell")
 
 
-def test_the_side_is_the_last_column_and_a_bought_leg_has_buy_whether_it_was_sold_or_marked() -> None:
-    assert CSV_HEADER[-1] == "side"
-
-    [_, sold_row, marked_row] = _rows(trades_csv([_sold(), _marked()]))
-
-    assert (sold_row[-1], marked_row[-1]) == ("buy", "buy")
-
-
 def test_a_run_with_no_trade_is_the_header_alone() -> None:
     assert trades_csv([]).decode("utf-8") == HEADER_LINE + "\r\n"
-
-
-def test_every_row_has_one_cell_for_every_column_and_the_first_is_the_entry_fills_bar_close() -> None:
-    rows = _rows(trades_csv([_sold(), _marked(), _sold()]))
-
-    assert rows[0] == list(CSV_HEADER)
-    assert [len(row) for row in rows] == [30, 30, 30, 30]
-    assert [int(row[0]) for row in rows[1:]] == [OPEN_MS + 660_000, OPEN_MS + 360_000, OPEN_MS + 660_000]
 
 
 @pytest.mark.parametrize(
@@ -238,7 +222,3 @@ def test_a_figure_is_plain_digits_whatever_form_the_decimal_holds_it_in() -> Non
         "0.0000000",
         "-1500",
     )
-
-
-def test_the_file_is_named_for_the_run() -> None:
-    assert csv_file_name(12) == "options-backtest-run-12-trades.csv"

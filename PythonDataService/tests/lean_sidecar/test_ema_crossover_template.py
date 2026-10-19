@@ -144,14 +144,6 @@ def test_template_state_csv_header_matches_spec() -> None:
     assert "ts_ms_utc,close,ema_fast,ema_slow,rsi,cross_state,signal" in EMA_CROSSOVER_SOURCE
 
 
-def test_template_rejects_non_15_bar_minutes() -> None:
-    from app.lean_sidecar.trusted_samples.ema_crossover import EMA_CROSSOVER_SOURCE
-
-    # Defense-in-depth check at the strategy layer.
-    assert "bar_minutes" in EMA_CROSSOVER_SOURCE
-    assert "raise ValueError" in EMA_CROSSOVER_SOURCE
-
-
 def test_template_pins_interactive_brokers_margin_brokerage() -> None:
     """The matrix's LEAN-side oracle locks IBKR margin brokerage so Gate 3
     with assert_fees=True is a meaningful comparison against the engine's

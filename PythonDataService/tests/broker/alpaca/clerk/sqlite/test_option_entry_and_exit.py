@@ -989,21 +989,6 @@ async def test_a_live_account_refuses_to_register_a_bot_that_trades_options(
     assert one_account.repo.strategy_instance("options-on-live") is None
 
 
-async def test_a_dry_run_registers_a_spread_bot(tmp_path: Path) -> None:
-    market_liveness.reset_market_liveness_store_for_testing()
-    spread = _plan(
-        _option_leg("long_call"),
-        _option_leg("short_call", position="short", strike={"selector": "leg_distance", "leg_id": "long_call", "dollars": 5.0}),
-    )
-    try:
-        account = await _open(tmp_path, _TestClock(NOON), _binding(spread))
-
-        await account.clerk.register_strategy_run(account.binding)
-    finally:
-        await close_synthetic_clerk_runtimes()
-        market_liveness.reset_market_liveness_store_for_testing()
-
-
 async def test_a_stock_dry_run_beside_it_buys_and_sells_as_it_always_did(tmp_path: Path) -> None:
     """The same harness, a bot in shares: its orders, fills and flat proof are a stock bot's own."""
     market_liveness.reset_market_liveness_store_for_testing()

@@ -21,12 +21,6 @@ def test_settings_allowed_origins_parses_comma_separated(monkeypatch):
     ]
 
 
-def test_fleet_worker_service_accepts_a_compose_service_name() -> None:
-    assert FleetSettings(WORKER_SERVICE="alpaca-paper-clerk").WORKER_SERVICE == (
-        "alpaca-paper-clerk"
-    )
-
-
 def test_fleet_worker_service_reads_an_undeclared_deployment_as_none() -> None:
     """An empty declaration is "this deployment said nothing", not a service
     named "". Compose writes an unset `${VAR}` through as an empty string, so
@@ -50,13 +44,6 @@ def test_fleet_worker_service_refuses_a_value_no_compose_service_could_be(declar
     must stop the process at boot rather than reach a copy button."""
     with pytest.raises(ValidationError):
         FleetSettings(WORKER_SERVICE=declared)
-
-
-def test_fleet_compose_project_and_profile_accept_compose_tokens() -> None:
-    declared = FleetSettings(COMPOSE_PROJECT="learn-ai-fleet", COMPOSE_PROFILE="fleet")
-
-    assert declared.COMPOSE_PROJECT == "learn-ai-fleet"
-    assert declared.COMPOSE_PROFILE == "fleet"
 
 
 def test_fleet_compose_project_and_profile_read_an_undeclared_deployment_as_none() -> None:

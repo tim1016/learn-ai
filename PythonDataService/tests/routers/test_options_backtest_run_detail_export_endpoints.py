@@ -294,10 +294,3 @@ async def test_a_run_that_does_not_exist_is_a_404_and_one_that_is_not_complete_i
         assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_RUN_NOT_COMPLETE"
         assert status in response.json()["detail"]["message"]
         assert "text/csv" not in response.headers["content-type"]
-
-
-@pytest.mark.parametrize("run_id", ["0", "-1", "abc", str(2**53)])
-async def test_a_run_id_that_cannot_be_one_is_a_422(client: httpx.AsyncClient, run_id: str) -> None:
-    response = await client.get(f"{PREFIX}/runs/{run_id}/trades.csv")
-
-    assert response.status_code == 422

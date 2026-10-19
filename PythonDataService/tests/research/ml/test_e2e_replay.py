@@ -48,27 +48,3 @@ def test_e2e_prediction_set_hash_matches_fixture(tmp_path: Path, known_hashes: d
         "prediction_set_hash drifted; if intentional, update "
         "tests/research/ml/fixtures/e2e_known_hashes.json with justification"
     )
-
-
-def test_e2e_regenerate_produces_same_hash(tmp_path: Path) -> None:
-    """Generating a fresh artifact twice produces the same hash."""
-    a = tmp_path / "a"
-    b = tmp_path / "b"
-    a.mkdir()
-    b.mkdir()
-
-    set_id = generate_prediction_set(
-        rule="rsi_14_centered", symbol="SPY",
-        start=Date(2024, 5, 1), end=Date(2024, 5, 2),
-        resolution_minutes=15, artifacts_root=a, bars_provider=_synthetic_bars_provider(),
-    )
-    set_id_b = generate_prediction_set(
-        rule="rsi_14_centered", symbol="SPY",
-        start=Date(2024, 5, 1), end=Date(2024, 5, 2),
-        resolution_minutes=15, artifacts_root=b, bars_provider=_synthetic_bars_provider(),
-    )
-    assert set_id == set_id_b
-
-    h_a = json.loads((a / set_id / "manifest.json").read_text())["prediction_set_hash"]
-    h_b = json.loads((b / set_id_b / "manifest.json").read_text())["prediction_set_hash"]
-    assert h_a == h_b

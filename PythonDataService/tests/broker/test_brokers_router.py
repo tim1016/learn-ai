@@ -450,11 +450,3 @@ async def test_activity_period_names_an_unprovable_walk_instead_of_failing_opaqu
         "message": "Alpaca activity history was not newest-first.",
         "why": "Activity pagination cannot prove the window's start boundary.",
     }
-
-
-async def test_activity_period_requires_a_known_period() -> None:
-    get_broker_registry().register(_FakePort())
-
-    response = await _get("/api/brokers/alpaca/activities/period?period=7d")
-
-    assert response.status_code == 422

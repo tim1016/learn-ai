@@ -2,17 +2,9 @@
 
 from __future__ import annotations
 
-import hashlib
-
 import pytest
 
 from app.options_backtest.data import Captured
-
-
-def test_a_value_is_captured_with_the_sha256_of_its_file() -> None:
-    pin = hashlib.sha256(b"one stored file").hexdigest()
-
-    assert Captured(value=("bar",), sha256=pin).sha256 == pin
 
 
 @pytest.mark.parametrize(

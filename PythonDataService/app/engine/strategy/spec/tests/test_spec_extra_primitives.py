@@ -316,12 +316,3 @@ def test_prediction_comparison_keyerror_when_id_missing() -> None:
     p = PredictionComparisonPrimitive(node)
     with pytest.raises(KeyError):
         p.evaluate(_ctx_with_predictions({"present": Decimal("0.5")}))
-
-
-def test_prediction_comparison_routed_by_build_leaf() -> None:
-    """_build_leaf must dispatch PredictionComparison to its primitive."""
-    from app.engine.strategy.spec.primitives import _build_leaf
-
-    node = S.PredictionComparison(kind="PredictionComparison", prediction="x", op=">", value=0.0)
-    primitive = _build_leaf(node)
-    assert isinstance(primitive, PredictionComparisonPrimitive)

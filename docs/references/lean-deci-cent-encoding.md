@@ -57,8 +57,6 @@ construction rather than by chance.
 `PythonDataService/tests/unit/data_lake/test_deci_cent_canonical.py` pins
 the `ROUND_HALF_UP` rule with hand-computed cases and asserts both writers
 agree row-for-row on sub-grid prices.
-`PythonDataService/tests/unit/data_lake/test_lean_writer.py::test_to_deci_cent_rounds_half_up`
-covers the same rule directly on `to_deci_cent`.
 
 ## Open items
 - If a real LEAN artifact containing a genuinely sub-grid price (5+

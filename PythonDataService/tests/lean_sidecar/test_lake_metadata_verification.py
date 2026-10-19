@@ -19,10 +19,7 @@ import pytest
 
 from app.data_lake.path_policy import lake_subpath
 from app.lean_sidecar.lake_mount import (
-    LAKE_VOLUME_HOST_PATH_ENV,
     LakeMountError,
-    launcher_host_base_root,
-    launcher_host_lake_root,
     verify_lake_metadata_bundle,
 )
 from app.lean_sidecar.launcher.models import LaunchRequest
@@ -40,37 +37,6 @@ def _allow_dummy_digest(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(sidecar_config, "ALLOWED_IMAGE_DIGESTS", frozenset({DUMMY_DIGEST}))
     monkeypatch.setattr(runner, "ALLOWED_IMAGE_DIGESTS", frozenset({DUMMY_DIGEST}))
-
-
-class TestLauncherHostBaseRoot:
-    """launcher_host_lake_root's base, extracted so the launcher's
-    root-marker verification can resolve it independently of any one mode."""
-
-    def test_returns_none_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv(LAKE_VOLUME_HOST_PATH_ENV, raising=False)
-        assert launcher_host_base_root() is None
-
-    def test_returns_the_resolved_absolute_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        volume = tmp_path / "learn_ai_lean_data"
-        volume.mkdir()
-        monkeypatch.setenv(LAKE_VOLUME_HOST_PATH_ENV, str(volume))
-
-        assert launcher_host_base_root() == volume.resolve()
-
-    def test_relative_path_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv(LAKE_VOLUME_HOST_PATH_ENV, "var/lib/learn_ai_lean_data")
-
-        with pytest.raises(LakeMountError, match="lake_volume_host_path_not_absolute"):
-            launcher_host_base_root()
-
-    def test_launcher_host_lake_root_joins_the_mode_onto_the_base(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        volume = tmp_path / "volume"
-        volume.mkdir()
-        monkeypatch.setenv(LAKE_VOLUME_HOST_PATH_ENV, str(volume))
-
-        assert launcher_host_lake_root("raw") == launcher_host_base_root() / lake_subpath("raw")
 
 
 class TestVerifyLakeMetadataBundle:

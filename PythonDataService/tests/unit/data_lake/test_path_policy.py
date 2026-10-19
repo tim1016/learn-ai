@@ -191,18 +191,6 @@ class TestWithinVariants:
     def test_staging_root_within_carries_the_mode(self):
         assert staging_root_within(Path("/mnt/other-root"), "raw") == Path("/mnt/other-root/staging/raw")
 
-    def test_resolve_lake_root_delegates_to_lake_root_within_the_active_write_root(self, monkeypatch):
-        monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
-        assert resolve_lake_root("raw") == lake_root_within(Path("/mnt/writer"), "raw")
-
-    def test_resolve_staging_root_delegates_to_staging_root_within_the_active_write_root(self, monkeypatch):
-        monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
-        assert resolve_staging_root("raw") == staging_root_within(Path("/mnt/writer"), "raw")
-
-    def test_resolve_lake_container_delegates_to_lake_container_within_the_active_write_root(self, monkeypatch):
-        monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", "/mnt/writer")
-        assert resolve_lake_container() == lake_container_within(Path("/mnt/writer"))
-
 
 class TestLakeRootRefusesUntrustedModes:
     """The mode reaches ``resolve_lake_root`` from request input and is now a

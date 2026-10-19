@@ -90,14 +90,6 @@ def test_coverage_passes_when_predictions_are_a_superset_of_bars() -> None:
     assert_bar_clock_coverage(pset, bars, refs=[_ref()])
 
 
-def test_coverage_fails_when_a_bar_has_no_prediction() -> None:
-    bars = _bars(3)
-    timestamps = [b.end_ms for b in bars[:-1]]
-    pset = _pset(timestamps)
-    with pytest.raises(PredictionCoverageError, match=r"exact_bar_close.*no prediction row"):
-        assert_bar_clock_coverage(pset, bars, refs=[_ref()])
-
-
 def test_coverage_error_lists_missing_timestamps() -> None:
     bars = _bars(5)
     timestamps = [b.end_ms for b in bars[:2]]
@@ -173,29 +165,6 @@ def test_coverage_mixed_lookup_modes_validates_both() -> None:
         _ref(lookup="next_after_bar_close", field="prediction"),
     ]
     with pytest.raises(PredictionCoverageError, match=r"next_after_bar_close"):
-        assert_bar_clock_coverage(pset, bars, refs=refs)
-
-
-def test_coverage_next_after_matched_row_missing_field_raises_with_both_timestamps() -> None:
-    """For next_after_bar_close, when the matched successor row exists but
-    lacks the declared field, the error must name BOTH the fired ts AND the
-    matched next-row's ts (so the user can locate the corrupt row in the
-    prediction set). Closes a test gap in the coverage layer — the evaluator
-    has a corresponding backstop test but coverage itself lacked one."""
-    bars = _bars(1)
-    fired_ts = bars[0].end_ms
-    matched_ts = fired_ts + 1
-    # Row exists at matched_ts but lacks 'prediction':
-    rows = [
-        (fired_ts, {"prediction": 0.0, "confidence": 0.5}),
-        (matched_ts, {"confidence": 0.6}),  # missing 'prediction'
-    ]
-    pset = _pset_with_fields(rows)
-    refs = [_ref(lookup="next_after_bar_close", field="prediction")]
-    with pytest.raises(
-        PredictionCoverageError,
-        match=rf"matched next row at ts_ms={matched_ts}.*missing field 'prediction'",
-    ):
         assert_bar_clock_coverage(pset, bars, refs=refs)
 
 

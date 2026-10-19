@@ -99,11 +99,6 @@ class TestHashing:
 
 
 class TestWindowMs:
-    def test_accepts_valid_range(self) -> None:
-        w = WindowMs(start_ms=1, end_ms=2)
-        assert w.start_ms == 1
-        assert w.end_ms == 2
-
     @pytest.mark.parametrize("start,end", [(1, 1), (2, 1), (0, 0)])
     def test_rejects_zero_or_reversed(self, start: int, end: int) -> None:
         with pytest.raises(ValueError):

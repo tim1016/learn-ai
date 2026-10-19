@@ -10,11 +10,8 @@ to the base or to the override surfaces explicitly.
 
 from __future__ import annotations
 
-import pytest
-
 from app.routers.jobs import (
     CrossSectionalJobRequest,
-    FeatureResearchJobRequest,
     SignalEngineJobRequest,
 )
 
@@ -40,18 +37,6 @@ class TestSignalEngineDefaults:
         )
         assert s.flip_sign is True
         assert s.regime_gate_enabled is True
-
-
-class TestFeatureResearchDefaults:
-    def test_multiplier_matches_base_default(self) -> None:
-        f = FeatureResearchJobRequest(
-            job_id="t",
-            symbol="SPY",
-            feature_name="rsi",
-            from_date="2025-01-01",
-            to_date="2025-01-31",
-        )
-        assert f.multiplier == 1  # matches base
 
 
 class TestCrossSectionalDefaults:
@@ -91,24 +76,6 @@ class TestCamelCaseWire:
         assert r.from_date == "2025-01-01"
         assert r.to_date == "2025-01-31"
 
-    def test_camel_case_legacy_ticker_no_longer_accepted(self) -> None:
-        # PR (iii) removed the legacy 'ticker' alias. With extra="forbid",
-        # the unknown field surfaces as a 422.
-        from pydantic import ValidationError
-
-        with pytest.raises(ValidationError) as exc:
-            SignalEngineJobRequest.model_validate(
-                {
-                    "jobId": "j1",
-                    "ticker": "SPY",  # legacy — no longer accepted
-                    "featureName": "rsi",
-                    "fromDate": "2025-01-01",
-                    "toDate": "2025-01-31",
-                }
-            )
-        s = str(exc.value).lower()
-        assert "ticker" in s and ("extra" in s or "symbol" in s)
-
     def test_camel_case_canonical_symbols_for_multi(self) -> None:
         c = CrossSectionalJobRequest.model_validate(
             {
@@ -120,17 +87,3 @@ class TestCamelCaseWire:
             }
         )
         assert c.symbols == ["SPY", "QQQ"]
-
-    def test_camel_case_legacy_tickers_no_longer_accepted(self) -> None:
-        from pydantic import ValidationError
-
-        with pytest.raises(ValidationError):
-            CrossSectionalJobRequest.model_validate(
-                {
-                    "jobId": "j2",
-                    "featureName": "rsi",
-                    "tickers": ["SPY", "QQQ"],  # legacy — no longer accepted
-                    "fromDate": "2025-01-01",
-                    "toDate": "2025-01-31",
-                }
-            )

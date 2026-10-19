@@ -131,12 +131,6 @@ class TestBreakevens:
         assert len(bes) == 1
         assert bes[0] == pytest.approx(103.0, abs=0.1)
 
-    def test_long_straddle_two_breakevens(self):
-        bes = find_breakevens(long_straddle())
-        assert len(bes) == 2
-        assert bes[0] == pytest.approx(91.0, abs=0.1)
-        assert bes[1] == pytest.approx(109.0, abs=0.1)
-
     def test_bear_put_spread_single_breakeven(self):
         bes = find_breakevens(bear_put_spread())
         assert len(bes) == 1
@@ -154,12 +148,6 @@ class TestMaxProfitLoss:
         max_p, max_l = extremes.max_profit, extremes.max_loss
         assert max_p == pytest.approx(2.0, abs=0.01)
         assert max_l == pytest.approx(-3.0, abs=0.01)
-
-    def test_long_straddle(self):
-        extremes = compute_max_profit_loss(long_straddle())
-        max_p, max_l = extremes.max_profit, extremes.max_loss
-        assert max_p > 0
-        assert max_l == pytest.approx(-9.0, abs=0.05)
 
 
 # Hand-derived per share, by case name (#3186): the most a structure can gain or

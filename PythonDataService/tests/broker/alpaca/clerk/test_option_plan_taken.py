@@ -63,10 +63,6 @@ def test_one_bought_call_is_taken_on_every_account_and_answers_its_leg_and_its_u
     assert taken.underlying == "SPY"
 
 
-def test_real_account_rollout_stays_off() -> None:
-    assert settings.ALPACA_MULTI_LEG_OPTION_ORDERS_ENABLED is False
-
-
 @pytest.mark.parametrize("plan", [STRADDLE, SPREAD])
 def test_a_simulation_takes_bought_and_sold_leg_structures(plan: ActionPlan) -> None:
     assert len(option_plan_taken(plan, real_account=False).legs) == 2

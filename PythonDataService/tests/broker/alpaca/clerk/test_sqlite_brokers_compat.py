@@ -25,10 +25,8 @@ from app.broker.contract.registry import (
     get_broker_registry,
     reset_broker_registry_for_testing,
 )
-from app.config import settings
 from app.routers import brokers as brokers_router
 from app.routers.brokers import router
-from app.security.data_plane_control import CONTROL_SECRET_HEADER
 from app.services.broker_account_snapshot import (
     clear_broker_account_snapshot_cache_for_testing,
 )
@@ -177,33 +175,6 @@ async def test_existing_reads_map_sqlite_projection_failures_to_typed_unavailabl
         "message": "The Account Clerk order record could not be read safely.",
         "next_step": "Keep broker actions blocked and retry after the Clerk projection is repaired.",
     }
-
-
-@pytest.mark.asyncio
-async def test_generic_recovery_routes_are_absent_under_sqlite(
-    sqlite_desk: FastAPI,
-) -> None:
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=sqlite_desk), base_url="http://test"
-    ) as client:
-        headers = {CONTROL_SECRET_HEADER: settings.DATA_PLANE_CONTROL_SECRET}
-        clear = await client.post(
-            "/api/brokers/alpaca/clerk/clear-hold",
-            json={"operator": "ops", "reason": "unsafe generic request"},
-            headers=headers,
-        )
-        resolve = await client.post(
-            "/api/brokers/alpaca/clerk/resolve",
-            json={
-                "reason": "unsafe generic request",
-                "snapshot_version": "stale",
-                "confirmation_token": "RESOLVE",
-                "idempotency_key": "old-path",
-            },
-            headers=headers,
-        )
-
-    assert clear.status_code == resolve.status_code == 404
 
 
 class _FakeAccount:

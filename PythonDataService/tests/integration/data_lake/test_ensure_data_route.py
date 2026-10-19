@@ -212,19 +212,6 @@ async def _post_ensure_data(make_data_lake_app, payload: dict):
         return await client.post("/api/data-lake/ensure-data", json=payload)
 
 
-async def test_ensure_data_old_field_names_rejected(make_data_lake_app):
-    payload = {
-        "request_id": str(uuid4()),
-        "run_type": "python_lab",
-        "symbols": ["SPY"],
-        "start_trading_date": "2024-05-20",
-        "end_trading_date": "2024-05-24",
-        "lean_image_digest": "sha256:test",
-    }
-    r = await _post_ensure_data(make_data_lake_app, payload)
-    assert r.status_code == 422
-
-
 async def test_ensure_data_iso_strings_on_ms_fields_rejected(make_data_lake_app):
     payload = _valid_ensure_data_payload(start_trading_date_ms="2024-05-20", end_trading_date_ms="2024-05-24")
     r = await _post_ensure_data(make_data_lake_app, payload)

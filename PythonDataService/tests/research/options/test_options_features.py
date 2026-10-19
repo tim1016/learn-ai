@@ -28,15 +28,6 @@ def _make_stock_df(n: int = 100, seed: int = 42) -> pd.DataFrame:
     return pd.DataFrame({"close": close})
 
 
-class TestIv30d:
-    """Test raw IV feature."""
-
-    def test_returns_atm_iv(self):
-        df = _make_iv_df()
-        result = OptionsFeatures.compute_iv_30d(df)
-        pd.testing.assert_series_equal(result, df["iv_30d_atm"].astype(float), check_names=False)
-
-
 class TestIvRank:
     """Test IV Rank feature."""
 

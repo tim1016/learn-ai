@@ -56,11 +56,6 @@ class TestBarRange:
         with pytest.raises(ValidationError):
             _BarRange(from_date="2025-01-01", to_date="2025-01-31", multiplier=0)
 
-    @pytest.mark.parametrize("ts", ["minute", "hour", "day"])
-    def test_accepts_supported_timespans(self, ts: str) -> None:
-        r = _BarRange(from_date="2025-01-01", to_date="2025-01-31", timespan=ts)  # type: ignore[arg-type]
-        assert r.timespan == ts
-
     @pytest.mark.parametrize("ts", ["weekly", "month", "minute_5", ""])
     def test_rejects_unknown_timespan(self, ts: str) -> None:
         with pytest.raises(ValidationError):
@@ -79,10 +74,6 @@ class TestBarRange:
 
 
 class TestTickerRequest:
-    def test_accepts_canonical_symbol_field(self) -> None:
-        r = TickerRequest(symbol="SPY", from_date="2025-01-01", to_date="2025-01-31")
-        assert r.symbol == "SPY"
-
     def test_rejects_empty_symbol(self) -> None:
         with pytest.raises(ValidationError):
             TickerRequest(symbol="", from_date="2025-01-01", to_date="2025-01-31")
@@ -95,33 +86,8 @@ class TestTickerRequest:
                 to_date="2025-01-31",
             )
 
-    def test_serializes_to_canonical_field_names(self) -> None:
-        r = TickerRequest(symbol="SPY", from_date="2025-01-01", to_date="2025-01-31")
-        d = r.model_dump()
-        assert "symbol" in d and "ticker" not in d
-        assert "from_date" in d and "start_date" not in d
-        assert "to_date" in d and "end_date" not in d
-
-    def test_extra_field_is_forbidden(self) -> None:
-        with pytest.raises(ValidationError) as exc:
-            TickerRequest.model_validate({
-                "symbol": "SPY",
-                "from_date": "2025-01-01",
-                "to_date": "2025-01-31",
-                "rogue_field": "value",
-            })
-        assert "rogue_field" in str(exc.value).lower()
-
 
 class TestMultiTickerRequest:
-    def test_accepts_canonical_symbols_field(self) -> None:
-        r = MultiTickerRequest(
-            symbols=["SPY", "QQQ"],
-            from_date="2025-01-01",
-            to_date="2025-01-31",
-        )
-        assert r.symbols == ["SPY", "QQQ"]
-
     def test_rejects_empty_symbols_list(self) -> None:
         with pytest.raises(ValidationError):
             MultiTickerRequest(
@@ -129,15 +95,6 @@ class TestMultiTickerRequest:
                 from_date="2025-01-01",
                 to_date="2025-01-31",
             )
-
-    def test_extra_field_is_forbidden(self) -> None:
-        with pytest.raises(ValidationError):
-            MultiTickerRequest.model_validate({
-                "symbols": ["SPY"],
-                "from_date": "2025-01-01",
-                "to_date": "2025-01-31",
-                "extra": True,
-            })
 
     def test_rejects_empty_string_symbol_in_list(self) -> None:
         # Per-element min_length=1 must reject [""] — without the

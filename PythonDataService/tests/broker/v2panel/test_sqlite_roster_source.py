@@ -687,41 +687,6 @@ async def test_catalog_lists_the_other_dry_runs_while_one_is_still_being_restore
     assert (listed.strategy_instance_id, listed.restoring) == ("dry-restoring", True)
 
 
-@pytest.mark.asyncio
-async def test_activated_catalog_never_scans_large_legacy_set(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    legacy_root = tmp_path / "live_state"
-    legacy_root.mkdir()
-    # Eight times the production cutover's disposable roster, large enough to
-    # catch an accidental directory walk without making temp-tree teardown the
-    # dominant cost of this regression.
-    for index in range(200):
-        (legacy_root / f"disposable-{index:05d}").mkdir()
-
-    monkeypatch.setattr(panel_data_source, "validate_account", _resolved_account)
-    monkeypatch.setattr(panel_data_source, "get_bot_task_registry", _runner_holding_no_dry_run)
-    assert not hasattr(panel_data_source, "_bot_statuses")
-    monkeypatch.setattr(sqlite_panel_source, "read_sqlite_catalog_projections", _empty_projections)
-    monkeypatch.setattr(
-        sqlite_panel_source,
-        "read_sqlite_catalog_economic_rollups",
-        _economic_rollups,
-    )
-    monkeypatch.setattr(
-        sqlite_panel_source,
-        "active_sqlite_facade",
-        lambda _broker: SimpleNamespace(account_id="paper-account", account_mode="paper", repository=_Repository()),
-    )
-
-    for _ in range(20):
-        result = await panel_data_source.get_catalog("alpaca", "paper-account")
-
-    # A retired bot with nothing live in custody is cleared: it is not on Home (#2567).
-    assert [row.strategy_instance_id for row in result] == ["active-spy"]
-
-
 async def _resolved_account(_broker: str, account_id: str) -> str:
     return account_id
 

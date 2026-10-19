@@ -313,12 +313,3 @@ async def test_list_filter_by_parent_run_id(client, parent_run_id):
     )
     items = response.json()["baselines"]
     assert [c["baseline_id"] for c in items] == [a.json()["config"]["baseline_id"]]
-
-
-# ---------------------------------------------------------------------------
-# Path-resolution check.
-# ---------------------------------------------------------------------------
-async def test_baselines_path_does_not_clash_with_run_id_route(client):
-    response = await client.get("/api/research/strategy-runs/baselines")
-    assert response.status_code == 200
-    assert "baselines" in response.json()

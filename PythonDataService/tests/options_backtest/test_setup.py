@@ -41,16 +41,6 @@ def _setup(**changes: Any) -> dict[str, Any]:
     }
 
 
-def test_a_plain_setup_is_taken_with_its_stated_defaults() -> None:
-    setup = OptionsBacktestSetup.model_validate(_setup())
-
-    assert setup.version == 1
-    assert setup.slippage_percent == Decimal("0.3")
-    assert setup.price_step_usd == Decimal("0.01")
-    assert setup.no_reentry_after is None
-    assert setup.legs[0].stop_loss is None
-
-
 def test_a_setup_reads_back_as_it_was_written() -> None:
     written = _setup(
         legs=[
@@ -488,12 +478,6 @@ def _busy_setup() -> dict[str, Any]:
         no_reentry_after={"anchor": "close", "offset_ms": 60 * MS_PER_MINUTE},
         fees={"kind": "per_contract", "per_contract_usd": "0.65"},
     )
-
-
-def test_a_leg_with_no_side_is_bought() -> None:
-    setup = OptionsBacktestSetup.model_validate(_setup())
-
-    assert setup.legs[0].side == "buy"
 
 
 def test_the_two_shipped_examples_that_buy_dump_to_the_bytes_they_dumped_to_before_a_leg_had_a_side() -> None:

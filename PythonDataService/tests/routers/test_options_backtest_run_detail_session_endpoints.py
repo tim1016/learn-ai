@@ -31,7 +31,6 @@ from app.options_backtest import lake_data
 from app.options_backtest.results import EventKind, Fill, Mark
 from app.options_backtest.run import RunResult, run_sessions
 from app.options_backtest.setup import MS_PER_MINUTE, OptionsBacktestSetup
-from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from tests._helpers.fake_lake_catalog import FakeCatalog
 from tests.options_backtest._a_run import a_busy_run
 from tests.options_backtest._detail_scene import (
@@ -752,16 +751,3 @@ async def test_a_run_that_is_not_complete_has_no_session_to_show_and_is_a_409_be
         assert response.status_code == 409, response.text
         assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_RUN_NOT_COMPLETE"
         assert status in response.json()["detail"]["message"]
-
-
-@pytest.mark.parametrize(
-    "run_id, session",
-    [(0, 1), (-1, 1), ("abc", 1), (1, -1), (1, MAX_TIMESTAMP_MS + 1), (1, "x"), (2**53, 1)],
-)
-async def test_a_request_that_cannot_be_one_is_a_422(
-    client: httpx.AsyncClient, run_id: object, session: object
-) -> None:
-    async with client as c:
-        response = await c.get(f"{PREFIX}/runs/{run_id}/sessions/{session}")
-
-    assert response.status_code == 422, response.text

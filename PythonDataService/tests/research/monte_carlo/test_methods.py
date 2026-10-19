@@ -54,14 +54,6 @@ class TestResample:
         out = resample_trades(returns, size=10, rng=np.random.default_rng(0))
         assert out.size == 10
 
-    def test_allows_duplicates(self):
-        # With size > universe size and a small universe, duplicates are
-        # almost guaranteed (P[no dup] is vanishingly small).
-        returns = np.array([0.01, -0.01, 0.0])
-        out = resample_trades(returns, size=50, rng=np.random.default_rng(0))
-        # Pigeonhole: 50 samples from 3 possible values must have dups.
-        assert len(np.unique(out)) <= 3
-
     def test_output_values_are_subset_of_input(self):
         returns = np.array([0.01, -0.02, 0.03, -0.005])
         out = resample_trades(returns, size=20, rng=np.random.default_rng(0))

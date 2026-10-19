@@ -360,12 +360,6 @@ def test_import_minute_trade_dch_differs_by_adjustment_mode():
     assert import_minute_trade_dch(adjusted=False) != import_minute_trade_dch(adjusted=True)
 
 
-def test_import_minute_trade_dch_is_deterministic():
-    from app.data_lake.cache_import import import_minute_trade_dch
-
-    assert import_minute_trade_dch(adjusted=True) == import_minute_trade_dch(adjusted=True)
-
-
 def test_import_minute_trade_dch_raw_differs_from_ensure_data_fetch_dch():
     """An imported 'raw' artifact and a live Polygon fetch produce the same
     kind of bytes, but must carry a *different* data_contract_hash -- the

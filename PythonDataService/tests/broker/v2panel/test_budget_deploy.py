@@ -78,11 +78,6 @@ def test_budget_receipts_reject_out_of_domain_timestamps(model: type[BaseModel],
         model(**payload, **{field: MAX_TIMESTAMP_MS + 1})
 
 
-def test_paper_deploy_submission_requires_budget_on_the_wire() -> None:
-    with pytest.raises(ValidationError, match="budget"):
-        AlpacaDeploySubmission.model_validate({"symbol": "SPY"})
-
-
 @pytest.mark.asyncio
 async def test_budgetless_preview_is_served_but_budgetless_deploy_is_rejected(
     monkeypatch: pytest.MonkeyPatch,

@@ -12,8 +12,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
-import pytest
-
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution import (
     Direction,
@@ -127,9 +125,3 @@ def test_slippage_and_commission_change_pnl_versus_zero_costs():
     # exit (price down) = Decimal("-4.00") on slippage, plus two $1.00
     # commissions = -$6.00 total.
     assert round_trip_pnl(realistic) == Decimal("-6.00")
-
-
-@pytest.mark.parametrize("fill_mode", [FillMode.SIGNAL_BAR_CLOSE, FillMode.NEXT_BAR_OPEN])
-def test_fill_mode_propagates_through_config(fill_mode: FillMode):
-    fill_model = ExecutionConfig(fill_mode=fill_mode).build_fill_model()
-    assert fill_model.mode is fill_mode

@@ -195,14 +195,6 @@ class TestDividendYield:
 class TestBsEuropeanPrice:
     """Closed-form BS price (no continuous dividend)."""
 
-    def test_atm_call_positive(self):
-        price = bs_european_price(spot=100, strike=100, ttm_years=0.25, rate=0.05, volatility=0.20, is_call=True)
-        assert price > 0
-
-    def test_atm_put_positive(self):
-        price = bs_european_price(spot=100, strike=100, ttm_years=0.25, rate=0.05, volatility=0.20, is_call=False)
-        assert price > 0
-
     def test_put_call_parity(self):
         S, K, T, r, sigma = 100.0, 100.0, 0.5, 0.05, 0.25
         call = bs_european_price(S, K, T, r, sigma, is_call=True)

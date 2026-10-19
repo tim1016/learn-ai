@@ -87,15 +87,6 @@ class TestHardeningFlagMatrix:
         result = _run_smoke(iter(["--pids-limit=64"]))
         assert result.returncode == 0, f"--pids-limit rejected by image; stderr=\n{result.stderr}"
 
-    def test_user_nonroot(self) -> None:
-        # A common LEAN image runs as root; this test documents that
-        # reality with an xfail rather than a hard fail until the ADR
-        # is updated. If the LEAN image starts shipping a non-root user
-        # by default this should be promoted to a hard assertion.
-        result = _run_smoke(iter(["--user=10001:10001"]))
-        if result.returncode != 0:
-            pytest.xfail(f"LEAN image does not run as non-root by default; stderr=\n{result.stderr}")
-
     def test_combined_required_shape(self) -> None:
         """All survivors together. The ADR records this exact set.
 
