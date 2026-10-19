@@ -15,3 +15,7 @@ dd { margin: var(--space-1) 0 0; font-size: var(--fs-md); font-weight: var(--fw-
 .contracts div { padding-block: var(--space-2); border-bottom: 1px solid var(--border-light); }
 .timeline input { width: 100%; accent-color: var(--accent); }
 @media (max-width: 500px) { .risk { grid-template-columns: 1fr; } }
+
+.preview--deploy { gap: var(--space-4); }
+.preview--deploy .contracts { border-top: 1px solid var(--border-light); padding-top: var(--space-3); }
+.preview--deploy .contracts summary { color: var(--accent-text); }

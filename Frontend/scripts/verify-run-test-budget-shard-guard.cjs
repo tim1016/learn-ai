@@ -8,7 +8,8 @@ const { spawnSync } = require('node:child_process');
 // frontend-test-shard matrix locally: reject a half-set shard env pair
 // instead of silently falling back to the full suite, auto-append
 // --runner-config=vitest.ci.config.ts when both shard vars are set (unless
-// the caller already passed a --runner-config), run a shard's specs without
+// the caller already passed a --runner-config), preselect that shard's specs
+// before Angular compiles them, and run them without
 // the guard scripts CI runs once elsewhere (#2882), and default
 // NG_BUILD_MAX_WORKERS=2 on the spawned child. It also holds a run to two
 // time limits (#2873): past the two-minute target the run keeps its own exit
@@ -34,6 +35,7 @@ function makeFakeNpm(captureFile, finishedFile) {
     '    NG_BUILD_MAX_WORKERS: process.env.NG_BUILD_MAX_WORKERS ?? null,',
     '    TEST_SHARD_INDEX: process.env.TEST_SHARD_INDEX ?? null,',
     '    TEST_SHARD_COUNT: process.env.TEST_SHARD_COUNT ?? null,',
+    '    CI_SHARD_PRESELECTED: process.env.CI_SHARD_PRESELECTED ?? null,',
     '  },',
     '}));',
     'setTimeout(() => {',
@@ -129,12 +131,16 @@ function runWrapper({ args = [], env = {}, limits = null } = {}) {
   });
   assert.equal(result.status, 0);
   assert.ok(capture, 'both shard vars set must spawn npm');
-  assert.deepEqual(capture.argv, [
+  assert.deepEqual(capture.argv.slice(0, 4), [
     'run',
     'test:specs',
     '--',
     '--runner-config=vitest.ci.config.ts',
   ]);
+  const includes = capture.argv.slice(4);
+  assert.ok(includes.length > 0 && includes.every((arg) => arg.startsWith('--include=src/') && arg.endsWith('.spec.ts')));
+  assert.equal(new Set(includes).size, includes.length);
+  assert.equal(capture.env.CI_SHARD_PRESELECTED, '1');
 }
 
 // Both shard vars set but the caller already passed --runner-config=...:
@@ -146,6 +152,7 @@ function runWrapper({ args = [], env = {}, limits = null } = {}) {
   });
   assert.ok(capture, 'both shard vars set (custom runner-config) must spawn npm');
   assert.deepEqual(capture.argv, ['run', 'test:specs', '--', '--runner-config=custom.config.ts']);
+  assert.equal(capture.env.CI_SHARD_PRESELECTED, '0');
 }
 
 // Neither shard var set: forwarded args pass through unchanged, no runner

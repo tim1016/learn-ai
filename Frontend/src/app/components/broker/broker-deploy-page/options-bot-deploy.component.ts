@@ -10,10 +10,8 @@ import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { refusalBody } from '../../../shared/errors/refusal-body';
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
-import { OptionsQualificationEvidenceComponent } from '../../options-backtest/options-qualification-evidence.component';
 import { GoldenOptionSetupsService } from '../../options-backtest/golden-option-setups.service';
 import { OptionsBacktestService } from '../../options-backtest/options-backtest.service';
-import { SetupSentencesComponent } from '../../options-backtest/cards/setup-sentences.component';
 import { BotEndEditorComponent } from '../bot-end/bot-end-editor.component';
 import { botEndFields, botEndInput } from '../bot-end/bot-end-fields';
 import { BotEndSummaryComponent } from '../bot-end/bot-end-summary.component';
@@ -25,6 +23,7 @@ import { BrokerV2PanelService, committedReceipt, uncommittedClaim, type BudgetDe
 import { canonicalJson } from './deploy-draft.store';
 import { DeployLaunchReceiptComponent } from './deploy-launch-receipt.component';
 import { DeployOptionOrderTermsComponent } from './deploy-option-order-terms.component';
+import { OptionsBotSetupDeskComponent } from './options-bot-setup-desk.component';
 import { OptionsBotDeployService, type OptionsDeploymentReview, type OptionsDeployRequest } from './options-bot-deploy.service';
 import { orderTermsSet, startingOrderTerms, type OptionOrderTerms } from './option-structure/option-structure';
 
@@ -39,8 +38,8 @@ interface ReviewedDeployment {
 @Component({
   selector: 'app-options-bot-deploy',
   imports: [
-    AssetIdentityComponent, AuthoredUsdPipe, OptionsQualificationEvidenceComponent, DeployLaunchReceiptComponent, DeployOptionOrderTermsComponent,
-    BotEndEditorComponent, BotEndSummaryComponent, FormField, FundingAnswerComponent, MoneyBarComponent, SetupSentencesComponent, TimestampDisplayComponent,
+    AssetIdentityComponent, AuthoredUsdPipe, DeployLaunchReceiptComponent, DeployOptionOrderTermsComponent, OptionsBotSetupDeskComponent,
+    BotEndEditorComponent, BotEndSummaryComponent, FormField, FundingAnswerComponent, MoneyBarComponent, TimestampDisplayComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './options-bot-deploy.component.html',
@@ -150,7 +149,7 @@ export class OptionsBotDeployComponent {
     const fields = this.fields();
     const golden = this.golden();
     if (golden === null) return 'Choose an approved golden setup before reviewing.';
-    if (golden.status !== 'ready') return golden.status_explanation;
+    if (golden.status !== 'ready') return 'Choose a ready approved setup before reviewing.';
     if (!this.modes().some(mode => mode.mode === fields.mode && mode.availability === 'available')) return 'Choose an available execution mode.';
     if (!orderTermsSet(this.terms(), this.orderDefaults())) return 'Complete the option order terms before reviewing.';
     if (fields.exitAllowanceBps === null || fields.bandMultiple === null || fields.spreadCapBps === null) {

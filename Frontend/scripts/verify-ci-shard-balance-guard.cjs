@@ -30,6 +30,15 @@ async function deal(index, count) {
 }
 
 async function main() {
+  if (process.argv[2] === '--list') {
+    const index = Number(process.env.TEST_SHARD_INDEX);
+    const count = Number(process.env.TEST_SHARD_COUNT);
+    assert.ok(Number.isInteger(index) && index >= 1 && Number.isInteger(count) && count >= index);
+    const selected = await deal(index, count);
+    assert.ok(selected.length > 0, 'the shard has no specs');
+    process.stdout.write(`${JSON.stringify(selected.map(({ moduleId }) => path.relative(frontendRoot, moduleId)))}\n`);
+    return;
+  }
   // The config reads its shard from the environment as it loads, so a load for
   // the weights needs a valid pair too; the weights do not depend on it.
   process.env.TEST_SHARD_INDEX = '1';

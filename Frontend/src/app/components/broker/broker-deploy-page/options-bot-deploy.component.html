@@ -1,83 +1,80 @@
 <section class="options-deploy">
-  <header><h1>Deploy an Options bot</h1><p>Session time, option premium momentum, stops and re-entry follow the approved setup.</p></header>
+  <header class="page-heading">
+    <div><h1>Deploy an Options bot</h1><p>Review an approved setup beside the account and budget it will use.</p></div>
+  </header>
   @if (receipt(); as result) {
     <app-deploy-launch-receipt [receipt]="result" [botLink]="botLink()" />
   } @else {
-    @if (loadProblem(); as why) { <p class="problem">{{ why }}</p><button type="button" (click)="reload()">Read settings again</button> }
-    <div class="deploy-grid">
-      <section class="card">
-        <h2>1. Golden setup</h2>
-        <label for="options-golden-setup">Approved tested version</label>
+    @if (loadProblem(); as why) { <p class="problem">{{ why }} <button type="button" (click)="reload()">Read settings again</button></p> }
+    <section class="setup-selection desk-panel">
+      <div class="section-heading"><div><h2>Approved setup</h2><p>The setup's contract quantities and trading rules stay fixed.</p></div>
+        @if (golden(); as version) { <span class="setup-state" [class.setup-state--unavailable]="version.status !== 'ready'">{{ version.status === 'ready' ? 'Ready' : version.status === 'stale' ? 'Stale' : 'Revoked' }}</span> }
+      </div>
+      <div class="setup-choice"><label for="options-golden-setup">Approved tested version</label>
         <select id="options-golden-setup" [formField]="ticket.goldenId">
           <option value="">Choose a golden setup</option>
-          @if (versionChoices().length) {
-            @for (version of versionChoices(); track version.id) {
-              <option [value]="version.id" [disabled]="version.status !== 'ready'">{{ version.name }}{{ version.evidence.verdict === 'owner_exception' ? ' · Owner exception' : '' }} · run {{ version.source_run_id }} · {{ version.status }}</option>
-            }
-          }
+          @for (version of versionChoices(); track version.id) { <option [value]="version.id" [disabled]="version.status !== 'ready'">{{ version.name }}{{ version.evidence.verdict === 'owner_exception' ? ' · Owner exception' : '' }} · run {{ version.source_run_id }} · {{ version.status }}</option> }
         </select>
-        @if (versions.hasValue() && versionChoices().length === 0) { <p>Approve a completed run in Options Backtest to create a golden setup.</p> }
-        @if (golden(); as version) {
-          <app-asset-identity [symbol]="version.underlying" size="sm" />
-          <p>{{ version.status_explanation }}</p>
-          <app-options-qualification-evidence [evidence]="version.evidence" />
-          <p>Tested <app-timestamp-display [value]="version.evidence.first_session_open_ms" mode="date-et" granularity="date" /> – <app-timestamp-display [value]="version.evidence.last_session_open_ms" mode="date-et" granularity="date" /> · {{ version.evidence.trades }} trades</p>
-          <p>Tested starting capital {{ version.evidence.starting_cash_usd | authoredUsd }}. Contract quantities and trading rules stay fixed.</p>
-          @if (setupWords.hasValue()) { <app-options-backtest-setup-sentences [summary]="setupWords.value()" /> }
-          @for (limitation of version.evidence.limitations; track limitation) { <p class="note">{{ limitation }}</p> }
-        }
-      </section>
-      <section class="card">
-        <h2>2. Execution</h2>
-        <label for="options-execution-mode">Execution mode</label>
-        <select id="options-execution-mode" [formField]="ticket.mode">
-          <option value="">Choose execution mode</option>
-          @for (mode of modes(); track mode.mode) { <option [value]="mode.mode" [disabled]="mode.availability !== 'available'">{{ mode.label }}</option> }
-        </select>
-        <fieldset [disabled]="busy() || unknown()">
-          <app-deploy-option-order-terms [terms]="terms()" [defaults]="orderDefaults()" [notes]="orderNotes()" [failure]="loadProblem()" (termsChange)="terms.set($event)" />
-        </fieldset>
-        <details open>
-          <summary>Per-bot exit settings</summary>
-          <p class="note">Required execution settings, fixed for this bot. These do not cap option market-order exit prices. Account defaults are unchanged.</p>
-          <label for="options-exit-allowance">Exit allowance (bps)</label>
-          <input id="options-exit-allowance" type="number" step="any" [formField]="ticket.exitAllowanceBps" />
-          <label for="options-exit-band">Band multiple</label>
-          <input id="options-exit-band" type="number" step="any" [formField]="ticket.bandMultiple" />
-          <label for="options-exit-spread">Spread cap (bps)</label>
-          <input id="options-exit-spread" type="number" step="any" [formField]="ticket.spreadCapBps" />
-          @for (error of exitTermErrors(); track error) { <p class="problem">{{ error }}</p> }
-        </details>
-        <h3>Deployment end</h3>
-        <app-bot-end-editor [(fields)]="endFields" [keepOffered]="false" [locked]="busy() || unknown()" />
-        <p class="note">At its end, the bot closes remaining positions and stops repeating.</p>
-        <p>The bot repeats on trading sessions until its end or until stopped. The setup closes positions at its daily square-off time. A late deployment waits for the next eligible session.</p>
-      </section>
-      <section class="card">
-        <h2>3. Budget and review</h2>
-        <label for="options-bot-budget">Dollar budget (USD)</label>
-        <input id="options-bot-budget" type="text" inputmode="decimal" [formField]="ticket.amount" />
-        <p class="note">Starts from the tested capital. A different budget can change which entries can be funded.</p>
-        <button type="button" [disabled]="!mayReview()" (click)="review()">Review setup and budget</button>
-        @if (reviewHint(); as hint) { <p class="note">{{ hint }}</p> }
-        @if (currentReview(); as reviewed) {
-          <app-bot-end-summary [end]="reviewed.end" detailed />
-          <p>{{ reviewed.review.explanation }}</p><p>{{ reviewed.review.budget.detail }}</p>
-          <p>{{ reviewed.review.budget.risk_limits_summary }}</p>
-          @if (reviewed.review.budget.budget_usd) { <p>Set aside: <strong>{{ reviewed.review.budget.budget_usd | authoredUsd }}</strong></p> }
-          @if (reviewed.review.budget.money_after; as money) { <app-money-bar [segments]="money.segments ?? []" size="detail" caption="Account money after this Deploy" /> }
-          @if (reviewed.review.budget.funding; as funding) { <app-funding-answer [funding]="funding" [showSentence]="true" /> }
-          @for (rule of reviewed.review.rules_summary; track rule) { <p>{{ rule }}</p> }
-          @if (reviewed.review.first_eligible_session_open_ms; as first) { <p>First eligible session: <app-timestamp-display [value]="first" mode="date-et" granularity="date" /></p> }
-          @if (reviewed.review.budget.confirmation_text; as phrase) {
-            <label for="options-live-confirmation">Type {{ phrase }} to confirm</label><input id="options-live-confirmation" type="text" [formField]="ticket.confirmation" autocomplete="off" />
+      </div>
+      @if (versions.hasValue() && versionChoices().length === 0) { <p class="note">Approve a completed run in Options Backtest to create a golden setup.</p> }
+      @if (golden(); as version) { <div class="selected-setup"><app-asset-identity [symbol]="version.underlying" size="sm" /><span>{{ version.status_explanation }}</span></div> }
+    </section>
+
+    <div class="desk-layout">
+      <main class="desk-main">
+        @if (golden(); as version) { <app-options-bot-setup-desk [golden]="version" [summary]="setupWords.hasValue() ? setupWords.value() : null" [summaryFailed]="setupWords.error() !== undefined" (retrySummary)="setupWords.reload()" /> }
+        @else { <section class="desk-panel empty-setup"><h2>Choose a tested setup</h2><p>The position payoff, resolved legs and approval evidence will appear here.</p></section> }
+      </main>
+      <aside class="desk-side">
+        <section class="desk-panel account-panel">
+          <div class="section-heading"><div><h2>Account and capital</h2><p>{{ accountId() }}</p></div></div>
+          @if (golden(); as version) { <div class="account-row"><span>Tested starting capital</span><strong>{{ version.evidence.starting_cash_usd | authoredUsd }}</strong></div> }
+          <label for="options-bot-budget">Dollar budget (USD)</label>
+          <input id="options-bot-budget" type="text" inputmode="decimal" [formField]="ticket.amount" />
+          <p class="note">A different budget can change which entries can be funded.</p>
+        </section>
+        <section class="desk-panel settings-panel">
+          <h2>Deployment settings</h2>
+          <label for="options-execution-mode">Execution mode</label>
+          <select id="options-execution-mode" [formField]="ticket.mode">
+            <option value="">Choose execution mode</option>
+            @for (mode of modes(); track mode.mode) { <option [value]="mode.mode" [disabled]="mode.availability !== 'available'">{{ mode.label }}</option> }
+          </select>
+          <details class="terms" open><summary>Option order terms</summary>
+            <fieldset [disabled]="busy() || unknown()"><app-deploy-option-order-terms [terms]="terms()" [defaults]="orderDefaults()" [notes]="orderNotes()" [failure]="loadProblem()" (termsChange)="terms.set($event)" /></fieldset>
+          </details>
+          <details class="terms" open><summary>Per-bot exit settings</summary>
+            <p class="note">Required for this bot. These do not cap option market-order exit prices. Account defaults are unchanged.</p>
+            <label for="options-exit-allowance">Exit allowance (bps)</label><input id="options-exit-allowance" type="number" step="any" [formField]="ticket.exitAllowanceBps" />
+            <label for="options-exit-band">Band multiple</label><input id="options-exit-band" type="number" step="any" [formField]="ticket.bandMultiple" />
+            <label for="options-exit-spread">Spread cap (bps)</label><input id="options-exit-spread" type="number" step="any" [formField]="ticket.spreadCapBps" />
+            @for (error of exitTermErrors(); track error) { <p class="problem">{{ error }}</p> }
+          </details>
+          <div class="end-setting"><h3>Deployment end</h3><app-bot-end-editor [(fields)]="endFields" [keepOffered]="false" [locked]="busy() || unknown()" />
+            <p class="note">At its end, the bot closes remaining positions and stops repeating. A late deployment waits for the next eligible session.</p>
+          </div>
+        </section>
+        <section class="desk-panel review-panel">
+          <h2>Final check</h2><p class="note">Review current routing, funding and risk limits before deployment.</p>
+          <button class="review-action" type="button" [disabled]="!mayReview()" (click)="review()">Review setup and budget</button>
+          @if (reviewHint(); as hint) { <p class="note">{{ hint }}</p> }
+          @if (currentReview(); as reviewed) {
+            <div class="review-answer"><app-bot-end-summary [end]="reviewed.end" detailed />
+              <p>{{ reviewed.review.explanation }}</p><p>{{ reviewed.review.budget.detail }}</p><p>{{ reviewed.review.budget.risk_limits_summary }}</p>
+              @if (reviewed.review.budget.budget_usd) { <div class="account-row"><span>Set aside</span><strong>{{ reviewed.review.budget.budget_usd | authoredUsd }}</strong></div> }
+              @if (reviewed.review.budget.money_after; as money) { <app-money-bar [segments]="money.segments ?? []" size="detail" caption="Account money after this Deploy" /> }
+              @if (reviewed.review.budget.funding; as funding) { <app-funding-answer [funding]="funding" [showSentence]="true" /> }
+              @for (rule of reviewed.review.rules_summary; track rule) { <p>{{ rule }}</p> }
+              @if (reviewed.review.first_eligible_session_open_ms; as first) { <p>First eligible session: <app-timestamp-display [value]="first" mode="date-et" granularity="date" /></p> }
+              @if (reviewed.review.budget.confirmation_text; as phrase) { <label for="options-live-confirmation">Type {{ phrase }} to confirm</label><input id="options-live-confirmation" type="text" [formField]="ticket.confirmation" autocomplete="off" /> }
+              <button class="deploy-action" type="button" [disabled]="!mayDeploy()" (click)="deploy()">Deploy Options bot</button>
+            </div>
           }
-          <button type="button" [disabled]="!mayDeploy()" (click)="deploy()">Deploy Options bot</button>
-        }
-      </section>
+        </section>
+      </aside>
     </div>
     @if (laneReviewRequired()) { <p class="problem">Review the refreshed account routing before deploying.</p> }
-    @if (busy()) { <p>Checking this account and the deployment…</p> }
+    @if (busy()) { <p class="note" role="status">Checking this account and the deployment…</p> }
     @if (problem(); as why) { <p class="problem">{{ why }}</p> }
     @if (unknown()) { <button type="button" [disabled]="busy()" (click)="recover()">Check deployment status</button> }
   }

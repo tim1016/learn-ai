@@ -116,7 +116,8 @@ const testConfig = {
   maxWorkers: 2,
   pool: "vmThreads",
   vmMemoryLimit: "1GB",
-  shard: `${shardIndex}/${shardCount}`,
+  // The wrapper already dealt Angular's --include paths in this mode.
+  ...(process.env["CI_SHARD_PRESELECTED"] === "1" ? {} : { shard: `${shardIndex}/${shardCount}` }),
   sequence: { sequencer: DurationBalancedSequencer },
 };
 

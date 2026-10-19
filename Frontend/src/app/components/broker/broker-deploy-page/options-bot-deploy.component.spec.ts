@@ -5,6 +5,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
+import { etMidnightMs } from '../../../shared/date/et-midnight';
 import { localWallClock } from '../../../shared/date/local-wall-clock';
 import { provideFakeDateWorld } from '../../../shared/date-picker/testing/fake-trading-calendar';
 import { resourceTarget } from '../../../fleet/resource-target';
@@ -12,6 +13,8 @@ import { GoldenOptionSetupsService, type GoldenOptionSetup } from '../../options
 import { OptionsBacktestService } from '../../options-backtest/options-backtest.service';
 import { exceptionGoldenSetup, goldenSetup } from '../../options-backtest/testing/golden-fixture';
 import { summaryFor } from '../../options-backtest/testing/fixtures';
+import { PositionPreviewService } from '../../options-backtest/position/position-preview.service';
+import { previewAnswer } from '../../options-backtest/position/testing';
 import { BrokerV2PanelService, type BudgetDeployReceipt, type BotEndPreviewRequest } from '../v2-panel/lib/broker-v2-panel.service';
 import { DEPLOY_VIEW, LIVE_DEPLOY_VIEW } from './alpaca-deploy-workflow.fixtures';
 import { OPTION_CATALOGUE } from './option-structure/option-structure.fixtures';
@@ -50,6 +53,7 @@ async function setup(options: { live?: boolean; selectedId?: string; versions?: 
     headline: 'Reviewed bot end',
   }));
   const get = vi.fn().mockResolvedValue(goldenSetup());
+  const preview = vi.fn().mockResolvedValue(previewAnswer());
   const result = await render(OptionsBotDeployComponent, {
     inputs: { target: TARGET, accountId: 'PA9', fence: { bindingGeneration: 3, routingEpoch: 4 } },
     providers: [
@@ -58,6 +62,7 @@ async function setup(options: { live?: boolean; selectedId?: string; versions?: 
       { provide: ActivatedRoute, useValue: { snapshot: { queryParamMap: convertToParamMap(options.selectedId ? { options_setup: options.selectedId } : {}) } } },
       { provide: GoldenOptionSetupsService, useValue: { list: async () => options.versions ?? [goldenSetup()], get } },
       { provide: OptionsBacktestService, useValue: { describe: async () => summaryFor('Tested setup') } },
+      { provide: PositionPreviewService, useValue: { preview } },
       { provide: BrokerV2PanelService, useValue: { getDeployView: async () => ({ ...(options.live ? LIVE_DEPLOY_VIEW : DEPLOY_VIEW),
         ...(options.noExitDefaults ? { default_exit_terms: null } : {}) }), previewBotEnd, getOptionStructures: async () => OPTION_CATALOGUE } },
       { provide: OptionsBotDeployService, useValue: { review, deploy, submission } },
@@ -66,7 +71,7 @@ async function setup(options: { live?: boolean; selectedId?: string; versions?: 
   vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
   if (!options.selectedId) await userEvent.selectOptions(await screen.findByLabelText('Approved tested version'), goldenSetup().id);
   await waitFor(() => expect((screen.getByLabelText('Dollar budget (USD)') as HTMLInputElement).value).toBe('10000'));
-  return { ...result, review, deploy, submission, get, previewBotEnd };
+  return { ...result, review, deploy, submission, get, preview, previewBotEnd };
 }
 
 async function reviewSetup(): Promise<void> {
@@ -76,6 +81,20 @@ async function reviewSetup(): Promise<void> {
 }
 
 describe('Options deployment', () => {
+  it('shows a server-authored position preview for the selected approved setup', async () => {
+    const { preview } = await setup();
+    await screen.findByRole('heading', { name: 'Historical position payoff' });
+    await screen.findByText('Underlying $500.00');
+    expect(screen.getByText('Option order terms').closest('details')?.open).toBe(true);
+    expect(screen.getByText('Per-bot exit settings').closest('details')?.open).toBe(true);
+    expect(preview).toHaveBeenCalledWith(expect.objectContaining({
+      setup: goldenSetup().setup, source: 'historical', mode: 'position', trading_date_ms: etMidnightMs('2026-10-09'),
+    }));
+    expect(screen.getByText('Resolved contracts and price evidence')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Current market' })).toBeNull();
+    await reviewSetup();
+  });
+
   it('reviews and deploys explicit per-bot terms and a bounded end when account defaults are absent', async () => {
     const { review, deploy, previewBotEnd } = await setup({ noExitDefaults: true });
     expect((screen.getByRole('button', { name: 'Review setup and budget' }) as HTMLButtonElement).disabled).toBe(true);
@@ -136,6 +155,14 @@ describe('Options deployment', () => {
     expect(screen.getByText(/The final Sharpe hurdle was not met/)).toBeTruthy();
     expect(screen.getByText(/The final interval was used in recorded research/)).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Review source Options study' })).toBeTruthy();
+  });
+
+  it('labels a stale selected version and keeps deployment review closed', async () => {
+    const stale = goldenSetup({ status: 'stale', status_explanation: 'The proof needs refreshing.' });
+    await setup({ selectedId: stale.id, versions: [stale] });
+    expect(screen.getByText('Stale', { exact: true })).toBeTruthy();
+    expect(screen.getByText('The proof needs refreshing.')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Review setup and budget' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('loads an older selected approval even when the recent list does not contain it', async () => {
