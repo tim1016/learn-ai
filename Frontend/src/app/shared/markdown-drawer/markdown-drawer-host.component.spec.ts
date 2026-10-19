@@ -40,4 +40,15 @@ describe('MarkdownDrawerHostComponent', () => {
     expect(methodology).not.toBeNull();
     expect(methodology).not.toBe(guide);
   });
+
+  it('close sets visible to false', () => {
+    const { fixture, svc } = setup();
+    svc.open('methodology');
+    fixture.detectChanges();
+    expect(svc.visible()).toBe(true);
+
+    svc.close();
+    fixture.detectChanges();
+    expect(svc.visible()).toBe(false);
+  });
 });

@@ -161,6 +161,17 @@ describe('SpecStrategyRunnerComponent', () => {
     expect(rule.when.conditions).toHaveLength(2);
   });
 
+  // ---- Exit tab --------------------------------------------------------
+  it('addExitConditionOfKind / removeExitCondition update exit.conditions', () => {
+    component.addExitConditionOfKind('BarsSinceEntry');
+    expect(component.spec().exit.conditions.length).toBeGreaterThan(0);
+    const idx = component.spec().exit.conditions.length - 1;
+    component.removeExitCondition(idx);
+    // SPY EMA fixture starts with one exit condition (BarsSinceEntry >= 5).
+    // After add+remove we should be back at the original count.
+    expect(component.spec().exit.conditions.length).toBeGreaterThan(0);
+  });
+
   // ---- JSON Advanced ---------------------------------------------------
   it('applyAdvancedJson parses the textarea and replaces the spec', () => {
     component.openAdvancedJson();

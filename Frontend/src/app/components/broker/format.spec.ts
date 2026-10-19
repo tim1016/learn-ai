@@ -3,7 +3,14 @@ import {
   absDiff,
   deltaAbsBand,
   diffBps,
+  fmtBrokerExpiryDate,
 } from './format';
+
+describe('fmtBrokerExpiryDate', () => {
+  it('returns a dash for absent expiry markers', () => {
+    expect(fmtBrokerExpiryDate(null)).toBe('—');
+  });
+});
 
 describe('absDiff', () => {
   it('returns null when either side is missing', () => {
