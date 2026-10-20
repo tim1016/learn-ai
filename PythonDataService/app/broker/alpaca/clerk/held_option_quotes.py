@@ -628,36 +628,32 @@ class HeldOptionQuotes:
 
     async def _write(self, wanted: _Writes, now_ms: int) -> int:
         """Append one account's hand-over to its file, and note when each quote was handed over. Returns
-        how many marks it stated."""
+        how many marks it stated. The chart's minute observations are kept after, and as their own fault
+        (#3368): a minute file that cannot be written must not stop the marks that price a close."""
         account, marks, one_sided = wanted.account, wanted.marks, wanted.one_sided
-        key = ("write", account.account_id)
 
-        def write() -> None:
-            if wanted.minute_quotes:
-                account.kept.keep_minutes(wanted.minute_quotes, observed_at_ms=now_ms)
+        def write_marks() -> None:
             if marks:
                 account.kept.keep_all(marks, kept_at_ms=now_ms)
             for symbol, quote in one_sided.items():
                 # As of its own receipt, never as of now: it says what the line shows, and is no mark.
                 account.kept.restore(symbol, quote, now_ms=now_ms)
 
-        try:
-            await to_thread(write)
-        except Exception as failed:
-            # Tried again on the next round. A mark that lapses meanwhile says so itself.
-            self._faults.failed(
-                key, "Could not keep the quotes of held option contracts; tried again on the next round",
-                kind=type(failed).__name__, error=failed,
-                extra={"action": "held_option_quotes_not_written", "account_id": account.account_id},
-            )
-            return 0
-        self._faults.cleared(
-            key, "The quotes of held option contracts are being kept again",
-            extra={"action": "held_option_quotes_written_again", "account_id": account.account_id},
+        def write_minutes() -> None:
+            account.kept.keep_minutes(wanted.minute_quotes, observed_at_ms=now_ms)
+
+        marks_kept = not (marks or one_sided) or await self._attempt(
+            account, write_marks, step="write", what="the quotes", action="held_option_quotes",
         )
-        minute = now_ms // 60_000 * 60_000
-        for symbol in wanted.minute_quotes:
-            account.minute_kept[symbol] = max(minute, account.minute_kept.get(symbol, minute))
+        if wanted.minute_quotes and await self._attempt(
+            account, write_minutes, step="write_minutes", what="the first quote of each minute",
+            action="held_option_quote_minutes",
+        ):
+            minute = now_ms // 60_000 * 60_000
+            for symbol in wanted.minute_quotes:
+                account.minute_kept[symbol] = max(minute, account.minute_kept.get(symbol, minute))
+        if not marks_kept:
+            return 0
         for symbol, quote in one_sided.items():
             account.put_back[symbol] = _sides_shown(quote)
         for symbol in marks:
@@ -671,6 +667,27 @@ class HeldOptionQuotes:
                     extra={"action": "held_option_quote_kept", "account_id": account.account_id, "contract": symbol},
                 )
         return len(marks)
+
+    async def _attempt(
+        self, account: _Account, write: Callable[[], None], *, step: str, what: str, action: str,
+    ) -> bool:
+        """Run one of an account's writes off the loop. A failure is its own logged fault, tried again on the
+        next round; a mark that lapses meanwhile says so itself."""
+        key = (step, account.account_id)
+        try:
+            await to_thread(write)
+        except Exception as failed:
+            self._faults.failed(
+                key, f"Could not keep {what} of held option contracts; tried again on the next round",
+                kind=type(failed).__name__, error=failed,
+                extra={"action": f"{action}_not_written", "account_id": account.account_id},
+            )
+            return False
+        self._faults.cleared(
+            key, f"{what.capitalize()} of held option contracts are being kept again",
+            extra={"action": f"{action}_written_again", "account_id": account.account_id},
+        )
+        return True
 
     def _say_feed_trouble(self, trouble: str | None) -> None:
         """Said once for the feed, not once for each contract, and once more when it is over."""
