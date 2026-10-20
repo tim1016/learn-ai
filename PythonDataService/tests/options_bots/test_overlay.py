@@ -109,6 +109,10 @@ async def test_overlay_matches_the_session_answer_and_keeps_live_panes_first(
             finally:
                 on_coordinator.reset(selected)
         respx.post("http://10.0.0.5/internal/fleet/options-overlay").mock(side_effect=answer_remotely)
+    unfinished = await overlay.with_options_overlay(chart, "alpaca", "overlay-bot", now_ms=WED_OPEN_MS + 60_000)
+    assert "partial day is never compared" in unfinished.backtest_notice
+    assert unfinished.premium_panes == chart.premium_panes
+    assert remote_calls == [], "an open session must not wait on the coordinator"
     answer = await overlay.with_options_overlay(chart, "alpaca", "overlay-bot", now_ms=NOW_MS)
     assert len(remote_calls) == (1 if role == "clerk_agent" else 0)
     assert answer.backtest_notice.startswith("Same-day backtest ready")

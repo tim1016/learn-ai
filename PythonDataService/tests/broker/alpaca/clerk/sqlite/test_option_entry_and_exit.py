@@ -51,7 +51,7 @@ from app.schemas.deployment_budget import DeployBudgetConsent
 from app.services import market_liveness
 from app.services.bot_binding_authority import SyntheticBindingAuthority
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
-from app.services.broker_v2_panel import option_position_value
+from app.services.broker_v2_panel import option_position_value, option_structure_view
 from app.services.broker_v2_panel.chart_projection_service import build_live_chart
 from app.services.broker_v2_panel.exit_estimate_read import read_exit_estimate
 from app.services.broker_v2_panel.option_structure_view import with_held_structure
@@ -296,6 +296,24 @@ async def test_the_panel_names_actual_held_contracts_and_their_recorded_entry_te
         LEG, SYMBOL, CALL, "long", 1, 100, 2,
     )
     assert held.traded.legs_notice is None
+
+
+@pytest.mark.parametrize("malformed", ["fractional", "symbol"])
+async def test_an_unreadable_held_structure_preserves_the_bot_status_and_controls(
+    dry_run: _DryRun, monkeypatch: pytest.MonkeyPatch, malformed: str,
+) -> None:
+    registration = dry_run.repo.strategy_instance(SID)
+    assert registration is not None
+    status = build_roster_status("alpaca", registration, dry_run.repo)
+    def unreadable(*_args: object) -> dict[tuple[str, int], int]:
+        if malformed == "fractional":
+            raise ValueError("held option quantity must be whole contracts")
+        return {("not-an-option-symbol", 100): 1}
+    monkeypatch.setattr(option_structure_view, "held_option_legs", unreadable)
+    view = with_held_structure(status, dry_run.repo)
+    assert view.model_dump(exclude={"traded"}) == status.model_dump(exclude={"traded"})
+    assert view.traded is not None and view.traded.legs == []
+    assert "Held contracts cannot be read" in view.traded.legs_notice
 
 
 async def test_saved_value_and_current_card_share_the_minute_and_never_fall_back_to_an_older_one(

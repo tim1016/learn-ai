@@ -35,15 +35,16 @@ Nothing here judges a quote. Whether one is usable for a decision is
 held contract's mark is ``held_option_quotes.mark_fault``'s, and how a fill
 is priced from one is ``app.options.simulated_fill``'s.
 
-**Pricing statements are compacted; minute observations are retained.** A hand-over every few seconds would otherwise
+**Pricing statements are compacted; minute observations have a separate index.** A hand-over every few seconds would otherwise
 grow the file without end, and every reader would pay for all of it. So the
 file is cut back as it grows to the rows a later reader can still be
 answered from (``rows_still_answerable``), and what it holds is also held in
 memory, read again only when the file has changed. A reader asks about now
 or later, or about a session's close: the mark a contract held overnight
-starts the next day from. Those answers survive every cut. Separately tagged minute observations
-retain the first quote per contract and minute for historical position valuation
-(#3368); they never price orders or replace a held mark.
+starts the next day from. Those answers survive every cut. New minute observations
+are appended to an indexed SQLite sidecar, so a current minute never reparses the
+whole history (#3368). Legacy inline minutes remain readable and retained in place.
+Neither prices orders or replaces a held mark.
 
 A fill or a baseline that used a kept quote records the quote itself, or its
 figure. The reference it carries (``KeptOptionQuote.ref``) says where the
@@ -53,6 +54,7 @@ quote was kept when it was used; the row may since have been cut.
 from __future__ import annotations
 
 import os
+import sqlite3
 import threading
 from bisect import bisect_left
 from collections.abc import Mapping, Sequence
@@ -64,6 +66,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.broker.alpaca.clerk.option_effects import RecordedQuote
+from app.broker.alpaca.clerk.option_quote_minutes import OptionQuoteMinutes
 from app.broker.alpaca.paths import resolve_contained_path, safe_path_component
 from app.broker.contract.errors import BrokerUnavailable
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
@@ -117,6 +120,8 @@ class KeptOptionQuote(BaseModel):
     @property
     def ref(self) -> str:
         """What a record that used this quote cites."""
+        if self.minute_ms is not None:
+            return f"held-option-minute:{self.symbol}:{self.minute_ms}"
         return f"kept-option-quote:{self.symbol}:{self.seq}"
 
 
@@ -186,6 +191,7 @@ def rows_still_answerable(rows: Sequence[KeptOptionQuote], *, as_of_ms: int) -> 
         return []
     closes = _session_closes(min(as_of_ms, *(row.kept_at_ms for row in rows)), as_of_ms)
     kept = {rows[-1].seq}
+    # Preserve legacy inline observations; new minutes use the indexed sidecar (#3368).
     kept.update(row.seq for row in rows if row.minute_ms is not None)
     newest: dict[str, KeptOptionQuote] = {}
     stated: dict[tuple[str, _Side, int], KeptOptionQuote] = {}
@@ -226,6 +232,8 @@ class _Held:
     by_symbol: dict[str, list[KeptOptionQuote]] = field(default_factory=dict)
     pricing_by_symbol: dict[str, list[KeptOptionQuote]] = field(default_factory=dict)
     minute_keys: set[tuple[str, int]] = field(default_factory=set)
+    minute_clock: list[int] = field(default_factory=list)
+    minutes_by_ms: dict[int, list[KeptOptionQuote]] = field(default_factory=dict)
     last_seq: int = 0
     rows: int = 0
     # How many rows the last cut left. The file is cut again once it holds twice as many.
@@ -236,13 +244,16 @@ class _Held:
     def hold(self, rows: Sequence[KeptOptionQuote], *, stamp: tuple[int, int, int] | None) -> None:
         self.by_symbol = {}
         self.minute_keys = set()
+        self.minutes_by_ms = {}
         self.pricing_by_symbol = {}
         for row in rows:
             self.by_symbol.setdefault(row.symbol, []).append(row)
             if row.minute_ms is not None:
                 self.minute_keys.add((row.symbol, row.minute_ms))
+                self.minutes_by_ms.setdefault(row.minute_ms, []).append(row)
             else:
                 self.pricing_by_symbol.setdefault(row.symbol, []).append(row)
+        self.minute_clock = sorted(self.minutes_by_ms)
         self.last_seq = rows[-1].seq if rows else 0
         self.rows = len(rows)
         self.stamp, self.read = stamp, True
@@ -273,6 +284,7 @@ class KeptOptionQuotes:
     """The option quotes one simulated account was handed, cut back to what a later reader can use."""
 
     def __init__(self, *, path: Path, trusted_root: Path) -> None:
+        self._minutes = OptionQuoteMinutes(path.with_suffix(".minutes.sqlite3"), trusted_root=trusted_root)
         self._wal: JsonlWal[KeptOptionQuote] = JsonlWal(
             path,
             record_model=KeptOptionQuote,
@@ -354,17 +366,31 @@ class KeptOptionQuotes:
 
     def keep_minutes(self, quotes: Mapping[str, HeldQuote], *, observed_at_ms: int) -> None:
         """Keep the first held-book observation per contract and UTC minute. Later observations never replace it."""
-        self._append(
-            [(symbol, quote, observed_at_ms) for symbol, quote in quotes.items()],
-            now_ms=observed_at_ms, minute_ms=observed_at_ms // SOURCE_BAR_MS * SOURCE_BAR_MS,
-        )
+        if not quotes:
+            return
+        minute = observed_at_ms // SOURCE_BAR_MS * SOURCE_BAR_MS
+        with _KEEP_LOCK:
+            legacy = self._held().minute_keys
+            pending = {symbol: quote for symbol, quote in quotes.items() if (symbol, minute) not in legacy}
+        try:
+            self._minutes.keep(pending, minute_ms=minute, observed_at_ms=observed_at_ms)
+        except sqlite3.Error as exc:
+            raise KeptOptionQuotesUnavailable("Held option quote minutes could not be saved.", detail=str(exc)) from exc
 
     def minutes(self, *, from_ms: int, to_ms: int) -> list[KeptOptionQuote]:
-        """The retained minute observations, including one-sided quotes, in observation order."""
+        """Read only the requested range, preserving the first observation in either store."""
         with _KEEP_LOCK:
-            return [row for row in self._held().all_rows()
-                    if row.minute_ms is not None and from_ms <= row.minute_ms < to_ms
-                    and row.kept_at_ms < to_ms]
+            held = self._held()
+            clock = held.minute_clock[bisect_left(held.minute_clock, from_ms):bisect_left(held.minute_clock, to_ms)]
+            legacy = [row for minute in clock for row in held.minutes_by_ms[minute] if row.kept_at_ms < to_ms]
+        try:
+            rows = [*legacy, *self._minutes.read(from_ms=from_ms, to_ms=to_ms)]
+        except (sqlite3.Error, ValueError) as exc:
+            raise KeptOptionQuotesUnavailable("Held option quote minutes could not be read.", detail=str(exc)) from exc
+        found = {}
+        for row in sorted(rows, key=lambda row: (row.kept_at_ms, row.seq)):
+            found.setdefault((row.symbol, row.minute_ms), row)
+        return list(found.values())
 
     def restore(self, symbol: str, quote: HeldQuote, *, now_ms: int | None = None) -> None:
         """Put back a quote the caller holds, if it is not kept: as of its own receipt, never as of now.
@@ -381,7 +407,7 @@ class KeptOptionQuotes:
             self._append([(symbol, quote, max(times))], now_ms=now_ms)
 
     def _append(
-        self, statements: Sequence[tuple[str, HeldQuote, int]], *, now_ms: int | None, minute_ms: int | None = None,
+        self, statements: Sequence[tuple[str, HeldQuote, int]], *, now_ms: int | None,
     ) -> None:
         said = [(symbol, RecordedQuote.of(quote), kept_at_ms) for symbol, quote, kept_at_ms in statements if receipt_times(quote)]
         if not said:
@@ -391,14 +417,14 @@ class KeptOptionQuotes:
             held = self._held()
             rows: list[KeptOptionQuote] = []
             for symbol, recorded, kept_at_ms in said:
-                already = (symbol, minute_ms) in held.minute_keys if minute_ms is not None else any(
+                already = any(
                     row.quote == recorded and row.kept_at_ms == kept_at_ms
                     for row in (*held.pricing_by_symbol.get(symbol, ()), *(new for new in rows if new.symbol == symbol))
                 )
                 if not already:
                     rows.append(
                         KeptOptionQuote(seq=held.last_seq + len(rows) + 1, symbol=symbol, quote=recorded,
-                                        kept_at_ms=kept_at_ms, minute_ms=minute_ms)
+                                        kept_at_ms=kept_at_ms)
                     )
             if not rows:
                 return
@@ -406,10 +432,7 @@ class KeptOptionQuotes:
             self._wal.append_many(rows)
             for row in rows:
                 held.by_symbol.setdefault(row.symbol, []).append(row)
-                if row.minute_ms is not None:
-                    held.minute_keys.add((row.symbol, row.minute_ms))
-                else:
-                    held.pricing_by_symbol.setdefault(row.symbol, []).append(row)
+                held.pricing_by_symbol.setdefault(row.symbol, []).append(row)
             held.last_seq, held.rows = rows[-1].seq, held.rows + len(rows)
             held.stamp = _stamp(self._wal.path)
             if now_ms is not None and held.rows > max(COMPACT_ABOVE_ROWS, 2 * held.rows_after_cut):

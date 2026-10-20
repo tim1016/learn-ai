@@ -13,6 +13,7 @@ import json
 import logging
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
@@ -133,9 +134,15 @@ def held(clock: _Clock) -> HeldOptionQuotes:
 
 @pytest.mark.parametrize("account_id", ["sim:minute-bot", "paper-account", "live-account"])
 async def test_every_account_keeps_one_held_leg_observation_per_minute(
-    held: HeldOptionQuotes, clock: _Clock, tmp_path: Path, account_id: str,
+    held: HeldOptionQuotes, clock: _Clock, tmp_path: Path, account_id: str, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     account, ibkr = _Account(held, tmp_path, account_id), _Supervisor()
+    saved: list[int] = []
+    keep_minutes = account.kept.keep_minutes
+    def observed(quotes: Mapping[str, HeldQuote], *, observed_at_ms: int) -> None:
+        saved.append(observed_at_ms)
+        keep_minutes(quotes, observed_at_ms=observed_at_ms)
+    monkeypatch.setattr(account.kept, "keep_minutes", observed)
     account.holds = [CALL.occ_symbol]
     await held.read_books()
     ibkr.quotes[CALL.occ_symbol] = _quote("4.08", "4.12", NOW - 100)
@@ -149,6 +156,7 @@ async def test_every_account_keeps_one_held_leg_observation_per_minute(
     rows = account.kept.minutes(from_ms=NOW - MINUTE, to_ms=clock.value + 1)
     assert [row.quote.bid for row in rows] == [Decimal("4.08"), Decimal(6)]
     assert rows[-1].quote.ask is None
+    assert saved == [NOW, clock.value], "same-minute rounds must not schedule another minute write"
 
 
 async def test_the_newest_quote_of_a_held_contract_is_kept_and_again_fifteen_seconds_on(

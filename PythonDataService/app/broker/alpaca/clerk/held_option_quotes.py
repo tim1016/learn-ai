@@ -238,6 +238,7 @@ class _Account:
     held: tuple[OptionContract, ...] = ()
     # When each held contract's quote was last handed over, by OCC symbol.
     kept_at_ms: dict[str, int] = field(default_factory=dict)
+    minute_kept: dict[str, int] = field(default_factory=dict)
     # What was last put back of a held contract whose line showed one side, by OCC symbol. Gone once
     # the contract is marked again.
     put_back: dict[str, tuple[int, Decimal | None, Decimal | None]] = field(default_factory=dict)
@@ -410,6 +411,8 @@ class HeldOptionQuotes:
         still = {contract.occ_symbol for contract in account.held}
         for symbol in [symbol for symbol in account.kept_at_ms if symbol not in still]:
             del account.kept_at_ms[symbol]
+        for symbol in [symbol for symbol in account.minute_kept if symbol not in still]:
+            del account.minute_kept[symbol]
         for symbol in [symbol for symbol in account.put_back if symbol not in still]:
             del account.put_back[symbol]
         for key in [key for key in self._not_kept if key[0] == account.account_id and key[1] not in still]:
@@ -585,7 +588,8 @@ class HeldOptionQuotes:
                 fault = None if quote is None else mark_fault(
                     quote, generation=feed.generation, session_open_ms=session_open_ms, now_ms=now_ms
                 )
-                if quote is not None and (fault is None or shows_one_side(
+                minute = now_ms // 60_000 * 60_000
+                if quote is not None and account.minute_kept.get(symbol) != minute and (fault is None or shows_one_side(
                     quote, generation=feed.generation, session_open_ms=session_open_ms, now_ms=now_ms,
                 )):
                     due.setdefault(account.account_id, _Writes(account)).minute_quotes[symbol] = quote
@@ -629,7 +633,8 @@ class HeldOptionQuotes:
         key = ("write", account.account_id)
 
         def write() -> None:
-            account.kept.keep_minutes(wanted.minute_quotes, observed_at_ms=now_ms)
+            if wanted.minute_quotes:
+                account.kept.keep_minutes(wanted.minute_quotes, observed_at_ms=now_ms)
             if marks:
                 account.kept.keep_all(marks, kept_at_ms=now_ms)
             for symbol, quote in one_sided.items():
@@ -650,6 +655,9 @@ class HeldOptionQuotes:
             key, "The quotes of held option contracts are being kept again",
             extra={"action": "held_option_quotes_written_again", "account_id": account.account_id},
         )
+        minute = now_ms // 60_000 * 60_000
+        for symbol in wanted.minute_quotes:
+            account.minute_kept[symbol] = max(minute, account.minute_kept.get(symbol, minute))
         for symbol, quote in one_sided.items():
             account.put_back[symbol] = _sides_shown(quote)
         for symbol in marks:

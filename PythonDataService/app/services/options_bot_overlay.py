@@ -138,9 +138,17 @@ def add_overlay(
                 filled_at_ms=at_ms, side=fill.side, quantity=fill.contracts, price=float(fill.filled),
                 symbol=fill.contract.occ_symbol, order_ref=f"backtest:{fill.leg_id}:{fill.entry_number}",
                 event_key=f"backtest:{fill.bar_close_ms}:{index}",
-                exit_reason=None if fill.exit_reason is None else EXIT_WORDS[fill.exit_reason.value], source="backtest",
+                exit_reason=None if fill.exit_reason is None else EXIT_WORDS.get(fill.exit_reason.value, fill.exit_reason.value), source="backtest",
             ))
     return chart.model_copy(update={"premium_panes": list(panes.values())})
+
+
+def _readiness_notice(session_opens: tuple[int, ...], *, now_ms: int) -> str | None:
+    if not session_opens:
+        return "Comparison not ready: the saved session identity is unavailable."
+    if any(now_ms < session_window_for_date(et_date_at_ms(opened)).close_ms_utc for opened in session_opens):
+        return "Comparison not ready: the session has not finished; a partial day is never compared."
+    return None
 
 
 def comparison_for_sessions(
@@ -149,15 +157,12 @@ def comparison_for_sessions(
 ) -> ChartLiveResponse | ChartHistoryResponse:
     if configuration.rules_digest != current_rules_digest():
         return chart.model_copy(update={"backtest_notice": "Comparison not ready: this deployment's sealed rules differ from the running replay."})
+    notice = _readiness_notice(session_opens, now_ms=now_ms)
+    if notice is not None:
+        return chart.model_copy(update={"backtest_notice": notice})
     reasons = []
     ready = []
-    if not session_opens:
-        reasons.append("the saved session identity is unavailable")
     for opened in session_opens:
-        window = session_window_for_date(et_date_at_ms(opened))
-        if now_ms < window.close_ms_utc:
-            reasons.append("the session has not finished; a partial day is never compared")
-            continue
         try:
             replay = _replay(configuration.golden_setup_id, configuration.setup_sha256, configuration.rules_digest,
                              configuration.setup.model_dump_json(), opened)
@@ -197,6 +202,9 @@ async def with_options_overlay(
 
     try:
         opens = await asyncio.to_thread(read_opens)
+        notice = _readiness_notice(opens, now_ms=now_ms)
+        if notice is not None:
+            return chart.model_copy(update={"backtest_notice": notice})
         if fleet_settings.ROLE == "clerk_agent":
             return await fetch_options_overlay(chart, binding.options_bot, opens, now_ms=now_ms)
         if fleet_settings.ROLE in {"combined", "fleet_coordinator"}:

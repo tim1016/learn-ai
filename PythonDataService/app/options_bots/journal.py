@@ -256,7 +256,7 @@ class OptionsBotJournal:
 
     def sessions(self, from_ms: int, to_ms: int) -> tuple[SessionState, ...]:
         return tuple(SessionState.model_validate_json(row[0]) for row in self._conn.execute(
-            "SELECT state_json FROM sessions WHERE open_ms<? ORDER BY open_ms", (to_ms,)
+            "SELECT state_json FROM sessions WHERE open_ms<? AND open_ms>? ORDER BY open_ms", (to_ms, from_ms - 86_400_000)
         ) if json.loads(row[0])["session_close_ms"] > from_ms)
 
     def minutes(self, session_open_ms: int) -> tuple[ConsumedMinute, ...]:

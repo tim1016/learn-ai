@@ -97,6 +97,7 @@ class OptionsBotDuty:
         self._session: OptionsSession | None = None
         self._observations: ObservedMarket | None = None
         self._observed_orders: list[ObservedOrder] = []
+        self._recorded_orders: set[ObservedOrder] = set()
         self._market: Any = None
         self._market_entered = False
         self._qualified_minute: int | None = None
@@ -186,10 +187,10 @@ class OptionsBotDuty:
                 raise ValueError("a pending Options attempt has no durable opening decision")
             snapshot = self._snapshot(row)
             for kind, fills in (("entry", snapshot.entry_fills), ("close", snapshot.close_fills)):
-                self._observed_orders.extend(
-                    ObservedOrder(fill.order_ref, row.attempt_id, leg.setup.leg_id, number, fill.contract, kind, fill.filled_at_ms)
-                    for fill in fills
-                )
+                for fill in fills:
+                    observed = ObservedOrder(fill.order_ref, row.attempt_id, leg.setup.leg_id, number, fill.contract, kind, fill.filled_at_ms)
+                    if observed not in self._recorded_orders and observed not in self._observed_orders:
+                        self._observed_orders.append(observed)
             if snapshot.entry_decision_id is not None:
                 if row.status == "pending":
                     self.journal.finish(row.decision_id)
@@ -316,6 +317,7 @@ class OptionsBotDuty:
         assert self._session is not None and self._observations is not None
         self.journal.commit(self._session.state, step, minutes=self._observations.minutes,
                             orders=self._observed_orders, read_at_ms=now)
+        self._recorded_orders.update(self._observed_orders)
         self._observations.minutes.clear()
         self._observed_orders.clear()
 
