@@ -120,16 +120,38 @@ def test_an_activity_date_is_new_york_midnight_and_nothing_else(instant: int) ->
         _share_trade(activity_date_ms=instant)
 
 
-def test_an_event_changes_a_position_by_at_least_one_contract() -> None:
-    with pytest.raises(ValidationError, match="never none"):
-        _event(position_change=0)
-
-
-def test_an_exercise_cannot_add_to_a_position_and_an_assignment_cannot_take_from_a_bought_one() -> None:
-    with pytest.raises(ValidationError, match="an exercise takes from a bought position"):
-        _event(kind=OptionEventKind.EXERCISED, activity_type="OPEXC", position_change=1)
-    with pytest.raises(ValidationError, match="an assignment takes from a sold position"):
-        _event(position_change=-1)
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        pytest.param({"position_change": 0}, "never none", id="an event changes a position by at least one contract"),
+        pytest.param(
+            {"kind": OptionEventKind.EXERCISED, "activity_type": "OPEXC", "position_change": 1},
+            "an exercise takes from a bought position",
+            id="an exercise cannot add to a position",
+        ),
+        pytest.param(
+            {"position_change": -1},
+            "an assignment takes from a sold position",
+            id="an assignment cannot take from a bought one",
+        ),
+        # The contract expires on Friday 2024-03-01. An expiry dated the Thursday is about something else.
+        pytest.param(
+            {
+                "kind": OptionEventKind.EXPIRED,
+                "activity_type": "OPEXP",
+                "position_change": -1,
+                "activity_date_ms": et_midnight_ms(date(2024, 2, 29)),
+            },
+            "this expiry is dated 2024-02-29",
+            id="an option cannot expire before its own expiry date",
+        ),
+        pytest.param({"net_amount": Decimal("-450")}, "moves no cash of its own", id="cash of its own: a debit"),
+        pytest.param({"net_amount": Decimal("0.01")}, "moves no cash of its own", id="cash of its own: a cent"),
+    ],
+)
+def test_an_event_the_books_cannot_follow_is_refused_by_name(changes: dict[str, Any], message: str) -> None:
+    with pytest.raises(ValidationError, match=message):
+        _event(**changes)
 
 
 @pytest.mark.parametrize("position_change", [-2, 2])
@@ -137,17 +159,6 @@ def test_an_expiry_may_end_a_bought_position_or_a_sold_one(position_change: int)
     event = _event(kind=OptionEventKind.EXPIRED, activity_type="OPEXP", position_change=position_change)
 
     assert event.contracts == 2
-
-
-def test_an_option_cannot_expire_before_its_own_expiry_date() -> None:
-    """The contract expires on Friday 2024-03-01. An expiry dated the Thursday is about something else."""
-    with pytest.raises(ValidationError, match="this expiry is dated 2024-02-29"):
-        _event(
-            kind=OptionEventKind.EXPIRED,
-            activity_type="OPEXP",
-            position_change=-1,
-            activity_date_ms=et_midnight_ms(date(2024, 2, 29)),
-        )
 
 
 @pytest.mark.parametrize("day", [date(2024, 3, 1), date(2024, 3, 2), date(2024, 3, 4)], ids=["the day", "the Saturday", "the Monday"])
@@ -169,52 +180,82 @@ def test_an_assignment_or_an_exercise_may_come_before_the_expiry_date() -> None:
     ).activity_date_ms == early
 
 
-@pytest.mark.parametrize("net_amount", [Decimal("-450"), Decimal("0.01")])
-def test_an_event_that_states_cash_of_its_own_is_not_one_the_books_can_follow(net_amount: Decimal) -> None:
-    with pytest.raises(ValidationError, match="moves no cash of its own"):
-        _event(net_amount=net_amount)
-
-
 @pytest.mark.parametrize("net_amount", [None, Decimal("0"), Decimal("0.00")])
 def test_an_event_states_no_cash_or_none_at_all(net_amount: Decimal | None) -> None:
     assert _event(net_amount=net_amount).net_amount == net_amount
 
 
-@pytest.mark.parametrize("changes", [{"shares": 0}, {"price": Decimal("0")}, {"price": Decimal("-4.5")}])
-def test_a_share_trade_is_for_some_shares_at_a_price_above_zero(changes: dict[str, Any]) -> None:
-    with pytest.raises(ValidationError):
-        _share_trade(**changes)
-
-
 # ── Nothing is read as a number, a price or a kind that is not one ──────────
-
-
-@pytest.mark.parametrize("position_change", [True, 1.0, "1", Decimal("1")], ids=["a boolean", "a float", "text", "a decimal"])
-def test_a_count_of_contracts_is_a_whole_number_and_nothing_else_is_read_as_one(position_change: Any) -> None:
-    with pytest.raises(ValidationError):
-        _event(position_change=position_change)
-
-
-@pytest.mark.parametrize("shares", [True, -300.0, "-300", Decimal("-300")], ids=["a boolean", "a float", "text", "a decimal"])
-def test_a_count_of_shares_is_a_whole_number_and_nothing_else_is_read_as_one(shares: Any) -> None:
-    with pytest.raises(ValidationError):
-        _share_trade(shares=shares)
 
 
 @pytest.mark.parametrize(
     "changes",
-    [{"price": 4.5}, {"price": "4.5"}, {"price": 4}, {"net_amount": 1350}, {"net_amount": 1350.0}, {"net_amount": "1350"}],
-    ids=["a float price", "a price in text", "a whole-number price", "whole-number cash", "float cash", "cash in text"],
+    [
+        {"position_change": True},
+        {"position_change": 1.0},
+        {"position_change": "1"},
+        {"position_change": Decimal("1")},
+        {"net_amount": 0},
+        {"net_amount": 0.0},
+        {"net_amount": "0"},
+        {"net_amount": False},
+    ],
+    ids=[
+        "contracts as a boolean",
+        "contracts as a float",
+        "contracts in text",
+        "contracts as a decimal",
+        "cash as a whole number",
+        "cash as a float",
+        "cash in text",
+        "cash as a boolean",
+    ],
 )
-def test_a_share_trades_money_is_an_exact_decimal_or_it_is_refused(changes: dict[str, Any]) -> None:
+def test_an_events_contract_count_is_a_whole_number_and_its_cash_an_exact_decimal_or_it_is_refused(
+    changes: dict[str, Any],
+) -> None:
+    with pytest.raises(ValidationError):
+        _event(**changes)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"shares": 0},
+        {"price": Decimal("0")},
+        {"price": Decimal("-4.5")},
+        {"shares": True},
+        {"shares": -300.0},
+        {"shares": "-300"},
+        {"shares": Decimal("-300")},
+        {"price": 4.5},
+        {"price": "4.5"},
+        {"price": 4},
+        {"net_amount": 1350},
+        {"net_amount": 1350.0},
+        {"net_amount": "1350"},
+    ],
+    ids=[
+        "no shares",
+        "a price of zero",
+        "a price below zero",
+        "shares as a boolean",
+        "shares as a float",
+        "shares in text",
+        "shares as a decimal",
+        "a float price",
+        "a price in text",
+        "a whole-number price",
+        "whole-number cash",
+        "float cash",
+        "cash in text",
+    ],
+)
+def test_a_share_trade_is_whole_shares_at_an_exact_decimal_price_above_zero_or_it_is_refused(
+    changes: dict[str, Any],
+) -> None:
     with pytest.raises(ValidationError):
         _share_trade(**changes)
-
-
-@pytest.mark.parametrize("net_amount", [0, 0.0, "0", False], ids=["a whole number", "a float", "text", "a boolean"])
-def test_an_events_cash_is_an_exact_decimal_or_it_is_refused(net_amount: Any) -> None:
-    with pytest.raises(ValidationError):
-        _event(net_amount=net_amount)
 
 
 @pytest.mark.parametrize(
@@ -438,20 +479,24 @@ def test_an_activity_the_broker_does_not_report_as_executed_is_allocated_to_noth
     assert refused.value.unmatched_contracts == 3
 
 
-def test_the_activitys_date_decides_which_lots_were_open() -> None:
-    opened_the_monday_after = _sold("bot-a", 3, opened=date(2024, 3, 4), sequence=9)
-
+@pytest.mark.parametrize(
+    ("lots", "reason"),
+    [
+        pytest.param(
+            (_sold("bot-a", 3, opened=date(2024, 3, 4), sequence=9),),
+            OptionEventRefusal.MORE_CONTRACTS_THAN_HELD,
+            id="the activitys date decides which lots were open",
+        ),
+        pytest.param((), OptionEventRefusal.CONTRACT_NOT_HELD, id="a refusal from the rule reaches the caller by name"),
+    ],
+)
+def test_a_refusal_from_the_rule_reaches_the_caller_by_name(
+    lots: tuple[HeldOptionLot, ...], reason: OptionEventRefusal
+) -> None:
     with pytest.raises(OptionEventRefused) as refused:
-        allocation_of(_event(), multiplier=100, lots=[opened_the_monday_after])
+        allocation_of(_event(), multiplier=100, lots=list(lots))
 
-    assert refused.value.reason is OptionEventRefusal.MORE_CONTRACTS_THAN_HELD
-
-
-def test_a_refusal_from_the_rule_reaches_the_caller_by_name() -> None:
-    with pytest.raises(OptionEventRefused) as refused:
-        allocation_of(_event(), multiplier=100, lots=[])
-
-    assert refused.value.reason is OptionEventRefusal.CONTRACT_NOT_HELD
+    assert refused.value.reason is reason
 
 
 # ── The broker's share trade against the contract's terms ───────────────────
@@ -463,40 +508,64 @@ def _expected() -> Any:
     return trade
 
 
-def test_a_share_trade_that_matches_the_contracts_terms_has_no_disagreement() -> None:
-    assert share_trade_disagreements(_expected(), _share_trade()) == ()
-    # The broker may write the same cash with or without its cents.
-    assert share_trade_disagreements(_expected(), _share_trade(net_amount=Decimal("1350.00"))) == ()
-
-
 @pytest.mark.parametrize(
-    ("changes", "difference"),
+    ("changes", "differences"),
     [
-        ({"underlying_symbol": "QSI"}, "the shares are in QSI, and the contract's root is QS"),
-        ({"shares": -200}, "-200 shares were reported, and the contract moves -300"),
-        ({"shares": 300}, "300 shares were reported, and the contract moves -300"),
-        ({"price": Decimal("4.55")}, "the reported price is 4.55, and the strike is 4.5"),
-        ({"net_amount": Decimal("1349.99")}, "the reported cash is 1349.99, and the shares at the strike come to 1350.00"),
-        ({"net_amount": Decimal("-1350")}, "the reported cash is -1350, and the shares at the strike come to 1350.00"),
+        pytest.param({}, (), id="a share trade that matches the contracts terms has no disagreement"),
+        # The broker may write the same cash with or without its cents.
+        pytest.param({"net_amount": Decimal("1350.00")}, (), id="the same cash with its cents has no disagreement"),
+        pytest.param(
+            {"underlying_symbol": "QSI"},
+            ("the shares are in QSI, and the contract's root is QS",),
+            id="the shares are in another root",
+        ),
+        pytest.param(
+            {"shares": -200},
+            ("-200 shares were reported, and the contract moves -300",),
+            id="fewer shares than the contract moves",
+        ),
+        pytest.param(
+            {"shares": 300},
+            ("300 shares were reported, and the contract moves -300",),
+            id="shares the other way",
+        ),
+        pytest.param(
+            {"price": Decimal("4.55")},
+            ("the reported price is 4.55, and the strike is 4.5",),
+            id="a price that is not the strike",
+        ),
+        pytest.param(
+            {"net_amount": Decimal("1349.99")},
+            ("the reported cash is 1349.99, and the shares at the strike come to 1350.00",),
+            id="cash a cent short",
+        ),
+        pytest.param(
+            {"net_amount": Decimal("-1350")},
+            ("the reported cash is -1350, and the shares at the strike come to 1350.00",),
+            id="cash with the sign reversed",
+        ),
+        pytest.param(
+            {"status": OptionActivityStatus.CORRECT},
+            (f"the broker reports the share trade as {OptionActivityStatus.CORRECT.value}, not executed",),
+            id="a share trade reported as correct agrees with nothing",
+        ),
+        pytest.param(
+            {"status": OptionActivityStatus.CANCELED},
+            (f"the broker reports the share trade as {OptionActivityStatus.CANCELED.value}, not executed",),
+            id="a share trade reported as canceled agrees with nothing",
+        ),
     ],
 )
-def test_each_way_a_share_trade_can_differ_is_named(changes: dict[str, Any], difference: str) -> None:
-    assert share_trade_disagreements(_expected(), _share_trade(**changes)) == (difference,)
+def test_a_share_trade_agrees_with_the_contracts_terms_or_each_way_it_differs_is_named(
+    changes: dict[str, Any], differences: tuple[str, ...]
+) -> None:
+    assert share_trade_disagreements(_expected(), _share_trade(**changes)) == differences
 
 
 def test_cash_that_differs_far_below_a_cent_is_still_a_difference() -> None:
     a_hair_over = Decimal("1350." + "0" * 33 + "1")
 
     assert len(share_trade_disagreements(_expected(), _share_trade(net_amount=a_hair_over))) == 1
-
-
-@pytest.mark.parametrize("status", [OptionActivityStatus.CORRECT, OptionActivityStatus.CANCELED])
-def test_a_share_trade_the_broker_does_not_report_as_executed_agrees_with_nothing(
-    status: OptionActivityStatus,
-) -> None:
-    assert share_trade_disagreements(_expected(), _share_trade(status=status)) == (
-        f"the broker reports the share trade as {status.value}, not executed",
-    )
 
 
 def test_several_differences_are_all_named() -> None:

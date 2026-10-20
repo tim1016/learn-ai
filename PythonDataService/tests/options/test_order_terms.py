@@ -25,13 +25,21 @@ def test_an_owners_two_times_make_close_terms_with_every_other_term_as_the_deadl
     assert (order_terms.entry_wait_seconds(made), order_terms.expiry_close_lead_minutes(made)) == (25, 90)
 
 
-def test_the_terms_as_the_deadlines_start_them_make_the_starting_close_terms_again() -> None:
+def test_the_terms_as_the_deadlines_start_them_round_trip_and_each_starts_inside_what_it_may_be() -> None:
     start = CloseTerms()
 
     assert order_terms.close_terms_with(
         entry_wait_seconds=order_terms.entry_wait_seconds(start),
         expiry_close_lead_minutes=order_terms.expiry_close_lead_minutes(start),
-    ) == start
+    ) == start, "the terms as the deadlines start them make the starting close terms again"
+    assert order_terms.GAP_LIMIT_PERCENT.fault(DEFAULT_LEG_GAP_LIMIT_PERCENT) is None, "the gap limit starts inside what it may be"
+    assert order_terms.COST_LIMIT_PERCENT.fault(DEFAULT_COST_LIMIT_PERCENT) is None, "the cost limit starts inside what it may be"
+    assert order_terms.ENTRY_WAIT_SECONDS.fault(Decimal(order_terms.entry_wait_seconds(start))) is None, (
+        "the entry wait starts inside what it may be"
+    )
+    assert order_terms.EXPIRY_CLOSE_LEAD_MINUTES.fault(Decimal(order_terms.expiry_close_lead_minutes(start))) is None, (
+        "the expiry close lead starts inside what it may be"
+    )
 
 
 def test_a_term_that_is_no_whole_number_of_its_unit_is_never_shown_rounded() -> None:
@@ -39,15 +47,6 @@ def test_a_term_that_is_no_whole_number_of_its_unit_is_never_shown_rounded() -> 
         order_terms.entry_wait_seconds(CloseTerms(entry_wait_ms=20_500))
     with pytest.raises(ValueError, match="whole number"):
         order_terms.expiry_close_lead_minutes(CloseTerms(expiry_close_lead_ms=90_000))
-
-
-def test_each_term_starts_inside_what_it_may_be() -> None:
-    start = CloseTerms()
-
-    assert order_terms.GAP_LIMIT_PERCENT.fault(DEFAULT_LEG_GAP_LIMIT_PERCENT) is None
-    assert order_terms.COST_LIMIT_PERCENT.fault(DEFAULT_COST_LIMIT_PERCENT) is None
-    assert order_terms.ENTRY_WAIT_SECONDS.fault(Decimal(order_terms.entry_wait_seconds(start))) is None
-    assert order_terms.EXPIRY_CLOSE_LEAD_MINUTES.fault(Decimal(order_terms.expiry_close_lead_minutes(start))) is None
 
 
 def test_an_owner_chooses_an_entry_wait_of_one_to_thirty_seconds_and_starts_at_twenty() -> None:

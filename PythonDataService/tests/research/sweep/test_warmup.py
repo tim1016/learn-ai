@@ -30,45 +30,27 @@ DAY_MS = 24 * 60 * 60_000
 @pytest.mark.parametrize(
     ("strategy_key", "params", "first_ready"),
     [
-        ("rsi_mean_reversion", {"window": 26}, 27),  # RSI(period) needs period + 1
-        ("spy_strategy_c", {"adx_period": 200}, 400),  # ADX(period) needs 2 x period
-        ("spy_strategy_a", {"macd_fast": 12, "macd_slow": 500, "macd_signal": 200}, 699),  # slow + signal - 1
-        ("sma_crossover", {"short_window": 2, "long_window": 3}, 3),
+        pytest.param("rsi_mean_reversion", {"window": 26}, 27, id="rsi_needs_period_plus_one"),
+        pytest.param("spy_strategy_c", {"adx_period": 200}, 400, id="adx_needs_two_times_period"),
+        pytest.param("spy_strategy_a", {"macd_fast": 12, "macd_slow": 500, "macd_signal": 200}, 699, id="macd_slow_plus_signal_minus_one"),
+        pytest.param("sma_crossover", {"short_window": 2, "long_window": 3}, 3, id="sma_crossover_long_window"),
+        # At the default EMA5 / EMA10 lengths the fixed RSI14 governs at 15 samples.
+        pytest.param("ema_crossover_signal", {}, 15, id="fixed_period_program_declares_a_constant_requirement_and_stays_sweepable"),
+        # The EMA lengths are parameters (#2696): EMA(n) is ready at n samples, RSI(14) at 15.
+        pytest.param("ema_crossover_signal", {"fast_period": 5, "slow_period": 10}, 15, id="ema_default_point_stated_explicitly"),
+        pytest.param("ema_crossover_signal", {"fast_period": 2, "slow_period": 14}, 15, id="ema_rsi14_still_governs_below_15"),
+        pytest.param("ema_crossover_signal", {"fast_period": 5, "slow_period": 15}, 15, id="ema15_and_rsi14_ready_together"),
+        pytest.param("ema_crossover_signal", {"fast_period": 20, "slow_period": 30}, 30, id="ema_20_30"),
+        pytest.param("ema_crossover_signal", {"fast_period": 30, "slow_period": 40}, 40, id="ema_slowest_legal_length_governs"),
     ],
 )
 def test_probe_reproduces_the_reviewed_readiness_thresholds(strategy_key: str, params: dict, first_ready: int) -> None:
     probe = probe_warmup_samples(strategy_key, {"symbol": "SPY", **params})
 
-    assert probe.first_ready_sample == first_ready
+    assert probe.first_ready_sample == first_ready, "the first ready sample is the reviewed readiness threshold"
     # One prior-state bar on top, so a crossover can be a fresh one on the first scored bar.
-    assert probe.required_samples == first_ready + 1
-
-
-def test_a_fixed_period_program_declares_a_constant_requirement_and_stays_sweepable() -> None:
-    # At the default EMA5 / EMA10 lengths the fixed RSI14 governs at 15 samples.
-    probe = probe_warmup_samples("ema_crossover_signal", {"symbol": "SPY"})
-
-    assert probe.first_ready_sample == 15
-    assert probe.bar_span_ms == FIFTEEN_MIN_MS
-
-
-@pytest.mark.parametrize(
-    ("lengths", "first_ready"),
-    [
-        ({"fast_period": 5, "slow_period": 10}, 15),  # the default point, stated explicitly
-        ({"fast_period": 2, "slow_period": 14}, 15),  # RSI(14) still governs below 15
-        ({"fast_period": 5, "slow_period": 15}, 15),  # EMA(15) and RSI(14) ready together
-        ({"fast_period": 20, "slow_period": 30}, 30),
-        ({"fast_period": 30, "slow_period": 40}, 40),  # the slowest legal EMA governs
-    ],
-)
-def test_probe_measures_the_configured_ema_lengths(lengths: dict[str, int], first_ready: int) -> None:
-    # The EMA lengths are parameters (#2696): EMA(n) is ready at n samples, RSI(14) at 15.
-    probe = probe_warmup_samples("ema_crossover_signal", {"symbol": "SPY", **lengths})
-
-    assert probe.first_ready_sample == first_ready
-    assert probe.required_samples == first_ready + 1
-    assert probe.bar_span_ms == FIFTEEN_MIN_MS
+    assert probe.required_samples == first_ready + 1, "the requirement is the first ready sample plus one prior-state bar"
+    assert probe.bar_span_ms == FIFTEEN_MIN_MS, "the decision cadence is fifteen minutes"
 
 
 def test_probe_ignores_the_hold_which_never_delays_readiness() -> None:
@@ -96,23 +78,64 @@ def test_probe_refuses_an_unknown_strategy() -> None:
 WINDOW = (date(2025, 1, 6), date(2025, 1, 31))
 
 
-def test_run_up_is_carved_from_the_front_when_no_earlier_history_exists(tmp_path: Path) -> None:
-    # 30 fifteen-minute bars: one full session holds 26, so two sessions are consumed.
+@pytest.mark.parametrize(
+    ("requested_start", "requested_end", "required_samples", "bar_span_ms", "run_up_sessions", "evaluation_start"),
+    [
+        # 30 fifteen-minute bars: one full session holds 26, so two sessions are consumed.
+        pytest.param(
+            WINDOW[0],
+            WINDOW[1],
+            30,
+            FIFTEEN_MIN_MS,
+            2,
+            expected_sessions(*WINDOW)[2],
+            id="run_up_is_carved_from_the_front_when_no_earlier_history_exists",
+        ),
+        # Thanksgiving week 2024: Wed 11-27 (26 bars), Thu closed, Fri 11-29 closes 13:00 ET (14 bars).
+        # 41 required: 26 + 14 = 40 is not enough; a full Friday (26) would have been.
+        pytest.param(
+            date(2024, 11, 27),
+            date(2024, 12, 6),
+            41,
+            FIFTEEN_MIN_MS,
+            3,
+            date(2024, 12, 3),
+            id="an_early_close_contributes_fewer_bars",
+        ),
+        pytest.param(
+            WINDOW[0],
+            WINDOW[1],
+            3,
+            DAY_MS,
+            3,
+            expected_sessions(*WINDOW)[3],
+            id="daily_cadence_counts_one_bar_per_session",
+        ),
+    ],
+)
+def test_run_up_is_carved_from_the_front_when_no_earlier_history_exists(
+    tmp_path: Path,
+    requested_start: date,
+    requested_end: date,
+    required_samples: int,
+    bar_span_ms: int,
+    run_up_sessions: int,
+    evaluation_start: date,
+) -> None:
     plan = plan_run_up(
         symbol="SPY",
-        requested_start=WINDOW[0],
-        requested_end=WINDOW[1],
-        required_samples=30,
-        bar_span_ms=FIFTEEN_MIN_MS,
+        requested_start=requested_start,
+        requested_end=requested_end,
+        required_samples=required_samples,
+        bar_span_ms=bar_span_ms,
         roots=[tmp_path],
     )
 
-    sessions = expected_sessions(*WINDOW)
-    assert plan.carved_from_range is True
-    assert plan.data_start == WINDOW[0]
-    assert plan.run_up_sessions == 2
-    assert plan.evaluation_start == sessions[2]
-    assert plan.evaluation_end == WINDOW[1]
+    assert plan.carved_from_range is True, "the run-up is carved from the requested range"
+    assert plan.data_start == requested_start, "data starts at the requested start"
+    assert plan.run_up_sessions == run_up_sessions, "the run-up consumes the expected number of sessions"
+    assert plan.evaluation_start == evaluation_start, "evaluation starts after the run-up sessions"
+    assert plan.evaluation_end == requested_end, "evaluation ends at the requested end"
 
 
 def test_earlier_history_is_used_when_the_lake_holds_it(tmp_path: Path) -> None:
@@ -133,35 +156,6 @@ def test_earlier_history_is_used_when_the_lake_holds_it(tmp_path: Path) -> None:
     assert plan.evaluation_start == WINDOW[0]
     assert plan.data_start == date(2025, 1, 2)  # the two sessions before Jan 6: Jan 2 and Jan 3 (Jan 1 closed)
     assert plan.run_up_sessions == 2
-
-
-def test_an_early_close_contributes_fewer_bars(tmp_path: Path) -> None:
-    # Thanksgiving week 2024: Wed 11-27 (26 bars), Thu closed, Fri 11-29 closes 13:00 ET (14 bars).
-    plan = plan_run_up(
-        symbol="SPY",
-        requested_start=date(2024, 11, 27),
-        requested_end=date(2024, 12, 6),
-        required_samples=41,  # 26 + 14 = 40 is not enough; a full Friday (26) would have been
-        bar_span_ms=FIFTEEN_MIN_MS,
-        roots=[tmp_path],
-    )
-
-    assert plan.run_up_sessions == 3
-    assert plan.evaluation_start == date(2024, 12, 3)
-
-
-def test_daily_cadence_counts_one_bar_per_session(tmp_path: Path) -> None:
-    plan = plan_run_up(
-        symbol="SPY",
-        requested_start=WINDOW[0],
-        requested_end=WINDOW[1],
-        required_samples=3,
-        bar_span_ms=DAY_MS,
-        roots=[tmp_path],
-    )
-
-    assert plan.run_up_sessions == 3
-    assert plan.evaluation_start == expected_sessions(*WINDOW)[3]
 
 
 def test_a_run_up_that_would_consume_the_whole_range_is_refused(tmp_path: Path) -> None:

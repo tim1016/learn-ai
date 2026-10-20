@@ -93,29 +93,23 @@ def test_the_review_headline_follows_the_exam_and_its_exposure(outcome: str, cla
     assert (guidance["detail"] == WEAK_EVIDENCE_DETAIL) is weak
 
 
-def test_retaining_says_whether_the_final_test_was_opened() -> None:
-    assert _guidance("retained", exam_locked=True)["detail"].endswith("The opened final test remains recorded as exposed.")
-    assert _guidance("retained", exam_locked=False)["detail"].endswith("The final test has not been opened.")
-
-
-def test_a_stopped_or_waiting_stage_says_so_instead_of_its_running_copy() -> None:
+def test_retaining_says_whether_the_final_test_was_opened_and_a_stopped_or_waiting_stage_says_so() -> None:
+    assert _guidance("retained", exam_locked=True)["detail"].endswith("The opened final test remains recorded as exposed."), "retaining says an opened final test remains recorded as exposed"
+    assert _guidance("retained", exam_locked=False)["detail"].endswith("The final test has not been opened."), "retaining says an unopened final test has not been opened"
     stopped = _guidance("search_running", presented_status="failed", failure_reason="RuntimeError: boom")
-    assert stopped == {"headline": "This stage stopped before it finished", "detail": "RuntimeError: boom"}
-    assert _guidance("search_running", presented_status="queued")["headline"] == "Waiting for a worker"
-    assert _guidance("search_running", presented_status="running")["headline"] == "Searching the development period"
+    assert stopped == {"headline": "This stage stopped before it finished", "detail": "RuntimeError: boom"}, "a stopped stage says so instead of its running copy"
+    assert _guidance("search_running", presented_status="queued")["headline"] == "Waiting for a worker", "a queued stage says it waits for a worker"
+    assert _guidance("search_running", presented_status="running")["headline"] == "Searching the development period", "a running stage says it is searching"
     failed = _guidance("qualification_failed", failure_reason="The default changed since you reviewed.")
-    assert failed["detail"] == "The default changed since you reviewed."
+    assert failed["detail"] == "The default changed since you reviewed.", "a failed approval shows its failure reason"
 
 
 def test_weakness_names_every_reason_an_approval_must_acknowledge() -> None:
-    assert research_weakness("meets_rules", "confirmatory", "not_opened") == []
+    assert research_weakness("meets_rules", "confirmatory", "not_opened") == [], "a confirmatory pass on an unopened interval has no weakness"
     assert research_weakness("not_enough_evidence", "exploratory", "previously_used") == [
         "EXAM_NOT_ENOUGH_EVIDENCE",
         "EXPOSURE_PREVIOUSLY_USED",
-    ]
-
-
-def test_the_exam_view_names_each_weakness_the_approval_acknowledges() -> None:
+    ], "weakness names the exam outcome and the exposure"
     checks = [
         {"code": "NET_POSITIVE", "label": "Positive net result after stated costs", "status": "fail", "detail": ""},
         {"code": "DRAWDOWN_WITHIN", "label": "Worst drawdown within your ceiling", "status": "pass", "detail": ""},
@@ -126,9 +120,9 @@ def test_the_exam_view_names_each_weakness_the_approval_acknowledges() -> None:
     assert weakness_items(exam, weak) == [
         {"code": "EXAM_DOES_NOT_MEET_RULES", "text": "failing the stated rules (positive net result after stated costs)"},
         {"code": "EXPOSURE_HISTORY_UNKNOWN", "text": "the unknown history of this test interval"},
-    ]
-    assert weakness_items({**exam, "claim": "confirmatory"}, {**weak, "outcome": "meets_rules"}) == []
-    assert weakness_items(exam, {**weak, "outcome": None}) == []  # not scored yet
+    ], "the exam view names each weakness the approval acknowledges"
+    assert weakness_items({**exam, "claim": "confirmatory"}, {**weak, "outcome": "meets_rules"}) == [], "a confirmatory pass names no weakness"
+    assert weakness_items(exam, {**weak, "outcome": None}) == [], "an exam not scored yet names no weakness"
 
 
 #: The frozen study identity every exam-view test validates its stored chance records against (#3024).
@@ -220,47 +214,41 @@ def test_every_command_and_retain_kind_the_wire_names_is_one_the_service_accepts
     assert set(RETAIN_KINDS) == set(get_args(RetainKind)) and len(RETAIN_KINDS) == len(get_args(RetainKind))
 
 
-def test_an_authorized_stage_without_a_worker_reads_queued_and_can_be_cancelled_or_authorized_again() -> None:
-    row = _row(state="search_running", status="queued", pending_stage="search", stage_token="t")
-    presented = presented_status(row, live=False)
-    refusals = action_refusals(row, presented=presented, resume_refusal=None)
-    # Its dispatch may have been lost: Run research issues a fresh token (#2814 review).
-    assert presented == "queued" and permitted(refusals) == ["run_research", "cancel"]
-    exam = _row(state="exam_running", status="queued", pending_stage="exam", stage_token="t", exam_locked=True)
-    assert permitted(action_refusals(exam, presented="queued", resume_refusal=None)) == ["cancel"]
-
-
-def test_a_bound_stage_whose_worker_died_reads_interrupted_and_finish_follows_the_resume_rules() -> None:
-    row = _row(state="validation_running", status="running", pending_stage="validation", job_id="j")
-    presented = presented_status(row, live=False)
-    assert presented == "interrupted"
-    assert permitted(action_refusals(row, presented=presented, resume_refusal=None)) == ["run_research", "close", "finish", "revise"]
-    blocked = action_refusals(row, presented=presented, resume_refusal="the engine or strategy code changed since launch")
-    assert blocked["finish"] == blocked["run_research"] == "the engine or strategy code changed since launch"
-    # Redis unreachable: never declared dead, so nothing that assumes the worker stopped is offered.
-    assert permitted(action_refusals(row, presented=presented_status(row, live=None), resume_refusal=None)) == ["cancel"]
-
-
-def test_a_stopped_approval_can_be_finished_revised_or_ended_by_keeping_the_current_settings() -> None:
-    row = _row(state="qualification_pending", status="failed", pending_stage="qualification", exam_locked=True)
-    assert permitted(action_refusals(row, presented="failed", resume_refusal=None)) == ["retain", "finish", "revise"]
-    # Code moved since lock: Finish is refused, and keeping the current settings is still an exit besides Revise.
-    blocked = action_refusals(row, presented="failed", resume_refusal="the engine or strategy code changed since launch")
-    assert permitted(blocked) == ["retain", "revise"]
-
-
 def _evidence(fit_hash: str) -> dict:
     """Stored evidence whose all-period fit has ``fit_hash``; the incumbent's is ``a``."""
     return {"evidence": {"candidates": [{"key": "incumbent", "point": {}, "point_hash": "a"}, {"key": "all_period", "point": {}, "point_hash": fit_hash}]}}
 
 
-def test_the_final_test_opens_from_compare_once_when_a_fit_differs_from_the_current_settings() -> None:
+def test_the_actions_a_stage_permits_follow_its_state_queued_interrupted_stopped_and_compare() -> None:
+    queued_row = _row(state="search_running", status="queued", pending_stage="search", stage_token="t")
+    queued_presented = presented_status(queued_row, live=False)
+    queued_refusals = action_refusals(queued_row, presented=queued_presented, resume_refusal=None)
+    # Its dispatch may have been lost: Run research issues a fresh token (#2814 review).
+    assert queued_presented == "queued" and permitted(queued_refusals) == ["run_research", "cancel"], "an authorized stage without a worker reads queued and can be cancelled or authorized again (#2814 review)"
+    queued_exam = _row(state="exam_running", status="queued", pending_stage="exam", stage_token="t", exam_locked=True)
+    assert permitted(action_refusals(queued_exam, presented="queued", resume_refusal=None)) == ["cancel"], "a queued exam can only be cancelled"
+
+    dead_row = _row(state="validation_running", status="running", pending_stage="validation", job_id="j")
+    dead_presented = presented_status(dead_row, live=False)
+    assert dead_presented == "interrupted", "a bound stage whose worker died reads interrupted"
+    assert permitted(action_refusals(dead_row, presented=dead_presented, resume_refusal=None)) == ["run_research", "close", "finish", "revise"], "an interrupted stage can run research, close, finish or revise"
+    moved = action_refusals(dead_row, presented=dead_presented, resume_refusal="the engine or strategy code changed since launch")
+    assert moved["finish"] == moved["run_research"] == "the engine or strategy code changed since launch", "finish follows the resume rules"
+    # Redis unreachable: never declared dead, so nothing that assumes the worker stopped is offered.
+    assert permitted(action_refusals(dead_row, presented=presented_status(dead_row, live=None), resume_refusal=None)) == ["cancel"], "a worker that cannot be checked is never declared dead"
+
+    stopped_row = _row(state="qualification_pending", status="failed", pending_stage="qualification", exam_locked=True)
+    assert permitted(action_refusals(stopped_row, presented="failed", resume_refusal=None)) == ["retain", "finish", "revise"], "a stopped approval can be finished, revised or ended by keeping the current settings"
+    # Code moved since lock: Finish is refused, and keeping the current settings is still an exit besides Revise.
+    blocked = action_refusals(stopped_row, presented="failed", resume_refusal="the engine or strategy code changed since launch")
+    assert permitted(blocked) == ["retain", "revise"], "with code moved a stopped approval keeps retain and revise"
+
     comparing = _row(state="awaiting_candidate", results=_evidence("b"))
-    assert permitted(action_refusals(comparing, presented="completed", resume_refusal=None)) == ["open_exam", "retain", "close", "revise"]
+    assert permitted(action_refusals(comparing, presented="completed", resume_refusal=None)) == ["open_exam", "retain", "close", "revise"], "the final test opens from compare when a fit differs from the current settings"
     same = action_refusals(_row(state="awaiting_candidate", results=_evidence("a")), presented="completed", resume_refusal=None)
-    assert same["open_exam"] == NOTHING_TO_TEST and permitted(same) == ["retain", "close", "revise"]
+    assert same["open_exam"] == NOTHING_TO_TEST and permitted(same) == ["retain", "close", "revise"], "no final test opens when no fit differs from the current settings"
     reviewing = _row(state="awaiting_review", exam_locked=True, results=_evidence("b"))
-    assert permitted(action_refusals(reviewing, presented="completed", resume_refusal=None)) == ["approve", "retain", "close", "revise"]
+    assert permitted(action_refusals(reviewing, presented="completed", resume_refusal=None)) == ["approve", "retain", "close", "revise"], "a reviewed exam offers approve instead of opening the final test again"
 
 
 @pytest.mark.parametrize(
@@ -326,13 +314,15 @@ def test_a_pass_the_budget_interrupted_is_not_counted_complete() -> None:
 # ── Candidate copy and evidence view ─────────────────────────────────────
 
 
-def test_the_parameter_sentence_reads_the_whole_tuple_and_the_fixed_one_its_held_knobs() -> None:
+def test_the_parameter_sentence_reads_the_whole_tuple_and_the_fixed_one_its_held_knobs_and_a_decimal_gap_keeps_its_cents() -> None:
     point = {"symbol": "SPY", "gap": 0.15, "rsi_min": 48.0, "rsi_max": 72.0, "fast_period": 8, "slow_period": 21, "hold_bars": 4}
-    assert params_sentence(EMA, point) == "Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars"
+    assert params_sentence(EMA, point) == "Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars", "the parameter sentence reads the whole tuple"
     # The bps gap is named only when a point sets it, so a searched bps gap tells two points apart.
-    assert params_sentence(EMA, {**point, "gap_bps": 2.5}) == "Gap $0.15 · normalized gap 2.5 bps · RSI 48–72 · EMA 8/21 · hold 4 bars"
+    assert params_sentence(EMA, {**point, "gap_bps": 2.5}) == "Gap $0.15 · normalized gap 2.5 bps · RSI 48–72 · EMA 8/21 · hold 4 bars", "the bps gap is named when a point sets it"
     plans = (KnobPlan("gap_bps", "fixed", 0.0, 0.0, 0.0), KnobPlan("hold_bars", "fixed", 0.0, 0.0, 5.0))
-    assert fixed_sentence(EMA, plans) == "Normalized gap fixed at 0 bps · Hold time fixed at 5 decision bars"
+    assert fixed_sentence(EMA, plans) == "Normalized gap fixed at 0 bps · Hold time fixed at 5 decision bars", "the fixed sentence reads its held knobs"
+    decimal_point = {"symbol": "SPY", "gap": Decimal("0.1"), "rsi_min": 45, "rsi_max": 70, "fast_period": 5, "slow_period": 10, "hold_bars": 3}
+    assert params_sentence(EMA, decimal_point) == "Gap $0.10 · RSI 45–70 · EMA 5/10 · hold 3 bars", "a decimal gap drops trailing zeros but keeps the gap in cents"
 
 
 @pytest.mark.parametrize(
@@ -478,11 +468,6 @@ def test_a_failed_detail_run_has_metrics_and_no_series() -> None:
     detail = run_detail(record)
     assert detail["metrics"]["error"] == "engine refused" and detail["monthly"] == []
     assert "daily_equity" not in detail
-
-
-def test_the_decimal_sentence_drops_trailing_zeros_but_keeps_the_gap_in_cents() -> None:
-    point = {"symbol": "SPY", "gap": Decimal("0.1"), "rsi_min": 45, "rsi_max": 70, "fast_period": 5, "slow_period": 10, "hold_bars": 3}
-    assert params_sentence(EMA, point) == "Gap $0.10 · RSI 45–70 · EMA 5/10 · hold 3 bars"
 
 
 def test_exposure_reads_the_window_keys_grid_and_walk_forward_requests_store() -> None:

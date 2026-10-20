@@ -47,48 +47,48 @@ def _bar(ts_ms: int, *, close: float = 100.0) -> dict[str, float | int]:
     }
 
 
-def test_15m_bars_stay_at_15m_resolution():
-    """A handful of 15-min bars across an RTH session must produce 26
-    rows (09:30 → 15:45 inclusive), not 390 rows. Before the fix this
-    returned 390 minute-stamped rows with ffilled OHLC."""
-    bars = [
-        _bar(_ms(2026, 1, 5, 9, 30), close=100.0),
-        _bar(_ms(2026, 1, 5, 9, 45), close=101.0),
-        _bar(_ms(2026, 1, 5, 10, 0), close=102.0),
-        _bar(_ms(2026, 1, 5, 15, 45), close=110.0),
-    ]
-    df = pd.DataFrame(bars)
+@pytest.mark.parametrize(
+    ("bars", "multiplier", "expected_rows", "expected_step_ms"),
+    [
+        # A handful of 15-min bars across an RTH session must produce 26
+        # rows (09:30 → 15:45 inclusive), not 390 rows. Before the fix this
+        # returned 390 minute-stamped rows with ffilled OHLC.
+        pytest.param(
+            ((9, 30, 100.0), (9, 45, 101.0), (10, 0, 102.0), (15, 45, 110.0)),
+            15,
+            26,
+            15 * 60 * 1000,
+            id="15m_bars_stay_at_15m_resolution",
+        ),
+        # The pre-existing minute-resolution path must keep working — 390 RTH
+        # slots with ffilled gaps (09:30 → 15:59 inclusive).
+        pytest.param(
+            ((9, 30, 100.0), (9, 35, 101.0), (15, 59, 110.0)),
+            1,
+            390,
+            60 * 1000,
+            id="1m_bars_unchanged_behavior",
+        ),
+    ],
+)
+def test_minute_bars_fill_on_a_grid_of_their_own_multiplier(
+    bars: tuple[tuple[int, int, float], ...], multiplier: int, expected_rows: int, expected_step_ms: int
+):
+    df = pd.DataFrame([_bar(_ms(2026, 1, 5, hour, minute), close=close) for hour, minute, close in bars])
 
-    out = forward_fill_gaps(df, session="rth", timespan="minute", multiplier=15)
+    out = forward_fill_gaps(df, session="rth", timespan="minute", multiplier=multiplier)
 
-    assert len(out) == 26, f"expected 26 fifteen-minute slots, got {len(out)}"
+    assert len(out) == expected_rows, f"expected {expected_rows} {multiplier}-minute slots, got {len(out)}"
 
-    # Spacing between consecutive timestamps must be exactly 15 minutes.
+    # Spacing between consecutive timestamps must be exactly one multiplier step.
     deltas_ms = out["timestamp"].diff().dropna().unique().tolist()
-    assert deltas_ms == [15 * 60 * 1000], f"non-15m spacing: {deltas_ms}"
+    assert deltas_ms == [expected_step_ms], f"non-{multiplier}m spacing: {deltas_ms}"
 
     # The known bars survive at their own timestamps with the correct close.
     by_ts = {int(row["timestamp"]): row for _, row in out.iterrows()}
-    assert by_ts[_ms(2026, 1, 5, 9, 30)]["close"] == 100.0
-    assert by_ts[_ms(2026, 1, 5, 9, 45)]["close"] == 101.0
-    assert by_ts[_ms(2026, 1, 5, 10, 0)]["close"] == 102.0
-
-
-def test_1m_bars_unchanged_behavior():
-    """The pre-existing minute-resolution path must keep working — 390 RTH
-    slots with ffilled gaps."""
-    bars = [
-        _bar(_ms(2026, 1, 5, 9, 30), close=100.0),
-        _bar(_ms(2026, 1, 5, 9, 35), close=101.0),
-        _bar(_ms(2026, 1, 5, 15, 59), close=110.0),
-    ]
-    df = pd.DataFrame(bars)
-
-    out = forward_fill_gaps(df, session="rth", timespan="minute", multiplier=1)
-
-    assert len(out) == 390  # 09:30 → 15:59 inclusive
-    deltas_ms = out["timestamp"].diff().dropna().unique().tolist()
-    assert deltas_ms == [60 * 1000]
+    known_closes = {_ms(2026, 1, 5, hour, minute): close for hour, minute, close in bars}
+    assert set(known_closes) <= set(by_ts), "known bars survive at their own timestamps"
+    assert {ts: by_ts[ts]["close"] for ts in known_closes} == known_closes, "known bars keep their own close"
 
 
 @pytest.mark.parametrize("timespan", ["hour", "day", "week", "month"])
@@ -120,15 +120,13 @@ def test_non_minute_returns_frame_unchanged(timespan: str):
 # ---------------------------------------------------------------------------
 
 
+# gap: 9:36, 9:37, 9:38 are missing
+_GAP_SLOTS = ((9, 30, 100.0), (9, 35, 101.0), (9, 39, 102.0), (9, 40, 103.0))
+
+
 def _bars_with_gap() -> list[dict]:
     """Two bars with a 5-minute gap between them (3 missing 1-min bars)."""
-    return [
-        _bar(_ms(2026, 1, 5, 9, 30), close=100.0),
-        _bar(_ms(2026, 1, 5, 9, 35), close=101.0),
-        # gap: 9:36, 9:37, 9:38 are missing
-        _bar(_ms(2026, 1, 5, 9, 39), close=102.0),
-        _bar(_ms(2026, 1, 5, 9, 40), close=103.0),
-    ]
+    return [_bar(_ms(2026, 1, 5, hour, minute), close=close) for hour, minute, close in _GAP_SLOTS]
 
 
 def test_fail_on_gaps_raises_on_gap():
@@ -145,19 +143,49 @@ def test_fail_on_gaps_raises_on_gap():
         )
 
 
-def test_explicit_fill_allows_gap_synthesis():
-    """Gap synthesis remains available only through explicit request flags."""
+@pytest.mark.parametrize(
+    ("slots", "forward_fill", "fail_on_gaps", "timespan", "expected_rows"),
+    [
+        # Gap synthesis remains available only through explicit request flags:
+        # the 4 input bars expand to 390 RTH slots.
+        pytest.param(_GAP_SLOTS, True, False, "minute", 390, id="explicit_fill_allows_gap_synthesis"),
+        # fail_on_gaps=True must not raise when the data is gap-free.
+        pytest.param(
+            ((9, 30, 100.0), (9, 31, 100.5), (9, 32, 101.0)),
+            False,
+            True,
+            "minute",
+            3,
+            id="fail_on_gaps_no_gap_does_not_raise",
+        ),
+        # fail_on_gaps=True must be a no-op for hourly bars (gaps are expected).
+        pytest.param(
+            ((9, 0, 100.0), (11, 0, 102.0)),
+            False,
+            True,
+            "hour",
+            2,
+            id="fail_on_gaps_skipped_for_non_minute",
+        ),
+    ],
+)
+def test_preprocess_keeps_the_rows_the_gap_flags_allow(
+    slots: tuple[tuple[int, int, float], ...],
+    forward_fill: bool,
+    fail_on_gaps: bool,
+    timespan: str,
+    expected_rows: int,
+):
     df, _ = preprocess_and_calculate(
-        bars=_bars_with_gap(),
+        bars=[_bar(_ms(2026, 1, 5, hour, minute), close=close) for hour, minute, close in slots],
         indicator_entries=[],
         session="rth",
-        forward_fill=True,
-        fail_on_gaps=False,
-        timespan="minute",
+        forward_fill=forward_fill,
+        fail_on_gaps=fail_on_gaps,
+        timespan=timespan,
         multiplier=1,
     )
-    # Gaps filled — the 4 input bars expanded to 390 RTH slots
-    assert len(df) == 390
+    assert len(df) == expected_rows
 
 
 def test_dataset_request_defaults_to_raw_gap_failing_input() -> None:
@@ -169,40 +197,3 @@ def test_dataset_request_defaults_to_raw_gap_failing_input() -> None:
 
     assert request.forward_fill is False
     assert request.fail_on_gaps is True
-
-
-def test_fail_on_gaps_no_gap_does_not_raise():
-    """fail_on_gaps=True must not raise when the data is gap-free."""
-    contiguous = [
-        _bar(_ms(2026, 1, 5, 9, 30), close=100.0),
-        _bar(_ms(2026, 1, 5, 9, 31), close=100.5),
-        _bar(_ms(2026, 1, 5, 9, 32), close=101.0),
-    ]
-    df, _ = preprocess_and_calculate(
-        bars=contiguous,
-        indicator_entries=[],
-        session="rth",
-        forward_fill=False,
-        fail_on_gaps=True,
-        timespan="minute",
-        multiplier=1,
-    )
-    assert len(df) == 3
-
-
-def test_fail_on_gaps_skipped_for_non_minute():
-    """fail_on_gaps=True must be a no-op for hourly bars (gaps are expected)."""
-    hourly = [
-        _bar(_ms(2026, 1, 5, 9, 0), close=100.0),
-        _bar(_ms(2026, 1, 5, 11, 0), close=102.0),
-    ]
-    df, _ = preprocess_and_calculate(
-        bars=hourly,
-        indicator_entries=[],
-        session="rth",
-        forward_fill=False,
-        fail_on_gaps=True,
-        timespan="hour",
-        multiplier=1,
-    )
-    assert len(df) == 2

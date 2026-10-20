@@ -69,36 +69,32 @@ def test_procedure_bound_for_grid_is_the_grid_product() -> None:
     assert estimate(plan, folds=3).stages[0].max_evaluations == 121
 
 
-def test_review_protocol_refuses_a_plan_whose_bound_exceeds_the_cap() -> None:
-    decl = declaration(*(knob(name, high="40") for name in "abcdef"))
-    plan = protocol(decl, zoom=ZoomSettings(points=9, refinements=4, passes=5))
+def test_review_protocol_sizes_a_plan_and_refuses_one_it_cannot_run() -> None:
+    heavy_decl = declaration(*(knob(name, high="40") for name in "abcdef"))
+    heavy_plan = protocol(heavy_decl, zoom=ZoomSettings(points=9, refinements=4, passes=5))
 
-    review = review_protocol(plan, decl)
+    over_cap = review_protocol(heavy_plan, heavy_decl)
 
-    assert review.estimate is not None
-    assert review.estimate.total_max > plan.budget_cap
-    assert [refusal.code for refusal in review.refusals] == ["WORKLOAD_LIMIT"]
-    assert not review.lockable
-    assert [fold.fold_index for fold in review.folds] == [0, 1, 2]
-    assert review.as_dict()["refusals"][0]["code"] == "WORKLOAD_LIMIT"
+    assert over_cap.estimate is not None, "a plan whose bound exceeds the cap is still sized"
+    assert over_cap.estimate.total_max > heavy_plan.budget_cap, "the bound exceeds the cap"
+    assert [refusal.code for refusal in over_cap.refusals] == ["WORKLOAD_LIMIT"], "the only refusal is the workload limit"
+    assert not over_cap.lockable, "a plan over the cap is not lockable"
+    assert [fold.fold_index for fold in over_cap.folds] == [0, 1, 2], "the refused plan still lists its folds"
+    assert over_cap.as_dict()["refusals"][0]["code"] == "WORKLOAD_LIMIT", "the workload limit is on the wire form"
 
+    lockable_decl = declaration()
+    lockable_plan = protocol(lockable_decl, stress=(StressScenario("slip", "Extra slippage", slippage_add=0.02),))
 
-def test_review_protocol_sizes_a_lockable_plan() -> None:
-    decl = declaration()
-    plan = protocol(decl, stress=(StressScenario("slip", "Extra slippage", slippage_add=0.02),))
+    lockable = review_protocol(lockable_plan, lockable_decl)
 
-    review = review_protocol(plan, decl)
+    assert lockable.lockable, "a plan within the cap is lockable"
+    assert lockable.estimate == estimate(lockable_plan, folds=3), "a lockable plan is sized by the estimate"
 
-    assert review.lockable
-    assert review.estimate == estimate(plan, folds=3)
+    unfolded_decl = declaration()
+    unfolded_plan = dataclasses.replace(protocol(unfolded_decl), training_months=11)
 
+    unfolded = review_protocol(unfolded_plan, unfolded_decl)
 
-def test_review_protocol_skips_sizing_when_the_folds_are_refused() -> None:
-    decl = declaration()
-    plan = dataclasses.replace(protocol(decl), training_months=11)
-
-    review = review_protocol(plan, decl)
-
-    assert "FOLDS_INVALID" in {refusal.code for refusal in review.refusals}
-    assert review.folds == ()
-    assert review.estimate is None
+    assert "FOLDS_INVALID" in {refusal.code for refusal in unfolded.refusals}, "refused folds are named"
+    assert unfolded.folds == (), "refused folds list no fold"
+    assert unfolded.estimate is None, "sizing is skipped when the folds are refused"

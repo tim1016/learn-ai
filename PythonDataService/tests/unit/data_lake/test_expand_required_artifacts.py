@@ -31,17 +31,30 @@ def test_single_symbol_one_week_trade_only():
     required, non_sessions = expand_required_artifacts(_base_spec())
     # 5 trading days x 1 minute-trade + 1 factor + 1 map + 1 daily-trade = 8
     kinds = [a.artifact_kind for a in required]
-    assert kinds.count("time_series_bars") == 6  # 5 minute + 1 daily
-    assert kinds.count("factor_file") == 1
-    assert kinds.count("map_file") == 1
-    assert "metadata" not in kinds
-    assert non_sessions == []
+    assert kinds.count("time_series_bars") == 6, "5 minute + 1 daily time_series_bars artifacts"
+    assert kinds.count("factor_file") == 1, "one factor file"
+    assert kinds.count("map_file") == 1, "one map file"
+    assert "metadata" not in kinds, "no metadata artifacts are emitted"
+    assert non_sessions == [], "a full trading week has no non-sessions"
+    # The daily artifact is per-symbol (not per-session), so it carries no trading date.
+    daily = [a for a in required if a.artifact_kind == "time_series_bars" and a.resolution == "daily"]
+    assert len(daily) == 1, "exactly one daily artifact"
+    assert daily[0].trading_date is None, "daily artifact has a null trading date"
+    assert daily[0].provider == "learn_ai_derived", "daily artifact uses the learn_ai_derived provider"
 
 
-def test_quote_inclusion_doubles_minute_artifacts():
+def test_quote_inclusion_doubles_minute_artifacts_with_per_kind_providers():
     required, _ = expand_required_artifacts(_base_spec(data_types=["trade", "quote"]))
     minute_artifacts = [a for a in required if a.artifact_kind == "time_series_bars" and a.resolution == "minute"]
-    assert len(minute_artifacts) == 10  # 5 trade + 5 quote
+    assert len(minute_artifacts) == 10, "5 trade + 5 quote minute artifacts"
+    quote_artifacts = [a for a in required if a.artifact_kind == "time_series_bars" and a.data_type == "quote"]
+    assert all(a.provider == "learn_ai_derived" for a in quote_artifacts), "quote artifacts use the learn_ai_derived provider"
+    trade_artifacts = [
+        a
+        for a in required
+        if a.artifact_kind == "time_series_bars" and a.data_type == "trade" and a.resolution == "minute"
+    ]
+    assert all(a.provider == "polygon" for a in trade_artifacts), "minute trade artifacts use the polygon provider"
 
 
 def test_holiday_week_produces_non_sessions():
@@ -55,26 +68,6 @@ def test_holiday_week_produces_non_sessions():
     minute_bars = [a for a in required if a.artifact_kind == "time_series_bars" and a.resolution == "minute"]
     assert minute_bars == []
     assert len(non_sessions) == 3
-
-
-def test_daily_artifact_has_null_trading_date():
-    required, _ = expand_required_artifacts(_base_spec())
-    daily = [a for a in required if a.artifact_kind == "time_series_bars" and a.resolution == "daily"]
-    assert len(daily) == 1
-    assert daily[0].trading_date is None
-    assert daily[0].provider == "learn_ai_derived"
-
-
-def test_quote_artifacts_use_learn_ai_derived_provider():
-    required, _ = expand_required_artifacts(_base_spec(data_types=["trade", "quote"]))
-    quote_artifacts = [a for a in required if a.artifact_kind == "time_series_bars" and a.data_type == "quote"]
-    assert all(a.provider == "learn_ai_derived" for a in quote_artifacts)
-    trade_artifacts = [
-        a
-        for a in required
-        if a.artifact_kind == "time_series_bars" and a.data_type == "trade" and a.resolution == "minute"
-    ]
-    assert all(a.provider == "polygon" for a in trade_artifacts)
 
 
 def test_factor_and_map_excluded_when_disabled():

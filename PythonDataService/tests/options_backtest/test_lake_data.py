@@ -35,6 +35,7 @@ import logging
 import shutil
 import zipfile
 import zlib
+from collections.abc import Callable
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -569,45 +570,56 @@ async def test_an_underlying_bar_that_closes_on_the_next_new_york_date_makes_the
 # ── The listing ──────────────────────────────────────────────────────────
 
 
+@pytest.mark.parametrize(
+    ("make_rows", "contracts", "rows_left_out"),
+    [
+        # The file sorts its rows by the vendor's ticker: O:SPY1... first, then the calls by strike, then the put. The
+        # adjusted-root row (603) and the row with no share count (604) are the two that are left out.
+        pytest.param(
+            _the_option_rows,
+            (
+                ("SPY250613C00600000", 100, True, True),
+                ("SPY250613C00601000", 100, True, True),
+                ("SPY250613C00602000", 10, False, False),
+                ("SPY250613P00600000", 100, True, True),
+            ),
+            2,
+            id="a_stored_listing_is_the_pickers_listing_and_a_row_that_cannot_be_a_contract_is_left_out_and_counted",
+        ),
+        pytest.param(
+            lambda: [vendor_listing_row(CALL_603, ticker="O:SPY1250613C00603000")],
+            (),
+            1,
+            id="a_listing_none_of_whose_rows_can_be_a_contract_is_captured_and_empty_not_none",
+        ),
+    ],
+)
 @respx.mock
-async def test_a_stored_listing_is_the_pickers_listing_and_a_row_that_cannot_be_a_contract_is_left_out_and_counted(
-    fake_catalog: FakeCatalog, tmp_lake: Path
+async def test_a_stored_listing_is_read_as_the_pickers_listing_with_the_rows_that_cannot_be_a_contract_counted(
+    make_rows: Callable[[], list],
+    contracts: tuple[tuple[str, int, bool, bool], ...],
+    rows_left_out: int,
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
 ) -> None:
-    await store_listing(_the_option_rows())
+    await store_listing(make_rows())
 
     read = await _read(LakeRunData("SPY").listing, FRIDAY)
 
-    assert read is not None
+    assert read is not None, "a stored listing is read and not none"
     listing = read.value
-    assert isinstance(listing, StoredListing)
-    assert (listing.underlying, listing.as_of, listing.complete) == ("SPY", FRIDAY, True)
-    # The file sorts its rows by the vendor's ticker: O:SPY1... first, then the calls by strike, then the put. The
-    # adjusted-root row (603) and the row with no share count (604) are the two that are left out.
-    assert [(c.contract.occ_symbol, c.multiplier, c.standard, c.is_pickable) for c in listing.contracts] == [
-        ("SPY250613C00600000", 100, True, True),
-        ("SPY250613C00601000", 100, True, True),
-        ("SPY250613C00602000", 10, False, False),
-        ("SPY250613P00600000", 100, True, True),
-    ]
-    assert listing.rows_left_out == 2
-    assert read.sha256 == hashlib.sha256(the_file_of(raw_root(tmp_lake), LISTING_PATH)).hexdigest()
+    assert isinstance(listing, StoredListing), "the listing is the picker's listing"
+    assert (listing.underlying, listing.as_of, listing.complete) == ("SPY", FRIDAY, True), "the listing is complete"
+    listed = [(c.contract.occ_symbol, c.multiplier, c.standard, c.is_pickable) for c in listing.contracts]
+    assert listed == list(contracts), "the listed contracts are the rows that can be named"
+    assert listing.rows_left_out == rows_left_out, "the rows that cannot be a contract are left out and counted"
+    assert read.sha256 == hashlib.sha256(the_file_of(raw_root(tmp_lake), LISTING_PATH)).hexdigest(), (
+        "the hash is the stored file's"
+    )
 
 
 async def test_a_listing_the_lake_does_not_hold_is_none(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
     assert await _read(LakeRunData("SPY").listing, FRIDAY) is None
-
-
-@respx.mock
-async def test_a_listing_none_of_whose_rows_can_be_a_contract_is_captured_and_empty_not_none(
-    fake_catalog: FakeCatalog, tmp_lake: Path
-) -> None:
-    await store_listing([vendor_listing_row(CALL_603, ticker="O:SPY1250613C00603000")])
-
-    read = await _read(LakeRunData("SPY").listing, FRIDAY)
-
-    assert read is not None
-    assert read.value.contracts == () and read.value.complete is True
-    assert isinstance(read.value, StoredListing) and read.value.rows_left_out == 1
 
 
 @respx.mock
@@ -618,17 +630,6 @@ async def test_a_damaged_listing_is_the_lakes_named_error_and_not_none(
     replace_the_stored_file(fake_catalog, raw_root(tmp_lake), LISTING_PATH, b"admitted, but not a zip", admit=True)
 
     with pytest.raises(OptionListingFileError):
-        await _read(LakeRunData("SPY").listing, FRIDAY)
-
-
-@respx.mock
-async def test_listing_bytes_the_catalog_does_not_admit_are_refused_and_not_read_as_missing(
-    fake_catalog: FakeCatalog, tmp_lake: Path
-) -> None:
-    await store_listing(_the_option_rows())
-    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), LISTING_PATH, b"changed after its receipt", admit=False)
-
-    with pytest.raises(LakeAdmissionError):
         await _read(LakeRunData("SPY").listing, FRIDAY)
 
 
@@ -809,16 +810,33 @@ async def test_a_damaged_option_day_is_the_lakes_named_error_and_not_none_or_emp
         await _read(LakeRunData("SPY").option_day, CALL_600, FRIDAY)
 
 
+@pytest.mark.parametrize(
+    ("stored_path", "reader", "arguments"),
+    [
+        pytest.param(
+            LISTING_PATH,
+            "listing",
+            (FRIDAY,),
+            id="listing_bytes_the_catalog_does_not_admit_are_refused_and_not_read_as_missing",
+        ),
+        pytest.param(
+            BARS_PATH_600,
+            "option_day",
+            (CALL_600, FRIDAY),
+            id="option_bytes_the_catalog_does_not_admit_are_refused_and_not_read_as_missing",
+        ),
+    ],
+)
 @respx.mock
-async def test_option_bytes_the_catalog_does_not_admit_are_refused_and_not_read_as_missing(
-    fake_catalog: FakeCatalog, tmp_lake: Path
+async def test_listing_and_option_bytes_the_catalog_does_not_admit_are_refused_and_not_read_as_missing(
+    stored_path: str, reader: str, arguments: tuple, fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
     await store_listing(_the_option_rows())
     await store_option_day(CALL_600, [minute_bar(0, 1.27, 1.31, 1.25, 1.27)])
-    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), BARS_PATH_600, b"changed after its receipt", admit=False)
+    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), stored_path, b"changed after its receipt", admit=False)
 
     with pytest.raises(LakeAdmissionError):
-        await _read(LakeRunData("SPY").option_day, CALL_600, FRIDAY)
+        await _read(getattr(LakeRunData("SPY"), reader), *arguments)
 
 
 # ── All three ────────────────────────────────────────────────────────────

@@ -226,62 +226,75 @@ def _zip_rows(payload: bytes) -> tuple[list[str], list[str]]:
 
 
 @respx.mock
-async def test_a_traded_session_is_captured_into_the_lake_and_the_catalog(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
-    _mock_vendor(_ok([_bar(0), _bar(1, o=1.30, h=1.40, l=1.28, c=1.35, v=40)]))
-
-    result = await _ensure()
-
-    assert result.failure is None and result.reused is False
-    record = result.record
-    assert record is not None
-    # The catalog row: the stock key with the option market name and the contract's own symbol.
-    assert (record.artifact_kind, record.market, record.symbol, record.trading_date) == (
-        "time_series_bars", "usa_options", SYMBOL, TRADING_DAY,
-    )
-    assert (record.resolution, record.data_type, record.provider, record.price_adjustment_mode) == (
-        "minute", "trade", "polygon", "raw",
-    )
-    assert record.file_path == RELATIVE_PATH
-    assert record.row_count == 2
-    assert (record.first_bar_start_ms, record.last_bar_start_ms) == (SESSION_OPEN_MS, SESSION_OPEN_MS + MINUTE_MS)
-    assert record.data_contract_hash == option_minute_trade_dch()
-    row = fake_catalog.rows[record.id]
-    assert row["status"] == "complete"
-    # The lake holds exactly that file, and its bytes are the receipt's.
-    [file] = _lake_files(tmp_lake)
-    assert file == _raw_root(tmp_lake) / RELATIVE_PATH
-    assert hashlib.sha256(file.read_bytes()).hexdigest() == record.file_sha256
-    assert len(file.read_bytes()) == record.file_size_bytes
-    assert _staged_files(tmp_lake) == []
-
-
-@respx.mock
-async def test_the_file_is_the_stock_minute_zip_with_start_times_and_ten_thousandths(
+async def test_a_traded_session_is_captured_into_the_lake_and_the_catalog_as_the_stock_minute_zip(
     fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
     _mock_vendor(_ok([_bar(0), _bar(1, o=1.30, h=1.40, l=1.28, c=1.35, v=40)]))
 
     result = await _ensure()
 
-    assert result.record is not None
+    assert result.failure is None and result.reused is False, "a traded session is captured, not reused, without a failure"
+    record = result.record
+    assert record is not None, "the capture has a record"
+    # The catalog row: the stock key with the option market name and the contract's own symbol.
+    assert (record.artifact_kind, record.market, record.symbol, record.trading_date) == (
+        "time_series_bars", "usa_options", SYMBOL, TRADING_DAY,
+    ), "the catalog row is the stock key with the option market name and the contract's own symbol"
+    assert (record.resolution, record.data_type, record.provider, record.price_adjustment_mode) == (
+        "minute", "trade", "polygon", "raw",
+    ), "the catalog row is a raw polygon minute trade"
+    assert record.file_path == RELATIVE_PATH, "the row names the option file path"
+    assert record.row_count == 2, "the row counts two bars"
+    assert (record.first_bar_start_ms, record.last_bar_start_ms) == (SESSION_OPEN_MS, SESSION_OPEN_MS + MINUTE_MS), (
+        "the row spans the first and last bar starts"
+    )
+    assert record.data_contract_hash == option_minute_trade_dch(), "the row carries the option recipe"
+    row = fake_catalog.rows[record.id]
+    assert row["status"] == "complete", "the row is complete"
+    # The lake holds exactly that file, and its bytes are the receipt's.
+    [file] = _lake_files(tmp_lake)
+    assert file == _raw_root(tmp_lake) / RELATIVE_PATH, "the lake holds exactly that file"
+    assert hashlib.sha256(file.read_bytes()).hexdigest() == record.file_sha256, "its bytes are the receipt's sha256"
+    assert len(file.read_bytes()) == record.file_size_bytes, "its size is the receipt's"
+    assert _staged_files(tmp_lake) == [], "nothing is left in staging"
+
+    assert result.record is not None, "the file is read from a captured record"
     names, rows = _zip_rows((_raw_root(tmp_lake) / RELATIVE_PATH).read_bytes())
-    assert names == ["20250613_spy250613c00600000_minute_trade.csv"]
+
+    assert names == ["20250613_spy250613c00600000_minute_trade.csv"], "the file is the stock minute zip with its one member"
     # 34 200 000 ms = 09:30 New York, the bar's start; 1.27 -> 12700; 1.31 -> 13100; volume as given.
-    assert rows == ["34200000,12700,13100,12500,12700,12", "34260000,13000,14000,12800,13500,40"]
+    assert rows == ["34200000,12700,13100,12500,12700,12", "34260000,13000,14000,12800,13500,40"], (
+        "the rows carry start times and ten-thousandths"
+    )
 
 
 @respx.mock
-async def test_the_vendor_is_asked_for_the_o_prefixed_ticker_raw_and_the_catalog_never_sees_the_prefix(
+async def test_the_vendor_is_asked_for_the_o_prefixed_ticker_raw_the_read_gives_back_the_files_sha256_and_a_second_capture_is_reused(
     fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
     route = _mock_vendor()
 
-    await _ensure()
+    result = await _ensure()
 
     asked = route.calls[0].request
-    assert f"/ticker/O:{SYMBOL}/range/1/minute/2025-06-13/2025-06-13" in str(asked.url)
-    assert asked.url.params["adjusted"] == "false"
-    assert {row["symbol"] for row in _bar_rows(fake_catalog)} == {SYMBOL}
+    assert f"/ticker/O:{SYMBOL}/range/1/minute/2025-06-13/2025-06-13" in str(asked.url), "the vendor is asked for the O-prefixed ticker"
+    assert asked.url.params["adjusted"] == "false", "the vendor is asked for raw bars"
+    assert {row["symbol"] for row in _bar_rows(fake_catalog)} == {SYMBOL}, "the catalog never sees the prefix"
+
+    day = await _read()
+
+    assert day is not None and result.record is not None, "the read gives back the captured day"
+    assert day.sha256 == result.record.file_sha256 == hashlib.sha256((_raw_root(tmp_lake) / RELATIVE_PATH).read_bytes()).hexdigest(), (
+        "the read gives back the file's sha256 for pinning"
+    )
+    assert (day.contract_symbol, day.trading_date) == (SYMBOL, TRADING_DAY), "the read names the contract and the date"
+
+    second = await _ensure()
+
+    assert route.call_count == 1, "a second capture reuses the complete row without asking the vendor"
+    assert second.reused is True and second.failure is None, "the second capture is a reuse without a failure"
+    assert second.record == result.record, "the reuse gives back the same record"
+    assert len(_bar_rows(fake_catalog)) == 1, "the reuse adds no second row"
 
 
 @respx.mock
@@ -317,18 +330,6 @@ async def test_a_bar_is_read_back_by_its_start_in_epoch_milliseconds(fake_catalo
         start_ms=SESSION_OPEN_MS, open=Decimal("1.27"), high=Decimal("1.31"), low=Decimal("1.25"), close=Decimal("1.27"),
         volume=Decimal("12"),
     )
-
-
-@respx.mock
-async def test_the_read_gives_back_the_files_sha256_for_pinning(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
-    _mock_vendor()
-    result = await _ensure()
-
-    day = await _read()
-
-    assert day is not None and result.record is not None
-    assert day.sha256 == result.record.file_sha256 == hashlib.sha256((_raw_root(tmp_lake) / RELATIVE_PATH).read_bytes()).hexdigest()
-    assert (day.contract_symbol, day.trading_date) == (SYMBOL, TRADING_DAY)
 
 
 @respx.mock
@@ -426,53 +427,37 @@ async def test_the_same_vendor_answer_always_makes_the_same_bytes(
 
 
 @respx.mock
-async def test_a_listed_contract_that_never_traded_is_a_complete_artifact_with_no_rows(
+async def test_a_listed_contract_that_never_traded_is_a_complete_artifact_with_no_rows_that_reads_back_as_captured_and_is_pinned(
     fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
-    _mock_vendor(no_trades(SYMBOL))
+    route = _mock_vendor(no_trades(SYMBOL))
 
     result = await _ensure()
 
-    assert result.failure is None
+    assert result.failure is None, "a listed contract that never traded is captured without a failure"
     record = result.record
-    assert record is not None
-    assert record.row_count == 0
-    assert fake_catalog.rows[record.id]["status"] == "complete"
+    assert record is not None, "it has a record"
+    assert record.row_count == 0, "the artifact has no rows"
+    assert fake_catalog.rows[record.id]["status"] == "complete", "the artifact is complete"
     [file] = _lake_files(tmp_lake)
     names, rows = _zip_rows(file.read_bytes())
-    assert names == ["20250613_spy250613c00600000_minute_trade.csv"]
-    assert rows == []
-
-
-@respx.mock
-async def test_a_day_with_no_trades_reads_back_as_captured_with_no_bars_not_as_missing(
-    fake_catalog: FakeCatalog, tmp_lake: Path
-) -> None:
-    _mock_vendor(no_trades(SYMBOL))
-    result = await _ensure()
+    assert names == ["20250613_spy250613c00600000_minute_trade.csv"], "the file holds the one member"
+    assert rows == [], "and the member holds no rows"
 
     captured_empty = await _read()
     never_asked = await _read(day=date(2025, 6, 12))
 
-    assert result.record is not None
-    assert captured_empty is not None
-    assert captured_empty.bars == ()
-    assert captured_empty.sha256 == result.record.file_sha256
-    assert never_asked is None
-
-
-@respx.mock
-async def test_a_day_with_no_trades_is_pinned_and_the_vendor_is_never_asked_again(
-    fake_catalog: FakeCatalog, tmp_lake: Path
-) -> None:
-    route = _mock_vendor(no_trades(SYMBOL))
-    first = await _ensure()
+    assert result.record is not None, "a day with no trades reads back as captured: the capture has a receipt"
+    assert captured_empty is not None, "a day with no trades reads back as captured, not as missing"
+    assert captured_empty.bars == (), "a day with no trades reads back with no bars"
+    assert captured_empty.sha256 == result.record.file_sha256, "the empty day is read under its receipt"
+    assert never_asked is None, "a day never asked about reads back as missing"
 
     again = await _ensure()
 
-    assert route.call_count == 1
-    assert again.reused is True
-    assert again.record == first.record
+    assert route.call_count == 1, "a day with no trades is pinned: the vendor is never asked again"
+    assert again.reused is True, "the second capture reuses the row"
+    assert again.record == record, "and gives back the same record"
 
 
 # ── An empty answer proves nothing: the stored listing does ───────────
@@ -516,25 +501,21 @@ async def test_a_contract_the_stored_listing_does_not_hold_is_refused_whatever_t
 
 
 @respx.mock
-async def test_a_listing_of_another_date_does_not_vouch_for_this_date(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+@pytest.mark.parametrize(
+    ("listed_day", "listed_under"),
+    [(date(2025, 6, 12), "SPY"), (TRADING_DAY, "QQQ")],
+    ids=["a listing of another date does not vouch for this date", "a listing of another underlying does not vouch for this one"],
+)
+async def test_a_listing_of_another_date_or_underlying_does_not_vouch_for_this_one(
+    listed_day: date, listed_under: str, fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
     route = _mock_vendor(no_trades(SYMBOL))
-    await _list(CONTRACT, day=date(2025, 6, 12))
+    await _list(CONTRACT, day=listed_day)
 
-    result = await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="SPY")
+    result = await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under=listed_under)
 
-    assert result.failure is not None and result.failure.reason == "listing_not_captured"
-    assert route.call_count == 0
-
-
-@respx.mock
-async def test_a_listing_of_another_underlying_does_not_vouch_for_this_one(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
-    route = _mock_vendor(no_trades(SYMBOL))
-    await _list(CONTRACT)
-
-    result = await ensure_option_day_bars(CONTRACT, TRADING_DAY, listed_under="QQQ")
-
-    assert result.failure is not None and result.failure.reason == "listing_not_captured"
-    assert route.call_count == 0
+    assert result.failure is not None and result.failure.reason == "listing_not_captured", "the contract-day has no listing"
+    assert route.call_count == 0, "the vendor is not asked"
 
 
 @respx.mock
@@ -896,24 +877,6 @@ async def test_a_twenty_character_symbol_still_fits(fake_catalog: FakeCatalog, t
 
     assert result.failure is None and result.record is not None
     assert result.record.symbol == fits.occ_symbol
-
-
-# ── A lost claim ─────────────────────────────────────────────────────────
-
-
-@respx.mock
-async def test_a_second_capture_reuses_the_complete_row_without_asking_the_vendor(
-    fake_catalog: FakeCatalog, tmp_lake: Path
-) -> None:
-    route = _mock_vendor()
-    first = await _ensure()
-
-    second = await _ensure()
-
-    assert route.call_count == 1
-    assert second.reused is True and second.failure is None
-    assert second.record == first.record
-    assert len(_bar_rows(fake_catalog)) == 1
 
 
 # ── Another provider's row for the same contract-day is not this provider's row ──
@@ -1776,12 +1739,24 @@ async def test_the_captured_contract_days_of_a_date_come_from_one_catalog_query(
 
 
 @respx.mock
-async def test_only_the_symbols_asked_about_are_named(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+async def test_only_the_symbols_asked_about_are_named_and_a_complete_row_whose_file_has_since_gone_is_still_named(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
     _mock_vendor()
     await _ensure()
 
-    assert await captured_option_days([OTHER_CONTRACT.occ_symbol], TRADING_DAY) == frozenset()
-    assert await captured_option_days({CONTRACT.occ_symbol}, TRADING_DAY) == frozenset({CONTRACT.occ_symbol})
+    assert await captured_option_days([OTHER_CONTRACT.occ_symbol], TRADING_DAY) == frozenset(), "a symbol not asked about is not named"
+    assert await captured_option_days({CONTRACT.occ_symbol}, TRADING_DAY) == frozenset({CONTRACT.occ_symbol}), (
+        "the symbol asked about is named"
+    )
+
+    # The catalog question is not the judge of "readable": the reader is.
+    (_raw_root(tmp_lake) / RELATIVE_PATH).unlink()
+
+    assert await captured_option_days([SYMBOL], TRADING_DAY) == frozenset({SYMBOL}), (
+        "a complete row whose file has since gone is still named"
+    )
+    assert await _read() is None, "and the reader says it is not there"
 
 
 async def test_one_symbol_given_as_a_string_is_a_mistake_and_not_an_answer_of_none(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
@@ -1813,19 +1788,6 @@ async def test_a_stock_row_with_a_contracts_symbol_is_not_a_captured_option_day(
     )
 
     assert await captured_option_days([SYMBOL], TRADING_DAY) == frozenset()
-
-
-@respx.mock
-async def test_a_complete_row_whose_file_has_since_gone_is_still_named_and_the_reader_says_it_is_not_there(
-    fake_catalog: FakeCatalog, tmp_lake: Path
-) -> None:
-    """The catalog question is not the judge of "readable": the reader is."""
-    _mock_vendor()
-    await _ensure()
-    (_raw_root(tmp_lake) / RELATIVE_PATH).unlink()
-
-    assert await captured_option_days([SYMBOL], TRADING_DAY) == frozenset({SYMBOL})
-    assert await _read() is None
 
 
 # ── A listing already read is not read again ─────────────────────────────
@@ -1994,13 +1956,6 @@ def test_a_malformed_row_is_an_error_not_a_skipped_bar(body: str, line: int) -> 
         parse_option_day_zip(_zip(MEMBER, body), SYMBOL, TRADING_DAY)
 
 
-def test_a_file_made_for_another_contract_is_refused() -> None:
-    other = "20250613_spy250613c00601000_minute_trade.csv"
-
-    with pytest.raises(OptionBarsFileError, match="expected one member"):
-        parse_option_day_zip(_zip(other, "34200000,12700,13100,12500,12700,12\n"), SYMBOL, TRADING_DAY)
-
-
 @pytest.mark.parametrize(
     ("ticks", "price"),
     [
@@ -2016,12 +1971,19 @@ def test_a_stored_price_with_more_digits_than_a_float_holds_reads_back_exact(tic
     assert str(bar.open) == price
 
 
-@pytest.mark.parametrize("extra_first", [False, True], ids=["extra last", "extra first"])
-def test_a_file_with_a_member_besides_the_one_it_should_hold_is_refused(extra_first: bool) -> None:
+@pytest.mark.parametrize(
+    "members",
+    [
+        ((MEMBER, "34200000,12700,13100,12500,12700,12\n"), ("20250613_notes.txt", "anything")),
+        (("20250613_notes.txt", "anything"), (MEMBER, "34200000,12700,13100,12500,12700,12\n")),
+        (("20250613_spy250613c00601000_minute_trade.csv", "34200000,12700,13100,12500,12700,12\n"),),
+    ],
+    ids=["extra last", "extra first", "made for another contract"],
+)
+def test_a_file_without_exactly_the_one_member_it_should_hold_is_refused(members: tuple[tuple[str, str], ...]) -> None:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
-        members = [(MEMBER, "34200000,12700,13100,12500,12700,12\n"), ("20250613_notes.txt", "anything")]
-        for name, body in reversed(members) if extra_first else members:
+        for name, body in members:
             zf.writestr(name, body)
 
     with pytest.raises(OptionBarsFileError, match="expected one member"):

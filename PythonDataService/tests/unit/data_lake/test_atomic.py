@@ -42,7 +42,7 @@ class TestAssertSameFilesystem:
 
 
 class TestStagePathFor:
-    def test_layout(self, tmp_path: Path):
+    def test_layout_and_attempts(self, tmp_path: Path):
         rel = PurePosixPath("equity/usa/minute/spy/20240520_trade.zip")
         request_id = UUID("12345678-1234-5678-1234-567812345678")
         result = stage_path_for(
@@ -63,18 +63,14 @@ class TestStagePathFor:
             / "minute"
             / "spy"
             / "20240520_trade.zip.tmp"
-        )
-
-    def test_two_attempts_distinct(self, tmp_path: Path):
-        rel = PurePosixPath("equity/usa/minute/spy/20240520_trade.zip")
-        request_id = UUID("12345678-1234-5678-1234-567812345678")
+        ), "layout: staging/<request_id>/<worker>/attempt_<n>/<lake path>.tmp"
         a1 = stage_path_for(tmp_path / "staging", rel, request_id, "w", 1)
         a2 = stage_path_for(tmp_path / "staging", rel, request_id, "w", 2)
-        assert a1 != a2
+        assert a1 != a2, "two attempts stage to distinct paths"
 
 
 class TestAtomicWriteAndPromote:
-    def test_writes_bytes_and_returns_sha256(self, tmp_path: Path):
+    def test_writes_bytes_returns_sha256_and_leaves_no_staging(self, tmp_path: Path):
         lake_root = tmp_path / "lake"
         staging_root = tmp_path / "staging"
         lake_root.mkdir()
@@ -94,27 +90,10 @@ class TestAtomicWriteAndPromote:
             attempt=1,
         )
 
-        assert result_sha == expected_sha
+        assert result_sha == expected_sha, "returns the sha256 of the content"
         final = lake_root / "equity" / "usa" / "minute" / "spy" / "20240520_trade.zip"
-        assert final.is_file()
-        assert final.read_bytes() == content
-
-    def test_no_staging_leftover_after_promote(self, tmp_path: Path):
-        lake_root = tmp_path / "lake"
-        staging_root = tmp_path / "staging"
-        lake_root.mkdir()
-        staging_root.mkdir()
-        rel = PurePosixPath("equity/usa/minute/spy/20240520_trade.zip")
-
-        atomic_write_and_promote(
-            content=b"x",
-            lake_root=lake_root,
-            staging_root=staging_root,
-            rel_lake_path=rel,
-            request_id=UUID("12345678-1234-5678-1234-567812345678"),
-            worker_id="w",
-            attempt=1,
-        )
+        assert final.is_file(), "writes the file at the lake path"
+        assert final.read_bytes() == content, "the lake file holds the written bytes"
 
         # The .tmp staging file should be gone (rename moved it).
         staged = stage_path_for(
@@ -124,7 +103,7 @@ class TestAtomicWriteAndPromote:
             "w",
             1,
         )
-        assert not staged.exists()
+        assert not staged.exists(), "no staging leftover after promote"
 
     def test_cross_device_raises(self, tmp_path: Path, monkeypatch):
         """If lake_root and staging_root are on different st_dev values,
@@ -153,51 +132,27 @@ class TestAtomicWriteAndPromote:
                 attempt=1,
             )
 
-    def test_rejects_absolute_path(self, tmp_path: Path):
+    @pytest.mark.parametrize(
+        ("rel_lake_path", "match"),
+        [
+            pytest.param("/tmp/x.zip", "absolute", id="rejects_absolute_path"),
+            pytest.param("equity/../../etc/passwd", r"\.\.", id="rejects_dotdot_traversal"),
+            # PurePosixPath('') has no parts; Path(*[]) resolves to CWD, which
+            # would overwrite lake_root itself if not rejected.
+            pytest.param("", "empty", id="rejects_empty_path"),
+        ],
+    )
+    def test_rejects_unsafe_rel_lake_path(self, tmp_path: Path, rel_lake_path: str, match: str):
         lake_root = tmp_path / "lake"
         staging_root = tmp_path / "staging"
         lake_root.mkdir()
         staging_root.mkdir()
-        with pytest.raises(ValueError, match="absolute"):
+        with pytest.raises(ValueError, match=match):
             atomic_write_and_promote(
                 content=b"x",
                 lake_root=lake_root,
                 staging_root=staging_root,
-                rel_lake_path=PurePosixPath("/tmp/x.zip"),
-                request_id=UUID("12345678-1234-5678-1234-567812345678"),
-                worker_id="w",
-                attempt=1,
-            )
-
-    def test_rejects_dotdot_traversal(self, tmp_path: Path):
-        lake_root = tmp_path / "lake"
-        staging_root = tmp_path / "staging"
-        lake_root.mkdir()
-        staging_root.mkdir()
-        with pytest.raises(ValueError, match=r"\.\."):
-            atomic_write_and_promote(
-                content=b"x",
-                lake_root=lake_root,
-                staging_root=staging_root,
-                rel_lake_path=PurePosixPath("equity/../../etc/passwd"),
-                request_id=UUID("12345678-1234-5678-1234-567812345678"),
-                worker_id="w",
-                attempt=1,
-            )
-
-    def test_rejects_empty_path(self, tmp_path: Path):
-        """PurePosixPath('') has no parts; Path(*[]) resolves to CWD, which
-        would overwrite lake_root itself if not rejected."""
-        lake_root = tmp_path / "lake"
-        staging_root = tmp_path / "staging"
-        lake_root.mkdir()
-        staging_root.mkdir()
-        with pytest.raises(ValueError, match="empty"):
-            atomic_write_and_promote(
-                content=b"x",
-                lake_root=lake_root,
-                staging_root=staging_root,
-                rel_lake_path=PurePosixPath(""),
+                rel_lake_path=PurePosixPath(rel_lake_path),
                 request_id=UUID("12345678-1234-5678-1234-567812345678"),
                 worker_id="w",
                 attempt=1,

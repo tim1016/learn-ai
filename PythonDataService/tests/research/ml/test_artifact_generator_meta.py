@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 from pydantic import ValidationError
 
@@ -73,30 +75,33 @@ def test_qc_fixture_manifest_round_trips() -> None:
     assert m.generator.qc_daily_anchor_hhmm == "16:00"
 
 
-def test_qc_fixture_manifest_rejects_malformed_anchor_hhmm() -> None:
-    bad = _qc_manifest_dict()
-    bad["generator"]["qc_daily_anchor_hhmm"] = "4pm"
-    with pytest.raises(ValidationError):
-        PredictionSetManifest.model_validate(bad)
-
-
-def test_qc_fixture_manifest_rejects_string_exported_at() -> None:
-    bad = _qc_manifest_dict()
-    bad["generator"]["qc_exported_at_ms"] = "2026-05-10T12:34:56Z"
-    with pytest.raises(ValidationError):
-        PredictionSetManifest.model_validate(bad)
-
-
-def test_discriminator_rejects_cross_variant_fields_on_qc_kind() -> None:
-    bad = _qc_manifest_dict()
-    bad["generator"]["rule_id"] = "rsi_14_centered"
-    with pytest.raises(ValidationError):
-        PredictionSetManifest.model_validate(bad)
-
-
-def test_discriminator_rejects_cross_variant_fields_on_deterministic_kind() -> None:
-    bad = _det_manifest_dict()
-    bad["generator"]["qc_dataset_id"] = "USEquity-Daily-v1"
+@pytest.mark.parametrize(
+    ("base", "field", "value"),
+    [
+        pytest.param(_qc_manifest_dict, "qc_daily_anchor_hhmm", "4pm", id="qc_fixture_rejects_malformed_anchor_hhmm"),
+        pytest.param(
+            _qc_manifest_dict,
+            "qc_exported_at_ms",
+            "2026-05-10T12:34:56Z",
+            id="qc_fixture_rejects_string_exported_at",
+        ),
+        pytest.param(
+            _qc_manifest_dict,
+            "rule_id",
+            "rsi_14_centered",
+            id="discriminator_rejects_cross_variant_fields_on_qc_kind",
+        ),
+        pytest.param(
+            _det_manifest_dict,
+            "qc_dataset_id",
+            "USEquity-Daily-v1",
+            id="discriminator_rejects_cross_variant_fields_on_deterministic_kind",
+        ),
+    ],
+)
+def test_manifest_generator_rejects_invalid_field(base: Callable[[], dict], field: str, value: object) -> None:
+    bad = base()
+    bad["generator"][field] = value
     with pytest.raises(ValidationError):
         PredictionSetManifest.model_validate(bad)
 

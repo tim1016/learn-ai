@@ -140,12 +140,25 @@ async def test_post_creates_persisted_run(client, tmp_path: Path):
 # ---------------------------------------------------------------------------
 # POST — validation errors.
 # ---------------------------------------------------------------------------
-async def test_post_invalid_date_returns_400(client):
+async def test_post_refuses_an_invalid_date_a_reversed_window_and_a_malformed_spec(client):
     body = _request_body()
     body["start_date"] = "not-a-date"
     response = await client.post("/api/research/strategy-runs", json=body)
-    assert response.status_code == 400
-    assert "start_date" in response.json()["detail"]
+    assert response.status_code == 400, "an invalid date returns 400"
+    assert "start_date" in response.json()["detail"], "an invalid date: the detail names start_date"
+
+    body = _request_body()
+    body["start_date"] = "2024-12-31"
+    body["end_date"] = "2024-01-02"
+    response = await client.post("/api/research/strategy-runs", json=body)
+    assert response.status_code == 400, "a start after the end returns 400"
+
+    # Pydantic validation on the embedded spec runs before our endpoint —
+    # a structurally-broken spec gets FastAPI's 422, not our 400.
+    body = _request_body()
+    body["spec"]["symbols"] = []  # Phase 1 boundary: single symbol required
+    response = await client.post("/api/research/strategy-runs", json=body)
+    assert response.status_code == 422, "a malformed spec returns 422"
 
 
 @pytest.mark.parametrize("fill_mode", ["signal_bar_close", "next_bar_open", "decision_minute_open"])
@@ -169,23 +182,6 @@ async def test_post_invalid_fill_mode_returns_400(client, fill_mode: str):
     response = await client.post("/api/research/strategy-runs", json=body)
     assert response.status_code == 400
     assert "signal_bar_close, next_bar_open or decision_minute_open" in response.json()["detail"]
-
-
-async def test_post_start_after_end_returns_400(client):
-    body = _request_body()
-    body["start_date"] = "2024-12-31"
-    body["end_date"] = "2024-01-02"
-    response = await client.post("/api/research/strategy-runs", json=body)
-    assert response.status_code == 400
-
-
-async def test_post_malformed_spec_returns_422(client):
-    """Pydantic validation on the embedded spec runs before our endpoint —
-    a structurally-broken spec gets FastAPI's 422, not our 400."""
-    body = _request_body()
-    body["spec"]["symbols"] = []  # Phase 1 boundary: single symbol required
-    response = await client.post("/api/research/strategy-runs", json=body)
-    assert response.status_code == 422
 
 
 # ---------------------------------------------------------------------------
@@ -219,27 +215,24 @@ async def test_post_unsupported_spec_feature_persists_failed_run(
 # ---------------------------------------------------------------------------
 # GET — single run.
 # ---------------------------------------------------------------------------
-async def test_get_missing_run_returns_404(client):
-    """Valid run_id format but no such run on disk → 404."""
+async def test_get_refuses_a_missing_run_with_404_and_a_path_traversal_run_id_with_400(client):
+    # Valid run_id format but no such run on disk → 404.
     response = await client.get(
         "/api/research/strategy-runs/deadbeefdeadbeefdeadbeefdeadbeef"
     )
-    assert response.status_code == 404
+    assert response.status_code == 404, "a missing run returns 404"
 
-
-async def test_get_path_traversal_run_id_returns_400(client):
-    """Path traversal attempt is rejected by ``_run_dir`` and surfaces as 400.
-
-    The artifacts root never sees a directory matching ``../etc/passwd``;
-    the storage layer's regex rejects the run_id before any path
-    concatenation. This test guards the defense at the HTTP boundary.
-    """
+    # Path traversal attempt is rejected by ``_run_dir`` and surfaces as 400.
+    #
+    # The artifacts root never sees a directory matching ``../etc/passwd``;
+    # the storage layer's regex rejects the run_id before any path
+    # concatenation. This test guards the defense at the HTTP boundary.
     response = await client.get("/api/research/strategy-runs/..%2Fetc%2Fpasswd")
     # FastAPI / Starlette decode %2F so the handler sees ``../etc/passwd``;
     # the storage validation raises ValueError → translated to 400.
-    assert response.status_code in {400, 404}, response.text
+    assert response.status_code in {400, 404}, f"a path-traversal run_id is refused: {response.text}"
     if response.status_code == 400:
-        assert "run_id" in response.json()["detail"]
+        assert "run_id" in response.json()["detail"], "a path-traversal run_id: the 400 detail names run_id"
 
 
 async def test_post_run_id_collision_returns_409(configured_app, tmp_path: Path, monkeypatch):
@@ -310,31 +303,28 @@ async def test_list_limit_truncates(client):
 # ---------------------------------------------------------------------------
 # RunLedger.window_summary — stamped on every persisted run.
 # ---------------------------------------------------------------------------
-async def test_post_ledger_carries_window_summary(client):
+async def test_post_ledger_carries_window_summary_and_it_round_trips_through_persist_load(client):
     response = await client.post("/api/research/strategy-runs", json=_request_body())
-    assert response.status_code == 200, response.text
+    assert response.status_code == 200, f"window summary: the POST succeeds: {response.text}"
 
     ledger = response.json()["ledger"]
     ws = ledger["window_summary"]
-    assert ws is not None
-    assert ws["requested_start_date"] == "2024-01-02"
-    assert ws["requested_end_date"] == "2024-12-31"
-    assert isinstance(ws["sessions_included"], list)
+    assert ws is not None, "window summary: the ledger carries one"
+    assert ws["requested_start_date"] == "2024-01-02", "window summary: requested start date"
+    assert ws["requested_end_date"] == "2024-12-31", "window summary: requested end date"
+    assert isinstance(ws["sessions_included"], list), "window summary: sessions_included is a list"
     # NYSE 2024 ran 252 trading sessions; ``[2024-01-02, 2024-12-31]``
     # inclusive covers every one of them (1/1 New Year's is the only
     # 2024 holiday before 1/2, and 12/31 is a regular session). Pin
     # the count + endpoints — wide ranges hide off-by-one bugs in the
     # exclusive-vs-inclusive end-date semantics this PR fixes.
-    assert len(ws["sessions_included"]) == 252
-    assert ws["sessions_included"][0] == "2024-01-02"
-    assert ws["sessions_included"][-1] == "2024-12-31"
+    assert len(ws["sessions_included"]) == 252, "window summary: 252 NYSE sessions in 2024"
+    assert ws["sessions_included"][0] == "2024-01-02", "window summary: first session"
+    assert ws["sessions_included"][-1] == "2024-12-31", "window summary: last session"
 
-
-async def test_window_summary_round_trips_through_persist_load(client):
-    """The ledger field survives save → load (JSON serialization round-trip)."""
-    post = await client.post("/api/research/strategy-runs", json=_request_body())
-    run_id = post.json()["ledger"]["run_id"]
-
-    got = await client.get(f"/api/research/strategy-runs/{run_id}")
-    assert got.status_code == 200, got.text
-    assert got.json()["ledger"]["window_summary"] == post.json()["ledger"]["window_summary"]
+    # The ledger field survives save → load (JSON serialization round-trip).
+    got = await client.get(f"/api/research/strategy-runs/{ledger['run_id']}")
+    assert got.status_code == 200, f"window summary round trip: the GET succeeds: {got.text}"
+    assert got.json()["ledger"]["window_summary"] == ledger["window_summary"], (
+        "window summary survives the persist and load round trip"
+    )

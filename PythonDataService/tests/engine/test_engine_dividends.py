@@ -98,9 +98,33 @@ def _write_factor_file(path: Path) -> None:
     )
 
 
-def test_factor_file_reader_skips_equal_factors_and_out_of_window_rows(tmp_path: Path) -> None:
+def _write_same_date_factor_file(path: Path) -> None:
+    """Two distributions sharing an ex-date are one dividend (#3000 review).
+
+    LEAN's CorporateFactorProvider.GetSplitsAndDividends walks its rows
+    grouped by date and uses each date's first row only, reconstructing from
+    that row's factor to the next date's — not one dividend per row.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # The 2026-03-19 pair carries two distributions (pf 0.99 then 0.9702);
+    # LEAN's walk uses only the first row, against 2026-04-01's factor of 1:
+    # round_half_even(100 − 100·0.99, 2) = 1.00.
+    path.write_text(
+        "20250102,0.98,1,50.00\n20260319,0.99,1,100.00\n20260319,0.9702,1,100.00\n20260401,1,1,101.00\n",
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize(
+    "write_factor_file",
+    [
+        pytest.param(_write_factor_file, id="skips_equal_factors_and_out_of_window_rows"),
+        pytest.param(_write_same_date_factor_file, id="collapses_same_date_rows_like_lean_3000"),
+    ],
+)
+def test_factor_file_reader_yields_the_one_dividend_leans_walk_finds(write_factor_file, tmp_path: Path) -> None:
     factor_file = tmp_path / "equity/usa/factor_files/syn.csv"
-    _write_factor_file(factor_file)
+    write_factor_file(factor_file)
     dividends = dividends_from_factor_file(factor_file, "syn", date(2026, 3, 1), date(2026, 3, 31))
     # 2026-03-19 16:00 ET = 20:00 UTC; round_half_even(100 - 100·0.99, 2) = 1.00
     assert [(d.held_through_ms, str(d.per_share)) for d in dividends] == [(1773950400000, "1.00")]
@@ -126,26 +150,6 @@ def test_factor_file_reader_pins_spy_march_2026_distribution() -> None:
     """The committed capture's own numbers: the dividend LEAN paid on the SPY cell (#2903)."""
     dividends = dividends_from_factor_file(_SPY_CAPTURE_FACTOR_FILE, "SPY", date(2026, 3, 1), date(2026, 4, 30))
     assert [(d.held_through_ms, str(d.per_share)) for d in dividends] == [(1773950400000, "1.80")]
-
-
-def test_factor_file_reader_collapses_same_date_rows_like_lean(tmp_path: Path) -> None:
-    """Two distributions sharing an ex-date are one dividend (#3000 review).
-
-    LEAN's CorporateFactorProvider.GetSplitsAndDividends walks its rows
-    grouped by date and uses each date's first row only, reconstructing from
-    that row's factor to the next date's — not one dividend per row.
-    """
-    factor_file = tmp_path / "equity/usa/factor_files/syn.csv"
-    factor_file.parent.mkdir(parents=True, exist_ok=True)
-    # The 2026-03-19 pair carries two distributions (pf 0.99 then 0.9702);
-    # LEAN's walk uses only the first row, against 2026-04-01's factor of 1:
-    # round_half_even(100 − 100·0.99, 2) = 1.00.
-    factor_file.write_text(
-        "20250102,0.98,1,50.00\n20260319,0.99,1,100.00\n20260319,0.9702,1,100.00\n20260401,1,1,101.00\n",
-        encoding="utf-8",
-    )
-    dividends = dividends_from_factor_file(factor_file, "syn", date(2026, 3, 1), date(2026, 3, 31))
-    assert [(d.held_through_ms, str(d.per_share)) for d in dividends] == [(1773950400000, "1.00")]
 
 
 def _deferred_fill_bars() -> list[TradeBar]:

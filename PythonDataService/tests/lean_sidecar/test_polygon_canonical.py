@@ -70,9 +70,10 @@ def _write_fixture(
     return fixture_dir
 
 
-def test_recorded_provider_returns_bars_when_metadata_matches(tmp_path: Path) -> None:
+def test_recorded_provider_returns_bars_and_exposes_identity_when_metadata_matches(tmp_path: Path) -> None:
     fixture_dir = _write_fixture(tmp_path)
     provider = RecordedPolygonFixtureProvider(fixture_dir)
+    meta = json.loads((fixture_dir / "metadata.json").read_text())
 
     bars = provider.fetch_minute_bars(
         symbol="SPY",
@@ -81,8 +82,10 @@ def test_recorded_provider_returns_bars_when_metadata_matches(tmp_path: Path) ->
         adjusted=False,
     )
 
-    assert len(bars) == 1
-    assert bars[0]["close"] == 591.2
+    assert len(bars) == 1, "returns the fixture's one bar when metadata matches"
+    assert bars[0]["close"] == 591.2, "returns the fixture's bar close"
+    assert provider.fixture_id == fixture_dir.name, "PR A hardening: fixture_id is the fixture directory name"
+    assert provider.fixture_sha256 == meta["bars_sha256"], "PR A hardening: fixture_sha256 is metadata bars_sha256"
 
 
 @pytest.mark.parametrize(
@@ -235,36 +238,27 @@ def test_fetch_canonical_minute_bars_filters_to_rth() -> None:
     assert [float(b.close) for b in trade_bars] == [591.0, 592.0]
 
 
-def test_fetch_canonical_rejects_duplicate_timestamps() -> None:
+@pytest.mark.parametrize(
+    "second_bar_offset_minutes,second_close,match",
+    [
+        # Same timestamp as the first bar.
+        pytest.param(0, 591.5, "duplicate", id="rejects_duplicate_timestamps"),
+        # One minute before the first bar: out of order.
+        pytest.param(-1, 590.5, "non-monotonic", id="rejects_non_monotonic_timestamps"),
+    ],
+)
+def test_fetch_canonical_rejects_invalid_timestamp_sequence(
+    second_bar_offset_minutes: int, second_close: float, match: str
+) -> None:
     from app.lean_sidecar.polygon_canonical import (
         CanonicalBarsError,
         fetch_canonical_minute_bars,
     )
 
     day = datetime(2025, 1, 6, 10, 0, tzinfo=_ET)
-    bars = [_bar(day, 591.0), _bar(day, 591.5)]  # same timestamp
+    bars = [_bar(day, 591.0), _bar(day + timedelta(minutes=second_bar_offset_minutes), second_close)]
 
-    with pytest.raises(CanonicalBarsError, match="duplicate"):
-        fetch_canonical_minute_bars(
-            symbol="SPY",
-            start_date=date(2025, 1, 6),
-            end_date=date(2025, 1, 6),
-            session="regular",
-            adjustment="raw",
-            provider=_StubProvider(bars),
-        )
-
-
-def test_fetch_canonical_rejects_non_monotonic_timestamps() -> None:
-    from app.lean_sidecar.polygon_canonical import (
-        CanonicalBarsError,
-        fetch_canonical_minute_bars,
-    )
-
-    day = datetime(2025, 1, 6, 10, 0, tzinfo=_ET)
-    bars = [_bar(day, 591.0), _bar(day - timedelta(minutes=1), 590.5)]  # out of order
-
-    with pytest.raises(CanonicalBarsError, match="non-monotonic"):
+    with pytest.raises(CanonicalBarsError, match=match):
         fetch_canonical_minute_bars(
             symbol="SPY",
             start_date=date(2025, 1, 6),
@@ -300,16 +294,6 @@ def test_fetch_canonical_keeps_all_when_extended() -> None:
 # ---------------------------------------------------------------------------
 # PR A hardening regression tests
 # ---------------------------------------------------------------------------
-
-
-def test_recorded_provider_exposes_fixture_identity(tmp_path: Path) -> None:
-    """RecordedPolygonFixtureProvider.fixture_id == dir name; fixture_sha256 == meta.bars_sha256."""
-    fixture_dir = _write_fixture(tmp_path)
-    provider = RecordedPolygonFixtureProvider(fixture_dir)
-    meta = json.loads((fixture_dir / "metadata.json").read_text())
-
-    assert provider.fixture_id == fixture_dir.name
-    assert provider.fixture_sha256 == meta["bars_sha256"]
 
 
 def test_recorded_provider_rejects_tampered_bars_json(tmp_path: Path) -> None:

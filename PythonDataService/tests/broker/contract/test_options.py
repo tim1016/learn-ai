@@ -152,17 +152,22 @@ def test_a_multi_leg_order_carries_two_to_four_legs() -> None:
     assert len(_spread(legs=four).legs) == 4
 
 
-def test_a_multi_leg_order_refuses_a_contract_in_two_legs() -> None:
-    same = _contract("call", "450")
-
-    with pytest.raises(ValidationError, match="each contract in one leg"):
-        _spread(legs=(_leg(same, OrderSide.BUY), _leg(same, OrderSide.SELL)))
-
-
-def test_a_multi_leg_order_refuses_legs_on_two_underlyings() -> None:
-    with pytest.raises(ValidationError, match="one underlying"):
+@pytest.mark.parametrize(
+    ("sold_strike", "sold_root", "message"),
+    [
+        pytest.param("450", "SPY", "each contract in one leg", id="a contract in two legs"),
+        pytest.param("455", "QQQ", "one underlying", id="legs on two underlyings"),
+    ],
+)
+def test_a_multi_leg_order_refuses_a_contract_in_two_legs_and_legs_on_two_underlyings(
+    sold_strike: str, sold_root: str, message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
         _spread(
-            legs=(_leg(_contract("call", "450"), OrderSide.BUY), _leg(_contract("call", "455", root="QQQ"), OrderSide.SELL))
+            legs=(
+                _leg(_contract("call", "450"), OrderSide.BUY),
+                _leg(_contract("call", sold_strike, root=sold_root), OrderSide.SELL),
+            )
         )
 
 
@@ -714,10 +719,20 @@ def _listing(contract: OptionContract, **overrides: object) -> BrokerOptionContr
     return BrokerOptionContract(**listing)  # type: ignore[arg-type]
 
 
-def test_a_listed_active_tradable_american_100_share_contract_may_be_traded() -> None:
+@pytest.mark.parametrize(
+    "change",
+    [
+        pytest.param({}, id="a listed active tradable american 100-share contract"),
+        pytest.param(
+            {"deliverables": (BrokerOptionDeliverable(kind="equity", symbol="SPY", amount=Decimal("100")),)},
+            id="a contract listed as delivering 100 shares of its underlying",
+        ),
+    ],
+)
+def test_a_listed_standard_contract_may_be_traded(change: dict[str, object]) -> None:
     contract = _contract("call", "450")
 
-    assert option_contract_refusal(contract, _listing(contract)) is None
+    assert option_contract_refusal(contract, _listing(contract, **change)) is None
 
 
 def test_a_contract_the_broker_does_not_list_is_refused_by_name() -> None:
@@ -755,78 +770,74 @@ def test_a_listed_contract_a_bot_may_not_trade_is_refused_with_its_reason(
 @pytest.mark.parametrize(
     ("change", "reason"),
     [
-        ({"status": "ACTIVE"}, OptionContractRefusal.NOT_ACTIVE),
-        ({"status": "Active"}, OptionContractRefusal.NOT_ACTIVE),
-        ({"style": "American"}, OptionContractRefusal.NOT_AMERICAN),
-        ({"style": "AMERICAN"}, OptionContractRefusal.NOT_AMERICAN),
-        (
+        # Alpaca's reference lists ``active``, ``american`` and ``equity`` in lowercase and nothing else.
+        pytest.param({"status": "ACTIVE"}, OptionContractRefusal.NOT_ACTIVE, id="status in capitals"),
+        pytest.param({"status": "Active"}, OptionContractRefusal.NOT_ACTIVE, id="status capitalised"),
+        pytest.param({"style": "American"}, OptionContractRefusal.NOT_AMERICAN, id="style capitalised"),
+        pytest.param({"style": "AMERICAN"}, OptionContractRefusal.NOT_AMERICAN, id="style in capitals"),
+        pytest.param(
             {"deliverables": (BrokerOptionDeliverable(kind="EQUITY", symbol="SPY", amount=Decimal("100")),)},
             OptionContractRefusal.NOT_STANDARD,
+            id="deliverable kind in capitals",
         ),
+        # An adjusted contract can keep a multiplier of 100 and deliver something else.
+        pytest.param({"deliverables": ()}, OptionContractRefusal.NOT_STANDARD, id="no deliverables"),
+        pytest.param(
+            {"deliverables": (BrokerOptionDeliverable(kind="equity", symbol="SPY", amount=Decimal("150")),)},
+            OptionContractRefusal.NOT_STANDARD,
+            id="150 shares of the underlying",
+        ),
+        pytest.param(
+            {"deliverables": (BrokerOptionDeliverable(kind="equity", symbol="SPYX", amount=Decimal("100")),)},
+            OptionContractRefusal.NOT_STANDARD,
+            id="100 shares of another symbol",
+        ),
+        pytest.param(
+            {"deliverables": (BrokerOptionDeliverable(kind="cash", symbol="SPY", amount=Decimal("100")),)},
+            OptionContractRefusal.NOT_STANDARD,
+            id="100 of cash, not shares",
+        ),
+        pytest.param(
+            {"deliverables": (BrokerOptionDeliverable(kind="equity", symbol="SPY", amount=None),)},
+            OptionContractRefusal.NOT_STANDARD,
+            id="shares with no amount settled",
+        ),
+        pytest.param(
+            {
+                "deliverables": (
+                    BrokerOptionDeliverable(kind="equity", symbol="SPY", amount=Decimal("100")),
+                    BrokerOptionDeliverable(kind="cash", symbol="USD", amount=Decimal("12.50")),
+                )
+            },
+            OptionContractRefusal.NOT_STANDARD,
+            id="100 shares with cash beside them",
+        ),
+        pytest.param(
+            {"symbol": "SPY261218C00455000"},
+            OptionContractRefusal.NOT_THE_CONTRACT_ASKED_FOR,
+            id="the symbol of another strike",
+        ),
+        pytest.param(
+            {"strike_price": Decimal("455")}, OptionContractRefusal.NOT_THE_CONTRACT_ASKED_FOR, id="another strike"
+        ),
+        pytest.param({"right": "put"}, OptionContractRefusal.NOT_THE_CONTRACT_ASKED_FOR, id="another right"),
+        pytest.param(
+            {"expiry_ms": _contract("call", "450", expiry=date(2027, 1, 15)).expiry_ms},
+            OptionContractRefusal.NOT_THE_CONTRACT_ASKED_FOR,
+            id="another expiry",
+        ),
+        pytest.param({"root_symbol": "SPYX"}, OptionContractRefusal.NOT_THE_CONTRACT_ASKED_FOR, id="another root"),
     ],
 )
-def test_a_word_the_brokers_reference_does_not_list_is_not_taken_for_the_one_it_resembles(
+def test_a_listing_with_lookalike_words_odd_deliverables_or_another_contract_is_refused_with_its_reason(
     change: dict[str, object], reason: OptionContractRefusal
 ) -> None:
-    """Alpaca's reference lists ``active``, ``american`` and ``equity`` in lowercase and nothing else."""
     contract = _contract("call", "450")
 
     refusal = option_contract_refusal(contract, _listing(contract, **change))
 
-    assert refusal is not None
-    assert refusal.reason is reason
-
-
-@pytest.mark.parametrize(
-    "deliverables",
-    [
-        (),
-        (BrokerOptionDeliverable(kind="equity", symbol="SPY", amount=Decimal("150")),),
-        (BrokerOptionDeliverable(kind="equity", symbol="SPYX", amount=Decimal("100")),),
-        (BrokerOptionDeliverable(kind="cash", symbol="SPY", amount=Decimal("100")),),
-        (BrokerOptionDeliverable(kind="equity", symbol="SPY", amount=None),),
-        (
-            BrokerOptionDeliverable(kind="equity", symbol="SPY", amount=Decimal("100")),
-            BrokerOptionDeliverable(kind="cash", symbol="USD", amount=Decimal("12.50")),
-        ),
-    ],
-)
-def test_a_contract_that_delivers_anything_but_100_shares_of_its_underlying_is_not_standard(
-    deliverables: tuple[BrokerOptionDeliverable, ...],
-) -> None:
-    """An adjusted contract can keep a multiplier of 100 and deliver something else."""
-    contract = _contract("call", "450")
-
-    refusal = option_contract_refusal(contract, _listing(contract, deliverables=deliverables))
-
-    assert refusal is not None
-    assert refusal.reason is OptionContractRefusal.NOT_STANDARD
-
-
-def test_a_contract_listed_as_delivering_100_shares_of_its_underlying_is_standard() -> None:
-    contract = _contract("call", "450")
-    standard = (BrokerOptionDeliverable(kind="equity", symbol="SPY", amount=Decimal("100")),)
-
-    assert option_contract_refusal(contract, _listing(contract, deliverables=standard)) is None
-
-
-@pytest.mark.parametrize(
-    "change",
-    [
-        {"symbol": "SPY261218C00455000"},
-        {"strike_price": Decimal("455")},
-        {"right": "put"},
-        {"expiry_ms": _contract("call", "450", expiry=date(2027, 1, 15)).expiry_ms},
-        {"root_symbol": "SPYX"},
-    ],
-)
-def test_an_answer_about_a_different_contract_is_refused(change: dict[str, object]) -> None:
-    contract = _contract("call", "450")
-
-    refusal = option_contract_refusal(contract, _listing(contract, **change))
-
-    assert refusal is not None
-    assert refusal.reason is OptionContractRefusal.NOT_THE_CONTRACT_ASKED_FOR
+    assert refusal is not None, "the listing is refused"
+    assert refusal.reason is reason, "the refusal names the reason for this listing"
 
 
 def test_a_listing_keeps_its_root_and_underlying_as_the_broker_wrote_them() -> None:

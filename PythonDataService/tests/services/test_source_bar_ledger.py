@@ -59,21 +59,14 @@ def test_source_bar_ledger_is_idempotent_but_refuses_revised_identity(tmp_path: 
 
     first = ledger.append(_bar(), run_id="run-a")
     replay = ledger.append(_bar(), run_id="run-a")
+    later_fetch_replay = ledger.append(_bar(fetched_at_ms=1_700_000_099_000), run_id="run-a")
 
-    assert replay == first
-    assert len(ledger.bars(provider="polygon-minute", symbol="SPY")) == 1
+    assert replay == first, "an exact replay returns the retained bar"
+    assert len(ledger.bars(provider="polygon-minute", symbol="SPY")) == 1, "replays add no second bar"
+    assert later_fetch_replay == first, "a later fetch time is an exact redelivery"
+    assert ledger.find_by_market_bar(_bar()) == first, "the retained bar is found by its market identity"
     with pytest.raises(SourceBarConflictError, match="SOURCE_BAR_IDENTITY_CONFLICT"):
         ledger.append(_bar(close="502.25"), run_id="run-a")
-
-
-def test_source_bar_ledger_treats_later_fetch_time_as_exact_redelivery(tmp_path: Path) -> None:
-    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
-
-    retained = ledger.append(_bar(), run_id="run-a")
-    replay = ledger.append(_bar(fetched_at_ms=1_700_000_099_000), run_id="run-a")
-
-    assert replay == retained
-    assert ledger.find_by_market_bar(_bar()) == retained
 
 
 def test_source_bar_ledger_uses_sqlite_identity_index_after_restart(tmp_path: Path) -> None:

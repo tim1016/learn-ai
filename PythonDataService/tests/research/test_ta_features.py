@@ -8,19 +8,13 @@ from app.research.features.ta_features import TechnicalFeatures
 
 
 class TestMomentum5m:
-    def test_output_length(self, sample_bars_single_day: list[dict]) -> None:
-        result = TechnicalFeatures.compute_feature("momentum_5m", sample_bars_single_day)
-        assert len(result) == len(sample_bars_single_day)
-
-    def test_first_5_bars_nan(self, sample_bars_single_day: list[dict]) -> None:
-        result = TechnicalFeatures.compute_feature("momentum_5m", sample_bars_single_day)
-        assert result.iloc[:5].isna().all()
-
-    def test_values_are_reasonable(self, sample_bars_single_day: list[dict]) -> None:
+    def test_output_length_first_5_bars_nan_and_values_are_reasonable(self, sample_bars_single_day: list[dict]) -> None:
         result = TechnicalFeatures.compute_feature("momentum_5m", sample_bars_single_day)
         valid = result.dropna()
+        assert len(result) == len(sample_bars_single_day), "output length matches the input bars"
+        assert result.iloc[:5].isna().all(), "the first 5 bars are NaN"
         # Momentum should be small relative values (not hundreds)
-        assert (valid.abs() < 1.0).all()
+        assert (valid.abs() < 1.0).all(), "values are reasonable: small relative momentum, not hundreds"
 
 
 class TestRSI14:

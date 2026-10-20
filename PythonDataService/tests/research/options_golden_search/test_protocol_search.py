@@ -42,7 +42,7 @@ def result(s, profit, eligible=True):
                       max_drawdown_fraction=Decimal("0.1"), sharpe=2, eligible=eligible, evidence_id=point_hash(s))
 
 
-def test_grid_preserves_original_outside_categories_and_exact_money_ranking():
+def test_a_search_ranks_money_exactly_keeps_a_tie_escapes_an_ineligible_seed_and_finds_pair_regions():
     p = protocol()
     seen = []
     def evaluate(s, w, scenario):
@@ -51,10 +51,27 @@ def test_grid_preserves_original_outside_categories_and_exact_money_ranking():
         # Sub-float precision still decides the winner.
         return result(s, {Decimal(10): "1", Decimal(20): "2.00000000000000000001", Decimal(30): "2", Decimal(40): "0"}[value])
     searched = run_search(p, p.development, evaluate)
-    assert searched.winner.net_profit_usd == Decimal("2.00000000000000000001")
-    assert seen == [Decimal(10), Decimal(20), Decimal(30), Decimal(40)]
-    assert len(searched.eligible) == 4
-    assert searched.unique_evaluations == 4
+    assert searched.winner.net_profit_usd == Decimal("2.00000000000000000001"), "grid: the exact money ranking decides the winner"
+    assert seen == [Decimal(10), Decimal(20), Decimal(30), Decimal(40)], "grid: the original outside categories are all evaluated in order"
+    assert len(searched.eligible) == 4, "grid: every point is eligible"
+    assert searched.unique_evaluations == 4, "grid: four unique evaluations"
+
+    p = protocol(method="zoom")
+    tied = run_search(p, p.development, lambda s, w, c: result(s, "1"))
+    assert tied.winner.point_hash == point_hash(p.setup), "zoom: an exact objective tie keeps the original seed"
+    escaped = run_search(p, p.development, lambda s, w, c: result(s, str(s.legs[0].stop_loss.value), s.legs[0].stop_loss.value != 10))
+    assert escaped.winner.net_profit_usd == 40, "zoom: an ineligible seed can be escaped"
+    none = run_search(p, p.development, lambda s, w, c: result(s, "100", False))
+    assert none.winner is None and not none.eligible, "zoom: no eligible point leaves no winner"
+
+    knobs = [Knob(path=f"legs.{name}.stop_loss.value", values=("10", "20")) for name in ("call_a", "put_b")]
+    def both_legs(s, w, c):
+        both = all(leg.stop_loss.value == 20 for leg in s.legs)
+        return result(s, "10" if both else "-1", both)
+    p = protocol(method="zoom", knobs=knobs)
+    assert run_search(p, p.development, both_legs).winner is None, "pair audit: without the audit the region needing both leg changes is missed"
+    audited = p.model_copy(update={"pair_audits": ((knobs[0].path, knobs[1].path),)})
+    assert run_search(audited, p.development, both_legs).winner.net_profit_usd == 10, "pair audit: the audit finds the region needing simultaneous leg changes"
 
 
 def test_stable_leg_ids_and_frozen_structure():
@@ -74,27 +91,6 @@ def test_illegal_dependency_is_excluded_and_zero_reentry_is_canonical_absence():
     searched = run_search(p, p.development, lambda s, w, c: result(s, "1"))
     assert sum(t.status == "invalid" for t in searched.trials) == 1
     assert searched.unique_evaluations == 3
-
-
-def test_zoom_preserves_exact_objective_tie_and_can_escape_ineligible_seed():
-    p = protocol(method="zoom")
-    tied = run_search(p, p.development, lambda s, w, c: result(s, "1"))
-    assert tied.winner.point_hash == point_hash(p.setup)
-    escaped = run_search(p, p.development, lambda s, w, c: result(s, str(s.legs[0].stop_loss.value), s.legs[0].stop_loss.value != 10))
-    assert escaped.winner.net_profit_usd == 40
-    none = run_search(p, p.development, lambda s, w, c: result(s, "100", False))
-    assert none.winner is None and not none.eligible
-
-
-def test_pair_audit_finds_region_requiring_simultaneous_leg_changes():
-    knobs = [Knob(path=f"legs.{name}.stop_loss.value", values=("10", "20")) for name in ("call_a", "put_b")]
-    def evaluate(s, w, c):
-        both = all(leg.stop_loss.value == 20 for leg in s.legs)
-        return result(s, "10" if both else "-1", both)
-    p = protocol(method="zoom", knobs=knobs)
-    assert run_search(p, p.development, evaluate).winner is None
-    audited = p.model_copy(update={"pair_audits": ((knobs[0].path, knobs[1].path),)})
-    assert run_search(audited, p.development, evaluate).winner.net_profit_usd == 10
 
 
 def test_fold_selection_resets_original_ranges_and_cannot_observe_future():
@@ -126,13 +122,30 @@ def test_frozen_sessions_disjoint_and_budget_includes_downstream():
                         end_ms=et_midnight_ms(date(2025, 6, 1)))
 
 
-def test_stress_keeps_estimated_policy_for_canonical_tier_scaling():
+def test_apply_scenario_keeps_the_estimated_policy_and_refuses_a_stress_of_zero_saved_costs():
     s = setup()
     stressed = apply_scenario(s, CostScenario(key="fees", fee_multiplier=Decimal(2)))
-    assert stressed.fees == s.fees
+    assert stressed.fees == s.fees, "stress keeps the estimated fee policy for canonical tier scaling"
     stressed = apply_scenario(s, CostScenario(key="slippage", slippage_multiplier=Decimal(2)))
-    assert stressed.slippage_percent == Decimal("0.6")
-    assert Policy().max_drawdown_fraction == Decimal("0.2")
+    assert stressed.slippage_percent == Decimal("0.6"), "a slippage stress doubles the saved slippage"
+    assert Policy().max_drawdown_fraction == Decimal("0.2"), "the default policy drawdown limit"
+
+    original = setup()
+    zero = OptionsBacktestSetup.model_validate({**original.model_dump(mode="json"),
+        "slippage_percent": "0", "fees": {"kind": "not_charged"}})
+    # Zero saved costs need a positive explicit stress, not a multiplier.
+    with pytest.raises(ValueError, match="zero"):
+        apply_scenario(zero, CostScenario(key="slippage", slippage_multiplier=Decimal(2)))
+    with pytest.raises(ValueError, match="zero"):
+        apply_scenario(zero, CostScenario(key="fees", fee_multiplier=Decimal(2)))
+    scenario = CostScenario(key="explicit", slippage_percent=Decimal("0.0123"),
+                            fee_per_contract_usd=Decimal("0.0123"), fee_multiplier=Decimal(2))
+    stressed = apply_scenario(zero, scenario)
+    assert stressed.slippage_percent == Decimal("0.0123"), "an explicit stress preserves the exact slippage amount"
+    assert stressed.fees.per_contract_usd == Decimal("0.0123"), "an explicit stress preserves the exact fee amount"
+    assert scenario.effective_fee_multiplier == 1, "an explicit fee stress has an effective multiplier of one"
+    estimated = apply_scenario(original, CostScenario(key="fees", fee_multiplier=Decimal(2)))
+    assert estimated.fees.kind == "estimated", "a fee stress on saved estimated fees stays estimated"
 
 
 def test_batched_completion_order_is_reassembled_before_adaptive_decisions():
@@ -156,24 +169,6 @@ def test_batched_completion_order_is_reassembled_before_adaptive_decisions():
     assert actual == expected
     assert evaluator.trials == list(actual.trials)
     assert max(evaluator.batches) > 1
-
-
-def test_zero_saved_costs_require_positive_explicit_stress_and_preserve_exact_amounts():
-    original = setup()
-    zero = OptionsBacktestSetup.model_validate({**original.model_dump(mode="json"),
-        "slippage_percent": "0", "fees": {"kind": "not_charged"}})
-    with pytest.raises(ValueError, match="zero"):
-        apply_scenario(zero, CostScenario(key="slippage", slippage_multiplier=Decimal(2)))
-    with pytest.raises(ValueError, match="zero"):
-        apply_scenario(zero, CostScenario(key="fees", fee_multiplier=Decimal(2)))
-    scenario = CostScenario(key="explicit", slippage_percent=Decimal("0.0123"),
-                            fee_per_contract_usd=Decimal("0.0123"), fee_multiplier=Decimal(2))
-    stressed = apply_scenario(zero, scenario)
-    assert stressed.slippage_percent == Decimal("0.0123")
-    assert stressed.fees.per_contract_usd == Decimal("0.0123")
-    assert scenario.effective_fee_multiplier == 1
-    estimated = apply_scenario(original, CostScenario(key="fees", fee_multiplier=Decimal(2)))
-    assert estimated.fees.kind == "estimated"
 
 
 @pytest.mark.parametrize("method", ["grid", "zoom"])

@@ -27,45 +27,49 @@ def _sample(ms: int, equity: str) -> EquitySnapshot:
     return EquitySnapshot(timestamp_ms=ms, equity=Decimal(equity), cash=Decimal(equity), holdings_value=Decimal(0))
 
 
-def test_each_et_date_keeps_its_last_sample_in_order() -> None:
-    curve = [
-        _sample(_at(2025, 3, 6, 9, 31), "100000"),
-        _sample(_at(2025, 3, 6, 16, 0), "100250.5"),
-        _sample(_at(2025, 3, 7, 9, 31), "100300"),
-        _sample(_at(2025, 3, 7, 12, 0), "99900"),
-        _sample(_at(2025, 3, 7, 16, 0), "100100.25"),
-    ]
+@pytest.mark.parametrize(
+    ("samples", "expected"),
+    [
+        pytest.param(
+            (
+                (_at(2025, 3, 6, 9, 31), "100000"),
+                (_at(2025, 3, 6, 16, 0), "100250.5"),
+                (_at(2025, 3, 7, 9, 31), "100300"),
+                (_at(2025, 3, 7, 12, 0), "99900"),
+                (_at(2025, 3, 7, 16, 0), "100100.25"),
+            ),
+            ((_at(2025, 3, 6, 16, 0), 100250.5), (_at(2025, 3, 7, 16, 0), 100100.25)),
+            id="each-et-date-keeps-its-last-sample-in-order",
+        ),
+        # Clocks moved forward on Sunday 2025-03-09. A sample at 23:59 ET belongs to its own date on either side;
+        # a fixed UTC offset would put one of them on the wrong day.
+        pytest.param(
+            (
+                (_at(2025, 3, 7, 23, 59), "1"),
+                (_at(2025, 3, 10, 0, 1), "2"),
+                (_at(2025, 3, 10, 23, 59), "3"),
+                (_at(2025, 3, 11, 0, 0), "4"),
+            ),
+            ((_at(2025, 3, 7, 23, 59), 1.0), (_at(2025, 3, 10, 23, 59), 3.0), (_at(2025, 3, 11, 0, 0), 4.0)),
+            id="a-day-boundary-is-et-midnight-on-both-sides-of-a-clock-change",
+        ),
+        # Friday then Monday: the weekend between them adds nothing.
+        pytest.param(
+            ((_at(2025, 3, 7, 16, 0), "10"), (_at(2025, 3, 10, 16, 0), "11")),
+            ((_at(2025, 3, 7, 16, 0), 10.0), (_at(2025, 3, 10, 16, 0), 11.0)),
+            id="a-day-without-a-sample-has-no-point",
+        ),
+        pytest.param((), (), id="an-empty-run-has-none"),
+    ],
+)
+def test_equity_day_ends_keeps_the_last_sample_of_each_et_date(
+    samples: tuple[tuple[int, str], ...], expected: tuple[tuple[int, float], ...]
+) -> None:
+    curve = [_sample(ms, equity) for ms, equity in samples]
 
-    assert equity_day_ends(curve) == [
-        {"timestamp": _at(2025, 3, 6, 16, 0), "equity": 100250.5},
-        {"timestamp": _at(2025, 3, 7, 16, 0), "equity": 100100.25},
-    ]
-
-
-def test_a_day_boundary_is_et_midnight_on_both_sides_of_a_clock_change() -> None:
-    # Clocks moved forward on Sunday 2025-03-09. A sample at 23:59 ET belongs to its own date on either side;
-    # a fixed UTC offset would put one of them on the wrong day.
-    curve = [
-        _sample(_at(2025, 3, 7, 23, 59), "1"),
-        _sample(_at(2025, 3, 10, 0, 1), "2"),
-        _sample(_at(2025, 3, 10, 23, 59), "3"),
-        _sample(_at(2025, 3, 11, 0, 0), "4"),
-    ]
-
-    assert [(point["timestamp"], point["equity"]) for point in equity_day_ends(curve)] == [
-        (_at(2025, 3, 7, 23, 59), 1.0),
-        (_at(2025, 3, 10, 23, 59), 3.0),
-        (_at(2025, 3, 11, 0, 0), 4.0),
-    ]
-
-
-def test_a_day_without_a_sample_has_no_point_and_an_empty_run_has_none() -> None:
-    # Friday then Monday: the weekend between them adds nothing.
-    curve = [_sample(_at(2025, 3, 7, 16, 0), "10"), _sample(_at(2025, 3, 10, 16, 0), "11")]
-
-    assert [point["equity"] for point in equity_day_ends(curve)] == [10.0, 11.0]
-    assert equity_day_ends([]) == []
-
+    assert equity_day_ends(curve) == [{"timestamp": ms, "equity": equity} for ms, equity in expected], (
+        "one point per ET date, the date's last sample, in time order"
+    )
 
 
 def test_samples_out_of_time_order_are_refused_never_searched() -> None:

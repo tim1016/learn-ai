@@ -110,7 +110,10 @@ def _pin_wall_clock(monkeypatch: pytest.MonkeyPatch, now_ms: int) -> None:
 
 @pytest.mark.parametrize(
     ("policy", "allowance_ms"),
-    [(None, DELIVERY_ALLOWANCE_MS), (_policy(_RTH), _policy(_RTH).delivery_allowance_ms)],
+    [
+        pytest.param(None, DELIVERY_ALLOWANCE_MS, id="no-policy"),
+        pytest.param(_policy(_RTH), _policy(_RTH).delivery_allowance_ms, id="rth-policy"),
+    ],
 )
 def test_late_decision_is_judged_against_the_one_allowance(
     monkeypatch: pytest.MonkeyPatch, policy: ContinuityPolicy | None, allowance_ms: int
@@ -118,27 +121,21 @@ def test_late_decision_is_judged_against_the_one_allowance(
     close_ms = session_open_ms_utc(_RTH_DAY) + 60_000
 
     _pin_wall_clock(monkeypatch, close_ms + allowance_ms)
-    assert fcp.late_decision(policy, close_ms) is None
+    assert fcp.late_decision(policy, close_ms) is None, "a decision delivered exactly at its allowance is not late"
 
     _pin_wall_clock(monkeypatch, close_ms + allowance_ms + 1)
     late = fcp.late_decision(policy, close_ms)
-    assert late is not None
-    assert (late.lateness_ms, late.allowance_ms) == (allowance_ms + 1, allowance_ms)
+    assert late is not None, "a decision delivered 1 ms past its allowance is late"
+    assert (late.lateness_ms, late.allowance_ms) == (allowance_ms + 1, allowance_ms), "it carries its lateness and the one allowance"
 
-
-@pytest.mark.parametrize("policy", [None, _policy(_RTH)])
-def test_a_decision_is_valid_until_the_last_instant_it_is_not_late(
-    monkeypatch: pytest.MonkeyPatch, policy: ContinuityPolicy | None
-) -> None:
-    """#2623: the time limit an ENTER waiting on an account reading carries is the lateness boundary."""
-    close_ms = session_open_ms_utc(_RTH_DAY) + 60_000
+    # #2623: the time limit an ENTER waiting on an account reading carries is the lateness boundary.
     until_ms = fcp.decision_valid_until_ms(policy, close_ms)
 
     _pin_wall_clock(monkeypatch, until_ms)
-    assert fcp.late_decision(policy, close_ms) is None
+    assert fcp.late_decision(policy, close_ms) is None, "#2623: a decision is not late at the last instant it is valid"
 
     _pin_wall_clock(monkeypatch, until_ms + 1)
-    assert fcp.late_decision(policy, close_ms) is not None
+    assert fcp.late_decision(policy, close_ms) is not None, "#2623: a decision is late 1 ms past the time limit an ENTER carries"
 
 
 # --- G-2: the extended session's final minute ------------------------------

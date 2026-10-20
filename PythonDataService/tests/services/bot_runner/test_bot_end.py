@@ -149,39 +149,33 @@ def _sell(end_at_ms: int | None) -> BotEndInput:
 # ── Deploy records the end ───────────────────────────────────────────────────
 
 
-async def test_deploy_records_the_owners_end_in_the_bots_desired_state(tmp_path: Path) -> None:
+async def test_deploy_records_the_owners_end_in_the_bots_desired_state_and_not_its_binding(tmp_path: Path) -> None:
     await _deployed(tmp_path, _Clock())
 
     desired = _desired_json(tmp_path)
-    assert desired["desired_state"] == "RUNNING"
-    assert desired["end"] == {"end_at_ms": _END.end_at_ms, "end_action": "SELL", "carried_out_at_ms": None}
-
-
-async def test_the_end_never_enters_the_binding_or_its_configuration_hash(tmp_path: Path) -> None:
-    await _deployed(tmp_path, _Clock())
+    assert desired["desired_state"] == "RUNNING", "deploy records the bot's desired state as RUNNING"
+    assert desired["end"] == {"end_at_ms": _END.end_at_ms, "end_action": "SELL", "carried_out_at_ms": None}, (
+        "deploy records the owner's end in the bot's desired state"
+    )
     with_end = _binding_bytes(tmp_path)
-
-    assert b"end_at_ms" not in with_end
-    assert b"end_action" not in with_end
-
-
-async def test_deploy_with_no_end_records_no_end(tmp_path: Path) -> None:
-    registry = await _deployed(tmp_path, _Clock(), end=None)
-
-    assert _desired_json(tmp_path)["end"] is None
-    assert registry.pending_ends([_SID]) == []
+    assert b"end_at_ms" not in with_end, "the end's time never enters the binding"
+    assert b"end_action" not in with_end, "the end's action never enters the binding"
 
 
-async def test_a_running_bot_with_no_end_is_offered_the_default_end_to_add(tmp_path: Path) -> None:
+async def test_a_bot_deployed_with_no_end_records_none_and_is_offered_the_default_end_to_add(tmp_path: Path) -> None:
     """#2663: the bot page's Change opens on the default end, as Deploy's form does; a bot with one opens on its own."""
     registry = await _deployed(tmp_path, _Clock(), end=None)
 
-    assert registry.bot_end("alpaca", _SID).default_end_at_ms == _END.end_at_ms
+    assert _desired_json(tmp_path)["end"] is None, "deploy with no end records no end"
+    assert registry.pending_ends([_SID]) == [], "deploy with no end leaves no pending end"
+    assert registry.bot_end("alpaca", _SID).default_end_at_ms == _END.end_at_ms, (
+        "#2663: a running bot with no end is offered the default end to add"
+    )
 
     view = await registry.edit_bot_end("alpaca", _SID, _sell(_END.end_at_ms - 3_600_000), updated_by="operator")
 
-    assert view.end_at_ms == _END.end_at_ms - 3_600_000
-    assert view.default_end_at_ms is None
+    assert view.end_at_ms == _END.end_at_ms - 3_600_000, "#2663: the edit adds the end the owner chose"
+    assert view.default_end_at_ms is None, "#2663: a bot with an end opens on its own, offered no default"
 
 
 # ── the owner edits a running bot's end ──────────────────────────────────────

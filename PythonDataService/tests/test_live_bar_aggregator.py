@@ -72,33 +72,11 @@ async def test_ensure_subscribed_starts_stream_and_buffers_bars(
         await asyncio.sleep(0.01)
 
     snap = fresh_aggregator.snapshot("SPY")
-    assert [b.start_ms for b in snap] == [1_000_000, 1_060_000]
-    assert state.status == "streaming"
-    assert state.last_bar_ms == 1_060_000
-
-    await fresh_aggregator.shutdown()
-
-
-async def test_snapshot_since_ms_filters_to_new_bars(
-    fresh_aggregator: LiveBarAggregator, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    bars = [_bar("SPY", 1_000_000, 100.0), _bar("SPY", 1_060_000, 101.0)]
-
-    async def fake_stream(_client, _symbol, **_kw) -> AsyncIterator[IbkrMinuteBar]:
-        for b in bars:
-            yield b
-        await asyncio.sleep(3600)
-
-    monkeypatch.setattr(agg_mod, "stream_minute_bars", fake_stream)
-
-    state = await fresh_aggregator.ensure_subscribed("SPY")
-    for _ in range(20):
-        if len(state.bars) == 2:
-            break
-        await asyncio.sleep(0.01)
-
-    snap = fresh_aggregator.snapshot("SPY", since_ms=1_000_000)
-    assert [b.start_ms for b in snap] == [1_060_000]
+    assert [b.start_ms for b in snap] == [1_000_000, 1_060_000], "snapshot holds both streamed bars"
+    assert state.status == "streaming", "state is streaming"
+    assert state.last_bar_ms == 1_060_000, "last_bar_ms is the newest bar"
+    since = fresh_aggregator.snapshot("SPY", since_ms=1_000_000)
+    assert [b.start_ms for b in since] == [1_060_000], "since_ms filters to new bars"
 
     await fresh_aggregator.shutdown()
 

@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import re
 
+import pytest
+
 from tests.contracts.compose_files import (
     ROOT,
     environment_as_key_value,
@@ -38,6 +40,13 @@ SECRET_KEYS = frozenset(
         "POSTGRES_URL",
         "REDIS_URL",
     }
+)
+
+LANE_IDENTITY_KEYS = (
+    "FLEET_CLERK_ID",
+    "FLEET_WORKER_KEY",
+    "FLEET_AGENT_SERVICE_TOKEN",
+    "FLEET_COORDINATOR_SERVICE_TOKEN",
 )
 
 
@@ -94,48 +103,59 @@ def _example_keys(name: str) -> set[str]:
     }
 
 
-def test_hardcoded_literal_check_catches_a_bare_secret_value() -> None:
-    assert _is_hardcoded_literal("wkrk_deadbeefdeadbeefdeadbeefdeadbeef") is True
+@pytest.mark.parametrize(
+    ("value", "hardcoded"),
+    [
+        pytest.param("wkrk_deadbeefdeadbeefdeadbeefdeadbeef", True, id="bare-secret-value"),
+        # A real credential wrapped as the variable's own `${KEY:-...}` fallback
+        # evades a naive "contains ${" carve-out entirely -- it still ships in the
+        # committed file, unconditionally, whenever the variable is unset.
+        pytest.param(
+            "${FLEET_WORKER_KEY:-sk-live-should-never-ship-1234567890}", True, id="default-clause-bypass-colon-dash"
+        ),
+        pytest.param("${DATA_PLANE_CONTROL_SECRET-another-hidden-default}", True, id="default-clause-bypass-dash"),
+        pytest.param(
+            "prefix-${ALPACA_API_SECRET_KEY:-embedded-secret}-suffix", True, id="default-clause-bypass-embedded"
+        ),
+        # Non-secret defaults (this repo's own compose idiom, e.g.
+        # FLEET_DEPLOYMENT_NAMESPACE throughout compose.fleet.dev.yaml), Compose's
+        # required-with-message form (compose.yaml's own DATA_PLANE_CONTROL_SECRET
+        # usage), a bare passthrough, and a templated connection string whose
+        # embedded variable is not itself a secret name must all stay green -- or
+        # the fix trades a false negative for a false positive.
+        pytest.param("${FLEET_DEPLOYMENT_NAMESPACE:-compose:learn-ai}", False, id="non-secret-default"),
+        pytest.param(
+            "${DATA_PLANE_CONTROL_SECRET:?Set DATA_PLANE_CONTROL_SECRET in .env before starting the stack}",
+            False,
+            id="required-with-message",
+        ),
+        pytest.param("${FLEET_WORKER_KEY}", False, id="bare-passthrough"),
+        pytest.param(
+            "redis://:${REDIS_PASSWORD:-local-dev-redis-password}@redis:6379/0",
+            False,
+            id="templated-connection-string-with-non-secret-variable",
+        ),
+    ],
+)
+def test_hardcoded_literal_check_catches_secrets_and_leaves_legitimate_interpolation_green(
+    value: str, hardcoded: bool
+) -> None:
+    assert _is_hardcoded_literal(value) is hardcoded
 
 
-def test_hardcoded_literal_check_catches_the_default_clause_bypass() -> None:
-    """A real credential wrapped as the variable's own `${KEY:-...}` fallback
-    evades a naive "contains ${" carve-out entirely — it still ships in the
-    committed file, unconditionally, whenever the variable is unset."""
-    assert _is_hardcoded_literal("${FLEET_WORKER_KEY:-sk-live-should-never-ship-1234567890}") is True
-    assert _is_hardcoded_literal("${DATA_PLANE_CONTROL_SECRET-another-hidden-default}") is True
-    assert _is_hardcoded_literal("prefix-${ALPACA_API_SECRET_KEY:-embedded-secret}-suffix") is True
-
-
-def test_hardcoded_literal_check_leaves_legitimate_interpolation_green() -> None:
-    """Non-secret defaults (this repo's own compose idiom, e.g.
-    FLEET_DEPLOYMENT_NAMESPACE throughout compose.fleet.dev.yaml), Compose's
-    required-with-message form (compose.yaml's own DATA_PLANE_CONTROL_SECRET
-    usage), a bare passthrough, and a templated connection string whose
-    embedded variable is not itself a secret name must all stay green — or
-    the fix trades a false negative for a false positive."""
-    assert _is_hardcoded_literal("${FLEET_DEPLOYMENT_NAMESPACE:-compose:learn-ai}") is False
-    assert _is_hardcoded_literal(
-        "${DATA_PLANE_CONTROL_SECRET:?Set DATA_PLANE_CONTROL_SECRET in .env before starting the stack}"
-    ) is False
-    assert _is_hardcoded_literal("${FLEET_WORKER_KEY}") is False
-    assert _is_hardcoded_literal("redis://:${REDIS_PASSWORD:-local-dev-redis-password}@redis:6379/0") is False
-
-
-def test_discovery_finds_every_committed_compose_overlay() -> None:
+def test_discovery_finds_every_committed_compose_overlay_and_none_carries_a_fleet_secret_literal() -> None:
     """The discovery mechanism itself must cover the file that was previously
     missed — a hardcoded tuple silently omitted it despite this test's own
-    docstring promising every committed compose file."""
-    tracked = tracked_compose_files()
-    assert {"compose.yaml", "compose.fleet.yaml", "compose.fleet.dev.yaml",
-            "compose.fleet.qualification.yaml"} <= set(tracked)
+    docstring promising every committed compose file.
 
-
-def test_no_committed_compose_file_carries_a_fleet_secret_literal() -> None:
-    """Every secret-bearing key is env_file-only or a `${VAR}` passthrough —
+    Every secret-bearing key is env_file-only or a `${VAR}` passthrough —
     never a hardcoded literal that would shadow `env_file:` for the same key."""
     renderer = render_module()
     tracked = tracked_compose_files()
+    assert {"compose.yaml", "compose.fleet.yaml", "compose.fleet.dev.yaml",
+            "compose.fleet.qualification.yaml"} <= set(tracked), (
+        "discovery omits a committed compose file"
+    )
     assert tracked, "no tracked compose*.yaml files found — git ls-files may be misconfigured"
     for name in tracked:
         document = renderer.load_compose_document(ROOT / name)
@@ -147,24 +167,27 @@ def test_no_committed_compose_file_carries_a_fleet_secret_literal() -> None:
             assert not leaked, f"{name}:{service} declares secret keys as literals: {sorted(leaked)}"
 
 
-def test_coordinator_example_declares_every_key_the_running_coordinator_needs() -> None:
-    assert {
-        "FLEET_AGENT_SERVICE_TOKENS_JSON",
-        "FLEET_COORDINATOR_SERVICE_TOKENS_JSON",
-        "DATA_PLANE_CONTROL_SECRET",
-    } <= _example_keys("coordinator.env.example")
-
-
-def test_lane_examples_declare_the_four_identity_and_transport_keys() -> None:
-    """The four keys the deployed override wrongly re-declares as literals."""
-    identity_keys = {
-        "FLEET_CLERK_ID",
-        "FLEET_WORKER_KEY",
-        "FLEET_AGENT_SERVICE_TOKEN",
-        "FLEET_COORDINATOR_SERVICE_TOKEN",
-    }
-    for name in ("live.env.example", "paper.env.example"):
-        assert identity_keys <= _example_keys(name), name
+@pytest.mark.parametrize(
+    ("example", "required_keys"),
+    [
+        pytest.param(
+            "coordinator.env.example",
+            (
+                "FLEET_AGENT_SERVICE_TOKENS_JSON",
+                "FLEET_COORDINATOR_SERVICE_TOKENS_JSON",
+                "DATA_PLANE_CONTROL_SECRET",
+            ),
+            id="coordinator-declares-every-key-the-running-coordinator-needs",
+        ),
+        # The four keys the deployed override wrongly re-declares as literals.
+        pytest.param("live.env.example", LANE_IDENTITY_KEYS, id="live-lane-declares-the-four-identity-and-transport-keys"),
+        pytest.param(
+            "paper.env.example", LANE_IDENTITY_KEYS, id="paper-lane-declares-the-four-identity-and-transport-keys"
+        ),
+    ],
+)
+def test_example_env_files_declare_every_key_their_role_needs(example: str, required_keys: tuple[str, ...]) -> None:
+    assert set(required_keys) <= _example_keys(example), example
 
 
 def test_lane_examples_document_the_lake_catalog_url_as_dev_only() -> None:

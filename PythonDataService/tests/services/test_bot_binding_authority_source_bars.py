@@ -49,40 +49,37 @@ def test_paper_evidence_account_id_for_strategy_is_instance_scoped() -> None:
     assert account_id != synthetic_account_id_for_strategy("bot-a")
 
 
-def test_real_paper_authority_source_bars_opens_instance_scoped_ledger(tmp_path: Path) -> None:
-    authority = PrimaryAccountBindingAuthority(
-        binding=_trade_binding("bot-a"),
-        projector=cast(AlpacaLifecycleProjector, object()),
-        external_start_guard=None,
-        artifacts_root=tmp_path,
-        custody_kind=lambda: "real_paper",
-    )
-
-    ledger = authority.source_bars()
-    try:
-        assert ledger is not None
-        assert ledger.account_id == paper_evidence_account_id_for_strategy("bot-a")
-        assert ledger.path == (
-            tmp_path / "accounts" / "alpaca" / "paper:bot-a" / "source_bars.sqlite3"
-        )
-    finally:
-        ledger.close()
-
-
-def test_primary_authority_on_the_shadow_world_opens_the_shadow_evidence_ledger(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("custody_kind", "account_id", "account_dir"),
+    [
+        pytest.param(
+            "real_paper", paper_evidence_account_id_for_strategy("bot-a"), "paper:bot-a",
+            id="real-paper-opens-instance-scoped-ledger",
+        ),
+        pytest.param(
+            "shadow", "shadow-evidence:bot-a", "shadow-evidence:bot-a",
+            id="shadow-world-opens-the-shadow-evidence-ledger",
+        ),
+    ],
+)
+def test_primary_authority_source_bars_opens_the_ledger_of_its_custody_world(
+    tmp_path: Path, custody_kind: str, account_id: str, account_dir: str,
 ) -> None:
     authority = PrimaryAccountBindingAuthority(
         binding=_trade_binding("bot-a"),
         projector=cast(AlpacaLifecycleProjector, object()),
         external_start_guard=None,
         artifacts_root=tmp_path,
-        custody_kind=lambda: "shadow",
+        custody_kind=lambda: custody_kind,
     )
 
     ledger = authority.source_bars()
     try:
-        assert ledger.account_id == "shadow-evidence:bot-a"
+        assert ledger is not None, "the authority opens a source-bar ledger"
+        assert ledger.account_id == account_id, "the ledger is scoped to the custody world's evidence account"
+        assert ledger.path == (
+            tmp_path / "accounts" / "alpaca" / account_dir / "source_bars.sqlite3"
+        ), "the ledger file lives under that evidence account"
     finally:
         ledger.close()
 

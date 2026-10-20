@@ -148,96 +148,88 @@ def _run_one_bar(algo: SpecAlgorithm, bar_end_time: datetime) -> None:
     algo._on_consolidated_bar(_make_bar(bar_end_time))
 
 
-def test_evaluator_consumes_next_row_at_decision_time_under_next_after_lookup() -> None:
-    """With lookup='next_after_bar_close', the evaluator reads the row whose
-    timestamp is strictly greater than the bar's end_time_ms.
-
-    Setup: bar at ts=100 has 'prediction' = -1.0 (negative), next ts=200
-    has +1.0. Spec entry fires when prediction > 0.0. If the evaluator
-    wrongly used exact-match, entry would NOT fire. With
-    next_after_bar_close, the evaluator reads +1.0 at ts=200 and entry
-    fires.
-    """
+@pytest.mark.parametrize(
+    "lookup,bar_end_prediction,next_prediction",
+    [
+        # With lookup='next_after_bar_close', the evaluator reads the row whose
+        # timestamp is strictly greater than the bar's end_time_ms.
+        # Setup: the bar's own row has 'prediction' = -1.0 (negative), the next
+        # row has +1.0. Spec entry fires when prediction > 0.0. If the evaluator
+        # wrongly used exact-match, entry would NOT fire. With
+        # next_after_bar_close, the evaluator reads +1.0 at the next row and
+        # entry fires.
+        pytest.param("next_after_bar_close", -1.0, 1.0, id="next_row_at_decision_time_under_next_after_lookup"),
+        # With lookup='exact_bar_close', the evaluator reads the row keyed at
+        # bar.end_time_ms.
+        # Same data layout but the exact-row value is what gets read. Here the
+        # bar's own row has +1.0, so entry fires under exact_bar_close (and would
+        # NOT under next_after because the next row's value is -1.0).
+        pytest.param("exact_bar_close", 1.0, -1.0, id="exact_row_under_exact_bar_close_lookup"),
+    ],
+)
+def test_evaluator_consumes_the_row_its_lookup_selects(
+    lookup: str, bar_end_prediction: float, next_prediction: float
+) -> None:
     bar_end = datetime(2026, 2, 9, 16, 0, tzinfo=NY)
     next_bar_end = datetime(2026, 2, 10, 16, 0, tzinfo=NY)
 
     pset = _make_pset(
         [
-            (_ts_ms(bar_end), {"prediction": -1.0}),
-            (_ts_ms(next_bar_end), {"prediction": 1.0}),
+            (_ts_ms(bar_end), {"prediction": bar_end_prediction}),
+            (_ts_ms(next_bar_end), {"prediction": next_prediction}),
         ]
     )
-    algo = SpecAlgorithm(_spec_with_lookup("next_after_bar_close"), prediction_set=pset)
+    algo = SpecAlgorithm(_spec_with_lookup(lookup), prediction_set=pset)
     _run_one_bar(algo, bar_end)
 
-    assert algo._in_position is True, "entry condition should have fired (next-row prediction +1.0 > 0)"
+    assert algo._in_position is True, f"entry condition should have fired under {lookup} (selected-row prediction +1.0 > 0)"
 
 
-def test_evaluator_consumes_exact_row_under_exact_bar_close_lookup() -> None:
-    """With lookup='exact_bar_close', the evaluator reads the row keyed at
-    bar.end_time_ms.
-
-    Same data layout as the next_after test but the exact-row value is what
-    gets read. Here ts=bar_end has +1.0, so entry fires under
-    exact_bar_close (and would NOT under next_after because next row's value
-    is -1.0).
-    """
+@pytest.mark.parametrize(
+    "lookup,rows,match",
+    [
+        # Runtime backstop: if coverage somehow let a bar through that has no
+        # successor prediction, the evaluator must raise PredictionLookupError
+        # rather than silently produce a False PredictionComparison.
+        # Only row; no successor.
+        pytest.param(
+            "next_after_bar_close",
+            (("bar_end", "prediction", 1.0),),
+            r"next_after_bar_close.*no row strictly after",
+            id="next_after_row_absent",
+        ),
+        # Runtime backstop for the exact-match branch: missing row at the bar's
+        # own ts raises with a descriptive message rather than silently producing
+        # False. Row at ts+1, not ts.
+        pytest.param(
+            "exact_bar_close",
+            (("bar_end_plus_1ms", "prediction", 1.0),),
+            r"exact_bar_close.*no row at ts_ms",
+            id="exact_bar_close_row_absent",
+        ),
+        # Runtime backstop: row exists but lacks the declared field. Catches a
+        # coverage bypass on the field-presence check.
+        # next_after_bar_close finds row at next_bar_end, but it lacks 'prediction'.
+        pytest.param(
+            "next_after_bar_close",
+            (("bar_end", "prediction", 0.0), ("next_bar_end", "other_field", 0.0)),
+            r"missing declared field 'prediction'",
+            id="resolved_row_missing_declared_field",
+        ),
+    ],
+)
+def test_evaluator_raises_when_the_resolved_row_or_field_is_absent(
+    lookup: str, rows: tuple[tuple[str, str, float], ...], match: str
+) -> None:
     bar_end = datetime(2026, 2, 9, 16, 0, tzinfo=NY)
     next_bar_end = datetime(2026, 2, 10, 16, 0, tzinfo=NY)
+    ts_by_name = {
+        "bar_end": _ts_ms(bar_end),
+        "bar_end_plus_1ms": _ts_ms(bar_end) + 1,
+        "next_bar_end": _ts_ms(next_bar_end),
+    }
+    pset = _make_pset([(ts_by_name[at], {field: value}) for at, field, value in rows])
+    algo = SpecAlgorithm(_spec_with_lookup(lookup), prediction_set=pset)
 
-    pset = _make_pset(
-        [
-            (_ts_ms(bar_end), {"prediction": 1.0}),
-            (_ts_ms(next_bar_end), {"prediction": -1.0}),
-        ]
-    )
-    algo = SpecAlgorithm(_spec_with_lookup("exact_bar_close"), prediction_set=pset)
-    _run_one_bar(algo, bar_end)
-
-    assert algo._in_position is True, "entry condition should have fired (exact-row prediction +1.0 > 0)"
-
-
-def test_evaluator_raises_when_next_after_row_absent() -> None:
-    """Runtime backstop: if coverage somehow let a bar through that has no
-    successor prediction, the evaluator must raise PredictionLookupError
-    rather than silently produce a False PredictionComparison.
-    """
-    bar_end = datetime(2026, 2, 9, 16, 0, tzinfo=NY)
-    pset = _make_pset([(_ts_ms(bar_end), {"prediction": 1.0})])  # only row; no successor
-    algo = SpecAlgorithm(_spec_with_lookup("next_after_bar_close"), prediction_set=pset)
-
-    with pytest.raises(PredictionLookupError, match=r"next_after_bar_close.*no row strictly after"):
-        _run_one_bar(algo, bar_end)
-
-
-def test_evaluator_raises_when_exact_bar_close_row_absent() -> None:
-    """Runtime backstop for the exact-match branch: missing row at the bar's
-    own ts raises with a descriptive message rather than silently producing
-    False.
-    """
-    bar_end = datetime(2026, 2, 9, 16, 0, tzinfo=NY)
-    pset = _make_pset([(_ts_ms(bar_end) + 1, {"prediction": 1.0})])  # row at ts+1, not ts
-    algo = SpecAlgorithm(_spec_with_lookup("exact_bar_close"), prediction_set=pset)
-
-    with pytest.raises(PredictionLookupError, match=r"exact_bar_close.*no row at ts_ms"):
-        _run_one_bar(algo, bar_end)
-
-
-def test_evaluator_raises_when_resolved_row_missing_declared_field() -> None:
-    """Runtime backstop: row exists but lacks the declared field. Catches a
-    coverage bypass on the field-presence check.
-    """
-    bar_end = datetime(2026, 2, 9, 16, 0, tzinfo=NY)
-    next_bar_end = datetime(2026, 2, 10, 16, 0, tzinfo=NY)
-
-    # next_after_bar_close finds row at next_bar_end, but it lacks 'prediction':
-    pset = _make_pset(
-        [
-            (_ts_ms(bar_end), {"prediction": 0.0}),
-            (_ts_ms(next_bar_end), {"other_field": 0.0}),
-        ]
-    )
-    algo = SpecAlgorithm(_spec_with_lookup("next_after_bar_close"), prediction_set=pset)
-
-    with pytest.raises(PredictionLookupError, match=r"missing declared field 'prediction'"):
+    with pytest.raises(PredictionLookupError, match=match):
         _run_one_bar(algo, bar_end)

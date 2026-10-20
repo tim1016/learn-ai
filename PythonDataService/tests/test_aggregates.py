@@ -57,31 +57,21 @@ async def test_fetch_aggregates_success(client):
 
 
 @pytest.mark.anyio
-async def test_fetch_aggregates_empty_ticker_returns_422(client):
-    """Empty ticker should be rejected by Pydantic validation"""
+@pytest.mark.parametrize(
+    ("ticker", "timespan"),
+    [
+        pytest.param("", "day", id="empty_ticker"),
+        pytest.param("AAPL", "invalid", id="invalid_timespan"),
+    ],
+)
+async def test_fetch_aggregates_invalid_request_returns_422(client, ticker, timespan):
+    """Pydantic validation rejects an empty ticker and an invalid timespan"""
     response = await client.post(
         "/api/aggregates/fetch",
         json={
-            "ticker": "",
+            "ticker": ticker,
             "multiplier": 1,
-            "timespan": "day",
-            "from_date": "2024-01-01",
-            "to_date": "2024-01-31",
-        },
-    )
-
-    assert response.status_code == 422
-
-
-@pytest.mark.anyio
-async def test_fetch_aggregates_invalid_timespan_returns_422(client):
-    """Invalid timespan should fail Pydantic validation"""
-    response = await client.post(
-        "/api/aggregates/fetch",
-        json={
-            "ticker": "AAPL",
-            "multiplier": 1,
-            "timespan": "invalid",
+            "timespan": timespan,
             "from_date": "2024-01-01",
             "to_date": "2024-01-31",
         },

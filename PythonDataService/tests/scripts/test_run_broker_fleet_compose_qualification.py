@@ -250,41 +250,41 @@ def test_qualification_coordinator_environment_has_complete_support_store_urls(
     )
 
 
-def test_cleanup_failure_changes_qualification_evidence_to_failed() -> None:
-    """A failed scoped teardown cannot leave a passing evidence record."""
+def test_cleanup_failure_changes_qualification_evidence_to_failed_and_preserves_an_earlier_failure() -> None:
+    """A failed scoped teardown cannot leave a passing evidence record.
+
+    Teardown trouble must not erase the root failure's evidence stage.
+    """
     class ComposeStub:
         def run(self, _project: str, _args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
             raise qualification.QualificationError("engine refused teardown")
 
-    evidence: dict[str, object] = {"result": "passed", "stage": "complete"}
+    passing: dict[str, object] = {"result": "passed", "stage": "complete"}
     error = qualification._cleanup_qualification(
-        cast(qualification.ComposeCommand, ComposeStub()), "qualification", evidence
+        cast(qualification.ComposeCommand, ComposeStub()), "qualification", passing
     )
 
-    assert error is not None
-    assert evidence == {
+    assert error is not None, "a failed teardown returns its error"
+    assert passing == {
         "result": "failed",
         "stage": "complete",
         "failure": {"stage": "cleanup", "error_type": "QualificationError"},
-    }
+    }, "a failed teardown changes passing evidence to failed"
 
-
-def test_cleanup_failure_preserves_an_earlier_qualification_failure() -> None:
-    """Teardown trouble must not erase the root failure's evidence stage."""
-    class ComposeStub:
-        def run(self, _project: str, _args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
-            raise qualification.QualificationError("engine refused teardown")
-
-    evidence: dict[str, object] = {
+    failed: dict[str, object] = {
         "result": "failed",
         "failure": {"stage": "lane_startup", "error_type": "QualificationError"},
     }
     qualification._cleanup_qualification(
-        cast(qualification.ComposeCommand, ComposeStub()), "qualification", evidence
+        cast(qualification.ComposeCommand, ComposeStub()), "qualification", failed
     )
 
-    assert evidence["failure"] == {"stage": "lane_startup", "error_type": "QualificationError"}
-    assert evidence["cleanup_failure"] == {"stage": "cleanup", "error_type": "QualificationError"}
+    assert failed["failure"] == {"stage": "lane_startup", "error_type": "QualificationError"}, (
+        "teardown trouble keeps an earlier failure's stage"
+    )
+    assert failed["cleanup_failure"] == {"stage": "cleanup", "error_type": "QualificationError"}, (
+        "teardown trouble is recorded apart as the cleanup failure"
+    )
 
 
 def test_capacity_probe_runs_as_module_inside_application_image() -> None:

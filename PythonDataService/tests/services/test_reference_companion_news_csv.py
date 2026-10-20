@@ -13,6 +13,8 @@ import csv
 import io
 from typing import Any
 
+import pytest
+
 from app.services.reference_companion_service import build_news_csv
 
 
@@ -46,46 +48,53 @@ def _parse(csv_bytes: bytes) -> list[dict[str, str]]:
     return list(csv.DictReader(io.StringIO(csv_bytes.decode("utf-8"))))
 
 
-def test_build_news_csv_flattens_lists_and_publisher() -> None:
-    out = build_news_csv(_FakePolygon([_row()]), "SPY", "2026-09-01", "2026-09-30")
+@pytest.mark.parametrize(
+    ("row_overrides", "expected_publisher"),
+    [
+        pytest.param((), "Example Wire", id="flattens_lists_and_publisher"),
+        pytest.param((("publisher", None),), "", id="tolerates_missing_publisher"),
+    ],
+)
+def test_build_news_csv_flattens_lists_and_publisher(
+    row_overrides: tuple[tuple[str, Any], ...], expected_publisher: str
+) -> None:
+    out = build_news_csv(_FakePolygon([_row(**dict(row_overrides))]), "SPY", "2026-09-01", "2026-09-30")
 
-    assert out is not None
+    assert out is not None, "an article yields a csv"
     [record] = _parse(out)
-    assert record["tickers"] == "SPY,DIA"
-    assert record["keywords"] == "markets,etf"
-    assert record["publisher"] == "Example Wire"
+    assert record["tickers"] == "SPY,DIA", "tickers are flattened"
+    assert record["keywords"] == "markets,etf", "keywords are flattened"
+    assert record["publisher"] == expected_publisher, "the publisher is flattened to its name, empty when missing"
     # The durable artifact carries canonical ms, not the vendor string.
-    assert record["published_utc_ms"] == "1788528600000"
+    assert record["published_utc_ms"] == "1788528600000", "the csv carries canonical ms"
 
 
-def test_build_news_csv_orders_by_canonical_ms_not_vendor_string() -> None:
-    older = _row(id="old", published_utc_ms=1788528600000)
-    newer = _row(id="new", published_utc_ms=1788615000000)
+@pytest.mark.parametrize(
+    ("articles", "expected_ids"),
+    [
+        pytest.param(
+            (("new", 1788615000000), ("old", 1788528600000)),
+            ["old", "new"],
+            id="orders_by_canonical_ms_not_vendor_string",
+        ),
+        # An unparseable vendor timestamp must not drop the article.
+        pytest.param(
+            (("undated", None), ("dated", 1788528600000)),
+            ["dated", "undated"],
+            id="keeps_rows_with_null_ms_last",
+        ),
+    ],
+)
+def test_build_news_csv_orders_rows_by_canonical_ms(
+    articles: tuple[tuple[str, int | None], ...], expected_ids: list[str]
+) -> None:
+    rows = [_row(id=article_id, published_utc_ms=published_ms) for article_id, published_ms in articles]
 
-    out = build_news_csv(_FakePolygon([newer, older]), "SPY", "2026-09-01", "2026-09-30")
+    out = build_news_csv(_FakePolygon(rows), "SPY", "2026-09-01", "2026-09-30")
 
-    assert out is not None
-    assert [r["id"] for r in _parse(out)] == ["old", "new"]
-
-
-def test_build_news_csv_keeps_rows_with_null_ms_last() -> None:
-    """An unparseable vendor timestamp must not drop the article."""
-    dated = _row(id="dated")
-    undated = _row(id="undated", published_utc_ms=None)
-
-    out = build_news_csv(_FakePolygon([undated, dated]), "SPY", "2026-09-01", "2026-09-30")
-
-    assert out is not None
-    assert [r["id"] for r in _parse(out)] == ["dated", "undated"]
+    assert out is not None, "the articles yield a csv"
+    assert [r["id"] for r in _parse(out)] == expected_ids, "rows are ordered by canonical ms, null ms last"
 
 
 def test_build_news_csv_returns_none_when_no_articles() -> None:
     assert build_news_csv(_FakePolygon([]), "SPY", "2026-09-01", "2026-09-30") is None
-
-
-def test_build_news_csv_tolerates_missing_publisher() -> None:
-    out = build_news_csv(_FakePolygon([_row(publisher=None)]), "SPY", "2026-09-01", "2026-09-30")
-
-    assert out is not None
-    [record] = _parse(out)
-    assert record["publisher"] == ""

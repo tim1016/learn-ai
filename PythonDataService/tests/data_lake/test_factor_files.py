@@ -61,17 +61,22 @@ def test_parse_factor_file_non_numeric_factor_rejected() -> None:
         parse_factor_file("20240701,abc,1,99\n")
 
 
-def test_factor_multiplier_empty_file_is_identity() -> None:
-    assert factor_multiplier_as_of([], date(2024, 7, 1)) == Decimal(1)
-
-
-def test_factor_multiplier_after_last_row_is_identity() -> None:
-    rows = _rows(("2024-07-01", "0.99", "0.5"))
-    # LEAN's loop breaks on the first (only) row when it is older than the
-    # search date, leaving the initialized identity — post-file data is
-    # unadjusted.
-    assert factor_multiplier_as_of(rows, date(2024, 7, 2)) == Decimal(1)
-    assert factor_multiplier_as_of(rows, date(2024, 7, 1)) == Decimal("0.99") * Decimal("0.5")
+@pytest.mark.parametrize(
+    ("specs", "search_date", "expected"),
+    [
+        ((), date(2024, 7, 1), Decimal(1)),
+        # LEAN's loop breaks on the first (only) row when it is older than the
+        # search date, leaving the initialized identity — post-file data is
+        # unadjusted.
+        ((("2024-07-01", "0.99", "0.5"),), date(2024, 7, 2), Decimal(1)),
+        ((("2024-07-01", "0.99", "0.5"),), date(2024, 7, 1), Decimal("0.99") * Decimal("0.5")),
+    ],
+    ids=["empty-file-is-identity", "after-last-row-is-identity", "on-the-last-row-keeps-its-factors"],
+)
+def test_factor_multiplier_at_the_edges_of_the_file(
+    specs: tuple[tuple[str, str, str], ...], search_date: date, expected: Decimal
+) -> None:
+    assert factor_multiplier_as_of(_rows(*specs), search_date) == expected
 
 
 def test_factor_multiplier_builder_round_trip() -> None:

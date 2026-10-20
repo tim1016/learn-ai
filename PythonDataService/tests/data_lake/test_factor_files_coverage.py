@@ -63,11 +63,14 @@ def _flat_closes(sessions: list[date]) -> dict[date, Decimal]:
 # ---------------------------------------------------------------------------
 
 
-def test_spans_are_runs_of_scheduled_sessions_across_weekends_and_holidays() -> None:
+def test_spans_are_runs_of_scheduled_sessions_and_an_unpriced_last_session_of_a_span_changes_nothing() -> None:
     plan = plan_factor_file(CAPTURED, [], [])
 
-    assert plan.spans == (SPAN_1, SPAN_2)
-    assert plan.anchor_sessions == (date(2024, 7, 1), date(2024, 7, 11))
+    assert plan.spans == (SPAN_1, SPAN_2), "spans are runs of scheduled sessions across weekends and holidays"
+    assert plan.anchor_sessions == (date(2024, 7, 1), date(2024, 7, 11)), "anchor sessions are the first and last captured sessions"
+    # Nothing in a span follows its last session, so there is no span to end.
+    unpriced_last = plan_factor_file(CAPTURED, [], [], unpriced_sessions=[date(2024, 7, 8)])
+    assert unpriced_last.spans == (SPAN_1, SPAN_2), "an unpriced last session of a span changes nothing"
 
 
 def test_only_actions_inside_a_span_are_kept_each_priced_on_its_prior_session() -> None:
@@ -140,11 +143,6 @@ def test_an_unpriced_reference_session_ends_its_span_and_drops_its_action() -> N
     assert plan.dividends == (dividend,)
     assert plan.reference_sessions == (date(2024, 7, 10),)
     assert plan.anchor_sessions == (date(2024, 7, 1), date(2024, 7, 11))
-
-
-def test_an_unpriced_last_session_of_a_span_changes_nothing() -> None:
-    """Nothing in a span follows its last session, so there is no span to end."""
-    assert plan_factor_file(CAPTURED, [], [], unpriced_sessions=[date(2024, 7, 8)]).spans == (SPAN_1, SPAN_2)
 
 
 def test_only_reads_crossing_an_unpriced_session_are_refused(tmp_path: Path) -> None:
@@ -367,20 +365,23 @@ def test_runs_inside_the_covered_spans_are_covered(tmp_path: Path) -> None:
     assert _read(tmp_path, []) == parse_factor_file(_BODY.decode("ascii"))
 
 
-def test_a_run_bridging_two_spans_is_not_covered(tmp_path: Path) -> None:
-    """07-09 captured after the build joins the runs: the 07-08 → 07-09 → 07-10
-    returns cross actions the file never priced."""
-    _write(tmp_path, _BODY, [SPAN_1, SPAN_2])
+@pytest.mark.parametrize(
+    ("spans", "sessions", "uncovered_run"),
+    [
+        # 07-09 captured after the build joins the runs: the 07-08 → 07-09 → 07-10
+        # returns cross actions the file never priced.
+        ((SPAN_1, SPAN_2), (date(2024, 7, 8), date(2024, 7, 9), date(2024, 7, 10)), r"2024-07-08\.\.2024-07-10"),
+        ((SPAN_1,), (date(2024, 7, 10), date(2024, 7, 11)), r"2024-07-01\.\.2024-07-08"),
+    ],
+    ids=["a-run-bridging-two-spans", "sessions-past-the-last-span"],
+)
+def test_a_read_outside_the_covered_spans_is_not_covered(
+    tmp_path: Path, spans: tuple[SessionRun, ...], sessions: tuple[date, ...], uncovered_run: str
+) -> None:
+    _write(tmp_path, _BODY, list(spans))
 
-    with pytest.raises(FactorFileNotCoveringError, match=r"2024-07-08\.\.2024-07-10"):
-        _read(tmp_path, [date(2024, 7, 8), date(2024, 7, 9), date(2024, 7, 10)])
-
-
-def test_sessions_past_the_last_span_are_not_covered(tmp_path: Path) -> None:
-    _write(tmp_path, _BODY, [SPAN_1])
-
-    with pytest.raises(FactorFileNotCoveringError, match=r"2024-07-01\.\.2024-07-08"):
-        _read(tmp_path, [date(2024, 7, 10), date(2024, 7, 11)])
+    with pytest.raises(FactorFileNotCoveringError, match=uncovered_run):
+        _read(tmp_path, list(sessions))
 
 
 def test_no_factor_file_covers_nothing(tmp_path: Path) -> None:

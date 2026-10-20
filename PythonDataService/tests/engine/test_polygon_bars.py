@@ -21,27 +21,21 @@ from app.utils.timestamps import datetime_at_ms
 EASTERN = ZoneInfo("America/New_York")
 
 
-def testpolygon_bar_to_trade_bar_converts_ms_to_et_start():
+def testpolygon_bar_to_trade_bar_converts_ms_to_et_start_with_exact_decimal_prices():
     # 2024-04-01 14:30 UTC = 2024-04-01 10:30 ET (DST active).
     ts_ms = int(datetime(2024, 4, 1, 14, 30, tzinfo=UTC).timestamp() * 1000)
     raw = {"timestamp": ts_ms, "open": 515.34, "high": 515.40, "low": 515.30, "close": 515.35, "volume": 1234}
 
     bar = polygon_bar_to_trade_bar("SPY", raw)
 
-    assert bar.symbol == "SPY"
-    assert datetime_at_ms(bar.start_ms, tz=EASTERN) == datetime(2024, 4, 1, 10, 30, tzinfo=EASTERN)
-    assert bar.end_ms == bar.start_ms + int(timedelta(minutes=1).total_seconds() * 1000)
-
-
-def testpolygon_bar_to_trade_bar_prices_are_exact_decimal():
-    ts_ms = int(datetime(2024, 4, 1, 14, 30, tzinfo=UTC).timestamp() * 1000)
-    raw = {"timestamp": ts_ms, "open": 515.34, "high": 515.40, "low": 515.30, "close": 515.35, "volume": 1234}
-
-    bar = polygon_bar_to_trade_bar("SPY", raw)
-
+    assert bar.symbol == "SPY", "the symbol is carried onto the bar"
+    assert datetime_at_ms(bar.start_ms, tz=EASTERN) == datetime(2024, 4, 1, 10, 30, tzinfo=EASTERN), (
+        "the ms timestamp converts to the ET start"
+    )
+    assert bar.end_ms == bar.start_ms + int(timedelta(minutes=1).total_seconds() * 1000), "the bar spans one minute"
     # Str-constructed Decimals avoid float→Decimal round-trip corruption.
-    assert bar.open == Decimal("515.34")
-    assert bar.close == Decimal("515.35")
+    assert bar.open == Decimal("515.34"), "the open price is an exact decimal"
+    assert bar.close == Decimal("515.35"), "the close price is an exact decimal"
 
 
 def testpolygon_bar_to_trade_bar_null_volume_becomes_zero():

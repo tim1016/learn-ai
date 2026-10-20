@@ -34,22 +34,18 @@ def _ms(year: int, month: int, day: int, hour: int, minute: int) -> int:
         ("mon_after_early_close", _ms(2026, 11, 30, 9, 30), _ms(2026, 11, 27, 13, 0)),
         # Independence Day 2026 falls Saturday → observed Friday 7/3.
         ("mon_after_observed_independence", _ms(2026, 7, 6, 9, 30), _ms(2026, 7, 2, 16, 0)),
+        # The function asks for the previous SESSION close. A start_ms on
+        # a non-session day is pathological but the function is still
+        # expected to find the previous session's close — Friday's close.
+        # We declare the contract: a session_start_ms before the first
+        # session in our lookback raises NoSessionError. A Saturday with
+        # 14-day lookback returns Friday close (not a raise).
+        ("weekend_session_start_returns_previous_friday_close", _ms(2026, 5, 16, 9, 30), _ms(2026, 5, 15, 16, 0)),
     ],
 )
 def test_previous_completed_session_close(case: str, session_start_ms: int, expected_prev_close_ms: int) -> None:
     actual = previous_completed_session_close_ms(session_start_ms)
     assert actual == expected_prev_close_ms, f"{case}: expected {expected_prev_close_ms}, got {actual}"
-
-
-def test_weekend_session_start_returns_previous_friday_close() -> None:
-    sat = _ms(2026, 5, 16, 9, 30)
-    # The function asks for the previous SESSION close. A start_ms on
-    # a non-session day is pathological but the function is still
-    # expected to find the previous session's close — Friday's close.
-    # We declare the contract: a session_start_ms before the first
-    # session in our lookback raises NoSessionError. A Saturday with
-    # 14-day lookback returns Friday close (not a raise).
-    assert previous_completed_session_close_ms(sat) == _ms(2026, 5, 15, 16, 0)
 
 
 def test_session_start_ms_before_any_lookback_session_raises() -> None:
@@ -86,21 +82,20 @@ def test_nyse_session_state_rejects_negative_timestamp() -> None:
         session_state_at_ms(-1)
 
 
-def test_session_start_for_bar_count_counts_half_day_and_partial_session() -> None:
-    # At 10:00 ET on the Monday after Thanksgiving, only 30 Monday bars and
-    # 210 Black-Friday bars are complete. A 300-bar 1m request therefore has
-    # to begin on the preceding Wednesday; a calendar-day lookback cannot
-    # derive that boundary reliably.
+@pytest.mark.parametrize(
+    "target_bars,bar_span_ms,expected_start",
+    [
+        # At 10:00 ET on the Monday after Thanksgiving, only 30 Monday bars and
+        # 210 Black-Friday bars are complete. A 300-bar 1m request therefore has
+        # to begin on the preceding Wednesday; a calendar-day lookback cannot
+        # derive that boundary reliably.
+        pytest.param(300, 60_000, date(2026, 11, 25), id="counts_half_day_and_partial_session"),
+        pytest.param(3, None, date(2026, 11, 24), id="counts_daily_bars_by_session"),
+    ],
+)
+def test_session_start_for_bar_count(target_bars: int, bar_span_ms: int | None, expected_start: date) -> None:
     assert session_start_for_bar_count(
         _ms(2026, 11, 30, 10, 0),
-        target_bars=300,
-        bar_span_ms=60_000,
-    ) == date(2026, 11, 25)
-
-
-def test_session_start_for_bar_count_counts_daily_bars_by_session() -> None:
-    assert session_start_for_bar_count(
-        _ms(2026, 11, 30, 10, 0),
-        target_bars=3,
-        bar_span_ms=None,
-    ) == date(2026, 11, 24)
+        target_bars=target_bars,
+        bar_span_ms=bar_span_ms,
+    ) == expected_start

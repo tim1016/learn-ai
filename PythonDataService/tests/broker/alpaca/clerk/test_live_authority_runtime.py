@@ -250,57 +250,6 @@ async def test_a_live_authority_without_envelope_values_is_unavailable(tmp_path:
     assert runtime.startup_failure.reason_code == LIVE_ENVELOPE_MISSING
 
 
-async def test_an_activation_naming_another_account_is_a_mode_disagreement(tmp_path: Path) -> None:
-    """R2: the activation leg is looked up by the observed id; it can never grant a different one."""
-    broker = _LiveBroker(now_ms=NOW_MS)
-    activation = live_activation(account_id="9OTHER0002")
-    runtime = await select_live_clerk_runtime(
-        account=await broker.get_account(),
-        activation=activation,
-        activation_store=_ActivationStore(activation),
-        read=broker,
-        trade=broker,
-        artifacts_root=tmp_path,
-        repository_opener=pinned_repository(NOW_MS),
-        startup_recovery_timeout_s=5.0,
-        execution_lease_wait_timeout_s=0.0,
-        execution_lease_retry_interval_s=0.1,
-        stream_health_gate=None,
-        live_envelope_values=TEST_ENVELOPE_VALUES,
-        control_unauthenticated=False,
-    )
-    assert runtime.authority_kind == "unavailable"
-    assert runtime.startup_failure is not None
-    assert runtime.startup_failure.reason_code == LIVE_MODE_DISAGREEMENT
-
-
-async def test_a_paper_mode_account_reaching_the_live_selector_is_a_mode_disagreement(
-    tmp_path: Path,
-) -> None:
-    """R2: the live selector's first mode-agreement leg refuses a non-live broker-observed account."""
-    broker = _LiveBroker(now_ms=NOW_MS)
-    account = (await broker.get_account()).model_copy(update={"account_mode": "paper"})
-    activation = live_activation()
-    runtime = await select_live_clerk_runtime(
-        account=account,
-        activation=activation,
-        activation_store=_ActivationStore(activation),
-        read=broker,
-        trade=broker,
-        artifacts_root=tmp_path,
-        repository_opener=pinned_repository(NOW_MS),
-        startup_recovery_timeout_s=5.0,
-        execution_lease_wait_timeout_s=0.0,
-        execution_lease_retry_interval_s=0.1,
-        stream_health_gate=None,
-        live_envelope_values=TEST_ENVELOPE_VALUES,
-        control_unauthenticated=False,
-    )
-    assert runtime.authority_kind == "unavailable"
-    assert runtime.startup_failure is not None
-    assert runtime.startup_failure.reason_code == LIVE_MODE_DISAGREEMENT
-
-
 async def _select_live(
     tmp_path: Path,
     *,
@@ -326,18 +275,32 @@ async def _select_live(
     )
 
 
-async def test_a_reserved_namespace_account_never_binds_the_real_live_trade_port(tmp_path: Path) -> None:
-    """ADR 0059 D1: a `sim:`/`shadow:` identity is a composition bug, refused before any port binds."""
+@pytest.mark.parametrize(
+    ("account_mode", "account_id", "activation_account_id", "expected_reason"),
+    [
+        # R2: the activation leg is looked up by the observed id; it can never grant a different one.
+        pytest.param("live", LIVE_ACCT, "9OTHER0002", LIVE_MODE_DISAGREEMENT, id="an activation naming another account"),
+        # R2: the live selector's first mode-agreement leg refuses a non-live broker-observed account.
+        pytest.param("paper", LIVE_ACCT, LIVE_ACCT, LIVE_MODE_DISAGREEMENT, id="a paper mode account"),
+        # ADR 0059 D1: a `sim:`/`shadow:` identity is a composition bug, refused before any port binds.
+        pytest.param(
+            "live", "sim:ema-1", "sim:ema-1", "REAL_PORT_REJECTED_SYNTHETIC_ACCOUNT", id="a reserved namespace account"
+        ),
+    ],
+)
+async def test_the_live_selector_refuses_an_account_that_is_not_the_activated_live_account(
+    tmp_path: Path, account_mode: str, account_id: str, activation_account_id: str, expected_reason: str
+) -> None:
     broker = _LiveBroker(now_ms=NOW_MS)
-    account = (await broker.get_account()).model_copy(update={"account_id": "sim:ema-1"})
+    account = (await broker.get_account()).model_copy(update={"account_mode": account_mode, "account_id": account_id})
 
     runtime = await _select_live(
-        tmp_path, account=account, activation=live_activation(account_id="sim:ema-1")
+        tmp_path, account=account, activation=live_activation(account_id=activation_account_id)
     )
 
-    assert runtime.authority_kind == "unavailable"
-    assert runtime.startup_failure is not None
-    assert runtime.startup_failure.reason_code == "REAL_PORT_REJECTED_SYNTHETIC_ACCOUNT"
+    assert runtime.authority_kind == "unavailable", "no authority is installed"
+    assert runtime.startup_failure is not None, "the refusal is reported as a startup failure"
+    assert runtime.startup_failure.reason_code == expected_reason, "the refusal names its reason"
 
 
 def _authorize_developer_reset(

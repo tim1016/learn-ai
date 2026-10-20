@@ -314,12 +314,14 @@ def test_the_totals_are_what_summarize_run_gives_and_capital_evidence_changes_no
         assert result.summary.capital_evidence is not None
 
 
-def test_a_run_that_made_no_trade_is_funded_through_every_session_and_saw_its_starting_cash() -> None:
+def test_a_session_whose_underlying_did_not_trade_at_the_entry_time_is_skipped_funded_and_has_no_money_steps() -> None:
     skipped = Day(underlying=steady("500.00", 6, 390))  # no bar at the entry time: the session is skipped
 
     result = run_sessions(the_selling_setup(), [WED], fake_data({WED: skipped}))
+    ladder = result.summary.cash_ladder
+    outcome = result.sessions[0].outcome
 
-    assert result.sessions[0].status is SessionStatus.SKIPPED
+    assert result.sessions[0].status is SessionStatus.SKIPPED, "a run that made no trade skips its session"
     assert result.summary.capital_evidence == CapitalEvidence(
         sessions_tested=1,
         sessions_funded_continuously=1,
@@ -330,7 +332,21 @@ def test_a_run_that_made_no_trade_is_funded_through_every_session_and_saw_its_st
         least_free_cash_usd=D("10000"),
         largest_assignment_obligation_usd=D("0"),
         closes_relied_on_own_relief=0,
-    )
+    ), "a run that made no trade is funded through every session and saw its starting cash"
+    assert ladder is not None, "a skipped run still carries a cash ladder"
+    assert [(level.entries_filled, level.entries_refused_for_cash, level.net_profit_usd) for level in ladder] == [
+        (0, 0, D("0"))
+    ] * 4, "a session whose underlying did not trade at the entry time is skipped at every level"
+    assert [level.capital_evidence.least_free_cash_usd for level in ladder] == [
+        D("5000"),
+        D("10000"),
+        D("20000"),
+        D("40000"),
+    ], "every level saw its own starting cash"
+    assert outcome.trades == () and outcome.money_steps == (), "a session that made no trade has no money steps"
+    assert CapitalSession.of_outcome(OPEN_MS[WED], outcome) == CapitalSession(
+        OPEN_MS[WED], SessionStatus.SKIPPED, (), ()
+    ), "a session that made no trade is not refused"
 
 
 # ── An entry refused for cash, and the cash ladder ───────────────────────
@@ -345,18 +361,52 @@ def _the_losing_run(cash: str = "499", **keywords: object):
     return run_sessions(_spread_setup(cash), [WED, THU], data, **keywords)  # type: ignore[arg-type]
 
 
-def test_the_cash_this_path_needed_is_worked_by_hand_and_is_marked_incomplete_when_an_entry_was_refused_for_cash() -> (
-    None
-):
+def test_the_losing_run_needs_cash_worked_by_hand_marked_incomplete_and_each_level_carries_its_own_cash() -> None:
     result = _the_losing_run()
 
     evidence = result.summary.capital_evidence
-    assert evidence is not None
+    assert evidence is not None, "the losing run carries capital evidence"
     # Wednesday's opening: 500.00 - 120.00 = 380.00. Its close: 0 - (379.00 - 499.00) = 120.00. Thursday traded nothing.
-    assert evidence.cash_needed_usd == D("380.00")
-    assert evidence.cash_needed_is_incomplete is True
-    assert (evidence.sessions_funded_continuously, evidence.ended_by) == (2, None)
-    assert result.summary.entries_refused_for_cash == 2
+    assert evidence.cash_needed_usd == D("380.00"), "the cash this path needed is worked by hand"
+    assert evidence.cash_needed_is_incomplete is True, "the cash needed is incomplete: an entry was refused for cash"
+    assert (evidence.sessions_funded_continuously, evidence.ended_by) == (2, None), "funded through both sessions"
+    assert result.summary.entries_refused_for_cash == 2, "both legs of Thursday were refused for cash"
+
+    ladder = result.summary.cash_ladder
+    assert ladder is not None, "the losing run carries a cash ladder"
+    [half, own, double, four_times] = ladder
+    # 249.50: 369.50 under the 500.00 pledged, so both legs are refused on both days: nothing is ever held.
+    assert (half.starting_cash_usd, half.entries_filled, half.entries_refused_for_cash) == (D("249.5"), 0, 4), (
+        "the half level refuses every entry on both days"
+    )
+    assert half.capital_evidence.cash_needed_usd == D("0"), "the half level needed no cash: nothing was held"
+    assert half.capital_evidence.cash_needed_is_incomplete is True, "the half level's cash needed is incomplete"
+    assert half.capital_evidence.least_free_cash_usd == D("249.5"), "the half level's least free cash is its start"
+    # 499.00 is the run: Wednesday trades (-120.00) and Thursday is refused.
+    assert (own.entries_filled, own.entries_refused_for_cash, own.net_profit_usd) == (2, 2, D("-120.00")), (
+        "the setup's own level trades Wednesday and refuses Thursday"
+    )
+    assert own.capital_evidence == result.summary.capital_evidence, "the own level's evidence is the run's"
+    assert own.capital_evidence.least_free_cash_usd == D("119.00"), "the own level's least free cash"
+    # 998.00: Wednesday 998.00 -> 1,118.00 -> 878.00; Thursday 878.00 -> 998.00 -> 758.00. Both days trade.
+    assert (double.entries_filled, double.entries_refused_for_cash, double.net_profit_usd) == (4, 0, D("-240.00")), (
+        "the double level trades both days"
+    )
+    # Thursday's opening leaves the cash where it began (998.00): 500.00 - 0 = 500.00, more than Wednesday's 380.00.
+    # The setup's own run could not show it: its Thursday was refused, and its figure is marked incomplete for that.
+    assert double.capital_evidence.cash_needed_usd == D("500.00"), "the double level's cash needed is Thursday's"
+    assert double.capital_evidence.cash_needed_is_incomplete is False, "the double level's cash needed is complete"
+    assert double.capital_evidence.least_free_cash_usd == D("498.00"), "the double level's least free cash"
+    # 1,996.00 trades the same path as 998.00, and needs the same.
+    assert (four_times.entries_filled, four_times.net_profit_usd) == (4, D("-240.00")), (
+        "the four times level trades the same path as the double level"
+    )
+    assert four_times.capital_evidence.cash_needed_usd == D("500.00"), "the four times level needs the same cash"
+    assert four_times.capital_evidence.least_free_cash_usd == D("1496.00"), "the four times level's least free cash"
+    for level in ladder:
+        assert (level.capital_evidence.sessions_tested, level.capital_evidence.ended_by) == (2, None), (
+            f"the {level.starting_cash_usd} level tested both sessions and was funded through them"
+        )
 
 
 def test_the_ladder_shows_a_level_too_small_to_enter_refused_and_a_larger_one_filled() -> None:
@@ -380,36 +430,6 @@ def test_the_ladder_shows_a_level_too_small_to_enter_refused_and_a_larger_one_fi
     ]
     assert [level.net_profit_usd for level in ladder] == [D("0"), D("0"), D("30.00"), D("30.00")]
     assert [level.multiple for level in ladder] == [D("0.5"), D("1"), D("2"), D("4")]
-
-
-def test_each_level_carries_its_own_cash_from_one_session_to_the_next_and_has_its_own_capital_evidence() -> None:
-    result = _the_losing_run()
-
-    ladder = result.summary.cash_ladder
-    assert ladder is not None
-    [half, own, double, four_times] = ladder
-    # 249.50: 369.50 under the 500.00 pledged, so both legs are refused on both days: nothing is ever held.
-    assert (half.starting_cash_usd, half.entries_filled, half.entries_refused_for_cash) == (D("249.5"), 0, 4)
-    assert half.capital_evidence.cash_needed_usd == D("0")
-    assert half.capital_evidence.cash_needed_is_incomplete is True
-    assert half.capital_evidence.least_free_cash_usd == D("249.5")
-    # 499.00 is the run: Wednesday trades (-120.00) and Thursday is refused.
-    assert (own.entries_filled, own.entries_refused_for_cash, own.net_profit_usd) == (2, 2, D("-120.00"))
-    assert own.capital_evidence == result.summary.capital_evidence
-    assert own.capital_evidence.least_free_cash_usd == D("119.00")
-    # 998.00: Wednesday 998.00 -> 1,118.00 -> 878.00; Thursday 878.00 -> 998.00 -> 758.00. Both days trade.
-    assert (double.entries_filled, double.entries_refused_for_cash, double.net_profit_usd) == (4, 0, D("-240.00"))
-    # Thursday's opening leaves the cash where it began (998.00): 500.00 - 0 = 500.00, more than Wednesday's 380.00.
-    # The setup's own run could not show it: its Thursday was refused, and its figure is marked incomplete for that.
-    assert double.capital_evidence.cash_needed_usd == D("500.00")
-    assert double.capital_evidence.cash_needed_is_incomplete is False
-    assert double.capital_evidence.least_free_cash_usd == D("498.00")
-    # 1,996.00 trades the same path as 998.00, and needs the same.
-    assert (four_times.entries_filled, four_times.net_profit_usd) == (4, D("-240.00"))
-    assert four_times.capital_evidence.cash_needed_usd == D("500.00")
-    assert four_times.capital_evidence.least_free_cash_usd == D("1496.00")
-    for level in ladder:
-        assert (level.capital_evidence.sessions_tested, level.capital_evidence.ended_by) == (2, None)
 
 
 def test_the_level_at_the_setups_own_cash_is_the_run_and_is_not_replayed_again(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -459,24 +479,6 @@ def test_a_session_the_window_does_not_fit_reads_nothing_and_is_skipped_at_every
     assert [level.entries_filled for level in ladder] == [0, 0, 0, 0]
     assert result.summary.capital_evidence is not None
     assert result.summary.capital_evidence.sessions_funded_continuously == 1
-
-
-def test_a_session_whose_underlying_did_not_trade_at_the_entry_time_is_skipped_at_every_level() -> None:
-    skipped = Day(underlying=steady("500.00", 6, 390))
-
-    result = run_sessions(the_selling_setup(), [WED], fake_data({WED: skipped}))
-
-    ladder = result.summary.cash_ladder
-    assert ladder is not None
-    assert [(level.entries_filled, level.entries_refused_for_cash, level.net_profit_usd) for level in ladder] == [
-        (0, 0, D("0"))
-    ] * 4
-    assert [level.capital_evidence.least_free_cash_usd for level in ladder] == [
-        D("5000"),
-        D("10000"),
-        D("20000"),
-        D("40000"),
-    ]
 
 
 # ── Cents: a level's cash is whole cents, rounded down ───────────────────
@@ -595,33 +597,36 @@ def test_a_new_run_is_stamped_with_the_version_of_the_rules_and_the_name_and_dat
 # ── What is stored ───────────────────────────────────────────────────────
 
 
-def test_capital_evidence_the_ladder_and_the_stamps_ride_in_the_stored_summary_and_come_back_equal() -> None:
+def test_the_three_figures_ride_in_the_stored_summary_and_a_run_stored_before_them_reads_as_not_recorded() -> None:
     from app.options_backtest import run_json
 
     summary = _the_losing_run().summary
 
     stored = json.loads(json.dumps(run_json.summary_to_json(summary)))
 
-    assert {"capital_evidence", "cash_ladder", "stamps"} <= stored.keys()
-    assert run_json.summary_from_json(stored) == summary
+    assert {"capital_evidence", "cash_ladder", "stamps"} <= stored.keys(), (
+        "capital evidence, the ladder and the stamps ride in the stored summary"
+    )
+    assert run_json.summary_from_json(stored) == summary, "the stored summary comes back equal"
 
-
-def test_a_run_stored_before_this_change_reads_as_not_recorded_and_its_figures_are_unchanged() -> None:
-    from app.options_backtest import run_json
-
-    summary = _the_losing_run().summary
     old = json.loads(json.dumps(run_json.summary_to_json(summary)))
     for key in ("capital_evidence", "cash_ladder", "stamps"):
         del old[key]
 
     read = run_json.summary_from_json(old)
 
-    assert (read.capital_evidence, read.cash_ladder, read.stamps) == (None, None, None)
+    assert (read.capital_evidence, read.cash_ladder, read.stamps) == (None, None, None), (
+        "a run stored before this change reads as not recorded"
+    )
     # Every figure the run had is what it was.
-    assert read == replace(summary, capital_evidence=None, cash_ladder=None, stamps=None)
-    assert read.net_profit_usd == D("-120.00") and read.entries_refused_for_cash == 2
+    assert read == replace(summary, capital_evidence=None, cash_ladder=None, stamps=None), (
+        "a run stored before this change keeps every figure it had"
+    )
+    assert read.net_profit_usd == D("-120.00") and read.entries_refused_for_cash == 2, (
+        "a run stored before this change keeps its net profit and refused entries"
+    )
     # And a summary with none of the three writes none of them: its JSON is the JSON it always was.
-    assert run_json.summary_to_json(read) == old
+    assert run_json.summary_to_json(read) == old, "a summary with none of the three writes none of them"
 
 
 # ── A session read back from storage is never asked ──────────────────────
@@ -637,13 +642,3 @@ def test_a_session_read_back_with_trades_and_no_money_steps_is_refused_and_not_r
     assert CapitalSession.of_outcome(OPEN_MS[WED], replayed).money_steps == replayed.money_steps
     with pytest.raises(ValueError, match="read back from storage"):
         CapitalSession.of_outcome(OPEN_MS[WED], read_back)
-
-
-def test_a_session_that_made_no_trade_has_no_money_steps_and_is_not_refused() -> None:
-    skipped = run_sessions(the_selling_setup(), [WED], fake_data({WED: Day(underlying=steady("500.00", 6, 390))}))
-    outcome = skipped.sessions[0].outcome
-    assert outcome.trades == () and outcome.money_steps == ()
-
-    assert CapitalSession.of_outcome(OPEN_MS[WED], outcome) == CapitalSession(
-        OPEN_MS[WED], SessionStatus.SKIPPED, (), ()
-    )

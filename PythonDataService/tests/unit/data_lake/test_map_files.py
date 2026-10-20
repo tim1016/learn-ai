@@ -8,18 +8,22 @@ from app.data_lake.map_files import build_map_file_bytes, map_file_coverage
 from app.data_lake.polygon_ticker_events import TickerEvent
 
 
-def test_no_change_emits_two_rows():
-    body = build_map_file_bytes(
+def test_no_change_emits_two_rows_and_builds_deterministically():
+    built = build_map_file_bytes(
         symbol="SPY",
         events=[],
         history_start=date(2010, 1, 1),
         history_end=date(2026, 5, 21),
         exchange="nyse",
-    ).decode("ascii")
+    )
+    body = built.decode("ascii")
     lines = body.strip().split("\n")
-    assert len(lines) == 2
-    assert lines[0] == "20100101,spy,nyse"
-    assert lines[1] == "20260521,spy,nyse"
+    assert len(lines) == 2, "no ticker change emits exactly two rows"
+    assert lines[0] == "20100101,spy,nyse", "first row is the history start"
+    assert lines[1] == "20260521,spy,nyse", "last row is the history end"
+    assert build_map_file_bytes("SPY", [], date(2010, 1, 1), date(2026, 5, 21), "nyse") == built, (
+        "build is deterministic"
+    )
 
 
 def test_one_ticker_change_emits_two_rows():
@@ -42,30 +46,23 @@ def test_one_ticker_change_emits_two_rows():
     assert lines[1] == "20260521,meta,nasdaq"
 
 
-def test_build_is_deterministic():
-    a = build_map_file_bytes("SPY", [], date(2010, 1, 1), date(2026, 5, 21), "nyse")
-    b = build_map_file_bytes("SPY", [], date(2010, 1, 1), date(2026, 5, 21), "nyse")
-    assert a == b
-
-
 # ── map_file_coverage — the one parser of a map's stated span (#2453) ──
 
 
-def test_coverage_reads_first_and_last_row_dates():
+def test_coverage_reads_the_stated_span():
     payload = b"20100101,spy,nyse\n20240520,spy,nyse\n20260521,spy,nyse\n"
-    assert map_file_coverage(payload) == (date(2010, 1, 1), date(2026, 5, 21))
+    assert map_file_coverage(payload) == (date(2010, 1, 1), date(2026, 5, 21)), "reads first and last row dates"
+    built = build_map_file_bytes("SPY", [], date(2010, 1, 1), date(2026, 5, 21), "nyse")
+    assert map_file_coverage(built) == (date(2010, 1, 1), date(2026, 5, 21)), "round-trips the builder"
 
 
-def test_coverage_round_trips_the_builder():
-    payload = build_map_file_bytes("SPY", [], date(2010, 1, 1), date(2026, 5, 21), "nyse")
-    assert map_file_coverage(payload) == (date(2010, 1, 1), date(2026, 5, 21))
-
-
-def test_coverage_rejects_disordered_rows():
-    with pytest.raises(ValueError, match="non-decreasing"):
-        map_file_coverage(b"20260521,spy,nyse\n20100101,spy,nyse\n")
-
-
-def test_coverage_rejects_a_single_row():
-    with pytest.raises(ValueError, match="at least two rows"):
-        map_file_coverage(b"20100101,spy,nyse\n")
+@pytest.mark.parametrize(
+    ("payload", "match"),
+    [
+        pytest.param(b"20260521,spy,nyse\n20100101,spy,nyse\n", "non-decreasing", id="rejects_disordered_rows"),
+        pytest.param(b"20100101,spy,nyse\n", "at least two rows", id="rejects_a_single_row"),
+    ],
+)
+def test_coverage_rejects_malformed_payloads(payload, match):
+    with pytest.raises(ValueError, match=match):
+        map_file_coverage(payload)

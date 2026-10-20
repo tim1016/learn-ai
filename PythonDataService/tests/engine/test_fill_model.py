@@ -106,15 +106,6 @@ def test_signal_bar_close_stale_signal_policy_preserves_same_boundary_fill() -> 
     assert event.filled_at_ms == int(datetime(2026, 1, 2, 10, 0, tzinfo=NY).timestamp() * 1000)
 
 
-def test_next_bar_open_defers_when_next_bar_missing():
-    model = FillModel(mode=FillMode.NEXT_BAR_OPEN)
-    signal = _bar("100.0", "100.5", "99.5", "100.3")
-
-    event = model.fill_market_order(_order(Direction.LONG), signal, next_bar=None)
-
-    assert event is None
-
-
 def test_next_bar_open_fills_at_next_bar_open():
     model = FillModel(mode=FillMode.NEXT_BAR_OPEN)
     signal = _bar("100.0", "100.5", "99.5", "100.3")
@@ -127,24 +118,23 @@ def test_next_bar_open_fills_at_next_bar_open():
     assert event.filled_at_ms == next_bar.start_ms
 
 
-def test_long_slippage_adds_to_fill_price():
+@pytest.mark.parametrize(
+    ("direction", "quantity", "expected_price"),
+    [
+        pytest.param(Direction.LONG, 100, Decimal("100.02"), id="long_slippage_adds_to_fill_price"),
+        pytest.param(Direction.SHORT, -100, Decimal("99.98"), id="short_slippage_subtracts_from_fill_price"),
+    ],
+)
+def test_slippage_moves_the_fill_price_against_the_trade_direction(
+    direction: Direction, quantity: int, expected_price: Decimal
+) -> None:
     model = FillModel(slippage_per_share=Decimal("0.02"))
     signal = _bar("100.0", "100.5", "99.5", "100.0")
 
-    event = model.fill_market_order(_order(Direction.LONG), signal)
+    event = model.fill_market_order(_order(direction, quantity), signal)
 
-    assert event is not None
-    assert event.fill_price == Decimal("100.02")
-
-
-def test_short_slippage_subtracts_from_fill_price():
-    model = FillModel(slippage_per_share=Decimal("0.02"))
-    signal = _bar("100.0", "100.5", "99.5", "100.0")
-
-    event = model.fill_market_order(_order(Direction.SHORT, quantity=-100), signal)
-
-    assert event is not None
-    assert event.fill_price == Decimal("99.98")
+    assert event is not None, "the order fills"
+    assert event.fill_price == expected_price, "slippage applies against the trade direction"
 
 
 def test_commission_propagates_to_order_event():
@@ -188,54 +178,69 @@ def _ny_bar(start: datetime, open_: str, high: str, low: str, close: str) -> Tra
     )
 
 
-def test_next_session_open_defers_when_candidate_same_trading_date() -> None:
-    """A candidate bar on the same NY trading date as signal_bar is ineligible.
-    The model returns None so the engine's deferred-fill loop retries on a
-    later bar."""
-    model = FillModel(mode=FillMode.NEXT_SESSION_OPEN)
-    signal = _ny_bar(datetime(2026, 2, 9, 9, 30, tzinfo=NY), "100.0", "100.5", "99.5", "100.3")
-    same_day_candidate = _ny_bar(datetime(2026, 2, 9, 15, 59, tzinfo=NY), "101.0", "101.2", "100.9", "101.1")
+@pytest.mark.parametrize(
+    ("mode", "signal", "next_bar"),
+    [
+        pytest.param(
+            FillMode.NEXT_BAR_OPEN,
+            _bar("100.0", "100.5", "99.5", "100.3"),
+            None,
+            id="next_bar_open_defers_when_next_bar_missing",
+        ),
+        # A candidate bar on the same NY trading date as signal_bar is ineligible.
+        # The model returns None so the engine's deferred-fill loop retries on a
+        # later bar.
+        pytest.param(
+            FillMode.NEXT_SESSION_OPEN,
+            _ny_bar(datetime(2026, 2, 9, 9, 30, tzinfo=NY), "100.0", "100.5", "99.5", "100.3"),
+            _ny_bar(datetime(2026, 2, 9, 15, 59, tzinfo=NY), "101.0", "101.2", "100.9", "101.1"),
+            id="next_session_open_defers_when_candidate_same_trading_date",
+        ),
+        # No candidate bar at all -> deferred (None), same as NEXT_BAR_OPEN.
+        pytest.param(
+            FillMode.NEXT_SESSION_OPEN,
+            _ny_bar(datetime(2026, 2, 9, 15, 59, tzinfo=NY), "100.0", "100.5", "99.5", "100.3"),
+            None,
+            id="next_session_open_returns_none_when_next_bar_missing",
+        ),
+    ],
+)
+def test_a_market_order_with_no_eligible_next_bar_is_deferred(
+    mode: FillMode, signal: TradeBar, next_bar: TradeBar | None
+) -> None:
+    model = FillModel(mode=mode)
 
-    event = model.fill_market_order(_order(Direction.LONG), signal, next_bar=same_day_candidate)
+    event = model.fill_market_order(_order(Direction.LONG), signal, next_bar=next_bar)
 
     assert event is None
 
 
-def test_next_session_open_fills_at_later_trading_date_open() -> None:
-    """A candidate bar strictly after the signal's NY trading date fills at
-    that bar's open, with fill_time = candidate.time (start of bar)."""
-    model = FillModel(mode=FillMode.NEXT_SESSION_OPEN)
+@pytest.mark.parametrize(
+    ("model_options", "expected_price"),
+    [
+        # A candidate bar strictly after the signal's NY trading date fills at
+        # that bar's open (next_day_open.open), with fill_time = candidate.time
+        # (start of bar).
+        pytest.param({}, Decimal("102.0"), id="fills_at_later_trading_date_open"),
+        # Slippage in the trade direction applies to the fill price (open +
+        # slippage), same as other modes.
+        pytest.param({"slippage_per_share": Decimal("0.05")}, Decimal("102.05"), id="applies_long_slippage"),
+    ],
+)
+def test_next_session_open_fills_at_the_later_trading_date_open(
+    model_options: dict[str, Decimal], expected_price: Decimal
+) -> None:
+    model = FillModel(mode=FillMode.NEXT_SESSION_OPEN, **model_options)
     signal = _ny_bar(datetime(2026, 2, 9, 15, 59, tzinfo=NY), "100.0", "100.5", "99.5", "100.3")
     next_day_open = _ny_bar(datetime(2026, 2, 10, 9, 30, tzinfo=NY), "102.0", "102.5", "101.8", "102.2")
 
     event = model.fill_market_order(_order(Direction.LONG), signal, next_bar=next_day_open)
 
-    assert event is not None
-    assert event.fill_price == Decimal("102.0")  # next_day_open.open
-    assert event.filled_at_ms == int(datetime(2026, 2, 10, 9, 30, tzinfo=NY).timestamp() * 1000)
-
-
-def test_next_session_open_returns_none_when_next_bar_missing() -> None:
-    """No candidate bar at all -> deferred (None), same as NEXT_BAR_OPEN."""
-    model = FillModel(mode=FillMode.NEXT_SESSION_OPEN)
-    signal = _ny_bar(datetime(2026, 2, 9, 15, 59, tzinfo=NY), "100.0", "100.5", "99.5", "100.3")
-
-    event = model.fill_market_order(_order(Direction.LONG), signal, next_bar=None)
-
-    assert event is None
-
-
-def test_next_session_open_applies_long_slippage() -> None:
-    """Slippage in the trade direction applies to the fill price, same as
-    other modes."""
-    model = FillModel(mode=FillMode.NEXT_SESSION_OPEN, slippage_per_share=Decimal("0.05"))
-    signal = _ny_bar(datetime(2026, 2, 9, 15, 59, tzinfo=NY), "100.0", "100.5", "99.5", "100.3")
-    next_day_open = _ny_bar(datetime(2026, 2, 10, 9, 30, tzinfo=NY), "102.0", "102.5", "101.8", "102.2")
-
-    event = model.fill_market_order(_order(Direction.LONG), signal, next_bar=next_day_open)
-
-    assert event is not None
-    assert event.fill_price == Decimal("102.05")  # open + slippage
+    assert event is not None, "the later session's bar fills the order"
+    assert event.fill_price == expected_price, "the fill is at the later bar's open, slipped in the trade direction"
+    assert event.filled_at_ms == int(datetime(2026, 2, 10, 9, 30, tzinfo=NY).timestamp() * 1000), (
+        "the fill is stamped at the start of the candidate bar"
+    )
 
 
 def _order_sent_at(sent: datetime) -> Order:

@@ -86,18 +86,15 @@ class TestVrpSignalContinuousGating:
         rv = pd.Series(0.18 + rng.normal(0, 0.01, n), index=idx)
         return iv.abs(), rv.abs()
 
-    def test_backward_compat_no_confidence(self):
-        iv, rv = self._make_iv_rv()
-        sig = vrp_signal(iv=iv, rv=rv, lookback=100)
-        # Old fields populated, new fields None.
-        assert sig.confidence is None
-        assert sig.vrp_z_scaled is None
-        assert sig.floor_gated is None
-        assert sig.side.dtype == int
-
-    def test_full_confidence_matches_legacy_when_threshold_unchanged(self):
+    def test_vrp_signal_backward_compat_then_full_floor_and_low_confidence_gating(self):
         iv, rv = self._make_iv_rv()
         sig_legacy = vrp_signal(iv=iv, rv=rv, lookback=100)
+        # Old fields populated, new fields None.
+        assert sig_legacy.confidence is None, "backward compat, no confidence: confidence is None"
+        assert sig_legacy.vrp_z_scaled is None, "backward compat, no confidence: vrp_z_scaled is None"
+        assert sig_legacy.floor_gated is None, "backward compat, no confidence: floor_gated is None"
+        assert sig_legacy.side.dtype == int, "backward compat, no confidence: side stays int"
+
         # confidence = 1.0 across the board → z_scaled == z
         conf = pd.Series(1.0, index=iv.index)
         sig_full = vrp_signal(iv=iv, rv=rv, lookback=100, confidence=conf)
@@ -105,21 +102,18 @@ class TestVrpSignalContinuousGating:
         # at confidence=1, scaled = raw, so threshold logic is identical).
         # Allow disagreement only where the legacy used > vs. >= (boundary).
         agreed = (sig_legacy.side == sig_full.side).sum()
-        assert agreed >= len(iv) - 5  # within a handful of boundary cases
+        # Within a handful of boundary cases.
+        assert agreed >= len(iv) - 5, "full confidence matches the legacy sides when the threshold is unchanged"
 
-    def test_below_floor_forces_zero(self):
-        iv, rv = self._make_iv_rv()
         # Confidence below floor everywhere → no actions even with extreme z.
-        conf = pd.Series(0.05, index=iv.index)
-        sig = vrp_signal(
-            iv=iv, rv=rv, lookback=100, confidence=conf,
+        conf_floor = pd.Series(0.05, index=iv.index)
+        sig_floor = vrp_signal(
+            iv=iv, rv=rv, lookback=100, confidence=conf_floor,
             confidence_floor=DEFAULT_CONFIDENCE_FLOOR,
         )
-        assert (sig.side == 0).all()
-        assert sig.floor_gated.all()
+        assert (sig_floor.side == 0).all(), "confidence below the floor forces every side to zero"
+        assert sig_floor.floor_gated.all(), "confidence below the floor marks every bar floor_gated"
 
-    def test_low_confidence_attenuates_signal(self):
-        iv, rv = self._make_iv_rv()
         conf_high = pd.Series(1.0, index=iv.index)
         conf_low = pd.Series(0.3, index=iv.index)  # > floor (0.1) but degraded
         sig_high = vrp_signal(iv=iv, rv=rv, lookback=100, confidence=conf_high)
@@ -128,4 +122,4 @@ class TestVrpSignalContinuousGating:
         # |z * 0.3| < |z * 1.0|, so threshold is harder to hit.
         n_actions_high = (sig_high.side != 0).sum()
         n_actions_low = (sig_low.side != 0).sum()
-        assert n_actions_low <= n_actions_high
+        assert n_actions_low <= n_actions_high, "low confidence attenuates the signal: no more actions than high"

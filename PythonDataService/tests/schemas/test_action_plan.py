@@ -42,89 +42,86 @@ _STOCK_LEG: dict = {
 }
 
 
-def test_single_stock_entry_leg_round_trips() -> None:
-    plan = ActionPlan(on_enter=[_STOCK_LEG], on_exit=[])
+@pytest.mark.parametrize(
+    "on_exit",
+    [
+        pytest.param([], id="single_stock_entry_leg_round_trips"),
+        pytest.param(
+            [{"kind": "close_leg", "entry_leg_id": "spy_long"}],
+            id="close_leg_exit_round_trips_when_entry_id_matches",
+        ),
+    ],
+)
+def test_a_stock_plan_round_trips(on_exit: list[dict]) -> None:
+    plan = ActionPlan(on_enter=[_STOCK_LEG], on_exit=on_exit)
 
-    assert plan.model_dump() == {"on_enter": [_STOCK_LEG], "on_exit": []}
-
-
-def test_stock_entry_leg_missing_underlying_rejected() -> None:
-    """``instrument.underlying`` is mandatory on every leg — there is no
-    implicit fallback from ``live_config.symbol`` (ADR 0012 §5). The plan
-    is self-contained or it doesn't validate."""
-
-    bad = {
-        "leg_id": "spy_long",
-        "instrument": {"kind": "stock"},  # underlying missing
-        "position": "long",
-        "qty_ratio": 1,
-    }
-    with pytest.raises(ValidationError, match=r"underlying"):
-        ActionPlan(on_enter=[bad], on_exit=[])
+    assert plan.model_dump() == {"on_enter": [_STOCK_LEG], "on_exit": on_exit}
 
 
-def test_stock_entry_leg_qty_ratio_below_one_rejected() -> None:
-    """``qty_ratio`` is a positive integer (>= 1) — Slice 1B declarative
-    semantics. Composition lands in Slice 4."""
-
-    bad = dict(_STOCK_LEG, qty_ratio=0)
-    with pytest.raises(ValidationError, match=r"qty_ratio"):
-        ActionPlan(on_enter=[bad], on_exit=[])
-
-
-def test_stock_entry_leg_missing_leg_id_rejected() -> None:
-    bad = {
-        "instrument": {"kind": "stock", "underlying": "SPY"},
-        "position": "long",
-        "qty_ratio": 1,
-    }
-    with pytest.raises(ValidationError, match=r"leg_id"):
-        ActionPlan(on_enter=[bad], on_exit=[])
-
-
-def test_stock_entry_leg_malformed_leg_id_rejected() -> None:
-    """``leg_id`` is constrained to ``^[a-z0-9_]{1,32}$`` so the future
-    resolver / persistence layer can rely on it as a stable identifier
-    without escaping (ADR 0012 §3)."""
-
-    bad = dict(_STOCK_LEG, leg_id="UPPER-CASE!")
-    with pytest.raises(ValidationError, match=r"leg_id"):
-        ActionPlan(on_enter=[bad], on_exit=[])
-
-
-def test_duplicate_leg_ids_within_a_plan_rejected() -> None:
-    """Two entry legs cannot share a ``leg_id`` — exits would be
-    ambiguous, and the future resolver's ``leg_id → conId`` map would
-    collapse."""
-
-    duplicate = dict(_STOCK_LEG)
-    with pytest.raises(ValidationError, match=r"duplicate"):
-        ActionPlan(on_enter=[_STOCK_LEG, duplicate], on_exit=[])
-
-
-def test_close_leg_exit_round_trips_when_entry_id_matches() -> None:
-    plan = ActionPlan(
-        on_enter=[_STOCK_LEG],
-        on_exit=[{"kind": "close_leg", "entry_leg_id": "spy_long"}],
-    )
-
-    assert plan.model_dump()["on_exit"] == [
-        {"kind": "close_leg", "entry_leg_id": "spy_long"}
-    ]
-
-
-def test_orphan_close_leg_referencing_unknown_entry_id_rejected() -> None:
-    """A ``close_leg`` referencing a ``leg_id`` that is not in
-    ``on_enter`` is a hard schema error, NOT a parity warning (#597
-    handles warnings). Future-resolver consumption would fail at runtime;
-    catching it at the deploy boundary keeps malformed plans out of the
-    ledger."""
-
-    with pytest.raises(ValidationError, match=r"close_leg"):
-        ActionPlan(
-            on_enter=[_STOCK_LEG],
-            on_exit=[{"kind": "close_leg", "entry_leg_id": "does_not_exist"}],
-        )
+@pytest.mark.parametrize(
+    ("on_enter", "on_exit", "refused"),
+    [
+        # ``instrument.underlying`` is mandatory on every leg — there is no
+        # implicit fallback from ``live_config.symbol`` (ADR 0012 §5). The plan
+        # is self-contained or it doesn't validate.
+        pytest.param(
+            [
+                {
+                    "leg_id": "spy_long",
+                    "instrument": {"kind": "stock"},  # underlying missing
+                    "position": "long",
+                    "qty_ratio": 1,
+                }
+            ],
+            [],
+            r"underlying",
+            id="stock_entry_leg_missing_underlying",
+        ),
+        # ``qty_ratio`` is a positive integer (>= 1) — Slice 1B declarative
+        # semantics. Composition lands in Slice 4.
+        pytest.param([dict(_STOCK_LEG, qty_ratio=0)], [], r"qty_ratio", id="stock_entry_leg_qty_ratio_below_one"),
+        pytest.param(
+            [
+                {
+                    "instrument": {"kind": "stock", "underlying": "SPY"},
+                    "position": "long",
+                    "qty_ratio": 1,
+                }
+            ],
+            [],
+            r"leg_id",
+            id="stock_entry_leg_missing_leg_id",
+        ),
+        # ``leg_id`` is constrained to ``^[a-z0-9_]{1,32}$`` so the future
+        # resolver / persistence layer can rely on it as a stable identifier
+        # without escaping (ADR 0012 §3).
+        pytest.param(
+            [dict(_STOCK_LEG, leg_id="UPPER-CASE!")], [], r"leg_id", id="stock_entry_leg_malformed_leg_id"
+        ),
+        # Two entry legs cannot share a ``leg_id`` — exits would be
+        # ambiguous, and the future resolver's ``leg_id → conId`` map would
+        # collapse.
+        pytest.param(
+            [_STOCK_LEG, dict(_STOCK_LEG)], [], r"duplicate", id="duplicate_leg_ids_within_a_plan"
+        ),
+        # A ``close_leg`` referencing a ``leg_id`` that is not in
+        # ``on_enter`` is a hard schema error, NOT a parity warning (#597
+        # handles warnings). Future-resolver consumption would fail at runtime;
+        # catching it at the deploy boundary keeps malformed plans out of the
+        # ledger.
+        pytest.param(
+            [_STOCK_LEG],
+            [{"kind": "close_leg", "entry_leg_id": "does_not_exist"}],
+            r"close_leg",
+            id="orphan_close_leg_referencing_unknown_entry_id",
+        ),
+    ],
+)
+def test_a_stock_plan_the_schema_cannot_carry_is_rejected(
+    on_enter: list[dict], on_exit: list[dict], refused: str
+) -> None:
+    with pytest.raises(ValidationError, match=refused):
+        ActionPlan(on_enter=on_enter, on_exit=on_exit)
 
 
 # ---------------------------------------------------------------------------
@@ -162,24 +159,15 @@ def test_single_option_entry_leg_round_trips() -> None:
     assert plan.model_dump()["on_enter"] == [_OPTION_LEG]
 
 
-def test_option_entry_leg_missing_right_rejected() -> None:
+@pytest.mark.parametrize(
+    "missing",
+    ["right", "strike", "expiry"],
+    ids=["option_entry_leg_missing_right", "option_entry_leg_missing_strike", "option_entry_leg_missing_expiry"],
+)
+def test_option_entry_leg_missing_a_required_field_rejected(missing: str) -> None:
     bad = dict(_OPTION_LEG)
-    del bad["right"]
-    with pytest.raises(ValidationError, match=r"right"):
-        _structure(bad)
-
-
-def test_option_entry_leg_missing_strike_rejected() -> None:
-    bad = dict(_OPTION_LEG)
-    del bad["strike"]
-    with pytest.raises(ValidationError, match=r"strike"):
-        _structure(bad)
-
-
-def test_option_entry_leg_missing_expiry_rejected() -> None:
-    bad = dict(_OPTION_LEG)
-    del bad["expiry"]
-    with pytest.raises(ValidationError, match=r"expiry"):
+    del bad[missing]
+    with pytest.raises(ValidationError, match=missing):
         _structure(bad)
 
 
@@ -331,13 +319,42 @@ def test_minus_zero_is_stored_as_zero(strike: dict, field: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "expiry",
-    [{"selector": "same_day", "days": 0}, {"selector": "nearest_weekly", "days": 30}],
-    ids=["same day", "nearest weekly"],
+    ("expiry", "reason"),
+    [
+        # A rule that takes no days must not swallow them: the owner would believe they counted.
+        pytest.param({"selector": "same_day", "days": 0}, "days", id="an_expiry_rule_with_a_key_it_does_not_have_same_day"),
+        pytest.param(
+            {"selector": "nearest_weekly", "days": 30},
+            "days",
+            id="an_expiry_rule_with_a_key_it_does_not_have_nearest_weekly",
+        ),
+        pytest.param({"selector": "min_dte", "days": 0}, "days", id="min_dte_days_below_one"),
+        pytest.param({"selector": "absolute"}, "expiration_ms", id="absolute_expiry_missing_expiration_ms"),
+        # ADR 0022 (i): one instant per expiry date, so two plans naming one date cannot hash apart.
+        pytest.param(
+            {"selector": "absolute", "expiration_ms": 1_797_552_000_000},
+            "is not an option expiry",
+            id="a_named_expiry_midnight_UTC_on_2026-12-18_not_1600_New_York",
+        ),
+        pytest.param(
+            {"selector": "absolute", "expiration_ms": 10**20},
+            "less than or equal to",
+            id="a_named_expiry_an_instant_no_calendar_holds",
+        ),
+        pytest.param(
+            {"selector": "absolute", "expiration_ms": -97_200_000},
+            "greater than 0",
+            id="a_named_expiry_1969-12-30_on_the_anchor_but_before_the_first_instant",
+        ),
+        pytest.param(
+            {"selector": "absolute", "expiration_ms": 4_103_125_200_000},
+            "two digits",
+            id="a_named_expiry_2100-01-08_a_year_no_contract_symbol_can_write",
+        ),
+    ],
 )
-def test_an_expiry_rule_with_a_key_it_does_not_have_is_refused(expiry: dict) -> None:
-    """A rule that takes no days must not swallow them: the owner would believe they counted."""
-    with pytest.raises(ValidationError, match="days"):
+def test_an_expiry_rule_no_contract_could_carry_is_refused(expiry: dict, reason: str) -> None:
+    with pytest.raises(ValidationError, match=reason):
         _structure(_leg("a", expiry=expiry))
 
 
@@ -355,31 +372,6 @@ def test_an_expiry_rule_round_trips(expiry: dict) -> None:
     plan = _structure(_leg("a", expiry=expiry))
 
     assert plan.model_dump()["on_enter"][0]["expiry"] == expiry
-
-
-def test_min_dte_days_below_one_rejected() -> None:
-    with pytest.raises(ValidationError, match=r"days"):
-        _structure(_leg("a", expiry={"selector": "min_dte", "days": 0}))
-
-
-def test_absolute_expiry_missing_expiration_ms_rejected() -> None:
-    with pytest.raises(ValidationError, match=r"expiration_ms"):
-        _structure(_leg("a", expiry={"selector": "absolute"}))
-
-
-@pytest.mark.parametrize(
-    ("expiration_ms", "reason"),
-    [
-        pytest.param(1_797_552_000_000, "is not an option expiry", id="midnight UTC on 2026-12-18, not 16:00 New York"),
-        pytest.param(10**20, "less than or equal to", id="an instant no calendar holds"),
-        pytest.param(-97_200_000, "greater than 0", id="1969-12-30, on the anchor but before the first instant"),
-        pytest.param(4_103_125_200_000, "two digits", id="2100-01-08, a year no contract symbol can write"),
-    ],
-)
-def test_a_named_expiry_no_contract_could_carry_is_refused(expiration_ms: int, reason: str) -> None:
-    """ADR 0022 (i): one instant per expiry date, so two plans naming one date cannot hash apart."""
-    with pytest.raises(ValidationError, match=reason):
-        _structure(_leg("a", expiry={"selector": "absolute", "expiration_ms": expiration_ms}))
 
 
 _SHORT = {"position": "short"}
@@ -629,19 +621,19 @@ def _option_leg(leg_id: str, underlying: str) -> dict[str, object]:
     }
 
 
-def test_a_plan_in_the_signals_own_shares_is_not_trading_something_else() -> None:
-    assert trades_the_signals_shares(_stock_plan("SPY"), "spy")
-    assert not trades_the_signals_shares(_stock_plan("QQQ"), "SPY")
-
-
-def test_options_on_the_signals_own_symbol_are_something_else() -> None:
-    """Decided by the instrument's type and identity, not by comparing tickers."""
+def test_what_a_plan_trades_against_the_signals_own_symbol() -> None:
     plan = ActionPlan.model_validate(
         {"on_enter": [_option_leg("call", "SPY")], "on_exit": [{"kind": "close_leg", "entry_leg_id": "call"}]}
     )
 
-    assert traded_instrument(plan).kind == "option"
-    assert not trades_the_signals_shares(plan, "SPY")
+    assert trades_the_signals_shares(_stock_plan("SPY"), "spy"), "a plan in the signal's own shares is not trading something else"
+    assert not trades_the_signals_shares(_stock_plan("QQQ"), "SPY"), "a plan in other shares is trading something else"
+    # Options on the signal's own symbol are something else: decided by the
+    # instrument's type and identity, not by comparing tickers.
+    assert traded_instrument(plan).kind == "option", "options on the signal's own symbol trade an option instrument"
+    assert not trades_the_signals_shares(plan, "SPY"), "options on the signal's own symbol are something else"
+    # They are something else to trade, but the market they need live is the same one.
+    assert traded_market_symbol(plan, "SPY") is None, "options on the symbol a bot listens to need no second symbol live"
 
 
 def test_a_plan_whose_legs_name_two_instruments_has_no_one_answer() -> None:
@@ -667,12 +659,3 @@ def test_the_second_symbol_a_bot_needs_live_is_the_one_its_orders_are_in(
     traded: str, listens_to: str, second_symbol: str | None
 ) -> None:
     assert traded_market_symbol(_stock_plan(traded), listens_to) == second_symbol
-
-
-def test_options_on_the_symbol_a_bot_listens_to_need_no_second_symbol_live() -> None:
-    """They are something else to trade, but the market they need live is the same one."""
-    plan = ActionPlan.model_validate(
-        {"on_enter": [_option_leg("call", "SPY")], "on_exit": [{"kind": "close_leg", "entry_leg_id": "call"}]}
-    )
-
-    assert traded_market_symbol(plan, "SPY") is None

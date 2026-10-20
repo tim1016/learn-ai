@@ -244,14 +244,6 @@ def test_a_named_run_is_a_base_cost_run_and_the_first_that_kept_a_curve() -> Non
     assert _drawn(records, "search", search=SEARCHED) == [("s3", "winner", "Winner"), ("c1", "incumbent", "Current settings")]
 
 
-def test_a_search_that_returned_the_incumbent_names_one_line_for_both() -> None:
-    kept = {"procedure": {"winner": INCUMBENT}, "window": {"start_ms": 0, "end_ms": 300}}
-    chosen = _chosen([_run("s1", "search", INCUMBENT), _run("s2", "search", WINNER)], "search", search=kept)
-
-    assert [(line.role, line.label) for line in chosen.lines] == [("winner", "Winner · current settings"), ("other", "Scored point")]
-    assert chosen.notes == ()
-
-
 def test_a_fold_test_set_finds_each_run_by_what_it_is_even_when_another_step_scored_it_first() -> None:
     validation = {"folds": [{"fold_index": 0, "winner": FOLD_WINNER}, {"fold_index": 1, "winner": WINNER}]}
     records = [
@@ -331,18 +323,20 @@ def test_a_neighbor_is_found_by_the_value_its_audit_recorded_not_by_the_knobs_st
     assert neighbors == [("n-far", "Crossover gap one step below (0.1)")]
 
 
-def test_a_set_marks_the_current_settings_whatever_their_role_and_counts_its_failed_runs() -> None:
+def test_a_set_names_one_line_for_a_returned_incumbent_marks_the_current_settings_whatever_their_role_and_counts_its_failed_runs() -> None:
     kept = {"procedure": {"winner": INCUMBENT}, "window": {"start_ms": 0, "end_ms": 300}}
     returned = _chosen([_run("s1", "search", INCUMBENT), _run("s2", "search", WINNER)], "search", search=kept)
-    assert [(line.role, line.incumbent) for line in returned.lines] == [("winner", True), ("other", False)]
+    assert [(line.role, line.label) for line in returned.lines] == [("winner", "Winner · current settings"), ("other", "Scored point")], "a search that returned the incumbent names one line for both"
+    assert returned.notes == (), "a search that returned the incumbent has no note"
+    assert [(line.role, line.incumbent) for line in returned.lines] == [("winner", True), ("other", False)], "the returned incumbent is marked as the current settings"
     searched = _chosen([_run("s1", "search", INCUMBENT), _run("s3", "search", WINNER)], "search", search=SEARCHED)
-    assert [(line.role, line.incumbent) for line in searched.lines] == [("incumbent", True), ("winner", False)]
+    assert [(line.role, line.incumbent) for line in searched.lines] == [("incumbent", True), ("winner", False)], "the incumbent is marked as the current settings when it did not win"
     evidence = {"candidates": [_evidence("incumbent", INCUMBENT)]}
-    assert [line.incumbent for line in _chosen([_run("c1", "evidence", INCUMBENT, detail=True)], "candidate", "incumbent", evidence=evidence).lines] == [True]
+    assert [line.incumbent for line in _chosen([_run("c1", "evidence", INCUMBENT, detail=True)], "candidate", "incumbent", evidence=evidence).lines] == [True], "the incumbent candidate's line is marked as the current settings"
 
     # Every run of the set failed: nothing to draw, and the set says they failed rather than that nothing ran.
     failed = _chosen([_run("s1", "search", INCUMBENT, status="failed", has_curve=False), _run("s3", "search", WINNER, status="failed", has_curve=False)], "search", search=SEARCHED)
-    assert (failed.lines, failed.failed, failed.not_recorded) == ((), 2, 0)
+    assert (failed.lines, failed.failed, failed.not_recorded) == ((), 2, 0), "a set whose every run failed draws nothing and counts them failed"
 
 
 def test_a_set_keeps_every_named_line_spreads_the_others_over_the_search_and_counts_only_completed_runs_without_a_curve() -> None:

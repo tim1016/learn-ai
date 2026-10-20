@@ -117,14 +117,6 @@ async def test_route_404_when_flag_off() -> None:
     assert r.status_code == 404
 
 
-async def test_invalid_spec_symbol_is_422() -> None:
-    flag_on_app = _make_app(include_data_lake=True)
-    body = _valid_body(symbols=["spy"])  # lowercase — rejected by DataRunSpec's validator
-    async with AsyncClient(transport=ASGITransport(app=flag_on_app), base_url="http://test") as client:
-        r = await client.post("/api/data-lake/backfill", json=body)
-    assert r.status_code == 422
-
-
 # ---------------------------------------------------------------------------
 # #1877 boundary matrix — mirrors tests/integration/data_lake/test_ensure_data_route.py
 # so /ensure-data and /backfill are pinned to identical behavior on the same
@@ -155,38 +147,39 @@ async def test_backfill_old_field_names_rejected() -> None:
     assert r.status_code == 422
 
 
-async def test_backfill_iso_strings_on_ms_fields_rejected() -> None:
-    body = _valid_body(start_trading_date_ms="2024-05-20", end_trading_date_ms="2024-05-24")
-    r = await _post_backfill(body)
-    assert r.status_code == 422
-
-
-async def test_backfill_non_integer_value_rejected() -> None:
-    body = _valid_body(start_trading_date_ms=1716206400000.5)
-    r = await _post_backfill(body)
-    assert r.status_code == 422
-
-
-async def test_backfill_value_outside_signed_int64_rejected() -> None:
-    body = _valid_body(start_trading_date_ms=2**63)
-    r = await _post_backfill(body)
-    assert r.status_code == 422
-
-
-async def test_backfill_off_anchor_milliseconds_rejected() -> None:
-    off_anchor = trading_date_to_calendar_anchor_ms(date(2024, 5, 20)) + 1
-    body = _valid_body(start_trading_date_ms=off_anchor)
-    r = await _post_backfill(body)
-    assert r.status_code == 422
-
-
-async def test_backfill_reversed_range_rejected() -> None:
-    body = _valid_body(
-        start_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 24)),
-        end_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 20)),
-    )
-    r = await _post_backfill(body)
-    assert r.status_code == 422
+@pytest.mark.parametrize(
+    "spec_overrides",
+    [
+        pytest.param({"symbols": ["spy"]}, id="invalid_spec_symbol"),  # lowercase — rejected by DataRunSpec's validator
+        pytest.param(
+            {"start_trading_date_ms": "2024-05-20", "end_trading_date_ms": "2024-05-24"},
+            id="iso_strings_on_ms_fields",
+        ),
+        pytest.param({"start_trading_date_ms": 1716206400000.5}, id="non_integer_value"),
+        pytest.param({"start_trading_date_ms": 2**63}, id="value_outside_signed_int64"),
+        pytest.param(
+            {"start_trading_date_ms": trading_date_to_calendar_anchor_ms(date(2024, 5, 20)) + 1},
+            id="off_anchor_milliseconds",
+        ),
+        pytest.param(
+            {
+                "start_trading_date_ms": trading_date_to_calendar_anchor_ms(date(2024, 5, 24)),
+                "end_trading_date_ms": trading_date_to_calendar_anchor_ms(date(2024, 5, 20)),
+            },
+            id="reversed_range",
+        ),
+        pytest.param(
+            {
+                "start_trading_date_ms": trading_date_to_calendar_anchor_ms(date(2018, 1, 1)),
+                "end_trading_date_ms": trading_date_to_calendar_anchor_ms(date(2024, 12, 31)),  # ~7 years
+            },
+            id="range_over_max_cap",
+        ),
+    ],
+)
+async def test_backfill_spec_rejected(spec_overrides: dict[str, Any]) -> None:
+    r = await _post_backfill(_valid_body(**spec_overrides))
+    assert r.status_code == 422, r.text
 
 
 async def test_backfill_before_provider_history_rejected_without_dispatch() -> None:
@@ -229,15 +222,6 @@ async def test_backfill_starting_on_the_provider_floor_is_accepted(
     r = await _post_backfill(body)
 
     assert r.status_code == 202
-
-
-async def test_backfill_range_over_max_cap_rejected() -> None:
-    body = _valid_body(
-        start_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2018, 1, 1)),
-        end_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 12, 31)),  # ~7 years
-    )
-    r = await _post_backfill(body)
-    assert r.status_code == 422
 
 
 async def test_weekend_boundary_backfill_job_accepted_and_completes_with_zero_sessions(

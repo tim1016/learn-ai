@@ -218,49 +218,37 @@ def test_an_integer_fact_that_is_a_float_or_a_bool_is_refused(value: object) -> 
         LiveDisarmRecord.from_payload({**asdict(_disarmed(record)), "schema_version": value})
 
 
-@pytest.mark.parametrize("key", ["shadow_sessions", "arming_max_sessions"])
-@pytest.mark.parametrize("value", [1.0, True])
-def test_a_resealed_envelope_integer_that_is_a_float_or_a_bool_is_refused(key: str, value: object) -> None:
-    """``LiveEnvelopeValues`` is a plain dataclass with no field validation of its
-    own, unlike the record's own four integers. A row re-sealed over a
-    tampered ``envelope_values`` entry verifies both its own digest and its
-    envelope sha, so only a type check by name catches ``1.0`` or ``True``
-    where ``shadow_sessions`` or ``arming_max_sessions`` promises an integer.
-    """
-    record = _armed()
-    tampered_envelope = {**record.envelope_values, key: value}
-    unsigned = {name: field_value for name, field_value in asdict(record).items() if name != "record_sha256"}
-    widened = {
-        **unsigned,
-        "envelope_values": tampered_envelope,
-        "envelope_sha256": canonical_sha256(tampered_envelope),
-    }
-    resealed = {**widened, "record_sha256": canonical_sha256(widened)}
-
-    with pytest.raises(LiveArmingInvalid, match="invalid integer facts"):
-        LiveArmingRecord.from_payload(resealed)
-
-
 @pytest.mark.parametrize(
-    ("key", "value"),
+    ("key", "value", "match"),
     [
-        ("loss_fraction", 0.0),
-        ("loss_fraction", 1.0),
-        ("loss_usd", 0.0),
+        # ``LiveEnvelopeValues`` is a plain dataclass with no field validation of its
+        # own, unlike the record's own four integers. A row re-sealed over a
+        # tampered ``envelope_values`` entry verifies both its own digest and its
+        # envelope sha, so only a type check by name catches ``1.0`` or ``True``
+        # where ``shadow_sessions`` or ``arming_max_sessions`` promises an integer.
+        pytest.param("shadow_sessions", 1.0, "invalid integer facts", id="shadow_sessions as a float"),
+        pytest.param("shadow_sessions", True, "invalid integer facts", id="shadow_sessions as a bool"),
+        pytest.param("arming_max_sessions", 1.0, "invalid integer facts", id="arming_max_sessions as a float"),
+        pytest.param("arming_max_sessions", True, "invalid integer facts", id="arming_max_sessions as a bool"),
+        pytest.param("loss_fraction", 0.0, "sealed loss_fraction is not", id="loss_fraction at zero"),
+        pytest.param("loss_fraction", 1.0, "sealed loss_fraction is not", id="loss_fraction at one"),
+        pytest.param("loss_usd", 0.0, "sealed loss_usd is not", id="loss_usd at zero"),
         # ``inf`` satisfies ``> 0`` and makes every loss comparison False, so a
         # sealed infinity would be a loss limit nothing can ever breach.
-        ("loss_usd", float("inf")),
-        ("loss_usd", float("nan")),
-        ("shadow_sessions", 0),
-        ("xh_entry_bps", -1.0),
+        pytest.param("loss_usd", float("inf"), "sealed loss_usd is not", id="loss_usd infinite"),
+        pytest.param("loss_usd", float("nan"), "sealed loss_usd is not", id="loss_usd nan"),
+        pytest.param("shadow_sessions", 0, "sealed shadow_sessions is not", id="shadow_sessions at zero"),
+        pytest.param("xh_entry_bps", -1.0, "sealed xh_entry_bps is not", id="xh_entry_bps negative"),
         # 10 000 bps is 100 %: a sell anchored there floors to zero, and the
         # leg is refused EXTENDED_ANCHOR_UNPRICEABLE -- an EXIT refused
         # *because of* a seal, which the envelope rule forbids.
-        ("xh_exit_bps", 10_000.0),
+        pytest.param("xh_exit_bps", 10_000.0, "sealed xh_exit_bps is not", id="xh_exit_bps at 10000"),
     ],
 )
-def test_a_resealed_envelope_float_outside_its_domain_is_refused(key: str, value: float) -> None:
-    """The sealed floats bound real money, so they carry the environment's domains.
+def test_a_resealed_envelope_value_outside_its_type_or_domain_is_refused(key: str, value: object, match: str) -> None:
+    """A re-sealed envelope integer that is a float or a bool, or a float outside its domain, is refused.
+
+    The sealed floats bound real money, so they carry the environment's domains.
 
     ``AlpacaSettings`` enforces these on ``ALPACA_LIVE_*`` and refuses to boot
     outside them. The sealed copy is what the loss hold is judged against and
@@ -283,7 +271,7 @@ def test_a_resealed_envelope_float_outside_its_domain_is_refused(key: str, value
     }
     resealed = {**widened, "record_sha256": canonical_sha256(widened)}
 
-    with pytest.raises(LiveArmingInvalid, match=f"sealed {key} is not"):
+    with pytest.raises(LiveArmingInvalid, match=match):
         LiveArmingRecord.from_payload(resealed)
 
 

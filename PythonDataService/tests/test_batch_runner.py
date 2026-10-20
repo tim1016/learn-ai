@@ -259,68 +259,77 @@ def _stage_inputs(
     return rows, aggregate, binomial, n_eff_assets
 
 
-def test_stage0_when_too_few_valid_tickers():
+@pytest.mark.parametrize(
+    (
+        "n_valid",
+        "mean_neff",
+        "aggregate_ic",
+        "ci_excludes_zero",
+        "binomial_p",
+        "n_eff_assets",
+        "is_failed_criterion",
+    ),
+    [
+        pytest.param(
+            1,
+            100.0,
+            0.05,
+            True,
+            0.01,
+            1.0,
+            lambda name: name == "Valid tickers",
+            id="stage0_when_too_few_valid_tickers",
+        ),
+        pytest.param(
+            5,
+            STAGE0_MEAN_NEFF_MIN - 1,
+            0.05,
+            True,
+            0.01,
+            4.0,
+            lambda name: "N_eff" in name,
+            id="stage0_when_mean_neff_too_low",
+        ),
+        pytest.param(
+            5,
+            100.0,
+            0.05,
+            True,
+            STAGE0_BINOMIAL_P_MAX + 0.01,
+            4.0,
+            lambda name: "Binomial" in name,
+            id="stage0_when_binomial_p_too_high",
+        ),
+        pytest.param(
+            5,
+            100.0,
+            STAGE0_AGGREGATE_IC_FLOOR - 0.005,
+            False,
+            0.10,
+            4.0,
+            lambda name: "Aggregate IC magnitude" in name,
+            id="stage0_when_ci_includes_zero_and_ic_below_floor",
+        ),
+    ],
+)
+def test_stage0_failed_criteria(
+    n_valid, mean_neff, aggregate_ic, ci_excludes_zero, binomial_p, n_eff_assets, is_failed_criterion
+):
     rows, agg, bn, neff_assets = _stage_inputs(
-        n_valid=1,
-        mean_neff=100.0,
-        aggregate_ic=0.05,
-        ci_excludes_zero=True,
-        binomial_p=0.01,
-        n_eff_assets=1.0,
+        n_valid=n_valid,
+        mean_neff=mean_neff,
+        aggregate_ic=aggregate_ic,
+        ci_excludes_zero=ci_excludes_zero,
+        binomial_p=binomial_p,
+        n_eff_assets=n_eff_assets,
     )
 
     info = _compute_stage_info(rows, agg, bn, neff_assets)
 
-    assert info.stage == 0
-    assert any(c.name == "Valid tickers" for c in info.failed_criteria)
-
-
-def test_stage0_when_mean_neff_too_low():
-    rows, agg, bn, neff_assets = _stage_inputs(
-        n_valid=5,
-        mean_neff=STAGE0_MEAN_NEFF_MIN - 1,
-        aggregate_ic=0.05,
-        ci_excludes_zero=True,
-        binomial_p=0.01,
-        n_eff_assets=4.0,
+    assert info.stage == 0, "the signal lands at stage 0"
+    assert any(is_failed_criterion(c.name) for c in info.failed_criteria), (
+        "the expected criterion is among the failed criteria"
     )
-
-    info = _compute_stage_info(rows, agg, bn, neff_assets)
-
-    assert info.stage == 0
-    assert any("N_eff" in c.name for c in info.failed_criteria)
-
-
-def test_stage0_when_binomial_p_too_high():
-    rows, agg, bn, neff_assets = _stage_inputs(
-        n_valid=5,
-        mean_neff=100.0,
-        aggregate_ic=0.05,
-        ci_excludes_zero=True,
-        binomial_p=STAGE0_BINOMIAL_P_MAX + 0.01,
-        n_eff_assets=4.0,
-    )
-
-    info = _compute_stage_info(rows, agg, bn, neff_assets)
-
-    assert info.stage == 0
-    assert any("Binomial" in c.name for c in info.failed_criteria)
-
-
-def test_stage0_when_ci_includes_zero_and_ic_below_floor():
-    rows, agg, bn, neff_assets = _stage_inputs(
-        n_valid=5,
-        mean_neff=100.0,
-        aggregate_ic=STAGE0_AGGREGATE_IC_FLOOR - 0.005,
-        ci_excludes_zero=False,
-        binomial_p=0.10,
-        n_eff_assets=4.0,
-    )
-
-    info = _compute_stage_info(rows, agg, bn, neff_assets)
-
-    assert info.stage == 0
-    assert any("Aggregate IC magnitude" in c.name for c in info.failed_criteria)
 
 
 def test_stage1_when_survives_stage0_but_below_stage2():
@@ -377,66 +386,51 @@ def test_stage3_when_meets_promotion_thresholds():
 # ─── HAC lag selection (after ChatGPT v2 review) ─────────────
 
 
-def test_select_hac_lag_drops_min_lag_floor_at_small_n():
-    """A ``min_lag = 5`` floor doesn't survive a 6-IC-observation window.
+def test_select_hac_lag_bounds():
+    """``_select_hac_lag`` drops the min_lag floor at small n, honours it at large n, and clamps to n - 2.
 
-    Before the v2 fix, the floor dominated and N_eff collapsed to ~2.
-    The new selection caps the lag at ``min(round(1.5·√n), n // 3)`` and
-    forces ``min_lag = 1`` when ``n < 50``.
+    Before the v2 fix, the floor dominated and N_eff collapsed to ~2. The new
+    selection caps the lag at ``min(round(1.5·√n), n // 3)`` and forces
+    ``min_lag = 1`` when ``n < 50``.
     """
     # n = 6 → sqrt-cap ≈ round(1.5·2.449) = 4 ; n//3 = 2 ; upper = 2
     # min_lag floor is dropped (n < 50), so the chosen lag must be ≤ 2.
-    chosen = _select_hac_lag(n=6, min_lag=5)
-    assert chosen <= 2
-    assert chosen >= 1
-
-
-def test_select_hac_lag_respects_min_lag_when_n_large_enough():
-    """At n ≥ 50 we honour the caller's structural min_lag."""
+    small_n = _select_hac_lag(n=6, min_lag=5)
     # n = 200 → sqrt-cap ≈ round(1.5·14.14) = 21 ; n//3 = 66 ; upper = 21
-    chosen = _select_hac_lag(n=200, min_lag=5)
-    assert chosen >= 5
-    assert chosen <= 21
+    large_n = _select_hac_lag(n=200, min_lag=5)
+    # Even when the cap is permissive, lag can't exceed n - 2.
+    tiny_n = _select_hac_lag(n=4, min_lag=10)
 
-
-def test_select_hac_lag_clamps_to_n_minus_2():
-    """Even when the cap is permissive, lag can't exceed n - 2."""
-    chosen = _select_hac_lag(n=4, min_lag=10)
-    assert chosen <= 4 - 2
+    assert small_n <= 2, "min_lag floor is dropped at small n: lag is at most 2"
+    assert small_n >= 1, "min_lag floor is dropped at small n: lag is at least 1"
+    assert large_n >= 5, "at n >= 50 the caller's structural min_lag is honoured"
+    assert large_n <= 21, "at n >= 50 the lag stays under the sqrt cap"
+    assert tiny_n <= 4 - 2, "lag is clamped to n - 2"
 
 
 # ─── N_eff_assets method selection ──────────────────────────
 
 
-def test_n_eff_assets_with_method_prefers_ic_when_all_tickers_have_enough_obs():
-    """IC correlation is the Stage-2-correct dependency structure; we
-    use it whenever every ticker has ≥ N_EFF_ASSETS_IC_OBS_MIN obs."""
-    rng = np.random.default_rng(seed=17)
-    dates_long = [f"2025-01-{d:02d}" for d in range(1, 21)]
-    ic_series = {
-        t: pd.Series(
-            rng.normal(size=N_EFF_ASSETS_IC_OBS_MIN + 5),
-            index=dates_long[: N_EFF_ASSETS_IC_OBS_MIN + 5],
-        )
-        for t in ("A", "B", "C")
-    }
-    returns = {
-        t: pd.Series(rng.normal(size=20), index=dates_long) for t in ("A", "B", "C")
-    }
-
-    n_eff, method = _compute_n_eff_assets_with_method(ic_series, returns)
-
-    assert method == "ic"
-    assert 1.0 <= n_eff <= 3.0
-
-
-def test_n_eff_assets_with_method_falls_back_to_returns_when_ic_too_short():
-    """Below the IC-obs threshold per ticker, fall back to the
-    daily-returns correlation (Stage 1 acceptable)."""
-    rng = np.random.default_rng(seed=18)
+@pytest.mark.parametrize(
+    ("seed", "ic_obs", "expected_method"),
+    [
+        # IC correlation is the Stage-2-correct dependency structure; we use it
+        # whenever every ticker has >= N_EFF_ASSETS_IC_OBS_MIN obs.
+        pytest.param(17, N_EFF_ASSETS_IC_OBS_MIN + 5, "ic", id="prefers_ic_when_all_tickers_have_enough_obs"),
+        # Below the IC-obs threshold per ticker, fall back to the
+        # daily-returns correlation (Stage 1 acceptable).
+        pytest.param(18, 2, "returns", id="falls_back_to_returns_when_ic_too_short"),
+    ],
+)
+def test_n_eff_assets_with_method_selection(seed, ic_obs, expected_method):
+    rng = np.random.default_rng(seed=seed)
     dates = [f"2025-01-{d:02d}" for d in range(1, 21)]
     ic_series = {
-        t: pd.Series(rng.normal(size=2), index=dates[:2]) for t in ("A", "B", "C")
+        t: pd.Series(
+            rng.normal(size=ic_obs),
+            index=dates[:ic_obs],
+        )
+        for t in ("A", "B", "C")
     }
     returns = {
         t: pd.Series(rng.normal(size=20), index=dates) for t in ("A", "B", "C")
@@ -444,8 +438,8 @@ def test_n_eff_assets_with_method_falls_back_to_returns_when_ic_too_short():
 
     n_eff, method = _compute_n_eff_assets_with_method(ic_series, returns)
 
-    assert method == "returns"
-    assert 1.0 <= n_eff <= 3.0
+    assert method == expected_method, "n_eff_assets method selected"
+    assert 1.0 <= n_eff <= 3.0, "n_eff_assets stays within the ticker count"
 
 
 def test_n_eff_assets_with_method_falls_back_when_ic_series_empty():

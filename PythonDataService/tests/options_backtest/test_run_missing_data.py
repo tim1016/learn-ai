@@ -188,21 +188,17 @@ def test_progress_is_reported_after_each_session_with_the_count_done_and_the_tot
     assert seen == [(1, 3, WED), (2, 3, THU), (3, 3, FRI)]
 
 
-def test_a_run_over_no_sessions_is_refused() -> None:
-    with pytest.raises(ValueError, match="at least one session"):
-        run_sessions(setup(leg()), [], FakeRunData())
-
-
 @pytest.mark.parametrize(
     ("sessions", "words"),
     [
-        ([THU, WED], "date order"),
-        ([WED, WED], "date order"),
-        ([date(2026, 10, 10)], "not a NYSE session"),  # a Saturday
-        ([WED, date(2026, 11, 26)], "not a NYSE session"),  # Thanksgiving
+        pytest.param([], "at least one session", id="no-sessions"),
+        pytest.param([THU, WED], "date order", id="out-of-order"),
+        pytest.param([WED, WED], "date order", id="repeated"),
+        pytest.param([date(2026, 10, 10)], "not a NYSE session", id="saturday-is-closed"),
+        pytest.param([WED, date(2026, 11, 26)], "not a NYSE session", id="thanksgiving-is-closed"),
     ],
 )
-def test_sessions_out_of_order_repeated_or_closed_are_refused_before_anything_is_read(
+def test_sessions_none_out_of_order_repeated_or_closed_are_refused_before_anything_is_read(
     sessions: list[date], words: str
 ) -> None:
     data = fake_data({WED: _day(), THU: _day()})
@@ -210,7 +206,7 @@ def test_sessions_out_of_order_repeated_or_closed_are_refused_before_anything_is
     with pytest.raises(ValueError, match=words):
         run_sessions(setup(leg()), sessions, data)
 
-    assert data.asked == []
+    assert data.asked == [], "the sessions are refused before anything is read"
 
 
 def test_estimated_fees_on_a_date_without_published_rates_are_refused_before_anything_is_read() -> None:

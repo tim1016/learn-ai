@@ -208,8 +208,31 @@ def test_dispatch_migrated_signal_launches_its_named_lean_template(verdict_write
     assert launched["request"]["template"] == "ema_crossover_signal"
 
 
+@pytest.mark.parametrize(
+    ("strategy", "extra_parameters", "parity_group_id", "left_execution_id", "job_id"),
+    [
+        pytest.param(
+            "ema_crossover_signal",
+            (),
+            "pg-parameters",
+            44,
+            "job-parameters",
+            id="non_default_ema_gates_reach_the_companion_request",
+        ),
+        pytest.param(
+            "ema_previous_crossover",
+            (("fast_period", 7), ("slow_period", 20), ("hold_bars", 6), ("cross_max_age_bars", 3)),
+            "pg-previous-crossover",
+            45,
+            "job-previous-crossover",
+            id="every_ema_previous_crossover_setting_reaches_its_own_template",
+        ),
+    ],
+)
 @respx.mock
-def test_non_default_ema_gates_reach_the_companion_request(verdict_writes) -> None:
+def test_non_default_settings_reach_the_companion_request(
+    verdict_writes, strategy, extra_parameters, parity_group_id, left_execution_id, job_id
+) -> None:
     launched: dict = {}
 
     def _capture_job(request: httpx.Request) -> httpx.Response:
@@ -217,55 +240,21 @@ def test_non_default_ema_gates_reach_the_companion_request(verdict_writes) -> No
         from app.routers.lean_sidecar import TrustedRunRequestModel
 
         TrustedRunRequestModel.model_validate(launched["request"])
-        return httpx.Response(202, json={"id": "job-parameters"})
+        return httpx.Response(202, json={"id": job_id})
 
     respx.post(f"{BACKEND}/api/jobs/lean_engine_run").mock(side_effect=_capture_job)
-    parameters = {"gap": 0.35, "gap_bps": 2.5, "rsi_min": 42.0, "rsi_max": 68.0}
+    parameters = {"gap": 0.35, "gap_bps": 2.5, "rsi_min": 42.0, "rsi_max": 68.0, **dict(extra_parameters)}
     dispatch_parity_companion(
-        registration=_STRATEGY_REGISTRY["ema_crossover_signal"],
-        request=_request(params={"symbol": "SPY", **parameters}),
-        parity_group_id="pg-parameters",
-        left_execution_id=44,
+        registration=_STRATEGY_REGISTRY[strategy],
+        request=_request(strategy_name=strategy, params={"symbol": "SPY", **parameters}),
+        parity_group_id=parity_group_id,
+        left_execution_id=left_execution_id,
         validated_parameters=parameters,
     )
 
-    assert launched["request"]["strategy_parameters"] == parameters
-    assert not verdict_writes["failed"]
-
-
-@respx.mock
-def test_every_ema_previous_crossover_setting_reaches_its_own_template(verdict_writes) -> None:
-    launched: dict = {}
-
-    def _capture_job(request: httpx.Request) -> httpx.Response:
-        launched.update(json.loads(request.content))
-        from app.routers.lean_sidecar import TrustedRunRequestModel
-
-        TrustedRunRequestModel.model_validate(launched["request"])
-        return httpx.Response(202, json={"id": "job-previous-crossover"})
-
-    respx.post(f"{BACKEND}/api/jobs/lean_engine_run").mock(side_effect=_capture_job)
-    parameters = {
-        "gap": 0.35,
-        "gap_bps": 2.5,
-        "rsi_min": 42.0,
-        "rsi_max": 68.0,
-        "fast_period": 7,
-        "slow_period": 20,
-        "hold_bars": 6,
-        "cross_max_age_bars": 3,
-    }
-    dispatch_parity_companion(
-        registration=_STRATEGY_REGISTRY["ema_previous_crossover"],
-        request=_request(strategy_name="ema_previous_crossover", params={"symbol": "SPY", **parameters}),
-        parity_group_id="pg-previous-crossover",
-        left_execution_id=45,
-        validated_parameters=parameters,
-    )
-
-    assert launched["request"]["template"] == "ema_previous_crossover"
-    assert launched["request"]["strategy_parameters"] == parameters
-    assert not verdict_writes["failed"]
+    assert launched["request"]["template"] == strategy, "the request names the strategy's own template"
+    assert launched["request"]["strategy_parameters"] == parameters, "every setting reaches the request"
+    assert not verdict_writes["failed"], "the dispatch is not marked failed"
 
 
 @respx.mock

@@ -44,32 +44,31 @@ def test_alpha_decay_at_or_above_min_folds_marks_test_valid():
     assert result.is_test_valid is True
 
 
-def test_alpha_decay_significant_requires_both_valid_and_p_below_threshold():
-    """A clearly-significant downward trend over enough folds is significant.
+@pytest.mark.parametrize(
+    ("sharpes", "significant"),
+    [
+        # A clearly-significant downward trend over enough folds is significant.
+        #
+        # The trend must have *some* residual noise — a perfectly collinear
+        # sequence has zero residual variance and the t-statistic falls back
+        # to zero by the divide-by-zero guard, which would mask significance.
+        # Real walk-forward Sharpes always have noise.
+        # 6 folds with a clear downward trend plus small jitter.
+        pytest.param(
+            (1.05, 0.78, 0.62, 0.41, 0.18, -0.05),
+            True,
+            id="significant_requires_both_valid_and_p_below_threshold",
+        ),
+        # Five folds of jittery but trendless Sharpes should not be flagged.
+        pytest.param((0.4, 0.5, 0.4, 0.5, 0.4), False, id="not_significant_when_trend_is_noise"),
+    ],
+)
+def test_alpha_decay_significance(sharpes, significant):
+    result = _compute_sharpe_trend_slope(list(sharpes))
 
-    The trend must have *some* residual noise — a perfectly collinear
-    sequence has zero residual variance and the t-statistic falls back
-    to zero by the divide-by-zero guard, which would mask significance.
-    Real walk-forward Sharpes always have noise.
-    """
-    # 6 folds with a clear downward trend plus small jitter.
-    sharpes = [1.05, 0.78, 0.62, 0.41, 0.18, -0.05]
-
-    result = _compute_sharpe_trend_slope(sharpes)
-
-    assert result.is_test_valid is True
-    assert result.p_value < ALPHA_DECAY_SIGNIFICANCE_LEVEL
-    assert result.is_significant is True
-
-
-def test_alpha_decay_not_significant_when_trend_is_noise():
-    """Five folds of jittery but trendless Sharpes should not be flagged."""
-    sharpes = [0.4, 0.5, 0.4, 0.5, 0.4]
-
-    result = _compute_sharpe_trend_slope(sharpes)
-
-    assert result.is_test_valid is True
-    assert result.is_significant is False
+    assert result.is_test_valid is True, "enough folds make the test valid"
+    assert (result.p_value < ALPHA_DECAY_SIGNIFICANCE_LEVEL) == significant, "p-value sits on the expected side"
+    assert result.is_significant is significant, "significance flag"
 
 
 def test_alpha_decay_two_folds_reports_slope_but_test_remains_invalid():

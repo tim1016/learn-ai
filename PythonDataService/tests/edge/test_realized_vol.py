@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from app.engine.edge.features_realtime.realized_vol import (
     DAILY_BARS_PER_YEAR,
@@ -55,27 +56,19 @@ def _gbm_bars(n: int, sigma: float = 0.20, seed: int = 0) -> pd.DataFrame:
     )
 
 
-def test_close_to_close_zero_when_prices_constant():
+@pytest.mark.parametrize(
+    "estimator",
+    [close_to_close, parkinson, garman_klass, yang_zhang],
+    ids=[
+        "close-to-close-zero-when-prices-constant",
+        "parkinson-zero-when-high-equals-low",
+        "garman-klass-zero-when-ohlc-constant",
+        "yang-zhang-zero-when-ohlc-constant",
+    ],
+)
+def test_realized_vol_estimator_is_zero_on_flat_bars(estimator):
     bars = _flat_bars(60)
-    rv = close_to_close(bars, window=20, annualize=True)
-    assert rv.dropna().abs().max() < 1e-12
-
-
-def test_parkinson_zero_when_high_equals_low():
-    bars = _flat_bars(60)
-    rv = parkinson(bars, window=20, annualize=True)
-    assert rv.dropna().abs().max() < 1e-12
-
-
-def test_garman_klass_zero_when_ohlc_constant():
-    bars = _flat_bars(60)
-    rv = garman_klass(bars, window=20, annualize=True)
-    assert rv.dropna().abs().max() < 1e-12
-
-
-def test_yang_zhang_zero_when_ohlc_constant():
-    bars = _flat_bars(60)
-    rv = yang_zhang(bars, window=20, annualize=True)
+    rv = estimator(bars, window=20, annualize=True)
     assert rv.dropna().abs().max() < 1e-12
 
 

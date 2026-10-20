@@ -130,48 +130,56 @@ async def test_diagnose_happy_path_returns_pass(client: AsyncClient) -> None:
     assert body["fetched_at_ms"] > 0
 
 
-async def test_diagnose_missing_pinned_image_blocks_lean_run(client: AsyncClient) -> None:
-    """Regression: an HTTP-reachable launcher must not pass readiness when
-    its local Podman store lacks the immutable LEAN image it will launch."""
-    assert PINNED_LEAN_IMAGE_DIGEST is not None
-    healthz = _healthy_healthz()
-    healthz["status"] = "degraded"
-    image = healthz["image"]
-    assert isinstance(image, dict)
-    image["available"] = False
-    image["failure_reason"] = "missing"
-    image["detail"] = "Pinned LEAN image is not present in Podman's local image store."
-    async with respx.mock(base_url=DEFAULT_LAUNCHER_URL) as mock:
-        mock.get("/healthz").mock(return_value=httpx.Response(200, json=healthz))
-
-        response = await client.get("/api/lean-sidecar/diagnose")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["overall_status"] == "fail"
-    assert next(c for c in body["checks"] if c["name"] == "launcher_healthz")["status"] == "pass"
-    image_check = next(c for c in body["checks"] if c["name"] == "launcher_image")
-    assert image_check["status"] == "fail"
-    assert "Build the configured local LEAN derivative" in image_check["fix"]
-
-
-async def test_diagnose_podman_readiness_failure_does_not_recommend_an_image_build(
+@pytest.mark.parametrize(
+    ("failure_reason", "detail", "detail_fragment", "recommends_image_build"),
+    [
+        # Regression: an HTTP-reachable launcher must not pass readiness when
+        # its local Podman store lacks the immutable LEAN image it will launch.
+        pytest.param(
+            "missing",
+            "Pinned LEAN image is not present in Podman's local image store.",
+            "not present in Podman's local image store",
+            True,
+            id="missing_pinned_image_blocks_lean_run",
+        ),
+        pytest.param(
+            "check_failed",
+            "Podman could not determine pinned-image readiness (exit code 125).",
+            "Podman could not determine",
+            False,
+            id="podman_readiness_failure_does_not_recommend_an_image_build",
+        ),
+    ],
+)
+async def test_diagnose_unavailable_pinned_image_fails_the_image_check(
     client: AsyncClient,
+    failure_reason: str,
+    detail: str,
+    detail_fragment: str,
+    recommends_image_build: bool,
 ) -> None:
+    assert PINNED_LEAN_IMAGE_DIGEST is not None, "a pinned LEAN image digest is configured"
     healthz = _healthy_healthz()
     healthz["status"] = "degraded"
     image = healthz["image"]
-    assert isinstance(image, dict)
+    assert isinstance(image, dict), "healthz carries the image readiness object"
     image["available"] = False
-    image["failure_reason"] = "check_failed"
-    image["detail"] = "Podman could not determine pinned-image readiness (exit code 125)."
+    image["failure_reason"] = failure_reason
+    image["detail"] = detail
     async with respx.mock(base_url=DEFAULT_LAUNCHER_URL) as mock:
         mock.get("/healthz").mock(return_value=httpx.Response(200, json=healthz))
 
         response = await client.get("/api/lean-sidecar/diagnose")
 
-    assert response.status_code == 200
-    image_check = next(c for c in response.json()["checks"] if c["name"] == "launcher_image")
-    assert image_check["status"] == "fail"
-    assert "Podman could not determine" in image_check["detail"]
-    assert "Build the configured local LEAN derivative" not in image_check["fix"]
+    assert response.status_code == 200, "diagnose answers 200 with a structured report"
+    body = response.json()
+    assert body["overall_status"] == "fail", "an unavailable pinned image fails the overall report"
+    assert (
+        next(c for c in body["checks"] if c["name"] == "launcher_healthz")["status"] == "pass"
+    ), "the launcher itself is still reachable"
+    image_check = next(c for c in body["checks"] if c["name"] == "launcher_image")
+    assert image_check["status"] == "fail", "image check fails"
+    assert detail_fragment in image_check["detail"], "image check detail carries the launcher's reason"
+    assert (
+        "Build the configured local LEAN derivative" in image_check["fix"]
+    ) is recommends_image_build, "an image build is recommended only when the image is missing"

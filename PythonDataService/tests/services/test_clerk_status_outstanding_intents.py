@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from app.broker.alpaca.clerk.sqlite.projection_models import ProjectedOrder
 from app.services.sqlite_clerk_compat import _operation_requires_reconciliation
 
@@ -27,12 +29,19 @@ def _enter(*orders: ProjectedOrder) -> SimpleNamespace:
     return SimpleNamespace(state="in_progress", kind="ENTER", orders=orders)
 
 
-def test_a_filled_single_leg_entry_with_its_fill_is_settled() -> None:
-    assert _operation_requires_reconciliation(_enter(_order("a", filled=1.0))) is False
-
-
-def test_a_filled_order_with_nothing_filled_is_still_unsettled() -> None:
-    assert _operation_requires_reconciliation(_enter(_order("a", filled=0.0))) is True
+@pytest.mark.parametrize(
+    ("filled", "requires_reconciliation"),
+    [
+        pytest.param(1.0, False, id="filled_single_leg_entry_with_its_fill_is_settled"),
+        pytest.param(0.0, True, id="filled_order_with_nothing_filled_is_still_unsettled"),
+    ],
+)
+def test_a_filled_single_leg_entry_is_settled_only_by_its_own_fill(
+    filled: float, requires_reconciliation: bool
+) -> None:
+    assert _operation_requires_reconciliation(_enter(_order("a", filled=filled))) is requires_reconciliation, (
+        "a filled single-leg entry needs reconciliation only when nothing is filled"
+    )
 
 
 def test_a_filled_several_leg_parent_is_settled_by_its_legs_fills() -> None:

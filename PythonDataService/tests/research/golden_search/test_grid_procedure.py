@@ -118,30 +118,28 @@ def _pair_plan(**overrides):  # type: ignore[no-untyped-def]
     return protocol(_EMA_PAIR, knobs=knobs, seed=synthetic_point({"fast": 5, "slow": 10}), **overrides)
 
 
-def test_pair_grid_maps_the_planned_ranges_through_the_center_rows_first_knob() -> None:
+def test_pair_grid_maps_the_planned_ranges_through_the_center_rows_first_knob_and_breaks_a_nearest_tie_toward_the_smaller_value() -> None:
     grid = pair_grid(_EMA_PAIR, _pair_plan(), synthetic_point({"fast": 8, "slow": 21}), "fast", "slow", canonicalize=synthetic_point)
 
     # Rows: fast over 3..12 -> 3, 5.25, 7.5, 9.75, 12 -> 3, 5, 8, 10, 12 (half-even); 8 is already the center.
-    assert (grid.y_knob, grid.y_values) == ("fast", (3.0, 5.0, 8.0, 10.0, 12.0))
+    assert (grid.y_knob, grid.y_values) == ("fast", (3.0, 5.0, 8.0, 10.0, 12.0)), "the rows are the first knob over its planned range, the center's value among them"
     # Columns: slow over 8..30 -> 8, 14, 19, 24, 30; 19 is nearest the center's 21 and is replaced by it.
-    assert (grid.x_knob, grid.x_values) == ("slow", (8.0, 14.0, 21.0, 24.0, 30.0))
-    assert len(grid.cells) == 25
+    assert (grid.x_knob, grid.x_values) == ("slow", (8.0, 14.0, 21.0, 24.0, 30.0)), "the columns are the second knob over its planned range, the center's value among them"
+    assert len(grid.cells) == 25, "the grid holds every row against every column"
     # Row-major: every column of the first row, then the next row.
-    assert [(c.values["fast"], c.values["slow"]) for c in grid.cells[:5]] == [(3.0, 8.0), (3.0, 14.0), (3.0, 21.0), (3.0, 24.0), (3.0, 30.0)]
+    assert [(c.values["fast"], c.values["slow"]) for c in grid.cells[:5]] == [(3.0, 8.0), (3.0, 14.0), (3.0, 21.0), (3.0, 24.0), (3.0, 30.0)], "cells run row-major"
     by_cell = {(c.values["fast"], c.values["slow"]): c for c in grid.cells}
-    assert by_cell[(8.0, 21.0)].point == synthetic_point({"fast": 8, "slow": 21})
+    assert by_cell[(8.0, 21.0)].point == synthetic_point({"fast": 8, "slow": 21}), "the center cell is the center point"
     # fast < slow fails at (8, 8), (10, 8) and (12, 8).
-    assert sorted(key for key, c in by_cell.items() if c.status == "invalid") == [(8.0, 8.0), (10.0, 8.0), (12.0, 8.0)]
-    assert by_cell[(10.0, 8.0)].reason == "fast must be below slow"
-    assert len(grid.testable) == 22
+    assert sorted(key for key, c in by_cell.items() if c.status == "invalid") == [(8.0, 8.0), (10.0, 8.0), (12.0, 8.0)], "cells that break the constraint are invalid"
+    assert by_cell[(10.0, 8.0)].reason == "fast must be below slow", "an invalid cell names the constraint it breaks"
+    assert len(grid.testable) == 22, "the other cells are testable"
 
-
-def test_pair_grid_breaks_a_nearest_tie_toward_the_smaller_value_and_keeps_an_off_range_center() -> None:
-    grid = pair_grid(_EMA_PAIR, _pair_plan(), synthetic_point({"fast": 4, "slow": 35}), "fast", "slow", canonicalize=synthetic_point)
+    tie_grid = pair_grid(_EMA_PAIR, _pair_plan(), synthetic_point({"fast": 4, "slow": 35}), "fast", "slow", canonicalize=synthetic_point)
 
     # 4 is as near 3 as 5: the smaller, 3, makes way. 35 lies beyond the planned 30, which it replaces.
-    assert grid.y_values == (4.0, 5.0, 8.0, 10.0, 12.0)
-    assert grid.x_values == (8.0, 14.0, 19.0, 24.0, 35.0)
+    assert tie_grid.y_values == (4.0, 5.0, 8.0, 10.0, 12.0), "a nearest tie gives way to the smaller value"
+    assert tie_grid.x_values == (8.0, 14.0, 19.0, 24.0, 35.0), "an off-range center replaces the planned end"
 
 
 def test_pair_grid_refuses_a_knob_the_plan_does_not_search() -> None:

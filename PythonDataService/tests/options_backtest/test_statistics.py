@@ -138,45 +138,41 @@ def _scene() -> list[SessionResult]:
     ]
 
 
-def test_the_sessions_are_counted_by_what_happened_in_them() -> None:
+def test_the_scene_summary_counts_the_sessions_the_trades_their_exits_and_what_did_not_trade() -> None:
     summary = summarize_run(_scene(), starting_cash_usd=STARTING)
 
     # Seven tested = five traded (1, 4, 5, 6, 7) + one no trade (2) + one skipped (3).
-    assert summary.sessions_tested == 7
-    assert summary.sessions_traded == 5
-    assert summary.sessions_no_trade == 1
-    assert summary.sessions_skipped == 1
+    assert summary.sessions_tested == 7, "seven sessions are tested"
+    assert summary.sessions_traded == 5, "five sessions traded"
+    assert summary.sessions_no_trade == 1, "one session had no trade"
+    assert summary.sessions_skipped == 1, "one session was skipped"
     assert summary.skipped_by_reason == (
         (SkipReason.WINDOW_DOES_NOT_FIT, 0),
         (SkipReason.UNDERLYING_DID_NOT_TRADE, 1),
-    )
-    assert summary.sessions_incomplete == 1  # session 5, a leg marked and not sold
+    ), "the skipped sessions are counted by reason, with every reason listed"
+    assert summary.sessions_incomplete == 1, "session 5, a leg marked and not sold, is the one incomplete session"
     # Of the five traded: 5 (+49.35) and 7 (+100.00) profit, 1 (-54.90) and 6 (-29.20) lose, 4 (0.00) breaks even.
-    assert (summary.sessions_profitable, summary.sessions_losing, summary.sessions_break_even) == (2, 2, 1)
+    assert (summary.sessions_profitable, summary.sessions_losing, summary.sessions_break_even) == (2, 2, 1), (
+        "of the five traded sessions two profit, two lose and one breaks even"
+    )
 
-
-def test_the_daily_win_rate_is_profitable_sessions_over_traded_sessions_and_ends_in_a_decimal() -> None:
-    summary = summarize_run(_scene(), starting_cash_usd=STARTING)
-
-    assert summary.daily_win_rate == Ratio(D("2"), D("5"))
-    assert summary.daily_win_rate.exact() == D("0.4")
-    assert summary.daily_win_rate.rounded_to_6_places() == D("0.400000")
-
-
-def test_the_trades_are_counted_won_lost_and_break_even_by_their_profit_after_fees() -> None:
-    summary = summarize_run(_scene(), starting_cash_usd=STARTING)
+    assert summary.daily_win_rate == Ratio(D("2"), D("5")), (
+        "the daily win rate is profitable sessions over traded sessions"
+    )
+    assert summary.daily_win_rate.exact() == D("0.4"), "the daily win rate is exactly 0.4"
+    assert summary.daily_win_rate.rounded_to_6_places() == D("0.400000"), "the daily win rate is shown as 0.400000"
 
     # B (55.70), F (49.35), C (40.70), G (100.00) won; A (-110.60) and D (-69.90) lost; E (0.00) broke even.
-    assert summary.trades == 7
-    assert (summary.trades_won, summary.trades_lost, summary.trades_break_even) == (4, 2, 1)
+    assert summary.trades == 7, "seven trades"
+    assert (summary.trades_won, summary.trades_lost, summary.trades_break_even) == (4, 2, 1), (
+        "four trades won, two lost and one broke even, by their profit after fees"
+    )
     # Four sevenths is a decimal that never ends: the two numbers, and a rounded one that says so.
-    assert summary.trade_win_rate == Ratio(D("4"), D("7"))
-    assert summary.trade_win_rate.exact() is None
-    assert summary.trade_win_rate.rounded_to_6_places() == D("0.571429")  # 0.571428571...
-
-
-def test_the_trades_are_counted_by_the_reason_they_left_with_every_reason_listed() -> None:
-    summary = summarize_run(_scene(), starting_cash_usd=STARTING)
+    assert summary.trade_win_rate == Ratio(D("4"), D("7")), "the trade win rate is won trades over trades"
+    assert summary.trade_win_rate.exact() is None, "four sevenths never ends, so it has no exact decimal"
+    assert summary.trade_win_rate.rounded_to_6_places() == D("0.571429"), (  # 0.571428571...
+        "four sevenths is shown rounded to 0.571429"
+    )
 
     # Stop: A. Square off: D. Exit time: B, E, C, G. Marked, not sold: F.
     assert summary.exits_by_reason == (
@@ -186,45 +182,57 @@ def test_the_trades_are_counted_by_the_reason_they_left_with_every_reason_listed
         (ExitReason.EXIT_TIME, 4),
         (ExitReason.MARKED_NOT_SOLD, 1),
         (ExitReason.MARKED_NOT_BOUGHT_BACK, 0),
-    )
+    ), "the trades are counted by the reason they left, with every reason listed"
+
+    # Session 2 took a starting price (leg b) and no momentum was reached; session 1 took one and reached it.
+    assert summary.sessions_without_momentum == 1, "session 2 is the one without momentum"
+    assert summary.entries_refused_for_cash == 1, "one entry refused for cash, in session 5"
+    assert summary.re_entries_blocked_by_cutoff == 1, "one re-entry blocked by the cutoff, in session 4"
+    assert summary.entries_dropped == 1, "one entry dropped, in session 4"
+    assert summary.picks_refused_by_reason == (
+        (PickRefusal.CHAIN_INCOMPLETE, 0),
+        (PickRefusal.EXPIRY_NOT_LISTED, 1),
+        (PickRefusal.EXPIRY_NOT_A_SESSION, 0),
+        (PickRefusal.STRIKE_NOT_LISTED, 1),
+        (PickRefusal.NOT_STANDARD, 0),
+    ), "the refused picks are counted by reason, with every reason listed"
+    assert summary.legs_without_a_starting_price == 1, "one leg without a starting price, in session 2"
+    assert summary.re_entries_lost == 1, "one re-entry lost, in session 6"
+
+    # Recorded and zero is a different thing from "not recorded", which is a run stored before they were counted.
+    assert summary.entries_refused_by_reason == (
+        (EntryRefusal.OTHER_SIDE, 0),
+        (EntryRefusal.SECOND_EXPIRY, 0),
+        (EntryRefusal.COVER_DID_NOT_TRADE, 0),
+        (EntryRefusal.COVER_NOT_YET_HELD, 0),
+        (EntryRefusal.SALE_AT_ZERO, 0),
+    ), "a run that only buys counts each refusal of a sale as none and not as not recorded"
 
 
-def test_the_money_adds_up_trade_profit_after_fees_with_the_marked_leg_at_its_mark() -> None:
+def test_the_scene_summary_money_adds_up_with_the_profit_factor_the_costs_and_the_drawdown() -> None:
     summary = summarize_run(_scene(), starting_cash_usd=STARTING)
 
     # Gross profit 55.70 + 49.35 + 40.70 + 100.00 = 245.75. Gross loss 110.60 + 69.90 = 180.50.
     # Net profit 245.75 - 180.50 = 65.25, which is also -54.90 + 0 + 0 + 0 + 49.35 - 29.20 + 100.00.
-    assert summary.gross_profit_usd == D("245.75")
-    assert summary.gross_loss_usd == D("180.50")
-    assert summary.net_profit_usd == D("65.25")
-    assert summary.starting_cash_usd == STARTING
-    assert summary.ending_cash_usd == D("10065.25")
-
-
-def test_the_profit_factor_is_gross_profit_over_gross_loss_in_dollars() -> None:
-    summary = summarize_run(_scene(), starting_cash_usd=STARTING)
+    assert summary.gross_profit_usd == D("245.75"), "gross profit is the winning trades' profit after fees"
+    assert summary.gross_loss_usd == D("180.50"), "gross loss is the losing trades' loss after fees"
+    assert summary.net_profit_usd == D("65.25"), "net profit is gross profit less gross loss"
+    assert summary.starting_cash_usd == STARTING, "the starting cash is the one the run began with"
+    assert summary.ending_cash_usd == D("10065.25"), "the ending cash is the starting cash plus net profit"
 
     # 245.75 / 180.50 = 983 / 722 = 1.36149584..., which never ends (722 has a factor of 19). The seventh place is
     # an 8, so six places round up to 1.361496.
-    assert summary.profit_factor == Ratio(D("245.75"), D("180.50"))
-    assert summary.profit_factor.exact() is None
-    assert summary.profit_factor.rounded_to_6_places() == D("1.361496")
-
-
-def test_the_costs_are_the_fees_of_every_fill_and_what_slippage_and_the_price_step_took_from_every_fill() -> None:
-    summary = summarize_run(_scene(), starting_cash_usd=STARTING)
+    assert summary.profit_factor == Ratio(D("245.75"), D("180.50")), "the profit factor is gross profit over gross loss"
+    assert summary.profit_factor.exact() is None, "the profit factor never ends, so it has no exact decimal"
+    assert summary.profit_factor.rounded_to_6_places() == D("1.361496"), "the profit factor rounds up to 1.361496"
 
     # Fees: A 2.60 + B 1.30 + F 0.65 + C 1.30 + D 3.90 = 9.75.
-    assert summary.total_fees_usd == D("9.75")
+    assert summary.total_fees_usd == D("9.75"), "the fees are those of every fill"
     # Slippage paid, |filled - seen| x 100 x contracts at each fill:
     #   A bought 0.02 x 200 = 4.00, sold 0.02 x 200 = 4.00;  B bought 0.01 x 100 = 1.00, sold 0.02 x 100 = 2.00;
     #   C bought 0.04 x 100 = 4.00, sold 0.04 x 100 = 4.00;  D bought 0.01 x 300 = 3.00, sold 0.01 x 300 = 3.00.
     #   E, G filled at the price seen; F's mark is not a fill. 4 + 4 + 1 + 2 + 4 + 4 + 3 + 3 = 25.00.
-    assert summary.slippage_paid_usd == D("25.00")
-
-
-def test_the_drawdown_is_the_worst_fall_of_equity_from_its_peak_measured_at_session_ends() -> None:
-    summary = summarize_run(_scene(), starting_cash_usd=STARTING)
+    assert summary.slippage_paid_usd == D("25.00"), "the slippage and the price step took 25.00 from every fill"
 
     # Equity: 10,000.00 at the start, then 9,945.10 after session 1 (and unchanged through 4), 9,994.45, 9,965.25,
     # 10,065.25. The deepest fall is the first: 10,000.00 - 9,945.10 = 54.90, which is 54.90 / 10,000.00 of the peak.
@@ -238,30 +246,23 @@ def test_the_drawdown_is_the_worst_fall_of_equity_from_its_peak_measured_at_sess
         peak_session_open_ms=None,
         trough_session_open_ms=OPEN_MS[SEP_29],
     )
-    assert OPEN_MS[SEP_29] == 1_790_688_600_000
-    assert summary.drawdown_by_fraction == expected
-    assert summary.drawdown_by_dollars == expected
-    assert summary.drawdown_by_fraction.measured_at == "session_end"
-    assert summary.drawdown_by_fraction.fall_ratio.exact() == D("0.00549")
-
-
-def test_what_did_not_trade_is_counted_from_the_events() -> None:
-    summary = summarize_run(_scene(), starting_cash_usd=STARTING)
-
-    # Session 2 took a starting price (leg b) and no momentum was reached; session 1 took one and reached it.
-    assert summary.sessions_without_momentum == 1
-    assert summary.entries_refused_for_cash == 1  # session 5
-    assert summary.re_entries_blocked_by_cutoff == 1  # session 4
-    assert summary.entries_dropped == 1  # session 4
-    assert summary.picks_refused_by_reason == (
-        (PickRefusal.CHAIN_INCOMPLETE, 0),
-        (PickRefusal.EXPIRY_NOT_LISTED, 1),
-        (PickRefusal.EXPIRY_NOT_A_SESSION, 0),
-        (PickRefusal.STRIKE_NOT_LISTED, 1),
-        (PickRefusal.NOT_STANDARD, 0),
+    assert OPEN_MS[SEP_29] == 1_790_688_600_000, "session 1's open is 1,790,688,600,000 ms UTC"
+    assert summary.drawdown_by_fraction == expected, (
+        "the drawdown by fraction is the fall from the starting cash to session 1"
     )
-    assert summary.legs_without_a_starting_price == 1  # session 2
-    assert summary.re_entries_lost == 1  # session 6
+    assert summary.drawdown_by_dollars == expected, "the drawdown by dollars is the same fall"
+    assert summary.drawdown_by_fraction.measured_at == "session_end", "the drawdown is measured at session ends"
+    assert summary.drawdown_by_fraction.fall_ratio.exact() == D("0.00549"), "the drawdown's fall is 0.00549 of the peak"
+
+    for name in (
+        "net_profit_usd",
+        "gross_profit_usd",
+        "gross_loss_usd",
+        "total_fees_usd",
+        "slippage_paid_usd",
+        "ending_cash_usd",
+    ):
+        assert isinstance(getattr(summary, name), Decimal), f"{name} is exact dollars, never a float"
 
 
 OCTOBER = expected_sessions(date(2026, 10, 1), date(2026, 10, 30))
@@ -363,33 +364,36 @@ def _counting_scene() -> list[SessionResult]:
     return sessions
 
 
-def test_the_sessions_of_each_status_are_counted_apart_when_no_two_counts_agree() -> None:
+def test_each_status_and_each_count_of_what_did_not_trade_is_its_own_figure_when_no_two_counts_agree() -> None:
     summary = summarize_run(_counting_scene(), starting_cash_usd=STARTING)
 
-    assert summary.sessions_tested == 11
-    assert summary.sessions_traded == 7  # sessions 1 to 6 and 8, the two incomplete ones included
-    assert summary.sessions_incomplete == 2  # 5 and 6
-    assert summary.sessions_no_trade == 1  # 7
-    assert summary.sessions_skipped == 3  # 9, 10 and 11
-    assert summary.skipped_by_reason == ((SkipReason.WINDOW_DOES_NOT_FIT, 1), (SkipReason.UNDERLYING_DID_NOT_TRADE, 2))
+    assert summary.sessions_tested == 11, "eleven sessions are tested"
+    assert summary.sessions_traded == 7, "seven traded: sessions 1 to 6 and 8, the two incomplete ones included"
+    assert summary.sessions_incomplete == 2, "two incomplete: 5 and 6"
+    assert summary.sessions_no_trade == 1, "one with no trade: 7"
+    assert summary.sessions_skipped == 3, "three skipped: 9, 10 and 11"
+    assert summary.skipped_by_reason == (
+        (SkipReason.WINDOW_DOES_NOT_FIT, 1),
+        (SkipReason.UNDERLYING_DID_NOT_TRADE, 2),
+    ), "the skipped sessions are counted by reason"
 
-
-def test_each_count_of_what_did_not_trade_is_its_own_figure_when_no_two_counts_agree() -> None:
-    summary = summarize_run(_counting_scene(), starting_cash_usd=STARTING)
-
-    assert summary.sessions_without_momentum == 3  # 2, 3 and 6; session 1 reached its momentum
-    assert summary.entries_refused_for_cash == 4  # one each in 2, 4, 5 and 6
-    assert summary.re_entries_blocked_by_cutoff == 5  # 2 in session 1, 1 in 2, 2 in 3
-    assert summary.legs_without_a_starting_price == 6  # 2 in session 4, 2 + 2 in 6
-    assert summary.re_entries_lost == 7  # 3 in session 3, 2 in 5, 2 in 6
-    assert summary.entries_dropped == 8  # 2 in session 2, 3 in 3, 3 in 5
+    assert summary.sessions_without_momentum == 3, (
+        "3 sessions without momentum: 2, 3 and 6; session 1 reached its momentum"
+    )
+    assert summary.entries_refused_for_cash == 4, "4 entries refused for cash: one each in 2, 4, 5 and 6"
+    assert summary.re_entries_blocked_by_cutoff == 5, (
+        "5 re-entries blocked by the cutoff: 2 in session 1, 1 in 2, 2 in 3"
+    )
+    assert summary.legs_without_a_starting_price == 6, "6 legs without a starting price: 2 in session 4, 2 + 2 in 6"
+    assert summary.re_entries_lost == 7, "7 re-entries lost: 3 in session 3, 2 in 5, 2 in 6"
+    assert summary.entries_dropped == 8, "8 entries dropped: 2 in session 2, 3 in 3, 3 in 5"
     assert summary.picks_refused_by_reason == (
         (PickRefusal.CHAIN_INCOMPLETE, 1),  # session 4
         (PickRefusal.EXPIRY_NOT_LISTED, 2),  # session 7
         (PickRefusal.EXPIRY_NOT_A_SESSION, 0),
         (PickRefusal.STRIKE_NOT_LISTED, 3),  # 2 in session 5, 1 in 7
         (PickRefusal.NOT_STANDARD, 0),
-    )
+    ), "the refused picks are counted by reason"
 
 
 def test_each_refusal_of_a_sale_or_its_cover_is_its_own_count_and_apart_from_the_count_for_cash() -> None:
@@ -431,37 +435,20 @@ def test_each_refusal_of_a_sale_or_its_cover_is_its_own_count_and_apart_from_the
     assert summary.entries_refused_for_cash == 6
 
 
-def test_a_run_that_only_buys_counts_each_refusal_of_a_sale_as_none_and_not_as_not_recorded() -> None:
-    summary = summarize_run(_scene(), starting_cash_usd=STARTING)
-
-    # Recorded and zero is a different thing from "not recorded", which is a run stored before they were counted.
-    assert summary.entries_refused_by_reason == (
-        (EntryRefusal.OTHER_SIDE, 0),
-        (EntryRefusal.SECOND_EXPIRY, 0),
-        (EntryRefusal.COVER_DID_NOT_TRADE, 0),
-        (EntryRefusal.COVER_NOT_YET_HELD, 0),
-        (EntryRefusal.SALE_AT_ZERO, 0),
-    )
-
-
-def test_a_refusal_event_with_no_reason_is_not_counted_by_a_guess() -> None:
+@pytest.mark.parametrize(
+    "kind",
+    [EventKind.ENTRY_REFUSED_FOR_COVER, EventKind.PICK_REFUSED],
+    ids=[
+        "a refusal event with no reason is not counted by a guess",
+        "a pick refused event with no reason is not left out of the counts",
+    ],
+)
+def test_a_refusal_event_with_no_reason_is_refused(kind: EventKind) -> None:
     session = a_session(
         SEP_29,
         "10000.00",
         status=SessionStatus.NO_TRADE,
-        events=(an_event(EventKind.ENTRY_REFUSED_FOR_COVER, "short"),),
-    )
-
-    with pytest.raises(ValueError, match="carries no reason"):
-        summarize_run([session], starting_cash_usd=STARTING)
-
-
-def test_a_pick_refused_event_with_no_reason_is_not_left_out_of_the_counts() -> None:
-    session = a_session(
-        SEP_29,
-        "10000.00",
-        status=SessionStatus.NO_TRADE,
-        events=(an_event(EventKind.PICK_REFUSED, "short"),),
+        events=(an_event(kind, "short"),),
     )
 
     with pytest.raises(ValueError, match="carries no reason"):
@@ -638,7 +625,7 @@ def test_a_re_entry_lost_is_counted_as_lost_and_again_under_the_cause_that_lost_
     assert summary.entries_dropped == dropped
 
 
-def test_the_by_day_table_has_a_row_for_every_session_in_order() -> None:
+def test_the_scene_summary_has_a_by_day_row_for_every_session_in_order_and_a_by_month_row_adding_them_up() -> None:
     summary = summarize_run(_scene(), starting_cash_usd=STARTING)
 
     # (session open in ms UTC, status, trades, net profit, fees, trades won, trades lost, trades break even). A session
@@ -664,38 +651,48 @@ def test_the_by_day_table_has_a_row_for_every_session_in_order() -> None:
         (OPEN_MS[OCT_5], SessionStatus.INCOMPLETE, 1, D("49.35"), D("0.65"), 1, 0, 0),
         (OPEN_MS[OCT_6], SessionStatus.TRADED, 2, D("-29.20"), D("5.20"), 1, 1, 0),
         (OPEN_MS[OCT_7], SessionStatus.TRADED, 1, D("100.00"), D("0"), 1, 0, 0),
-    ]
-    assert summary.by_day[2].skip_reason is SkipReason.UNDERLYING_DID_NOT_TRADE
-    assert summary.by_day[0].skip_reason is None
-
-
-def test_the_by_month_table_adds_up_the_sessions_of_each_month() -> None:
-    summary = summarize_run(_scene(), starting_cash_usd=STARTING)
+    ], "the by-day table has a row for every session in order"
+    assert summary.by_day[2].skip_reason is SkipReason.UNDERLYING_DID_NOT_TRADE, "the skipped day says why"
+    assert summary.by_day[0].skip_reason is None, "a traded day has no skip reason"
 
     september, october = summary.by_month
     # September: sessions 1 and 2. Two sessions, one traded; two trades (B won, A lost); -54.90; fees 3.90.
-    assert (september.year, september.month, september.sessions, september.sessions_traded) == (2026, 9, 2, 1)
-    assert (september.trades, september.net_profit_usd, september.fees_usd) == (2, D("-54.90"), D("3.90"))
-    assert (september.trades_won, september.trades_lost, september.trades_break_even) == (1, 1, 0)
+    assert (september.year, september.month, september.sessions, september.sessions_traded) == (2026, 9, 2, 1), (
+        "September holds two sessions, one traded"
+    )
+    assert (september.trades, september.net_profit_usd, september.fees_usd) == (2, D("-54.90"), D("3.90")), (
+        "September holds two trades, -54.90 net, 3.90 in fees"
+    )
+    assert (september.trades_won, september.trades_lost, september.trades_break_even) == (1, 1, 0), (
+        "September's trades: one won, one lost"
+    )
     assert september.sessions_by_status == (
         (SessionStatus.TRADED, 1),
         (SessionStatus.NO_TRADE, 1),
         (SessionStatus.SKIPPED, 0),
         (SessionStatus.INCOMPLETE, 0),
-    )
+    ), "September's sessions are counted by status"
     # October: sessions 3 to 7. Five sessions, four traded; five trades (F, C, G won, D lost, E broke even);
     # 0 + 49.35 - 29.20 + 100.00 = 120.15; fees 0.65 + 5.20 = 5.85.
-    assert (october.year, october.month, october.sessions, october.sessions_traded) == (2026, 10, 5, 4)
-    assert (october.trades, october.net_profit_usd, october.fees_usd) == (5, D("120.15"), D("5.85"))
-    assert (october.trades_won, october.trades_lost, october.trades_break_even) == (3, 1, 1)
+    assert (october.year, october.month, october.sessions, october.sessions_traded) == (2026, 10, 5, 4), (
+        "October holds five sessions, four traded"
+    )
+    assert (october.trades, october.net_profit_usd, october.fees_usd) == (5, D("120.15"), D("5.85")), (
+        "October holds five trades, 120.15 net, 5.85 in fees"
+    )
+    assert (october.trades_won, october.trades_lost, october.trades_break_even) == (3, 1, 1), (
+        "October's trades: three won, one lost, one broke even"
+    )
     assert october.sessions_by_status == (
         (SessionStatus.TRADED, 3),
         (SessionStatus.NO_TRADE, 0),
         (SessionStatus.SKIPPED, 1),
         (SessionStatus.INCOMPLETE, 1),
-    )
+    ), "October's sessions are counted by status"
     # The months add up to the run.
-    assert september.net_profit_usd + october.net_profit_usd == summary.net_profit_usd == D("65.25")
+    assert september.net_profit_usd + october.net_profit_usd == summary.net_profit_usd == D("65.25"), (
+        "the months add up to the run"
+    )
 
 
 def test_the_rows_count_trades_won_lost_and_even_and_not_the_sessions_that_had_them() -> None:
@@ -735,16 +732,29 @@ def test_the_rows_count_trades_won_lost_and_even_and_not_the_sessions_that_had_t
     assert (summary.trades_won, summary.trades_lost, summary.trades_break_even) == (3, 3, 2)
 
 
-def test_a_month_is_the_new_york_month_of_the_trading_date_and_the_table_follows_the_calendar_across_a_year() -> None:
-    last_of_2026, first_of_2027 = date(2026, 12, 31), date(2027, 1, 4)
-    sessions = [
-        a_session(last_of_2026, "10000.00", status=SessionStatus.NO_TRADE),
-        a_session(first_of_2027, "10000.00", status=SessionStatus.NO_TRADE),
-    ]
+@pytest.mark.parametrize(
+    ("dates", "expected"),
+    [
+        pytest.param(
+            (date(2026, 12, 31), date(2027, 1, 4)),
+            ((2026, 12, 1), (2027, 1, 1)),
+            id="a month is the new york month of the trading date and the table follows the calendar across a year",
+        ),
+        pytest.param(
+            (date(2026, 12, 30), date(2027, 12, 30)),
+            ((2026, 12, 1), (2027, 12, 1)),
+            id="the same month of two years is two rows",
+        ),
+    ],
+)
+def test_the_by_month_table_has_a_row_for_each_year_and_month_of_the_trading_dates(
+    dates: tuple[date, ...], expected: tuple[tuple[int, int, int], ...]
+) -> None:
+    sessions = [a_session(day, "10000.00", status=SessionStatus.NO_TRADE) for day in dates]
 
     summary = summarize_run(sessions, starting_cash_usd=STARTING)
 
-    assert [(row.year, row.month, row.sessions) for row in summary.by_month] == [(2026, 12, 1), (2027, 1, 1)]
+    assert [(row.year, row.month, row.sessions) for row in summary.by_month] == list(expected)
 
 
 def test_a_months_year_and_month_are_those_of_the_new_york_date_of_the_open_and_not_of_the_utc_one() -> None:
@@ -796,17 +806,6 @@ def test_a_session_is_without_momentum_when_a_leg_took_a_starting_price_and_no_l
     ]
 
     assert summarize_run(sessions, starting_cash_usd=STARTING).sessions_without_momentum == 2
-
-
-def test_the_same_month_of_two_years_is_two_rows() -> None:
-    sessions = [
-        a_session(date(2026, 12, 30), "10000.00", status=SessionStatus.NO_TRADE),
-        a_session(date(2027, 12, 30), "10000.00", status=SessionStatus.NO_TRADE),
-    ]
-
-    summary = summarize_run(sessions, starting_cash_usd=STARTING)
-
-    assert [(row.year, row.month, row.sessions) for row in summary.by_month] == [(2026, 12, 1), (2027, 12, 1)]
 
 
 def test_a_trade_that_gained_on_the_price_and_lost_on_its_fees_is_a_lost_trade() -> None:
@@ -915,16 +914,15 @@ def test_a_ratio_divides_by_something_above_zero() -> None:
         Ratio(D("1"), D("-2"))
 
 
-def test_a_ratio_display_percent_rounds_the_exact_fraction() -> None:
-    assert Ratio(D(217), D(471)).percent_1_place() == D("46.1")
-    assert Ratio(D("960"), D("10837.90")).percent_1_place() == D("8.9")
-    assert Ratio(D(1), D(16)).percent_1_place() == D("6.2")
-
-
-def test_a_ratio_does_not_depend_on_the_decimal_context_it_is_asked_in() -> None:
+def test_a_ratio_display_percent_rounds_the_exact_fraction_whatever_the_decimal_context_it_is_asked_in() -> None:
+    assert Ratio(D(217), D(471)).percent_1_place() == D("46.1"), "217 / 471 shows as 46.1 percent"
+    assert Ratio(D("960"), D("10837.90")).percent_1_place() == D("8.9"), "960 / 10837.90 shows as 8.9 percent"
+    assert Ratio(D(1), D(16)).percent_1_place() == D("6.2"), "1 / 16 shows as 6.2 percent"
     with localcontext(Context(prec=3)):
-        assert Ratio(D("245.75"), D("180.50")).rounded_to_6_places() == D("1.361496")
-        assert Ratio(D("1"), D("8")).exact() == D("0.125")
+        assert Ratio(D("245.75"), D("180.50")).rounded_to_6_places() == D("1.361496"), (
+            "a ratio rounds the same in a three-digit decimal context"
+        )
+        assert Ratio(D("1"), D("8")).exact() == D("0.125"), "a ratio is as exact in a three-digit decimal context"
 
 
 def _big_scene() -> list[SessionResult]:
@@ -1013,17 +1011,3 @@ def test_a_summary_is_the_same_in_a_six_digit_decimal_context_as_in_the_default_
     assert OCTOBER[4] == OCT_7
     assert drawdown.trough_session_open_ms == OPEN_MS[OCT_7] == 1_791_379_800_000
     assert drawdown.fall_ratio == Ratio(D("176010.53"), D("1302553.41"))
-
-
-def test_the_summary_is_exact_dollars_and_never_a_float() -> None:
-    summary = summarize_run(_scene(), starting_cash_usd=STARTING)
-
-    for name in (
-        "net_profit_usd",
-        "gross_profit_usd",
-        "gross_loss_usd",
-        "total_fees_usd",
-        "slippage_paid_usd",
-        "ending_cash_usd",
-    ):
-        assert isinstance(getattr(summary, name), Decimal), name

@@ -169,21 +169,6 @@ async def test_post_ensure_data_known_symbol(make_data_lake_app, tmp_lake):
         await catalog_client.close_pool()
 
 
-async def test_post_ensure_data_422_on_bad_symbol(make_data_lake_app):
-    flag_on_app = make_data_lake_app(include_data_lake=True)
-    payload = {
-        "request_id": str(uuid4()),
-        "run_type": "python_lab",
-        "symbols": ["spy"],  # lowercase — rejected by validator
-        "start_trading_date_ms": trading_date_to_calendar_anchor_ms(date(2024, 5, 20)),
-        "end_trading_date_ms": trading_date_to_calendar_anchor_ms(date(2024, 5, 24)),
-        "lean_image_digest": "sha256:test",
-    }
-    async with AsyncClient(transport=ASGITransport(app=flag_on_app), base_url="http://test") as client:
-        r = await client.post("/api/data-lake/ensure-data", json=payload)
-    assert r.status_code == 422
-
-
 # ---------------------------------------------------------------------------
 # #1877 boundary matrix — POST-body trading dates become anchored ms.
 # The rejection cases below need no Postgres: DataRunSpec's own validation
@@ -212,44 +197,30 @@ async def _post_ensure_data(make_data_lake_app, payload: dict):
         return await client.post("/api/data-lake/ensure-data", json=payload)
 
 
-async def test_ensure_data_iso_strings_on_ms_fields_rejected(make_data_lake_app):
-    payload = _valid_ensure_data_payload(start_trading_date_ms="2024-05-20", end_trading_date_ms="2024-05-24")
-    r = await _post_ensure_data(make_data_lake_app, payload)
-    assert r.status_code == 422
+_START_MS = trading_date_to_calendar_anchor_ms(date(2024, 5, 20))
+_END_MS = trading_date_to_calendar_anchor_ms(date(2024, 5, 24))
 
 
-async def test_ensure_data_non_integer_value_rejected(make_data_lake_app):
-    payload = _valid_ensure_data_payload(start_trading_date_ms=1716206400000.5)
-    r = await _post_ensure_data(make_data_lake_app, payload)
-    assert r.status_code == 422
-
-
-async def test_ensure_data_value_outside_signed_int64_rejected(make_data_lake_app):
-    payload = _valid_ensure_data_payload(start_trading_date_ms=2**63)
-    r = await _post_ensure_data(make_data_lake_app, payload)
-    assert r.status_code == 422
-
-
-async def test_ensure_data_off_anchor_milliseconds_rejected(make_data_lake_app):
-    off_anchor = trading_date_to_calendar_anchor_ms(date(2024, 5, 20)) + 1
-    payload = _valid_ensure_data_payload(start_trading_date_ms=off_anchor)
-    r = await _post_ensure_data(make_data_lake_app, payload)
-    assert r.status_code == 422
-
-
-async def test_ensure_data_reversed_range_rejected(make_data_lake_app):
+@pytest.mark.parametrize(
+    ("symbols", "start_ms", "end_ms"),
+    [
+        pytest.param(("spy",), _START_MS, _END_MS, id="bad_symbol_lowercase_rejected_by_validator"),
+        pytest.param(("SPY",), "2024-05-20", "2024-05-24", id="iso_strings_on_ms_fields"),
+        pytest.param(("SPY",), 1716206400000.5, _END_MS, id="non_integer_value"),
+        pytest.param(("SPY",), 2**63, _END_MS, id="value_outside_signed_int64"),
+        pytest.param(("SPY",), _START_MS + 1, _END_MS, id="off_anchor_milliseconds"),
+        pytest.param(("SPY",), _END_MS, _START_MS, id="reversed_range"),
+        pytest.param(
+            ("SPY",),
+            trading_date_to_calendar_anchor_ms(date(2018, 1, 1)),
+            trading_date_to_calendar_anchor_ms(date(2024, 12, 31)),  # ~7 years
+            id="range_over_max_cap",
+        ),
+    ],
+)
+async def test_ensure_data_invalid_body_rejected(make_data_lake_app, symbols, start_ms, end_ms):
     payload = _valid_ensure_data_payload(
-        start_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 24)),
-        end_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 5, 20)),
-    )
-    r = await _post_ensure_data(make_data_lake_app, payload)
-    assert r.status_code == 422
-
-
-async def test_ensure_data_range_over_max_cap_rejected(make_data_lake_app):
-    payload = _valid_ensure_data_payload(
-        start_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2018, 1, 1)),
-        end_trading_date_ms=trading_date_to_calendar_anchor_ms(date(2024, 12, 31)),  # ~7 years
+        symbols=list(symbols), start_trading_date_ms=start_ms, end_trading_date_ms=end_ms
     )
     r = await _post_ensure_data(make_data_lake_app, payload)
     assert r.status_code == 422

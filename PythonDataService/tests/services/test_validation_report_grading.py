@@ -9,6 +9,8 @@ grade and names the minimum it failed.
 
 from __future__ import annotations
 
+import pytest
+
 from app.services.validation_service import generate_validation_report
 
 
@@ -30,7 +32,7 @@ def _tv_csv(rows: int, *, value: float = 100.0, missing_from: int = 0) -> bytes:
     return _csv("\n".join(lines))
 
 
-def test_thin_coverage_withholds_the_grade_and_names_the_minimum() -> None:
+def test_thin_coverage_withholds_the_grade_and_the_per_field_table_shows_missing_counts() -> None:
     """1,000 aligned rows where TradingView is missing 999 values cannot grade.
 
     On master the single surviving pair is 100% exact, so the report
@@ -40,10 +42,16 @@ def test_thin_coverage_withholds_the_grade_and_names_the_minimum() -> None:
         _our_csv(1_000), _tv_csv(1_000, missing_from=999), "SPY"
     )
 
-    assert "Excellent" not in report
-    assert "insufficient comparable evidence" in report
-    assert "80% minimum" in report
-    assert "Overall grade" in report  # the withheld grade is explained, not absent
+    assert "Excellent" not in report, "thin coverage (#2461) must not say Excellent"
+    assert "insufficient comparable evidence" in report, "thin coverage (#2461) names the insufficient evidence"
+    assert "80% minimum" in report, "thin coverage (#2461) names the 80% minimum"
+    # The withheld grade is explained, not absent.
+    assert "Overall grade" in report, "thin coverage (#2461) explains the withheld grade"
+    assert "Missing (ours)" in report, "per-field table shows the missing count on our side"
+    assert "Missing (TradingView)" in report, "per-field table shows the missing count on TradingView's side"
+    assert "Missing (both)" in report, "per-field table shows the missing count on both sides"
+    assert "Coverage" in report, "per-field table shows the coverage"
+    assert "| ema10 | 1,000 | 1 | 0.1% | 0 | 999 | 0 |" in report, "per-field table row for ema10"
 
 
 def test_duplicate_time_keys_invalidate_the_comparison_with_counts() -> None:
@@ -83,28 +91,15 @@ def test_positional_pairing_is_labelled_unverified_and_gets_no_grade() -> None:
     assert "Significant divergence" not in report
 
 
-def test_per_field_table_shows_missing_counts_on_each_side_and_coverage() -> None:
-    report = generate_validation_report(
-        _our_csv(1_000), _tv_csv(1_000, missing_from=999), "SPY"
-    )
+@pytest.mark.parametrize(
+    ("tv_value", "grade"),
+    [(100.0, "Excellent"), (200.0, "Significant divergence")],
+    ids=["identical-fully-aligned-files-still-grade-excellent", "different-values-still-grade-significant-divergence"],
+)
+def test_fully_aligned_files_still_grade_by_their_values(tv_value: float, grade: str) -> None:
+    report = generate_validation_report(_our_csv(50), _tv_csv(50, value=tv_value), "SPY")
 
-    assert "Missing (ours)" in report
-    assert "Missing (TradingView)" in report
-    assert "Missing (both)" in report
-    assert "Coverage" in report
-    assert "| ema10 | 1,000 | 1 | 0.1% | 0 | 999 | 0 |" in report
-
-
-def test_identical_fully_aligned_files_still_grade_excellent() -> None:
-    report = generate_validation_report(_our_csv(50), _tv_csv(50), "SPY")
-
-    assert "Excellent" in report
-
-
-def test_aligned_files_with_different_values_still_grade_significant_divergence() -> None:
-    report = generate_validation_report(_our_csv(50), _tv_csv(50, value=200.0), "SPY")
-
-    assert "Significant divergence" in report
+    assert grade in report
 
 
 def test_match_rate_never_exceeds_100_and_unmatched_never_negative() -> None:

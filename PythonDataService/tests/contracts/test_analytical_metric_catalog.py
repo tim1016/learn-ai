@@ -23,35 +23,40 @@ CONTRACT_PATH = REPOSITORY_ROOT / "contracts" / "strategy-lab" / "analytical-met
 GENERATOR_PATH = REPOSITORY_ROOT / "PythonDataService" / "scripts" / "export_analytical_metric_catalog.py"
 
 
-def test_catalog_contains_the_two_source_aware_sharpe_variants() -> None:
+def test_catalog_contains_the_two_source_aware_sharpe_variants_and_never_shares_metric_id_and_producer() -> None:
     result = catalog()
     variants = {variant.variant_id: variant for variant in result.variants}
 
-    assert result.catalog_version == CATALOG_VERSION
-    assert len(result.variants) == 136
-    assert {"sharpe.platform.v1", "sharpe.lean_native.v1"} <= set(variants)
+    assert result.catalog_version == CATALOG_VERSION, "the catalog carries CATALOG_VERSION"
+    assert len(result.variants) == 136, "the catalog holds 136 variants"
+    assert {"sharpe.platform.v1", "sharpe.lean_native.v1"} <= set(variants), (
+        "both source-aware Sharpe variants are in the catalog"
+    )
     assert all(
         alternative in variants
         for variant in result.variants
         for alternative in variant.alternative_variant_ids
-    )
+    ), "every alternative_variant_id names a variant in the catalog"
     assert {variant.category for variant in result.variants} == {
         "returns", "risk", "drawdown", "benchmark", "trade_population", "trade_economics",
         "duration", "excursion", "statistical_confidence", "validation_atlas", "runtime_snapshot", "verdict_policy",
-    }
-    assert PLATFORM_SHARPE_VARIANT.formula_latex is not None
-    assert LEAN_NATIVE_SHARPE_VARIANT.formula_latex is not None
-    assert PLATFORM_SHARPE_VARIANT.alternative_variant_ids == (LEAN_NATIVE_SHARPE_VARIANT.variant_id,)
-    assert LEAN_NATIVE_SHARPE_VARIANT.alternative_variant_ids == (PLATFORM_SHARPE_VARIANT.variant_id,)
+    }, "the catalog's categories are exactly the documented set"
+    assert PLATFORM_SHARPE_VARIANT.formula_latex is not None, "the platform Sharpe variant carries a latex formula"
+    assert LEAN_NATIVE_SHARPE_VARIANT.formula_latex is not None, (
+        "the lean-native Sharpe variant carries a latex formula"
+    )
+    assert PLATFORM_SHARPE_VARIANT.alternative_variant_ids == (LEAN_NATIVE_SHARPE_VARIANT.variant_id,), (
+        "the platform Sharpe variant's one alternative is the lean-native variant"
+    )
+    assert LEAN_NATIVE_SHARPE_VARIANT.alternative_variant_ids == (PLATFORM_SHARPE_VARIANT.variant_id,), (
+        "the lean-native Sharpe variant's one alternative is the platform variant"
+    )
 
-
-def test_catalog_never_lets_two_variants_share_metric_id_and_producer() -> None:
     # frontend resolveMetricContext() filters by metric_id then .find()s a
     # producer match; two distinct variants sharing (metric_id, producer)
     # means one is unreachable and the other is picked arbitrarily. Portfolio
     # vs. trade Sortino/Sharpe/Win rate previously collapsed to the same
     # semantic metric_id despite being genuinely different calculations.
-    result = catalog()
     seen: dict[tuple[str, str], str] = {}
     collisions: list[str] = []
     for variant in result.variants:
@@ -61,7 +66,7 @@ def test_catalog_never_lets_two_variants_share_metric_id_and_producer() -> None:
         else:
             seen[key] = variant.variant_id
 
-    assert collisions == []
+    assert collisions == [], "no two variants share a (metric_id, producer) pair"
 
 
 def test_new_run_context_records_the_producer_and_contract() -> None:
@@ -122,13 +127,29 @@ def test_new_run_context_records_the_producer_and_contract() -> None:
     )
 
 
-def test_catalog_rejects_broken_comparison_references() -> None:
-    broken_platform = PLATFORM_SHARPE_VARIANT.model_copy(
-        update={"alternative_variant_ids": ("missing.variant.v1",)},
-    )
+@pytest.mark.parametrize(
+    ("platform_changes", "lean_native_changes", "error"),
+    [
+        pytest.param(
+            (("alternative_variant_ids", ("missing.variant.v1",)),),
+            (),
+            "missing alternatives",
+            id="broken-comparison-references",
+        ),
+        pytest.param((), (("metric_id", "sortino"),), "same metric_id", id="cross-metric-comparisons"),
+        pytest.param((), (("alternative_variant_ids", ()),), "reciprocal", id="one-sided-comparisons"),
+    ],
+)
+def test_catalog_rejects_broken_cross_metric_and_one_sided_comparisons(
+    platform_changes: tuple[tuple[str, object], ...],
+    lean_native_changes: tuple[tuple[str, object], ...],
+    error: str,
+) -> None:
+    platform = PLATFORM_SHARPE_VARIANT.model_copy(update=dict(platform_changes))
+    lean_native = LEAN_NATIVE_SHARPE_VARIANT.model_copy(update=dict(lean_native_changes))
 
-    with pytest.raises(ValueError, match="missing alternatives"):
-        AnalyticalMetricCatalog(catalog_version=CATALOG_VERSION, variants=(broken_platform, LEAN_NATIVE_SHARPE_VARIANT))
+    with pytest.raises(ValueError, match=error):
+        AnalyticalMetricCatalog(catalog_version=CATALOG_VERSION, variants=(platform, lean_native))
 
 
 def test_catalog_rejects_duplicate_variant_ids() -> None:
@@ -136,26 +157,6 @@ def test_catalog_rejects_duplicate_variant_ids() -> None:
         AnalyticalMetricCatalog(
             catalog_version=CATALOG_VERSION,
             variants=(PLATFORM_SHARPE_VARIANT, PLATFORM_SHARPE_VARIANT),
-        )
-
-
-def test_catalog_rejects_cross_metric_comparisons() -> None:
-    foreign = LEAN_NATIVE_SHARPE_VARIANT.model_copy(update={"metric_id": "sortino"})
-
-    with pytest.raises(ValueError, match="same metric_id"):
-        AnalyticalMetricCatalog(
-            catalog_version=CATALOG_VERSION,
-            variants=(PLATFORM_SHARPE_VARIANT, foreign),
-        )
-
-
-def test_catalog_rejects_one_sided_comparisons() -> None:
-    one_sided = LEAN_NATIVE_SHARPE_VARIANT.model_copy(update={"alternative_variant_ids": ()})
-
-    with pytest.raises(ValueError, match="reciprocal"):
-        AnalyticalMetricCatalog(
-            catalog_version=CATALOG_VERSION,
-            variants=(PLATFORM_SHARPE_VARIANT, one_sided),
         )
 
 

@@ -215,7 +215,7 @@ async def _execute(
 
 
 @respx.mock
-async def test_a_request_becomes_a_saved_run_with_every_figure_the_hand_worked_scene_says(
+async def test_a_request_becomes_a_saved_run_with_every_figure_the_scene_says_and_the_job_reports_its_work(
     fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
     Vendor(the_scene()).mount()
@@ -224,73 +224,82 @@ async def test_a_request_becomes_a_saved_run_with_every_figure_the_hand_worked_s
     returned = await _execute(store, job)
 
     [(run_id, saved, finished_at_ms)] = store.completed
-    assert returned is saved and run_id == 7 and finished_at_ms == FINISHED_AT_MS
-    assert store.failed == [] and store.cancelled == []
+    assert (
+        returned is saved and run_id == 7 and finished_at_ms == FINISHED_AT_MS
+    ), "the run is saved once, as the run returned, under its id and the finishing clock reading"
+    assert store.failed == [] and store.cancelled == [], "a saved run is not also recorded as failed or cancelled"
     summary = saved.summary
     assert [(s.session_open_ms, s.status) for s in saved.sessions] == [
         (_open(TUE), SessionStatus.INCOMPLETE),
         (_open(WED), SessionStatus.TRADED),
         (_open(THU), SessionStatus.TRADED),
         (_open(FRI), SessionStatus.NO_TRADE),
-    ]
-    assert [s.pnl_usd for s in saved.sessions] == [D("-52.65"), D("36.70"), D("-53.30"), D("0")]
-    assert [s.cash_after_usd for s in saved.sessions] == [D("9947.35"), D("9984.05"), D("9930.75"), D("9930.75")]
+    ], "each session's status: Tuesday incomplete, Wednesday and Thursday traded, Friday no trade"
+    assert [s.pnl_usd for s in saved.sessions] == [
+        D("-52.65"),
+        D("36.70"),
+        D("-53.30"),
+        D("0"),
+    ], "each session's profit"
+    assert [s.cash_after_usd for s in saved.sessions] == [
+        D("9947.35"),
+        D("9984.05"),
+        D("9930.75"),
+        D("9930.75"),
+    ], "each session's cash after"
     assert (
         summary.sessions_tested,
         summary.sessions_traded,
         summary.sessions_no_trade,
         summary.sessions_incomplete,
-    ) == (4, 3, 1, 1)
-    assert (summary.trades, summary.trades_won, summary.trades_lost) == (3, 1, 2)
-    assert summary.net_profit_usd == D("-69.25")
-    assert (summary.gross_profit_usd, summary.gross_loss_usd) == (D("36.70"), D("105.95"))
-    assert (summary.total_fees_usd, summary.slippage_paid_usd) == (D("3.25"), D("6.00"))
-    assert summary.ending_cash_usd == D("9930.75")
+    ) == (4, 3, 1, 1), "sessions tested, traded, no trade and incomplete"
+    assert (summary.trades, summary.trades_won, summary.trades_lost) == (3, 1, 2), "trades, won and lost"
+    assert summary.net_profit_usd == D("-69.25"), "net profit"
+    assert (summary.gross_profit_usd, summary.gross_loss_usd) == (D("36.70"), D("105.95")), "gross profit and loss"
+    assert (summary.total_fees_usd, summary.slippage_paid_usd) == (D("3.25"), D("6.00")), "fees and slippage paid"
+    assert summary.ending_cash_usd == D("9930.75"), "ending cash"
     drawdown = summary.drawdown_by_dollars
-    assert drawdown is not None
+    assert drawdown is not None, "the run has a drawdown"
     assert (drawdown.peak_equity_usd, drawdown.trough_equity_usd, drawdown.fall_usd) == (
         D("10000.00"),
         D("9930.75"),
         D("69.25"),
-    )
-    assert drawdown.peak_session_open_ms is None and drawdown.trough_session_open_ms == _open(THU)
+    ), "the drawdown's peak, trough and fall"
+    assert (
+        drawdown.peak_session_open_ms is None and drawdown.trough_session_open_ms == _open(THU)
+    ), "the peak is the starting cash and the trough is Thursday's open"
 
-
-@respx.mock
-async def test_the_ladder_replays_the_whole_run_and_a_run_that_loses_even_with_no_slippage_survives_none(
-    fake_catalog: FakeCatalog, tmp_lake: Path
-) -> None:
-    Vendor(the_scene()).mount()
-    store = FakeStore()
-
-    await _execute(store, Job())
-
-    saved = store.completed[0][1]
     by_percent = {point.slippage_percent: point for point in saved.slippage}
-    assert by_percent[D("0")].net_profit_usd == D("-63.25") and by_percent[D("0")].trades == 3
-    assert by_percent[D("0.3")].net_profit_usd == D("-69.25") and by_percent[D("0.3")].is_setups_own
-    assert saved.slippage_tolerance.highest_profitable_percent is None
-    assert saved.slippage_tolerance.first_unprofitable_percent == D("0")
+    assert (
+        by_percent[D("0")].net_profit_usd == D("-63.25") and by_percent[D("0")].trades == 3
+    ), "the ladder replays the whole run: at no slippage it loses 63.25 over three trades"
+    assert (
+        by_percent[D("0.3")].net_profit_usd == D("-69.25") and by_percent[D("0.3")].is_setups_own
+    ), "the ladder's rung at the setup's own 0.3 percent is the run itself"
+    assert (
+        saved.slippage_tolerance.highest_profitable_percent is None
+    ), "a run that loses even with no slippage survives none: no profitable slippage"
+    assert saved.slippage_tolerance.first_unprofitable_percent == D("0"), "the first unprofitable slippage is none"
 
-
-@respx.mock
-async def test_the_job_reports_its_phases_in_order_and_progress_in_sessions(
-    fake_catalog: FakeCatalog, tmp_lake: Path
-) -> None:
-    Vendor(the_scene()).mount()
-    job = Job()
-
-    await _execute(FakeStore(), job)
-
-    assert job.phases == ["checking_data", "downloading_data", "replaying", "saving"]
+    assert job.phases == [
+        "checking_data",
+        "downloading_data",
+        "replaying",
+        "saving",
+    ], "the job reports its phases in order"
     registered = [phase.id for phase in JOB_PHASES["options_backtest"]]
-    assert [registered.index(phase) for phase in job.phases] == sorted(registered.index(phase) for phase in job.phases)
+    assert [registered.index(phase) for phase in job.phases] == sorted(
+        registered.index(phase) for phase in job.phases
+    ), "the phases are reported in the order they are registered"
+    assert [(phase, done, total) for phase, done, total in job.progress if phase == "checking_data"] == [
+        ("checking_data", n, 4) for n in (1, 2, 3, 4)
+    ], "checking_data reports its progress in sessions like the other phases"
     assert [(phase, done, total) for phase, done, total in job.progress if phase == "downloading_data"] == [
         ("downloading_data", n, 4) for n in (1, 2, 3, 4)
-    ]
+    ], "downloading_data reports its progress in sessions"
     assert [(phase, done, total) for phase, done, total in job.progress if phase == "replaying"] == [
         ("replaying", n, 4) for n in (1, 2, 3, 4)
-    ]
+    ], "replaying reports its progress in sessions"
 
 
 @respx.mock
@@ -596,24 +605,25 @@ def test_an_unpublished_fee_rate_fails_with_its_session_and_types() -> None:
 
 
 @pytest.mark.parametrize(
-    "error",
+    ("error", "says"),
     [
-        LakeAdmissionError("no receipt"),
-        UnderlyingDayUnreadable("bad zip"),
+        pytest.param(LakeAdmissionError("no receipt"), "LakeAdmissionError", id="a-stored-file-without-a-receipt"),
+        pytest.param(UnderlyingDayUnreadable("bad zip"), "UnderlyingDayUnreadable", id="a-stored-day-of-bad-zip"),
+        pytest.param(
+            MalformedBars("the underlying on 2026-10-07: a bar closing at 1 comes twice"),
+            "rules of a bar",
+            id="stored-bars-that-break-the-rules-of-a-bar",
+        ),
     ],
 )
-def test_a_stored_file_that_cannot_be_read_is_a_failure_that_says_so(error: Exception) -> None:
+def test_a_stored_file_or_stored_bars_that_cannot_be_read_are_a_failure_that_says_so(
+    error: Exception, says: str
+) -> None:
     failure = failure_of(error)
 
-    assert failure.code == "DATA_UNREADABLE"
-    assert type(error).__name__ in failure.reason and "Nothing was saved" in failure.reason
-
-
-def test_stored_bars_that_break_the_rules_of_a_bar_are_a_failure_that_says_so() -> None:
-    failure = failure_of(MalformedBars("the underlying on 2026-10-07: a bar closing at 1 comes twice"))
-
-    assert failure.code == "DATA_UNREADABLE"
-    assert "rules of a bar" in failure.reason and "Nothing was saved" in failure.reason
+    assert failure.code == "DATA_UNREADABLE", "an unreadable stored file or stored bars fail the run as DATA_UNREADABLE"
+    assert says in failure.reason, "the failure names what could not be read"
+    assert "Nothing was saved" in failure.reason, "the failure says nothing was saved"
 
 
 def test_an_unreachable_catalog_and_a_wait_that_ran_out_are_told_apart() -> None:
@@ -893,20 +903,6 @@ async def test_a_cancel_during_check_data_marks_the_run_cancelled_before_anythin
 
 
 @respx.mock
-async def test_check_data_reports_its_progress_in_sessions_like_the_other_phases(
-    fake_catalog: FakeCatalog, tmp_lake: Path
-) -> None:
-    Vendor(the_scene()).mount()
-    job = Job()
-
-    await _execute(FakeStore(), job)
-
-    assert [(phase, done, total) for phase, done, total in job.progress if phase == "checking_data"] == [
-        ("checking_data", n, 4) for n in (1, 2, 3, 4)
-    ]
-
-
-@respx.mock
 async def test_a_save_that_takes_longer_than_the_run_waits_is_a_failure_of_its_own_and_not_a_download_failure(
     fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
@@ -999,23 +995,6 @@ async def test_if_recording_the_end_fails_twice_the_run_id_is_logged_the_row_sta
 # ── The range ────────────────────────────────────────────────────────────
 
 
-def test_a_range_is_the_sessions_between_new_york_midnight_of_the_first_date_and_the_end_of_the_last() -> None:
-    # Saturday 10-03 to Sunday 10-11 holds the sessions of two weeks, less the weekend days.
-    start_ms, end_ms = et_midnight_ms(date(2026, 10, 3)), et_day_end_ms(date(2026, 10, 11))
-
-    assert sessions_of_range(start_ms, end_ms) == (
-        date(2026, 10, 5),
-        TUE,
-        WED,
-        THU,
-        FRI,
-    )
-
-
-def test_an_end_at_new_york_midnight_leaves_that_day_out() -> None:
-    assert sessions_of_range(et_midnight_ms(WED), et_midnight_ms(FRI)) == (WED, THU)
-
-
 def test_a_range_of_a_weekend_holds_no_session_and_an_empty_or_reversed_one_is_refused() -> None:
     saturday, sunday = date(2026, 10, 10), date(2026, 10, 11)
     for start_ms, end_ms, code in (
@@ -1047,13 +1026,32 @@ FRI_03_06, SUN_03_08, MON_03_09, TUE_03_10 = 1_772_773_200_000, 1_772_946_000_00
 FRI_10_30, SUN_11_01, MON_11_02, TUE_11_03 = 1_793_332_800_000, 1_793_505_600_000, 1_793_595_600_000, 1_793_682_000_000
 
 
-def test_a_range_may_start_or_end_on_a_day_the_clocks_change_because_that_days_midnight_is_still_a_midnight() -> None:
-    # Friday to the end of Sunday (Monday's midnight), a range whose last date is a clock-change Sunday, in both seasons.
-    assert sessions_of_range(FRI_03_06, MON_03_09) == (date(2026, 3, 6),)
-    assert sessions_of_range(FRI_10_30, MON_11_02) == (date(2026, 10, 30),)
-    # From the Sunday itself to the Monday's end (Tuesday's midnight): the Monday is the session.
-    assert sessions_of_range(SUN_03_08, TUE_03_10) == (date(2026, 3, 9),)
-    assert sessions_of_range(SUN_11_01, TUE_11_03) == (date(2026, 11, 2),)
+@pytest.mark.parametrize(
+    ("start_ms", "end_ms", "sessions"),
+    [
+        # Saturday 10-03 to Sunday 10-11 holds the sessions of two weeks, less the weekend days.
+        pytest.param(
+            et_midnight_ms(date(2026, 10, 3)),
+            et_day_end_ms(date(2026, 10, 11)),
+            (date(2026, 10, 5), TUE, WED, THU, FRI),
+            id="from-new-york-midnight-of-the-first-date-to-the-end-of-the-last",
+        ),
+        pytest.param(
+            et_midnight_ms(WED), et_midnight_ms(FRI), (WED, THU), id="an-end-at-new-york-midnight-leaves-that-day-out"
+        ),
+        # Friday to the end of Sunday (Monday's midnight), a range whose last date is a clock-change Sunday, in both
+        # seasons.
+        pytest.param(FRI_03_06, MON_03_09, (date(2026, 3, 6),), id="ends-on-the-spring-clock-change-sunday"),
+        pytest.param(FRI_10_30, MON_11_02, (date(2026, 10, 30),), id="ends-on-the-fall-clock-change-sunday"),
+        # From the Sunday itself to the Monday's end (Tuesday's midnight): the Monday is the session.
+        pytest.param(SUN_03_08, TUE_03_10, (date(2026, 3, 9),), id="starts-on-the-spring-clock-change-sunday"),
+        pytest.param(SUN_11_01, TUE_11_03, (date(2026, 11, 2),), id="starts-on-the-fall-clock-change-sunday"),
+    ],
+)
+def test_a_range_is_the_sessions_between_its_new_york_midnights_even_on_a_day_the_clocks_change(
+    start_ms: int, end_ms: int, sessions: tuple[date, ...]
+) -> None:
+    assert sessions_of_range(start_ms, end_ms) == sessions
 
 
 @pytest.mark.parametrize(

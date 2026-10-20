@@ -50,18 +50,27 @@ def _strikes(window: tuple[WindowContract, ...], right: str = "call") -> list[in
 
 
 @pytest.mark.parametrize(
-    ("strike", "watched"),
+    ("strike", "money", "watched"),
     [
-        pytest.param(_AT_THE_MONEY, [583, 584, 585, 586, 587], id="at the money"),
-        pytest.param({"selector": "atm_offset", "offset": 3}, [586, 587, 588, 589, 590], id="three strikes up"),
-        pytest.param({"selector": "atm_offset", "offset": -3}, [580, 581, 582, 583, 584], id="three strikes down"),
-        pytest.param({"selector": "percent", "percent": 2.0}, [595, 596, 597, 598, 599], id="2% up is 596.70: around 597"),
-        pytest.param({"selector": "delta", "target": 0.30}, [583, 584, 585, 586, 587], id="a delta aims at the money"),
-        pytest.param({"selector": "absolute", "strike": 590.0}, [590], id="a named strike is watched alone"),
+        pytest.param(_AT_THE_MONEY, "585.00", [583, 584, 585, 586, 587], id="at the money"),
+        pytest.param({"selector": "atm_offset", "offset": 3}, "585.00", [586, 587, 588, 589, 590], id="three strikes up"),
+        pytest.param({"selector": "atm_offset", "offset": -3}, "585.00", [580, 581, 582, 583, 584], id="three strikes down"),
+        pytest.param({"selector": "percent", "percent": 2.0}, "585.00", [595, 596, 597, 598, 599], id="2% up is 596.70: around 597"),
+        pytest.param({"selector": "delta", "target": 0.30}, "585.00", [583, 584, 585, 586, 587], id="a delta aims at the money"),
+        pytest.param({"selector": "absolute", "strike": 590.0}, "585.00", [590], id="a named strike is watched alone"),
+        pytest.param(
+            _AT_THE_MONEY, "585.50", [583, 584, 585, 586, 587], id="the money between two strikes centres the window on the lower"
+        ),
+        pytest.param(
+            _AT_THE_MONEY, "585.51", [584, 585, 586, 587, 588], id="the money a cent past the middle centres the window on the upper"
+        ),
+        pytest.param(_AT_THE_MONEY, "609.20", [607, 608, 609, 610], id="a window stops at the end of the ladder"),
+        # Counted past the last listed strike, a rule aims at nothing listed, and only what is in reach is watched.
+        pytest.param({"selector": "atm_offset", "offset": 3}, "609.20", [610], id="a rule counted past the end of the ladder"),
     ],
 )
-def test_a_legs_window_is_the_listed_strikes_around_where_its_rule_aims(strike: dict, watched: list[int]) -> None:
-    window = _window(scenes._one("call", strike))
+def test_a_legs_window_is_the_listed_strikes_around_where_its_rule_aims(strike: dict, money: str, watched: list[int]) -> None:
+    window = _window(scenes._one("call", strike), money=money)
 
     assert _strikes(window) == watched
     assert {seen.contract.right for seen in window} == {"call"}
@@ -101,17 +110,6 @@ def test_a_contract_two_legs_want_is_as_near_as_the_nearer_wants_it() -> None:
     distance = {int(seen.contract.strike): seen.distance for seen in _window(plan)}
 
     assert distance == {583: 2, 584: 1, 585: 0, 586: 1, 587: 0, 588: 1, 589: 2}
-
-
-def test_the_money_between_two_strikes_centres_the_window_on_the_lower() -> None:
-    assert _strikes(_window(scenes._one("call", _AT_THE_MONEY), money="585.50")) == [583, 584, 585, 586, 587]
-    assert _strikes(_window(scenes._one("call", _AT_THE_MONEY), money="585.51")) == [584, 585, 586, 587, 588]
-
-
-def test_a_window_stops_at_the_end_of_the_ladder() -> None:
-    assert _strikes(_window(scenes._one("call", _AT_THE_MONEY), money="609.20")) == [607, 608, 609, 610]
-    # Counted past the last listed strike, a rule aims at nothing listed, and only what is in reach is watched.
-    assert _strikes(_window(scenes._one("call", {"selector": "atm_offset", "offset": 3}), money="609.20")) == [610]
 
 
 @pytest.mark.parametrize(

@@ -15,10 +15,21 @@ def _validate(limit: int = 5_000, multiplier: int = 1, **param_ranges):
     return validate_grid(SMA, strategy_key="sma_crossover", symbol="SPY", param_ranges=param_ranges, limit=limit, multiplier=multiplier)
 
 
-def test_a_well_formed_grid_reports_its_combination_count() -> None:
-    validated = _validate(short_window=ValueListRange((5.0, 10.0)), long_window=LowHighStepRange(20, 40, 10))
+@pytest.mark.parametrize(
+    ("ranges", "combinations"),
+    [
+        pytest.param(
+            (("short_window", ValueListRange((5.0, 10.0))), ("long_window", LowHighStepRange(20, 40, 10))),
+            6,
+            id="well_formed_grid_reports_its_combination_count",
+        ),
+        pytest.param((("short_window", LowHighStepRange(5.0, 5.0, 1e-20)),), 1, id="single_cell_range_ignores_the_step_size"),
+    ],
+)
+def test_a_valid_grid_reports_its_combination_count(ranges: tuple[tuple[str, ValueListRange | LowHighStepRange], ...], combinations: int) -> None:
+    validated = _validate(**dict(ranges))
 
-    assert validated.combinations == 6
+    assert validated.combinations == combinations
 
 
 def test_a_repeated_explicit_value_is_refused_naming_the_parameter() -> None:
@@ -70,28 +81,28 @@ def test_one_under_the_limit_is_admitted_and_one_over_is_refused() -> None:
         _validate(limit=4, long_window=LowHighStepRange(20, 60, 10))
 
 
-def test_a_step_below_float_resolution_is_an_invalid_grid_not_a_server_fault() -> None:
-    with pytest.raises(GridInvalidError, match="collapse to the same float"):
-        _validate(short_window=LowHighStepRange(0.12345678901234566, 0.12345678901234568, 1e-18))
-
-
-def test_an_absurd_step_is_refused_before_any_expansion() -> None:
-    with pytest.raises(GridInvalidError):
-        _validate(short_window=LowHighStepRange(0.0, 1.0, 1e-28))
-
-
-def test_a_single_cell_range_ignores_the_step_size() -> None:
-    validated = _validate(short_window=LowHighStepRange(5.0, 5.0, 1e-20))
-
-    assert validated.combinations == 1
-
-
-def test_a_non_finite_bound_is_an_invalid_grid() -> None:
-    with pytest.raises(GridInvalidError, match="finite"):
-        _validate(short_window=LowHighStepRange(5.0, 10.0, float("nan")))
-
-
-def test_an_interior_float_collapse_is_an_invalid_grid_not_a_server_fault() -> None:
-    # Endpoint neighbours resolve, an interior pair does not (review finding).
-    with pytest.raises(GridInvalidError, match="collapse to the same float"):
-        _validate(short_window=LowHighStepRange(0.9999999999999944, 0.9999999999999949, 1.0880185641326534e-16))
+@pytest.mark.parametrize(
+    ("low", "high", "step", "match"),
+    [
+        pytest.param(
+            0.12345678901234566,
+            0.12345678901234568,
+            1e-18,
+            "collapse to the same float",
+            id="step_below_float_resolution_is_an_invalid_grid_not_a_server_fault",
+        ),
+        pytest.param(0.0, 1.0, 1e-28, None, id="absurd_step_is_refused_before_any_expansion"),
+        pytest.param(5.0, 10.0, float("nan"), "finite", id="non_finite_bound_is_an_invalid_grid"),
+        # Endpoint neighbours resolve, an interior pair does not (review finding).
+        pytest.param(
+            0.9999999999999944,
+            0.9999999999999949,
+            1.0880185641326534e-16,
+            "collapse to the same float",
+            id="interior_float_collapse_is_an_invalid_grid_not_a_server_fault",
+        ),
+    ],
+)
+def test_an_unresolvable_step_or_bound_is_an_invalid_grid(low: float, high: float, step: float, match: str | None) -> None:
+    with pytest.raises(GridInvalidError, match=match):
+        _validate(short_window=LowHighStepRange(low, high, step))

@@ -531,30 +531,42 @@ def _ema_plan(ledger_path: Path) -> CanaryActivationPlan:
     )
 
 
-def test_canary_rollback_admitted_when_flat() -> None:
+@pytest.mark.parametrize(
+    ("stop_outcome", "allowed", "reason_code"),
+    [
+        pytest.param("STOPPED_FLAT", True, "CANARY_ROLLBACK_ADMITTED", id="admitted_when_flat"),
+        pytest.param(
+            "STOPPED_WITH_APPROVED_ATTRIBUTED_EXPOSURE",
+            True,
+            "CANARY_ROLLBACK_ADMITTED",
+            id="admitted_with_an_approved_carried_exposure",
+        ),
+        # #1729 AC10: an unprovable boundary is refused outright, unlike an
+        # ordinary Stop, which records `STOPPED_CUSTODY_UNPROVABLE` honestly and
+        # still proceeds -- rollback is the stricter of the two.
+        pytest.param(
+            "STOPPED_CUSTODY_UNPROVABLE",
+            False,
+            "CANARY_ROLLBACK_BOUNDARY_UNPROVABLE",
+            id="1729_AC10-refused_when_custody_is_unprovable",
+        ),
+    ],
+)
+def test_canary_rollback_is_decided_by_the_clerk_proved_stop_outcome(
+    stop_outcome: str, allowed: bool, reason_code: str
+) -> None:
     decision = evaluate_canary_rollback(
         strategy_instance_id="sid-1",
-        stop_outcome="STOPPED_FLAT",
+        stop_outcome=stop_outcome,
         evaluated_at_ms=_NOW,
     )
 
-    assert decision.allowed is True
-    assert decision.reason_code == "CANARY_ROLLBACK_ADMITTED"
-    assert isinstance(decision, CanaryRollbackDecision)
+    assert decision.allowed is allowed, "rollback is allowed only at a Clerk-proved safe boundary"
+    assert decision.reason_code == reason_code, "rollback reason code for this stop outcome"
+    assert isinstance(decision, CanaryRollbackDecision), "evaluation returns a CanaryRollbackDecision"
 
 
-def test_canary_rollback_admitted_with_an_approved_carried_exposure() -> None:
-    decision = evaluate_canary_rollback(
-        strategy_instance_id="sid-1",
-        stop_outcome="STOPPED_WITH_APPROVED_ATTRIBUTED_EXPOSURE",
-        evaluated_at_ms=_NOW,
-    )
-
-    assert decision.allowed is True
-    assert decision.reason_code == "CANARY_ROLLBACK_ADMITTED"
-
-
-def test_canary_rollback_refused_when_flatten_is_required() -> None:
+def test_canary_rollback_refused_when_flatten_is_required_and_carries_what_it_classified() -> None:
     """#1729 AC10: rollback stops the canary ONLY at a Clerk-proved safe
     boundary -- unapproved attributed exposure is not one."""
     decision = evaluate_canary_rollback(
@@ -563,35 +575,12 @@ def test_canary_rollback_refused_when_flatten_is_required() -> None:
         evaluated_at_ms=_NOW,
     )
 
-    assert decision.allowed is False
-    assert decision.reason_code == "CANARY_ROLLBACK_REQUIRES_FLATTEN"
-    assert decision.next_step is not None
-
-
-def test_canary_rollback_refused_when_custody_is_unprovable() -> None:
-    """#1729 AC10: an unprovable boundary is refused outright, unlike an
-    ordinary Stop, which records `STOPPED_CUSTODY_UNPROVABLE` honestly and
-    still proceeds -- rollback is the stricter of the two."""
-    decision = evaluate_canary_rollback(
-        strategy_instance_id="sid-1",
-        stop_outcome="STOPPED_CUSTODY_UNPROVABLE",
-        evaluated_at_ms=_NOW,
-    )
-
-    assert decision.allowed is False
-    assert decision.reason_code == "CANARY_ROLLBACK_BOUNDARY_UNPROVABLE"
-
-
-def test_canary_rollback_decision_carries_the_exact_stop_outcome_it_classified() -> None:
-    decision = evaluate_canary_rollback(
-        strategy_instance_id="sid-1",
-        stop_outcome="STOP_REQUIRES_FLATTEN",
-        evaluated_at_ms=_NOW,
-    )
-
-    assert decision.stop_outcome == "STOP_REQUIRES_FLATTEN"
-    assert decision.strategy_instance_id == "sid-1"
-    assert decision.evaluated_at_ms == _NOW
+    assert decision.allowed is False, "#1729 AC10: rollback refused when flatten is required"
+    assert decision.reason_code == "CANARY_ROLLBACK_REQUIRES_FLATTEN", "#1729 AC10: requires-flatten reason code"
+    assert decision.next_step is not None, "#1729 AC10: a refusal names the next step"
+    assert decision.stop_outcome == "STOP_REQUIRES_FLATTEN", "decision carries the exact stop outcome it classified"
+    assert decision.strategy_instance_id == "sid-1", "decision carries the strategy instance id"
+    assert decision.evaluated_at_ms == _NOW, "decision carries the evaluation time"
 
 
 @pytest.mark.parametrize("custody_account,admitted", [

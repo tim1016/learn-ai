@@ -6,6 +6,7 @@ the range's own bounds, and which of two ways a sentence goes. No sentence is he
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from decimal import Decimal
 from typing import Any
 
@@ -36,6 +37,11 @@ from tests.options import test_resolver as scenes
 
 # The second leg in the request is written first in the alphabet: a place is not an order of names.
 _ORDER = ["zulu", "alpha", "leg_3"]
+
+
+def _left_alone(why: str, sentence: str) -> Any:
+    """A table row for a sentence the builder's words leave exactly as it was."""
+    return pytest.param(sentence, sentence, id=f"left alone: {why}")
 
 
 # ---- A leg, by its place ------------------------------------------------------------------------------
@@ -70,27 +76,17 @@ _ORDER = ["zulu", "alpha", "leg_3"]
             id="a loop, where ids are written bare",
         ),
         pytest.param("Leg 'zulu' has no whole quote", "Leg 1 has no whole quote", id="at the start of a sentence"),
+        _left_alone("no leg named", "a bull call spread is 1 bought call and 1 sold call; these legs are not"),
+        _left_alone("an id that is no leg here", "leg 'someone_else' is no leg of this request"),
+        _left_alone("an arrow that is no loop of legs", "the quote feed is not healthy: reconnecting (attempt 2 -> 3)"),
+        _left_alone("a quoted word that is no leg", "an option is a call or a put; got 'straddle'"),
+        _left_alone("ids never quoted", "the alpha of zulu is leg_3"),
     ],
 )
-def test_a_leg_named_by_its_id_is_said_by_its_place_in_the_request(
+def test_a_leg_named_by_its_id_is_said_by_its_place_and_words_that_name_no_leg_of_the_request_are_left_as_they_were(
     as_its_source_says_it: str, as_the_builder_reads_it: str
 ) -> None:
     assert legs_by_number(as_its_source_says_it, _ORDER) == as_the_builder_reads_it
-
-
-@pytest.mark.parametrize(
-    "left_alone",
-    [
-        "a bull call spread is 1 bought call and 1 sold call; these legs are not",
-        "leg 'someone_else' is no leg of this request",
-        "the quote feed is not healthy: reconnecting (attempt 2 -> 3)",
-        "an option is a call or a put; got 'straddle'",
-        "the alpha of zulu is leg_3",
-    ],
-    ids=["no leg named", "an id that is no leg here", "an arrow that is no loop of legs", "a quoted word that is no leg", "ids never quoted"],
-)
-def test_words_that_name_no_leg_of_the_request_are_left_as_they_were(left_alone: str) -> None:
-    assert legs_by_number(left_alone, _ORDER) == left_alone
 
 
 def test_legs_are_listed_by_their_places_one_or_several() -> None:
@@ -103,25 +99,14 @@ def test_legs_are_listed_by_their_places_one_or_several() -> None:
 # ---- Money in dollars, and a number nobody meant by its length ---------------------------------------------
 
 
-def test_an_amount_a_refusal_gives_in_cents_is_said_in_dollars_with_its_sign() -> None:
-    """The money's own refusal, as an entry keeps it. An owner reads dollars."""
-    as_the_money_says_it = "Requirement 0 cents plus premium -3958800 cents is not above zero; the prices do not belong together."
-
-    said = in_the_builders_words(as_the_money_says_it, _ORDER)
-
-    assert "$0.00" in said and "-$39,588.00" in said
-    assert "cents" not in said and "3958800" not in said
-
-
-def test_one_sentence_gets_all_three_translations_and_nothing_else_in_it_moves() -> None:
-    said = in_the_builders_words("leg 'alpha' would set aside 19410 cents for SPY261009C00585000 at 1791302400000", _ORDER)
-
-    assert said == "leg 2 would set aside $194.10 for SPY261009C00585000 at 1791302400000"
-
-
 @pytest.mark.parametrize(
     ("as_its_source_says_it", "carries", "never"),
     [
+        pytest.param(
+            "Requirement 0 cents plus premium -3958800 cents is not above zero; the prices do not belong together.",
+            ["$0.00", "-$39,588.00"], ["cents", "3958800"],
+            id="an amount a refusal gives in cents is said in dollars with its sign, as an owner reads dollars",
+        ),
         pytest.param(
             f"leg 'zulu' asks for the strike +{10**400} from the money; the chain lists no such call",
             ["leg 1", "401 digits"], ["0000000000000000"], id="steps beyond counting",
@@ -136,27 +121,39 @@ def test_one_sentence_gets_all_three_translations_and_nothing_else_in_it_moves()
         ),
     ],
 )
-def test_a_number_longer_than_anyone_meant_is_said_by_its_length_wherever_a_sentence_carries_it(
+def test_an_amount_in_cents_is_said_in_dollars_and_a_number_longer_than_anyone_meant_is_said_by_its_length_in_a_sentence(
     as_its_source_says_it: str, carries: list[str], never: list[str]
 ) -> None:
     said = in_the_builders_words(as_its_source_says_it, _ORDER)
 
     assert all(part in said for part in carries), said
     assert not any(part in said for part in never), said
-    assert len(said) < 120
+    assert len(said) < 120, said
 
 
 @pytest.mark.parametrize(
-    "left_alone",
+    ("as_its_source_says_it", "as_the_builder_says_it"),
     [
-        "leg asks for a delta of 0.30000000000000004; the nearest is 0.2999999999999999889",
-        "SPY261009C00585000 was received at 1791302400000 and holds 123456789012345 contracts",
-        "the quote is 1234567890123456.25 wide",
+        pytest.param(
+            "leg 'alpha' would set aside 19410 cents for SPY261009C00585000 at 1791302400000",
+            "leg 2 would set aside $194.10 for SPY261009C00585000 at 1791302400000",
+            id="one sentence gets all three translations and nothing else in it moves",
+        ),
+        _left_alone(
+            "the digits after a decimal point",
+            "leg asks for a delta of 0.30000000000000004; the nearest is 0.2999999999999999889",
+        ),
+        _left_alone(
+            "a contract code, a time and a number of fifteen digits",
+            "SPY261009C00585000 was received at 1791302400000 and holds 123456789012345 contracts",
+        ),
+        _left_alone("a long number with a fraction", "the quote is 1234567890123456.25 wide"),
     ],
-    ids=["the digits after a decimal point", "a contract code, a time and a number of fifteen digits", "a long number with a fraction"],
 )
-def test_a_number_that_is_not_a_long_whole_number_is_left_as_it_was(left_alone: str) -> None:
-    assert in_the_builders_words(left_alone, _ORDER) == left_alone
+def test_a_sentence_gets_its_translations_and_a_number_that_is_not_a_long_whole_number_is_left_as_it_was(
+    as_its_source_says_it: str, as_the_builder_says_it: str
+) -> None:
+    assert in_the_builders_words(as_its_source_says_it, _ORDER) == as_the_builder_says_it
 
 
 def test_the_dates_a_fixed_expiry_may_be_are_said_first_to_last_with_their_years_in_full() -> None:
@@ -307,22 +304,33 @@ def test_a_number_too_long_to_have_been_meant_is_said_by_its_length_and_never_wh
 # ---- Numbers, as an owner writes them ----------------------------------------------------------------------
 
 
-def test_a_number_is_written_out_with_no_exponent_and_no_trailing_zeros() -> None:
-    assert [plain(number) for number in (5.0, 0.05, Decimal("1E+2"), Decimal("99999.999"), -2.50, 0.0, 1e-05)] == [
-        "5", "0.05", "100", "99,999.999", "-2.5", "0", "0.00001",
-    ]
-
-
-def test_a_price_a_share_is_written_to_the_cent_or_as_fine_as_it_is_and_without_its_sign() -> None:
-    assert [dollars(Decimal(price)) for price in ("1.94", "-3.07", "2", "0.005", "1234.5")] == [
-        "$1.94", "$3.07", "$2.00", "$0.005", "$1,234.50",
-    ]
-
-
-def test_an_age_is_said_in_seconds_and_a_whole_minute_as_a_minute() -> None:
-    assert [age_in_words(age) for age in (0, 999, 1_000, 2_400, 60_000, 61_000, 120_000)] == [
-        "under a second", "under a second", "1 second", "2 seconds", "1 minute", "61 seconds", "2 minutes",
-    ]
+@pytest.mark.parametrize(
+    ("write", "figures", "written"),
+    [
+        pytest.param(
+            plain,
+            (5.0, 0.05, Decimal("1E+2"), Decimal("99999.999"), -2.50, 0.0, 1e-05),
+            ("5", "0.05", "100", "99,999.999", "-2.5", "0", "0.00001"),
+            id="a number is written out with no exponent and no trailing zeros",
+        ),
+        pytest.param(
+            dollars,
+            tuple(Decimal(price) for price in ("1.94", "-3.07", "2", "0.005", "1234.5")),
+            ("$1.94", "$3.07", "$2.00", "$0.005", "$1,234.50"),
+            id="a price a share is written to the cent or as fine as it is and without its sign",
+        ),
+        pytest.param(
+            age_in_words,
+            (0, 999, 1_000, 2_400, 60_000, 61_000, 120_000),
+            ("under a second", "under a second", "1 second", "2 seconds", "1 minute", "61 seconds", "2 minutes"),
+            id="an age is said in seconds and a whole minute as a minute",
+        ),
+    ],
+)
+def test_a_figure_is_written_the_way_an_owner_reads_it(
+    write: Callable[[Any], str], figures: tuple[Any, ...], written: tuple[str, ...]
+) -> None:
+    assert [write(figure) for figure in figures] == list(written)
 
 
 def test_every_answer_the_model_can_give_for_a_delta_has_its_own_words_and_only_one_says_it_was_worked_out() -> None:

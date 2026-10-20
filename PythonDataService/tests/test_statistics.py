@@ -135,15 +135,72 @@ def _make_equity_curve(initial: float = 100_000.0) -> list[EquityPoint]:
 # Unit tests: max drawdown
 # ---------------------------------------------------------------------------
 class TestMaxDrawdown:
-    def test_max_drawdown_unsorted_points_reports_peak_and_trough(self) -> None:
-        points = [(30, 90.0), (10, 100.0), (20, 120.0), (40, 110.0)]
-
-        result = max_drawdown(points)
+    @pytest.mark.parametrize(
+        ("points", "max_dd", "peak", "trough"),
+        [
+            pytest.param(
+                ((30, 90.0), (10, 100.0), (20, 120.0), (40, 110.0)),
+                0.25,
+                20,
+                30,
+                id="unsorted_points_reports_peak_and_trough",
+            ),
+            pytest.param(
+                ((1, 100.0), (2, 120.0), (2, None), (3, 80.0)),
+                0.2,
+                1,
+                3,
+                id="duplicate_last_invalid_value_replaces_prior_value",
+            ),
+            pytest.param(
+                (
+                    (50, 80.0),
+                    (10, 100.0),
+                    (20, None),
+                    (30, float("nan")),
+                    (40, float("inf")),
+                    (45, float("-inf")),
+                ),
+                0.2,
+                10,
+                50,
+                id="ignores_none_and_nonfinite_equity",
+            ),
+            pytest.param((), 0.0, None, None, id="fewer_than_two_valid_points_none"),
+            pytest.param(((1, 100.0),), 0.0, None, None, id="fewer_than_two_valid_points_one"),
+            pytest.param(
+                ((1, None), (2, float("nan")), (3, float("inf")), (4, 100.0)),
+                0.0,
+                None,
+                None,
+                id="fewer_than_two_valid_points_only_one_finite",
+            ),
+            pytest.param(
+                ((1, 100.0), (2, 100.0), (3, 120.0)), 0.0, None, None, id="without_a_drop_returns_empty_pair"
+            ),
+            pytest.param(
+                ((1, 100.0), (2, 50.0), (3, 200.0), (4, 100.0)),
+                0.5,
+                1,
+                2,
+                id="equal_drawdowns_choose_earliest_peak",
+            ),
+            pytest.param(
+                ((1, 100.0), (2, 50.0), (3, 50.0)),
+                0.5,
+                1,
+                2,
+                id="equal_drawdowns_from_same_peak_choose_earliest_trough",
+            ),
+        ],
+    )
+    def test_max_drawdown_reports_peak_and_trough(self, points, max_dd, peak, trough) -> None:
+        result = max_drawdown(list(points))
 
         assert result == {
-            "max_drawdown": 0.25,
-            "peak_timestamp": 20,
-            "trough_timestamp": 30,
+            "max_drawdown": max_dd,
+            "peak_timestamp": peak,
+            "trough_timestamp": trough,
         }
 
     def test_max_drawdown_duplicate_timestamp_uses_last_input_occurrence(self) -> None:
@@ -155,17 +212,6 @@ class TestMaxDrawdown:
         assert result["peak_timestamp"] == 2
         assert result["trough_timestamp"] == 3
 
-    def test_max_drawdown_duplicate_last_invalid_value_replaces_prior_value(self) -> None:
-        points = [(1, 100.0), (2, 120.0), (2, None), (3, 80.0)]
-
-        result = max_drawdown(points)
-
-        assert result == {
-            "max_drawdown": 0.2,
-            "peak_timestamp": 1,
-            "trough_timestamp": 3,
-        }
-
     def test_max_drawdown_does_not_mutate_input(self) -> None:
         points = [(3, 80.0), (1, 100.0), (2, 120.0)]
         original = list(points)
@@ -174,94 +220,40 @@ class TestMaxDrawdown:
 
         assert points == original
 
-    def test_max_drawdown_ignores_none_and_nonfinite_equity(self) -> None:
-        points = [
-            (50, 80.0),
-            (10, 100.0),
-            (20, None),
-            (30, float("nan")),
-            (40, float("inf")),
-            (45, float("-inf")),
-        ]
-
-        result = max_drawdown(points)
-
-        assert result == {
-            "max_drawdown": 0.2,
-            "peak_timestamp": 10,
-            "trough_timestamp": 50,
-        }
-
     @pytest.mark.parametrize("invalid_equity", [0.0, -1.0])
     def test_max_drawdown_rejects_nonpositive_finite_equity(self, invalid_equity: float) -> None:
         with pytest.raises(ValueError, match="must be greater than zero"):
             max_drawdown([(1, 100.0), (2, invalid_equity)])
 
     @pytest.mark.parametrize(
-        "points",
+        "curve",
         [
-            [],
-            [(1, 100.0)],
-            [(1, None), (2, float("nan")), (3, float("inf")), (4, 100.0)],
+            pytest.param((100, 110, 120, 130), id="monotonic_up"),
+            pytest.param((), id="empty_curve"),
+            pytest.param((100,), id="single_point"),
         ],
     )
-    def test_max_drawdown_fewer_than_two_valid_points_returns_empty_pair(
-        self, points: list[tuple[int, float | None]]
-    ) -> None:
-        assert max_drawdown(points) == {
-            "max_drawdown": 0.0,
-            "peak_timestamp": None,
-            "trough_timestamp": None,
-        }
-
-    def test_max_drawdown_without_a_drop_returns_empty_pair(self) -> None:
-        assert max_drawdown([(1, 100.0), (2, 100.0), (3, 120.0)]) == {
-            "max_drawdown": 0.0,
-            "peak_timestamp": None,
-            "trough_timestamp": None,
-        }
-
-    def test_max_drawdown_equal_drawdowns_choose_earliest_peak(self) -> None:
-        result = max_drawdown([(1, 100.0), (2, 50.0), (3, 200.0), (4, 100.0)])
-
-        assert result == {
-            "max_drawdown": 0.5,
-            "peak_timestamp": 1,
-            "trough_timestamp": 2,
-        }
-
-    def test_max_drawdown_equal_drawdowns_from_same_peak_choose_earliest_trough(self) -> None:
-        result = max_drawdown([(1, 100.0), (2, 50.0), (3, 50.0)])
-
-        assert result == {
-            "max_drawdown": 0.5,
-            "peak_timestamp": 1,
-            "trough_timestamp": 2,
-        }
-
-    def test_monotonic_up(self) -> None:
-        assert _max_drawdown([100, 110, 120, 130]) == 0.0
+    def test_no_drawdown_is_zero(self, curve: tuple[int, ...]) -> None:
+        assert _max_drawdown(list(curve)) == 0.0
 
     def test_simple_drawdown(self) -> None:
         dd = _max_drawdown([100, 120, 90, 110])
         assert abs(dd - 0.25) < 1e-10  # 30/120 = 0.25
-
-    def test_empty_curve(self) -> None:
-        assert _max_drawdown([]) == 0.0
-
-    def test_single_point(self) -> None:
-        assert _max_drawdown([100]) == 0.0
 
 
 # ---------------------------------------------------------------------------
 # Unit tests: Sharpe & Sortino
 # ---------------------------------------------------------------------------
 class TestSharpe:
-    def test_constant_returns(self) -> None:
-        assert _sharpe([0.01, 0.01, 0.01, 0.01], 252) is None  # std = 0
-
-    def test_insufficient_data(self) -> None:
-        assert _sharpe([0.01], 252) is None
+    @pytest.mark.parametrize(
+        "returns",
+        [
+            pytest.param((0.01, 0.01, 0.01, 0.01), id="constant_returns"),  # std = 0
+            pytest.param((0.01,), id="insufficient_data"),
+        ],
+    )
+    def test_undefined_returns_none(self, returns: tuple[float, ...]) -> None:
+        assert _sharpe(list(returns), 252) is None
 
     def test_known_value(self) -> None:
         returns = [0.01, -0.005, 0.015, 0.0075, -0.01, 0.02, -0.0025, 0.005, 0.01, -0.0075]
@@ -271,11 +263,15 @@ class TestSharpe:
 
 
 class TestSortino:
-    def test_no_downside(self) -> None:
-        assert _sortino([0.01, 0.02, 0.03], 252) is None  # no negative returns
-
-    def test_insufficient_data(self) -> None:
-        assert _sortino([0.01], 252) is None
+    @pytest.mark.parametrize(
+        "returns",
+        [
+            pytest.param((0.01, 0.02, 0.03), id="no_downside"),  # no negative returns
+            pytest.param((0.01,), id="insufficient_data"),
+        ],
+    )
+    def test_undefined_returns_none(self, returns: tuple[float, ...]) -> None:
+        assert _sortino(list(returns), 252) is None
 
     def test_known_positive(self) -> None:
         returns = [0.01, -0.005, 0.015, -0.01, 0.02]
@@ -327,14 +323,20 @@ class TestDailyReturns:
         assert abs(rets[0] - 0.1) < 1e-10
         assert abs(rets[1] - (-5 / 110)) < 1e-10
 
-    def test_single_value(self) -> None:
-        assert _daily_returns([90.0], initial_cash=100.0) == pytest.approx([-0.1], abs=1e-9, rel=0)
-
-    def test_empty(self) -> None:
-        assert _daily_returns([], initial_cash=100.0) == []
-
-    def test_flat_first_session_is_one_observation(self) -> None:
-        assert _daily_returns([100.0, 110.0], initial_cash=100.0) == pytest.approx([0.0, 0.1], abs=1e-9, rel=0)
+    @pytest.mark.parametrize(
+        ("daily_values", "expected"),
+        [
+            pytest.param((90.0,), (-0.1,), id="single_value"),
+            pytest.param((), (), id="empty"),
+            pytest.param((100.0, 110.0), (0.0, 0.1), id="flat_first_session_is_one_observation"),
+        ],
+    )
+    def test_returns_against_initial_cash(
+        self, daily_values: tuple[float, ...], expected: tuple[float, ...]
+    ) -> None:
+        assert _daily_returns(list(daily_values), initial_cash=100.0) == pytest.approx(
+            list(expected), abs=1e-9, rel=0
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -511,10 +513,12 @@ class TestSummarizeSnapshot:
 
         assert stats["drawdown_recovery"] == 1
 
-    def test_trade_level_metrics_frozen(self) -> None:
+    def test_trade_level_metrics_frozen_and_portfolio_metrics_present(self) -> None:
         """Assert trade-level metrics match frozen expected values.
 
-        This catches any accidental change to the trade statistics math.
+        This catches any accidental change to the trade statistics math. The
+        portfolio-level keys must also be present and non-None when a curve is
+        provided.
         """
         trades = _make_trades()
         curve = _make_equity_curve()
@@ -525,30 +529,22 @@ class TestSummarizeSnapshot:
             trading_days=12,
             equity_curve=curve,
         )
-        assert stats["total_trades"] == EXPECTED_SNAPSHOT["total_trades"]
-        assert stats["winning_trades"] == EXPECTED_SNAPSHOT["winning_trades"]
-        assert stats["losing_trades"] == EXPECTED_SNAPSHOT["losing_trades"]
-        assert abs(stats["win_rate"] - EXPECTED_SNAPSHOT["win_rate"]) < 1e-10
-        assert abs(stats["profit_factor"] - EXPECTED_SNAPSHOT["profit_factor"]) < 1e-10
-        assert abs(stats["payoff_ratio"] - EXPECTED_SNAPSHOT["payoff_ratio"]) < 1e-10
-
-    def test_portfolio_metrics_present(self) -> None:
-        """Ensure all portfolio-level keys are present and non-None when curve provided."""
-        trades = _make_trades()
-        curve = _make_equity_curve()
-        stats = summarize(
-            initial_cash=100_000.0,
-            final_equity=102_300.0,
-            trades=trades,
-            trading_days=12,
-            equity_curve=curve,
+        assert stats["total_trades"] == EXPECTED_SNAPSHOT["total_trades"], "total_trades matches frozen value"
+        assert stats["winning_trades"] == EXPECTED_SNAPSHOT["winning_trades"], "winning_trades matches frozen value"
+        assert stats["losing_trades"] == EXPECTED_SNAPSHOT["losing_trades"], "losing_trades matches frozen value"
+        assert abs(stats["win_rate"] - EXPECTED_SNAPSHOT["win_rate"]) < 1e-10, "win_rate matches frozen value"
+        assert abs(stats["profit_factor"] - EXPECTED_SNAPSHOT["profit_factor"]) < 1e-10, (
+            "profit_factor matches frozen value"
         )
-        assert stats["sharpe_ratio"] is not None
-        assert stats["sortino_ratio"] is not None
-        assert stats["max_drawdown_pct"] > 0
-        assert stats["cagr"] is not None
-        assert "net_profit" in stats
-        assert "net_profit_pct" in stats
+        assert abs(stats["payoff_ratio"] - EXPECTED_SNAPSHOT["payoff_ratio"]) < 1e-10, (
+            "payoff_ratio matches frozen value"
+        )
+        assert stats["sharpe_ratio"] is not None, "sharpe_ratio is present with a curve"
+        assert stats["sortino_ratio"] is not None, "sortino_ratio is present with a curve"
+        assert stats["max_drawdown_pct"] > 0, "max_drawdown_pct is positive with a curve"
+        assert stats["cagr"] is not None, "cagr is present with a curve"
+        assert "net_profit" in stats, "net_profit key is present"
+        assert "net_profit_pct" in stats, "net_profit_pct key is present"
 
     def test_cagr_included(self) -> None:
         trades = _make_trades()
@@ -572,17 +568,28 @@ class TestValidateTradeLog:
         errors = validate_trade_log(_make_trades())
         assert errors == []
 
-    def test_bad_times(self) -> None:
+    @pytest.mark.parametrize(
+        "is_synthetic_exit",
+        [
+            pytest.param(False, id="bad_times"),
+            # The exemption covers an *equal* pair only. An exit that precedes its
+            # entry is corrupt however the exit was produced.
+            pytest.param(True, id="inverted_pair_fails_even_when_labelled_a_forced_close"),
+        ],
+    )
+    def test_an_inverted_pair_fails(self, is_synthetic_exit: bool) -> None:
         t = FakeTrade(
             Decimal("1"),
             Decimal("0.01"),
             "WIN",
             entry_time_ms=to_ms_utc(datetime(2024, 1, 2, 12, 0, tzinfo=UTC)),
             exit_time_ms=to_ms_utc(datetime(2024, 1, 2, 10, 0, tzinfo=UTC)),  # before entry
+            is_synthetic_exit=is_synthetic_exit,
         )
+
         errors = validate_trade_log([t])
-        assert len(errors) == 1
-        assert errors[0].code == "invalid_trade_times"
+        assert len(errors) == 1, "exactly one error"
+        assert errors[0].code == "invalid_trade_times", "error code is invalid_trade_times"
 
     def test_a_labelled_terminal_forced_close_may_share_its_entry_instant(self) -> None:
         """A position opened on the final bar of the window is force-closed at
@@ -599,20 +606,6 @@ class TestValidateTradeLog:
         pair from the ordinary signal path is still an accounting error."""
         ms = to_ms_utc(datetime(2024, 1, 2, 21, 0, tzinfo=UTC))
         t = FakeTrade(Decimal("0"), Decimal("0"), "LOSS", ms, ms)
-
-        assert [e.code for e in validate_trade_log([t])] == ["invalid_trade_times"]
-
-    def test_an_inverted_pair_fails_even_when_labelled_a_forced_close(self) -> None:
-        """The exemption covers an *equal* pair only. An exit that precedes its
-        entry is corrupt however the exit was produced."""
-        t = FakeTrade(
-            Decimal("1"),
-            Decimal("0.01"),
-            "WIN",
-            entry_time_ms=to_ms_utc(datetime(2024, 1, 2, 12, 0, tzinfo=UTC)),
-            exit_time_ms=to_ms_utc(datetime(2024, 1, 2, 10, 0, tzinfo=UTC)),
-            is_synthetic_exit=True,
-        )
 
         assert [e.code for e in validate_trade_log([t])] == ["invalid_trade_times"]
 

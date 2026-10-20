@@ -12,24 +12,28 @@ from __future__ import annotations
 
 import inspect
 
+import pytest
+
 from app.jobs.progress import CancellationCheck
 from app.jobs.runner import run_in_thread
 
 
 class TestFirstCallCheckReadsTheFlag:
-    def test_the_first_call_reads_redis_even_under_a_throttle(self, fake) -> None:
-        fake.hset("job:job-1:state", mapping={"cancel_requested": "1"})
+    @pytest.mark.parametrize(
+        ("job_id", "cancel_requested", "expected"),
+        [
+            pytest.param("job-1", "1", True, id="the_first_call_reads_redis_even_under_a_throttle"),
+            pytest.param("job-2", "0", False, id="the_first_call_reads_redis_when_nothing_is_requested"),
+        ],
+    )
+    def test_the_first_call_reads_redis_under_a_throttle(
+        self, fake, job_id: str, cancel_requested: str, expected: bool
+    ) -> None:
+        fake.hset(f"job:{job_id}:state", mapping={"cancel_requested": cancel_requested})
 
-        check = CancellationCheck("job-1", check_every_n=1000)
+        check = CancellationCheck(job_id, check_every_n=1000)
 
-        assert check.should_cancel() is True
-
-    def test_the_first_call_reads_redis_when_nothing_is_requested(self, fake) -> None:
-        fake.hset("job:job-2:state", mapping={"cancel_requested": "0"})
-
-        check = CancellationCheck("job-2", check_every_n=1000)
-
-        assert check.should_cancel() is False
+        assert check.should_cancel() is expected
 
     def test_throttling_still_applies_after_the_first_read(self, fake) -> None:
         fake.hset("job:job-3:state", mapping={"cancel_requested": "0"})
@@ -44,11 +48,11 @@ class TestFirstCallCheckReadsTheFlag:
 
 
 class TestDefaults:
-    def test_the_check_defaults_to_reading_every_call(self) -> None:
-        assert CancellationCheck(job_id="job-4").check_every_n == 1
+    def test_the_check_and_the_runner_default_to_reading_every_call(self) -> None:
+        runner_default = inspect.signature(run_in_thread).parameters["cancel_check_every_n"].default
 
-    def test_the_runner_defaults_to_reading_every_call(self) -> None:
-        assert inspect.signature(run_in_thread).parameters["cancel_check_every_n"].default == 1
+        assert CancellationCheck(job_id="job-4").check_every_n == 1, "the check defaults to reading every call"
+        assert runner_default == 1, "the runner defaults to reading every call"
 
 
 class TestCancelledJobEmitsJobCancelled:

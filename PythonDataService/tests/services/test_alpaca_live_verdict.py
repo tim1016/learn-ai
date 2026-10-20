@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
@@ -50,20 +53,24 @@ def _failure(reason_code: str, account_id: str | None) -> ActiveClerkRuntime:
     )
 
 
-def test_unconfigured_settings_is_unknown() -> None:
-    verdict = alpaca_live_verdict(settings=None, runtime=None, now_ms=_NOW)
+@pytest.mark.parametrize(
+    ("make_settings", "configured_mode", "final_verdict"),
+    [
+        pytest.param(lambda: None, "unconfigured", "unknown", id="unconfigured-settings-is-unknown"),
+        pytest.param(_paper, "paper", "paper", id="paper-settings-is-paper-regardless-of-clerk-state"),
+        pytest.param(_live, "live", "unknown", id="live-with-no-runtime-yet-is-unknown"),
+    ],
+)
+def test_a_verdict_with_no_runtime_installed_reads_only_the_settings(
+    make_settings: Callable[[], AlpacaSettings | None], configured_mode: str, final_verdict: str
+) -> None:
+    verdict = alpaca_live_verdict(settings=make_settings(), runtime=None, now_ms=_NOW)
 
-    assert verdict.configured_mode == "unconfigured"
-    assert verdict.final_verdict == "unknown"
-    assert verdict.observed_at_ms == _NOW
-
-
-def test_paper_settings_is_paper_regardless_of_clerk_state() -> None:
-    verdict = alpaca_live_verdict(settings=_paper(), runtime=None, now_ms=_NOW)
-
-    assert verdict.configured_mode == "paper"
-    assert verdict.final_verdict == "paper"
-    assert verdict.deployment_readiness == "not_applicable"
+    assert verdict.configured_mode == configured_mode, "configured mode is read from the settings"
+    assert verdict.final_verdict == final_verdict, "final verdict follows the settings alone"
+    assert verdict.observed_at_ms == _NOW, "observed_at_ms is the caller's clock"
+    assert verdict.clerk_authority == "not_installed", "no runtime means no clerk authority is installed"
+    assert verdict.deployment_readiness == "not_applicable", "no runtime means no deployment readiness"
 
 
 def test_live_with_refused_clerk_is_live_unarmed_and_names_the_account() -> None:
@@ -79,29 +86,35 @@ def test_live_with_refused_clerk_is_live_unarmed_and_names_the_account() -> None
     assert "9LIVE0001" in verdict.headline
 
 
-def test_live_with_mode_disagreement_is_unknown_and_disagreed() -> None:
-    runtime = _failure("LIVE_MODE_DISAGREEMENT", None)
+@pytest.mark.parametrize(
+    ("make_settings", "configured_mode", "reason_code", "mode_agreement"),
+    [
+        pytest.param(
+            _live, "live", "LIVE_MODE_DISAGREEMENT", "disagreed",
+            id="live-with-mode-disagreement-is-unknown-and-disagreed",
+        ),
+        pytest.param(
+            _live, "live", "BROKER_ACCOUNT_UNAVAILABLE", "unobserved",
+            id="live-with-no-account-observed-is-unknown-and-unobserved",
+        ),
+        pytest.param(
+            _paper, "paper", "LIVE_MODE_DISAGREEMENT", "disagreed",
+            id="paper-with-mode-disagreement-is-unknown-not-reassuring",
+        ),
+    ],
+)
+def test_an_unverified_account_mode_is_unknown_and_never_reassuring(
+    make_settings: Callable[[], AlpacaSettings], configured_mode: str, reason_code: str, mode_agreement: str
+) -> None:
+    runtime = _failure(reason_code, None)
 
-    verdict = alpaca_live_verdict(settings=_live(), runtime=runtime, now_ms=_NOW)
+    verdict = alpaca_live_verdict(settings=make_settings(), runtime=runtime, now_ms=_NOW)
 
-    assert verdict.mode_agreement == "disagreed"
-    assert verdict.final_verdict == "unknown"
-
-
-def test_live_with_no_account_observed_is_unknown_and_unobserved() -> None:
-    runtime = _failure("BROKER_ACCOUNT_UNAVAILABLE", None)
-
-    verdict = alpaca_live_verdict(settings=_live(), runtime=runtime, now_ms=_NOW)
-
-    assert verdict.mode_agreement == "unobserved"
-    assert verdict.final_verdict == "unknown"
-
-
-def test_live_with_no_runtime_yet_is_unknown() -> None:
-    verdict = alpaca_live_verdict(settings=_live(), runtime=None, now_ms=_NOW)
-
-    assert verdict.clerk_authority == "not_installed"
-    assert verdict.final_verdict == "unknown"
+    assert verdict.configured_mode == configured_mode, "configured mode is read from the settings"
+    assert verdict.mode_agreement == mode_agreement, "mode agreement follows the clerk's refusal"
+    assert verdict.final_verdict == "unknown", "an unverified account mode is unknown"
+    assert "no real money" not in verdict.headline, "an unknown verdict never reassures"
+    assert verdict.clerk_refusal_reason_code == reason_code, "the clerk's refusal reason is carried"
 
 
 def test_a_mid_session_mode_disagreement_the_envelope_sync_observed_is_disagreed() -> None:
@@ -117,18 +130,6 @@ def test_a_mid_session_mode_disagreement_the_envelope_sync_observed_is_disagreed
     assert verdict.mode_agreement == "disagreed"
     assert verdict.clerk_refusal_reason_code == "LIVE_MODE_DISAGREEMENT"
     assert verdict.final_verdict == "unknown"
-
-
-def test_paper_with_mode_disagreement_is_unknown_not_reassuring() -> None:
-    runtime = _failure("LIVE_MODE_DISAGREEMENT", None)
-
-    verdict = alpaca_live_verdict(settings=_paper(), runtime=runtime, now_ms=_NOW)
-
-    assert verdict.configured_mode == "paper"
-    assert verdict.mode_agreement == "disagreed"
-    assert verdict.final_verdict == "unknown"
-    assert "no real money" not in verdict.headline
-    assert verdict.clerk_refusal_reason_code == "LIVE_MODE_DISAGREEMENT"
 
 
 def test_clean_paper_selection_is_the_normal_path() -> None:

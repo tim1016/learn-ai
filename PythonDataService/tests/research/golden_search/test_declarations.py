@@ -29,7 +29,7 @@ _EMA_PREVIOUS_DECLARATION = declaration_for(EMA_PREVIOUS)
 assert _EMA_PREVIOUS_DECLARATION is not None
 
 
-def test_ema_declaration_follows_the_owner_order_and_table() -> None:
+def test_ema_declaration_follows_the_owner_order_and_table_and_names_only_declared_searchable_knobs() -> None:
     rows = [
         (
             k.name,
@@ -55,14 +55,21 @@ def test_ema_declaration_follows_the_owner_order_and_table() -> None:
         ("slow_period", "integer", D("3"), D("40"), D("1"), D("8"), D("30"), D("1"), D("1"), True),
         ("hold_bars", "integer", D("1"), D("26"), D("1"), D("2"), D("12"), D("1"), D("1"), True),
         ("gap_bps", "decimal", D("0"), D("100"), D("0.5"), D("0"), D("5"), D("0.5"), D("0.5"), False),
-    ]
-    assert [k.name for k in _EMA_DECLARATION.knobs if k.warmup_dependent] == ["fast_period", "slow_period"]
-    assert [(f.label, f.value) for f in _EMA_DECLARATION.fixed] == [("RSI length", "14"), ("Decision cadence", "15 minutes")]
+    ], "the knobs follow the owner order and table"
+    assert [k.name for k in _EMA_DECLARATION.knobs if k.warmup_dependent] == ["fast_period", "slow_period"], "the warmup-dependent knobs are the two periods"
+    assert [(f.label, f.value) for f in _EMA_DECLARATION.fixed] == [("RSI length", "14"), ("Decision cadence", "15 minutes")], "the fixed settings are the RSI length and the decision cadence"
     assert [(c.left, c.op, c.right) for c in _EMA_DECLARATION.constraints] == [
         ("fast_period", "<", "slow_period"),
         ("rsi_min", "<", "rsi_max"),
-    ]
-    assert _EMA_DECLARATION.default_pair_audits == (("fast_period", "slow_period"), ("rsi_min", "rsi_max"))
+    ], "the constraints order the two periods and the two RSI gates"
+    assert _EMA_DECLARATION.default_pair_audits == (("fast_period", "slow_period"), ("rsi_min", "rsi_max")), "the default pair audits are the periods and the RSI gates"
+
+    names = {k.name for k in _EMA_DECLARATION.knobs}
+    searchable = {k.name for k in _EMA_DECLARATION.knobs if k.searchable_by_default}
+
+    assert all({c.left, c.right} <= names for c in _EMA_DECLARATION.constraints), "every constraint names only declared knobs"
+    assert all({a, b} <= searchable for a, b in _EMA_DECLARATION.default_pair_audits), "every default pair audit names only searchable knobs"
+    assert violates(_EMA_DECLARATION, {k.name: k.default_value for k in _EMA_DECLARATION.knobs}) is None, "the declared defaults violate no constraint"
 
 
 @pytest.mark.parametrize(
@@ -95,15 +102,6 @@ def test_ema_knob_ranges_and_steps_sit_on_its_quantum_lattice(knob: SearchKnob) 
     assert knob.default_step > 0
     assert knob.domain_low <= knob.default_low < knob.default_high <= knob.domain_high
     assert knob.domain_low <= knob.default_value <= knob.domain_high
-
-
-def test_ema_declaration_names_only_declared_searchable_knobs_in_rules_and_audits() -> None:
-    names = {k.name for k in _EMA_DECLARATION.knobs}
-    searchable = {k.name for k in _EMA_DECLARATION.knobs if k.searchable_by_default}
-
-    assert all({c.left, c.right} <= names for c in _EMA_DECLARATION.constraints)
-    assert all({a, b} <= searchable for a, b in _EMA_DECLARATION.default_pair_audits)
-    assert violates(_EMA_DECLARATION, {k.name: k.default_value for k in _EMA_DECLARATION.knobs}) is None
 
 
 def test_ema_previous_crossover_searches_the_ema_knobs_and_holds_its_cross_age_limit_fixed() -> None:
@@ -170,55 +168,51 @@ def test_violates_reads_omitted_knobs_at_their_defaults() -> None:
     assert violates(_EMA_DECLARATION, {"rsi_min": 70}) == "The RSI lower gate must be below the RSI upper gate."
 
 
-def test_canonical_point_snaps_decimals_and_includes_the_symbol() -> None:
+def test_canonical_point_snaps_decimals_includes_the_symbol_types_integer_knobs_and_omits_identity_neutral_defaults() -> None:
     point = canonical_point(EMA, "QQQ", {"gap": 0.30000000000000004, "rsi_min": 45})
 
-    assert point == {"symbol": "QQQ", "gap": 0.3, "gap_bps": 0.0, "rsi_min": 45.0, "rsi_max": 70.0}
-    assert canonical_point(EMA, "QQQ", {"gap": 0.304}) == canonical_point(EMA, "QQQ", {"gap": 0.3})
+    assert point == {"symbol": "QQQ", "gap": 0.3, "gap_bps": 0.0, "rsi_min": 45.0, "rsi_max": 70.0}, "the canonical point snaps decimals and includes the symbol"
+    assert canonical_point(EMA, "QQQ", {"gap": 0.304}) == canonical_point(EMA, "QQQ", {"gap": 0.3}), "a gap within half a quantum snaps to the same point"
 
-
-def test_canonical_point_refuses_out_of_domain_and_unknown_inputs() -> None:
-    with pytest.raises(ValueError, match="outside its domain"):
-        canonical_point(EMA, "SPY", {"gap": 2.5})
-    with pytest.raises(ValueError, match="outside its domain"):
-        canonical_point(EMA, "SPY", {"rsi_min": 1e300})
-    with pytest.raises(ValueError, match="unknown strategy"):
-        canonical_point("no_such_program", "SPY", {})
-    with pytest.raises(ValueError, match="not a number"):
-        canonical_point(EMA, "SPY", {"gap": "wide"})
-    with pytest.raises(ValueError):
-        canonical_point(EMA, "SPY", {"rsi_min": 80})  # the model refuses rsi_min >= rsi_max
-
-
-@pytest.mark.parametrize(("name", "value"), [("gap", -0.004), ("gap", 2.004), ("rsi_min", -0.4), ("gap_bps", 100.2)])
-def test_canonical_point_refuses_a_value_less_than_half_a_quantum_outside_the_domain(name: str, value: float) -> None:
-    # The raw value is outside the domain: rounding it onto the boundary would move it, not refuse it.
-    with pytest.raises(ValueError, match="outside its domain"):
-        canonical_point(EMA, "SPY", {name: value})
-
-
-def test_a_zero_has_one_sign_and_so_one_hash() -> None:
-    negative = canonical_point(EMA, "SPY", {"gap": -0.0, "gap_bps": -0.0})
-    positive = canonical_point(EMA, "SPY", {"gap": 0.0, "gap_bps": 0.0})
-
-    assert negative == positive
-    assert math.copysign(1.0, negative["gap"]) == 1.0 and math.copysign(1.0, negative["gap_bps"]) == 1.0
-    assert point_hash(EMA, negative) == point_hash(EMA, positive)
-
-
-def test_point_hash_ignores_key_order() -> None:
-    point = canonical_point(EMA, "SPY", {"gap": 0.35})
-
-    assert point_hash(EMA, point) == point_hash(EMA, dict(reversed(list(point.items()))))
-    assert point_hash(EMA, point) != point_hash(EMA, {**point, "symbol": "QQQ"})
-
-
-def test_canonical_point_types_integer_knobs_and_omits_identity_neutral_defaults() -> None:
     at_defaults = canonical_point(EMA, "SPY", {"fast_period": 5.0, "slow_period": 10, "hold_bars": 5, "gap": 0.2})
     moved = canonical_point(EMA, "SPY", {"fast_period": 7.0, "slow_period": 21, "hold_bars": 5})
 
-    assert at_defaults == {"gap": 0.2, "gap_bps": 0.0, "rsi_min": 50.0, "rsi_max": 70.0, "symbol": "SPY"}
-    assert moved["fast_period"] == 7 and isinstance(moved["fast_period"], int)
-    assert moved["slow_period"] == 21 and isinstance(moved["slow_period"], int)
-    assert "hold_bars" not in moved
-    assert canonical_point(EMA, "SPY", moved) == moved
+    assert at_defaults == {"gap": 0.2, "gap_bps": 0.0, "rsi_min": 50.0, "rsi_max": 70.0, "symbol": "SPY"}, "identity-neutral defaults are omitted from the point"
+    assert moved["fast_period"] == 7 and isinstance(moved["fast_period"], int), "the fast period is typed as an integer"
+    assert moved["slow_period"] == 21 and isinstance(moved["slow_period"], int), "the slow period is typed as an integer"
+    assert "hold_bars" not in moved, "a hold_bars at its default is omitted"
+    assert canonical_point(EMA, "SPY", moved) == moved, "a canonical point is its own canonical point"
+
+
+@pytest.mark.parametrize(
+    ("strategy_key", "params", "match"),
+    [
+        pytest.param(EMA, (("gap", 2.5),), "outside its domain", id="out_of_domain_gap"),
+        pytest.param(EMA, (("rsi_min", 1e300),), "outside its domain", id="out_of_domain_rsi_min"),
+        pytest.param("no_such_program", (), "unknown strategy", id="unknown_strategy"),
+        pytest.param(EMA, (("gap", "wide"),), "not a number", id="not_a_number"),
+        pytest.param(EMA, (("rsi_min", 80),), None, id="the_model_refuses_rsi_min_at_or_above_rsi_max"),
+        # The raw value is outside the domain: rounding it onto the boundary would move it, not refuse it.
+        pytest.param(EMA, (("gap", -0.004),), "outside its domain", id="gap_less_than_half_a_quantum_below_the_domain"),
+        pytest.param(EMA, (("gap", 2.004),), "outside its domain", id="gap_less_than_half_a_quantum_above_the_domain"),
+        pytest.param(EMA, (("rsi_min", -0.4),), "outside its domain", id="rsi_min_less_than_half_a_quantum_below_the_domain"),
+        pytest.param(EMA, (("gap_bps", 100.2),), "outside its domain", id="gap_bps_less_than_half_a_quantum_above_the_domain"),
+    ],
+)
+def test_canonical_point_refuses_out_of_domain_and_unknown_inputs(strategy_key: str, params: tuple[tuple[str, object], ...], match: str | None) -> None:
+    with pytest.raises(ValueError, match=match):
+        canonical_point(strategy_key, "SPY", dict(params))
+
+
+def test_a_zero_has_one_sign_and_so_one_hash_and_the_hash_ignores_key_order() -> None:
+    negative = canonical_point(EMA, "SPY", {"gap": -0.0, "gap_bps": -0.0})
+    positive = canonical_point(EMA, "SPY", {"gap": 0.0, "gap_bps": 0.0})
+
+    assert negative == positive, "a negative zero snaps to the same point as a positive zero"
+    assert math.copysign(1.0, negative["gap"]) == 1.0 and math.copysign(1.0, negative["gap_bps"]) == 1.0, "a zero knob carries a positive sign"
+    assert point_hash(EMA, negative) == point_hash(EMA, positive), "a zero has one sign and so one hash"
+
+    point = canonical_point(EMA, "SPY", {"gap": 0.35})
+
+    assert point_hash(EMA, point) == point_hash(EMA, dict(reversed(list(point.items())))), "the point hash ignores key order"
+    assert point_hash(EMA, point) != point_hash(EMA, {**point, "symbol": "QQQ"}), "the point hash follows the symbol"

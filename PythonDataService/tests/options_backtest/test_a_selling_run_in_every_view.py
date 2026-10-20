@@ -77,7 +77,7 @@ def test_the_trades_route_says_which_way_each_leg_opened_and_how_it_left(selling
     assert [trade.exit_reason for trade in sent[2:]] == ["marked_not_sold", "marked_not_bought_back"]
 
 
-def test_a_session_says_which_way_each_fill_traded_and_whether_each_mark_is_owed(selling: RunResult) -> None:
+def test_a_session_says_which_way_each_leg_traded_in_its_fills_marks_and_trades(selling: RunResult) -> None:
     wednesday, thursday = _session(selling, 0), _session(selling, 1)
 
     # The purchase to open and the sale to open are entries on opposite sides; the sold leg's close is a purchase and the
@@ -87,26 +87,31 @@ def test_a_session_says_which_way_each_fill_traded_and_whether_each_mark_is_owed
         ("entry", "sell", "short"),
         ("exit", "sell", "long"),
         ("exit", "buy", "short"),
-    ]
-    assert wednesday.marks == []
-    assert thursday.fills[0].side == "buy" and thursday.fills[1].side == "sell"
+    ], "a session's fills say which way each traded, the two closes in the order of their trades"
+    assert wednesday.marks == [], "a session that closed both legs has no marks"
+    assert thursday.fills[0].side == "buy" and thursday.fills[1].side == "sell", (
+        "the entries of a session are on opposite sides"
+    )
     # Marked, not sold: a held value. Marked and owed: a sold leg never bought back.
-    assert [(mark.leg_id, mark.owed) for mark in thursday.marks] == [("long", False), ("short", True)]
-
-
-def test_the_session_s_trades_and_the_trades_route_agree_on_the_side_of_every_leg(selling: RunResult) -> None:
-    wednesday = _session(selling, 0)
+    assert [(mark.leg_id, mark.owed) for mark in thursday.marks] == [
+        ("long", False),
+        ("short", True),
+    ], "a held value is not owed and a sold leg never bought back is"
 
     assert [(trade.leg_id, trade.entry.side, trade.exit_kind) for trade in wednesday.trades] == [
         ("long", "buy", "sale"),
         ("short", "sell", "buy_back"),
-    ]
+    ], "the session's trades agree with the trades route on the side of every leg"
     # An entry's fill and the trade it belongs to are on the same side, and so are its buy-back and its close.
     entries = {fill.leg_id: fill.side for fill in wednesday.fills if fill.kind == "entry"}
     exits = {fill.leg_id: fill.side for fill in wednesday.fills if fill.kind == "exit"}
     for trade in wednesday.trades:
-        assert trade.entry.side == entries[trade.leg_id]
-        assert trade.sale is not None and trade.sale.side == exits[trade.leg_id]
+        assert trade.entry.side == entries[trade.leg_id], (
+            f"{trade.leg_id}: the trade and its entry fill are on one side"
+        )
+        assert trade.sale is not None and trade.sale.side == exits[trade.leg_id], (
+            f"{trade.leg_id}: the trade's close and its exit fill are on one side"
+        )
 
 
 def test_the_export_gives_each_row_its_side_and_calls_a_buy_back_a_buy_back(selling: RunResult) -> None:

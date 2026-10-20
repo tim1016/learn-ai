@@ -125,17 +125,30 @@ def test_one_minute_timeframe() -> None:
     assert next_trigger_ms(L, timeframe_ms=60_000) == _et(_REGULAR, 15, 1)
 
 
-def test_next_trigger_function_binds_the_timeframe() -> None:
-    """The callable Tasks 7/8 schedule against must carry the timeframe it was built with.
+@pytest.mark.parametrize(
+    ("timeframe_ms", "window", "last_end_ms", "expected"),
+    [
+        # The callable Tasks 7/8 schedule against must carry the timeframe it was
+        # built with. 15:01 is chosen because it is an instant where the two
+        # timeframes must disagree (15-minute buckets fire next at 15:15,
+        # one-minute at 15:02); an input where they agree would pass even
+        # against an unbound timeframe.
+        pytest.param(_TF, None, _et(_REGULAR, 15, 1), _et(_REGULAR, 15, 15), id="fifteen-minute-timeframe-fires-next-at-15-15"),
+        pytest.param(60_000, None, _et(_REGULAR, 15, 1), _et(_REGULAR, 15, 2), id="one-minute-timeframe-fires-next-at-15-02"),
+        pytest.param(_TF, None, _et(_REGULAR, 17, 0), _et(date(2026, 9, 3), 9, 45), id="regular-session-rolls-to-the-next-day-from-17-00"),
+        # 17:00 ET is a clean 15-minute boundary under the window's 04:00 anchor
+        # (780 minutes since open), and the bucket closing there was decided on
+        # the minute that closed it -- so the next decision is the 17:00–17:15
+        # bucket's, at 17:15.
+        pytest.param(_TF, _WINDOW, _et(_REGULAR, 17, 0), _et(_REGULAR, 17, 15), id="extended-session-fires-next-at-17-15"),
+    ],
+)
+def test_next_trigger_function_binds_the_timeframe_and_the_session(
+    timeframe_ms: int, window: ExtendedHoursWindow | None, last_end_ms: int, expected: int
+) -> None:
+    next_trigger = next_trigger_function(timeframe_ms, window=window)
 
-    15:01 is chosen because it is an instant where the two timeframes must
-    disagree (15-minute buckets fire next at 15:15, one-minute at 15:02); an
-    input where they agree would pass even against an unbound timeframe.
-    """
-    rth_15 = next_trigger_function(_TF)
-    rth_1 = next_trigger_function(60_000)
-    assert rth_15(_et(_REGULAR, 15, 1)) == _et(_REGULAR, 15, 15)
-    assert rth_1(_et(_REGULAR, 15, 1)) == _et(_REGULAR, 15, 2)
+    assert next_trigger(last_end_ms) == expected, "the callable schedules with the timeframe and session it was built with"
 
 
 def test_extended_trigger_instants_regular_day() -> None:
@@ -165,19 +178,6 @@ def test_extended_next_trigger_rolls_across_the_weekend() -> None:
 
 def test_extended_next_trigger_before_the_declared_open_is_the_first_bucket() -> None:
     assert next_trigger_ms(_et(_REGULAR, 3, 0), timeframe_ms=_TF, window=_WINDOW) == _et(_REGULAR, 4, 15)
-
-
-def test_next_trigger_function_binds_the_session() -> None:
-    rth = next_trigger_function(_TF)
-    extended = next_trigger_function(_TF, window=_WINDOW)
-    at_1700 = _et(_REGULAR, 17, 0)
-
-    assert rth(at_1700) == _et(date(2026, 9, 3), 9, 45)
-    # 17:00 ET is a clean 15-minute boundary under the window's 04:00 anchor
-    # (780 minutes since open), and the bucket closing there was decided on
-    # the minute that closed it -- so the next decision is the 17:00–17:15
-    # bucket's, at 17:15.
-    assert extended(at_1700) == _et(_REGULAR, 17, 15)
 
 
 def _binding() -> BrokerBotBinding:

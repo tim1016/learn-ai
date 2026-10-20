@@ -127,42 +127,42 @@ def _only(check: DataCheck) -> SessionCheck:
     return session
 
 
-def test_a_session_with_everything_it_can_need_stored_is_ready_and_has_its_contract_counted() -> None:
-    session = _only(_check({WED: _stored()}))
-
-    assert session.verdict is SessionVerdict.READY
-    assert session.skip is None and session.missing == () and session.problems == ()
-    assert session.contracts == ContractNeeds(needed=1, missing=0)
-
-
-def test_the_session_keeps_the_calendars_open_and_close() -> None:
+def test_a_session_with_everything_stored_is_ready_has_its_contract_counted_and_keeps_the_calendars_times() -> None:
     session = _only(_check({WED: _stored()}))
 
     window = session_window_for_date(WED)
-    assert (session.session_open_ms, session.session_close_ms) == (window.open_ms_utc, window.close_ms_utc)
+    assert session.verdict is SessionVerdict.READY, "a session with everything it can need stored is ready"
+    assert session.skip is None and session.missing == () and session.problems == (), "nothing skipped or missing"
+    assert session.contracts == ContractNeeds(needed=1, missing=0), "its contract is counted"
+    assert (session.session_open_ms, session.session_close_ms) == (
+        window.open_ms_utc,
+        window.close_ms_utc,
+    ), "the session keeps the calendar's open and close"
 
 
-def test_missing_underlying_bars_are_named_and_the_contracts_are_not_yet_known() -> None:
-    session = _only(_check({WED: _stored()}, without_underlying=(WED,)))
+@pytest.mark.parametrize(
+    ("without_underlying", "without_listing", "missing"),
+    [
+        pytest.param((WED,), (), (DataKind.UNDERLYING_BARS,), id="missing underlying bars are named"),
+        pytest.param((), (WED,), (DataKind.LISTING,), id="a missing listing is named"),
+        pytest.param(
+            (WED,),
+            (WED,),
+            (DataKind.UNDERLYING_BARS, DataKind.LISTING),
+            id="both missing are named in the order a download brings them",
+        ),
+    ],
+)
+def test_what_is_missing_is_named_and_the_contracts_are_not_yet_known(
+    without_underlying: tuple[date, ...], without_listing: tuple[date, ...], missing: tuple[DataKind, ...]
+) -> None:
+    session = _only(_check({WED: _stored()}, without_underlying=without_underlying, without_listing=without_listing))
 
-    assert session.verdict is SessionVerdict.NEEDS_DOWNLOAD
-    assert session.missing == (DataKind.UNDERLYING_BARS,)
-    assert session.contracts == ContractNeeds(needed=None, missing=None) and not session.contracts.known
-
-
-def test_a_missing_listing_is_named_and_the_contracts_are_not_yet_known() -> None:
-    session = _only(_check({WED: _stored()}, without_listing=(WED,)))
-
-    assert session.verdict is SessionVerdict.NEEDS_DOWNLOAD
-    assert session.missing == (DataKind.LISTING,)
-    assert not session.contracts.known
-
-
-def test_both_missing_are_named_in_the_order_a_download_brings_them() -> None:
-    session = _only(_check({WED: _stored()}, without_underlying=(WED,), without_listing=(WED,)))
-
-    assert session.missing == (DataKind.UNDERLYING_BARS, DataKind.LISTING)
-    assert not session.contracts.known
+    assert session.verdict is SessionVerdict.NEEDS_DOWNLOAD, "a session missing data needs a download"
+    assert session.missing == missing, "what is missing is named"
+    assert session.contracts == ContractNeeds(needed=None, missing=None) and not session.contracts.known, (
+        "the contracts are not yet known"
+    )
 
 
 def test_contracts_not_stored_are_counted_of_the_contracts_the_session_needs() -> None:
@@ -444,45 +444,38 @@ def _range(*verdicts: SessionVerdict) -> DataCheck:
 R, N, C = SessionVerdict.READY, SessionVerdict.NEEDS_DOWNLOAD, SessionVerdict.CANNOT_BE_TESTED
 
 
-def test_the_longest_unbroken_run_of_testable_sessions_is_offered_as_a_range() -> None:
-    # Indices 1 to 3 are three testable sessions in a row (Tue, Wed, Thu); 5 to 6 are two. The run is Tue to Thu.
-    checked = _range(C, R, N, R, C, R, R)
+@pytest.mark.parametrize(
+    ("verdicts", "stretch_found"),
+    [
+        # Indices 1 to 3 are three testable sessions in a row (Tue, Wed, Thu); 5 to 6 are two. The run is Tue to Thu.
+        pytest.param(
+            (C, R, N, R, C, R, R),
+            (_open(date(2026, 10, 6)), _open(THU), 3),
+            id="the longest unbroken run of testable sessions is offered as a range",
+        ),
+        pytest.param(
+            (R, R, C, R, R, C, C),
+            (_open(date(2026, 10, 5)), _open(date(2026, 10, 6)), 2),
+            id="of two runs as long the earlier is offered",
+        ),
+        pytest.param(
+            (C, R, C, R, R, R, N),
+            (_open(THU), _open(date(2026, 10, 13)), 4),
+            id="a run that ends the range is counted",
+        ),
+        pytest.param((C, C, C), None, id="a range with nothing testable offers no range"),
+    ],
+)
+def test_the_longest_testable_stretch_offered_as_a_range(
+    verdicts: tuple[SessionVerdict, ...], stretch_found: tuple[int, int, int] | None
+) -> None:
+    stretch = _range(*verdicts).longest_testable_stretch
 
-    stretch = checked.longest_testable_stretch
-
-    assert stretch is not None
-    assert (stretch.first_session_open_ms, stretch.last_session_open_ms, stretch.sessions) == (
-        _open(date(2026, 10, 6)),
-        _open(THU),
-        3,
-    )
-
-
-def test_of_two_runs_as_long_the_earlier_is_offered() -> None:
-    checked = _range(R, R, C, R, R, C, C)
-
-    stretch = checked.longest_testable_stretch
-
-    assert stretch is not None and (stretch.first_session_open_ms, stretch.sessions) == (_open(date(2026, 10, 5)), 2)
-
-
-def test_a_run_that_ends_the_range_is_counted() -> None:
-    checked = _range(C, R, C, R, R, R, N)
-
-    stretch = checked.longest_testable_stretch
-
-    assert stretch is not None
-    assert (stretch.first_session_open_ms, stretch.last_session_open_ms, stretch.sessions) == (
-        _open(THU),
-        _open(date(2026, 10, 13)),
-        4,
-    )
-
-
-def test_a_range_with_nothing_testable_offers_no_range() -> None:
-    checked = _range(C, C, C)
-
-    assert checked.longest_testable_stretch is None
+    assert (stretch is None) == (stretch_found is None), "a range is offered exactly when a run is testable"
+    if stretch is not None:
+        assert (stretch.first_session_open_ms, stretch.last_session_open_ms, stretch.sessions) == stretch_found, (
+            "the range offered is the longest run, the earlier of two as long"
+        )
 
 
 def test_a_session_that_cannot_be_tested_breaks_a_run_of_sessions_even_when_it_is_one_in_a_stored_range() -> None:

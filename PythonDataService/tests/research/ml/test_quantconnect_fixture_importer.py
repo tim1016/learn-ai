@@ -62,18 +62,15 @@ def test_qc_export_rejects_envelope_object() -> None:
         QcExport.model_validate(bad)
 
 
-def test_qc_prediction_record_rejects_extra_field() -> None:
-    bad = {
-        "date": "2024-01-02",
-        "prediction_by_symbol": {"SPY": 0.0123},
-        "confidence": 0.9,
-    }
-    with pytest.raises(ValidationError):
-        QcPredictionRecord.model_validate(bad)
-
-
-def test_qc_prediction_record_requires_at_least_one_symbol() -> None:
-    bad = {"date": "2024-01-02", "prediction_by_symbol": {}}
+@pytest.mark.parametrize(
+    ("symbol_predictions", "extra_fields"),
+    [
+        pytest.param((("SPY", 0.0123),), (("confidence", 0.9),), id="rejects_extra_field"),
+        pytest.param((), (), id="requires_at_least_one_symbol"),
+    ],
+)
+def test_qc_prediction_record_rejects_invalid(symbol_predictions: tuple, extra_fields: tuple) -> None:
+    bad = {"date": "2024-01-02", "prediction_by_symbol": dict(symbol_predictions)} | dict(extra_fields)
     with pytest.raises(ValidationError):
         QcPredictionRecord.model_validate(bad)
 
@@ -123,18 +120,6 @@ def test_import_skips_days_without_symbol_in_map(tmp_path: Path) -> None:
     assert manifest.chunks[0].row_count == 2
 
 
-def test_import_rejects_symbol_absent_from_every_record(tmp_path: Path) -> None:
-    export_path = _write_export(tmp_path, _good_export_records())
-    with pytest.raises(ValueError, match="absent from QC export"):
-        import_qc_fixture(
-            qc_export_path=export_path,
-            prediction_set_id="qc_iwm_v001",
-            output_root=tmp_path / "artifacts" / "predictions",
-            symbol="IWM",
-            **_provenance_kwargs(),
-        )
-
-
 def test_import_rejects_duplicate_date(tmp_path: Path) -> None:
     records = _good_export_records()
     records.append({"date": "2024-01-02", "prediction_by_symbol": {"SPY": 0.999}})
@@ -166,14 +151,21 @@ def test_import_rejects_tz_aware_date_string(tmp_path: Path) -> None:
         )
 
 
-def test_import_rejects_path_unsafe_prediction_set_id(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("prediction_set_id", "symbol", "match"),
+    [
+        pytest.param("qc_iwm_v001", "IWM", "absent from QC export", id="rejects_symbol_absent_from_every_record"),
+        pytest.param("../evil", "SPY", "path-safe", id="rejects_path_unsafe_prediction_set_id"),
+    ],
+)
+def test_import_rejects_invalid_symbol_or_id(tmp_path: Path, prediction_set_id: str, symbol: str, match: str) -> None:
     export_path = _write_export(tmp_path, _good_export_records())
-    with pytest.raises(ValueError, match="path-safe"):
+    with pytest.raises(ValueError, match=match):
         import_qc_fixture(
             qc_export_path=export_path,
-            prediction_set_id="../evil",
+            prediction_set_id=prediction_set_id,
             output_root=tmp_path / "artifacts" / "predictions",
-            symbol="SPY",
+            symbol=symbol,
             **_provenance_kwargs(),
         )
 

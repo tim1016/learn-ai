@@ -305,22 +305,6 @@ async def test_shutdown_during_a_dry_run_s_restoration_releases_its_account(
     _another_process_holds_the_dry_run(restarted_lane.artifacts_root, lease_ttl_ms=60_000).close()
 
 
-async def test_the_unrestored_dry_runs_panel_says_its_account_did_not_open(
-    restarted_lane: _Lane,
-) -> None:
-    """While another process holds its account, the bot's own panel refuses rather than guessing."""
-    holder = _another_process_holds_the_dry_run(restarted_lane.artifacts_root, lease_ttl_ms=60_000)
-    try:
-        with pytest.raises(PanelUnavailableError) as refused:
-            async with binding_clerk_runtime(restarted_lane.registry, _dry_run_binding()):
-                pass
-    finally:
-        holder.close()
-
-    assert refused.value.http_status == 503
-    assert "This Dry Run's own simulated Clerk could not be opened." in str(refused.value.detail)
-
-
 # ── #2668: the restoration runs under its bot's own operation lock ────────────
 
 
@@ -680,10 +664,12 @@ async def test_boot_retires_the_run_an_orphan_was_left_with_and_keeps_its_accoun
         repository.close()
 
 
-async def test_a_lease_held_dry_run_panel_shows_only_the_owner_sentence(
+async def test_a_lease_held_dry_run_panel_refuses_in_the_owner_sentence_and_says_its_account_did_not_open(
     restarted_lane: _Lane,
 ) -> None:
-    """#2670: a Dry Run whose account another live process holds refuses with the
+    """While another process holds its account, the bot's own panel refuses rather than guessing.
+
+    #2670: a Dry Run whose account another live process holds refuses with the
     one owner sentence on every surface -- never the internal ``sim:`` id,
     never the words "execution lease" the repository's exception carries."""
     holder = _another_process_holds_the_dry_run(restarted_lane.artifacts_root, lease_ttl_ms=60_000)
@@ -691,14 +677,18 @@ async def test_a_lease_held_dry_run_panel_shows_only_the_owner_sentence(
         with pytest.raises(PanelUnavailableError) as refused:
             async with binding_clerk_runtime(restarted_lane.registry, _dry_run_binding()):
                 pass
-
-        sentence = f"{refused.value.detail}"
-        assert "still open in another running copy of this Clerk" in sentence
-        assert "Stop that copy" in sentence
-        assert "sim:" not in sentence
-        assert "execution lease" not in sentence
     finally:
         holder.close()
+
+    sentence = f"{refused.value.detail}"
+    assert refused.value.http_status == 503, "the unrestored Dry Run's panel answers 503"
+    assert "This Dry Run's own simulated Clerk could not be opened." in str(
+        refused.value.detail
+    ), "the panel says the Dry Run's account did not open"
+    assert "still open in another running copy of this Clerk" in sentence, "#2670: the owner sentence is shown"
+    assert "Stop that copy" in sentence, "#2670: the owner sentence says what to do"
+    assert "sim:" not in sentence, "#2670: the internal sim: id is never shown"
+    assert "execution lease" not in sentence, "#2670: the repository's lease wording is never shown"
 
 
 async def test_start_re_checks_a_held_dry_run_account_and_agrees_with_the_panel(

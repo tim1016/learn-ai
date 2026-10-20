@@ -57,73 +57,86 @@ def _request(**overrides: object) -> EngineChartRequest:
     return EngineChartRequest.model_validate(payload)
 
 
-def test_service_resolves_strategy_recipe_from_validated_parameters(chart_store: None) -> None:
-    response = build_engine_chart(
-        _request(
-            strategy_name="sma_crossover",
-            parameters={"symbol": "SPY", "short_window": 3, "long_window": 8},
-        )
-    )
+@pytest.mark.parametrize(
+    ("overrides", "expected_ids"),
+    [
+        pytest.param(
+            {
+                "strategy_name": "sma_crossover",
+                "parameters": {"symbol": "SPY", "short_window": 3, "long_window": 8},
+            },
+            ["sma-length-3", "sma-length-8"],
+            id="resolves_strategy_recipe_from_validated_parameters",
+        ),
+        # The EMA lengths are parameters (#2696); the evidence chart must draw the
+        # lines the program trades on, not the reference's 5/10.
+        pytest.param(
+            {"parameters": {"symbol": "SPY", "fast_period": 3, "slow_period": 20}},
+            ["ema-length-3", "ema-length-20", "rsi-length-14"],
+            id="draws_the_configured_ema_lengths_2696",
+        ),
+    ],
+)
+def test_service_resolves_indicator_specs_from_validated_parameters(
+    chart_store: None, overrides: dict[str, object], expected_ids: list[str]
+) -> None:
+    response = build_engine_chart(_request(**overrides))
 
-    assert [spec.id for spec in response.indicator_specs] == [
-        "sma-length-3",
-        "sma-length-8",
-    ]
-    assert all(spec.strategy_default for spec in response.indicator_specs)
-
-
-def test_service_draws_the_configured_ema_lengths(chart_store: None) -> None:
-    # The EMA lengths are parameters (#2696); the evidence chart must draw the
-    # lines the program trades on, not the reference's 5/10.
-    response = build_engine_chart(
-        _request(parameters={"symbol": "SPY", "fast_period": 3, "slow_period": 20})
-    )
-
-    assert [spec.id for spec in response.indicator_specs] == [
-        "ema-length-3",
-        "ema-length-20",
-        "rsi-length-14",
-    ]
+    assert [spec.id for spec in response.indicator_specs] == expected_ids, "the specs follow the validated parameters"
+    assert all(spec.strategy_default for spec in response.indicator_specs), "every resolved spec is a strategy default"
 
 
 @pytest.mark.asyncio
-async def test_endpoint_computes_indicators_on_the_returned_policy_store_bars(
-    chart_store: None,
-    client,
-) -> None:
-    response = await client.post("/api/engine/chart", json=_request().model_dump(mode="json"))
+async def test_endpoint_computes_and_resolves_indicators(chart_store: None, client) -> None:
+    default = await client.post("/api/engine/chart", json=_request().model_dump(mode="json"))
+    excluded = await client.post(
+        "/api/engine/chart",
+        json=_request(
+            excluded_strategy_indicator_ids=["ema-length-5"],
+            indicators=[{"name": "sma", "params": {"length": 3}}],
+        ).model_dump(mode="json"),
+    )
+    deduplicated = await client.post(
+        "/api/engine/chart",
+        json=_request(
+            strategy_name="spy_strategy_b",
+            parameters={},
+            indicators=[{"name": "supertrend", "params": {"length": 10, "multiplier": 3}}],
+        ).model_dump(mode="json"),
+    )
 
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    assert payload["policy_key"] == "polygon-adjusted"
-    assert len(payload["bars"]) == 26
-    assert payload["bars"][0]["t"] == FROM_MS + 15 * 60_000
+    # Indicators are computed on the returned policy-store bars.
+    assert default.status_code == 200, f"default request: {default.text}"
+    payload = default.json()
+    assert payload["policy_key"] == "polygon-adjusted", "default request: policy key is polygon-adjusted"
+    assert len(payload["bars"]) == 26, "default request: 26 fifteen-minute bars"
+    assert payload["bars"][0]["t"] == FROM_MS + 15 * 60_000, "default request: first bar is stamped at its close"
     assert [spec["id"] for spec in payload["indicator_specs"]] == [
         "ema-length-5",
         "ema-length-10",
         "rsi-length-14",
-    ]
+    ], "default request: the strategy's default indicator specs"
     bar_timestamps = [bar["t"] for bar in payload["bars"]]
     for result in payload["indicators"]:
         if isinstance(result["data"], list):
-            assert [point["t"] for point in result["data"]] == bar_timestamps
+            assert [point["t"] for point in result["data"]] == bar_timestamps, (
+                f"default request: indicator {result['id']} is aligned to the bar timestamps"
+            )
 
-
-@pytest.mark.asyncio
-async def test_endpoint_applies_default_exclusions_and_user_indicators(chart_store: None, client) -> None:
-    request = _request(
-        excluded_strategy_indicator_ids=["ema-length-5"],
-        indicators=[{"name": "sma", "params": {"length": 3}}],
-    )
-
-    response = await client.post("/api/engine/chart", json=request.model_dump(mode="json"))
-
-    assert response.status_code == 200, response.text
-    assert [spec["id"] for spec in response.json()["indicator_specs"]] == [
+    # Default exclusions and user indicators.
+    assert excluded.status_code == 200, f"excluded request: {excluded.text}"
+    assert [spec["id"] for spec in excluded.json()["indicator_specs"]] == [
         "ema-length-10",
         "rsi-length-14",
         "sma-length-3",
-    ]
+    ], "excluded request: the excluded default is gone and the user's sma is added"
+
+    # Numeric-equivalent server-owned indicator ids are deduplicated.
+    assert deduplicated.status_code == 200, f"deduplicated request: {deduplicated.text}"
+    specs = deduplicated.json()["indicator_specs"]
+    assert [spec["id"] for spec in specs].count("supertrend-length-10-multiplier-3") == 1, (
+        "deduplicated request: supertrend-length-10-multiplier-3 appears once"
+    )
 
 
 def test_strategy_rsi_uses_canonical_wilders_value_and_bar_close_timestamp() -> None:
@@ -150,21 +163,3 @@ def test_strategy_rsi_uses_canonical_wilders_value_and_bar_close_timestamp() -> 
     assert [point.value for point in result.data[:-1]] == [None] * 5
     assert result.data[-1].value == pytest.approx(60.0, rel=0, abs=1e-9)
     assert result.data[-1].t == bars[-1].end_ms
-
-
-@pytest.mark.asyncio
-async def test_endpoint_deduplicates_numeric_equivalent_server_owned_indicator_ids(
-    chart_store: None,
-    client,
-) -> None:
-    request = _request(
-        strategy_name="spy_strategy_b",
-        parameters={},
-        indicators=[{"name": "supertrend", "params": {"length": 10, "multiplier": 3}}],
-    )
-
-    response = await client.post("/api/engine/chart", json=request.model_dump(mode="json"))
-
-    assert response.status_code == 200, response.text
-    specs = response.json()["indicator_specs"]
-    assert [spec["id"] for spec in specs].count("supertrend-length-10-multiplier-3") == 1

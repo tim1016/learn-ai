@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -49,25 +50,34 @@ def test_volume_info_of_an_absent_volume_is_none() -> None:
     assert SubprocessPodman(run=run).volume_info("nope") is None
 
 
-def test_create_volume_carries_every_label_and_the_driver() -> None:
+@pytest.mark.parametrize(
+    ("operation", "command"),
+    [
+        pytest.param(
+            lambda podman: podman.create_volume(
+                VolumeInfo(name="v", driver="local", labels={"z": "1", "a": "2"})
+            ),
+            [
+                "podman", "volume", "create", "--driver", "local",
+                "--label", "a=2", "--label", "z=1", "v",
+            ],
+            id="create_volume_carries_every_label_and_the_driver",
+        ),
+        pytest.param(
+            lambda podman: podman.remove_volume("v"),
+            ["podman", "volume", "rm", "v"],
+            id="remove_volume_never_forces",
+        ),
+    ],
+)
+def test_a_volume_operation_issues_exactly_this_command(
+    operation: Callable[[SubprocessPodman], object], command: list[str]
+) -> None:
     run = _ScriptedRun((0, "", ""))
 
-    SubprocessPodman(run=run).create_volume(
-        VolumeInfo(name="v", driver="local", labels={"z": "1", "a": "2"})
-    )
+    operation(SubprocessPodman(run=run))
 
-    assert run.calls[0][0] == [
-        "podman", "volume", "create", "--driver", "local",
-        "--label", "a=2", "--label", "z=1", "v",
-    ]
-
-
-def test_remove_volume_never_forces() -> None:
-    run = _ScriptedRun((0, "", ""))
-
-    SubprocessPodman(run=run).remove_volume("v")
-
-    assert run.calls[0][0] == ["podman", "volume", "rm", "v"]
+    assert run.calls[0][0] == command
 
 
 def test_export_and_import_use_the_transfer_timeout(tmp_path: Path) -> None:
@@ -115,24 +125,40 @@ def test_a_failed_command_refuses_naming_the_subject_and_stderr() -> None:
     assert "being used" in refused.value.message
 
 
-def test_a_timed_out_command_refuses() -> None:
-    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        raise subprocess.TimeoutExpired(command, kwargs["timeout"])  # type: ignore[arg-type]
+def _timing_out_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+    raise subprocess.TimeoutExpired(command, kwargs["timeout"])  # type: ignore[arg-type]
 
+
+def _missing_executable_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+    raise FileNotFoundError(command[0])
+
+
+@pytest.mark.parametrize(
+    ("run", "operation", "reason"),
+    [
+        pytest.param(
+            _timing_out_run,
+            lambda podman: podman.stop_container("my-postgres"),
+            "podman_command_timed_out",
+            id="a_timed_out_command_refuses",
+        ),
+        pytest.param(
+            _missing_executable_run,
+            lambda podman: podman.volume_info("v"),
+            "podman_unavailable",
+            id="a_missing_executable_refuses",
+        ),
+    ],
+)
+def test_a_podman_that_cannot_run_the_command_refuses(
+    run: Callable[..., subprocess.CompletedProcess[str]],
+    operation: Callable[[SubprocessPodman], object],
+    reason: str,
+) -> None:
     with pytest.raises(MigrationRefused) as refused:
-        SubprocessPodman(run=run).stop_container("my-postgres")
+        operation(SubprocessPodman(run=run))
 
-    assert refused.value.reason == "podman_command_timed_out"
-
-
-def test_a_missing_executable_refuses() -> None:
-    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        raise FileNotFoundError(command[0])
-
-    with pytest.raises(MigrationRefused) as refused:
-        SubprocessPodman(run=run).volume_info("v")
-
-    assert refused.value.reason == "podman_unavailable"
+    assert refused.value.reason == reason, "the failure is a refusal with its own reason"
 
 
 _SYSTEM_DF = """Images space usage:
@@ -149,24 +175,22 @@ empty-volume                         0           0B
 """
 
 
+_UNREADABLE_DF = "Local Volumes space usage:\n\nVOLUME NAME LINKS SIZE\nv 1 lots\n"
+
+
 @pytest.mark.parametrize(
-    ("name", "expected"),
+    ("name", "system_df", "expected"),
     [
-        ("learn-ai_pgdata", 106_200_000),
-        ("learn-ai-alpaca-clerk-data", 2_500_000_000),
-        ("learn-ai_alpaca-fleet-control", 24_580),
-        ("empty-volume", 0),
-        ("not-listed", None),
+        pytest.param("learn-ai_pgdata", _SYSTEM_DF, 106_200_000, id="megabytes"),
+        pytest.param("learn-ai-alpaca-clerk-data", _SYSTEM_DF, 2_500_000_000, id="gigabytes"),
+        pytest.param("learn-ai_alpaca-fleet-control", _SYSTEM_DF, 24_580, id="kilobytes"),
+        pytest.param("empty-volume", _SYSTEM_DF, 0, id="empty_volume"),
+        pytest.param("not-listed", _SYSTEM_DF, None, id="not_listed"),
+        pytest.param("v", _UNREADABLE_DF, None, id="unreadable_size_is_unknown_not_a_guess"),
     ],
 )
-def test_volume_size_reads_podman_system_df(name: str, expected: int | None) -> None:
-    run = _ScriptedRun((0, _SYSTEM_DF, ""))
+def test_volume_size_reads_podman_system_df(name: str, system_df: str, expected: int | None) -> None:
+    run = _ScriptedRun((0, system_df, ""))
 
     assert SubprocessPodman(run=run).volume_size_bytes(name) == expected
     assert run.calls[0][0] == ["podman", "system", "df", "--verbose"]
-
-
-def test_an_unreadable_volume_size_is_unknown_not_a_guess() -> None:
-    run = _ScriptedRun((0, "Local Volumes space usage:\n\nVOLUME NAME LINKS SIZE\nv 1 lots\n", ""))
-
-    assert SubprocessPodman(run=run).volume_size_bytes("v") is None

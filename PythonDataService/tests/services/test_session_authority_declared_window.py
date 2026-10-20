@@ -45,54 +45,51 @@ def test_extended_bounds_enclose_the_regular_session() -> None:
     assert bounds.close_ms == _et(_REGULAR, 20, 0)
 
 
-def test_extended_bounds_refuse_a_non_trading_day() -> None:
-    with pytest.raises(ValueError, match="not a trading day"):
-        extended_session_bounds_ms(_SUNDAY, window=_WINDOW)
+@pytest.mark.parametrize(
+    ("day", "open_minute_et", "close_minute_et", "match"),
+    [
+        pytest.param(_SUNDAY, 4 * 60, 20 * 60, "not a trading day", id="non-trading-day"),
+        pytest.param(_REGULAR, 10 * 60, 15 * 60, "enclose", id="window-inside-the-regular-session"),
+    ],
+)
+def test_extended_bounds_refuse_an_unusable_day_or_window(
+    day: date, open_minute_et: int, close_minute_et: int, match: str
+) -> None:
+    window = ExtendedHoursWindow(open_minute_et=open_minute_et, close_minute_et=close_minute_et)
 
-
-def test_extended_bounds_refuse_a_window_inside_the_regular_session() -> None:
-    with pytest.raises(ValueError, match="enclose"):
-        extended_session_bounds_ms(_REGULAR, window=ExtendedHoursWindow(open_minute_et=10 * 60, close_minute_et=15 * 60))
+    with pytest.raises(ValueError, match=match):
+        extended_session_bounds_ms(day, window=window)
 
 
 @pytest.mark.parametrize(
-    ("hour", "minute", "phase", "next_hour", "next_minute"),
+    ("now", "phase", "next_transition"),
     [
-        (3, 59, "CLOSED", 4, 0),
-        (4, 0, "PRE", 9, 30),
-        (9, 29, "PRE", 9, 30),
-        (9, 30, "RTH", 16, 0),
-        (15, 59, "RTH", 16, 0),
-        (16, 0, "POST", 20, 0),
-        (19, 59, "POST", 20, 0),
+        pytest.param((_REGULAR, 3, 59), "CLOSED", (_REGULAR, 4, 0), id="closed-before-the-declared-open"),
+        pytest.param((_REGULAR, 4, 0), "PRE", (_REGULAR, 9, 30), id="pre-opens-at-the-declared-open"),
+        pytest.param((_REGULAR, 9, 29), "PRE", (_REGULAR, 9, 30), id="pre-until-the-last-minute-before-rth"),
+        pytest.param((_REGULAR, 9, 30), "RTH", (_REGULAR, 16, 0), id="rth-opens-at-the-calendar-open"),
+        pytest.param((_REGULAR, 15, 59), "RTH", (_REGULAR, 16, 0), id="rth-until-the-last-minute-before-post"),
+        pytest.param((_REGULAR, 16, 0), "POST", (_REGULAR, 20, 0), id="post-opens-at-the-calendar-close"),
+        pytest.param((_REGULAR, 19, 59), "POST", (_REGULAR, 20, 0), id="post-until-the-last-minute-before-the-declared-close"),
+        pytest.param(
+            (_REGULAR, 20, 0), "CLOSED", (date(2026, 9, 3), 4, 0), id="after-the-declared-close-the-next-transition-is-the-next-sessions-open"
+        ),
+        # Labor Day 2026-09-07 → next session Tuesday 2026-09-08.
+        pytest.param(
+            (_SUNDAY, 12, 0), "CLOSED", (date(2026, 9, 8), 4, 0), id="a-non-trading-day-is-closed-until-the-next-declared-open"
+        ),
+        pytest.param((_EARLY, 13, 0), "POST", (_EARLY, 20, 0), id="an-early-close-starts-post-at-the-calendar-close"),
     ],
 )
-def test_declared_window_phases_on_a_regular_day(hour: int, minute: int, phase: str, next_hour: int, next_minute: int) -> None:
-    state = session_state_at_ms(now_ms=_et(_REGULAR, hour, minute), extended_window=_WINDOW)
+def test_declared_window_phases_and_next_transitions(
+    now: tuple[date, int, int], phase: str, next_transition: tuple[date, int, int]
+) -> None:
+    state = session_state_at_ms(now_ms=_et(*now), extended_window=_WINDOW)
 
-    assert state.phase == phase
-    assert state.source == "broker_declared_window"
-    assert state.extended_phase_proven is True
-    assert state.next_transition_ms == _et(_REGULAR, next_hour, next_minute)
-
-
-def test_after_the_declared_close_the_next_transition_is_the_next_sessions_open() -> None:
-    state = session_state_at_ms(now_ms=_et(_REGULAR, 20, 0), extended_window=_WINDOW)
-    assert state.phase == "CLOSED"
-    assert state.next_transition_ms == _et(date(2026, 9, 3), 4, 0)
-
-
-def test_a_non_trading_day_is_closed_until_the_next_declared_open() -> None:
-    state = session_state_at_ms(now_ms=_et(_SUNDAY, 12, 0), extended_window=_WINDOW)
-    assert state.phase == "CLOSED"
-    # Labor Day 2026-09-07 → next session Tuesday 2026-09-08.
-    assert state.next_transition_ms == _et(date(2026, 9, 8), 4, 0)
-
-
-def test_an_early_close_starts_post_at_the_calendar_close() -> None:
-    state = session_state_at_ms(now_ms=_et(_EARLY, 13, 0), extended_window=_WINDOW)
-    assert state.phase == "POST"
-    assert state.next_transition_ms == _et(_EARLY, 20, 0)
+    assert state.phase == phase, "the declared window resolves the phase"
+    assert state.source == "broker_declared_window", "the phase is read from the broker's declared window"
+    assert state.extended_phase_proven is True, "the declared window proves the extended phase"
+    assert state.next_transition_ms == _et(*next_transition), "the next transition"
 
 
 def test_without_a_window_the_calendar_still_proves_only_rth_or_closed() -> None:

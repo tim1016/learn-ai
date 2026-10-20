@@ -66,32 +66,47 @@ def _curve(body: dict[str, Any], model: str) -> list[dict[str, float]]:
 
 
 @pytest.mark.parametrize(
-    ("overrides", "reason"),
+    ("path", "overrides"),
     [
-        ({"spot_min": 0.0, "spot_max": 120.0}, "zero start"),
-        ({"spot_min": -50.0, "spot_max": 50.0}, "negative start"),
-        ({"spot_min": 120.0, "spot_max": 80.0}, "descending"),
-        ({"spot_min": 100.0, "spot_max": 100.0}, "zero width, what an empty Range % sends"),
-        ({"spot_min": 150.0, "spot_max": None}, "start above the default end (spot x 1.20)"),
-        ({"spot_min": None, "spot_max": 70.0}, "end below the default start (spot x 0.80)"),
-        ({"spot_min": 0.00001, "spot_max": 120.0}, "start that rounds to a spot of 0 at 4 decimals"),
+        pytest.param("/api/quantlib/compare", {"spot_min": 0.0, "spot_max": 120.0}, id="spot range: zero start"),
+        pytest.param("/api/quantlib/compare", {"spot_min": -50.0, "spot_max": 50.0}, id="spot range: negative start"),
+        pytest.param("/api/quantlib/compare", {"spot_min": 120.0, "spot_max": 80.0}, id="spot range: descending"),
+        pytest.param(
+            "/api/quantlib/compare",
+            {"spot_min": 100.0, "spot_max": 100.0},
+            id="spot range: zero width, what an empty Range % sends",
+        ),
+        pytest.param(
+            "/api/quantlib/compare",
+            {"spot_min": 150.0, "spot_max": None},
+            id="spot range: start above the default end (spot x 1.20)",
+        ),
+        pytest.param(
+            "/api/quantlib/compare",
+            {"spot_min": None, "spot_max": 70.0},
+            id="spot range: end below the default start (spot x 0.80)",
+        ),
+        pytest.param(
+            "/api/quantlib/compare",
+            {"spot_min": 0.00001, "spot_max": 120.0},
+            id="spot range: start that rounds to a spot of 0 at 4 decimals",
+        ),
+        pytest.param("/api/quantlib/compare", {"risk_free_rate": -0.01}, id="risk-free rate -0.01 on compare"),
+        pytest.param("/api/quantlib/compare", {"risk_free_rate": 0.51}, id="risk-free rate 0.51 on compare"),
+        pytest.param("/api/quantlib/compare", {"risk_free_rate": 5.0}, id="risk-free rate 5.0 on compare"),
+        pytest.param("/api/quantlib/price", {"risk_free_rate": -0.01}, id="risk-free rate -0.01 on price"),
+        pytest.param("/api/quantlib/price", {"risk_free_rate": 0.51}, id="risk-free rate 0.51 on price"),
+        pytest.param("/api/quantlib/price", {"risk_free_rate": 5.0}, id="risk-free rate 5.0 on price"),
     ],
 )
-async def test_compare_refuses_a_spot_range_that_is_not_an_upward_range(
-    client: AsyncClient, overrides: dict[str, Any], reason: str
+async def test_a_request_that_cannot_describe_a_curve_or_a_rate_is_refused(
+    client: AsyncClient, path: str, overrides: dict[str, Any]
 ) -> None:
+    # A spot range must be an upward range; a risk-free rate must lie in 0 to half.
     payload = {**COMPARE_PAYLOAD, **overrides}
     payload = {k: v for k, v in payload.items() if v is not None}
 
-    response = await client.post("/api/quantlib/compare", json=payload)
-
-    assert response.status_code == 422, f"{reason}: {response.text}"
-
-
-@pytest.mark.parametrize("path", ["/api/quantlib/compare", "/api/quantlib/price"])
-@pytest.mark.parametrize("rate", [-0.01, 0.51, 5.0])
-async def test_a_risk_free_rate_outside_zero_to_half_is_refused(client: AsyncClient, path: str, rate: float) -> None:
-    response = await client.post(path, json={**COMPARE_PAYLOAD, "risk_free_rate": rate})
+    response = await client.post(path, json=payload)
 
     assert response.status_code == 422, response.text
 
@@ -307,7 +322,7 @@ async def test_compare_after_8pm_new_york_prices_an_option_expiring_the_next_new
     assert body["time_to_expiry_years"] == round(ONE_DAY_YEARS, 6)
 
 
-def test_price_after_8pm_new_york_defaults_the_pricing_date_to_the_new_york_date(
+def test_price_and_implied_volatility_after_8pm_new_york_default_the_pricing_date_to_the_new_york_date(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     pytest.importorskip("QuantLib")
@@ -322,21 +337,9 @@ def test_price_after_8pm_new_york_defaults_the_pricing_date_to_the_new_york_date
         option_type="call",
         engine=PricingEngine.ANALYTIC_BS,
     )
-
     expected = bs_european_price(100.0, 100.0, ONE_DAY_YEARS, 0.043, VOLATILITY, is_call=True)
-    assert result.price == pytest.approx(expected, abs=1e-10, rel=0)
-    assert result.price > 0.0
-
-
-def test_implied_volatility_after_8pm_new_york_defaults_the_pricing_date_to_the_new_york_date(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    pytest.importorskip("QuantLib")
-    monkeypatch.setattr(quantlib_pricer, "now_ms_utc", lambda: NINE_PM_ET_MS)
-    market_price = bs_european_price(100.0, 100.0, ONE_DAY_YEARS, 0.043, VOLATILITY, is_call=True)
-
     solved = implied_volatility(
-        market_price=market_price,
+        market_price=expected,
         spot=100.0,
         strike=100.0,
         risk_free_rate=0.043,
@@ -344,4 +347,6 @@ def test_implied_volatility_after_8pm_new_york_defaults_the_pricing_date_to_the_
         option_type="call",
     )
 
-    assert solved == pytest.approx(VOLATILITY, abs=1e-4, rel=0)
+    assert result.price == pytest.approx(expected, abs=1e-10, rel=0), "price_option prices one day to expiry"
+    assert result.price > 0.0, "price_option prices an option expiring the next New York date above zero"
+    assert solved == pytest.approx(VOLATILITY, abs=1e-4, rel=0), "implied_volatility solves with one day to expiry"

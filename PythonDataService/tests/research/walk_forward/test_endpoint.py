@@ -253,26 +253,31 @@ async def test_post_over_ceiling_timestamp_returns_422(client, path: str, field:
     assert response.status_code == 422, response.text
 
 
-async def test_post_start_ms_at_ceiling_passes_the_schema(client):
-    """``start_ms == MAX_TIMESTAMP_MS`` is admissible; the handler, not the
-    schema, refuses it because no later ``end_ms`` exists."""
-    body = _request_body(split_policy={"kind": "chronological", "train_pct": 0.7})
-    body["start_ms"] = MAX_TIMESTAMP_MS
-    body["end_ms"] = MAX_TIMESTAMP_MS
+@pytest.mark.parametrize(
+    ("overrides", "detail"),
+    [
+        # ``start_ms == MAX_TIMESTAMP_MS`` is admissible; the handler, not the
+        # schema, refuses it because no later ``end_ms`` exists.
+        pytest.param(
+            (("start_ms", MAX_TIMESTAMP_MS), ("end_ms", MAX_TIMESTAMP_MS)),
+            "strictly before",
+            id="post_start_ms_at_ceiling_passes_the_schema",
+        ),
+        # ``end_ms == MAX_TIMESTAMP_MS`` passes the schema, but the trading
+        # calendar cannot schedule a window ending in 9999: a request the service
+        # cannot serve, refused as a 400 before any schedule is built (#2771).
+        pytest.param(
+            (("end_ms", MAX_TIMESTAMP_MS),),
+            "cannot schedule past 2262-04-10",
+            id="post_end_ms_at_ceiling_is_a_400_not_a_500_2771",
+        ),
+    ],
+)
+async def test_post_at_the_ceiling_is_a_400_naming_the_reason(client, overrides: tuple, detail: str):
+    body = _request_body(split_policy={"kind": "chronological", "train_pct": 0.7}, **dict(overrides))
     response = await client.post(_WALK_FORWARD, json=body)
     assert response.status_code == 400, response.text
-    assert "strictly before" in response.json()["detail"]
-
-
-async def test_post_end_ms_at_ceiling_is_a_400_not_a_500(client):
-    """``end_ms == MAX_TIMESTAMP_MS`` passes the schema, but the trading
-    calendar cannot schedule a window ending in 9999: a request the service
-    cannot serve, refused as a 400 before any schedule is built (#2771)."""
-    body = _request_body(split_policy={"kind": "chronological", "train_pct": 0.7})
-    body["end_ms"] = MAX_TIMESTAMP_MS
-    response = await client.post(_WALK_FORWARD, json=body)
-    assert response.status_code == 400, response.text
-    assert "cannot schedule past 2262-04-10" in response.json()["detail"]
+    assert detail in response.json()["detail"], response.text
 
 
 @pytest.mark.parametrize(
@@ -340,40 +345,44 @@ async def test_post_unknown_fill_mode_returns_400_naming_the_modes(client, fill_
     assert "signal_bar_close, next_bar_open or decision_minute_open" in response.json()["detail"]
 
 
-async def test_post_unknown_split_kind_returns_400(client):
-    body = _request_body(split_policy={"kind": "totally_made_up"})
-    response = await client.post("/api/research/strategy-runs/walk-forward", json=body)
-    # Pydantic 422 — the SplitPolicySpec literal-field validation
-    # rejects unknown kinds before the route body runs.
-    assert response.status_code == 422, response.text
-
-
 @pytest.mark.parametrize(
     "split_policy",
     [
-        {"kind": "rolling"},
-        {
-            "kind": "rolling",
-            "train_days": 10,
-            "test_days": 5,
-            "step_days": 5,
-            "unexpected": 1,
-        },
-        {
-            "kind": "rolling",
-            "train_days": True,
-            "test_days": 5,
-            "step_days": 5,
-        },
-        {
-            "kind": "rolling",
-            "train_days": "10",
-            "test_days": 5,
-            "step_days": 5,
-        },
+        # Pydantic 422 — the SplitPolicySpec literal-field validation
+        # rejects unknown kinds before the route body runs.
+        pytest.param({"kind": "totally_made_up"}, id="post_unknown_split_kind_returns_400"),
+        pytest.param({"kind": "rolling"}, id="incomplete_split_fields"),
+        pytest.param(
+            {
+                "kind": "rolling",
+                "train_days": 10,
+                "test_days": 5,
+                "step_days": 5,
+                "unexpected": 1,
+            },
+            id="extra_split_field",
+        ),
+        pytest.param(
+            {
+                "kind": "rolling",
+                "train_days": True,
+                "test_days": 5,
+                "step_days": 5,
+            },
+            id="coerced_bool_split_field",
+        ),
+        pytest.param(
+            {
+                "kind": "rolling",
+                "train_days": "10",
+                "test_days": 5,
+                "step_days": 5,
+            },
+            id="coerced_string_split_field",
+        ),
     ],
 )
-async def test_post_rejects_incomplete_extra_or_coerced_split_fields(
+async def test_post_rejects_unknown_incomplete_extra_or_coerced_split_policy(
     client,
     split_policy: dict,
 ):
@@ -424,23 +433,34 @@ async def test_post_window_too_short_persists_failed_walk_forward(client, tmp_pa
 # ---------------------------------------------------------------------------
 # GET single + 404.
 # ---------------------------------------------------------------------------
-async def test_get_missing_walk_forward_returns_404(client):
-    response = await client.get("/api/research/strategy-runs/walk-forward/" + "f" * 32)
-    assert response.status_code == 404
-
-
-async def test_get_path_traversal_id_returns_400(client):
-    response = await client.get("/api/research/strategy-runs/walk-forward/..%2Fetc%2Fpasswd")
-    assert response.status_code in {400, 404}, response.text
+@pytest.mark.parametrize(
+    ("walk_forward_id", "statuses"),
+    [
+        pytest.param("f" * 32, (404,), id="get_missing_walk_forward_returns_404"),
+        pytest.param("..%2Fetc%2Fpasswd", (400, 404), id="get_path_traversal_id_returns_400"),
+    ],
+)
+async def test_get_an_unservable_walk_forward_id_is_refused(client, walk_forward_id: str, statuses: tuple):
+    response = await client.get("/api/research/strategy-runs/walk-forward/" + walk_forward_id)
+    assert response.status_code in statuses, response.text
 
 
 # ---------------------------------------------------------------------------
 # Listing + filters.
 # ---------------------------------------------------------------------------
-async def test_list_empty_returns_empty(client):
+async def test_list_empty_returns_empty_and_the_walk_forward_path_does_not_clash_with_run_id_route(client):
+    """``GET /api/research/strategy-runs/walk-forward`` must hit the
+    walk-forward listing endpoint, not be parsed as ``run_id=walk-forward``
+    on the parent ``research_runs`` router.
+    """
     response = await client.get("/api/research/strategy-runs/walk-forward")
-    assert response.status_code == 200
-    assert response.json() == {"walk_forwards": []}
+    assert response.status_code == 200, "list empty returns 200"
+    assert response.json() == {"walk_forwards": []}, "list empty returns an empty walk_forwards list"
+    # If the parent route had won, ``walk-forward`` wouldn't match the
+    # 32-char hex regex → 400. The walk-forward listing returns 200
+    # with a ``walk_forwards`` envelope.
+    assert response.status_code == 200, "walk-forward path does not clash with the run_id route: 200, not 400"
+    assert "walk_forwards" in response.json(), "walk-forward path does not clash with the run_id route: listing envelope"
 
 
 async def test_list_requires_complete_protocol_filter_identity(client):
@@ -497,22 +517,6 @@ async def test_list_filter_by_parent_run_id(client):
     assert response.status_code == 200
     items = response.json()["walk_forwards"]
     assert [c["walk_forward_id"] for c in items] == [a.json()["config"]["walk_forward_id"]]
-
-
-# ---------------------------------------------------------------------------
-# Path-resolution check: literal /walk-forward beats /{run_id} on the parent.
-# ---------------------------------------------------------------------------
-async def test_walk_forward_path_does_not_clash_with_run_id_route(client):
-    """``GET /api/research/strategy-runs/walk-forward`` must hit the
-    walk-forward listing endpoint, not be parsed as ``run_id=walk-forward``
-    on the parent ``research_runs`` router.
-    """
-    response = await client.get("/api/research/strategy-runs/walk-forward")
-    # If the parent route had won, ``walk-forward`` wouldn't match the
-    # 32-char hex regex → 400. The walk-forward listing returns 200
-    # with a ``walk_forwards`` envelope.
-    assert response.status_code == 200
-    assert "walk_forwards" in response.json()
 
 
 async def test_engine_chart_to_ms_at_ceiling_is_a_400_not_a_500(client):

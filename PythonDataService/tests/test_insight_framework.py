@@ -35,15 +35,17 @@ def _ms(*, minutes: int = 0) -> int:
 # InsightScore
 # ──────────────────────────────────────────────────────────────────
 class TestInsightScore:
-    def test_clamp_above_one(self):
+    @pytest.mark.parametrize(
+        ("score_type", "attribute", "value", "expected"),
+        [
+            pytest.param(InsightScoreType.DIRECTION, "direction", 1.5, 1.0, id="clamp_above_one"),
+            pytest.param(InsightScoreType.MAGNITUDE, "magnitude", -0.3, 0.0, id="clamp_below_zero"),
+        ],
+    )
+    def test_set_score_clamps_to_unit_interval(self, score_type, attribute, value, expected):
         score = InsightScore()
-        score.set_score(InsightScoreType.DIRECTION, 1.5)
-        assert score.direction == 1.0
-
-    def test_clamp_below_zero(self):
-        score = InsightScore()
-        score.set_score(InsightScoreType.MAGNITUDE, -0.3)
-        assert score.magnitude == 0.0
+        score.set_score(score_type, value)
+        assert getattr(score, attribute) == expected
 
     def test_finalize_locks_scores(self):
         score = InsightScore()
@@ -164,42 +166,36 @@ class TestDefaultInsightScorer:
         DefaultInsightScoreFunction().score(i)
         return i
 
-    def test_up_correct(self):
-        i = self._make_scored_insight(InsightDirection.UP, Decimal("500"), Decimal("502"))
-        assert i.score.direction == 1.0
+    @pytest.mark.parametrize(
+        ("direction", "ref_start", "ref_end", "expected"),
+        [
+            pytest.param(InsightDirection.UP, Decimal("500"), Decimal("502"), 1.0, id="up_correct"),
+            pytest.param(InsightDirection.UP, Decimal("500"), Decimal("498"), 0.0, id="up_wrong"),
+            pytest.param(InsightDirection.DOWN, Decimal("500"), Decimal("498"), 1.0, id="down_correct"),
+            pytest.param(InsightDirection.DOWN, Decimal("500"), Decimal("502"), 0.0, id="down_wrong"),
+            # Price barely moved — within 0.1% threshold.
+            pytest.param(InsightDirection.FLAT, Decimal("500"), Decimal("500.04"), 1.0, id="flat_correct"),
+            # Price moved too much for FLAT prediction.
+            pytest.param(InsightDirection.FLAT, Decimal("500"), Decimal("505"), 0.0, id="flat_wrong"),
+        ],
+    )
+    def test_direction_scoring(self, direction, ref_start, ref_end, expected):
+        i = self._make_scored_insight(direction, ref_start, ref_end)
+        assert i.score.direction == expected
 
-    def test_up_wrong(self):
-        i = self._make_scored_insight(InsightDirection.UP, Decimal("500"), Decimal("498"))
-        assert i.score.direction == 0.0
-
-    def test_down_correct(self):
-        i = self._make_scored_insight(InsightDirection.DOWN, Decimal("500"), Decimal("498"))
-        assert i.score.direction == 1.0
-
-    def test_down_wrong(self):
-        i = self._make_scored_insight(InsightDirection.DOWN, Decimal("500"), Decimal("502"))
-        assert i.score.direction == 0.0
-
-    def test_flat_correct(self):
-        # Price barely moved — within 0.1% threshold.
-        i = self._make_scored_insight(InsightDirection.FLAT, Decimal("500"), Decimal("500.04"))
-        assert i.score.direction == 1.0
-
-    def test_flat_wrong(self):
-        # Price moved too much for FLAT prediction.
-        i = self._make_scored_insight(InsightDirection.FLAT, Decimal("500"), Decimal("505"))
-        assert i.score.direction == 0.0
-
-    def test_magnitude_scoring_perfect(self):
-        # Predicted 0.4% move, actual was exactly 0.4%.
-        i = self._make_scored_insight(InsightDirection.UP, Decimal("500"), Decimal("502"), magnitude=0.004)
-        assert i.score.magnitude == pytest.approx(1.0, abs=0.01)
-
-    def test_magnitude_scoring_partial(self):
-        # Predicted 1% move, actual was 0.5%.
-        i = self._make_scored_insight(InsightDirection.UP, Decimal("500"), Decimal("502.5"), magnitude=0.01)
-        # score = 1 - |0.01 - 0.005| / max(0.01, 0.005) = 1 - 0.005/0.01 = 0.5
-        assert i.score.magnitude == pytest.approx(0.5, abs=0.01)
+    @pytest.mark.parametrize(
+        ("ref_end", "magnitude", "expected"),
+        [
+            # Predicted 0.4% move, actual was exactly 0.4%.
+            pytest.param(Decimal("502"), 0.004, 1.0, id="magnitude_scoring_perfect"),
+            # Predicted 1% move, actual was 0.5%.
+            # score = 1 - |0.01 - 0.005| / max(0.01, 0.005) = 1 - 0.005/0.01 = 0.5
+            pytest.param(Decimal("502.5"), 0.01, 0.5, id="magnitude_scoring_partial"),
+        ],
+    )
+    def test_magnitude_scoring(self, ref_end, magnitude, expected):
+        i = self._make_scored_insight(InsightDirection.UP, Decimal("500"), ref_end, magnitude=magnitude)
+        assert i.score.magnitude == pytest.approx(expected, abs=0.01)
 
     def test_no_magnitude_leaves_zero(self):
         i = self._make_scored_insight(InsightDirection.UP, Decimal("500"), Decimal("502"))
@@ -303,7 +299,7 @@ class TestInsightManager:
         assert len(active) == 1  # Only i2 is still active
         assert active[0].id == i2.id
 
-    def test_get_summary_direction_accuracy(self):
+    def test_get_summary_after_all_insights_expire(self):
         mgr, _insights = self._make_manager_with_insights()
         t_end_ms = to_ms_utc(datetime(2024, 6, 1, 14, 0, tzinfo=UTC))
 
@@ -314,24 +310,18 @@ class TestInsightManager:
         # i3: ref=503, final=510 → UP correct
 
         summary = mgr.get_summary()
-        assert summary.total_insights == 3
-        assert summary.scored_insights == 3
+        assert summary.total_insights == 3, "direction accuracy: every insight is tracked"
+        assert summary.scored_insights == 3, "direction accuracy: every insight is scored"
         # All 3 went up since the reference was below 510
-        assert summary.direction_accuracy == pytest.approx(1.0)
+        assert summary.direction_accuracy == pytest.approx(1.0), "direction accuracy: all three went up"
 
-    def test_get_summary_confidence_calibration(self):
-        mgr, _ = self._make_manager_with_insights()
-        t_end_ms = to_ms_utc(datetime(2024, 6, 1, 14, 0, tzinfo=UTC))
-        mgr.step(t_end_ms, {"SPY": Decimal("510")})
-
-        summary = mgr.get_summary()
-        assert len(summary.confidence_calibration) > 0
+        assert len(summary.confidence_calibration) > 0, "confidence calibration: buckets are produced"
         # All insights had confidence in [0.6, 0.8] range
         buckets = {b.bucket_low: b for b in summary.confidence_calibration}
         # 0.6 confidence → bucket 0.6-0.7
-        assert 0.6 in buckets
+        assert 0.6 in buckets, "confidence calibration: 0.6 confidence lands in bucket 0.6-0.7"
         # 0.7 confidence → bucket 0.7-0.8
-        assert 0.7 in buckets
+        assert 0.7 in buckets, "confidence calibration: 0.7 confidence lands in bucket 0.7-0.8"
 
     def test_get_summary_empty_when_no_insights(self):
         mgr = InsightManager()

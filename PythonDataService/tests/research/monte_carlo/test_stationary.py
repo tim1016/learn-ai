@@ -29,13 +29,20 @@ def _variance_of_resampled_mean(series: np.ndarray, mean_block: float) -> float:
     return float((n * autocov[0] + 2.0 * np.sum((n - lags) * (1.0 - p) ** lags * autocov[1:])) / n**2)
 
 
-def test_stationary_indices_same_seed_same_indices() -> None:
+def test_stationary_indices_seeded_draw_properties() -> None:
     first = stationary_indices(50, size=50, mean_block=5, replications=20, rng=np.random.default_rng(9))
     again = stationary_indices(50, size=50, mean_block=5, replications=20, rng=np.random.default_rng(9))
-    assert first.shape == (20, 50)
-    assert first.dtype == np.int64
-    assert np.array_equal(first, again)
-    assert first.min() >= 0 and first.max() < 50
+    assert first.shape == (20, 50), "same seed draw has shape (replications, size)"
+    assert first.dtype == np.int64, "same seed draw is int64"
+    assert np.array_equal(first, again), "same seed same indices"
+    assert first.min() >= 0 and first.max() < 50, "same seed draw stays inside [0, n)"
+
+    drawn = stationary_indices(30, size=30, mean_block=1, replications=8, rng=np.random.default_rng(3))
+    ordinary = np.random.default_rng(3).integers(0, 30, size=(8, 30))
+    assert np.array_equal(drawn, ordinary), "mean_block one is the ordinary bootstrap"
+
+    drawn = stationary_indices(7, size=20, mean_block=1e12, replications=5, rng=np.random.default_rng(4))
+    assert np.array_equal(drawn, (drawn[:, :1] + np.arange(20)) % 7), "one block wraps from last to first"
 
 
 def test_stationary_indices_seeded_draw_is_pinned() -> None:
@@ -45,16 +52,6 @@ def test_stationary_indices_seeded_draw_is_pinned() -> None:
     # convention name, never a new literal.
     drawn = stationary_indices(7, size=8, mean_block=3, replications=3, rng=np.random.default_rng(20261006))
     assert drawn.tolist() == [[5, 6, 0, 1, 3, 4, 5, 1], [6, 3, 0, 1, 2, 3, 4, 5], [0, 1, 4, 5, 6, 0, 1, 2]]
-
-
-def test_stationary_indices_mean_block_one_is_the_ordinary_bootstrap() -> None:
-    drawn = stationary_indices(30, size=30, mean_block=1, replications=8, rng=np.random.default_rng(3))
-    assert np.array_equal(drawn, np.random.default_rng(3).integers(0, 30, size=(8, 30)))
-
-
-def test_stationary_indices_one_block_wraps_from_last_to_first() -> None:
-    drawn = stationary_indices(7, size=20, mean_block=1e12, replications=5, rng=np.random.default_rng(4))
-    assert np.array_equal(drawn, (drawn[:, :1] + np.arange(20)) % 7)
 
 
 def test_stationary_indices_blocks_average_the_mean_block() -> None:

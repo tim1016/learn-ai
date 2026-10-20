@@ -44,23 +44,23 @@ class _Sample(BaseModel):
     value: int = Field(ge=0)
 
 
-def test_write_then_read_round_trips(tmp_path: Path) -> None:
+def test_a_written_artifact_round_trips_leaves_no_tmp_debris_and_is_byte_stable(tmp_path: Path) -> None:
     path = tmp_path / "sample.json"
     artifact = _Sample(name="alpha", value=7)
 
     atomic_write_pydantic_artifact(path, artifact)
     loaded = read_pydantic_artifact(path, _Sample)
+    raw = path.read_text(encoding="utf-8")
+    parsed = json.loads(raw)
 
-    assert loaded == artifact
-
-
-def test_write_leaves_no_tmp_debris_on_success(tmp_path: Path) -> None:
-    path = tmp_path / "sample.json"
-
-    atomic_write_pydantic_artifact(path, _Sample(name="alpha", value=1))
-
-    assert path.exists()
-    assert not list(tmp_path.glob(".sample.json.*.tmp"))
+    assert loaded == artifact, "write then read round trips"
+    assert path.exists(), "the write publishes the file"
+    assert not list(tmp_path.glob(".sample.json.*.tmp")), "no writer-owned tmp debris on success"
+    # Stable byte shape matters for downstream content-hash comparisons.
+    assert " " not in raw, "serialized output has no spaces"
+    assert "\n" not in raw, "serialized output has no newlines"
+    # Sorted-keys means schema_version comes before value (alphabetical).
+    assert list(parsed.keys()) == sorted(parsed.keys()), "serialized keys are sorted"
 
 
 def test_write_creates_parent_directory(tmp_path: Path) -> None:
@@ -103,17 +103,3 @@ def test_write_ignores_leftover_legacy_tmp_file(tmp_path: Path) -> None:
 
     assert path.exists()
     assert legacy_tmp.read_text(encoding="utf-8") == "debris from a crashed write"
-
-
-def test_serialized_output_is_sorted_and_whitespace_free(tmp_path: Path) -> None:
-    # Stable byte shape matters for downstream content-hash comparisons.
-    path = tmp_path / "sample.json"
-
-    atomic_write_pydantic_artifact(path, _Sample(name="alpha", value=42))
-
-    raw = path.read_text(encoding="utf-8")
-    assert " " not in raw
-    assert "\n" not in raw
-    # Sorted-keys means schema_version comes before value (alphabetical).
-    parsed = json.loads(raw)
-    assert list(parsed.keys()) == sorted(parsed.keys())

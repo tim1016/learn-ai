@@ -35,42 +35,42 @@ def test_compute_train_zscore_flip_sign_negates_output():
     np.testing.assert_allclose(z_flipped.to_numpy(), -z_positive.to_numpy(), atol=1e-12, rtol=0)
 
 
-def test_compute_train_zscore_zero_sigma_returns_all_nan():
-    feature = pd.Series([2.0, 2.0, 2.0, 2.0])
-    train_mask = pd.Series([True] * 4)
+@pytest.mark.parametrize(
+    ("feature_values", "train_flags"),
+    [
+        pytest.param((2.0, 2.0, 2.0, 2.0), (True,) * 4, id="zero_sigma_returns_all_nan"),
+        # A single train value yields sigma=NaN from pd.Series.std (ddof=1).
+        pytest.param((1.0, 2.0, 3.0), (True, False, False), id="nan_sigma_returns_all_nan"),
+    ],
+)
+def test_compute_train_zscore_degenerate_sigma_returns_all_nan(feature_values, train_flags):
+    feature = pd.Series(list(feature_values))
+    train_mask = pd.Series(list(train_flags))
 
     z = compute_train_zscore(feature, train_mask, flip_sign=False)
 
     assert z.isna().all()
 
 
-def test_compute_train_zscore_nan_sigma_returns_all_nan():
-    # A single train value yields sigma=NaN from pd.Series.std (ddof=1).
-    feature = pd.Series([1.0, 2.0, 3.0])
-    train_mask = pd.Series([True, False, False])
-
-    z = compute_train_zscore(feature, train_mask, flip_sign=False)
-
-    assert z.isna().all()
-
-
-def test_apply_threshold_filter_produces_sign_outside_threshold():
-    z = pd.Series([-2.5, -1.0, 0.0, 0.5, 1.5, 3.0])
-
-    signal = apply_threshold_filter(z, threshold=1.0)
-
-    # |z|>1 → sign(z); else 0.
-    expected = pd.Series([-1.0, 0.0, 0.0, 0.0, 1.0, 1.0])
-    np.testing.assert_allclose(signal.to_numpy(), expected.to_numpy(), atol=1e-12, rtol=0)
-
-
-def test_apply_threshold_filter_boundary_is_strict():
-    z = pd.Series([-1.0, 1.0])
+@pytest.mark.parametrize(
+    ("z_values", "expected_values"),
+    [
+        # |z|>1 → sign(z); else 0.
+        pytest.param(
+            (-2.5, -1.0, 0.0, 0.5, 1.5, 3.0),
+            (-1.0, 0.0, 0.0, 0.0, 1.0, 1.0),
+            id="produces_sign_outside_threshold",
+        ),
+        # threshold is strict-greater — boundary values filter to 0.
+        pytest.param((-1.0, 1.0), (0.0, 0.0), id="boundary_is_strict"),
+    ],
+)
+def test_apply_threshold_filter_signal(z_values, expected_values):
+    z = pd.Series(list(z_values))
 
     signal = apply_threshold_filter(z, threshold=1.0)
 
-    # threshold is strict-greater — boundary values filter to 0.
-    np.testing.assert_allclose(signal.to_numpy(), np.array([0.0, 0.0]), atol=1e-12, rtol=0)
+    np.testing.assert_allclose(signal.to_numpy(), np.array(expected_values), atol=1e-12, rtol=0)
 
 
 def test_apply_threshold_filter_preserves_index():

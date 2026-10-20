@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -36,10 +37,6 @@ def _pb(index: int = 0, **overrides: Any) -> PolygonBar:
     return PolygonBar(**fields)
 
 
-def test_validator_accepts_a_clean_session() -> None:
-    assert_publishable_minute_bars([_pb(i) for i in range(390)], symbol="SPY", trading_date=TRADING_DAY)
-
-
 def test_validator_names_the_offending_bar_with_et_wall_clock() -> None:
     with pytest.raises(CorruptVendorBarsError) as excinfo:
         assert_publishable_minute_bars(
@@ -60,32 +57,41 @@ def test_validator_caps_named_offenders() -> None:
     assert "and 3 more" in str(excinfo.value)
 
 
-def test_validator_rejects_non_positive_and_non_finite_prices() -> None:
-    for bad in ({"open": 0.0}, {"close": -1.0}, {"low": float("inf")}, {"high": float("nan")}):
-        with pytest.raises(CorruptVendorBarsError, match="not finite and positive"):
-            assert_publishable_minute_bars([_pb(0, **bad)], symbol="SPY", trading_date=TRADING_DAY)
+@pytest.mark.parametrize(
+    ("make_bars", "match"),
+    [
+        pytest.param(lambda: [_pb(0, open=0.0)], "not finite and positive", id="non_positive_price_open_zero"),
+        pytest.param(lambda: [_pb(0, close=-1.0)], "not finite and positive", id="non_positive_price_close_negative"),
+        pytest.param(lambda: [_pb(0, low=float("inf"))], "not finite and positive", id="non_finite_price_low_inf"),
+        pytest.param(lambda: [_pb(0, high=float("nan"))], "not finite and positive", id="non_finite_price_high_nan"),
+        pytest.param(lambda: [_pb(0), _pb(2), _pb(1)], "non-increasing timestamp", id="non_increasing_timestamps"),
+        # 2024-05-21 pre-market bar inside a 2024-05-20 capture fetch.
+        pytest.param(
+            lambda: [_pb(0), _pb(t_ms=BAR_START_MS + NEXT_DAY_MS_DELTA)],
+            "outside requested session 2024-05-20",
+            id="next_session_premarket_as_wrong_day",
+        ),
+        pytest.param(lambda: [_pb(0, volume=float("nan"))], "is not finite", id="non_finite_volume_nan"),
+        pytest.param(lambda: [_pb(0, volume=float("inf"))], "is not finite", id="non_finite_volume_inf"),
+    ],
+)
+def test_validator_rejects_corrupt_bars(make_bars: Callable[[], list[PolygonBar]], match: str) -> None:
+    with pytest.raises(CorruptVendorBarsError, match=match):
+        assert_publishable_minute_bars(make_bars(), symbol="SPY", trading_date=TRADING_DAY)
 
 
-def test_validator_rejects_non_increasing_timestamps() -> None:
-    with pytest.raises(CorruptVendorBarsError, match="non-increasing timestamp"):
-        assert_publishable_minute_bars(
-            [_pb(0), _pb(2), _pb(1)], symbol="SPY", trading_date=TRADING_DAY
-        )
-
-
-def test_validator_rejects_next_session_premarket_as_wrong_day() -> None:
-    # 2024-05-21 pre-market bar inside a 2024-05-20 capture fetch.
-    with pytest.raises(CorruptVendorBarsError, match="outside requested session 2024-05-20"):
-        assert_publishable_minute_bars(
-            [_pb(0), _pb(t_ms=BAR_START_MS + NEXT_DAY_MS_DELTA)], symbol="SPY", trading_date=TRADING_DAY
-        )
-
-
-def test_validator_accepts_premarket_of_the_requested_session() -> None:
-    # 2024-05-20 08:00 ET pre-market bar — same ET date, so publishable.
-    assert_publishable_minute_bars(
-        [_pb(t_ms=BAR_START_MS - 90 * 60_000), _pb(0)], symbol="SPY", trading_date=TRADING_DAY
-    )
+@pytest.mark.parametrize(
+    "make_bars",
+    [
+        pytest.param(lambda: [_pb(i) for i in range(390)], id="accepts_a_clean_session"),
+        # 2024-05-20 08:00 ET pre-market bar — same ET date, so publishable.
+        pytest.param(
+            lambda: [_pb(t_ms=BAR_START_MS - 90 * 60_000), _pb(0)], id="accepts_premarket_of_the_requested_session"
+        ),
+    ],
+)
+def test_validator_accepts_publishable_sessions(make_bars: Callable[[], list[PolygonBar]]) -> None:
+    assert_publishable_minute_bars(make_bars(), symbol="SPY", trading_date=TRADING_DAY)
 
 
 def test_stored_bars_validate_through_the_same_contract() -> None:
@@ -106,11 +112,3 @@ def test_stored_bars_validate_through_the_same_contract() -> None:
         assert_publishable_stored_minute_bars(
             [bar, duplicate], symbol="SPY", trading_date=TRADING_DAY
         )
-
-
-def test_validator_rejects_non_finite_volume() -> None:
-    for bad in (float("nan"), float("inf")):
-        with pytest.raises(CorruptVendorBarsError, match="is not finite"):
-            assert_publishable_minute_bars(
-                [_pb(0, volume=bad)], symbol="SPY", trading_date=TRADING_DAY
-            )
