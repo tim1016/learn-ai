@@ -5,6 +5,8 @@ import { CopyButtonComponent } from '../../../../shared/copy-button/copy-button.
 import { extractServerMessage } from '../../operation-error';
 import type { OptionsBotConfiguration } from '../../broker-deploy-page/options-bot-deploy.service';
 
+class ProofMismatchError extends Error {}
+
 @Component({
   selector: 'app-options-bot-proof',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -19,11 +21,15 @@ export class OptionsBotProofComponent {
     loader: async ({ params }) => {
       const proof = await this.service.get(params.golden_setup_id);
       if (proof.setup_sha256 !== params.setup_sha256 || proof.rules_digest !== params.rules_digest) {
-        throw new Error('The retained proof does not match this deployment’s exact setup and rules.');
+        throw new ProofMismatchError('The retained proof does not match this deployment’s exact setup and rules.');
       }
       return proof;
     },
   });
-  protected readonly problem = computed(() => this.proof.error() === undefined ? null
-    : extractServerMessage(this.proof.error(), 'The retained Options proof could not be read.'));
+  protected readonly problem = computed(() => {
+    const error = this.proof.error();
+    if (error === undefined) return null;
+    return error instanceof ProofMismatchError ? error.message
+      : extractServerMessage(error, 'The retained Options proof could not be read.');
+  });
 }

@@ -26,7 +26,7 @@ const SESSION: OptionsBotSession = {
     held_contract: 'SPY261016C00500000', held_contracts: 1, average_fill_price: '2.50', stop_level: '2.00' }], events: [],
 };
 
-async function setup(state: OptionsBotSession = SESSION) {
+async function setup(state: OptionsBotSession = SESSION, configuration = CONFIGURATION) {
   const directory = provideFleetDirectory({ observed_at_ms: 1791828000000, clerks: [testLane({ clerk_id: 'clrk_spec', effective_binding_generation: 3, routing_epoch: 4 })] });
   const session = vi.fn().mockResolvedValue(state);
   const resume = vi.fn().mockResolvedValue({ running: true });
@@ -36,7 +36,7 @@ async function setup(state: OptionsBotSession = SESSION) {
     confirmation_text: null, shortcuts: [],
   }));
   const result = await render(OptionsBotSessionComponent, {
-    inputs: { target: TARGET, sid: 'spy-options-1', configuration: CONFIGURATION, revision: 1 },
+    inputs: { target: TARGET, sid: 'spy-options-1', configuration, revision: 1 },
     providers: [
       directory,
       { provide: OptionsBacktestService, useValue: { describe: async () => summaryFor('Tested setup') } },
@@ -49,6 +49,12 @@ async function setup(state: OptionsBotSession = SESSION) {
 }
 
 describe('Options session recovery', () => {
+  it('explains when the retained proof belongs to a different sealed setup', async () => {
+    await setup(SESSION, { ...CONFIGURATION, setup_sha256: '0'.repeat(64) });
+    fireEvent.click(screen.getByRole('button', { name: 'Build proof' }));
+    await screen.findByText('The retained proof does not match this deployment’s exact setup and rules.');
+    expect(screen.queryByText(goldenSetup().status_explanation)).toBeNull();
+  });
   it('says when saved premiums and leg P&L are unavailable', async () => {
     await setup({ ...SESSION, legs: [{ ...SESSION.legs[0], realized_pnl_usd: null, open_pnl_usd: null,
       watched_contracts: [{ symbol: 'SPY261016C00500000', premium: null, close_ms: null }],
