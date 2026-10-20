@@ -190,6 +190,9 @@
                   <app-options-bot-session [(proofOpen)]="proofOpen" [target]="optionsTarget()" [sid]="sid()" [configuration]="configuration" [revision]="panelData.revision" [locked]="actionPending()" (pendingChange)="optionsPending.set($event)" (resumed)="refreshOptionsBot()" />
                 } @else { <p>The approved Options setup could not be read.</p> }
               } @else {
+                @if (panelData.traded?.kind === 'option') {
+                  @if (panelData.traded; as traded) { <app-bot-option-legs [traded]="traded" /> }
+                }
                 <app-bot-setup [panel]="panelData" [settings]="strategyViewValue()?.settings ?? null" [(proofOpen)]="proofOpen" />
               }
               <details class="bot-board__runs">

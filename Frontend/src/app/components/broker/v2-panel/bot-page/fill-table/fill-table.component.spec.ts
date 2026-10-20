@@ -4,6 +4,15 @@ import { describe, expect, it } from 'vitest';
 import { FillTableComponent } from './fill-table.component';
 
 describe('FillTableComponent', () => {
+  it('names an option fill by underlying, expiry, strike and right', async () => {
+    await render(FillTableComponent, { inputs: {
+      label: 'Option fills', showAsset: true,
+      fills: [{ filled_at_ms: 1_790_000_000_000, side: 'sell', quantity: 2, price: 1.5,
+        symbol: 'SPY261023P00585000', order_ref: 'exit', event_key: 'put-fill' }],
+    } });
+    expect(screen.getByRole('button', { name: "SPY Oct 23 '26 585 Put" })).toBeTruthy();
+    expect(screen.getByText('2')).toBeTruthy();
+  });
   it('renders timestamped buy and sell fills from the chart projection', async () => {
     await render(FillTableComponent, {
       inputs: {

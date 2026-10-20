@@ -30800,6 +30800,32 @@ export interface components {
             kind: "stock" | "option";
             /** Label */
             label?: string | null;
+            /** Legs */
+            legs?: components["schemas"]["TradedOptionLegView"][];
+            /** Legs Notice */
+            legs_notice?: string | null;
+            /** Symbol */
+            symbol: string;
+        };
+        /**
+         * TradedOptionLegView
+         * @description A held contract and its recorded entry terms; never an unresolved selector.
+         */
+        TradedOptionLegView: {
+            contract: components["schemas"]["OptionContract"];
+            /** Leg Id */
+            leg_id: string | null;
+            /** Multiplier */
+            multiplier: number;
+            /** Quantity */
+            quantity: number;
+            /** Ratio */
+            ratio: number | null;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "long" | "short";
             /** Symbol */
             symbol: string;
         };

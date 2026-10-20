@@ -708,6 +708,7 @@ async function renderShell(
     /** The bot's end on its page (#2607), and the service's change of it. */
     end?: BotEndView;
     editBotEnd?: ReturnType<typeof vi.fn>;
+    traded?: BotPanelView['traded'];
   } = {},
 ) {
   // A persistent mock, not `mockResolvedValueOnce`: a rebind restarts the
@@ -723,6 +724,7 @@ async function renderShell(
       actions: [RECONCILE_ACTION],
       primary_action: 'reconcile_now',
       ...(overrides.end ? { end: overrides.end } : {}),
+      ...(overrides.traded ? { traded: overrides.traded } : {}),
     })),
     ...(overrides.runBotAction ? { runBotAction: overrides.runBotAction } : {}),
     ...(overrides.editBotEnd ? { editBotEnd: overrides.editBotEnd } : {}),
@@ -745,6 +747,16 @@ async function renderShell(
 }
 
 describe('BotPanelShellComponent', () => {
+  it('shows a held-legs card for a Signal option structure', async () => {
+    await renderShell({ traded: { kind: 'option', symbol: 'SPY', legs: [], legs_notice: 'No contracts held yet.' } });
+    expect(screen.getByRole('heading', { name: 'Held option legs' })).toBeTruthy();
+    expect(screen.getByText('No contracts held yet.')).toBeTruthy();
+  });
+
+  it('keeps the held-legs card off a stock bot page', async () => {
+    await renderShell({ traded: { kind: 'stock', symbol: 'SPY' } });
+    expect(screen.queryByRole('heading', { name: 'Held option legs' })).toBeNull();
+  });
   it('lets a new bot choose its default interval after a stock interval was selected', async () => {
     const { fixture, service } = await renderShell();
     await showTape(fixture);

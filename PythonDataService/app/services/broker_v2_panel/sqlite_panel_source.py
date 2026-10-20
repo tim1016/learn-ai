@@ -84,6 +84,7 @@ from app.services.broker_v2_panel.catalog_projection_service import (
     bot_world,
     ended_at_ms,
 )
+from app.services.broker_v2_panel.option_structure_view import with_held_structure
 from app.services.broker_v2_panel.sqlite_panel_adapter import (
     SQLITE_PANEL_LIFECYCLE_ACTION_IDS,
     CatalogHomeFacts,
@@ -240,6 +241,8 @@ def _bound_bot_status(
         if registration is not None
         else None
     )
+    if status is not None:
+        status = with_held_structure(status, repository)
     after = repository.control_meta_snapshot()
     if not _meta_matches(
         after,

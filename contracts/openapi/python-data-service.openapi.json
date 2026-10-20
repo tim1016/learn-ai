@@ -60280,6 +60280,24 @@
             ],
             "title": "Label"
           },
+          "legs": {
+            "items": {
+              "$ref": "#/components/schemas/TradedOptionLegView"
+            },
+            "title": "Legs",
+            "type": "array"
+          },
+          "legs_notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Legs Notice"
+          },
           "symbol": {
             "title": "Symbol",
             "type": "string"
@@ -60290,6 +60308,71 @@
           "symbol"
         ],
         "title": "TradedInstrumentView",
+        "type": "object"
+      },
+      "TradedOptionLegView": {
+        "additionalProperties": false,
+        "description": "A held contract and its recorded entry terms; never an unresolved selector.",
+        "properties": {
+          "contract": {
+            "$ref": "#/components/schemas/OptionContract"
+          },
+          "leg_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leg Id"
+          },
+          "multiplier": {
+            "minimum": 1.0,
+            "title": "Multiplier",
+            "type": "integer"
+          },
+          "quantity": {
+            "minimum": 1.0,
+            "title": "Quantity",
+            "type": "integer"
+          },
+          "ratio": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ratio"
+          },
+          "side": {
+            "enum": [
+              "long",
+              "short"
+            ],
+            "title": "Side",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "leg_id",
+          "contract",
+          "symbol",
+          "side",
+          "ratio",
+          "multiplier",
+          "quantity"
+        ],
+        "title": "TradedOptionLegView",
         "type": "object"
       },
       "TradesAnotherStock": {

@@ -49,6 +49,8 @@ from app.schemas.deployment_budget import DeployBudgetConsent
 from app.services import market_liveness
 from app.services.bot_binding_authority import SyntheticBindingAuthority
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
+from app.services.broker_v2_panel.option_structure_view import with_held_structure
+from app.services.broker_v2_panel.sqlite_roster_status import build_roster_status
 from app.services.source_bar_ledger import RetainedSourceBar
 from tests._helpers.market_quotes import publish_quotes
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
@@ -270,6 +272,24 @@ async def test_an_entry_buys_the_picked_contract_at_its_ask_and_the_bot_holds_it
     assert dry_run.fills() == [(SYMBOL, "buy", 1.0, 1.94, 100)]
     [order_ref] = bought.child_order_refs
     assert order_contract(dry_run.repo, order_ref) == ContractTerms(symbol=SYMBOL, multiplier=100)
+
+
+async def test_the_panel_names_actual_held_contracts_and_their_recorded_entry_terms(dry_run: _DryRun) -> None:
+    registration = dry_run.repo.strategy_instance(SID)
+    assert registration is not None
+    status = build_roster_status("alpaca", registration, dry_run.repo)
+    before = with_held_structure(status, dry_run.repo)
+    assert before.traded is not None and before.traded.legs == []
+    assert "No option contracts held" in (before.traded.legs_notice or "")
+
+    await dry_run.enter(dry_run.evidence(), units=2)
+    held = with_held_structure(status, dry_run.repo)
+    assert held.traded is not None
+    leg, = held.traded.legs
+    assert (leg.leg_id, leg.symbol, leg.contract, leg.side, leg.ratio, leg.multiplier, leg.quantity) == (
+        LEG, SYMBOL, CALL, "long", 1, 100, 2,
+    )
+    assert held.traded.legs_notice is None
 
 
 async def test_the_entry_keeps_the_contract_the_quote_and_the_money_it_was_admitted_on(dry_run: _DryRun) -> None:

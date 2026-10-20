@@ -92,6 +92,7 @@ import { BotOptionBuyingPowerComponent } from '../bot-page/bot-option-buying-pow
 import { BotOrderRecordsComponent } from '../bot-page/bot-order-records.component';
 import { BotSetupComponent } from '../bot-page/bot-setup.component';
 import { OptionsBotSessionComponent } from '../bot-page/options-bot-session.component';
+import { BotOptionLegsComponent } from '../bot-page/bot-option-legs.component';
 import { OperatorRunHistoryComponent } from '../bot-run-history/operator-run-history.component';
 import { DeploymentBudgetComponent } from '../../deployment-budget/deployment-budget.component';
 import { RunFillsListComponent } from '../bot-page/run-fills-list.component';
@@ -268,6 +269,7 @@ const RUN_TAPE_PADDING_MS = 15 * 60_000;
     BotPageNoticesComponent,
     BotSetupComponent,
     OptionsBotSessionComponent,
+    BotOptionLegsComponent,
     BotToolbarComponent,
     OperatorRunHistoryComponent,
     RouterLink,

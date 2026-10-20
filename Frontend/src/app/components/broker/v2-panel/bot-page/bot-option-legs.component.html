@@ -1,0 +1,11 @@
+<section class="option-legs">
+  <h3 class="panel-title">Held option legs</h3>
+  @for (row of rows(); track row.leg.symbol) {
+    <div class="option-legs__leg">
+      @if (row.contract; as contract) { <app-option-contract [contract]="contract" size="sm" /> }
+      <span>{{ row.leg.side | receiptLabel }} · {{ row.leg.quantity }} contracts</span>
+      <small>{{ row.leg.leg_id ?? 'Entry leg unavailable' }} · Ratio {{ row.leg.ratio ?? 'unavailable' }} · Multiplier {{ row.leg.multiplier }}</small>
+    </div>
+  }
+  @if (traded().legs_notice; as notice) { <p>{{ notice }}</p> }
+</section>
