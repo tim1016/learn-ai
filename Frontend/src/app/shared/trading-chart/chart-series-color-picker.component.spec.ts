@@ -34,24 +34,28 @@ function pressKey(el: HTMLElement, key: string): void {
 }
 
 describe('ChartSeriesColorPickerComponent', () => {
-  it('renders a labelled radiogroup with one labelled radio per eligible token', () => {
+  it('with nothing selected, renders a labelled radiogroup with one labelled radio per eligible token and the first as the single tab stop', () => {
     const { el } = setup();
     const group = el.querySelector<HTMLElement>('[role="radiogroup"]');
-    expect(group).not.toBeNull();
-    expect(group?.getAttribute('aria-label')).toBe('Chart series color');
+    expect.soft(group, 'renders a radiogroup').not.toBeNull();
+    expect.soft(group?.getAttribute('aria-label'), 'labels the radiogroup').toBe('Chart series color');
     const radios = el.querySelectorAll<HTMLButtonElement>('[role="radio"]');
-    expect(radios.length).toBe(10);
-    expect(radioFor(el, 'series-blue').getAttribute('aria-label')).toBe('Blue');
-    expect(radioFor(el, 'series-amber').getAttribute('aria-label')).toBe('Amber');
+    expect.soft(radios.length, 'renders one radio per eligible token').toBe(10);
+    expect.soft(radioFor(el, 'series-blue').getAttribute('aria-label'), 'labels the Blue radio').toBe('Blue');
+    expect.soft(radioFor(el, 'series-amber').getAttribute('aria-label'), 'labels the Amber radio').toBe('Amber');
+    expect.soft(radioFor(el, 'series-blue').tabIndex, 'keeps a single tab stop (none selected): the first radio').toBe(0);
+    expect.soft(radioFor(el, 'series-red').tabIndex, 'keeps a single tab stop (none selected): the other radios stay out of the tab order').toBe(-1);
   });
 
-  it('marks the selected token aria-checked with a non-color check glyph', () => {
+  it('with a token selected, marks it aria-checked with a non-color check glyph and makes it the single tab stop', () => {
     const { el } = setup('series-teal');
     const teal = radioFor(el, 'series-teal');
-    expect(teal.getAttribute('aria-checked')).toBe('true');
-    expect(teal.querySelector('.cscp-check')).not.toBeNull();
-    expect(radioFor(el, 'series-blue').getAttribute('aria-checked')).toBe('false');
-    expect(radioFor(el, 'series-blue').querySelector('.cscp-check')).toBeNull();
+    expect.soft(teal.getAttribute('aria-checked'), 'marks the selected token aria-checked').toBe('true');
+    expect.soft(teal.querySelector('.cscp-check'), 'marks the selected token with a non-color check glyph').not.toBeNull();
+    expect.soft(radioFor(el, 'series-blue').getAttribute('aria-checked'), 'leaves an unselected token unchecked').toBe('false');
+    expect.soft(radioFor(el, 'series-blue').querySelector('.cscp-check'), 'draws no check glyph on an unselected token').toBeNull();
+    expect.soft(radioFor(el, 'series-teal').tabIndex, 'keeps a single tab stop (token selected): the selected radio').toBe(0);
+    expect.soft(radioFor(el, 'series-blue').tabIndex, 'keeps a single tab stop (token selected): the other radios stay out of the tab order').toBe(-1);
   });
 
   it('emits only token IDs on click', () => {
@@ -62,16 +66,6 @@ describe('ChartSeriesColorPickerComponent', () => {
     fixture.detectChanges();
     expect(tokenSelected).toHaveBeenCalledWith('series-orange');
     expect(tokenSelected.mock.calls[0]?.[0]).toMatch(/^series-[a-z]+$/);
-  });
-
-  it('keeps a single tab stop — the selected radio, or the first when none', () => {
-    const noneSel = setup();
-    expect(radioFor(noneSel.el, 'series-blue').tabIndex).toBe(0);
-    expect(radioFor(noneSel.el, 'series-red').tabIndex).toBe(-1);
-
-    const tealSel = setup('series-teal');
-    expect(radioFor(tealSel.el, 'series-teal').tabIndex).toBe(0);
-    expect(radioFor(tealSel.el, 'series-blue').tabIndex).toBe(-1);
   });
 
   it('arrow keys move selection and focus together, wrapping around the ends', () => {

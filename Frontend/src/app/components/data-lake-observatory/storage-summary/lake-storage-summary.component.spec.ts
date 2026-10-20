@@ -43,31 +43,28 @@ describe('LakeStorageSummaryComponent', () => {
     expect(screen.queryByRole('table')).toBeNull();
   });
 
-  it('totals artifacts and bytes across every kind', async () => {
-    await renderSummary(POPULATED);
-
-    expect(screen.getByText('4')).toBeTruthy();
-    expect(screen.getByText('4.00 MB')).toBeTruthy();
-    expect(screen.getByText('3.00 MB')).toBeTruthy();
-    expect(screen.getByText('1.00 MB')).toBeTruthy();
-  });
-
-  it('anchors each coverage span to its ET trading date', async () => {
+  it('renders a populated catalog: totals across every kind, ET-anchored spans, and passes AXE', async () => {
     const { container } = await renderSummary(POPULATED);
 
-    const dates = Array.from(container.querySelectorAll('[data-timestamp-mode]'));
-    expect(dates.every((node) => node.getAttribute('data-timestamp-mode') === 'date-et')).toBe(true);
-    expect(screen.getByText('2026-05-18')).toBeTruthy();
-    expect(screen.getByText('2026-05-20')).toBeTruthy();
-  });
+    expect.soft(screen.queryByText('4'), 'totals artifacts across every kind').toBeTruthy();
+    expect.soft(screen.queryByText('4.00 MB'), 'totals bytes across every kind').toBeTruthy();
+    expect.soft(screen.queryByText('3.00 MB'), 'shows the minute_trade kind bytes').toBeTruthy();
+    expect.soft(screen.queryByText('1.00 MB'), 'shows the map_file kind bytes').toBeTruthy();
 
-  it('passes AXE', async () => {
-    await renderSummary(POPULATED);
+    const dates = Array.from(container.querySelectorAll('[data-timestamp-mode]'));
+    expect
+      .soft(
+        dates.every((node) => node.getAttribute('data-timestamp-mode') === 'date-et'),
+        'anchors each coverage span to its ET trading date',
+      )
+      .toBe(true);
+    expect.soft(screen.queryByText('2026-05-18'), 'shows the first coverage date').toBeTruthy();
+    expect.soft(screen.queryByText('2026-05-20'), 'shows the last coverage date').toBeTruthy();
 
     const results = await axe.run(document.body, {
       rules: { 'color-contrast': { enabled: false }, region: { enabled: false } },
     });
 
-    expect(results.violations).toEqual([]);
+    expect.soft(results.violations, 'passes AXE').toEqual([]);
   });
 });

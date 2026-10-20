@@ -285,7 +285,22 @@ def test_evidence_override_is_durable_immutable_configuration(tmp_path: Path) ->
 
 
 def test_absent_override_preserves_pre_override_configuration_hash_shape() -> None:
-    assert "evidence_override" not in immutable_configuration_payload(_binding())
+    """An absent ``evidence_override`` and an absent ``strategy_params`` (#1701) both leave the hash payload alone.
+
+    A binding persisted before #1701 must keep its original configuration_hash.
+    ``strategy_params`` defaults to ``None`` (not ``{}``) specifically so
+    ``exclude_none=True`` strips it here -- an empty-dict default would appear
+    in the hash payload and invalidate every hash computed before this field
+    existed, the same way ``evidence_override`` is already required to behave.
+    (``app/services/bot_binding_repository.py`` cites this test by name.)
+    """
+    payload = immutable_configuration_payload(_binding())
+
+    assert "evidence_override" not in payload, "an absent override is not in the configuration hash payload"
+    assert "strategy_params" not in payload, "#1701: absent strategy_params is not in the configuration hash payload"
+    assert configuration_hash(_binding()) == configuration_hash(_binding(strategy_params=None)), (
+        "#1701: strategy_params=None hashes the same as leaving it out"
+    )
 
 
 # The owner's written acceptance of an untested traded asset (#2912).
@@ -336,17 +351,6 @@ def test_a_bot_with_no_acceptance_is_hashed_and_stored_as_before_the_field_exist
     stored = json.loads((tmp_path / "live_state" / _SID / "strategy_instance.json").read_text())
     assert "traded_asset_acknowledgement" not in stored
     assert stored["configuration_hash"] == _CONFIGURATION_HASH_BEFORE_THE_ACCEPTANCE
-
-
-def test_absent_strategy_params_preserves_pre_feature_configuration_hash_shape() -> None:
-    """#1701: a binding persisted before this feature existed must keep its
-    original configuration_hash. `strategy_params` defaults to `None` (not
-    `{}`) specifically so `exclude_none=True` strips it here — an empty-dict
-    default would appear in the hash payload and invalidate every hash
-    computed before this field existed, the same way ``evidence_override``
-    is already required to behave."""
-    assert "strategy_params" not in immutable_configuration_payload(_binding())
-    assert configuration_hash(_binding()) == configuration_hash(_binding(strategy_params=None))
 
 
 def test_duplicate_run_is_idempotent_but_changed_run_payload_conflicts(

@@ -7,59 +7,39 @@ function httpError(body: unknown, status = 409): HttpErrorResponse {
 }
 
 describe('refusalBody', () => {
-  it('reads the flat body the fleet coordinator returns', () => {
-    const body = {
-      reason: 'clerk_unreachable',
-      message: 'The clerk did not answer.',
-      next_step: 'Check the lane and retry.',
-    };
+  const flat = {
+    reason: 'clerk_unreachable',
+    message: 'The clerk did not answer.',
+    next_step: 'Check the lane and retry.',
+  };
+  const nested = { reason: 'stale_revision', message: 'Someone else applied first.' };
+  const both = { reason: 'nested_wins', message: 'nested' };
 
-    expect(refusalBody(httpError(body))).toEqual(body);
+  it.each([
+    ['the flat body the fleet coordinator returns', flat, flat],
+    ['the nested body a FastAPI HTTPException returns', { detail: nested }, nested],
+    ['the explicit envelope, preferred when a body carries both', { detail: both, message: 'flat' }, both],
+    ['a flat body carrying only a message', { message: 'It failed.' }, { message: 'It failed.' }],
+  ])('reads %s', (_name, body, expected) => {
+    expect(refusalBody(httpError(body))).toEqual(expected);
   });
 
-  it('reads the nested body a FastAPI HTTPException returns', () => {
-    const detail = { reason: 'stale_revision', message: 'Someone else applied first.' };
-
-    expect(refusalBody(httpError({ detail }))).toEqual(detail);
-  });
-
-  it('prefers the explicit envelope when a body carries both', () => {
-    const detail = { reason: 'nested_wins', message: 'nested' };
-
-    expect(refusalBody(httpError({ detail, message: 'flat' }))).toEqual(detail);
-  });
-
-  it('accepts a flat body carrying only a message', () => {
-    expect(refusalBody(httpError({ message: 'It failed.' }))).toEqual({ message: 'It failed.' });
-  });
-
-  it('returns null for a body that is not a refusal', () => {
-    expect(refusalBody(httpError({ items: [1, 2, 3] }))).toBeNull();
-  });
-
-  it('returns null for a non-object body', () => {
-    expect(refusalBody(httpError('gateway timeout'))).toBeNull();
-    expect(refusalBody(httpError(null))).toBeNull();
-  });
-
-  it('returns null for an array body rather than mining it by index', () => {
-    expect(refusalBody(httpError([{ reason: 'nope' }]))).toBeNull();
-  });
-
-  it("returns null for FastAPI's validation envelope, whose `detail` is a list", () => {
+  it.each([
+    ['a body that is not a refusal', httpError({ items: [1, 2, 3] })],
+    ['a string body, as a non-object body', httpError('gateway timeout')],
+    ['a null body, as a non-object body', httpError(null)],
+    ['an array body, rather than mining it by index', httpError([{ reason: 'nope' }])],
     // A 422 body is `{detail: [{loc, msg, type}, ...]}`. `typeof [] === 'object'`,
     // so a naive nested check hands the caller an array and it reads
     // `.reason`/`.message` off it as undefined. There is no operator-facing
     // refusal here, so the honest answer is null.
-    const validationError = {
-      detail: [{ loc: ['body', 'symbol'], msg: 'field required', type: 'value_error.missing' }],
-    };
-
-    expect(refusalBody(httpError(validationError, 422))).toBeNull();
-  });
-
-  it('returns null for anything that is not an HttpErrorResponse', () => {
-    expect(refusalBody(new Error('boom'))).toBeNull();
-    expect(refusalBody(undefined)).toBeNull();
+    [
+      "FastAPI's validation envelope, whose `detail` is a list",
+      httpError({ detail: [{ loc: ['body', 'symbol'], msg: 'field required', type: 'value_error.missing' }] }, 422),
+    ],
+    ['an Error, as anything that is not an HttpErrorResponse', new Error('boom')],
+    ['undefined, as anything that is not an HttpErrorResponse', undefined],
+  ])('returns null for %s', (_name, error) => {
+    expect(refusalBody(error)).toBeNull();
   });
 });

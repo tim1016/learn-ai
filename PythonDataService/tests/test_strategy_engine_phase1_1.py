@@ -87,24 +87,21 @@ class TestPayloadShapeStableByDefault:
 class TestCurrentCurve:
     """include_current_curve populates a curve at today's vol surface (not at expiry)."""
 
-    def test_current_curve_has_request_curve_points(self) -> None:
+    def test_current_curve_has_request_curve_points_and_differs_from_expiry_curve(self) -> None:
         request = _bull_call_spread()
         request.include_current_curve = True
         result = analyze_strategy(request)
-        assert result.current_curve is not None
-        assert len(result.current_curve) == request.curve_points
-
-    def test_current_curve_differs_from_expiry_curve(self) -> None:
-        """At today (30 DTE, 25% IV) the current value is not the same as at expiry."""
-        request = _bull_call_spread()
-        request.include_current_curve = True
-        result = analyze_strategy(request)
+        assert result.current_curve is not None, "current_curve is populated when requested"
+        assert len(result.current_curve) == request.curve_points, "current_curve has the request's curve_points"
+        # At today (30 DTE, 25% IV) the current value is not the same as at expiry.
         # At-the-money (price ~ 102), expiry payoff and current value differ:
         # expiry payoff = max(102-100,0) - 5 - max(102-105,0) + 2 = 2 - 5 - 0 + 2 = -1
         # current value carries time value, so theoretical_pnl ≠ -1 at price=102
         atm = min(result.current_curve, key=lambda p: abs(p.price - 102.0))
         atm_expiry = min(result.curve, key=lambda p: abs(p.price - 102.0))
-        assert atm.theoretical_pnl != pytest.approx(atm_expiry.pnl, abs=0.01)
+        assert atm.theoretical_pnl != pytest.approx(atm_expiry.pnl, abs=0.01), (
+            "current curve differs from the expiry curve at the money"
+        )
 
     def test_iv_shift_changes_current_curve(self) -> None:
         request = _bull_call_spread()
@@ -128,17 +125,12 @@ class TestCurrentCurve:
 class TestGreekCurves:
     """include_greek_curves populates aggregate Greeks per spot grid point."""
 
-    def test_greek_curves_populated_when_requested(self) -> None:
+    def test_greek_curves_populated_and_aggregate_delta_matches_per_leg_sum(self) -> None:
         request = _bull_call_spread()
         request.include_greek_curves = True
         result = analyze_strategy(request)
-        assert result.greek_curves is not None
-        assert len(result.greek_curves) == request.curve_points
-
-    def test_aggregate_delta_matches_per_leg_sum(self) -> None:
-        request = _bull_call_spread()
-        request.include_greek_curves = True
-        result = analyze_strategy(request)
+        assert result.greek_curves is not None, "greek_curves is populated when requested"
+        assert len(result.greek_curves) == request.curve_points, "greek_curves has the request's curve_points"
         ttm = _ttm_years(request)
         # Spot-check at request spot: delta should equal sum of per-leg
         # closed-form deltas with sign and quantity applied.
@@ -162,24 +154,21 @@ class TestGreekCurves:
             is_call=True,
         )
         expected_delta = long_g.delta * 1 - short_g.delta * 1
-        assert atm.delta == pytest.approx(expected_delta, abs=1e-3)
+        assert atm.delta == pytest.approx(expected_delta, abs=1e-3), "aggregate delta matches the per-leg sum"
 
 
 class TestLegDiagnostics:
     """include_leg_diagnostics populates per-leg current value/Greeks."""
 
-    def test_leg_diagnostics_one_row_per_leg(self) -> None:
+    def test_leg_diagnostics_one_row_per_leg_and_theoretical_matches_bs_european_price(self) -> None:
         request = _bull_call_spread()
         request.include_leg_diagnostics = True
         result = analyze_strategy(request)
-        assert result.leg_diagnostics is not None
-        assert len(result.leg_diagnostics) == 2
-        assert {row.leg_id for row in result.leg_diagnostics} == {"long_100c", "short_105c"}
-
-    def test_leg_diagnostic_theoretical_matches_bs_european_price(self) -> None:
-        request = _bull_call_spread()
-        request.include_leg_diagnostics = True
-        result = analyze_strategy(request)
+        assert result.leg_diagnostics is not None, "leg_diagnostics is populated when requested"
+        assert len(result.leg_diagnostics) == 2, "one diagnostics row per leg"
+        assert {row.leg_id for row in result.leg_diagnostics} == {"long_100c", "short_105c"}, (
+            "rows are keyed by the legs' ids"
+        )
         ttm = _ttm_years(request)
         for row in result.leg_diagnostics:
             expected = bs_european_price(
@@ -191,7 +180,9 @@ class TestLegDiagnostics:
                 is_call=row.option_type == "call",
                 dividend=0.0,
             )
-            assert row.current_theoretical == pytest.approx(expected, abs=1e-4)
+            assert row.current_theoretical == pytest.approx(expected, abs=1e-4), (
+                f"{row.leg_id}: current_theoretical matches bs_european_price"
+            )
 
 
 class TestZeroDTEHandling:

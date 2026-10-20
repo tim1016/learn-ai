@@ -320,7 +320,7 @@ async def test_a_record_the_books_hold_and_this_build_cannot_read_is_named_not_d
 # ── what it will not do ──────────────────────────────────────────────────
 
 
-async def test_the_bundle_is_refused_inside_the_stores_it_reads_and_into_a_folder_that_is_not_empty(
+async def test_the_bundle_is_refused_inside_the_stores_it_reads_into_a_non_empty_folder_and_for_an_empty_window(
     paper: Paper, tmp_path: Path
 ) -> None:
     inside_books = paper.repo.db_path.parent / "bundle"
@@ -334,10 +334,9 @@ async def test_the_bundle_is_refused_inside_the_stores_it_reads_and_into_a_folde
     (occupied / "earlier.txt").write_text("an earlier bundle")
     with pytest.raises(kit.BundleRefused, match="not empty"):
         _write(paper, tmp_path, out_dir=occupied)
-    assert not inside_books.exists() and not inside_journal.exists()
+    assert not inside_books.exists() and not inside_journal.exists(), "a refused bundle leaves nothing behind"
 
-
-async def test_an_empty_window_is_refused(paper: Paper, tmp_path: Path) -> None:
+    # An empty window is refused.
     with pytest.raises(kit.BundleRefused, match="window is empty"):
         _write(paper, tmp_path, from_ms=NOON, to_ms=NOON)
 
@@ -542,16 +541,27 @@ async def test_only_writes_the_named_families_and_says_which_it_left_out(paper: 
     assert exit_code == 0
 
 
-async def test_a_family_the_bundle_has_no_journal_of_is_refused_rather_than_written_as_nothing(
+async def test_recordings_are_refused_for_a_missing_family_and_for_a_manifest_that_does_not_say_what_it_could_not_read(
     paper: Paper, tmp_path: Path
 ) -> None:
     _journal_line(tmp_path / "captures", NOON + 1_000, body=b'{"fine":true}')
     bundle = _write(paper, tmp_path, out_dir=tmp_path / "bundle").out_dir
 
+    # A family the bundle has no journal of is refused rather than written as nothing.
     with pytest.raises(kit.BundleRefused, match="has no stream"):
         kit.write_recordings(bundle_dir=bundle, out_dir=tmp_path / "recordings", only=("orders", "stream"))
 
-    assert not (tmp_path / "recordings").exists()
+    assert not (tmp_path / "recordings").exists(), "a family with no journal is refused rather than written as nothing"
+
+    manifest = json.loads((bundle / "manifest.json").read_text())
+    del manifest["not_read"]
+    (bundle / "manifest.json").write_text(json.dumps(manifest))
+
+    # A manifest that does not say what it could not read is not recorded.
+    with pytest.raises(kit.BundleRefused, match="does not say what it could not read"):
+        kit.write_recordings(bundle_dir=bundle, out_dir=tmp_path / "recordings")
+
+    assert not (tmp_path / "recordings").exists(), "a manifest that does not say what it could not read is not recorded"
 
 
 async def test_the_journal_gaps_of_the_source_bundle_are_carried_into_the_recordings_and_exit_three(
@@ -588,21 +598,6 @@ async def test_a_gap_in_the_books_is_not_a_gap_in_the_recordings(paper: Paper, t
     assert recorded.not_read == ()
     exit_code = kit.main(["recordings", "--bundle-dir", str(bundle.out_dir), "--out-dir", str(tmp_path / "second")])
     assert exit_code == 0
-
-
-async def test_a_manifest_that_does_not_say_what_it_could_not_read_is_not_recorded(
-    paper: Paper, tmp_path: Path
-) -> None:
-    _journal_line(tmp_path / "captures", NOON + 1_000, body=b'{"fine":true}')
-    bundle = _write(paper, tmp_path, out_dir=tmp_path / "bundle").out_dir
-    manifest = json.loads((bundle / "manifest.json").read_text())
-    del manifest["not_read"]
-    (bundle / "manifest.json").write_text(json.dumps(manifest))
-
-    with pytest.raises(kit.BundleRefused, match="does not say what it could not read"):
-        kit.write_recordings(bundle_dir=bundle, out_dir=tmp_path / "recordings")
-
-    assert not (tmp_path / "recordings").exists()
 
 
 def test_an_offline_unknown_is_not_a_judgment_and_the_entry_stays_as_unknown_as_it_was_recorded() -> None:

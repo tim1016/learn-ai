@@ -100,45 +100,42 @@ def _record(
 
 
 class TestIvSeriesFromRecorder:
-    def test_empty_window_returns_empty_list(self, recorder_store):
-        assert _iv_series_from_recorder("SPY", pd.Index([], dtype=np.int64)) == []
+    @pytest.mark.parametrize(
+        ("records", "window_ms"),
+        [
+            pytest.param((), (), id="empty_window"),
+            pytest.param((), (1_700_000_000_000, 1_700_086_400_000), id="no_rows"),
+            pytest.param(
+                ({"iv_vix": 0.21, "error": "polygon outage"},), (1_700_000_000_000,), id="skips_rows_with_error"
+            ),
+            pytest.param(
+                ({"iv_vix": None, "iv_param": None},), (1_700_000_000_000,), id="skips_rows_with_no_iv"
+            ),
+        ],
+    )
+    def test_returns_empty_list_when_no_row_is_usable(self, recorder_store, records, window_ms):
+        for kwargs in records:
+            _record(recorder_store, ts_ms=1_700_000_000_000, **kwargs)
+        idx = pd.Index(list(window_ms), dtype=np.int64)
 
-    def test_no_rows_returns_empty_list(self, recorder_store):
-        idx = pd.Index([1_700_000_000_000, 1_700_086_400_000], dtype=np.int64)
         assert _iv_series_from_recorder("SPY", idx) == []
 
-    def test_prefers_vix_style_over_parametric(self, recorder_store):
+    @pytest.mark.parametrize(
+        ("iv_vix", "iv_param", "expected_iv30"),
+        [
+            pytest.param(0.21, 0.19, 0.21, id="prefers_vix_style_over_parametric"),
+            pytest.param(None, 0.19, 0.19, id="falls_back_to_parametric_when_vix_style_missing"),
+        ],
+    )
+    def test_iv30_comes_from_the_preferred_available_source(self, recorder_store, iv_vix, iv_param, expected_iv30):
         ts = 1_700_000_000_000
-        _record(recorder_store, ts_ms=ts, iv_vix=0.21, iv_param=0.19)
+        _record(recorder_store, ts_ms=ts, iv_vix=iv_vix, iv_param=iv_param)
         idx = pd.Index([ts], dtype=np.int64)
 
         items = _iv_series_from_recorder("SPY", idx)
 
-        assert len(items) == 1
-        assert items[0]["iv30"] == pytest.approx(0.21)
-
-    def test_falls_back_to_parametric_when_vix_style_missing(self, recorder_store):
-        ts = 1_700_000_000_000
-        _record(recorder_store, ts_ms=ts, iv_vix=None, iv_param=0.19)
-        idx = pd.Index([ts], dtype=np.int64)
-
-        items = _iv_series_from_recorder("SPY", idx)
-
-        assert items[0]["iv30"] == pytest.approx(0.19)
-
-    def test_skips_rows_with_error(self, recorder_store):
-        ts = 1_700_000_000_000
-        _record(recorder_store, ts_ms=ts, iv_vix=0.21, error="polygon outage")
-        idx = pd.Index([ts], dtype=np.int64)
-
-        assert _iv_series_from_recorder("SPY", idx) == []
-
-    def test_skips_rows_with_no_iv(self, recorder_store):
-        ts = 1_700_000_000_000
-        _record(recorder_store, ts_ms=ts, iv_vix=None, iv_param=None)
-        idx = pd.Index([ts], dtype=np.int64)
-
-        assert _iv_series_from_recorder("SPY", idx) == []
+        assert len(items) == 1, "the one recorded row yields one item"
+        assert items[0]["iv30"] == pytest.approx(expected_iv30), "iv30 comes from the preferred available source"
 
     def test_propagates_variance_contribution_synthetic(self, recorder_store):
         ts = 1_700_000_000_000

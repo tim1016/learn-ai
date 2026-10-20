@@ -156,18 +156,16 @@ def test_market_data_bar_carries_no_ibkr_types() -> None:
         assert "broker.ibkr" not in mod, f"feed.py exports an IBKR type: {attr} from {mod}"
 
 
-def test_market_data_feed_error_is_not_ibkr_error() -> None:
-    """MarketDataFeedError must not be a subclass of IBKRBarStreamError."""
+def test_market_data_feed_error_and_ibkr_bar_stream_error_are_unrelated() -> None:
+    """MarketDataFeedError is not an IBKRBarStreamError, and IBKRBarStreamError does not escape through the port."""
     from app.broker.ibkr.bars import IBKRBarStreamError
 
-    assert not issubclass(MarketDataFeedError, IBKRBarStreamError)
-
-
-def test_ibkr_bar_stream_error_is_not_market_data_feed_error() -> None:
-    """IBKRBarStreamError must not escape through the port."""
-    from app.broker.ibkr.bars import IBKRBarStreamError
-
-    assert not issubclass(IBKRBarStreamError, MarketDataFeedError)
+    assert not issubclass(MarketDataFeedError, IBKRBarStreamError), (
+        "MarketDataFeedError must not be a subclass of IBKRBarStreamError"
+    )
+    assert not issubclass(IBKRBarStreamError, MarketDataFeedError), (
+        "IBKRBarStreamError must not escape through the port"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -490,60 +488,51 @@ def test_health_withdrawn_proof_with_no_delivery_since_is_not_warming(monkeypatc
     assert "first closed bar" in health.reason
 
 
-def test_health_disconnected_reports_reason() -> None:
-    client = _fake_connected_client(connected=False)
+@pytest.mark.parametrize(
+    ("connected", "connection_lost"),
+    [(False, False), (True, True)],
+    ids=["disconnected", "connection_lost_flag"],
+)
+def test_health_lost_connection_reports_unhealthy_with_reason(connected: bool, connection_lost: bool) -> None:
+    client = _fake_connected_client(connected=connected, connection_lost=connection_lost)
     feed = IbkrMarketDataFeed(client)
     h = feed.health()
 
-    assert h.connected is False
-    assert "connection lost" in h.reason.lower()
+    assert h.connected is False, "a lost connection reports connected=False"
+    assert "connection lost" in h.reason.lower(), "a lost connection reports its reason"
 
 
-def test_health_connection_lost_flag_reports_unhealthy() -> None:
-    client = _fake_connected_client(connected=True, connection_lost=True)
-    feed = IbkrMarketDataFeed(client)
-    h = feed.health()
-
-    assert h.connected is False
-
-
-def test_health_stale_after_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Feed reports stale=True when last_bar_wall_ms is older than the threshold."""
+@pytest.mark.parametrize(
+    ("stale_threshold_ms", "bar_age_ms", "stale"),
+    [
+        # Feed reports stale=True when last_bar_wall_ms is older than the threshold
+        # (a last-bar wall-clock 5 minutes ago).
+        (60_000, 300_000, True),
+        # Feed is not stale when the last bar arrived within the threshold
+        # (1 minute ago, within the 3-minute threshold).
+        (180_000, 60_000, False),
+    ],
+    ids=["stale_after_threshold", "not_stale_within_threshold"],
+)
+def test_health_staleness_follows_the_threshold(
+    monkeypatch: pytest.MonkeyPatch, stale_threshold_ms: int, bar_age_ms: int, stale: bool
+) -> None:
     fixed_now = 1_700_001_000_000
     monkeypatch.setattr("app.marketdata.ibkr_feed.now_ms_utc", lambda: fixed_now)
 
     client = _fake_connected_client(connected=True, connection_lost=False)
-    feed = IbkrMarketDataFeed(client, stale_threshold_ms=60_000)
-    # Fake a last-bar wall-clock 5 minutes ago
+    feed = IbkrMarketDataFeed(client, stale_threshold_ms=stale_threshold_ms)
     state = feed._state_for("SPY")
-    state.last_bar_wall_ms = fixed_now - 300_000
-    state.last_bar_ms = 1_700_000_700_000
+    state.last_bar_wall_ms = fixed_now - bar_age_ms
+    state.last_bar_ms = fixed_now - bar_age_ms
     state.active_count = 1
     state.first_bar_seen = True
 
     h = feed.health()
 
-    assert h.connected is True
-    assert h.stale is True
-    assert "300s" in h.reason or "300" in h.reason
-
-
-def test_health_not_stale_within_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Feed is not stale when last bar arrived within the threshold."""
-    fixed_now = 1_700_001_000_000
-    monkeypatch.setattr("app.marketdata.ibkr_feed.now_ms_utc", lambda: fixed_now)
-
-    client = _fake_connected_client(connected=True, connection_lost=False)
-    feed = IbkrMarketDataFeed(client, stale_threshold_ms=180_000)
-    state = feed._state_for("SPY")
-    state.last_bar_wall_ms = fixed_now - 60_000  # 1 minute ago — within 3-min threshold
-    state.last_bar_ms = 1_700_000_940_000
-    state.active_count = 1
-    state.first_bar_seen = True
-
-    h = feed.health()
-
-    assert h.stale is False
+    assert h.connected is True, "a connected client reports connected=True"
+    assert h.stale is stale, "stale exactly when the last bar is older than the threshold"
+    assert ("300" in h.reason) is stale, "the reason names the 300 s age exactly when stale"
 
 
 def test_health_ignores_detached_symbol_watermarks(
@@ -592,29 +581,23 @@ def test_translate_maps_all_fields() -> None:
     )
     bar = IbkrMarketDataFeed._translate(ibkr_bar)
 
-    assert bar.symbol == "AAPL"
-    assert bar.start_ms == 1_700_000_120_000
-    assert bar.end_ms == 1_700_000_180_000
-    assert bar.open == Decimal("150.00")
-    assert bar.high == Decimal("151.00")
-    assert bar.low == Decimal("149.50")
-    assert bar.close == Decimal("150.75")
-    assert bar.volume == 2500
-    assert bar.feed_id == "ibkr"
-    assert isinstance(bar.fetched_at_ms, int)
-    assert bar.session_phase == "RTH"
-
-
-def test_translate_produces_int64_ms_utc_timestamps() -> None:
-    """Translated bar timestamps must be plain Python ints (int64-compatible)."""
-    ibkr_bar = _make_ibkr_bar("SPY", start_ms=1_700_000_000_000)
-    bar = IbkrMarketDataFeed._translate(ibkr_bar)
-
-    assert type(bar.start_ms) is int
-    assert type(bar.end_ms) is int
-    assert type(bar.fetched_at_ms) is int
-    # Not floats, not strings, not datetime objects
-    assert bar.end_ms - bar.start_ms == 60_000
+    assert bar.symbol == "AAPL", "symbol is carried over"
+    assert bar.start_ms == 1_700_000_120_000, "start_ms is carried over"
+    assert bar.end_ms == 1_700_000_180_000, "end_ms is carried over"
+    assert bar.open == Decimal("150.00"), "open is carried over"
+    assert bar.high == Decimal("151.00"), "high is carried over"
+    assert bar.low == Decimal("149.50"), "low is carried over"
+    assert bar.close == Decimal("150.75"), "close is carried over"
+    assert bar.volume == 2500, "volume is carried over"
+    assert bar.feed_id == "ibkr", "feed_id is ibkr"
+    assert isinstance(bar.fetched_at_ms, int), "fetched_at_ms is an int"
+    assert bar.session_phase == "RTH", "session_phase is carried over"
+    # Translated bar timestamps must be plain Python ints (int64-compatible):
+    # not floats, not strings, not datetime objects
+    assert type(bar.start_ms) is int, "start_ms is a plain int"
+    assert type(bar.end_ms) is int, "end_ms is a plain int"
+    assert type(bar.fetched_at_ms) is int, "fetched_at_ms is a plain int"
+    assert bar.end_ms - bar.start_ms == 60_000, "the bar spans one minute"
 
 
 def _skip_warmup_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -692,32 +675,41 @@ async def test_recent_closed_bars_anchors_cutoff_before_history_request(
     assert await feed.recent_closed_bars("SPY", use_rth=False) == []
 
 
-def _warmup_history_failures() -> list[Exception]:
+def _warmup_history_failures() -> list[tuple[Exception, str]]:
     from app.broker.ibkr.bars import IBKRBarStreamError
     from app.broker.ibkr.client import BrokerError, NotConnectedError
+    from app.broker.ibkr.minute_assembler import IBKRImpossibleBarError
 
     return [
-        IBKRBarStreamError("historical data farm connection is broken"),
-        NotConnectedError("IB Gateway is not connected"),
-        BrokerError("no security definition has been found"),
-        ValueError("contract has no conId"),
+        (IBKRBarStreamError("historical data farm connection is broken"), "WARMUP_HISTORY_UNAVAILABLE"),
+        (NotConnectedError("IB Gateway is not connected"), "WARMUP_HISTORY_UNAVAILABLE"),
+        (BrokerError("no security definition has been found"), "WARMUP_HISTORY_UNAVAILABLE"),
+        (ValueError("contract has no conId"), "WARMUP_HISTORY_UNAVAILABLE"),
+        (
+            IBKRImpossibleBarError("IBKR bar for SPY at 1 ms was refused: close price is not finite"),
+            "IMPOSSIBLE_SOURCE_BAR",
+        ),
     ]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "failure",
+    ("failure", "reason"),
     _warmup_history_failures(),
-    ids=["stream_error", "not_connected", "contract_lookup", "contract_value"],
+    ids=["stream_error", "not_connected", "contract_lookup", "contract_value", "impossible_bar_2444"],
 )
 async def test_recent_closed_bars_refuses_loudly_when_history_is_unavailable(
-    monkeypatch: pytest.MonkeyPatch, failure: Exception
+    monkeypatch: pytest.MonkeyPatch, failure: Exception, reason: str
 ) -> None:
     """#2365: a failed warmup fetch must not read as "no history, start cold".
 
     Returning ``[]`` let the run start on the bare indicator minimum instead
     of its sealed lookback -- different real orders, with only a log line to
     show for it. The failure is a typed feed refusal the runner records.
+
+    #2444: a corrupt warmup bar is not a failed fetch. The refusal carries its
+    own reason, so the deploy page does not offer it as a retryable warmup miss
+    the way ``WARMUP_HISTORY_UNAVAILABLE`` is.
     """
 
     async def _history_fails(*_args: Any, **_kwargs: Any) -> list[SimpleNamespace]:
@@ -731,8 +723,8 @@ async def test_recent_closed_bars_refuses_loudly_when_history_is_unavailable(
     with pytest.raises(MarketDataFeedError) as refused:
         await feed.recent_closed_bars("SPY", use_rth=False, lookback_days=7)
 
-    assert refused.value.reason == "WARMUP_HISTORY_UNAVAILABLE"
-    assert refused.value.__cause__ is failure
+    assert refused.value.reason == reason, "the refusal carries the reason for this kind of failure"
+    assert refused.value.__cause__ is failure, "the refusal is chained from the original failure"
 
 
 @pytest.mark.asyncio
@@ -941,34 +933,6 @@ async def test_an_impossible_minute_is_refused_not_decided(
 
     assert [bar.start_ms for bar in delivered] == [_ms(RTH_MINUTE)]
     assert excinfo.value.reason == "IMPOSSIBLE_SOURCE_BAR"
-
-
-@pytest.mark.asyncio
-async def test_warmup_history_with_an_impossible_bar_refuses_under_its_own_reason(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """#2444: a corrupt warmup bar is not a failed fetch. The refusal carries its
-    own reason, so the deploy page does not offer it as a retryable warmup miss
-    the way ``WARMUP_HISTORY_UNAVAILABLE`` is."""
-    from app.broker.ibkr.minute_assembler import IBKRImpossibleBarError
-
-    failure = IBKRImpossibleBarError(
-        "IBKR bar for SPY at 1 ms was refused: close price is not finite"
-    )
-
-    async def _history_corrupt(*_args: Any, **_kwargs: Any) -> list[SimpleNamespace]:
-        raise failure
-
-    monkeypatch.setattr(
-        "app.marketdata.ibkr_feed.fetch_historical_minute_bars", _history_corrupt
-    )
-    feed = IbkrMarketDataFeed(_fake_connected_client())
-
-    with pytest.raises(MarketDataFeedError) as refused:
-        await feed.recent_closed_bars("SPY", use_rth=False, lookback_days=7)
-
-    assert refused.value.reason == "IMPOSSIBLE_SOURCE_BAR"
-    assert refused.value.__cause__ is failure
 
 
 @pytest.mark.asyncio

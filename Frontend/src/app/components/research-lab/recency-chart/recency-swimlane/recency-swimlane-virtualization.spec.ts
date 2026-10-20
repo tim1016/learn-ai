@@ -24,25 +24,22 @@ function trade(overrides: Partial<RecencySwimlaneTrade> = {}): RecencySwimlaneTr
 }
 
 describe("RecencySwimlaneComponent — virtualization & duration labels (design spec D13, D18-D19)", () => {
-  it("virtualizes — a trade entirely outside [windowStartMs, windowEndMs] is not rendered", async () => {
+  it.each([
+    [
+      "virtualizes — a trade entirely outside [windowStartMs, windowEndMs] is not rendered",
+      [
+        trade({ fingerprint: "in-window", entryMs: 5_000, exitMs: 6_000 }),
+        trade({ fingerprint: "outside-window", entryMs: 50_000, exitMs: 60_000 }),
+      ],
+    ],
+    [
+      "a trade straddling the window edge is still rendered (display-clipped, not dropped)",
+      [trade({ fingerprint: "straddling", entryMs: 8_000, exitMs: 20_000 })],
+    ],
+  ])("%s", async (_name, trades) => {
     await render(RecencySwimlaneComponent, {
       inputs: {
-        trades: [
-          trade({ fingerprint: "in-window", entryMs: 5_000, exitMs: 6_000 }),
-          trade({ fingerprint: "outside-window", entryMs: 50_000, exitMs: 60_000 }),
-        ],
-        windowStartMs: 0,
-        windowEndMs: 10_000,
-      },
-    });
-
-    expect(screen.getAllByRole("button")).toHaveLength(1);
-  });
-
-  it("a trade straddling the window edge is still rendered (display-clipped, not dropped)", async () => {
-    await render(RecencySwimlaneComponent, {
-      inputs: {
-        trades: [trade({ fingerprint: "straddling", entryMs: 8_000, exitMs: 20_000 })],
+        trades,
         windowStartMs: 0,
         windowEndMs: 10_000,
       },

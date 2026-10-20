@@ -145,43 +145,32 @@ def _source(answer: LaneQuietAnswer | None) -> LaneAccountQuietSource:
     return LaneAccountQuietSource(account_id="PA-MIGRATE-1", probe=probe)
 
 
-async def test_account_quiet_answers_quiet_for_a_flat_idle_account() -> None:
+@pytest.mark.parametrize(
+    ("broker_work_ended", "account_flat", "quiet", "outstanding"),
+    [
+        pytest.param(True, True, True, (), id="quiet for a flat idle account"),
+        pytest.param(
+            False,
+            False,
+            False,
+            (
+                "a working order on the account has not ended",
+                "the account or the lane's custody is not flat",
+            ),
+            id="names each open condition, not flat",
+        ),
+    ],
+)
+async def test_account_quiet_answers_its_verdict_and_names_each_open_condition(
+    broker_work_ended: bool, account_flat: bool, quiet: bool, outstanding: tuple[str, ...]
+) -> None:
     set_lane_account_quiet_source(
         _source(
             LaneQuietAnswer(
                 observed_at_ms=_T0,
                 runner_idle=True,
-                broker_work_ended=True,
-                account_flat=True,
-                intents_resolved=True,
-            )
-        )
-    )
-
-    async with _client() as client:
-        response = await client.get(_QUIET_PATH)
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "account_id": "PA-MIGRATE-1",
-        "observed_at_ms": _T0,
-        "runner_idle": True,
-        "broker_work_ended": True,
-        "account_flat": True,
-        "intents_resolved": True,
-        "quiet": True,
-        "outstanding": [],
-    }
-
-
-async def test_account_quiet_names_each_open_condition_not_flat() -> None:
-    set_lane_account_quiet_source(
-        _source(
-            LaneQuietAnswer(
-                observed_at_ms=_T0,
-                runner_idle=True,
-                broker_work_ended=False,
-                account_flat=False,
+                broker_work_ended=broker_work_ended,
+                account_flat=account_flat,
                 intents_resolved=True,
             )
         )
@@ -191,27 +180,35 @@ async def test_account_quiet_names_each_open_condition_not_flat() -> None:
         response = await client.get(_QUIET_PATH)
 
     body = response.json()
-    assert response.status_code == 200
-    assert body["quiet"] is False
-    assert body["outstanding"] == [
-        "a working order on the account has not ended",
-        "the account or the lane's custody is not flat",
-    ]
+    assert response.status_code == 200, "the quiet read answers 200"
+    assert body["quiet"] is quiet, "the quiet verdict"
+    assert body["outstanding"] == list(outstanding), "each open condition is named"
+    assert body == {
+        "account_id": "PA-MIGRATE-1",
+        "observed_at_ms": _T0,
+        "runner_idle": True,
+        "broker_work_ended": broker_work_ended,
+        "account_flat": account_flat,
+        "intents_resolved": True,
+        "quiet": quiet,
+        "outstanding": list(outstanding),
+    }, "the whole answer"
 
 
-async def test_account_quiet_that_cannot_observe_the_broker_is_unavailable() -> None:
-    set_lane_account_quiet_source(_source(None))
+@pytest.mark.parametrize(
+    ("source", "reason"),
+    [
+        pytest.param(_source(None), "lane_account_quiet_unobservable", id="cannot observe the broker"),
+        pytest.param(None, "lane_account_quiet_unanswerable", id="a lane with no clerk"),
+    ],
+)
+async def test_account_quiet_that_cannot_be_answered_is_unavailable(
+    source: LaneAccountQuietSource | None, reason: str
+) -> None:
+    set_lane_account_quiet_source(source)
 
     async with _client() as client:
         response = await client.get(_QUIET_PATH)
 
-    assert response.status_code == 503
-    assert response.json()["detail"]["reason"] == "lane_account_quiet_unobservable"
-
-
-async def test_account_quiet_on_a_lane_with_no_clerk_is_unanswerable() -> None:
-    async with _client() as client:
-        response = await client.get(_QUIET_PATH)
-
-    assert response.status_code == 503
-    assert response.json()["detail"]["reason"] == "lane_account_quiet_unanswerable"
+    assert response.status_code == 503, "the quiet read is unavailable"
+    assert response.json()["detail"]["reason"] == reason, "the refusal names why it cannot answer"

@@ -46,17 +46,25 @@ def _clear_cache():
 
 
 class TestTrailingTwelveMonth:
-    def test_sums_cash_amounts(self):
-        polygon = FakePolygon(
-            [
-                {"cash_amount": 1.62, "ex_dividend_date": "2024-03-15"},
-                {"cash_amount": 1.65, "ex_dividend_date": "2024-06-21"},
-                {"cash_amount": 1.68, "ex_dividend_date": "2024-09-20"},
-                {"cash_amount": 1.74, "ex_dividend_date": "2024-12-20"},
-            ]
-        )
+    @pytest.mark.parametrize(
+        ("events", "expected"),
+        [
+            pytest.param(
+                ((1.62, "2024-03-15"), (1.65, "2024-06-21"), (1.68, "2024-09-20"), (1.74, "2024-12-20")),
+                6.69,
+                id="sums-cash-amounts",
+            ),
+            pytest.param(
+                ((None, "2024-03-15"), (1.65, "2024-06-21"), ("not-a-number", "2024-09-20")),
+                1.65,
+                id="skips-null-amounts",
+            ),
+        ],
+    )
+    def test_total_of_the_cash_amounts_the_events_carry(self, events, expected):
+        polygon = FakePolygon([{"cash_amount": amount, "ex_dividend_date": ex_date} for amount, ex_date in events])
         total = get_trailing_12m_cash_dividends("SPY", polygon, "2024-12-20")
-        assert total == pytest.approx(6.69, abs=1e-12)
+        assert total == pytest.approx(expected, abs=1e-12), "the total is the sum of the usable cash amounts"
 
     def test_window_is_365_days(self):
         polygon = FakePolygon([])
@@ -80,16 +88,6 @@ class TestTrailingTwelveMonth:
         recovered = FakePolygon([{"cash_amount": 1.65, "ex_dividend_date": "2024-06-21"}])
         assert compute_dividend_yield("SPY", 590.0, recovered, "2024-12-20") == pytest.approx(1.65 / 590.0, abs=1e-12)
 
-    def test_skips_null_amounts(self):
-        polygon = FakePolygon(
-            [
-                {"cash_amount": None, "ex_dividend_date": "2024-03-15"},
-                {"cash_amount": 1.65, "ex_dividend_date": "2024-06-21"},
-                {"cash_amount": "not-a-number", "ex_dividend_date": "2024-09-20"},
-            ]
-        )
-        assert get_trailing_12m_cash_dividends("SPY", polygon, "2024-12-20") == pytest.approx(1.65)
-
 
 class TestComputeDividendYield:
     def test_yield_is_ttm_over_spot(self):
@@ -105,33 +103,28 @@ class TestComputeDividendYield:
         yld = compute_dividend_yield("SPY", spot_price=590.0, polygon=polygon, observation_date="2024-12-20")
         assert yld == pytest.approx(6.69 / 590.0, abs=1e-12)
 
-    def test_yield_is_cached(self):
+    @pytest.mark.parametrize(
+        ("lookups", "polygon_calls"),
+        [
+            # Cache hit on second call → exactly one polygon call.
+            pytest.param((("SPY", "2024-12-20"), ("SPY", "2024-12-20")), 1, id="yield-is-cached"),
+            # Different (symbol, date) → three polygon calls.
+            pytest.param(
+                (("SPY", "2024-12-20"), ("SPY", "2024-12-19"), ("QQQ", "2024-12-20")),
+                3,
+                id="cache-is-keyed-by-date-and-symbol",
+            ),
+            pytest.param((("spy", "2024-12-20"), ("SPY", "2024-12-20")), 1, id="ticker-is-case-insensitive-in-cache"),
+        ],
+    )
+    def test_yield_lookups_hit_polygon_once_per_symbol_and_date(self, lookups, polygon_calls):
         polygon = FakePolygon([{"cash_amount": 2.0, "ex_dividend_date": "2024-06-01"}])
-        compute_dividend_yield("SPY", 100.0, polygon, "2024-12-20")
-        compute_dividend_yield("SPY", 100.0, polygon, "2024-12-20")
-        # Cache hit on second call → exactly one polygon call.
-        assert len(polygon.calls) == 1
+        for ticker, observation_date in lookups:
+            compute_dividend_yield(ticker, 100.0, polygon, observation_date)
+        assert len(polygon.calls) == polygon_calls, "polygon is asked once per distinct (symbol, date)"
 
-    def test_cache_keyed_by_date_and_symbol(self):
-        polygon = FakePolygon([{"cash_amount": 2.0, "ex_dividend_date": "2024-06-01"}])
-        compute_dividend_yield("SPY", 100.0, polygon, "2024-12-20")
-        compute_dividend_yield("SPY", 100.0, polygon, "2024-12-19")
-        compute_dividend_yield("QQQ", 100.0, polygon, "2024-12-20")
-        # Different (symbol, date) → three polygon calls.
-        assert len(polygon.calls) == 3
-
-    def test_negative_spot_raises(self):
+    @pytest.mark.parametrize("spot", [-1.0, 0.0], ids=["negative-spot-raises", "zero-spot-raises"])
+    def test_non_positive_spot_raises(self, spot):
         polygon = FakePolygon([])
         with pytest.raises(ValueError):
-            compute_dividend_yield("SPY", -1.0, polygon, "2024-12-20")
-
-    def test_zero_spot_raises(self):
-        polygon = FakePolygon([])
-        with pytest.raises(ValueError):
-            compute_dividend_yield("SPY", 0.0, polygon, "2024-12-20")
-
-    def test_ticker_case_insensitive_in_cache(self):
-        polygon = FakePolygon([{"cash_amount": 2.0, "ex_dividend_date": "2024-06-01"}])
-        compute_dividend_yield("spy", 100.0, polygon, "2024-12-20")
-        compute_dividend_yield("SPY", 100.0, polygon, "2024-12-20")
-        assert len(polygon.calls) == 1
+            compute_dividend_yield("SPY", spot, polygon, "2024-12-20")

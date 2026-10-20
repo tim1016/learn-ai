@@ -116,53 +116,43 @@ describe('BaselinesDetailPageComponent', () => {
     vi.clearAllMocks();
   });
 
-  it('reads baseline_id from the route and fetches the baseline', () => {
-    expect(service.getBaseline).toHaveBeenCalledWith('b'.repeat(32));
-    expect(component.baselineId()).toBe('b'.repeat(32));
-    expect(component.baseline()?.config.method).toBe('random_ema_windows');
-  });
+  it('loads the baseline named by the route and shows its null-distribution card, null-array P5/P50/P95, sample baseline row and parent-run link', () => {
+    expect.soft(service.getBaseline, 'fetches the baseline named by the route').toHaveBeenCalledWith('b'.repeat(32));
+    expect.soft(component.baselineId(), 'reads baseline_id from the route').toBe('b'.repeat(32));
+    expect.soft(component.baseline()?.config.method, 'holds the fetched baseline').toBe('random_ema_windows');
 
-  it('renders the null-distribution card with parent value, percentile, and p-value', () => {
     const text: string = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('sharpe_ratio');
+    expect.soft(text, 'null-distribution card names the metric').toContain('sharpe_ratio');
     // parent value 1.85 → '1.8500'
-    expect(text).toContain('1.8500');
+    expect.soft(text, 'null-distribution card shows the parent value').toContain('1.8500');
     // empirical_percentile 0.857 → '85.7%'
-    expect(text).toContain('85.7%');
+    expect.soft(text, 'null-distribution card shows the percentile').toContain('85.7%');
     // p-value 0.222 → '0.2220'
-    expect(text).toContain('0.2220');
-  });
+    expect.soft(text, 'null-distribution card shows the p-value').toContain('0.2220');
+    expect.soft(text, 'parent-run link is labelled').toContain('Parent run');
+    expect.soft(text, 'parent-run link shows the parent run id').toContain('aaaaaaaaaaaaaaaa');
 
-  it('computes null-array P5/P50/P95 from null_values', () => {
     const summaries = component.nullSummaries();
-    expect(summaries.length).toBe(1);
+    expect(summaries.length, 'computes one null-array summary').toBe(1);
     const s = summaries[0];
     // 8 values: [0.5,0.9,1.1,1.3,1.5,1.7,1.9,2.0]; linear-interp
     // P50 between idx 3 (1.3) and 4 (1.5) at 0.5 → 1.4
-    expect(s.p50).toBeCloseTo(1.4, 6);
+    expect.soft(s.p50, 'null-array P50 is linearly interpolated from null_values').toBeCloseTo(1.4, 6);
     // P5 at 0.05*(8-1)=0.35 between 0.5 and 0.9 → 0.5 + 0.4*0.35 = 0.64
-    expect(s.p5).toBeCloseTo(0.64, 6);
+    expect.soft(s.p5, 'null-array P5 is linearly interpolated from null_values').toBeCloseTo(0.64, 6);
     // P95 at 0.95*(8-1)=6.65 between 1.9 and 2.0 → 1.9 + 0.1*0.65 = 1.965
-    expect(s.p95).toBeCloseTo(1.965, 6);
-    expect(s.null_count).toBe(8);
-  });
+    expect.soft(s.p95, 'null-array P95 is linearly interpolated from null_values').toBeCloseTo(1.965, 6);
+    expect.soft(s.null_count, 'null-array summary counts the null values').toBe(8);
 
-  it('renders a row per sample baseline with parameters and test metrics', () => {
     const rows = fixture.nativeElement.querySelectorAll(
       '.bld-runs-table tbody tr',
     );
-    expect(rows.length).toBe(1);
+    expect(rows.length, 'renders a row per sample baseline').toBe(1);
     const row = (rows[0].textContent ?? '').trim();
-    expect(row).toContain('fast=5');
-    expect(row).toContain('slow=20');
-    expect(row).toContain('1.42');
-    expect(row).toContain('22');
-  });
-
-  it('renders the parent-run link', () => {
-    const text: string = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('Parent run');
-    expect(text).toContain('aaaaaaaaaaaaaaaa');
+    expect.soft(row, 'sample baseline row shows the fast parameter').toContain('fast=5');
+    expect.soft(row, 'sample baseline row shows the slow parameter').toContain('slow=20');
+    expect.soft(row, 'sample baseline row shows the Sharpe test metric').toContain('1.42');
+    expect.soft(row, 'sample baseline row shows the test trade count').toContain('22');
   });
 
   it('surfaces service errors', async () => {

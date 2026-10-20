@@ -73,23 +73,22 @@ def test_the_price_actually_sent_is_what_is_set_aside_not_the_quoted_one() -> No
 
 
 @pytest.mark.parametrize(
-    ("net_price", "reason"),
+    ("net_price", "fee_provision", "reason"),
     [
-        pytest.param(Decimal("-3.07456"), "whole number of cents", id="a price finer than a cent a contract"),
-        pytest.param(Decimal("NaN"), "finite", id="a price that is no number"),
-        pytest.param(Decimal("-1E+5000000"), "everyday number", id="an exponent that would take seconds to write out"),
-        pytest.param(-3.07, "exact decimal", id="a float, which has already lost the cents"),
+        pytest.param(Decimal("-3.07456"), 0, "whole number of cents", id="a price finer than a cent a contract"),
+        pytest.param(Decimal("NaN"), 0, "finite", id="a price that is no number"),
+        pytest.param(Decimal("-1E+5000000"), 0, "everyday number", id="an exponent that would take seconds to write out"),
+        pytest.param(-3.07, 0, "exact decimal", id="a float, which has already lost the cents"),
+        pytest.param(Decimal("-3.07"), -1, "fee provision", id="a negative fee provision"),
+        pytest.param(Decimal("-3.07"), 1.5, "fee provision", id="a fee provision of a fraction of a cent"),
+        pytest.param(Decimal("-3.07"), True, "fee provision", id="a boolean fee provision"),
     ],
 )
-def test_money_is_not_worked_out_from_a_price_it_cannot_be_exact_about(net_price: object, reason: str) -> None:
+def test_money_is_not_worked_out_from_a_price_or_a_fee_provision_it_cannot_be_exact_about(
+    net_price: object, fee_provision: object, reason: str
+) -> None:
     with pytest.raises(ValueError, match=reason):
-        entry_money(_sold_call_spread(), _ONE_STRUCTURE, net_price=net_price, fee_provision_cents=0)  # type: ignore[arg-type]
-
-
-@pytest.mark.parametrize("fee_provision", [-1, 1.5, True], ids=["negative", "a fraction of a cent", "a boolean"])
-def test_a_fee_provision_is_a_whole_number_of_cents_zero_or_more(fee_provision: object) -> None:
-    with pytest.raises(ValueError, match="fee provision"):
-        entry_money(_sold_call_spread(), _ONE_STRUCTURE, net_price=Decimal("-3.07"), fee_provision_cents=fee_provision)  # type: ignore[arg-type]
+        entry_money(_sold_call_spread(), _ONE_STRUCTURE, net_price=net_price, fee_provision_cents=fee_provision)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(
@@ -290,12 +289,39 @@ _BOUGHT_CALL_SPREAD = _held(("call", "100", 1), ("call", "110", -1))
 _SOLD_CALL_SPREAD = _held(("call", "190", -1), ("call", "200", 1))
 
 
-def test_a_first_five_dollar_spread_on_a_flat_account_adds_its_whole_requirement() -> None:
-    assert incremental_account_requirement({}, _SOLD_SPREAD_450) == (0, 50_000)
-
-
-def test_a_bought_spread_on_a_flat_account_adds_nothing() -> None:
-    assert incremental_account_requirement({}, _BOUGHT_CALL_SPREAD) == (0, 0)
+@pytest.mark.parametrize(
+    ("before", "after", "released_and_added"),
+    [
+        pytest.param(
+            (), (("call", "450", -1), ("call", "455", 1)), (0, 50_000),
+            id="a first five-dollar spread on a flat account adds its whole requirement",
+        ),
+        pytest.param(
+            (), (("call", "100", 1), ("call", "110", -1)), (0, 0),
+            id="a bought spread on a flat account adds nothing",
+        ),
+        # The account holds the sold spread; entering the bought one takes its $1,000 requirement to nothing.
+        pytest.param(
+            (("call", "190", -1), ("call", "200", 1)),
+            (("call", "190", -1), ("call", "200", 1), ("call", "100", 1), ("call", "110", -1)),
+            (100_000, 0),
+            id="an entry that nets against what is held shows the requirement it released, not the commitment",
+        ),
+        # A second sold spread beside the first is counted with it, on the same expiry: $1,000 more, not $500 alone.
+        pytest.param(
+            (("call", "450", -1), ("call", "455", 1)),
+            (("call", "450", -1), ("call", "455", 1), ("call", "460", -1), ("call", "465", 1)),
+            (50_000, 100_000),
+            id="the holdings are the account's whole and not the entry's alone",
+        ),
+    ],
+)
+def test_an_entry_adds_to_the_account_what_the_whole_holdings_need_after_it_less_before(
+    before: tuple[tuple[str, str, int], ...],
+    after: tuple[tuple[str, str, int], ...],
+    released_and_added: tuple[int, int],
+) -> None:
+    assert incremental_account_requirement(_held(*before), _held(*after)) == released_and_added
 
 
 def test_alpacas_two_spreads_that_need_1000_apart_need_nothing_together() -> None:
@@ -307,21 +333,6 @@ def test_alpacas_two_spreads_that_need_1000_apart_need_nothing_together() -> Non
 
     assert apart == 100_000
     assert incremental_account_requirement({}, {**_SOLD_CALL_SPREAD, **_BOUGHT_CALL_SPREAD}) == (0, 0)
-
-
-def test_an_entry_that_nets_against_what_is_held_shows_the_requirement_it_released_not_the_commitment() -> None:
-    """The account holds the sold spread; entering the bought one takes its $1,000 requirement to nothing."""
-    after = {**_SOLD_CALL_SPREAD, **_BOUGHT_CALL_SPREAD}
-
-    assert incremental_account_requirement(_SOLD_CALL_SPREAD, after) == (100_000, 0)
-
-
-def test_the_holdings_are_the_accounts_whole_and_not_the_entrys_alone() -> None:
-    """A second sold spread beside the first is counted with it, on the same expiry: $1,000 more, not $500 alone."""
-    first = _held(("call", "450", -1), ("call", "455", 1))
-    second = _held(("call", "460", -1), ("call", "465", 1))
-
-    assert incremental_account_requirement(first, {**first, **second}) == (50_000, 100_000)
 
 
 def test_a_contract_that_nets_to_nothing_is_not_held() -> None:

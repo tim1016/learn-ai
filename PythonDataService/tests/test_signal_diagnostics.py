@@ -29,28 +29,25 @@ def test_compute_signal_diagnostics_empty_returns_default():
     assert result == SignalDiagnostics()
 
 
-def test_compute_signal_diagnostics_without_regime_gate():
+def test_compute_signal_diagnostics_regime_gate():
     z = pd.Series([-2.0, 0.0, 1.0, 2.0])
     thresh = pd.Series([-1.0, 0.0, 0.0, 1.0])  # 2 active of 4 → 50% filtered
-
-    result = compute_signal_diagnostics(z_scores=z, threshold_signal=thresh, regime_gated_signal=None)
-
-    assert result.signal_mean == pytest.approx(0.25, abs=1e-12, rel=0)
-    assert result.pct_time_active == pytest.approx(0.5, abs=1e-12, rel=0)
-    assert result.pct_filtered_by_threshold == pytest.approx(0.5, abs=1e-12, rel=0)
-    assert result.pct_gated_by_regime == 0.0
-    assert result.avg_abs_signal == pytest.approx(1.25, abs=1e-12, rel=0)
-
-
-def test_compute_signal_diagnostics_with_regime_gate():
-    z = pd.Series([-2.0, 0.0, 1.0, 2.0])
-    thresh = pd.Series([-1.0, 0.0, 0.0, 1.0])  # 2 active pre-gate
     gated = pd.Series([0.0, 0.0, 0.0, 1.0])  # 1 active post-gate
 
-    result = compute_signal_diagnostics(z_scores=z, threshold_signal=thresh, regime_gated_signal=gated)
+    ungated = compute_signal_diagnostics(z_scores=z, threshold_signal=thresh, regime_gated_signal=None)
+    with_gate = compute_signal_diagnostics(z_scores=z, threshold_signal=thresh, regime_gated_signal=gated)
 
-    assert result.pct_time_active == pytest.approx(0.25, abs=1e-12, rel=0)
-    assert result.pct_gated_by_regime == pytest.approx(0.25, abs=1e-12, rel=0)
+    assert ungated.signal_mean == pytest.approx(0.25, abs=1e-12, rel=0), "without regime gate: signal mean"
+    assert ungated.pct_time_active == pytest.approx(0.5, abs=1e-12, rel=0), "without regime gate: pct time active"
+    assert ungated.pct_filtered_by_threshold == pytest.approx(0.5, abs=1e-12, rel=0), (
+        "without regime gate: pct filtered by threshold"
+    )
+    assert ungated.pct_gated_by_regime == 0.0, "without regime gate: nothing gated by regime"
+    assert ungated.avg_abs_signal == pytest.approx(1.25, abs=1e-12, rel=0), "without regime gate: avg abs signal"
+    assert with_gate.pct_time_active == pytest.approx(0.25, abs=1e-12, rel=0), "with regime gate: pct time active"
+    assert with_gate.pct_gated_by_regime == pytest.approx(0.25, abs=1e-12, rel=0), (
+        "with regime gate: pct gated by regime"
+    )
 
 
 def test_compute_data_sufficiency_warns_on_short_history():
@@ -104,13 +101,22 @@ def test_compute_data_sufficiency_all_green_has_no_warnings():
     assert result.coverage_warnings == []
 
 
-def test_compute_effective_sample_size_short_series_returns_raw_n():
-    result = compute_effective_sample_size(pd.Series([0.01, 0.02]))
+@pytest.mark.parametrize(
+    "values",
+    [
+        pytest.param((0.01, 0.02), id="short_series_returns_raw_n"),
+        pytest.param((0.0,) * 100, id="zero_variance_returns_raw_n"),
+    ],
+)
+def test_compute_effective_sample_size_degenerate_returns_raw_n(values):
+    n = len(values)
 
-    assert isinstance(result, EffectiveSampleSize)
-    assert result.raw_n == 2
-    assert result.effective_n == 2.0
-    assert result.independent_bets == 2
+    result = compute_effective_sample_size(pd.Series(list(values)))
+
+    assert isinstance(result, EffectiveSampleSize), "result is an EffectiveSampleSize"
+    assert result.raw_n == n, "raw_n is the series length"
+    assert result.effective_n == float(n), "effective_n falls back to the series length"
+    assert result.independent_bets == n, "independent_bets falls back to the series length"
 
 
 def test_compute_effective_sample_size_iid_returns_near_n():
@@ -143,14 +149,6 @@ def test_compute_effective_sample_size_autocorrelated_reduces_n():
     assert result.autocorrelation_lag1 > 0.5
 
 
-def test_compute_effective_sample_size_zero_variance_returns_raw_n():
-    result = compute_effective_sample_size(pd.Series([0.0] * 100))
-
-    assert result.raw_n == 100
-    assert result.effective_n == 100.0
-    assert result.independent_bets == 100
-
-
 # ─── Sharpe CI (Lo 2002) ────────────────────────────────────────────────────
 
 
@@ -170,14 +168,15 @@ def test_compute_sharpe_ci_brackets_point_estimate():
     )
 
 
-def test_compute_sharpe_ci_invalid_when_too_few_samples():
-    result = compute_sharpe_ci(np.array([0.01, 0.02]), n_eff=2.0)
-
-    assert result.valid is False
-
-
-def test_compute_sharpe_ci_invalid_on_zero_variance_returns():
-    result = compute_sharpe_ci(np.zeros(100), n_eff=100.0)
+@pytest.mark.parametrize(
+    ("returns", "n_eff"),
+    [
+        pytest.param((0.01, 0.02), 2.0, id="invalid_when_too_few_samples"),
+        pytest.param((0.0,) * 100, 100.0, id="invalid_on_zero_variance_returns"),
+    ],
+)
+def test_compute_sharpe_ci_invalid_returns(returns, n_eff):
+    result = compute_sharpe_ci(np.array(returns), n_eff=n_eff)
 
     assert result.valid is False
 
@@ -280,29 +279,27 @@ def test_compute_joint_regime_coverage_counts_joint_buckets_correctly():
     assert by_key[("Normal Vol", "Trending Down")].days == 1
 
 
-def test_compute_joint_regime_coverage_badge_pass_when_trades_exceed_threshold():
-    """A bucket with ≥ 30 effective trades should earn a Pass badge."""
-    # 100 days, all in one bucket. With N_eff=100,000 and pct_active=0.10:
-    # trades = 100,000 * 0.10 * (100/100) = 10,000 — well over 30.
-    df = _make_daily_regimes([("Low Vol", "Trending Up")] * 100)
+@pytest.mark.parametrize(
+    ("trend", "n_eff", "pct_active", "badge", "trades_above", "trades_below"),
+    [
+        # A bucket with ≥ 30 effective trades should earn a Pass badge.
+        # 100 days, all in one bucket. With N_eff=100,000 and pct_active=0.10:
+        # trades = 100,000 * 0.10 * (100/100) = 10,000 — well over 30.
+        pytest.param("Trending Up", 100_000.0, 0.10, "Pass", 30, float("inf"), id="badge_pass_when_trades_exceed_threshold"),
+        # Buckets with positive but < 30 effective trades earn Sparse.
+        # 100 days, all in one bucket, very low N_eff and pct_active:
+        # trades = 50 * 0.05 * 1.0 = 2.5 → sparse.
+        pytest.param("Sideways", 50.0, 0.05, "Sparse", 0, 30, id="badge_sparse_for_thin_buckets"),
+    ],
+)
+def test_compute_joint_regime_coverage_badge(trend, n_eff, pct_active, badge, trades_above, trades_below):
+    df = _make_daily_regimes([("Low Vol", trend)] * 100)
 
-    buckets = compute_joint_regime_coverage(df, n_eff=100_000.0, pct_active=0.10)
+    buckets = compute_joint_regime_coverage(df, n_eff=n_eff, pct_active=pct_active)
 
-    assert len(buckets) == 1
-    assert buckets[0].badge == "Pass"
-    assert buckets[0].effective_trades > 30
-
-
-def test_compute_joint_regime_coverage_badge_sparse_for_thin_buckets():
-    """Buckets with positive but < 30 effective trades earn Sparse."""
-    # 100 days, all in one bucket, very low N_eff and pct_active:
-    # trades = 50 * 0.05 * 1.0 = 2.5 → sparse.
-    df = _make_daily_regimes([("Low Vol", "Sideways")] * 100)
-
-    buckets = compute_joint_regime_coverage(df, n_eff=50.0, pct_active=0.05)
-
-    assert buckets[0].badge == "Sparse"
-    assert 0 < buckets[0].effective_trades < 30
+    assert len(buckets) == 1, "all days land in one bucket"
+    assert buckets[0].badge == badge, "badge follows the effective trades"
+    assert trades_above < buckets[0].effective_trades < trades_below, "effective trades sit in the badge's range"
 
 
 def test_compute_joint_regime_coverage_handles_empty_dataframe():

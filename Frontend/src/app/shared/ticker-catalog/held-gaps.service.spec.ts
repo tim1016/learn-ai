@@ -71,19 +71,14 @@ describe('HeldGapsService', () => {
     expect(after).toEqual({ unheldMs: new Set(), problem: 'The data plane did not respond.' });
   });
 
-  it('asks nothing while the span has no first or last day', () => {
+  it.each<[string, string | null, string | null, 'minute' | 'daily']>([
+    ['asks nothing while the span has no first or last day', null, null, 'minute'],
+    ['tells a daily run nothing: the endpoint reports minute bars, and a daily run reads the daily history', '2026-09-14', '2026-09-18', 'daily'],
+  ])('%s', (_name, first, last, resolution) => {
     const read = vi.fn();
     TestBed.configureTestingModule({ providers: [{ provide: DataLakeService, useValue: { coverage: read } }] });
 
-    expect(TestBed.inject(HeldGapsService).gapsFor('raw', 'QQQ', heldBounds('QQQ', null, null), 'minute')).toBeNull();
-    expect(read).not.toHaveBeenCalled();
-  });
-
-  it('tells a daily run nothing: the endpoint reports minute bars, and a daily run reads the daily history', () => {
-    const read = vi.fn();
-    TestBed.configureTestingModule({ providers: [{ provide: DataLakeService, useValue: { coverage: read } }] });
-
-    expect(TestBed.inject(HeldGapsService).gapsFor('raw', 'QQQ', heldBounds('QQQ', '2026-09-14', '2026-09-18'), 'daily')).toBeNull();
+    expect(TestBed.inject(HeldGapsService).gapsFor('raw', 'QQQ', heldBounds('QQQ', first, last), resolution)).toBeNull();
     expect(read).not.toHaveBeenCalled();
   });
 

@@ -57,66 +57,66 @@ function receiptValue(container: Element, label: string): string {
 }
 
 describe('ArtifactInspectorComponent', () => {
-  it('shows the hashes and the path verbatim', async () => {
-    await renderInspector({ kind: 'ok', value: fakeDetail() });
+  it('renders the artifact receipt from the catalog row and passes AXE', async () => {
+    const { container } = await renderInspector({ kind: 'ok', value: fakeDetail() });
 
-    expect(await screen.findByText('dch-aaaabbbbccccdddd')).toBeTruthy();
-    expect(screen.getByText('sha256-eeeeffff00001111')).toBeTruthy();
-    expect(screen.getByText('/lake/usa/minute/spy/20260520_trade.zip')).toBeTruthy();
-  });
+    expect
+      .soft(await screen.findByText('dch-aaaabbbbccccdddd'), 'shows the data contract hash verbatim')
+      .toBeTruthy();
+    expect.soft(screen.queryByText('sha256-eeeeffff00001111'), 'shows the content hash verbatim').toBeTruthy();
+    expect
+      .soft(screen.queryByText('/lake/usa/minute/spy/20260520_trade.zip'), 'shows the path verbatim')
+      .toBeTruthy();
 
-  it('names the symbol and market exactly as the catalog holds them', async () => {
     // The receipt pipe title-cases a code-like value, which would print
     // "Spy" and "Usa" here while the heatmap row header and the panel's own
     // eyebrow print "SPY". A receipt that disagrees with the grid above it
     // about which symbol it describes is worse than no receipt.
-    const { container } = await renderInspector({ kind: 'ok', value: fakeDetail() });
-    await screen.findByText('dch-aaaabbbbccccdddd');
+    expect
+      .soft(receiptValue(container, 'Symbol'), 'names the symbol exactly as the catalog holds it')
+      .toBe('SPY');
+    expect
+      .soft(receiptValue(container, 'Market'), 'names the market exactly as the catalog holds it')
+      .toBe('usa');
+    expect.soft(screen.queryByText('Spy'), 'never title-cases the symbol to "Spy"').toBeNull();
+    expect.soft(screen.queryByText('Usa'), 'never title-cases the market to "Usa"').toBeNull();
 
-    expect(receiptValue(container, 'Symbol')).toBe('SPY');
-    expect(receiptValue(container, 'Market')).toBe('usa');
-    expect(screen.queryByText('Spy')).toBeNull();
-    expect(screen.queryByText('Usa')).toBeNull();
-  });
+    expect
+      .soft(
+        screen.queryByText('2.00 MB (2097152 bytes)'),
+        'reports size in both human and exact byte terms',
+      )
+      .toBeTruthy();
 
-  it('reports size in both human and exact byte terms', async () => {
-    await renderInspector({ kind: 'ok', value: fakeDetail() });
+    expect
+      .soft(
+        screen.queryByText('sha256:pinned'),
+        'renders the provider parameters that produced the artifact: the image digest',
+      )
+      .toBeTruthy();
+    expect
+      .soft(
+        screen.queryByText('Adjusted'),
+        'renders the provider parameters that produced the artifact: the adjusted flag',
+      )
+      .toBeTruthy();
 
-    expect(await screen.findByText('2.00 MB (2097152 bytes)')).toBeTruthy();
-  });
-
-  it('renders the provider parameters that produced the artifact', async () => {
-    await renderInspector({ kind: 'ok', value: fakeDetail() });
-
-    expect(await screen.findByText('sha256:pinned')).toBeTruthy();
-    expect(screen.getByText('Adjusted')).toBeTruthy();
-  });
-
-  it('renders the trading date in ET, never shifted to the viewer local day', async () => {
-    await renderInspector({ kind: 'ok', value: fakeDetail() });
-
-    const tradingDate = await screen.findByText('2026-05-20');
-    expect(tradingDate.getAttribute('data-timestamp-mode')).toBe('date-et');
-  });
-
-  it('renders instants in the viewer zone, not ET', async () => {
-    const { container } = await renderInspector({ kind: 'ok', value: fakeDetail() });
-    await screen.findByText('2026-05-20');
+    expect
+      .soft(
+        screen.queryByText('2026-05-20')?.getAttribute('data-timestamp-mode'),
+        'renders the trading date in ET, never shifted to the viewer local day',
+      )
+      .toBe('date-et');
 
     const modes = Array.from(container.querySelectorAll('[data-timestamp-mode]')).map((node) =>
       node.getAttribute('data-timestamp-mode'),
     );
-    expect(modes).toContain('local');
-  });
-
-  it('passes AXE', async () => {
-    await renderInspector({ kind: 'ok', value: fakeDetail() });
-    await screen.findByText('dch-aaaabbbbccccdddd');
+    expect.soft(modes, 'renders instants in the viewer zone, not ET').toContain('local');
 
     const results = await axe.run(document.body, {
       rules: { 'color-contrast': { enabled: false }, region: { enabled: false } },
     });
 
-    expect(results.violations).toEqual([]);
+    expect.soft(results.violations, 'passes AXE').toEqual([]);
   });
 });

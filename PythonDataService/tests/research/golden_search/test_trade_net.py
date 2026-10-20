@@ -15,12 +15,9 @@ def test_a_trades_net_is_its_pnl_less_its_entry_and_exit_commission() -> None:
 
 def test_trades_reconcile_with_their_run_within_a_cent() -> None:
     nets = [10.0, -5.5]
-    assert reconciles(nets, 4.5)
+    assert reconciles(nets, 4.5), "trades that sum to the run's net profit reconcile"
     # Exactly one cent apart, either way, still reconciles; two cents does not.
-    assert reconciles(nets, 4.51) and reconciles(nets, 4.49)
-    assert not reconciles(nets, 4.52)
-
-
-def test_a_run_whose_trades_miss_a_loss_does_not_reconcile() -> None:
+    assert reconciles(nets, 4.51) and reconciles(nets, 4.49), "one cent apart, either way, still reconciles"
+    assert not reconciles(nets, 4.52), "two cents apart does not reconcile"
     # A position still open when the window ended moves net profit but is no trade.
-    assert not reconciles([300.0, -100.0], -50.0)
+    assert not reconciles([300.0, -100.0], -50.0), "a run whose trades miss a loss does not reconcile"

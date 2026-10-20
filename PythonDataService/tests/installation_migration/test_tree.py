@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import tarfile
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -33,51 +34,46 @@ def _populate(root: Path) -> None:
     os.symlink("notes.txt", root / "latest")
 
 
-def test_folder_tar_digest_equals_the_directory_digest(tmp_path: Path) -> None:
+def test_folder_tar_digest_and_its_extraction_equal_the_directory_digest(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()
     _populate(source)
     archive = tmp_path / "folder.tar"
 
-    build_folder_tar(source, archive)
-
-    assert tree_digest_from_tar(archive) == tree_digest_from_dir(source)
-
-
-def test_extracting_the_tar_reproduces_the_same_digest(tmp_path: Path) -> None:
-    source = tmp_path / "source"
-    source.mkdir()
-    _populate(source)
-    archive = tmp_path / "folder.tar"
     build_folder_tar(source, archive)
     restored = tmp_path / "restored"
     restored.mkdir()
-
     extract_tar(archive, restored)
 
-    assert tree_digest_from_dir(restored) == tree_digest_from_dir(source)
-    assert (restored / "lake" / "bars" / "spy.parquet").read_bytes() == b"\x00\x01parquet"
-    assert os.readlink(restored / "latest") == "notes.txt"
+    assert tree_digest_from_tar(archive) == tree_digest_from_dir(source), (
+        "folder tar digest equals the directory digest"
+    )
+    assert tree_digest_from_dir(restored) == tree_digest_from_dir(source), (
+        "extracting the tar reproduces the same digest"
+    )
+    assert (restored / "lake" / "bars" / "spy.parquet").read_bytes() == b"\x00\x01parquet", (
+        "extracting the tar restores the file bytes"
+    )
+    assert os.readlink(restored / "latest") == "notes.txt", (
+        "extracting the tar restores the symlink target"
+    )
 
 
-def test_digest_changes_when_one_byte_of_content_changes(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda root: (root / "notes.txt").write_text("hellO", encoding="utf-8"),
+        lambda root: (root / "another-empty").mkdir(),
+    ],
+    ids=["one_byte_of_content_changes", "an_added_empty_directory"],
+)
+def test_digest_changes_when_the_tree_changes(tmp_path: Path, change: Callable[[Path], object]) -> None:
     root = tmp_path / "root"
     root.mkdir()
     _populate(root)
     before = tree_digest_from_dir(root)
 
-    (root / "notes.txt").write_text("hellO", encoding="utf-8")
-
-    assert tree_digest_from_dir(root) != before
-
-
-def test_digest_sees_an_added_empty_directory(tmp_path: Path) -> None:
-    root = tmp_path / "root"
-    root.mkdir()
-    _populate(root)
-    before = tree_digest_from_dir(root)
-
-    (root / "another-empty").mkdir()
+    change(root)
 
     assert tree_digest_from_dir(root) != before
 

@@ -62,11 +62,14 @@ async def _client():
 # ---------------------------------------------------------------------------
 # Tests.
 # ---------------------------------------------------------------------------
-async def test_fixtures_list_endpoint() -> None:
+async def test_fixtures_endpoints() -> None:
     async with await _client() as client:
-        resp = await client.get("/api/spec-strategy/fixtures")
-    assert resp.status_code == 200
-    items = resp.json()
+        list_resp = await client.get("/api/spec-strategy/fixtures")
+        detail_resp = await client.get("/api/spec-strategy/fixtures/sma_crossover")
+        unknown_resp = await client.get("/api/spec-strategy/fixtures/does_not_exist")
+
+    assert list_resp.status_code == 200, "fixtures list endpoint answers 200"
+    items = list_resp.json()
     names = {item["name"] for item in items}
     assert names == {
         "spy_ema_crossover",
@@ -76,28 +79,20 @@ async def test_fixtures_list_endpoint() -> None:
         "rsi_mean_reversion",
         "deployment_validation",
     }, (
-        f"unexpected fixture names: {names}"
+        f"fixtures list endpoint: unexpected fixture names: {names}"
     )
     by_name = {item["name"]: item for item in items}
     assert (
         by_name["spy_ema_crossover"]["path"]
         == "PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json"
-    )
+    ), "fixtures list endpoint: spy_ema_crossover names its spec path"
 
+    assert detail_resp.status_code == 200, "fixture detail endpoint answers 200"
+    spec = detail_resp.json()
+    assert spec["name"].startswith("SMA"), "fixture detail endpoint: sma_crossover spec name starts with SMA"
+    assert spec["symbols"] == ["SPY"], "fixture detail endpoint: sma_crossover spec trades SPY"
 
-async def test_fixture_detail_endpoint() -> None:
-    async with await _client() as client:
-        resp = await client.get("/api/spec-strategy/fixtures/sma_crossover")
-    assert resp.status_code == 200
-    spec = resp.json()
-    assert spec["name"].startswith("SMA")
-    assert spec["symbols"] == ["SPY"]
-
-
-async def test_fixture_detail_unknown_returns_404() -> None:
-    async with await _client() as client:
-        resp = await client.get("/api/spec-strategy/fixtures/does_not_exist")
-    assert resp.status_code == 404
+    assert unknown_resp.status_code == 404, "fixture detail endpoint: an unknown fixture returns 404"
 
 
 async def test_backtest_runs_sma_spec_on_synthetic_data() -> None:

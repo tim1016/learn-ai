@@ -43,47 +43,34 @@ def _trade(
 
 
 class TestComputeAggregates:
-    def test_empty_trade_list_returns_zero_aggregates(self) -> None:
-        agg = compute_aggregates([], starting_cash=Decimal("100000"))
-
-        assert agg.total_trades == 0
-        assert agg.winning_trades == 0
-        assert agg.losing_trades == 0
-        assert agg.total_pnl == Decimal("0")
-        assert agg.final_equity == Decimal("100000")
-        assert agg.win_rate == 0.0
-
-    def test_single_winning_trade(self) -> None:
-        agg = compute_aggregates([_trade(pnl="25")], starting_cash=Decimal("100000"))
-
-        assert agg.total_trades == 1
-        assert agg.winning_trades == 1
-        assert agg.losing_trades == 0
-        assert agg.total_pnl == Decimal("25")
-        assert agg.final_equity == Decimal("100025")
-        assert agg.win_rate == 1.0
-
-    def test_mixed_wins_and_losses(self) -> None:
-        trades = [
-            _trade(n=1, pnl="50"),
-            _trade(n=2, pnl="-20"),
-            _trade(n=3, pnl="30"),
-        ]
+    @pytest.mark.parametrize(
+        ("pnls", "total_trades", "winning_trades", "losing_trades", "total_pnl", "final_equity", "win_rate"),
+        [
+            pytest.param((), 0, 0, 0, Decimal("0"), Decimal("100000"), 0.0, id="empty-trade-list-returns-zero-aggregates"),
+            pytest.param(("25",), 1, 1, 0, Decimal("25"), Decimal("100025"), 1.0, id="single-winning-trade"),
+            pytest.param(("50", "-20", "30"), 3, 2, 1, Decimal("60"), Decimal("100060"), 2 / 3, id="mixed-wins-and-losses"),
+            pytest.param(("0",), 1, 0, 0, Decimal("0"), Decimal("100000"), 0.0, id="breakeven-trade-counted-neither-win-nor-loss"),
+        ],
+    )
+    def test_aggregates_of_a_trade_list(
+        self,
+        pnls: tuple[str, ...],
+        total_trades: int,
+        winning_trades: int,
+        losing_trades: int,
+        total_pnl: Decimal,
+        final_equity: Decimal,
+        win_rate: float,
+    ) -> None:
+        trades = [_trade(n=n, pnl=pnl) for n, pnl in enumerate(pnls, start=1)]
         agg = compute_aggregates(trades, starting_cash=Decimal("100000"))
 
-        assert agg.total_trades == 3
-        assert agg.winning_trades == 2
-        assert agg.losing_trades == 1
-        assert agg.total_pnl == Decimal("60")
-        assert agg.final_equity == Decimal("100060")
-        assert agg.win_rate == pytest.approx(2 / 3)
-
-    def test_breakeven_trade_counted_neither_win_nor_loss(self) -> None:
-        agg = compute_aggregates([_trade(pnl="0")], starting_cash=Decimal("100000"))
-
-        assert agg.winning_trades == 0
-        assert agg.losing_trades == 0
-        assert agg.win_rate == 0.0
+        assert agg.total_trades == total_trades, "every trade is counted"
+        assert agg.winning_trades == winning_trades, "only a positive pnl wins"
+        assert agg.losing_trades == losing_trades, "only a negative pnl loses"
+        assert agg.total_pnl == total_pnl, "total pnl is the sum of the trades' pnl"
+        assert agg.final_equity == final_equity, "final equity is the starting cash plus total pnl"
+        assert agg.win_rate == win_rate, "win rate is winners over trades"
 
     def test_total_fees_does_not_double_subtract_from_final_equity(self) -> None:
         # Per the module docstring: per-trade pnl is already net of fees,

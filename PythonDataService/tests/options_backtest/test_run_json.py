@@ -28,13 +28,21 @@ def test_the_busy_run_reaches_every_kind_of_thing_a_result_holds() -> None:
     assert missing == []
 
 
-def test_the_summary_comes_back_as_it_went_and_holds_no_float() -> None:
+def test_the_summary_comes_back_as_it_went_holds_no_float_and_identifies_a_session_by_its_open_with_no_date() -> None:
     summary = a_busy_run().summary
 
-    written = json.loads(json.dumps(run_json.summary_to_json(summary)))
+    text = json.dumps(run_json.summary_to_json(summary))
+    written = json.loads(text)
 
-    assert run_json.summary_from_json(written) == summary
+    assert run_json.summary_from_json(written) == summary, "the summary comes back as it went"
     _no_float_anywhere(written)
+    assert "trading_date" not in text and "peak_date" not in text and "trough_date" not in text, (
+        "a session is identified by its open: no date key is written"
+    )
+    assert not re.search(r"\d{4}-\d{2}-\d{2}", text), "no date text is in the stored summary"
+    assert [row.session_open_ms for row in run_json.summary_from_json(json.loads(text)).by_day] == [
+        row.session_open_ms for row in summary.by_day
+    ], "the sessions read back are identified by their opens"
 
 
 def test_a_summary_stored_before_a_sold_leg_could_be_closed_with_its_protection_reads_with_the_five_reasons_it_had() -> (
@@ -97,18 +105,6 @@ def test_a_summary_stored_before_refusals_were_counted_by_reason_reads_them_as_n
     assert read == replace(summary, entries_refused_by_reason=None)
     # Its JSON is the JSON it always was, and not a key of null.
     assert run_json.summary_to_json(read) == old
-
-
-def test_a_session_is_identified_by_its_open_and_no_date_is_written() -> None:
-    summary = a_busy_run().summary
-
-    written = json.dumps(run_json.summary_to_json(summary))
-
-    assert "trading_date" not in written and "peak_date" not in written and "trough_date" not in written
-    assert not re.search(r"\d{4}-\d{2}-\d{2}", written), "no date text is in the stored summary"
-    assert [row.session_open_ms for row in run_json.summary_from_json(json.loads(written)).by_day] == [
-        row.session_open_ms for row in summary.by_day
-    ]
 
 
 def test_the_ladder_and_the_tolerance_come_back_as_they_went() -> None:

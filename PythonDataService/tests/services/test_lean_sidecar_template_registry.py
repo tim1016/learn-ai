@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.lean_sidecar.trusted_samples.ema_crossover_2_bps import (
     EMA_CROSSOVER_2_BPS_SOURCE,
+)
+from app.lean_sidecar.trusted_samples.ema_crossover_signal import (
+    EMA_CROSSOVER_SIGNAL_SOURCE,
 )
 from app.lean_sidecar.trusted_samples.rsi_mean_reversion import (
     RSI_MEAN_REVERSION_SOURCE,
@@ -17,25 +22,33 @@ from app.routers.lean_sidecar import _STRATEGY_PARAMETER_MODELS
 from app.services.strategy_lean_source_service import resolve_strategy_lean_source
 
 
-def test_ema_crossover_signal_brokerage_policy_is_interactive_brokers() -> None:
-    assert (
-        TRUSTED_TEMPLATE_DEFINITIONS[TrustedTemplate.EMA_CROSSOVER_SIGNAL].brokerage_policy
-        == "interactive_brokers"
-    )
+@pytest.mark.parametrize(
+    ("template", "source"),
+    [
+        pytest.param(
+            TrustedTemplate.EMA_CROSSOVER_SIGNAL,
+            EMA_CROSSOVER_SIGNAL_SOURCE,
+            id="ema_crossover_signal_brokerage_policy_is_interactive_brokers",
+        ),
+        pytest.param(
+            TrustedTemplate.EMA_CROSSOVER_2_BPS,
+            EMA_CROSSOVER_2_BPS_SOURCE,
+            id="ema_crossover_two_bps_is_in_source_registry",
+        ),
+        pytest.param(
+            TrustedTemplate.RSI_MEAN_REVERSION,
+            RSI_MEAN_REVERSION_SOURCE,
+            id="rsi_mean_reversion_is_in_source_registry",
+        ),
+    ],
+)
+def test_bundled_template_is_in_source_registry_under_interactive_brokers(
+    template: TrustedTemplate, source: str
+) -> None:
+    definition = TRUSTED_TEMPLATE_DEFINITIONS[template]
 
-
-def test_ema_crossover_two_bps_is_in_source_registry() -> None:
-    definition = TRUSTED_TEMPLATE_DEFINITIONS[TrustedTemplate.EMA_CROSSOVER_2_BPS]
-
-    assert definition.source is EMA_CROSSOVER_2_BPS_SOURCE
-    assert definition.brokerage_policy == "interactive_brokers"
-
-
-def test_rsi_mean_reversion_is_in_source_registry() -> None:
-    definition = TRUSTED_TEMPLATE_DEFINITIONS[TrustedTemplate.RSI_MEAN_REVERSION]
-
-    assert definition.source is RSI_MEAN_REVERSION_SOURCE
-    assert definition.brokerage_policy == "interactive_brokers"
+    assert definition.source is source, "the template's source is the one registered for it"
+    assert definition.brokerage_policy == "interactive_brokers", "the template is under the Interactive Brokers policy"
 
 
 # ----------------------------------------------------------------------
@@ -111,6 +124,8 @@ def test_every_strategy_twin_template_is_claimed_by_a_strategy() -> None:
     Fails when a template is added without wiring it to a strategy. The
     escape hatch is deliberate and documented, not silent: put it in
     ``_TEMPLATES_WITHOUT_A_REGISTRY_STRATEGY`` with a reason.
+
+    And the escape hatch must not outlive the gap it documents.
     """
     claimed = _claimed_twins()
     unclaimed = {
@@ -118,26 +133,20 @@ def test_every_strategy_twin_template_is_claimed_by_a_strategy() -> None:
         for template in TrustedTemplate
         if template.value not in claimed and template not in _TEMPLATES_WITHOUT_A_REGISTRY_STRATEGY
     }
+    stale = {t.value for t in _TEMPLATES_WITHOUT_A_REGISTRY_STRATEGY if t.value in claimed}
 
     assert not unclaimed, (
         f"bundled LEAN templates claimed by no strategy: {sorted(t.value for t in unclaimed)}. "
         "Set lean_twin on the strategy they validate, or document the exemption in "
         "_TEMPLATES_WITHOUT_A_REGISTRY_STRATEGY."
     )
-
-
-def test_exemption_list_does_not_name_a_claimed_template() -> None:
-    """The escape hatch must not outlive the gap it documents."""
-    claimed = _claimed_twins()
-    stale = {t.value for t in _TEMPLATES_WITHOUT_A_REGISTRY_STRATEGY if t.value in claimed}
-
     assert not stale, f"exempted templates are now claimed; drop them from the exemption list: {sorted(stale)}"
 
 
 #: Registered strategies that have no LEAN validation twin, and why.
 #:
 #: This list is the answer to "why is `lean_twin` None here?" -- it makes the
-#: absence a reviewed decision instead of a silent default. It is what the two
+#: absence a reviewed decision instead of a silent default. It is what the
 #: tests above cannot cover: they detect a template that drifted loose from a
 #: strategy, but nothing in the code can distinguish "twin deliberately not
 #: built" from "twin forgotten". Only an explicit list can.
@@ -160,35 +169,29 @@ def test_every_strategy_either_has_a_twin_or_documents_why_not() -> None:
     Without this, `lean_twin=None` is indistinguishable from an oversight --
     which is exactly how rsi_mean_reversion sat un-twinned while its Python
     side was fully sealed and validated.
+
+    And the escape hatch must not outlive the gap it documents: the list names
+    no strategy that now has a twin, and a renamed or deleted strategy must not
+    linger in it as a phantom exemption.
     """
     untwinned = {
         name
         for name, registration in _STRATEGY_REGISTRY.items()
         if registration.lean_twin is None and name not in _STRATEGIES_WITHOUT_A_LEAN_TWIN
     }
+    stale = {
+        name
+        for name in _STRATEGIES_WITHOUT_A_LEAN_TWIN
+        if (registration := _STRATEGY_REGISTRY.get(name)) is not None and registration.lean_twin is not None
+    }
+    phantom = {name for name in _STRATEGIES_WITHOUT_A_LEAN_TWIN if name not in _STRATEGY_REGISTRY}
 
     assert not untwinned, (
         f"strategies with no LEAN twin and no documented reason: {sorted(untwinned)}. "
         "Author a trusted sample and set lean_twin, or add the strategy to "
         "_STRATEGIES_WITHOUT_A_LEAN_TWIN with the reason."
     )
-
-
-def test_untwinned_list_does_not_name_a_twinned_strategy() -> None:
-    """The escape hatch must not outlive the gap it documents."""
-    stale = {
-        name
-        for name in _STRATEGIES_WITHOUT_A_LEAN_TWIN
-        if (registration := _STRATEGY_REGISTRY.get(name)) is not None and registration.lean_twin is not None
-    }
-
     assert not stale, f"these strategies now have twins; drop them from the list: {sorted(stale)}"
-
-
-def test_untwinned_list_does_not_name_an_unregistered_strategy() -> None:
-    """A renamed or deleted strategy must not linger as a phantom exemption."""
-    phantom = {name for name in _STRATEGIES_WITHOUT_A_LEAN_TWIN if name not in _STRATEGY_REGISTRY}
-
     assert not phantom, f"unknown strategies in the exemption list: {sorted(phantom)}"
 
 

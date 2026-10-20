@@ -8,35 +8,32 @@ function lane(overrides: Partial<LaneDescriptor> = {}): LaneDescriptor {
 }
 
 describe('laneDisplayName', () => {
-  it('uses the nickname when the lane has one', () => {
-    const paper = lane({
+  it.each([
+    ['uses the nickname when the lane has one', {
       clerk_id: 'clrk_paper',
       display_label: 'Paper',
       provider_summary: { account_nickname: 'Strategy lab' },
-    });
-
-    expect(laneDisplayName(paper, [paper])).toEqual({ name: 'Strategy lab', disambiguator: null });
-  });
-
-  it('falls back to the lane label when no nickname is set', () => {
-    const paper = lane({
+    }, { name: 'Strategy lab', disambiguator: null }],
+    ['falls back to the lane label when no nickname is set', {
       clerk_id: 'clrk_paper',
       display_label: 'Paper',
       provider_summary: { account_nickname: null },
-    });
-
-    expect(laneDisplayName(paper, [paper])).toEqual({ name: 'Paper', disambiguator: null });
-  });
-
-  it('falls back to the lane label for a lane with no confirmed account at all', () => {
-    const unbound = lane({
+    }, { name: 'Paper', disambiguator: null }],
+    ['falls back to the lane label for a lane with no confirmed account at all', {
       clerk_id: 'clrk_unbound',
       display_label: 'Unbound lane',
       lifecycle_state: 'starting',
       provider_summary: null,
-    });
+    }, { name: 'Unbound lane', disambiguator: null }],
+    ['does not disambiguate against itself', {
+      clerk_id: 'clrk_solo',
+      display_label: 'Solo',
+      provider_summary: { account_nickname: 'Only account' },
+    }, { name: 'Only account', disambiguator: null }],
+  ] as const)('names a lane listed alone: %s', (_name, overrides, expected) => {
+    const subject = lane(overrides);
 
-    expect(laneDisplayName(unbound, [unbound])).toEqual({ name: 'Unbound lane', disambiguator: null });
+    expect(laneDisplayName(subject, [subject])).toEqual(expected);
   });
 
   it('shows the lane label beside a name shared with another lane, case- and whitespace-insensitively', () => {
@@ -54,16 +51,6 @@ describe('laneDisplayName', () => {
 
     expect(laneDisplayName(paper, all)).toEqual({ name: 'Strategy Lab', disambiguator: 'Paper' });
     expect(laneDisplayName(live, all)).toEqual({ name: 'strategy lab', disambiguator: 'Live' });
-  });
-
-  it('does not disambiguate against itself', () => {
-    const solo = lane({
-      clerk_id: 'clrk_solo',
-      display_label: 'Solo',
-      provider_summary: { account_nickname: 'Only account' },
-    });
-
-    expect(laneDisplayName(solo, [solo])).toEqual({ name: 'Only account', disambiguator: null });
   });
 
   it('does not disambiguate two distinct names', () => {
@@ -121,14 +108,12 @@ describe('laneDisplayName', () => {
 });
 
 describe('laneDisplayNameText', () => {
-  it('is just the name when there is no disambiguator', () => {
-    expect(laneDisplayNameText({ name: 'Strategy lab', disambiguator: null })).toBe('Strategy lab');
-  });
-
-  it('appends the disambiguator in the same "(Label)" parenthetical the visible markup uses', () => {
-    expect(laneDisplayNameText({ name: 'Strategy lab', disambiguator: 'Paper' })).toBe(
-      'Strategy lab (Paper)',
-    );
+  it.each([
+    ['is just the name when there is no disambiguator', { name: 'Strategy lab', disambiguator: null }, 'Strategy lab'],
+    ['appends the disambiguator in the same "(Label)" parenthetical the visible markup uses',
+      { name: 'Strategy lab', disambiguator: 'Paper' }, 'Strategy lab (Paper)'],
+  ])('renders the display name as text: %s', (_name, displayName, expected) => {
+    expect(laneDisplayNameText(displayName)).toBe(expected);
   });
 });
 

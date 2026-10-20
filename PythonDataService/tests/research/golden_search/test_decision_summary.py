@@ -102,7 +102,7 @@ def test_test_over_time_reports_the_verdict_with_coverage_of_every_scheduled_fol
     assert "test_over_time" not in _rows(_results(_candidate("incumbent")), "incumbent")
 
 
-def test_neighbors_name_the_knob_that_loses_and_never_pass_an_unrecorded_run() -> None:
+def test_neighbors_name_the_knob_that_loses_and_never_pass_an_unrecorded_run_or_an_untestable_knob() -> None:
     def hood(*rows: dict[str, Any]) -> list[dict[str, Any]]:
         return [{"knob": "hold_bars", "rows": list(rows), "one_sided": False}]
 
@@ -110,47 +110,39 @@ def test_neighbors_name_the_knob_that_loses_and_never_pass_an_unrecorded_run() -
     losing = {**tested, "metrics": _metrics(net=-10.0)}
     untested = {**tested, "status": "untested", "metrics": None}
     null_net = {**tested, "metrics": _metrics(net=None)}
-    assert _rows(_results(_candidate(neighbors=hood(tested))))["neighbors"]["status"] == "meets"
-    assert _rows(_results(_candidate(neighbors=hood(tested, losing))))["neighbors"]["text"] == "A one-step change in hold_bars loses money."
-    assert _rows(_results(_candidate(neighbors=hood(tested, untested))))["neighbors"]["status"] == "missing"
-    assert _rows(_results(_candidate(neighbors=hood(null_net))))["neighbors"]["status"] == "missing"
-    assert _rows(_results(_candidate("incumbent")), "incumbent")["neighbors"]["status"] == "missing"
+    assert _rows(_results(_candidate(neighbors=hood(tested))))["neighbors"]["status"] == "meets", "a tested neighbor that makes money meets"
+    assert _rows(_results(_candidate(neighbors=hood(tested, losing))))["neighbors"]["text"] == "A one-step change in hold_bars loses money.", "the neighbor row names the knob that loses"
+    assert _rows(_results(_candidate(neighbors=hood(tested, untested))))["neighbors"]["status"] == "missing", "an untested neighbor is missing, never a pass"
+    assert _rows(_results(_candidate(neighbors=hood(null_net))))["neighbors"]["status"] == "missing", "a neighbor with no recorded net profit is missing, never a pass"
+    assert _rows(_results(_candidate("incumbent")), "incumbent")["neighbors"]["status"] == "missing", "the current settings audit no neighbors, so the row is missing"
 
-
-def test_neighbors_that_were_all_invalid_or_outside_the_domain_are_missing_not_a_pass() -> None:
     center = {"value": 0.2, "status": "center", "metrics": _metrics(net=100.0), "reason": None}
     invalid = {"value": 0.15, "status": "invalid", "metrics": None, "reason": "fast must stay below slow"}
     outside = {"value": 0.25, "status": "outside_domain", "metrics": None, "reason": None}
-    tested = {"value": 6.0, "status": "tested", "metrics": _metrics(net=50.0), "reason": None}
 
     nothing_tested = [{"knob": "gap", "rows": [invalid, center, outside], "one_sided": False}]
-    assert _rows(_results(_candidate(neighbors=nothing_tested)))["neighbors"]["status"] == "missing"
+    assert _rows(_results(_candidate(neighbors=nothing_tested)))["neighbors"]["status"] == "missing", "neighbors that were all invalid or outside the domain are missing, not a pass"
 
     # One knob with no testable neighbor beside a knob whose neighbors were tested still reads from what was tested.
     one_knob_tested = [*nothing_tested, {"knob": "hold_bars", "rows": [tested], "one_sided": False}]
-    assert _rows(_results(_candidate(neighbors=one_knob_tested)))["neighbors"]["status"] == "meets"
+    assert _rows(_results(_candidate(neighbors=one_knob_tested)))["neighbors"]["status"] == "meets", "a knob with no testable neighbor beside a tested knob reads from what was tested"
 
 
-def test_stress_names_the_scenario_that_turns_a_loss_and_never_passes_an_unrecorded_run() -> None:
+def test_stress_names_the_scenario_that_turns_a_loss_calls_zero_break_even_and_never_passes_an_unrecorded_run() -> None:
     def stressed(*nets: float | None) -> list[dict[str, Any]]:
         return [{"scenario": f"s{i}", "label": f"Stress {i}", "metrics": None if net is None else _metrics(net=net)} for i, net in enumerate(nets)]
 
-    assert _rows(_results(_candidate(stress=stressed(10.0, 20.0))))["stress"]["status"] == "meets"
-    assert _rows(_results(_candidate(stress=stressed(10.0, -1.0))))["stress"]["text"] == "Stress 1 turns the result into a loss."
-    assert _rows(_results(_candidate(stress=stressed(10.0, None))))["stress"]["status"] == "missing"
-    assert _rows(_results(_candidate(stress=[])))["stress"]["status"] == "missing"
-    assert _rows(_results(_candidate(development_metrics=_metrics(net=-5.0))))["stress"]["status"] == "concern"
-
-
-def test_stress_calls_a_zero_result_break_even_not_a_loss() -> None:
-    def stressed(*nets: float) -> list[dict[str, Any]]:
-        return [{"scenario": f"s{i}", "label": f"Stress {i}", "metrics": _metrics(net=net)} for i, net in enumerate(nets)]
+    assert _rows(_results(_candidate(stress=stressed(10.0, 20.0))))["stress"]["status"] == "meets", "stress scenarios that all make money meet"
+    assert _rows(_results(_candidate(stress=stressed(10.0, -1.0))))["stress"]["text"] == "Stress 1 turns the result into a loss.", "the stress row names the scenario that turns a loss"
+    assert _rows(_results(_candidate(stress=stressed(10.0, None))))["stress"]["status"] == "missing", "an unrecorded stress run is missing, never a pass"
+    assert _rows(_results(_candidate(stress=[])))["stress"]["status"] == "missing", "no stress scenarios at all is missing"
+    assert _rows(_results(_candidate(development_metrics=_metrics(net=-5.0))))["stress"]["status"] == "concern", "stress on a losing development run is a concern"
 
     zero = _rows(_results(_candidate(stress=stressed(0.0))))["stress"]
-    assert (zero["status"], zero["text"]) == ("concern", "Stress 0 leaves it at break-even.")
-    assert _rows(_results(_candidate(stress=stressed(-1.0, 0.0))))["stress"]["text"] == "Stress 0 turns the result into a loss. Stress 1 leaves it at break-even."
+    assert (zero["status"], zero["text"]) == ("concern", "Stress 0 leaves it at break-even."), "a zero stress result is break-even, not a loss"
+    assert _rows(_results(_candidate(stress=stressed(-1.0, 0.0))))["stress"]["text"] == "Stress 0 turns the result into a loss. Stress 1 leaves it at break-even.", "a loss and a break-even stress are both named"
     flat = _rows(_results(_candidate(development_metrics=_metrics(net=0.0), stress=stressed(5.0))))["stress"]
-    assert (flat["status"], flat["text"]) == ("concern", "It only breaks even before any cost stress.")
+    assert (flat["status"], flat["text"]) == ("concern", "It only breaks even before any cost stress."), "a break-even development run is a concern before any stress"
 
 
 def _measure(status: str, *, month: float = 500.0, trades: float = 1_500.0, best: int = 1) -> dict[str, Any]:
@@ -166,20 +158,17 @@ def _measure(status: str, *, month: float = 500.0, trades: float = 1_500.0, best
     }
 
 
-def test_concentration_reads_the_stored_measure_and_names_what_fails() -> None:
+def test_concentration_reads_the_stored_measure_names_what_fails_and_is_missing_with_its_reason() -> None:
     meets = _rows(_results(_candidate(concentration=_measure("meets", best=10))))["concentration"]
-    assert (meets["status"], meets["text"]) == ("meets", "Still profitable without its best month ($500.00) or its best 10 trades ($1,500.00).")
+    assert (meets["status"], meets["text"]) == ("meets", "Still profitable without its best month ($500.00) or its best 10 trades ($1,500.00)."), "a stored measure that meets reads its remainders"
     one = _rows(_results(_candidate(concentration=_measure("concern", month=500.0, trades=-250.0))))["concentration"]
-    assert (one["status"], one["text"]) == ("concern", "Not profitable without its best trade (-$250.00).")
+    assert (one["status"], one["text"]) == ("concern", "Not profitable without its best trade (-$250.00)."), "a stored measure names the one thing that fails"
     both = _rows(_results(_candidate(concentration=_measure("concern", month=0.0, trades=-250.0, best=2))))["concentration"]
-    assert both["text"] == "Not profitable without its best month ($0.00) or its best 2 trades (-$250.00)."
-
-
-def test_concentration_is_missing_with_its_reason_or_for_evidence_recorded_before_it() -> None:
+    assert both["text"] == "Not profitable without its best month ($0.00) or its best 2 trades (-$250.00).", "a stored measure names both things that fail"
     unmeasured = _rows(_results(_candidate(concentration={"status": "missing", "reason": "The development run made no trades."})))["concentration"]
-    assert (unmeasured["status"], unmeasured["text"]) == ("missing", "The development run made no trades.")
+    assert (unmeasured["status"], unmeasured["text"]) == ("missing", "The development run made no trades."), "an unmeasured concentration is missing with its reason"
     legacy = _rows(_results(_candidate()))["concentration"]
-    assert legacy["status"] == "missing" and legacy["text"].startswith("Not measured for this study")
+    assert legacy["status"] == "missing" and legacy["text"].startswith("Not measured for this study"), "evidence recorded before the concentration measure reads missing"
 
 
 def test_final_exposure_follows_the_ledger_and_an_opened_test_records_its_own_state() -> None:

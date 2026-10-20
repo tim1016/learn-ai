@@ -336,66 +336,73 @@ def _row(seq: int, *, kept_at: int, received: int, bid: str | None = "1.90", ask
     return KeptOptionQuote(seq=seq, symbol=symbol, quote=RecordedQuote.of(quote), kept_at_ms=kept_at)
 
 
-def test_what_is_kept_through_a_cut_is_what_a_later_reader_can_ask_for_and_no_more() -> None:
-    noon = et_minute_of_day_ms(TUESDAY, 12 * 60)
-    rows = [
-        _row(1, kept_at=noon, received=noon - 300),
-        # The last one received with a bid. A newer quote has none, so this bid prices nothing any more.
-        _row(2, kept_at=noon + 3_000, received=noon + 2_900),
-        _row(3, kept_at=noon + 6_000, received=noon + 2_000),
-        # An ask alone, and the newest by receipt: a purchase is priced from it, and no sale is priced at all.
-        _row(4, kept_at=noon + 9_000, received=noon + 8_900, bid=None),
-        # The last hand-over made for this contract.
-        _row(5, kept_at=noon + 12_000, received=noon + 2_500),
-        # Another contract's only row.
-        _row(6, kept_at=noon + 13_000, received=noon + 12_900, symbol=FIFTY[0]),
-        # Stamped a minute after the latest hand-over in the file: it may yet become the newest.
-        _row(7, kept_at=noon + 10_000, received=noon + 74_000),
-        # Handed over last of all, as of its own old receipt. Kept, so that its sequence is never given out twice.
-        _row(8, kept_at=noon - 5_000, received=noon - 5_000),
-    ]
-
-    still = rows_still_answerable(rows, as_of_ms=noon + 13_000)
-
-    # Rows 1 and 3 are behind in both. Row 2 is not kept for its bid: no close is priced from it again.
-    assert [row.seq for row in still] == [4, 5, 6, 7, 8]
+NOON = et_minute_of_day_ms(TUESDAY, 12 * 60)
+FRIDAY_CLOSE = et_minute_of_day_ms(date(2026, 9, 11), 16 * 60)
+MONDAY_CLOSE = et_minute_of_day_ms(date(2026, 9, 14), 16 * 60)
 
 
-def test_a_cut_keeps_one_mark_for_each_sessions_close_and_the_last_one_made_before_it() -> None:
-    monday_close = et_minute_of_day_ms(date(2026, 9, 14), 16 * 60)
-    friday_close = et_minute_of_day_ms(date(2026, 9, 11), 16 * 60)
-    rows = [
-        _row(1, kept_at=friday_close - 6_000, received=friday_close - 6_200),
-        _row(2, kept_at=friday_close, received=friday_close - 200),  # at the close itself: Friday's mark
-        _row(3, kept_at=friday_close + 1, received=friday_close - 100),  # a millisecond after it: Monday's, unless...
-        _row(4, kept_at=monday_close - 3_000, received=monday_close - 3_200),  # ...a later one is made before Monday's
-        _row(5, kept_at=monday_close + 60_000, received=monday_close + 59_800),
-    ]
+@pytest.mark.parametrize(
+    ("rows", "as_of_ms", "still_answerable"),
+    [
+        pytest.param(
+            (
+                _row(1, kept_at=NOON, received=NOON - 300),
+                # The last one received with a bid. A newer quote has none, so this bid prices nothing any more.
+                _row(2, kept_at=NOON + 3_000, received=NOON + 2_900),
+                _row(3, kept_at=NOON + 6_000, received=NOON + 2_000),
+                # An ask alone, and the newest by receipt: a purchase is priced from it, and no sale is priced at all.
+                _row(4, kept_at=NOON + 9_000, received=NOON + 8_900, bid=None),
+                # The last hand-over made for this contract.
+                _row(5, kept_at=NOON + 12_000, received=NOON + 2_500),
+                # Another contract's only row.
+                _row(6, kept_at=NOON + 13_000, received=NOON + 12_900, symbol=FIFTY[0]),
+                # Stamped a minute after the latest hand-over in the file: it may yet become the newest.
+                _row(7, kept_at=NOON + 10_000, received=NOON + 74_000),
+                # Handed over last of all, as of its own old receipt. Kept, so that its sequence is never given out twice.
+                _row(8, kept_at=NOON - 5_000, received=NOON - 5_000),
+            ),
+            NOON + 13_000,
+            # Rows 1 and 3 are behind in both. Row 2 is not kept for its bid: no close is priced from it again.
+            (4, 5, 6, 7, 8),
+            id="what is kept through a cut is what a later reader can ask for and no more",
+        ),
+        pytest.param(
+            (
+                _row(1, kept_at=FRIDAY_CLOSE - 6_000, received=FRIDAY_CLOSE - 6_200),
+                _row(2, kept_at=FRIDAY_CLOSE, received=FRIDAY_CLOSE - 200),  # at the close itself: Friday's mark
+                _row(3, kept_at=FRIDAY_CLOSE + 1, received=FRIDAY_CLOSE - 100),  # a millisecond after it: Monday's, unless...
+                _row(4, kept_at=MONDAY_CLOSE - 3_000, received=MONDAY_CLOSE - 3_200),  # ...a later one is made before Monday's
+                _row(5, kept_at=MONDAY_CLOSE + 60_000, received=MONDAY_CLOSE + 59_800),
+            ),
+            MONDAY_CLOSE + 60_000,
+            (2, 4, 5),
+            id="a cut keeps one mark for each session's close and the last one made before it",
+        ),
+        # A quote put back as of its own receipt can be stamped ahead of the clock.
+        #
+        # Row 2 is: its receipt and its stamp are a minute after now. The newest
+        # quote received by now is row 1, and the last handed over by now is row
+        # 3. A cut made as of row 2's stamp would keep row 2 for both and drop
+        # them. A reader asking about now is answered from rows 1 and 3.
+        pytest.param(
+            (
+                _row(1, kept_at=NOON - 9_000, received=NOON - 500, bid="2.20"),
+                _row(2, kept_at=NOON + 60_000, received=NOON + 60_000, bid="9.00"),
+                _row(3, kept_at=NOON - 3_000, received=NOON - 8_000, bid="2.10"),
+                _row(4, kept_at=NOON - 1_000, received=NOON - 1_200, symbol=FIFTY[0]),
+            ),
+            NOON,
+            (1, 2, 3, 4),
+            id="a cut is made as of the writer's clock and never as of a stamp ahead of it",
+        ),
+    ],
+)
+def test_a_cut_keeps_the_rows_a_later_reader_can_still_be_answered_from(
+    rows: tuple[KeptOptionQuote, ...], as_of_ms: int, still_answerable: tuple[int, ...]
+) -> None:
+    still = rows_still_answerable(list(rows), as_of_ms=as_of_ms)
 
-    still = rows_still_answerable(rows, as_of_ms=monday_close + 60_000)
-
-    assert [row.seq for row in still] == [2, 4, 5]
-
-
-def test_a_cut_is_made_as_of_the_writers_clock_and_never_as_of_a_stamp_ahead_of_it() -> None:
-    """A quote put back as of its own receipt can be stamped ahead of the clock.
-
-    Row 2 is: its receipt and its stamp are a minute after now. The newest
-    quote received by now is row 1, and the last handed over by now is row
-    3. A cut made as of row 2's stamp would keep row 2 for both and drop
-    them. A reader asking about now is answered from rows 1 and 3.
-    """
-    now = et_minute_of_day_ms(TUESDAY, 12 * 60)
-    rows = [
-        _row(1, kept_at=now - 9_000, received=now - 500, bid="2.20"),
-        _row(2, kept_at=now + 60_000, received=now + 60_000, bid="9.00"),
-        _row(3, kept_at=now - 3_000, received=now - 8_000, bid="2.10"),
-        _row(4, kept_at=now - 1_000, received=now - 1_200, symbol=FIFTY[0]),
-    ]
-
-    still = rows_still_answerable(rows, as_of_ms=now)
-
-    assert [row.seq for row in still] == [1, 2, 3, 4]
+    assert tuple(row.seq for row in still) == still_answerable, "the rows still answerable after the cut"
 
 
 def test_the_newest_bid_by_now_is_the_same_after_a_cut_as_before_it_when_a_quote_was_put_back_ahead_of_the_clock(

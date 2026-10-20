@@ -15,19 +15,23 @@ def test_sharpe_retention_is_fold_local_test_over_train() -> None:
 
 @pytest.mark.parametrize(
     ("test_sharpe", "train_sharpe"),
-    [(None, 1.0), (1.0, None), (1.0, 0.0), (1.0, math.nan), (math.inf, 1.0), (1.0, -math.inf)],
+    [
+        pytest.param(None, 1.0, id="test_sharpe_none"),
+        pytest.param(1.0, None, id="train_sharpe_none"),
+        pytest.param(1.0, 0.0, id="train_sharpe_zero"),
+        pytest.param(1.0, math.nan, id="train_sharpe_nan"),
+        pytest.param(math.inf, 1.0, id="test_sharpe_inf"),
+        pytest.param(1.0, -math.inf, id="train_sharpe_negative_inf"),
+        # Regression: ``-0.5 / -1.0`` used to come back as ``0.5`` — "retained half" of a loss.
+        pytest.param(-0.5, -1.0, id="negative_training_sharpe_not_a_sign_flipped_retention"),
+        pytest.param(0.5, -1.0, id="negative_training_sharpe_with_positive_test_sharpe"),
+    ],
 )
 def test_sharpe_retention_is_none_when_ratio_is_undefined(
     test_sharpe: float | None,
     train_sharpe: float | None,
 ) -> None:
     assert sharpe_retention(test_sharpe, train_sharpe) is None
-
-
-def test_a_negative_training_sharpe_yields_an_undefined_retention_not_a_sign_flipped_one() -> None:
-    """Regression: ``-0.5 / -1.0`` used to come back as ``0.5`` — "retained half" of a loss."""
-    assert sharpe_retention(-0.5, -1.0) is None
-    assert sharpe_retention(0.5, -1.0) is None
 
 
 def test_mean_fold_retention_ignores_undefined_folds_and_weights_defined_equally() -> None:

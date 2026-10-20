@@ -5,15 +5,12 @@ import { primaryAction, stepProgress } from './golden-search-steps';
 import { studyDetail } from './testing/fixtures';
 
 describe('stepProgress', () => {
-  it('reads the decision step as waiting while the study needs a decision', () => {
-    expect(stepProgress('decision', 'awaiting_review')).toBe('current');
-    expect(stepProgress('compare', 'awaiting_review')).toBe('done');
-    expect(stepProgress('decision', 'awaiting_candidate')).toBe('upcoming');
-  });
-
-  it('reads the decision step as done once a decision ended the study', () => {
+  it('reads the decision step as waiting while the study needs a decision, and as done once a decision ended the study', () => {
+    expect.soft(stepProgress('decision', 'awaiting_review'), 'reads the decision step as current while the study awaits review').toBe('current');
+    expect.soft(stepProgress('compare', 'awaiting_review'), 'reads the compare step as done while the study awaits review').toBe('done');
+    expect.soft(stepProgress('decision', 'awaiting_candidate'), 'reads the decision step as upcoming while the study awaits a candidate').toBe('upcoming');
     for (const state of ['approved', 'retained', 'closed'] as const) {
-      expect(stepProgress('decision', state)).toBe('done');
+      expect.soft(stepProgress('decision', state), `reads the decision step as done once the study is ${state}`).toBe('done');
     }
   });
 });

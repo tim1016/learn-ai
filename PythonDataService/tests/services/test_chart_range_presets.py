@@ -50,48 +50,76 @@ def _by_key(now_ms: int, *, session: str = "rth") -> dict[str, dict]:
     return {preset["key"]: preset for preset in resolve_range_presets(now_ms, session=session)}
 
 
-def test_preset_wire_dicts_carry_no_date_strings() -> None:
-    """Temporal wire values are int64 ms UTC only;
-    display strings are derived at the rendering boundary."""
-    for preset in resolve_range_presets(SATURDAY_MS):
-        assert "start_date" not in preset
-        assert "end_date" not in preset
+def test_saturday_presets_obey_the_wire_contract() -> None:
+    """The list and every wire dict resolved on a Saturday."""
+    presets = resolve_range_presets(SATURDAY_MS)
+    by_key = {preset["key"]: preset for preset in presets}
 
-
-def test_one_day_preset_on_a_saturday_resolves_to_friday() -> None:
-    preset = _by_key(SATURDAY_MS)["1D"]
-    assert preset["start_ms_utc"] == _utc_midnight_ms(date(2026, 9, 11))
-    assert preset["end_ms_utc"] == _utc_day_end_ms(date(2026, 9, 11))
-    assert preset["session_count"] == 1
-
-
-def test_one_week_preset_skips_the_labor_day_holiday() -> None:
-    """The week of 2026-09-07 has four sessions (Labor Day Monday) plus the
-    prior Friday — five sessions with a holiday simply absent from the span."""
-    preset = _by_key(SATURDAY_MS)["5D"]
-    assert preset["start_ms_utc"] == _utc_midnight_ms(date(2026, 9, 4))
-    assert preset["end_ms_utc"] == _utc_day_end_ms(date(2026, 9, 11))
-    assert preset["session_count"] == 5
-    assert _utc_date_of_ms(preset["start_ms_utc"]) == date(2026, 9, 4)
-    assert _utc_date_of_ms(preset["end_ms_utc"]) == date(2026, 9, 11)
-
-
-def test_session_counts_follow_the_preset_table() -> None:
-    presets = {p["key"]: p for p in resolve_range_presets(SATURDAY_MS)}
     for key, _label, count in RANGE_PRESETS:
         if count is not None:
-            assert presets[key]["session_count"] == count
+            assert by_key[key]["session_count"] == count, f"{key}: session count follows the preset table"
+    assert [preset["key"] for preset in presets] == ["1D", "5D", "1M", "3M", "6M", "1Y", "2Y", "5Y"], (
+        "5Y comes last, after 2Y"
+    )
+    for preset in presets:
+        key = preset["key"]
+        # Temporal wire values are int64 ms UTC only;
+        # display strings are derived at the rendering boundary.
+        assert "start_date" not in preset, f"{key}: wire dict carries no start_date string"
+        assert "end_date" not in preset, f"{key}: wire dict carries no end_date string"
+        # The exact inverse the chart request performs: a preset applied to a
+        # Data Lab window resolves back to the same trading dates.
+        from_date, to_date = resolve_request_dates(
+            "1999-01-01",
+            "1999-01-02",
+            preset["start_ms_utc"],
+            preset["end_ms_utc"],
+        )
+        assert date.fromisoformat(from_date) == _utc_date_of_ms(preset["start_ms_utc"]), (
+            f"{key}: ms anchors round-trip through the chart resolution (start)"
+        )
+        assert date.fromisoformat(to_date) == _utc_date_of_ms(preset["end_ms_utc"]), (
+            f"{key}: ms anchors round-trip through the chart resolution (end)"
+        )
+        # The news query and the dataset endpoints read the same committed ms
+        # pair as half-open instants; equal endpoints would make a single-day
+        # window empty there (and trip DatasetGenerationRequest's
+        # start-before-end validator).
+        assert preset["end_ms_utc"] > preset["start_ms_utc"], (
+            f"{key}: window is non-degenerate for half-open readers"
+        )
 
 
-def test_five_year_preset_is_everything_the_provider_serves() -> None:
-    """5Y starts on the provider's first day, two days inside five years, so every bar it asks for can be fetched."""
-    preset = _by_key(SATURDAY_MS)["5Y"]
+def test_saturday_presets_resolve_their_windows_from_the_calendar() -> None:
+    by_key = _by_key(SATURDAY_MS)
 
+    one_day = by_key["1D"]
+    assert one_day["start_ms_utc"] == _utc_midnight_ms(date(2026, 9, 11)), "1D on a Saturday starts on Friday"
+    assert one_day["end_ms_utc"] == _utc_day_end_ms(date(2026, 9, 11)), "1D on a Saturday ends on Friday"
+    assert one_day["session_count"] == 1, "1D holds one session"
+
+    # The week of 2026-09-07 has four sessions (Labor Day Monday) plus the
+    # prior Friday — five sessions with a holiday simply absent from the span.
+    one_week = by_key["5D"]
+    assert one_week["start_ms_utc"] == _utc_midnight_ms(date(2026, 9, 4)), "5D skips the Labor Day holiday (start)"
+    assert one_week["end_ms_utc"] == _utc_day_end_ms(date(2026, 9, 11)), "5D skips the Labor Day holiday (end)"
+    assert one_week["session_count"] == 5, "5D holds five sessions"
+    assert _utc_date_of_ms(one_week["start_ms_utc"]) == date(2026, 9, 4), "5D start reads back as its trading date"
+    assert _utc_date_of_ms(one_week["end_ms_utc"]) == date(2026, 9, 11), "5D end reads back as its trading date"
+
+    # 5Y starts on the provider's first day, two days inside five years, so every bar it asks for can be fetched.
+    five_year = by_key["5Y"]
     # Five years before Saturday 2026-09-12 is 2021-09-12; two days inside is Tuesday the 14th.
-    assert preset["start_ms_utc"] == _utc_midnight_ms(date(2021, 9, 14))
-    assert preset["end_ms_utc"] == _utc_day_end_ms(date(2026, 9, 11))
-    assert preset["session_count"] == len(expected_sessions(date(2021, 9, 14), date(2026, 9, 11)))
-    assert preset["label"] == "Past 5 years"
+    assert five_year["start_ms_utc"] == _utc_midnight_ms(date(2021, 9, 14)), "5Y starts on the provider's first day"
+    assert five_year["end_ms_utc"] == _utc_day_end_ms(date(2026, 9, 11)), "5Y ends on the last session"
+    assert five_year["session_count"] == len(expected_sessions(date(2021, 9, 14), date(2026, 9, 11))), (
+        "5Y counts every session from the provider's first day"
+    )
+    assert five_year["label"] == "Past 5 years", "5Y label"
+
+    one_month = by_key["1M"]
+    assert one_month["estimated_bars_per_timeframe"]["1D"] == 21, "1M daily-bar estimate is the shared estimator's"
+    assert one_month["estimated_bars_per_timeframe"]["1m"] > 0, "1M minute-bar estimate is positive"
 
 
 def test_five_year_preset_starts_on_a_session_when_the_provider_first_day_is_closed() -> None:
@@ -100,10 +128,6 @@ def test_five_year_preset_starts_on_a_session_when_the_provider_first_day_is_clo
 
     assert preset["start_ms_utc"] == _utc_midnight_ms(date(2021, 9, 13))
     assert preset["end_ms_utc"] == _utc_day_end_ms(date(2026, 9, 10))
-
-
-def test_five_year_preset_comes_last_after_two_years() -> None:
-    assert [preset["key"] for preset in resolve_range_presets(SATURDAY_MS)] == ["1D", "5D", "1M", "3M", "6M", "1Y", "2Y", "5Y"]
 
 
 def test_mid_session_preset_includes_today() -> None:
@@ -132,35 +156,6 @@ def test_extended_session_arg_flips_at_the_rth_open_too() -> None:
     assert _utc_date_of_ms(preset["end_ms_utc"]) == date(2026, 9, 14)
 
 
-def test_preset_ms_anchors_round_trip_through_the_chart_resolution() -> None:
-    for preset in resolve_range_presets(SATURDAY_MS):
-        # The exact inverse the chart request performs: a preset applied to a
-        # Data Lab window resolves back to the same trading dates.
-        from_date, to_date = resolve_request_dates(
-            "1999-01-01",
-            "1999-01-02",
-            preset["start_ms_utc"],
-            preset["end_ms_utc"],
-        )
-        assert date.fromisoformat(from_date) == _utc_date_of_ms(preset["start_ms_utc"])
-        assert date.fromisoformat(to_date) == _utc_date_of_ms(preset["end_ms_utc"])
-
-
-def test_every_preset_window_is_non_degenerate_for_half_open_readers() -> None:
-    """The news query and the dataset endpoints read the same committed ms
-    pair as half-open instants; equal endpoints would make a single-day
-    window empty there (and trip DatasetGenerationRequest's
-    start-before-end validator)."""
-    for preset in resolve_range_presets(SATURDAY_MS):
-        assert preset["end_ms_utc"] > preset["start_ms_utc"]
-
-
-def test_preset_estimates_come_from_the_shared_estimator() -> None:
-    preset = _by_key(SATURDAY_MS)["1M"]
-    assert preset["estimated_bars_per_timeframe"]["1D"] == 21
-    assert preset["estimated_bars_per_timeframe"]["1m"] > 0
-
-
 # ──────────────────────────────────────────────
 # resolve_request_dates — numeric window authority
 # ──────────────────────────────────────────────
@@ -168,27 +163,36 @@ AUG_1_MS = _utc_midnight_ms(date(2026, 8, 1))
 SEP_11_MS = _utc_midnight_ms(date(2026, 9, 11))
 
 
-def test_numeric_fields_take_per_field_precedence_over_the_strings() -> None:
-    from_date, to_date = resolve_request_dates("1999-01-01", "1999-12-31", AUG_1_MS, SEP_11_MS)
-    assert (from_date, to_date) == ("2026-08-01", "2026-09-11")
-
-
-def test_one_numeric_field_leaves_the_other_string_in_charge() -> None:
-    from_date, to_date = resolve_request_dates("2026-08-01", "2026-09-11", None, SEP_11_MS)
-    assert (from_date, to_date) == ("2026-08-01", "2026-09-11")
-    from_date, to_date = resolve_request_dates("2026-08-01", "2026-09-11", AUG_1_MS, None)
-    assert (from_date, to_date) == ("2026-08-01", "2026-09-11")
-
-
-def test_strings_still_drive_the_window_when_no_ms_is_supplied() -> None:
-    from_date, to_date = resolve_request_dates("2026-08-01", "2026-09-11", None, None)
-    assert (from_date, to_date) == ("2026-08-01", "2026-09-11")
-
-
-def test_a_non_midnight_instant_floors_to_its_utc_calendar_date() -> None:
-    intraday = AUG_1_MS + (23 * 60 + 59) * 60_000
-    from_date, to_date = resolve_request_dates("1999-01-01", "2026-09-11", intraday, None)
-    assert (from_date, to_date) == ("2026-08-01", "2026-09-11")
+@pytest.mark.parametrize(
+    ("from_str", "to_str", "start_ms", "end_ms"),
+    [
+        pytest.param(
+            "1999-01-01", "1999-12-31", AUG_1_MS, SEP_11_MS,
+            id="numeric_fields_take_per_field_precedence_over_the_strings",
+        ),
+        pytest.param(
+            "2026-08-01", "2026-09-11", None, SEP_11_MS,
+            id="one_numeric_field_leaves_the_other_string_in_charge-end_ms_only",
+        ),
+        pytest.param(
+            "2026-08-01", "2026-09-11", AUG_1_MS, None,
+            id="one_numeric_field_leaves_the_other_string_in_charge-start_ms_only",
+        ),
+        pytest.param(
+            "2026-08-01", "2026-09-11", None, None,
+            id="strings_still_drive_the_window_when_no_ms_is_supplied",
+        ),
+        pytest.param(
+            "1999-01-01", "2026-09-11", AUG_1_MS + (23 * 60 + 59) * 60_000, None,
+            id="a_non_midnight_instant_floors_to_its_utc_calendar_date",
+        ),
+    ],
+)
+def test_resolve_request_dates_numeric_window_authority(
+    from_str: str, to_str: str, start_ms: int | None, end_ms: int | None
+) -> None:
+    from_date, to_date = resolve_request_dates(from_str, to_str, start_ms, end_ms)
+    assert (from_date, to_date) == ("2026-08-01", "2026-09-11"), "resolved (from_date, to_date)"
 
 
 def test_an_inverted_resolved_window_is_refused() -> None:

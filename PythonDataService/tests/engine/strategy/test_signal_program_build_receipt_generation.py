@@ -232,51 +232,58 @@ def _qualified_ema_receipt(
     )
 
 
-def test_reuses_git_provenance_with_the_timestamp_when_identity_is_unchanged(
+@pytest.mark.parametrize(
+    ("prior_at_ms", "prior_provenance", "qualified_at_ms", "git_provenance"),
+    [
+        # An unchanged identity keeps its recorded provenance even when the repo
+        # has since moved on — re-running with unchanged code stays a byte-for-byte
+        # no-op, which is what keeps `--check` stable in CI regardless of the
+        # checkout's git state.
+        pytest.param(
+            1_700_000_000_000,
+            _COMMITTED_PROVENANCE,
+            1_700_000_000_000,
+            _COMMITTED_PROVENANCE,
+            id="reuses_git_provenance_with_the_timestamp_when_identity_is_unchanged",
+        ),
+        # A receipt minted before provenance existed gains it on the next run
+        # without being re-dated. The claim is about the bytes, not the original
+        # qualification event: the identity match just re-verified that the current
+        # tree still produces this exact artifact digest, so the current git state
+        # truthfully locates those bytes.
+        pytest.param(
+            1_700_000_000_000,
+            None,
+            1_700_000_000_000,
+            _CURRENT_PROVENANCE,
+            id="backfills_git_provenance_when_the_prior_receipt_has_none",
+        ),
+        pytest.param(
+            None,
+            None,
+            1_700_000_000_555,
+            _CURRENT_PROVENANCE,
+            id="stamps_current_git_provenance_on_a_new_identity",
+        ),
+    ],
+)
+def test_qualified_receipt_takes_its_timestamp_and_git_provenance_from_the_prior_receipt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    prior_at_ms: int | None,
+    prior_provenance: dict | None,
+    qualified_at_ms: int,
+    git_provenance: dict,
 ) -> None:
-    """An unchanged identity keeps its recorded provenance even when the repo
-    has since moved on — re-running with unchanged code stays a byte-for-byte
-    no-op, which is what keeps `--check` stable in CI regardless of the
-    checkout's git state."""
-    prior, _suite = _ema_receipt(1_700_000_000_000, git_provenance=_COMMITTED_PROVENANCE)
+    prior_manifest = None
+    if prior_at_ms is not None:
+        prior, _suite = _ema_receipt(prior_at_ms, git_provenance=prior_provenance)
+        prior_manifest = {"schema_version": 2, "receipts": [prior]}
 
-    receipt = _qualified_ema_receipt(
-        tmp_path, monkeypatch, {"schema_version": 2, "receipts": [prior]}
-    )
+    receipt = _qualified_ema_receipt(tmp_path, monkeypatch, prior_manifest)
 
-    assert receipt["qualified_at_ms"] == 1_700_000_000_000
-    assert receipt["git_provenance"] == _COMMITTED_PROVENANCE
-
-
-def test_backfills_git_provenance_when_the_prior_receipt_has_none(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A receipt minted before provenance existed gains it on the next run
-    without being re-dated. The claim is about the bytes, not the original
-    qualification event: the identity match just re-verified that the current
-    tree still produces this exact artifact digest, so the current git state
-    truthfully locates those bytes."""
-    prior, _suite = _ema_receipt(1_700_000_000_000)
-
-    receipt = _qualified_ema_receipt(
-        tmp_path, monkeypatch, {"schema_version": 2, "receipts": [prior]}
-    )
-
-    assert receipt["qualified_at_ms"] == 1_700_000_000_000
-    assert receipt["git_provenance"] == _CURRENT_PROVENANCE
-
-
-def test_stamps_current_git_provenance_on_a_new_identity(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    receipt = _qualified_ema_receipt(tmp_path, monkeypatch, None)
-
-    assert receipt["qualified_at_ms"] == 1_700_000_000_555
-    assert receipt["git_provenance"] == _CURRENT_PROVENANCE
+    assert receipt["qualified_at_ms"] == qualified_at_ms, "the receipt is dated by its prior identity, else freshly"
+    assert receipt["git_provenance"] == git_provenance, "the receipt carries the recorded or the current git provenance"
 
 
 def test_receipts_omit_git_provenance_when_git_is_unavailable(

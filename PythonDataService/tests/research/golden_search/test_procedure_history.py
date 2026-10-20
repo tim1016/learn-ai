@@ -14,20 +14,17 @@ from app.utils.session_anchors import et_midnight_ms
 from tests._helpers.golden_search import declaration, metrics, protocol
 
 
-def test_link_fold_returns_compounds_growth_of_one_across_folds() -> None:
+def test_link_fold_returns_compounds_growth_of_one_and_a_missing_fold_breaks_the_line_and_never_interpolates() -> None:
     linked = link_fold_returns([0.10, -0.05, 0.02])
 
     # 1.1 - 1 = 0.1; 1.1 x 0.95 - 1 = 0.045; 1.045 x 1.02 - 1 = 0.0659.
-    assert np.allclose(linked, [0.10, 0.045, 0.0659], atol=1e-9, rtol=0)
-
-
-def test_link_fold_returns_a_missing_fold_breaks_the_line_and_never_interpolates() -> None:
+    assert np.allclose(linked, [0.10, 0.045, 0.0659], atol=1e-9, rtol=0), "fold returns compound as growth of one"
     broken = link_fold_returns([0.10, None, 0.20])
-    assert np.isclose(broken[0], 0.10, atol=1e-9, rtol=0)
-    assert broken[1:] == [None, None]
-    assert link_fold_returns([None, 0.10]) == [None, None]
-    assert link_fold_returns([0.10, math.nan, 0.20])[1:] == [None, None]
-    assert link_fold_returns([]) == []
+    assert np.isclose(broken[0], 0.10, atol=1e-9, rtol=0), "the fold before a missing one keeps its linked return"
+    assert broken[1:] == [None, None], "a missing fold breaks the line and never interpolates"
+    assert link_fold_returns([None, 0.10]) == [None, None], "a missing first fold leaves no line"
+    assert link_fold_returns([0.10, math.nan, 0.20])[1:] == [None, None], "a nan fold breaks the line like a missing one"
+    assert link_fold_returns([]) == [], "no folds link to nothing"
 
 
 def test_fold_return_is_the_completed_test_runs_return_on_fresh_capital() -> None:

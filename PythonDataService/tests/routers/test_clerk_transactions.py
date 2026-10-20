@@ -27,70 +27,50 @@ from app.services.sqlite_clerk_transaction_projection import InvalidTransactionH
 pytestmark = pytest.mark.asyncio
 
 
-async def test_history_endpoint_rejects_an_inverted_ms_window() -> None:
+async def test_history_endpoint_rejects_an_invalid_ms_window() -> None:
     app = FastAPI()
     app.include_router(router)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(
+        inverted = await client.get(
             "/api/accounts/DU1219/transactions",
             params={"from_ms": 2, "to_ms": 1},
         )
-    assert response.status_code == 422
-    assert response.json()["detail"] == "to_ms must be greater than or equal to from_ms"
-
-
-async def test_history_endpoint_rejects_timestamp_beyond_int64() -> None:
-    app = FastAPI()
-    app.include_router(router)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(
+        beyond_int64 = await client.get(
             "/api/accounts/DU1219/transactions",
             params={"from_ms": 2**63},
         )
 
-    assert response.status_code == 422
+    assert inverted.status_code == 422, "an inverted ms window is rejected with 422"
+    assert inverted.json()["detail"] == "to_ms must be greater than or equal to from_ms", "the inverted window names to_ms >= from_ms"
+    assert beyond_int64.status_code == 422, "a timestamp beyond int64 is rejected with 422"
 
 
-async def test_transaction_history_surfaces_unavailable_without_active_authority() -> None:
+async def test_transaction_reads_surface_unavailable_without_active_authority() -> None:
     """No active SQLite authority must surface as unavailable, not silent success.
 
-    Renamed from test_missing_alpaca_activation_never_reads_ibkr_projection
-    (PR-A of #1813) — the poisoned-IBKR-store half of that proof no longer
+    Renamed from test_missing_alpaca_activation_never_reads_ibkr_projection and
+    test_missing_alpaca_activation_never_reads_ibkr_transaction_detail
+    (PR-A of #1813) — the poisoned-IBKR-store half of those proofs no longer
     applies (there is no legacy store left for the router to reach for), but
     nothing else in the suite exercises the "no active authority" degraded
-    response for GET /transactions.
+    response for GET /transactions and GET /transactions/{transaction_id}.
     """
     set_active_clerk_runtime(None)
     app = FastAPI()
     app.include_router(router)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/accounts/PA-NO-ACTIVATION/transactions")
+        history = await client.get("/api/accounts/PA-NO-ACTIVATION/transactions")
+        detail = await client.get("/api/accounts/PA-NO-ACTIVATION/transactions/legacy-row")
 
-    assert response.status_code == 200
-    assert response.json()["feed_state"] == "projection_unavailable"
-    assert response.json()["rows"] == []
-
-
-async def test_transaction_detail_surfaces_unavailable_without_active_authority() -> None:
-    """No active SQLite authority must surface as unavailable, not silent success.
-
-    Renamed from test_missing_alpaca_activation_never_reads_ibkr_transaction_detail
-    (PR-A of #1813) — same reasoning as the history test above, for
-    GET /transactions/{transaction_id}.
-    """
-    set_active_clerk_runtime(None)
-    app = FastAPI()
-    app.include_router(router)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/accounts/PA-NO-ACTIVATION/transactions/legacy-row")
-
-    assert response.status_code == 503
-    assert response.json()["detail"] == "Clerk transaction projection unavailable."
+    assert history.status_code == 200, "history: the degraded page is still a 200"
+    assert history.json()["feed_state"] == "projection_unavailable", "history: feed_state says projection_unavailable"
+    assert history.json()["rows"] == [], "history: no rows are invented"
+    assert detail.status_code == 503, "detail: no active authority is a 503"
+    assert detail.json()["detail"] == "Clerk transaction projection unavailable.", "detail: the 503 names the unavailable projection"
 
 
-async def test_foreign_account_transaction_detail_returns_typed_404(tmp_path: Path) -> None:
+async def test_active_clerk_rejects_a_foreign_account_detail_and_a_malformed_cursor(tmp_path: Path) -> None:
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
     broker = object()
     set_active_clerk_runtime(ActiveClerkRuntime(
@@ -101,31 +81,15 @@ async def test_foreign_account_transaction_detail_returns_typed_404(tmp_path: Pa
     app.include_router(router)
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.get("/api/accounts/PA-OTHER/transactions/some-op")
+            foreign = await client.get("/api/accounts/PA-OTHER/transactions/some-op")
+            malformed = await client.get("/api/accounts/PA-TEST/transactions", params={"cursor": "invalid"})
     finally:
         set_active_clerk_runtime(None)
         repo.close()
-    assert response.status_code == 404
-    assert response.json()["detail"] == {"reason": "sqlite_account_not_active"}
-
-
-async def test_history_rejects_a_malformed_cursor_from_the_active_clerk(tmp_path: Path) -> None:
-    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
-    broker = object()
-    set_active_clerk_runtime(ActiveClerkRuntime(
-        authority_kind="sqlite",
-        clerk=SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper"),  # type: ignore[arg-type]
-    ))
-    app = FastAPI()
-    app.include_router(router)
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.get("/api/accounts/PA-TEST/transactions", params={"cursor": "invalid"})
-    finally:
-        set_active_clerk_runtime(None)
-        repo.close()
-    assert response.status_code == 422
-    assert response.json()["detail"] == "transaction history cursor is invalid"
+    assert foreign.status_code == 404, "a foreign account's transaction detail is a typed 404"
+    assert foreign.json()["detail"] == {"reason": "sqlite_account_not_active"}, "the foreign-account 404 names sqlite_account_not_active"
+    assert malformed.status_code == 422, "a malformed cursor from the active clerk is rejected with 422"
+    assert malformed.json()["detail"] == "transaction history cursor is invalid", "the malformed-cursor 422 names the invalid cursor"
 
 
 async def test_history_logs_projection_failure_while_preserving_degraded_page(

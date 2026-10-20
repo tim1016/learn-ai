@@ -18,26 +18,30 @@ def test_order_leg_rejects_non_equity_symbol_shape(symbol: str) -> None:
         BrokerOrderLeg(symbol=symbol, side="buy", quantity=1)
 
 
-def test_limit_order_without_price_is_rejected() -> None:
-    with pytest.raises(ValidationError, match="limit order requires a limit_price"):
-        BrokerOrderLeg(symbol="SPY", side="buy", quantity=1, order_type="limit")
+@pytest.mark.parametrize(
+    ("terms", "message"),
+    [
+        pytest.param({"order_type": "limit"}, "limit order requires a limit_price", id="limit_order_without_price"),
+        pytest.param({"limit_price": 100.0}, "market order must not carry a limit_price", id="market_order_with_price"),
+    ],
+)
+def test_a_limit_order_needs_its_price_and_a_market_order_carries_none(terms: dict[str, object], message: str) -> None:
+    with pytest.raises(ValidationError, match=message):
+        BrokerOrderLeg(symbol="SPY", side="buy", quantity=1, **terms)
 
 
-def test_market_order_with_price_is_rejected() -> None:
-    with pytest.raises(ValidationError, match="market order must not carry a limit_price"):
-        BrokerOrderLeg(symbol="SPY", side="buy", quantity=1, limit_price=100.0)
-
-
-def test_non_positive_limit_price_is_rejected() -> None:
-    with pytest.raises(ValidationError):
-        BrokerOrderLeg(
-            symbol="SPY", side="buy", quantity=1, order_type="limit", limit_price=0
-        )
-
-
-@pytest.mark.parametrize("limit_price", [240.555, 0.12345])
-def test_limit_price_with_too_many_decimal_places_is_rejected(limit_price: float) -> None:
-    with pytest.raises(ValidationError, match="limit prices"):
+@pytest.mark.parametrize(
+    ("limit_price", "message"),
+    [
+        pytest.param(0, None, id="non_positive_limit_price"),
+        pytest.param(240.555, "limit prices", id="too_many_decimal_places_240.555"),
+        pytest.param(0.12345, "limit prices", id="too_many_decimal_places_0.12345"),
+    ],
+)
+def test_a_limit_price_is_above_zero_with_no_more_decimals_than_alpaca_allows(
+    limit_price: float, message: str | None
+) -> None:
+    with pytest.raises(ValidationError, match=message):
         BrokerOrderLeg(
             symbol="SPY",
             side="buy",

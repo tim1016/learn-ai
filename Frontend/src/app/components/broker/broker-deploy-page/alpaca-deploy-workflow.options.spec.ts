@@ -225,21 +225,56 @@ describe('AlpacaDeployWorkflowComponent — a bot that trades options (#2913)', 
     expect(service.previewOptionStructure).not.toHaveBeenCalled();
   });
 
-  it('shows the structure the owner built, and what it would pick right now', async () => {
+  it('shows a built structure in every step: its picks in What, its money review, its sizes in How and its lines at Confirm', async () => {
     const { service } = await renderWorkflow();
     await tradeOptions();
 
     await useBullCallSpread();
 
+    const built = 'shows the structure the owner built, and what it would pick right now';
     const what = step('What');
-    expect(within(what).getByText('Stand-in: what a bull call spread is.')).toBeTruthy();
+    expect.soft(within(what).getByText('Stand-in: what a bull call spread is.'), built).toBeTruthy();
     const picks = within(what).getByRole('region', { name: 'Right now this picks' });
-    expect(await within(picks).findByLabelText("SPY Oct 9 '26 585 Call")).toBeTruthy();
-    expect(within(what).getByText('Stand-in: it can be deployed.')).toBeTruthy();
-    expect(service.previewOptionStructure.mock.calls.at(-1)?.[1]).toMatchObject({
+    expect.soft(await within(picks).findByLabelText("SPY Oct 9 '26 585 Call"), built).toBeTruthy();
+    expect.soft(within(what).getByText('Stand-in: it can be deployed.'), built).toBeTruthy();
+    expect.soft(service.previewOptionStructure.mock.calls.at(-1)?.[1], built).toMatchObject({
       underlying: 'SPY', listens_to: 'SPY', structure: 'bull_call_spread', legs: BULL_CALL_SPREAD_LEGS,
       structures: 1, gap_limit_percent: '8', cost_limit_percent: '10',
     });
+
+    const confirm = 'says what it trades and how its orders go at Confirm in the server’s lines, never shares or exit terms';
+    const review = within(step('Confirm')).getByLabelText('Deploy review');
+    await vi.waitFor(() => expect(review.textContent, confirm).toContain(OPTION_TRADES_SUMMARY));
+    expect.soft(within(review).getByText('Orders'), confirm).toBeTruthy();
+    expect.soft(within(review).queryByText('Exits'), confirm).toBeNull();
+    expect.soft(review.textContent, confirm).toContain(OPTION_REVIEW_PRICED.orders_summary);
+    expect.soft(review.textContent, confirm).not.toContain('Exit allowance');
+    expect.soft(review.textContent, confirm).not.toContain('1 share');
+
+    const reviews = 'reviews the money of the structure with its four order terms and exit terms, sized in structures, and shows the server’s review';
+    const money = step('Money');
+    expect.soft(await within(money).findByText('Set aside for 2 structures'), reviews).toBeTruthy();
+    expect.soft(within(money).getByRole('list', { name: 'Right now this picks' }), reviews).toBeTruthy();
+    // The option review's own set-aside row stands where a share bot's minimum does.
+    expect.soft(within(money).queryByText('Minimum for one position'), reviews).toBeNull();
+    expect.soft(lastBudgetAsk(service), reviews)
+      .toMatchObject({ symbol: 'SPY', trades: SPREAD_TRADES, exit_terms: EXIT_TERMS, sizing: { preset: 'safe_canary', quantity: 1 } });
+    expect.soft(lastBudgetAsk(service).traded_symbol, reviews).toBeUndefined();
+
+    await within(step('Money')).findByText('Set aside for 2 structures');
+    expect.soft(step('How').querySelector('.deploy-option-end'), 'says nothing in How about a scheduled close for a structure with no sold leg')
+      .toBeNull();
+
+    const explains = 'explains each size option in the server’s words for structures, once it has reviewed the structure';
+    const how = step('How');
+    await vi.waitFor(() => expect(
+      within(how).getByRole('button', { name: `About One structure: ${OPTION_REVIEW_PRICED.one_structure_explanation}` }),
+      explains,
+    ).toBeTruthy());
+    expect.soft(
+      within(how).getByRole('button', { name: `About Custom structures: ${OPTION_REVIEW_PRICED.custom_structures_explanation}` }),
+      explains,
+    ).toBeTruthy();
   });
 
   it('offers separate option order terms and the custody exit seal, sized in whole structures', async () => {
@@ -377,20 +412,6 @@ describe('AlpacaDeployWorkflowComponent — a bot that trades options (#2913)', 
     }));
   });
 
-  it('says what it trades and how its orders go at Confirm in the server’s lines, never shares or exit terms', async () => {
-    await renderWorkflow();
-    await tradeOptions();
-    await useBullCallSpread();
-
-    const review = within(step('Confirm')).getByLabelText('Deploy review');
-    await vi.waitFor(() => expect(review.textContent).toContain(OPTION_TRADES_SUMMARY));
-    expect(within(review).getByText('Orders')).toBeTruthy();
-    expect(within(review).queryByText('Exits')).toBeNull();
-    expect(review.textContent).toContain(OPTION_REVIEW_PRICED.orders_summary);
-    expect(review.textContent).not.toContain('Exit allowance');
-    expect(review.textContent).not.toContain('1 share');
-  });
-
   it('has no accessibility violation with Options chosen and a structure built', async () => {
     await renderWorkflow();
     await tradeOptions();
@@ -453,20 +474,6 @@ describe('AlpacaDeployWorkflowComponent — a bot that trades options (#2913)', 
     await vi.waitFor(() => expect(service.previewOptionStructure.mock.calls.at(-1)?.[1]).toMatchObject({
       underlying: 'SPY', listens_to: 'AAPL',
     }));
-  });
-
-  it('reviews the money of the structure with its four order terms and exit terms, sized in structures, and shows the server’s review', async () => {
-    const { service } = await renderWorkflow();
-    await tradeOptions();
-    await useBullCallSpread();
-
-    const money = step('Money');
-    expect(await within(money).findByText('Set aside for 2 structures')).toBeTruthy();
-    expect(within(money).getByRole('list', { name: 'Right now this picks' })).toBeTruthy();
-    // The option review's own set-aside row stands where a share bot's minimum does.
-    expect(within(money).queryByText('Minimum for one position')).toBeNull();
-    expect(lastBudgetAsk(service)).toMatchObject({ symbol: 'SPY', trades: SPREAD_TRADES, exit_terms: EXIT_TERMS, sizing: { preset: 'safe_canary', quantity: 1 } });
-    expect(lastBudgetAsk(service).traded_symbol).toBeUndefined();
   });
 
   it.each(['paper', 'shadow', 'live'] as const)('deploys an option bot in %s after acceptance and the mode’s consent, sending the same choice to the Start check and the Deploy', async (mode) => {
@@ -610,27 +617,6 @@ describe('AlpacaDeployWorkflowComponent — a bot that trades options (#2913)', 
     await useBullCallSpread();
 
     expect(await within(step('How')).findByText(OPTION_REVIEW_THAT_PAYS.end_sentence ?? '')).toBeTruthy();
-  });
-
-  it('says nothing in How about a scheduled close for a structure with no sold leg', async () => {
-    await renderWorkflow();
-    await tradeOptions();
-    await useBullCallSpread();
-    await within(step('Money')).findByText('Set aside for 2 structures');
-
-    expect(step('How').querySelector('.deploy-option-end')).toBeNull();
-  });
-
-  it('explains each size option in the server’s words for structures, once it has reviewed the structure', async () => {
-    await renderWorkflow();
-    await tradeOptions();
-    await useBullCallSpread();
-
-    const how = step('How');
-    await vi.waitFor(() => expect(
-      within(how).getByRole('button', { name: `About One structure: ${OPTION_REVIEW_PRICED.one_structure_explanation}` }),
-    ).toBeTruthy());
-    expect(within(how).getByRole('button', { name: `About Custom structures: ${OPTION_REVIEW_PRICED.custom_structures_explanation}` })).toBeTruthy();
   });
 
   it('lets an option bot seal its required exit terms without switching its traded asset', async () => {

@@ -116,17 +116,18 @@ class TestPairEngineFills:
         with pytest.raises(NotImplementedError, match="Pyramiding"):
             pair_engine_fills([e1, e2])
 
-    def test_unmatched_exit_raises(self) -> None:
-        flat = _event(direction=Direction.FLAT, fill_quantity=-10)
+    @pytest.mark.parametrize(
+        ("direction", "fill_quantity", "reason"),
+        [
+            pytest.param(Direction.FLAT, -10, "Unmatched FLAT", id="unmatched-exit"),
+            pytest.param(Direction.LONG, 10, "ended with an open LONG", id="open-position-at-end"),
+        ],
+    )
+    def test_an_unpaired_fill_raises(self, direction: Direction, fill_quantity: int, reason: str) -> None:
+        unpaired = _event(direction=direction, fill_quantity=fill_quantity)
 
-        with pytest.raises(ValueError, match="Unmatched FLAT"):
-            pair_engine_fills([flat])
-
-    def test_open_position_at_end_raises(self) -> None:
-        entry = _event(direction=Direction.LONG)
-
-        with pytest.raises(ValueError, match="ended with an open LONG"):
-            pair_engine_fills([entry])
+        with pytest.raises(ValueError, match=reason):
+            pair_engine_fills([unpaired])
 
     def test_multiple_round_trips(self) -> None:
         events = [
@@ -225,13 +226,15 @@ class TestRunSpecAgainstBars:
 
 
 class TestRunSpecAgainstBarsStartingCash:
-    def test_starting_cash_propagates_to_engine_sizing(self) -> None:
+    def test_starting_cash_propagates_to_engine_sizing_and_defaults_to_the_spec(self) -> None:
         """starting_cash must flow into the engine, not just the persist payload.
 
         Run the same bars at 100k and 200k starting cash and assert that the
         quantities differ — at 200k the engine can afford twice as many shares,
         so at least one trade must have a larger quantity. If starting_cash were
         ignored (P1 bug), both runs would produce identical quantities.
+
+        When starting_cash is None, the spec's own set_cash default is used (100 000).
         """
         bars = build_minute_bars(closes_for_spy_ema(2000))
 
@@ -251,6 +254,14 @@ class TestRunSpecAgainstBarsStartingCash:
             end_date=(2024, 12, 31),
             starting_cash=Decimal("200000"),
         )
+        result_default = run_spec_against_bars(
+            spec_path=fixture_path("spy_ema_crossover"),
+            symbol="TEST",
+            bars=bars,
+            start_date=(2024, 1, 2),
+            end_date=(2024, 12, 31),
+            # starting_cash omitted → None → spec default of 100 000
+        )
 
         assert len(result_100k.trades) >= 1, "need at least one trade to compare sizing"
         assert len(result_100k.trades) == len(result_200k.trades), (
@@ -262,30 +273,13 @@ class TestRunSpecAgainstBarsStartingCash:
             t200.quantity > t100.quantity for t100, t200 in zip(result_100k.trades, result_200k.trades, strict=True)
         ), "200k run produced no larger quantities than 100k run — starting_cash not applied"
 
-    def test_default_starting_cash_uses_spec_default(self) -> None:
-        """When starting_cash is None, the spec's own set_cash default is used (100 000)."""
-        bars = build_minute_bars(closes_for_spy_ema(2000))
-
-        result_explicit = run_spec_against_bars(
-            spec_path=fixture_path("spy_ema_crossover"),
-            symbol="TEST",
-            bars=bars,
-            start_date=(2024, 1, 2),
-            end_date=(2024, 12, 31),
-            starting_cash=Decimal("100000"),
+        assert len(result_100k.trades) == len(result_default.trades), (
+            "an omitted starting_cash changed the trade count against an explicit 100 000"
         )
-        result_default = run_spec_against_bars(
-            spec_path=fixture_path("spy_ema_crossover"),
-            symbol="TEST",
-            bars=bars,
-            start_date=(2024, 1, 2),
-            end_date=(2024, 12, 31),
-            # starting_cash omitted → None → spec default of 100 000
-        )
-
-        assert len(result_explicit.trades) == len(result_default.trades)
-        for t_explicit, t_default in zip(result_explicit.trades, result_default.trades, strict=True):
-            assert t_explicit.quantity == t_default.quantity
+        for number, (t_explicit, t_default) in enumerate(zip(result_100k.trades, result_default.trades, strict=True)):
+            assert t_explicit.quantity == t_default.quantity, (
+                f"trade {number}: an omitted starting_cash must size like an explicit 100 000"
+            )
 
 
 class TestRunSpecAgainstBarsAndPersist:

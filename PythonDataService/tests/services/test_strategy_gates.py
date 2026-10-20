@@ -109,23 +109,20 @@ def test_an_invalid_gate_is_refused_with_a_plain_reason(text: str, reason: str) 
         parse_linear(text)
 
 
-def test_variables_resolve_in_the_order_the_owner_was_promised() -> None:
+def test_variables_resolve_in_the_order_the_owner_was_promised_and_a_catalogue_name_is_recorded_only_at_the_bots_length() -> None:
     view = _ema_view()
-
-    assert resolve_variable(view, "EMA5").source is VariableSource.RECORDED
-    assert resolve_variable(view, "rsi14").source is VariableSource.RECORDED
-    assert resolve_variable(view, "gap").source is VariableSource.SETTING
-    assert resolve_variable(view, "close").source is VariableSource.CANDLE
-    assert resolve_variable(view, "EMA20").source is VariableSource.CATALOGUE
-    assert resolve_variable(view, "VWAP").source is VariableSource.CATALOGUE
-
-
-def test_a_catalogue_name_the_bot_records_is_the_bots_own_value_only_at_its_length() -> None:
-    assert resolve_variable(_ema_view(), "EMA5").source is VariableSource.RECORDED
     # Deployed at 8/21, EMA5 is no longer a recorded value; EMA8 is.
     deployed = _ema_view(fast_period=8, slow_period=21)
-    assert resolve_variable(deployed, "EMA5").source is VariableSource.CATALOGUE
-    assert resolve_variable(deployed, "EMA8").source is VariableSource.RECORDED
+
+    assert resolve_variable(view, "EMA5").source is VariableSource.RECORDED, "EMA5 is a recorded value"
+    assert resolve_variable(view, "rsi14").source is VariableSource.RECORDED, "rsi14 is a recorded value"
+    assert resolve_variable(view, "gap").source is VariableSource.SETTING, "gap is a setting"
+    assert resolve_variable(view, "close").source is VariableSource.CANDLE, "close is a candle field"
+    assert resolve_variable(view, "EMA20").source is VariableSource.CATALOGUE, "EMA20 is a catalogue indicator"
+    assert resolve_variable(view, "VWAP").source is VariableSource.CATALOGUE, "VWAP is a catalogue indicator"
+    assert resolve_variable(view, "EMA5").source is VariableSource.RECORDED, "at the default length EMA5 is the bot's own value"
+    assert resolve_variable(deployed, "EMA5").source is VariableSource.CATALOGUE, "deployed at 8/21, EMA5 is no longer recorded"
+    assert resolve_variable(deployed, "EMA8").source is VariableSource.RECORDED, "deployed at 8/21, EMA8 is recorded"
 
 
 @pytest.mark.parametrize(

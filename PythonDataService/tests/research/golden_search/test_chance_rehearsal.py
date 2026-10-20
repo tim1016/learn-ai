@@ -119,24 +119,22 @@ def _smooth(n: int, seed: int) -> list[float]:
 # ── Floors ────────────────────────────────────────────────────────────────
 
 
-def test_a_frequency_rung_rounds_once_on_the_frozen_years_not_the_rounded_floor() -> None:
+def test_a_frequency_rung_rounds_once_on_the_frozen_years_and_a_fixed_floor_plan_keeps_its_final_floor_on_every_rung() -> None:
     from math import ceil
 
     floors, rate, years, final_window = _frequency_world()
     # Precondition, so a calendar change fails here loudly instead of asserting wrong numbers:
     # this final interval's frozen fraction makes ceil(k x rate x years) disagree with k x ceil(rate x years) at k = 2.
-    assert ceil(2 * rate * years) != 2 * ceil(rate * years)
-    assert final_session_count(final_window) == len(expected_sessions(date(2026, 1, 1), date(2026, 8, 31)))
-    assert rung_floor(floors, final_window, 1, rate=rate, final_years=years) == floors.at(final_window, final=True)
-    assert rung_floor(floors, final_window, 2, rate=rate, final_years=years) == ceil(2 * rate * years)
-    assert rung_floor(floors, final_window, 3, rate=rate, final_years=years) == ceil(3 * rate * years)
-    assert rung_floor(floors, final_window, 2, rate=rate, final_years=years) != 2 * rung_floor(floors, final_window, 1, rate=rate, final_years=years)
+    assert ceil(2 * rate * years) != 2 * ceil(rate * years), "precondition: the frozen fraction makes the two rounding rules disagree at k = 2"
+    assert final_session_count(final_window) == len(expected_sessions(date(2026, 1, 1), date(2026, 8, 31))), "the final window's session count is the calendar's"
+    assert rung_floor(floors, final_window, 1, rate=rate, final_years=years) == floors.at(final_window, final=True), "the first rung is the final floor"
+    assert rung_floor(floors, final_window, 2, rate=rate, final_years=years) == ceil(2 * rate * years), "the second rung rounds once on the frozen years"
+    assert rung_floor(floors, final_window, 3, rate=rate, final_years=years) == ceil(3 * rate * years), "the third rung rounds once on the frozen years"
+    assert rung_floor(floors, final_window, 2, rate=rate, final_years=years) != 2 * rung_floor(floors, final_window, 1, rate=rate, final_years=years), "a rung is not the rounded floor times k"
 
-
-def test_a_fixed_floor_legacy_plan_uses_its_final_floor_on_every_rung() -> None:
-    floors, _, _, final_window = _legacy_world(exam_min_trades=7)
+    legacy_floors, _, _, legacy_window = _legacy_world(exam_min_trades=7)
     for k in (1, 2, 3, 4):
-        assert rung_floor(floors, final_window, k, rate=None, final_years=None) == 7
+        assert rung_floor(legacy_floors, legacy_window, k, rate=None, final_years=None) == 7, f"a fixed-floor legacy plan uses its final floor on rung {k}"
 
 
 # ── The ladder ────────────────────────────────────────────────────────────

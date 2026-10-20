@@ -37,12 +37,25 @@ def test_window_date_resolves_the_et_calendar_date_not_utc() -> None:
     assert recency_service.window_date(ms) == "2026-06-10"
 
 
+def _sweep_body(**changes: Any) -> dict[str, Any]:
+    """A request the endpoint accepts; each case changes the one thing it must refuse."""
+    return {
+        "strategies": [
+            {"strategyKey": "ema_crossover_signal", "paramRanges": {"gapBps": {"type": "value_list", "values": [2.0]}}}
+        ],
+        "symbols": ["SPY"],
+        "windowStartMs": 0,
+        "windowEndMs": 1,
+        **changes,
+    }
+
+
 @pytest.mark.asyncio
-async def test_rejects_a_grid_past_the_sanity_ceiling_before_queuing() -> None:
-    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/api/jobs-internal/recency-chart",
-            json={
+@pytest.mark.parametrize(
+    ("changes", "fragment"),
+    [
+        pytest.param(
+            {
                 "jobId": "job-1",
                 "strategies": [
                     {
@@ -52,21 +65,34 @@ async def test_rejects_a_grid_past_the_sanity_ceiling_before_queuing() -> None:
                         },
                     }
                 ],
-                "symbols": ["SPY"],
-                "windowStartMs": 0,
-                "windowEndMs": 1,
             },
-        )
-    assert response.status_code == 400
-    assert "sanity ceiling" in response.json()["detail"]
+            "sanity ceiling",
+            id="a_grid_past_the_sanity_ceiling_before_queuing",
+        ),
+        # ``2, 2`` is a malformed request: two identical cells would run and the second would read as a redelivery.
+        pytest.param(
+            {
+                "jobId": "job-dup",
+                "strategies": [{"strategyKey": "ema_crossover_signal", "paramRanges": {"gap_bps": {"type": "value_list", "values": [2.0, 2.0]}}}],
+            },
+            "repeats a value",
+            id="a_repeated_parameter_value_instead_of_scheduling_a_duplicate_cell",
+        ),
+    ],
+)
+async def test_rejects_a_grid_the_sweep_cannot_schedule_before_queuing(changes: dict[str, Any], fragment: str) -> None:
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/jobs-internal/recency-chart", json=_sweep_body(**changes))
+    assert response.status_code == 400, response.text
+    assert fragment in response.json()["detail"], response.text
 
 
 @pytest.mark.asyncio
-async def test_rejects_an_inverted_low_high_range() -> None:
-    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/api/jobs-internal/recency-chart",
-            json={
+@pytest.mark.parametrize(
+    ("changes", "status_code"),
+    [
+        pytest.param(
+            {
                 "jobId": "job-2",
                 "strategies": [
                     {
@@ -74,48 +100,17 @@ async def test_rejects_an_inverted_low_high_range() -> None:
                         "paramRanges": {"gapBps": {"type": "low_high_step", "low": 5.0, "high": 1.0, "step": 1.0}},
                     }
                 ],
-                "symbols": ["SPY"],
-                "windowStartMs": 0,
-                "windowEndMs": 1,
             },
-        )
-    assert response.status_code == 400
-
-
-@pytest.mark.asyncio
-async def test_rejects_a_repeated_parameter_value_instead_of_scheduling_a_duplicate_cell() -> None:
-    """``2, 2`` is a malformed request: two identical cells would run and the second would read as a redelivery."""
+            400,
+            id="an_inverted_low_high_range",
+        ),
+        pytest.param({"jobId": "job-3", "symbols": []}, 422, id="empty_symbols_is_a_pydantic_min_length_violation"),
+    ],
+)
+async def test_rejects_an_inverted_low_high_range_and_empty_symbols(changes: dict[str, Any], status_code: int) -> None:
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/api/jobs-internal/recency-chart",
-            json={
-                "jobId": "job-dup",
-                "strategies": [{"strategyKey": "ema_crossover_signal", "paramRanges": {"gap_bps": {"type": "value_list", "values": [2.0, 2.0]}}}],
-                "symbols": ["SPY"],
-                "windowStartMs": 0,
-                "windowEndMs": 1,
-            },
-        )
-    assert response.status_code == 400
-    assert "repeats a value" in response.json()["detail"]
-
-
-@pytest.mark.asyncio
-async def test_rejects_empty_symbols() -> None:
-    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/api/jobs-internal/recency-chart",
-            json={
-                "jobId": "job-3",
-                "strategies": [
-                    {"strategyKey": "ema_crossover_signal", "paramRanges": {"gapBps": {"type": "value_list", "values": [2.0]}}}
-                ],
-                "symbols": [],
-                "windowStartMs": 0,
-                "windowEndMs": 1,
-            },
-        )
-    assert response.status_code == 422  # Pydantic min_length violation
+        response = await client.post("/api/jobs-internal/recency-chart", json=_sweep_body(**changes))
+    assert response.status_code == status_code, response.text
 
 
 class TestValidateBeforeDispatch:
@@ -129,72 +124,50 @@ class TestValidateBeforeDispatch:
             return await client.post("/api/jobs-internal/recency-chart", json=body)
 
     @pytest.mark.asyncio
-    async def test_rejects_an_unknown_strategy_key(self) -> None:
-        response = await self._post(
-            {
-                "jobId": "job-unknown-strategy",
-                "strategies": [
-                    {"strategyKey": "not_a_real_strategy", "paramRanges": {"gapBps": {"type": "value_list", "values": [2.0]}}}
-                ],
-                "symbols": ["SPY"],
-                "windowStartMs": 0,
-                "windowEndMs": 1,
-            }
-        )
-        assert response.status_code == 400
-        assert "unknown strategy_key" in response.json()["detail"]
-
-    @pytest.mark.asyncio
-    async def test_rejects_an_out_of_bounds_parameter_value(self) -> None:
-        response = await self._post(
-            {
-                "jobId": "job-oob-param",
-                "strategies": [
-                    {
-                        "strategyKey": "ema_crossover_signal",
-                        "paramRanges": {"gapBps": {"type": "value_list", "values": [150.0]}},  # le=100.0
-                    }
-                ],
-                "symbols": ["SPY"],
-                "windowStartMs": 0,
-                "windowEndMs": 1,
-            }
-        )
-        assert response.status_code == 400
-        assert "parameters invalid" in response.json()["detail"]
-
-    @pytest.mark.asyncio
-    async def test_rejects_an_unsupported_data_policy_label(self) -> None:
-        response = await self._post(
-            {
-                "jobId": "job-bad-policy",
-                "strategies": [
-                    {"strategyKey": "ema_crossover_signal", "paramRanges": {"gapBps": {"type": "value_list", "values": [2.0]}}}
-                ],
-                "symbols": ["SPY"],
-                "windowStartMs": 0,
-                "windowEndMs": 1,
-                "dataPolicy": "ibkr-raw-regular-minute",
-            }
-        )
-        assert response.status_code == 400
-        assert "data_policy" in response.json()["detail"]
-
-    @pytest.mark.asyncio
-    async def test_rejects_a_window_start_not_before_window_end(self) -> None:
-        response = await self._post(
-            {
-                "jobId": "job-bad-window",
-                "strategies": [
-                    {"strategyKey": "ema_crossover_signal", "paramRanges": {"gapBps": {"type": "value_list", "values": [2.0]}}}
-                ],
-                "symbols": ["SPY"],
-                "windowStartMs": 1000,
-                "windowEndMs": 1000,
-            }
-        )
-        assert response.status_code == 400
-        assert "window_start_ms" in response.json()["detail"]
+    @pytest.mark.parametrize(
+        ("changes", "fragment"),
+        [
+            pytest.param(
+                {
+                    "jobId": "job-unknown-strategy",
+                    "strategies": [
+                        {"strategyKey": "not_a_real_strategy", "paramRanges": {"gapBps": {"type": "value_list", "values": [2.0]}}}
+                    ],
+                },
+                "unknown strategy_key",
+                id="an_unknown_strategy_key",
+            ),
+            pytest.param(
+                {
+                    "jobId": "job-oob-param",
+                    "strategies": [
+                        {
+                            "strategyKey": "ema_crossover_signal",
+                            "paramRanges": {"gapBps": {"type": "value_list", "values": [150.0]}},  # le=100.0
+                        }
+                    ],
+                },
+                "parameters invalid",
+                id="an_out_of_bounds_parameter_value",
+            ),
+            pytest.param(
+                {"jobId": "job-bad-policy", "dataPolicy": "ibkr-raw-regular-minute"},
+                "data_policy",
+                id="an_unsupported_data_policy_label",
+            ),
+            pytest.param(
+                {"jobId": "job-bad-window", "windowStartMs": 1000, "windowEndMs": 1000},
+                "window_start_ms",
+                id="a_window_start_not_before_window_end",
+            ),
+        ],
+    )
+    async def test_rejects_a_request_that_can_only_fail_every_child_backtest(
+        self, changes: dict[str, Any], fragment: str
+    ) -> None:
+        response = await self._post(_sweep_body(**changes))
+        assert response.status_code == 400, response.text
+        assert fragment in response.json()["detail"], response.text
 
 
 class TestWindowCeiling:

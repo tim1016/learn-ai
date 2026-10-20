@@ -9,58 +9,56 @@ import {
 const AVAILABLE = ['open', 'high', 'low', 'close', 'volume', 'rsi_length14'];
 
 describe('toggleExportColumn', () => {
-  it('turns "everything" into an explicit list on the first uncheck', () => {
-    expect(toggleExportColumn(null, AVAILABLE, 'high', false)).toEqual([
-      'open',
-      'low',
-      'close',
-      'volume',
-      'rsi_length14',
-    ]);
-  });
-
-  it('adds and removes a column from an explicit list', () => {
-    expect(toggleExportColumn(['close'], AVAILABLE, 'open', true)).toEqual(['close', 'open']);
-    expect(toggleExportColumn(['close', 'open'], AVAILABLE, 'close', false)).toEqual(['open']);
-  });
-
-  it('never duplicates a column that is already ticked', () => {
-    expect(toggleExportColumn(['close'], AVAILABLE, 'close', true)).toEqual(['close']);
+  it('toggles a column: the first uncheck makes an explicit list, ticks edit it, a ticked column is never duplicated', () => {
+    expect
+      .soft(toggleExportColumn(null, AVAILABLE, 'high', false), 'turns "everything" into an explicit list on the first uncheck')
+      .toEqual(['open', 'low', 'close', 'volume', 'rsi_length14']);
+    expect
+      .soft(toggleExportColumn(['close'], AVAILABLE, 'open', true), 'adds and removes a column from an explicit list: add')
+      .toEqual(['close', 'open']);
+    expect
+      .soft(toggleExportColumn(['close', 'open'], AVAILABLE, 'close', false), 'adds and removes a column from an explicit list: remove')
+      .toEqual(['open']);
+    expect
+      .soft(toggleExportColumn(['close'], AVAILABLE, 'close', true), 'never duplicates a column that is already ticked')
+      .toEqual(['close']);
   });
 });
 
 describe('columnsForPayload', () => {
-  it('sends null while nothing was edited, so later columns are included too', () => {
-    expect(columnsForPayload(null, AVAILABLE)).toBeNull();
-  });
-
-  it('sends only ticked columns the current plan still lists, in plan order', () => {
+  it('builds the payload columns from the selection and the current plan', () => {
+    expect
+      .soft(columnsForPayload(null, AVAILABLE), 'sends null while nothing was edited, so later columns are included too')
+      .toBeNull();
     // ema_length20 belonged to an indicator that has since been removed.
-    expect(columnsForPayload(['rsi_length14', 'ema_length20', 'open'], AVAILABLE)).toEqual([
-      'open',
-      'rsi_length14',
-    ]);
-  });
-
-  it('leaves a new column out once the selection was edited', () => {
-    expect(columnsForPayload(['close'], [...AVAILABLE, 'atr_length14'])).toEqual(['close']);
-  });
-
-  it('passes the selection through untouched when no plan is loaded — the server validates it', () => {
-    expect(columnsForPayload(['close', 'open'], null)).toEqual(['close', 'open']);
+    expect
+      .soft(
+        columnsForPayload(['rsi_length14', 'ema_length20', 'open'], AVAILABLE),
+        'sends only ticked columns the current plan still lists, in plan order',
+      )
+      .toEqual(['open', 'rsi_length14']);
+    expect
+      .soft(columnsForPayload(['close'], [...AVAILABLE, 'atr_length14']), 'leaves a new column out once the selection was edited')
+      .toEqual(['close']);
+    expect
+      .soft(
+        columnsForPayload(['close', 'open'], null),
+        'passes the selection through untouched when no plan is loaded — the server validates it',
+      )
+      .toEqual(['close', 'open']);
   });
 });
 
 describe('exportTimeZoneOptions', () => {
-  it('lists UTC first, then the full IANA list, each zone once', () => {
+  it('lists UTC first then the full IANA list with each zone once, and keeps a selected zone the runtime list does not carry', () => {
     const options = exportTimeZoneOptions('America/Chicago');
-    expect(options[0]).toBe('UTC');
-    expect(options).toContain('America/New_York');
-    expect(options).toContain('America/Chicago');
-    expect(new Set(options).size).toBe(options.length);
-  });
+    expect.soft(options[0], 'lists UTC first, then the full IANA list, each zone once: UTC first').toBe('UTC');
+    expect.soft(options, 'lists UTC first, then the full IANA list, each zone once: has America/New_York').toContain('America/New_York');
+    expect.soft(options, 'lists UTC first, then the full IANA list, each zone once: has America/Chicago').toContain('America/Chicago');
+    expect.soft(new Set(options).size, 'lists UTC first, then the full IANA list, each zone once: no duplicates').toBe(options.length);
 
-  it('keeps a selected zone the runtime list does not carry', () => {
-    expect(exportTimeZoneOptions('Asia/Calcutta')).toContain('Asia/Calcutta');
+    expect
+      .soft(exportTimeZoneOptions('Asia/Calcutta'), 'keeps a selected zone the runtime list does not carry')
+      .toContain('Asia/Calcutta');
   });
 });

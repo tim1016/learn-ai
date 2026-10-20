@@ -175,11 +175,13 @@ def test_everything_a_search_is_handed_reaches_the_worker_equal_to_what_was_sent
     assert arrived == asked
 
 
-async def test_a_resolution_comes_back_from_the_worker_as_the_resolver_made_it() -> None:
+async def test_a_resolution_and_the_picks_daily_decay_come_back_from_the_worker_as_the_resolver_and_pricer_made_them() -> None:
     scene = scenes._scene()
-    lane = OptionSearchLane("entry", executor=InThisProcess)
+    entry = OptionSearchLane("entry", executor=InThisProcess)
+    preview = OptionSearchLane("preview", executor=InThisProcess)
+    here = scene.resolve(_SPREAD)
 
-    found = await lane.resolve(
+    found = await entry.resolve(
         _SPREAD,
         chain=scene.chain,
         underlying=scene.underlying,
@@ -189,31 +191,28 @@ async def test_a_resolution_comes_back_from_the_worker_as_the_resolver_made_it()
         decision_bar_close_ms=scene.decision_bar_close_ms,
         selection_ms=scene.selection_ms,
     )
+    with_decay = await preview.search(replace(_ask(_SPREAD, scene), daily_decay=True))
+    without = await preview.search(_ask(_SPREAD, scene))
 
-    here = scene.resolve(_SPREAD)
-    assert isinstance(found, Resolution) and found == here
+    assert isinstance(found, Resolution) and found == here, "a resolution comes back as the resolver made it"
     # In the plan's order, and read-only, as the resolver hands them.
-    assert list(found.picked) == list(here.picked) == ["long_call", "short_call"]
-    assert all(isinstance(part, MappingProxyType) for part in (found.picked, found.quotes, found.multipliers))
-    assert found.evidence == here.evidence
-
-
-async def test_a_search_asked_for_the_picks_daily_decay_brings_it_back_beside_the_resolvers_own_answer() -> None:
-    scene = scenes._scene()
-    lane = OptionSearchLane("preview", executor=InThisProcess)
-    here = scene.resolve(_SPREAD)
-
-    with_decay = await lane.search(replace(_ask(_SPREAD, scene), daily_decay=True))
-    without = await lane.search(_ask(_SPREAD, scene))
-
-    assert isinstance(with_decay, ResolutionWithDecay) and with_decay.resolution == here
+    assert list(found.picked) == list(here.picked) == ["long_call", "short_call"], "the picks come back in the plan's order"
+    assert all(
+        isinstance(part, MappingProxyType) for part in (found.picked, found.quotes, found.multipliers)
+    ), "the picks, quotes and multipliers come back read-only"
+    assert found.evidence == here.evidence, "the evidence comes back as the resolver made it"
+    assert isinstance(with_decay, ResolutionWithDecay) and with_decay.resolution == here, (
+        "a search asked for the daily decay brings back the resolver's own answer"
+    )
     # Each leg's own, by the plan's leg ids, as the pricer works it out here for the same picks.
-    assert dict(with_decay.daily_decay) == picks_daily_decay(here)
-    assert list(with_decay.daily_decay) == ["long_call", "short_call"]
-    assert all(leg.worked is not None and leg.worked.decay < 0 for leg in with_decay.daily_decay.values())
-    assert isinstance(with_decay.daily_decay, MappingProxyType)
+    assert dict(with_decay.daily_decay) == picks_daily_decay(here), "each leg's decay is as the pricer works it out here"
+    assert list(with_decay.daily_decay) == ["long_call", "short_call"], "the decay is by the plan's leg ids"
+    assert all(
+        leg.worked is not None and leg.worked.decay < 0 for leg in with_decay.daily_decay.values()
+    ), "each leg's decay is worked and negative"
+    assert isinstance(with_decay.daily_decay, MappingProxyType), "the decay comes back read-only"
     # Not asked for, nothing comes back beside the resolution.
-    assert isinstance(without, Resolution) and without == here
+    assert isinstance(without, Resolution) and without == here, "not asked for, no decay comes back beside the resolution"
 
 
 async def test_a_search_that_is_refused_brings_back_the_refusal_and_no_decay_whatever_was_asked() -> None:

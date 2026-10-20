@@ -83,7 +83,7 @@ def _detail(returns: list[float], *, capital: float = CAPITAL) -> dict[str, Any]
 # ── Injected index paths: exact counts and independently calculated quantiles ──
 
 
-def test_injected_paths_count_events_exactly() -> None:
+def test_injected_paths_count_events_exactly_and_an_overflowing_difference_keeps_its_count() -> None:
     candidate = _series([0.1, -0.2, 0.5])
     incumbent = _series([0.05, -0.1, 0.2])
     indices = np.array([[0, 1, 2], [2, 1, 0], [0, 0, 1], [1, 1, 1], [2, 2, 0]])
@@ -92,12 +92,15 @@ def test_injected_paths_count_events_exactly() -> None:
     counts, differences = _pair_chunk(own, other)
     # Row [0,1,2] and its reversal give both sides their own multiset, so the candidate's Sharpe beats the incumbent's twice;
     # row [0,0,1] centers both sides exactly on a 0.0 Sharpe (a tie); row [1,1,1] is undefined for the candidate.
-    assert counts == {"better": 2, "tied": 1, "worse": 1, "undefined": 1}
-    assert sum(counts.values()) == len(indices)
-    assert np.isnan(differences[3])
+    assert counts == {"better": 2, "tied": 1, "worse": 1, "undefined": 1}, "injected paths count each event exactly"
+    assert sum(counts.values()) == len(indices), "every injected path is counted once"
+    assert np.isnan(differences[3]), "the path undefined for the candidate has no difference"
+    overflow_counts, overflow_differences = _pair_chunk(np.array([1e308, 5.0]), np.array([-1e308, 2.0]))
+    assert overflow_counts == {"better": 2, "tied": 0, "worse": 0, "undefined": 0}, "a finite subtraction overflow keeps the count"
+    assert np.isnan(overflow_differences[0]) and overflow_differences[1] == 3.0, "a finite subtraction overflow loses the difference"
 
 
-def test_quantiles_are_linear_interpolation_over_the_finite_values() -> None:
+def test_a_range_is_linear_interpolation_over_the_finite_values_and_explicitly_empty_without_any() -> None:
     values = np.array([0.32, -7.0, 1.5, np.nan, 0.0, 4.0, -0.25, 9.0, 2.5])
     result = _range(values)
     finite = np.sort(np.array([-7.0, -0.25, 0.0, 0.32, 1.5, 2.5, 4.0, 9.0]))
@@ -108,20 +111,11 @@ def test_quantiles_are_linear_interpolation_over_the_finite_values() -> None:
         upper = math.ceil(position)
         return float(finite[lower] + (finite[upper] - finite[lower]) * (position - lower))
 
-    assert result["finite"] == 8
-    assert result["p5"] == pytest.approx(at(0.05), abs=1e-15)
-    assert result["p50"] == pytest.approx(at(0.5), abs=1e-15)
-    assert result["p95"] == pytest.approx(at(0.95), abs=1e-15)
-
-
-def test_a_range_without_finite_values_is_explicitly_empty_never_nan() -> None:
-    assert _range(np.full(4, np.nan)) == {"p5": None, "p50": None, "p95": None, "finite": 0}
-
-
-def test_finite_subtraction_overflow_keeps_the_count_and_loses_the_difference() -> None:
-    counts, differences = _pair_chunk(np.array([1e308, 5.0]), np.array([-1e308, 2.0]))
-    assert counts == {"better": 2, "tied": 0, "worse": 0, "undefined": 0}
-    assert np.isnan(differences[0]) and differences[1] == 3.0
+    assert result["finite"] == 8, "the range counts the finite values"
+    assert result["p5"] == pytest.approx(at(0.05), abs=1e-15), "p5 is the linear interpolation over the finite values"
+    assert result["p50"] == pytest.approx(at(0.5), abs=1e-15), "p50 is the linear interpolation over the finite values"
+    assert result["p95"] == pytest.approx(at(0.95), abs=1e-15), "p95 is the linear interpolation over the finite values"
+    assert _range(np.full(4, np.nan)) == {"p5": None, "p50": None, "p95": None, "finite": 0}, "a range without finite values is explicitly empty, never NaN"
 
 
 # ── Classification: raw counts against stored thresholds ──
@@ -131,29 +125,23 @@ def _counts(better: int, tied: int, worse: int, undefined: int = 0) -> dict[str,
     return {"better": better, "tied": tied, "worse": worse, "undefined": undefined}
 
 
-def test_the_clear_threshold_is_exact_at_9500_of_10000() -> None:
-    assert _classify(_counts(9_500, 0, 500), 0.95) == ("clearly_as_good", False)
-    assert _classify(_counts(0, 9_500, 500), 0.95) == ("clearly_as_good", False)
-    assert _classify(_counts(9_499, 0, 501), 0.95) == ("mixed", False)
-
-
-def test_an_adverse_label_needs_actual_finite_worse_outcomes() -> None:
-    # 9,500 undefined paths with only 500 finite losses must not read as clearly worse, whatever 1 minus the success share says.
-    assert _classify(_counts(0, 0, 500, undefined=9_500), 0.95) == ("mixed", True)
-    assert _classify(_counts(0, 0, 9_500), 0.95) == ("clearly_worse", False)
-    assert _classify(_counts(10, 0, 9_499), 0.95) == ("mixed", False)
-
-
-def test_an_all_tie_draw_is_not_strong_improvement() -> None:
-    assert _classify(_counts(0, 10_000, 0), 0.95) == ("identical_outcomes", False)
-
-
-def test_no_defined_paths_leaves_the_comparison_unavailable() -> None:
-    assert _classify(_counts(0, 0, 0, undefined=10_000), 0.95) == ("no_defined_paths", True)
-
-
-def test_mixed_undefined_cases_read_as_incomplete_support() -> None:
-    assert _classify(_counts(9_600, 0, 100, undefined=300), 0.95) == ("clearly_as_good", True)
+@pytest.mark.parametrize(
+    ("better", "tied", "worse", "undefined", "expected"),
+    [
+        pytest.param(9_500, 0, 500, 0, ("clearly_as_good", False), id="the_clear_threshold_is_exact_at_9500_better_of_10000"),
+        pytest.param(0, 9_500, 500, 0, ("clearly_as_good", False), id="the_clear_threshold_is_exact_at_9500_tied_of_10000"),
+        pytest.param(9_499, 0, 501, 0, ("mixed", False), id="the_clear_threshold_is_not_met_at_9499_of_10000"),
+        # 9,500 undefined paths with only 500 finite losses must not read as clearly worse, whatever 1 minus the success share says.
+        pytest.param(0, 0, 500, 9_500, ("mixed", True), id="an_adverse_label_needs_actual_finite_worse_outcomes"),
+        pytest.param(0, 0, 9_500, 0, ("clearly_worse", False), id="an_adverse_label_at_9500_finite_worse_outcomes"),
+        pytest.param(10, 0, 9_499, 0, ("mixed", False), id="an_adverse_label_is_not_met_at_9499_worse_outcomes"),
+        pytest.param(0, 10_000, 0, 0, ("identical_outcomes", False), id="an_all_tie_draw_is_not_strong_improvement"),
+        pytest.param(0, 0, 0, 10_000, ("no_defined_paths", True), id="no_defined_paths_leaves_the_comparison_unavailable"),
+        pytest.param(9_600, 0, 100, 300, ("clearly_as_good", True), id="mixed_undefined_cases_read_as_incomplete_support"),
+    ],
+)
+def test_the_classification_reads_raw_counts_against_the_clear_threshold(better: int, tied: int, worse: int, undefined: int, expected: tuple[str, bool]) -> None:
+    assert _classify(_counts(better, tied, worse, undefined), 0.95) == expected
 
 
 # ── The reading itself ────────────────────────────────────────────────────
@@ -227,26 +215,31 @@ def test_a_positive_sharpe_can_compound_to_a_loss_and_the_range_says_so() -> Non
     assert net_range["finite"] == sum(readings["counts"][key] for key in ("positive", "zero", "negative"))
 
 
-def test_a_flat_series_compounds_to_exactly_zero_on_every_path() -> None:
-    readings = _profitability_of([0.0] * 40)
-    net_range = readings["net_return_range"]
-    assert readings["counts"] == {"positive": 0, "zero": 10_000, "negative": 0, "undefined": 0}
-    assert (net_range["p5"], net_range["p50"], net_range["p95"]) == (0.0, 0.0, 0.0)  # exactly zero, never a rounded one
-    assert net_range["finite"] == 10_000
+def test_the_net_return_range_of_a_flat_an_overflowing_and_a_drifting_series() -> None:
+    flat = _profitability_of([0.0] * 40)
+    flat_range = flat["net_return_range"]
+    assert flat["counts"] == {"positive": 0, "zero": 10_000, "negative": 0, "undefined": 0}, "a flat series compounds to exactly zero on every path"
+    assert (flat_range["p5"], flat_range["p50"], flat_range["p95"]) == (0.0, 0.0, 0.0), "a flat series ranges exactly zero, never a rounded one"
+    assert flat_range["finite"] == 10_000, "every path of a flat series is finite"
 
-
-def test_paths_that_overflow_leave_the_range_undefined_never_money() -> None:
     # Sessions alternating +1e30 and flat: each session's own (1 + r) is finite, but a resampled path that
     # draws the big return eleven times or more compounds past every float, and that path is undefined — not
     # a loss, not a gain.
     overflowing = [1e30, 0.0] * 20
-    readings = _profitability_of(overflowing)
-    net_range = readings["net_return_range"]
-    assert readings["counts"]["undefined"] > 0
-    assert net_range["finite"] < 10_000 == REPLICATIONS
-    assert net_range["finite"] == sum(readings["counts"][key] for key in ("positive", "zero", "negative"))
+    overflow = _profitability_of(overflowing)
+    overflow_range = overflow["net_return_range"]
+    assert overflow["counts"]["undefined"] > 0, "paths that overflow are counted undefined"
+    assert overflow_range["finite"] < 10_000 == REPLICATIONS, "paths that overflow leave fewer finite results than replications"
+    assert overflow_range["finite"] == sum(overflow["counts"][key] for key in ("positive", "zero", "negative")), "the overflow range counts exactly the paths that are money"
     for key in ("p5", "p50", "p95"):
-        assert net_range[key] is None or np.isfinite(net_range[key])
+        assert overflow_range[key] is None or np.isfinite(overflow_range[key]), f"the overflow range's {key} is undefined or finite, never money"
+
+    drifting = list(np.random.default_rng(2).normal(0.01, 0.004, 60))  # a strong, steady per-session gain
+    drift = _profitability_of(drifting)
+    drift_range = drift["net_return_range"]
+    assert drift["counts"]["positive"] == 10_000, "a genuinely positive series is positive on every path"
+    assert drift_range["p5"] > 0.0, "a genuinely positive series ranges positive from p5"
+    assert drift_range["p95"] > drift_range["p5"], "a genuinely positive series ranges upward"
 
 
 def test_the_range_is_the_same_draw_the_counts_came_from() -> None:
@@ -269,15 +262,6 @@ def test_the_range_is_the_same_draw_the_counts_came_from() -> None:
     assert (net_range["p5"], net_range["p50"], net_range["p95"], net_range["finite"]) == (expected["p5"], expected["p50"], expected["p95"], expected["finite"])
 
 
-def test_a_genuinely_positive_series_ranges_positive_with_the_counts() -> None:
-    drifting = list(np.random.default_rng(2).normal(0.01, 0.004, 60))  # a strong, steady per-session gain
-    readings = _profitability_of(drifting)
-    net_range = readings["net_return_range"]
-    assert readings["counts"]["positive"] == 10_000
-    assert net_range["p5"] > 0.0
-    assert net_range["p95"] > net_range["p5"]
-
-
 def test_the_same_inputs_redraw_identically_for_retry_and_reopen() -> None:
     first = _reading(_smooth(60, seed=5), _smooth(60, seed=6))
     second = _reading(_smooth(60, seed=5), _smooth(60, seed=6))
@@ -296,20 +280,18 @@ def test_swapping_the_comparison_direction_exchanges_better_and_worse_only() -> 
     assert forward["basis"]["seed"]["inputs"] == backward["basis"]["seed"]["inputs"]
 
 
-def test_identical_series_draw_an_identical_outcome_reading() -> None:
+def test_identical_series_read_as_ties_and_identical_settings_as_the_same_settings_without_drawing() -> None:
     same = _smooth(60, seed=9)
     readings = _reading(same, same)
     comparison = readings["comparison"]
-    assert comparison["label"] == "identical_outcomes"
-    assert comparison["counts"] == {"better": 0, "tied": 10_000, "worse": 0, "undefined": 0}
-    assert "tie is not an improvement" in comparison["sentence"]
+    assert comparison["label"] == "identical_outcomes", "identical series draw an identical outcome reading"
+    assert comparison["counts"] == {"better": 0, "tied": 10_000, "worse": 0, "undefined": 0}, "identical series tie on every path"
+    assert "tie is not an improvement" in comparison["sentence"], "the tie sentence says a tie is not an improvement"
 
-
-def test_identical_settings_say_same_settings_without_drawing() -> None:
-    readings = _reading(_smooth(60, seed=10), _smooth(60, seed=11), hashes=("twin", "twin"))
-    assert readings["comparison"]["status"] == "same_settings"
-    assert readings["comparison"]["basis"]["seed"]["inputs"] == []
-    assert readings["profitability"]["status"] == "measured"
+    twin = _reading(_smooth(60, seed=10), _smooth(60, seed=11), hashes=("twin", "twin"))
+    assert twin["comparison"]["status"] == "same_settings", "identical settings say same settings"
+    assert twin["comparison"]["basis"]["seed"]["inputs"] == [], "identical settings draw nothing"
+    assert twin["profitability"]["status"] == "measured", "identical settings still measure the profitability"
 
 
 def test_the_incumbent_is_a_baseline_never_compared_with_itself() -> None:
@@ -319,9 +301,9 @@ def test_the_incumbent_is_a_baseline_never_compared_with_itself() -> None:
     assert readings["profitability"]["code"] == "not_measured"
 
 
-def test_a_missing_incumbent_erases_only_the_comparison() -> None:
+def test_a_comparison_that_cannot_be_made_is_a_named_reading_and_erases_only_the_comparison() -> None:
     window = _window_for(60)
-    readings = development_readings(
+    no_incumbent = development_readings(
         objective="sharpe_ratio",
         window=window,
         candidate_metrics=_completed(),
@@ -331,13 +313,10 @@ def test_a_missing_incumbent_erases_only_the_comparison() -> None:
         incumbent_detail=None,
         incumbent_hash="deadbeef",
     )
-    assert readings["comparison"]["status"] == "missing"
-    assert readings["comparison"]["code"] == INCUMBENT_UNAVAILABLE[0]
-    assert readings["profitability"]["status"] == "measured"
+    assert no_incumbent["comparison"]["status"] == "missing", "a missing incumbent erases the comparison"
+    assert no_incumbent["comparison"]["code"] == INCUMBENT_UNAVAILABLE[0], "a missing incumbent names the incumbent as unavailable"
+    assert no_incumbent["profitability"]["status"] == "measured", "a missing incumbent erases only the comparison"
 
-
-def test_an_unevaluated_or_failed_run_is_a_named_missing_reading() -> None:
-    window = _window_for(60)
     not_evaluated = development_readings(
         objective="sharpe_ratio",
         window=window,
@@ -348,7 +327,7 @@ def test_an_unevaluated_or_failed_run_is_a_named_missing_reading() -> None:
         incumbent_detail=_detail(_smooth(60, seed=13)),
         incumbent_hash="deadbeef",
     )
-    assert not_evaluated["comparison"]["code"] == "not_evaluated"
+    assert not_evaluated["comparison"]["code"] == "not_evaluated", "an unevaluated run is a named missing reading"
     failed = Metrics(status="failed", total_trades=0, net_profit=None, total_return_pct=None, sharpe_ratio=None, max_drawdown_pct=None, win_rate=None, error="engine refused")
     failed_reading = development_readings(
         objective="sharpe_ratio",
@@ -360,47 +339,82 @@ def test_an_unevaluated_or_failed_run_is_a_named_missing_reading() -> None:
         incumbent_detail=_detail(_smooth(60, seed=13)),
         incumbent_hash="deadbeef",
     )
-    assert failed_reading["comparison"]["code"] == "failed_run"
-    assert "engine refused" in failed_reading["comparison"]["reason"]
+    assert failed_reading["comparison"]["code"] == "failed_run", "a failed run is a named missing reading"
+    assert "engine refused" in failed_reading["comparison"]["reason"], "a failed run's reading carries the engine's reason"
+
+    # An incumbent that misses a scheduled session of the shared window fails its own admission first.
+    uncovered = development_readings(
+        objective="sharpe_ratio",
+        window=_window_for(60),
+        candidate_metrics=_completed(),
+        candidate_detail=_detail(_smooth(60, seed=17)),
+        candidate_hash="cafebabe",
+        incumbent_metrics=_completed(),
+        incumbent_detail=_detail(_smooth(59, seed=18), capital=CAPITAL),
+        incumbent_hash="deadbeef",
+    )
+    assert uncovered["comparison"]["code"] == INCUMBENT_UNAVAILABLE[0], "an incumbent short of a scheduled session refuses the pairing"
+
+    inconsistent = development_readings(
+        objective="sharpe_ratio",
+        window=_window_for(60),
+        candidate_metrics=_completed(),
+        candidate_detail=_detail(_smooth(60, seed=19)),
+        candidate_hash="cafebabe",
+        incumbent_metrics=_completed(),
+        incumbent_detail=_detail(_smooth(60, seed=20), capital=50_000.0),
+        incumbent_hash="deadbeef",
+    )
+    assert inconsistent["comparison"]["code"] == INCONSISTENT_CAPITAL[0], "an incumbent with another capital refuses the pairing"
+    # The fit's own profitability is independent of the pairing's scope.
+    assert inconsistent["profitability"]["status"] == "measured", "mismatched capital refuses the pairing, not the fit"
+
+    malformed = {"daily_equity": []}
+    incumbent_crash = development_readings(
+        objective="sharpe_ratio",
+        window=_window_for(60),
+        candidate_metrics=_completed(),
+        candidate_detail=_detail(_smooth(60, seed=34)),
+        candidate_hash="cafebabe",
+        incumbent_metrics=_completed(),
+        incumbent_detail=malformed,
+        incumbent_hash="deadbeef",
+    )
+    assert incumbent_crash["comparison"]["status"] == "failed", "an incumbent admission crash is a failed comparison, not an unavailable one"
+    assert "KeyError" in incumbent_crash["comparison"]["reason"], "the incumbent admission crash names its error"
+    # The fit's own profitability is untouched by the incumbent's crash.
+    assert incumbent_crash["profitability"]["status"] == "measured", "the incumbent's crash leaves the fit's profitability untouched"
 
 
 # ── Admission boundary checks ─────────────────────────────────────────────
 
 
-def test_admission_accepts_a_run_that_covers_its_scheduled_window() -> None:
-    admitted = admit_run(_completed(), _detail(_smooth(60, seed=14)), _window_for(60))
-    assert isinstance(admitted, SessionSeries)
+def test_admission_accepts_a_run_that_covers_its_scheduled_window_and_refuses_one_that_does_not() -> None:
+    covered = admit_run(_completed(), _detail(_smooth(60, seed=14)), _window_for(60))
+    assert isinstance(covered, SessionSeries), "a run that covers its scheduled window is admitted"
 
+    gapped = _detail(_smooth(60, seed=15))
+    del gapped["daily_equity"][30]
+    missing = admit_run(_completed(), gapped, _window_for(60))
+    assert missing["code"] == MISSING_SCHEDULED_SESSIONS[0], "a run missing a scheduled session is refused, not repaired"
+    assert "1 scheduled session missing" in missing["reason"], "the refusal counts the missing scheduled session"
 
-def test_a_run_missing_a_scheduled_session_is_refused_not_repaired() -> None:
-    detail = _detail(_smooth(60, seed=15))
-    del detail["daily_equity"][30]
-    missing = admit_run(_completed(), detail, _window_for(60))
-    assert missing["code"] == MISSING_SCHEDULED_SESSIONS[0]
-    assert "1 scheduled session missing" in missing["reason"]
+    stamped = _detail(_smooth(60, seed=16))
+    stamped["daily_equity"][30][0] += 1_000
+    off_close = admit_run(_completed(), stamped, _window_for(60))
+    assert off_close["code"] == NON_CANONICAL_CLOSE[0], "a session stamped off the canonical close is refused"
 
-
-def test_a_session_stamped_off_the_canonical_close_is_refused() -> None:
-    detail = _detail(_smooth(60, seed=16))
-    detail["daily_equity"][30][0] += 1_000
-    admitted = admit_run(_completed(), detail, _window_for(60))
-    assert admitted["code"] == NON_CANONICAL_CLOSE[0]
-
-
-def test_a_run_holding_an_unscheduled_session_is_refused() -> None:
-    detail = _detail(_smooth(60, seed=16))
+    padded = _detail(_smooth(60, seed=16))
     extra = session_close_ms_utc(expected_sessions(date(2025, 1, 2), date(2027, 12, 31))[60])
-    detail["daily_equity"].append([extra, CAPITAL])
-    admitted = admit_run(_completed(), detail, _window_for(60))
-    assert admitted["code"] == UNSCHEDULED_SESSION[0]
+    padded["daily_equity"].append([extra, CAPITAL])
+    unscheduled = admit_run(_completed(), padded, _window_for(60))
+    assert unscheduled["code"] == UNSCHEDULED_SESSION[0], "a run holding an unscheduled session is refused"
 
-
-def test_a_run_too_short_to_resample_reads_too_few_sessions_with_the_series_own_sentence() -> None:
     # The code is read off the series refusal's wording, so a reworded refusal would silently become "unreadable_series".
-    admitted = admit_run(_completed(), _detail(_smooth(10, seed=18)), _window_for(10))
+    short = admit_run(_completed(), _detail(_smooth(10, seed=18)), _window_for(10))
 
-    assert admitted["status"] == "missing" and admitted["code"] == TOO_FEW_SESSIONS[0]
-    assert admitted["reason"].startswith(TOO_FEW_SESSIONS[1]) and "10 sessions" in admitted["reason"]
+    assert short["status"] == "missing" and short["code"] == TOO_FEW_SESSIONS[0], "a run too short to resample reads too few sessions"
+    assert short["reason"].startswith(TOO_FEW_SESSIONS[1]) and "10 sessions" in short["reason"], "the too-short refusal carries the series' own sentence"
 
 
 @pytest.mark.filterwarnings("ignore:overflow encountered in divide:RuntimeWarning")
@@ -416,49 +430,26 @@ def test_equity_whose_session_return_overflows_is_refused_not_resampled() -> Non
     assert admitted["status"] == "missing" and admitted["code"] == DERIVED_RETURN_OVERFLOW[0]
 
 
-def test_mismatched_sessions_or_capital_refuse_the_pairing_not_the_fit() -> None:
-    # An incumbent that misses a scheduled session of the shared window fails its own admission first.
-    uncovered = development_readings(
-        objective="sharpe_ratio",
-        window=_window_for(60),
-        candidate_metrics=_completed(),
-        candidate_detail=_detail(_smooth(60, seed=17)),
-        candidate_hash="cafebabe",
-        incumbent_metrics=_completed(),
-        incumbent_detail=_detail(_smooth(59, seed=18), capital=CAPITAL),
-        incumbent_hash="deadbeef",
-    )
-    assert uncovered["comparison"]["code"] == INCUMBENT_UNAVAILABLE[0]
-
-    inconsistent = development_readings(
-        objective="sharpe_ratio",
-        window=_window_for(60),
-        candidate_metrics=_completed(),
-        candidate_detail=_detail(_smooth(60, seed=19)),
-        candidate_hash="cafebabe",
-        incumbent_metrics=_completed(),
-        incumbent_detail=_detail(_smooth(60, seed=20), capital=50_000.0),
-        incumbent_hash="deadbeef",
-    )
-    assert inconsistent["comparison"]["code"] == INCONSISTENT_CAPITAL[0]
-    # The fit's own profitability is independent of the pairing's scope.
-    assert inconsistent["profitability"]["status"] == "measured"
-
-
 # ── Stored-shape normalization ────────────────────────────────────────────
 
 
-def test_a_legacy_record_reads_not_measured_per_component_without_backfill() -> None:
+def test_a_legacy_or_unsupported_record_reads_not_measured_or_unavailable_per_component_without_backfill() -> None:
     measured = _reading(_smooth(60, seed=25), _smooth(60, seed=26))
     # Evidence recorded after #3011 shipped but before a later slice: the comparison stays, the rest reads missing.
     partial = stored_chance({"chance": {"comparison": copy.deepcopy(measured["comparison"])}})
-    assert partial["comparison"] == measured["comparison"]
-    assert partial["profitability"]["status"] == "missing"
-    assert partial["profitability"]["code"] == NOT_MEASURED[0]
+    assert partial["comparison"] == measured["comparison"], "a partial legacy record keeps its stored comparison"
+    assert partial["profitability"]["status"] == "missing", "a partial legacy record reads the unrecorded profitability as missing"
+    assert partial["profitability"]["code"] == NOT_MEASURED[0], "a partial legacy record reads the unrecorded profitability as not measured"
     # A study from before #3011 has no chance record at all.
     absent = stored_chance({})
-    assert absent["comparison"]["code"] == NOT_MEASURED[0]
-    assert absent["profitability"]["code"] == NOT_MEASURED[0]
+    assert absent["comparison"]["code"] == NOT_MEASURED[0], "a study with no chance record reads the comparison as not measured"
+    assert absent["profitability"]["code"] == NOT_MEASURED[0], "a study with no chance record reads the profitability as not measured"
+    normalized = stored_chance({"chance": {"comparison": {"status": "from_the_future"}, "profitability": None}})
+    assert normalized["comparison"]["status"] == "missing", "an unsupported stored status reads as missing"
+    assert normalized["comparison"]["code"] == "unsupported", "an unsupported stored status says it is unsupported"
+    assert "from_the_future" in normalized["comparison"]["reason"], "an unsupported stored status names the status it could not read"
+    assert normalized["profitability"]["code"] == "not_measured", "a profitability stored as None reads as not measured"
+    assert "profitability readings were first recorded" in normalized["profitability"]["reason"], "a not-measured profitability says when readings were first recorded"
 
 
 def test_a_malformed_stored_component_reads_unavailable_and_never_breaks_the_response() -> None:
@@ -531,30 +522,3 @@ def test_an_admission_crash_is_a_diagnostic_failure_with_its_sentence_not_a_miss
         assert readings[component]["status"] == "failed"
         assert "KeyError" in readings[component]["reason"]
         assert readings[component]["sentence"].startswith(f"The {component} reading could not be computed")
-
-
-def test_an_incumbent_admission_crash_is_a_failed_comparison_not_an_unavailable_one() -> None:
-    malformed = {"daily_equity": []}
-    readings = development_readings(
-        objective="sharpe_ratio",
-        window=_window_for(60),
-        candidate_metrics=_completed(),
-        candidate_detail=_detail(_smooth(60, seed=34)),
-        candidate_hash="cafebabe",
-        incumbent_metrics=_completed(),
-        incumbent_detail=malformed,
-        incumbent_hash="deadbeef",
-    )
-    assert readings["comparison"]["status"] == "failed"
-    assert "KeyError" in readings["comparison"]["reason"]
-    # The fit's own profitability is untouched by the incumbent's crash.
-    assert readings["profitability"]["status"] == "measured"
-
-
-def test_an_unsupported_stored_status_says_why_it_is_unavailable() -> None:
-    normalized = stored_chance({"chance": {"comparison": {"status": "from_the_future"}, "profitability": None}})
-    assert normalized["comparison"]["status"] == "missing"
-    assert normalized["comparison"]["code"] == "unsupported"
-    assert "from_the_future" in normalized["comparison"]["reason"]
-    assert normalized["profitability"]["code"] == "not_measured"
-    assert "profitability readings were first recorded" in normalized["profitability"]["reason"]

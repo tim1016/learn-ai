@@ -39,22 +39,111 @@ PUT = contract("put", "500")
 
 
 @pytest.mark.parametrize(
-    ("entry_minute", "exit_minute", "fits"),
+    ("entry", "exit_", "close_ms", "fits"),
     [
-        (1, 60, True),  # one minute after the open, to the second
-        (5, 389, True),  # one minute before the close, to the second
-        (5, 390, False),  # an exit at the close has no next minute to fill in
-        (60, 61, True),
+        pytest.param(after_open(1), after_open(60), FULL_CLOSE_MS, True, id="one minute after the open, to the second"),
+        pytest.param(
+            after_open(5), after_open(389), FULL_CLOSE_MS, True, id="one minute before the close, to the second"
+        ),
+        pytest.param(
+            after_open(5),
+            after_open(390),
+            FULL_CLOSE_MS,
+            False,
+            id="an exit at the close has no next minute to fill in",
+        ),
+        pytest.param(after_open(60), after_open(61), FULL_CLOSE_MS, True, id="minute 60 to minute 61"),
+        # An entry counted from the open and an exit counted from the close: minute 190 to minute 360 of a full
+        # session, minute 190 to minute 180 of one that closes at minute 210.
+        pytest.param(
+            after_open(190), before_close(30), FULL_CLOSE_MS, True, id="open entry, close exit: minute 190 to 360 fits"
+        ),
+        pytest.param(
+            after_open(190),
+            before_close(30),
+            HALF_CLOSE_MS,
+            False,
+            id="open entry, close exit: leaving before entering",
+        ),
+        pytest.param(
+            after_open(180),
+            before_close(30),
+            HALF_CLOSE_MS,
+            False,
+            id="open entry, close exit: one instant cannot be both",
+        ),
+        pytest.param(
+            after_open(179),
+            before_close(30),
+            HALF_CLOSE_MS,
+            True,
+            id="open entry, close exit: minute 179 to minute 180",
+        ),
+        # An entry counted from the close, 210 minutes before it: minute 180 of a full session, the open itself
+        # (minute 0) of a half day, and one minute earlier is before the open.
+        pytest.param(
+            before_close(210),
+            before_close(1),
+            FULL_CLOSE_MS,
+            True,
+            id="close entry, 210 before: minute 180 of a full day",
+        ),
+        pytest.param(
+            before_close(210),
+            before_close(1),
+            HALF_CLOSE_MS,
+            False,
+            id="close entry, 210 before: the open's own minute has no closed bar to read",
+        ),
+        pytest.param(
+            before_close(211),
+            before_close(1),
+            HALF_CLOSE_MS,
+            False,
+            id="close entry, 211 before: a minute before the open",
+        ),
+        pytest.param(
+            before_close(209),
+            before_close(1),
+            HALF_CLOSE_MS,
+            True,
+            id="close entry, 209 before: minute 1 to minute 209",
+        ),
+        # An exit counted from the open, 210 minutes after it: minute 210 of a full session, the close itself of a
+        # half day, and one minute later is after the close.
+        pytest.param(
+            after_open(5), after_open(210), FULL_CLOSE_MS, True, id="open exit, 210 after: minute 210 of a full day"
+        ),
+        pytest.param(
+            after_open(5),
+            after_open(210),
+            HALF_CLOSE_MS,
+            False,
+            id="open exit, 210 after: an exit at the close has no next minute to fill in",
+        ),
+        pytest.param(
+            after_open(5), after_open(211), HALF_CLOSE_MS, False, id="open exit, 211 after: a minute after the close"
+        ),
+        pytest.param(
+            after_open(5),
+            after_open(209),
+            HALF_CLOSE_MS,
+            True,
+            id="open exit, 209 after: one minute before the close, to the second",
+        ),
     ],
 )
-def test_a_window_fits_only_between_a_minute_after_the_open_and_a_minute_before_the_close(
-    entry_minute: int, exit_minute: int, fits: bool
+def test_a_window_fits_only_between_a_minute_after_the_open_and_a_minute_before_the_close_of_its_session(
+    entry: dict[str, Any], exit_: dict[str, Any], close_ms: int, fits: bool
 ) -> None:
     market = TableMarket(
-        underlying=steady("500"), picks=picked(("call", "500", CALL)), options={CALL: flat("2.00", 1, 390)}
+        underlying=steady("500"),
+        picks=picked(("call", "500", CALL)),
+        options={CALL: flat("2.00", 1, 390)},
+        session_close_ms=close_ms,
     )
 
-    outcome = replay(setup(leg(), entry=after_open(entry_minute), exit=after_open(exit_minute)), market)
+    outcome = replay(setup(leg(), entry=entry, exit=exit_), market)
 
     _assert_traded_or_skipped_for_its_window(outcome, fits)
 
@@ -71,44 +160,6 @@ def _assert_traded_or_skipped_for_its_window(outcome: SessionOutcome, fits: bool
             (),
             D(0),
         )
-
-
-@pytest.mark.parametrize(
-    ("entry", "exit_", "close_ms", "fits"),
-    [
-        # An entry counted from the open and an exit counted from the close: minute 190 to minute 360 of a full
-        # session, minute 190 to minute 180 of one that closes at minute 210.
-        (after_open(190), before_close(30), FULL_CLOSE_MS, True),
-        (after_open(190), before_close(30), HALF_CLOSE_MS, False),  # leaving before entering
-        (after_open(180), before_close(30), HALF_CLOSE_MS, False),  # one instant cannot be both
-        (after_open(179), before_close(30), HALF_CLOSE_MS, True),  # minute 179 to minute 180
-        # An entry counted from the close, 210 minutes before it: minute 180 of a full session, the open itself
-        # (minute 0) of a half day, and one minute earlier is before the open.
-        (before_close(210), before_close(1), FULL_CLOSE_MS, True),
-        (before_close(210), before_close(1), HALF_CLOSE_MS, False),  # the open's own minute has no closed bar to read
-        (before_close(211), before_close(1), HALF_CLOSE_MS, False),  # a minute before the open
-        (before_close(209), before_close(1), HALF_CLOSE_MS, True),  # minute 1 to minute 209
-        # An exit counted from the open, 210 minutes after it: minute 210 of a full session, the close itself of a
-        # half day, and one minute later is after the close.
-        (after_open(5), after_open(210), FULL_CLOSE_MS, True),
-        (after_open(5), after_open(210), HALF_CLOSE_MS, False),  # an exit at the close has no next minute to fill in
-        (after_open(5), after_open(211), HALF_CLOSE_MS, False),  # a minute after the close
-        (after_open(5), after_open(209), HALF_CLOSE_MS, True),  # one minute before the close, to the second
-    ],
-)
-def test_a_window_the_setup_allows_can_still_miss_a_session_and_that_session_is_skipped(
-    entry: dict[str, Any], exit_: dict[str, Any], close_ms: int, fits: bool
-) -> None:
-    market = TableMarket(
-        underlying=steady("500"),
-        picks=picked(("call", "500", CALL)),
-        options={CALL: flat("2.00", 1, 390)},
-        session_close_ms=close_ms,
-    )
-
-    outcome = replay(setup(leg(), entry=entry, exit=exit_), market)
-
-    _assert_traded_or_skipped_for_its_window(outcome, fits)
 
 
 @pytest.mark.parametrize(("close_ms", "minutes_before_the_close"), [(FULL_CLOSE_MS, 385), (HALF_CLOSE_MS, 205)])

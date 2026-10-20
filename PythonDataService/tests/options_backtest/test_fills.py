@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from decimal import Context, Decimal, localcontext
 
 import pytest
@@ -28,51 +29,56 @@ sell = fills.sell_fill_price
 _CENT = D("0.01")
 
 
-def test_a_buy_at_the_default_slippage_rounds_up_to_the_cent() -> None:
-    # 2.57 * 1.003 = 2.57771, and the next cent up is 2.58.
-    assert buy(D("2.57"), slippage_percent=D("0.3"), price_step_usd=_CENT) == D("2.58")
-
-
-def test_a_sale_at_the_default_slippage_rounds_down_to_the_cent() -> None:
-    # 1.87 * 0.997 = 1.86439, and the cent below is 1.86.
-    assert sell(D("1.87"), slippage_percent=D("0.3"), price_step_usd=_CENT) == D("1.86")
-
-
-def test_a_price_already_on_the_step_after_slippage_is_not_moved_a_further_step() -> None:
-    # 2.50 * 1.004 = 2.51 exactly; 1.99 = 2.00 * 0.995 exactly.
-    assert buy(D("2.50"), slippage_percent=D("0.4"), price_step_usd=_CENT) == D("2.51")
-    assert sell(D("2.00"), slippage_percent=D("0.5"), price_step_usd=_CENT) == D("1.99")
-
-
-def test_no_slippage_fills_at_the_price_seen() -> None:
-    assert buy(D("2.57"), slippage_percent=D("0"), price_step_usd=_CENT) == D("2.57")
-    assert sell(D("2.57"), slippage_percent=D("0"), price_step_usd=_CENT) == D("2.57")
-
-
-def test_the_smallest_slippage_still_costs_the_buyer_a_full_step() -> None:
-    # 1.00 * 1.0001 = 1.0001, which is not a whole cent, so the buyer pays 1.01.
-    assert buy(D("1.00"), slippage_percent=D("0.01"), price_step_usd=_CENT) == D("1.01")
-
-
-def test_a_sale_that_rounds_to_nothing_sells_for_zero_not_less() -> None:
-    # 0.01 * 0.997 = 0.00997, which is under one cent.
-    assert sell(D("0.01"), slippage_percent=D("0.3"), price_step_usd=_CENT) == D("0")
-    assert sell(D("0"), slippage_percent=D("0.3"), price_step_usd=_CENT) == D("0")
-
-
-def test_a_wider_step_rounds_against_the_trader_to_that_step() -> None:
-    nickel = D("0.05")
-    # 2.00 * 1.003 = 2.006 -> 2.05. 1.87 * 0.997 = 1.86439 -> 37 nickels = 1.85.
-    assert buy(D("2.00"), slippage_percent=D("0.3"), price_step_usd=nickel) == D("2.05")
-    assert sell(D("1.87"), slippage_percent=D("0.3"), price_step_usd=nickel) == D("1.85")
-
-
-def test_a_step_that_does_not_divide_a_dollar_is_rounded_exactly() -> None:
-    three_cents = D("0.03")
-    # 0.30 is ten steps exactly; 0.31 is 10.33 steps, so 11 steps up = 0.33 and 10 steps down = 0.30.
-    assert buy(D("0.30"), slippage_percent=D("0"), price_step_usd=three_cents) == D("0.30")
-    assert buy(D("0.31"), slippage_percent=D("0"), price_step_usd=three_cents) == D("0.33")
-    assert sell(D("0.31"), slippage_percent=D("0"), price_step_usd=three_cents) == D("0.30")
+@pytest.mark.parametrize(
+    ("fill", "price", "slippage", "step", "expected"),
+    [
+        # 2.57 * 1.003 = 2.57771, and the next cent up is 2.58.
+        pytest.param(buy, "2.57", "0.3", "0.01", "2.58", id="a_buy_at_the_default_slippage_rounds_up_to_the_cent"),
+        # 1.87 * 0.997 = 1.86439, and the cent below is 1.86.
+        pytest.param(sell, "1.87", "0.3", "0.01", "1.86", id="a_sale_at_the_default_slippage_rounds_down_to_the_cent"),
+        # 2.50 * 1.004 = 2.51 exactly.
+        pytest.param(
+            buy, "2.50", "0.4", "0.01", "2.51", id="a_price_already_on_the_step_after_slippage_is_not_moved_a_further_step-buy"
+        ),
+        # 1.99 = 2.00 * 0.995 exactly.
+        pytest.param(
+            sell, "2.00", "0.5", "0.01", "1.99", id="a_price_already_on_the_step_after_slippage_is_not_moved_a_further_step-sell"
+        ),
+        pytest.param(buy, "2.57", "0", "0.01", "2.57", id="no_slippage_fills_at_the_price_seen-buy"),
+        pytest.param(sell, "2.57", "0", "0.01", "2.57", id="no_slippage_fills_at_the_price_seen-sell"),
+        # 1.00 * 1.0001 = 1.0001, which is not a whole cent, so the buyer pays 1.01.
+        pytest.param(
+            buy, "1.00", "0.01", "0.01", "1.01", id="the_smallest_slippage_still_costs_the_buyer_a_full_step"
+        ),
+        # 0.01 * 0.997 = 0.00997, which is under one cent.
+        pytest.param(
+            sell, "0.01", "0.3", "0.01", "0", id="a_sale_that_rounds_to_nothing_sells_for_zero_not_less-under_one_cent"
+        ),
+        pytest.param(
+            sell, "0", "0.3", "0.01", "0", id="a_sale_that_rounds_to_nothing_sells_for_zero_not_less-a_price_of_zero"
+        ),
+        # 2.00 * 1.003 = 2.006 -> 2.05.
+        pytest.param(buy, "2.00", "0.3", "0.05", "2.05", id="a_wider_step_rounds_against_the_trader_to_that_step-buy"),
+        # 1.87 * 0.997 = 1.86439 -> 37 nickels = 1.85.
+        pytest.param(sell, "1.87", "0.3", "0.05", "1.85", id="a_wider_step_rounds_against_the_trader_to_that_step-sell"),
+        # 0.30 is ten steps exactly.
+        pytest.param(
+            buy, "0.30", "0", "0.03", "0.30", id="a_step_that_does_not_divide_a_dollar_is_rounded_exactly-ten_steps_exactly"
+        ),
+        # 0.31 is 10.33 steps, so 11 steps up = 0.33 ...
+        pytest.param(
+            buy, "0.31", "0", "0.03", "0.33", id="a_step_that_does_not_divide_a_dollar_is_rounded_exactly-eleven_steps_up"
+        ),
+        # ... and 10 steps down = 0.30.
+        pytest.param(
+            sell, "0.31", "0", "0.03", "0.30", id="a_step_that_does_not_divide_a_dollar_is_rounded_exactly-ten_steps_down"
+        ),
+    ],
+)
+def test_a_fill_is_moved_by_the_slippage_and_rounded_against_the_trader_to_the_step(
+    fill: Callable[..., Decimal], price: str, slippage: str, step: str, expected: str
+) -> None:
+    assert fill(D(price), slippage_percent=D(slippage), price_step_usd=D(step)) == D(expected)
 
 
 def test_the_fill_does_not_depend_on_the_ambient_decimal_precision() -> None:
@@ -90,69 +96,83 @@ def test_a_negative_price_is_refused_not_sold_for_less_than_nothing() -> None:
         buy(D("-0.01"), slippage_percent=D("0.3"), price_step_usd=_CENT)
 
 
-def test_an_order_is_valued_at_its_price_times_the_multiplier_times_the_contracts() -> None:
+def test_an_order_is_valued_costed_and_cashed_by_its_price_multiplier_contracts_and_fee() -> None:
     # 2.58 * 100 * 2 = 516.00
-    assert order_value(D("2.58"), multiplier=100, contracts=2) == D("516.00")
-
-
-def test_an_entry_costs_its_value_plus_its_fee_and_an_exit_brings_in_its_value_less_its_fee() -> None:
+    assert order_value(D("2.58"), multiplier=100, contracts=2) == D("516.00"), (
+        "an order is valued at its price times the multiplier times the contracts"
+    )
     # 516.00 + 1.30 = 517.30; 1.86 * 100 * 2 = 372.00, less 1.30 = 370.70.
-    assert entry_cost(D("2.58"), multiplier=100, contracts=2, fee=D("1.30")) == D("517.30")
-    assert exit_proceeds(D("1.86"), multiplier=100, contracts=2, fee=D("1.30")) == D("370.70")
+    assert entry_cost(D("2.58"), multiplier=100, contracts=2, fee=D("1.30")) == D("517.30"), (
+        "an entry costs its value plus its fee"
+    )
+    assert exit_proceeds(D("1.86"), multiplier=100, contracts=2, fee=D("1.30")) == D("370.70"), (
+        "an exit brings in its value less its fee"
+    )
+    # A bought leg buys to open (-517.30) and sells to close (+370.70). A sold leg sells to open and buys to close.
+    assert cash_effect("buy", D("2.58"), multiplier=100, contracts=2, fee=D("1.30")) == D("-517.30"), (
+        "a buy moves its cost out of the cash"
+    )
+    assert cash_effect("sell", D("1.86"), multiplier=100, contracts=2, fee=D("1.30")) == D("370.70"), (
+        "a sale moves its proceeds in, whichever order of a leg it is"
+    )
+    # A sale whose fee is more than its value takes cash out.
+    assert cash_effect("sell", D("0.00"), multiplier=100, contracts=1, fee=D("0.65")) == D("-0.65"), (
+        "a sale whose fee is more than its value takes cash out"
+    )
 
 
 def test_a_trades_profit_is_the_price_move_less_both_fees_and_equals_the_cash_it_moved() -> None:
-    # (1.86 - 2.58) * 100 * 2 = -144.00, less 1.30 twice = -146.60.
-    pnl = trade_pnl(
+    # A bought leg: (1.86 - 2.58) * 100 * 2 = -144.00, less 1.30 twice = -146.60.
+    bought_leg_pnl = trade_pnl(
         bought=D("2.58"), sold=D("1.86"), multiplier=100, contracts=2, entry_fee=D("1.30"), exit_fee=D("1.30")
     )
-
-    assert pnl == D("-146.60")
-    # -517.30 out, +370.70 back.
-    assert pnl == -D("517.30") + D("370.70")
-
-
-def test_a_buy_moves_its_cost_out_of_the_cash_and_a_sale_moves_its_proceeds_in_whichever_order_of_a_leg_it_is() -> None:
-    # A bought leg buys to open (-517.30) and sells to close (+370.70). A sold leg sells to open and buys to close.
-    assert cash_effect("buy", D("2.58"), multiplier=100, contracts=2, fee=D("1.30")) == D("-517.30")
-    assert cash_effect("sell", D("1.86"), multiplier=100, contracts=2, fee=D("1.30")) == D("370.70")
-    # A sale whose fee is more than its value takes cash out.
-    assert cash_effect("sell", D("0.00"), multiplier=100, contracts=1, fee=D("0.65")) == D("-0.65")
-
-
-def test_a_sold_legs_profit_is_its_sale_less_its_buy_back_less_both_fees_and_equals_the_cash_it_moved() -> None:
-    # Sold at 2.20 and bought back at 1.50, 2 contracts, a fee of 1.30 each way:
+    # A sold leg, sold at 2.20 and bought back at 1.50, 2 contracts, a fee of 1.30 each way:
     # (2.20 - 1.50) * 100 * 2 = 140.00, less 1.30 twice = 137.40.
-    pnl = trade_pnl(
+    sold_leg_pnl = trade_pnl(
         bought=D("1.50"), sold=D("2.20"), multiplier=100, contracts=2, entry_fee=D("1.30"), exit_fee=D("1.30")
     )
 
-    assert pnl == D("137.40")
+    assert bought_leg_pnl == D("-146.60"), "a bought leg's profit is the price move less both fees"
+    # -517.30 out, +370.70 back.
+    assert bought_leg_pnl == -D("517.30") + D("370.70"), "a bought leg's profit equals the cash it moved"
+    assert sold_leg_pnl == D("137.40"), "a sold leg's profit is its sale less its buy-back less both fees"
     # +438.70 in at the sale (440.00 less 1.30), -301.30 out at the buy-back (300.00 and 1.30).
     cash = cash_effect("sell", D("2.20"), multiplier=100, contracts=2, fee=D("1.30")) + cash_effect(
         "buy", D("1.50"), multiplier=100, contracts=2, fee=D("1.30")
     )
-    assert pnl == cash == D("137.40")
+    assert sold_leg_pnl == cash == D("137.40"), "a sold leg's profit equals the cash it moved"
 
 
-def test_a_percent_stop_sits_below_the_buy_fill_and_is_not_rounded() -> None:
-    # 2.58 * (1 - 25/100) = 2.58 * 0.75 = 1.935
-    level = stop_level(StopLoss(kind="percent", value=D("25")), bought=D("2.58"))
+@pytest.mark.parametrize(
+    ("kind", "value", "level"),
+    [
+        # 2.58 * (1 - 25/100) = 2.58 * 0.75 = 1.935
+        pytest.param("percent", "25", "1.935", id="a_percent_stop_sits_below_the_buy_fill_and_is_not_rounded"),
+        # 2.58 - 0.50
+        pytest.param("points", "0.50", "2.08", id="a_points_stop_sits_that_many_points_below_the_buy_fill"),
+    ],
+)
+def test_a_stop_sits_below_the_buy_fill_by_the_rule(kind: str, value: str, level: str) -> None:
+    rule = StopLoss(kind=kind, value=D(value))  # type: ignore[arg-type]
 
-    assert level == D("1.935")
+    assert stop_level(rule, bought=D("2.58")) == D(level)
 
 
-def test_a_points_stop_sits_that_many_points_below_the_buy_fill() -> None:
-    # 2.58 - 0.50
-    assert stop_level(StopLoss(kind="points", value=D("0.50")), bought=D("2.58")) == D("2.08")
-
-
-def test_a_stop_is_hit_by_a_close_at_or_below_its_level_and_not_by_one_above() -> None:
-    level = D("1.935")
-
-    assert stop_hit(level, close=D("1.94")) is False
-    assert stop_hit(level, close=D("1.935")) is True
-    assert stop_hit(level, close=D("1.93")) is True
+@pytest.mark.parametrize(
+    ("hit", "level", "close", "expected"),
+    [
+        pytest.param(stop_hit, "1.935", "1.94", False, id="a_stop_is_not_hit_by_a_close_above_its_level"),
+        pytest.param(stop_hit, "1.935", "1.935", True, id="a_stop_is_hit_by_a_close_at_its_level"),
+        pytest.param(stop_hit, "1.935", "1.93", True, id="a_stop_is_hit_by_a_close_below_its_level"),
+        pytest.param(sold_stop_hit, "2.75", "2.74", False, id="a_sold_legs_stop_is_not_hit_by_a_close_below_its_level"),
+        pytest.param(sold_stop_hit, "2.75", "2.75", True, id="a_sold_legs_stop_is_hit_by_a_close_at_its_level"),
+        pytest.param(sold_stop_hit, "2.75", "2.76", True, id="a_sold_legs_stop_is_hit_by_a_close_above_its_level"),
+    ],
+)
+def test_a_stop_is_hit_by_a_close_at_its_level_or_beyond_it_and_not_by_one_short_of_it(
+    hit: Callable[..., bool], level: str, close: str, expected: bool
+) -> None:
+    assert hit(D(level), close=D(close)) is expected
 
 
 @pytest.mark.parametrize(
@@ -171,14 +191,6 @@ def test_a_sold_legs_stop_sits_above_the_sale_price_by_the_rule_and_is_not_round
     rule = StopLoss(kind=kind, value=D(value))  # type: ignore[arg-type]
 
     assert sold_stop_level(rule, sold=D("2.20")) == D(level)
-
-
-def test_a_sold_legs_stop_is_hit_by_a_close_at_or_above_its_level_and_not_by_one_below() -> None:
-    level = D("2.75")
-
-    assert sold_stop_hit(level, close=D("2.74")) is False
-    assert sold_stop_hit(level, close=D("2.75")) is True
-    assert sold_stop_hit(level, close=D("2.76")) is True
 
 
 def test_a_sold_legs_stop_is_the_bought_legs_stop_the_other_way_round() -> None:

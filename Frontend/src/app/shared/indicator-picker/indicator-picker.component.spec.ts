@@ -100,17 +100,14 @@ describe('IndicatorPickerComponent', () => {
     expect(addInstance.mock.calls.map(c => (c[0] as IndicatorPickerAdd).params['length'])).toEqual([5, 10, 20, 50]);
   });
 
-  it('Category chip filters the visible set to only that category', () => {
-    const { fixture, el } = setup();
-    clickAndFlush(fixture, el.querySelector<HTMLButtonElement>('.ip-chip[data-cat="momentum"]'));
-    expect(textOf(el, '.ip-count')).toContain('2 of 6');
-  });
-
-  it('Pane chip filters orthogonally — Overlay-only leaves overlay indicators visible', () => {
-    const { fixture, el } = setup();
-    clickAndFlush(fixture, el.querySelector<HTMLButtonElement>('.ip-chip[data-pane="overlay"]'));
+  it.each([
+    ['Category chip filters the visible set to only that category', '.ip-chip[data-cat="momentum"]', '2 of 6'],
     // Overlay names in stub: ema, sma, bbands → 3 of 6
-    expect(textOf(el, '.ip-count')).toContain('3 of 6');
+    ['Pane chip filters orthogonally — Overlay-only leaves overlay indicators visible', '.ip-chip[data-pane="overlay"]', '3 of 6'],
+  ])('%s', (_name, chip, count) => {
+    const { fixture, el } = setup();
+    clickAndFlush(fixture, el.querySelector<HTMLButtonElement>(chip));
+    expect(textOf(el, '.ip-count')).toContain(count);
   });
 
   it('opening a category lists its rows; Add emits with default params', () => {
@@ -295,20 +292,16 @@ describe('IndicatorPickerComponent search (opt-in)', () => {
     }
   });
 
-  it('filters by display name, case-insensitively', () => {
+  it('matches display name case-insensitively, and description, category, and parameter-name text', () => {
     const h = setupSearchable();
     typeSearch(h, 'RSI');
-    expect(textOf(h.el, '.ip-count')).toContain('1 of 6');
-  });
-
-  it('matches description, category, and parameter-name text', () => {
-    const h = setupSearchable();
+    expect.soft(textOf(h.el, '.ip-count'), 'filters by display name, case-insensitively').toContain('1 of 6');
     typeSearch(h, 'oscillator');      // description of rsi
-    expect(textOf(h.el, '.ip-count')).toContain('1 of 6');
+    expect.soft(textOf(h.el, '.ip-count'), 'matches description text').toContain('1 of 6');
     typeSearch(h, 'volatility');      // category name
-    expect(textOf(h.el, '.ip-count')).toContain('2 of 6');
+    expect.soft(textOf(h.el, '.ip-count'), 'matches category text').toContain('2 of 6');
     typeSearch(h, 'length');          // configurable parameter name
-    expect(textOf(h.el, '.ip-count')).toContain('5 of 6'); // macd has no params
+    expect.soft(textOf(h.el, '.ip-count'), 'matches parameter-name text').toContain('5 of 6'); // macd has no params
   });
 
   it('search intersects with the category facet', () => {

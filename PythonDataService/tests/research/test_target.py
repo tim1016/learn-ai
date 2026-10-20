@@ -10,6 +10,8 @@ Pin the contract guarantees that the v2 review surfaced as critical:
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -22,20 +24,35 @@ from app.research.target import (
 
 
 class TestComputeForwardLogReturn:
-    def test_single_day_produces_valid_returns(self, sample_bars_single_day: list[dict]) -> None:
+    def test_single_day_forward_return_values_and_audit_metadata(self, sample_bars_single_day: list[dict]) -> None:
         result = compute_forward_log_return(sample_bars_single_day, horizon_minutes=15)
 
-        assert len(result.values) == len(sample_bars_single_day)
-        assert result.valid_count > 0
-        assert result.horizon_minutes == 15
-        assert result.bar_minutes == 1
-        assert result.horizon_bars == 15
-
-    def test_last_horizon_bars_are_nan(self, sample_bars_single_day: list[dict]) -> None:
-        result = compute_forward_log_return(sample_bars_single_day, horizon_minutes=15)
+        assert len(result.values) == len(sample_bars_single_day), "single day produces one value per bar"
+        assert result.valid_count > 0, "single day produces valid returns"
+        assert result.horizon_minutes == 15, "horizon_minutes is 15"
+        assert result.bar_minutes == 1, "bar_minutes is 1"
+        assert result.horizon_bars == 15, "horizon_bars is 15"
 
         # Last 15 bars run off the end of the series.
-        assert result.values.iloc[-15:].isna().all()
+        assert result.values.iloc[-15:].isna().all(), "the last horizon bars are NaN"
+
+        df = pd.DataFrame(sample_bars_single_day).sort_values("timestamp").reset_index(drop=True)
+        first_valid = result.values.first_valid_index()
+        if first_valid is not None:
+            expected = np.log(df.loc[first_valid + 15, "close"] / df.loc[first_valid, "close"])
+            np.testing.assert_allclose(
+                result.values.iloc[first_valid], expected, atol=1e-10, err_msg="return values are log returns"
+            )
+
+        assert result.target_name == "forward_log_return_15m", "target metadata: target_name"
+        assert result.timezone == "America/New_York", "target metadata: timezone"
+        assert result.total_count == len(sample_bars_single_day), "target metadata: total_count"
+        assert isinstance(result.invalid_reason_counts, dict), "target metadata: invalid_reason_counts is a dict"
+        # The drop reasons sum to (total - valid).
+        assert (
+            sum(result.invalid_reason_counts.values()) + result.valid_count
+            == result.total_count
+        ), "target metadata: the drop reasons sum to (total - valid)"
 
     def test_no_cross_day_contamination(self, sample_bars_multi_day: list[dict]) -> None:
         result = compute_forward_log_return(sample_bars_multi_day, horizon_minutes=15)
@@ -54,15 +71,6 @@ class TestComputeForwardLogReturn:
                     f"got {result.values.iloc[idx]}"
                 )
 
-    def test_return_values_are_log_returns(self, sample_bars_single_day: list[dict]) -> None:
-        result = compute_forward_log_return(sample_bars_single_day, horizon_minutes=15)
-
-        df = pd.DataFrame(sample_bars_single_day).sort_values("timestamp").reset_index(drop=True)
-        first_valid = result.values.first_valid_index()
-        if first_valid is not None:
-            expected = np.log(df.loc[first_valid + 15, "close"] / df.loc[first_valid, "close"])
-            np.testing.assert_allclose(result.values.iloc[first_valid], expected, atol=1e-10)
-
     def test_horizon_minutes_is_time_not_bars_on_5min_bars(self) -> None:
         """A 5-minute-bar caller asking for horizon_minutes=15 must use a 3-bar offset."""
         bars = [
@@ -79,12 +87,17 @@ class TestComputeForwardLogReturn:
         expected = np.log(bars[3]["close"] / bars[0]["close"])
         np.testing.assert_allclose(result.values.iloc[0], expected, atol=1e-12)
 
-    def test_small_missing_gap_is_tolerated_within_overshoot(self) -> None:
+    def test_small_missing_gap_is_tolerated_within_overshoot_and_dropped_in_strict_mode(self) -> None:
         """One missing minute in the forward window stretches the elapsed
         time from 15 → 16 minutes. The default ``max_overshoot_minutes=5``
         accepts that — Polygon Starter routinely drops 1-3 low-liquidity
         minutes per session and rejecting all of them was killing > 30 %
-        of valid bars on real data."""
+        of valid bars on real data.
+
+        ``max_overshoot_minutes=0`` is the legacy-strict gate: any
+        non-exact match drops as ``window_gap``. Useful when the caller
+        wants the strictest possible interpretation (e.g. a regression
+        test asserting feed integrity)."""
         full = [
             {"timestamp": 1_700_000_000_000 + i * 60_000, "close": 100.0 + i}
             for i in range(40)
@@ -92,11 +105,16 @@ class TestComputeForwardLogReturn:
         bars = [b for i, b in enumerate(full) if i != 4]  # drop t=4
 
         result = compute_forward_log_return(bars, horizon_minutes=15)
+        strict = compute_forward_log_return(
+            bars, horizon_minutes=15, max_overshoot_minutes=0
+        )
 
         # No window_gap drops — 16-minute deltas land inside [15, 20].
-        assert result.invalid_reason_counts.get("window_gap", 0) == 0
+        assert result.invalid_reason_counts.get("window_gap", 0) == 0, "small gap is tolerated: no window_gap drops"
         # And we still get valid forward returns for early rows.
-        assert result.values.iloc[0:5].notna().all()
+        assert result.values.iloc[0:5].notna().all(), "small gap is tolerated: early rows stay valid"
+        # With strict gate, the 16-minute window for the early rows is rejected.
+        assert strict.invalid_reason_counts.get("window_gap", 0) > 0, "max_overshoot_minutes=0 is strict: window_gap drops"
 
     def test_large_missing_gap_above_overshoot_is_dropped(self) -> None:
         """An 8-minute gap inside the forward window pushes the elapsed
@@ -118,32 +136,6 @@ class TestComputeForwardLogReturn:
         result = compute_forward_log_return(bars, horizon_minutes=15)
 
         assert result.invalid_reason_counts.get("window_gap", 0) > 0
-
-    def test_max_overshoot_minutes_zero_recovers_strict_mode(self) -> None:
-        """``max_overshoot_minutes=0`` is the legacy-strict gate: any
-        non-exact match drops as ``window_gap``. Useful when the caller
-        wants the strictest possible interpretation (e.g. a regression
-        test asserting feed integrity)."""
-        full = [
-            {"timestamp": 1_700_000_000_000 + i * 60_000, "close": 100.0 + i}
-            for i in range(40)
-        ]
-        bars = [b for i, b in enumerate(full) if i != 4]
-
-        result = compute_forward_log_return(
-            bars, horizon_minutes=15, max_overshoot_minutes=0
-        )
-
-        # With strict gate, the 16-minute window for the early rows is rejected.
-        assert result.invalid_reason_counts.get("window_gap", 0) > 0
-
-    def test_horizon_not_multiple_of_bar_minutes_raises(self) -> None:
-        bars = [
-            {"timestamp": 1_700_000_000_000 + i * 5 * 60_000, "close": 100.0 + i}
-            for i in range(20)
-        ]
-        with pytest.raises(ValueError, match="not an integer multiple"):
-            compute_forward_log_return(bars, horizon_minutes=7)
 
     def test_session_date_uses_new_york_not_utc(self) -> None:
         """A bar at 16:30 ET (the next UTC date in DST) must share its
@@ -172,44 +164,51 @@ class TestComputeForwardLogReturn:
         # No cross_session drops in the first half (all same NY day).
         assert result.invalid_reason_counts.get("cross_session", 0) == 0
 
-    def test_duplicate_timestamps_raise(self) -> None:
-        bars = [
-            {"timestamp": 1_700_000_000_000, "close": 100.0},
-            {"timestamp": 1_700_000_000_000, "close": 101.0},  # duplicate
-            {"timestamp": 1_700_000_000_060_000, "close": 102.0},
-        ]
-        with pytest.raises(ValueError, match="duplicate timestamps"):
-            compute_forward_log_return(bars, horizon_minutes=15)
-
-    def test_inf_close_raises(self) -> None:
-        bars = [
-            {"timestamp": 1_700_000_000_000 + i * 60_000, "close": (np.inf if i == 5 else 100.0 + i)}
-            for i in range(20)
-        ]
-        with pytest.raises(ValueError, match="non-finite/non-numeric"):
-            compute_forward_log_return(bars, horizon_minutes=15)
-
-    def test_missing_columns_raise(self) -> None:
-        bars = [{"timestamp": 1_700_000_000_000 + i * 60_000} for i in range(20)]
-        with pytest.raises(ValueError, match="missing required columns"):
-            compute_forward_log_return(bars, horizon_minutes=15)
-
-    def test_empty_bars_raise(self) -> None:
-        with pytest.raises(ValueError, match="empty"):
-            compute_forward_log_return([], horizon_minutes=15)
-
-    def test_target_metadata_is_audit_trail(self, sample_bars_single_day: list[dict]) -> None:
-        result = compute_forward_log_return(sample_bars_single_day, horizon_minutes=15)
-
-        assert result.target_name == "forward_log_return_15m"
-        assert result.timezone == "America/New_York"
-        assert result.total_count == len(sample_bars_single_day)
-        assert isinstance(result.invalid_reason_counts, dict)
-        # The drop reasons sum to (total - valid).
-        assert (
-            sum(result.invalid_reason_counts.values()) + result.valid_count
-            == result.total_count
-        )
+    @pytest.mark.parametrize(
+        ("make_bars", "horizon_minutes", "match"),
+        [
+            pytest.param(
+                lambda: [
+                    {"timestamp": 1_700_000_000_000 + i * 5 * 60_000, "close": 100.0 + i}
+                    for i in range(20)
+                ],
+                7,
+                "not an integer multiple",
+                id="horizon_not_multiple_of_bar_minutes",
+            ),
+            pytest.param(
+                lambda: [
+                    {"timestamp": 1_700_000_000_000, "close": 100.0},
+                    {"timestamp": 1_700_000_000_000, "close": 101.0},  # duplicate
+                    {"timestamp": 1_700_000_000_060_000, "close": 102.0},
+                ],
+                15,
+                "duplicate timestamps",
+                id="duplicate_timestamps",
+            ),
+            pytest.param(
+                lambda: [
+                    {"timestamp": 1_700_000_000_000 + i * 60_000, "close": (np.inf if i == 5 else 100.0 + i)}
+                    for i in range(20)
+                ],
+                15,
+                "non-finite/non-numeric",
+                id="inf_close",
+            ),
+            pytest.param(
+                lambda: [{"timestamp": 1_700_000_000_000 + i * 60_000} for i in range(20)],
+                15,
+                "missing required columns",
+                id="missing_columns",
+            ),
+            pytest.param(lambda: [], 15, "empty", id="empty_bars"),
+        ],
+    )
+    def test_invalid_bars_or_horizon_raise(
+        self, make_bars: Callable[[], list[dict]], horizon_minutes: int, match: str
+    ) -> None:
+        with pytest.raises(ValueError, match=match):
+            compute_forward_log_return(make_bars(), horizon_minutes=horizon_minutes)
 
 
 class TestLegacyWrapper:
@@ -228,29 +227,28 @@ class TestLegacyWrapper:
 
 
 class TestValidateReturnSeries:
-    def test_valid_series_passes(self) -> None:
-        series = pd.Series(np.random.default_rng(0).normal(0, 0.01, 100))
-        assert validate_return_series(series) is True
-
-    def test_thirty_percent_coverage_now_fails(self) -> None:
-        """v2 tightens the threshold from 0.30 → 0.70. A 30 %-coverage
-        series previously passed; it must fail now."""
-        series = pd.Series([np.nan] * 70 + list(np.random.default_rng(0).normal(0, 0.01, 30)))
-        assert validate_return_series(series) is False
-
-    def test_seventy_percent_coverage_passes(self) -> None:
-        series = pd.Series(
-            list(np.random.default_rng(0).normal(0, 0.01, 75)) + [np.nan] * 25
-        )
-        assert validate_return_series(series) is True
-
-    def test_zero_variance_fails(self) -> None:
-        series = pd.Series([0.005] * 100)
-        assert validate_return_series(series) is False
-
-    def test_empty_series_fails(self) -> None:
-        series = pd.Series([], dtype=float)
-        assert validate_return_series(series) is False
+    @pytest.mark.parametrize(
+        ("make_series", "expected"),
+        [
+            pytest.param(lambda: pd.Series(np.random.default_rng(0).normal(0, 0.01, 100)), True, id="valid_series_passes"),
+            # v2 tightens the threshold from 0.30 → 0.70. A 30 %-coverage
+            # series previously passed; it must fail now.
+            pytest.param(
+                lambda: pd.Series([np.nan] * 70 + list(np.random.default_rng(0).normal(0, 0.01, 30))),
+                False,
+                id="thirty_percent_coverage_now_fails",
+            ),
+            pytest.param(
+                lambda: pd.Series(list(np.random.default_rng(0).normal(0, 0.01, 75)) + [np.nan] * 25),
+                True,
+                id="seventy_percent_coverage_passes",
+            ),
+            pytest.param(lambda: pd.Series([0.005] * 100), False, id="zero_variance_fails"),
+            pytest.param(lambda: pd.Series([], dtype=float), False, id="empty_series_fails"),
+        ],
+    )
+    def test_validate_return_series_verdict(self, make_series: Callable[[], pd.Series], expected: bool) -> None:
+        assert validate_return_series(make_series()) is expected
 
     def test_min_non_nan_ratio_is_caller_overridable(self) -> None:
         series = pd.Series([np.nan] * 60 + list(np.random.default_rng(0).normal(0, 0.01, 40)))

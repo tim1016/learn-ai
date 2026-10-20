@@ -96,43 +96,36 @@ def test_python_only_request_has_no_parity_group_or_companion(monkeypatch) -> No
 
 
 @pytest.mark.asyncio
-async def test_engine_backtest_synthesizes_data_policy_from_legacy_fields() -> None:
+@pytest.mark.parametrize(
+    ("strategy_name", "param_symbol", "resolution", "expected_symbol", "expected_timespan"),
+    [
+        # lowercase symbol → uppercased by synthesizer
+        pytest.param("ema_crossover_signal", "spy", "minute", "SPY", "minute", id="from_legacy_fields_uppercases_symbol"),
+        # Daily resolution maps to ``timespan='day'`` in the synthesized BarsSpec.
+        pytest.param("sma_crossover", "AAPL", "daily", "AAPL", "day", id="daily_resolution_maps_to_day_timespan"),
+    ],
+)
+async def test_engine_backtest_synthesizes_data_policy(
+    strategy_name: str, param_symbol: str, resolution: str, expected_symbol: str, expected_timespan: str
+) -> None:
     """A request without ``data_policy`` synthesizes it from symbol + resolution."""
     from app.schemas.engine_backtest import EngineBacktestRequest
 
     req = EngineBacktestRequest(
-        strategy_name="ema_crossover_signal",
-        params={"symbol": "spy"},  # lowercase → uppercased by synthesizer
+        strategy_name=strategy_name,
+        params={"symbol": param_symbol},
         from_date="2025-01-13",
         to_date="2025-01-17",
-        resolution="minute",
+        resolution=resolution,
     )
 
-    assert req.data_policy is not None
-    assert req.data_policy.symbol == "SPY"
-    assert req.data_policy.adjusted is True  # PR B default
-    assert req.data_policy.session == "regular"
-    assert req.data_policy.input_bars.timespan == "minute"
-    assert req.data_policy.input_bars.multiplier == 1
-
-
-@pytest.mark.asyncio
-async def test_engine_backtest_synthesizes_data_policy_for_daily_resolution() -> None:
-    """Daily resolution maps to ``timespan='day'`` in the synthesized BarsSpec."""
-    from app.schemas.engine_backtest import EngineBacktestRequest
-
-    req = EngineBacktestRequest(
-        strategy_name="sma_crossover",
-        params={"symbol": "AAPL"},
-        from_date="2025-01-13",
-        to_date="2025-01-17",
-        resolution="daily",
-    )
-
-    assert req.data_policy is not None
-    assert req.data_policy.symbol == "AAPL"
-    assert req.data_policy.input_bars.timespan == "day"
-    assert req.data_policy.strategy_bars.timespan == "day"
+    assert req.data_policy is not None, "a data_policy is synthesized"
+    assert req.data_policy.symbol == expected_symbol, "the symbol is the uppercased params symbol"
+    assert req.data_policy.adjusted is True, "adjusted defaults to True (PR B default)"
+    assert req.data_policy.session == "regular", "the session is regular"
+    assert req.data_policy.input_bars.timespan == expected_timespan, "input bars timespan follows the resolution"
+    assert req.data_policy.input_bars.multiplier == 1, "input bars multiplier is 1"
+    assert req.data_policy.strategy_bars.timespan == expected_timespan, "strategy bars timespan follows the resolution"
 
 
 @pytest.mark.asyncio

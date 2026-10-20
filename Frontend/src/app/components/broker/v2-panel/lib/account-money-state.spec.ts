@@ -44,36 +44,30 @@ describe('accountMoneyState', () => {
     });
   });
 
-  it('surfaces a refusal’s message, why and next step instead of discarding them', () => {
-    expect(accountMoneyState({ capable: true, view: undefined, error: refusal503() })).toEqual({
+  it.each<[string, unknown, ReturnType<typeof accountMoneyState>]>([
+    ['surfaces a refusal’s message, why and next step instead of discarding them', refusal503(), {
       kind: 'unavailable',
       view: null,
       text: 'This account’s money cannot be read right now. The account’s records are still being opened.',
       nextStep: 'Open the account’s Settings to see why, then retry.',
-    });
-  });
-
-  it('reads the fleet’s flat refusal body too', () => {
-    const error = new HttpErrorResponse({
+    }],
+    ['reads the fleet’s flat refusal body too', new HttpErrorResponse({
       status: 503,
       error: { reason: 'LANE_UNREACHABLE', message: 'This account’s connection is not answering.', next_step: 'Check the connection in Settings.' },
-    });
-
-    expect(accountMoneyState({ capable: true, view: undefined, error })).toEqual({
+    }), {
       kind: 'unavailable',
       view: null,
       text: 'This account’s connection is not answering.',
       nextStep: 'Check the connection in Settings.',
-    });
-  });
-
-  it('still names a next step when the failure carried no words of its own', () => {
-    expect(accountMoneyState({ capable: true, view: undefined, error: new Error('network down') })).toEqual({
+    }],
+    ['still names a next step when the failure carried no words of its own', new Error('network down'), {
       kind: 'unavailable',
       view: null,
       text: MONEY_FAILED_TEXT,
       nextStep: MONEY_FAILED_NEXT_STEP,
-    });
+    }],
+  ])('reads a failed money read: %s', (_name, error, expected) => {
+    expect(accountMoneyState({ capable: true, view: undefined, error })).toEqual(expected);
   });
 
   it('is loading while nothing has answered yet, including while the lane is unresolved', () => {

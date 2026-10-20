@@ -19,23 +19,16 @@ const lineOf = (position: number) => legCard(position).querySelector('.leg__line
 const sideList = () => screen.getByRole('complementary', { name: 'Saved setups' });
 
 describe('the Buy or Sell switch', () => {
-  it('is on Buy for a new leg, beside the call or put choice, and no longer says that only buying is offered', async () => {
-    await renderPage(fakeService(vi));
-
-    const switchGroup = screen.getByRole('group', { name: 'Buy or sell' });
-
-    expect(within(switchGroup).getByRole<HTMLInputElement>('radio', { name: 'Buy' }).checked).toBe(true);
-    expect(within(switchGroup).getByRole<HTMLInputElement>('radio', { name: 'Sell' }).checked).toBe(false);
-    expect(screen.queryByText(/only buying is offered/i)).toBeNull();
-  });
-
-  it('is followed by one line that says a sold leg needs a bought leg of the same kind to cover it', async () => {
+  it('is on Buy for a new leg, beside the call or put choice, with no claim that only buying is offered, and is followed by one line that says a sold leg needs a bought leg of the same kind to cover it', async () => {
     await renderPage(fakeService(vi));
 
     const switchGroup = screen.getByRole('group', { name: 'Buy or sell' });
     const line = document.getElementById(switchGroup.getAttribute('aria-describedby') ?? 'missing');
 
-    expect(line?.textContent).toMatch(/sold leg needs a bought leg of the same kind.*to cover it/);
+    expect.soft(within(switchGroup).getByRole<HTMLInputElement>('radio', { name: 'Buy' }).checked, 'is on Buy for a new leg').toBe(true);
+    expect.soft(within(switchGroup).getByRole<HTMLInputElement>('radio', { name: 'Sell' }).checked, 'is not on Sell for a new leg').toBe(false);
+    expect.soft(screen.queryByText(/only buying is offered/i), 'no longer says that only buying is offered').toBeNull();
+    expect.soft(line?.textContent, 'is followed by a line saying a sold leg needs a bought leg of the same kind to cover it').toMatch(/sold leg needs a bought leg of the same kind.*to cover it/);
   });
 
   it('adds a sold leg that reads Sell, and sends the side it shows', async () => {
@@ -158,28 +151,19 @@ describe('opening a stored setup that sells', () => {
   const longCall: ServedLeg = { leg_id: 'long_call', right: 'call', contracts: 1, expiry: { kind: 'this_week' }, strike: { kind: 'atm' } };
   const spread = (): ServedSetup => ({ ...noReentryExampleBody(), legs: [longCall, shortCall] });
 
-  it('reads the side back into the form: the leg card says Sell, and what is sent says sell', async () => {
+  it('reads the side back into the form, with the leg card saying Sell and what is sent saying sell, and keeps a sold leg’s stop at its stored value, above a hundred percent', async () => {
     const service = fakeService(vi, { list: vi.fn(async () => [servedSaved('Call spread', spread())]) });
     await renderPage(service);
 
     fireEvent.click(await within(sideList()).findByRole('button', { name: /^Call spread/ }));
     await screen.findByRole('article', { name: 'Leg 2' });
 
-    expect(lineOf(1)).toMatch(/^Buy · 1 contract · Call/);
-    expect(lineOf(2)).toMatch(/^Sell · 1 contract · Call · Weekly expiry · 2 strikes above the money/);
+    expect.soft(lineOf(1), 'the first leg card says Buy').toMatch(/^Buy · 1 contract · Call/);
+    expect.soft(lineOf(2), 'the second leg card says Sell').toMatch(/^Sell · 1 contract · Call · Weekly expiry · 2 strikes above the money/);
+    expect.soft(screen.getByLabelText<HTMLInputElement>('Leg 2 stop loss value').value, 'the sold leg’s stop value is its stored value, above a hundred percent').toBe('150');
+    expect.soft((ruleSwitch('Leg 2 stop loss') as HTMLInputElement).checked, 'the sold leg’s stop loss switch is on').toBe(true);
     await waitFor(() => expect(lastBody(service).legs).toHaveLength(2));
-    expect(lastBody(service).legs).toEqual([longCall, shortCall]);
-  });
-
-  it('keeps a sold leg’s stop at its stored value, above a hundred percent', async () => {
-    const service = fakeService(vi, { list: vi.fn(async () => [servedSaved('Call spread', spread())]) });
-    await renderPage(service);
-
-    fireEvent.click(await within(sideList()).findByRole('button', { name: /^Call spread/ }));
-    await screen.findByRole('article', { name: 'Leg 2' });
-
-    expect(screen.getByLabelText<HTMLInputElement>('Leg 2 stop loss value').value).toBe('150');
-    expect((ruleSwitch('Leg 2 stop loss') as HTMLInputElement).checked).toBe(true);
+    expect.soft(lastBody(service).legs, 'what is sent says sell for the sold leg').toEqual([longCall, shortCall]);
   });
 });
 

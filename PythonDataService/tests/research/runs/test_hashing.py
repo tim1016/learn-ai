@@ -22,48 +22,38 @@ from app.research.runs.ledger import (
 )
 
 
-def test_canonical_json_no_whitespace():
+def test_canonical_json_is_compact_nested_key_sorted_and_keeps_unicode():
     s = canonical_json({"a": 1, "b": [2, 3]})
-    assert " " not in s
-    assert "\n" not in s
-    assert s == '{"a":1,"b":[2,3]}'
+    assert " " not in s, "no whitespace: no spaces"
+    assert "\n" not in s, "no whitespace: no newlines"
+    assert s == '{"a":1,"b":[2,3]}', "compact separators"
 
-
-def test_canonical_json_nested_keys_sorted():
     payload = {"outer": {"z": 1, "a": 2}, "alpha": [{"q": 1, "p": 0}]}
     s = canonical_json(payload)
-    assert s == '{"alpha":[{"p":0,"q":1}],"outer":{"a":2,"z":1}}'
+    assert s == '{"alpha":[{"p":0,"q":1}],"outer":{"a":2,"z":1}}', "nested keys are sorted"
 
-
-def test_canonical_json_preserves_unicode():
     payload = {"name": "résumé"}
     s = canonical_json(payload)
-    assert "résumé" in s
+    assert "résumé" in s, "unicode is preserved"
 
 
-def test_hash_payload_stable_across_key_order():
+def test_hash_payload_is_stable_across_key_order_and_changes_with_value_key_and_type():
     a = {"id": "ema", "period": 10, "source": "close"}
     b = {"source": "close", "period": 10, "id": "ema"}
-    assert hash_payload(a) == hash_payload(b)
+    assert hash_payload(a) == hash_payload(b), "stable across key order"
 
-
-def test_hash_payload_changes_on_value_change():
     base = {"period": 10}
     mutated = {"period": 11}
-    assert hash_payload(base) != hash_payload(mutated)
+    assert hash_payload(base) != hash_payload(mutated), "changes on value change"
 
-
-def test_hash_payload_changes_on_key_change():
     a = {"period": 10}
     b = {"window": 10}
-    assert hash_payload(a) != hash_payload(b)
+    assert hash_payload(a) != hash_payload(b), "changes on key change"
+
+    assert hash_payload({"x": 10}) != hash_payload({"x": "10"}), "distinguishes int and str"
 
 
-def test_hash_payload_distinguishes_int_and_str():
-    assert hash_payload({"x": 10}) != hash_payload({"x": "10"})
-
-
-def test_make_data_snapshot_id_format():
+def test_make_data_snapshot_id_format_and_changes_with_each_field():
     out = make_data_snapshot_id(
         symbol="SPY",
         resolution_minutes=15,
@@ -71,10 +61,8 @@ def test_make_data_snapshot_id_format():
         end_ms=1_710_000_000_000,
         data_root_revision="abc123",
     )
-    assert out == "SPY|15|1700000000000|1710000000000|abc123"
+    assert out == "SPY|15|1700000000000|1710000000000|abc123", "id format"
 
-
-def test_make_data_snapshot_id_changes_with_each_field():
     base = make_data_snapshot_id(
         symbol="SPY",
         resolution_minutes=15,
@@ -117,7 +105,9 @@ def test_make_data_snapshot_id_changes_with_each_field():
         end_ms=1_710_000_000_000,
         data_root_revision="def",
     )
-    assert len({base, diff_symbol, diff_resolution, diff_start, diff_end, diff_revision}) == 6
+    assert len({base, diff_symbol, diff_resolution, diff_start, diff_end, diff_revision}) == 6, (
+        "each field changes the id"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +133,7 @@ def _write_empty_lean_minute_zip(root: Path, symbol: str, trading_date: date, mt
     return zip_path
 
 
-def test_compute_window_files_fingerprint_files_none_when_no_data_root(tmp_path):
+def test_compute_window_files_fingerprint_is_files_none_with_no_data_root_and_with_no_files_in_window(tmp_path):
     # No LEAN roots passed in, no matching files — sentinel value.
     out = compute_window_files_fingerprint(
         symbol="SPY",
@@ -151,10 +141,8 @@ def test_compute_window_files_fingerprint_files_none_when_no_data_root(tmp_path)
         end_date=date(2024, 1, 3),
         data_roots=[],
     )
-    assert out == "files:none"
+    assert out == "files:none", "files:none when no data root"
 
-
-def test_compute_window_files_fingerprint_files_none_when_window_has_no_files(tmp_path):
     # Data root exists but contains no zips for the window — still sentinel.
     out = compute_window_files_fingerprint(
         symbol="SPY",
@@ -162,12 +150,14 @@ def test_compute_window_files_fingerprint_files_none_when_window_has_no_files(tm
         end_date=date(2024, 1, 3),
         data_roots=[tmp_path],
     )
-    assert out == "files:none"
+    assert out == "files:none", "files:none when window has no files"
 
 
-def test_compute_window_files_fingerprint_stable_when_unchanged(tmp_path):
+def test_compute_window_files_fingerprint_is_stable_when_unchanged_and_changes_when_an_mtime_changes(tmp_path):
     _write_empty_lean_minute_zip(tmp_path, "SPY", date(2024, 1, 2), 1_700_000_000.0)
-    _write_empty_lean_minute_zip(tmp_path, "SPY", date(2024, 1, 3), 1_700_000_100.0)
+    second_path = _write_empty_lean_minute_zip(
+        tmp_path, "SPY", date(2024, 1, 3), 1_700_000_100.0
+    )
 
     first = compute_window_files_fingerprint(
         symbol="SPY",
@@ -181,24 +171,10 @@ def test_compute_window_files_fingerprint_stable_when_unchanged(tmp_path):
         end_date=date(2024, 1, 3),
         data_roots=[tmp_path],
     )
-    assert first == second
-    assert first.startswith("files:")
+    assert first == second, "stable when unchanged"
+    assert first.startswith("files:"), "stable fingerprint carries the files: prefix"
     # 16 hex chars after the prefix.
-    assert len(first) == len("files:") + 16
-
-
-def test_compute_window_files_fingerprint_changes_when_an_mtime_changes(tmp_path):
-    _write_empty_lean_minute_zip(tmp_path, "SPY", date(2024, 1, 2), 1_700_000_000.0)
-    second_path = _write_empty_lean_minute_zip(
-        tmp_path, "SPY", date(2024, 1, 3), 1_700_000_100.0
-    )
-
-    before = compute_window_files_fingerprint(
-        symbol="SPY",
-        start_date=date(2024, 1, 2),
-        end_date=date(2024, 1, 3),
-        data_roots=[tmp_path],
-    )
+    assert len(first) == len("files:") + 16, "stable fingerprint is 16 hex chars after the prefix"
 
     # Touch the second file: same content, fresh mtime.
     new_mtime = 1_700_999_999.0
@@ -210,9 +186,9 @@ def test_compute_window_files_fingerprint_changes_when_an_mtime_changes(tmp_path
         end_date=date(2024, 1, 3),
         data_roots=[tmp_path],
     )
-    assert before != after, (
-        "Per-file mtime change must shift the fingerprint — that is the whole "
-        "reason this replaced the directory-level mtime."
+    assert first != after, (
+        "changes when an mtime changes: per-file mtime change must shift the fingerprint — "
+        "that is the whole reason this replaced the directory-level mtime."
     )
 
 

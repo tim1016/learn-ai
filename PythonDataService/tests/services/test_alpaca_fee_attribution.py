@@ -46,19 +46,25 @@ def _attribute(fills=(), charges=(), **kwargs):
     )
 
 
-def test_equal_weights_split_five_cents_by_stable_subject_not_input_order() -> None:
-    assert apportion_cents(D("0.05"), {"bot:c": D(1), "bot:a": D(1), "bot:b": D(1)}) == {
-        "bot:a": D("0.02"),
-        "bot:b": D("0.02"),
-        "bot:c": D("0.01"),
-    }
-
-
-def test_fractional_exact_remainder_does_not_round_each_subject_up() -> None:
-    assert apportion_cents(D("0.01"), {"a": D("0.00000000000000000000001"), "b": D("0.00000000000000000000002")}) == {
-        "a": D("0"),
-        "b": D("0.01"),
-    }
+@pytest.mark.parametrize(
+    "amount,weights,expected",
+    [
+        pytest.param(
+            D("0.05"),
+            (("bot:c", D(1)), ("bot:a", D(1)), ("bot:b", D(1))),
+            (("bot:a", D("0.02")), ("bot:b", D("0.02")), ("bot:c", D("0.01"))),
+            id="equal-weights-split-five-cents-by-stable-subject-not-input-order",
+        ),
+        pytest.param(
+            D("0.01"),
+            (("a", D("0.00000000000000000000001")), ("b", D("0.00000000000000000000002"))),
+            (("a", D("0")), ("b", D("0.01"))),
+            id="fractional-exact-remainder-does-not-round-each-subject-up",
+        ),
+    ],
+)
+def test_apportion_cents_splits_the_amount_exactly(amount, weights, expected) -> None:
+    assert apportion_cents(amount, dict(weights)) == dict(expected)
 
 
 def test_component_weights_use_sells_only_for_sec_and_both_sides_for_cat() -> None:

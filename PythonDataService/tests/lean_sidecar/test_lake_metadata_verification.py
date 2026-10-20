@@ -113,30 +113,30 @@ class TestVerifyLakeMetadataBundle:
                 expected_lean_image_digest="sha256:test",
             )
 
-    def test_refuses_a_receipt_from_a_different_mode(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        ("seeded_digest", "expected_mode", "expected_digest"),
+        [
+            ("sha256:test", "polygon_split_adjusted", "sha256:test"),
+            ("sha256:old", "raw", "sha256:new"),
+        ],
+        ids=[
+            "receipt-from-a-different-mode",
+            "receipt-pinned-to-a-different-digest",
+        ],
+    )
+    def test_refuses_a_receipt_that_is_not_the_one_asked_for(
+        self, tmp_path: Path, seeded_digest: str, expected_mode: str, expected_digest: str
+    ) -> None:
         root_id = uuid4()
-        lake_root = self._seed_valid_bundle(tmp_path, root_id=root_id, mode="raw")
+        lake_root = self._seed_valid_bundle(tmp_path, root_id=root_id, mode="raw", digest=seeded_digest)
 
         with pytest.raises(LakeMountError, match="lake_metadata_receipt_invalid"):
             verify_lake_metadata_bundle(
                 lake_root=lake_root,
                 base_root=tmp_path,
                 expected_data_root_id=root_id,
-                expected_price_adjustment_mode="polygon_split_adjusted",
-                expected_lean_image_digest="sha256:test",
-            )
-
-    def test_refuses_a_receipt_pinned_to_a_different_digest(self, tmp_path: Path) -> None:
-        root_id = uuid4()
-        lake_root = self._seed_valid_bundle(tmp_path, root_id=root_id, digest="sha256:old")
-
-        with pytest.raises(LakeMountError, match="lake_metadata_receipt_invalid"):
-            verify_lake_metadata_bundle(
-                lake_root=lake_root,
-                base_root=tmp_path,
-                expected_data_root_id=root_id,
-                expected_price_adjustment_mode="raw",
-                expected_lean_image_digest="sha256:new",
+                expected_price_adjustment_mode=expected_mode,
+                expected_lean_image_digest=expected_digest,
             )
 
     def test_refuses_a_tampered_file(self, tmp_path: Path) -> None:

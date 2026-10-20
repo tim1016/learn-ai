@@ -147,25 +147,43 @@ def _one_stop_at(stop_minute: int) -> TableMarket:
     )
 
 
-def test_a_stop_at_exactly_the_cutoff_earns_a_re_entry() -> None:
-    outcome = replay(setup(leg(stop=STOP_25, reentry=AT_ONCE_1), no_reentry_after=after_open(20)), _one_stop_at(20))
+@pytest.mark.parametrize(
+    ("stop_minute", "trades", "earned", "blocked"),
+    [
+        pytest.param(
+            20,
+            (
+                ("call", 0, 6, D("2.00"), D("2.00"), "stop", 21, D("1.40"), D("1.40")),
+                ("call", 1, 22, D("1.50"), D("1.50"), "exit_time", 61, D("1.50"), D("1.50")),
+            ),
+            (20,),
+            (),
+            id="a_stop_at_exactly_the_cutoff_earns_a_re_entry",
+        ),
+        pytest.param(
+            21,
+            (("call", 0, 6, D("2.00"), D("2.00"), "stop", 22, D("1.40"), D("1.40")),),
+            (),
+            (21,),
+            id="a_stop_one_minute_after_the_cutoff_earns_none_and_says_so",
+        ),
+    ],
+)
+def test_a_stop_earns_a_re_entry_up_to_the_cutoff_and_none_after_it(
+    stop_minute: int,
+    trades: tuple[tuple[object, ...], ...],
+    earned: tuple[int, ...],
+    blocked: tuple[int, ...],
+) -> None:
+    outcome = replay(
+        setup(leg(stop=STOP_25, reentry=AT_ONCE_1), no_reentry_after=after_open(20)), _one_stop_at(stop_minute)
+    )
 
-    assert [row(trade) for trade in outcome.trades] == [
-        ("call", 0, 6, D("2.00"), D("2.00"), "stop", 21, D("1.40"), D("1.40")),
-        ("call", 1, 22, D("1.50"), D("1.50"), "exit_time", 61, D("1.50"), D("1.50")),
-    ]
-    assert minutes(outcome, EventKind.RE_ENTRY_EARNED) == [20]
-    assert minutes(outcome, EventKind.RE_ENTRY_BLOCKED_BY_CUTOFF) == []
-
-
-def test_a_stop_one_minute_after_the_cutoff_earns_none_and_says_so() -> None:
-    outcome = replay(setup(leg(stop=STOP_25, reentry=AT_ONCE_1), no_reentry_after=after_open(20)), _one_stop_at(21))
-
-    assert [row(trade) for trade in outcome.trades] == [
-        ("call", 0, 6, D("2.00"), D("2.00"), "stop", 22, D("1.40"), D("1.40"))
-    ]
-    assert minutes(outcome, EventKind.RE_ENTRY_BLOCKED_BY_CUTOFF) == [21]
-    assert minutes(outcome, EventKind.RE_ENTRY_EARNED) == []
+    assert tuple(row(trade) for trade in outcome.trades) == trades, "the trades"
+    assert tuple(minutes(outcome, EventKind.RE_ENTRY_EARNED)) == earned, "the minutes a re-entry was earned"
+    assert tuple(minutes(outcome, EventKind.RE_ENTRY_BLOCKED_BY_CUTOFF)) == blocked, (
+        "the minutes a re-entry was blocked by the cutoff"
+    )
 
 
 def _stopped_at_on_a_half_day(stop_minute: int) -> TableMarket:
@@ -331,28 +349,45 @@ def test_a_leg_with_no_re_entry_left_is_not_counted_as_blocked_by_the_cutoff_and
     assert [trade.entry_number for trade in spent.trades] == [trade.entry_number for trade in one_left.trades] == [0, 1]
 
 
-def test_with_a_count_of_one_a_second_stop_earns_nothing() -> None:
-    outcome = replay(setup(leg(stop=STOP_25, reentry=("at_once", 1))), _stopped_twice())
+@pytest.mark.parametrize(
+    ("count", "trades", "earned", "exit_groups"),
+    [
+        pytest.param(
+            1,
+            (
+                ("call", 0, 6, D("2.00"), D("2.00"), "stop", 11, D("1.40"), D("1.40")),
+                ("call", 1, 12, D("2.00"), D("2.00"), "stop", 16, D("1.40"), D("1.40")),
+            ),
+            (10,),
+            (1, 2),
+            id="with_a_count_of_one_a_second_stop_earns_nothing",
+        ),
+        pytest.param(
+            2,
+            # The third entry fills at the 1.40 open of minute 17; its stop is at 1.05, which 1.40 never reaches.
+            (
+                ("call", 0, 6, D("2.00"), D("2.00"), "stop", 11, D("1.40"), D("1.40")),
+                ("call", 1, 12, D("2.00"), D("2.00"), "stop", 16, D("1.40"), D("1.40")),
+                ("call", 2, 17, D("1.40"), D("1.40"), "exit_time", 61, D("1.40"), D("1.40")),
+            ),
+            (10, 15),
+            # Each stop is its own group, and the exit time is the next.
+            (1, 2, 3),
+            id="with_a_count_of_two_the_second_stop_earns_a_second_re_entry_and_no_third",
+        ),
+    ],
+)
+def test_a_second_stop_earns_a_re_entry_only_while_the_count_has_one_left(
+    count: int,
+    trades: tuple[tuple[object, ...], ...],
+    earned: tuple[int, ...],
+    exit_groups: tuple[int, ...],
+) -> None:
+    outcome = replay(setup(leg(stop=STOP_25, reentry=("at_once", count))), _stopped_twice())
 
-    assert [row(trade) for trade in outcome.trades] == [
-        ("call", 0, 6, D("2.00"), D("2.00"), "stop", 11, D("1.40"), D("1.40")),
-        ("call", 1, 12, D("2.00"), D("2.00"), "stop", 16, D("1.40"), D("1.40")),
-    ]
-    assert minutes(outcome, EventKind.RE_ENTRY_EARNED) == [10]
-
-
-def test_with_a_count_of_two_the_second_stop_earns_a_second_re_entry_and_no_third() -> None:
-    outcome = replay(setup(leg(stop=STOP_25, reentry=("at_once", 2))), _stopped_twice())
-
-    # The third entry fills at the 1.40 open of minute 17; its stop is at 1.05, which 1.40 never reaches.
-    assert [row(trade) for trade in outcome.trades] == [
-        ("call", 0, 6, D("2.00"), D("2.00"), "stop", 11, D("1.40"), D("1.40")),
-        ("call", 1, 12, D("2.00"), D("2.00"), "stop", 16, D("1.40"), D("1.40")),
-        ("call", 2, 17, D("1.40"), D("1.40"), "exit_time", 61, D("1.40"), D("1.40")),
-    ]
-    assert minutes(outcome, EventKind.RE_ENTRY_EARNED) == [10, 15]
-    # Each stop is its own group, and the exit time is the next.
-    assert [trade.exit_group for trade in outcome.trades] == [1, 2, 3]
+    assert tuple(row(trade) for trade in outcome.trades) == trades, "the trades"
+    assert tuple(minutes(outcome, EventKind.RE_ENTRY_EARNED)) == earned, "the minutes a re-entry was earned"
+    assert tuple(trade.exit_group for trade in outcome.trades) == exit_groups, "each stop is its own exit group"
 
 
 def _three_legs_one_stop_at_ten() -> TableMarket:

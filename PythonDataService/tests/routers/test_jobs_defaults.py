@@ -17,7 +17,7 @@ from app.routers.jobs import (
 
 
 class TestSignalEngineDefaults:
-    def test_multiplier_defaults_to_15_pre_migration(self) -> None:
+    def test_pre_migration_defaults_preserved(self) -> None:
         s = SignalEngineJobRequest(
             job_id="t",
             symbol="SPY",
@@ -25,18 +25,9 @@ class TestSignalEngineDefaults:
             from_date="2025-01-01",
             to_date="2025-01-31",
         )
-        assert s.multiplier == 15  # NOT 1
-
-    def test_flip_sign_default_preserved(self) -> None:
-        s = SignalEngineJobRequest(
-            job_id="t",
-            symbol="SPY",
-            feature_name="rsi",
-            from_date="2025-01-01",
-            to_date="2025-01-31",
-        )
-        assert s.flip_sign is True
-        assert s.regime_gate_enabled is True
+        assert s.multiplier == 15, "multiplier defaults to 15 pre-migration, NOT 1"
+        assert s.flip_sign is True, "flip_sign default is preserved"
+        assert s.regime_gate_enabled is True, "regime_gate_enabled default is preserved"
 
 
 class TestCrossSectionalDefaults:

@@ -69,13 +69,40 @@ describe('DeployOptionStructureComponent', () => {
     expect(settingsChange).toHaveBeenCalledWith({ ...SPREAD, underlying: 'AAPL' });
   });
 
-  it('says a named structure in the server’s line for it, with one Edit button', async () => {
-    await renderOptions(SPREAD);
+  it('says a named structure in the server’s line, then what it picks right now under its verdict, with no lean warning', async () => {
+    const { service } = await renderOptions(SPREAD);
 
+    const said = 'says a named structure in the server’s line for it, with one Edit button';
     const summary = screen.getByRole('region', { name: 'Bull call spread' });
-    expect(within(summary).getByText('Stand-in: what a bull call spread is.')).toBeTruthy();
-    expect(within(summary).getAllByRole('button').map((button) => button.textContent?.trim())).toEqual(['Edit structure']);
-    expect(within(summary).queryByRole('list')).toBeNull();
+    expect.soft(within(summary).getByText('Stand-in: what a bull call spread is.'), said).toBeTruthy();
+    expect.soft(within(summary).getAllByRole('button').map((button) => button.textContent?.trim()), said).toEqual(['Edit structure']);
+    expect.soft(within(summary).queryByRole('list'), said).toBeNull();
+
+    const shows = 'shows what the structure picks right now, short, with the verdict above it';
+    const picks = screen.getByRole('region', { name: 'Right now this picks' });
+    expect.soft(await within(picks).findByLabelText("SPY Oct 9 '26 585 Call"), shows).toBeTruthy();
+    expect.soft(within(picks).getByLabelText("SPY Oct 9 '26 590 Call"), shows).toBeTruthy();
+    expect.soft(within(picks).getAllByRole('listitem').map((leg) => leg.querySelector('strong')?.textContent?.trim()), shows)
+      .toEqual(['Buy 1', 'Sell 1']);
+    // The short view leaves the quotes and deltas to the builder.
+    expect.soft(within(picks).queryByText('3.10'), shows).toBeNull();
+    expect.soft(picks.querySelector('dl.figures__money')?.textContent?.replace(/\s+/g, ' ').trim(), shows)
+      .toBe('Premium $1.94 paid · $194.00 a structure');
+    for (const sentence of [
+      'Stand-in: which way it leans.', 'Stand-in: at expiry, if held, before fees.', 'Stand-in: the most it loses at expiry.',
+      'Stand-in: the most it gains at expiry.', 'Stand-in: a market exit can do worse.', 'Stand-in: the bot picks again at every entry.',
+    ]) {
+      expect.soft(within(picks).getByText(sentence), shows).toBeTruthy();
+    }
+    expect.soft(picks.querySelector('.picks__read app-timestamp-display'), shows).not.toBeNull();
+    expect.soft(screen.getByText('Stand-in: it can be deployed.'), shows).toBeTruthy();
+    expect.soft(screen.getByText('Stand-in: it resolves to what was built.'), shows).toBeTruthy();
+    expect.soft(service.previewOptionStructure.mock.calls[0][1], shows).toMatchObject({
+      underlying: 'SPY', listens_to: 'SPY', structure: 'bull_call_spread', legs: BULL_CALL_SPREAD_LEGS, structures: 1,
+    });
+
+    await screen.findByText('Stand-in: which way it leans.');
+    expect.soft(screen.queryByRole('note'), 'shows no warning for a structure that leans with the signal').toBeNull();
   });
 
   it('says a structure of the owner’s own leg by leg, in the catalogue’s labels', async () => {
@@ -99,30 +126,6 @@ describe('DeployOptionStructureComponent', () => {
     expect(service.previewOptionStructure).not.toHaveBeenCalled();
     expect(screen.queryByRole('region', { name: 'Right now this picks' })).toBeNull();
     expect(screen.queryByText('Not known yet.')).toBeNull();
-  });
-
-  it('shows what the structure picks right now, short, with the verdict above it', async () => {
-    const { service } = await renderOptions(SPREAD);
-
-    const picks = screen.getByRole('region', { name: 'Right now this picks' });
-    expect(await within(picks).findByLabelText("SPY Oct 9 '26 585 Call")).toBeTruthy();
-    expect(within(picks).getByLabelText("SPY Oct 9 '26 590 Call")).toBeTruthy();
-    expect(within(picks).getAllByRole('listitem').map((leg) => leg.querySelector('strong')?.textContent?.trim())).toEqual(['Buy 1', 'Sell 1']);
-    // The short view leaves the quotes and deltas to the builder.
-    expect(within(picks).queryByText('3.10')).toBeNull();
-    expect(picks.querySelector('dl.figures__money')?.textContent?.replace(/\s+/g, ' ').trim()).toBe('Premium $1.94 paid · $194.00 a structure');
-    for (const sentence of [
-      'Stand-in: which way it leans.', 'Stand-in: at expiry, if held, before fees.', 'Stand-in: the most it loses at expiry.',
-      'Stand-in: the most it gains at expiry.', 'Stand-in: a market exit can do worse.', 'Stand-in: the bot picks again at every entry.',
-    ]) {
-      expect(within(picks).getByText(sentence)).toBeTruthy();
-    }
-    expect(picks.querySelector('.picks__read app-timestamp-display')).not.toBeNull();
-    expect(screen.getByText('Stand-in: it can be deployed.')).toBeTruthy();
-    expect(screen.getByText('Stand-in: it resolves to what was built.')).toBeTruthy();
-    expect(service.previewOptionStructure.mock.calls[0][1]).toMatchObject({
-      underlying: 'SPY', listens_to: 'SPY', structure: 'bull_call_spread', legs: BULL_CALL_SPREAD_LEGS, structures: 1,
-    });
   });
 
   it('shows the premium of a structure that pays as received, a share and a structure, never as a minus', async () => {
@@ -165,13 +168,6 @@ describe('DeployOptionStructureComponent', () => {
     await renderOptions(SPREAD, { service: previewService({ ...answer, lean: leans }) });
 
     expect((await screen.findByRole('note')).textContent).toContain('Stand-in: this gains when SPY falls.');
-  });
-
-  it('shows no warning for a structure that leans with the signal', async () => {
-    await renderOptions(SPREAD);
-
-    await screen.findByText('Stand-in: which way it leans.');
-    expect(screen.queryByRole('note')).toBeNull();
   });
 
   it('says so while what the builder offers is being read, and offers no builder yet', async () => {

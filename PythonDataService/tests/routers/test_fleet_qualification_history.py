@@ -51,31 +51,25 @@ def _build_app(secret: str) -> FastAPI:
     return app
 
 
-async def test_mode_requires_the_secret_header() -> None:
-    app = _build_app("s3cr3t")
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        get_response = await client.get("/internal/fleet-qualification-history/mode")
-        post_response = await client.post(
-            "/internal/fleet-qualification-history/mode", json={"mode": "unavailable"}
-        )
-
-    assert get_response.status_code == 404
-    assert post_response.status_code == 404
-
-
-async def test_mode_answers_404_for_a_non_ascii_secret_header() -> None:
+async def test_mode_answers_404_without_the_secret_header_or_with_a_non_ascii_one() -> None:
     """Starlette decodes header bytes as Latin-1, so ``b"\\xe9"`` arrives as a
     non-ASCII ``str``; comparing that with ``hmac.compare_digest`` on ``str``
     raised ``TypeError`` (a 500 that reveals the hidden surface) instead of
     the same 404 every wrong secret gets."""
     app = _build_app("s3cr3t")
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(
+        get_response = await client.get("/internal/fleet-qualification-history/mode")
+        post_response = await client.post(
+            "/internal/fleet-qualification-history/mode", json={"mode": "unavailable"}
+        )
+        non_ascii_response = await client.get(
             "/internal/fleet-qualification-history/mode",
             headers={"X-Fleet-Qualification-Secret": b"\xe9"},
         )
 
-    assert response.status_code == 404
+    assert get_response.status_code == 404, "a GET without the secret header is a 404"
+    assert post_response.status_code == 404, "a POST without the secret header is a 404"
+    assert non_ascii_response.status_code == 404, "a non-ASCII secret header gets the same 404, not a 500 TypeError"
 
 
 async def test_mode_defaults_to_healthy_and_can_be_set_and_read_back() -> None:

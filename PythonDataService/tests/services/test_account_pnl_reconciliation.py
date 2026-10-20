@@ -66,47 +66,69 @@ def _attribution(
     )
 
 
-def test_reconcile_broker_curve_to_local_pnl_matching_flat_books_passes() -> None:
+@pytest.mark.parametrize(
+    ("broker_delta", "residual", "within_tolerance", "categories"),
+    [
+        pytest.param(25.0, 0.0, True, (), id="matching-flat-books-pass"),
+        pytest.param(
+            25.5,
+            0.5,
+            False,
+            (DivergenceCategory.PNL_DRIFT,),
+            id="injected-delta-is-classified-as-pnl-drift",
+        ),
+    ],
+)
+def test_reconcile_broker_curve_to_local_pnl_flat_books_pass_or_drift(
+    broker_delta: float,
+    residual: float,
+    within_tolerance: bool,
+    categories: tuple[DivergenceCategory, ...],
+) -> None:
     result = reconcile_broker_curve_to_local_pnl(
-        _history([10_000.0, 10_025.0]),
+        _history([10_000.0, 10_000.0 + broker_delta]),
         _attribution(realized_pnl_total=25.0),
     )
 
     assert result.broker_delta == pytest.approx(
-        25.0, abs=ACCOUNT_PNL_RECONCILIATION_ATOL, rel=ACCOUNT_PNL_RECONCILIATION_RTOL
-    )
+        broker_delta, abs=ACCOUNT_PNL_RECONCILIATION_ATOL, rel=ACCOUNT_PNL_RECONCILIATION_RTOL
+    ), "broker delta is the curve's last equity minus its first"
     assert result.local_delta == pytest.approx(
         25.0, abs=ACCOUNT_PNL_RECONCILIATION_ATOL, rel=ACCOUNT_PNL_RECONCILIATION_RTOL
-    )
+    ), "local delta is the flat book's realized P&L"
     assert result.residual == pytest.approx(
-        0.0, abs=ACCOUNT_PNL_RECONCILIATION_ATOL, rel=ACCOUNT_PNL_RECONCILIATION_RTOL
-    )
-    assert result.within_tolerance is True
-    assert result.atol == ACCOUNT_PNL_RECONCILIATION_ATOL
-    assert result.rtol == ACCOUNT_PNL_RECONCILIATION_RTOL
-    assert result.divergences == ()
+        residual, abs=ACCOUNT_PNL_RECONCILIATION_ATOL, rel=ACCOUNT_PNL_RECONCILIATION_RTOL
+    ), "residual is broker delta minus local delta"
+    assert result.within_tolerance is within_tolerance, "within_tolerance follows the residual"
+    assert result.atol == ACCOUNT_PNL_RECONCILIATION_ATOL, "the result reports its absolute tolerance"
+    assert result.rtol == ACCOUNT_PNL_RECONCILIATION_RTOL, "the result reports its relative tolerance"
+    assert tuple(item.category for item in result.divergences) == categories, "divergence categories"
 
 
-def test_reconcile_broker_curve_to_local_pnl_classifies_injected_delta_as_pnl_drift() -> None:
-    result = reconcile_broker_curve_to_local_pnl(
-        _history([10_000.0, 10_025.5]),
-        _attribution(realized_pnl_total=25.0),
-    )
-
-    assert result.residual == pytest.approx(
-        0.5, abs=ACCOUNT_PNL_RECONCILIATION_ATOL, rel=ACCOUNT_PNL_RECONCILIATION_RTOL
-    )
-    assert result.within_tolerance is False
-    assert [item.category for item in result.divergences] == [DivergenceCategory.PNL_DRIFT]
-
-
-def test_reconcile_broker_curve_to_local_pnl_includes_complete_open_pnl() -> None:
+@pytest.mark.parametrize(
+    ("mark_observed_at_ms", "within_tolerance", "categories"),
+    [
+        pytest.param(1_700_000_001_000, True, (), id="includes-complete-open-pnl"),
+        pytest.param(1_700_000_001_001, True, (), id="accepts-mark-in-same-timeframe-bucket"),
+        pytest.param(
+            1_700_086_401_000,
+            False,
+            (DivergenceCategory.FIXTURE_INSUFFICIENT,),
+            id="refuses-mark-in-later-timeframe-bucket",
+        ),
+    ],
+)
+def test_reconcile_broker_curve_to_local_pnl_judges_open_pnl_marks_by_timeframe_bucket(
+    mark_observed_at_ms: int,
+    within_tolerance: bool,
+    categories: tuple[DivergenceCategory, ...],
+) -> None:
     result = reconcile_broker_curve_to_local_pnl(
         _history([10_000.0, 10_030.0]),
         _attribution(
             realized_pnl_total=25.0,
             open_pnl_total=5.0,
-            mark_observed_at_ms={'SPY': 1_700_000_001_000},
+            mark_observed_at_ms={"SPY": mark_observed_at_ms},
         ),
     )
 
@@ -114,35 +136,9 @@ def test_reconcile_broker_curve_to_local_pnl_includes_complete_open_pnl() -> Non
         30.0,
         abs=ACCOUNT_PNL_RECONCILIATION_ATOL,
         rel=ACCOUNT_PNL_RECONCILIATION_RTOL,
-    )
-    assert result.within_tolerance is True
-
-
-def test_reconcile_broker_curve_to_local_pnl_accepts_mark_in_same_timeframe_bucket() -> None:
-    result = reconcile_broker_curve_to_local_pnl(
-        _history([10_000.0, 10_030.0]),
-        _attribution(
-            realized_pnl_total=25.0,
-            open_pnl_total=5.0,
-            mark_observed_at_ms={'SPY': 1_700_000_001_001},
-        ),
-    )
-
-    assert result.within_tolerance is True
-
-
-def test_reconcile_broker_curve_to_local_pnl_refuses_mark_in_later_timeframe_bucket() -> None:
-    result = reconcile_broker_curve_to_local_pnl(
-        _history([10_000.0, 10_030.0]),
-        _attribution(
-            realized_pnl_total=25.0,
-            open_pnl_total=5.0,
-            mark_observed_at_ms={"SPY": 1_700_086_401_000},
-        ),
-    )
-
-    assert result.within_tolerance is False
-    assert [item.category for item in result.divergences] == [DivergenceCategory.FIXTURE_INSUFFICIENT]
+    ), "local delta includes the complete open P&L"
+    assert result.within_tolerance is within_tolerance, "within_tolerance holds only when each mark falls in its timeframe bucket"
+    assert tuple(item.category for item in result.divergences) == categories, "divergence categories"
 
 
 def test_reconcile_broker_curve_to_local_pnl_subtracts_start_open_pnl_and_fees() -> None:
@@ -162,30 +158,40 @@ def test_reconcile_broker_curve_to_local_pnl_subtracts_start_open_pnl_and_fees()
     assert result.within_tolerance is True
 
 
-def test_reconcile_broker_curve_to_local_pnl_refuses_unknown_fees() -> None:
+@pytest.mark.parametrize(
+    ("fee_total", "fee_fidelity", "execution_coverage", "detail_fragment"),
+    [
+        pytest.param(None, "not_reported", "complete", "fees", id="refuses-unknown-fees"),
+        pytest.param(
+            0.0,
+            "reported",
+            "incomplete",
+            "complete broker account",
+            id="refuses-incomplete-execution-coverage",
+        ),
+    ],
+)
+def test_reconcile_broker_curve_to_local_pnl_refuses_a_book_that_cannot_prove_the_curve(
+    fee_total: float | None,
+    fee_fidelity: FeeFidelity,
+    execution_coverage: ExecutionCoverage,
+    detail_fragment: str,
+) -> None:
     result = reconcile_broker_curve_to_local_pnl(
         _history([10_000.0, 10_025.0]),
         _attribution(
             realized_pnl_total=25.0,
-            fee_total=None,
-            fee_fidelity="not_reported",
+            fee_total=fee_total,
+            fee_fidelity=fee_fidelity,
+            execution_coverage=execution_coverage,
         ),
     )
 
-    assert result.within_tolerance is False
-    assert result.divergences[0].category is DivergenceCategory.FIXTURE_INSUFFICIENT
-    assert "fees" in result.divergences[0].detail
-
-
-def test_reconcile_broker_curve_to_local_pnl_refuses_incomplete_execution_coverage() -> None:
-    result = reconcile_broker_curve_to_local_pnl(
-        _history([10_000.0, 10_025.0]),
-        _attribution(realized_pnl_total=25.0, execution_coverage="incomplete"),
-    )
-
-    assert result.within_tolerance is False
-    assert result.divergences[0].category is DivergenceCategory.FIXTURE_INSUFFICIENT
-    assert "complete broker account" in result.divergences[0].detail
+    assert result.within_tolerance is False, "the curve is not proven"
+    assert (
+        result.divergences[0].category is DivergenceCategory.FIXTURE_INSUFFICIENT
+    ), "the refusal is classified FIXTURE_INSUFFICIENT"
+    assert detail_fragment in result.divergences[0].detail, "the detail names what is missing"
 
 
 def test_reconcile_broker_curve_to_local_pnl_refuses_unmarked_open_lots_as_proof() -> None:

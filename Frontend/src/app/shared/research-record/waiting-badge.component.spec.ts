@@ -35,17 +35,12 @@ describe('WaitingBadgeComponent (the #3052 waiting states)', () => {
     expect(rendered.fixture.nativeElement.textContent).not.toContain('machine capacity');
   });
 
-  it('renders nothing for a run that is evaluating', async () => {
+  it.each<[string, JobState['waiting'], string]>([
+    ['for a run that is evaluating', null, 'running'],
+    ['once the run is no longer running', 'capacity', 'completed'],
+  ])('renders nothing %s', async (_when, waiting, status) => {
     const rendered = await render(WaitingBadgeComponent, {
-      providers: [{ provide: JobsService, useValue: serviceOf(runningJob(null)) }],
-      componentInputs: { jobId: 'job-1' },
-    });
-    expect(rendered.fixture.nativeElement.textContent).not.toContain('Waiting');
-  });
-
-  it('renders nothing once the run is no longer running', async () => {
-    const rendered = await render(WaitingBadgeComponent, {
-      providers: [{ provide: JobsService, useValue: serviceOf(runningJob('capacity', 'completed')) }],
+      providers: [{ provide: JobsService, useValue: serviceOf(runningJob(waiting, status)) }],
       componentInputs: { jobId: 'job-1' },
     });
     expect(rendered.fixture.nativeElement.textContent).not.toContain('Waiting');

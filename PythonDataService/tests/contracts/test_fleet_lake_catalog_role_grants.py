@@ -85,28 +85,43 @@ def _code() -> str:
     return "\n".join(lines)
 
 
-def test_role_creation_is_idempotent() -> None:
+def test_role_provisioning_is_idempotent_unprivileged_read_only_converging_and_closes_the_temporary_table_path() -> None:
     """Re-running provisioning (e.g. after migrations add tables) must be a
     no-op for the role itself: CREATE ROLE has no IF NOT EXISTS, so an
     unguarded script fails on its second run and an operator's safest move
-    becomes not re-running it."""
+    becomes not re-running it.
+
+    The role is a plain login: every administrative flag is explicitly
+    refused (not merely omitted by CREATE ROLE defaults), and the password
+    arrives as a psql variable — a generated secret never belongs in a
+    committed file.
+
+    Re-running the script after the allowlist narrows (or after an
+    operator's temporary widening elsewhere) must actually remove the
+    stale privilege: every table privilege is revoked before the allowlist
+    is applied, so the role's effective surface is always exactly the list
+    above rather than the union of everything it was ever granted.
+
+    PostgreSQL grants TEMPORARY on every database to PUBLIC, and a role
+    cannot selectively refuse an inherited PUBLIC privilege — so the
+    script must close the wildcard at the PUBLIC boundary or the lane role
+    can still create and fill temp tables despite its flags and narrow
+    grants (a write path and a disk-exhaustion vector under the
+    clerk-compromise scenario this role exists to contain).
+
+    No grant may carry a write, DDL, or blanket privilege — not ALL, not
+    ALL TABLES, not default privileges (the runbook's re-run step is the
+    documented way new tables become readable, deliberately)."""
     code = _code()
-    assert "CREATE ROLE fleet_lake_catalog" in code
+
+    assert "CREATE ROLE fleet_lake_catalog" in code, "the role is created"
     assert (
         re.search(
             r"IF NOT EXISTS \(\s*SELECT 1 FROM pg_roles WHERE rolname = 'fleet_lake_catalog'\s*\)",
             code,
         )
         is not None
-    )
-
-
-def test_role_holds_no_privileged_flags_and_no_literal_password() -> None:
-    """The role is a plain login: every administrative flag is explicitly
-    refused (not merely omitted by CREATE ROLE defaults), and the password
-    arrives as a psql variable — a generated secret never belongs in a
-    committed file."""
-    code = _code()
+    ), "CREATE ROLE is guarded by an IF NOT EXISTS check on pg_roles"
     for flag in (
         "NOSUPERUSER",
         "NOCREATEDB",
@@ -115,16 +130,23 @@ def test_role_holds_no_privileged_flags_and_no_literal_password() -> None:
         "NOBYPASSRLS",
     ):
         assert flag in code, f"missing explicit {flag}"
-    assert re.search(r"(?<!NO)SUPERUSER", code) is None
-    assert "PASSWORD :'lane_password'" in code
-    assert re.search(r"PASSWORD\s+'[^:]", code) is None
+    assert re.search(r"(?<!NO)SUPERUSER", code) is None, "the role is never granted a bare SUPERUSER"
+    assert "PASSWORD :'lane_password'" in code, "the password arrives as the psql variable lane_password"
+    assert re.search(r"PASSWORD\s+'[^:]", code) is None, "no literal password is committed in the script"
+    revoke_at = code.find("REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM fleet_lake_catalog")
+    first_grant_at = code.find("GRANT SELECT ON TABLE")
+    assert revoke_at != -1, "no converging REVOKE of existing table privileges"
+    assert first_grant_at != -1, "no GRANT SELECT ON TABLE allowlist found"
+    assert revoke_at < first_grant_at, "the REVOKE must precede the allowlist GRANTs"
+    assert (
+        "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM fleet_lake_catalog"
+        in code
+    ), "sequence privileges are revoked before the allowlist as well"
+    assert "REVOKE TEMPORARY ON DATABASE postgres FROM PUBLIC" in code, (
+        "the inherited PUBLIC TEMPORARY wildcard is not closed"
+    )
 
-
-def test_every_grant_is_read_only() -> None:
-    """No grant may carry a write, DDL, or blanket privilege — not ALL, not
-    ALL TABLES, not default privileges (the runbook's re-run step is the
-    documented way new tables become readable, deliberately)."""
-    grants = re.findall(r"GRANT\s+(.*?);", _code(), flags=re.DOTALL)
+    grants = re.findall(r"GRANT\s+(.*?);", code, flags=re.DOTALL)
     assert grants, "no GRANT statements found"
     for grant in grants:
         forbidden = (
@@ -169,31 +191,3 @@ def test_no_grant_reaches_tables_outside_the_lane_surface() -> None:
         assert table not in _code(), (
             f"{table} must never appear in the lane role's provisioning SQL"
         )
-
-
-def test_reprovisioning_converges_instead_of_accumulating() -> None:
-    """Re-running the script after the allowlist narrows (or after an
-    operator's temporary widening elsewhere) must actually remove the
-    stale privilege: every table privilege is revoked before the allowlist
-    is applied, so the role's effective surface is always exactly the list
-    above rather than the union of everything it was ever granted."""
-    code = _code()
-    revoke = code.find("REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM fleet_lake_catalog")
-    grant = code.find("GRANT SELECT ON TABLE")
-    assert revoke != -1, "no converging REVOKE of existing table privileges"
-    assert grant != -1
-    assert revoke < grant, "the REVOKE must precede the allowlist GRANTs"
-    assert (
-        "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM fleet_lake_catalog"
-        in code
-    )
-
-
-def test_the_inherited_temporary_table_write_path_is_closed() -> None:
-    """PostgreSQL grants TEMPORARY on every database to PUBLIC, and a role
-    cannot selectively refuse an inherited PUBLIC privilege — so the
-    script must close the wildcard at the PUBLIC boundary or the lane role
-    can still create and fill temp tables despite its flags and narrow
-    grants (a write path and a disk-exhaustion vector under the
-    clerk-compromise scenario this role exists to contain)."""
-    assert "REVOKE TEMPORARY ON DATABASE postgres FROM PUBLIC" in _code()

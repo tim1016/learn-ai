@@ -86,13 +86,16 @@ def _generate_multi_month_bars(
 
 
 class TestMonthlyICBreakdown:
-    def test_groups_by_month(self) -> None:
+    def test_groups_by_month_and_picks_best_and_worst_month(self) -> None:
         ic_values, ic_dates = _generate_multi_month_ic(n_months=4)
-        monthly, *_ = compute_monthly_ic_breakdown(ic_values, ic_dates)
+        monthly, _, _, best, worst, _ = compute_monthly_ic_breakdown(ic_values, ic_dates)
 
-        assert len(monthly) == 4
-        assert monthly[0].month == "2024-01"
-        assert monthly[3].month == "2024-04"
+        assert len(monthly) == 4, "one entry per month"
+        assert monthly[0].month == "2024-01", "first month is January"
+        assert monthly[3].month == "2024-04", "last month is April"
+        mean_ics = [m.mean_ic for m in monthly]
+        assert best == max(mean_ics), "best month is the highest mean IC"
+        assert worst == min(mean_ics), "worst month is the lowest mean IC"
 
     def test_each_month_has_stats(self) -> None:
         ic_values, ic_dates = _generate_multi_month_ic(n_months=3)
@@ -103,38 +106,28 @@ class TestMonthlyICBreakdown:
             assert isinstance(m.mean_ic, float)
             assert isinstance(m.t_stat, float)
 
-    def test_pct_positive_with_positive_base(self) -> None:
+    def test_pct_positive_follows_the_sign_of_the_base(self) -> None:
         ic_values, ic_dates = _generate_multi_month_ic(n_months=6, base_ic=0.05)
         _, pct_positive, _, _, _, _ = compute_monthly_ic_breakdown(ic_values, ic_dates)
 
-        assert pct_positive > 0.5
+        assert pct_positive > 0.5, "positive base: most months are positive"
 
-    def test_pct_positive_with_negative_base(self) -> None:
         ic_values, ic_dates = _generate_multi_month_ic(n_months=6, base_ic=-0.05)
         _, pct_positive, _, _, _, _ = compute_monthly_ic_breakdown(ic_values, ic_dates)
 
-        assert pct_positive < 0.5
+        assert pct_positive < 0.5, "negative base: most months are negative"
 
-    def test_stability_label_strong(self) -> None:
+    def test_stability_label_follows_the_sign_of_the_base(self) -> None:
         ic_values, ic_dates = _generate_multi_month_ic(n_months=10, base_ic=0.08, seed=99)
         _, _, _, _, _, label = compute_monthly_ic_breakdown(ic_values, ic_dates)
 
-        assert label in ("Strong", "Suspicious")
+        assert label in ("Strong", "Suspicious"), "strong positive base: stability label is Strong"
 
-    def test_stability_label_noise(self) -> None:
         # Use a strongly negative base so most months are negative
         ic_values, ic_dates = _generate_multi_month_ic(n_months=10, base_ic=-0.04, seed=99)
         _, _pct_positive, _, _, _, label = compute_monthly_ic_breakdown(ic_values, ic_dates)
 
-        assert label in ("Noise", "Weak")
-
-    def test_best_and_worst_month(self) -> None:
-        ic_values, ic_dates = _generate_multi_month_ic(n_months=4)
-        monthly, _, _, best, worst, _ = compute_monthly_ic_breakdown(ic_values, ic_dates)
-
-        mean_ics = [m.mean_ic for m in monthly]
-        assert best == max(mean_ics)
-        assert worst == min(mean_ics)
+        assert label in ("Noise", "Weak"), "negative base: stability label is Noise"
 
     def test_insufficient_data_returns_empty(self) -> None:
         monthly, _pct_pos, _pct_sig, _best, _worst, label = compute_monthly_ic_breakdown(
@@ -204,12 +197,16 @@ class TestTrainTestSplit:
         assert result is not None
         assert result.overfit_flag is True
 
-    def test_no_overfit_when_consistent(self) -> None:
+    def test_no_overfit_and_retention_computed_when_consistent(self) -> None:
+        """OOS retention should be computed when train/test split exists."""
         ic_values, ic_dates = _generate_multi_month_ic(n_months=6, base_ic=0.03)
         result = compute_train_test_split(ic_values, ic_dates)
 
-        assert result is not None
-        assert result.overfit_flag is False
+        assert result is not None, "a consistent series has a train/test split"
+        assert result.overfit_flag is False, "no overfit flag when consistent"
+        assert result is not None, "the train/test split exists, so OOS retention is computed"
+        assert result.oos_retention > 0, "OOS retention is positive"
+        assert result.oos_retention_label != "Unknown", "OOS retention is labelled"
 
     def test_insufficient_data_returns_none(self) -> None:
         result = compute_train_test_split([0.01, 0.02], ["2024-01-01", "2024-01-02"])
@@ -218,25 +215,20 @@ class TestTrainTestSplit:
 
 
 class TestRegimeAnalysis:
-    def test_volatility_regimes_returned(self) -> None:
+    def test_volatility_and_trend_regimes_returned(self) -> None:
         ic_values, ic_dates = _generate_multi_month_ic(n_months=6)
         bars = _generate_multi_month_bars(n_months=6)
-        vol_regimes, _ = compute_regime_analysis(ic_values, ic_dates, bars)
+        vol_regimes, trend_regimes = compute_regime_analysis(ic_values, ic_dates, bars)
 
         if vol_regimes:
             labels = {r.regime_label for r in vol_regimes}
-            assert labels.issubset({"Low Vol", "Normal Vol", "High Vol"})
+            assert labels.issubset({"Low Vol", "Normal Vol", "High Vol"}), "volatility regimes use the volatility labels"
             for r in vol_regimes:
-                assert r.observation_count >= 5
-
-    def test_trend_regimes_returned(self) -> None:
-        ic_values, ic_dates = _generate_multi_month_ic(n_months=6)
-        bars = _generate_multi_month_bars(n_months=6)
-        _, trend_regimes = compute_regime_analysis(ic_values, ic_dates, bars)
+                assert r.observation_count >= 5, f"{r.regime_label} volatility regime has at least five observations"
 
         if trend_regimes:
             labels = {r.regime_label for r in trend_regimes}
-            assert labels.issubset({"Trending Up", "Sideways", "Trending Down"})
+            assert labels.issubset({"Trending Up", "Sideways", "Trending Down"}), "trend regimes use the trend labels"
 
     def test_insufficient_ic_data(self) -> None:
         vol, trend = compute_regime_analysis(
@@ -250,15 +242,6 @@ class TestRegimeAnalysis:
 
 
 class TestOosRetention:
-    def test_retention_computed(self) -> None:
-        """OOS retention should be computed when train/test split exists."""
-        ic_values, ic_dates = _generate_multi_month_ic(n_months=6, base_ic=0.03)
-        result = compute_train_test_split(ic_values, ic_dates)
-
-        assert result is not None
-        assert result.oos_retention > 0
-        assert result.oos_retention_label != "Unknown"
-
     def test_retention_label_excellent(self) -> None:
         """Consistent IC across train/test should yield high retention."""
         ic_values, ic_dates = _generate_multi_month_ic(n_months=6, base_ic=0.05, seed=10)
@@ -300,8 +283,13 @@ class TestSignConsistentStability:
         """With insufficient data, sign-consistent fields should be defaults."""
         result = compute_robustness([0.01], ["2024-01-01"], [])
 
-        assert result.pct_sign_consistent_months == 0.0
-        assert result.sign_consistent_stability_label == "Unknown"
+        assert result.pct_sign_consistent_months == 0.0, "sign-consistent months default to zero"
+        assert result.sign_consistent_stability_label == "Unknown", "sign-consistent stability label is Unknown"
+        assert result.monthly_breakdown == [], "no monthly breakdown"
+        assert result.stability_label == "Unknown", "stability label is Unknown"
+        assert result.train_test is None, "no train/test split"
+        assert result.pct_sign_consistent_months == 0.0, "the defaults carry zero sign-consistent months"
+        assert result.structural_breaks == [], "no structural breaks"
 
 
 class TestStructuralBreaks:
@@ -362,12 +350,3 @@ class TestComputeRobustness:
         if result.train_test is not None:
             assert result.train_test.oos_retention >= 0
             assert result.train_test.oos_retention_label != "Unknown"
-
-    def test_insufficient_data_returns_defaults(self) -> None:
-        result = compute_robustness([0.01], ["2024-01-01"], [])
-
-        assert result.monthly_breakdown == []
-        assert result.stability_label == "Unknown"
-        assert result.train_test is None
-        assert result.pct_sign_consistent_months == 0.0
-        assert result.structural_breaks == []

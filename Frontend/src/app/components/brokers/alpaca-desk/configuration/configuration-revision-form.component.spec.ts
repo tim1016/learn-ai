@@ -49,33 +49,42 @@ describe('ConfigurationRevisionFormComponent', () => {
     }
   });
 
-  it('offers every allowlisted slot and says which has no credentials injected', async () => {
+  it('offers every allowlisted slot, and shows paper entry settings and exit defaults with their ownership', async () => {
     await render(HostComponent);
 
-    expect(screen.getByRole('option', { name: 'Default credentials' })).toBeTruthy();
-    expect(
-      screen.getByRole('option', { name: 'Live credentials — no credentials injected' }),
+    expect.soft(
+      screen.queryByRole('spinbutton', { name: 'Daily loss fraction' }),
+      'paper settings: no daily loss fraction',
+    ).toBeNull();
+    expect.soft(screen.queryByText(/Every Live deployment/), 'paper settings: no Live deployment note').toBeNull();
+    expect.soft(
+      screen.getByRole('option', { name: 'Default credentials' }),
+      'offers every allowlisted slot: Default credentials',
     ).toBeTruthy();
-  });
-
-  it('shows paper entry settings and exit defaults, and explains their ownership', async () => {
-    await render(HostComponent);
+    expect.soft(
+      screen.getByRole('option', { name: 'Live credentials — no credentials injected' }),
+      'says which slot has no credentials injected',
+    ).toBeTruthy();
 
     const offsets = screen.getByRole('group', { name: 'Extended-hours offsets' });
-    expect(screen.getAllByRole('spinbutton')).toHaveLength(4);
-    expect(
+    expect.soft(screen.getAllByRole('spinbutton'), 'paper settings: four number fields').toHaveLength(4);
+    expect.soft(
       within(offsets).getByRole('spinbutton', { name: 'Extended-hours entry offset (bps)' }),
+      'paper settings: entry offset field',
     ).toBeTruthy();
-    expect(
+    expect.soft(
       within(offsets).getByRole('spinbutton', { name: /^Extended-hours exit offset \(bps\)/ }),
+      'paper settings: exit offset field',
     ).toBeTruthy();
-    expect(screen.queryByRole('spinbutton', { name: 'Daily loss fraction' })).toBeNull();
     const note = within(offsets).getByText(/The entry offset sets/);
-    expect(note.textContent).toMatch(/each bot keeps the exit terms chosen when it was deployed/);
-    expect(note.textContent).toMatch(/a sell below the bid or a cover above the ask/);
-    expect(note.textContent).toMatch(/Stopped\s+positions retain their existing recovery actions/);
-    expect(note.textContent).toMatch(/Every fresh Deploy reviews its own exit terms/);
-    expect(screen.queryByText(/Every Live deployment/)).toBeNull();
+    expect.soft(note.textContent, 'ownership note: bots keep their deployed exit terms')
+      .toMatch(/each bot keeps the exit terms chosen when it was deployed/);
+    expect.soft(note.textContent, 'ownership note: sell below the bid or cover above the ask')
+      .toMatch(/a sell below the bid or a cover above the ask/);
+    expect.soft(note.textContent, 'ownership note: stopped positions keep their recovery actions')
+      .toMatch(/Stopped\s+positions retain their existing recovery actions/);
+    expect.soft(note.textContent, 'ownership note: every fresh Deploy reviews its exit terms')
+      .toMatch(/Every fresh Deploy reviews its own exit terms/);
   });
 
   it('keeps typed offsets when the endpoint switches between paper and live', async () => {

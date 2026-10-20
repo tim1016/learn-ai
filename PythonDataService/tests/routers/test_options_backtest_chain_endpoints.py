@@ -172,13 +172,15 @@ async def test_any_instant_on_the_date_names_it_and_the_session_is_its_own(
     assert before.json()["session_open_ms"] != FRIDAY_OPEN_MS  # a millisecond earlier is Thursday's session
 
 
-async def test_a_date_with_no_stored_listing_says_not_stored_and_lists_nothing(
+async def test_a_date_with_no_stored_listing_says_not_stored_and_lists_nothing_and_only_a_session_not_yet_over_carries_a_refusal(
     client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
+    # The tests' clock is 2026-10-12 14:00 New York: 2025-06-13 is over, and 2026-10-12 is a session not yet over.
     async with client as c:
         response = await c.get(f"{PREFIX}/day", params={"underlying": "SPY", "trading_date_ms": FRIDAY_MIDNIGHT_MS})
+        today = await c.get(f"{PREFIX}/day", params={"underlying": "SPY", "trading_date_ms": TODAY_MIDNIGHT_MS})
 
-    assert response.status_code == 200
+    assert response.status_code == 200, "a date with no stored listing is answered"
     assert response.json() | {"session_open_ms": 0, "session_close_ms": 0} == {
         "underlying": "SPY",
         "session_open_ms": 0,
@@ -189,7 +191,13 @@ async def test_a_date_with_no_stored_listing_says_not_stored_and_lists_nothing(
         "rows_left_out_unusable": 0,
         "rows_left_out_expired": 0,
         "fetch_refusal": None,
-    }
+    }, "a date with no stored listing says not stored and lists nothing"
+    assert response.json()["fetch_refusal"] is None, "the day of a session long over has no refusal"
+    assert today.json()["fetch_refusal"]["reason"] == "session_not_over", "today's session, not yet over, has one"
+    # Everything else of the answer is what it was for a day with nothing stored.
+    assert (
+        today.json()["listing_state"] == "not_stored" and today.json()["expiries"] == []
+    ), "today's answer is otherwise a day with nothing stored"
 
 
 # The lake takes a session's option data from the New York midnight after its date. Friday 2025-06-13 is taken from
@@ -220,20 +228,6 @@ async def test_the_day_carries_the_refusal_until_the_millisecond_the_lake_takes_
     assert response.status_code == 200, response.text
     expected = {"reason": "session_not_over", "words": lake_reason_words("session_not_over")}
     assert response.json()["fetch_refusal"] == (expected if refused else None)
-
-
-async def test_the_day_of_a_session_long_over_has_no_refusal_and_todays_has_one(
-    client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path
-) -> None:
-    # The tests' clock is 2026-10-12 14:00 New York: 2025-06-13 is over, and 2026-10-12 is a session not yet over.
-    async with client as c:
-        long_over = await c.get(f"{PREFIX}/day", params={"underlying": "SPY", "trading_date_ms": FRIDAY_MIDNIGHT_MS})
-        today = await c.get(f"{PREFIX}/day", params={"underlying": "SPY", "trading_date_ms": TODAY_MIDNIGHT_MS})
-
-    assert long_over.json()["fetch_refusal"] is None
-    assert today.json()["fetch_refusal"]["reason"] == "session_not_over"
-    # Everything else of the answer is what it was for a day with nothing stored.
-    assert today.json()["listing_state"] == "not_stored" and today.json()["expiries"] == []
 
 
 @respx.mock
@@ -269,28 +263,6 @@ async def test_a_date_with_no_session_is_refused_with_a_plain_reason(
     assert what in response.json()["detail"]["message"]
 
 
-@pytest.mark.parametrize(
-    "params",
-    [
-        pytest.param({"trading_date_ms": FRIDAY_MIDNIGHT_MS}, id="no underlying"),
-        pytest.param({"underlying": "SPY"}, id="no date"),
-        pytest.param({"underlying": "spy", "trading_date_ms": FRIDAY_MIDNIGHT_MS}, id="lower case"),
-        pytest.param({"underlying": "SPYSPYS", "trading_date_ms": FRIDAY_MIDNIGHT_MS}, id="seven letters"),
-        pytest.param({"underlying": "BRK.B", "trading_date_ms": FRIDAY_MIDNIGHT_MS}, id="a dot"),
-        pytest.param({"underlying": "SPY", "trading_date_ms": -1}, id="before the epoch"),
-        pytest.param({"underlying": "SPY", "trading_date_ms": 2**63 - 1}, id="the int64 width, not the domain's end"),
-        pytest.param({"underlying": "SPY", "trading_date_ms": "yesterday"}, id="not a number"),
-    ],
-)
-async def test_a_day_request_that_is_malformed_is_the_standard_422(
-    client: httpx.AsyncClient, params: dict[str, Any]
-) -> None:
-    async with client as c:
-        response = await c.get(f"{PREFIX}/day", params=params)
-
-    assert response.status_code == 422
-
-
 async def test_a_catalog_that_cannot_be_reached_is_a_503_and_not_a_missing_listing(
     client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -318,7 +290,7 @@ def _expiry_params(**overrides: Any) -> dict[str, Any]:
 
 
 @respx.mock
-async def test_one_expiry_at_an_instant_has_the_underlyings_price_the_money_and_each_contracts_last_trade(
+async def test_one_expiry_at_an_instant_has_the_underlyings_price_the_money_and_each_contracts_last_trade_with_exact_dollar_strings_and_integer_times(
     client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
     await _the_lake(fake_catalog, tmp_lake)
@@ -333,53 +305,75 @@ async def test_one_expiry_at_an_instant_has_the_underlyings_price_the_money_and_
         FRIDAY_CLOSE_MS,
         MINUTE_10_MS,
         1,
-    )
-    assert (body["session_open_ms"], body["session_close_ms"]) == (FRIDAY_OPEN_MS, FRIDAY_CLOSE_MS)
-    assert (body["listing_state"], body["expiry_listed"]) == ("stored", True)
-    assert body["tag"]["series"] == "weekly" and body["tag"]["expires_today"] is True
+    ), "the answer names the underlying, the expiry, the instant and the window it was asked for"
+    assert (body["session_open_ms"], body["session_close_ms"]) == (
+        FRIDAY_OPEN_MS,
+        FRIDAY_CLOSE_MS,
+    ), "the session of the date"
+    assert (body["listing_state"], body["expiry_listed"]) == ("stored", True), "the listing holds the expiry"
+    assert (
+        body["tag"]["series"] == "weekly" and body["tag"]["expires_today"] is True
+    ), "the expiry is tagged a weekly that expires today"
     # The close of the bar that closed at minute 10 is 602.40, with that bar's close time: exactly the instant.
     assert body["underlying_price"] == {
         "state": "priced",
         "price": "602.4",
         "price_time_ms": MINUTE_10_MS,
         "problem": None,
-    }
+    }, "the underlying's price is the close of the bar that closed at the instant"
     calls, puts = body["calls"], body["puts"]
-    assert (calls["right"], calls["listed"], calls["standard_listed"]) == ("call", 3, 3)
-    assert (calls["at_the_money_strike"], calls["at_the_money_strike_thousandths"]) == ("602", 602000)
-    assert (puts["at_the_money_strike"], puts["at_the_money_strike_thousandths"]) == ("602", 602000)
+    assert (calls["right"], calls["listed"], calls["standard_listed"]) == ("call", 3, 3), "the calls listed"
+    assert (calls["at_the_money_strike"], calls["at_the_money_strike_thousandths"]) == (
+        "602",
+        602000,
+    ), "the calls' money strike"
+    assert (puts["at_the_money_strike"], puts["at_the_money_strike_thousandths"]) == (
+        "602",
+        602000,
+    ), "the puts' money strike"
     # One strike each side of 602 on calls 601 602 603; on puts 602 603 only, as 601 is not listed.
-    assert sorted(_contracts(calls)) == [601000, 602000, 603000] and sorted(_contracts(puts)) == [602000, 603000]
+    assert (
+        sorted(_contracts(calls)) == [601000, 602000, 603000] and sorted(_contracts(puts)) == [602000, 603000]
+    ), "one strike each side of the money, listed strikes only"
     by_strike = _contracts(calls)
-    assert by_strike[601000]["price_state"] == "not_stored" and by_strike[601000]["price"] is None
-    assert by_strike[602000]["symbol"] == "SPY250613C00602000"
+    assert (
+        by_strike[601000]["price_state"] == "not_stored" and by_strike[601000]["price"] is None
+    ), "call 601 was never captured"
+    assert by_strike[602000]["symbol"] == "SPY250613C00602000", "call 602's symbol"
     assert (by_strike[602000]["price_state"], by_strike[602000]["price"], by_strike[602000]["price_time_ms"]) == (
         "traded",
         "3.1",
         1749821700000,
-    )
-    assert by_strike[602000]["steps_from_the_money"] == 0 and by_strike[603000]["steps_from_the_money"] == 1
-    assert by_strike[603000]["price_state"] == "did_not_trade" and by_strike[602000]["standard"] is True
-    assert by_strike[602000]["strike"] == "602"
-    assert (_contracts(puts)[603000]["price"], _contracts(puts)[603000]["price_time_ms"]) == ("4.4", MINUTE_10_MS)
-    assert _contracts(puts)[602000]["price_state"] == "not_stored"
-
-
-@respx.mock
-async def test_prices_and_strikes_are_strings_of_exact_dollars_and_times_are_integers(
-    client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path
-) -> None:
-    await _the_lake(fake_catalog, tmp_lake)
-
-    async with client as c:
-        response = await c.get(f"{PREFIX}/expiry", params=_expiry_params(at_ms=MINUTE_10_MS, strikes=1))
-
-    body = response.json()
-    traded = _contracts(body["calls"])[602000]
-    assert isinstance(traded["price"], str) and isinstance(traded["strike"], str)
-    assert isinstance(body["underlying_price"]["price"], str) and isinstance(body["calls"]["at_the_money_strike"], str)
-    for value in (body["at_ms"], body["expiry_ms"], traded["price_time_ms"], traded["strike_thousandths"]):
-        assert type(value) is int
+    ), "call 602 last traded at minute 5"
+    assert (
+        by_strike[602000]["steps_from_the_money"] == 0 and by_strike[603000]["steps_from_the_money"] == 1
+    ), "steps from the money"
+    assert (
+        by_strike[603000]["price_state"] == "did_not_trade" and by_strike[602000]["standard"] is True
+    ), "call 603 did not trade, call 602 is standard"
+    assert by_strike[602000]["strike"] == "602", "call 602's strike"
+    assert (_contracts(puts)[603000]["price"], _contracts(puts)[603000]["price_time_ms"]) == (
+        "4.4",
+        MINUTE_10_MS,
+    ), "put 603 traded at minute 10"
+    assert _contracts(puts)[602000]["price_state"] == "not_stored", "put 602 was never captured"
+    # Prices and strikes are strings of exact dollars and times are integers.
+    traded = by_strike[602000]
+    assert isinstance(traded["price"], str) and isinstance(
+        traded["strike"], str
+    ), "a contract's price and strike are strings"
+    assert isinstance(body["underlying_price"]["price"], str) and isinstance(
+        body["calls"]["at_the_money_strike"], str
+    ), "the underlying's price and the money strike are strings"
+    integers = {
+        "at_ms": body["at_ms"],
+        "expiry_ms": body["expiry_ms"],
+        "price_time_ms": traded["price_time_ms"],
+        "strike_thousandths": traded["strike_thousandths"],
+    }
+    assert {name: type(value) for name, value in integers.items()} == dict.fromkeys(
+        integers, int
+    ), "times and thousandths are integers"
 
 
 @respx.mock
@@ -498,20 +492,30 @@ async def test_an_expiry_request_the_page_should_not_have_made_is_refused_with_a
 
 
 @pytest.mark.parametrize(
-    "overrides",
+    ("route", "params"),
     [
-        pytest.param({"strikes": 15}, id="more strikes than the cap"),
-        pytest.param({"strikes": -1}, id="fewer than none"),
-        pytest.param({"strikes": "many"}, id="not a number"),
-        pytest.param({"at_ms": -1}, id="a negative instant"),
-        pytest.param({"underlying": "spy"}, id="lower case"),
+        pytest.param("day", {"trading_date_ms": FRIDAY_MIDNIGHT_MS}, id="day, no underlying"),
+        pytest.param("day", {"underlying": "SPY"}, id="day, no date"),
+        pytest.param("day", {"underlying": "spy", "trading_date_ms": FRIDAY_MIDNIGHT_MS}, id="day, lower case"),
+        pytest.param("day", {"underlying": "SPYSPYS", "trading_date_ms": FRIDAY_MIDNIGHT_MS}, id="day, seven letters"),
+        pytest.param("day", {"underlying": "BRK.B", "trading_date_ms": FRIDAY_MIDNIGHT_MS}, id="day, a dot"),
+        pytest.param("day", {"underlying": "SPY", "trading_date_ms": -1}, id="day, before the epoch"),
+        pytest.param(
+            "day", {"underlying": "SPY", "trading_date_ms": 2**63 - 1}, id="day, the int64 width, not the domain's end"
+        ),
+        pytest.param("day", {"underlying": "SPY", "trading_date_ms": "yesterday"}, id="day, not a number"),
+        pytest.param("expiry", _expiry_params(strikes=15), id="expiry, more strikes than the cap"),
+        pytest.param("expiry", _expiry_params(strikes=-1), id="expiry, fewer than none"),
+        pytest.param("expiry", _expiry_params(strikes="many"), id="expiry, not a number"),
+        pytest.param("expiry", _expiry_params(at_ms=-1), id="expiry, a negative instant"),
+        pytest.param("expiry", _expiry_params(underlying="spy"), id="expiry, lower case"),
     ],
 )
-async def test_an_expiry_request_that_is_malformed_is_the_standard_422(
-    client: httpx.AsyncClient, overrides: dict[str, Any]
+async def test_a_day_or_expiry_request_that_is_malformed_is_the_standard_422(
+    client: httpx.AsyncClient, route: str, params: dict[str, Any]
 ) -> None:
     async with client as c:
-        response = await c.get(f"{PREFIX}/expiry", params=_expiry_params(**overrides))
+        response = await c.get(f"{PREFIX}/{route}", params=params)
 
     assert response.status_code == 422
 
@@ -1305,48 +1309,47 @@ PAST_CHAIN_MODELS = {
 }
 
 
-def test_every_model_the_routes_serve_is_in_the_contract_once_under_its_own_name() -> None:
+def test_the_published_contract_names_every_model_once_serves_the_three_routes_and_bounds_every_timestamp() -> None:
+    from app.utils.session_anchors import MAX_TIMESTAMP_MS
+
     schemas = app.openapi()["components"]["schemas"]
+    paths = app.openapi()["paths"]
 
-    assert set(schemas) >= PAST_CHAIN_MODELS
+    # Every model the routes serve is in the contract once, under its own name.
+    assert set(schemas) >= PAST_CHAIN_MODELS, "every model the routes serve is in the contract"
     # A name two served models share is renamed by FastAPI with its module path; none of ours may be.
-    assert [name for name in schemas if "PastChain" in name and name not in PAST_CHAIN_MODELS] == []
-    assert [name for name in schemas if "__" in name and name.rsplit("__", 1)[-1] in PAST_CHAIN_MODELS] == []
+    assert [
+        name for name in schemas if "PastChain" in name and name not in PAST_CHAIN_MODELS
+    ] == [], "no past-chain schema is a name the routes do not serve"
+    assert [
+        name for name in schemas if "__" in name and name.rsplit("__", 1)[-1] in PAST_CHAIN_MODELS
+    ] == [], "no served model is renamed with its module path"
 
+    # The three routes are served under the setup routes' prefix.
+    assert (
+        set(paths[f"{PREFIX}/day"]) == {"get"} and set(paths[f"{PREFIX}/expiry"]) == {"get"}
+    ), "day and expiry are served as GET only"
+    assert set(paths[f"{PREFIX}/download"]) == {"post"}, "download is served as POST only"
 
-def test_the_three_routes_are_served_under_the_setup_routes_prefix() -> None:
-    paths = app.openapi()["paths"]
-
-    assert set(paths[f"{PREFIX}/day"]) == {"get"} and set(paths[f"{PREFIX}/expiry"]) == {"get"}
-    assert set(paths[f"{PREFIX}/download"]) == {"post"}
-
-
-def test_only_the_download_operation_publishes_the_control_secret_header() -> None:
-    paths = app.openapi()["paths"]
-
+    # Only the download operation publishes the control secret header.
     def headers(path: str, method: str) -> set[str]:
         return {
             parameter["name"] for parameter in paths[path][method].get("parameters", []) if parameter["in"] == "header"
         }
 
-    assert headers(f"{PREFIX}/download", "post") == {CONTROL_SECRET_HEADER}
-    assert headers(f"{PREFIX}/day", "get") == set() and headers(f"{PREFIX}/expiry", "get") == set()
+    assert headers(f"{PREFIX}/download", "post") == {CONTROL_SECRET_HEADER}, "download publishes the secret header"
+    assert (
+        headers(f"{PREFIX}/day", "get") == set() and headers(f"{PREFIX}/expiry", "get") == set()
+    ), "the two reads publish no header"
 
-
-def test_the_routes_publish_the_refusal_body_the_setup_routes_already_use() -> None:
-    schemas = app.openapi()["components"]["schemas"]
-    day = app.openapi()["paths"][f"{PREFIX}/day"]["get"]["responses"]
-
+    # The routes publish the refusal body the setup routes already use.
+    day = paths[f"{PREFIX}/day"]["get"]["responses"]
     assert day["400"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/OptionsBacktestRefusalBody"
-    }
-    assert "OptionsBacktestRefusalBody" in schemas
+    }, "the day route's 400 is the setup routes' refusal body"
+    assert "OptionsBacktestRefusalBody" in schemas, "the refusal body is in the contract"
 
-
-def test_every_timestamp_field_is_bounded_by_the_domains_last_instant_and_not_the_int64_width() -> None:
-    from app.utils.session_anchors import MAX_TIMESTAMP_MS
-
-    schemas = app.openapi()["components"]["schemas"]
+    # Every timestamp field is bounded by the domain's last instant and not the int64 width.
     ms_fields = [
         (name, field, definition)
         for name in PAST_CHAIN_MODELS
@@ -1354,8 +1357,8 @@ def test_every_timestamp_field_is_bounded_by_the_domains_last_instant_and_not_th
         if field.endswith("_ms")
     ]
 
-    assert ms_fields
+    assert ms_fields, "the models carry timestamp fields"
     for name, field, definition in ms_fields:
         options = definition.get("anyOf", [definition])
         integer = next(option for option in options if option.get("type") == "integer")
-        assert integer["maximum"] == MAX_TIMESTAMP_MS, (name, field)
+        assert integer["maximum"] == MAX_TIMESTAMP_MS, f"{name}.{field} is bounded by the domain's last instant"

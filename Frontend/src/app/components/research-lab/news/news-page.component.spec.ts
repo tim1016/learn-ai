@@ -56,47 +56,34 @@ async function renderPage() {
 }
 
 describe('NewsPageComponent', () => {
-  it('fetches SPY by default, newest first', async () => {
+  it('fetches SPY by default, newest first, and omits blank optional parameters from the request', async () => {
     const { http } = await renderPage();
 
     const req = http.expectOne((r) => r.url === NEWS_URL);
 
-    expect(req.request.params.get('ticker')).toBe('SPY');
-    expect(req.request.params.get('order')).toBe('desc');
-    expect(req.request.params.get('sort')).toBe('published_utc');
-    expect(req.request.params.get('limit')).toBe('50');
+    expect.soft(req.request.params.get('ticker'), 'fetches SPY by default').toBe('SPY');
+    expect.soft(req.request.params.get('order'), 'fetches newest first: order').toBe('desc');
+    expect.soft(req.request.params.get('sort'), 'fetches newest first: sort').toBe('published_utc');
+    expect.soft(req.request.params.get('limit'), 'fetches 50 articles by default').toBe('50');
+    expect.soft(req.request.params.has('ticker_gte'), 'omits the blank ticker_gte parameter').toBe(false);
+    expect.soft(req.request.params.has('published_utc'), 'omits the blank published_utc parameter').toBe(false);
     req.flush(responseBody());
   });
 
-  it('renders the article with its vendor sentiment', async () => {
+  it('renders the article with its vendor sentiment, labelled vendor-asserted rather than derived', async () => {
     const { http } = await renderPage();
     http.expectOne((r) => r.url === NEWS_URL).flush(responseBody());
 
-    expect(await screen.findByText('SPY climbs on strong data')).toBeTruthy();
-    expect(screen.getByText('Example Wire')).toBeTruthy();
-    expect(screen.getByText(/SPY: positive/)).toBeTruthy();
-    expect(screen.getByText('Strong print.')).toBeTruthy();
-  });
+    expect.soft(await screen.findByText('SPY climbs on strong data'), 'renders the article title').toBeTruthy();
+    expect.soft(screen.getByText('Example Wire'), 'renders the publisher').toBeTruthy();
+    expect.soft(screen.getByText(/SPY: positive/), 'renders the vendor sentiment').toBeTruthy();
+    expect.soft(screen.getByText('Strong print.'), 'renders the sentiment reasoning').toBeTruthy();
 
-  it('labels sentiment as vendor-asserted rather than derived', async () => {
-    const { http } = await renderPage();
-    http.expectOne((r) => r.url === NEWS_URL).flush(responseBody());
-
-    expect(await screen.findByText(/vendor_asserted/)).toBeTruthy();
+    expect.soft(await screen.findByText(/vendor_asserted/), 'labels sentiment as vendor-asserted').toBeTruthy();
     // Page-level caveat, naming the point-in-time hazard.
-    expect(screen.getByText(/backfilled sentiment is not a point-in-time input/)).toBeTruthy();
+    expect.soft(screen.getByText(/backfilled sentiment is not a point-in-time input/), 'page-level caveat names the point-in-time hazard').toBeTruthy();
     // Per-card note, reachable by keyboard rather than a title tooltip.
-    expect(screen.getByText(/not validated by us/)).toBeTruthy();
-  });
-
-  it('omits blank optional parameters from the request', async () => {
-    const { http } = await renderPage();
-
-    const req = http.expectOne((r) => r.url === NEWS_URL);
-
-    expect(req.request.params.has('ticker_gte')).toBe(false);
-    expect(req.request.params.has('published_utc')).toBe(false);
-    req.flush(responseBody());
+    expect.soft(screen.getByText(/not validated by us/), 'per-card note says the sentiment is not validated').toBeTruthy();
   });
 
   it('does not refetch while the user edits — only on submit', async () => {

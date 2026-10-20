@@ -78,28 +78,23 @@ def test_serialize_news_article_reads_insights_the_sdk_model_would_drop() -> Non
     assert PolygonClientService._serialize_news_article(_article())["insights"] != []
 
 
-def test_serialize_news_article_preserves_every_documented_field() -> None:
+def test_serialize_news_article_preserves_every_documented_field_and_converts_published_utc_to_canonical_ms() -> None:
     row = PolygonClientService._serialize_news_article(_article())
 
-    assert row["id"] == "art-1"
-    assert row["amp_url"] == "https://example.test/a/amp"
-    assert row["image_url"] == "https://example.test/a.png"
+    assert row["id"] == "art-1", "the id is kept"
+    assert row["amp_url"] == "https://example.test/a/amp", "the amp url is kept"
+    assert row["image_url"] == "https://example.test/a.png", "the image url is kept"
     # Lists stay lists — the CSV exporter flattens at its own boundary.
-    assert row["tickers"] == ["SPY", "DIA"]
-    assert row["keywords"] == ["markets", "etf"]
-    assert row["publisher"]["favicon_url"] == "https://example.test/fav.ico"
+    assert row["tickers"] == ["SPY", "DIA"], "tickers stay a list"
+    assert row["keywords"] == ["markets", "etf"], "keywords stay a list"
+    assert row["publisher"]["favicon_url"] == "https://example.test/fav.ico", "the nested publisher keeps its favicon"
     # The field the previous implementation dropped entirely.
     assert row["insights"] == [
         {"ticker": "SPY", "sentiment": "positive", "sentiment_reasoning": "Because reasons."}
-    ]
-
-
-def test_serialize_news_article_converts_published_utc_to_canonical_ms() -> None:
-    row = PolygonClientService._serialize_news_article(_article())
-
-    assert row["published_utc_ms"] == PUBLISHED_MS
+    ], "the vendor-asserted insights are kept"
+    assert row["published_utc_ms"] == PUBLISHED_MS, "published_utc is converted to canonical ms"
     # The vendor's RFC3339 string is snapped to ms and not kept.
-    assert "published_utc" not in row
+    assert "published_utc" not in row, "the vendor's published_utc string is not kept"
 
 
 def test_serialize_news_article_survives_unparseable_published_utc() -> None:

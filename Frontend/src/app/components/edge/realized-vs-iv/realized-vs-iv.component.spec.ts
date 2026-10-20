@@ -63,7 +63,7 @@ describe("RealizedVsIvComponent — IV confidence banner", () => {
     expect(banner()).toBeNull();
   });
 
-  it("renders the recorder-fallback label and confidence when iv_source=recorder", () => {
+  it("renders the recorder-fallback label and confidence, and no imputed pill, for a recorder IV with real evidence", () => {
     setIvConfidence({
       ivSource: "recorder",
       latestConfidence: 0.83,
@@ -74,9 +74,16 @@ describe("RealizedVsIvComponent — IV confidence banner", () => {
     });
 
     const el = bannerOrThrow();
-    expect(el.classList.contains("banner-iv-confidence-warn")).toBe(false);
-    expect(textOf(el, '[data-testid="iv-source"]')).toContain("recorder fallback");
-    expect(textOf(el, '[data-testid="iv-confidence-value"]')).toContain("83%");
+    expect.soft(el.classList.contains("banner-iv-confidence-warn"), "stays off the warn variant").toBe(false);
+    expect
+      .soft(textOf(el, '[data-testid="iv-source"]'), "renders the recorder-fallback label when iv_source=recorder")
+      .toContain("recorder fallback");
+    expect
+      .soft(textOf(el, '[data-testid="iv-confidence-value"]'), "renders the confidence when iv_source=recorder")
+      .toContain("83%");
+    expect
+      .soft(el.querySelector('[data-testid="iv-confidence-imputed"]'), "hides the imputed pill when healthImputed=false (real evidence)")
+      .toBeNull();
   });
 
   it("flips to the warn variant and surfaces the gated-now copy when gatedNow=true", () => {
@@ -112,7 +119,7 @@ describe("RealizedVsIvComponent — IV confidence banner", () => {
     expect(text).not.toContain("bars");
   });
 
-  it("hides the gated-now copy when confidence wasn't computed (gatedNow=null)", () => {
+  it("hides the gated-now copy, the confidence value and the imputed pill when confidence wasn't computed", () => {
     setIvConfidence({
       ivSource: "absent",
       latestConfidence: null,
@@ -123,9 +130,18 @@ describe("RealizedVsIvComponent — IV confidence banner", () => {
     });
 
     const el = bannerOrThrow();
-    expect(el.querySelector('[data-testid="iv-gated-now"]')).toBeNull();
-    expect(el.querySelector('[data-testid="iv-confidence-value"]')).toBeNull();
-    expect(textOf(el, '[data-testid="iv-source"]')).toContain("no IV provided");
+    expect
+      .soft(el.querySelector('[data-testid="iv-gated-now"]'), "hides the gated-now copy when confidence wasn't computed (gatedNow=null)")
+      .toBeNull();
+    expect
+      .soft(el.querySelector('[data-testid="iv-confidence-value"]'), "hides the confidence value when confidence wasn't computed")
+      .toBeNull();
+    expect
+      .soft(textOf(el, '[data-testid="iv-source"]'), "says no IV was provided when ivSource is absent")
+      .toContain("no IV provided");
+    expect
+      .soft(el.querySelector('[data-testid="iv-confidence-imputed"]'), "hides the imputed pill when healthImputed=null (confidence not computed)")
+      .toBeNull();
   });
 
   // ADR 0071 decision 11: when the recorder row lacks an explicit
@@ -149,34 +165,6 @@ describe("RealizedVsIvComponent — IV confidence banner", () => {
     expect(pill?.textContent).toContain("imputed");
     // Accessible name surfaces the rationale for screen-reader users.
     expect(pill?.getAttribute("aria-label")).toContain("imputed");
-  });
-
-  it("hides the imputed pill when healthImputed=false (real evidence)", () => {
-    setIvConfidence({
-      ivSource: "recorder",
-      latestConfidence: 0.83,
-      floor: 0.5,
-      gatedNow: false,
-      nGated: 0,
-      healthImputed: false,
-    });
-
-    const el = bannerOrThrow();
-    expect(el.querySelector('[data-testid="iv-confidence-imputed"]')).toBeNull();
-  });
-
-  it("hides the imputed pill when healthImputed=null (confidence not computed)", () => {
-    setIvConfidence({
-      ivSource: "absent",
-      latestConfidence: null,
-      floor: null,
-      gatedNow: null,
-      nGated: 0,
-      healthImputed: null,
-    });
-
-    const el = bannerOrThrow();
-    expect(el.querySelector('[data-testid="iv-confidence-imputed"]')).toBeNull();
   });
 });
 

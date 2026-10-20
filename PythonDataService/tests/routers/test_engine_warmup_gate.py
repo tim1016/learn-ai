@@ -115,31 +115,7 @@ def test_an_unprimed_run_reports_one_window_and_saves_its_study(seeded_lake, rec
     assert recorded_persistence["save"][0]["start_date"] == DAYS[1].isoformat()
 
 
-def test_a_primed_run_scopes_every_reported_figure_to_the_evaluation_window(seeded_lake, recorded_persistence) -> None:
-    primed = _run(_request(warmup_from_date=DAYS[0].isoformat()))
-    cold = _run(_request())
-
-    assert primed.success, primed.error
-    boundary = _ny_midnight_ms(DAYS[1])
-    assert primed.evaluation_window is not None
-    assert primed.evaluation_window.warmup_primed is True
-    assert primed.evaluation_window.data_start_ms == et_midnight_ms(DAYS[0])
-    assert primed.evaluation_window.evaluation_start_ms == boundary
-    # Nothing from the warmup day reaches the record.
-    assert all(trade.entry_time >= boundary for trade in primed.trades)
-    assert all(point["timestamp"] >= boundary for point in primed.equity_curve)
-    assert all(bar["t"] >= boundary for bar in primed.chart_bars)
-    assert any("EVALUATION START" in line for line in primed.log_lines)
-    # The curve is rebased at the evaluation start and spans the same bars a
-    # cold run of the same window does.
-    assert primed.equity_curve[0]["equity"] == pytest.approx(primed.initial_cash, abs=1e-6)
-    assert len(primed.equity_curve) == len(cold.equity_curve)
-    assert len(primed.chart_bars) == len(cold.chart_bars)
-    # The persisted study describes the scored window, not the bars read.
-    assert recorded_persistence["save"][0]["start_date"] == DAYS[1].isoformat()
-
-
-def test_a_primed_run_is_not_cold_started_where_the_unprimed_one_is(seeded_lake, recorded_persistence) -> None:
+def test_a_primed_run_scopes_every_reported_figure_and_is_not_cold_started(seeded_lake, recorded_persistence) -> None:
     """The same evaluation window, primed vs cold, differs only in readiness.
 
     With a 3-sample SMA the cold run spends its first bars unready; the primed
@@ -150,11 +126,30 @@ def test_a_primed_run_is_not_cold_started_where_the_unprimed_one_is(seeded_lake,
     primed = _run(_request(warmup_from_date=DAYS[0].isoformat()))
     cold = _run(_request())
 
+    assert primed.success, f"scoping: {primed.error}"
+    boundary = _ny_midnight_ms(DAYS[1])
+    assert primed.evaluation_window is not None, "scoping: the primed run reports its evaluation window"
+    assert primed.evaluation_window.warmup_primed is True, "scoping: the window says warmup was primed"
+    assert primed.evaluation_window.data_start_ms == et_midnight_ms(DAYS[0]), "scoping: data starts on the warmup day"
+    assert primed.evaluation_window.evaluation_start_ms == boundary, "scoping: scoring starts at the evaluation boundary"
+    # Nothing from the warmup day reaches the record.
+    assert all(trade.entry_time >= boundary for trade in primed.trades), "scoping: no warmup-day trade is reported"
+    assert all(point["timestamp"] >= boundary for point in primed.equity_curve), "scoping: no warmup-day equity point is reported"
+    assert all(bar["t"] >= boundary for bar in primed.chart_bars), "scoping: no warmup-day chart bar is reported"
+    assert any("EVALUATION START" in line for line in primed.log_lines), "scoping: the log marks the evaluation start"
+    # The curve is rebased at the evaluation start and spans the same bars a
+    # cold run of the same window does.
+    assert primed.equity_curve[0]["equity"] == pytest.approx(primed.initial_cash, abs=1e-6), "scoping: the curve is rebased at the initial cash"
+    assert len(primed.equity_curve) == len(cold.equity_curve), "scoping: the curve spans the same bars as a cold run"
+    assert len(primed.chart_bars) == len(cold.chart_bars), "scoping: the chart spans the same bars as a cold run"
+    # The persisted study describes the scored window, not the bars read.
+    assert recorded_persistence["save"][0]["start_date"] == DAYS[1].isoformat(), "scoping: the saved study starts at the scored window"
+
     first_minutes = _ny_midnight_ms(DAYS[1]) + (9 * 60 + 35) * 60_000
     primed_early = [t for t in primed.trades if t.entry_time <= first_minutes]
     cold_early = [t for t in cold.trades if t.entry_time <= first_minutes]
-    assert len(primed_early) >= len(cold_early)
-    assert primed.total_trades > 0
+    assert len(primed_early) >= len(cold_early), "not cold-started: the primed run sees at least as many early decisions as the cold run"
+    assert primed.total_trades > 0, "not cold-started: the primed run trades"
 
 
 def test_save_study_false_keeps_the_engine_result_only(seeded_lake, recorded_persistence) -> None:

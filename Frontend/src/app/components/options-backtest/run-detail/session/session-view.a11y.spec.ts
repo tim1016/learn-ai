@@ -24,50 +24,52 @@ const asked = { openMs: TUESDAY_OPEN, origin: null };
 const serving = (day: SessionDetail) => fakeRunDetail(vi, { session: vi.fn(async () => day) });
 
 describe('one day for a screen reader', () => {
-  it('has no violation before a day is chosen', async () => {
-    await renderSession(vi);
-
-    expect(await violations()).toEqual([]);
-  });
-
-  it('has no violation while a day is being read', async () => {
-    const waiting = new Promise<never>(() => undefined);
-    await renderSession(vi, { detail: fakeRunDetail(vi, { session: vi.fn(() => waiting) }), request: asked });
-    await screen.findByText('Reading the day…');
-
-    expect(await violations()).toEqual([]);
-  });
-
-  it('has no violation with a traded day, its chart, its legend, its lists and a contract’s code shown', async () => {
-    await renderSession(vi, { detail: serving(sessionDetail()), request: asked });
-    await screen.findByRole('img');
-    fireEvent.focus(screen.getAllByLabelText(/SPY.*Call/)[0]);
-
-    expect(await violations()).toEqual([]);
-  });
-
-  it('has no violation with a series withheld and the setup unreadable', async () => {
-    const day = sessionDetail({
-      setup_cannot_open_reason: 'lots: Extra inputs are not permitted.',
-      contracts: [withheldSeries(CALL_585.symbol, CALL_585, 'changed'), shownSeries(PUT_585.symbol, PUT_585, [[3, '1.40'], [4, '1.44']])],
-    });
-    await renderSession(vi, { detail: serving(day), request: asked });
-    await screen.findByRole('region', { name: 'Not drawn' });
-
-    expect(await violations()).toEqual([]);
-  });
-
-  it('has no violation with a skipped day', async () => {
-    await renderSession(vi, { detail: serving(skippedSession()), request: asked });
-    await screen.findByRole('region', { name: 'Not drawn' });
-
-    expect(await violations()).toEqual([]);
-  });
-
-  it('has no violation with the server’s refusal', async () => {
-    const refused = fakeRunDetail(vi, { session: vi.fn(async () => { throw new RunDetailRefusedError('X', 'Run 7 did not test that day.', 404); }) });
-    await renderSession(vi, { detail: refused, request: asked });
-    await screen.findByRole('alert');
+  it.each([
+    ['before a day is chosen', async () => { await renderSession(vi); }],
+    [
+      'while a day is being read',
+      async () => {
+        const waiting = new Promise<never>(() => undefined);
+        await renderSession(vi, { detail: fakeRunDetail(vi, { session: vi.fn(() => waiting) }), request: asked });
+        await screen.findByText('Reading the day…');
+      },
+    ],
+    [
+      'with a traded day, its chart, its legend, its lists and a contract’s code shown',
+      async () => {
+        await renderSession(vi, { detail: serving(sessionDetail()), request: asked });
+        await screen.findByRole('img');
+        fireEvent.focus(screen.getAllByLabelText(/SPY.*Call/)[0]);
+      },
+    ],
+    [
+      'with a series withheld and the setup unreadable',
+      async () => {
+        const day = sessionDetail({
+          setup_cannot_open_reason: 'lots: Extra inputs are not permitted.',
+          contracts: [withheldSeries(CALL_585.symbol, CALL_585, 'changed'), shownSeries(PUT_585.symbol, PUT_585, [[3, '1.40'], [4, '1.44']])],
+        });
+        await renderSession(vi, { detail: serving(day), request: asked });
+        await screen.findByRole('region', { name: 'Not drawn' });
+      },
+    ],
+    [
+      'with a skipped day',
+      async () => {
+        await renderSession(vi, { detail: serving(skippedSession()), request: asked });
+        await screen.findByRole('region', { name: 'Not drawn' });
+      },
+    ],
+    [
+      'with the server’s refusal',
+      async () => {
+        const refused = fakeRunDetail(vi, { session: vi.fn(async () => { throw new RunDetailRefusedError('X', 'Run 7 did not test that day.', 404); }) });
+        await renderSession(vi, { detail: refused, request: asked });
+        await screen.findByRole('alert');
+      },
+    ],
+  ])('has no violation %s', async (_state, arrange) => {
+    await arrange();
 
     expect(await violations()).toEqual([]);
   });

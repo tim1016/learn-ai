@@ -152,18 +152,31 @@ async def test_join_fills_the_hole_from_history() -> None:
     assert join.warm_from_ms is None
 
 
+@pytest.mark.parametrize(
+    ("retained_end_ms", "now_ms", "lookback_days"),
+    [
+        pytest.param(_et(_THU, 10, 7), _et(_THU, 10, 7) + 59_000, 5, id="nothing_is_owed"),
+        # Review: Friday close to Monday 08:30 with a one-day lookback is not refused,
+        # and -- nothing being owed -- neither fetches nor drops the retained bars.
+        pytest.param(
+            session_window_for_date(date(2026, 9, 18)).close_ms_utc,
+            _et(date(2026, 9, 21), 8, 30),
+            1,
+            id="a_weekend_longer_than_the_lookback_owes_nothing_and_keeps_the_retained_bars",
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_join_does_not_fetch_when_nothing_is_owed() -> None:
+async def test_join_does_not_fetch_when_nothing_is_owed(retained_end_ms: int, now_ms: int, lookback_days: int) -> None:
     feed = _HistoryFeed([])
-    retained_end_ms = _et(_THU, 10, 7)
 
     join = await join_retained_tail(
-        feed, symbol="SPY", session=_RTH, retained_end_ms=retained_end_ms,
-        now_ms=retained_end_ms + 59_000, lookback_days=5,
+        feed, symbol="SPY", session=_RTH, retained_end_ms=retained_end_ms, now_ms=now_ms, lookback_days=lookback_days,
     )
 
-    assert join.filled == ()
-    assert feed.lookbacks == []
+    assert join.filled == (), "nothing is filled"
+    assert join.warm_from_ms is None, "the retained bars are kept: no warm floor"
+    assert feed.lookbacks == [], "no history is fetched"
 
 
 @pytest.mark.asyncio
@@ -180,18 +193,35 @@ async def test_join_refuses_when_history_misses_an_owed_minute() -> None:
     assert refused.value.reason == RESUME_HOLE_UNFILLED
 
 
+@pytest.mark.parametrize(
+    ("retained_end_ms", "now_ms", "lookback_days", "history_until_ms"),
+    [
+        pytest.param(_et(_WED, 17, 0), _et(_THU, 10, 0), 5, None, id="an_extended_session_hole"),
+        # Review P1: a week-old extended-hours gap with a one-day lookback was admitted.
+        # The refusal is about the hole the bot sat through, not how much warmup replays.
+        pytest.param(
+            _et(date(2026, 9, 17), 17, 0),
+            _et(_THU, 13, 0),
+            1,
+            _et(_THU, 13, 0),
+            id="an_old_after_hours_gap_is_refused_even_past_the_lookback_review_p1",
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_join_refuses_an_extended_session_hole_without_fetching() -> None:
-    feed = _HistoryFeed(_regular_bars(_THU))
+async def test_join_refuses_an_extended_session_hole_without_fetching(
+    retained_end_ms: int, now_ms: int, lookback_days: int, history_until_ms: int | None
+) -> None:
+    feed = _HistoryFeed(_regular_bars(_THU, until_end_ms=history_until_ms))
 
     with pytest.raises(MarketDataFeedError) as refused:
         await join_retained_tail(
             feed, symbol="SPY", session=_EXTENDED,
-            retained_end_ms=_et(_WED, 17, 0), now_ms=_et(_THU, 10, 0), lookback_days=5,
+            retained_end_ms=retained_end_ms, now_ms=now_ms, lookback_days=lookback_days,
         )
 
-    assert refused.value.reason == RESUME_HOLE_AFTER_HOURS
-    assert feed.lookbacks == []
+    assert refused.value.reason == RESUME_HOLE_AFTER_HOURS, "the hole is refused as an after-hours hole"
+    assert feed.lookbacks == [], "no history is fetched"
 
 
 @pytest.mark.asyncio
@@ -209,39 +239,6 @@ async def test_a_hole_longer_than_the_lookback_warms_on_the_lookback_history_onl
     assert feed.lookbacks == [2]
     assert join.warm_from_ms == history[0].start_ms
     assert len(join.filled) == len(history)
-
-
-@pytest.mark.asyncio
-async def test_an_old_after_hours_gap_is_refused_even_past_the_lookback() -> None:
-    """Review P1: a week-old extended-hours gap with a one-day lookback was admitted.
-    The refusal is about the hole the bot sat through, not how much warmup replays."""
-    now_ms = _et(_THU, 13, 0)
-    feed = _HistoryFeed(_regular_bars(_THU, until_end_ms=now_ms))
-
-    with pytest.raises(MarketDataFeedError) as refused:
-        await join_retained_tail(
-            feed, symbol="SPY", session=_EXTENDED,
-            retained_end_ms=_et(date(2026, 9, 17), 17, 0), now_ms=now_ms, lookback_days=1,
-        )
-
-    assert refused.value.reason == RESUME_HOLE_AFTER_HOURS
-    assert feed.lookbacks == []
-
-
-@pytest.mark.asyncio
-async def test_a_weekend_longer_than_the_lookback_owes_nothing_and_keeps_the_retained_bars() -> None:
-    """Review: Friday close to Monday 08:30 with a one-day lookback is not refused,
-    and -- nothing being owed -- neither fetches nor drops the retained bars."""
-    friday, monday = date(2026, 9, 18), date(2026, 9, 21)
-    feed = _HistoryFeed([])
-
-    join = await join_retained_tail(
-        feed, symbol="SPY", session=_RTH,
-        retained_end_ms=session_window_for_date(friday).close_ms_utc,
-        now_ms=_et(monday, 8, 30), lookback_days=1,
-    )
-
-    assert (join.filled, join.warm_from_ms, feed.lookbacks) == ((), None, [])
 
 
 @pytest.mark.asyncio

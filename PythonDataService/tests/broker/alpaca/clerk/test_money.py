@@ -44,9 +44,18 @@ def test_consent_is_an_exact_cent_integer() -> None:
     assert consent_cents("0.01") == 1
 
 
-@pytest.mark.parametrize("amount", [float("nan"), float("inf"), True, "1e-325", "1e309"])
-def test_unknown_or_unsupported_recorded_money_is_never_zero(amount: object) -> None:
-    with pytest.raises(MoneyInputError):
+@pytest.mark.parametrize(("amount", "message"), [
+    pytest.param(float("nan"), None, id="unknown-nan-is-never-zero"),
+    pytest.param(float("inf"), None, id="unknown-inf-is-never-zero"),
+    pytest.param(True, None, id="unknown-bool-is-never-zero"),
+    pytest.param("1e-325", None, id="unsupported-underflow-is-never-zero"),
+    pytest.param("1e309", None, id="unsupported-overflow-is-never-zero"),
+    pytest.param("1e1000000", "supported", id="extreme-wire-exponent-large"),
+    pytest.param("1e-1000000", "supported", id="extreme-wire-exponent-small"),
+    pytest.param("1." + "1" * 1500, "supported", id="extreme-wire-scale-1500-digits"),
+])
+def test_unknown_or_unsupported_recorded_money_is_a_named_refusal_never_zero(amount: object, message: str | None) -> None:
+    with pytest.raises(MoneyInputError, match=message):
         normalize_money(amount)
 
 
@@ -67,12 +76,6 @@ def test_extreme_finite_float_inputs_are_normalized_without_precision_loss() -> 
     with money_context():
         actual = notional(smallest, smallest) + notional(largest, largest)
     assert Fraction(actual) == Fraction(str(smallest)) ** 2 + Fraction(str(largest)) ** 2
-
-
-@pytest.mark.parametrize("value", ["1e1000000", "1e-1000000", "1." + "1" * 1500])
-def test_extreme_wire_exponents_are_named_refusals(value: str) -> None:
-    with pytest.raises(MoneyInputError, match="supported"):
-        normalize_money(value)
 
 
 def test_dollars_renders_signed_cents_with_two_decimals() -> None:

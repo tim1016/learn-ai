@@ -48,18 +48,20 @@ def test_sqlite_authority_accepts_matching_alpaca_binding(tmp_path: Path) -> Non
     AlpacaBotIdentityGuard(tmp_path).require("paper-guard", sqlite_claim=True)
 
 
-def test_missing_sqlite_authority_is_never_inferred_from_binding(tmp_path: Path) -> None:
-    _binding(tmp_path, broker="alpaca")
+@pytest.mark.parametrize(
+    ("binding_broker", "sqlite_claim", "refusal"),
+    [
+        pytest.param("alpaca", False, "no active SQLite", id="missing-sqlite-authority-is-never-inferred-from-binding"),
+        pytest.param("ibkr", True, "non-Alpaca", id="non-alpaca-binding-conflicts-with-sqlite-authority"),
+    ],
+)
+def test_a_binding_that_disagrees_with_the_sqlite_claim_is_refused(
+    tmp_path: Path, binding_broker: str, sqlite_claim: bool, refusal: str
+) -> None:
+    _binding(tmp_path, broker=binding_broker)
 
-    with pytest.raises(AlpacaBotIdentityRefusedError, match="no active SQLite"):
-        AlpacaBotIdentityGuard(tmp_path).require("paper-guard", sqlite_claim=False)
-
-
-def test_non_alpaca_binding_conflicts_with_sqlite_authority(tmp_path: Path) -> None:
-    _binding(tmp_path, broker="ibkr")
-
-    with pytest.raises(AlpacaBotIdentityRefusedError, match="non-Alpaca"):
-        AlpacaBotIdentityGuard(tmp_path).require("paper-guard", sqlite_claim=True)
+    with pytest.raises(AlpacaBotIdentityRefusedError, match=refusal):
+        AlpacaBotIdentityGuard(tmp_path).require("paper-guard", sqlite_claim=sqlite_claim)
 
 
 def test_unreadable_binding_fails_closed(tmp_path: Path) -> None:

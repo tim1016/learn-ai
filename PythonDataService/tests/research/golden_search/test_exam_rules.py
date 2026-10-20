@@ -53,22 +53,6 @@ def test_judge_exam_could_not_evaluate_a_failed_run() -> None:
     assert judgement.retention is None
 
 
-def test_judge_exam_too_few_trades_is_not_enough_evidence_even_when_it_also_lost() -> None:
-    judgement = _judge(metrics(1.5, trades=29, net=-10.0))
-
-    assert judgement.outcome == "not_enough_evidence"
-    assert _statuses(judgement)["SAMPLE_FLOOR"] == "fail"
-    assert _statuses(judgement)["NET_POSITIVE"] == "fail"
-
-
-def test_judge_exam_undefined_objective_is_not_enough_evidence() -> None:
-    judgement = _judge(metrics(math.nan, trades=40))
-
-    assert judgement.outcome == "not_enough_evidence"
-    assert _statuses(judgement)["BEATS_INCUMBENT"] == "not_available"
-    assert judgement.retention is None
-
-
 def test_judge_exam_any_failed_check_does_not_meet_the_rules() -> None:
     assert _judge(metrics(1.5, net=0.0)).outcome == "does_not_meet_rules"
     assert _judge(metrics(1.5, drawdown=0.25)).outcome == "does_not_meet_rules"
@@ -108,10 +92,22 @@ def test_judge_exam_compares_with_the_incumbent_under_every_ranking_measure(obje
     assert _statuses(judgement)["BEATS_INCUMBENT"] == "pass"
 
 
-def test_judge_exam_undefined_drawdown_or_net_is_not_available_not_a_pass() -> None:
-    assert _statuses(_judge(metrics(1.5, drawdown=None)))["DRAWDOWN_WITHIN"] == "not_available"
-    assert _judge(metrics(1.5, drawdown=None)).outcome == "not_enough_evidence"
-    assert _judge(metrics(1.5, net=None)).outcome == "not_enough_evidence"
+def test_judge_exam_is_not_enough_evidence_for_too_few_trades_even_when_it_also_lost_and_for_an_undefined_objective_drawdown_or_net() -> None:
+    too_few = _judge(metrics(1.5, trades=29, net=-10.0))
+
+    assert too_few.outcome == "not_enough_evidence", "too few trades is not enough evidence even when the run also lost"
+    assert _statuses(too_few)["SAMPLE_FLOOR"] == "fail", "too few trades fails the sample floor"
+    assert _statuses(too_few)["NET_POSITIVE"] == "fail", "the losing run fails the net check too"
+
+    undefined_objective = _judge(metrics(math.nan, trades=40))
+
+    assert undefined_objective.outcome == "not_enough_evidence", "an undefined objective is not enough evidence"
+    assert _statuses(undefined_objective)["BEATS_INCUMBENT"] == "not_available", "an undefined objective cannot beat the incumbent"
+    assert undefined_objective.retention is None, "an undefined objective has no retention"
+
+    assert _statuses(_judge(metrics(1.5, drawdown=None)))["DRAWDOWN_WITHIN"] == "not_available", "an undefined drawdown is not available, not a pass"
+    assert _judge(metrics(1.5, drawdown=None)).outcome == "not_enough_evidence", "an undefined drawdown is not enough evidence"
+    assert _judge(metrics(1.5, net=None)).outcome == "not_enough_evidence", "an undefined net is not enough evidence"
 
 
 def test_retention_is_defined_only_for_a_positive_development_objective() -> None:

@@ -120,12 +120,25 @@ class TestSurfaceQuery:
         builder = VolSurfaceBuilder(spot=spot, rate=rate)
         return builder.build(skewed_chain, method=SurfaceMethod.SVI)
 
-    def test_query_at_fitted_expiry(self, surface: VolSurface) -> None:
-        """Query at a fitted expiry should return finite vol."""
+    def test_query_at_fitted_expiry_extrapolation_and_grid(self, surface: VolSurface) -> None:
+        """Query at a fitted expiry returns a finite vol, a query outside the fitted range extrapolates flat, and
+        to_grid returns a DataFrame with the expected columns."""
         ttm = surface.fits[0].ttm
         iv = surface.volatility(100.0, ttm)
-        assert math.isfinite(iv)
-        assert iv > 0
+        assert math.isfinite(iv), "query at a fitted expiry returns a finite vol"
+        assert iv > 0, "query at a fitted expiry returns a positive vol"
+
+        ttms = sorted(f.ttm for f in surface.fits)
+        tiny_ttm = ttms[0] * 0.5
+        iv_extrap = surface.volatility(100.0, tiny_ttm)
+        iv_boundary = surface.volatility(100.0, ttms[0])
+        assert abs(iv_extrap - iv_boundary) < 1e-6, "query outside the fitted range extrapolates flat"
+
+        df = surface.to_grid(strike_range=(85, 115), n_strikes=20)
+        assert "strike" in df.columns, "to_grid has a strike column"
+        assert "ttm" in df.columns, "to_grid has a ttm column"
+        assert "iv" in df.columns, "to_grid has an iv column"
+        assert len(df) > 0, "to_grid returns rows"
 
     def test_interpolation_between_expiries(self, surface: VolSurface) -> None:
         """Query between two expiries should interpolate smoothly."""
@@ -142,27 +155,10 @@ class TestSurfaceQuery:
         # (the two expiries' vols differ on this skewed chain).
         assert min(iv_first, iv_second) < iv < max(iv_first, iv_second)
 
-    def test_extrapolation_flat(self, surface: VolSurface) -> None:
-        """Query outside fitted range should extrapolate flat."""
-        ttms = sorted(f.ttm for f in surface.fits)
-        tiny_ttm = ttms[0] * 0.5
-        iv_extrap = surface.volatility(100.0, tiny_ttm)
-        iv_boundary = surface.volatility(100.0, ttms[0])
-
-        assert abs(iv_extrap - iv_boundary) < 1e-6
-
     def test_invalid_ttm_raises(self, surface: VolSurface) -> None:
         """Negative TTM should raise ValueError."""
         with pytest.raises(ValueError, match="positive"):
             surface.volatility(100.0, -0.1)
-
-    def test_grid_output(self, surface: VolSurface) -> None:
-        """to_grid should return a DataFrame with expected columns."""
-        df = surface.to_grid(strike_range=(85, 115), n_strikes=20)
-        assert "strike" in df.columns
-        assert "ttm" in df.columns
-        assert "iv" in df.columns
-        assert len(df) > 0
 
 
 class TestDeterminism:

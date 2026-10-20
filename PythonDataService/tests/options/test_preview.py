@@ -280,15 +280,48 @@ def test_a_structure_with_a_sold_leg_is_too_late_to_enter_from_its_cutoff_on_and
     assert too_late.money.net_entry_premium_cents == 19_400
 
 
-def test_the_sold_legs_close_is_counted_back_by_the_terms_handed_in() -> None:
-    """Closed an hour before the close, with a wait of 5 seconds: no entry from 14:58:55."""
-    terms = replace(_TERMS, sold_leg_close_lead_ms=60 * 60_000, entry_wait_ms=5_000)
-    cutoff = scenes._at(scenes._TUESDAY, 14, 58, 55)
+# A sold leg closed an hour before the close, with an entry wait of 5 seconds: none is opened from 14:58:55.
+_HOUR_BEFORE_TERMS = replace(_TERMS, sold_leg_close_lead_ms=60 * 60_000, entry_wait_ms=5_000)
+_HOUR_BEFORE_CUTOFF = scenes._at(scenes._TUESDAY, 14, 58, 55)
 
-    assert _figures(_spread(), at_ms=cutoff - 1, terms=terms, **_MARKETS).too_late_to_enter is None
-    assert _figures(_spread(), at_ms=cutoff, terms=terms, **_MARKETS).too_late_to_enter == TooLateToEnter(
-        CloseKind.SOLD_LEG, close_lead_ms=60 * 60_000
-    )
+
+@pytest.mark.parametrize(
+    ("at_ms", "terms", "too_late", "refusals"),
+    [
+        pytest.param(
+            _HOUR_BEFORE_CUTOFF - 1, _HOUR_BEFORE_TERMS, None, (),
+            id="a close counted back an hour: a millisecond before 14:58:55 there is time",
+        ),
+        pytest.param(
+            _HOUR_BEFORE_CUTOFF, _HOUR_BEFORE_TERMS, TooLateToEnter(CloseKind.SOLD_LEG, close_lead_ms=60 * 60_000),
+            (ResolverRefusal.PAST_ENTRY_CUTOFF,),
+            id="a close counted back an hour: no entry from 14:58:55",
+        ),
+        # Tuesday at 20:30 in New York is Wednesday already by the UTC clock. It is Tuesday's close the entry is
+        # too late for. Before Wednesday's open there is time again.
+        pytest.param(
+            scenes._at(scenes._TUESDAY, 20, 30), _TERMS, TooLateToEnter(CloseKind.SOLD_LEG, close_lead_ms=10 * 60_000),
+            (ResolverRefusal.PAST_ENTRY_CUTOFF,),
+            id="the day a close is owed on is New York's own: Tuesday evening is too late for Tuesday's close",
+        ),
+        pytest.param(
+            scenes._at(scenes._WEDNESDAY, 8, 0), _TERMS, None, (),
+            id="the day a close is owed on is New York's own: before Wednesday's open there is time again",
+        ),
+        # A Saturday at noon. The calendar has no close to count back from, and that is no error.
+        pytest.param(
+            scenes._at(date(2026, 10, 10), 12, 0), _TERMS, None, (),
+            id="on a day with no session no close is owed and none is asked",
+        ),
+    ],
+)
+def test_a_spread_is_too_late_to_enter_by_the_terms_handed_in_and_the_new_york_day_it_is_asked_on(
+    at_ms: int, terms: CloseTerms, too_late: TooLateToEnter | None, refusals: tuple[ResolverRefusal, ...]
+) -> None:
+    shown = _figures(_spread(), at_ms=at_ms, terms=terms, **_MARKETS)
+
+    assert shown.too_late_to_enter == too_late, "the entry is too late, and for which close"
+    assert tuple(refusal.reason for refusal in shown.entry_refusals) == refusals, "the entry's refusals"
 
 
 def test_a_bought_contract_owes_a_close_only_on_its_expiry_day() -> None:
@@ -302,16 +335,6 @@ def test_a_bought_contract_owes_a_close_only_on_its_expiry_day() -> None:
     late = _figures(bought, at_ms=on_its_expiry_day)
     assert late.too_late_to_enter == TooLateToEnter(CloseKind.EXPIRY_DAY, close_lead_ms=45 * 60_000)
     assert [refusal.reason for refusal in late.entry_refusals] == [ResolverRefusal.PAST_ENTRY_CUTOFF]
-
-
-def test_the_day_a_close_is_owed_on_is_new_yorks_own() -> None:
-    """Tuesday at 20:30 in New York is Wednesday already by the UTC clock. It is Tuesday's close the entry is
-    too late for. Before Wednesday's open there is time again."""
-    that_evening = _figures(_spread(), at_ms=scenes._at(scenes._TUESDAY, 20, 30), **_MARKETS)
-    next_morning = _figures(_spread(), at_ms=scenes._at(scenes._WEDNESDAY, 8, 0), **_MARKETS)
-
-    assert that_evening.too_late_to_enter == TooLateToEnter(CloseKind.SOLD_LEG, close_lead_ms=10 * 60_000)
-    assert (next_morning.too_late_to_enter, next_morning.entry_refusals) == (None, ())
 
 
 def test_too_late_is_told_last_as_the_clerk_asks_it_after_the_entrys_own_questions() -> None:
@@ -330,13 +353,6 @@ def test_too_late_is_told_last_as_the_clerk_asks_it_after_the_entrys_own_questio
         StructureMoneyRefusal.LEG_GAP_OVER_LIMIT, FEE_RATE_NOT_PINNED, ResolverRefusal.PAST_ENTRY_CUTOFF,
     ]
     assert no_rate.not_as_built.reason == FEE_RATE_NOT_PINNED
-
-
-def test_on_a_day_with_no_session_no_close_is_owed_and_none_is_asked() -> None:
-    """A Saturday at noon. The calendar has no close to count back from, and that is no error."""
-    shown = _figures(_spread(), at_ms=scenes._at(date(2026, 10, 10), 12, 0), **_MARKETS)
-
-    assert (shown.too_late_to_enter, shown.entry_refusals) == (None, ())
 
 
 def test_inputs_that_are_not_known_show_no_delta_and_no_lean() -> None:
@@ -383,23 +399,29 @@ def test_the_structures_decay_is_its_legs_own_bought_less_sold_for_every_structu
     assert shown.decay.total < 0
 
 
-def test_a_leg_with_no_decay_leaves_the_structure_with_none() -> None:
-    """The 590 call quoted far above anything a volatility explains: no volatility, so no decay for it."""
-    shown = _figures(_spread(), with_decay=True, c585=("4.08", "4.12"), c590=("400.00", "400.04"))
+@pytest.mark.parametrize(
+    ("model_is_known", "sold_market", "why_not", "legs_without"),
+    [
+        # The 590 call quoted far above anything a volatility explains: no volatility, so no decay for it.
+        pytest.param(
+            True, ("400.00", "400.04"), DecayNotEstimated.NO_VOLATILITY, ("short_call",),
+            id="a leg with no decay leaves the structure with none",
+        ),
+        # A decay priced on dividends nobody could look up is not shown, as no delta is.
+        pytest.param(
+            False, ("2.18", "2.22"), DecayNotEstimated.INPUTS_NOT_KNOWN, ("long_call", "short_call"),
+            id="inputs that are not known show no decay even when one was worked out",
+        ),
+    ],
+)
+def test_a_decay_that_cannot_be_worked_out_for_every_leg_is_none_and_says_why(
+    model_is_known: bool, sold_market: tuple[str, str], why_not: DecayNotEstimated, legs_without: tuple[str, ...]
+) -> None:
+    shown = _figures(_spread(), model_is_known=model_is_known, with_decay=True, c585=("4.08", "4.12"), c590=sold_market)
 
-    assert (shown.decay.estimated, shown.decay.why_not, shown.decay.legs_without) == (
-        False, DecayNotEstimated.NO_VOLATILITY, ("short_call",),
-    )
-    assert (shown.decay.per_share, shown.decay.total) == (None, None)
-
-
-def test_inputs_that_are_not_known_show_no_decay_even_when_one_was_worked_out() -> None:
-    """A decay priced on dividends nobody could look up is not shown, as no delta is."""
-    shown = _figures(_spread(), model_is_known=False, with_decay=True, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
-
-    assert (shown.decay.estimated, shown.decay.why_not) == (False, DecayNotEstimated.INPUTS_NOT_KNOWN)
-    assert shown.decay.legs_without == ("long_call", "short_call")
-    assert (shown.decay.per_share, shown.decay.total) == (None, None)
+    assert (shown.decay.estimated, shown.decay.why_not) == (False, why_not), "no decay is estimated, and why not"
+    assert shown.decay.legs_without == legs_without, "the legs the decay could not be worked out for"
+    assert (shown.decay.per_share, shown.decay.total) == (None, None), "no decay per share or in total"
 
 
 def test_figures_nobody_asked_a_decay_for_carry_none_and_picks_that_are_no_structure_have_none_either() -> None:

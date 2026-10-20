@@ -55,56 +55,63 @@ class _NoDatabase:
 # ── The shipped examples ──────────────────────────────────────────────────
 
 
-def test_three_examples_ship_and_the_first_two_are_the_strategy_the_page_started_from() -> None:
-    assert tuple(example.name for example in EXAMPLE_SETUPS) == _EXAMPLE_NAMES
+def test_three_examples_ship_and_the_first_two_are_the_pages_first_strategy_differing_in_re_entry() -> None:
+    assert tuple(example.name for example in EXAMPLE_SETUPS) == _EXAMPLE_NAMES, "three examples ship, by these names"
     assert all(
         example.example and example.saved_at_ms is None and example.cannot_open_reason is None
         for example in EXAMPLE_SETUPS
-    )
+    ), "every example is marked as one, has no saved stamp and opens"
 
     for example in _PREMIUM_MOMENTUM:
         setup = example.setup
-        assert setup is not None
-        assert setup.underlying == "SPY"
-        assert (setup.entry.anchor, setup.entry.offset_ms) == ("open", 5 * MS_PER_MINUTE)
-        assert (setup.exit.anchor, setup.exit.offset_ms) == ("close", 46 * MS_PER_MINUTE)
-        assert setup.square_off == "complete"
+        assert setup is not None, f"{example.name}: the example opens"
+        assert setup.underlying == "SPY", f"{example.name}: underlying"
+        assert (setup.entry.anchor, setup.entry.offset_ms) == (
+            "open",
+            5 * MS_PER_MINUTE,
+        ), f"{example.name}: enters five minutes after the open"
+        assert (setup.exit.anchor, setup.exit.offset_ms) == (
+            "close",
+            46 * MS_PER_MINUTE,
+        ), f"{example.name}: exits 46 minutes before the close"
+        assert setup.square_off == "complete", f"{example.name}: square-off"
         assert (setup.slippage_percent, setup.fees.kind, setup.starting_cash_usd) == (
             Decimal("0.3"),
             "not_charged",
             Decimal("10000"),
-        )
+        ), f"{example.name}: slippage, fees and starting cash"
         assert [(leg.leg_id, leg.right, leg.contracts) for leg in setup.legs] == [
             ("call", "call", 1),
             ("put", "put", 1),
-        ]
+        ], f"{example.name}: one call and one put"
         for leg in setup.legs:
-            assert leg.expiry.kind == "this_week" and leg.strike.kind == "atm"
-            assert (leg.momentum.kind, leg.momentum.value) == ("percent_up", Decimal(25))
-            assert (leg.stop_loss.kind, leg.stop_loss.value) == ("percent", Decimal(25))
+            assert (
+                leg.expiry.kind == "this_week" and leg.strike.kind == "atm"
+            ), f"{example.name} {leg.leg_id}: this week's expiry at the money"
+            assert (leg.momentum.kind, leg.momentum.value) == (
+                "percent_up",
+                Decimal(25),
+            ), f"{example.name} {leg.leg_id}: momentum"
+            assert (leg.stop_loss.kind, leg.stop_loss.value) == (
+                "percent",
+                Decimal(25),
+            ), f"{example.name} {leg.leg_id}: stop loss"
 
+    no_re_entry, one_re_entry = (example.setup for example in _PREMIUM_MOMENTUM)
 
-def test_the_example_named_no_re_entry_has_no_re_entry_rule_and_no_cutoff() -> None:
-    no_re_entry = EXAMPLE_SETUPS[0].setup
-
-    assert no_re_entry.no_reentry_after is None
-    assert all(leg.reentry_on_stop is None for leg in no_re_entry.legs)
-
-
-def test_the_example_named_one_re_entry_re_enters_once_at_once_until_an_hour_before_the_close() -> None:
-    one_re_entry = EXAMPLE_SETUPS[1].setup
-
+    assert no_re_entry.no_reentry_after is None, "the example named no re-entry has no cutoff"
+    assert all(
+        leg.reentry_on_stop is None for leg in no_re_entry.legs
+    ), "the example named no re-entry has no re-entry rule"
     assert (one_re_entry.no_reentry_after.anchor, one_re_entry.no_reentry_after.offset_ms) == (
         "close",
         60 * MS_PER_MINUTE,
-    )
+    ), "the example named one re-entry re-enters until an hour before the close"
     for leg in one_re_entry.legs:
-        assert (leg.reentry_on_stop.kind, leg.reentry_on_stop.count) == ("at_once", 1)
-
-
-def test_the_two_examples_differ_only_in_their_re_entry_rules() -> None:
-    no_re_entry, one_re_entry = (example.setup for example in _PREMIUM_MOMENTUM)
-
+        assert (leg.reentry_on_stop.kind, leg.reentry_on_stop.count) == (
+            "at_once",
+            1,
+        ), f"one re-entry {leg.leg_id}: re-enters once at once"
     came_back = no_re_entry.model_copy(
         update={
             "no_reentry_after": one_re_entry.no_reentry_after,
@@ -114,7 +121,7 @@ def test_the_two_examples_differ_only_in_their_re_entry_rules() -> None:
             ),
         }
     )
-    assert came_back == one_re_entry
+    assert came_back == one_re_entry, "the two examples differ only in their re-entry rules"
 
 
 def test_the_third_example_sells_a_put_spread_covered_one_for_one_and_stops_only_the_sold_leg() -> None:
@@ -157,40 +164,41 @@ async def test_an_example_is_read_without_the_database() -> None:
 
 
 @pytest.mark.parametrize(
-    "name",
-    ["a", "SPY (v2), 0.3-slippage_a.b", "x" * 80, "two  spaces inside", "7", "ends with a dot.", "a.."],
-)
-def test_a_name_of_letters_digits_spaces_and_the_few_marks_is_taken(name: str) -> None:
-    assert is_valid_setup_name(name)
-
-
-@pytest.mark.parametrize(
-    "name",
+    ("name", "taken"),
     [
-        "",
-        "x" * 81,
-        " leading",
-        "trailing ",
-        " ",
-        "slash/inside",
-        "semi;colon",
-        "quote'd",
-        "naïve",
-        "tab\there",
-        "line\nbreak",
-        "end\n",
+        pytest.param("a", True, id="taken-a-single-letter"),
+        pytest.param("SPY (v2), 0.3-slippage_a.b", True, id="taken-letters-digits-spaces-and-the-few-marks"),
+        pytest.param("x" * 80, True, id="taken-80-characters"),
+        pytest.param("two  spaces inside", True, id="taken-two-spaces-inside"),
+        pytest.param("7", True, id="taken-a-digit"),
+        pytest.param("ends with a dot.", True, id="taken-ends-with-a-dot"),
+        pytest.param("a..", True, id="taken-ends-with-two-dots"),
+        pytest.param("", False, id="refused-empty"),
+        pytest.param("x" * 81, False, id="refused-81-characters"),
+        pytest.param(" leading", False, id="refused-leading-space"),
+        pytest.param("trailing ", False, id="refused-trailing-space"),
+        pytest.param(" ", False, id="refused-only-a-space"),
+        pytest.param("slash/inside", False, id="refused-slash"),
+        pytest.param("semi;colon", False, id="refused-semicolon"),
+        pytest.param("quote'd", False, id="refused-quote"),
+        pytest.param("naïve", False, id="refused-non-ascii-letter"),
+        pytest.param("tab\there", False, id="refused-tab"),
+        pytest.param("line\nbreak", False, id="refused-newline-inside"),
+        pytest.param("end\n", False, id="refused-trailing-newline"),
         # A name that starts with a mark: "." and ".." never reach a route from a browser, and a leading dot hides.
-        ".",
-        "..",
-        ".hidden",
-        "-dash",
-        "_under",
-        "(paren",
-        ",comma",
+        pytest.param(".", False, id="refused-a-dot"),
+        pytest.param("..", False, id="refused-two-dots"),
+        pytest.param(".hidden", False, id="refused-leading-dot"),
+        pytest.param("-dash", False, id="refused-leading-dash"),
+        pytest.param("_under", False, id="refused-leading-underscore"),
+        pytest.param("(paren", False, id="refused-leading-paren"),
+        pytest.param(",comma", False, id="refused-leading-comma"),
     ],
 )
-def test_a_name_outside_the_rule_is_refused(name: str) -> None:
-    assert not is_valid_setup_name(name)
+def test_a_name_of_letters_digits_spaces_and_the_few_marks_is_taken_and_any_other_is_refused(
+    name: str, taken: bool
+) -> None:
+    assert is_valid_setup_name(name) is taken
 
 
 async def test_saving_under_a_refused_name_stops_before_the_database() -> None:

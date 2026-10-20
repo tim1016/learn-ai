@@ -41,27 +41,17 @@ def _repo_with_two_commits(tmp_path: Path) -> tuple[Path, str, str]:
     return repo, first, second
 
 
-def test_head_and_ancestry_follow_the_commit_graph(tmp_path: Path) -> None:
+def test_the_adapter_reads_the_commit_graph_and_the_working_tree(tmp_path: Path) -> None:
     repo, first, second = _repo_with_two_commits(tmp_path)
     git = SubprocessGit(repo)
 
-    assert git.head_commit() == second
-    assert git.is_ancestor(first, second) is True
-    assert git.is_ancestor(second, second) is True
-    assert git.is_ancestor(second, first) is False
-
-
-def test_an_unknown_commit_does_not_exist(tmp_path: Path) -> None:
-    repo, _first, _second = _repo_with_two_commits(tmp_path)
-
-    assert SubprocessGit(repo).commit_exists("0" * 40) is False
-
-
-def test_a_tracked_edit_makes_the_tree_dirty(tmp_path: Path) -> None:
-    repo, _first, _second = _repo_with_two_commits(tmp_path)
-    git = SubprocessGit(repo)
-    assert git.tree_dirty() is False
+    assert git.head_commit() == second, "head follows the commit graph"
+    assert git.is_ancestor(first, second) is True, "the first commit is an ancestor of the second"
+    assert git.is_ancestor(second, second) is True, "a commit is its own ancestor"
+    assert git.is_ancestor(second, first) is False, "the second commit is not an ancestor of the first"
+    assert git.commit_exists("0" * 40) is False, "an unknown commit does not exist"
+    assert git.tree_dirty() is False, "a clean tree is not dirty"
 
     (repo / "a").write_text("3", encoding="utf-8")
 
-    assert git.tree_dirty() is True
+    assert git.tree_dirty() is True, "a tracked edit makes the tree dirty"

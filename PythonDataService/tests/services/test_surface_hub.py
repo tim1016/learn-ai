@@ -71,91 +71,63 @@ async def test_surface_hub_preserves_payload_and_adds_identity() -> None:
 
 
 @pytest.mark.asyncio
-async def test_identical_semantics_do_not_advance_surface_version() -> None:
+@pytest.mark.parametrize(
+    ("strategy_instance_id", "fetch_field"),
+    [
+        pytest.param("bot-a", "fetched_at_ms", id="identical-semantics"),
+        pytest.param("__fleet_roster__", "daemon_fetched_at_ms", id="daemon-fetch-timestamp"),
+    ],
+)
+async def test_a_changed_fetch_timestamp_alone_does_not_advance_surface_version(
+    strategy_instance_id: str, fetch_field: str
+) -> None:
     fetched_at_ms = 1_700_000_000_100
 
     async def assemble() -> _Snapshot:
         nonlocal fetched_at_ms
-        value = _snapshot(generated_at_ms=1_700_000_000_100).model_copy(update={"fetched_at_ms": fetched_at_ms})
+        value = _snapshot(generated_at_ms=1_700_000_000_100).model_copy(update={fetch_field: fetched_at_ms})
         fetched_at_ms += 1_000
         return value
 
-    hub = SurfaceHub(strategy_instance_id="bot-a", assemble=assemble)
+    hub = SurfaceHub(strategy_instance_id=strategy_instance_id, assemble=assemble)
 
     first = await hub.refresh()
     queue = hub.subscribe()
-    assert await queue.get() == first
+    assert await queue.get() == first, "a new subscriber is handed the first snapshot"
     second = await hub.refresh()
 
-    assert first.surface_version == 1
-    assert second.surface_version == 1
-    assert second.fetched_at_ms > first.fetched_at_ms
-    assert queue.empty()
+    assert first.surface_version == 1, "the first publish is version 1"
+    assert second.surface_version == 1, "a later fetch timestamp alone does not advance the version"
+    assert getattr(second, fetch_field) is not None, "the second snapshot carries the fetch timestamp"
+    assert getattr(first, fetch_field) is not None, "the first snapshot carries the fetch timestamp"
+    assert getattr(second, fetch_field) > getattr(first, fetch_field), "the fetch timestamp really moved"
+    assert queue.empty(), "nothing is published to subscribers for it"
 
 
 @pytest.mark.asyncio
-async def test_daemon_fetch_timestamp_does_not_advance_surface_version() -> None:
-    daemon_fetched_at_ms = 1_700_000_000_100
+@pytest.mark.parametrize(
+    ("first_cycle", "second_cycle"),
+    [
+        pytest.param((1_700_000_000_100, "FRESH"), (1_700_000_001_100, "FRESH"), id="source-timestamp"),
+        pytest.param((1_700_000_001_000, "FRESH"), (1_700_000_001_000, "STALE"), id="freshness-transition"),
+    ],
+)
+async def test_a_changed_source_timestamp_or_freshness_advances_surface_version(
+    first_cycle: tuple[int, str], second_cycle: tuple[int, str]
+) -> None:
+    cycles = iter((first_cycle, second_cycle))
 
     async def assemble() -> _Snapshot:
-        nonlocal daemon_fetched_at_ms
-        value = _snapshot(generated_at_ms=1_700_000_000_100).model_copy(
-            update={"daemon_fetched_at_ms": daemon_fetched_at_ms}
-        )
-        daemon_fetched_at_ms += 1_000
-        return value
-
-    hub = SurfaceHub(strategy_instance_id="__fleet_roster__", assemble=assemble)
-
-    first = await hub.refresh()
-    queue = hub.subscribe()
-    assert await queue.get() == first
-    second = await hub.refresh()
-
-    assert first.surface_version == 1
-    assert second.surface_version == 1
-    assert second.daemon_fetched_at_ms is not None
-    assert first.daemon_fetched_at_ms is not None
-    assert second.daemon_fetched_at_ms > first.daemon_fetched_at_ms
-    assert queue.empty()
-
-
-@pytest.mark.asyncio
-async def test_source_timestamp_advances_surface_version() -> None:
-    generated_at_ms = 1_700_000_000_100
-
-    async def assemble() -> _Snapshot:
-        nonlocal generated_at_ms
-        value = _snapshot(generated_at_ms=generated_at_ms)
-        generated_at_ms += 1_000
-        return value
+        generated_at_ms, source_state = next(cycles)
+        return _snapshot(generated_at_ms=generated_at_ms, source_state=source_state)
 
     hub = SurfaceHub(strategy_instance_id="bot-a", assemble=assemble)
 
     first = await hub.refresh()
     second = await hub.refresh()
 
-    assert first.surface_version == 1
-    assert second.surface_version == 2
-
-
-@pytest.mark.asyncio
-async def test_freshness_transition_advances_surface_version() -> None:
-    source_state = "FRESH"
-
-    async def assemble() -> _Snapshot:
-        return _snapshot(
-            generated_at_ms=1_700_000_001_000,
-            source_state=source_state,
-        )
-
-    hub = SurfaceHub(strategy_instance_id="bot-a", assemble=assemble)
-    first = await hub.refresh()
-    source_state = "STALE"
-    second = await hub.refresh()
-
-    assert first.surface_version == 1
-    assert second.surface_version == 2
+    assert first.surface_version == 1, "the first publish is version 1"
+    assert second.surface_version == 2, "the change advances the version"
 
 
 @pytest.mark.asyncio

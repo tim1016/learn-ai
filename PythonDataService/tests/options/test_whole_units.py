@@ -8,59 +8,65 @@ from __future__ import annotations
 
 import pytest
 
-from app.options.whole_units import LegContracts, WholeUnits, in_leg_direction, whole_units
+from app.options.whole_units import LegContracts, in_leg_direction, whole_units
 
 
 def _legs(*counted: tuple[str, int, int]) -> list[LegContracts]:
     return [LegContracts(leg_id=leg_id, ratio=ratio, contracts=contracts) for leg_id, ratio, contracts in counted]
 
 
-def test_two_legs_filled_alike_are_that_many_units_in_step() -> None:
-    came_to = whole_units(_legs(("bought", 1, 2), ("sold", 1, 2)))
+@pytest.mark.parametrize(
+    ("counted", "units", "in_step", "beyond"),
+    [
+        pytest.param(
+            (("bought", 1, 2), ("sold", 1, 2)), 2, True, (("bought", 0), ("sold", 0)),
+            id="two legs filled alike are that many units in step",
+        ),
+        # An order for two units that filled two of one leg and one of the other holds one unit.
+        # One contract of the bought leg is beyond the one whole unit.
+        pytest.param(
+            (("bought", 1, 2), ("sold", 1, 1)), 1, False, (("bought", 1), ("sold", 0)),
+            id="the units are the smallest whole number across the legs",
+        ),
+        # A 1:2 spread. Three of the first leg and six of the second are three units: 3 // 1 = 3, 6 // 2 = 3.
+        pytest.param(
+            (("one", 1, 3), ("two", 2, 6)), 3, True, (("one", 0), ("two", 0)),
+            id="a leg is counted by its ratio: three and six",
+        ),
+        # Three and five: 5 // 2 = 2 units. Beyond them: 3 - 2 = 1 of the first, 5 - 4 = 1 of the second.
+        pytest.param(
+            (("one", 1, 3), ("two", 2, 5)), 2, False, (("one", 1), ("two", 1)),
+            id="a leg is counted by its ratio: three and five",
+        ),
+        pytest.param(
+            (("bought", 1, 1), ("sold", 1, 0)), 0, False, (("bought", 1), ("sold", 0)),
+            id="a fill on one leg only is no unit and out of step",
+        ),
+        pytest.param(
+            (("bought", 1, 0), ("sold", 1, 0)), 0, True, (("bought", 0), ("sold", 0)),
+            id="nothing filled is no unit and in step",
+        ),
+        # One leg is in its direction by two; the other is the wrong way round by one.
+        pytest.param(
+            (("bought", 1, 2), ("sold", 1, -1)), 0, False, (("bought", 2), ("sold", -1)),
+            id="a leg held the other way round counts below zero and never as a unit",
+        ),
+        # With a ratio of two, floor division still never rounds a wrong-way leg up to nothing.
+        pytest.param(
+            (("one", 1, 4), ("two", 2, -1)), 0, False, (("one", 4), ("two", -1)),
+            id="a wrong-way leg with a ratio of two is still no unit",
+        ),
+        pytest.param((("only", 1, 5),), 5, True, (("only", 0),), id="one leg alone is its contracts over its ratio"),
+    ],
+)
+def test_legs_come_to_whole_units(
+    counted: tuple[tuple[str, int, int], ...], units: int, in_step: bool, beyond: tuple[tuple[str, int], ...]
+) -> None:
+    came_to = whole_units(_legs(*counted))
 
-    assert (came_to.units, came_to.in_step, dict(came_to.beyond)) == (2, True, {"bought": 0, "sold": 0})
-
-
-def test_the_units_are_the_smallest_whole_number_across_the_legs() -> None:
-    # An order for two units that filled two of one leg and one of the other holds one unit.
-    came_to = whole_units(_legs(("bought", 1, 2), ("sold", 1, 1)))
-
-    assert (came_to.units, came_to.in_step) == (1, False)
-    # One contract of the bought leg is beyond the one whole unit.
-    assert dict(came_to.beyond) == {"bought": 1, "sold": 0}
-
-
-def test_a_leg_is_counted_by_its_ratio() -> None:
-    # A 1:2 spread. Three of the first leg and six of the second are three units: 3 // 1 = 3, 6 // 2 = 3.
-    assert whole_units(_legs(("one", 1, 3), ("two", 2, 6))) == WholeUnits(units=3, in_step=True, beyond={"one": 0, "two": 0})
-    # Three and five: 5 // 2 = 2 units. Beyond them: 3 - 2 = 1 of the first, 5 - 4 = 1 of the second.
-    uneven = whole_units(_legs(("one", 1, 3), ("two", 2, 5)))
-    assert (uneven.units, uneven.in_step, dict(uneven.beyond)) == (2, False, {"one": 1, "two": 1})
-
-
-def test_a_fill_on_one_leg_only_is_no_unit_and_out_of_step() -> None:
-    came_to = whole_units(_legs(("bought", 1, 1), ("sold", 1, 0)))
-
-    assert (came_to.units, came_to.in_step, dict(came_to.beyond)) == (0, False, {"bought": 1, "sold": 0})
-
-
-def test_nothing_filled_is_no_unit_and_in_step() -> None:
-    came_to = whole_units(_legs(("bought", 1, 0), ("sold", 1, 0)))
-
-    assert (came_to.units, came_to.in_step) == (0, True)
-
-
-def test_a_leg_held_the_other_way_round_counts_below_zero_and_never_as_a_unit() -> None:
-    # One leg is in its direction by two; the other is the wrong way round by one.
-    came_to = whole_units(_legs(("bought", 1, 2), ("sold", 1, -1)))
-
-    assert (came_to.units, came_to.in_step, dict(came_to.beyond)) == (0, False, {"bought": 2, "sold": -1})
-    # With a ratio of two, floor division still never rounds a wrong-way leg up to nothing.
-    assert whole_units(_legs(("one", 1, 4), ("two", 2, -1))).units == 0
-
-
-def test_one_leg_alone_is_its_contracts_over_its_ratio() -> None:
-    assert whole_units(_legs(("only", 1, 5))) == WholeUnits(units=5, in_step=True, beyond={"only": 0})
+    assert came_to.units == units, "the whole units the legs come to"
+    assert came_to.in_step is in_step, "whether the legs are in step"
+    assert dict(came_to.beyond) == dict(beyond), "the contracts of each leg beyond the whole units"
 
 
 def test_a_bought_leg_counts_what_is_held_and_a_sold_leg_what_is_owed() -> None:

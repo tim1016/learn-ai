@@ -263,7 +263,7 @@ beforeEach(() => {
 });
 
 describe('StrategyValidationComponent', () => {
-  it('renders validated and unvalidated strategies in the catalog', async () => {
+  it('renders the default selection: the catalog, the non-Live operational harness, and its Strategy Lab and Alpaca Deploy links', async () => {
     await render(StrategyValidationComponent, {
       providers: [
         provideRouter([]),
@@ -272,68 +272,38 @@ describe('StrategyValidationComponent', () => {
       ],
     });
 
-    expect(await screen.findByRole('heading', { name: 'Strategy Validation' })).toBeTruthy();
-    expect(await screen.findByRole('button', { name: /Deployment Validation/ })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Opening Range Breakout/ })).toBeTruthy();
-    expect(screen.getAllByText('Proof current').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Proof missing').length).toBeGreaterThan(0);
-  });
+    expect.soft(await screen.findByRole('heading', { name: 'Strategy Validation' }), 'renders validated and unvalidated strategies in the catalog: page heading').toBeTruthy();
+    expect.soft(await screen.findByRole('button', { name: /Deployment Validation/ }), 'renders validated and unvalidated strategies in the catalog: validated strategy button').toBeTruthy();
+    expect.soft(screen.getByRole('button', { name: /Opening Range Breakout/ }), 'renders validated and unvalidated strategies in the catalog: unvalidated strategy button').toBeTruthy();
+    expect.soft(screen.getAllByText('Proof current').length, 'renders validated and unvalidated strategies in the catalog: a current proof badge').toBeGreaterThan(0);
+    expect.soft(screen.getAllByText('Proof missing').length, 'renders validated and unvalidated strategies in the catalog: a missing proof badge').toBeGreaterThan(0);
 
-  it('renders the deployment test program as a non-Live operational harness', async () => {
-    await render(StrategyValidationComponent, {
-      providers: [
-        provideRouter([]),
-        LEAN_TWIN_SOURCE_STUB_PROVIDER,
-        { provide: StrategyValidationService, useClass: FakeStrategyValidationService },
-      ],
-    });
+    expect.soft(await screen.findByRole('heading', { name: 'Operational validation harness' }), 'renders the deployment test program as a non-Live operational harness: harness heading').toBeTruthy();
+    expect.soft(screen.getByText(/permanently ineligible for Live/), 'renders the deployment test program as a non-Live operational harness: Live ineligibility notice').toBeTruthy();
+    expect.soft(screen.getByRole('heading', { name: 'Strategy proof' }), 'renders the deployment test program as a non-Live operational harness: Strategy proof heading').toBeTruthy();
+    expect.soft(screen.getByRole('heading', { name: 'Current validation proof' }), 'renders the deployment test program as a non-Live operational harness: Current validation proof heading').toBeTruthy();
+    expect.soft(screen.getAllByText('Not Applicable').length, 'renders the deployment test program as a non-Live operational harness: Not Applicable stage').toBeGreaterThan(0);
+    expect.soft(screen.getByText('SPY'), 'renders the deployment test program as a non-Live operational harness: validation case symbol').toBeTruthy();
+    expect.soft(screen.getByText('56 trades matched'), 'renders the deployment test program as a non-Live operational harness: trades matched').toBeTruthy();
+    expect.soft(screen.getByText('56 trades validated'), 'renders the deployment test program as a non-Live operational harness: trades validated').toBeTruthy();
+    expect.soft(screen.getByText('Fill Price Drift'), 'renders the deployment test program as a non-Live operational harness: divergence label').toBeTruthy();
+    expect.soft(screen.queryByText('fill_price_drift'), 'renders the deployment test program as a non-Live operational harness: no raw divergence key').toBeNull();
+    expect.soft(screen.getAllByText('Accepted For Deploy').length, 'renders the deployment test program as a non-Live operational harness: accepted verdict').toBeGreaterThan(0);
+    expect.soft(screen.getByText('migration:strategy-validation-prd-seed'), 'renders the deployment test program as a non-Live operational harness: flagged-by').toBeTruthy();
+    expect.soft(screen.getByText('snapshot-sha'), 'renders the deployment test program as a non-Live operational harness: evidence snapshot hash').toBeTruthy();
+    expect.soft(screen.queryByText(/class DeploymentValidationAlgorithm/), 'renders the deployment test program as a non-Live operational harness: no reference source dump').toBeNull();
+    expect.soft(screen.queryByText(/DeploymentValidationConsecutiveGreen/), 'renders the deployment test program as a non-Live operational harness: no consecutive-green source dump').toBeNull();
 
-    expect(await screen.findByRole('heading', { name: 'Operational validation harness' })).toBeTruthy();
-    expect(screen.getByText(/permanently ineligible for Live/)).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Strategy proof' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Current validation proof' })).toBeTruthy();
-    expect(screen.getAllByText('Not Applicable').length).toBeGreaterThan(0);
-    expect(screen.getByText('SPY')).toBeTruthy();
-    expect(screen.getByText('56 trades matched')).toBeTruthy();
-    expect(screen.getByText('56 trades validated')).toBeTruthy();
-    expect(screen.getByText('Fill Price Drift')).toBeTruthy();
-    expect(screen.queryByText('fill_price_drift')).toBeNull();
-    expect(screen.getAllByText('Accepted For Deploy').length).toBeGreaterThan(0);
-    expect(screen.getByText('migration:strategy-validation-prd-seed')).toBeTruthy();
-    expect(screen.getByText('snapshot-sha')).toBeTruthy();
-    expect(screen.queryByText(/class DeploymentValidationAlgorithm/)).toBeNull();
-    expect(screen.queryByText(/DeploymentValidationConsecutiveGreen/)).toBeNull();
-  });
+    const labLink = await screen.findByRole('link', { name: /Diagnose in Strategy Lab/ });
 
-  it('links the selected strategy directly into Strategy Lab validation mode', async () => {
-    await render(StrategyValidationComponent, {
-      providers: [
-        provideRouter([]),
-        LEAN_TWIN_SOURCE_STUB_PROVIDER,
-        { provide: StrategyValidationService, useClass: FakeStrategyValidationService },
-      ],
-    });
+    expect.soft(labLink.getAttribute('href'), 'links the selected strategy directly into Strategy Lab validation mode: route').toContain('/strategy-lab?');
+    expect.soft(labLink.getAttribute('href'), 'links the selected strategy directly into Strategy Lab validation mode: strategy').toContain('strategy=deployment_validation');
+    expect.soft(labLink.getAttribute('href'), 'links the selected strategy directly into Strategy Lab validation mode: engine').toContain('engine=both');
+    expect.soft(labLink.getAttribute('href'), 'links the selected strategy directly into Strategy Lab validation mode: symbol').toContain('symbol=SPY');
 
-    const link = await screen.findByRole('link', { name: /Diagnose in Strategy Lab/ });
+    const deployLink = await screen.findByRole('link', { name: /Deploy strategy/ });
 
-    expect(link.getAttribute('href')).toContain('/strategy-lab?');
-    expect(link.getAttribute('href')).toContain('strategy=deployment_validation');
-    expect(link.getAttribute('href')).toContain('engine=both');
-    expect(link.getAttribute('href')).toContain('symbol=SPY');
-  });
-
-  it('links accepted evidence into the broker-aware Alpaca Deploy trader flow', async () => {
-    await render(StrategyValidationComponent, {
-      providers: [
-        provideRouter([]),
-        LEAN_TWIN_SOURCE_STUB_PROVIDER,
-        { provide: StrategyValidationService, useClass: FakeStrategyValidationService },
-      ],
-    });
-
-    const link = await screen.findByRole('link', { name: /Deploy strategy/ });
-
-    expect(link.getAttribute('href'))
+    expect.soft(deployLink.getAttribute('href'), 'links accepted evidence into the broker-aware Alpaca Deploy trader flow')
       .toBe('/brokers/alpaca?deploy=&strategy=deployment_validation');
   });
 

@@ -29,46 +29,36 @@ function response(
 }
 
 describe('historyUnavailableNotice (#2211 fail-loud classification)', () => {
-  it('returns null for a null response', () => {
-    expect(historyUnavailableNotice(null)).toBeNull();
-  });
-
-  it('returns null when the response has bars, regardless of notices', () => {
-    const withBars = response({
+  it.each<[string, ChartHistoryResponse | null]>([
+    ['for a null response', null],
+    ['when the response has bars, regardless of notices', response({
       bars: [
         { start_ms: 1, end_ms: 2, open: '1', high: '1', low: '1', close: '1', volume: 1, source: 'polygon' },
       ],
       overlay_notices: [notice('polygon_api_key_missing')],
-    });
-    expect(historyUnavailableNotice(withBars)).toBeNull();
+    })],
+    ['for a zero-bar response with no notices (genuinely empty)', response({ overlay_notices: [] })],
+    [
+      'for a zero-bar response whose only notice is polygon_overlay_empty (the closed empty-set code)',
+      response({ overlay_notices: [notice('polygon_overlay_empty')] }),
+    ],
+  ])('returns null %s', (_name, input) => {
+    expect(historyUnavailableNotice(input)).toBeNull();
   });
 
-  it('returns null for a zero-bar response with no notices (genuinely empty)', () => {
-    expect(historyUnavailableNotice(response({ overlay_notices: [] }))).toBeNull();
-  });
+  const missingKey = notice(
+    'polygon_api_key_missing',
+    'Polygon history is unavailable because POLYGON_API_KEY is not configured.',
+  );
+  const unseen = notice('coordinator_unavailable', 'The fleet coordinator did not respond in time.');
+  const empty = notice('polygon_overlay_empty', 'Nothing printed for this session.');
+  const outage = notice('polygon_rate_limited', 'Polygon rate-limited this request.');
 
-  it('returns null for a zero-bar response whose only notice is polygon_overlay_empty (the closed empty-set code)', () => {
-    expect(
-      historyUnavailableNotice(response({ overlay_notices: [notice('polygon_overlay_empty')] })),
-    ).toBeNull();
-  });
-
-  it('returns the notice for polygon_api_key_missing on a zero-bar response', () => {
-    const missingKey = notice(
-      'polygon_api_key_missing',
-      'Polygon history is unavailable because POLYGON_API_KEY is not configured.',
-    );
-    expect(historyUnavailableNotice(response({ overlay_notices: [missingKey] }))).toEqual(missingKey);
-  });
-
-  it('defaults fail-loud for a code it has never seen (coordinator_unavailable, #2204)', () => {
-    const unseen = notice('coordinator_unavailable', 'The fleet coordinator did not respond in time.');
-    expect(historyUnavailableNotice(response({ overlay_notices: [unseen] }))).toEqual(unseen);
-  });
-
-  it('returns the first non-empty-class notice when several are present', () => {
-    const empty = notice('polygon_overlay_empty', 'Nothing printed for this session.');
-    const outage = notice('polygon_rate_limited', 'Polygon rate-limited this request.');
-    expect(historyUnavailableNotice(response({ overlay_notices: [empty, outage] }))).toEqual(outage);
+  it.each<[string, ChartOverlayNoticeView[], ChartOverlayNoticeView]>([
+    ['the notice for polygon_api_key_missing on a zero-bar response', [missingKey], missingKey],
+    ['the notice for a code it has never seen, failing loud by default (coordinator_unavailable, #2204)', [unseen], unseen],
+    ['the first non-empty-class notice when several are present', [empty, outage], outage],
+  ])('returns %s', (_name, notices, expected) => {
+    expect(historyUnavailableNotice(response({ overlay_notices: notices }))).toEqual(expected);
   });
 });

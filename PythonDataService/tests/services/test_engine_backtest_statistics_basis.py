@@ -148,24 +148,12 @@ def test_a_full_runs_day_ends_are_its_per_bar_curve_read_at_each_days_last_sampl
     assert daily_equity(response.equity_day_ends) == daily_equity(response.equity_curve)
 
 
-def test_a_compatibility_pair_grades_the_marked_equity_curve() -> None:
+def test_a_compatibility_pair_grades_the_marked_equity_curve_exactly_as_a_normal_run() -> None:
     """#2447: an all-in trade with a 50% mid-trade drawdown used to report ~1%
     max drawdown in paired mode (the closed-trade ledger's own -1%); the
-    headline number now grades the marked curve exactly as a normal run."""
-    response = _aggregate(
-        _request(
-            compatibility_profile=COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1,
-            data_policy=dict(_RAW_DATA_POLICY),
-        )
-    )
-
-    # (10_000 - 5_000) / 10_000: the marked trough, not the ledger's -1%.
-    assert response.statistics["max_drawdown_pct"] == 0.5
-
-
-def test_verdict_inputs_are_identical_in_paired_and_normal_mode() -> None:
-    """#2447: for the same run, the statistics feeding ``compute_run_verdict``
-    are identical in compatibility-paired and normal mode."""
+    headline number now grades the marked curve exactly as a normal run, and
+    for the same run the statistics feeding ``compute_run_verdict`` are
+    identical in compatibility-paired and normal mode."""
     paired = _aggregate(
         _request(
             compatibility_profile=COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1,
@@ -174,17 +162,19 @@ def test_verdict_inputs_are_identical_in_paired_and_normal_mode() -> None:
     )
     normal = _aggregate(_request())
 
-    assert paired.statistics == normal.statistics
-    assert paired.run_verdict is not None and normal.run_verdict is not None
+    # (10_000 - 5_000) / 10_000: the marked trough, not the ledger's -1%.
+    assert paired.statistics["max_drawdown_pct"] == 0.5, "#2447: a paired run's drawdown is the marked trough, not the ledger's -1%"
+    assert paired.statistics == normal.statistics, "#2447: paired and normal statistics are identical"
+    assert paired.run_verdict is not None and normal.run_verdict is not None, "#2447: both modes grade a verdict"
     # The verdict names its basis so the parity comparison can refuse to
     # compare it against the LEAN companion's ledger-based envelope (#2447).
-    assert paired.run_verdict.statistics_basis == "marked_equity_curve"
-    assert normal.run_verdict.statistics_basis == "marked_equity_curve"
+    assert paired.run_verdict.statistics_basis == "marked_equity_curve", "#2447: the paired verdict names its basis"
+    assert normal.run_verdict.statistics_basis == "marked_equity_curve", "#2447: the normal verdict names its basis"
     # The verdict stamps its own wall-clock generation time; every graded
     # input and every grade must be identical between the two modes.
     assert paired.run_verdict.model_dump(exclude={"generated_at_ms"}) == (
         normal.run_verdict.model_dump(exclude={"generated_at_ms"})
-    )
+    ), "#2447: every graded input and grade is identical between the two modes"
 
 
 def test_the_actual_producer_records_conventions_and_preserves_unknown_data_identity() -> None:

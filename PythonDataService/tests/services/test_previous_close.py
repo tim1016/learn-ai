@@ -30,6 +30,7 @@ from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import pytest
 
 from app.services.dataset_service import (
     add_previous_close_column,
@@ -52,92 +53,96 @@ def _daily_bar(ts_ms: int, close: float) -> dict[str, Any]:
 # ── fetch_rth_closes ──────────────────────────────────────────────────
 
 
-def test_fetch_rth_closes_maps_each_trading_day_to_its_own_close():
-    """Returns today's close per trading day, not yesterday's. The rolling
-    logic that picks prior-vs-current lives in add_previous_close_column."""
+@pytest.mark.parametrize(
+    ("symbol", "from_date", "to_date", "daily_closes", "expected_closes"),
+    [
+        # Returns today's close per trading day, not yesterday's. The rolling
+        # logic that picks prior-vs-current lives in add_previous_close_column.
+        pytest.param(
+            "SPY",
+            "2026-01-05",
+            "2026-01-06",
+            ((2, 100.0), (5, 101.0), (6, 102.0)),  # Friday, Monday, Tuesday
+            (("2026-01-02", 100.0), ("2026-01-05", 101.0), ("2026-01-06", 102.0)),
+            id="maps_each_trading_day_to_its_own_close",
+        ),
+        # An empty Polygon response (e.g. invalid ticker) must not crash; the
+        # column-add helper will then attach NaN PC values rather than
+        # fabricated numbers.
+        pytest.param("INVALID", "2026-01-05", "2026-01-07", (), (), id="empty_response_returns_empty_map"),
+    ],
+)
+def test_fetch_rth_closes_maps_daily_bars_to_closes(symbol, from_date, to_date, daily_closes, expected_closes):
     polygon = Mock()
-    polygon.fetch_aggregates.return_value = [
-        _daily_bar(_ms(2026, 1, 2), close=100.0),  # Friday
-        _daily_bar(_ms(2026, 1, 5), close=101.0),  # Monday
-        _daily_bar(_ms(2026, 1, 6), close=102.0),  # Tuesday
-    ]
+    polygon.fetch_aggregates.return_value = [_daily_bar(_ms(2026, 1, day), close=close) for day, close in daily_closes]
 
-    closes = fetch_rth_closes(polygon, "SPY", "2026-01-05", "2026-01-06")
+    closes = fetch_rth_closes(polygon, symbol, from_date, to_date)
 
-    assert closes == {"2026-01-02": 100.0, "2026-01-05": 101.0, "2026-01-06": 102.0}
-
-
-def test_fetch_rth_closes_empty_response_returns_empty_map():
-    """An empty Polygon response (e.g. invalid ticker) must not crash; the
-    column-add helper will then attach NaN PC values rather than fabricated
-    numbers."""
-    polygon = Mock()
-    polygon.fetch_aggregates.return_value = []
-
-    assert fetch_rth_closes(polygon, "INVALID", "2026-01-05", "2026-01-07") == {}
+    assert closes == dict(expected_closes), "each trading day maps to its own close; no bars map to nothing"
 
 
 # ── add_previous_close_column — rolling rule ─────────────────────────
 
 
-def test_pc_before_1600_uses_prior_trading_day_close():
-    """Morning RTH and pre-market bars on day D reference D−1's close so
-    morning gap is open − PC."""
-    rth_closes = {"2026-01-05": 99.5, "2026-01-06": 102.0}
-    bars = pd.DataFrame(
-        [
-            {"timestamp": _ms(2026, 1, 6, 4, 30), "close": 101.5},   # pre-market
-            {"timestamp": _ms(2026, 1, 6, 9, 30), "close": 101.7},   # RTH open
-            {"timestamp": _ms(2026, 1, 6, 12, 0), "close": 101.9},   # RTH midday
-            {"timestamp": _ms(2026, 1, 6, 15, 59), "close": 102.0},  # RTH last minute
-        ]
-    )
+@pytest.mark.parametrize(
+    ("rth_closes", "bars", "expected_pc"),
+    [
+        # Morning RTH and pre-market bars on day D reference D−1's close so
+        # morning gap is open − PC.
+        pytest.param(
+            (("2026-01-05", 99.5), ("2026-01-06", 102.0)),
+            (
+                ((2026, 1, 6, 4, 30), 101.5),  # pre-market
+                ((2026, 1, 6, 9, 30), 101.7),  # RTH open
+                ((2026, 1, 6, 12, 0), 101.9),  # RTH midday
+                ((2026, 1, 6, 15, 59), 102.0),  # RTH last minute
+            ),
+            (99.5, 99.5, 99.5, 99.5),
+            id="before_1600_uses_prior_trading_day_close",
+        ),
+        # Bars at 16:00 or later on day D reference D's just-completed close
+        # so post-market drift is close − PC against today's close.
+        pytest.param(
+            (("2026-01-05", 99.5), ("2026-01-06", 102.0)),
+            (
+                ((2026, 1, 6, 16, 0), 102.05),  # close boundary (after-hours start)
+                ((2026, 1, 6, 17, 30), 102.10),  # post-market
+                ((2026, 1, 6, 19, 59), 102.20),  # post-market last minute
+            ),
+            (102.0, 102.0, 102.0),
+            id="at_or_after_1600_uses_same_day_close",
+        ),
+        # The whole point of the rolling rule: post-market on D and pre-market
+        # on D+1 reference the same close (D's), so two adjacent extended-session
+        # bars subtract cleanly to give the overnight gap (here 102.8 − 102.5 =
+        # 0.3). Without the rolling rule, post-market on D would reference D−1's
+        # close and the gap would smuggle in two days of movement.
+        pytest.param(
+            (("2026-01-05", 99.5), ("2026-01-06", 102.0), ("2026-01-07", 103.0)),
+            (
+                ((2026, 1, 6, 17, 0), 102.5),  # post-market on Tue (Jan 6)
+                ((2026, 1, 7, 6, 0), 102.8),  # pre-market on Wed (Jan 7)
+            ),
+            (102.0, 102.0),
+            id="overnight_gap_is_clean_subtraction_across_1600",
+        ),
+        # A bar at 22:00 ET on Jan 5 is 03:00 UTC on Jan 6 — its trading date
+        # is Jan 5 in ET. Because 22:00 ≥ 16:00 ET, PC = Jan 5's close, not
+        # Jan 6's. Without ET tz-conversion this would mis-key into Jan 6.
+        pytest.param(
+            (("2026-01-05", 99.0), ("2026-01-06", 100.0)),
+            (((2026, 1, 5, 22, 0), 99.5),),
+            (99.0,),
+            id="groups_by_et_date_not_utc",
+        ),
+    ],
+)
+def test_pc_follows_the_rolling_previous_close_rule(rth_closes, bars, expected_pc):
+    frame = pd.DataFrame([{"timestamp": _ms(*when), "close": close} for when, close in bars])
 
-    out = add_previous_close_column(bars, rth_closes)
+    out = add_previous_close_column(frame, dict(rth_closes))
 
-    assert out["PC"].tolist() == [99.5, 99.5, 99.5, 99.5]
-
-
-def test_pc_at_or_after_1600_uses_same_day_close():
-    """Bars at 16:00 or later on day D reference D's just-completed close
-    so post-market drift is close − PC against today's close."""
-    rth_closes = {"2026-01-05": 99.5, "2026-01-06": 102.0}
-    bars = pd.DataFrame(
-        [
-            {"timestamp": _ms(2026, 1, 6, 16, 0), "close": 102.05},   # close boundary (after-hours start)
-            {"timestamp": _ms(2026, 1, 6, 17, 30), "close": 102.10},  # post-market
-            {"timestamp": _ms(2026, 1, 6, 19, 59), "close": 102.20},  # post-market last minute
-        ]
-    )
-
-    out = add_previous_close_column(bars, rth_closes)
-
-    assert out["PC"].tolist() == [102.0, 102.0, 102.0]
-
-
-def test_pc_overnight_gap_is_clean_subtraction_across_1600():
-    """The whole point of the rolling rule: post-market on D and pre-market
-    on D+1 reference the same close (D's), so two adjacent extended-session
-    bars subtract cleanly to give the overnight gap. Without the rolling
-    rule, post-market on D would reference D−1's close and the gap would
-    smuggle in two days of movement."""
-    rth_closes = {
-        "2026-01-05": 99.5,
-        "2026-01-06": 102.0,
-        "2026-01-07": 103.0,
-    }
-    bars = pd.DataFrame(
-        [
-            {"timestamp": _ms(2026, 1, 6, 17, 0), "close": 102.5},  # post-market on Tue (Jan 6)
-            {"timestamp": _ms(2026, 1, 7, 6, 0), "close": 102.8},   # pre-market on Wed (Jan 7)
-        ]
-    )
-
-    out = add_previous_close_column(bars, rth_closes)
-
-    # Both reference Jan 6's close (102.0). Spread = 102.8 − 102.5 = 0.3
-    # is the genuine overnight move between the two extended-session prints.
-    assert out["PC"].tolist() == [102.0, 102.0]
+    assert out["PC"].tolist() == list(expected_pc), "each bar references the most recently completed RTH close"
 
 
 def test_pc_unmapped_lookup_target_becomes_nan():
@@ -154,18 +159,6 @@ def test_pc_unmapped_lookup_target_becomes_nan():
     afternoon_bar = pd.DataFrame([{"timestamp": _ms(2026, 1, 6, 16, 30), "close": 102.05}])
     out_afternoon = add_previous_close_column(afternoon_bar, rth_closes)
     assert out_afternoon.loc[0, "PC"] == 102.0
-
-
-def test_pc_groups_by_et_date_not_utc():
-    """A bar at 22:00 ET on Jan 5 is 03:00 UTC on Jan 6 — its trading date
-    is Jan 5 in ET. Because 22:00 ≥ 16:00 ET, PC = Jan 5's close, not
-    Jan 6's. Without ET tz-conversion this would mis-key into Jan 6."""
-    rth_closes = {"2026-01-05": 99.0, "2026-01-06": 100.0}
-    bars = pd.DataFrame([{"timestamp": _ms(2026, 1, 5, 22, 0), "close": 99.5}])
-
-    out = add_previous_close_column(bars, rth_closes)
-
-    assert out["PC"].tolist() == [99.0]
 
 
 def test_pc_empty_df_keeps_pc_column():

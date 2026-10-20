@@ -59,24 +59,17 @@ def test_get_spec_returns_generic_fallback_for_unknown_feature():
 # ─── compute_holm_p ───────────────────────────────────────────────────────
 
 
-def test_holm_correction_scales_with_family_size():
+def test_holm_correction():
     raw = 0.04
     holm_5 = compute_holm_p(raw, n_family=5)
     holm_10 = compute_holm_p(raw, n_family=10)
+    holm_capped = compute_holm_p(0.5, n_family=10)
 
-    assert holm_5 == pytest.approx(0.20, abs=1e-12)
-    assert holm_10 == pytest.approx(0.40, abs=1e-12)
-
-
-def test_holm_correction_caps_at_one():
-    holm = compute_holm_p(0.5, n_family=10)
-
-    assert holm == 1.0
-
-
-def test_holm_correction_handles_invalid_inputs():
-    assert compute_holm_p(-0.01, n_family=5) == 1.0
-    assert compute_holm_p(0.04, n_family=0) == 1.0
+    assert holm_5 == pytest.approx(0.20, abs=1e-12), "scales with family size: 5 tests"
+    assert holm_10 == pytest.approx(0.40, abs=1e-12), "scales with family size: 10 tests"
+    assert holm_capped == 1.0, "caps at one"
+    assert compute_holm_p(-0.01, n_family=5) == 1.0, "invalid input: negative raw p"
+    assert compute_holm_p(0.04, n_family=0) == 1.0, "invalid input: empty family"
 
 
 # ─── compute_ic_ci ────────────────────────────────────────────────────────
@@ -101,14 +94,15 @@ def test_ic_ci_widens_when_n_eff_shrinks():
     )
 
 
-def test_ic_ci_invalid_when_n_eff_too_small():
-    ci = compute_ic_ci(mean_ic=0.05, n_eff=1)
-
-    assert ci.valid is False
-
-
-def test_ic_ci_invalid_when_mean_ic_is_nan():
-    ci = compute_ic_ci(mean_ic=float("nan"), n_eff=200)
+@pytest.mark.parametrize(
+    ("mean_ic", "n_eff"),
+    [
+        pytest.param(0.05, 1, id="n_eff_too_small"),
+        pytest.param(float("nan"), 200, id="mean_ic_is_nan"),
+    ],
+)
+def test_ic_ci_invalid(mean_ic, n_eff):
+    ci = compute_ic_ci(mean_ic=mean_ic, n_eff=n_eff)
 
     assert ci.valid is False
 
@@ -163,23 +157,38 @@ def test_cost_viability_handles_empty_bins():
     assert "No quantile" in cost.note
 
 
-def test_cost_viability_negative_direction_uses_q1_minus_q5():
-    """Mean-reversion spec (negative direction) trades long Q1 / short Q5.
-    Signed Q5−Q1 is negative when the spec works as intended; the
-    directional spread inverts the sign so the economic gate is correct."""
+@pytest.mark.parametrize(
+    ("q1_return", "q5_return", "expected_direction", "signed_bps", "directional_bps", "viable"),
+    [
+        # Mean-reversion spec (negative direction) trades long Q1 / short Q5.
+        # Signed Q5-Q1 is negative when the spec works as intended; the
+        # directional spread inverts the sign so the economic gate is correct.
+        # Q1 high (oversold rebound), Q5 low (overbought reversal).
+        # Signed Q5-Q1 = -20 bps; directional (Q1-Q5) = +20 bps.
+        pytest.param(0.0010, -0.0010, "negative", -20.0, 20.0, True, id="negative_direction_uses_q1_minus_q5"),
+        # Positive-direction spec but signed Q5-Q1 is negative -> trade
+        # captures -Q5+Q1, which is the opposite of what the spec expects.
+        # Q1 outperforms, Q5 underperforms.
+        # Signed = -10 bps; directional (positive direction = Q5-Q1) = -10 bps.
+        # Net at 1 bp one-way = -12 bps. Not viable.
+        pytest.param(0.0005, -0.0005, "positive", -10.0, -10.0, False, id="direction_mismatch_fails_economic_screen"),
+    ],
+)
+def test_cost_viability_directional_spread(
+    q1_return, q5_return, expected_direction, signed_bps, directional_bps, viable
+):
     bins = [
-        {"bin_number": 1, "mean_return": 0.0010},   # Q1 high (oversold rebound)
-        {"bin_number": 5, "mean_return": -0.0010},  # Q5 low (overbought reversal)
+        {"bin_number": 1, "mean_return": q1_return},
+        {"bin_number": 5, "mean_return": q5_return},
     ]
 
     cost = compute_cost_viability(
-        bins, cost_assumption_one_way_bps=1.0, expected_direction="negative"
+        bins, cost_assumption_one_way_bps=1.0, expected_direction=expected_direction
     )
 
-    # Signed Q5-Q1 = -20 bps; directional (Q1-Q5) = +20 bps.
-    assert cost.gross_spread_bps_signed == pytest.approx(-20.0, abs=1e-9)
-    assert cost.directional_spread_bps == pytest.approx(20.0, abs=1e-9)
-    assert cost.viable_at_assumption is True
+    assert cost.gross_spread_bps_signed == pytest.approx(signed_bps, abs=1e-9), "signed Q5-Q1 spread"
+    assert cost.directional_spread_bps == pytest.approx(directional_bps, abs=1e-9), "directional spread"
+    assert cost.viable_at_assumption is viable, "economic viability at the cost assumption"
 
 
 def test_cost_viability_two_sided_direction_uses_absolute_spread():
@@ -193,25 +202,6 @@ def test_cost_viability_two_sided_direction_uses_absolute_spread():
     )
 
     assert cost.directional_spread_bps == pytest.approx(20.0, abs=1e-9)
-
-
-def test_cost_viability_direction_mismatch_fails_economic_screen():
-    """Positive-direction spec but signed Q5-Q1 is negative → trade
-    captures −Q5+Q1, which is the opposite of what the spec expects."""
-    bins = [
-        {"bin_number": 1, "mean_return": 0.0005},   # Q1 outperforms
-        {"bin_number": 5, "mean_return": -0.0005},  # Q5 underperforms
-    ]
-
-    cost = compute_cost_viability(
-        bins, cost_assumption_one_way_bps=1.0, expected_direction="positive"
-    )
-
-    # Signed = -10 bps; directional (positive direction = Q5-Q1) = -10 bps.
-    # Net at 1 bp one-way = -12 bps. Not viable.
-    assert cost.gross_spread_bps_signed == pytest.approx(-10.0, abs=1e-9)
-    assert cost.directional_spread_bps == pytest.approx(-10.0, abs=1e-9)
-    assert cost.viable_at_assumption is False
 
 
 # ─── evaluate_feature_validation — stage assignment ──────────────────────
@@ -247,17 +237,26 @@ def _strong_args(spec: FeatureValidationSpec) -> dict:
     )
 
 
-def test_evaluate_returns_stage_3_when_all_screens_pass_strongly():
+def test_evaluate_strong_inputs_verdict():
     spec = get_spec("momentum_5m")
+    args = _strong_args(spec)
+    expected_ci = compute_ic_ci(mean_ic=args["mean_ic"], n_eff=args["effective_n"])
 
-    verdict = evaluate_feature_validation(**_strong_args(spec))
+    verdict = evaluate_feature_validation(**args)
 
-    assert verdict.stage_info.stage == 3
-    assert verdict.stage_info.label == "Paper-trading candidate"
-    assert verdict.statistical_screen.passed is True
-    assert verdict.economic_screen.passed is True
-    assert verdict.oos_screen.passed is True
-    assert verdict.multiple_testing_screen.passed is True
+    assert verdict.stage_info.stage == 3, "returns stage 3 when all screens pass strongly"
+    assert verdict.stage_info.label == "Paper-trading candidate", "stage 3 label"
+    assert verdict.statistical_screen.passed is True, "statistical screen passes"
+    assert verdict.economic_screen.passed is True, "economic screen passes"
+    assert verdict.oos_screen.passed is True, "oos screen passes"
+    assert verdict.multiple_testing_screen.passed is True, "multiple testing screen passes"
+    assert verdict.ic_ci.valid == expected_ci.valid, "ic_ci validity is consistent with compute_ic_ci"
+    assert verdict.ic_ci.ci_lower == pytest.approx(expected_ci.ci_lower, rel=1e-9), (
+        "ic_ci lower bound is consistent with compute_ic_ci"
+    )
+    assert verdict.ic_ci.ci_upper == pytest.approx(expected_ci.ci_upper, rel=1e-9), (
+        "ic_ci upper bound is consistent with compute_ic_ci"
+    )
 
 
 def test_evaluate_returns_stage_0_when_statistical_screen_fails_required_check():
@@ -303,17 +302,25 @@ def test_evaluate_returns_stage_1_when_cost_erases_alpha():
     assert verdict.statistical_screen.passed is True
 
 
-def test_evaluate_stage_2_when_multiple_testing_relaxed_but_stage3_thresholds_unmet():
+def test_evaluate_stage_2_when_effective_n_is_below_the_stage_3_floor():
     """Stage 2 fires when Holm-p ≤ 0.10 (Stage 2 threshold) but a Stage 3
     threshold (effective_n / test_days / abs_ic) is unmet."""
     spec = get_spec("momentum_5m")
     args = _strong_args(spec)
-    args["effective_n"] = 120  # below STAGE3_MIN_EFFECTIVE_N = 180
+    args["effective_n"] = 120  # below STAGE3_MIN_EFFECTIVE_N = 180; forces stage 2
 
     verdict = evaluate_feature_validation(**args)
 
-    assert verdict.stage_info.stage == 2
-    assert verdict.stage_info.next_stage_label == "Paper-trading candidate"
+    assert verdict.stage_info.stage == 2, "stage 2 when multiple testing is relaxed but stage 3 thresholds are unmet"
+    assert verdict.stage_info.next_stage_label == "Paper-trading candidate", "stage 2 points at stage 3"
+    assert verdict.stage_info.stage == 2, "advance criteria: still stage 2"
+    n_eff_criterion = next(
+        c for c in verdict.stage_info.advance_criteria if c.name == "Effective N"
+    )
+    assert math.isclose(n_eff_criterion.current_value, 120.0, abs_tol=1e-12), (
+        "advance criteria reference the stage 3 effective N threshold: current value"
+    )
+    assert n_eff_criterion.met is False, "advance criteria reference the stage 3 effective N threshold: not met"
 
 
 def test_evaluate_stationarity_required_kills_when_not_stationary():
@@ -342,30 +349,31 @@ def test_evaluate_stationarity_not_required_for_macd_passes_when_non_stationary(
     assert verdict.stage_info.stage >= 1
 
 
-def test_evaluate_holm_correction_visible_in_warning():
+def test_evaluate_holm_correction():
     spec = get_spec("momentum_5m")
-    args = _strong_args(spec)
-    args["nw_p_value"] = 0.04
+    args_default = _strong_args(spec)
+    args_default["nw_p_value"] = 0.04
+    args_wide = dict(args_default)
+    args_wide["n_family"] = 20
 
-    verdict = evaluate_feature_validation(**args)
+    v_default = evaluate_feature_validation(**args_default)
+    v_wide = evaluate_feature_validation(**args_wide)
 
-    assert verdict.multiple_testing.raw_nw_p_value == pytest.approx(0.04, abs=1e-12)
-    expected_holm = min(1.0, 0.04 * DEFAULT_NUM_FEATURE_FAMILY)
-    assert verdict.multiple_testing.holm_p_value == pytest.approx(
-        expected_holm, abs=1e-12
+    assert v_default.multiple_testing.raw_nw_p_value == pytest.approx(0.04, abs=1e-12), (
+        "holm correction visible in warning: raw p is carried through"
     )
-
-
-def test_evaluate_returns_ic_ci_consistent_with_helper():
-    spec = get_spec("momentum_5m")
-    args = _strong_args(spec)
-    expected_ci = compute_ic_ci(mean_ic=args["mean_ic"], n_eff=args["effective_n"])
-
-    verdict = evaluate_feature_validation(**args)
-
-    assert verdict.ic_ci.valid == expected_ci.valid
-    assert verdict.ic_ci.ci_lower == pytest.approx(expected_ci.ci_lower, rel=1e-9)
-    assert verdict.ic_ci.ci_upper == pytest.approx(expected_ci.ci_upper, rel=1e-9)
+    expected_holm = min(1.0, 0.04 * DEFAULT_NUM_FEATURE_FAMILY)
+    assert v_default.multiple_testing.holm_p_value == pytest.approx(
+        expected_holm, abs=1e-12
+    ), "holm correction visible in warning: default family"
+    # Default 5-family: Holm = min(1, 0.04 × 5) = 0.20.
+    # 20-family: Holm = min(1, 0.04 × 20) = 0.80.
+    assert v_default.multiple_testing.holm_p_value == pytest.approx(0.20, abs=1e-12), (
+        "n_family override: default 5-family"
+    )
+    assert v_wide.multiple_testing.holm_p_value == pytest.approx(0.80, abs=1e-12), (
+        "n_family override: 20-family changes the correction"
+    )
 
 
 def test_evaluate_includes_advance_criteria_for_non_terminal_stages():
@@ -381,21 +389,6 @@ def test_evaluate_includes_advance_criteria_for_non_terminal_stages():
     assert len(verdict.stage_info.advance_criteria) > 0
     advance_names = {c.name for c in verdict.stage_info.advance_criteria}
     assert "OOS retention" in advance_names
-
-
-def test_evaluate_stage_2_advance_criteria_reference_stage_3_thresholds():
-    spec = get_spec("momentum_5m")
-    args = _strong_args(spec)
-    args["effective_n"] = 120  # forces stage 2
-
-    verdict = evaluate_feature_validation(**args)
-
-    assert verdict.stage_info.stage == 2
-    n_eff_criterion = next(
-        c for c in verdict.stage_info.advance_criteria if c.name == "Effective N"
-    )
-    assert math.isclose(n_eff_criterion.current_value, 120.0, abs_tol=1e-12)
-    assert n_eff_criterion.met is False
 
 
 # ─── Sanity: thresholds are strictly nested ──────────────────────────────
@@ -504,22 +497,6 @@ def test_evaluate_stage_3_blocked_when_regime_stability_fails():
 
     assert verdict.regime_stability_screen.passed is False
     assert verdict.stage_info.stage <= 2
-
-
-def test_evaluate_n_family_override_changes_holm_correction():
-    spec = get_spec("momentum_5m")
-    args_default = _strong_args(spec)
-    args_default["nw_p_value"] = 0.04
-    args_wide = dict(args_default)
-    args_wide["n_family"] = 20
-
-    v_default = evaluate_feature_validation(**args_default)
-    v_wide = evaluate_feature_validation(**args_wide)
-
-    # Default 5-family: Holm = min(1, 0.04 × 5) = 0.20.
-    # 20-family: Holm = min(1, 0.04 × 20) = 0.80.
-    assert v_default.multiple_testing.holm_p_value == pytest.approx(0.20, abs=1e-12)
-    assert v_wide.multiple_testing.holm_p_value == pytest.approx(0.80, abs=1e-12)
 
 
 def test_evaluate_stage_3_no_longer_requires_higher_ic_than_stage_2():

@@ -59,25 +59,19 @@ def _reading(returns: list[float], *, ceiling: float = 0.20, metrics: Metrics | 
     )
 
 
-def test_a_hand_computed_path_finds_its_own_close_only_depth() -> None:
+def test_the_close_only_depth_of_a_hand_computed_path_counts_the_initial_capital_and_a_rise_never_falls() -> None:
     path = [0.10, -0.20, 0.05, *([0.0] * 57)]  # equity 1 -> 1.1 -> 0.88 -> 0.924, then flat: the deepest fall is 0.2 off the 1.1 peak
     reading = _reading(path)
-    assert reading["recorded_close_only"] == pytest.approx(0.2, abs=1e-12)
-
-
-def test_the_initial_capital_sits_in_the_initial_peak() -> None:
-    path = [-0.10, 0.05, *([0.0] * 58)]
-    reading = _reading(path)
+    assert reading["recorded_close_only"] == pytest.approx(0.2, abs=1e-12), "a hand-computed path finds its own close-only depth"
+    initial_path = [-0.10, 0.05, *([0.0] * 58)]
+    initial = _reading(initial_path)
     # The engine's own peak starts at the first bar (0.9), so it misses this fall; this reading counts it from capital 1.0.
-    assert reading["recorded_close_only"] == pytest.approx(0.10, abs=1e-12)
-
-
-def test_a_positive_only_series_falls_not_at_all() -> None:
-    reading = _reading([0.01] * 60)
-    assert reading["recorded_close_only"] == 0.0
-    assert reading["counts"]["within_ceiling"] == 10_000
-    assert reading["counts"]["beyond_ceiling"] == 0
-    assert reading["percentiles"]["p95"] == 0.0
+    assert initial["recorded_close_only"] == pytest.approx(0.10, abs=1e-12), "the initial capital sits in the initial peak"
+    rising = _reading([0.01] * 60)
+    assert rising["recorded_close_only"] == 0.0, "a positive-only series falls not at all"
+    assert rising["counts"]["within_ceiling"] == 10_000, "a positive-only series is within the ceiling on every path"
+    assert rising["counts"]["beyond_ceiling"] == 0, "a positive-only series is beyond the ceiling on no path"
+    assert rising["percentiles"]["p95"] == 0.0, "a positive-only series has a zero p95 fall"
 
 
 def test_the_percentiles_interpolate_by_hand_computed_positions() -> None:

@@ -21,6 +21,7 @@ from app.data_lake.types import (
     calendar_anchor_ms_to_trading_date,
     trading_date_to_calendar_anchor_ms,
 )
+from app.lean_sidecar.trading_calendar import session_open_ms_utc
 
 _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
@@ -85,16 +86,18 @@ class TestCalendarAnchorHelpers:
         ms = trading_date_to_calendar_anchor_ms(date(2026, 8, 1))
         assert ms == 1785585600000
 
-    def test_est_date_round_trips(self):
-        """A date wholly inside EST (UTC-5) — the anchor is fixed UTC, so
-        the local NY offset must not perturb it."""
-        d = date(2026, 1, 15)
-        assert calendar_anchor_ms_to_trading_date(trading_date_to_calendar_anchor_ms(d)) == d
-
-    def test_edt_date_round_trips(self):
-        """A date wholly inside EDT (UTC-4) — same invariant across the
-        DST boundary the fixed-UTC anchor is designed to ignore."""
-        d = date(2026, 7, 15)
+    @pytest.mark.parametrize(
+        "d",
+        [
+            # Wholly inside EST (UTC-5) — the anchor is fixed UTC, so the local NY
+            # offset must not perturb it.
+            pytest.param(date(2026, 1, 15), id="est_date"),
+            # Wholly inside EDT (UTC-4) — same invariant across the DST boundary the
+            # fixed-UTC anchor is designed to ignore.
+            pytest.param(date(2026, 7, 15), id="edt_date"),
+        ],
+    )
+    def test_date_round_trips(self, d: date):
         assert calendar_anchor_ms_to_trading_date(trading_date_to_calendar_anchor_ms(d)) == d
 
     def test_weekend_date_round_trips(self):
@@ -105,37 +108,29 @@ class TestCalendarAnchorHelpers:
         assert d.weekday() == 6
         assert calendar_anchor_ms_to_trading_date(trading_date_to_calendar_anchor_ms(d)) == d
 
-    def test_off_anchor_ms_is_rejected(self):
-        """One millisecond off the canonical noon-UTC anchor must be
-        refused, not silently snapped to the nearest date."""
-        ms = trading_date_to_calendar_anchor_ms(date(2024, 5, 20)) + 1
+    @pytest.mark.parametrize(
+        "ms",
+        [
+            # One millisecond off the canonical noon-UTC anchor must be refused, not
+            # silently snapped to the nearest date.
+            pytest.param(trading_date_to_calendar_anchor_ms(date(2024, 5, 20)) + 1, id="off_anchor_ms"),
+            # Midnight UTC is the obvious-but-wrong anchor (would shift the date west of
+            # UTC) — it must be rejected like any other off-anchor value, not silently
+            # accepted as an alternate anchor.
+            pytest.param(
+                trading_date_to_calendar_anchor_ms(date(2024, 5, 20)) - CALENDAR_ANCHOR_UTC_HOUR * 3_600_000,
+                id="midnight_utc",
+            ),
+            # 09:30 ET is the *other* endpoint's anchor (GET /coverage) — it must not be
+            # silently accepted here as if the two conventions were interchangeable.
+            pytest.param(session_open_ms_utc(date(2024, 5, 20)), id="session_open_anchor"),
+            pytest.param(_INT64_MAX + 1, id="value_above_int64_max"),
+            pytest.param(_INT64_MIN - 1, id="value_below_int64_min"),
+        ],
+    )
+    def test_off_anchor_ms_is_rejected(self, ms: int):
         with pytest.raises(ValueError):
             calendar_anchor_ms_to_trading_date(ms)
-
-    def test_midnight_utc_is_rejected(self):
-        """Midnight UTC is the obvious-but-wrong anchor (would shift the
-        date west of UTC) — it must be rejected like any other off-anchor
-        value, not silently accepted as an alternate anchor."""
-        midnight_ms = trading_date_to_calendar_anchor_ms(date(2024, 5, 20)) - CALENDAR_ANCHOR_UTC_HOUR * 3_600_000
-        with pytest.raises(ValueError):
-            calendar_anchor_ms_to_trading_date(midnight_ms)
-
-    def test_session_open_anchor_is_rejected(self):
-        """09:30 ET is the *other* endpoint's anchor (GET /coverage) — it
-        must not be silently accepted here as if the two conventions were
-        interchangeable."""
-        from app.lean_sidecar.trading_calendar import session_open_ms_utc
-
-        with pytest.raises(ValueError):
-            calendar_anchor_ms_to_trading_date(session_open_ms_utc(date(2024, 5, 20)))
-
-    def test_value_above_int64_max_is_rejected(self):
-        with pytest.raises(ValueError):
-            calendar_anchor_ms_to_trading_date(_INT64_MAX + 1)
-
-    def test_value_below_int64_min_is_rejected(self):
-        with pytest.raises(ValueError):
-            calendar_anchor_ms_to_trading_date(_INT64_MIN - 1)
 
 
 class TestDataRunSpec:
@@ -151,30 +146,47 @@ class TestDataRunSpec:
 
     def test_minimal_valid_spec(self):
         spec = DataRunSpec(**self._valid_payload())
-        assert spec.market == "usa"
-        assert spec.symbols == ["SPY"]
-        assert spec.resolution == "minute"
-        assert spec.data_types == ["trade"]
-        assert spec.price_adjustment_mode == "raw"
-        assert spec.provider == "polygon"
-        assert spec.include_factor_files is True
-        assert spec.fetch_timeout_seconds == 600
+        assert spec.market == "usa", "market defaults to usa"
+        assert spec.symbols == ["SPY"], "symbols carry the payload's symbol"
+        assert spec.resolution == "minute", "resolution defaults to minute"
+        assert spec.data_types == ["trade"], "data_types defaults to trade only"
+        assert spec.price_adjustment_mode == "raw", "price_adjustment_mode defaults to raw"
+        assert spec.provider == "polygon", "provider defaults to polygon"
+        assert spec.include_factor_files is True, "include_factor_files defaults to True"
+        assert spec.fetch_timeout_seconds == 600, "fetch_timeout_seconds defaults to 600"
+        assert spec.start_trading_date == date(2024, 5, 20), "start_trading_date derives from start_trading_date_ms"
+        assert spec.end_trading_date == date(2024, 5, 24), "end_trading_date derives from end_trading_date_ms"
 
-    def test_start_and_end_trading_date_properties_derive_from_ms(self):
-        spec = DataRunSpec(**self._valid_payload())
-        assert spec.start_trading_date == date(2024, 5, 20)
-        assert spec.end_trading_date == date(2024, 5, 24)
-
-    def test_empty_symbols_rejected(self):
+    @pytest.mark.parametrize(
+        "corrupt",
+        [
+            pytest.param(lambda p: p.update(symbols=[]), id="empty_symbols"),
+            # lean_image_digest has no default; omitting it must be a ValidationError.
+            pytest.param(lambda p: p.pop("lean_image_digest"), id="lean_image_digest_required"),
+            # Unknown keys must raise ValidationError (extra='forbid'). Pydantic's default
+            # is to silently ignore extra fields; for DataRunSpec, silent drops would allow
+            # typos (e.g. 'include_lean_metadata') to fall back to defaults without the
+            # caller knowing.
+            pytest.param(lambda p: p.update(typo_field="should_be_rejected"), id="extra_fields"),
+            # #1877 boundary matrix. A numeric string that would parse to an on-anchor ms
+            # value must still be refused — the wire type is int64, not a string that
+            # happens to parse to the right number.
+            pytest.param(
+                lambda p: p.update(start_trading_date_ms=str(p["start_trading_date_ms"])),
+                id="numeric_string_value_1877",
+            ),
+            # An integral float (e.g. 1716206400000.0) that would parse to an on-anchor ms
+            # value must still be refused — Pydantic's lax int coercion would otherwise
+            # silently accept it.
+            pytest.param(
+                lambda p: p.update(start_trading_date_ms=float(p["start_trading_date_ms"])),
+                id="integral_float_value_1877",
+            ),
+        ],
+    )
+    def test_invalid_payload_rejected(self, corrupt):
         payload = self._valid_payload()
-        payload["symbols"] = []
-        with pytest.raises(ValidationError):
-            DataRunSpec(**payload)
-
-    def test_lean_image_digest_required(self):
-        """lean_image_digest has no default; omitting it must be a ValidationError."""
-        payload = self._valid_payload()
-        del payload["lean_image_digest"]
+        corrupt(payload)
         with pytest.raises(ValidationError):
             DataRunSpec(**payload)
 
@@ -195,38 +207,6 @@ class TestDataRunSpec:
         spec = DataRunSpec(**payload)
         assert "quote" in spec.data_types
         assert "trade" in spec.data_types
-
-    def test_extra_fields_rejected(self):
-        """Unknown keys must raise ValidationError (extra='forbid').
-
-        Pydantic's default is to silently ignore extra fields. For DataRunSpec,
-        silent drops would allow typos (e.g. 'include_lean_metadata') to fall
-        back to defaults without the caller knowing.
-        """
-        payload = self._valid_payload()
-        payload["typo_field"] = "should_be_rejected"
-        with pytest.raises(ValidationError):
-            DataRunSpec(**payload)
-
-    # --- #1877 boundary matrix -------------------------------------------
-
-    def test_numeric_string_value_is_rejected(self):
-        """A numeric string that would parse to an on-anchor ms value must
-        still be refused — the wire type is int64, not a string that
-        happens to parse to the right number."""
-        payload = self._valid_payload()
-        payload["start_trading_date_ms"] = str(payload["start_trading_date_ms"])
-        with pytest.raises(ValidationError):
-            DataRunSpec(**payload)
-
-    def test_integral_float_value_is_rejected(self):
-        """An integral float (e.g. 1716206400000.0) that would parse to an
-        on-anchor ms value must still be refused — Pydantic's lax int
-        coercion would otherwise silently accept it."""
-        payload = self._valid_payload()
-        payload["start_trading_date_ms"] = float(payload["start_trading_date_ms"])
-        with pytest.raises(ValidationError):
-            DataRunSpec(**payload)
 
     def test_edt_date_range_accepted(self):
         payload = self._valid_payload()

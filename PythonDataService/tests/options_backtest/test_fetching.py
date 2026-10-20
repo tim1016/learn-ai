@@ -258,32 +258,32 @@ async def test_the_underlying_that_cannot_be_fetched_stops_the_phase_before_any_
     assert vendor.listing_requests == []
 
 
+@pytest.mark.parametrize(
+    ("stock_errors", "reason"),
+    [
+        pytest.param(
+            (), "provider_no_data", id="an_underlying_day_the_vendor_has_no_data_for_is_a_failure_with_the_reason_the_lake_recorded"
+        ),
+        # Wednesday's request fails (500, provider_api_error) and Thursday's comes back empty (provider_no_data): the
+        # reason named is Wednesday's, the first failed day in date order.
+        pytest.param(
+            ((WED, 500),), "provider_api_error", id="when_two_days_of_a_chunk_fail_the_reason_is_the_first_days"
+        ),
+    ],
+)
 @respx.mock
-async def test_an_underlying_day_the_vendor_has_no_data_for_is_a_failure_with_the_reason_the_lake_recorded_for_it(
-    fake_catalog: FakeCatalog, tmp_lake: Path
+async def test_a_failed_underlying_names_no_session_and_the_reason_the_lake_recorded_for_its_first_failed_day(
+    stock_errors: tuple[tuple[date, int], ...], reason: str, fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
     scene = {**_scene(*THREE_SESSIONS), THU: Day(underlying={})}
-    Vendor(scene).mount()
+    Vendor(scene, stock_errors=dict(stock_errors)).mount()
 
     with pytest.raises(DownloadFailed) as caught:
         await _fetch(_same_day_call(), THREE_SESSIONS)
 
-    assert (caught.value.session, caught.value.reason) == (None, "provider_no_data")
-
-
-@respx.mock
-async def test_when_two_days_of_a_chunk_fail_the_reason_is_the_first_days(
-    fake_catalog: FakeCatalog, tmp_lake: Path
-) -> None:
-    # Wednesday's request fails (500, provider_api_error) and Thursday's comes back empty (provider_no_data): the
-    # reason named is Wednesday's, the first failed day in date order.
-    scene = {**_scene(*THREE_SESSIONS), THU: Day(underlying={})}
-    Vendor(scene, stock_errors={WED: 500}).mount()
-
-    with pytest.raises(DownloadFailed) as caught:
-        await _fetch(_same_day_call(), THREE_SESSIONS)
-
-    assert caught.value.reason == "provider_api_error"
+    assert (caught.value.session, caught.value.reason) == (None, reason), (
+        "no session is named, and the reason is the one the lake recorded for the first failed day"
+    )
 
 
 @respx.mock
@@ -703,13 +703,33 @@ async def test_an_underlying_still_missing_after_its_fetch_is_a_failure_naming_t
     assert vendor.option_requests == []
 
 
+@pytest.mark.parametrize(
+    ("stored_steps", "fetched", "reused"),
+    [
+        pytest.param(
+            (-4, -3, -2, -1, 1, 2, 3, 4),
+            0,
+            8,
+            id="a_fully_stored_session_asks_the_lake_to_capture_nothing_and_the_vendor_nothing",
+        ),
+        # Three of the eight are stored: the strikes 496, 497 and 498.
+        pytest.param((-4, -3, -2), 5, 3, id="only_the_contract_days_not_stored_are_captured"),
+    ],
+)
 @respx.mock
-async def test_a_fully_stored_session_asks_the_lake_to_capture_nothing_and_the_vendor_nothing(
-    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+async def test_only_the_contract_days_not_stored_are_captured(
+    stored_steps: tuple[int, ...],
+    fetched: int,
+    reused: int,
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     vendor = Vendor({WED: ladder_day()})
     vendor.mount()
-    await _fetch(eight_legs_setup(), [WED])
+    await _fetch(eight_legs_setup(steps=stored_steps), [WED])
+    stored = {f"SPY261007C{500 + step:05d}000" for step in stored_steps}
+    assert len(vendor.option_requests) == reused, "the first run fetched each stored contract day"
     captures: list[str] = []
     real = fetching.ensure_option_day_bars
 
@@ -722,34 +742,11 @@ async def test_a_fully_stored_session_asks_the_lake_to_capture_nothing_and_the_v
 
     report, _ = await _fetch(eight_legs_setup(), [WED])
 
-    assert captures == [], "the lake was asked once which days are stored, and had nothing left to capture"
-    assert vendor.vendor_requests == asked
-    assert (report.option_days_fetched, report.option_days_reused) == (0, 8)
-
-
-@respx.mock
-async def test_only_the_contract_days_not_stored_are_captured(
-    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    vendor = Vendor({WED: ladder_day()})
-    vendor.mount()
-    # Three of the eight are stored: the strikes 496, 497 and 498.
-    await _fetch(eight_legs_setup(steps=(-4, -3, -2)), [WED])
-    assert len(vendor.option_requests) == 3
-    captures: list[str] = []
-    real = fetching.ensure_option_day_bars
-
-    async def counted(contract: OptionContract, *args: Any, **kwargs: Any) -> Any:
-        captures.append(contract.occ_symbol)
-        return await real(contract, *args, **kwargs)
-
-    monkeypatch.setattr(fetching, "ensure_option_day_bars", counted)
-
-    report, _ = await _fetch(eight_legs_setup(), [WED])
-
-    assert len(captures) == 5 and len(vendor.option_requests) == 3 + 5
-    assert not {"SPY261007C00496000", "SPY261007C00497000", "SPY261007C00498000"} & set(captures)
-    assert (report.option_days_fetched, report.option_days_reused) == (5, 3)
+    assert len(captures) == fetched, "the lake was asked once which days are stored, and captured only the others"
+    assert not stored & set(captures), "no stored contract day was captured again"
+    assert vendor.vendor_requests == asked + fetched, "the vendor was asked for the captured days and nothing else"
+    assert len(vendor.option_requests) == reused + fetched, "each captured day was one request for its contract"
+    assert (report.option_days_fetched, report.option_days_reused) == (fetched, reused), "the report counts both"
 
 
 @respx.mock

@@ -396,14 +396,20 @@ describe("StrategyLab configuration and runner", () => {
       expect(runner.runError()).not.toContain("rsi_min");
     });
 
-    it("refuses a setting the twin reads once it is left blank, so LEAN never runs its own default unseen", async () => {
-      selectForLean(EMA_PREVIOUS_STRATEGY);
-      config.updateParameter("hold_bars", "", "integer");
+    it.each([
+      ["a setting the twin reads once it is left blank, so LEAN never runs its own default unseen", EMA_PREVIOUS_STRATEGY, "hold_bars", ""],
+      // The policy falls back to the declared 15 minutes for a cadence it
+      // cannot use, so LEAN would consolidate at 15 while the screen says 0.
+      ["a bar cadence the data policy would not carry", RSI_STRATEGY, "resolution_minutes", "0"],
+      ["every changed setting of a twin the catalog lists no settings for", RSI_STRATEGY, "window", "20"],
+    ])("refuses %s", async (_what, strategy, setting, value) => {
+      selectForLean(strategy);
+      config.updateParameter(setting, value, "integer");
 
       await runner.run();
 
       expect(startJob).not.toHaveBeenCalled();
-      expect(runner.runError()).toContain("hold_bars");
+      expect(runner.runError()).toContain(setting);
     });
 
     it("lets a changed bar cadence through, because the data policy carries it to the twin", async () => {
@@ -415,28 +421,6 @@ describe("StrategyLab configuration and runner", () => {
       const request = startJob.mock.calls[0]?.[1]?.request;
       expect(request.data_policy.strategy_bars).toEqual({ timespan: "minute", multiplier: 30 });
       expect(request).not.toHaveProperty("strategy_parameters");
-    });
-
-    it("refuses a bar cadence the data policy would not carry", async () => {
-      // The policy falls back to the declared 15 minutes for a cadence it
-      // cannot use, so LEAN would consolidate at 15 while the screen says 0.
-      selectForLean(RSI_STRATEGY);
-      config.updateParameter("resolution_minutes", "0", "integer");
-
-      await runner.run();
-
-      expect(startJob).not.toHaveBeenCalled();
-      expect(runner.runError()).toContain("resolution_minutes");
-    });
-
-    it("refuses every changed setting of a twin the catalog lists no settings for", async () => {
-      selectForLean(RSI_STRATEGY);
-      config.updateParameter("window", "20", "integer");
-
-      await runner.run();
-
-      expect(startJob).not.toHaveBeenCalled();
-      expect(runner.runError()).toContain("window");
     });
 
     it("still sends the template when every parameter is left at its default", async () => {
@@ -634,13 +618,16 @@ describe("StrategyLab configuration and runner", () => {
   });
 
   describe("resuming a job JobsService already had in flight (e.g. after a page reload)", () => {
-    it("adopts an active engine_backtest job discovered after construction and reports running", () => {
+    it.each([
+      ["engine_backtest", makeJobState({ id: "resumed-1", type: "engine_backtest", status: "running" })],
+      ["lean_engine_run", makeJobState({ id: "resumed-lean-1", type: "lean_engine_run", status: "running", parameters: { request: { run_id: "strategy_lab_spy_x1" } } })],
+    ])("adopts an active %s job discovered after construction and reports running", (_type, job) => {
       expect(runner.running()).toBe(false);
 
       // JobsService's own resumeActive() resolves asynchronously, after this
       // runner was already constructed — so the job only appears once the
       // signal updates, not at construction time.
-      putJob(makeJobState({ id: "resumed-1", type: "engine_backtest", status: "running" }));
+      putJob(job);
       TestBed.tick();
 
       expect(runner.running()).toBe(true);
@@ -690,13 +677,6 @@ describe("StrategyLab configuration and runner", () => {
         commissionPerOrder: 0,
         dataPolicy: config.dataPolicy(),
       });
-    });
-
-    it("adopts an active lean_engine_run job discovered after construction and reports running", () => {
-      putJob(makeJobState({ id: "resumed-lean-1", type: "lean_engine_run", status: "running", parameters: { request: { run_id: "strategy_lab_spy_x1" } } }));
-      TestBed.tick();
-
-      expect(runner.running()).toBe(true);
     });
 
     it("does not adopt a second job while one is already tracked", async () => {

@@ -21,6 +21,8 @@ _WINDOW = ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60)
 _REGULAR = date(2026, 9, 2)  # Wednesday, regular session
 _EARLY = date(2026, 11, 27)  # day after Thanksgiving: 13:00 ET close
 _SATURDAY = date(2026, 9, 5)
+_RTH_SESSION = RunDecisionSession(kind="rth", window=None)
+_EXTENDED_SESSION = RunDecisionSession(kind="extended", window=_WINDOW)
 
 
 def _et(day: date, hour: int, minute: int) -> int:
@@ -36,30 +38,24 @@ def _bar(day: date, hour: int, minute: int, *, phase: str = "CLOSED") -> MarketD
     )
 
 
-def test_resolve_returns_the_regular_session_for_an_rth_run() -> None:
-    session = RunDecisionSession.resolve(use_rth=True, window=None)
+@pytest.mark.parametrize(
+    ("use_rth", "window", "expected"),
+    [
+        pytest.param(True, None, _RTH_SESSION, id="rth-run-resolves-the-regular-session"),
+        # An RTH run does not become extended because the authority happens to offer one.
+        pytest.param(True, _WINDOW, _RTH_SESSION, id="rth-run-ignores-a-declared-window"),
+        pytest.param(False, _WINDOW, _EXTENDED_SESSION, id="extended-run-resolves-the-extended-session-when-a-window-is-declared"),
+        # The one place "extended run, no window" is judged; every caller refuses on it.
+        pytest.param(False, None, None, id="extended-run-with-no-declared-window-resolves-to-none"),
+    ],
+)
+def test_resolve_returns_the_session_the_run_decides_on(
+    use_rth: bool, window: ExtendedHoursWindow | None, expected: RunDecisionSession | None
+) -> None:
+    session = RunDecisionSession.resolve(use_rth=use_rth, window=window)
 
-    assert session == RunDecisionSession(kind="rth", window=None)
-
-
-def test_resolve_ignores_a_declared_window_for_an_rth_run() -> None:
-    """An RTH run does not become extended because the authority happens to offer one."""
-    session = RunDecisionSession.resolve(use_rth=True, window=_WINDOW)
-
-    assert session is not None
-    assert session.kind == "rth"
-    assert session.window is None
-
-
-def test_resolve_returns_the_extended_session_when_a_window_is_declared() -> None:
-    session = RunDecisionSession.resolve(use_rth=False, window=_WINDOW)
-
-    assert session == RunDecisionSession(kind="extended", window=_WINDOW)
-
-
-def test_resolve_returns_none_for_an_extended_run_with_no_declared_window() -> None:
-    """The one place "extended run, no window" is judged; every caller refuses on it."""
-    assert RunDecisionSession.resolve(use_rth=False, window=None) is None
+    assert (session is None) == (expected is None), "a session resolves exactly when the run has one to decide on"
+    assert session == expected, "the run resolves to the session it decides on"
 
 
 @pytest.mark.parametrize(
@@ -71,30 +67,27 @@ def test_an_incoherent_session_cannot_be_constructed(kind: str, window: Extended
         RunDecisionSession(kind=kind, window=window)  # type: ignore[arg-type]
 
 
-def test_includes_reads_the_feed_label_for_a_regular_session_run() -> None:
-    """Ruling R3: the RTH filter stays label-based, so labelled test bars keep working."""
-    session = RunDecisionSession(kind="rth", window=None)
-
-    assert session.includes(_bar(_REGULAR, 3, 0, phase="RTH")) is True
-    assert session.includes(_bar(_REGULAR, 12, 0, phase="CLOSED")) is False
-
-
 @pytest.mark.parametrize(
-    ("hour", "minute", "included"),
-    [(3, 59, False), (4, 0, True), (9, 30, True), (16, 0, True), (19, 59, True), (20, 0, False)],
+    ("session", "day", "hour", "minute", "phase", "included"),
+    [
+        # Ruling R3: the RTH filter stays label-based, so labelled test bars keep working.
+        pytest.param(_RTH_SESSION, _REGULAR, 3, 0, "RTH", True, id="rth-run-keeps-a-bar-the-feed-labels-rth"),
+        pytest.param(_RTH_SESSION, _REGULAR, 12, 0, "CLOSED", False, id="rth-run-drops-a-bar-the-feed-labels-closed"),
+        pytest.param(_EXTENDED_SESSION, _REGULAR, 3, 59, "CLOSED", False, id="extended-run-drops-the-bar-opening-at-03-59"),
+        pytest.param(_EXTENDED_SESSION, _REGULAR, 4, 0, "CLOSED", True, id="extended-run-keeps-the-bar-opening-at-04-00"),
+        pytest.param(_EXTENDED_SESSION, _REGULAR, 9, 30, "CLOSED", True, id="extended-run-keeps-the-bar-opening-at-09-30"),
+        pytest.param(_EXTENDED_SESSION, _REGULAR, 16, 0, "CLOSED", True, id="extended-run-keeps-the-bar-opening-at-16-00"),
+        pytest.param(_EXTENDED_SESSION, _REGULAR, 19, 59, "CLOSED", True, id="extended-run-keeps-the-bar-opening-at-19-59"),
+        pytest.param(_EXTENDED_SESSION, _REGULAR, 20, 0, "CLOSED", False, id="extended-run-drops-the-bar-opening-at-20-00"),
+        pytest.param(_EXTENDED_SESSION, _SATURDAY, 12, 0, "CLOSED", False, id="extended-run-drops-a-bar-on-a-non-trading-day"),
+    ],
 )
-def test_includes_compares_a_bars_open_against_the_declared_bounds(
-    hour: int, minute: int, included: bool
+def test_includes_decides_on_a_bar_by_the_runs_session(
+    session: RunDecisionSession, day: date, hour: int, minute: int, phase: str, included: bool
 ) -> None:
-    session = RunDecisionSession(kind="extended", window=_WINDOW)
-
-    assert session.includes(_bar(_REGULAR, hour, minute, phase="CLOSED")) is included
-
-
-def test_includes_is_false_on_a_non_trading_day() -> None:
-    session = RunDecisionSession(kind="extended", window=_WINDOW)
-
-    assert session.includes(_bar(_SATURDAY, 12, 0, phase="CLOSED")) is False
+    assert session.includes(_bar(day, hour, minute, phase=phase)) is included, (
+        "the run decides on the bar exactly when it is inside the run's session"
+    )
 
 
 def test_includes_instant_covers_the_whole_declared_window_not_only_rth() -> None:
@@ -109,17 +102,16 @@ def test_includes_instant_covers_the_whole_declared_window_not_only_rth() -> Non
     assert extended.includes_instant(_et(_REGULAR, 21, 0)) is False
 
 
-def test_close_ms_is_the_calendar_close_for_a_regular_session_run() -> None:
-    session = RunDecisionSession(kind="rth", window=None)
-
-    assert session.close_ms(_REGULAR) == session_close_ms_utc(_REGULAR)
-    assert session.close_ms(_EARLY) == session_close_ms_utc(_EARLY)
-
-
-def test_close_ms_is_the_declared_close_even_on_an_early_close_day() -> None:
-    session = RunDecisionSession(kind="extended", window=_WINDOW)
-
-    assert session.close_ms(_EARLY) == _et(_EARLY, 20, 0)
+@pytest.mark.parametrize(
+    ("session", "day", "expected"),
+    [
+        pytest.param(_RTH_SESSION, _REGULAR, session_close_ms_utc(_REGULAR), id="regular-session-run-closes-at-the-calendar-close"),
+        pytest.param(_RTH_SESSION, _EARLY, session_close_ms_utc(_EARLY), id="regular-session-run-closes-at-the-calendar-early-close"),
+        pytest.param(_EXTENDED_SESSION, _EARLY, _et(_EARLY, 20, 0), id="extended-run-closes-at-the-declared-close-even-on-an-early-close-day"),
+    ],
+)
+def test_close_ms_is_the_close_of_the_runs_session(session: RunDecisionSession, day: date, expected: int) -> None:
+    assert session.close_ms(day) == expected, "the run flushes at its own session's close"
 
 
 def test_close_ms_refuses_a_day_that_is_not_a_session() -> None:

@@ -56,52 +56,40 @@ def _read_zip_lines(path: Path) -> list[str]:
 
 
 class TestWriteLeanQuoteDayZip:
-    def test_path_layout_matches_lean_minute_quote_contract(self, tmp_path: Path) -> None:
-        """LEAN looks for ``equity/usa/minute/<symbol>/YYYYMMDD_quote.zip``.
-        A wrong path means LEAN keeps emitting the original log noise."""
+    def test_single_bar_zip_matches_lean_minute_quote_contract(self, tmp_path: Path) -> None:
         bars = [_bar(9, 30, 580.50)]
         path = write_lean_quote_day_zip(tmp_path, "SPY", date(2025, 1, 6), bars)
-        assert path == tmp_path / "equity" / "usa" / "minute" / "spy" / "20250106_quote.zip"
-        assert path.exists()
 
-    def test_csv_filename_matches_lean_contract(self, tmp_path: Path) -> None:
-        bars = [_bar(9, 30, 580.50)]
-        path = write_lean_quote_day_zip(tmp_path, "SPY", date(2025, 1, 6), bars)
+        # LEAN looks for ``equity/usa/minute/<symbol>/YYYYMMDD_quote.zip``.
+        # A wrong path means LEAN keeps emitting the original log noise.
+        assert path == tmp_path / "equity" / "usa" / "minute" / "spy" / "20250106_quote.zip", (
+            "path layout matches the LEAN minute-quote contract"
+        )
+        assert path.exists(), "the quote zip is written at that path"
         with zipfile.ZipFile(path, "r") as zf:
-            assert zf.namelist() == ["20250106_spy_minute_quote.csv"]
+            assert zf.namelist() == ["20250106_spy_minute_quote.csv"], "csv filename matches the LEAN contract"
 
-    def test_row_format_is_eleven_columns(self, tmp_path: Path) -> None:
-        """LEAN minute-quote rows are 11 columns:
-        ms, bid_o, bid_h, bid_l, bid_c, bid_size, ask_o, ask_h, ask_l, ask_c, ask_size.
-        Anything else and LEAN's parser silently produces empty bars."""
-        bars = [_bar(9, 30, 580.50)]
-        path = write_lean_quote_day_zip(tmp_path, "SPY", date(2025, 1, 6), bars)
+        # LEAN minute-quote rows are 11 columns:
+        # ms, bid_o, bid_h, bid_l, bid_c, bid_size, ask_o, ask_h, ask_l, ask_c, ask_size.
+        # Anything else and LEAN's parser silently produces empty bars.
         lines = _read_zip_lines(path)
-        assert len(lines) == 1
+        assert len(lines) == 1, "one bar is one row"
         cols = lines[0].split(",")
-        assert len(cols) == 11
+        assert len(cols) == 11, "row format is eleven columns"
 
-    def test_bid_equals_ask_zero_spread(self, tmp_path: Path) -> None:
-        """The synthesis is zero-spread by design. Reviewer or auditor
-        seeing a non-zero spread should suspect the bid/ask got mixed
-        with something other than the trade close."""
-        bars = [_bar(9, 30, 580.50)]
-        path = write_lean_quote_day_zip(tmp_path, "SPY", date(2025, 1, 6), bars)
-        cols = _read_zip_lines(path)[0].split(",")
+        # The synthesis is zero-spread by design. Reviewer or auditor
+        # seeing a non-zero spread should suspect the bid/ask got mixed
+        # with something other than the trade close.
         bid_close = cols[4]
         ask_close = cols[9]
-        assert bid_close == ask_close
+        assert bid_close == ask_close, "bid equals ask (zero spread)"
         # Price must be deci-cent-scaled per the trade-zip contract.
-        assert bid_close == str(int(Decimal("580.50") * PRICE_SCALE))
+        assert bid_close == str(int(Decimal("580.50") * PRICE_SCALE)), "price is deci-cent-scaled"
 
-    def test_bid_ask_sizes_are_zero(self, tmp_path: Path) -> None:
-        """We don't have real bid/ask sizes; emitting 0 makes the
-        synthesis explicit. Non-zero sizes would falsely claim depth."""
-        bars = [_bar(9, 30, 580.50)]
-        path = write_lean_quote_day_zip(tmp_path, "SPY", date(2025, 1, 6), bars)
-        cols = _read_zip_lines(path)[0].split(",")
-        assert cols[5] == "0"  # bid_size
-        assert cols[10] == "0"  # ask_size
+        # We don't have real bid/ask sizes; emitting 0 makes the
+        # synthesis explicit. Non-zero sizes would falsely claim depth.
+        assert cols[5] == "0", "bid_size is zero"
+        assert cols[10] == "0", "ask_size is zero"
 
     def test_multiple_bars_one_per_row_in_order(self, tmp_path: Path) -> None:
         bars = [_bar(9, 30, 580.50), _bar(9, 31, 580.75), _bar(9, 32, 580.60)]

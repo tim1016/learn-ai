@@ -170,18 +170,21 @@ async def test_a_live_accounts_option_fields_are_read_as_a_live_accounts(capture
     assert options.options_trading_level == 3
 
 
-async def test_the_broker_names_unreadable_option_fields_as_unavailable_evidence(captured: dict[str, Any]) -> None:
-    captured["options_trading_level"] = "three"
-
-    with pytest.raises(BrokerEvidenceUnavailable, match="account"):
-        await _broker(captured).get_option_account()
-
-
-async def test_the_broker_names_a_trading_level_above_the_approved_one_as_unavailable_evidence(
-    captured: dict[str, Any],
+@pytest.mark.parametrize(
+    "changes",
+    [
+        pytest.param((("options_trading_level", "three"),), id="unreadable option fields"),
+        pytest.param(
+            (("options_approved_level", 2), ("options_trading_level", 3)),
+            id="a trading level above the approved one",
+        ),
+    ],
+)
+async def test_the_broker_names_unreadable_option_fields_as_unavailable_evidence(
+    captured: dict[str, Any], changes: tuple[tuple[str, Any], ...]
 ) -> None:
     """Refused as an answer that could not be read, never as an error no caller of the port is written to catch."""
-    captured.update(options_approved_level=2, options_trading_level=3)
+    captured.update(changes)
 
     with pytest.raises(BrokerEvidenceUnavailable, match="account"):
         await _broker(captured).get_option_account()

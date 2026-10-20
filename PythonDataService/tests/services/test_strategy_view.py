@@ -143,9 +143,23 @@ def test_a_held_bar_marks_its_entry_rules_as_not_applying() -> None:
     assert not any(check.applies for check in rendered.checks)
 
 
-def test_an_unregistered_strategy_has_no_view() -> None:
-    with pytest.raises(StrategyViewUnavailableError):
-        ResolvedStrategyView.for_settings("retired_strategy", None, symbol="SPY")
+@pytest.mark.parametrize(
+    ("strategy_key", "saved_settings", "reason"),
+    [
+        pytest.param("retired_strategy", (), None, id="an-unregistered-strategy-has-no-view"),
+        pytest.param(
+            "ema_crossover_signal",
+            (("rsi_min", "not a number"),),
+            "no longer fit",
+            id="saved-settings-that-no-longer-validate-mean-no-view",
+        ),
+    ],
+)
+def test_a_strategy_view_that_cannot_be_resolved_is_refused(
+    strategy_key: str, saved_settings: tuple[tuple[str, str], ...], reason: str | None
+) -> None:
+    with pytest.raises(StrategyViewUnavailableError, match=reason):
+        ResolvedStrategyView.for_settings(strategy_key, dict(saved_settings) or None, symbol="SPY")
 
 
 def _receipt(
@@ -263,11 +277,6 @@ def test_a_row_this_build_cannot_word_is_left_out_and_said_so() -> None:
         "This run saved no bars from before it started.",
         "1 decision's values could not be shown by this build.",
     ]
-
-
-def test_saved_settings_that_no_longer_validate_mean_no_view() -> None:
-    with pytest.raises(StrategyViewUnavailableError, match="no longer fit"):
-        ResolvedStrategyView.for_settings("ema_crossover_signal", {"rsi_min": "not a number"}, symbol="SPY")
 
 
 def test_a_bots_saved_settings_lose_only_what_the_strategy_no_longer_declares() -> None:

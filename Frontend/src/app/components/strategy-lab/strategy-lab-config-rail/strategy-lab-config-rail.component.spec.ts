@@ -76,30 +76,35 @@ async function createRail(
 }
 
 describe("StrategyLabConfigRailComponent", () => {
-  it("renders exactly the four primary flat inputs and keeps parameters in Advanced", async () => {
+  it("with a ready launcher, renders exactly the four primary flat inputs and keeps parameters and the launcher status in Advanced", async () => {
     const fixture = await createRail();
     // A launcher that has passed its check lives in Advanced; an unchecked one is on the rail (#1976).
     fixture.componentRef.setInput("launcherStatus", "ready");
     fixture.detectChanges();
     const root = fixture.nativeElement as HTMLElement;
 
-    expect(root.textContent).toContain("Engine");
-    expect(root.textContent).toContain("Instrument");
-    expect(root.textContent).toContain("Time window");
-    expect(root.textContent).toContain("Strategy");
-    expect(root.querySelectorAll("app-config-section")).toHaveLength(0);
-    expect(root.querySelector(".availability-strip")).toBeNull();
-    expect(root.querySelector(".availability-legend")).toBeNull();
+    expect.soft(root.textContent, "renders the Engine input").toContain("Engine");
+    expect.soft(root.textContent, "renders the Instrument input").toContain("Instrument");
+    expect.soft(root.textContent, "renders the Time window input").toContain("Time window");
+    expect.soft(root.textContent, "renders the Strategy input").toContain("Strategy");
+    expect.soft(root.querySelectorAll("app-config-section"), "renders no config sections").toHaveLength(0);
+    expect.soft(root.querySelector(".availability-strip"), "renders no availability strip").toBeNull();
+    expect.soft(root.querySelector(".availability-legend"), "renders no availability legend").toBeNull();
+
+    const launcher = root.querySelector<HTMLElement>(".lean-launcher");
+    expect.soft(launcher, "renders a ready launcher's status").not.toBeNull();
+    expect.soft(launcher?.closest("details.advanced"), "keeps a ready launcher's status inside the Advanced block").not.toBeNull();
+    expect.soft(root.querySelectorAll(".lean-launcher"), "renders the launcher status exactly once").toHaveLength(1);
 
     const advanced = root.querySelector<HTMLDetailsElement>("details.advanced");
-    expect(advanced?.open).toBe(false);
+    expect.soft(advanced?.open, "starts with Advanced closed").toBe(false);
     if (!advanced) throw new Error("Advanced disclosure is missing");
     advanced.open = true;
     fixture.detectChanges();
-    expect(advanced?.textContent).toContain("5 minutes · extended session · fixture spy-bars-v1");
-    expect(advanced?.textContent).toContain("Strategy parameters");
-    expect(advanced?.textContent).toContain("Execution");
-    expect(advanced?.textContent).toContain("LEAN launcher");
+    expect.soft(advanced?.textContent, "keeps the data policy in Advanced").toContain("5 minutes · extended session · fixture spy-bars-v1");
+    expect.soft(advanced?.textContent, "keeps strategy parameters in Advanced").toContain("Strategy parameters");
+    expect.soft(advanced?.textContent, "keeps execution in Advanced").toContain("Execution");
+    expect.soft(advanced?.textContent, "keeps the LEAN launcher in Advanced").toContain("LEAN launcher");
   });
 
   it("shows the restored strategy when it is not the first available option", async () => {
@@ -151,18 +156,6 @@ describe("StrategyLabConfigRailComponent", () => {
     expect(launcher?.textContent).toContain("blocked");
     expect(launcher?.textContent).toContain("launcher_unreachable: connection refused");
     expect(launcher?.textContent).toContain("uvicorn app.lean_sidecar.launcher.app:app");
-    expect(root.querySelectorAll(".lean-launcher")).toHaveLength(1);
-  });
-
-  it("keeps a ready launcher's status inside the Advanced block", async () => {
-    const fixture = await createRail();
-    fixture.componentRef.setInput("launcherStatus", "ready");
-    fixture.detectChanges();
-    const root = fixture.nativeElement as HTMLElement;
-
-    const launcher = root.querySelector<HTMLElement>(".lean-launcher");
-    expect(launcher).not.toBeNull();
-    expect(launcher?.closest("details.advanced")).not.toBeNull();
     expect(root.querySelectorAll(".lean-launcher")).toHaveLength(1);
   });
 

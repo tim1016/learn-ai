@@ -14,18 +14,17 @@ from app.lean_sidecar.parity_matrix.matrix import (
 )
 
 
-def test_cells_total_count() -> None:
-    assert len(CELLS) == 16
-
-
-def test_cells_have_four_distinct_tickers() -> None:
-    assert {c.ticker for c in CELLS} == {"SPY", "QQQ", "AAPL", "TSLA"}
-
-
-def test_each_ticker_has_four_windows() -> None:
+def test_cells_are_sixteen_over_four_distinct_tickers_with_four_windows_each() -> None:
+    assert len(CELLS) == 16, "total cell count is 16"
+    assert {c.ticker for c in CELLS} == {"SPY", "QQQ", "AAPL", "TSLA"}, "the cells span four distinct tickers"
     for ticker in ("SPY", "QQQ", "AAPL", "TSLA"):
         labels = {c.window_label for c in CELLS if c.ticker == ticker}
-        assert labels == {WindowLabel.W3MO, WindowLabel.W6MO, WindowLabel.W12MO, WindowLabel.W24MO}
+        assert labels == {
+            WindowLabel.W3MO,
+            WindowLabel.W6MO,
+            WindowLabel.W12MO,
+            WindowLabel.W24MO,
+        }, f"{ticker} has four windows"
 
 
 def test_cell_id_format() -> None:

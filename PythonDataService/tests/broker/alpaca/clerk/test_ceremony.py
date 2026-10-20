@@ -28,7 +28,7 @@ def test_the_ttl_must_be_a_whole_millisecond_count_inside_the_bound() -> None:
             require_confirmation_ttl_ms(bad, refused=_Refused)  # type: ignore[arg-type]
 
 
-def test_the_digest_of_a_fixed_payload_is_pinned_to_a_literal() -> None:
+def test_the_token_of_a_fixed_payload_is_pinned_to_a_literal_and_is_its_own_canonical_digest_and_key_order_free() -> None:
     """The bytes that are hashed are part of the contract, not an implementation detail.
 
     Every cutover plan token an operator is holding was minted over
@@ -36,14 +36,13 @@ def test_the_digest_of_a_fixed_payload_is_pinned_to_a_literal() -> None:
     Changing what is hashed would invalidate all of them silently, so the
     digest of one fixed payload is written out here once.
     """
-    assert plan_content_token(PAYLOAD) == "60b1fa54852b30dab78968a50164f76b33440b658802a704c355b5afa86c32b3"
-
-
-def test_the_token_is_the_payloads_own_canonical_digest_and_is_key_order_free() -> None:
     token = plan_content_token(PAYLOAD)
-    assert len(token) == 64
-    assert plan_content_token(dict(reversed(list(PAYLOAD.items())))) == token
-    assert plan_content_token({**PAYLOAD, "created_at_ms": 11}) != token
+    assert token == "60b1fa54852b30dab78968a50164f76b33440b658802a704c355b5afa86c32b3", (
+        "the digest of a fixed payload is pinned to a literal"
+    )
+    assert len(token) == 64, "the token is the payload's own canonical digest, 64 hex characters"
+    assert plan_content_token(dict(reversed(list(PAYLOAD.items())))) == token, "the token is key-order free"
+    assert plan_content_token({**PAYLOAD, "created_at_ms": 11}) != token, "a changed payload changes the token"
 
 
 def test_a_plan_that_does_not_hash_to_its_own_ids_is_refused_before_the_token_is_compared() -> None:

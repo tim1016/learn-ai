@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextlib import aclosing
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -214,15 +215,23 @@ async def test_count_complete_interruption_resumes_on_the_same_stream(monkeypatc
     assert source.assemblers[0] is source.assemblers[1]  # the same assembler survived
 
 
-async def test_interruption_before_any_delivered_bar_is_fatal_as_today(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "calls",
+    [
+        lambda: ([IBKRBarInterrupted("x", cause="socket_down")], [_ibkr_bar(_MINUTE0)]),
+        lambda: ([NotConnectedError("IBKR client is not connected")],),
+    ],
+    ids=["interruption", "not_connected"],
+)
+async def test_failure_before_any_delivered_bar_is_fatal_as_today(monkeypatch: pytest.MonkeyPatch, calls) -> None:
     sink = _RecordingSink()
-    source = _Source([IBKRBarInterrupted("x", cause="socket_down")], [_ibkr_bar(_MINUTE0)])
+    source = _Source(*calls())
     monkeypatch.setattr(feed_module, "stream_minute_bars", source)
     feed = IbkrMarketDataFeed(_client())
     with pytest.raises(MarketDataFeedError) as excinfo:
         await _collect(feed, _policy(sink), 1)
-    assert excinfo.value.reason is None
-    assert sink.events == []
+    assert excinfo.value.reason is None, "the failure is fatal with no typed reason"
+    assert sink.events == [], "no continuity event is recorded"
 
 
 async def test_a_complete_minute_is_delivered_before_the_interruption_it_precedes(
@@ -287,8 +296,17 @@ async def test_a_minute_stitched_by_the_real_assembler_crosses_the_reconnect(
     assert [e.kind for e in sink.events] == ["interruption", "recovered"]
 
 
+@pytest.mark.parametrize(
+    ("interruption", "cause"),
+    [
+        (lambda: IBKRBarInterrupted("x", cause="socket_down"), "socket_down"),
+        # The stall path reaches the same refusal — it is the same interruption choreography.
+        (lambda: IBKRBarSubscriptionStalled("stalled"), "stall"),
+    ],
+    ids=["interruption", "stall"],
+)
 async def test_an_interruption_outliving_the_open_minute_refuses_the_short_minute(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, interruption, cause: str
 ) -> None:
     """Ruling P9: a 9/12 minute is never delivered just because one socket built it.
 
@@ -302,7 +320,7 @@ async def test_an_interruption_outliving_the_open_minute_refuses_the_short_minut
         [
             _ibkr_bar(_MINUTE0 - 60_000),
             *_rth_minute_raw(_MINUTE0, range(0, 45, 5)),  # 9 of 12
-            IBKRBarInterrupted("x", cause="socket_down"),
+            interruption(),
         ],
         [*_rth_minute_raw(_MINUTE0 + 60_000, range(0, 15, 5))],
     )
@@ -314,36 +332,13 @@ async def test_an_interruption_outliving_the_open_minute_refuses_the_short_minut
         async for bar in feed.stream_bars("SPY", continuity=_policy(sink)):
             delivered.append(bar)
 
-    assert excinfo.value.reason == "SUBSTITUTION_NOT_AUTHORIZED"
-    assert [b.start_ms for b in delivered] == [_MINUTE0 - 60_000]  # the 9/12 minute never shipped
-    assert [e.kind for e in sink.events] == ["interruption", "recovered", "refused"]
-    assert sink.events[-1].window_start_ms == _MINUTE0
-    assert sink.events[-1].window_end_ms == _MINUTE0 + 60_000
-    assert sink.events[-1].contribution_count == 9
-
-
-async def test_a_stall_outliving_the_open_minute_refuses_the_short_minute(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The stall path reaches the same refusal — it is the same interruption choreography."""
-    sink = _RecordingSink()
-    source = _Source(
-        [
-            _ibkr_bar(_MINUTE0 - 60_000),
-            *_rth_minute_raw(_MINUTE0, range(0, 45, 5)),
-            IBKRBarSubscriptionStalled("stalled"),
-        ],
-        [*_rth_minute_raw(_MINUTE0 + 60_000, range(0, 15, 5))],
-    )
-    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
-    feed = IbkrMarketDataFeed(_client())
-
-    with pytest.raises(MarketDataFeedError) as excinfo:
-        await _collect(feed, _policy(sink), 2)
-
-    assert excinfo.value.reason == "SUBSTITUTION_NOT_AUTHORIZED"
-    assert sink.events[0].cause == "stall"
-    assert sink.events[-1].kind == "refused" and sink.events[-1].contribution_count == 9
+    assert excinfo.value.reason == "SUBSTITUTION_NOT_AUTHORIZED", "the run is refused with the grant reason"
+    assert [b.start_ms for b in delivered] == [_MINUTE0 - 60_000], "the 9/12 minute never shipped"
+    assert [e.kind for e in sink.events] == ["interruption", "recovered", "refused"], "events record the episode"
+    assert sink.events[0].cause == cause, "the interruption event names its cause"
+    assert sink.events[-1].window_start_ms == _MINUTE0, "the refused window starts at the short minute"
+    assert sink.events[-1].window_end_ms == _MINUTE0 + 60_000, "the refused window ends with the short minute"
+    assert sink.events[-1].contribution_count == 9, "the refusal carries the minute's 9 contributions"
 
 
 async def test_an_ordinary_gap_with_no_interruption_is_delivered_without_events(
@@ -366,14 +361,22 @@ async def test_an_ordinary_gap_with_no_interruption_is_delivered_without_events(
     assert sink.events == []
 
 
-async def test_contiguous_missed_minutes_are_offered_as_one_window(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "next_bar_offset_ms",
+    [
+        120_000,  # 15:00 and 15:01 never assembled at all
+        180_000,  # 15:00, 15:01 and 15:02 never assembled
+    ],
+    ids=["wholly_missed_minutes_before_the_next_bar", "contiguous_missed_minutes_one_window"],
+)
+async def test_missed_minutes_are_offered_as_one_window(
+    monkeypatch: pytest.MonkeyPatch, next_bar_offset_ms: int
 ) -> None:
     """Ruling P11: one episode, one window, one event — not one per minute."""
     sink = _RecordingSink()
     source = _Source(
         [_ibkr_bar(_MINUTE0 - 60_000), IBKRBarInterrupted("x", cause="socket_down")],
-        [_ibkr_bar(_MINUTE0 + 180_000)],  # 15:00, 15:01 and 15:02 never assembled
+        [_ibkr_bar(_MINUTE0 + next_bar_offset_ms)],
     )
     monkeypatch.setattr(feed_module, "stream_minute_bars", source)
     feed = IbkrMarketDataFeed(_client())
@@ -381,12 +384,15 @@ async def test_contiguous_missed_minutes_are_offered_as_one_window(
     with pytest.raises(MarketDataFeedError) as excinfo:
         await _collect(feed, _policy(sink), 2)
 
-    assert excinfo.value.reason == "SUBSTITUTION_NOT_AUTHORIZED"
+    assert excinfo.value.reason == "SUBSTITUTION_NOT_AUTHORIZED", "the run is refused with the grant reason"
     refusals = [e for e in sink.events if e.kind == "refused"]
-    assert len(refusals) == 1
-    assert refusals[0].window_start_ms == _MINUTE0
-    assert refusals[0].window_end_ms - refusals[0].window_start_ms == 180_000
-    assert refusals[0].contribution_count is None  # nothing was ever assembled for it
+    assert len(refusals) == 1, "one episode is one refusal, not one per minute"
+    assert sink.events[-1].kind == "refused", "the refusal is resolved before the next bar"
+    assert refusals[0].window_start_ms == _MINUTE0, "the window starts at the first missed minute"
+    assert refusals[0].window_end_ms - refusals[0].window_start_ms == next_bar_offset_ms, (
+        "the window spans every missed minute"
+    )
+    assert refusals[0].contribution_count is None, "nothing was ever assembled for it"
 
 
 async def test_a_missed_window_outside_the_session_is_one_gap_and_the_run_continues(
@@ -544,7 +550,22 @@ async def test_the_wait_refuses_exactly_at_the_deadline_the_interruption_recorde
     assert sink.events[-1].last_delivered_end_ms == _MINUTE0 + 60_000
 
 
-async def test_incomplete_minute_inside_rth_is_refused_with_the_grant_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+def _authorizing_grant(s: int, e: int) -> SubstitutionGrant:
+    return SubstitutionGrant(authorization_id="a", window_start_ms=s, window_end_ms=e)
+
+
+@pytest.mark.parametrize(
+    ("grant", "reason"),
+    [
+        (None, "SUBSTITUTION_NOT_AUTHORIZED"),
+        # A grant is never honored in this slice
+        (_authorizing_grant, "SUBSTITUTION_PATH_UNAVAILABLE"),
+    ],
+    ids=["no_grant", "a_grant_is_never_honored_in_this_slice"],
+)
+async def test_incomplete_minute_inside_rth_is_refused_with_the_grant_reason(
+    monkeypatch: pytest.MonkeyPatch, grant: Callable[[int, int], SubstitutionGrant] | None, reason: str
+) -> None:
     sink = _RecordingSink()
     source = _Source(
         [_ibkr_bar(_MINUTE0 - 60_000), IBKRBarInterrupted("x", cause="socket_down")],
@@ -553,43 +574,47 @@ async def test_incomplete_minute_inside_rth_is_refused_with_the_grant_reason(mon
     monkeypatch.setattr(feed_module, "stream_minute_bars", source)
     feed = IbkrMarketDataFeed(_client())
     with pytest.raises(MarketDataFeedError) as excinfo:
-        await _collect(feed, _policy(sink), 2)
-    assert excinfo.value.reason == "SUBSTITUTION_NOT_AUTHORIZED"
-    assert [e.kind for e in sink.events] == ["interruption", "recovered", "refused"]
-    assert sink.events[-1].window_start_ms == _MINUTE0 and sink.events[-1].reason == "SUBSTITUTION_NOT_AUTHORIZED"
+        await _collect(feed, _policy(sink, grant=grant), 2)
+    assert excinfo.value.reason == reason, "the run is refused with the reason the grant path gives"
+    assert [e.kind for e in sink.events] == ["interruption", "recovered", "refused"], "events record the episode"
+    assert sink.events[-1].window_start_ms == _MINUTE0, "the refused window starts at the incomplete minute"
+    assert sink.events[-1].reason == reason, "the refusal event carries the same reason"
 
 
-async def test_a_grant_is_never_honored_in_this_slice(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("policy_for", "ms_before_minute0", "phase"),
+    [
+        (_policy, 8 * 3_600_000, "PRE"),  # 07:00 ET
+        # Outside the declared window an extended run decides on nothing, so the
+        # omission stays survivable -- the floor widened to the window, not to the day.
+        (_extended_policy, 13 * 3_600_000, "CLOSED"),  # 02:00 ET, before the declared open
+    ],
+    ids=["unresolvable_minute_outside_rth", "unresolvable_overnight_minute_for_an_extended_run"],
+)
+async def test_unresolvable_minute_outside_the_decision_session_is_a_gap_and_the_run_continues(
+    monkeypatch: pytest.MonkeyPatch,
+    policy_for: Callable[[_RecordingSink], ContinuityPolicy],
+    ms_before_minute0: int,
+    phase: str,
+) -> None:
     sink = _RecordingSink()
+    outside = _MINUTE0 - ms_before_minute0
     source = _Source(
-        [_ibkr_bar(_MINUTE0 - 60_000), IBKRBarInterrupted("x", cause="socket_down")],
-        [_ibkr_bar(_MINUTE0, contribution_count=11, spans_interruption=True)],
+        [_ibkr_bar(outside - 60_000, phase=phase), IBKRBarInterrupted("x", cause="socket_down")],
+        [
+            _ibkr_bar(outside, contribution_count=3, spans_interruption=True, phase=phase),
+            _ibkr_bar(outside + 60_000, phase=phase),
+        ],
     )
     monkeypatch.setattr(feed_module, "stream_minute_bars", source)
+    monkeypatch.setattr("app.marketdata.ibkr_continuity.now_ms_utc", lambda: outside + 30_000)
     feed = IbkrMarketDataFeed(_client())
 
-    def _grant(s: int, e: int) -> SubstitutionGrant:
-        return SubstitutionGrant(authorization_id="a", window_start_ms=s, window_end_ms=e)
+    bars = await _collect(feed, policy_for(sink), 2)
 
-    with pytest.raises(MarketDataFeedError) as excinfo:
-        await _collect(feed, _policy(sink, grant=_grant), 2)
-    assert excinfo.value.reason == "SUBSTITUTION_PATH_UNAVAILABLE"
-
-
-async def test_unresolvable_minute_outside_rth_is_a_gap_and_the_run_continues(monkeypatch: pytest.MonkeyPatch) -> None:
-    sink = _RecordingSink()
-    pre = _MINUTE0 - 8 * 3_600_000  # 07:00 ET
-    source = _Source(
-        [_ibkr_bar(pre - 60_000, phase="PRE"), IBKRBarInterrupted("x", cause="socket_down")],
-        [_ibkr_bar(pre, contribution_count=3, spans_interruption=True, phase="PRE"), _ibkr_bar(pre + 60_000, phase="PRE")],
-    )
-    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
-    monkeypatch.setattr("app.marketdata.ibkr_continuity.now_ms_utc", lambda: pre + 30_000)
-    feed = IbkrMarketDataFeed(_client())
-    bars = await _collect(feed, _policy(sink), 2)
-    assert [b.start_ms for b in bars] == [pre - 60_000, pre + 60_000]
-    assert [e.kind for e in sink.events] == ["interruption", "recovered", "gap"]
-    assert sink.events[-1].window_start_ms == pre
+    assert [b.start_ms for b in bars] == [outside - 60_000, outside + 60_000], "the unresolvable minute is omitted"
+    assert [e.kind for e in sink.events] == ["interruption", "recovered", "gap"], "it is recorded as a gap"
+    assert sink.events[-1].window_start_ms == outside, "the gap window starts at the omitted minute"
 
 
 async def test_an_unresolvable_pre_market_minute_is_fatal_for_an_extended_run(
@@ -620,31 +645,6 @@ async def test_an_unresolvable_pre_market_minute_is_fatal_for_an_extended_run(
     assert sink.events[-1].window_start_ms == pre
 
 
-async def test_an_unresolvable_overnight_minute_is_still_a_gap_for_an_extended_run(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Outside the declared window an extended run decides on nothing, so the
-    omission stays survivable -- the floor widened to the window, not to the day."""
-    sink = _RecordingSink()
-    overnight = _MINUTE0 - 13 * 3_600_000  # 02:00 ET, before the declared open
-    source = _Source(
-        [_ibkr_bar(overnight - 60_000, phase="CLOSED"), IBKRBarInterrupted("x", cause="socket_down")],
-        [
-            _ibkr_bar(overnight, contribution_count=3, spans_interruption=True, phase="CLOSED"),
-            _ibkr_bar(overnight + 60_000, phase="CLOSED"),
-        ],
-    )
-    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
-    monkeypatch.setattr("app.marketdata.ibkr_continuity.now_ms_utc", lambda: overnight + 30_000)
-    feed = IbkrMarketDataFeed(_client())
-
-    bars = await _collect(feed, _extended_policy(sink), 2)
-
-    assert [b.start_ms for b in bars] == [overnight - 60_000, overnight + 60_000]
-    assert [e.kind for e in sink.events] == ["interruption", "recovered", "gap"]
-    assert sink.events[-1].window_start_ms == overnight
-
-
 async def test_a_touched_pre_market_minute_holding_every_print_is_delivered(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -671,20 +671,6 @@ async def test_a_touched_pre_market_minute_holding_every_print_is_delivered(
         (pre, "realtime_across_reconnect"),
     ]
     assert [e.kind for e in sink.events] == ["interruption", "recovered"]
-
-
-async def test_wholly_missed_minutes_are_resolved_before_the_next_bar(monkeypatch: pytest.MonkeyPatch) -> None:
-    sink = _RecordingSink()
-    source = _Source(
-        [_ibkr_bar(_MINUTE0 - 60_000), IBKRBarInterrupted("x", cause="socket_down")],
-        [_ibkr_bar(_MINUTE0 + 120_000)],  # 15:00 and 15:01 never assembled at all
-    )
-    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
-    feed = IbkrMarketDataFeed(_client())
-    with pytest.raises(MarketDataFeedError) as excinfo:
-        await _collect(feed, _policy(sink), 2)
-    assert excinfo.value.reason == "SUBSTITUTION_NOT_AUTHORIZED"
-    assert sink.events[-1].kind == "refused" and sink.events[-1].window_start_ms == _MINUTE0
 
 
 async def test_deadline_passing_during_the_wait_is_decision_bar_missed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -810,17 +796,6 @@ async def test_not_connected_on_reentry_is_a_second_episode_under_the_same_deadl
     assert sink.events[2].cause == "socket_down"
     assert {e.deadline_ms for e in sink.events if e.kind == "interruption"} == {_MINUTE0 + 80_000}
     assert bars[1].continuity_event_ref == ContinuityEventRef(run_id="run-1", evidence_seq=4).ref()
-
-
-async def test_not_connected_before_any_delivered_bar_is_fatal(monkeypatch: pytest.MonkeyPatch) -> None:
-    sink = _RecordingSink()
-    source = _Source([NotConnectedError("IBKR client is not connected")])
-    monkeypatch.setattr(feed_module, "stream_minute_bars", source)
-    feed = IbkrMarketDataFeed(_client())
-    with pytest.raises(MarketDataFeedError) as excinfo:
-        await _collect(feed, _policy(sink), 1)
-    assert excinfo.value.reason is None
-    assert sink.events == []
 
 
 async def test_an_unrelated_bar_stream_error_stays_fatal(monkeypatch: pytest.MonkeyPatch) -> None:

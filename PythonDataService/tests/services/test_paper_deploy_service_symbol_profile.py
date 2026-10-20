@@ -63,31 +63,28 @@ def test_resolve_deploy_strategy_params_is_a_clean_no_op_without_a_profile() -> 
     assert resolved.diverges_from_defaults == ()
 
 
-def test_resolve_deploy_strategy_params_symbol_profile_origin() -> None:
+@pytest.mark.parametrize(
+    ("overrides", "gap", "gap_origin"),
+    [
+        pytest.param((), 0.35, "deployment_symbol", id="symbol_profile_origin"),
+        pytest.param((("gap", 0.5),), 0.5, "deploy_override", id="operator_override_beats_symbol_profile"),
+    ],
+)
+def test_resolve_deploy_strategy_params_symbol_profile_tiers(
+    overrides: tuple[tuple[str, float], ...], gap: float, gap_origin: str
+) -> None:
     resolved = resolve_deploy_strategy_params(
         _STRATEGY_KEY,
         _SYMBOL,
-        {},
+        dict(overrides),
         symbol_profile={"gap": 0.35},
     )
 
-    assert resolved.effective["gap"] == 0.35
-    assert resolved.origins["gap"] == "deployment_symbol"
+    assert resolved.effective["gap"] == gap, "the winning tier sets the effective gap"
+    assert resolved.origins["gap"] == gap_origin, "the gap's origin names the winning tier"
     # An untouched parameter still resolves to the registered default.
-    assert resolved.origins["rsi_min"] == "registered_default"
-    assert resolved.diverges_from_defaults == ("gap",)
-
-
-def test_resolve_deploy_strategy_params_operator_override_beats_symbol_profile() -> None:
-    resolved = resolve_deploy_strategy_params(
-        _STRATEGY_KEY,
-        _SYMBOL,
-        {"gap": 0.5},
-        symbol_profile={"gap": 0.35},
-    )
-
-    assert resolved.effective["gap"] == 0.5
-    assert resolved.origins["gap"] == "deploy_override"
+    assert resolved.origins["rsi_min"] == "registered_default", "an untouched parameter keeps the registered default"
+    assert resolved.diverges_from_defaults == ("gap",), "only the gap diverges from the defaults"
 
 
 def test_seal_parameters_match_validated_settings_true_under_symbol_profile_tier() -> None:

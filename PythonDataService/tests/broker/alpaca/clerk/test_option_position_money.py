@@ -34,28 +34,18 @@ def _lot(
     )
 
 
-def test_separately_bounded_expiries_keep_the_largest_requirement() -> None:
-    # December: $5 × 100 = $500. January: $10 × 2 × 100 = $2,000.
-    # Alpaca's rule takes their maximum; total signed basis is -$900.
-    later = date(2027, 1, 15)
-    lots = [
-        _lot("450", side=OrderSide.SELL, price="5"), _lot("455"),
-        _lot("450", expiry=later, side=OrderSide.SELL, quantity=2, price="5"),
-        _lot("460", expiry=later, quantity=2),
-    ]
-    assert option_position_money(lots) == (Decimal("1100"), Decimal("2000"))
-
-
-def test_six_distinct_contracts_are_valued_without_an_order_leg_cap() -> None:
+def test_holdings_are_valued_without_an_order_leg_cap() -> None:
     # Three $5-wide sold spreads lose $15 a share together above the last strike.
-    lots = [lot for strike in ("450", "460", "470") for lot in (
+    sold_spreads = [lot for strike in ("450", "460", "470") for lot in (
         _lot(strike, side=OrderSide.SELL, price="5"), _lot(str(Decimal(strike) + 5)),
     )]
-    assert option_position_money(lots) == (Decimal("600"), Decimal("1500"))
-
-
-def test_bought_holdings_are_not_limited_to_four_contracts() -> None:
-    assert option_position_money([_lot(str(strike)) for strike in range(450, 456)]) == (Decimal("1200"), Decimal(0))
+    assert option_position_money(sold_spreads) == (Decimal("600"), Decimal("1500")), (
+        "six distinct contracts are valued without an order leg cap (#2985)"
+    )
+    bought = [_lot(str(strike)) for strike in range(450, 456)]
+    assert option_position_money(bought) == (Decimal("1200"), Decimal(0)), (
+        "bought holdings are not limited to four contracts (#2985)"
+    )
 
 
 def test_a_later_expiry_cannot_cover_an_unbounded_sold_call() -> None:
@@ -65,12 +55,25 @@ def test_a_later_expiry_cannot_cover_an_unbounded_sold_call() -> None:
         ])
 
 
-def test_independent_underlyings_and_multipliers_do_not_offset_requirements() -> None:
-    lots = [lot for root, multiplier in (("SPY", 100), ("QQQ", 100), ("SPY", 10)) for lot in (
+def test_requirements_are_kept_per_expiry_and_do_not_offset_across_underlyings_or_multipliers() -> None:
+    # December: $5 × 100 = $500. January: $10 × 2 × 100 = $2,000.
+    # Alpaca's rule takes their maximum; total signed basis is -$900.
+    later = date(2027, 1, 15)
+    expiries = [
+        _lot("450", side=OrderSide.SELL, price="5"), _lot("455"),
+        _lot("450", expiry=later, side=OrderSide.SELL, quantity=2, price="5"),
+        _lot("460", expiry=later, quantity=2),
+    ]
+    assert option_position_money(expiries) == (Decimal("1100"), Decimal("2000")), (
+        "separately bounded expiries keep the largest requirement (#2985)"
+    )
+    underlyings = [lot for root, multiplier in (("SPY", 100), ("QQQ", 100), ("SPY", 10)) for lot in (
         _lot("450", root=root, multiplier=multiplier, side=OrderSide.SELL, price="5"),
         _lot("455", root=root, multiplier=multiplier),
     )]
-    assert option_position_money(lots) == (Decimal("420"), Decimal("1050"))
+    assert option_position_money(underlyings) == (Decimal("420"), Decimal("1050")), (
+        "independent underlyings and multipliers do not offset requirements (#2985)"
+    )
 
 
 @pytest.mark.parametrize("different_expiries,last_buy_price", [

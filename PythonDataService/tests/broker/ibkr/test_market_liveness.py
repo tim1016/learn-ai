@@ -248,9 +248,9 @@ async def test_live_top_of_book_rides_the_status_snapshot(source: SourceFixture)
     assert quote.source == "ibkr.market_data.status"
 
 
-@pytest.mark.parametrize("kind", ["delayed", "no_bid", "sentinel_ask", "zero_bid", "absent"])
-async def test_an_unusable_book_publishes_no_quote(source: SourceFixture, kind: str) -> None:
-    status, _, ticker = source
+@pytest.mark.parametrize("kind", ["delayed", "no_bid", "sentinel_ask", "zero_bid", "absent", "disconnected"])
+async def test_an_unusable_book_or_a_disconnected_source_publishes_no_quote(source: SourceFixture, kind: str) -> None:
+    status, client, ticker = source
     ticker.bid, ticker.ask = 512.31, 512.36
     if kind == "delayed":
         ticker.marketDataType = 3
@@ -260,16 +260,10 @@ async def test_an_unusable_book_publishes_no_quote(source: SourceFixture, kind: 
         ticker.ask = -1.0
     elif kind == "zero_bid":
         ticker.bid = 0.0
+    elif kind == "disconnected":
+        client.connection_state = "degraded_data_farm"
     else:
         ticker.bid, ticker.ask = float("nan"), float("nan")
-
-    assert (await poll(status)).quotes == ()
-
-
-async def test_a_disconnected_source_publishes_no_quote(source: SourceFixture) -> None:
-    status, client, ticker = source
-    ticker.bid, ticker.ask = 512.31, 512.36
-    client.connection_state = "degraded_data_farm"
 
     assert (await poll(status)).quotes == ()
 

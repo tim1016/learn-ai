@@ -573,33 +573,23 @@ describe('PricingLabComponent', () => {
         component.diffReference.set('python_bs');
       }
 
-      it('is left out of the difference table, not compared as zero', () => {
+      it('is left out of the difference table (not compared as zero), compared where the engine does provide the Greek, and names the engine that has none', () => {
         seedMonteCarloWithoutTheta();
+
         component.selectedMetric.set('theta');
-
         const rows = component.summaryStats().map(row => row.key);
+        expect.soft(rows, 'theta: leaves the engine without it out of the difference table, not compared as zero').not.toContain('quantlib_mc');
+        expect.soft(rows, 'theta: still lists the legacy_bs overlay').toContain('legacy_bs');
 
-        expect(rows).not.toContain('quantlib_mc');
-        expect(rows).toContain('legacy_bs');
-      });
-
-      it('is compared where the engine does provide the Greek', () => {
-        seedMonteCarloWithoutTheta();
         component.selectedMetric.set('delta');
-
         const mc = component.summaryStats().find(row => row.key === 'quantlib_mc');
-
-        expect(mc?.maxDiff).toBeCloseTo(0.02, 12);
-      });
-
-      it('names the engine that has none for the selected Greek, and none for price or delta', () => {
-        seedMonteCarloWithoutTheta();
+        expect.soft(mc?.maxDiff, 'delta: compares the engine where it does provide the Greek').toBeCloseTo(0.02, 12);
 
         component.selectedMetric.set('vega');
-        expect(component.metricNotProvidedBy()).toEqual(['MC']);
+        expect.soft(component.metricNotProvidedBy(), 'vega: names the engine that has none for the selected Greek').toEqual(['MC']);
 
         component.selectedMetric.set('delta');
-        expect(component.metricNotProvidedBy()).toEqual([]);
+        expect.soft(component.metricNotProvidedBy(), 'delta: names none for price or delta').toEqual([]);
       });
     });
 

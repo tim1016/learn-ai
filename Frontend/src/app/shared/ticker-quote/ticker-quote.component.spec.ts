@@ -31,21 +31,7 @@ const FLAT_QUOTE: TickerQuoteView = {
 
 describe('TickerQuoteComponent', () => {
   describe('trend states', () => {
-    it('applies .positive class and + sign prefix for positive changePercent', async () => {
-      const { container } = await render(TickerQuoteComponent, {
-        inputs: { quote: BASE_QUOTE },
-      });
-
-      const change = requireElement(
-        container.querySelector('.ticker-quote__change'),
-        '.ticker-quote__change',
-      );
-      expect(change.classList.contains('positive')).toBe(true);
-      expect(change.classList.contains('negative')).toBe(false);
-      expect(change.textContent?.trim()).toMatch(/^\+/);
-    });
-
-    it('applies .negative class and - sign for negative changePercent', async () => {
+    it('renders a negative quote inline: .negative class with a minus sign, and a down aria-label', async () => {
       const { container } = await render(TickerQuoteComponent, {
         inputs: { quote: NEGATIVE_QUOTE },
       });
@@ -54,12 +40,13 @@ describe('TickerQuoteComponent', () => {
         container.querySelector('.ticker-quote__change'),
         '.ticker-quote__change',
       );
-      expect(change.classList.contains('negative')).toBe(true);
-      expect(change.classList.contains('positive')).toBe(false);
-      expect(change.textContent?.trim()).toMatch(/-/);
+      expect.soft(change.classList.contains('negative'), 'applies .negative class for negative changePercent').toBe(true);
+      expect.soft(change.classList.contains('positive'), 'applies .negative class, not .positive, for negative changePercent').toBe(false);
+      expect.soft(change.textContent?.trim(), 'shows a - sign for negative changePercent').toMatch(/-/);
+      expect.soft(change.getAttribute('aria-label'), 'change span has aria-label for negative trend').toContain('down');
     });
 
-    it('applies .flat class and no sign for zero changePercent', async () => {
+    it('renders a flat quote inline: .flat class with no sign, and an unchanged aria-label', async () => {
       const { container } = await render(TickerQuoteComponent, {
         inputs: { quote: FLAT_QUOTE },
       });
@@ -68,10 +55,11 @@ describe('TickerQuoteComponent', () => {
         container.querySelector('.ticker-quote__change'),
         '.ticker-quote__change',
       );
-      expect(change.classList.contains('flat')).toBe(true);
-      expect(change.classList.contains('positive')).toBe(false);
-      expect(change.classList.contains('negative')).toBe(false);
-      expect(change.textContent?.trim()).not.toMatch(/^\+/);
+      expect.soft(change.classList.contains('flat'), 'applies .flat class for zero changePercent').toBe(true);
+      expect.soft(change.classList.contains('positive'), 'applies .flat class, not .positive, for zero changePercent').toBe(false);
+      expect.soft(change.classList.contains('negative'), 'applies .flat class, not .negative, for zero changePercent').toBe(false);
+      expect.soft(change.textContent?.trim(), 'shows no + sign for zero changePercent').not.toMatch(/^\+/);
+      expect.soft(change.getAttribute('aria-label'), 'change span has aria-label for flat trend').toBe('unchanged');
     });
 
     it('renders an em dash when changePercent is unavailable', async () => {
@@ -86,24 +74,6 @@ describe('TickerQuoteComponent', () => {
       expect(change.textContent?.trim()).toBe('—');
     });
 
-    it('shows pi-caret-up for positive in card mode', async () => {
-      const { container } = await render(TickerQuoteComponent, {
-        inputs: { quote: BASE_QUOTE, mode: 'card' },
-      });
-
-      const caret = requireElement(container.querySelector('i'), 'i');
-      expect(caret.classList.contains('pi-caret-up')).toBe(true);
-    });
-
-    it('shows pi-caret-down for negative in card mode', async () => {
-      const { container } = await render(TickerQuoteComponent, {
-        inputs: { quote: NEGATIVE_QUOTE, mode: 'card' },
-      });
-
-      const caret = requireElement(container.querySelector('i'), 'i');
-      expect(caret.classList.contains('pi-caret-down')).toBe(true);
-    });
-
     it('shows pi-minus for flat in card mode', async () => {
       const { container } = await render(TickerQuoteComponent, {
         inputs: { quote: FLAT_QUOTE, mode: 'card' },
@@ -115,19 +85,6 @@ describe('TickerQuoteComponent', () => {
   });
 
   describe('price and currency formatting', () => {
-    it('renders price with default $ prefix and 2 decimal places', async () => {
-      const { container } = await render(TickerQuoteComponent, {
-        inputs: { quote: BASE_QUOTE },
-      });
-
-      const price = requireElement(
-        container.querySelector('.ticker-quote__price'),
-        '.ticker-quote__price',
-      );
-      expect(price.textContent?.trim()).toContain('$');
-      expect(price.textContent?.trim()).toContain('542.44');
-    });
-
     it('accepts a market snapshot without an adapter', async () => {
       const snapshot: SnapshotUnderlyingResult = {
         ticker: 'DIA',
@@ -156,19 +113,6 @@ describe('TickerQuoteComponent', () => {
       expect(price.textContent?.trim()).toContain('€');
       expect(price.textContent?.trim()).not.toContain('$');
     });
-
-    it('formats percent with 2 decimal places', async () => {
-      const quote: TickerQuoteView = { ...BASE_QUOTE, changePercent: 0.77 };
-      const { container } = await render(TickerQuoteComponent, {
-        inputs: { quote },
-      });
-
-      const change = requireElement(
-        container.querySelector('.ticker-quote__change'),
-        '.ticker-quote__change',
-      );
-      expect(change.textContent?.trim()).toContain('0.77%');
-    });
   });
 
   describe('inline mode (default)', () => {
@@ -180,58 +124,59 @@ describe('TickerQuoteComponent', () => {
       expect(container.querySelector('app-asset-identity.asset-identity--lg')).not.toBeNull();
     });
 
-    it('does not render name in inline mode', async () => {
-      await render(TickerQuoteComponent, {
-        inputs: { quote: BASE_QUOTE },
-      });
-
-      expect(screen.queryByText('SPDR S&P 500 ETF')).toBeNull();
-    });
-
-    it('does not render exchange chip in inline mode', async () => {
+    it('renders a positive quote inline: .positive class with a plus sign, price and percent, a logo, an up aria-label, and no name, exchange chip or caret', async () => {
       const { container } = await render(TickerQuoteComponent, {
         inputs: { quote: BASE_QUOTE },
       });
 
-      expect(container.querySelector('.asset-identity__exchange')).toBeNull();
-    });
-
-    it('does not render caret icon in inline mode', async () => {
-      const { container } = await render(TickerQuoteComponent, {
-        inputs: { quote: BASE_QUOTE },
-      });
-
-      expect(container.querySelector('i')).toBeNull();
+      const change = requireElement(
+        container.querySelector('.ticker-quote__change'),
+        '.ticker-quote__change',
+      );
+      expect.soft(change.classList.contains('positive'), 'applies .positive class for positive changePercent').toBe(true);
+      expect.soft(change.classList.contains('negative'), 'applies .positive class, not .negative, for positive changePercent').toBe(false);
+      expect.soft(change.textContent?.trim(), 'shows a + sign prefix for positive changePercent').toMatch(/^\+/);
+      expect.soft(change.textContent?.trim(), 'formats percent with 2 decimal places').toContain('0.77%');
+      const price = requireElement(
+        container.querySelector('.ticker-quote__price'),
+        '.ticker-quote__price',
+      );
+      expect.soft(price.textContent?.trim(), 'renders price with default $ prefix').toContain('$');
+      expect.soft(price.textContent?.trim(), 'renders price with 2 decimal places').toContain('542.44');
+      expect.soft(screen.queryByText('SPDR S&P 500 ETF'), 'does not render name in inline mode').toBeNull();
+      expect.soft(container.querySelector('.asset-identity__exchange'), 'does not render exchange chip in inline mode').toBeNull();
+      expect.soft(container.querySelector('i'), 'does not render caret icon in inline mode').toBeNull();
+      expect.soft(container.querySelector('img'), 'renders a logo by default when logoSlug is provided').not.toBeNull();
+      const label = change.getAttribute('aria-label');
+      expect.soft(label, 'change span has aria-label for positive trend: up').toContain('up');
+      expect.soft(label, 'change span has aria-label for positive trend: percent').toContain('percent');
     });
   });
 
   describe('card mode', () => {
-    it('renders name in card mode', async () => {
-      await render(TickerQuoteComponent, {
-        inputs: { quote: BASE_QUOTE, mode: 'card' },
-      });
-
-      expect(screen.getByText('SPDR S&P 500 ETF')).toBeTruthy();
-    });
-
-    it('renders exchange chip in card mode when exchange is provided', async () => {
+    it('renders a positive quote as a card: a caret up, the name, and the exchange chip', async () => {
       const { container } = await render(TickerQuoteComponent, {
         inputs: { quote: BASE_QUOTE, mode: 'card' },
       });
 
+      const caret = requireElement(container.querySelector('i'), 'i');
+      expect.soft(caret.classList.contains('pi-caret-up'), 'shows pi-caret-up for positive in card mode').toBe(true);
+      expect.soft(screen.getByText('SPDR S&P 500 ETF'), 'renders name in card mode').toBeTruthy();
       const chip = requireElement(
         container.querySelector('.asset-identity__exchange'),
         '.asset-identity__exchange',
       );
-      expect(chip.textContent?.trim()).toBe('ARCA');
+      expect.soft(chip.textContent?.trim(), 'renders exchange chip in card mode when exchange is provided').toBe('ARCA');
     });
 
-    it('does not render exchange chip in card mode when exchange is absent', async () => {
+    it('renders a negative quote without an exchange as a card: a caret down and no exchange chip', async () => {
       const { container } = await render(TickerQuoteComponent, {
         inputs: { quote: NEGATIVE_QUOTE, mode: 'card' },
       });
 
-      expect(container.querySelector('.asset-identity__exchange')).toBeNull();
+      const caret = requireElement(container.querySelector('i'), 'i');
+      expect.soft(caret.classList.contains('pi-caret-down'), 'shows pi-caret-down for negative in card mode').toBe(true);
+      expect.soft(container.querySelector('.asset-identity__exchange'), 'does not render exchange chip in card mode when exchange is absent').toBeNull();
     });
 
     it('keeps the rich ticker tooltip when hovering the identity', async () => {
@@ -257,14 +202,6 @@ describe('TickerQuoteComponent', () => {
       expect(container.querySelector('img')).toBeNull();
       expect(container.querySelector('.asset-identity__fallback')).toBeNull();
     });
-
-    it('renders a logo by default when logoSlug is provided', async () => {
-      const { container } = await render(TickerQuoteComponent, {
-        inputs: { quote: BASE_QUOTE },
-      });
-
-      expect(container.querySelector('img')).not.toBeNull();
-    });
   });
 
   describe('accessibility', () => {
@@ -275,44 +212,6 @@ describe('TickerQuoteComponent', () => {
 
       const caret = requireElement(container.querySelector('i'), 'i');
       expect(caret.getAttribute('aria-hidden')).toBe('true');
-    });
-
-    it('change span has aria-label for positive trend', async () => {
-      const { container } = await render(TickerQuoteComponent, {
-        inputs: { quote: BASE_QUOTE },
-      });
-
-      const change = requireElement(
-        container.querySelector('.ticker-quote__change'),
-        '.ticker-quote__change',
-      );
-      const label = change.getAttribute('aria-label');
-      expect(label).toContain('up');
-      expect(label).toContain('percent');
-    });
-
-    it('change span has aria-label for negative trend', async () => {
-      const { container } = await render(TickerQuoteComponent, {
-        inputs: { quote: NEGATIVE_QUOTE },
-      });
-
-      const change = requireElement(
-        container.querySelector('.ticker-quote__change'),
-        '.ticker-quote__change',
-      );
-      expect(change.getAttribute('aria-label')).toContain('down');
-    });
-
-    it('change span has aria-label for flat trend', async () => {
-      const { container } = await render(TickerQuoteComponent, {
-        inputs: { quote: FLAT_QUOTE },
-      });
-
-      const change = requireElement(
-        container.querySelector('.ticker-quote__change'),
-        '.ticker-quote__change',
-      );
-      expect(change.getAttribute('aria-label')).toBe('unchanged');
     });
   });
 

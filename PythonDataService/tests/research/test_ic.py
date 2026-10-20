@@ -14,8 +14,8 @@ from app.research.validation.ic import (
 
 
 class TestInformationCoefficient:
-    def test_correlated_data_has_positive_ic(self) -> None:
-        """Feature positively correlated with returns should have positive mean IC."""
+    def test_correlated_data_has_positive_ic_and_newey_west_stats(self) -> None:
+        """Feature positively correlated with returns should have positive mean IC and computed Newey-West stats."""
         rng = np.random.default_rng(42)
         n = 500
         # 5 days of 100 bars, same date for grouping
@@ -32,9 +32,13 @@ class TestInformationCoefficient:
 
         result = compute_information_coefficient(feature, target, ts)
 
-        assert result.mean_ic > 0
-        assert len(result.daily_ic_values) == 5
-        assert len(result.daily_ic_dates) == 5
+        assert result.mean_ic > 0, "correlated feature has a positive mean IC"
+        assert len(result.daily_ic_values) == 5, "one daily IC value per day"
+        assert len(result.daily_ic_dates) == 5, "one daily IC date per day"
+        assert result.nw_t_stat != 0.0, "Newey-West t-stat is computed for correlated data"
+        assert result.nw_p_value < 1.0, "Newey-West p-value is below one for correlated data"
+        assert result.effective_n > 0, "effective N is positive"
+        assert result.effective_n <= len(result.daily_ic_values), "effective N is at most the actual N for autocorrelated ICs"
 
     def test_uncorrelated_data_has_near_zero_ic(self) -> None:
         rng = np.random.default_rng(99)
@@ -60,7 +64,7 @@ class TestInformationCoefficient:
         assert result.ic_p_value == 1.0
         assert len(result.daily_ic_values) == 0
 
-    def test_t_stat_direction_matches_ic(self) -> None:
+    def test_t_stats_direction_matches_ic(self) -> None:
         rng = np.random.default_rng(7)
         n = 300
         timestamps = []
@@ -75,73 +79,16 @@ class TestInformationCoefficient:
 
         result = compute_information_coefficient(feature, target, ts)
 
-        # t-stat should have same sign as mean IC
+        # t-stat and Newey-West t-stat should have same sign as mean IC
         if result.mean_ic > 0:
-            assert result.ic_t_stat > 0
+            assert result.ic_t_stat > 0, "t-stat is positive when mean IC is positive"
+            assert result.nw_t_stat > 0, "Newey-West t-stat is positive when mean IC is positive"
         elif result.mean_ic < 0:
-            assert result.ic_t_stat < 0
+            assert result.ic_t_stat < 0, "t-stat is negative when mean IC is negative"
+            assert result.nw_t_stat < 0, "Newey-West t-stat is negative when mean IC is negative"
 
 
 class TestNeweyWest:
-    def test_nw_t_stat_computed(self) -> None:
-        """Newey-West t-stat should be computed for correlated data."""
-        rng = np.random.default_rng(42)
-        n = 500
-        timestamps = []
-        base_ts = 1704117000000
-        for day in range(5):
-            for bar in range(100):
-                timestamps.append(base_ts + day * 86_400_000 + bar * 60_000)
-
-        feature = pd.Series(rng.normal(0, 1, n))
-        target = pd.Series(0.5 * feature + rng.normal(0, 0.5, n))
-        ts = pd.Series(timestamps)
-
-        result = compute_information_coefficient(feature, target, ts)
-
-        assert result.nw_t_stat != 0.0
-        assert result.nw_p_value < 1.0
-
-    def test_effective_n_less_than_actual_n(self) -> None:
-        """Effective N should be <= actual N when ICs are autocorrelated."""
-        rng = np.random.default_rng(42)
-        n = 500
-        timestamps = []
-        base_ts = 1704117000000
-        for day in range(5):
-            for bar in range(100):
-                timestamps.append(base_ts + day * 86_400_000 + bar * 60_000)
-
-        feature = pd.Series(rng.normal(0, 1, n))
-        target = pd.Series(0.5 * feature + rng.normal(0, 0.5, n))
-        ts = pd.Series(timestamps)
-
-        result = compute_information_coefficient(feature, target, ts)
-
-        assert result.effective_n > 0
-        assert result.effective_n <= len(result.daily_ic_values)
-
-    def test_nw_t_stat_direction_matches_ic(self) -> None:
-        """Newey-West t-stat should have the same sign as mean IC."""
-        rng = np.random.default_rng(7)
-        n = 300
-        timestamps = []
-        base_ts = 1704117000000
-        for day in range(3):
-            for bar in range(100):
-                timestamps.append(base_ts + day * 86_400_000 + bar * 60_000)
-
-        feature = pd.Series(rng.normal(0, 1, n))
-        target = pd.Series(0.3 * feature + rng.normal(0, 0.7, n))
-        ts = pd.Series(timestamps)
-
-        result = compute_information_coefficient(feature, target, ts)
-
-        if result.mean_ic > 0:
-            assert result.nw_t_stat > 0
-        elif result.mean_ic < 0:
-            assert result.nw_t_stat < 0
-
     def test_effective_n_helpers_with_iid_data(self) -> None:
         """For IID data, effective N should be close to actual N."""
         rng = np.random.default_rng(123)
@@ -165,23 +112,12 @@ class TestNeweyWest:
 class TestAndrewsLag:
     """Test Andrews (1991) automatic bandwidth selection."""
 
-    def test_small_sample(self) -> None:
-        """Small n=10 → floor(4 * (10/100)^(2/9)) = floor(2.15) = 2."""
-        assert _andrews_lag(10) == 2
-
-    def test_100_sample(self) -> None:
-        """n=100 → floor(4 * 1.0) = 4."""
-        assert _andrews_lag(100) == 4
-
-    def test_250_sample(self) -> None:
-        """n=250 → floor(4 * (250/100)^(2/9)) ≈ floor(4 * 1.22) = 4."""
-        lag = _andrews_lag(250)
-        assert lag >= 4
-
-    def test_500_sample(self) -> None:
-        """n=500 → floor(4 * (5)^(2/9)) ≈ floor(5.4) = 5."""
-        lag = _andrews_lag(500)
-        assert lag >= 5
+    def test_reference_sample_sizes(self) -> None:
+        """Andrews lag at the reference sample sizes."""
+        assert _andrews_lag(10) == 2, "n=10 → floor(4 * (10/100)^(2/9)) = floor(2.15) = 2"
+        assert _andrews_lag(100) == 4, "n=100 → floor(4 * 1.0) = 4"
+        assert _andrews_lag(250) >= 4, "n=250 → floor(4 * (250/100)^(2/9)) ≈ floor(4 * 1.22) = 4"
+        assert _andrews_lag(500) >= 5, "n=500 → floor(4 * (5)^(2/9)) ≈ floor(5.4) = 5"
 
     def test_monotonically_increasing(self) -> None:
         """Larger n should give >= lag than smaller n."""

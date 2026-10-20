@@ -57,161 +57,128 @@ def test_open_clock_and_tradable_symbol_prove_tradability() -> None:
     assert fact.reason_code == "MARKET_TRADABLE"
 
 
-def test_tradable_fact_stays_fresh_on_a_long_lived_connection() -> None:
-    """Regression: the connection watermark stays fixed at the original
-    connect instant for a long-lived healthy connection. A TRADABLE fact's
-    ``observed_at_ms`` must not be pinned to that stale instant — a
-    freshness-gated caller (e.g. ``evaluate_run_admission``, 5s bound)
-    would treat every TRADABLE fact as stale a few seconds after each
-    reconnect even though the underlying clock evidence is re-polled and
-    re-validated fresh every ~1s."""
-    long_lived_connection_ms = _NOW - 60 * 60 * 1_000  # connected an hour ago
-
+@pytest.mark.parametrize(
+    "connected_for_ms",
+    [
+        # Regression: the connection watermark stays fixed at the original
+        # connect instant for a long-lived healthy connection (here, an hour).
+        # A TRADABLE fact's ``observed_at_ms`` must not be pinned to that stale
+        # instant — a freshness-gated caller (e.g. ``evaluate_run_admission``,
+        # 5s bound) would treat every TRADABLE fact as stale a few seconds
+        # after each reconnect even though the underlying clock evidence is
+        # re-polled and re-validated fresh every ~1s.
+        pytest.param(60 * 60 * 1_000, id="tradable_fact_stays_fresh_on_a_long_lived_connection"),
+        # Regression for #1671's core bug: Alpaca's status stream is
+        # transition-only (halt/resume), not a per-symbol heartbeat, so a symbol
+        # that simply never halts has no record here at all — that silence is the
+        # common, expected case, not missing proof. A symbol goes untouched for
+        # far longer than any old wall-clock freshness bound would have allowed
+        # (here, ten times it) and must still resolve TRADABLE as long as the
+        # stream itself is connected and the clock is fresh and open.
+        pytest.param(
+            MARKET_CLOCK_MAX_AGE_MS * 10,
+            id="symbol_with_no_evidence_at_all_is_tradable_on_a_connected_stream_1671",
+        ),
+    ],
+)
+def test_tradable_fact_without_a_symbol_record_does_not_age_with_the_connection(connected_for_ms: int) -> None:
     fact = compose_market_liveness(
         "SPY",
         now_ms=_NOW,
         market_clock=_clock(observed_at_ms=_NOW),
         connected=True,
-        connection_changed_at_ms=long_lived_connection_ms,
+        connection_changed_at_ms=_NOW - connected_for_ms,
         symbol_status=None,
     )
 
-    assert fact.state == "TRADABLE"
-    assert fact.observed_at_ms == _NOW
+    assert fact.state == "TRADABLE", "the fact is TRADABLE"
+    assert fact.reason_code == "MARKET_TRADABLE", "the reason is MARKET_TRADABLE"
+    assert fact.observed_at_ms == _NOW, "the fact is observed when the fresh clock was, not when the connection began"
 
 
-def test_open_clock_and_halted_symbol_never_claim_tradability() -> None:
+@pytest.mark.parametrize(
+    ("clock_state", "symbol_state", "expected_state", "expected_reason_code"),
+    [
+        pytest.param(
+            "OPEN", "HALTED", "HALTED", "SYMBOL_HALTED", id="open_clock_and_halted_symbol_never_claim_tradability"
+        ),
+        pytest.param(
+            "CLOSED", "TRADABLE", "CLOSED", "MARKET_CLOSED", id="closed_market_clock_overrides_a_tradable_symbol_status"
+        ),
+        # Regression: Alpaca's market clock is RTH-only and reports CLOSED
+        # through every extended session, so callers reconcile a CLOSED liveness
+        # fact against a declared extended-hours window to allow non-RTH entries
+        # (see session_authority.declared_extended_phase_at_ms). Once that
+        # reconciliation actually works, this HALTED symbol status must still be
+        # the one that decides the outcome — if the CLOSED branch returned first
+        # without ever inspecting it, a proven-extended-hours caller would see a
+        # liveness fact reporting only "CLOSED" and never learn the symbol was
+        # genuinely halted, and liveness_blocks_entry would wave the ENTER
+        # through.
+        pytest.param(
+            "CLOSED", "HALTED", "HALTED", "SYMBOL_HALTED", id="halted_symbol_status_overrides_a_closed_market_clock"
+        ),
+        pytest.param(
+            "CLOSED",
+            "UNKNOWN",
+            "UNKNOWN",
+            "SYMBOL_STATUS_UNKNOWN",
+            id="unrecognized_symbol_status_overrides_a_closed_market_clock",
+        ),
+        # An actual, unrecognized-status record for this symbol is negative
+        # evidence and blocks — unlike no record at all, this is not silence.
+        pytest.param(
+            "OPEN", "UNKNOWN", "UNKNOWN", "SYMBOL_STATUS_UNKNOWN", id="unrecognized_symbol_status_fails_closed"
+        ),
+    ],
+)
+def test_clock_and_symbol_status_decide_the_liveness_fact(
+    clock_state: str, symbol_state: str, expected_state: str, expected_reason_code: str
+) -> None:
     fact = compose_market_liveness(
         "SPY",
         now_ms=_NOW,
-        market_clock=_clock("OPEN"),
+        market_clock=_clock(clock_state),
         connected=True,
         connection_changed_at_ms=_NOW,
-        symbol_status=_status("HALTED"),
+        symbol_status=_status(symbol_state),
     )
 
-    assert fact.state == "HALTED"
-    assert fact.reason_code == "SYMBOL_HALTED"
+    assert fact.state == expected_state, "the liveness state"
+    assert fact.reason_code == expected_reason_code, "the liveness reason code"
 
 
-def test_closed_market_clock_overrides_a_tradable_symbol_status() -> None:
+@pytest.mark.parametrize(
+    ("connected", "clock_age_ms", "link_age_ms", "expected_reason_code"),
+    [
+        # The stream connection — not a per-symbol timestamp — is what proves
+        # liveness now, so losing the connection must still fail closed even when
+        # the last-known record for this symbol was TRADABLE (here a minute old,
+        # like the connection watermark).
+        pytest.param(
+            False,
+            0,
+            60_000,
+            "STATUS_STREAM_DISCONNECTED",
+            id="disconnected_stream_fails_closed_even_with_a_stale_tradable_record",
+        ),
+        pytest.param(True, MARKET_CLOCK_MAX_AGE_MS + 1, 0, "MARKET_CLOCK_STALE", id="stale_market_clock_fails_closed"),
+    ],
+)
+def test_lost_or_stale_proof_fails_closed(
+    connected: bool, clock_age_ms: int, link_age_ms: int, expected_reason_code: str
+) -> None:
     fact = compose_market_liveness(
         "SPY",
         now_ms=_NOW,
-        market_clock=_clock("CLOSED"),
-        connected=True,
-        connection_changed_at_ms=_NOW,
-        symbol_status=_status("TRADABLE"),
+        market_clock=_clock(observed_at_ms=_NOW - clock_age_ms),
+        connected=connected,
+        connection_changed_at_ms=_NOW - link_age_ms,
+        symbol_status=_status("TRADABLE", observed_at_ms=_NOW - link_age_ms),
     )
 
-    assert fact.state == "CLOSED"
-    assert fact.reason_code == "MARKET_CLOSED"
-
-
-def test_halted_symbol_status_overrides_a_closed_market_clock() -> None:
-    """Regression: Alpaca's market clock is RTH-only and reports CLOSED
-    through every extended session, so callers reconcile a CLOSED liveness
-    fact against a declared extended-hours window to allow non-RTH entries
-    (see session_authority.declared_extended_phase_at_ms). Once that
-    reconciliation actually works, this HALTED symbol status must still be
-    the one that decides the outcome — if the CLOSED branch returned first
-    without ever inspecting it, a proven-extended-hours caller would see a
-    liveness fact reporting only "CLOSED" and never learn the symbol was
-    genuinely halted, and liveness_blocks_entry would wave the ENTER
-    through."""
-    fact = compose_market_liveness(
-        "SPY",
-        now_ms=_NOW,
-        market_clock=_clock("CLOSED"),
-        connected=True,
-        connection_changed_at_ms=_NOW,
-        symbol_status=_status("HALTED"),
-    )
-
-    assert fact.state == "HALTED"
-    assert fact.reason_code == "SYMBOL_HALTED"
-
-
-def test_unrecognized_symbol_status_overrides_a_closed_market_clock() -> None:
-    fact = compose_market_liveness(
-        "SPY",
-        now_ms=_NOW,
-        market_clock=_clock("CLOSED"),
-        connected=True,
-        connection_changed_at_ms=_NOW,
-        symbol_status=_status("UNKNOWN"),
-    )
-
-    assert fact.state == "UNKNOWN"
-    assert fact.reason_code == "SYMBOL_STATUS_UNKNOWN"
-
-
-def test_symbol_with_no_evidence_at_all_is_tradable_on_a_connected_stream() -> None:
-    """Regression for #1671's core bug: Alpaca's status stream is
-    transition-only (halt/resume), not a per-symbol heartbeat, so a symbol
-    that simply never halts has no record here at all — that silence is the
-    common, expected case, not missing proof. A symbol goes untouched for
-    far longer than any old wall-clock freshness bound would have allowed
-    (here, ten times it) and must still resolve TRADABLE as long as the
-    stream itself is connected and the clock is fresh and open."""
-    fact = compose_market_liveness(
-        "SPY",
-        now_ms=_NOW,
-        market_clock=_clock(observed_at_ms=_NOW),
-        connected=True,
-        connection_changed_at_ms=_NOW - (MARKET_CLOCK_MAX_AGE_MS * 10),
-        symbol_status=None,
-    )
-
-    assert fact.state == "TRADABLE"
-    assert fact.reason_code == "MARKET_TRADABLE"
-
-
-def test_disconnected_stream_fails_closed_even_with_a_stale_tradable_record() -> None:
-    """The stream connection — not a per-symbol timestamp — is what proves
-    liveness now, so losing the connection must still fail closed even when
-    the last-known record for this symbol was TRADABLE."""
-    fact = compose_market_liveness(
-        "SPY",
-        now_ms=_NOW,
-        market_clock=_clock(),
-        connected=False,
-        connection_changed_at_ms=_NOW - 60_000,
-        symbol_status=_status("TRADABLE", observed_at_ms=_NOW - 60_000),
-    )
-
-    assert fact.state == "UNKNOWN"
-    assert fact.reason_code == "STATUS_STREAM_DISCONNECTED"
-
-
-def test_unrecognized_symbol_status_fails_closed() -> None:
-    """An actual, unrecognized-status record for this symbol is negative
-    evidence and blocks — unlike no record at all, this is not silence."""
-    fact = compose_market_liveness(
-        "SPY",
-        now_ms=_NOW,
-        market_clock=_clock(),
-        connected=True,
-        connection_changed_at_ms=_NOW,
-        symbol_status=_status("UNKNOWN"),
-    )
-
-    assert fact.state == "UNKNOWN"
-    assert fact.reason_code == "SYMBOL_STATUS_UNKNOWN"
-
-
-def test_stale_market_clock_fails_closed() -> None:
-    fact = compose_market_liveness(
-        "SPY",
-        now_ms=_NOW,
-        market_clock=_clock(observed_at_ms=_NOW - MARKET_CLOCK_MAX_AGE_MS - 1),
-        connected=True,
-        connection_changed_at_ms=_NOW,
-        symbol_status=_status(),
-    )
-
-    assert fact.state == "UNKNOWN"
-    assert fact.reason_code == "MARKET_CLOCK_STALE"
+    assert fact.state == "UNKNOWN", "the fact fails closed to UNKNOWN"
+    assert fact.reason_code == expected_reason_code, "the liveness reason code"
 
 
 def test_future_dated_market_clock_fails_closed_and_logs_loudly(caplog: pytest.LogCaptureFixture) -> None:
@@ -320,21 +287,20 @@ def _health(*, connected: bool, stale: bool) -> FeedHealth:
 
 
 def test_only_a_connected_unstale_feed_proves_bars_are_printing() -> None:
-    assert market_data_bars_live(_health(connected=True, stale=False)) is True
-    assert market_data_bars_live(_health(connected=True, stale=True)) is False
-    assert market_data_bars_live(_health(connected=False, stale=False)) is False
-    assert market_data_bars_live(None) is False
-
-
-def test_a_warming_feed_still_refuses_every_order_gate() -> None:
     """A warming line may start a run (Deploy), never send an order: both order gates read it as not live."""
     warming = FeedHealth(
         connected=True, stale=True, warming=True, last_bar_ms=None, reason="warming",
         active_subscription_count=1, observed_at_ms=_NOW,
     )
 
-    assert market_data_bars_live(warming) is False
-    assert market_data_channel_health(warming, now_ms=_NOW).healthy is False
+    assert market_data_bars_live(_health(connected=True, stale=False)) is True, "a connected, unstale feed is live"
+    assert market_data_bars_live(_health(connected=True, stale=True)) is False, "a stale feed is not live"
+    assert market_data_bars_live(_health(connected=False, stale=False)) is False, "a disconnected feed is not live"
+    assert market_data_bars_live(None) is False, "no feed health at all is not live"
+    assert market_data_bars_live(warming) is False, "a warming feed is not live for the bars gate"
+    assert (
+        market_data_channel_health(warming, now_ms=_NOW).healthy is False
+    ), "a warming feed is not healthy for the channel-health gate"
 
 
 def test_a_closed_clock_needs_both_the_schedule_and_live_bars_to_admit_an_enter() -> None:

@@ -6,6 +6,7 @@ import datetime
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from app.research.signal.backtest import BacktestResult, run_backtest
 from app.research.signal.config import SignalConfig
@@ -99,22 +100,21 @@ class TestRollingZScore:
 
 
 class TestThresholdFilter:
-    def test_below_threshold_zeroed(self) -> None:
-        """Values below threshold should become 0."""
+    def test_below_threshold_zeroed_and_above_threshold_preserves_sign(self) -> None:
+        # Values below threshold should become 0.
         z = pd.Series([0.3, -0.3, 1.5, -2.0, 0.0])
         signal = apply_threshold_filter(z, threshold=1.0)
 
-        assert signal.iloc[0] == 0.0
-        assert signal.iloc[1] == 0.0
-        assert signal.iloc[4] == 0.0
+        assert signal.iloc[0] == 0.0, "0.3 is below the threshold and becomes 0"
+        assert signal.iloc[1] == 0.0, "-0.3 is below the threshold and becomes 0"
+        assert signal.iloc[4] == 0.0, "0.0 is below the threshold and stays 0"
 
-    def test_above_threshold_preserves_sign(self) -> None:
-        """Values above threshold should preserve sign."""
+        # Values above threshold should preserve sign.
         z = pd.Series([1.5, -2.0])
         signal = apply_threshold_filter(z, threshold=1.0)
 
-        assert signal.iloc[0] == 1.0
-        assert signal.iloc[1] == -1.0
+        assert signal.iloc[0] == 1.0, "1.5 is above the threshold and keeps its positive sign"
+        assert signal.iloc[1] == -1.0, "-2.0 is above the threshold and keeps its negative sign"
 
 
 class TestRegimeGate:
@@ -129,22 +129,14 @@ class TestRegimeGate:
         assert "vol_regime" in daily.columns
         assert "trend_regime" in daily.columns
 
-    def test_gate_returns_correct_length(self) -> None:
-        """Gate should have same length as input timestamps."""
+    def test_gate_has_the_input_length_and_binary_values(self) -> None:
         bars = _generate_multi_month_bars(n_months=3)
         df = pd.DataFrame(bars).sort_values("timestamp").reset_index(drop=True)
         gate = compute_bar_regime_gate(bars, df["timestamp"])
 
-        assert len(gate) == len(df)
-
-    def test_gate_values_binary(self) -> None:
-        """Gate values should be 0 or 1."""
-        bars = _generate_multi_month_bars(n_months=3)
-        df = pd.DataFrame(bars).sort_values("timestamp").reset_index(drop=True)
-        gate = compute_bar_regime_gate(bars, df["timestamp"])
-
+        assert len(gate) == len(df), "gate has the same length as the input timestamps"
         unique_vals = set(gate.unique())
-        assert unique_vals.issubset({0.0, 1.0})
+        assert unique_vals.issubset({0.0, 1.0}), "gate values are 0 or 1"
 
 
 class TestBacktest:
@@ -201,8 +193,7 @@ class TestWalkForward:
 
         assert len(result.windows) == 0
 
-    def test_walk_forward_produces_windows(self) -> None:
-        """Sufficient data should produce at least one window."""
+    def test_walk_forward_windows_do_not_overlap_and_aggregate_consistently(self) -> None:
         bars = _generate_multi_month_bars(n_months=8, bars_per_day=50)
         config = SignalConfig(
             walk_forward_train_months=3,
@@ -212,51 +203,19 @@ class TestWalkForward:
 
         result = run_walk_forward(bars, "momentum_5m", config)
 
-        assert len(result.windows) >= 1
-
-    def test_no_overlap(self) -> None:
-        """Test periods should not overlap."""
-        bars = _generate_multi_month_bars(n_months=8, bars_per_day=50)
-        config = SignalConfig(
-            walk_forward_train_months=3,
-            walk_forward_test_months=1,
-            min_bars_for_signal=100,
-        )
-
-        result = run_walk_forward(bars, "momentum_5m", config)
-
+        assert len(result.windows) >= 1, "sufficient data produces at least one window"
         if len(result.windows) >= 2:
             for i in range(len(result.windows) - 1):
-                assert result.windows[i].test_end <= result.windows[i + 1].test_start
-
-    def test_alpha_decay_slope_computed(self) -> None:
-        """OOS Sharpe trend slope should be a finite number."""
-        bars = _generate_multi_month_bars(n_months=8, bars_per_day=50)
-        config = SignalConfig(
-            walk_forward_train_months=3,
-            walk_forward_test_months=1,
-            min_bars_for_signal=100,
-        )
-
-        result = run_walk_forward(bars, "momentum_5m", config)
-
-        assert np.isfinite(result.oos_sharpe_trend_slope)
-
-    def test_aggregates_correct(self) -> None:
-        """Aggregated stats should be consistent with windows."""
-        bars = _generate_multi_month_bars(n_months=8, bars_per_day=50)
-        config = SignalConfig(
-            walk_forward_train_months=3,
-            walk_forward_test_months=1,
-            min_bars_for_signal=100,
-        )
-
-        result = run_walk_forward(bars, "momentum_5m", config)
-
+                assert result.windows[i].test_end <= result.windows[i + 1].test_start, (
+                    f"test periods of windows {i} and {i + 1} do not overlap"
+                )
+        assert np.isfinite(result.oos_sharpe_trend_slope), "OOS Sharpe trend slope is a finite number"
         if result.windows:
             sharpes = [w.oos_net_sharpe for w in result.windows]
-            assert abs(result.mean_oos_sharpe - np.mean(sharpes)) < 1e-8
-            assert result.total_oos_bars == sum(w.test_bars for w in result.windows)
+            assert abs(result.mean_oos_sharpe - np.mean(sharpes)) < 1e-8, "mean OOS Sharpe is consistent with the windows"
+            assert result.total_oos_bars == sum(w.test_bars for w in result.windows), (
+                "total OOS bars is consistent with the windows"
+            )
 
 
 class TestGraduation:
@@ -290,25 +249,23 @@ class TestGraduation:
         assert result.overall_grade == "A"
         assert result.overall_passed
 
-    def test_low_sharpe_fails(self) -> None:
-        """Low net Sharpe should fail the first criterion."""
-        grid = [BacktestResult(threshold=1.0, cost_bps=2.0, net_sharpe=0.3)]
+    @pytest.mark.parametrize(
+        ("result_kwargs", "criterion_index", "reason_fragment"),
+        [
+            # Low net Sharpe should fail the first criterion (Net Sharpe).
+            pytest.param({"net_sharpe": 0.3}, 0, "0.75", id="low_sharpe_fails"),
+            # High drawdown should fail the second criterion (Max Drawdown).
+            pytest.param({"net_sharpe": 1.0, "max_drawdown": 0.25}, 1, "15%", id="high_drawdown_fails"),
+        ],
+    )
+    def test_failing_criterion_names_its_reason(self, result_kwargs, criterion_index, reason_fragment) -> None:
+        grid = [BacktestResult(threshold=1.0, cost_bps=2.0, **result_kwargs)]
 
         result = evaluate_graduation(None, grid, {}, None, None)
 
-        criterion = result.criteria[0]  # Net Sharpe
-        assert not criterion.passed
-        assert "0.75" in criterion.failure_reason
-
-    def test_high_drawdown_fails(self) -> None:
-        """High drawdown should fail."""
-        grid = [BacktestResult(threshold=1.0, cost_bps=2.0, net_sharpe=1.0, max_drawdown=0.25)]
-
-        result = evaluate_graduation(None, grid, {}, None, None)
-
-        criterion = result.criteria[1]  # Max Drawdown
-        assert not criterion.passed
-        assert "15%" in criterion.failure_reason
+        criterion = result.criteria[criterion_index]
+        assert not criterion.passed, "the criterion fails"
+        assert reason_fragment in criterion.failure_reason, "the failure reason names the threshold"
 
     def test_failure_reasons_populated(self) -> None:
         """Failed criteria should have non-empty failure reasons."""

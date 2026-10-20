@@ -21,8 +21,8 @@ from app.engine.edge.features_realtime.iv30_constructor import (
 from app.engine.edge.vrp import compute_vrp, vrp_signal
 
 
-def test_strike_for_delta_50d_atm_at_zero_rates():
-    K = strike_for_delta_constant_vol(
+def test_strike_for_delta_50d_atm_at_zero_rates_and_25d_call_higher_than_atm():
+    atm = strike_for_delta_constant_vol(
         S=400.0,
         T=30.0 / 365.0,
         r=0.0,
@@ -33,18 +33,7 @@ def test_strike_for_delta_50d_atm_at_zero_rates():
     # 50Δ ATM strike at zero rates: K = S * exp(σ²T/2 - σ√T · N⁻¹(0.5))
     # N⁻¹(0.5) = 0; so K = S * exp(σ²T/2)
     expected = 400.0 * np.exp(0.5 * 0.20**2 * 30.0 / 365.0)
-    np.testing.assert_allclose(K, expected, rtol=1e-9)
-
-
-def test_strike_for_delta_25d_call_higher_than_atm():
-    atm = strike_for_delta_constant_vol(
-        S=400.0,
-        T=30.0 / 365.0,
-        r=0.0,
-        q=0.0,
-        sigma=0.20,
-        target_delta=0.50,
-    )
+    np.testing.assert_allclose(atm, expected, rtol=1e-9, err_msg="50-delta ATM strike at zero rates")
     otm_call = strike_for_delta_constant_vol(
         S=400.0,
         T=30.0 / 365.0,
@@ -53,7 +42,7 @@ def test_strike_for_delta_25d_call_higher_than_atm():
         sigma=0.20,
         target_delta=0.25,
     )
-    assert otm_call > atm  # 25Δ call is OTM
+    assert otm_call > atm, "25-delta call strike is higher than ATM (OTM)"
 
 
 def test_strike_for_delta_rejects_out_of_range():
@@ -109,13 +98,14 @@ def test_iv30_atm_50d_is_none_when_the_expiries_do_not_straddle_the_target(expir
     assert iv30_atm_50d(pd.Series(expiries), target_days=30) is None
 
 
-def test_iv30_atm_50d_returns_an_expiry_that_sits_exactly_on_the_target_with_none_below():
-    np.testing.assert_allclose(iv30_atm_50d(pd.Series({30: 0.25, 45: 0.28}), target_days=30), 0.25, atol=1e-12)
-
-
-def test_iv30_atm_50d_accepts_an_expiry_exactly_at_the_target():
-    iv30 = iv30_atm_50d(pd.Series({20: 0.20, 30: 0.25}), target_days=30)
-    assert iv30 is not None
+@pytest.mark.parametrize(
+    "expiries",
+    [((30, 0.25), (45, 0.28)), ((20, 0.20), (30, 0.25))],
+    ids=["expiry-exactly-on-the-target-with-none-below", "expiry-exactly-at-the-target"],
+)
+def test_iv30_atm_50d_returns_an_expiry_that_sits_exactly_on_the_target(expiries):
+    iv30 = iv30_atm_50d(pd.Series(dict(expiries)), target_days=30)
+    assert iv30 is not None, "an expiry sitting exactly on the target is returned, not None"
     np.testing.assert_allclose(iv30, 0.25, atol=1e-12)
 
 

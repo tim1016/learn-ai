@@ -22,9 +22,17 @@ from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 class TestInterpolateRate:
     """Test linear interpolation between Treasury tenors."""
 
-    def test_exact_match(self):
-        rates = {28: 0.04, 91: 0.045, 182: 0.047, 365: 0.05}
-        assert _interpolate_rate(rates, 91) == 0.045
+    @pytest.mark.parametrize(
+        ("rate_items", "tenor", "expected"),
+        [
+            pytest.param(((28, 0.04), (91, 0.045), (182, 0.047), (365, 0.05)), 91, 0.045, id="exact_match"),
+            pytest.param(((28, 0.04), (91, 0.045)), 7, 0.04, id="below_shortest_tenor"),
+            pytest.param(((28, 0.04), (91, 0.045), (365, 0.05)), 500, 0.05, id="above_longest_tenor"),
+            pytest.param((), 30, DEFAULT_RISK_FREE_RATE, id="empty_rates_returns_fallback"),
+        ],
+    )
+    def test_returns_exact_rate(self, rate_items, tenor, expected):
+        assert _interpolate_rate(dict(rate_items), tenor) == expected
 
     def test_interpolation_between_tenors(self):
         rates = {28: 0.04, 91: 0.045}
@@ -34,35 +42,31 @@ class TestInterpolateRate:
         expected = 0.04 + (32 / 63) * (0.045 - 0.04)
         assert abs(result - expected) < 1e-10
 
-    def test_below_shortest_tenor(self):
-        rates = {28: 0.04, 91: 0.045}
-        assert _interpolate_rate(rates, 7) == 0.04
-
-    def test_above_longest_tenor(self):
-        rates = {28: 0.04, 91: 0.045, 365: 0.05}
-        assert _interpolate_rate(rates, 500) == 0.05
-
-    def test_empty_rates_returns_fallback(self):
-        assert _interpolate_rate({}, 30) == DEFAULT_RISK_FREE_RATE
-
 
 class TestParseLatestRate:
     """Test parsing FRED observation values."""
 
-    def test_valid_rate(self):
-        obs = [{"value": "4.30"}]
-        assert _parse_latest_rate(obs) == pytest.approx(0.043)
+    @pytest.mark.parametrize(
+        ("values", "expected"),
+        [
+            pytest.param(("4.30",), 0.043, id="valid_rate"),
+            pytest.param((".", "4.50"), 0.045, id="skips_missing_values"),
+        ],
+    )
+    def test_parses_latest_rate(self, values, expected):
+        obs = [{"value": value} for value in values]
+        assert _parse_latest_rate(obs) == pytest.approx(expected)
 
-    def test_skips_missing_values(self):
-        obs = [{"value": "."}, {"value": "4.50"}]
-        assert _parse_latest_rate(obs) == pytest.approx(0.045)
-
-    def test_all_missing(self):
-        obs = [{"value": "."}, {"value": "."}]
+    @pytest.mark.parametrize(
+        "values",
+        [
+            pytest.param((".", "."), id="all_missing"),
+            pytest.param((), id="empty_list"),
+        ],
+    )
+    def test_returns_none_when_no_rate_is_present(self, values):
+        obs = [{"value": value} for value in values]
         assert _parse_latest_rate(obs) is None
-
-    def test_empty_list(self):
-        assert _parse_latest_rate([]) is None
 
 
 class TestGetRiskFreeRate:

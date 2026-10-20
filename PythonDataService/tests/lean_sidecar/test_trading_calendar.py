@@ -18,35 +18,30 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import pytest
 
 _ET = ZoneInfo("America/New_York")
 
 
 class TestIsTradingDay:
-    def test_weekday_is_trading_day(self) -> None:
+    @pytest.mark.parametrize(
+        ("session", "expected"),
+        [
+            # Tuesday, Jan 6 2026 — boring weekday, no holiday.
+            pytest.param(date(2026, 1, 6), True, id="weekday_is_trading_day"),
+            # Saturday + Sunday, Jan 10/11 2026.
+            pytest.param(date(2026, 1, 10), False, id="saturday_is_not_trading_day"),
+            pytest.param(date(2026, 1, 11), False, id="sunday_is_not_trading_day"),
+            # 2026-01-19 — MLK Day (third Monday of January 2026).
+            pytest.param(date(2026, 1, 19), False, id="federal_holiday_is_not_trading_day"),
+            # 2026-12-25 — Christmas, Friday.
+            pytest.param(date(2026, 12, 25), False, id="christmas_day_is_not_trading_day"),
+        ],
+    )
+    def test_is_trading_day(self, session: date, expected: bool) -> None:
         from app.lean_sidecar.trading_calendar import is_trading_day
 
-        # Tuesday, Jan 6 2026 — boring weekday, no holiday.
-        assert is_trading_day(date(2026, 1, 6)) is True
-
-    def test_weekend_is_not_trading_day(self) -> None:
-        from app.lean_sidecar.trading_calendar import is_trading_day
-
-        # Saturday + Sunday, Jan 10/11 2026.
-        assert is_trading_day(date(2026, 1, 10)) is False
-        assert is_trading_day(date(2026, 1, 11)) is False
-
-    def test_federal_holiday_is_not_trading_day(self) -> None:
-        from app.lean_sidecar.trading_calendar import is_trading_day
-
-        # 2026-01-19 — MLK Day (third Monday of January 2026).
-        assert is_trading_day(date(2026, 1, 19)) is False
-
-    def test_christmas_day_is_not_trading_day(self) -> None:
-        from app.lean_sidecar.trading_calendar import is_trading_day
-
-        # 2026-12-25 — Christmas, Friday.
-        assert is_trading_day(date(2026, 12, 25)) is False
+        assert is_trading_day(session) is expected
 
 
 class TestIsEarlyClose:
@@ -57,96 +52,71 @@ class TestIsEarlyClose:
     weekday with a session.
     """
 
-    def test_black_friday_is_early_close(self) -> None:
+    @pytest.mark.parametrize(
+        ("session", "expected"),
+        [
+            # 2026-11-27 — Black Friday (day after US Thanksgiving).
+            pytest.param(date(2026, 11, 27), True, id="black_friday_is_early_close"),
+            # 2026-12-24 — Christmas Eve, Thursday, NYSE early close.
+            pytest.param(date(2026, 12, 24), True, id="christmas_eve_2026_is_early_close"),
+            pytest.param(date(2026, 1, 6), False, id="normal_weekday_is_not_early_close"),
+            # Non-session days are categorically not early-close.
+            pytest.param(date(2026, 1, 10), False, id="weekend_is_not_early_close"),
+            # MLK Day is a full holiday, not a half-day.
+            pytest.param(date(2026, 1, 19), False, id="holiday_is_not_early_close"),
+        ],
+    )
+    def test_is_early_close(self, session: date, expected: bool) -> None:
         from app.lean_sidecar.trading_calendar import is_early_close
 
-        # 2026-11-27 — Black Friday (day after US Thanksgiving).
-        assert is_early_close(date(2026, 11, 27)) is True
-
-    def test_christmas_eve_2026_is_early_close(self) -> None:
-        from app.lean_sidecar.trading_calendar import is_early_close
-
-        # 2026-12-24 — Christmas Eve, Thursday, NYSE early close.
-        assert is_early_close(date(2026, 12, 24)) is True
-
-    def test_normal_weekday_is_not_early_close(self) -> None:
-        from app.lean_sidecar.trading_calendar import is_early_close
-
-        assert is_early_close(date(2026, 1, 6)) is False
-
-    def test_weekend_is_not_early_close(self) -> None:
-        from app.lean_sidecar.trading_calendar import is_early_close
-
-        # Non-session days are categorically not early-close.
-        assert is_early_close(date(2026, 1, 10)) is False
-
-    def test_holiday_is_not_early_close(self) -> None:
-        from app.lean_sidecar.trading_calendar import is_early_close
-
-        # MLK Day is a full holiday, not a half-day.
-        assert is_early_close(date(2026, 1, 19)) is False
+        assert is_early_close(session) is expected
 
 
 class TestNextTradingDay:
-    def test_next_trading_day_skips_weekend(self) -> None:
+    @pytest.mark.parametrize(
+        ("start", "expected"),
+        [
+            # Friday Jan 9 → Monday Jan 12 (skip Sat/Sun).
+            pytest.param(date(2026, 1, 9), date(2026, 1, 12), id="skips_weekend"),
+            # Friday Jan 16 → Tuesday Jan 20 (skip Sat/Sun + MLK Mon).
+            pytest.param(date(2026, 1, 16), date(2026, 1, 20), id="skips_holiday"),
+            # Tuesday Jan 6 → Wednesday Jan 7.
+            pytest.param(date(2026, 1, 6), date(2026, 1, 7), id="after_trading_day"),
+        ],
+    )
+    def test_next_trading_day(self, start: date, expected: date) -> None:
         from app.lean_sidecar.trading_calendar import next_trading_day
 
-        # Friday Jan 9 → Monday Jan 12 (skip Sat/Sun).
-        assert next_trading_day(date(2026, 1, 9)) == date(2026, 1, 12)
-
-    def test_next_trading_day_skips_holiday(self) -> None:
-        from app.lean_sidecar.trading_calendar import next_trading_day
-
-        # Friday Jan 16 → Tuesday Jan 20 (skip Sat/Sun + MLK Mon).
-        assert next_trading_day(date(2026, 1, 16)) == date(2026, 1, 20)
-
-    def test_next_trading_day_after_trading_day(self) -> None:
-        from app.lean_sidecar.trading_calendar import next_trading_day
-
-        # Tuesday Jan 6 → Wednesday Jan 7.
-        assert next_trading_day(date(2026, 1, 6)) == date(2026, 1, 7)
+        assert next_trading_day(start) == expected
 
 
 class TestSessionOpenMsUtc:
     """The 09:30-ET-to-UTC-ms conversion MUST go through the NY zone,
     never a fixed offset — DST days produce different UTC ms."""
 
-    def test_winter_session_open_uses_est(self) -> None:
+    @pytest.mark.parametrize(
+        ("session", "utc_hour"),
+        [
+            # 2026-01-06 09:30 ET = 14:30 UTC (EST, UTC-5).
+            pytest.param(date(2026, 1, 6), 14, id="winter_session_open_uses_est"),
+            # 2026-07-15 09:30 ET = 13:30 UTC (EDT, UTC-4).
+            pytest.param(date(2026, 7, 15), 13, id="summer_session_open_uses_edt"),
+            # DST start: EST→EDT happens 2am ET on 2026-03-08. The session
+            # open on Monday 2026-03-09 is 09:30 EDT = 13:30 UTC.
+            pytest.param(date(2026, 3, 9), 13, id="dst_start_2026_03_08"),
+            # DST end: EDT→EST happens 2am ET on 2026-11-01 (Sunday).
+            # Monday 2026-11-02 09:30 EST = 14:30 UTC.
+            pytest.param(date(2026, 11, 2), 14, id="dst_end_2026_11_02"),
+        ],
+    )
+    def test_session_open_goes_through_ny_zone(self, session: date, utc_hour: int) -> None:
         from app.lean_sidecar.trading_calendar import session_open_ms_utc
 
-        # 2026-01-06 09:30 ET = 14:30 UTC (EST, UTC-5).
-        expected = int(datetime(2026, 1, 6, 9, 30, tzinfo=_ET).timestamp() * 1000)
-        assert session_open_ms_utc(date(2026, 1, 6)) == expected
-        # Sanity: 09:30 EST = 14:30 UTC.
-        assert datetime(2026, 1, 6, 9, 30, tzinfo=_ET).astimezone(ZoneInfo("UTC")).hour == 14
-
-    def test_summer_session_open_uses_edt(self) -> None:
-        from app.lean_sidecar.trading_calendar import session_open_ms_utc
-
-        # 2026-07-15 09:30 ET = 13:30 UTC (EDT, UTC-4).
-        expected = int(datetime(2026, 7, 15, 9, 30, tzinfo=_ET).timestamp() * 1000)
-        assert session_open_ms_utc(date(2026, 7, 15)) == expected
-        assert datetime(2026, 7, 15, 9, 30, tzinfo=_ET).astimezone(ZoneInfo("UTC")).hour == 13
-
-    def test_dst_start_2026_03_08(self) -> None:
-        """DST start: EST→EDT happens 2am ET on 2026-03-08. The
-        session-open on Monday 2026-03-09 is 09:30 EDT = 13:30 UTC."""
-        from app.lean_sidecar.trading_calendar import session_open_ms_utc
-
-        # 2026-03-09 is Monday after DST began.
-        expected = int(datetime(2026, 3, 9, 9, 30, tzinfo=_ET).timestamp() * 1000)
-        assert session_open_ms_utc(date(2026, 3, 9)) == expected
-        # 09:30 EDT = 13:30 UTC.
-        assert datetime(2026, 3, 9, 9, 30, tzinfo=_ET).astimezone(ZoneInfo("UTC")).hour == 13
-
-    def test_dst_end_2026_11_02(self) -> None:
-        """DST end: EDT→EST happens 2am ET on 2026-11-01 (Sunday).
-        Monday 2026-11-02 09:30 EST = 14:30 UTC."""
-        from app.lean_sidecar.trading_calendar import session_open_ms_utc
-
-        expected = int(datetime(2026, 11, 2, 9, 30, tzinfo=_ET).timestamp() * 1000)
-        assert session_open_ms_utc(date(2026, 11, 2)) == expected
-        assert datetime(2026, 11, 2, 9, 30, tzinfo=_ET).astimezone(ZoneInfo("UTC")).hour == 14
+        open_et = datetime(session.year, session.month, session.day, 9, 30, tzinfo=_ET)
+        expected = int(open_et.timestamp() * 1000)
+        assert session_open_ms_utc(session) == expected, "session open is 09:30 ET resolved through the NY zone"
+        # Sanity: the 09:30 ET wall clock lands on the expected UTC hour.
+        assert open_et.astimezone(ZoneInfo("UTC")).hour == utc_hour, "09:30 ET maps to the expected UTC hour"
 
     def test_dst_transition_differs_by_one_hour(self) -> None:
         """The before-and-after DST flip session-opens must differ by

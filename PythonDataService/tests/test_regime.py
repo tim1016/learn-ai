@@ -68,26 +68,23 @@ def test_compute_daily_regime_labels_assigns_three_vol_buckets():
     assert vols == {"Low Vol", "Normal Vol", "High Vol"}
 
 
-def test_compute_daily_regime_labels_trending_up_detected():
-    # Steadily rising closes → MA slope positive → Trending Up
-    closes = [100.0 + i for i in range(60)]
+@pytest.mark.parametrize(
+    ("start", "step", "expected"),
+    [
+        # Steadily rising closes → MA slope positive → Trending Up
+        pytest.param(100.0, 1, "Trending Up", id="trending_up_detected"),
+        pytest.param(200.0, -1, "Trending Down", id="trending_down_detected"),
+    ],
+)
+def test_compute_daily_regime_labels_trend_detected(start: float, step: int, expected: str):
+    closes = [start + step * i for i in range(60)]
     bars = _synthetic_daily_bars(closes)
 
     daily = compute_daily_regime_labels(bars, ma_window=20, ma_slope_diff=5)
 
-    # After the MA window + slope lookback the label should converge to Trending Up.
+    # After the MA window + slope lookback the label should converge to the trend.
     tail_labels = daily["trend_regime"].iloc[-10:].unique().tolist()
-    assert tail_labels == ["Trending Up"], tail_labels
-
-
-def test_compute_daily_regime_labels_trending_down_detected():
-    closes = [200.0 - i for i in range(60)]
-    bars = _synthetic_daily_bars(closes)
-
-    daily = compute_daily_regime_labels(bars, ma_window=20, ma_slope_diff=5)
-
-    tail_labels = daily["trend_regime"].iloc[-10:].unique().tolist()
-    assert tail_labels == ["Trending Down"], tail_labels
+    assert tail_labels == [expected], tail_labels
 
 
 def test_compute_bar_regime_gate_shape_and_values():

@@ -66,56 +66,38 @@ describe('pickMonthlyExpiries', () => {
 });
 
 describe('pickStrikesAroundAtm', () => {
-  it('returns ±band strikes around the closest-to-ATM strike', () => {
-    const grid = [400, 405, 410, 415, 420, 425, 430, 435, 440];
-    expect(pickStrikesAroundAtm(grid, 420, 2)).toEqual([410, 415, 420, 425, 430]);
-  });
-
-  it('clips at the low edge of the grid', () => {
-    const grid = [400, 405, 410, 415, 420];
-    expect(pickStrikesAroundAtm(grid, 401, 3)).toEqual([400, 405, 410, 415]);
-  });
-
-  it('clips at the high edge of the grid', () => {
-    const grid = [400, 405, 410, 415, 420];
-    expect(pickStrikesAroundAtm(grid, 419, 3)).toEqual([405, 410, 415, 420]);
-  });
-
-  it('handles ATM exactly between two strikes by snapping to the nearer of the two (ties = lower)', () => {
-    const grid = [400, 405, 410, 415, 420];
+  it.each([
+    ['returns ±band strikes around the closest-to-ATM strike', [400, 405, 410, 415, 420, 425, 430, 435, 440], 420, 2, [410, 415, 420, 425, 430]],
+    ['clips at the low edge of the grid', [400, 405, 410, 415, 420], 401, 3, [400, 405, 410, 415]],
+    ['clips at the high edge of the grid', [400, 405, 410, 415, 420], 419, 3, [405, 410, 415, 420]],
     // 407.5 is equidistant from 405 and 410; first-found wins → 405.
-    expect(pickStrikesAroundAtm(grid, 407.5, 1)).toEqual([400, 405, 410]);
-  });
-
-  it('returns an empty list when given no strikes', () => {
-    expect(pickStrikesAroundAtm([], 420, 5)).toEqual([]);
+    ['handles ATM exactly between two strikes by snapping to the nearer of the two (ties = lower)', [400, 405, 410, 415, 420], 407.5, 1, [400, 405, 410]],
+    ['returns an empty list when given no strikes', [], 420, 5, []],
+  ])('%s', (_name, grid, atm, band, expected) => {
+    expect(pickStrikesAroundAtm(grid, atm, band)).toEqual(expected);
   });
 });
 
 describe('intersectAll', () => {
-  it('returns the strikes present in every list', () => {
-    const result = intersectAll([
+  it.each([
+    ['the strikes present in every list', [
       [400, 405, 410, 415],
       [405, 410, 415, 420],
       [400, 410, 415],
-    ]).sort((a, b) => a - b);
-    expect(result).toEqual([410, 415]);
+    ], [410, 415]],
+    ['the single list unchanged when given one input', [[400, 405, 410]], [400, 405, 410]],
+  ])('returns %s', (_name, lists, expected) => {
+    const result = intersectAll(lists).sort((a, b) => a - b);
+    expect(result).toEqual(expected);
   });
 
-  it('returns an empty list when no common strike exists', () => {
-    const result = intersectAll([
+  it.each([
+    ['no common strike exists', [
       [400, 405],
       [410, 415],
-    ]);
-    expect(result).toEqual([]);
-  });
-
-  it('returns the single list unchanged when given one input', () => {
-    const result = intersectAll([[400, 405, 410]]).sort((a, b) => a - b);
-    expect(result).toEqual([400, 405, 410]);
-  });
-
-  it('returns an empty list when given no inputs', () => {
-    expect(intersectAll([])).toEqual([]);
+    ]],
+    ['given no inputs', []],
+  ])('returns an empty list when %s', (_name, lists) => {
+    expect(intersectAll(lists)).toEqual([]);
   });
 });

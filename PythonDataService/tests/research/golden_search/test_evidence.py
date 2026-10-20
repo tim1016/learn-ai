@@ -60,28 +60,25 @@ def _decl():  # type: ignore[no-untyped-def]
     return declaration(knob("x", high="10"), knob("y", high="10"), constraints=(KnobConstraint("x", "<", "y", "x must be below y"),))
 
 
-def test_neighborhood_reports_each_side() -> None:
+def test_neighborhood_reports_each_side_and_distinguishes_failed_and_untested_neighbors() -> None:
     decl = _decl()
     center = synthetic_point({"x": 4, "y": 5})
     below, above = neighbor_probes(decl, center, "x", canonicalize=synthetic_point)
-    assert below.point_hash is not None
+    assert below.point_hash is not None, "the probe below the center is testable and carries a hash"
 
     hood = neighborhood("x", 4.0, metrics(1.2), (below, above), {below.point_hash: metrics(0.4, net=-250.0)})
 
-    assert [(row.value, row.status) for row in hood.rows] == [(3.0, "tested"), (4.0, "center"), (5.0, "invalid")]
-    assert hood.rows[2].reason == "x must be below y"
-    assert [row.value for row in hood.losing_neighbors] == [3.0]
+    assert [(row.value, row.status) for row in hood.rows] == [(3.0, "tested"), (4.0, "center"), (5.0, "invalid")], "each side reports its status"
+    assert hood.rows[2].reason == "x must be below y", "the invalid side names the constraint it breaks"
+    assert [row.value for row in hood.losing_neighbors] == [3.0], "a tested neighbor that loses money is named"
 
+    failed_below, untested_above = neighbor_probes(decl, synthetic_point({"x": 2, "y": 9}), "x", canonicalize=synthetic_point)
+    assert failed_below.point_hash is not None, "the probe below the second center is testable and carries a hash"
 
-def test_neighborhood_distinguishes_failed_and_untested_neighbors() -> None:
-    decl = _decl()
-    below, above = neighbor_probes(decl, synthetic_point({"x": 2, "y": 9}), "x", canonicalize=synthetic_point)
-    assert below.point_hash is not None
+    failed_hood = neighborhood("x", 2.0, metrics(1.0), (failed_below, untested_above), {failed_below.point_hash: metrics(None, status="failed")})
 
-    hood = neighborhood("x", 2.0, metrics(1.0), (below, above), {below.point_hash: metrics(None, status="failed")})
-
-    assert [row.status for row in hood.rows] == ["failed", "center", "untested"]
-    assert hood.losing_neighbors == ()
+    assert [row.status for row in failed_hood.rows] == ["failed", "center", "untested"], "a failed neighbor and an untested neighbor read differently"
+    assert failed_hood.losing_neighbors == (), "a failed neighbor is not a losing one"
 
 
 def test_pair_map_carries_every_cells_status_and_metrics() -> None:

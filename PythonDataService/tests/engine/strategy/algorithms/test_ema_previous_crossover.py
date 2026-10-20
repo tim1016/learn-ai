@@ -1,4 +1,4 @@
-"""The EMA Previous Crossover entry rule, one branch per test (#2902).
+"""The EMA Previous Crossover entry rule, one branch per test case (#2902).
 
 A cross up is remembered by its bar's close time while fast stays above slow.
 While flat, a bar enters when it closes at most ``cross_max_age_bars``
@@ -62,6 +62,7 @@ def above(gap: str, rsi: str | None = "60") -> Reading:
 
 
 GOOD = above("0.25")  # clears the default 0.20 gap and the 50-70 band
+TOUCHING: Reading = (_SLOW, _SLOW, Decimal("60"))  # fast touches slow
 
 
 @dataclass
@@ -131,68 +132,186 @@ def _drive(
     return run
 
 
-def test_cross_bar_that_already_clears_the_gates_enters() -> None:
-    assert _drive([below(), GOOD]).staged == [None, ENTER]
-
-
-def test_bar_after_the_cross_enters_once_the_gap_has_widened() -> None:
-    run = _drive([below(), above("0.05"), above("0.25")])
-
-    assert run.staged == [None, None, ENTER]
-    assert run.cross_states() == ["not_above", "crossed_up", "recent"]
-
-
-def test_bar_after_the_cross_enters_once_rsi_is_back_inside_the_band() -> None:
-    run = _drive([below(), above("0.25", "75"), above("0.25", "65")])
-
-    assert run.staged == [None, None, ENTER]
-
-
-def test_cross_older_than_the_limit_does_not_enter() -> None:
-    """The owner's rule: the cross bar closed at most 15 minutes before the evaluated bar."""
-    run = _drive([below(), above("0.05"), above("0.15"), GOOD, GOOD])
-
-    assert run.staged == [None, None, None, None, None]
-    assert run.cross_states() == ["not_above", "crossed_up", "recent", "stale", "stale"]
-
-
-def test_gap_and_rsi_must_pass_on_the_same_bar() -> None:
-    """The gap passes on the cross bar and RSI on the next, but no bar has both."""
-    run = _drive([below(), above("0.25", "72"), above("0.18", "65")])
-
-    assert run.staged == [None, None, None]
-
-
-@pytest.mark.parametrize("limit", [2, 3], ids=["at-the-limit", "inside-the-limit"])
-def test_cross_age_limit_is_inclusive_and_configurable(limit: int) -> None:
-    run = _drive([below(), above("0.05"), above("0.15"), GOOD, GOOD], cross_max_age_bars=limit)
-
-    assert run.staged == [None, None, None, ENTER, None]
-
-
-def test_cross_age_limit_of_zero_allows_the_cross_bar_only() -> None:
-    assert _drive([below(), GOOD], cross_max_age_bars=0).staged == [None, ENTER]
-    assert _drive([below(), above("0.05"), GOOD], cross_max_age_bars=0).staged == [None, None, None]
+@pytest.mark.parametrize(
+    ("tape", "options", "expected"),
+    [
+        pytest.param((below(), GOOD), {}, (None, ENTER), id="cross-bar-that-already-clears-the-gates-enters"),
+        pytest.param(
+            (below(), above("0.25", "75"), above("0.25", "65")),
+            {},
+            (None, None, ENTER),
+            id="bar-after-the-cross-enters-once-rsi-is-back-inside-the-band",
+        ),
+        # The gap passes on the cross bar and RSI on the next, but no bar has both.
+        pytest.param(
+            (below(), above("0.25", "72"), above("0.18", "65")),
+            {},
+            (None, None, None),
+            id="gap-and-rsi-must-pass-on-the-same-bar",
+        ),
+        pytest.param(
+            (below(), above("0.05"), above("0.15"), GOOD, GOOD),
+            {"cross_max_age_bars": 2},
+            (None, None, None, ENTER, None),
+            id="cross-age-limit-is-inclusive-and-configurable-at-the-limit",
+        ),
+        pytest.param(
+            (below(), above("0.05"), above("0.15"), GOOD, GOOD),
+            {"cross_max_age_bars": 3},
+            (None, None, None, ENTER, None),
+            id="cross-age-limit-is-inclusive-and-configurable-inside-the-limit",
+        ),
+        pytest.param(
+            (below(), GOOD),
+            {"cross_max_age_bars": 0},
+            (None, ENTER),
+            id="cross-age-limit-of-zero-allows-the-cross-bar-only-the-cross-bar",
+        ),
+        pytest.param(
+            (below(), above("0.05"), GOOD),
+            {"cross_max_age_bars": 0},
+            (None, None, None),
+            id="cross-age-limit-of-zero-allows-the-cross-bar-only-not-the-bar-after",
+        ),
+        pytest.param(
+            (below(), above("0.20", "70")), {}, (None, ENTER), id="gap-floors-and-rsi-band-are-inclusive-gap-floor-and-rsi-upper"
+        ),
+        pytest.param((below(), above("0.20", "50")), {}, (None, ENTER), id="gap-floors-and-rsi-band-are-inclusive-rsi-lower"),
+        pytest.param(
+            (below(), above("0.20")),
+            {"gap": 0.0, "gap_bps": 20.0},
+            (None, ENTER),
+            id="gap-floors-and-rsi-band-are-inclusive-normalized-gap-floor",
+        ),
+        # 20 bps of a 100 slow EMA is 0.20.
+        pytest.param(
+            (below(), above("0.10"), above("0.25")),
+            {"gap": 0.0, "gap_bps": 20.0},
+            (None, None, ENTER),
+            id="normalized-gap-floor-applies-on-the-entry-bar",
+        ),
+        # With no gap floor, only the ended cross keeps the touching bar out.
+        pytest.param(
+            (below(), above("0.05", "75"), TOUCHING),
+            {"gap": 0.0},
+            (None, None, None),
+            id="fast-touching-slow-ends-a-cross-that-was-still-recent",
+        ),
+        pytest.param(
+            (below(None), above("0.25", None), above("0.25", None), GOOD),
+            {},
+            (None, None, None, None),
+            id="cross-seen-while-rsi-warms-up-is-stale-if-rsi-takes-too-long",
+        ),
+    ],
+)
+def test_entry_rule_stages_the_expected_intents(
+    tape: tuple[Reading, ...], options: dict[str, object], expected: tuple[SignalIntentKind | None, ...]
+) -> None:
+    assert _drive(list(tape), **options).staged == list(expected), "staged intents, bar by bar"
 
 
 @pytest.mark.parametrize(
-    ("reading", "params"),
+    ("tape", "options", "expected"),
     [
-        (above("0.20", "70"), {}),
-        (above("0.20", "50"), {}),
-        (above("0.20"), {"gap": 0.0, "gap_bps": 20.0}),
+        # Only a limit longer than the hold leaves a cross recent once its trade is over.
+        pytest.param(
+            (below(), GOOD, GOOD, GOOD),
+            {"hold_bars": 1, "cross_max_age_bars": 2},
+            (None, ENTER, EXIT, ENTER),
+            id="cross-still-recent-after-the-exit-enters-again",
+        ),
+        pytest.param(
+            (below(), GOOD, below(), below(), below()),
+            {"hold_bars": 3},
+            (None, ENTER, None, None, EXIT),
+            id="reversed-cross-during-the-hold-does-not-end-the-trade",
+        ),
+        pytest.param(
+            (below(), GOOD, GOOD, GOOD, TOUCHING, GOOD),
+            {"hold_bars": 1},
+            (None, ENTER, EXIT, None, None, ENTER),
+            id="fast-touching-slow-ends-the-cross-and-the-next-cross-enters",
+        ),
+        pytest.param(
+            (below(), GOOD, below(), GOOD, GOOD, GOOD, GOOD),
+            {"hold_bars": 4},
+            (None, ENTER, None, None, None, EXIT, None),
+            id="cross-during-a-hold-is-stale-by-the-time-the-trade-exits",
+        ),
+        # Nothing is remembered: the cross bar passed the gates while the trade was ending, and the bar after is judged on its own.
+        pytest.param(
+            (below(), GOOD, below(), below(), GOOD, GOOD),
+            {"hold_bars": 3},
+            (None, ENTER, None, None, EXIT, ENTER),
+            id="cross-on-the-exit-bar-enters-on-the-next-bar",
+        ),
+        pytest.param(
+            (below(), GOOD, GOOD, GOOD),
+            {"discard": frozenset({1, 2})},
+            (None, ENTER, ENTER, None),
+            id="discarded-entry-is-proposed-again-while-the-cross-is-recent",
+        ),
+        pytest.param(
+            (below(), GOOD, GOOD),
+            {"observe_only": frozenset({1})},
+            (None, ENTER, ENTER),
+            id="observe-only-entry-bar-leaves-the-next-bar-free-to-enter",
+        ),
+        pytest.param(
+            (below(), GOOD, GOOD, GOOD),
+            {"hold_bars": 1, "discard": frozenset({2})},
+            (None, ENTER, EXIT, EXIT),
+            id="discarded-exit-is-proposed-again-on-the-next-bar",
+        ),
+        # A bot starts flat: the bar after the cross is judged on its own, whatever the replay did on the cross bar.
+        pytest.param(
+            (below(), GOOD, GOOD, GOOD),
+            {"force_flat_before": frozenset({2})},
+            (None, ENTER, ENTER, None),
+            id="force-flat-drops-the-position-and-a-still-recent-cross-enters",
+        ),
     ],
-    ids=["gap-floor-and-rsi-upper", "rsi-lower", "normalized-gap-floor"],
 )
-def test_gap_floors_and_rsi_band_are_inclusive(reading: Reading, params: dict[str, float]) -> None:
-    assert _drive([below(), reading], **params).staged == [None, ENTER]
+def test_position_lifecycle_stages_the_expected_intents(
+    tape: tuple[Reading, ...], options: dict[str, object], expected: tuple[SignalIntentKind | None, ...]
+) -> None:
+    assert _drive(list(tape), **options).staged == list(expected), "staged intents, bar by bar"
 
 
-def test_normalized_gap_floor_applies_on_the_entry_bar() -> None:
-    # 20 bps of a 100 slow EMA is 0.20.
-    run = _drive([below(), above("0.10"), above("0.25")], gap=0.0, gap_bps=20.0)
+@pytest.mark.parametrize(
+    ("tape", "expected_staged", "expected_cross_states"),
+    [
+        pytest.param(
+            (below(), above("0.05"), above("0.25")),
+            (None, None, ENTER),
+            ("not_above", "crossed_up", "recent"),
+            id="bar-after-the-cross-enters-once-the-gap-has-widened",
+        ),
+        # The owner's rule: the cross bar closed at most 15 minutes before the evaluated bar.
+        pytest.param(
+            (below(), above("0.05"), above("0.15"), GOOD, GOOD),
+            (None, None, None, None, None),
+            ("not_above", "crossed_up", "recent", "stale", "stale"),
+            id="cross-older-than-the-limit-does-not-enter",
+        ),
+        pytest.param(
+            (GOOD, GOOD, GOOD),
+            (None, None, None),
+            ("unseen", "unseen", "unseen"),
+            id="fast-already-above-slow-when-first-known-is-never-an-entry",
+        ),
+    ],
+)
+def test_entry_rule_reports_the_cross_state_it_staged_on(
+    tape: tuple[Reading, ...],
+    expected_staged: tuple[SignalIntentKind | None, ...],
+    expected_cross_states: tuple[str, ...],
+) -> None:
+    run = _drive(list(tape))
 
-    assert run.staged == [None, None, ENTER]
+    assert run.staged == list(expected_staged), "staged intents, bar by bar"
+    assert run.cross_states() == list(expected_cross_states), "cross state read by each ready bar"
 
 
 def test_position_is_held_for_exactly_hold_bars_and_a_stale_cross_gives_no_second_entry() -> None:
@@ -202,90 +321,11 @@ def test_position_is_held_for_exactly_hold_bars_and_a_stale_cross_gives_no_secon
     assert run.cross_states()[-2:] == ["stale", "stale"]
 
 
-def test_cross_still_recent_after_the_exit_enters_again() -> None:
-    """Only a limit longer than the hold leaves a cross recent once its trade is over."""
-    run = _drive([below(), GOOD, GOOD, GOOD], hold_bars=1, cross_max_age_bars=2)
-
-    assert run.staged == [None, ENTER, EXIT, ENTER]
-
-
-def test_reversed_cross_during_the_hold_does_not_end_the_trade() -> None:
-    run = _drive([below(), GOOD, below(), below(), below()], hold_bars=3)
-
-    assert run.staged == [None, ENTER, None, None, EXIT]
-
-
-def test_fast_touching_slow_ends_the_cross_and_the_next_cross_enters() -> None:
-    touching: Reading = (_SLOW, _SLOW, Decimal("60"))
-    run = _drive([below(), GOOD, GOOD, GOOD, touching, GOOD], hold_bars=1)
-
-    assert run.staged == [None, ENTER, EXIT, None, None, ENTER]
-
-
-def test_fast_touching_slow_ends_a_cross_that_was_still_recent() -> None:
-    """With no gap floor, only the ended cross keeps the touching bar out."""
-    touching: Reading = (_SLOW, _SLOW, Decimal("60"))
-    run = _drive([below(), above("0.05", "75"), touching], gap=0.0)
-
-    assert run.staged == [None, None, None]
-
-
-def test_cross_during_a_hold_is_stale_by_the_time_the_trade_exits() -> None:
-    run = _drive([below(), GOOD, below(), GOOD, GOOD, GOOD, GOOD], hold_bars=4)
-
-    assert run.staged == [None, ENTER, None, None, None, EXIT, None]
-
-
-def test_cross_on_the_exit_bar_enters_on_the_next_bar() -> None:
-    """Nothing is remembered: the cross bar passed the gates while the trade was ending, and the bar after is judged on its own."""
-    run = _drive([below(), GOOD, below(), below(), GOOD, GOOD], hold_bars=3)
-
-    assert run.staged == [None, ENTER, None, None, EXIT, ENTER]
-
-
-def test_discarded_entry_is_proposed_again_while_the_cross_is_recent() -> None:
-    run = _drive([below(), GOOD, GOOD, GOOD], discard=frozenset({1, 2}))
-
-    assert run.staged == [None, ENTER, ENTER, None]
-
-
-def test_observe_only_entry_bar_leaves_the_next_bar_free_to_enter() -> None:
-    run = _drive([below(), GOOD, GOOD], observe_only=frozenset({1}))
-
-    assert run.staged == [None, ENTER, ENTER]
-
-
-def test_discarded_exit_is_proposed_again_on_the_next_bar() -> None:
-    run = _drive([below(), GOOD, GOOD, GOOD], hold_bars=1, discard=frozenset({2}))
-
-    assert run.staged == [None, ENTER, EXIT, EXIT]
-
-
 def test_cross_seen_while_rsi_warms_up_enters_once_rsi_is_ready() -> None:
     run = _drive([below(None), above("0.25", None), GOOD])
 
     assert [d.ready for d in run.decisions] == [False, False, True]
     assert run.staged == [None, None, ENTER]
-
-
-def test_cross_seen_while_rsi_warms_up_is_stale_if_rsi_takes_too_long() -> None:
-    run = _drive([below(None), above("0.25", None), above("0.25", None), GOOD])
-
-    assert run.staged == [None, None, None, None]
-
-
-def test_fast_already_above_slow_when_first_known_is_never_an_entry() -> None:
-    run = _drive([GOOD, GOOD, GOOD])
-
-    assert run.staged == [None, None, None]
-    assert run.cross_states() == ["unseen", "unseen", "unseen"]
-
-
-def test_force_flat_drops_the_position_and_a_still_recent_cross_enters() -> None:
-    """A bot starts flat: the bar after the cross is judged on its own, whatever the replay did on the cross bar."""
-    run = _drive([below(), GOOD, GOOD, GOOD], force_flat_before=frozenset({2}))
-
-    assert run.staged == [None, ENTER, ENTER, None]
 
 
 @pytest.mark.parametrize("limit", [1, 8], ids=["default", "longest"])

@@ -59,7 +59,7 @@ class TestBuildCommand:
             f"{ws.data_dir}:/lean-run/data:ro",
         ]
 
-    def test_contains_mandatory_security_flags(
+    def test_default_command_security_flags_and_cidfile(
         self,
         tmp_artifacts_root: Path,
         _allow_dummy_digest: None,
@@ -69,13 +69,13 @@ class TestBuildCommand:
         plan = build_command(ws, DUMMY_DIGEST)
         argv = plan.argv
 
-        assert "run" in argv
-        assert "--rm" in argv
-        assert "--network=none" in argv
-        assert "--security-opt=no-new-privileges" in argv
-        assert "--cap-drop=ALL" in argv
+        assert "run" in argv, "argv runs the container"
+        assert "--rm" in argv, "mandatory flag --rm"
+        assert "--network=none" in argv, "mandatory flag --network=none"
+        assert "--security-opt=no-new-privileges" in argv, "mandatory flag --security-opt=no-new-privileges"
+        assert "--cap-drop=ALL" in argv, "mandatory flag --cap-drop=ALL"
         # Phase 1c — promoted to mandatory after E2E proved viable.
-        assert "--read-only" in argv
+        assert "--read-only" in argv, "mandatory flag --read-only (Phase 1c)"
         # ``--user`` is dynamic per host (matches host UID on Linux,
         # falls back to ``10001:10001`` on Windows where ``os.getuid``
         # is unavailable). Pattern-match rather than literal-match.
@@ -84,35 +84,26 @@ class TestBuildCommand:
         uid_str, gid_str = user_args[0].removeprefix("--user=").split(":", 1)
         assert int(uid_str) > 0, f"container UID must not be root, got {uid_str}"
         assert int(gid_str) > 0, f"container GID must not be root, got {gid_str}"
-        assert any(a.startswith("--cpus=") for a in argv)
-        assert any(a.startswith("--memory=") for a in argv)
-        assert any(a.startswith("--pids-limit=") for a in argv)
+        assert any(a.startswith("--cpus=") for a in argv), "mandatory --cpus= limit"
+        assert any(a.startswith("--memory=") for a in argv), "mandatory --memory= limit"
+        assert any(a.startswith("--pids-limit=") for a in argv), "mandatory --pids-limit= limit"
         # The LEAN launcher arg ``--config <workspace-path>`` is always
         # appended after the image; without it LEAN runs the image-baked
         # default config silently.
-        assert "--config" in argv
-        assert "/lean-run/project/config.json" in argv
+        assert "--config" in argv, "LEAN launcher arg --config is appended after the image"
+        assert "/lean-run/project/config.json" in argv, "--config points at the workspace project config"
         # Workspace mount is exactly the workspace directory.
         mount_arg_idx = argv.index("-v")
         mount_spec = argv[mount_arg_idx + 1]
-        assert mount_spec.startswith(str(ws.workspace_dir))
-        assert mount_spec.endswith(f":{CONTAINER_WORKSPACE_MOUNT}:rw")
-
-    def test_argv_contains_cidfile_flag_pointing_into_workspace(
-        self,
-        tmp_artifacts_root: Path,
-        _allow_dummy_digest: None,
-    ) -> None:
-        """Review-fix (P1.1): the argv must include ``--cidfile=<path>``
-        so podman writes the container id to a host-side file on
-        creation, and ``execute`` can issue ``podman stop`` against it
-        on wall-clock timeout. Without the cidfile, the
-        ``subprocess.run(..., timeout=...)`` outer kill switch only
-        kills the podman CLIENT — the LEAN container keeps running."""
-        ws = resolve_workspace("run_cid", tmp_artifacts_root)
-        ws.ensure_layout()
-        plan = build_command(ws, DUMMY_DIGEST)
-        cidfile_args = [a for a in plan.argv if a.startswith("--cidfile=")]
+        assert mount_spec.startswith(str(ws.workspace_dir)), "workspace mount starts at the workspace directory"
+        assert mount_spec.endswith(f":{CONTAINER_WORKSPACE_MOUNT}:rw"), "workspace mount is read-write at the container mount"
+        # Review-fix (P1.1): the argv must include ``--cidfile=<path>`` so
+        # podman writes the container id to a host-side file on creation, and
+        # ``execute`` can issue ``podman stop`` against it on wall-clock
+        # timeout. Without the cidfile, the ``subprocess.run(..., timeout=...)``
+        # outer kill switch only kills the podman CLIENT — the LEAN container
+        # keeps running.
+        cidfile_args = [a for a in argv if a.startswith("--cidfile=")]
         assert len(cidfile_args) == 1, f"expected exactly one --cidfile= flag, got {cidfile_args}"
         cidfile_path_str = cidfile_args[0].removeprefix("--cidfile=")
         # Lives under the workspace's launcher_dir alongside
@@ -123,7 +114,7 @@ class TestBuildCommand:
         )
         # ``RunnerPlan.cidfile_path`` carries the same path so
         # ``execute`` can read it without re-parsing argv.
-        assert str(plan.cidfile_path) == cidfile_path_str
+        assert str(plan.cidfile_path) == cidfile_path_str, "RunnerPlan.cidfile_path carries the --cidfile= path"
 
     def test_build_command_clears_stale_cidfile(
         self,
@@ -142,26 +133,26 @@ class TestBuildCommand:
         plan = build_command(ws, DUMMY_DIGEST)
         assert not plan.cidfile_path.exists(), "build_command should have removed the stale cidfile"
 
-    def test_refuses_unpinned_image(
+    @pytest.mark.parametrize(
+        "image",
+        [
+            pytest.param("quantconnect/lean:latest", id="unpinned_image"),
+            pytest.param(
+                "sha256:dead000000000000000000000000000000000000000000000000000000000000",
+                id="unknown_digest",
+            ),
+        ],
+    )
+    def test_refuses_image_not_on_allow_list(
         self,
         tmp_artifacts_root: Path,
         _allow_dummy_digest: None,
+        image: str,
     ) -> None:
         ws = resolve_workspace("run_x2", tmp_artifacts_root)
         ws.ensure_layout()
         with pytest.raises(RunnerConfigurationError):
-            build_command(ws, "quantconnect/lean:latest")
-
-    def test_refuses_unknown_digest(
-        self,
-        tmp_artifacts_root: Path,
-        _allow_dummy_digest: None,
-    ) -> None:
-        ws = resolve_workspace("run_x3", tmp_artifacts_root)
-        ws.ensure_layout()
-        other = "sha256:dead000000000000000000000000000000000000000000000000000000000000"
-        with pytest.raises(RunnerConfigurationError):
-            build_command(ws, other)
+            build_command(ws, image)
 
     def test_refuses_missing_workspace(
         self,
@@ -187,33 +178,80 @@ class TestBuildCommand:
             build_command(ws, DUMMY_DIGEST)
 
     @pytest.mark.parametrize(
-        "bad_token",
+        ("hardening_flags", "match"),
         [
-            "--privileged",
-            "--cap-add=SYS_ADMIN",
-            "--security-opt=seccomp=unconfined",
-            "--network=host",
-            "--user=0:0",
-            "--volume=/etc:/host-etc",
+            # ``--tmpfs`` / ``--env`` on their own must fail before podman sees
+            # them: the next token would be the image reference, which podman
+            # would treat as the tmpfs / env spec — a confusing failure that's
+            # hard to diagnose from outside.
+            pytest.param(("--tmpfs",), "requires a value", id="tmpfs_without_spec"),
+            pytest.param(("--env",), "requires a value", id="env_without_value"),
+            # ``--tmpfs`` / ``--env`` must be followed by a value token, not
+            # another flag. The other-flag check has to fire AFTER allow-list
+            # membership; using a token CodeQL-allow-listed but flag-shaped
+            # (``--tmpfs --tmpfs``) exercises the structural validator rather
+            # than the allow-list.
+            pytest.param(("--tmpfs", "--tmpfs"), "expects a value", id="tmpfs_followed_by_another_flag"),
+            pytest.param(("--env", "--env"), "expects a value", id="env_followed_by_another_flag"),
+            # Hardening flags from a caller can never widen the sandbox. The
+            # launcher boundary forwards ``hardening_flags`` straight into the
+            # ``podman run`` argv; a caller passing ``--privileged`` or
+            # anything similarly permissive must be rejected with a clear
+            # error before any container is spawned.
+            pytest.param(("--privileged",), "not on the allow-list", id="sandbox_widening_privileged"),
+            pytest.param(("--cap-add=SYS_ADMIN",), "not on the allow-list", id="sandbox_widening_cap_add_sys_admin"),
+            pytest.param(
+                ("--security-opt=seccomp=unconfined",),
+                "not on the allow-list",
+                id="sandbox_widening_seccomp_unconfined",
+            ),
+            pytest.param(("--network=host",), "not on the allow-list", id="sandbox_widening_network_host"),
+            pytest.param(("--user=0:0",), "not on the allow-list", id="sandbox_widening_user_root"),
+            pytest.param(("--volume=/etc:/host-etc",), "not on the allow-list", id="sandbox_widening_volume_host_etc"),
+            # ``--env`` is more powerful than ``--tmpfs`` (it can set any
+            # container-side env var). Safety is preserved by pinning literal
+            # KEY=VAL strings in the allow-list, NOT patterns. Other DOTNET_*
+            # knobs, generic env smuggling and the right key with the wrong
+            # value must all be rejected before podman runs.
+            pytest.param(
+                ("--env", "DOTNET_EnableDiagnostics=1"),
+                "not on the allow-list",
+                id="env_unpinned_dotnet_enable_diagnostics",
+            ),
+            pytest.param(
+                ("--env", "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0"),
+                "not on the allow-list",
+                id="env_unpinned_dotnet_globalization_invariant",
+            ),
+            pytest.param(
+                ("--env", "LD_PRELOAD=/tmp/evil.so"),
+                "not on the allow-list",
+                id="env_smuggled_ld_preload",
+            ),
+            pytest.param(("--env", "PATH=/tmp"), "not on the allow-list", id="env_smuggled_path"),
+            pytest.param(
+                ("--env", "DOTNET_ReadyToRun=1"),
+                "not on the allow-list",
+                id="env_right_key_wrong_value_ready_to_run",
+            ),
+            pytest.param(
+                ("--env", "DOTNET_TieredCompilation=1"),
+                "not on the allow-list",
+                id="env_right_key_wrong_value_tiered_compilation",
+            ),
         ],
     )
-    def test_refuses_sandbox_widening_hardening_flag(
+    def test_refuses_invalid_hardening_flags(
         self,
         tmp_artifacts_root: Path,
         _allow_dummy_digest: None,
-        bad_token: str,
+        hardening_flags: tuple[str, ...],
+        match: str,
     ) -> None:
-        """Hardening flags from a caller can never widen the sandbox.
-
-        The launcher boundary forwards ``hardening_flags`` straight into
-        the ``podman run`` argv; a caller passing ``--privileged`` or
-        anything similarly permissive must be rejected with a clear
-        error before any container is spawned.
-        """
-        ws = resolve_workspace("run_x6", tmp_artifacts_root)
+        ws = resolve_workspace("run_refuse_hardening", tmp_artifacts_root)
         ws.ensure_layout()
-        with pytest.raises(RunnerConfigurationError, match="not on the allow-list"):
-            build_command(ws, DUMMY_DIGEST, hardening_flags=(bad_token,))
+        with pytest.raises(RunnerConfigurationError, match=match):
+            build_command(ws, DUMMY_DIGEST, hardening_flags=hardening_flags)
 
     def test_accepts_allow_listed_hardening_tokens(
         self,
@@ -240,22 +278,6 @@ class TestBuildCommand:
         assert "--read-only" in argv
         assert "--tmpfs" in argv
         assert "/tmp:rw,noexec,nosuid,size=256m" in argv
-
-    def test_rejects_tmpfs_without_spec(
-        self,
-        tmp_artifacts_root: Path,
-        _allow_dummy_digest: None,
-    ) -> None:
-        """``--tmpfs`` on its own must fail before podman sees it.
-
-        Without this check the next token would be the image
-        reference, which podman would treat as the tmpfs spec — a
-        confusing failure that's hard to diagnose from outside.
-        """
-        ws = resolve_workspace("run_x8", tmp_artifacts_root)
-        ws.ensure_layout()
-        with pytest.raises(RunnerConfigurationError, match="requires a value"):
-            build_command(ws, DUMMY_DIGEST, hardening_flags=("--tmpfs",))
 
     def test_container_user_spec_matches_host_uid_on_posix(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Reviewer P1: on Linux, the container UID must match the
@@ -355,35 +377,35 @@ class TestBuildCommand:
 
         assert "--userns=keep-id" not in argv
 
-    def test_is_rootless_podman_true_when_euid_non_root(
+    @pytest.mark.parametrize(
+        ("euid", "expected"),
+        [
+            # The launcher's host UID being non-root is the canonical signal
+            # for "rootless podman" on Linux: the same UID identity is what
+            # ``--userns=keep-id`` maps into the container. The previous
+            # ``podman info`` subprocess probe was abandoned because its 15s
+            # wall-clock timeout intermittently fired under concurrent podman
+            # load (e.g., while a prior LEAN container was exiting and
+            # releasing storage locks), silently misclassifying rootless as
+            # rootful and dropping ``--userns=keep-id`` from the argv. The
+            # euid check is microseconds and has no race window.
+            pytest.param(1000, True, id="true_when_euid_non_root"),
+            # Launcher running as root means rootful podman; the keep-id flag
+            # is not valid there (podman rejects it at parse time with
+            # "keep-id is only supported in rootless mode"). Omit the flag.
+            pytest.param(0, False, id="false_when_euid_root"),
+        ],
+    )
+    def test_is_rootless_podman_follows_euid(
         self,
         monkeypatch: pytest.MonkeyPatch,
+        euid: int,
+        expected: bool,
     ) -> None:
-        """The launcher's host UID being non-root is the canonical
-        signal for "rootless podman" on Linux: the same UID identity
-        is what ``--userns=keep-id`` maps into the container. The
-        previous ``podman info`` subprocess probe was abandoned because
-        its 15s wall-clock timeout intermittently fired under concurrent
-        podman load (e.g., while a prior LEAN container was exiting
-        and releasing storage locks), silently misclassifying rootless
-        as rootful and dropping ``--userns=keep-id`` from the argv. The
-        euid check is microseconds and has no race window."""
         from app.lean_sidecar import runner
 
-        monkeypatch.setattr(runner.os, "geteuid", lambda: 1000)
-        assert runner._is_rootless_podman("/usr/bin/podman") is True
-
-    def test_is_rootless_podman_false_when_euid_root(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Launcher running as root means rootful podman; the keep-id
-        flag is not valid there (podman rejects it at parse time with
-        "keep-id is only supported in rootless mode"). Omit the flag."""
-        from app.lean_sidecar import runner
-
-        monkeypatch.setattr(runner.os, "geteuid", lambda: 0)
-        assert runner._is_rootless_podman("/usr/bin/podman") is False
+        monkeypatch.setattr(runner.os, "geteuid", lambda: euid)
+        assert runner._is_rootless_podman("/usr/bin/podman") is expected
 
     def test_is_rootless_podman_false_on_non_posix(
         self,
@@ -396,25 +418,6 @@ class TestBuildCommand:
 
         monkeypatch.delattr(runner.os, "geteuid", raising=False)
         assert runner._is_rootless_podman("/usr/bin/podman") is False
-
-    def test_rejects_tmpfs_followed_by_another_flag(
-        self,
-        tmp_artifacts_root: Path,
-        _allow_dummy_digest: None,
-    ) -> None:
-        """``--tmpfs`` must be followed by a value token, not another
-        flag. The other-flag check has to fire AFTER allow-list
-        membership; using a token CodeQL-allow-listed but flag-shaped
-        (``--tmpfs --tmpfs``) exercises the structural validator
-        rather than the allow-list."""
-        ws = resolve_workspace("run_x9", tmp_artifacts_root)
-        ws.ensure_layout()
-        with pytest.raises(RunnerConfigurationError, match="expects a value"):
-            build_command(
-                ws,
-                DUMMY_DIGEST,
-                hardening_flags=("--tmpfs", "--tmpfs"),
-            )
 
     def test_accepts_pinned_dotnet_env_pair(
         self,
@@ -447,75 +450,6 @@ class TestBuildCommand:
         assert "--env" in argv
         assert "DOTNET_ReadyToRun=0" in argv
         assert "DOTNET_TieredCompilation=0" in argv
-
-    @pytest.mark.parametrize(
-        "smuggled_value",
-        [
-            # Other DOTNET_* knobs an attacker might try to bypass the
-            # allow-list with — the runner must reject every one.
-            "DOTNET_EnableDiagnostics=1",
-            "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0",
-            # Generic env smuggling attempts.
-            "LD_PRELOAD=/tmp/evil.so",
-            "PATH=/tmp",
-            # Right key + wrong value still rejected — the allow-list
-            # pins literal KEY=VAL strings, not patterns.
-            "DOTNET_ReadyToRun=1",
-            "DOTNET_TieredCompilation=1",
-        ],
-    )
-    def test_refuses_unpinned_env_value(
-        self,
-        tmp_artifacts_root: Path,
-        _allow_dummy_digest: None,
-        smuggled_value: str,
-    ) -> None:
-        """``--env`` is more powerful than ``--tmpfs`` (it can set any
-        container-side env var). Safety is preserved by pinning literal
-        KEY=VAL strings in the allow-list, NOT patterns. A caller
-        passing ``--env DOTNET_EnableDiagnostics=1`` or any other
-        non-allow-listed value must be rejected before podman runs.
-        """
-        ws = resolve_workspace("run_env_smuggle", tmp_artifacts_root)
-        ws.ensure_layout()
-        with pytest.raises(RunnerConfigurationError, match="not on the allow-list"):
-            build_command(
-                ws,
-                DUMMY_DIGEST,
-                hardening_flags=("--env", smuggled_value),
-            )
-
-    def test_rejects_env_without_value(
-        self,
-        tmp_artifacts_root: Path,
-        _allow_dummy_digest: None,
-    ) -> None:
-        """``--env`` on its own must fail before podman sees it.
-        Without this check the next token would be the image
-        reference, which podman would treat as the env spec.
-        """
-        ws = resolve_workspace("run_env_no_value", tmp_artifacts_root)
-        ws.ensure_layout()
-        with pytest.raises(RunnerConfigurationError, match="requires a value"):
-            build_command(ws, DUMMY_DIGEST, hardening_flags=("--env",))
-
-    def test_rejects_env_followed_by_another_flag(
-        self,
-        tmp_artifacts_root: Path,
-        _allow_dummy_digest: None,
-    ) -> None:
-        """Structural-validator twin of the ``--tmpfs`` case: ``--env``
-        must be followed by a value token, not another flag. Using
-        ``--env --env`` exercises the pair validator rather than the
-        allow-list."""
-        ws = resolve_workspace("run_env_flag_after_flag", tmp_artifacts_root)
-        ws.ensure_layout()
-        with pytest.raises(RunnerConfigurationError, match="expects a value"):
-            build_command(
-                ws,
-                DUMMY_DIGEST,
-                hardening_flags=("--env", "--env"),
-            )
 
 
 class TestExecuteTimeoutKillsContainer:

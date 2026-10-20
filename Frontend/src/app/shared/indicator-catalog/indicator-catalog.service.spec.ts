@@ -30,21 +30,14 @@ describe('IndicatorCatalogService failed', () => {
     expect(service.failed()).toBe(false);
   });
 
-  it('is true after the request fails', async () => {
+  it.each([
+    ['the request fails', 'boom', { status: 500, statusText: 'Internal Server Error' }],
+    ['the backend reports success: false', { success: false, categories: {}, total: 0 }, undefined],
+  ])('is true when %s', async (_name, body, init) => {
     const { service, http } = setup();
 
     const load = service.load();
-    http.expectOne(CATALOG_URL).flush('boom', { status: 500, statusText: 'Internal Server Error' });
-    await load;
-
-    expect(service.failed()).toBe(true);
-  });
-
-  it('is true when the backend reports success: false', async () => {
-    const { service, http } = setup();
-
-    const load = service.load();
-    http.expectOne(CATALOG_URL).flush({ success: false, categories: {}, total: 0 });
+    http.expectOne(CATALOG_URL).flush(body, init);
     await load;
 
     expect(service.failed()).toBe(true);

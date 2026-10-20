@@ -11,24 +11,21 @@ const BARS: readonly OverlayBar[] = [
 ];
 
 describe('logicalIndexAt', () => {
-  it('puts a bar’s close on its candle’s right edge and an instant inside a bar inside its candle', () => {
-    expect(logicalIndexAt(BARS, 15 * MINUTE)).toBe(0.5);
+  it('places an instant on the bars’ logical axis: inside a bar, in a gap, past either end, and nowhere without bars', () => {
+    expect.soft(logicalIndexAt(BARS, 15 * MINUTE), 'puts a bar’s close on its candle’s right edge').toBe(0.5);
     // Five seconds into the second bar: just right of the first candle — where "Bot started" belongs.
-    expect(logicalIndexAt(BARS, 15 * MINUTE + 5_000)).toBeCloseTo(0.5 + 5_000 / (15 * MINUTE), 12);
-    expect(logicalIndexAt(BARS, 22.5 * MINUTE)).toBe(1);
-  });
+    expect.soft(logicalIndexAt(BARS, 15 * MINUTE + 5_000), 'puts an instant just inside a bar inside its candle')
+      .toBeCloseTo(0.5 + 5_000 / (15 * MINUTE), 12);
+    expect.soft(logicalIndexAt(BARS, 22.5 * MINUTE), 'puts an instant mid-bar mid-candle').toBe(1);
 
-  it('lands an instant in a gap between bars on their boundary', () => {
-    expect(logicalIndexAt(BARS, 45 * MINUTE)).toBe(1.5);
-  });
+    expect.soft(logicalIndexAt(BARS, 45 * MINUTE), 'lands an instant in a gap between bars on their boundary').toBe(1.5);
 
-  it('extends past either end at that end bar’s length, at most one bar out, and has no place without bars', () => {
-    expect(logicalIndexAt(BARS, -7.5 * MINUTE)).toBe(-1);
-    expect(logicalIndexAt(BARS, 82.5 * MINUTE)).toBe(3);
+    expect.soft(logicalIndexAt(BARS, -7.5 * MINUTE), 'extends before the first bar at that bar’s length').toBe(-1);
+    expect.soft(logicalIndexAt(BARS, 82.5 * MINUTE), 'extends after the last bar at that bar’s length').toBe(3);
     // A run stopped hours after its last bar: its line stays beside that bar.
-    expect(logicalIndexAt(BARS, -120 * MINUTE)).toBe(-1.5);
-    expect(logicalIndexAt(BARS, 300 * MINUTE)).toBe(3.5);
-    expect(logicalIndexAt([], 0)).toBeNull();
+    expect.soft(logicalIndexAt(BARS, -120 * MINUTE), 'extends at most one bar out before the first bar').toBe(-1.5);
+    expect.soft(logicalIndexAt(BARS, 300 * MINUTE), 'extends at most one bar out after the last bar').toBe(3.5);
+    expect.soft(logicalIndexAt([], 0), 'has no place without bars').toBeNull();
   });
 });
 

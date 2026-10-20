@@ -8,77 +8,108 @@ import {
 } from './app-menu';
 
 describe('app menu projections', () => {
-  it('keeps every group a trigger, never a destination', () => {
-    for (const group of menuItemsFor('/data-lab')) {
-      expect(group.routerLink).toBeUndefined();
-      expect(group.items?.length).toBeGreaterThan(0);
-    }
-  });
+  it('projects the canonical /data-lab menu: every group a trigger, in order, Alpaca offering only Accounts', () => {
+    const groups = menuItemsFor('/data-lab');
 
-  it('projects the canonical menu in order', () => {
-    expect(menuItemsFor('/data-lab').map((group) => group.label)).toEqual(
+    for (const group of groups) {
+      expect.soft(group.routerLink, `keeps the ${group.label} group a trigger, never a destination`).toBeUndefined();
+      expect.soft(group.items?.length, `keeps the ${group.label} group's entries`).toBeGreaterThan(0);
+    }
+    expect.soft(groups.map((group) => group.label), 'projects the canonical menu in order').toEqual(
       APP_MENU.map((group) => group.title),
     );
-  });
-
-  it('marks the active group and the active entry', () => {
-    const groups = menuItemsFor('/pricing-lab');
-    const options = groups.find((group) => group.label === 'Options');
-
-    expect(options?.styleClass).toBe(ACTIVE_GROUP_CLASS);
-    expect(options?.items?.find((item) => item.label === 'Pricing Lab')?.styleClass).toBe(ACTIVE_ITEM_CLASS);
-    expect(options?.items?.find((item) => item.label === 'Options Lab')?.styleClass).toBeUndefined();
-    expect(groups.filter((group) => group.styleClass === ACTIVE_GROUP_CLASS)).toHaveLength(1);
-  });
-
-  it('lists Options Backtest beside the other strategy research pages and titles the window for it', () => {
-    const node = activeMenuNodeFor('/options-backtest');
-
-    expect(node?.group.title).toBe('Strategy Tools');
-    expect(node?.item.title).toBe('Options Backtest');
-    expect(pageTitleFor('/options-backtest')).toBe('Options Backtest');
-  });
-
-  it('offers Alpaca as Accounts and nothing else', () => {
     // ADR 0064 Decision 2: Deploy, the bot roster and the Gallery are things
     // done *on* an account, so they are that account's workspace tabs — four
     // broker-wide entries would each have to ask which account they meant.
-    const alpaca = menuItemsFor('/data-lab').find((group) => group.label === 'Alpaca');
+    const alpaca = groups.find((group) => group.label === 'Alpaca');
 
-    expect(alpaca?.items?.map((item) => item.label)).toEqual(['Accounts']);
-    expect(alpaca?.items?.[0]?.routerLink).toBe('/brokers/alpaca');
+    expect.soft(alpaca?.items?.map((item) => item.label), 'offers Alpaca as Accounts and nothing else').toEqual(['Accounts']);
+    expect.soft(alpaca?.items?.[0]?.routerLink, 'sends Alpaca Accounts to /brokers/alpaca').toBe('/brokers/alpaca');
+  });
+
+  it('marks the active group and entry, including Edge pages nested within Research', () => {
+    const groups = menuItemsFor('/pricing-lab');
+    const options = groups.find((group) => group.label === 'Options');
+
+    expect.soft(options?.styleClass, 'marks the active group').toBe(ACTIVE_GROUP_CLASS);
+    expect.soft(options?.items?.find((item) => item.label === 'Pricing Lab')?.styleClass, 'marks the active entry').toBe(ACTIVE_ITEM_CLASS);
+    expect.soft(options?.items?.find((item) => item.label === 'Options Lab')?.styleClass, 'leaves the other entries unmarked').toBeUndefined();
+    expect.soft(groups.filter((group) => group.styleClass === ACTIVE_GROUP_CLASS), 'marks exactly one group').toHaveLength(1);
+
+    const edgeGroups = menuItemsFor('/edge/regimes');
+    const research = edgeGroups.find((group) => group.label === 'Research');
+
+    expect.soft(edgeGroups.map((group) => group.label), 'nests Edge Analysis within Research instead of a separate top-level group').not.toContain('Edge Analysis');
+    expect.soft(research?.items?.find((item) => item.label === 'Edge Analysis')?.routerLink, 'links Edge Analysis from Research').toBe('/edge');
+    expect.soft(research?.items?.find((item) => item.label === 'Regimes')?.styleClass, 'marks the Regimes entry active').toBe(ACTIVE_ITEM_CLASS);
+    expect.soft(research?.styleClass, 'marks the Research group active for an Edge page').toBe(ACTIVE_GROUP_CLASS);
+  });
+
+  it('reaches the Data Lake Observatory and the Return Distribution study from the Stocks group', () => {
+    const lakeEntry = menuItemsFor('/data-lake')
+      .find((group) => group.label === 'Stocks')
+      ?.items?.find((item) => item.label === 'Data Lake Observatory');
+
+    expect.soft(lakeEntry?.routerLink, 'links the Data Lake Observatory entry to /data-lake').toBe('/data-lake');
+    expect.soft(lakeEntry?.styleClass, 'marks the Data Lake Observatory entry active').toBe(ACTIVE_ITEM_CLASS);
+    expect.soft(pageTitleFor('/data-lake'), 'titles the window for the Data Lake Observatory').toBe('Data Lake Observatory');
+
+    // The study route is longer than the Stocks entry, so the longest-match
+    // resolution must prefer it — the page highlights its own item.
+    const returnsEntry = menuItemsFor('/data-lab/returns')
+      .find((group) => group.label === 'Stocks')
+      ?.items?.find((item) => item.label === 'Return Distribution');
+
+    expect.soft(returnsEntry?.routerLink, 'links the Return Distribution entry to /data-lab/returns').toBe('/data-lab/returns');
+    expect.soft(returnsEntry?.styleClass, 'marks the Return Distribution entry active').toBe(ACTIVE_ITEM_CLASS);
+    expect.soft(activeMenuNodeFor('/data-lab/returns')?.item.route, 'resolves /data-lab/returns to its own menu node').toBe('/data-lab/returns');
+    expect.soft(pageTitleFor('/data-lab/returns'), 'titles the window for Return Distribution').toBe('Return Distribution');
+  });
+
+  it('resolves routes to their menu node and page title', () => {
+    const backtest = activeMenuNodeFor('/options-backtest');
+
+    expect.soft(backtest?.group.title, 'lists Options Backtest beside the other strategy research pages: group').toBe('Strategy Tools');
+    expect.soft(backtest?.item.title, 'lists Options Backtest beside the other strategy research pages: item').toBe('Options Backtest');
+    expect.soft(pageTitleFor('/options-backtest'), 'titles the window for Options Backtest').toBe('Options Backtest');
+
+    expect.soft(pageTitleFor('/pricing-lab'), 'resolves page titles through the active menu node: Pricing Lab').toBe('Pricing Lab');
+    expect.soft(pageTitleFor('/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery'), 'resolves page titles through the active menu node: workspace gallery').toBe('Accounts');
+    expect.soft(pageTitleFor('/brokers/alpaca?deploy='), 'resolves page titles through the active menu node: deploy intent on the account list').toBe('Accounts');
+    expect.soft(pageTitleFor('/brokers/alpaca/clerks/clrk_spec/accounts/PA9?deploy='), 'resolves page titles through the active menu node: deploy intent on a workspace').toBe('Accounts');
+    expect.soft(pageTitleFor('/unlisted-page'), 'resolves page titles through the active menu node: unlisted page has none').toBeNull();
+
+    expect.soft(activeMenuNodeFor('/unlisted-page'), 'highlights nothing for a route outside the menu: no node').toBeNull();
+    expect.soft(menuItemsFor('/unlisted-page').every((group) => group.styleClass === undefined), 'highlights nothing for a route outside the menu: no group marked').toBe(true);
+
+    expect.soft(pageTitleFor('/data-lab'), 'presents the Data Lab route as Stocks').toBe('Stocks');
+    expect.soft(activeMenuNodeFor('/data-lab')?.item.route, 'keeps Data Lake separate: /data-lab resolves to its own route').toBe('/data-lab');
   });
 
   it.each([
-    '/research-lab/strategy-runs/run-42',
-    '/research-lab/walk-forward/wf-42',
-    '/research-lab/monte-carlo/mc-42',
-    '/research-lab/baselines/baseline-42',
-    '/research-lab/signal-report/42',
-  ])('stops the research-detail route %s at its deepest menu node', (url) => {
-    expect(activeMenuNodeFor(url)?.group.title).toBe('Research');
-    expect(activeMenuNodeFor(url)?.item.title).toBe('Research Lab');
-  });
-
-  it.each([
-    '/brokers/alpaca/clerks/clrk_spec/accounts/PA9',
-    '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots',
-    '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery',
-    // A bot's own page and the lane-scoped tabs are inside the workspace too
-    // (#2186), so the menubar names the account list for them as well.
-    '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid-1',
-    '/brokers/alpaca/clerks/clrk_spec/settings',
-    '/brokers/alpaca/clerks/clrk_spec/bots',
-    '/brokers/alpaca/clerks/clrk_spec/gallery',
-  ])('highlights Accounts on the workspace URL %s', (url) => {
+    ['/research-lab/strategy-runs/run-42', 'Research', 'Research Lab'],
+    ['/research-lab/walk-forward/wf-42', 'Research', 'Research Lab'],
+    ['/research-lab/monte-carlo/mc-42', 'Research', 'Research Lab'],
+    ['/research-lab/baselines/baseline-42', 'Research', 'Research Lab'],
+    ['/research-lab/signal-report/42', 'Research', 'Research Lab'],
     // ADR 0064: every tab of one account is that account's place, so the
     // menubar names the account list rather than moving between Bots and
     // Gallery entries while the workspace's own tabs already say which page
     // is open.
+    ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9', 'Alpaca', 'Accounts'],
+    ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots', 'Alpaca', 'Accounts'],
+    ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery', 'Alpaca', 'Accounts'],
+    // A bot's own page and the lane-scoped tabs are inside the workspace too
+    // (#2186), so the menubar names the account list for them as well.
+    ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid-1', 'Alpaca', 'Accounts'],
+    ['/brokers/alpaca/clerks/clrk_spec/settings', 'Alpaca', 'Accounts'],
+    ['/brokers/alpaca/clerks/clrk_spec/bots', 'Alpaca', 'Accounts'],
+    ['/brokers/alpaca/clerks/clrk_spec/gallery', 'Alpaca', 'Accounts'],
+  ])('resolves %s to its deepest menu node, %s > %s', (url, groupTitle, itemTitle) => {
     const node = activeMenuNodeFor(url);
 
-    expect(node?.group.title).toBe('Alpaca');
-    expect(node?.item.title).toBe('Accounts');
+    expect(node?.group.title).toBe(groupTitle);
+    expect(node?.item.title).toBe(itemTitle);
   });
 
   it.each([
@@ -110,56 +141,5 @@ describe('app menu projections', () => {
     // Alpaca destination the menu names.
     expect(activeMenuNodeFor(url)?.item.title).toBe('Accounts');
     expect(pageTitleFor(url)).toBe('Accounts');
-  });
-
-  it('resolves page titles through the active menu node', () => {
-    expect(pageTitleFor('/pricing-lab')).toBe('Pricing Lab');
-    expect(pageTitleFor('/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery')).toBe('Accounts');
-    expect(pageTitleFor('/brokers/alpaca?deploy=')).toBe('Accounts');
-    expect(pageTitleFor('/brokers/alpaca/clerks/clrk_spec/accounts/PA9?deploy=')).toBe('Accounts');
-    expect(pageTitleFor('/unlisted-page')).toBeNull();
-  });
-
-  it('highlights nothing for a route outside the menu', () => {
-    expect(activeMenuNodeFor('/unlisted-page')).toBeNull();
-    expect(menuItemsFor('/unlisted-page').every((group) => group.styleClass === undefined)).toBe(true);
-  });
-
-  it('reaches the Data Lake Observatory from the Stocks group', () => {
-    const entry = menuItemsFor('/data-lake')
-      .find((group) => group.label === 'Stocks')
-      ?.items?.find((item) => item.label === 'Data Lake Observatory');
-
-    expect(entry?.routerLink).toBe('/data-lake');
-    expect(entry?.styleClass).toBe(ACTIVE_ITEM_CLASS);
-    expect(pageTitleFor('/data-lake')).toBe('Data Lake Observatory');
-  });
-
-  it('presents the Data Lab route as Stocks while keeping Data Lake separate', () => {
-    expect(pageTitleFor('/data-lab')).toBe('Stocks');
-    expect(activeMenuNodeFor('/data-lab')?.item.route).toBe('/data-lab');
-  });
-
-  it('reaches the Return Distribution study from the Stocks group', () => {
-    // The study route is longer than the Stocks entry, so the longest-match
-    // resolution must prefer it — the page highlights its own item.
-    const entry = menuItemsFor('/data-lab/returns')
-      .find((group) => group.label === 'Stocks')
-      ?.items?.find((item) => item.label === 'Return Distribution');
-
-    expect(entry?.routerLink).toBe('/data-lab/returns');
-    expect(entry?.styleClass).toBe(ACTIVE_ITEM_CLASS);
-    expect(activeMenuNodeFor('/data-lab/returns')?.item.route).toBe('/data-lab/returns');
-    expect(pageTitleFor('/data-lab/returns')).toBe('Return Distribution');
-  });
-
-  it('nests Edge Analysis within Research instead of using a separate top-level group', () => {
-    const groups = menuItemsFor('/edge/regimes');
-    const research = groups.find((group) => group.label === 'Research');
-
-    expect(groups.map((group) => group.label)).not.toContain('Edge Analysis');
-    expect(research?.items?.find((item) => item.label === 'Edge Analysis')?.routerLink).toBe('/edge');
-    expect(research?.items?.find((item) => item.label === 'Regimes')?.styleClass).toBe(ACTIVE_ITEM_CLASS);
-    expect(research?.styleClass).toBe(ACTIVE_GROUP_CLASS);
   });
 });

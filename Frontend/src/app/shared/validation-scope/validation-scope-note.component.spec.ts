@@ -33,7 +33,7 @@ describe("ValidationScopeNoteComponent", () => {
     expect(trigger?.getAttribute("aria-expanded")).toBe("true");
   });
 
-  it("labels the dialog for screen readers through the header template's aria id", async () => {
+  it("opens the explainer with its dialog named through the header template's aria id, and closes it from the dialog's own close control", async () => {
     const fixture = await renderNote();
 
     (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>("button")?.click();
@@ -45,21 +45,14 @@ describe("ValidationScopeNoteComponent", () => {
     // unnamed.
     const dialog = document.body.querySelector<HTMLElement>(".validation-scope-dialog");
     const labelledBy = dialog?.getAttribute("aria-labelledby");
-    expect(labelledBy).toBeTruthy();
-    expect(document.getElementById(labelledBy as string)?.textContent).toContain("What LEAN validation covers");
-  });
-
-  it("closes the explainer from the dialog's own close control", async () => {
-    const fixture = await renderNote();
-
-    (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>("button")?.click();
-    fixture.detectChanges();
-    expect(document.body.textContent).toContain("What LEAN validation covers");
+    expect.soft(labelledBy, "labels the dialog for screen readers through the header template's aria id").toBeTruthy();
+    expect.soft(document.getElementById(labelledBy as string)?.textContent, "the element the dialog's aria id points at carries the title").toContain("What LEAN validation covers");
+    expect.soft(document.body.textContent, "opens the explainer from the trigger").toContain("What LEAN validation covers");
 
     const close = document.body.querySelector<HTMLButtonElement>(".validation-scope-dialog .p-dialog-close-button");
     close?.click();
     fixture.detectChanges();
 
-    expect(document.body.textContent).not.toContain("Validation is summary-level, by design.");
+    expect.soft(document.body.textContent, "closes the explainer from the dialog's own close control").not.toContain("Validation is summary-level, by design.");
   });
 });

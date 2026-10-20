@@ -62,16 +62,21 @@ def _make_synthetic_data(
 class TestComputeDailyForwardReturn:
     """Test daily forward return computation."""
 
-    def test_directional_return(self):
+    def test_directional_and_abs_return(self):
         bars = [
             {"timestamp": i * 86400000, "open": 100, "high": 105, "low": 95, "close": 100 + i, "volume": 1000}
             for i in range(10)
         ]
         target = _compute_daily_forward_return(bars, "directional")
         # Should be ln(close_{t+1}/close_t)
-        assert len(target) == 10
-        assert pd.notna(target.iloc[0])
-        assert pd.isna(target.iloc[-1])  # No forward return for last bar
+        assert len(target) == 10, "directional: one target per bar"
+        assert pd.notna(target.iloc[0]), "directional: first bar has a forward return"
+        assert pd.isna(target.iloc[-1]), "directional: no forward return for last bar"
+
+        abs_target = _compute_daily_forward_return(bars, "abs_return")
+        # All non-NaN values should be >= 0
+        valid = abs_target.dropna()
+        assert (valid >= 0).all(), "abs_return: all non-NaN values are non-negative"
 
     def test_volatility_target(self):
         bars = [
@@ -83,16 +88,6 @@ class TestComputeDailyForwardReturn:
         # Last 5 should be NaN (forward-looking)
         assert target.iloc[-5:].isna().all()
 
-    def test_abs_return(self):
-        bars = [
-            {"timestamp": i * 86400000, "open": 100, "high": 105, "low": 95, "close": 100 + i, "volume": 1000}
-            for i in range(10)
-        ]
-        target = _compute_daily_forward_return(bars, "abs_return")
-        # All non-NaN values should be >= 0
-        valid = target.dropna()
-        assert (valid >= 0).all()
-
     def test_unknown_target_raises(self):
         bars = [{"timestamp": 0, "open": 100, "high": 105, "low": 95, "close": 100, "volume": 1000}]
         with pytest.raises(ValueError, match="Unknown target_type"):
@@ -103,7 +98,7 @@ class TestOptionsRunner:
     """Integration tests for options feature research runner."""
 
     def test_iv_rank_60_directional(self):
-        """Run iv_rank_60 with directional target — should produce valid report."""
+        """Run iv_rank_60 with directional target — should produce a valid, fully populated report."""
         iv_data, stock_bars = _make_synthetic_data(n_days=200)
 
         report = run_options_feature_research(
@@ -115,61 +110,47 @@ class TestOptionsRunner:
             end_date="2024-10-01",
         )
 
-        assert report.error is None
-        assert report.ticker == "SPY"
-        assert report.feature_name == "iv_rank_60"
-        assert report.bars_used > 0
+        assert report.error is None, "report has no error"
+        assert report.ticker == "SPY", "report carries the ticker"
+        assert report.feature_name == "iv_rank_60", "report carries the feature name"
+        assert report.bars_used > 0, "report uses bars"
         # IC values should exist
-        assert len(report.ic_values) > 0
+        assert len(report.ic_values) > 0, "IC values exist"
         # Stats should be populated
-        assert report.mean_ic != 0.0 or report.ic_p_value <= 1.0
+        assert report.mean_ic != 0.0 or report.ic_p_value <= 1.0, "IC stats are populated"
+        # Report should include stationarity test results
+        assert report.adf_pvalue is not None, "report has the ADF stationarity p-value"
+        assert report.kpss_pvalue is not None, "report has the KPSS stationarity p-value"
+        # Report should include quantile analysis
+        assert len(report.quantile_bins) > 0, "report has quantile bins"
+        # Report should include robustness analysis when enough data
+        if len(report.ic_values) >= 2:
+            assert report.robustness is not None, "report has robustness analysis when enough data"
 
-    def test_iv_30d_raw(self):
-        """Run iv_30d (raw IV) — baseline data validation."""
-        iv_data, stock_bars = _make_synthetic_data(n_days=150)
+    @pytest.mark.parametrize(
+        ("n_days", "ticker", "feature_name", "end_date", "run_kwargs"),
+        [
+            # iv_30d (raw IV) — baseline data validation
+            pytest.param(150, "AAPL", "iv_30d", "2024-07-01", {}, id="iv_30d_raw"),
+            pytest.param(150, "QQQ", "log_skew", "2024-07-01", {}, id="log_skew"),
+            pytest.param(200, "SPY", "iv_30d", "2024-10-01", {"target_type": "volatility"}, id="volatility_target"),
+        ],
+    )
+    def test_feature_research_report_is_valid(self, n_days, ticker, feature_name, end_date, run_kwargs):
+        iv_data, stock_bars = _make_synthetic_data(n_days=n_days)
 
         report = run_options_feature_research(
-            ticker="AAPL",
-            feature_name="iv_30d",
+            ticker=ticker,
+            feature_name=feature_name,
             iv_data=iv_data,
             stock_daily_bars=stock_bars,
             start_date="2024-01-01",
-            end_date="2024-07-01",
+            end_date=end_date,
+            **run_kwargs,
         )
 
-        assert report.error is None
-        assert report.bars_used > 0
-
-    def test_log_skew(self):
-        """Run log_skew feature."""
-        iv_data, stock_bars = _make_synthetic_data(n_days=150)
-
-        report = run_options_feature_research(
-            ticker="QQQ",
-            feature_name="log_skew",
-            iv_data=iv_data,
-            stock_daily_bars=stock_bars,
-            start_date="2024-01-01",
-            end_date="2024-07-01",
-        )
-
-        assert report.error is None
-
-    def test_volatility_target(self):
-        """Run with volatility target type."""
-        iv_data, stock_bars = _make_synthetic_data(n_days=200)
-
-        report = run_options_feature_research(
-            ticker="SPY",
-            feature_name="iv_30d",
-            iv_data=iv_data,
-            stock_daily_bars=stock_bars,
-            start_date="2024-01-01",
-            end_date="2024-10-01",
-            target_type="volatility",
-        )
-
-        assert report.error is None
+        assert report.error is None, "report has no error"
+        assert report.bars_used > 0, "report uses bars"
 
     def test_insufficient_data_fails(self):
         """Too few data points should fail with error."""
@@ -220,50 +201,3 @@ class TestOptionsRunner:
             or "missing" in report.error.lower()
             or "valid" in report.error.lower()
         )
-
-    def test_report_has_stationarity(self):
-        """Report should include stationarity test results."""
-        iv_data, stock_bars = _make_synthetic_data(n_days=200)
-
-        report = run_options_feature_research(
-            ticker="SPY",
-            feature_name="iv_rank_60",
-            iv_data=iv_data,
-            stock_daily_bars=stock_bars,
-            start_date="2024-01-01",
-            end_date="2024-10-01",
-        )
-
-        assert report.adf_pvalue is not None
-        assert report.kpss_pvalue is not None
-
-    def test_report_has_quantile_bins(self):
-        """Report should include quantile analysis."""
-        iv_data, stock_bars = _make_synthetic_data(n_days=200)
-
-        report = run_options_feature_research(
-            ticker="SPY",
-            feature_name="iv_rank_60",
-            iv_data=iv_data,
-            stock_daily_bars=stock_bars,
-            start_date="2024-01-01",
-            end_date="2024-10-01",
-        )
-
-        assert len(report.quantile_bins) > 0
-
-    def test_report_has_robustness(self):
-        """Report should include robustness analysis when enough data."""
-        iv_data, stock_bars = _make_synthetic_data(n_days=200)
-
-        report = run_options_feature_research(
-            ticker="SPY",
-            feature_name="iv_rank_60",
-            iv_data=iv_data,
-            stock_daily_bars=stock_bars,
-            start_date="2024-01-01",
-            end_date="2024-10-01",
-        )
-
-        if len(report.ic_values) >= 2:
-            assert report.robustness is not None

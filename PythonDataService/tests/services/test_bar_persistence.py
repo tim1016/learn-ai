@@ -163,13 +163,6 @@ def test_replay_skips_exact_duplicate_lines_in_jsonl(tmp_path: Path) -> None:
     assert len(bars) == 1
 
 
-def test_replay_returns_empty_when_no_jsonl(tmp_path: Path) -> None:
-    """A date with no JSONL (pre-persistence, or post-compaction-only) yields
-    an empty list — never raises."""
-    store = BarPersistence(root=tmp_path)
-    assert store.replay("SPY", "1m", ANCHOR_DATE) == []
-
-
 def test_active_dates_lists_every_jsonl_day(tmp_path: Path) -> None:
     """``active_dates`` includes every date that has a JSONL."""
     store = BarPersistence(root=tmp_path)
@@ -180,9 +173,12 @@ def test_active_dates_lists_every_jsonl_day(tmp_path: Path) -> None:
     assert dates == [ANCHOR_DATE, ANCHOR_DATE + timedelta(days=1)]
 
 
-def test_active_dates_empty_when_no_data(tmp_path: Path) -> None:
+def test_an_empty_store_replays_and_lists_nothing(tmp_path: Path) -> None:
+    """A date with no JSONL (pre-persistence, or post-compaction-only) replays
+    as an empty list — never raises — and no date is active."""
     store = BarPersistence(root=tmp_path)
-    assert store.active_dates("SPY", "1m") == []
+    assert store.replay("SPY", "1m", ANCHOR_DATE) == [], "replay of a date with no JSONL is an empty list"
+    assert store.active_dates("SPY", "1m") == [], "active_dates is empty when there is no data"
 
 
 def test_counters_are_per_symbol_resolution(tmp_path: Path) -> None:

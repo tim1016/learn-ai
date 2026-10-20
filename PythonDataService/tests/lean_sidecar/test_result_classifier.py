@@ -99,81 +99,102 @@ class TestClassifyLeanLog:
         block = result.by_category["analysis_failed"][0]
         assert "ResultsAnalyzer" in block or "ParameterCountAnalysis" in block
 
-    def test_real_failed_data_request_still_gates(self) -> None:
-        """A real ``daily/<symbol>.zip`` miss (not SPY) still gates.
-
-        Regression coverage for the narrow benign-pattern rule — the
-        benchmark-unavailable bucket must NOT swallow genuine
-        data-request failures for non-benchmark symbols.
-        """
-        result = classify_lean_log(REAL_FAILED_DATA_REQUEST_LOG)
-        assert "failed_data_requests" in result.by_category
-        assert "benchmark_unavailable" not in result.by_category
-        assert not result.is_clean
-
-    def test_spy_benchmark_zip_miss_is_benign(self) -> None:
-        """SPY-zip miss alone routes to ``benchmark_unavailable``."""
-        result = classify_lean_log(BENIGN_SPY_BENCHMARK_MISS_LOG)
-        assert "benchmark_unavailable" in result.by_category
-        assert "failed_data_requests" not in result.by_category
-        assert result.is_clean
+    @pytest.mark.parametrize(
+        ("log", "category", "absent_category", "is_clean"),
+        [
+            # A real ``daily/<symbol>.zip`` miss (not SPY) still gates.
+            #
+            # Regression coverage for the narrow benign-pattern rule — the
+            # benchmark-unavailable bucket must NOT swallow genuine
+            # data-request failures for non-benchmark symbols.
+            pytest.param(
+                REAL_FAILED_DATA_REQUEST_LOG,
+                "failed_data_requests",
+                "benchmark_unavailable",
+                False,
+                id="real_failed_data_request_still_gates",
+            ),
+            # SPY-zip miss alone routes to ``benchmark_unavailable``.
+            pytest.param(
+                BENIGN_SPY_BENCHMARK_MISS_LOG,
+                "benchmark_unavailable",
+                "failed_data_requests",
+                True,
+                id="spy_benchmark_zip_miss_is_benign",
+            ),
+            # Missing _quote.zip files (trade-bar-only captures) are non-gating.
+            pytest.param(
+                TRADE_ONLY_QUOTE_MISS_LOG,
+                "trade_only_capture",
+                "failed_data_requests",
+                True,
+                id="quote_zip_miss_routes_to_trade_only_capture",
+            ),
+            # A zero-reference-price dividend error gates: it truncates the backtest.
+            #
+            # Regression coverage — an earlier revision classified this as the
+            # non-gating ``trade_only_capture``, masking a SPY parity run that
+            # executed only ~35 of 123 trading days.
+            pytest.param(
+                DIVIDEND_ZERO_REF_PRICE_LOG,
+                "runtime_error",
+                "trade_only_capture",
+                False,
+                id="zero_reference_price_dividend_error_gates",
+            ),
+        ],
+    )
+    def test_single_pattern_log_routes_to_its_category(
+        self, log: str, category: str, absent_category: str, is_clean: bool
+    ) -> None:
+        result = classify_lean_log(log)
+        assert category in result.by_category, f"log routes to {category}"
+        assert absent_category not in result.by_category, f"log does not route to {absent_category}"
+        assert result.is_clean == is_clean, "is_clean follows whether the category gates"
         # Reconciliation still disqualifies — alpha/beta are zero
         # without the benchmark.
-        assert not result.is_reconciliation_grade
+        assert not result.is_reconciliation_grade, "any error, gating or not, disqualifies reconciliation"
 
-    def test_spy_benchmark_cascade_only_is_clean(self) -> None:
-        """SPY-zip miss + equity-curve cascade both route to
-        ``benchmark_unavailable`` and the run is reported clean."""
-        combined = BENIGN_SPY_BENCHMARK_MISS_LOG + BENIGN_EQUITY_CURVE_CASCADE_LOG
-        result = classify_lean_log(combined)
-        assert set(result.by_category.keys()) == {"benchmark_unavailable"}
-        assert len(result.by_category["benchmark_unavailable"]) == 2
-        assert result.is_clean
-        assert not result.is_reconciliation_grade
-
-    def test_quote_zip_miss_routes_to_trade_only_capture(self) -> None:
-        """Missing _quote.zip files (trade-bar-only captures) are non-gating."""
-        result = classify_lean_log(TRADE_ONLY_QUOTE_MISS_LOG)
-        assert "trade_only_capture" in result.by_category
-        assert "failed_data_requests" not in result.by_category
-        assert result.is_clean
-        assert not result.is_reconciliation_grade
-
-    def test_zero_reference_price_dividend_error_gates(self) -> None:
-        """A zero-reference-price dividend error gates: it truncates the backtest.
-
-        Regression coverage — an earlier revision classified this as the
-        non-gating ``trade_only_capture``, masking a SPY parity run that
-        executed only ~35 of 123 trading days.
-        """
-        result = classify_lean_log(DIVIDEND_ZERO_REF_PRICE_LOG)
-        assert "runtime_error" in result.by_category
-        assert "trade_only_capture" not in result.by_category
-        assert not result.is_clean
-
-    def test_quote_miss_clean_but_dividend_error_gates(self) -> None:
-        """Quote-zip misses stay non-gating; a co-occurring zero-reference-price
-        dividend error still gates the whole run."""
-        combined = TRADE_ONLY_QUOTE_MISS_LOG * 34 + DIVIDEND_ZERO_REF_PRICE_LOG * 3
-        result = classify_lean_log(combined)
-        assert set(result.by_category.keys()) == {"trade_only_capture", "runtime_error"}
-        assert len(result.by_category["trade_only_capture"]) == 34
-        assert len(result.by_category["runtime_error"]) == 3
-        assert not result.is_clean
+    @pytest.mark.parametrize(
+        ("log", "expected_counts", "is_clean"),
+        [
+            # SPY-zip miss + equity-curve cascade both route to
+            # ``benchmark_unavailable`` and the run is reported clean.
+            pytest.param(
+                BENIGN_SPY_BENCHMARK_MISS_LOG + BENIGN_EQUITY_CURVE_CASCADE_LOG,
+                (("benchmark_unavailable", 2),),
+                True,
+                id="spy_benchmark_cascade_only_is_clean",
+            ),
+            # Quote-zip misses stay non-gating; a co-occurring zero-reference-price
+            # dividend error still gates the whole run.
+            pytest.param(
+                TRADE_ONLY_QUOTE_MISS_LOG * 34 + DIVIDEND_ZERO_REF_PRICE_LOG * 3,
+                (("trade_only_capture", 34), ("runtime_error", 3)),
+                False,
+                id="quote_miss_clean_but_dividend_error_gates",
+            ),
+            pytest.param(
+                MIXED_LOG,
+                (("analysis_failed", 1), ("failed_data_requests", 1), ("runtime_error", 1)),
+                False,
+                id="mixed_log_separates_categories",
+            ),
+        ],
+    )
+    def test_multi_error_log_separates_categories(
+        self, log: str, expected_counts: tuple[tuple[str, int], ...], is_clean: bool
+    ) -> None:
+        result = classify_lean_log(log)
+        counts = {category: len(blocks) for category, blocks in result.by_category.items()}
+        assert counts == dict(expected_counts), "categories and their error-block counts"
+        assert result.total == sum(n for _, n in expected_counts), "total counts every error block"
+        assert result.is_clean == is_clean, "is_clean follows whether any gating category is present"
+        assert not result.is_reconciliation_grade, "any error, gating or not, disqualifies reconciliation"
 
     def test_runtime_error_category(self) -> None:
         result = classify_lean_log(RUNTIME_ERROR_LOG)
         assert "runtime_error" in result.by_category
-        assert not result.is_clean
-
-    def test_mixed_log_separates_categories(self) -> None:
-        result = classify_lean_log(MIXED_LOG)
-        assert set(result.by_category.keys()) == {
-            "analysis_failed",
-            "failed_data_requests",
-            "runtime_error",
-        }
-        assert result.total == 3
         assert not result.is_clean
 
     def test_unknown_error_bucketed_as_other(self) -> None:

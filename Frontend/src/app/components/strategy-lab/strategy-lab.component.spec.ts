@@ -537,9 +537,10 @@ describe("Strategy Lab Workbench", () => {
     });
   });
 
-  it("populates statistics under the configuration and the chart on the stage", async () => {
+  it("loads a saved run onto the workbench: statistics and chart on the stage, the configuration collapsed without the saved preference, the run detail read once", async () => {
+    localStorage.removeItem("engineLab.configNavOverride");
     const saved = run();
-    const { fixture, http } = await createLab({ activeRun: saved.id, backtestRun: saved });
+    const { fixture, http, runDetailWatchCount } = await createLab({ activeRun: saved.id, backtestRun: saved });
     http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
     const root = fixture.nativeElement as HTMLElement;
     await vi.waitFor(() => {
@@ -547,13 +548,30 @@ describe("Strategy Lab Workbench", () => {
     });
 
     const rail = root.querySelector(".workbench__rail");
-    expect(rail?.querySelector("app-strategy-lab-run-stats")).not.toBeNull();
+    expect.soft(rail?.querySelector("app-strategy-lab-run-stats"), "populates statistics under the configuration").not.toBeNull();
     // The stage is the workbench grid's own second column — no wrapper section,
     // which would duplicate its "Strategy evidence" landmark and reintroduce
     // the auto-placement drift the stage's two-child grid now prevents.
-    expect(root.querySelector(".workbench > app-strategy-lab-stage")).not.toBeNull();
-    expect(root.querySelectorAll("[aria-label='Strategy evidence']")).toHaveLength(1);
-    expect(root.textContent).not.toContain("Back to workbench");
+    expect.soft(root.querySelector(".workbench > app-strategy-lab-stage"), "populates the chart on the stage: the stage is the workbench grid's own column").not.toBeNull();
+    expect.soft(root.querySelectorAll("[aria-label='Strategy evidence']"), "populates the chart on the stage: one Strategy evidence landmark").toHaveLength(1);
+    expect.soft(root.textContent, "populates the chart on the stage: no Back to workbench").not.toContain("Back to workbench");
+
+    await vi.waitFor(() => {
+      expect(fixture.componentInstance.config.configNavCollapsed()).toBe(true);
+    });
+
+    // Completion is an event, not a setting: the operator's stored preference
+    // must be untouched so a reload does not inherit an automatic collapse.
+    expect.soft(localStorage.getItem("engineLab.configNavOverride"), "collapses the configuration on completion without writing the saved preference").toBeNull();
+
+    await vi.waitFor(() => {
+      expect(fixture.componentInstance.report.run()).not.toBeNull();
+    });
+    await fixture.whenStable();
+
+    // The report service is the single source of truth for the loaded run;
+    // configuration restore reads it rather than fetching the same run again.
+    expect.soft(runDetailWatchCount(), "loads the run detail once per selected run rather than once per surface").toBe(1);
     http.verify();
   });
 
@@ -590,21 +608,6 @@ describe("Strategy Lab Workbench", () => {
       queryParams: { run: 91 },
       queryParamsHandling: "merge",
     }));
-    http.verify();
-  });
-
-  it("collapses the configuration on completion without writing the saved preference", async () => {
-    localStorage.removeItem("engineLab.configNavOverride");
-    const saved = run();
-    const { fixture, http } = await createLab({ activeRun: saved.id, backtestRun: saved });
-    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
-    await vi.waitFor(() => {
-      expect(fixture.componentInstance.config.configNavCollapsed()).toBe(true);
-    });
-
-    // Completion is an event, not a setting: the operator's stored preference
-    // must be untouched so a reload does not inherit an automatic collapse.
-    expect(localStorage.getItem("engineLab.configNavOverride")).toBeNull();
     http.verify();
   });
 
@@ -685,24 +688,6 @@ describe("Strategy Lab Workbench", () => {
     expect(lab.report.displayRun()).toBeNull();
     expect(lab.config.initialCash()).toBe(100_000);
     expect(lab.config.fillMode()).toBe("decision_minute_open");
-    http.verify();
-  });
-
-  it("loads the run detail once per selected run rather than once per surface", async () => {
-    const saved = run();
-    const { fixture, http, runDetailWatchCount } = await createLab({
-      activeRun: saved.id,
-      backtestRun: saved,
-    });
-    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
-    await vi.waitFor(() => {
-      expect(fixture.componentInstance.report.run()).not.toBeNull();
-    });
-    await fixture.whenStable();
-
-    // The report service is the single source of truth for the loaded run;
-    // configuration restore reads it rather than fetching the same run again.
-    expect(runDetailWatchCount()).toBe(1);
     http.verify();
   });
 
@@ -832,10 +817,16 @@ describe("Strategy Lab Workbench", () => {
     });
   }
 
-  it("never gates a restored direct LEAN fixture run on lake membership", async () => {
+  it.each([
     // The LEAN sidecar replays the recording itself: the run never reads
     // the lake, so the gate must not make it impossible to rerun.
-    const saved = fixtureBackedRun("lean");
+    ["never gates a restored direct LEAN fixture run on lake membership", "lean", false, false],
+    // `both` goes through the Python engine, which resolves the lake tree
+    // regardless of the restored policy's provenance: the absent symbol
+    // would fail deep in the engine, so the gate stays.
+    ["still gates a restored fixture run that the Python engine would read from the lake", "both", true, true],
+  ] as const)("%s", async (_name, requested, readsLake, rerunBlocked) => {
+    const saved = fixtureBackedRun(requested);
     const { fixture, http } = await createLab({ activeRun: saved.id, backtestRun: saved });
     http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
     const config = fixture.componentInstance.config;
@@ -844,27 +835,9 @@ describe("Strategy Lab Workbench", () => {
     });
 
     expect(config.effectiveSymbol()).toBe("QQQ");
-    expect(config.engine()).toBe("lean");
-    expect(config.readsLake()).toBe(false);
-    expect(config.rerunBlocked()).toBe(false);
-    http.verify();
-  });
-
-  it("still gates a restored fixture run that the Python engine would read from the lake", async () => {
-    // `both` goes through the Python engine, which resolves the lake tree
-    // regardless of the restored policy's provenance: the absent symbol
-    // would fail deep in the engine, so the gate stays.
-    const saved = fixtureBackedRun("both");
-    const { fixture, http } = await createLab({ activeRun: saved.id, backtestRun: saved });
-    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
-    const config = fixture.componentInstance.config;
-    await vi.waitFor(() => {
-      expect(config.autoFetch()).toBe(false);
-    });
-
-    expect(config.engine()).toBe("both");
-    expect(config.readsLake()).toBe(true);
-    expect(config.rerunBlocked()).toBe(true);
+    expect(config.engine()).toBe(requested);
+    expect(config.readsLake()).toBe(readsLake);
+    expect(config.rerunBlocked()).toBe(rerunBlocked);
     http.verify();
   });
 

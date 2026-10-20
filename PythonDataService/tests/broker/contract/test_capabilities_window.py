@@ -31,14 +31,16 @@ def test_window_must_open_before_it_closes() -> None:
         ExtendedHoursWindow(open_minute_et=20 * 60, close_minute_et=4 * 60)
 
 
-def test_supported_extended_hours_requires_a_window() -> None:
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("extended_hours_window", None, id="supported extended hours requires a window"),
+        pytest.param("supports_extended_hours", False, id="unsupported extended hours forbids a window"),
+    ],
+)
+def test_the_extended_hours_flag_and_its_window_must_agree(field: str, value: object) -> None:
     with pytest.raises(ValidationError, match="extended_hours_window"):
-        _capabilities(extended_hours_window=None)
-
-
-def test_unsupported_extended_hours_forbids_a_window() -> None:
-    with pytest.raises(ValidationError, match="extended_hours_window"):
-        _capabilities(supports_extended_hours=False)
+        _capabilities(**{field: value})
 
 
 def test_unsupported_extended_hours_without_a_window_is_valid() -> None:

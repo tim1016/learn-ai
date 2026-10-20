@@ -80,22 +80,12 @@ describe('AssetIdentityComponent', () => {
     );
   });
 
-  it('uses a text fallback when the logo slug is invalid', async () => {
+  it.each([
+    ['uses a text fallback when the logo slug is invalid', 'https://example.invalid/logo.svg'],
+    ['blocks script-like logo slugs instead of falling back to a known symbol URL', 'javascript:alert(1)'],
+  ])('%s', async (_name, logoSlug) => {
     const { container } = await render(AssetIdentityComponent, {
-      inputs: { symbol: 'AAPL', logoSlug: 'https://example.invalid/logo.svg' },
-    });
-
-    expect(container.querySelector('img')).toBeNull();
-    const fallback = requireElement(
-      container.querySelector<HTMLElement>('.asset-identity__fallback'),
-      '.asset-identity__fallback',
-    );
-    expect(fallback.textContent).toBe('AAPL');
-  });
-
-  it('blocks script-like logo slugs instead of falling back to a known symbol URL', async () => {
-    const { container } = await render(AssetIdentityComponent, {
-      inputs: { symbol: 'AAPL', logoSlug: 'javascript:alert(1)' },
+      inputs: { symbol: 'AAPL', logoSlug },
     });
 
     expect(container.querySelector('img')).toBeNull();
@@ -118,18 +108,11 @@ describe('AssetIdentityComponent', () => {
     expect(chip.textContent?.trim()).toBe('ARCA');
   });
 
-  it('does not render exchange chip when exchange is not provided', async () => {
-    const { container } = await render(AssetIdentityComponent, {
-      inputs: { symbol: 'SPY' },
-    });
-
-    expect(container.querySelector('.asset-identity__exchange')).toBeNull();
-  });
-
-  it('does not render exchange chip when exchange is null', async () => {
-    const { container } = await render(AssetIdentityComponent, {
-      inputs: { symbol: 'SPY', exchange: null },
-    });
+  it.each([
+    ['does not render exchange chip when exchange is not provided', { symbol: 'SPY' }],
+    ['does not render exchange chip when exchange is null', { symbol: 'SPY', exchange: null }],
+  ])('%s', async (_name, inputs) => {
+    const { container } = await render(AssetIdentityComponent, { inputs });
 
     expect(container.querySelector('.asset-identity__exchange')).toBeNull();
   });

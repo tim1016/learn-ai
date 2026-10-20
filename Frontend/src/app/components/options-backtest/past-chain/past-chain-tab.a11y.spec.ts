@@ -13,10 +13,14 @@ async function violations(): Promise<string[]> {
 }
 
 describe('the Past chain tab for a screen reader', () => {
-  it('has no violation before a date is picked', async () => {
+  it('has no violation before a date is picked, and names every control', async () => {
     await renderChainTab(fakeChainService(vi));
 
-    expect(await violations()).toEqual([]);
+    expect.soft(await violations(), 'has no violation before a date is picked').toEqual([]);
+    for (const name of ['Trading date', 'Time of day (New York time)', 'Strikes each side of the money']) {
+      expect.soft(screen.getByLabelText(name), `names the ${name} control`).toBeTruthy();
+    }
+    expect.soft(screen.getByRole('combobox', { name: /chain underlying/i }), 'names the chain underlying control').toBeTruthy();
   });
 
   it('has no violation with the expiries listed, a chain open in every state a contract can be in, and a download on offer', async () => {
@@ -89,38 +93,53 @@ describe('the Past chain tab for a screen reader', () => {
   });
 
   it.each([
-    ['a listing that is not stored, with the download on offer', () => chainDay({ listing_state: 'not_stored', expiries: [] })],
-    ['a listing that cannot be read', () => chainDay({ listing_state: 'unreadable', listing_problem: 'cannot be read', expiries: [] })],
-    ['a listing that holds nothing usable', () => chainDay({ expiries: [], rows_left_out_unusable: 3 })],
-  ])('has no violation for %s', async (_name, answer) => {
-    await renderChainTab(fakeChainService(vi, { day: vi.fn(async () => answer()) }));
+    [
+      'a listing that is not stored, with the download on offer',
+      () => vi.fn(async () => chainDay({ listing_state: 'not_stored', expiries: [] })),
+      '2026-10-09',
+      /listing for this date|stored listing/,
+    ],
+    [
+      'a listing that cannot be read',
+      () => vi.fn(async () => chainDay({ listing_state: 'unreadable', listing_problem: 'cannot be read', expiries: [] })),
+      '2026-10-09',
+      /listing for this date|stored listing/,
+    ],
+    [
+      'a listing that holds nothing usable',
+      () => vi.fn(async () => chainDay({ expiries: [], rows_left_out_unusable: 3 })),
+      '2026-10-09',
+      /listing for this date|stored listing/,
+    ],
+    [
+      'a date that is not a trading day',
+      () =>
+        vi.fn(async () => {
+          throw new PastChainRefusedError('OPTIONS_BACKTEST_NOT_A_SESSION', '2026-10-10 is a weekend day', 400);
+        }),
+      '2026-10-10',
+      'Not a trading day.',
+    ],
+    [
+      'a listing that fails to be read, and for an underlying or date the server refused',
+      () =>
+        vi.fn(async () => {
+          throw new PastChainInvalidError([{ loc: ['query', 'trading_date_ms'], msg: 'Input should be greater than or equal to 0' }]);
+        }),
+      '1969-12-31',
+      /The server did not take the trading date/,
+    ],
+    [
+      'a session the lake will fetch nothing for yet',
+      () => vi.fn(async () => chainDay({ listing_state: 'not_stored', expiries: [], fetch_refusal: { reason: 'session_not_over', words: 'The session is not over in New York yet.' } })),
+      '2026-10-09',
+      'The session is not over in New York yet.',
+    ],
+  ])('has no violation for %s', async (_name, day, date, shown) => {
+    await renderChainTab(fakeChainService(vi, { day: day() }));
 
-    pickDate('2026-10-09');
-    await screen.findByText(/listing for this date|stored listing/);
-
-    expect(await violations()).toEqual([]);
-  });
-
-  it('has no violation for a date that is not a trading day', async () => {
-    const day = vi.fn(async () => {
-      throw new PastChainRefusedError('OPTIONS_BACKTEST_NOT_A_SESSION', '2026-10-10 is a weekend day', 400);
-    });
-    await renderChainTab(fakeChainService(vi, { day }));
-
-    pickDate('2026-10-10');
-    await screen.findByText('Not a trading day.');
-
-    expect(await violations()).toEqual([]);
-  });
-
-  it('has no violation for a listing that fails to be read, and for an underlying or date the server refused', async () => {
-    const day = vi.fn(async () => {
-      throw new PastChainInvalidError([{ loc: ['query', 'trading_date_ms'], msg: 'Input should be greater than or equal to 0' }]);
-    });
-    await renderChainTab(fakeChainService(vi, { day }));
-
-    pickDate('1969-12-31');
-    await screen.findByText(/The server did not take the trading date/);
+    pickDate(date);
+    await screen.findByText(shown);
 
     expect(await violations()).toEqual([]);
   });
@@ -137,27 +156,30 @@ describe('the Past chain tab for a screen reader', () => {
   });
 
   it.each([
-    ['an expiry that is not listed', () => chainExpiry({ expiry_listed: false, tag: null, calls: side('call', [], null), puts: side('put', [], null) })],
-    ['an expiry whose listing is not stored', () => chainExpiry({ expiry_listed: null, tag: null, listing_state: 'not_stored', calls: side('call', [], null), puts: side('put', [], null) })],
-  ])('has no violation for %s', async (_name, answer) => {
-    await renderChainTab(fakeChainService(vi, { expiry: vi.fn(async () => answer()) }));
+    [
+      'an expiry that is not listed',
+      () => vi.fn(async () => chainExpiry({ expiry_listed: false, tag: null, calls: side('call', [], null), puts: side('put', [], null) })),
+      /expiry is (not listed|listed cannot)|Whether the/,
+    ],
+    [
+      'an expiry whose listing is not stored',
+      () => vi.fn(async () => chainExpiry({ expiry_listed: null, tag: null, listing_state: 'not_stored', calls: side('call', [], null), puts: side('put', [], null) })),
+      /expiry is (not listed|listed cannot)|Whether the/,
+    ],
+    [
+      'a chain that failed to be read',
+      () =>
+        vi.fn(async () => {
+          throw new PastChainRefusedError('OPTIONS_BACKTEST_LAKE_CATALOG_UNAVAILABLE', 'The catalog cannot be reached.', 503);
+        }),
+      'The catalog cannot be reached.',
+    ],
+  ])('has no violation for %s', async (_name, expiry, shown) => {
+    await renderChainTab(fakeChainService(vi, { expiry: expiry() }));
     pickDate('2026-10-09');
     await screen.findByRole('table', { name: /Every expiry the listing held/ });
     showChain('2026-10-16');
-    await screen.findByText(/expiry is (not listed|listed cannot)|Whether the/);
-
-    expect(await violations()).toEqual([]);
-  });
-
-  it('has no violation for a chain that failed to be read', async () => {
-    const expiry = vi.fn(async () => {
-      throw new PastChainRefusedError('OPTIONS_BACKTEST_LAKE_CATALOG_UNAVAILABLE', 'The catalog cannot be reached.', 503);
-    });
-    await renderChainTab(fakeChainService(vi, { expiry }));
-    pickDate('2026-10-09');
-    await screen.findByRole('table', { name: /Every expiry the listing held/ });
-    showChain('2026-10-16');
-    await screen.findByText('The catalog cannot be reached.');
+    await screen.findByText(shown);
 
     expect(await violations()).toEqual([]);
   });
@@ -190,25 +212,5 @@ describe('the Past chain tab for a screen reader', () => {
     await screen.findByText('This page is not allowed to start a download here.');
 
     expect(await violations()).toEqual([]);
-  });
-
-  it('has no violation when the lake will fetch nothing for the session yet', async () => {
-    const service = fakeChainService(vi, {
-      day: vi.fn(async () => chainDay({ listing_state: 'not_stored', expiries: [], fetch_refusal: { reason: 'session_not_over', words: 'The session is not over in New York yet.' } })),
-    });
-    await renderChainTab(service);
-    pickDate('2026-10-09');
-    await screen.findByText('The session is not over in New York yet.');
-
-    expect(await violations()).toEqual([]);
-  });
-
-  it('names every control', async () => {
-    await renderChainTab(fakeChainService(vi));
-
-    for (const name of ['Trading date', 'Time of day (New York time)', 'Strikes each side of the money']) {
-      expect(screen.getByLabelText(name)).toBeTruthy();
-    }
-    expect(screen.getByRole('combobox', { name: /chain underlying/i })).toBeTruthy();
   });
 });

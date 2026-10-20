@@ -326,30 +326,29 @@ def _assert_chart_indicators_match_export(
 # ── Chart ⇄ export parity ───────────────────────────────────────
 
 
-@pytest.mark.parametrize("window", list(_WINDOWS))
-@pytest.mark.parametrize("timeframe", list(_COMPARABLE_TIMEFRAMES))
+@pytest.mark.parametrize(
+    ("session", "timeframe", "window"),
+    [
+        pytest.param("rth", timeframe, window, id=f"rth-{timeframe}-{window}")
+        for window in _WINDOWS
+        for timeframe in _COMPARABLE_TIMEFRAMES
+    ]
+    + [
+        pytest.param("extended", timeframe, "monday", id=f"extended-{timeframe}-monday")
+        for timeframe in _COMPARABLE_TIMEFRAMES
+    ],
+)
 def test_chart_indicators_match_the_export_for_the_same_window(
-    served: None, chart_frames: list[pd.DataFrame], timeframe: str, window: str
+    served: None, chart_frames: list[pd.DataFrame], session: str, timeframe: str, window: str
 ) -> None:
     """The #2458 regression, per timeframe: both surfaces warm the same EMA up
     on the same bars, so a multi-minute export no longer starts its lead-in on
     a weekend (the old bars-per-day multiplication) while the chart reached
-    back a fixed four calendar days."""
-    chart = _chart("rth", _EMAS, timeframe, _WINDOWS[window])
+    back a fixed four calendar days. The extended rows: pre- and post-market
+    bars feed the same lead-in on both surfaces."""
+    chart = _chart(session, _EMAS, timeframe, _WINDOWS[window])
 
-    export = _export("rth", _COMPARABLE_TIMEFRAMES[timeframe], _WINDOWS[window])
-
-    _assert_chart_indicators_match_export(chart, chart_frames[-1], export)
-
-
-@pytest.mark.parametrize("timeframe", list(_COMPARABLE_TIMEFRAMES))
-def test_extended_hours_chart_indicators_match_the_export(
-    served: None, chart_frames: list[pd.DataFrame], timeframe: str
-) -> None:
-    """Pre- and post-market bars feed the same lead-in on both surfaces."""
-    chart = _chart("extended", _EMAS, timeframe, _WINDOWS["monday"])
-
-    export = _export("extended", _COMPARABLE_TIMEFRAMES[timeframe], _WINDOWS["monday"])
+    export = _export(session, _COMPARABLE_TIMEFRAMES[timeframe], _WINDOWS[window])
 
     _assert_chart_indicators_match_export(chart, chart_frames[-1], export)
 
@@ -727,24 +726,34 @@ def _lead_in_sessions(window_from: str, fetch_from: str) -> list[date]:
     return [day for day in expected_sessions(date.fromisoformat(fetch_from), first) if day < first]
 
 
-def test_a_monday_window_warms_up_on_the_sessions_before_its_weekend() -> None:
-    """Three regular sessions hold the 1,000 one-minute bars EMA-200 warms up
-    on; for a Monday they are the Wednesday, Thursday and Friday before it —
-    never a lead-in that starts on the Saturday."""
-    window = resolve_indicator_window("2026-01-12", max_lookback=200, bar_minutes=1)
+@pytest.mark.parametrize(
+    ("from_date", "max_lookback", "bar_minutes", "fetch_from", "warmup_bars"),
+    [
+        # Three regular sessions hold the 1,000 one-minute bars EMA-200 warms up
+        # on; for a Monday they are the Wednesday, Thursday and Friday before it —
+        # never a lead-in that starts on the Saturday.
+        pytest.param("2026-01-12", 200, 1, "2026-01-07", 1000, id="monday-warms-up-on-the-sessions-before-its-weekend"),
+        # The Friday after Thanksgiving closes at 13:00 ET: its 210 minutes plus
+        # two full sessions fall short of 1,000 bars, so the lead-in takes the
+        # Monday before too.
+        pytest.param("2025-12-01", 200, 1, "2025-11-24", 1000, id="early-close-in-the-lead-in-counts-its-shorter-session"),
+        # #2611: Polygon serves 6 or 7 hourly bins per regular session after the
+        # regular-hours filter, so the lead-in is sized on the guaranteed 6 and can
+        # never be one bin short. 20 warm-up bars take Tue 2026-01-06 through Fri
+        # 2026-01-09 (4 × 6 = 24); one session fewer holds only 18.
+        pytest.param("2026-01-12", 4, 60, "2026-01-06", 20, id="hour-bars-count-the-guaranteed-six-per-regular-session-2611"),
+        pytest.param("2021-06-01", 200, 1, "2021-06-01", 1000, id="window-before-the-history-floor-has-no-lead-in"),
+        pytest.param("2026-01-12", 0, 1, "2026-01-12", 0, id="no-indicators-need-no-lead-in"),
+    ],
+)
+def test_the_lead_in_window_resolves_to_the_sessions_the_lookback_needs(
+    from_date: str, max_lookback: int, bar_minutes: int, fetch_from: str, warmup_bars: int
+) -> None:
+    window = resolve_indicator_window(from_date, max_lookback=max_lookback, bar_minutes=bar_minutes)
 
-    assert window.fetch_from == "2026-01-07"
-    assert window.window_start_ms == et_midnight_ms(date(2026, 1, 12))
-    assert window.warmup_bars == 1000
-
-
-def test_an_early_close_in_the_lead_in_counts_its_shorter_session() -> None:
-    """The Friday after Thanksgiving closes at 13:00 ET: its 210 minutes plus
-    two full sessions fall short of 1,000 bars, so the lead-in takes the
-    Monday before too."""
-    window = resolve_indicator_window("2025-12-01", max_lookback=200, bar_minutes=1)
-
-    assert window.fetch_from == "2025-11-24"
+    assert window.fetch_from == fetch_from, "the lead-in starts on the session that holds the warm-up bars"
+    assert window.window_start_ms == et_midnight_ms(date.fromisoformat(from_date)), "the window starts at its ET midnight"
+    assert window.warmup_bars == warmup_bars, "the warm-up is sized from the lookback"
 
 
 @pytest.mark.parametrize("bar_minutes", [1, 5, 15, 30, 60, 240])
@@ -778,17 +787,6 @@ def test_the_lead_in_is_sized_from_the_requested_indicators_not_a_fixed_floor() 
     assert len(_lead_in_sessions("2026-01-12", window.fetch_from)) == 100
 
 
-def test_hour_bars_count_the_guaranteed_six_per_regular_session() -> None:
-    """#2611: Polygon serves 6 or 7 hourly bins per regular session after the
-    regular-hours filter, so the lead-in is sized on the guaranteed 6 and can
-    never be one bin short. 20 warm-up bars take Tue 2026-01-06 through Fri
-    2026-01-09 (4 × 6 = 24); one session fewer holds only 18."""
-    window = resolve_indicator_window("2026-01-12", max_lookback=4, bar_minutes=60)
-
-    assert window.warmup_bars == 20
-    assert window.fetch_from == "2026-01-06"
-
-
 def test_daily_bars_warm_up_on_one_session_each() -> None:
     window = resolve_indicator_window("2026-01-12", max_lookback=200, bar_minutes=bar_minutes_for("day", 1))
 
@@ -804,19 +802,6 @@ def test_the_lead_in_never_reaches_past_the_providers_history_floor(timeframe: s
     window = resolve_indicator_window("2026-01-12", max_lookback=200, bar_minutes=minutes)
 
     assert window.fetch_from == polygon_history_floor(date(2026, 9, 29)).isoformat()
-
-
-def test_a_window_before_the_history_floor_has_no_lead_in() -> None:
-    window = resolve_indicator_window("2021-06-01", max_lookback=200, bar_minutes=1)
-
-    assert window.fetch_from == "2021-06-01"
-    assert window.warmup_bars == 1000
-
-
-def test_no_indicators_need_no_lead_in() -> None:
-    window = resolve_indicator_window("2026-01-12", max_lookback=0, bar_minutes=1)
-
-    assert (window.fetch_from, window.warmup_bars) == ("2026-01-12", 0)
 
 
 @pytest.mark.parametrize(

@@ -78,31 +78,6 @@ def test_finish_skips_cells_that_already_have_rows_and_counts_them_as_done() -> 
     assert progress == [(2, 4), (3, 4), (4, 4)]
 
 
-def test_a_cancellation_during_the_last_cell_is_observed_after_it_is_persisted() -> None:
-    """Regression for the lost-cancel defect (issue #1928, review F12)."""
-
-    class _Cancelled(Exception):
-        pass
-
-    candidates, expected = _grid(1)  # a single cell, so no head-of-cell poll can see the cancel
-    cancelled = threading.Event()
-    persisted: list[CellResult] = []
-
-    def execute(spec) -> CellResult:
-        cancelled.set()  # the user cancels while the only cell executes
-        return _ok(spec)
-
-    def cancel_check() -> None:
-        if cancelled.is_set():
-            raise _Cancelled()
-
-    with pytest.raises(_Cancelled):
-        run_grid(candidates, expected_cells=expected, execute_cell=execute, persist=persisted.append, cancel_check=cancel_check)
-
-    # The finished cell was persisted before the cancellation was acknowledged.
-    assert len(persisted) == 1 and persisted[0].status == "completed"
-
-
 def test_cancel_check_return_value_is_ignored() -> None:
     candidates, expected = _grid(1, 2)
 
@@ -111,13 +86,20 @@ def test_cancel_check_return_value_is_ignored() -> None:
     assert summary.executed_cells == 2
 
 
-def test_a_cancellation_between_cells_stops_before_the_next_cell_starts() -> None:
-    """The head-of-cell poll: a cancel set during cell 1 means cell 2 never runs."""
-
+@pytest.mark.parametrize(
+    "values",
+    [
+        # Regression for the lost-cancel defect (issue #1928, review F12): a single cell, so no head-of-cell poll can see the cancel.
+        pytest.param((1,), id="cancel_during_the_last_cell_is_observed_after_it_is_persisted_1928"),
+        # The head-of-cell poll: a cancel set during cell 1 means cell 2 never runs.
+        pytest.param((1, 2), id="cancel_between_cells_stops_before_the_next_cell_starts"),
+    ],
+)
+def test_a_cancellation_during_a_cell_is_observed_after_it_is_persisted(values: tuple[float, ...]) -> None:
     class _Cancelled(Exception):
         pass
 
-    candidates, expected = _grid(1, 2)
+    candidates, expected = _grid(*values)
     cancelled = threading.Event()
     executed: list[float] = []
     persisted: list[CellResult] = []
@@ -134,5 +116,5 @@ def test_a_cancellation_between_cells_stops_before_the_next_cell_starts() -> Non
     with pytest.raises(_Cancelled):
         run_grid(candidates, expected_cells=expected, execute_cell=execute, persist=persisted.append, cancel_check=cancel_check)
 
-    assert executed == [1.0]
-    assert [cell.status for cell in persisted] == ["completed"]
+    assert executed == [1.0], "the cancel landed during the first cell, so no later cell started"
+    assert [cell.status for cell in persisted] == ["completed"], "the finished cell was persisted before the cancellation was acknowledged"

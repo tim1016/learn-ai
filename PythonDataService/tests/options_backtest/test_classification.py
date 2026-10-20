@@ -180,6 +180,7 @@ def _tag(expiry: date, trading_date: date) -> ExpiryTag:
             ExpirySeries.DAILY,
             id="the last Thursday of a month that is no quarter end is a daily",
         ),
+        pytest.param(_FLOOR, _FRI_AFTER_THE_FLOOR, ExpirySeries.WEEKLY, id="the floor day itself is tagged"),
     ],
 )
 def test_an_expiry_is_tagged_by_where_its_date_sits_on_the_calendar(
@@ -222,10 +223,6 @@ def test_a_trading_date_before_the_floor_leaves_every_expiry_unknown_and_says_wh
 
     assert tag.series is ExpirySeries.UNKNOWN
     assert _FLOOR.isoformat() in tag.evidence
-
-
-def test_the_floor_day_itself_is_tagged() -> None:
-    assert _tag(_FRI_AFTER_THE_FLOOR, _FLOOR).series is ExpirySeries.WEEKLY
 
 
 # ---- What the owner reads beside a tag ------------------------------------------
@@ -309,41 +306,61 @@ def test_the_words_beside_a_tag_name_the_rule_that_decided_it_and_no_other(
 # ---- Expiring today ------------------------------------------------------------
 
 
-def test_a_monthly_on_its_last_day_is_a_monthly_that_expires_today() -> None:
-    tag = _tag(_FRI_THIRD, _FRI_THIRD)
+@pytest.mark.parametrize(
+    ("expiry", "trading_date", "series", "expires_today", "days_to_expiry"),
+    [
+        pytest.param(
+            _FRI_THIRD,
+            _FRI_THIRD,
+            ExpirySeries.MONTHLY,
+            True,
+            0,
+            id="a monthly on its last day is a monthly that expires today",
+        ),
+        pytest.param(
+            _Q4_2025_END,
+            _Q4_2025_END,
+            ExpirySeries.QUARTERLY,
+            True,
+            0,
+            id="a quarterly on its last day is a quarterly that expires today",
+        ),
+        pytest.param(
+            _WED, _WED, ExpirySeries.DAILY, True, 0, id="a daily expiring today is a daily that expires today"
+        ),
+        pytest.param(
+            _FRI_NEXT,
+            _FRI_NEXT,
+            ExpirySeries.WEEKLY,
+            True,
+            0,
+            id="a weekly expiring today is a weekly that expires today",
+        ),
+        # A trading date before the floor: the series is not claimed, the date arithmetic still holds.
+        pytest.param(
+            _DAY_BEFORE_THE_FLOOR,
+            _DAY_BEFORE_THE_FLOOR,
+            ExpirySeries.UNKNOWN,
+            True,
+            0,
+            id="an expiry on the trading date is flagged even when its series is not claimed",
+        ),
+        pytest.param(
+            _FRI_NEXT,
+            _MON_BEFORE,
+            ExpirySeries.WEEKLY,
+            False,
+            11,
+            id="an expiry after the trading date does not expire today and counts calendar days",
+        ),
+    ],
+)
+def test_an_expiry_expires_today_only_on_the_trading_date_and_counts_calendar_days_to_it(
+    expiry: date, trading_date: date, series: ExpirySeries, expires_today: bool, days_to_expiry: int
+) -> None:
+    tag = _tag(expiry, trading_date)
 
-    assert (tag.series, tag.expires_today, tag.days_to_expiry) == (ExpirySeries.MONTHLY, True, 0)
-
-
-def test_a_quarterly_on_its_last_day_is_a_quarterly_that_expires_today() -> None:
-    tag = _tag(_Q4_2025_END, _Q4_2025_END)
-
-    assert (tag.series, tag.expires_today) == (ExpirySeries.QUARTERLY, True)
-
-
-def test_a_daily_expiring_today_is_a_daily_that_expires_today() -> None:
-    tag = _tag(_WED, _WED)
-
-    assert (tag.series, tag.expires_today) == (ExpirySeries.DAILY, True)
-
-
-def test_a_weekly_expiring_today_is_a_weekly_that_expires_today() -> None:
-    tag = _tag(_FRI_NEXT, _FRI_NEXT)
-
-    assert (tag.series, tag.expires_today) == (ExpirySeries.WEEKLY, True)
-
-
-def test_an_expiry_on_the_trading_date_is_flagged_even_when_its_series_is_not_claimed() -> None:
-    """A trading date before the floor: the series is not claimed, the date arithmetic still holds."""
-    tag = _tag(_DAY_BEFORE_THE_FLOOR, _DAY_BEFORE_THE_FLOOR)
-
-    assert (tag.series, tag.expires_today, tag.days_to_expiry) == (ExpirySeries.UNKNOWN, True, 0)
-
-
-def test_an_expiry_after_the_trading_date_does_not_expire_today_and_counts_calendar_days() -> None:
-    tag = _tag(_FRI_NEXT, _MON_BEFORE)
-
-    assert (tag.expires_today, tag.days_to_expiry) == (False, 11)
+    assert (tag.series, tag.expires_today, tag.days_to_expiry) == (series, expires_today, days_to_expiry)
 
 
 # ---- What the listing is for ---------------------------------------------------
@@ -356,14 +373,18 @@ def test_a_tag_is_a_fact_of_the_date_and_does_not_change_with_what_else_is_liste
     assert alone == among_others
 
 
-def test_an_expiry_the_listing_does_not_hold_is_a_callers_mistake() -> None:
-    with pytest.raises(ValueError, match=str(_FRI_THIRD)):
-        tag_expiry(_FRI_THIRD, trading_date=_MON_BEFORE, listed=[_WED, _FRI_NEXT])
-
-
-def test_an_expiry_before_the_trading_date_is_a_callers_mistake() -> None:
-    with pytest.raises(ValueError, match=str(_WED)):
-        tag_expiry(_WED, trading_date=_FRI_THIRD, listed=[_WED, _FRI_NEXT])
+@pytest.mark.parametrize(
+    ("expiry", "trading_date"),
+    [
+        pytest.param(_FRI_THIRD, _MON_BEFORE, id="an expiry the listing does not hold"),
+        pytest.param(_WED, _FRI_THIRD, id="an expiry before the trading date"),
+    ],
+)
+def test_an_expiry_that_cannot_be_tagged_from_its_listing_is_a_callers_mistake(
+    expiry: date, trading_date: date
+) -> None:
+    with pytest.raises(ValueError, match=str(expiry)):
+        tag_expiry(expiry, trading_date=trading_date, listed=[_WED, _FRI_NEXT])
 
 
 # ---- The dates the tags are built on --------------------------------------------

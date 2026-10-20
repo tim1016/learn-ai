@@ -43,8 +43,9 @@ def _run() -> RunResult:
     return run_sessions(written, [WED, THU, FRI, MON, TUE], fake_data(days))
 
 
-def test_each_session_is_what_the_hand_worked_scene_says() -> None:
+def test_each_session_is_what_the_scene_says_and_the_summary_counts_the_trades_and_adds_up_the_money() -> None:
     result = _run()
+    summary = result.summary
 
     assert [(s.status, s.outcome.skip_reason, s.pnl_usd) for s in result.sessions] == [
         (SessionStatus.TRADED, None, D("99.00")),
@@ -52,7 +53,7 @@ def test_each_session_is_what_the_hand_worked_scene_says() -> None:
         (SessionStatus.NO_TRADE, None, D("0")),
         (SessionStatus.INCOMPLETE, None, D("-20.50")),
         (SessionStatus.SKIPPED, SkipReason.UNDERLYING_DID_NOT_TRADE, D("0")),
-    ]
+    ], "each session is what the hand-worked scene says: status, skip reason and profit"
     # 10,000.00 + 99.00 + 0.00, nothing on Friday; Monday's mark is paid back: 10,099.00 - 200.50 + 180.00 = 10,078.50.
     assert [s.cash_after_usd for s in result.sessions] == [
         D("10099.00"),
@@ -60,20 +61,24 @@ def test_each_session_is_what_the_hand_worked_scene_says() -> None:
         D("10099.00"),
         D("10078.50"),
         D("10078.50"),
-    ]
-
-
-def test_the_summary_counts_the_sessions_and_trades_of_the_run() -> None:
-    summary = _run().summary
+    ], "each session is what the hand-worked scene says: cash after it"
 
     # Tested 5 = traded 3 (Wed, Thu, Mon) + no trade 1 (Fri) + skipped 1 (Tue). Mon is the incomplete one.
-    assert (summary.sessions_tested, summary.sessions_traded, summary.sessions_no_trade) == (5, 3, 1)
-    assert (summary.sessions_skipped, summary.sessions_incomplete) == (1, 1)
-    assert (summary.sessions_profitable, summary.sessions_losing, summary.sessions_break_even) == (1, 1, 1)
-    assert summary.daily_win_rate == Ratio(D("1"), D("3"))
+    assert (summary.sessions_tested, summary.sessions_traded, summary.sessions_no_trade) == (5, 3, 1), (
+        "the summary counts the sessions tested, traded and with no trade"
+    )
+    assert (summary.sessions_skipped, summary.sessions_incomplete) == (1, 1), (
+        "the summary counts the sessions skipped and incomplete"
+    )
+    assert (summary.sessions_profitable, summary.sessions_losing, summary.sessions_break_even) == (1, 1, 1), (
+        "the summary counts the sessions profitable, losing and break-even"
+    )
+    assert summary.daily_win_rate == Ratio(D("1"), D("3")), "the daily win rate is one in three"
     # Three trades: Wed won (99.00), Mon lost (-20.50), Thu broke even (0.00).
-    assert (summary.trades, summary.trades_won, summary.trades_lost, summary.trades_break_even) == (3, 1, 1, 1)
-    assert summary.trade_win_rate == Ratio(D("1"), D("3"))
+    assert (summary.trades, summary.trades_won, summary.trades_lost, summary.trades_break_even) == (3, 1, 1, 1), (
+        "the summary counts the trades won, lost and break-even"
+    )
+    assert summary.trade_win_rate == Ratio(D("1"), D("3")), "the trade win rate is one in three"
     assert summary.exits_by_reason == (
         (ExitReason.STOP, 0),
         (ExitReason.SQUARE_OFF, 0),
@@ -81,55 +86,56 @@ def test_the_summary_counts_the_sessions_and_trades_of_the_run() -> None:
         (ExitReason.EXIT_TIME, 2),
         (ExitReason.MARKED_NOT_SOLD, 1),
         (ExitReason.MARKED_NOT_BOUGHT_BACK, 0),
-    )
-
-
-def test_the_summary_adds_up_the_money_with_the_marked_leg_at_its_mark() -> None:
-    summary = _run().summary
+    ), "the summary counts the exits by reason"
 
     # Net 99.00 + 0.00 - 20.50 = 78.50, from gross profit 99.00 and gross loss 20.50.
     assert (summary.net_profit_usd, summary.gross_profit_usd, summary.gross_loss_usd) == (
         D("78.50"),
         D("99.00"),
         D("20.50"),
-    )
+    ), "the money adds up with the marked leg at its mark: net profit, gross profit and gross loss"
     # 99.00 / 20.50 = 198 / 41 = 4.8292682926..., the digits 82926 repeating after the 4.
-    assert summary.profit_factor == Ratio(D("99.00"), D("20.50"))
-    assert summary.profit_factor.rounded_to_6_places() == D("4.829268")
+    assert summary.profit_factor == Ratio(D("99.00"), D("20.50")), "the profit factor is gross profit over gross loss"
+    assert summary.profit_factor.rounded_to_6_places() == D("4.829268"), "the profit factor rounds to 4.829268"
     # Fees: Wed 1.00, Thu 1.00, Mon 0.50 (a buy, and no sale). No slippage was set.
-    assert (summary.total_fees_usd, summary.slippage_paid_usd) == (D("2.50"), D("0"))
-    assert summary.ending_cash_usd == D("10078.50") == summary.starting_cash_usd + summary.net_profit_usd
+    assert (summary.total_fees_usd, summary.slippage_paid_usd) == (D("2.50"), D("0")), "fees paid and no slippage paid"
+    assert summary.ending_cash_usd == D("10078.50") == summary.starting_cash_usd + summary.net_profit_usd, (
+        "the ending cash is the starting cash plus the net profit"
+    )
 
 
-def test_the_summary_draws_the_drawdown_from_the_peak_to_the_marked_day_and_counts_what_did_not_trade() -> None:
-    summary = _run().summary
+def test_the_drawdown_the_tables_and_the_runs_own_point_come_from_the_five_sessions_of_the_scene() -> None:
+    result = _run()
+    summary = result.summary
 
     # Equity peaks at 10,099.00 on Wednesday (Thursday and Friday leave it there) and ends Monday at 10,078.50.
     # Wednesday is 2026-10-07 and Monday 2026-10-12: their 09:30 New York opens are 1,791,379,800,000 and
     # 1,791,811,800,000 ms UTC.
     drawdown = summary.drawdown_by_fraction
-    assert drawdown is not None
+    assert drawdown is not None, "the summary draws a drawdown by fraction"
     assert (drawdown.peak_equity_usd, drawdown.trough_equity_usd, drawdown.fall_usd) == (
         D("10099.00"),
         D("10078.50"),
         D("20.50"),
+    ), "the drawdown falls from the peak equity to the marked day's trough equity"
+    assert (OPEN_MS[WED], OPEN_MS[MON]) == (1_791_379_800_000, 1_791_811_800_000), (
+        "Wednesday's and Monday's opens are the 09:30 New York opens in ms UTC"
     )
-    assert (OPEN_MS[WED], OPEN_MS[MON]) == (1_791_379_800_000, 1_791_811_800_000)
-    assert (drawdown.peak_session_open_ms, drawdown.trough_session_open_ms) == (OPEN_MS[WED], OPEN_MS[MON])
-    assert drawdown.fall_ratio == Ratio(D("20.50"), D("10099.00"))
-    assert summary.drawdown_by_dollars == drawdown
+    assert (drawdown.peak_session_open_ms, drawdown.trough_session_open_ms) == (OPEN_MS[WED], OPEN_MS[MON]), (
+        "the drawdown names the peak session and the trough session by their opens"
+    )
+    assert drawdown.fall_ratio == Ratio(D("20.50"), D("10099.00")), "the drawdown fall ratio is the fall over the peak"
+    assert summary.drawdown_by_dollars == drawdown, "the drawdown by dollars is the drawdown by fraction"
     # Friday's contract never traded, so its entry was dropped.
-    assert summary.entries_dropped == 1
+    assert summary.entries_dropped == 1, "Friday's entry was dropped"
     assert (
         summary.entries_refused_for_cash,
         summary.re_entries_blocked_by_cutoff,
         summary.sessions_without_momentum,
-    ) == (0, 0, 0)
-    assert summary.picks_refused_by_reason == tuple((reason, 0) for reason in PickRefusal)
-
-
-def test_the_tables_cover_the_five_sessions_and_the_one_month() -> None:
-    summary = _run().summary
+    ) == (0, 0, 0), "nothing was refused for cash, blocked by the cutoff or left without momentum"
+    assert summary.picks_refused_by_reason == tuple((reason, 0) for reason in PickRefusal), (
+        "no pick was refused for any reason"
+    )
 
     # The rows are the five sessions, Wed 10-07 to Tue 10-13, each named by its 09:30 New York open in ms UTC (the
     # table in _run_data.py works each out from its date).
@@ -139,7 +145,7 @@ def test_the_tables_cover_the_five_sessions_and_the_one_month() -> None:
         (OPEN_MS[FRI], SessionStatus.NO_TRADE, D("0")),
         (OPEN_MS[MON], SessionStatus.INCOMPLETE, D("-20.50")),
         (OPEN_MS[TUE], SessionStatus.SKIPPED, D("0")),
-    ]
+    ], "the by-day table covers the five sessions"
     [october] = summary.by_month
     assert (october.year, october.month, october.sessions, october.sessions_traded, october.trades) == (
         2026,
@@ -147,14 +153,14 @@ def test_the_tables_cover_the_five_sessions_and_the_one_month() -> None:
         5,
         3,
         3,
+    ), "the by-month table has the one month with its sessions, sessions traded and trades"
+    assert (october.net_profit_usd, october.fees_usd) == (D("78.50"), D("2.50")), "the month's net profit and fees"
+
+    assert summary.net_profit_usd == sum((s.pnl_usd for s in result.sessions), start=D("0")), (
+        "the run keeps the summary of its own sessions"
     )
-    assert (october.net_profit_usd, october.fees_usd) == (D("78.50"), D("2.50"))
-
-
-def test_the_run_keeps_the_summary_of_its_own_sessions_and_the_slippage_point_of_its_own_setup() -> None:
-    result = _run()
-
-    assert result.summary.net_profit_usd == sum((s.pnl_usd for s in result.sessions), start=D("0"))
     [own] = [point for point in result.slippage if point.is_setups_own]
-    assert own.net_profit_usd == result.summary.net_profit_usd
-    assert (own.trades, own.traded_sessions, own.winning_sessions) == (3, 3, 1)
+    assert own.net_profit_usd == result.summary.net_profit_usd, "the slippage point of the setup's own is the run's"
+    assert (own.trades, own.traded_sessions, own.winning_sessions) == (3, 3, 1), (
+        "the setup's own slippage point counts the trades, traded sessions and winning sessions"
+    )

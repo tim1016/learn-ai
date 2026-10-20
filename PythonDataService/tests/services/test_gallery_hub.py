@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import replace
 
 import pytest
@@ -93,22 +94,36 @@ class _Cat:
         return _status_label_for(phase=self.phase, running=self.running)
 
 
-def test_shown_symbols_dedupes_across_running_and_stopped_bots() -> None:
-    cat = [_Cat("a", "SPY", True), _Cat("b", "SPY", False), _Cat("c", "QQQ", True), _Cat("d", "IWM", False)]
-    assert shown_symbols(cat) == ["SPY", "QQQ", "IWM"]
-
-
-def test_shown_symbols_includes_symbol_held_only_by_a_stopped_bot() -> None:
-    cat = [_Cat("a", "IWM", False)]
-    assert shown_symbols(cat) == ["IWM"]
-
-
-def test_shown_symbols_excludes_retired_bot_symbols() -> None:
-    cat = [
-        _Cat("a", "SPY", True, phase="ON_DUTY"),
-        _Cat("b", "IWM", False, phase="RETIRED"),
-    ]
-    assert shown_symbols(cat) == ["SPY"]
+@pytest.mark.parametrize(
+    ("bots", "expected"),
+    [
+        pytest.param(
+            (
+                ("a", "SPY", True, "ON_DUTY"),
+                ("b", "SPY", False, "ON_DUTY"),
+                ("c", "QQQ", True, "ON_DUTY"),
+                ("d", "IWM", False, "ON_DUTY"),
+            ),
+            ("SPY", "QQQ", "IWM"),
+            id="dedupes_across_running_and_stopped_bots",
+        ),
+        pytest.param(
+            (("a", "IWM", False, "ON_DUTY"),),
+            ("IWM",),
+            id="includes_symbol_held_only_by_a_stopped_bot",
+        ),
+        pytest.param(
+            (("a", "SPY", True, "ON_DUTY"), ("b", "IWM", False, "RETIRED")),
+            ("SPY",),
+            id="excludes_retired_bot_symbols",
+        ),
+    ],
+)
+def test_shown_symbols_follow_the_bots_on_the_wall(
+    bots: tuple[tuple[str, str, bool, str], ...], expected: tuple[str, ...]
+) -> None:
+    cat = [_Cat(sid, symbol, running, phase=phase) for sid, symbol, running, phase in bots]
+    assert shown_symbols(cat) == list(expected)
 
 
 @pytest.mark.parametrize(
@@ -280,13 +295,41 @@ async def test_build_snapshot_uses_the_five_second_buffer_when_configured() -> N
 
 
 @pytest.mark.asyncio
-async def test_build_snapshot_includes_stopped_bot_and_its_bars() -> None:
-    """A stopped (non-retired) bot stays on the wall — projected with
-    ``running=False`` — and its symbol's bars are fetched even though
-    nothing running holds that symbol."""
+@pytest.mark.parametrize(
+    ("second_bot", "expected_sids", "expected_stopped", "expected_symbols", "expected_subscribed"),
+    [
+        # A stopped (non-retired) bot stays on the wall — projected with
+        # ``running=False`` — and its symbol's bars are fetched even though
+        # nothing running holds that symbol.
+        pytest.param(
+            ("Aug11-03", "QQQ", False, 5.0, 0.0, 1, "OFF_DUTY"),
+            ("Aug11-02", "Aug11-03"),
+            ("Aug11-03",),
+            ("SPY", "QQQ"),
+            ("QQQ", "SPY"),
+            id="includes_stopped_bot_and_its_bars",
+        ),
+        pytest.param(
+            ("Aug11-04", "IWM", False, None, None, None, "RETIRED"),
+            ("Aug11-02",),
+            (),
+            ("SPY",),
+            ("SPY",),  # retired bot's symbol never subscribed
+            id="excludes_retired_bot_and_its_bars",
+        ),
+    ],
+)
+async def test_build_snapshot_puts_a_non_retired_bot_on_the_wall(
+    second_bot: tuple[str, str, bool, float | None, float | None, int | None, str],
+    expected_sids: tuple[str, ...],
+    expected_stopped: tuple[str, ...],
+    expected_symbols: tuple[str, ...],
+    expected_subscribed: tuple[str, ...],
+) -> None:
+    sid, symbol, running, realized_pnl_today, open_pnl, fills_today, phase = second_bot
     rows = [
         _Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12, phase="ON_DUTY"),
-        _Cat2("Aug11-03", "QQQ", False, 5.0, 0.0, 1, phase="OFF_DUTY"),
+        _Cat2(sid, symbol, running, realized_pnl_today, open_pnl, fills_today, phase=phase),
     ]
     aggregator = _FakeAggregator()
     hub = GalleryHub(
@@ -298,32 +341,10 @@ async def test_build_snapshot_includes_stopped_bot_and_its_bars() -> None:
 
     snap = await hub.build_snapshot()
 
-    assert {b.sid for b in snap.bots} == {"Aug11-02", "Aug11-03"}
-    assert {s.symbol for s in snap.symbols} == {"SPY", "QQQ"}
-    assert sorted(aggregator.subscribed) == ["QQQ", "SPY"]
-    stopped = next(b for b in snap.bots if b.sid == "Aug11-03")
-    assert stopped.running is False
-
-
-@pytest.mark.asyncio
-async def test_build_snapshot_excludes_retired_bot_and_its_bars() -> None:
-    rows = [
-        _Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12, phase="ON_DUTY"),
-        _Cat2("Aug11-04", "IWM", False, None, None, None, phase="RETIRED"),
-    ]
-    aggregator = _FakeAggregator()
-    hub = GalleryHub(
-        broker="alpaca",
-        account_id="PA3",
-        catalog_source=_FakeCatalogSource(rows),
-        aggregator=aggregator,
-    )
-
-    snap = await hub.build_snapshot()
-
-    assert {b.sid for b in snap.bots} == {"Aug11-02"}
-    assert {s.symbol for s in snap.symbols} == {"SPY"}
-    assert aggregator.subscribed == ["SPY"]  # retired bot's symbol never subscribed
+    assert {b.sid for b in snap.bots} == set(expected_sids), "bots on the wall"
+    assert {b.sid for b in snap.bots if b.running is False} == set(expected_stopped), "bots projected as stopped"
+    assert {s.symbol for s in snap.symbols} == set(expected_symbols), "symbols with bars fetched"
+    assert sorted(aggregator.subscribed) == list(expected_subscribed), "symbols subscribed"
 
 
 class _EmptyAggregator(_FakeAggregator):
@@ -366,52 +387,44 @@ async def test_build_update_returns_only_new_bars_and_bumps_version() -> None:
 
 
 @pytest.mark.asyncio
-async def test_build_update_stopped_bot_survives_not_removed() -> None:
-    """A bot that stops between calls stays on the wall as a stopped
-    (Resume) tile — only a bot that leaves the catalog entirely (retired or
-    deleted) lands in ``removed_sids``, never one that merely stopped."""
-    rows = [
-        _Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12),
-        _Cat2("Aug11-03", "SPY", True, 10.0, 0.0, 3),
-    ]
-    agg = _FakeAggregator()
-    hub = GalleryHub(broker="alpaca", account_id="PA3", catalog_source=_FakeCatalogSource(rows), aggregator=agg)
-    snapshot = await hub.build_snapshot()
-
-    rows[1].running = False  # bot stops between snapshot and update
-
-    upd = await hub.build_update(
-        since_bar_ms={}, known_sids={b.sid for b in snapshot.bots}
-    )
-
-    assert upd.removed_sids == []
-    assert {b.sid for b in upd.bots_delta} == {"Aug11-02", "Aug11-03"}
-    stopped = next(b for b in upd.bots_delta if b.sid == "Aug11-03")
-    assert stopped.running is False
-
-
-@pytest.mark.asyncio
-async def test_build_update_removed_sids_when_bot_retires_between_calls() -> None:
-    rows = [
-        _Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12),
-        _Cat2("Aug11-03", "SPY", True, 10.0, 0.0, 3),
-    ]
-    agg = _FakeAggregator()
-    hub = GalleryHub(broker="alpaca", account_id="PA3", catalog_source=_FakeCatalogSource(rows), aggregator=agg)
-    snapshot = await hub.build_snapshot()
-
-    rows[1].phase = "RETIRED"  # bot retires between snapshot and update
-
-    upd = await hub.build_update(
-        since_bar_ms={}, known_sids={b.sid for b in snapshot.bots}
-    )
-
-    assert upd.removed_sids == ["Aug11-03"]
-    assert {b.sid for b in upd.bots_delta} == {"Aug11-02"}
-
-
-@pytest.mark.asyncio
-async def test_build_update_removed_sids_when_bot_leaves_catalog_entirely() -> None:
+@pytest.mark.parametrize(
+    ("change", "expected_removed", "expected_delta_sids", "expected_stopped"),
+    [
+        # A bot that stops between calls stays on the wall as a stopped
+        # (Resume) tile — only a bot that leaves the catalog entirely (retired or
+        # deleted) lands in ``removed_sids``, never one that merely stopped.
+        # The bot stops between snapshot and update.
+        pytest.param(
+            lambda rows, catalog_source: setattr(rows[1], "running", False),
+            (),
+            ("Aug11-02", "Aug11-03"),
+            ("Aug11-03",),
+            id="stopped_bot_survives_not_removed",
+        ),
+        # The bot retires between snapshot and update.
+        pytest.param(
+            lambda rows, catalog_source: setattr(rows[1], "phase", "RETIRED"),
+            ("Aug11-03",),
+            ("Aug11-02",),
+            (),
+            id="removed_sids_when_bot_retires_between_calls",
+        ),
+        # The bot is deleted from the catalog between calls.
+        pytest.param(
+            lambda rows, catalog_source: setattr(catalog_source, "_rows", [rows[0]]),
+            ("Aug11-03",),
+            ("Aug11-02",),
+            (),
+            id="removed_sids_when_bot_leaves_catalog_entirely",
+        ),
+    ],
+)
+async def test_build_update_removes_only_a_bot_that_left_the_catalog(
+    change: Callable[[list[_Cat2], _FakeCatalogSource], None],
+    expected_removed: tuple[str, ...],
+    expected_delta_sids: tuple[str, ...],
+    expected_stopped: tuple[str, ...],
+) -> None:
     rows = [
         _Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12),
         _Cat2("Aug11-03", "SPY", True, 10.0, 0.0, 3),
@@ -421,14 +434,15 @@ async def test_build_update_removed_sids_when_bot_leaves_catalog_entirely() -> N
     hub = GalleryHub(broker="alpaca", account_id="PA3", catalog_source=catalog_source, aggregator=agg)
     snapshot = await hub.build_snapshot()
 
-    catalog_source._rows = [rows[0]]  # bot deleted from the catalog between calls
+    change(rows, catalog_source)
 
     upd = await hub.build_update(
         since_bar_ms={}, known_sids={b.sid for b in snapshot.bots}
     )
 
-    assert upd.removed_sids == ["Aug11-03"]
-    assert {b.sid for b in upd.bots_delta} == {"Aug11-02"}
+    assert upd.removed_sids == list(expected_removed), "removed_sids"
+    assert {b.sid for b in upd.bots_delta} == set(expected_delta_sids), "bots still in the update"
+    assert {b.sid for b in upd.bots_delta if b.running is False} == set(expected_stopped), "bots shown as stopped"
 
 
 @pytest.mark.asyncio
@@ -853,40 +867,60 @@ async def test_build_update_shows_a_frozen_streaming_feed_as_stalled(
 
 
 @pytest.mark.asyncio
-async def test_build_snapshot_shows_a_fresh_streaming_feed_as_live(
+@pytest.mark.parametrize(
+    ("now_ms", "line", "expected_state", "expected_attention"),
+    [
+        pytest.param(
+            _RTH_MIDDAY_MS,
+            LiveLineStatus(status="streaming", last_bar_ms=_RTH_MIDDAY_MS - 10_000),
+            "LIVE",
+            False,
+            id="a_fresh_streaming_feed_as_live",
+        ),
+        # At 09:30:10 the line's newest bar is yesterday's and its sticky status is
+        # a pre-open error: that is a line starting, not a line that failed.
+        pytest.param(
+            _RTH_OPEN_MS + 10_000,
+            LiveLineStatus(
+                status="errored",
+                last_error="broker not connected: overnight gateway restart",
+                last_bar_ms=_PRIOR_SESSION_BAR_MS,
+                status_changed_at_ms=_PRIOR_SESSION_BAR_MS + 60_000,
+            ),
+            "STARTING",
+            False,
+            id="does_not_alarm_at_the_open_on_a_pre_open_error",
+        ),
+        # A line still ``subscribing`` an hour after the open is not starting: its
+        # first-bar budget is spent, so the tile says the chart is stalled.
+        pytest.param(
+            _RTH_OPEN_MS + 3_600_000,
+            LiveLineStatus(
+                status="subscribing",
+                last_bar_ms=_PRIOR_SESSION_BAR_MS,
+                status_changed_at_ms=_RTH_OPEN_MS - 60_000,
+            ),
+            "STALLED",
+            True,
+            id="bounds_a_line_that_never_delivers_its_first_bar",
+        ),
+    ],
+)
+async def test_build_snapshot_shows_the_feed_state_of_the_ibkr_line(
     monkeypatch: pytest.MonkeyPatch,
+    now_ms: int,
+    line: LiveLineStatus,
+    expected_state: str,
+    expected_attention: bool,
 ) -> None:
-    monkeypatch.setattr(gallery_hub, "now_ms_utc", lambda: _RTH_MIDDAY_MS)
+    monkeypatch.setattr(gallery_hub, "now_ms_utc", lambda: now_ms)
     aggregator = _FakeAggregator()
-    aggregator.status_5s_by_symbol["SPY"] = LiveLineStatus(
-        status="streaming", last_bar_ms=_RTH_MIDDAY_MS - 10_000
-    )
+    aggregator.status_5s_by_symbol["SPY"] = line
 
     snapshot = await _five_second_hub(aggregator).build_snapshot()
 
-    assert snapshot.bots[0].feed.state == "LIVE"
-    assert snapshot.bots[0].feed.attention_required is False
-
-
-@pytest.mark.asyncio
-async def test_build_snapshot_does_not_alarm_at_the_open_on_a_pre_open_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """At 09:30:10 the line's newest bar is yesterday's and its sticky status is
-    a pre-open error: that is a line starting, not a line that failed."""
-    monkeypatch.setattr(gallery_hub, "now_ms_utc", lambda: _RTH_OPEN_MS + 10_000)
-    aggregator = _FakeAggregator()
-    aggregator.status_5s_by_symbol["SPY"] = LiveLineStatus(
-        status="errored",
-        last_error="broker not connected: overnight gateway restart",
-        last_bar_ms=_PRIOR_SESSION_BAR_MS,
-        status_changed_at_ms=_PRIOR_SESSION_BAR_MS + 60_000,
-    )
-
-    snapshot = await _five_second_hub(aggregator).build_snapshot()
-
-    assert snapshot.bots[0].feed.state == "STARTING"
-    assert snapshot.bots[0].feed.attention_required is False
+    assert snapshot.bots[0].feed.state == expected_state, "feed state"
+    assert snapshot.bots[0].feed.attention_required is expected_attention, "attention required"
 
 
 @pytest.mark.asyncio
@@ -902,26 +936,6 @@ async def test_build_snapshot_says_no_bar_is_expected_when_the_market_is_closed(
     assert feed.state == "NOT_EXPECTED"
     assert feed.attention_required is False
     assert feed.headline == "Outside regular hours"
-
-
-@pytest.mark.asyncio
-async def test_build_snapshot_bounds_a_line_that_never_delivers_its_first_bar(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A line still ``subscribing`` an hour after the open is not starting: its
-    first-bar budget is spent, so the tile says the chart is stalled."""
-    monkeypatch.setattr(gallery_hub, "now_ms_utc", lambda: _RTH_OPEN_MS + 3_600_000)
-    aggregator = _FakeAggregator()
-    aggregator.status_5s_by_symbol["SPY"] = LiveLineStatus(
-        status="subscribing",
-        last_bar_ms=_PRIOR_SESSION_BAR_MS,
-        status_changed_at_ms=_RTH_OPEN_MS - 60_000,
-    )
-
-    snapshot = await _five_second_hub(aggregator).build_snapshot()
-
-    assert snapshot.bots[0].feed.state == "STALLED"
-    assert snapshot.bots[0].feed.attention_required is True
 
 
 @pytest.mark.asyncio

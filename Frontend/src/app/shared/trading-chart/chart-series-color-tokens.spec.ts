@@ -33,22 +33,6 @@ function contrastRatio(fgHex: string, bgHex: string): number {
 }
 
 describe('CHART_SERIES_COLOR_TOKENS', () => {
-  it('registers ten eligible tokens', () => {
-    expect(CHART_SERIES_ELIGIBLE_TOKENS).toHaveLength(10);
-    for (const id of CHART_SERIES_ELIGIBLE_TOKENS) {
-      expect(CHART_SERIES_COLOR_TOKENS.get(id)).toBeDefined();
-    }
-  });
-
-  it('isChartSeriesColorToken accepts registered IDs and rejects everything else', () => {
-    expect(isChartSeriesColorToken('series-blue')).toBe(true);
-    expect(isChartSeriesColorToken('series-blue ')).toBe(false);
-    expect(isChartSeriesColorToken('#4d8dff')).toBe(false);
-    expect(isChartSeriesColorToken('var(--chart-series-blue)')).toBe(false);
-    expect(isChartSeriesColorToken(null)).toBe(false);
-    expect(isChartSeriesColorToken(42)).toBe(false);
-  });
-
   it('every eligible token has >= 3:1 WCAG contrast on the chart surface (TV-dark)', () => {
     const surface = CHART_SERIES_SURFACE_HEX;
     for (const id of CHART_SERIES_ELIGIBLE_TOKENS) {
@@ -61,10 +45,22 @@ describe('CHART_SERIES_COLOR_TOKENS', () => {
     }
   });
 
-  it('registry and eligible list are frozen / immutable shapes', () => {
-    expect(Object.isFrozen(CHART_SERIES_ELIGIBLE_TOKENS)).toBe(true);
-    expect(() => {
+  it('registers ten eligible tokens, accepts only registered IDs, and keeps the registry and eligible list frozen', () => {
+    expect.soft(CHART_SERIES_ELIGIBLE_TOKENS, 'registers ten eligible tokens').toHaveLength(10);
+    for (const id of CHART_SERIES_ELIGIBLE_TOKENS) {
+      expect.soft(CHART_SERIES_COLOR_TOKENS.get(id), `registers a definition for eligible token ${id}`).toBeDefined();
+    }
+
+    expect.soft(isChartSeriesColorToken('series-blue'), 'isChartSeriesColorToken accepts a registered ID').toBe(true);
+    expect.soft(isChartSeriesColorToken('series-blue '), 'isChartSeriesColorToken rejects a registered ID with trailing whitespace').toBe(false);
+    expect.soft(isChartSeriesColorToken('#4d8dff'), 'isChartSeriesColorToken rejects a hex value').toBe(false);
+    expect.soft(isChartSeriesColorToken('var(--chart-series-blue)'), 'isChartSeriesColorToken rejects a CSS variable reference').toBe(false);
+    expect.soft(isChartSeriesColorToken(null), 'isChartSeriesColorToken rejects null').toBe(false);
+    expect.soft(isChartSeriesColorToken(42), 'isChartSeriesColorToken rejects a number').toBe(false);
+
+    expect.soft(Object.isFrozen(CHART_SERIES_ELIGIBLE_TOKENS), 'the eligible list is frozen').toBe(true);
+    expect.soft(() => {
       (CHART_SERIES_COLOR_TOKENS as Map<string, unknown>).set('series-hack', {} as never);
-    }).toThrow();
+    }, 'the registry rejects a new entry').toThrow();
   });
 });

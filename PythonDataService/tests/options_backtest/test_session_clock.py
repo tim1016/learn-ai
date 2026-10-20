@@ -24,13 +24,20 @@ def _clock_of(session_day: date) -> SessionClock:
     )
 
 
-def test_the_clock_is_the_open_and_close_of_a_full_session_the_calendar_names() -> None:
-    # 2026-10-12 is a Monday and a full session; the clock is read from it.
-    assert full_session_clock(as_of_ms=_noon_utc(date(2026, 10, 12))) == _clock_of(date(2026, 10, 12))
-
-
-def test_a_weekend_is_walked_back_to_the_last_session() -> None:
-    assert full_session_clock(as_of_ms=_noon_utc(date(2026, 10, 11))) == _clock_of(date(2026, 10, 9))
+@pytest.mark.parametrize(
+    ("as_of", "session_day"),
+    [
+        # 2026-10-12 is a Monday and a full session; the clock is read from it.
+        pytest.param(
+            date(2026, 10, 12),
+            date(2026, 10, 12),
+            id="the_clock_is_the_open_and_close_of_a_full_session_the_calendar_names",
+        ),
+        pytest.param(date(2026, 10, 11), date(2026, 10, 9), id="a_weekend_is_walked_back_to_the_last_session"),
+    ],
+)
+def test_the_clock_is_read_from_the_full_session_the_calendar_names(as_of: date, session_day: date) -> None:
+    assert full_session_clock(as_of_ms=_noon_utc(as_of)) == _clock_of(session_day)
 
 
 def test_an_early_close_is_not_a_full_session() -> None:

@@ -138,15 +138,12 @@ describe('readinessTotals', () => {
 });
 
 describe('coverageWindow', () => {
-  it('reads the whole held span when the coverage endpoint accepts it', () => {
+  it.each([
+    ['reads the whole held span when the coverage endpoint accepts it', 1830, { from: '2024-08-06', to: '2026-09-18' }],
+    ['keeps the newest sessions when the span is longer than the endpoint accepts', 30, { from: '2026-08-20', to: '2026-09-18' }],
+  ])('%s', (_name, maxDays, want) => {
     const [gld] = readinessRows([GLD], 'trade');
 
-    expect(coverageWindow(gld, 1830)).toEqual({ from: '2024-08-06', to: '2026-09-18' });
-  });
-
-  it('keeps the newest sessions when the span is longer than the endpoint accepts', () => {
-    const [gld] = readinessRows([GLD], 'trade');
-
-    expect(coverageWindow(gld, 30)).toEqual({ from: '2026-08-20', to: '2026-09-18' });
+    expect(coverageWindow(gld, maxDays)).toEqual(want);
   });
 });

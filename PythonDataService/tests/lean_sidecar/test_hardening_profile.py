@@ -47,31 +47,39 @@ def _allow_dummy_digest(monkeypatch):
 
 
 class TestProfileMapping:
-    def test_minimal_expands_to_empty_tuple(self) -> None:
-        assert tokens_for_profile(HardeningProfile.MINIMAL) == ()
-
-    def test_with_tmpfs_256m_expands_to_two_tokens(self) -> None:
-        expanded = tokens_for_profile(HardeningProfile.WITH_TMPFS_256M)
-        assert expanded == ("--tmpfs", "/tmp:rw,noexec,nosuid,size=256m")
-
-    def test_with_tmpfs_64m_expands_to_two_tokens(self) -> None:
-        expanded = tokens_for_profile(HardeningProfile.WITH_TMPFS_64M)
-        assert expanded == ("--tmpfs", "/tmp:rw,noexec,nosuid,size=64m")
-
-    def test_with_applehv_dotnet_fix_expands_to_six_tokens(self) -> None:
-        """Composite profile: tmpfs + the two pinned DOTNET_* env flags
-        that unblock the Apple Silicon / podman-applehv SIGILL on wider
-        trade-zip windows. Token order is load-bearing — ``--env`` is a
-        paired flag and the value must immediately follow the flag."""
-        expanded = tokens_for_profile(HardeningProfile.WITH_TMPFS_256M_AND_APPLEHV_DOTNET_FIX)
-        assert expanded == (
-            "--tmpfs",
-            "/tmp:rw,noexec,nosuid,size=256m",
-            "--env",
-            "DOTNET_ReadyToRun=0",
-            "--env",
-            "DOTNET_TieredCompilation=0",
-        )
+    @pytest.mark.parametrize(
+        ("profile", "expected_tokens"),
+        [
+            (HardeningProfile.MINIMAL, ()),
+            (HardeningProfile.WITH_TMPFS_256M, ("--tmpfs", "/tmp:rw,noexec,nosuid,size=256m")),
+            (HardeningProfile.WITH_TMPFS_64M, ("--tmpfs", "/tmp:rw,noexec,nosuid,size=64m")),
+            # Composite profile: tmpfs + the two pinned DOTNET_* env flags
+            # that unblock the Apple Silicon / podman-applehv SIGILL on wider
+            # trade-zip windows. Token order is load-bearing — ``--env`` is a
+            # paired flag and the value must immediately follow the flag.
+            (
+                HardeningProfile.WITH_TMPFS_256M_AND_APPLEHV_DOTNET_FIX,
+                (
+                    "--tmpfs",
+                    "/tmp:rw,noexec,nosuid,size=256m",
+                    "--env",
+                    "DOTNET_ReadyToRun=0",
+                    "--env",
+                    "DOTNET_TieredCompilation=0",
+                ),
+            ),
+        ],
+        ids=[
+            "minimal-expands-to-empty-tuple",
+            "with-tmpfs-256m-expands-to-two-tokens",
+            "with-tmpfs-64m-expands-to-two-tokens",
+            "with-applehv-dotnet-fix-expands-to-six-tokens",
+        ],
+    )
+    def test_a_profile_expands_to_its_pinned_tokens(
+        self, profile: HardeningProfile, expected_tokens: tuple[str, ...]
+    ) -> None:
+        assert tokens_for_profile(profile) == expected_tokens
 
     @pytest.mark.parametrize("profile", list(HardeningProfile))
     def test_every_profile_expands_only_to_allow_listed_tokens(self, profile: HardeningProfile) -> None:
@@ -86,22 +94,24 @@ class TestProfileMapping:
 
 
 class TestBuildCommandWithProfile:
-    def test_minimal_profile_yields_same_argv_as_empty_flags(self, workspace: Workspace) -> None:
-        """Minimal profile must be argv-identical to passing no flags —
-        the enum is a typed wrapper, not a behavior change."""
-        plan_profile = build_command(workspace, DUMMY_DIGEST, hardening_profile=HardeningProfile.MINIMAL)
-        plan_flags = build_command(workspace, DUMMY_DIGEST, hardening_flags=())
-        assert plan_profile.argv == plan_flags.argv
-
-    def test_with_tmpfs_profile_yields_same_argv_as_explicit_flags(self, workspace: Workspace) -> None:
-        plan_profile = build_command(
-            workspace, DUMMY_DIGEST, hardening_profile=HardeningProfile.WITH_TMPFS_256M
-        )
-        plan_flags = build_command(
-            workspace,
-            DUMMY_DIGEST,
-            hardening_flags=("--tmpfs", "/tmp:rw,noexec,nosuid,size=256m"),
-        )
+    @pytest.mark.parametrize(
+        ("profile", "explicit_flags"),
+        [
+            # Minimal profile must be argv-identical to passing no flags —
+            # the enum is a typed wrapper, not a behavior change.
+            (HardeningProfile.MINIMAL, ()),
+            (HardeningProfile.WITH_TMPFS_256M, ("--tmpfs", "/tmp:rw,noexec,nosuid,size=256m")),
+        ],
+        ids=[
+            "minimal-profile-yields-same-argv-as-empty-flags",
+            "with-tmpfs-profile-yields-same-argv-as-explicit-flags",
+        ],
+    )
+    def test_a_profile_yields_the_same_argv_as_its_explicit_flags(
+        self, workspace: Workspace, profile: HardeningProfile, explicit_flags: tuple[str, ...]
+    ) -> None:
+        plan_profile = build_command(workspace, DUMMY_DIGEST, hardening_profile=profile)
+        plan_flags = build_command(workspace, DUMMY_DIGEST, hardening_flags=explicit_flags)
         assert plan_profile.argv == plan_flags.argv
 
     def test_both_profile_and_flags_rejected(self, workspace: Workspace) -> None:

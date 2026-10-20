@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -266,76 +267,68 @@ def test_start_admission_blocks_a_validation_proof_that_was_not_reverified() -> 
     assert decision.reason_code == "STRATEGY_VALIDATION_UNVERIFIED"
 
 
-def test_start_admission_blocks_fresh_market_wide_closed_evidence() -> None:
-    decision = evaluate_run_admission(
-        _bot(liveness_state="CLOSED"),
-        _clerk(),
-        evaluated_at_ms=_NOW,
-    )
+@pytest.mark.parametrize(
+    ("bot_factory", "reason_code"),
+    [
+        pytest.param(
+            lambda: _bot(liveness_state="CLOSED"), "MARKET_LIVENESS_CLOSED", id="fresh-market-wide-closed-evidence"
+        ),
+        # #1671 AC4: scheduled RTH must never override fresh live evidence that
+        # the market is actually closed (e.g. an emergency early close) — the
+        # calendar and the broker's live clock can disagree, and live evidence
+        # wins for the admission decision.
+        pytest.param(
+            lambda: _bot(liveness_state="CLOSED", scheduled_phase="RTH"),
+            "MARKET_LIVENESS_CLOSED",
+            id="market-wide-closed-even-during-scheduled-rth-1671-ac4",
+        ),
+        pytest.param(lambda: _bot(process_state="UNKNOWN"), "PROCESS_STATE_UNKNOWN", id="unknown-process-state"),
+        pytest.param(
+            lambda: _bot(runtime_state="BOOT_RECOVERY_INCOMPLETE"),
+            "BOOT_RECOVERY_INCOMPLETE",
+            id="incomplete-boot-recovery",
+        ),
+        pytest.param(lambda: _bot(market_state="STALE"), "MARKET_DATA_STALE", id="stale-market-data"),
+        pytest.param(
+            lambda: _bot(observed_at_ms=_NOW + 1), "AUTHORITY_CLOCK_INVALID", id="future-dated-authority-facts"
+        ),
+    ],
+)
+def test_start_admission_blocks_one_bad_start_fact(bot_factory: Callable[[], StartRunFacts], reason_code: str) -> None:
+    decision = evaluate_run_admission(bot_factory(), _clerk(), evaluated_at_ms=_NOW)
 
-    assert decision.allowed is False
-    assert decision.reason_code == "MARKET_LIVENESS_CLOSED"
-
-
-def test_start_admission_blocks_market_wide_closed_even_during_scheduled_rth() -> None:
-    """#1671 AC4: scheduled RTH must never override fresh live evidence that
-    the market is actually closed (e.g. an emergency early close) — the
-    calendar and the broker's live clock can disagree, and live evidence
-    wins for the admission decision."""
-    decision = evaluate_run_admission(
-        _bot(liveness_state="CLOSED", scheduled_phase="RTH"),
-        _clerk(),
-        evaluated_at_ms=_NOW,
-    )
-
-    assert decision.allowed is False
-    assert decision.reason_code == "MARKET_LIVENESS_CLOSED"
-
-
-def test_start_admission_blocks_unknown_process_state() -> None:
-    decision = evaluate_run_admission(_bot(process_state="UNKNOWN"), _clerk(), evaluated_at_ms=_NOW)
-
-    assert decision.allowed is False
-    assert decision.reason_code == "PROCESS_STATE_UNKNOWN"
-
-
-def test_start_admission_blocks_incomplete_boot_recovery() -> None:
-    decision = evaluate_run_admission(
-        _bot(runtime_state="BOOT_RECOVERY_INCOMPLETE"),
-        _clerk(),
-        evaluated_at_ms=_NOW,
-    )
-
-    assert decision.allowed is False
-    assert decision.reason_code == "BOOT_RECOVERY_INCOMPLETE"
-
-
-def test_start_admission_blocks_stale_market_data() -> None:
-    decision = evaluate_run_admission(_bot(market_state="STALE"), _clerk(), evaluated_at_ms=_NOW)
-
-    assert decision.allowed is False
-    assert decision.reason_code == "MARKET_DATA_STALE"
+    assert decision.allowed is False, "the Start is refused"
+    assert decision.reason_code == reason_code, "the refusal names the failing start fact"
 
 
 @pytest.mark.parametrize("mode", ["trade", "dry_run", "log_only"])
-def test_start_admission_refuses_an_unsupported_extended_session_in_every_mode(mode: str) -> None:
+@pytest.mark.parametrize(
+    ("extended_hours_state", "reason_code"),
+    [
+        pytest.param("UNSUPPORTED", "EXTENDED_HOURS_UNSUPPORTED", id="unsupported-extended-session"),
+        # #2440 owner decision 2026-09-25: Start refuses until the exit allowance is set.
+        pytest.param(
+            "EXIT_ALLOWANCE_UNSET",
+            "EXTENDED_HOURS_ALLOWANCE_UNSET",
+            id="regular-hours-run-without-an-exit-allowance-2440",
+        ),
+        # Plan R8 as amended (thermo MAJOR 3): no mode carve-out. A Dry Run runs
+        # on the synthetic authority built with the same ``ProgramLegPolicy`` and
+        # routes every intent through ``shape_program_leg``, which refuses
+        # ``EXTENDED_HOURS_ALLOWANCE_UNSET`` regardless of mode — so admitting it
+        # started a run that then rejected every extended decision.
+        pytest.param("ALLOWANCE_UNSET", "EXTENDED_HOURS_ALLOWANCE_UNSET", id="unset-allowance-denies-every-mode"),
+    ],
+)
+def test_start_admission_refuses_an_unusable_extended_hours_state_in_every_mode(
+    mode: str, extended_hours_state: str, reason_code: str
+) -> None:
     decision = evaluate_run_admission(
-        _bot(mode=mode, extended_hours_state="UNSUPPORTED"), _clerk(), evaluated_at_ms=_NOW
+        _bot(mode=mode, extended_hours_state=extended_hours_state), _clerk(), evaluated_at_ms=_NOW
     )
 
-    assert decision.allowed is False
-    assert decision.reason_code == "EXTENDED_HOURS_UNSUPPORTED"
-
-
-@pytest.mark.parametrize("mode", ["trade", "dry_run", "log_only"])
-def test_start_of_a_regular_hours_run_without_an_exit_allowance_is_refused(mode: str) -> None:
-    """#2440 owner decision 2026-09-25: Start refuses until the exit allowance is set."""
-    decision = evaluate_run_admission(
-        _bot(mode=mode, extended_hours_state="EXIT_ALLOWANCE_UNSET"), _clerk(), evaluated_at_ms=_NOW
-    )
-
-    assert decision.allowed is False
-    assert decision.reason_code == "EXTENDED_HOURS_ALLOWANCE_UNSET"
+    assert decision.allowed is False, "the Start is refused in every mode"
+    assert decision.reason_code == reason_code, "the refusal names the extended-hours state"
 
 
 def test_start_admission_keeps_unprovable_custody_unknown() -> None:
@@ -369,13 +362,6 @@ def test_start_admission_refuses_existing_attributed_exposure() -> None:
     assert decision.allowed is False
     assert decision.reason_code == "START_REQUIRES_FLAT_CUSTODY"
     assert decision.next_step == "Flatten the exact Clerk-attributed exposure before starting another run."
-
-
-def test_start_admission_refuses_future_dated_authority_facts() -> None:
-    decision = evaluate_run_admission(_bot(observed_at_ms=_NOW + 1), _clerk(), evaluated_at_ms=_NOW)
-
-    assert decision.allowed is False
-    assert decision.reason_code == "AUTHORITY_CLOCK_INVALID"
 
 
 def test_start_admission_fact_age_boundary_is_explicit() -> None:
@@ -412,15 +398,50 @@ def test_dry_run_admitted_despite_market_liveness_halted_trade_still_denied() ->
     assert trade.reason_code == "MARKET_LIVENESS_HALTED"
 
 
-def test_dry_run_admitted_despite_unreconciled_custody_trade_still_denied() -> None:
-    clerk = _clerk(reconciliation_state="stale", reconciliation_fresh=False)
+@pytest.mark.parametrize(
+    ("clerk_factory", "trade_reason_code"),
+    [
+        pytest.param(
+            lambda: _clerk(reconciliation_state="stale", reconciliation_fresh=False),
+            "CLERK_CUSTODY_UNPROVABLE",
+            id="unreconciled-custody",
+        ),
+        pytest.param(
+            lambda: _clerk().model_copy(update={"freeze": _active_freeze()}),
+            "ACCOUNT_STATE_UNPROVABLE",
+            id="clerk-freeze",
+        ),
+        pytest.param(
+            lambda: _clerk().model_copy(update={"hold": HoldState(active=True, reason_code="UNEXPLAINED_ORDER_HOLD")}),
+            "UNEXPLAINED_ORDER_HOLD",
+            id="clerk-hold",
+        ),
+        pytest.param(lambda: _clerk(exposure_state="unknown"), "CLERK_EXPOSURE_UNKNOWN", id="unknown-exposure"),
+        pytest.param(
+            lambda: _clerk().model_copy(
+                update={"exposure": CustodyExposureFact(state="non_zero", positions={"SPY": 1.0})}
+            ),
+            "START_REQUIRES_FLAT_CUSTODY",
+            id="non-zero-start-exposure",
+        ),
+        pytest.param(
+            lambda: _clerk().model_copy(update={"working_orders": _count("non_zero")}),
+            "CLERK_WORK_REMAINS",
+            id="unresolved-clerk-work",
+        ),
+    ],
+)
+def test_dry_run_admitted_despite_a_custody_fact_trade_still_denied(
+    clerk_factory: Callable[[], ClerkCustodySnapshot], trade_reason_code: str
+) -> None:
+    clerk = clerk_factory()
 
     dry_run = evaluate_run_admission(_bot(mode="dry_run"), clerk, evaluated_at_ms=_NOW)
     trade = evaluate_run_admission(_bot(mode="trade"), clerk, evaluated_at_ms=_NOW)
 
-    assert dry_run.allowed is True
-    assert trade.allowed is False
-    assert trade.reason_code == "CLERK_CUSTODY_UNPROVABLE"
+    assert dry_run.allowed is True, "Dry Run holds no custody, so the fact does not stop it"
+    assert trade.allowed is False, "the same fact still denies trade"
+    assert trade.reason_code == trade_reason_code, "the trade refusal names the custody fact"
 
 
 def test_a_failed_broker_read_refuses_in_plain_language_and_offers_a_recheck() -> None:
@@ -446,84 +467,6 @@ def test_a_failed_broker_read_refuses_in_plain_language_and_offers_a_recheck() -
     # The recovery words are the Clerk snapshot's own (forwarded, with a
     # fallback), so the policy and the authority cannot drift apart.
     assert start.next_step == "Check again when the connection to Alpaca recovers."
-
-
-def test_dry_run_admitted_despite_clerk_freeze_trade_still_denied() -> None:
-    clerk = _clerk().model_copy(
-        update={"freeze": _active_freeze()}
-    )
-
-    dry_run = evaluate_run_admission(_bot(mode="dry_run"), clerk, evaluated_at_ms=_NOW)
-    trade = evaluate_run_admission(_bot(mode="trade"), clerk, evaluated_at_ms=_NOW)
-
-    assert dry_run.allowed is True
-    assert trade.allowed is False
-    assert trade.reason_code == "ACCOUNT_STATE_UNPROVABLE"
-
-
-def test_dry_run_admitted_despite_clerk_hold_trade_still_denied() -> None:
-    clerk = _clerk().model_copy(
-        update={"hold": HoldState(active=True, reason_code="UNEXPLAINED_ORDER_HOLD")}
-    )
-
-    dry_run = evaluate_run_admission(_bot(mode="dry_run"), clerk, evaluated_at_ms=_NOW)
-    trade = evaluate_run_admission(_bot(mode="trade"), clerk, evaluated_at_ms=_NOW)
-
-    assert dry_run.allowed is True
-    assert trade.allowed is False
-    assert trade.reason_code == "UNEXPLAINED_ORDER_HOLD"
-
-
-def test_dry_run_admitted_despite_unknown_exposure_trade_still_denied() -> None:
-    clerk = _clerk(exposure_state="unknown")
-
-    dry_run = evaluate_run_admission(_bot(mode="dry_run"), clerk, evaluated_at_ms=_NOW)
-    trade = evaluate_run_admission(_bot(mode="trade"), clerk, evaluated_at_ms=_NOW)
-
-    assert dry_run.allowed is True
-    assert trade.allowed is False
-    assert trade.reason_code == "CLERK_EXPOSURE_UNKNOWN"
-
-
-def test_dry_run_admitted_despite_non_zero_start_exposure_trade_still_denied() -> None:
-    clerk = _clerk().model_copy(
-        update={"exposure": CustodyExposureFact(state="non_zero", positions={"SPY": 1.0})}
-    )
-
-    dry_run = evaluate_run_admission(_bot(mode="dry_run"), clerk, evaluated_at_ms=_NOW)
-    trade = evaluate_run_admission(_bot(mode="trade"), clerk, evaluated_at_ms=_NOW)
-
-    assert dry_run.allowed is True
-    assert trade.allowed is False
-    assert trade.reason_code == "START_REQUIRES_FLAT_CUSTODY"
-
-
-def test_dry_run_admitted_despite_unresolved_clerk_work_trade_still_denied() -> None:
-    clerk = _clerk().model_copy(update={"working_orders": _count("non_zero")})
-
-    dry_run = evaluate_run_admission(_bot(mode="dry_run"), clerk, evaluated_at_ms=_NOW)
-    trade = evaluate_run_admission(_bot(mode="trade"), clerk, evaluated_at_ms=_NOW)
-
-    assert dry_run.allowed is True
-    assert trade.allowed is False
-    assert trade.reason_code == "CLERK_WORK_REMAINS"
-
-
-@pytest.mark.parametrize("mode", ["trade", "dry_run", "log_only"])
-def test_unset_extended_allowance_denies_every_mode(mode: str) -> None:
-    """Plan R8 as amended (thermo MAJOR 3): no mode carve-out.
-
-    A Dry Run runs on the synthetic authority built with the same
-    ``ProgramLegPolicy`` and routes every intent through ``shape_program_leg``,
-    which refuses ``EXTENDED_HOURS_ALLOWANCE_UNSET`` regardless of mode — so
-    admitting it started a run that then rejected every extended decision.
-    """
-    decision = evaluate_run_admission(
-        _bot(mode=mode, extended_hours_state="ALLOWANCE_UNSET"), _clerk(), evaluated_at_ms=_NOW
-    )
-
-    assert decision.allowed is False
-    assert decision.reason_code == "EXTENDED_HOURS_ALLOWANCE_UNSET"
 
 
 def test_dry_run_still_denied_for_stale_authority_facts_and_process_conflicts() -> None:
@@ -1000,15 +943,28 @@ def test_start_is_refused_when_only_the_traded_assets_facts_are_out_of_date(
 
 
 
-def test_a_cause_both_symbols_share_is_not_blamed_on_one_of_them() -> None:
-    """A closed market refuses SPY and QQQ alike; the refusal names neither."""
-    bot = _trading_qqq(_bot(liveness_state="CLOSED"), liveness_state="CLOSED")
+@pytest.mark.parametrize(
+    ("market_state", "liveness_state", "reason_code"),
+    [
+        # A closed market refuses SPY and QQQ alike; the refusal names neither.
+        pytest.param("AVAILABLE", "CLOSED", "MARKET_LIVENESS_CLOSED", id="closed-market"),
+        pytest.param("STALE", "TRADABLE", "MARKET_DATA_STALE", id="feed-stale-for-both-symbols"),
+    ],
+)
+def test_a_cause_both_symbols_share_is_not_blamed_on_one_of_them(
+    market_state: str, liveness_state: str, reason_code: str
+) -> None:
+    bot = _trading_qqq(
+        _bot(market_state=market_state, liveness_state=liveness_state),
+        market_state=market_state,
+        liveness_state=liveness_state,
+    )
 
     decision = evaluate_run_admission(bot, _clerk(), evaluated_at_ms=_NOW)
 
-    assert decision.reason_code == "MARKET_LIVENESS_CLOSED"
-    assert "SPY" not in decision.explanation
-    assert "QQQ" not in decision.explanation
+    assert decision.reason_code == reason_code, "the refusal names the shared cause"
+    assert "SPY" not in decision.explanation, "the refusal does not blame the symbol listened to"
+    assert "QQQ" not in decision.explanation, "the refusal does not blame the traded symbol"
 
 
 def test_a_bot_with_two_symbols_starts_before_the_open_like_any_other() -> None:
@@ -1019,13 +975,3 @@ def test_a_bot_with_two_symbols_starts_before_the_open_like_any_other() -> None:
     )
 
     assert evaluate_run_admission(bot, _clerk(), evaluated_at_ms=_NOW).allowed is True
-
-
-def test_a_feed_that_is_stale_for_both_symbols_is_not_blamed_on_one_of_them() -> None:
-    bot = _trading_qqq(_bot(market_state="STALE"), market_state="STALE")
-
-    decision = evaluate_run_admission(bot, _clerk(), evaluated_at_ms=_NOW)
-
-    assert decision.reason_code == "MARKET_DATA_STALE"
-    assert "SPY" not in decision.explanation
-    assert "QQQ" not in decision.explanation

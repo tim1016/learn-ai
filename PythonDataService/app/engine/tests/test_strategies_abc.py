@@ -94,26 +94,25 @@ def _bar(ts: datetime, close: str, high: str | None = None, low: str | None = No
 # ---------------------------------------------------------------------------
 
 
-def test_strategy_a_gate_rejects_when_ema_gap_below_threshold():
-    s = SpyStrategyAAlgorithm(ema_fast_period=3, ema_slow_period=5, ema_gap_threshold=1)
+@pytest.mark.parametrize(
+    ("ema_gap_threshold", "price_step", "probe_close", "gates_pass"),
+    [
+        # Flat bars: EMA gap ≈ 0 < threshold=1. All indicators ready.
+        pytest.param(1, 0, "100", False, id="gate_rejects_when_ema_gap_below_threshold"),
+        # Rising sequence pushes fast > slow (large gap) and macd > 0.
+        pytest.param(Decimal("0.01"), 0.5, "125", True, id="gate_passes_with_large_gap_and_positive_macd"),
+    ],
+)
+def test_strategy_a_gate(ema_gap_threshold: int | Decimal, price_step: float, probe_close: str, gates_pass: bool):
+    s = SpyStrategyAAlgorithm(ema_fast_period=3, ema_slow_period=5, ema_gap_threshold=ema_gap_threshold)
     _wire(s)
     t = datetime(2024, 1, 2, 14, 30, tzinfo=UTC)
-    # Feed 50 flat bars so EMA gap ≈ 0 < threshold=1. All indicators ready.
     for i in range(50):
-        s._update_extra_indicators(_bar(t + timedelta(minutes=15 * i), "100"))
-    assert s._extra_indicators_ready()
-    assert not _gates_pass(s, _bar(t + timedelta(minutes=15 * 50), "100"))
-
-
-def test_strategy_a_gate_passes_with_large_gap_and_positive_macd():
-    s = SpyStrategyAAlgorithm(ema_fast_period=3, ema_slow_period=5, ema_gap_threshold=Decimal("0.01"))
-    _wire(s)
-    t = datetime(2024, 1, 2, 14, 30, tzinfo=UTC)
-    # Rising sequence pushes fast > slow (large gap) and macd > 0.
-    for i in range(50):
-        s._update_extra_indicators(_bar(t + timedelta(minutes=15 * i), str(100 + i * 0.5)))
-    assert s._extra_indicators_ready()
-    assert _gates_pass(s, _bar(t + timedelta(minutes=15 * 50), "125"))
+        s._update_extra_indicators(_bar(t + timedelta(minutes=15 * i), str(100 + i * price_step)))
+    assert s._extra_indicators_ready(), "all strategy A indicators are ready"
+    assert _gates_pass(s, _bar(t + timedelta(minutes=15 * 50), probe_close)) is gates_pass, (
+        f"strategy A entry gates {'pass' if gates_pass else 'reject'}"
+    )
 
 
 # ---------------------------------------------------------------------------

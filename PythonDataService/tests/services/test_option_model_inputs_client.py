@@ -174,46 +174,9 @@ def _nothing_known(read: ModelInputsRead) -> tuple[object, ...]:
 # ---- What a Clerk learns ------------------------------------------------------------
 
 
-def test_a_clerk_reads_every_digit_and_every_ex_date_the_coordinator_read(monkeypatch: pytest.MonkeyPatch) -> None:
-    coordinator = Coordinator(monkeypatch)
-
-    read = _read()
-
-    assert read.rate.hex() == (0.1 + 0.2).hex()
-    assert read.dividends == READ.dividends
-    assert [paid.cash.hex() for paid in read.dividends] == [(1.8).hex(), (0.470625).hex()]
-    assert (read.rate_is_default, read.rate_default_why, read.dividends_unknown_why) == (False, None, None)
-    assert (read.rate_source, read.dividends_source, read.dividends_read_ms) == (
-        READ.rate_source, READ.dividends_source, READ.dividends_read_ms,
-    )
-    assert read.model is not None and read.model.dividends == READ.dividends
-    # One ask, for the symbol as the coordinator spells it, and no vendor asked from here.
-    assert coordinator.asked == [("SPY", NOW, _NEXT_FRIDAY, True)]
-    assert len(coordinator.sent) == 1
-    assert coordinator.vendors_asked == []
-
-
-def test_the_ask_goes_to_the_coordinators_route_as_this_clerk_with_no_token_and_no_date_text_in_its_body(
+def test_a_clerk_asks_as_itself_and_reads_every_digit_and_every_ex_date_the_coordinator_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    coordinator = Coordinator(monkeypatch)
-
-    _read()
-
-    (sent,) = coordinator.sent
-    assert (sent.method, str(sent.url)) == ("POST", f"http://127.0.0.1:8000{INTERNAL_OPTION_MODEL_INPUTS_PATH}")
-    assert (sent.headers["X-Fleet-Clerk-Id"], sent.headers["X-Fleet-Agent-Token"]) == (CLERK_ID, TOKEN)
-    assert json.loads(sent.content) == {
-        "clerk_id": CLERK_ID,
-        "underlying": "SPY",
-        "at_ms": NOW,
-        "latest_expiry_ms": option_expiry_anchor_ms(_NEXT_FRIDAY),
-        "wait": True,
-    }
-    assert coordinator.read_timeouts == [OPTION_MODEL_INPUTS_READ_TIMEOUT_S]
-
-
-def test_the_answer_on_the_wire_has_its_numbers_as_text_and_its_dates_as_moments(monkeypatch: pytest.MonkeyPatch) -> None:
     coordinator = Coordinator(monkeypatch)
     answers: list[dict] = []
 
@@ -223,7 +186,39 @@ def test_the_answer_on_the_wire_has_its_numbers_as_text_and_its_dates_as_moments
         return response
 
     coordinator.answer = keeping
-    _read()
+
+    read = _read()
+
+    assert read.rate.hex() == (0.1 + 0.2).hex(), "a Clerk reads every digit of the rate"
+    assert read.dividends == READ.dividends, "a Clerk reads every ex-date the coordinator read"
+    assert [paid.cash.hex() for paid in read.dividends] == [(1.8).hex(), (0.470625).hex()], "every digit of each cash"
+    assert (read.rate_is_default, read.rate_default_why, read.dividends_unknown_why) == (False, None, None), (
+        "neither fact is marked default or unknown"
+    )
+    assert (read.rate_source, read.dividends_source, read.dividends_read_ms) == (
+        READ.rate_source, READ.dividends_source, READ.dividends_read_ms,
+    ), "the coordinator's words and read time come through"
+    assert read.model is not None and read.model.dividends == READ.dividends, "the model carries the dividends"
+    # One ask, for the symbol as the coordinator spells it, and no vendor asked from here.
+    assert coordinator.asked == [("SPY", NOW, _NEXT_FRIDAY, True)], "one ask, for the symbol as the coordinator spells it"
+    assert len(coordinator.sent) == 1, "one request sent"
+    assert coordinator.vendors_asked == [], "no vendor asked from here"
+
+    (sent,) = coordinator.sent
+    assert (sent.method, str(sent.url)) == ("POST", f"http://127.0.0.1:8000{INTERNAL_OPTION_MODEL_INPUTS_PATH}"), (
+        "the ask goes to the coordinator's route"
+    )
+    assert (sent.headers["X-Fleet-Clerk-Id"], sent.headers["X-Fleet-Agent-Token"]) == (CLERK_ID, TOKEN), (
+        "the ask is made as this Clerk"
+    )
+    assert json.loads(sent.content) == {
+        "clerk_id": CLERK_ID,
+        "underlying": "SPY",
+        "at_ms": NOW,
+        "latest_expiry_ms": option_expiry_anchor_ms(_NEXT_FRIDAY),
+        "wait": True,
+    }, "the body carries no token and no date text"
+    assert coordinator.read_timeouts == [OPTION_MODEL_INPUTS_READ_TIMEOUT_S], "the ask is read within the timeout"
 
     (answer,) = answers
     assert answer["rate"] == {
@@ -231,11 +226,11 @@ def test_the_answer_on_the_wire_has_its_numbers_as_text_and_its_dates_as_moments
         "source": "FRED",
         "why_default": None,
         "sentence": READ.rate_source,
-    }
+    }, "the answer on the wire has its rate as text"
     assert answer["dividends"]["declared"] == [
         {"ex_ms": session_open_ms_utc(_FRIDAY), "cash": "1.8"},
         {"ex_ms": session_open_ms_utc(_NEXT_FRIDAY), "cash": "0.470625"},
-    ]
+    ], "the answer on the wire has its cash as text and its ex-dates as moments"
 
 
 def test_over_a_real_socket_the_fleets_own_client_reads_the_same_answer(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -209,12 +210,21 @@ def test_custom_gate_is_sealed_but_not_claimed_as_golden_validated() -> None:
     assert seal.configured_signal.parameters_match_validated_settings is False
 
 
-def test_build_start_program_seal_fails_closed_on_missing_parameter_origin() -> None:
+@pytest.mark.parametrize(
+    "seal_kwargs_factory",
+    [
+        pytest.param(lambda: {}, id="missing-parameter-origins"),
+        pytest.param(lambda: {"parameter_origins": {"gap": "deploy_override"}}, id="partial-parameter-origins"),
+    ],
+)
+def test_build_start_program_seal_fails_closed_on_missing_or_partial_parameter_origins(
+    seal_kwargs_factory: Callable[[], dict[str, object]],
+) -> None:
     """No inference in the Start path: an absent origin is a hard error, not a guess."""
     binding = _binding()
 
     with pytest.raises(SignalProgramSealError, match="explicit origin"):
-        build_start_program_seal(binding, _validation())
+        build_start_program_seal(binding, _validation(), **seal_kwargs_factory())
 
 
 def test_build_start_program_seal_defaults_every_untouched_parameter_without_an_origins_map() -> None:
@@ -235,13 +245,6 @@ def test_build_start_program_seal_defaults_every_untouched_parameter_without_an_
     assert seal.configured_signal.parameters["gap"].origin == "registered_default"
     assert seal.configured_signal.parameters["rsi_min"].origin == "registered_default"
     assert seal.configured_signal.parameters["rsi_max"].origin == "registered_default"
-
-
-def test_build_start_program_seal_fails_closed_on_partial_parameter_origins() -> None:
-    binding = _binding()
-
-    with pytest.raises(SignalProgramSealError, match="explicit origin"):
-        build_start_program_seal(binding, _validation(), parameter_origins={"gap": "deploy_override"})
 
 
 def test_committed_receipt_matches_current_artifacts_and_golden_root() -> None:
@@ -604,33 +607,31 @@ def test_explicit_default_lengths_seal_exactly_like_the_pre_lengths_point() -> N
     assert explicit.configured_signal.parameters_match_validated_settings is True
 
 
-def test_seal_records_the_series_and_hold_its_own_lengths_build() -> None:
-    _bound, seal = _lengths_seal(**_NON_DEFAULT_LENGTHS)
+def test_non_default_lengths_seal_their_series_and_hold_prove_their_build_and_stamp_the_corpus_uncovered() -> None:
+    binding, seal = _lengths_seal(**_NON_DEFAULT_LENGTHS)
     configured = seal.configured_signal
 
     assert {series.name: (series.period, series.warmup_bars) for series in configured.signals} == {
         "ema_fast": (7, 7),
         "ema_slow": (20, 20),
         "rsi": (14, 15),
-    }
-    assert configured.exit_eligibility.countdown_decision_clocks == 8
+    }, "the seal records the series its own lengths build"
+    assert configured.exit_eligibility.countdown_decision_clocks == 8, "the seal records the hold its own lengths build"
     assert {name: (configured.parameters[name].value, configured.parameters[name].unit) for name in _NON_DEFAULT_LENGTHS} == {
         "fast_period": (7, "decision_bars"),
         "slow_period": (20, "decision_bars"),
         "hold_bars": (8, "decision_bars"),
-    }
-    assert all(configured.parameters[name].origin == "deploy_override" for name in _NON_DEFAULT_LENGTHS)
+    }, "the lengths and the hold are sealed in decision bars"
+    assert all(
+        configured.parameters[name].origin == "deploy_override" for name in _NON_DEFAULT_LENGTHS
+    ), "every length is sealed as a deploy override"
     # The corpus covers 5/10/5 only; the gates alone matching must not claim it.
-    assert configured.parameters_match_validated_settings is False
-
-
-def test_non_default_lengths_prove_their_build_but_stamp_the_corpus_uncovered() -> None:
-    binding, _seal = _lengths_seal(**_NON_DEFAULT_LENGTHS)
+    assert configured.parameters_match_validated_settings is False, "the gates alone matching do not claim the corpus"
 
     proof = prove_running_program_build(binding, verified_at_ms=_NOW)
 
-    assert proof.state == "PROVEN"
-    assert proof.corpus_coverage == "UNCOVERED"
+    assert proof.state == "PROVEN", "non-default lengths prove their build"
+    assert proof.corpus_coverage == "UNCOVERED", "non-default lengths stamp the corpus uncovered"
 
 
 @pytest.mark.parametrize(
@@ -701,28 +702,27 @@ def _off_validated_seal(
 
 @pytest.mark.parametrize("program_key", sorted(_SERIES_OFF_VALIDATED))
 def test_a_deploy_off_the_default_periods_seals_the_periods_it_runs(program_key: str) -> None:
-    """These five sealed their default periods whatever the deploy ran (#2796)."""
-    _bound, seal = _off_validated_seal(program_key)
+    """These five sealed their default periods whatever the deploy ran (#2796).
+
+    The seal they minted before attests to series the bot does not run, so a
+    seal naming the default periods for another deploy must fail closed.
+    """
+    binding, seal = _off_validated_seal(program_key)
     configured = seal.configured_signal
 
     sealed = {series.name: (series.period, series.warmup_bars) for series in configured.signals}
-    assert sealed == _SERIES_OFF_VALIDATED[program_key]
-    assert configured.parameters_match_validated_settings is False
+    assert sealed == _SERIES_OFF_VALIDATED[program_key], "#2796: the seal records the periods the deploy runs"
+    assert configured.parameters_match_validated_settings is False, "#2796: off-validated periods do not claim the validated settings"
 
-
-@pytest.mark.parametrize("program_key", sorted(_SERIES_OFF_VALIDATED))
-def test_a_seal_naming_the_default_periods_for_another_deploy_fails_closed(program_key: str) -> None:
-    """The seal these five minted before #2796 attests to series the bot does not run."""
-    binding, seal = _off_validated_seal(program_key)
     contract = _STRATEGY_REGISTRY[program_key].signal_program_contract
-    assert contract is not None
-    stale = seal.configured_signal.model_copy(update={"signals": contract.signals})
+    assert contract is not None, "#2796: the program has a registered contract"
+    stale = configured.model_copy(update={"signals": contract.signals})
     binding = binding.model_copy(update={"sealed_program": seal.model_copy(update={"configured_signal": stale})})
 
     proof = prove_running_program_build(binding, verified_at_ms=_NOW)
 
-    assert proof.state == "UNPROVEN"
-    assert "signal semantics" in proof.explanation
+    assert proof.state == "UNPROVEN", "#2796: a seal naming the default periods for another deploy fails closed"
+    assert "signal semantics" in proof.explanation, "#2796: the refusal names the signal semantics"
 
 
 @pytest.mark.parametrize(("rsi_period", "adx_period"), [(21, 14), (14, 10), (21, 10)])
@@ -862,19 +862,6 @@ def test_wiring_drift_is_reported_but_admitted_while_the_toggle_is_off(tmp_path:
     assert f"program-wiring-digest:{running_wiring_digest(contract)}" in proof.evidence_refs
 
 
-def test_wiring_drift_fails_closed_once_the_toggle_is_on(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(settings, "SIGNAL_PROGRAM_WIRING_DIGEST_ENFORCED", True)
-    manifest_path = _rewritten_manifest(tmp_path, "ema_crossover_signal", wiring_digest="a" * 64)
-
-    proof = prove_running_program_build(
-        _sealed_binding(), verified_at_ms=_NOW, manifest_path=manifest_path
-    )
-
-    assert proof.state == "UNPROVEN"
-
-
 def test_matching_wiring_proves_and_says_so(tmp_path: Path) -> None:
     proof = prove_running_program_build(_sealed_binding(), verified_at_ms=_NOW)
 
@@ -883,9 +870,16 @@ def test_matching_wiring_proves_and_says_so(tmp_path: Path) -> None:
     assert proof.next_step is None
 
 
-@pytest.mark.parametrize("enforced", [False, True])
-def test_artifact_drift_still_fails_closed_whatever_the_toggle_says(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enforced: bool
+@pytest.mark.parametrize(
+    ("drifted_field", "digest", "enforced"),
+    [
+        pytest.param("wiring_digest", "a" * 64, True, id="wiring-drift-fails-closed-once-the-toggle-is-on"),
+        pytest.param("artifact_digest", "b" * 64, False, id="artifact-drift-still-fails-closed-with-the-toggle-off"),
+        pytest.param("artifact_digest", "b" * 64, True, id="artifact-drift-still-fails-closed-with-the-toggle-on"),
+    ],
+)
+def test_digest_drift_fails_closed_wherever_the_toggle_governs_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, drifted_field: str, digest: str, enforced: bool
 ) -> None:
     """Issue #1735's scope note, encoded.
 
@@ -895,15 +889,13 @@ def test_artifact_drift_still_fails_closed_whatever_the_toggle_says(
     the toggle off would quietly widen what can start.
     """
     monkeypatch.setattr(settings, "SIGNAL_PROGRAM_WIRING_DIGEST_ENFORCED", enforced)
-    manifest_path = _rewritten_manifest(
-        tmp_path, "ema_crossover_signal", artifact_digest="b" * 64
-    )
+    manifest_path = _rewritten_manifest(tmp_path, "ema_crossover_signal", **{drifted_field: digest})
 
     proof = prove_running_program_build(
         _sealed_binding(), verified_at_ms=_NOW, manifest_path=manifest_path
     )
 
-    assert proof.state == "UNPROVEN"
+    assert proof.state == "UNPROVEN", "the drifted digest is refused"
 
 
 def test_an_unreadable_wiring_path_fails_closed_rather_than_raising(

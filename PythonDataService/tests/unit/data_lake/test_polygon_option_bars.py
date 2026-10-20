@@ -93,44 +93,48 @@ async def test_a_price_keeps_every_digit_the_vendor_wrote() -> None:
 
 
 @respx.mock
-async def test_the_request_names_the_o_prefixed_contract_and_the_day_and_asks_for_raw_ascending_bars() -> None:
+async def test_the_request_names_the_o_prefixed_contract_and_the_day_asks_for_raw_ascending_bars_and_sends_the_key_in_a_header_only() -> None:
     route = _vendor(traded(SYMBOL, [bar_row(0)]))
 
     await _fetch()
 
     asked = route.calls[0].request
-    assert asked.url.path == f"/v2/aggs/ticker/O:{SYMBOL}/range/1/minute/2025-06-13/2025-06-13"
-    assert dict(asked.url.params) == {"adjusted": "false", "sort": "asc", "limit": "50000"}
+    assert asked.url.path == f"/v2/aggs/ticker/O:{SYMBOL}/range/1/minute/2025-06-13/2025-06-13", (
+        "the request names the O:-prefixed contract and the day"
+    )
+    assert dict(asked.url.params) == {"adjusted": "false", "sort": "asc", "limit": "50000"}, (
+        "the request asks for raw ascending bars"
+    )
+    assert asked.headers["Authorization"] == f"Bearer {SENTINEL_KEY}", "the key rides in an Authorization header"
+    assert SENTINEL_KEY not in str(asked.url), "the key is in no URL"
+    assert "apikey" not in str(asked.url).lower(), "no apikey parameter is in the URL"
 
 
 @respx.mock
-async def test_a_listed_contract_that_did_not_trade_is_a_confirmed_empty_answer() -> None:
+async def test_a_listed_contract_that_did_not_trade_and_an_empty_results_list_are_confirmed_empty_answers() -> None:
     """The probed body: ``status OK``, the ticker, ``resultsCount 0``, ``queryCount 0`` and no ``results`` key at all."""
     body = no_trades_body(SYMBOL)
-    assert "results" not in body and "count" not in body
+    assert "results" not in body and "count" not in body, "the probed body has no results key at all"
     _vendor(no_trades(SYMBOL))
+    assert await _fetch() == [], "a listed contract that did not trade is a confirmed empty answer"
 
-    assert await _fetch() == []
-
-
-@respx.mock
-async def test_an_empty_results_list_with_a_zero_count_is_also_confirmed_empty() -> None:
     _vendor(httpx.Response(200, json=no_trades_body(SYMBOL, results=[])))
-
-    assert await _fetch() == []
+    assert await _fetch() == [], "an empty results list with a zero count is also confirmed empty"
 
 
 @respx.mock
-async def test_an_answer_that_says_nothing_of_adjusted_is_still_confirmed_and_one_that_says_false_is_the_probed_shape() -> None:
+async def test_an_answer_that_says_nothing_of_adjusted_or_says_false_or_a_delayed_status_is_still_confirmed() -> None:
     """The probed answers carry ``adjusted: false``; the echo is not required, only never true."""
     body = traded_body(SYMBOL, [bar_row(0)])
-    assert body["adjusted"] is False
+    assert body["adjusted"] is False, "the probed shape carries adjusted: false"
     without_it = {k: v for k, v in body.items() if k != "adjusted"}
 
     _vendor(httpx.Response(200, json=without_it))
-    assert len(await _fetch()) == 1
+    assert len(await _fetch()) == 1, "an answer that says nothing of adjusted is still confirmed"
     _vendor(httpx.Response(200, json=body))
-    assert len(await _fetch()) == 1
+    assert len(await _fetch()) == 1, "one that says false is the probed shape"
+    _vendor(httpx.Response(200, json=traded_body(SYMBOL, [bar_row(0)], status="DELAYED")))
+    assert len(await _fetch()) == 1, "a delayed status is a confirmed answer"
 
 
 @respx.mock
@@ -141,13 +145,6 @@ async def test_an_answer_that_says_its_bars_are_adjusted_is_an_error_because_the
         await _fetch()
 
     assert type(raised.value) is PolygonFetchError and raised.value.status_code == 200
-
-
-@respx.mock
-async def test_a_delayed_status_is_a_confirmed_answer() -> None:
-    _vendor(httpx.Response(200, json=traded_body(SYMBOL, [bar_row(0)], status="DELAYED")))
-
-    assert len(await _fetch()) == 1
 
 
 @respx.mock
@@ -168,18 +165,6 @@ async def test_an_empty_answer_cannot_tell_a_day_that_did_not_trade_from_one_tha
 
 
 # ── The key rides in a header ────────────────────────────────────────────
-
-
-@respx.mock
-async def test_the_key_rides_in_an_authorization_header_and_in_no_url() -> None:
-    route = _vendor(traded(SYMBOL, [bar_row(0)]))
-
-    await _fetch()
-
-    request = route.calls[0].request
-    assert request.headers["Authorization"] == f"Bearer {SENTINEL_KEY}"
-    assert SENTINEL_KEY not in str(request.url)
-    assert "apikey" not in str(request.url).lower()
 
 
 @respx.mock

@@ -91,16 +91,14 @@ function makeRun(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail 
 }
 
 describe("Strategy Lab chart adapter", () => {
-  it("compares numeric indicator recipes semantically without recreating server IDs", () => {
-    expect(indicatorMatches(
+  it("matches indicator recipes, keeps EMA values with their timestamps, and formats the persisted timeframe", () => {
+    expect.soft(indicatorMatches(
       "supertrend",
       { multiplier: 3.0, length: 10 },
       "supertrend",
       { length: 10, multiplier: 3 },
-    )).toBe(true);
-  });
+    ), "compares numeric indicator recipes semantically without recreating server IDs").toBe(true);
 
-  it("keeps EMA values and timestamps together in a dedicated indicator pane", () => {
     const timestamps = [1_767_626_100_000, 1_767_627_000_000];
     const normalized = normalizeIndicatorResults([
       {
@@ -124,8 +122,8 @@ describe("Strategy Lab chart adapter", () => {
       { id: "ema-length-10", name: "ema", label: "EMA 10" },
     ]);
 
-    expect(normalized.overlays).toEqual([]);
-    expect(normalized.subPanes).toEqual([expect.objectContaining({
+    expect.soft(normalized.overlays, "keeps EMA values and timestamps out of the price overlays").toEqual([]);
+    expect.soft(normalized.subPanes, "keeps EMA values and timestamps together in a dedicated indicator pane").toEqual([expect.objectContaining({
       id: "ema",
       label: "EMA",
       series: [
@@ -133,11 +131,9 @@ describe("Strategy Lab chart adapter", () => {
         expect.objectContaining({ name: "EMA 10", points: timestamps.map((timeMs, index) => ({ timeMs, value: 499 + index })) }),
       ],
     })]);
-  });
 
-  it("formats the persisted strategy timeframe without inferring a new cadence", () => {
-    expect(timeframeKey("minute", 15)).toBe("15m");
-    expect(timeframeKey("day", 1)).toBe("1D");
+    expect.soft(timeframeKey("minute", 15), "formats the persisted minute timeframe without inferring a new cadence").toBe("15m");
+    expect.soft(timeframeKey("day", 1), "formats the persisted day timeframe without inferring a new cadence").toBe("1D");
   });
 });
 

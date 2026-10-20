@@ -136,71 +136,36 @@ async def test_empty_results_returns_empty_list():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_401_raises_PolygonAuthError():
-    respx.get(_aggs_url_pattern()).mock(return_value=httpx.Response(401, json={"error": "Unauthorized"}))
-    with pytest.raises(PolygonAuthError):
+@pytest.mark.parametrize(
+    ("make_response", "symbol", "api_key", "error"),
+    [
+        (lambda: httpx.Response(401, json={"error": "Unauthorized"}), "SPY", "bad", PolygonAuthError),
+        (lambda: httpx.Response(403, json={"error": "Forbidden"}), "SPY", "ok", PolygonEntitlementError),
+        (lambda: httpx.Response(429, json={"error": "Too many"}), "SPY", "ok", PolygonRateLimitedError),
+        (
+            lambda: httpx.Response(200, json={"ticker": "FAKE", "status": "NOT_FOUND", "results": []}),
+            "FAKE",
+            "ok",
+            PolygonUnknownSymbolError,
+        ),
+        (lambda: httpx.Response(500, json={"error": "Server"}), "SPY", "ok", PolygonFetchError),
+    ],
+    ids=[
+        "401_raises_PolygonAuthError",
+        "403_raises_PolygonEntitlementError",
+        "429_raises_PolygonRateLimitedError",
+        "404_or_unknown_status_raises_PolygonUnknownSymbolError",
+        "500_raises_PolygonFetchError",
+    ],
+)
+async def test_a_failed_answer_raises_its_own_error_type(make_response, symbol: str, api_key: str, error: type):
+    respx.get(_aggs_url_pattern()).mock(return_value=make_response())
+    with pytest.raises(error):
         await fetch_minute_trade_aggregates(
-            symbol="SPY",
+            symbol=symbol,
             start=date(2024, 5, 20),
             end=date(2024, 5, 20),
-            api_key="bad",
-        )
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_403_raises_PolygonEntitlementError():
-    respx.get(_aggs_url_pattern()).mock(return_value=httpx.Response(403, json={"error": "Forbidden"}))
-    with pytest.raises(PolygonEntitlementError):
-        await fetch_minute_trade_aggregates(
-            symbol="SPY",
-            start=date(2024, 5, 20),
-            end=date(2024, 5, 20),
-            api_key="ok",
-        )
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_429_raises_PolygonRateLimitedError():
-    respx.get(_aggs_url_pattern()).mock(return_value=httpx.Response(429, json={"error": "Too many"}))
-    with pytest.raises(PolygonRateLimitedError):
-        await fetch_minute_trade_aggregates(
-            symbol="SPY",
-            start=date(2024, 5, 20),
-            end=date(2024, 5, 20),
-            api_key="ok",
-        )
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_404_or_unknown_status_raises_PolygonUnknownSymbolError():
-    respx.get(_aggs_url_pattern()).mock(
-        return_value=httpx.Response(
-            200,
-            json={"ticker": "FAKE", "status": "NOT_FOUND", "results": []},
-        )
-    )
-    with pytest.raises(PolygonUnknownSymbolError):
-        await fetch_minute_trade_aggregates(
-            symbol="FAKE",
-            start=date(2024, 5, 20),
-            end=date(2024, 5, 20),
-            api_key="ok",
-        )
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_500_raises_PolygonFetchError():
-    respx.get(_aggs_url_pattern()).mock(return_value=httpx.Response(500, json={"error": "Server"}))
-    with pytest.raises(PolygonFetchError):
-        await fetch_minute_trade_aggregates(
-            symbol="SPY",
-            start=date(2024, 5, 20),
-            end=date(2024, 5, 20),
-            api_key="ok",
+            api_key=api_key,
         )
 
 

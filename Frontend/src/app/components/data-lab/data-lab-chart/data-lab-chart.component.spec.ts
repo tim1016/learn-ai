@@ -150,16 +150,14 @@ describe('DataLabChartComponent data-source notice', () => {
     expect(container.textContent).not.toContain('symbol_provider_only');
   });
 
-  it('shows no notice when the response carries no source indicator (lake off)', async () => {
-    const { container } = await renderChartWith(chartResponse());
-
-    expect(container.querySelector(NOTICE_SELECTOR)).toBeNull();
-  });
-
-  it('shows no notice when history is fully lake-backed', async () => {
-    const { container } = await renderChartWith(
+  it.each([
+    ['shows no notice when the response carries no source indicator (lake off)', chartResponse()],
+    [
+      'shows no notice when history is fully lake-backed',
       chartResponse({ boundary_ms_utc: 1_764_599_400_000, notice_code: null }),
-    );
+    ],
+  ])('%s', async (_name, response) => {
+    const { container } = await renderChartWith(response);
 
     expect(container.querySelector(NOTICE_SELECTOR)).toBeNull();
   });
@@ -230,38 +228,37 @@ describe('DataLabChartComponent saved-session provenance', () => {
 });
 
 describe('DataLabChartComponent indicator warm-up notice', () => {
-  it('shows the backend note on values the held history could not warm up, verbatim', async () => {
-    const { container } = await renderChartWith({
+  it('shows the backend note verbatim and hands it to the parent so a save can carry it', async () => {
+    const { container, emitted } = await renderChartWith({
       ...chartResponse(),
       indicator_warmup: { note: WARMUP_NOTE },
     });
 
-    expect(container.querySelector(WARMUP_NOTICE_SELECTOR)?.textContent?.trim()).toBe(WARMUP_NOTE);
-    expect(screen.getByRole('status').textContent).toContain('not fully warmed up');
+    expect
+      .soft(
+        container.querySelector(WARMUP_NOTICE_SELECTOR)?.textContent?.trim(),
+        'shows the backend note on values the held history could not warm up, verbatim',
+      )
+      .toBe(WARMUP_NOTE);
+    expect
+      .soft(
+        screen.getByRole('status').textContent,
+        'shows the backend note on values the held history could not warm up: status text',
+      )
+      .toContain('not fully warmed up');
+    expect.soft(emitted[0].warmupNote, 'hands the note to the parent so a save can carry it').toBe(WARMUP_NOTE);
   });
 
-  it('shows no warm-up notice when every value is warmed up', async () => {
-    const { container } = await renderChartWith({
-      ...chartResponse(),
-      indicator_warmup: { note: null },
-    });
+  it.each([
+    [
+      'shows no warm-up notice when every value is warmed up',
+      { ...chartResponse(), indicator_warmup: { note: null } },
+    ],
+    ['shows no warm-up notice when no indicators were requested', chartResponse()],
+  ])('%s', async (_name, response) => {
+    const { container } = await renderChartWith(response);
 
     expect(container.querySelector(WARMUP_NOTICE_SELECTOR)).toBeNull();
-  });
-
-  it('shows no warm-up notice when no indicators were requested', async () => {
-    const { container } = await renderChartWith(chartResponse());
-
-    expect(container.querySelector(WARMUP_NOTICE_SELECTOR)).toBeNull();
-  });
-
-  it('hands the note to the parent so a save can carry it', async () => {
-    const { emitted } = await renderChartWith({
-      ...chartResponse(),
-      indicator_warmup: { note: WARMUP_NOTE },
-    });
-
-    expect(emitted[0].warmupNote).toBe(WARMUP_NOTE);
   });
 
   it('restores the note a saved snapshot was showing', async () => {

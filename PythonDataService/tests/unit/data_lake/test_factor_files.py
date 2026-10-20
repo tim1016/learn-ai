@@ -75,31 +75,29 @@ def test_one_split_event_dates_row_to_prior_session():
     assert Decimal(post[2]) == Decimal("1")
 
 
-def test_one_dividend_event_uses_prior_session_close():
+def test_one_dividend_event_uses_prior_session_close_and_builds_deterministically():
     dividends = [DividendEvent(ex_dividend_date="2025-12-19", cash_amount=1.81)]
-    body = _build(
-        "SPY",
-        [],
-        dividends,
-        {
-            date(2024, 6, 3): Decimal("530.00"),
-            date(2025, 12, 18): Decimal("680.00"),
-            date(2026, 4, 30): Decimal("711.00"),
-        },
-    ).decode("ascii")
+    closes = {
+        date(2024, 6, 3): Decimal("530.00"),
+        date(2025, 12, 18): Decimal("680.00"),
+        date(2026, 4, 30): Decimal("711.00"),
+    }
+    built = _build("SPY", [], dividends, closes)
+    body = built.decode("ascii")
     lines = body.strip().split("\n")
-    assert len(lines) == 3
+    assert len(lines) == 3, "anchor, dividend and anchor rows"
     event = lines[1].split(",")
     # Row dated to the prior trading session (2025-12-18), not the ex-date.
-    assert event[0] == "20251218"
+    assert event[0] == "20251218", "dividend row is dated to the prior trading session, not the ex-date"
     # Reference price is that session's RTH close.
-    assert Decimal(event[3]) == Decimal("680.00")
+    assert Decimal(event[3]) == Decimal("680.00"), "reference price is the prior session's RTH close"
     # price_factor = 1 - cash / reference_price — raw cash on the raw close
     # (#2479; a later split no longer rescales an earlier dividend).
     expected_pf = (Decimal("1") - Decimal("1.81") / Decimal("680.00")).quantize(Decimal("0.0000000001"))
-    assert Decimal(event[1]) == expected_pf
+    assert Decimal(event[1]) == expected_pf, "price_factor is 1 - cash / reference price (#2479)"
     # End anchor is unadjusted.
-    assert lines[2].split(",")[1] == "1"
+    assert lines[2].split(",")[1] == "1", "end anchor is unadjusted"
+    assert _build("SPY", [], dividends, closes) == built, "build is deterministic"
 
 
 def test_zero_reference_close_fails_loudly():
@@ -114,13 +112,3 @@ def test_zero_reference_close_fails_loudly():
                 date(2026, 4, 30): Decimal("711.00"),
             },
         )
-
-
-def test_build_is_deterministic():
-    dividends = [DividendEvent(ex_dividend_date="2025-12-19", cash_amount=1.81)]
-    closes = {
-        date(2024, 6, 3): Decimal("530.00"),
-        date(2025, 12, 18): Decimal("680.00"),
-        date(2026, 4, 30): Decimal("711.00"),
-    }
-    assert _build("SPY", [], dividends, closes) == _build("SPY", [], dividends, closes)

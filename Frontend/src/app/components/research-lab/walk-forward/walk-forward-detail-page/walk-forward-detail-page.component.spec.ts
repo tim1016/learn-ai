@@ -195,42 +195,44 @@ describe('WalkForwardDetailPageComponent', () => {
     vi.clearAllMocks();
   });
 
-  it('reads wf_id from the route and fetches the walk-forward', () => {
-    expect(service.getWalkForward).toHaveBeenCalledWith('b'.repeat(32));
-    expect(component.wfId()).toBe('b'.repeat(32));
-    expect(component.walkForward()?.result.folds).toHaveLength(2);
-  });
+  it('renders a loaded walk-forward: route wf_id fetched, aggregate metrics, one row per fold, parameter stability and the parent-run link', () => {
+    expect
+      .soft(service.getWalkForward, 'reads wf_id from the route and fetches the walk-forward: fetch call')
+      .toHaveBeenCalledWith('b'.repeat(32));
+    expect
+      .soft(component.wfId(), 'reads wf_id from the route and fetches the walk-forward: wf id')
+      .toBe('b'.repeat(32));
+    expect
+      .soft(component.walkForward()?.result.folds, 'reads wf_id from the route and fetches the walk-forward: fold count')
+      .toHaveLength(2);
 
-  it('renders aggregate metrics from the server payload', () => {
     const text: string = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('OOS aggregates');
+    expect.soft(text, 'renders aggregate metrics from the server payload: OOS aggregates heading').toContain('OOS aggregates');
     // mean_oos_sharpe = 0.50 → '0.50'
-    expect(text).toContain('0.50');
+    expect.soft(text, 'renders aggregate metrics from the server payload: mean OOS sharpe').toContain('0.50');
     // pct_profitable = 0.5 → '50%'
-    expect(text).toContain('50%');
+    expect.soft(text, 'renders aggregate metrics from the server payload: pct profitable folds').toContain('50%');
     // alpha_decay = -0.92 → '-0.920'
-    expect(text).toContain('-0.920');
-  });
+    expect.soft(text, 'renders aggregate metrics from the server payload: alpha decay').toContain('-0.920');
 
-  it('renders one row per fold with its run-id link', () => {
     const rows = fixture.nativeElement.querySelectorAll('.wfd-fold-table tbody tr');
-    expect(rows.length).toBe(2);
+    expect.soft(rows.length, 'renders one row per fold with its run-id link: row count').toBe(2);
     const firstRowText = (rows[0].textContent ?? '').trim();
-    expect(firstRowText).toContain('cccccccccccc'); // truncated test_run_id
-  });
+    expect
+      .soft(firstRowText, 'renders one row per fold with its run-id link: truncated test_run_id')
+      .toContain('cccccccccccc');
 
-  it('renders parameter stability and selected gap evidence', () => {
-    const text: string = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('How each candidate behaved across folds');
-    expect(text).toContain('Selected gap');
-    expect(text).toContain('2 bps');
-    expect(text).toContain('3 bps');
-  });
+    expect
+      .soft(text, 'renders parameter stability and selected gap evidence: stability heading')
+      .toContain('How each candidate behaved across folds');
+    expect.soft(text, 'renders parameter stability and selected gap evidence: selected gap').toContain('Selected gap');
+    expect.soft(text, 'renders parameter stability and selected gap evidence: 2 bps candidate').toContain('2 bps');
+    expect.soft(text, 'renders parameter stability and selected gap evidence: 3 bps candidate').toContain('3 bps');
 
-  it('shows the parent-run link in the header when parent_run_id is set', () => {
-    const text: string = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('Parent run');
-    expect(text).toContain('aaaaaaaaaaaaaaaa');
+    expect.soft(text, 'shows the parent-run link in the header when parent_run_id is set: label').toContain('Parent run');
+    expect
+      .soft(text, 'shows the parent-run link in the header when parent_run_id is set: parent run id')
+      .toContain('aaaaaaaaaaaaaaaa');
   });
 
   it('surfaces service errors', async () => {
