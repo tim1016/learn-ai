@@ -737,7 +737,11 @@ def _external_summary_row(
         native_order_id=order.broker_order_id,
         lifecycle_state=("reviewed" if order.acknowledged_at_ms is not None else "review_required"),
         external_order_id=order.external_order_id,
-        event_count=2 if order.acknowledgement_sequence is not None else 1,
+        # What the broker reports the order filled, as the operator reads it against Alpaca (#3309).
+        execution_quantity=order.filled_quantity or None,
+        execution_price=order.filled_avg_price if order.filled_quantity else None,
+        # A review a later fill or cancel reopened (#3309) leaves its sequence behind but is not a review now.
+        event_count=2 if order.acknowledged_at_ms is not None else 1,
     )
 
 

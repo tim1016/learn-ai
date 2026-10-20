@@ -13,6 +13,7 @@ from app.broker.alpaca.clerk.active_authority import (
     set_active_clerk_runtime,
 )
 from app.broker.alpaca.clerk.sqlite.external_orders import (
+    ExternalOrderReviewIncompleteError,
     observe_external_order,
     record_unfoldable_broker_order,
 )
@@ -150,6 +151,26 @@ async def test_external_order_acknowledgement_reports_unavailable_authority(
         )
     assert response.status_code == 503
     assert response.json()["detail"]["reason"] == "sqlite_authority_unavailable"
+
+
+async def test_acknowledging_a_leg_before_its_group_is_recorded_is_a_conflict_that_says_what_to_do(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.routers.clerk_transactions as module
+
+    def refuse(**_kwargs: object) -> None:
+        raise ExternalOrderReviewIncompleteError("The legs of this multi-leg order are not all recorded yet.")
+
+    monkeypatch.setattr(module, "sqlite_acknowledge_external_order", refuse)
+    app = FastAPI()
+    app.include_router(router)
+    async with AsyncClient(transport=ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test") as client:
+        response = await client.post(
+            "/api/accounts/PA-TEST/transactions/external-orders/external-1/acknowledge",
+            json={"operator": "operator-1"},
+        )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "The legs of this multi-leg order are not all recorded yet."
 
 
 async def test_external_order_acknowledgement_reports_selected_clerk_startup_failure() -> None:

@@ -128,6 +128,14 @@ async def test_list_orders_builds_filter() -> None:
     assert fake.orders_filter.direction == Sort.DESC
 
 
+async def test_list_orders_asks_alpaca_to_nest_a_multi_leg_parents_legs() -> None:
+    """Without it a closed multi-leg parent may arrive legless and be contained as unrecordable (#3309)."""
+    fake = _FakeAlpaca()
+    await _client(fake).list_orders(status="closed", limit=500)
+
+    assert fake.orders_filter.nested is True
+
+
 async def test_list_orders_narrows_to_a_symbol_and_a_window_for_paging() -> None:
     """One symbol's orders between two times: what a caller pages a long order history with (#2854)."""
     fake = _FakeAlpaca()

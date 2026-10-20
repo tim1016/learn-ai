@@ -634,7 +634,44 @@ def from_alpaca_order(
         observed_at_ms=_observed(observed_at_ms),
         fill_latency_seconds=fill_latency_seconds(submitted_at_ms, filled_at_ms),
         unreadable_fields=tuple(sorted(unreadable)),
+        legs=_multi_leg_parents_legs(payload, observed_at_ms=observed_at_ms),
     )
+
+
+def _multi_leg_parents_legs(payload: Mapping[str, Any], *, observed_at_ms: int | None) -> tuple[BrokerOrder, ...]:
+    """The legs a multi-leg parent answer nests, each read as the single-symbol order it is (#3309).
+
+    Alpaca gives the parent no symbol or side and nests the legs that carry
+    both. A leg that is read with values it could not parse names them in its
+    own ``unreadable_fields``; the Clerk decides whether the group is stated.
+    Anything that is not a list of leg objects with no legs of their own is
+    no legs at all, so the parent is held to what it states: nothing.
+    """
+    if payload.get("order_class") != _ALPACA_MULTI_LEG_ORDER_CLASS:
+        return ()
+    raw_legs = payload.get("legs")
+    if not isinstance(raw_legs, list) or any(not isinstance(leg, Mapping) or leg.get("legs") for leg in raw_legs):
+        return ()
+    return tuple(
+        from_alpaca_order(nested_leg_with_its_parents_terms(payload, leg), observed_at_ms=observed_at_ms)
+        for leg in raw_legs
+    )
+
+
+def nested_leg_with_its_parents_terms(parent: Mapping[str, Any], leg: Mapping[str, Any]) -> dict[str, Any]:
+    """A nested leg's answer, taking its parent's order type and time in force where it states none (#3309).
+
+    Alpaca's nested leg may omit its own type. Wherever a leg is read as an
+    order on its own -- from its parent's answer, or from the fill frame the
+    consumer synthesizes for it -- it is the parent's type and time in force
+    it trades under.
+    """
+    terms: dict[str, Any] = {}
+    if not (str_or_blank(leg.get("order_type")) or str_or_blank(leg.get("type"))):
+        terms["order_type"] = str_or_blank(parent.get("order_type")) or str_or_blank(parent.get("type"))
+    if not str_or_blank(leg.get("time_in_force")):
+        terms["time_in_force"] = str_or_blank(parent.get("time_in_force"))
+    return {**leg, **terms}
 
 
 # The full set of Alpaca ``trade_updates`` event names, per Alpaca's websocket

@@ -8,6 +8,12 @@ Fixture layout (orders.json):
 
 from __future__ import annotations
 
+import copy
+import json
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
 import pytest
 
 from app.broker.alpaca.adapter import (
@@ -550,3 +556,45 @@ async def test_one_orders_missing_text_maps_blank_and_the_clerk_contains_that_or
     assert "None" not in text
     with pytest.raises(ExternalOrderObservationError, match=reason):
         _observation_from_broker_order(mapped)
+
+
+def _recorded_outside_parent() -> dict[str, object]:
+    """The credit spread Alpaca Paper reported filled on 2026-10-15, as its trade_updates frame sent it (#3225)."""
+    recording = Path(__file__).resolve().parents[2] / "fixtures" / "alpaca" / "option_paper_recordings"
+    for line in (recording / "3225-credit-sign-check" / "stream.jsonl").read_text(encoding="utf-8").splitlines():
+        data = json.loads(json.loads(line)["raw_body"]).get("data", {})
+        if data.get("event") == "fill":
+            return data["order"]
+    raise AssertionError("the recording holds no fill")
+
+
+def test_a_multi_leg_parent_reads_its_legs_as_the_single_symbol_orders_they_are() -> None:
+    payload = _recorded_outside_parent()
+
+    parent = from_alpaca_order(payload, observed_at_ms=_OBSERVED)
+
+    assert (parent.symbol, parent.unreadable_fields) == ("", ())
+    assert [(leg.symbol, leg.side, leg.quantity, leg.filled_avg_price) for leg in parent.legs] == [
+        ("SPY261016C00776000", "sell", 1.0, 0.6),
+        ("SPY261016C00777000", "buy", 1.0, 0.46),
+    ]
+    assert all(leg.legs == () for leg in parent.legs)
+    # Not part of the wire shape: no router serializes a parent's legs.
+    assert "legs" not in parent.model_dump()
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        lambda payload: payload.update(order_class="simple"),
+        lambda payload: payload.update(legs="SPY261016C00776000"),
+        lambda payload: payload.update(legs=[payload["legs"][0], "SPY261016C00777000"]),
+        lambda payload: payload["legs"][0].update(legs=[{"id": "nested"}]),
+    ],
+    ids=["not-a-multi-leg-class", "legs-not-a-list", "a-leg-not-an-object", "a-leg-with-legs-of-its-own"],
+)
+def test_legs_that_are_not_a_parents_legs_are_no_legs_at_all(tamper: Callable[[dict[str, Any]], object]) -> None:
+    payload = copy.deepcopy(_recorded_outside_parent())
+    tamper(payload)
+
+    assert from_alpaca_order(payload, observed_at_ms=_OBSERVED).legs == ()

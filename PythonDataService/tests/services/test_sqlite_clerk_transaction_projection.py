@@ -959,6 +959,59 @@ def test_external_transaction_history_and_detail_stay_outside_bot_economics(tmp_
     assert detail.events[0].recorded_at_ms == observed.observation_recorded_at_ms
 
 
+def test_an_outside_legs_history_row_shows_its_execution_and_a_reopened_review_counts_one_event(
+    tmp_path: Path,
+) -> None:
+    """#3309: a leg reviewed while it rested is open again once it fills, and shows what Alpaca says it filled."""
+    import json
+
+    from app.broker.alpaca import adapter
+    from app.broker.alpaca.clerk.sqlite.external_orders import acknowledge_external_order, observe_or_record_unfoldable
+
+    recording = Path(__file__).resolve().parents[1] / "fixtures" / "alpaca" / "option_paper_recordings"
+    frames = [
+        json.loads(json.loads(line)["raw_body"])["data"]["order"]
+        for line in (recording / "3225-credit-sign-check" / "stream.jsonl").read_text(encoding="utf-8").splitlines()
+        if "event" in json.loads(json.loads(line)["raw_body"]).get("data", {})
+    ]
+    resting = adapter.from_alpaca_order(frames[1], observed_at_ms=1_800_000_000_000)
+    filled = adapter.from_alpaca_order(frames[2], observed_at_ms=1_800_000_000_100)
+    leg_id = "00000000-0000-0000-0000-000000000356"
+    repo = ClerkSqliteRepository.initialize(account_id="PA-ACCOUNT-DESK", artifacts_root=tmp_path)
+    observe_or_record_unfoldable(repo, order=resting)
+    acknowledge_external_order(repo, external_order_id=leg_id, operator="operator-1")
+    broker = _UnusedBroker()
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(
+            authority_kind="sqlite",
+            clerk=SqliteAlpacaClerkFacade(
+                account_mode="paper", repo=repo, read=broker, trade=broker  # type: ignore[arg-type]
+            ),
+        )
+    )
+
+    def row() -> Any:
+        page = sqlite_transaction_history(
+            account_id="PA-ACCOUNT-DESK", limit=25, cursor=None, origin="external",
+            lifecycle_state=None, strategy_instance_id=None, run_id=None,
+        )
+        assert page is not None
+        return next(r for r in page.rows if r.native_order_id == leg_id)
+
+    try:
+        reviewed = row()
+        observe_or_record_unfoldable(repo, order=filled)
+        reopened = row()
+    finally:
+        set_active_clerk_runtime(None)
+        repo.close()
+
+    assert (reviewed.execution_quantity, reviewed.execution_price) == (None, None)
+    assert (reviewed.lifecycle_state, reviewed.event_count) == ("reviewed", 2)
+    assert (reopened.execution_quantity, reopened.execution_price) == (1.0, 0.6)
+    assert (reopened.lifecycle_state, reopened.event_count) == ("review_required", 1)
+
+
 def test_external_history_applies_window_before_keyset_limit(tmp_path: Path) -> None:
     now_ms = [1_000]
     repo = ClerkSqliteRepository.initialize(

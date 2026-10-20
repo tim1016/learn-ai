@@ -247,6 +247,11 @@ class BrokerOrder(_ContractModel):
     # foreign order recorded unfoldable, an answer about its own order
     # withheld -- and never folds it as evidence.
     unreadable_fields: tuple[str, ...] = ()
+    # A multi-leg parent's legs, each read as the single-symbol order it is
+    # (#3309). Alpaca gives the parent no symbol or side; the Clerk takes
+    # custody of an outside parent as its legs. Not part of the wire shape:
+    # no router serializes them.
+    legs: tuple[BrokerOrder, ...] = Field(default=(), exclude=True)
 
 
 class BrokerActivity(_ContractModel):

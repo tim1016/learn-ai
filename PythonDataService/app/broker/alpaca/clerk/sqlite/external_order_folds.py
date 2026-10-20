@@ -14,6 +14,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.option_event_books import outside_order_reduces_a_bots_contract
+from app.broker.alpaca.clerk.sqlite.order_projection import ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     UNEXPLAINED_ORDER_HOLD_REASON_CODE,
 )
@@ -94,7 +95,13 @@ def fold_external_order_observed(conn: sqlite3.Connection, payload: dict[str, An
     observed = reads.external_order_by_broker_order_id(conn, facts.broker_order_id)
     assert observed is not None
     if observed.acknowledged_at_ms is not None:
-        return
+        if not _a_reviewed_leg_moved_on(conn, facts):
+            return
+        conn.execute(
+            "UPDATE external_orders SET acknowledged_at_ms = NULL, ack_operator = NULL "
+            "WHERE external_order_id = ?",
+            (facts.external_order_id,),
+        )
     if outside_order_reduces_a_bots_contract(
         conn, symbol=facts.symbol, side=facts.side, broker_order_id=facts.broker_order_id
     ):
@@ -119,6 +126,35 @@ def fold_external_order_observed(conn: sqlite3.Connection, payload: dict[str, An
     merged = sorted({*current_refs, facts.broker_order_id})
     if merged != current_refs:
         _update_unexplained_order_hold(conn, hold_id=active["hold_id"], evidence_refs=merged)
+
+
+def _a_reviewed_leg_moved_on(conn: sqlite3.Connection, facts: ExternalOrderObservedFacts) -> bool:
+    """Whether a reviewed leg of an outside multi-leg order has since filled more or ended (#3309).
+
+    A review covers the state the operator saw. A later fill or cancel of the
+    leg is new broker evidence, so the leg is open to review again. A read
+    that shows the leg less far along (a lagging snapshot), a change of
+    working state, or learning only its parent, siblings or client order id,
+    is not. An ordinary outside order, or one observed before the link was
+    recorded, keeps the review it has: a replay of an earlier chain folds as
+    it did.
+    """
+    if not reads.is_a_leg_of_an_outside_order(facts.evidence_refs):
+        return False
+    previous = conn.execute(
+        "SELECT facts_json FROM custody_transitions WHERE transition_kind = 'EXTERNAL_ORDER_OBSERVED' "
+        "AND broker_order_id = ? AND sequence < ? ORDER BY sequence DESC LIMIT 1",
+        (facts.broker_order_id, _transition_sequence(conn)),
+    ).fetchone()
+    if previous is None:
+        return False
+    before = ExternalOrderObservedFacts.from_facts_json(previous["facts_json"])
+    if before.broker_state is None or before.filled_quantity is None or facts.filled_quantity is None:
+        return False
+    ended = before.broker_state not in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES and (
+        facts.broker_state in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
+    )
+    return ended or facts.filled_quantity > before.filled_quantity
 
 
 def fold_external_order_acknowledged(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
