@@ -745,6 +745,19 @@ async function renderShell(
 }
 
 describe('BotPanelShellComponent', () => {
+  it('resets the history interval when the route opens another bot', async () => {
+    const { fixture } = await renderShell();
+    await showTape(fixture);
+    await userEvent.click(screen.getByRole('tab', { name: /History · Polygon/ }));
+    await userEvent.click(screen.getByRole('button', { name: '15m' }));
+    await vi.waitFor(() => expect(mockService.getHistoryChart).toHaveBeenLastCalledWith(
+      expect.anything(), 'sid-001', '15m', null,
+    ));
+    fixture.componentRef.setInput('sid', 'sid-002');
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(mockService.getHistoryChart).toHaveBeenLastCalledWith(expect.anything(), 'sid-002', '1m', null);
+  });
   it('lets a new bot choose its default interval after a stock interval was selected', async () => {
     const { fixture, service } = await renderShell();
     await showTape(fixture);

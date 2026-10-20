@@ -901,8 +901,9 @@ async def test_active_history_uses_sqlite_chart_evidence_not_legacy_journal(
     assert [marker.order_ref for marker in result.fill_markers] == [expected_fills[0].order_ref]
 
 
+@pytest.mark.parametrize("options", [False, True])
 async def test_a_sparse_symbols_candles_keep_the_fills_they_reach_back_to(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, options: bool,
 ) -> None:
     """Candles that start before the planned fill window still draw the fills under them.
 
@@ -961,11 +962,23 @@ async def test_a_sparse_symbols_candles_keep_the_fills_they_reach_back_to(
         lambda: _batch_provider_from_source(_source),
     )
 
+    pane_fills = []
+    if options:
+        status = status.model_copy(update={"options_bot": object()})
+        monkeypatch.setattr(panel_chart_data_source, "require_options_minute", lambda *_args: None)
+
+        def with_panes(chart, _broker, _sid, chart_fills):
+            pane_fills.extend(chart_fills)
+            return chart
+
+        monkeypatch.setattr(panel_chart_data_source, "with_options_panes", with_panes)
     result = await panel_chart_data_source.get_history_chart("alpaca", "paper-account", SID, "1m")
 
     assert result.from_ms == first_candle_ms
     assert len(result.bars) == 300
     assert [marker.event_key for marker in result.fill_markers] == ["under-the-early-candles", "inside-the-plan"]
+    if options:
+        assert [fill.event_key for fill in pane_fills] == ["under-the-early-candles", "inside-the-plan"]
 
 
 @pytest.mark.parametrize(

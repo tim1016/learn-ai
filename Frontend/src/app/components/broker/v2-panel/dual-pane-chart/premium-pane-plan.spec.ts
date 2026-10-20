@@ -22,7 +22,7 @@ it('keeps pick order, missing-minute gaps, finite levels and contract exit reaso
   const plans = premiumPanePlans([premium, { ...premium, symbol: 'second' }], bars);
   expect(plans.map((plan) => plan.symbol)).toEqual([premium.symbol, 'second']);
   expect(plans[0].runs.map((run) => run.points.length)).toEqual([1, 2]);
-  expect(plans[0].rules[0].points.map((point) => point.time)).toEqual([FIRST / 1000, bars[2].start_ms / 1000]);
+  expect(plans[0].rules[0].points.map((point) => point.time)).toEqual([bars[1].start_ms / 1000, bars[2].start_ms / 1000]);
   expect(plans[0].fills[0].text).toContain('SPY261009C00500000 · Stop');
   expect(plans[0].fills[0].time).toBe(bars[3].start_ms / 1000);
 });
