@@ -9,7 +9,7 @@ this file is about the capture mechanism, not strategy correctness.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
@@ -55,59 +55,41 @@ class TestPairEngineFills:
     def test_empty_event_list_returns_empty_trades(self) -> None:
         assert pair_engine_fills([]) == []
 
-    def test_long_then_short_pair_produces_one_trade(self) -> None:
-        entry = _event(direction=Direction.LONG, fill_price="100", fill_quantity=10)
+    @pytest.mark.parametrize(
+        ("exit_direction", "exit_price", "entry_fee", "exit_fee", "expected_pnl"),
+        [
+            # (101-100) * 10
+            pytest.param(Direction.SHORT, "101", "0", "0", "10", id="long-then-short-pair-produces-one-trade"),
+            # Some strategies emit Direction.FLAT (explicit liquidate) instead of
+            # SHORT. The pairer must accept both as exit signals.
+            pytest.param(Direction.FLAT, "99", "0", "0", "-10", id="long-then-flat-also-pairs-as-exit"),
+            # Gross 10.00 - (0.50 + 0.75) = 8.75
+            pytest.param(Direction.SHORT, "101", "0.50", "0.75", "8.75", id="fee-subtracted-from-pnl"),
+        ],
+    )
+    def test_a_long_entry_and_its_exit_pair_into_one_trade_with_its_pnl(
+        self, exit_direction: Direction, exit_price: str, entry_fee: str, exit_fee: str, expected_pnl: str
+    ) -> None:
+        entry = _event(direction=Direction.LONG, fill_price="100", fill_quantity=10, fee=entry_fee)
         exit_ = _event(
             order_id=2,
             time=datetime(2025, 1, 6, 14, 45, tzinfo=UTC),
-            direction=Direction.SHORT,
-            fill_price="101",
+            direction=exit_direction,
+            fill_price=exit_price,
             fill_quantity=-10,
+            fee=exit_fee,
         )
 
         trades = pair_engine_fills([entry, exit_])
 
-        assert len(trades) == 1
+        assert len(trades) == 1, "the entry and its exit pair into one trade"
         t = trades[0]
-        assert t.trade_number == 1
-        assert t.entry_price == Decimal("100")
-        assert t.exit_price == Decimal("101")
-        assert t.quantity == Decimal("10")  # positive entry qty
-        assert t.pnl == Decimal("10")  # (101-100) * 10
-        assert t.is_synthetic_exit is False
-
-    def test_long_then_flat_also_pairs_as_exit(self) -> None:
-        # Some strategies emit Direction.FLAT (explicit liquidate) instead of
-        # SHORT. The pairer must accept both as exit signals.
-        entry = _event(direction=Direction.LONG, fill_price="100", fill_quantity=10)
-        exit_ = _event(
-            order_id=2,
-            time=datetime(2025, 1, 6, 14, 45, tzinfo=UTC),
-            direction=Direction.FLAT,
-            fill_price="99",
-            fill_quantity=-10,
-        )
-
-        trades = pair_engine_fills([entry, exit_])
-
-        assert len(trades) == 1
-        assert trades[0].pnl == Decimal("-10")
-
-    def test_fee_subtracted_from_pnl(self) -> None:
-        entry = _event(direction=Direction.LONG, fill_price="100", fill_quantity=10, fee="0.50")
-        exit_ = _event(
-            order_id=2,
-            time=datetime(2025, 1, 6, 14, 45, tzinfo=UTC),
-            direction=Direction.SHORT,
-            fill_price="101",
-            fill_quantity=-10,
-            fee="0.75",
-        )
-
-        trades = pair_engine_fills([entry, exit_])
-
-        # Gross 10.00 - (0.50 + 0.75) = 8.75
-        assert trades[0].pnl == Decimal("8.75")
+        assert t.trade_number == 1, "the first trade is number 1"
+        assert t.entry_price == Decimal("100"), "the trade enters at the entry fill price"
+        assert t.exit_price == Decimal(exit_price), "the trade exits at the exit fill price"
+        assert t.quantity == Decimal("10"), "the quantity is the positive entry qty"
+        assert t.pnl == Decimal(expected_pnl), "pnl is gross of the price move less both fees"
+        assert t.is_synthetic_exit is False, "a paired exit is not a synthetic exit"
 
     def test_pyramiding_raises(self) -> None:
         e1 = _event(direction=Direction.LONG)
@@ -171,31 +153,28 @@ class TestPairEngineFills:
 
 
 class TestInMemoryDataReader:
-    def test_filters_by_symbol(self) -> None:
-        from datetime import date
+    @pytest.mark.parametrize(
+        ("closes", "symbol", "from_date", "to_date", "has_bars"),
+        [
+            # The synthetic helper uses symbol="TEST" so neither SPY nor QQQ matches; just confirm
+            # the symbol filter actually filters (no symbol => no bars).
+            pytest.param(50, "SPY", date(2020, 1, 1), date(2030, 12, 31), False, id="filters-by-symbol-spy"),
+            pytest.param(50, "QQQ", date(2020, 1, 1), date(2030, 12, 31), False, id="filters-by-symbol-qqq"),
+            # Bars start at 2024-01-02 per START_TIME in _parity_helpers
+            pytest.param(100, "TEST", date(2024, 1, 2), date(2024, 1, 5), True, id="filters-by-date-range-in-range"),
+            pytest.param(
+                100, "TEST", date(2030, 1, 1), date(2030, 12, 31), False, id="filters-by-date-range-out-of-range"
+            ),
+        ],
+    )
+    def test_iter_bars_returns_only_the_symbol_and_dates_asked_for(
+        self, closes: int, symbol: str, from_date: date, to_date: date, has_bars: bool
+    ) -> None:
+        reader = InMemoryDataReader(bars=build_minute_bars(closes_for_spy_ema(closes)))
 
-        bars = build_minute_bars(closes_for_spy_ema(50))
-        reader = InMemoryDataReader(bars=bars)
+        selected = list(reader.iter_bars(symbol, from_date, to_date))
 
-        spy_bars = list(reader.iter_bars("SPY", date(2020, 1, 1), date(2030, 12, 31)))
-        wrong_bars = list(reader.iter_bars("QQQ", date(2020, 1, 1), date(2030, 12, 31)))
-
-        # The synthetic helper uses symbol="TEST" so neither matches; just confirm
-        # the symbol filter actually filters (no symbol => no bars).
-        assert spy_bars == []
-        assert wrong_bars == []
-
-    def test_filters_by_date_range(self) -> None:
-        from datetime import date
-
-        bars = build_minute_bars(closes_for_spy_ema(100))
-        reader = InMemoryDataReader(bars=bars)
-        # Bars start at 2024-01-02 per START_TIME in _parity_helpers
-        in_range = list(reader.iter_bars("TEST", date(2024, 1, 2), date(2024, 1, 5)))
-        out_of_range = list(reader.iter_bars("TEST", date(2030, 1, 1), date(2030, 12, 31)))
-
-        assert len(in_range) > 0
-        assert out_of_range == []
+        assert (len(selected) > 0) == has_bars, "bars come back only for the matching symbol inside the date range"
 
 
 class TestRunSpecAgainstBars:

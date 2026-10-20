@@ -347,16 +347,25 @@ async def _read_first_frame(hub: GalleryHub, *, cursor: str | None) -> str:
         await response.body_iterator.aclose()
 
 
-async def test_gallery_stream_first_frame_is_snapshot() -> None:
+@pytest.mark.parametrize(
+    "cursor_for",
+    [
+        pytest.param(lambda epoch: None, id="first_frame_is_snapshot"),
+        # A cursor already on the hub's epoch goes straight to ``event: snapshot``.
+        pytest.param(lambda epoch: f"{epoch}:0", id="matching_cursor_skips_reset"),
+    ],
+)
+async def test_gallery_stream_opens_with_a_snapshot_unless_the_cursor_is_stale(cursor_for) -> None:
     hub = _fake_hub()
 
-    frame = await asyncio.wait_for(_read_first_frame(hub, cursor=None), timeout=5.0)
+    frame = await asyncio.wait_for(_read_first_frame(hub, cursor=cursor_for(hub._epoch)), timeout=5.0)
 
-    assert "event: snapshot" in frame
+    assert "event: reset" not in frame, "a missing or current cursor gets no reset"
+    assert "event: snapshot" in frame, "the first frame is the snapshot"
     payload = _frame_payload(frame)
-    assert payload["resolution"] == "1m"
-    assert payload["stream_epoch"] == hub._epoch
-    assert payload["surface_version"] == 1
+    assert payload["resolution"] == "1m", "the snapshot carries the hub's resolution"
+    assert payload["stream_epoch"] == hub._epoch, "the snapshot carries the hub's epoch"
+    assert payload["surface_version"] == 1, "the snapshot carries surface version 1"
 
 
 def test_gallery_hub_epoch_has_per_process_nonce() -> None:
@@ -387,17 +396,6 @@ async def test_gallery_stream_stale_cursor_emits_reset_first() -> None:
     # exactly `{reason, cursor}` (#1667). A field added, removed, or renamed
     # here must fail this assertion.
     assert set(payload.keys()) == {"reason", "cursor"}
-
-
-async def test_gallery_stream_matching_cursor_skips_reset() -> None:
-    """A cursor already on the hub's epoch goes straight to ``event: snapshot``."""
-    hub = _fake_hub()
-    matching_cursor = f"{hub._epoch}:0"
-
-    frame = await asyncio.wait_for(_read_first_frame(hub, cursor=matching_cursor), timeout=5.0)
-
-    assert "event: reset" not in frame
-    assert "event: snapshot" in frame
 
 
 class _ServedAccountPort:

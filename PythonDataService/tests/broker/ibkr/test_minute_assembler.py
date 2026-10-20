@@ -125,7 +125,17 @@ def test_exact_redelivery_after_a_flush_is_skipped_idempotently() -> None:
     assert assembler.open_minute_start_ms is None
 
 
-def test_an_older_print_of_a_flushed_minute_is_fatal_even_when_identical() -> None:
+@pytest.mark.parametrize(
+    "second",
+    [
+        # A slot the emitted minute held, redelivered with an identical payload.
+        pytest.param(20, id="older_print_of_a_flushed_minute_is_fatal_even_when_identical"),
+        # A timestamp the emitted minute never held must not silently rebuild an
+        # accumulator for a minute the consumer has already decided on.
+        pytest.param(57, id="new_timestamp_inside_an_emitted_minute_is_refused_rather_than_rebuilt"),
+    ],
+)
+def test_a_print_other_than_the_last_of_an_emitted_minute_is_fatal(second: int) -> None:
     # ADR 0053 §14: only the most-recently-accepted
     # element may be absorbed; any other timestamp belonging to an
     # already-emitted aggregate is fatal, identical payload or not.
@@ -133,9 +143,9 @@ def test_an_older_print_of_a_flushed_minute_is_fatal_even_when_identical() -> No
     _fill_and_flush(assembler)
 
     with pytest.raises(IBKRBarStreamError, match="already emitted"):
-        assembler.feed(_raw(20), symbol="SPY", generation=2, venue=None, use_rth=True)
-    assert assembler.counters.skipped_duplicate == 0
-    assert assembler.open_minute_start_ms is None
+        assembler.feed(_raw(second), symbol="SPY", generation=2, venue=None, use_rth=True)
+    assert assembler.counters.skipped_duplicate == 0, "a refused print is not counted as an absorbed duplicate"
+    assert assembler.open_minute_start_ms is None, "a refused print opens no accumulator"
 
 
 def test_a_correction_to_the_last_print_of_an_emitted_minute_is_ignored_and_counted() -> None:
@@ -155,17 +165,6 @@ def test_a_correction_to_the_last_print_of_an_emitted_minute_is_ignored_and_coun
     # The minute is still closed: the next minute opens a fresh accumulator.
     assert assembler.feed(_next_minute_raw(), symbol="SPY", generation=2, venue=None, use_rth=True) is None
     assert assembler.open_minute_start_ms == int(_MINUTE.replace(minute=1).timestamp() * 1000)
-
-
-def test_a_new_timestamp_inside_an_emitted_minute_is_refused_rather_than_rebuilt() -> None:
-    # A timestamp the emitted minute never held must not silently rebuild an
-    # accumulator for a minute the consumer has already decided on.
-    assembler = MinuteAssembler()
-    _fill_and_flush(assembler)
-
-    with pytest.raises(IBKRBarStreamError, match="already emitted"):
-        assembler.feed(_raw(57), symbol="SPY", generation=2, venue=None, use_rth=True)
-    assert assembler.open_minute_start_ms is None
 
 
 def test_a_later_minute_after_a_flush_opens_a_fresh_accumulator() -> None:

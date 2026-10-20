@@ -162,17 +162,27 @@ def test_two_bought_calls_break_even_above_the_higher_strike_where_they_gain_two
     assert figures.loss_holds == (_between("0", "580"),)
 
 
-def test_a_contract_of_ten_shares_gains_and_loses_a_tenth_of_what_one_of_a_hundred_does() -> None:
-    """The $1.94 spread gains $3.06 a share and loses $1.94: $30.60 and $19.40 on ten shares a contract. Its
-    break-even is a price of the stock, and the same."""
+@pytest.mark.parametrize(
+    ("multiplier", "units", "loss_cents", "gain_cents"),
+    [
+        # The $1.94 spread gains $3.06 a share and loses $1.94: $30.60 and $19.40 on ten shares a contract.
+        pytest.param(10, 1, 1_940, 3_060, id="a contract of ten shares gains and loses a tenth of what one of a hundred does"),
+        # Three structures: three times the $19,400 it loses and the $30,600 it gains with a hundred shares a contract.
+        pytest.param(100, 3, 3 * 19_400, 3 * 30_600, id="every structure of an entry gains its own share"),
+    ],
+)
+def test_a_spreads_figures_scale_with_the_size_of_the_entry(
+    multiplier: int, units: int, loss_cents: int, gain_cents: int
+) -> None:
+    """Its break-even is a price of the stock, and the same at every size."""
     spread = _of(_leg("bought", "long", "call", 585), _leg("sold", "short", "call", 590))
-    of_ten_shares = EntrySize(multiplier=10, units=1)
+    size = EntrySize(multiplier=multiplier, units=units)
 
-    money = entry_money(spread, of_ten_shares, net_price=Decimal("1.94"), fee_provision_cents=0)
-    figures = at_expiry(spread, of_ten_shares, net_price=Decimal("1.94"))
+    money = entry_money(spread, size, net_price=Decimal("1.94"), fee_provision_cents=0)
+    figures = at_expiry(spread, size, net_price=Decimal("1.94"))
 
-    assert (money.loss_at_expiry_cents, figures.gain_cents) == (1_940, 3_060)
-    assert figures.break_evens == (Fraction("586.94"),)
+    assert (money.loss_at_expiry_cents, figures.gain_cents) == (loss_cents, gain_cents), "it loses and gains in proportion to its size"
+    assert figures.break_evens == (Fraction("586.94"),), "its break-even is the same price of the stock at every size"
 
 
 def test_a_put_structure_can_be_at_its_lowest_only_with_the_stock_at_zero() -> None:
@@ -211,15 +221,6 @@ def test_a_spread_bought_for_all_it_can_be_worth_or_more_gains_nothing(
     assert (figures.gain_cents, figures.break_evens) == (0, break_evens)
 
 
-def test_every_structure_of_an_entry_gains_its_own_share() -> None:
-    spread = _of(_leg("bought", "long", "call", 585), _leg("sold", "short", "call", 590))
-
-    figures = at_expiry(spread, EntrySize(multiplier=100, units=3), net_price=Decimal("1.94"))
-
-    assert figures.gain_cents == 3 * 30_600
-    assert figures.break_evens == (Fraction("586.94"),)
-
-
 def test_legs_that_do_not_share_an_expiry_have_nothing_estimated() -> None:
     calendar = _of(_leg("near", "long", "call", 585), _leg("far", "long", "call", 590, expiry=date(2026, 10, 16)))
 
@@ -251,24 +252,30 @@ def _line(*points: tuple[str, int]) -> tuple[ResultAt, ...]:
     return tuple(ResultAt(Decimal(price), cents) for price, cents in points)
 
 
-def test_one_bought_calls_line_reaches_past_its_break_even_and_keeps_rising() -> None:
-    """A 585 call bought for $4.12 is even at 589.12. From 585 to 589.12 is $4.12, a quarter of it $1.03: the
-    line starts at 583 and ends at 589.12 + 1.03 = 590.15, rounded up to 591, where the call is worth $6.00
-    and the entry is $1.88 a share ahead. Three structures: three times each."""
-    call = _of(_leg("bought", "long", "call", 585))
+@pytest.mark.parametrize(
+    ("right", "strike", "units", "net_price", "break_even", "points"),
+    [
+        # A 585 call bought for $4.12 is even at 589.12. From 585 to 589.12 is $4.12, a quarter of it $1.03: the
+        # line starts at 583 and ends at 589.12 + 1.03 = 590.15, rounded up to 591, where the call is worth $6.00
+        # and the entry is $1.88 a share ahead. Three structures: three times each.
+        pytest.param(
+            "call", 585, 3, "4.12", "589.12", (("583", -123_600), ("585", -123_600), ("591", 56_400)),
+            id="one bought calls line reaches past its break-even and keeps rising",
+        ),
+        # A 2 put bought for $1.50 is even at 0.50. A dollar below that is under zero, and no stock trades there:
+        # the line starts at zero, where the put is worth its whole strike and the entry is 50 cents a share ahead.
+        pytest.param(
+            "put", 2, 1, "1.50", "0.5", (("0", 5_000), ("2", -15_000), ("3", -15_000)),
+            id="a line never starts below a price of zero",
+        ),
+    ],
+)
+def test_a_bought_options_line_runs_from_below_its_break_even_to_above_it(
+    right: str, strike: int, units: int, net_price: str, break_even: str, points: tuple[tuple[str, int], ...]
+) -> None:
+    option = _of(_leg("bought", "long", right, strike))
 
-    figures = at_expiry(call, EntrySize(multiplier=100, units=3), net_price=Decimal("4.12"))
+    figures = at_expiry(option, EntrySize(multiplier=100, units=units), net_price=Decimal(net_price))
 
-    assert figures.sketch == _line(("583", -123_600), ("585", -123_600), ("591", 56_400))
-
-
-def test_a_line_never_starts_below_a_price_of_zero() -> None:
-    """A 2 put bought for $1.50 is even at 0.50. A dollar below that is under zero, and no stock trades there:
-    the line starts at zero, where the put is worth its whole strike and the entry is 50 cents a share ahead."""
-    put = _of(_leg("bought", "long", "put", 2))
-
-    figures = at_expiry(put, _ONE, net_price=Decimal("1.50"))
-
-    assert figures.break_evens == (Fraction("0.5"),)
-    assert figures.sketch == _line(("0", 5_000), ("2", -15_000), ("3", -15_000))
-
+    assert figures.break_evens == (Fraction(break_even),), "a bought option is even at its strike moved by what it cost"
+    assert figures.sketch == _line(*points), "the line starts below the break-even, never below zero, and ends beyond its last turn"

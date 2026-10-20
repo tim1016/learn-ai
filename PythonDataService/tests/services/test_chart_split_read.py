@@ -582,16 +582,38 @@ def test_compose_chart_bars_still_stitches_at_the_provider_run_cap(lake_root: Pa
 # ──────────────────────────────────────────────
 # The receipt covers the visible window, not the warmup
 # ──────────────────────────────────────────────
-def test_compose_chart_bars_reports_only_the_visible_window(lake_root: Path) -> None:
-    """Warmup-only provider days must not raise a notice about bars nobody sees.
-
-    At the lake's leading edge this is the common case: warmup reaches back
-    before the backfill, so without the cut a fully lake-backed visible chart
-    would show the fallback notice on every load.
-    """
-    _write_lake_day(lake_root, REGULAR_BEFORE)
-    _write_lake_day(lake_root, HALF_DAY)
-    provider = _ProviderSpy()
+@pytest.mark.parametrize(
+    ("held_days", "notice_code", "span_kinds"),
+    [
+        # Warmup-only provider days must not raise a notice about bars nobody sees.
+        #
+        # At the lake's leading edge this is the common case: warmup reaches back
+        # before the backfill, so without the cut a fully lake-backed visible chart
+        # would show the fallback notice on every load.
+        pytest.param(
+            (REGULAR_BEFORE, HALF_DAY),
+            None,
+            (("lake", "completed_sessions"), ("provider", "current_session")),
+            id="reports_only_the_visible_window",
+        ),
+        # The cut hides warmup, not real gaps the operator is looking at: HALF_DAY is
+        # visible and missing.
+        pytest.param(
+            (REGULAR_BEFORE,),
+            "history_provider_fallback",
+            (("lake", "completed_sessions"), ("provider", "lake_gap"), ("provider", "current_session")),
+            id="still_reports_a_hole_inside_the_visible_window",
+        ),
+    ],
+)
+def test_compose_chart_bars_reports_the_visible_window_not_the_warmup(
+    lake_root: Path,
+    held_days: tuple[date, ...],
+    notice_code: str | None,
+    span_kinds: tuple[tuple[str, str], ...],
+) -> None:
+    for session_date in held_days:
+        _write_lake_day(lake_root, session_date)
 
     composed = compose_chart_bars(
         ticker=_SYMBOL,
@@ -599,84 +621,57 @@ def test_compose_chart_bars_reports_only_the_visible_window(lake_root: Path) -> 
         to_date=LIVE_SESSION.isoformat(),
         visible_from_date=REGULAR_BEFORE.isoformat(),
         adjusted=False,
-        fetch_provider=provider,
+        fetch_provider=_ProviderSpy(),
         now_ms=_during(LIVE_SESSION),
         lake_root=lake_root,
     )
 
-    assert composed.notice_code is None
-    assert [(span.source, span.reason) for span in composed.spans] == [
-        ("lake", "completed_sessions"),
-        ("provider", "current_session"),
-    ]
-    assert composed.spans[0].from_session_open_ms_utc == session_open_ms_utc(REGULAR_BEFORE)
-    assert composed.spans[0].session_count == 2
-    assert composed.spans[0].bar_count == len(_expected_minutes([REGULAR_BEFORE, HALF_DAY]))
+    assert composed.notice_code == notice_code, "the notice follows the visible window"
+    assert [(span.source, span.reason) for span in composed.spans] == list(span_kinds), "spans of the visible window"
+    assert composed.spans[0].from_session_open_ms_utc == session_open_ms_utc(REGULAR_BEFORE), "lake span starts at the visible window"
+    assert composed.spans[0].session_count == len(held_days), "lake span counts the held sessions"
+    assert composed.spans[0].bar_count == len(_expected_minutes(held_days)), "lake span counts the held sessions' bars"
     # The warmup bars are still in the series — only the receipt is cut.
-    assert min(bar["timestamp"] for bar in composed.bars) < session_open_ms_utc(REGULAR_BEFORE)
+    assert min(bar["timestamp"] for bar in composed.bars) < session_open_ms_utc(REGULAR_BEFORE), (
+        "the warmup bars are still in the series"
+    )
 
 
-def test_compose_chart_bars_still_reports_a_hole_inside_the_visible_window(lake_root: Path) -> None:
-    """The cut hides warmup, not real gaps the operator is looking at."""
-    _write_lake_day(lake_root, REGULAR_BEFORE)  # HALF_DAY is visible and missing
-
+@pytest.mark.parametrize(
+    ("from_date", "visible_from_date", "warmup_in_series"),
+    [
+        # Provider service for the forming session is the design, not a gap.
+        # Nothing in view could have been lake-backed, so calling it a lake gap
+        # would tell the operator history is missing when no history is on
+        # screen at all.
+        pytest.param(LIVE_SESSION, None, False, id="only_today_is_in_view"),
+        # Same rule through the warmup cut: the uncovered sessions are all behind
+        # the visible window, and the only session in view is still forming.
+        pytest.param(WARMUP_FROM, LIVE_SESSION, True, id="only_warmup_missed_the_lake"),
+    ],
+)
+def test_compose_chart_bars_raises_no_notice_when_nothing_in_view_could_have_been_lake_backed(
+    lake_root: Path, from_date: date, visible_from_date: date | None, warmup_in_series: bool,
+) -> None:
     composed = compose_chart_bars(
         ticker=_SYMBOL,
-        from_date=WARMUP_FROM.isoformat(),
+        from_date=from_date.isoformat(),
         to_date=LIVE_SESSION.isoformat(),
-        visible_from_date=REGULAR_BEFORE.isoformat(),
+        visible_from_date=None if visible_from_date is None else visible_from_date.isoformat(),
         adjusted=False,
         fetch_provider=_ProviderSpy(),
         now_ms=_during(LIVE_SESSION),
         lake_root=lake_root,
     )
 
-    assert composed.notice_code == "history_provider_fallback"
-    assert [(span.source, span.reason) for span in composed.spans] == [
-        ("lake", "completed_sessions"),
-        ("provider", "lake_gap"),
-        ("provider", "current_session"),
-    ]
-
-
-def test_compose_chart_bars_raises_no_notice_when_only_today_is_in_view(lake_root: Path) -> None:
-    """Provider service for the forming session is the design, not a gap.
-
-    Nothing in view could have been lake-backed, so calling it a lake gap would
-    tell the operator history is missing when no history is on screen at all.
-    """
-    composed = compose_chart_bars(
-        ticker=_SYMBOL,
-        from_date=LIVE_SESSION.isoformat(),
-        to_date=LIVE_SESSION.isoformat(),
-        adjusted=False,
-        fetch_provider=_ProviderSpy(),
-        now_ms=_during(LIVE_SESSION),
-        lake_root=lake_root,
+    assert [(span.source, span.reason) for span in composed.spans] == [("provider", "current_session")], (
+        "the forming session is served by the provider"
     )
-
-    assert [(span.source, span.reason) for span in composed.spans] == [("provider", "current_session")]
-    assert composed.notice_code is None
-
-
-def test_compose_chart_bars_raises_no_notice_when_only_warmup_missed_the_lake(lake_root: Path) -> None:
-    """Same rule through the warmup cut: the uncovered sessions are all behind
-    the visible window, and the only session in view is still forming."""
-    composed = compose_chart_bars(
-        ticker=_SYMBOL,
-        from_date=WARMUP_FROM.isoformat(),
-        to_date=LIVE_SESSION.isoformat(),
-        visible_from_date=LIVE_SESSION.isoformat(),
-        adjusted=False,
-        fetch_provider=_ProviderSpy(),
-        now_ms=_during(LIVE_SESSION),
-        lake_root=lake_root,
-    )
-
-    assert [(span.source, span.reason) for span in composed.spans] == [("provider", "current_session")]
-    assert composed.notice_code is None
+    assert composed.notice_code is None, "no fallback notice"
     # The warmup bars are still fetched and still in the series.
-    assert min(bar["timestamp"] for bar in composed.bars) < session_open_ms_utc(LIVE_SESSION)
+    assert (min(bar["timestamp"] for bar in composed.bars) < session_open_ms_utc(LIVE_SESSION)) is warmup_in_series, (
+        "the series starts before the live session only when warmup bars were fetched"
+    )
 
 
 def test_compose_chart_bars_rejects_a_provider_range_that_overlaps_the_lake(lake_root: Path) -> None:

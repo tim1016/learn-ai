@@ -122,16 +122,26 @@ def test_the_receipt_freezes_the_rate_and_yearly_counts_against_later_edits_and_
         TradeFloors(protocol, receipt).at(_window(date(2026, 1, 1), date(2026, 2, 1)))
 
 
-def test_the_forward_floor_covers_every_scheduled_fold_test() -> None:
+def test_the_forward_floor_covers_every_scheduled_fold_test_and_a_floor_without_its_rate_or_receipt_is_refused() -> None:
     protocol = protocol_from_request(frequency_plan_request("SPY"))
     frozen = activity_plan(protocol)
-    assert frozen is not None
+    assert frozen is not None, "a frequency plan freezes its activity plan"
     windows = {window["key"]: window for window in frozen["windows"]}
     folds = fold_windows(protocol)
     tests = [window_activity(50, fold.test_start_ms, fold.test_end_ms) for fold in folds]
-    assert windows["forward"]["trading_sessions"] == sum(test["trading_sessions"] for test in tests)
-    assert {f"training_{fold.fold_index}" for fold in folds} <= windows.keys()
-    assert {"development", "recent", "final"} <= windows.keys()
+    assert windows["forward"]["trading_sessions"] == sum(test["trading_sessions"] for test in tests), "the forward floor covers every scheduled fold test"
+    assert {f"training_{fold.fold_index}" for fold in folds} <= windows.keys(), "every fold's training window has a floor"
+    assert {"development", "recent", "final"} <= windows.keys(), "the development, recent and final windows have floors"
+
+    with pytest.raises(ValueError, match="no trade floor"):
+        ineligibility(metrics(1.5, trades=5), protocol.policy)
+
+    declaration = declaration_for(protocol.strategy_key)
+    assert declaration is not None, "the plan's strategy has a declaration"
+    row = cast(StudyRow, SimpleNamespace(id="frequency-study", receipt={}))
+    ctx = StageContext(row, 0, protocol, declaration, FakeEngine(), [], lambda: None, lambda _: None, lambda *_: None)
+    with pytest.raises(ValueError, match="missing its expected trade frequency"):
+        ctx.floors.at(ctx.development)
 
 
 def test_a_legacy_plan_keeps_its_hash_and_its_two_fixed_floors() -> None:
@@ -145,12 +155,6 @@ def test_a_legacy_plan_keeps_its_hash_and_its_two_fixed_floors() -> None:
     assert floors.at((legacy.final_start_ms, legacy.final_end_ms), final=True) == 7
     assert floors.at((legacy.development_start_ms, legacy.development_end_ms)) == 1
     assert activity_plan(legacy) is None
-
-
-def test_an_unresolved_floor_never_reaches_selection() -> None:
-    protocol = protocol_from_request(frequency_plan_request("SPY"))
-    with pytest.raises(ValueError, match="no trade floor"):
-        ineligibility(metrics(1.5, trades=5), protocol.policy)
 
 
 def test_stages_use_each_windows_floor_and_the_verdict_uses_all_forward_time(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -191,11 +195,3 @@ def test_stages_use_each_windows_floor_and_the_verdict_uses_all_forward_time(mon
     assert check.label == "Expected trade frequency" and "does not establish statistical confidence" in check.detail
 
 
-def test_a_frequency_plan_without_its_receipt_refuses_instead_of_falling_back() -> None:
-    protocol = protocol_from_request(frequency_plan_request("SPY"))
-    declaration = declaration_for(protocol.strategy_key)
-    assert declaration is not None
-    row = cast(StudyRow, SimpleNamespace(id="frequency-study", receipt={}))
-    ctx = StageContext(row, 0, protocol, declaration, FakeEngine(), [], lambda: None, lambda _: None, lambda *_: None)
-    with pytest.raises(ValueError, match="missing its expected trade frequency"):
-        ctx.floors.at(ctx.development)

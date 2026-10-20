@@ -41,7 +41,12 @@ def _record_sale(repo: ClerkSqliteRepository, accepted: EnterSubmission, *, key:
     ))
 
 
-def test_completed_manual_buy_claims_its_unseen_exact_debit(tmp_path: Path) -> None:
+def test_completed_manual_buy_claims_its_unseen_exact_debit_and_sits_outside_every_bot_on_the_bar(tmp_path: Path) -> None:
+    """PRD #2560: the money bar places manual shares outside every bot, at
+    cost, and never counts a bought share as cash too -- whether or not the
+    cash observation has caught up with the fill."""
+    from app.broker.alpaca.clerk.account_money import money_bar
+
     repo = _new_budget_repo(tmp_path)
     try:
         accepted = accept_manual_order(
@@ -49,7 +54,7 @@ def test_completed_manual_buy_claims_its_unseen_exact_debit(tmp_path: Path) -> N
             leg_id=LEG_ID, leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=6),
         )
         leg = accepted.leg
-        assert leg.order_ref and leg.effect_operation_id
+        assert leg.order_ref and leg.effect_operation_id, "the accepted manual leg has an order ref and an effect operation"
         repo.append_transition(TransitionInput(
             command_id=accepted.command.command_id, effect_operation_id=leg.effect_operation_id,
             order_ref=leg.order_ref, transition_kind="EXECUTION_SLICE_FILLED",
@@ -65,53 +70,21 @@ def test_completed_manual_buy_claims_its_unseen_exact_debit(tmp_path: Path) -> N
             "quantity": 6, "filled_quantity": 6, "filled_avg_price": 100,
             "updated_at_ms": NOON, "observed_at_ms": NOON,
         }))
-        assert repo.effect_operation(leg.effect_operation_id).state == "succeeded"
+        assert repo.effect_operation(leg.effect_operation_id).state == "succeeded", "the completed manual buy's effect succeeded"
         unseen = repo.account_budget(cash=1000, seen_before_ms=NOON)
-        assert unseen.order_claims == Decimal("600.03")
-        assert unseen.fee_claims == 0  # Reported fee rides with its fill, exactly once.
-        assert unseen.available == Decimal("399.97")
+        assert unseen.order_claims == Decimal("600.03"), "completed manual buy claims its unseen exact debit"
+        assert unseen.fee_claims == 0, "reported fee rides with its fill, exactly once"
+        assert unseen.available == Decimal("399.97"), "the unseen debit leaves the exact remainder available"
         seen = repo.account_budget(cash="399.97", seen_before_ms=NOON + 1)
-        assert seen.order_claims == 0 and seen.available == unseen.available
-    finally:
-        repo.close()
-
-
-def test_manual_shares_are_outside_any_bot_and_counted_once_before_and_after_cash_sees_them(tmp_path: Path) -> None:
-    """PRD #2560: the money bar places manual shares outside every bot, at
-    cost, and never counts a bought share as cash too -- whether or not the
-    cash observation has caught up with the fill."""
-    from app.broker.alpaca.clerk.account_money import money_bar
-
-    repo = _new_budget_repo(tmp_path)
-    try:
-        accepted = accept_manual_order(
-            repo, account_id=repo.account_id, operator_id=OPERATOR_ID, ticket_id=TICKET_ID,
-            leg_id=LEG_ID, leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=6),
-        )
-        leg = accepted.leg
-        assert leg.order_ref and leg.effect_operation_id
-        repo.append_transition(TransitionInput(
-            command_id=accepted.command.command_id, effect_operation_id=leg.effect_operation_id,
-            order_ref=leg.order_ref, transition_kind="EXECUTION_SLICE_FILLED",
-            custody_owner="ACCOUNT_CLERK", execution_authority="ACCOUNT_CLERK",
-            operation_state="in_progress", source_event_at_ms=NOON, clerk_observed_at_ms=NOON,
-            summary_code="EXECUTION_SLICE_FILLED", facts_json=ExecutionSliceFilledFacts(
-                execution_id="manual-outside", symbol="SPY", side="BUY", slice_qty=6,
-                slice_price=100, fee=.03, fee_fidelity="reported", evidence_source="websocket",
-                source_event_at_ms=NOON,
-            ).to_facts_json(),
-        ))
-        fold_order_acknowledgement(repo, effect_operation_id=leg.effect_operation_id, order=filled_order(leg.order_ref).model_copy(update={
-            "quantity": 6, "filled_quantity": 6, "filled_avg_price": 100, "updated_at_ms": NOON, "observed_at_ms": NOON,
-        }))
-        unseen = repo.account_money(cash=1000, seen_before_ms=NOON)
-        seen = repo.account_money(cash="399.97", seen_before_ms=NOON + 1)
-        for money in (unseen, seen):
-            assert money.outside == Decimal(600) and money.cash == Decimal("399.97")
-            assert money.total == Decimal("999.97")
+        assert seen.order_claims == 0 and seen.available == unseen.available, "once cash has seen the fill nothing is claimed twice"
+        unseen_money = repo.account_money(cash=1000, seen_before_ms=NOON)
+        seen_money = repo.account_money(cash="399.97", seen_before_ms=NOON + 1)
+        for when, money in (("before cash sees the fill", unseen_money), ("after cash sees the fill", seen_money)):
+            assert money.outside == Decimal(600) and money.cash == Decimal("399.97"), f"manual shares are outside every bot, at cost, {when}"
+            assert money.total == Decimal("999.97"), f"a bought share is never counted as cash too, {when}"
             bar = money_bar(money)
-            assert [(segment.kind, segment.cents) for segment in bar.segments] == [("outside", 60_000), ("free", 39_997)]
-            assert bar.total_cents == 99_997
+            assert [(segment.kind, segment.cents) for segment in bar.segments] == [("outside", 60_000), ("free", 39_997)], f"the bar draws outside then free, {when}"
+            assert bar.total_cents == 99_997, f"the bar's total is cash plus the shares at cost, {when}"
     finally:
         repo.close()
 
@@ -288,50 +261,50 @@ _BEFORE_CUSTODY_DAY = NOON - 4 * 86_400_000
 _EARLIER_ON_GENESIS_DAY = NOON - 3_600_000
 
 
-@pytest.mark.parametrize("before_custody", [_BEFORE_CUSTODY_DAY, _EARLIER_ON_GENESIS_DAY], ids=["days-before", "same-day"])
-def test_an_outside_purchase_from_before_custody_is_inside_the_cash(tmp_path: Path, before_custody: int) -> None:
-    """Review A1 (H35): an outside BUY from before custody began, recorded
-    only now -- at or after the cash observation's boundary -- is inside the
-    cash custody started from. Pricing it as an unseen purchase subtracted
-    shares no longer on the bar from the cash: $400 cash with 6 SPY bought
-    before custody drew -$200. Total = cash."""
+@pytest.mark.parametrize(
+    ("symbol", "trades", "at_ms", "cash"),
+    [
+        pytest.param("SPY", (("buy", 6),), _BEFORE_CUSTODY_DAY, 400, id="h35-purchase-days-before"),
+        pytest.param("SPY", (("buy", 6),), _EARLIER_ON_GENESIS_DAY, 400, id="h35-purchase-same-day"),
+        pytest.param(
+            "AAPL", tuple((side, 1) for side in ["buy", "sell", "buy", "sell", "buy", "sell", "sell"]),
+            _BEFORE_CUSTODY_DAY, 1000, id="three-purchases-and-four-sales-never-move-the-total",
+        ),
+        pytest.param("AAPL", (("sell", 1),), _BEFORE_CUSTODY_DAY, 1000, id="h35-sale-is-never-a-short"),
+    ],
+)
+def test_outside_trades_from_before_custody_are_inside_the_cash(
+    tmp_path: Path, symbol: str, trades: tuple[tuple[str, int], ...], at_ms: int, cash: int
+) -> None:
+    """Review A1 (H35): outside trades from before custody began, recorded
+    only now -- at or after the cash observation's boundary -- are inside the
+    cash custody started from. Pricing an outside BUY as an unseen purchase
+    subtracted shares no longer on the bar from the cash: $400 cash with 6 SPY
+    bought before custody drew -$200. 3 purchases and 4 sales of one AAPL at
+    $100 drew $700 against $1,000 of cash ($1,100 before H35). And a tracked
+    outside order that sold before custody began (paper account PA3KWXU1C4C3)
+    closed a purchase made before custody too: lotting the sale alone read it
+    as a short, on an account Alpaca reported flat. Custody starts from a flat
+    account, so the execution only proves its order's filled quantity: never a
+    lot, a short, or an unseen sale. Total = cash."""
     from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 
     repo = _new_budget_repo(tmp_path)
     try:
-        order, fill = _outside_trade("old-buy", "SPY", "buy", quantity=6, at_ms=before_custody)
-        observe_external_order(repo, order=order)
-        record_fee_evidence(repo, [fill], checked_at_ms=NOON, history_complete=True)
-
-        money = repo.account_money(cash=400, seen_before_ms=NOON)
-
-        assert _drawn_total(money) == (Decimal(400), 40_000, 0)
-        assert money.cash == Decimal(400) and money.outside == 0
-        assert not money.holds_positions and money.unvalued == ()
-    finally:
-        repo.close()
-
-
-def test_outside_trades_from_before_custody_never_move_the_total(tmp_path: Path) -> None:
-    """Review A1 probe: 3 purchases and 4 sales of one AAPL at $100, all
-    before custody began and recorded now, drew $700 against $1,000 of cash
-    (and $1,100 before H35). They are inside the cash: the total is $1,000."""
-    from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
-
-    repo = _new_budget_repo(tmp_path)
-    try:
-        trades = [
-            _outside_trade(f"old-{index}", "AAPL", side, at_ms=_BEFORE_CUSTODY_DAY + index)
-            for index, side in enumerate(["buy", "sell", "buy", "sell", "buy", "sell", "sell"])
+        placed = [
+            _outside_trade(f"old-{index}", symbol, side, quantity=quantity, at_ms=at_ms + index)
+            for index, (side, quantity) in enumerate(trades)
         ]
-        for order, _ in trades:
+        for order, _ in placed:
             observe_external_order(repo, order=order)
-        record_fee_evidence(repo, [fill for _, fill in trades], checked_at_ms=NOON, history_complete=True)
+        record_fee_evidence(repo, [fill for _, fill in placed], checked_at_ms=NOON, history_complete=True)
 
-        money = repo.account_money(cash=1000, seen_before_ms=NOON)
+        money = repo.account_money(cash=cash, seen_before_ms=NOON)
 
-        assert _drawn_total(money) == (Decimal(1000), 100_000, 0)
-        assert money.unvalued == () and money.unseen_sales == 0 and not money.holds_positions
+        assert _drawn_total(money) == (Decimal(cash), cash * 100, 0), "the total and the drawn bar are the cash, with no shortfall"
+        assert money.cash == Decimal(cash) and money.outside == 0, "nothing is placed outside any bot"
+        assert not money.holds_positions and money.unvalued == (), "no position is held and no short is named"
+        assert money.unseen_sales == 0, "no sale is still on its way to cash"
     finally:
         repo.close()
 
@@ -357,32 +330,6 @@ def test_an_outside_short_from_after_custody_began_is_still_named(tmp_path: Path
         assert money.unvalued == ("1 TSLA sold short by outside orders",)
         # Only the custody-era sale's proceeds are still on their way to cash.
         assert money.unseen_sales == Decimal(100)
-    finally:
-        repo.close()
-
-
-def test_an_outside_sale_from_before_custody_began_is_never_a_short(tmp_path: Path) -> None:
-    """H35 (paper account PA3KWXU1C4C3): a tracked outside order that sold
-    before custody began closed a purchase made before custody too. Lotting
-    the sale alone read it as a short -- on an account Alpaca reported flat.
-    Custody starts from a flat account, so the execution only proves its
-    order's filled quantity: never a lot, a short, or an unseen sale."""
-    from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
-
-    repo = _new_budget_repo(tmp_path)
-    try:
-        before_custody = NOON - 4 * 86_400_000
-        order, fill = _outside_sale("old-sale", "AAPL", at_ms=before_custody)
-        observe_external_order(repo, order=order)
-        # Recorded now (observed at NOON), as the paper clerk's startup
-        # recovery recorded its old outside orders' history.
-        record_fee_evidence(repo, [fill], checked_at_ms=NOON, history_complete=True)
-
-        money = repo.account_money(cash=1000, seen_before_ms=NOON)
-
-        assert money.unvalued == ()
-        assert not money.holds_positions
-        assert money.total == Decimal(1000) and money.unseen_sales == 0
     finally:
         repo.close()
 

@@ -7,6 +7,7 @@ Split from ``tests/services/test_bot_runner.py`` (issue #1737, seam 3).
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -40,96 +41,59 @@ from ._support import _WIN_START_MS, _green_bar, _red_bar, _wait_for
 _RTH_SESSION = RunDecisionSession(kind="rth", window=None)
 
 
-@pytest.mark.asyncio
-async def test_unknown_liveness_blocks_entry(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
-    repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
-    clerk = _FakeClerk(repository=repo)
-    clerk.authority_kind = "sqlite"
-    clerk.account_id = "PA-TEST"
-    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
-    monkeypatch.setattr(
-        bot_trade_strategy,
-        "market_liveness_fact",
-        lambda symbol, observed_at_ms: unknown_market_liveness(
-            symbol,
+def _unknown_liveness(symbol: str, observed_at_ms: int) -> MarketLivenessFact:
+    return unknown_market_liveness(
+        symbol,
+        observed_at_ms=observed_at_ms,
+    )
+
+
+def _halted_symbol_under_an_open_clock(symbol: str, observed_at_ms: int) -> MarketLivenessFact:
+    return compose_market_liveness(
+        symbol,
+        now_ms=observed_at_ms,
+        market_clock=MarketClockLivenessEvidence(
+            state="OPEN",
+            source="test.clock",
             observed_at_ms=observed_at_ms,
+            vendor_timestamp_ms=observed_at_ms,
+        ),
+        connected=True,
+        connection_changed_at_ms=observed_at_ms,
+        symbol_status=SymbolTradingStatusEvidence(
+            symbol=symbol,
+            state="HALTED",
+            source="test.symbol-status",
+            observed_at_ms=observed_at_ms,
+            source_timestamp_ms=observed_at_ms,
         ),
     )
-    bars = [
-        _green_bar(_WIN_START_MS + 60_000),
-        _green_bar(_WIN_START_MS + 120_000),  # ENTER is refused by liveness.
-        _red_bar(_WIN_START_MS + 180_000),
-        _red_bar(_WIN_START_MS + 240_000),
-        _red_bar(_WIN_START_MS + 300_000),
-    ]
-    registry = _registry(tmp_path, _FakeFeed(bars, mode="hold"))
-    set_alpaca_clerk(clerk)
-    try:
-        await deploy_bot(registry,
-            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
-            strategy_instance_id=_SID,
-            strategy_key="deployment_validation",
-            symbol="SPY",
-            mode="trade",
-            quantity=1,
-        )
-        await _wait_for(lambda: len(repo.decision_receipt_tail(strategy_instance_id=_SID, limit=10)) >= 5)
-        await registry.stop("alpaca", _SID)
-
-        # Rolled back (#1671 AC6): no real entry means no phantom EXIT either.
-        assert clerk.calls == []
-        decisions = repo.decision_receipt_tail(strategy_instance_id=_SID, limit=5)
-        blocked = next(decision for decision in decisions if decision.outcome == "blocked")
-        blocked_facts = json.loads(blocked.facts_json)
-        assert blocked_facts["reason_code"] == "MARKET_LIVENESS_UNAVAILABLE"
-        assert blocked_facts["market_liveness"]["state"] == "UNKNOWN"
-        assert all(decision.outcome in {"blocked", "no_action"} for decision in decisions)
-    finally:
-        set_alpaca_clerk(None)
-        repo.close()
 
 
 @pytest.mark.asyncio
-async def test_halted_liveness_blocks_entry(
+@pytest.mark.parametrize(
+    ("liveness", "reason_code", "state"),
+    [
+        pytest.param(_unknown_liveness, "MARKET_LIVENESS_UNAVAILABLE", "UNKNOWN", id="unknown liveness"),
+        # #1671 AC4: a market-wide OPEN clock with a HALTED symbol must never claim tradability at the actual
+        # submit-blocking layer (not just at the compose/display layers, which have their own dedicated tests).
+        pytest.param(_halted_symbol_under_an_open_clock, "SYMBOL_HALTED", "HALTED", id="halted symbol under an open clock (#1671 AC4)"),
+    ],
+)
+async def test_liveness_that_does_not_prove_the_symbol_tradable_blocks_entry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    liveness: Callable[[str, int], MarketLivenessFact],
+    reason_code: str,
+    state: str,
 ) -> None:
-    """#1671 AC4: a market-wide OPEN clock with a HALTED symbol must never
-    claim tradability at the actual submit-blocking layer (not just at the
-    compose/display layers, which have their own dedicated tests)."""
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
     repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
     clerk = _FakeClerk(repository=repo)
     clerk.authority_kind = "sqlite"
     clerk.account_id = "PA-TEST"
     admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
-    monkeypatch.setattr(
-        bot_trade_strategy,
-        "market_liveness_fact",
-        lambda symbol, observed_at_ms: compose_market_liveness(
-            symbol,
-            now_ms=observed_at_ms,
-            market_clock=MarketClockLivenessEvidence(
-                state="OPEN",
-                source="test.clock",
-                observed_at_ms=observed_at_ms,
-                vendor_timestamp_ms=observed_at_ms,
-            ),
-            connected=True,
-            connection_changed_at_ms=observed_at_ms,
-            symbol_status=SymbolTradingStatusEvidence(
-                symbol=symbol,
-                state="HALTED",
-                source="test.symbol-status",
-                observed_at_ms=observed_at_ms,
-                source_timestamp_ms=observed_at_ms,
-            ),
-        ),
-    )
+    monkeypatch.setattr(bot_trade_strategy, "market_liveness_fact", liveness)
     bars = [
         _green_bar(_WIN_START_MS + 60_000),
         _green_bar(_WIN_START_MS + 120_000),  # ENTER is refused by liveness.
@@ -151,17 +115,15 @@ async def test_halted_liveness_blocks_entry(
         await _wait_for(lambda: len(repo.decision_receipt_tail(strategy_instance_id=_SID, limit=10)) >= 5)
         await registry.stop("alpaca", _SID)
 
-        # No real entry was ever accepted, so no phantom EXIT reaches the
-        # Clerk either — the blocked ENTER's state was rolled back (#1671
-        # AC6); see test_blocked_entry_is_rolled_back_and_can_re_enter for
-        # the regression this rollback specifically targets.
-        assert clerk.calls == []
+        # Rolled back (#1671 AC6): no real entry means no phantom EXIT either, so nothing reaches the Clerk;
+        # see test_blocked_entry_is_rolled_back_and_can_re_enter for the regression this rollback targets.
+        assert clerk.calls == [], "the blocked ENTER was rolled back: no ENTER and no phantom EXIT reached the Clerk"
         decisions = repo.decision_receipt_tail(strategy_instance_id=_SID, limit=5)
         blocked = next(decision for decision in decisions if decision.outcome == "blocked")
         blocked_facts = json.loads(blocked.facts_json)
-        assert blocked_facts["reason_code"] == "SYMBOL_HALTED"
-        assert blocked_facts["market_liveness"]["state"] == "HALTED"
-        assert all(decision.outcome in {"blocked", "no_action"} for decision in decisions)
+        assert blocked_facts["reason_code"] == reason_code, "the blocked decision names the liveness reason"
+        assert blocked_facts["market_liveness"]["state"] == state, "the blocked decision carries the liveness state"
+        assert all(decision.outcome in {"blocked", "no_action"} for decision in decisions), "every decision is blocked or no_action"
     finally:
         set_alpaca_clerk(None)
         repo.close()
@@ -280,78 +242,49 @@ def _feed_with_health(*, connected: bool, stale: bool) -> _FakeFeed:
     return feed
 
 
-def test_closed_liveness_with_a_proven_phase_and_fresh_bars_does_not_block_entry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Alpaca's clock is RTH-only (#1671): a non-RTH binding whose schedule
-    proves PRE/POST and whose feed is printing must not be blocked just
-    because the RTH-only clock reports CLOSED."""
-    from types import SimpleNamespace
-
-    monkeypatch.setattr("app.services.market_liveness.declared_extended_phase_at_ms", lambda **_kwargs: True)
-    binding = SimpleNamespace(use_rth=False, symbol="SPY")
-
-    blocked = bot_trade_strategy._liveness_blocks_entry(
-        binding,
-        _closed_clock_liveness(),
-        _RTH_SESSION,
-        _feed_with_health(connected=True, stale=False),
-    )
-
-    assert blocked is False
-
-
-@pytest.mark.parametrize(
-    ("connected", "stale"),
-    [(False, False)],
-)
-def test_closed_liveness_with_a_proven_phase_but_no_fresh_bars_blocks_entry(
-    monkeypatch: pytest.MonkeyPatch,
-    connected: bool,
-    stale: bool,
-) -> None:
-    """The declared window proves the *schedule*, not liveness.
-
-    Alpaca's clock reports CLOSED through every scheduled extended session,
-    so it cannot distinguish one from an unscheduled PRE/POST closure. The
-    live evidence that separates them is the feed printing bars for the
-    symbol; without it, a static window would have admitted new exposure
-    straight into a closed venue.
-    """
-    from types import SimpleNamespace
-
-    monkeypatch.setattr("app.services.market_liveness.declared_extended_phase_at_ms", lambda **_kwargs: True)
-    binding = SimpleNamespace(use_rth=False, symbol="SPY")
-
-    blocked = bot_trade_strategy._liveness_blocks_entry(
-        binding,
-        _closed_clock_liveness(),
-        _RTH_SESSION,
-        _feed_with_health(connected=connected, stale=stale),
-    )
-
-    assert blocked is True
-
-
-def test_closed_liveness_with_an_unreadable_feed_health_blocks_entry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A health probe that raises proves nothing, so it refuses."""
-    from types import SimpleNamespace
+def _feed_whose_health_probe_raises() -> _FakeFeed:
+    """A health probe that raises proves nothing."""
 
     def _raise(_symbol: str | None = None):
         raise RuntimeError("probe exploded")
 
-    monkeypatch.setattr("app.services.market_liveness.declared_extended_phase_at_ms", lambda **_kwargs: True)
     feed = _FakeFeed([], mode="finite")
     feed.health = _raise  # type: ignore[method-assign]
+    return feed
+
+
+# Alpaca's clock is RTH-only (#1671): a non-RTH binding whose schedule proves PRE/POST and whose feed is printing must
+# not be blocked just because the RTH-only clock reports CLOSED. The declared window proves the *schedule*, not
+# liveness: Alpaca's clock reports CLOSED through every scheduled extended session, so it cannot distinguish one from
+# an unscheduled PRE/POST closure. The live evidence that separates them is the feed printing bars for the symbol;
+# without it, a static window would have admitted new exposure straight into a closed venue. A health probe that
+# raises proves nothing, so it refuses.
+@pytest.mark.parametrize(
+    ("make_feed", "blocked"),
+    [
+        pytest.param(lambda: _feed_with_health(connected=True, stale=False), False, id="fresh bars: not blocked"),
+        pytest.param(lambda: _feed_with_health(connected=False, stale=False), True, id="no fresh bars: blocked"),
+        pytest.param(_feed_whose_health_probe_raises, True, id="unreadable feed health: blocked"),
+    ],
+)
+def test_closed_liveness_with_a_proven_phase_blocks_entry_unless_the_feed_proves_fresh_bars(
+    monkeypatch: pytest.MonkeyPatch,
+    make_feed: Callable[[], _FakeFeed],
+    blocked: bool,
+) -> None:
+    from types import SimpleNamespace
+
+    monkeypatch.setattr("app.services.market_liveness.declared_extended_phase_at_ms", lambda **_kwargs: True)
     binding = SimpleNamespace(use_rth=False, symbol="SPY")
 
-    blocked = bot_trade_strategy._liveness_blocks_entry(
-        binding, _closed_clock_liveness(), _RTH_SESSION, feed
+    result = bot_trade_strategy._liveness_blocks_entry(
+        binding,
+        _closed_clock_liveness(),
+        _RTH_SESSION,
+        make_feed(),
     )
 
-    assert blocked is True
+    assert result is blocked, "a CLOSED clock with a proven phase blocks entry exactly when the feed does not prove fresh bars"
 
 
 @pytest.mark.asyncio

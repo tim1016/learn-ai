@@ -577,75 +577,51 @@ def test_market_mark_rejects_non_numeric_or_ambiguous_boundary_values() -> None:
         MarketMark(price=100.0, observed_at_ms=True)  # type: ignore[arg-type]
 
 
-def test_dst_session_boundary_counts_only_fills_inside_canonical_nyse_window(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("session_date", "fills", "expected_fills_today"),
+    [
+        # The March 2026 Monday follows the US DST transition.  Use only the
+        # calendar's ms boundaries; a fixed-offset implementation would drift.
+        pytest.param(
+            date(2026, 3, 9),
+            (
+                ("exec-before-dst-session", "open", -1),
+                ("exec-at-dst-open", "open", 0),
+                ("exec-before-dst-close", "close", -1),
+            ),
+            2,
+            id="dst-session-counts-only-fills-inside-the-window",
+        ),
+        # Thanksgiving Friday is an NYSE early-close session. The calendar, not a
+        # literal RTH close, supplies the half-open window used by the projection.
+        pytest.param(
+            date(2026, 11, 27),
+            (("exec-before-early-close", "close", -1), ("exec-at-early-close", "close", 0)),
+            1,
+            id="half-day-excludes-the-execution-at-the-early-close",
+        ),
+    ],
+)
+def test_session_boundary_counts_only_fills_inside_the_canonical_nyse_window(
+    tmp_path: Path, session_date: date, fills: tuple[tuple[str, str, int], ...], expected_fills_today: int
+) -> None:
     repo, accepted = _repository(tmp_path)
-    # The March 2026 Monday follows the US DST transition.  Use only the
-    # calendar's ms boundaries; a fixed-offset implementation would drift.
-    session = session_window_for_date(date(2026, 3, 9))
+    session = session_window_for_date(session_date)
     try:
-        _append_slice(
-            repo,
-            accepted,
-            execution_id="exec-before-dst-session",
-            side="BUY",
-            quantity=1.0,
-            price=100.0,
-            occurred_at_ms=session.open_ms_utc - 1,
-        )
-        _append_slice(
-            repo,
-            accepted,
-            execution_id="exec-at-dst-open",
-            side="BUY",
-            quantity=1.0,
-            price=101.0,
-            occurred_at_ms=session.open_ms_utc,
-        )
-        _append_slice(
-            repo,
-            accepted,
-            execution_id="exec-before-dst-close",
-            side="BUY",
-            quantity=1.0,
-            price=102.0,
-            occurred_at_ms=session.close_ms_utc - 1,
-        )
+        for index, (execution_id, anchor, offset_ms) in enumerate(fills):
+            _append_slice(
+                repo,
+                accepted,
+                execution_id=execution_id,
+                side="BUY",
+                quantity=1.0,
+                price=100.0 + index,
+                occurred_at_ms=(session.open_ms_utc if anchor == "open" else session.close_ms_utc) + offset_ms,
+            )
 
         snapshot = _snapshot(repo, session=session)
 
-        assert snapshot.fills_today == 2
-    finally:
-        repo.close()
-
-
-def test_half_day_session_excludes_execution_at_canonical_early_close(tmp_path: Path) -> None:
-    repo, accepted = _repository(tmp_path)
-    # Thanksgiving Friday is an NYSE early-close session. The calendar, not a
-    # literal RTH close, supplies the half-open window used by the projection.
-    session = session_window_for_date(date(2026, 11, 27))
-    try:
-        _append_slice(
-            repo,
-            accepted,
-            execution_id="exec-before-early-close",
-            side="BUY",
-            quantity=1.0,
-            price=100.0,
-            occurred_at_ms=session.close_ms_utc - 1,
-        )
-        _append_slice(
-            repo,
-            accepted,
-            execution_id="exec-at-early-close",
-            side="BUY",
-            quantity=1.0,
-            price=101.0,
-            occurred_at_ms=session.close_ms_utc,
-        )
-
-        snapshot = _snapshot(repo, session=session)
-
-        assert snapshot.fills_today == 1
+        assert snapshot.fills_today == expected_fills_today
     finally:
         repo.close()
 

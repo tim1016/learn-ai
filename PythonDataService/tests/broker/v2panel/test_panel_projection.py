@@ -170,23 +170,61 @@ _MARKET_PULSE = MarketPulseView(
 @pytest.mark.parametrize(
     "row_factory",
     [
-        lambda: RecentDecisionView(
-            seq=1,
-            recorded_at_ms=_NOW,
-            outcome="entered",
-            reason_code="SIMULATED",
-            bar_ref="source-bar:sim:ema-1:bar-1",
-            order_ref="order:1",
-            simulated=True,
+        pytest.param(
+            lambda: RecentDecisionView(
+                seq=1,
+                recorded_at_ms=_NOW,
+                outcome="entered",
+                reason_code="SIMULATED",
+                bar_ref="source-bar:sim:ema-1:bar-1",
+                order_ref="order:1",
+                simulated=True,
+            ),
+            id="decision_without_authority_metadata",
         ),
-        lambda: RecentFillView(
-            order_ref="order:1",
-            symbol="SPY",
-            side="buy",
-            quantity=1,
-            price=500,
-            filled_at_ms=_NOW,
-            simulated=True,
+        pytest.param(
+            lambda: RecentFillView(
+                order_ref="order:1",
+                symbol="SPY",
+                side="buy",
+                quantity=1,
+                price=500,
+                filled_at_ms=_NOW,
+                simulated=True,
+            ),
+            id="fill_without_authority_metadata",
+        ),
+        # The namespace and the kind stay inseparable: shadow: is never synthetic.
+        pytest.param(
+            lambda: RecentFillView(
+                order_ref="r",
+                symbol="SPY",
+                side="buy",
+                quantity=1.0,
+                price=1.0,
+                filled_at_ms=1,
+                simulated=True,
+                authority_account_id="shadow:9LIVE0001",
+                authority_kind="synthetic",
+            ),
+            id="shadow_namespace_with_synthetic_kind",
+        ),
+        # The reverse of the pairing above: a ``sim:`` id is never the shadow world. Both directions now
+        # resolve through the one canonical namespace/kind validator in ``schemas.account_authority``, so
+        # the panel model cannot drift from the wire boundary that owns the table.
+        pytest.param(
+            lambda: RecentFillView(
+                order_ref="r",
+                symbol="SPY",
+                side="buy",
+                quantity=1.0,
+                price=1.0,
+                filled_at_ms=1,
+                simulated=True,
+                authority_account_id="sim:ema-1",
+                authority_kind="shadow",
+            ),
+            id="sim_namespace_with_shadow_kind",
         ),
     ],
 )
@@ -197,74 +235,50 @@ def test_simulated_panel_rows_require_synthetic_authority_metadata(
         row_factory()
 
 
-def test_simulated_panel_rows_accept_nonempty_synthetic_authority_metadata() -> None:
-    row = RecentDecisionView(
-        seq=1,
-        recorded_at_ms=_NOW,
-        outcome="entered",
-        reason_code="SIMULATED",
-        bar_ref="source-bar:sim:ema-1:bar-1",
-        order_ref="order:1",
-        simulated=True,
-        authority_account_id="sim:ema-1",
-        authority_kind="synthetic",
-    )
+@pytest.mark.parametrize(
+    ("row_factory", "authority_account_id", "authority_kind"),
+    [
+        pytest.param(
+            lambda: RecentDecisionView(
+                seq=1,
+                recorded_at_ms=_NOW,
+                outcome="entered",
+                reason_code="SIMULATED",
+                bar_ref="source-bar:sim:ema-1:bar-1",
+                order_ref="order:1",
+                simulated=True,
+                authority_account_id="sim:ema-1",
+                authority_kind="synthetic",
+            ),
+            "sim:ema-1",
+            "synthetic",
+            id="decision_with_nonempty_synthetic_metadata",
+        ),
+        # ADR 0059 D2: the shadow world synthesizes fills, so its rows are simulated.
+        pytest.param(
+            lambda: RecentFillView(
+                order_ref="r",
+                symbol="SPY",
+                side="buy",
+                quantity=1.0,
+                price=1.0,
+                filled_at_ms=1,
+                simulated=True,
+                authority_account_id="shadow:9LIVE0001",
+                authority_kind="shadow",
+            ),
+            "shadow:9LIVE0001",
+            "shadow",
+            id="fill_in_the_shadow_authority_namespace",
+        ),
+    ],
+)
+def test_simulated_panel_rows_accept_nonempty_authority_metadata(
+    row_factory: Callable[[], RecentDecisionView | RecentFillView], authority_account_id: str, authority_kind: str,
+) -> None:
+    row = row_factory()
 
-    assert row.authority_account_id == "sim:ema-1"
-
-
-def test_simulated_panel_rows_accept_the_shadow_authority_namespace() -> None:
-    """ADR 0059 D2: the shadow world synthesizes fills, so its rows are simulated."""
-    row = RecentFillView(
-        order_ref="r",
-        symbol="SPY",
-        side="buy",
-        quantity=1.0,
-        price=1.0,
-        filled_at_ms=1,
-        simulated=True,
-        authority_account_id="shadow:9LIVE0001",
-        authority_kind="shadow",
-    )
-
-    assert row.authority_kind == "shadow"
-
-
-def test_simulated_shadow_row_still_requires_its_own_authority_kind() -> None:
-    """The namespace and the kind stay inseparable: shadow: is never synthetic."""
-    with pytest.raises(ValidationError, match="synthetic or shadow authority metadata"):
-        RecentFillView(
-            order_ref="r",
-            symbol="SPY",
-            side="buy",
-            quantity=1.0,
-            price=1.0,
-            filled_at_ms=1,
-            simulated=True,
-            authority_account_id="shadow:9LIVE0001",
-            authority_kind="synthetic",
-        )
-
-
-def test_a_simulated_row_is_refused_when_its_namespace_names_the_other_world() -> None:
-    """The reverse of the pairing above: a ``sim:`` id is never the shadow world.
-
-    Both directions now resolve through the one canonical namespace/kind
-    validator in ``schemas.account_authority``, so the panel model cannot
-    drift from the wire boundary that owns the table.
-    """
-    with pytest.raises(ValidationError, match="synthetic or shadow authority metadata"):
-        RecentFillView(
-            order_ref="r",
-            symbol="SPY",
-            side="buy",
-            quantity=1.0,
-            price=1.0,
-            filled_at_ms=1,
-            simulated=True,
-            authority_account_id="sim:ema-1",
-            authority_kind="shadow",
-        )
+    assert (row.authority_account_id, row.authority_kind) == (authority_account_id, authority_kind)
 
 
 def test_sqlite_fill_adapter_stamps_a_shadow_authority_row_as_simulated() -> None:
@@ -1340,7 +1354,14 @@ def _rail_projection(
     )
 
 
-def test_sqlite_status_does_not_count_a_filled_entry_as_outstanding() -> None:
+@pytest.mark.parametrize(
+    ("broker_state", "outstanding"),
+    [
+        pytest.param("filled", 0, id="a_filled_entry_is_not_outstanding"),
+        pytest.param("accepted", 1, id="a_working_entry_is_outstanding"),
+    ],
+)
+def test_sqlite_status_counts_only_an_unfilled_entry_as_outstanding(broker_state: str, outstanding: int) -> None:
     projection = _rail_projection(
         orders=(
             ProjectedOrder(
@@ -1348,13 +1369,13 @@ def test_sqlite_status_does_not_count_a_filled_entry_as_outstanding() -> None:
                 client_order_id="order:enter",
                 broker_order_id="broker-1",
                 role="ENTRY",
-                broker_state="filled",
+                broker_state=broker_state,
                 updated_at_ms=_NOW - 300,
             ),
         ),
     )
 
-    assert sqlite_clerk_status(projection, last_clean_pass_at_ms=None).outstanding_intents == 0
+    assert sqlite_clerk_status(projection, last_clean_pass_at_ms=None).outstanding_intents == outstanding
 
 
 def test_sqlite_status_names_the_real_paper_authority_for_a_real_account_id() -> None:
@@ -1364,24 +1385,14 @@ def test_sqlite_status_names_the_real_paper_authority_for_a_real_account_id() ->
     assert sqlite_clerk_status(projection, last_clean_pass_at_ms=None).authority_kind == "real_paper"
 
 
-def test_sqlite_status_counts_a_working_entry_as_outstanding() -> None:
-    projection = _rail_projection(
-        orders=(
-            ProjectedOrder(
-                order_ref="order:enter",
-                client_order_id="order:enter",
-                broker_order_id="broker-1",
-                role="ENTRY",
-                broker_state="accepted",
-                updated_at_ms=_NOW - 300,
-            ),
-        ),
-    )
-
-    assert sqlite_clerk_status(projection, last_clean_pass_at_ms=None).outstanding_intents == 1
-
-
-def test_trade_health_uses_decision_bar_reference_for_last_evaluated_bar() -> None:
+@pytest.mark.parametrize(
+    "last_bar_at_ms",
+    [
+        pytest.param(None, id="decision_bar_reference_is_the_last_evaluated_bar"),
+        pytest.param(_NOW - 1, id="a_later_fill_is_not_relabelled_as_the_evaluated_bar"),
+    ],
+)
+def test_trade_health_uses_decision_bar_reference_for_last_evaluated_bar(last_bar_at_ms: int | None) -> None:
     decision = decision_receipt(
         seq=1,
         ts_ms=_NOW - 100,
@@ -1394,29 +1405,10 @@ def test_trade_health_uses_decision_bar_reference_for_last_evaluated_bar() -> No
         _status(mode="trade"),
         _clerk_status(),
         decision,
-        last_bar_at_ms=None,
+        last_bar_at_ms=last_bar_at_ms,
     )
 
     assert panel.health.last_decision_at_ms == _NOW - 100
-    assert panel.health.last_bar_at_ms == _NOW - 60_000
-
-
-def test_trade_health_does_not_relabel_a_later_fill_as_a_evaluated_bar() -> None:
-    decision = decision_receipt(
-        seq=1,
-        ts_ms=_NOW - 100,
-        outcome="no_action",
-        reason_code="NO_ACTION",
-        bar_ref=f"SPY@{_NOW - 60_000}",
-    )
-
-    panel = _panel(
-        _status(mode="trade"),
-        _clerk_status(),
-        decision,
-        last_bar_at_ms=_NOW - 1,
-    )
-
     assert panel.health.last_bar_at_ms == _NOW - 60_000
 
 
@@ -1897,32 +1889,20 @@ def test_a_failed_operation_outside_the_bounded_window_reads_blocked_too(tmp_pat
     assert (states["BROKER_ACK"], states["FILL"]) == ("blocked", "blocked")
 
 
-def test_an_exit_that_failed_is_not_satisfied_by_the_entry_it_closes(tmp_path: Path) -> None:
+def test_an_exit_that_failed_is_not_satisfied_by_the_entry_it_closes_and_each_order_ref_selects_its_own_rail(
+    tmp_path: Path,
+) -> None:
     """#3217: an EXIT links the entries it closes, so a filled entry satisfied BROKER_ACK and FILL
-    whatever became of the exit, and the newest operation after a stop is the EXIT."""
-    repo = _real_repo(tmp_path)
-    try:
-        refs = _exit_of_a_filled_entry(repo, reducing_status=None, fail_exit=True)
-        exit_stations = _real_rail(repo)
-        enter_stations = _real_rail(repo, selected_ref=refs.enter_operation_id)
-    finally:
-        repo.close()
+    whatever became of the exit, and the newest operation after a stop is the EXIT.
 
-    assert exit_stations["BROKER_ACK"].state == "blocked"
-    assert exit_stations["FILL"].state == "blocked"
-    assert exit_stations["BROKER_ACK"].blocker is not None
-    assert exit_stations["FILL"].blocker is None
-    # The entry's own rail still reads what happened to the entry.
-    assert (enter_stations["BROKER_ACK"].state, enter_stations["FILL"].state) == ("satisfied", "satisfied")
-
-
-def test_an_order_ref_selects_the_operation_that_sent_it_not_the_exit_that_links_it(tmp_path: Path) -> None:
-    """The audit trail sends an order's ref, and the EXIT is the newest operation in the window.
+    The audit trail sends an order's ref, and the EXIT is the newest operation in the window.
     The entry's ref reads the ENTER's rail, as it does when the ENTER is outside the window; the
     reducing order's ref reads the EXIT's."""
     repo = _real_repo(tmp_path)
     try:
         refs = _exit_of_a_filled_entry(repo, reducing_status=None, fail_exit=True)
+        exit_stations = _real_rail(repo)
+        enter_stations = _real_rail(repo, selected_ref=refs.enter_operation_id)
         by_entry = _real_panel(repo, selected_ref=refs.entry_order_ref).rail
         by_reducing = _real_panel(repo, selected_ref=refs.reducing_order_ref).rail
     finally:
@@ -1930,10 +1910,22 @@ def test_an_order_ref_selects_the_operation_that_sent_it_not_the_exit_that_links
 
     entry_states = {station.station_id: station.state for station in by_entry.stations}
     reducing_states = {station.station_id: station.state for station in by_reducing.stations}
-    assert by_entry.transaction_ref == refs.enter_operation_id
-    assert (entry_states["BROKER_ACK"], entry_states["FILL"]) == ("satisfied", "satisfied")
-    assert by_reducing.transaction_ref == refs.exit_operation_id
-    assert (reducing_states["BROKER_ACK"], reducing_states["FILL"]) == ("blocked", "blocked")
+    assert exit_stations["BROKER_ACK"].state == "blocked", "#3217: a failed exit's BROKER_ACK is blocked, not satisfied"
+    assert exit_stations["FILL"].state == "blocked", "#3217: a failed exit's FILL is blocked, not satisfied"
+    assert exit_stations["BROKER_ACK"].blocker is not None, "the station where the exit stopped carries the blocker"
+    assert exit_stations["FILL"].blocker is None, "the station after it is blocked by it, with no second alarm"
+    # The entry's own rail still reads what happened to the entry.
+    assert (enter_stations["BROKER_ACK"].state, enter_stations["FILL"].state) == ("satisfied", "satisfied"), (
+        "the entry's own rail still reads satisfied"
+    )
+    assert by_entry.transaction_ref == refs.enter_operation_id, "the entry's order ref selects the ENTER's rail"
+    assert (entry_states["BROKER_ACK"], entry_states["FILL"]) == ("satisfied", "satisfied"), (
+        "the ENTER's rail reads what happened to the entry"
+    )
+    assert by_reducing.transaction_ref == refs.exit_operation_id, "the reducing order's ref selects the EXIT's rail"
+    assert (reducing_states["BROKER_ACK"], reducing_states["FILL"]) == ("blocked", "blocked"), (
+        "the EXIT's rail reads blocked"
+    )
 
 
 @pytest.mark.parametrize("reducing_status", ["rejected", "canceled"])
@@ -2506,30 +2498,24 @@ def test_served_readiness_counts_partition_the_recovery_checks() -> None:
     assert (served.readiness_ready_count, served.readiness_blocked_count) == (2, 1)
 
 
-def test_evaluate_channel_health_required_streams_narrows_to_market_data() -> None:
+def test_evaluate_channel_health_required_streams_narrows_to_market_data_and_still_catches_unhealthy_market_data() -> None:
     """#1702: Dry Run checks only the market-data stream — it never opens
     the execution channel, so an unhealthy/absent execution stream must not
     fail a Dry-Run-scoped evaluation."""
     now_ms = 1_700_000_000_000
     market_data_only = (ChannelHealth(stream="market_data", healthy=True, connected=True, observed_at_ms=now_ms),)
+    unhealthy = (ChannelHealth(stream="market_data", healthy=False, connected=False, observed_at_ms=now_ms),)
 
     full = evaluate_channel_health(market_data_only, now_ms)
     scoped = evaluate_channel_health(market_data_only, now_ms, required_streams=("market_data",))
+    scoped_unhealthy = evaluate_channel_health(unhealthy, now_ms, required_streams=("market_data",))
 
-    assert full.ready is False
-    assert full.missing == ("execution",)
-    assert scoped.ready is True
-    assert scoped.missing == ()
-
-
-def test_evaluate_channel_health_required_streams_still_catches_unhealthy_market_data() -> None:
-    now_ms = 1_700_000_000_000
-    unhealthy = (ChannelHealth(stream="market_data", healthy=False, connected=False, observed_at_ms=now_ms),)
-
-    scoped = evaluate_channel_health(unhealthy, now_ms, required_streams=("market_data",))
-
-    assert scoped.ready is False
-    assert scoped.unhealthy == ("market_data",)
+    assert full.ready is False, "the full required set is not ready without the execution channel"
+    assert full.missing == ("execution",), "the full required set names the missing execution channel"
+    assert scoped.ready is True, "#1702: a market-data-scoped evaluation is ready without the execution channel"
+    assert scoped.missing == (), "#1702: a market-data-scoped evaluation misses nothing"
+    assert scoped_unhealthy.ready is False, "a scoped evaluation still catches unhealthy market data"
+    assert scoped_unhealthy.unhealthy == ("market_data",), "the unhealthy market-data stream is named"
 
 
 def test_unhealthy_required_channel_blocks_trade_mode_mission() -> None:
@@ -2951,31 +2937,35 @@ def _recovery_capability(action_id: str, *, primary: bool, available: bool = Tru
     )
 
 
-def test_select_primary_action_blocked_action_still_referenced() -> None:
-    """A disabled lifecycle action is still the reference; ``enabled`` only
-    gates the button, not whether the page may point at it (ADR 0027's
-    ``wait`` disposition — a block is allowed to name its control without
-    offering a fake, always-enabled button)."""
-    assert select_primary_action(
-        [_stub_action("stop_bot_decisions", enabled=False)], _health(running=True),
-    ) == "stop_bot_decisions"
+@pytest.mark.parametrize(
+    ("actions", "recovery_primary", "expected"),
+    [
+        # A disabled lifecycle action is still the reference; ``enabled`` only gates the button, not whether
+        # the page may point at it (ADR 0027's ``wait`` disposition -- a block is allowed to name its control
+        # without offering a fake, always-enabled button).
+        pytest.param(
+            (("stop_bot_decisions", False),), None, "stop_bot_decisions", id="blocked_action_still_referenced",
+        ),
+        # Nothing presented: ``None`` rather than a guess from ``health``.
+        pytest.param((), None, None, id="missing_action_fails_closed"),
+        # A recovery-primary id that is not presented (stale evidence, a caller bug) never leaks through as a
+        # dangling reference.
+        pytest.param(
+            (("stop_bot_decisions", True),), "resolve_execution_coverage", "stop_bot_decisions",
+            id="dangling_recovery_primary_falls_back",
+        ),
+    ],
+)
+def test_select_primary_action_references_only_a_presented_action(
+    actions: tuple[tuple[str, bool], ...], recovery_primary: str | None, expected: str | None,
+) -> None:
+    presented = [_stub_action(action_id, enabled=enabled) for action_id, enabled in actions]
 
-
-def test_select_primary_action_missing_action_fails_closed() -> None:
-    """Nothing presented: ``None`` rather than a guess from ``health``."""
-    assert select_primary_action([], _health(running=True)) is None
-
-
-def test_select_primary_action_dangling_recovery_primary_falls_back() -> None:
-    """A recovery-primary id that is not presented (stale evidence, a caller
-    bug) never leaks through as a dangling reference."""
     selection = select_primary_action(
-        [_stub_action("stop_bot_decisions")],
-        _health(running=True),
-        recovery_primary_action_id="resolve_execution_coverage",
+        presented, _health(running=True), recovery_primary_action_id=recovery_primary,
     )
 
-    assert selection == "stop_bot_decisions"
+    assert selection == expected
 
 
 def test_sqlite_adapter_recovery_cure_is_the_primary_action() -> None:
@@ -3197,15 +3187,26 @@ def _notices(
     return [(notice.kind, notice.label) for notice in outcome.exposure_notices]
 
 
-def test_a_startup_refusal_with_a_position_says_the_bot_is_not_managing_it() -> None:
+@pytest.mark.parametrize(
+    "reason_code",
+    [
+        pytest.param("RESUME_HOLE_UNFILLED", id="a_startup_refusal"),
+        # #2444: the impossible-bar refusal is in the startup-notices vocabulary, and a panel with no
+        # startup-join view cannot prove the run ever decided.
+        pytest.param("IMPOSSIBLE_SOURCE_BAR", id="an_impossible_bar_refusal_while_preparing"),
+    ],
+)
+def test_a_refusal_with_a_position_says_the_bot_is_not_managing_it(reason_code: str) -> None:
     projection = replace(_exposure_projection(orders=()), positions=_held(3.0))
 
-    outcome = adapt_sqlite_panel(_refused_panel(), projection).health.duty_outcome
+    outcome = adapt_sqlite_panel(_refused_panel(reason_code), projection).health.duty_outcome
 
-    assert outcome is not None
+    assert outcome is not None, "the refusal is served with a duty outcome"
     (notice,) = outcome.exposure_notices
-    assert (notice.kind, notice.label) == ("position_unmanaged", "Bot is not managing this position")
-    assert "3 SPY" in notice.explanation
+    assert (notice.kind, notice.label) == ("position_unmanaged", "Bot is not managing this position"), (
+        "the position is said to be unmanaged"
+    )
+    assert "3 SPY" in notice.explanation, "the notice names the position held"
 
 
 @pytest.mark.parametrize(
@@ -3235,12 +3236,6 @@ def test_a_held_position_names_the_exit_the_clerk_is_still_working(exit_state: s
 
 def test_a_confirmed_flat_refusal_says_nothing_about_a_position() -> None:
     assert _notices(_refused_panel(), _exposure_projection(orders=())) == []
-
-
-def test_a_flat_refusal_with_a_working_entry_order_warns_it_can_still_fill() -> None:
-    notices = _notices(_refused_panel(), _exposure_projection(orders=(_entry_order(),)))
-
-    assert notices == [("entry_order_working", "An entry order is still working")]
 
 
 def test_a_refusal_the_clerk_cannot_vouch_for_says_the_position_is_unverified() -> None:
@@ -3280,18 +3275,6 @@ def test_lost_feed_with_exposure_and_an_entry_warns_about_both() -> None:
     ]
 
 
-def test_an_impossible_bar_refusal_while_preparing_shows_the_exposure_notices() -> None:
-    """#2444: the impossible-bar refusal is in the startup-notices vocabulary,
-    and a panel with no startup-join view cannot prove the run ever decided."""
-    projection = replace(_exposure_projection(orders=()), positions=_held(3.0))
-
-    outcome = adapt_sqlite_panel(_refused_panel("IMPOSSIBLE_SOURCE_BAR"), projection).health.duty_outcome
-
-    assert outcome is not None
-    (notice,) = outcome.exposure_notices
-    assert (notice.kind, notice.label) == ("position_unmanaged", "Bot is not managing this position")
-
-
 def test_an_impossible_bar_refusal_after_the_run_was_deciding_still_warns_about_exposure() -> None:
     """Exposure warnings outlive startup: an ended run cannot manage its position."""
     projection = replace(_exposure_projection(orders=()), positions=_held(3.0))
@@ -3320,39 +3303,48 @@ def test_an_impossible_bar_refusal_with_a_retained_join_that_never_reached_ready
     ) == [("position_unmanaged", "Bot is not managing this position")]
 
 
-@pytest.mark.parametrize("broker_state", ["held", "pending_replace", "accepted_for_bidding", None])
-def test_an_entry_order_the_broker_has_not_finished_is_warned_about(broker_state: str | None) -> None:
-    """Review P2: any non-terminal state can still fill, including an order not yet acknowledged."""
-    order = replace(_entry_order(), broker_state=broker_state)
+@pytest.mark.parametrize(
+    ("broker_state", "may_fill", "warned"),
+    [
+        pytest.param("new", True, True, id="a_flat_refusal_with_a_working_entry_order_warns_it_can_still_fill"),
+        # Review P2: any non-terminal state can still fill, including an order not yet acknowledged.
+        pytest.param("held", True, True, id="held"),
+        pytest.param("pending_replace", True, True, id="pending_replace"),
+        pytest.param("accepted_for_bidding", True, True, id="accepted_for_bidding"),
+        pytest.param(None, True, True, id="not_yet_acknowledged"),
+        # Whether an order may still fill is read with it (``ORDER_OPEN_SQL``); a cancelled one may not.
+        pytest.param("canceled", False, False, id="a_finished_entry_order_is_not_warned_about"),
+    ],
+)
+def test_an_entry_order_is_warned_about_only_while_the_broker_has_not_finished_it(
+    broker_state: str | None, may_fill: bool, warned: bool,
+) -> None:
+    order = replace(_entry_order(), broker_state=broker_state, may_fill=may_fill)
 
-    assert _notices(_refused_panel(), _exposure_projection(orders=(order,))) == [
-        ("entry_order_working", "An entry order is still working")
-    ]
+    expected = [("entry_order_working", "An entry order is still working")] if warned else []
+    assert _notices(_refused_panel(), _exposure_projection(orders=(order,))) == expected
 
 
-@pytest.mark.parametrize("broker_state", ["suspended", "accepted_for_bidding", "pending_replace", "calculated", "stopped"])
-def test_panel_lists_broker_identified_orders_that_can_still_fill(broker_state: str) -> None:
-    order = _entry_order(broker_state)
+@pytest.mark.parametrize(
+    ("broker_state", "may_fill", "listed"),
+    [
+        pytest.param("suspended", True, True, id="suspended"),
+        pytest.param("accepted_for_bidding", True, True, id="accepted_for_bidding"),
+        pytest.param("pending_replace", True, True, id="pending_replace"),
+        pytest.param("calculated", True, True, id="calculated"),
+        pytest.param("stopped", True, True, id="stopped"),
+        pytest.param("canceled", False, False, id="a_terminal_broker_order_is_not_listed_as_working"),
+    ],
+)
+def test_panel_lists_broker_identified_orders_that_can_still_fill(
+    broker_state: str, may_fill: bool, listed: bool,
+) -> None:
+    order = replace(_entry_order(broker_state), may_fill=may_fill)
 
     panel = adapt_sqlite_panel(_refused_panel(), _exposure_projection(orders=(order,)))
 
-    assert [(item.order_ref, item.status) for item in panel.working_orders] == [
-        (order.order_ref, broker_state)
-    ]
-
-
-def test_panel_does_not_list_a_terminal_broker_order_as_working() -> None:
-    order = replace(_entry_order("canceled"), may_fill=False)
-
-    panel = adapt_sqlite_panel(_refused_panel(), _exposure_projection(orders=(order,)))
-
-    assert panel.working_orders == []
-
-
-def test_a_finished_entry_order_is_not_warned_about() -> None:
-    # Whether an order may still fill is read with it (``ORDER_OPEN_SQL``); a cancelled one may not.
-    finished = replace(_entry_order("canceled"), may_fill=False)
-    assert _notices(_refused_panel(), _exposure_projection(orders=(finished,))) == []
+    expected = [(order.order_ref, broker_state)] if listed else []
+    assert [(item.order_ref, item.status) for item in panel.working_orders] == expected
 
 
 @pytest.mark.parametrize("age_ms", [30_001, 60_000])
@@ -3534,27 +3526,29 @@ def _account_hold(reason_code: str) -> ProjectedHold:
     )
 
 
-@pytest.mark.parametrize("reason_code", ["STREAM_HEALTH_HOLD", "LIVE_ENVELOPE_LOSS_HOLD"])
-def test_a_hold_the_sweep_did_not_find_does_not_change_what_the_last_check_found(reason_code: str) -> None:
-    """#3217: a stream-health or loss hold read "Last check against Alpaca: Unexplained order"
-    beside a reconciliation that had resolved. Those holds are not reconciliation findings."""
+@pytest.mark.parametrize(
+    ("reason_code", "pass_at_ms", "verdict"),
+    [
+        # #3217: a stream-health or loss hold read "Last check against Alpaca: Unexplained order"
+        # beside a reconciliation that had resolved. Those holds are not reconciliation findings.
+        pytest.param("STREAM_HEALTH_HOLD", None, "clean", id="a_stream_health_hold_is_not_a_finding"),
+        pytest.param("LIVE_ENVELOPE_LOSS_HOLD", None, "clean", id="a_live_envelope_loss_hold_is_not_a_finding"),
+        pytest.param(
+            "UNEXPLAINED_ORDER_HOLD", _NOW - 4_000, "unexplained_order",
+            id="an_unexplained_order_hold_is_what_the_last_check_found",
+        ),
+    ],
+)
+def test_only_a_hold_the_sweep_found_changes_what_the_last_check_found(
+    reason_code: str, pass_at_ms: int | None, verdict: str,
+) -> None:
     projection = replace(_exposure_projection(orders=()), holds=(_account_hold(reason_code),))
 
-    status = sqlite_clerk_status(projection, last_clean_pass_at_ms=None)
+    status = sqlite_clerk_status(projection, last_clean_pass_at_ms=pass_at_ms)
 
-    assert status.hold.active is True
-    assert status.latest_reconciliation == ReconciliationSummary(verdict="clean", recorded_at_ms=_NOW - 100)
-
-
-def test_an_unexplained_order_hold_is_what_the_last_check_found() -> None:
-    projection = replace(
-        _exposure_projection(orders=()), holds=(_account_hold("UNEXPLAINED_ORDER_HOLD"),)
-    )
-
-    status = sqlite_clerk_status(projection, last_clean_pass_at_ms=_NOW - 4_000)
-
-    assert status.latest_reconciliation == ReconciliationSummary(
-        verdict="unexplained_order", recorded_at_ms=_NOW - 100
+    assert status.hold.active is True, "the hold is active"
+    assert status.latest_reconciliation == ReconciliationSummary(verdict=verdict, recorded_at_ms=_NOW - 100), (
+        "the last check is what the sweep found, not the hold"
     )
 
 

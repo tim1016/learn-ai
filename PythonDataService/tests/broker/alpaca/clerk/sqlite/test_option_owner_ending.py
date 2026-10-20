@@ -688,16 +688,20 @@ async def test_an_ending_is_made_now_whatever_the_cadence_of_the_read(tmp_path: 
 
 
 @pytest.mark.parametrize(
-    ("when", "contracts", "broker", "reason_code"),
+    ("when", "contracts", "broker", "bot", "reason_code"),
     [
-        pytest.param("while it trades", 1, {}, "OPTION_OWNER_ENDING_CONTRACT_STILL_TRADES", id="a contract that still trades"),
-        pytest.param("before the wait is over", 1, {}, "OPTION_OWNER_ENDING_RECORD_MAY_STILL_COME", id="before the next session has closed"),
-        pytest.param("after the wait", -1, {}, "OPTION_OWNER_ENDING_SOLD_CONTRACT", id="a sold contract"),
-        pytest.param("after the wait", 1, {CALL: 1.0}, "OPTION_OWNER_ENDING_BROKER_STILL_HOLDS", id="the broker still holds it"),
+        pytest.param("while it trades", 1, {}, "bot-a", "OPTION_OWNER_ENDING_CONTRACT_STILL_TRADES", id="a contract that still trades"),
+        pytest.param("before the wait is over", 1, {}, "bot-a", "OPTION_OWNER_ENDING_RECORD_MAY_STILL_COME", id="before the next session has closed"),
+        pytest.param("after the wait", -1, {}, "bot-a", "OPTION_OWNER_ENDING_SOLD_CONTRACT", id="a sold contract"),
+        pytest.param("after the wait", 1, {CALL: 1.0}, "bot-a", "OPTION_OWNER_ENDING_BROKER_STILL_HOLDS", id="the broker still holds it"),
+        pytest.param(
+            "after the wait", 1, {}, "bot-b", "OPTION_OWNER_ENDING_NOTHING_HELD",
+            id="a bot that holds none of the contract",
+        ),
     ],
 )
 async def test_the_batch_function_ends_nothing_it_is_not_shown_to_have_no_settlement(
-    tmp_path: Path, when: str, contracts: int, broker: dict[str, float], reason_code: str
+    tmp_path: Path, when: str, contracts: int, broker: dict[str, float], bot: str, reason_code: str
 ) -> None:
     repo = _books(tmp_path, bot_a=contracts)
     account = _FakeReadPort(positions=broker_holds(**broker))
@@ -707,24 +711,10 @@ async def test_the_batch_function_ends_nothing_it_is_not_shown_to_have_no_settle
         elif when == "after the wait":
             later(repo, AFTER_THE_WAIT - repo.clock())
 
-        outcome = await _asked_to_end(repo, account)
+        outcome = await _asked_to_end(repo, account, bot)
 
-        assert (outcome.result, outcome.reason_code) == ("refused", reason_code)
-        assert bookings(repo) == [] and held(repo, "bot-a") == {CALL: float(contracts)}
-    finally:
-        repo.close()
-
-
-async def test_an_ending_asked_of_a_bot_that_holds_none_of_the_contract_is_refused(tmp_path: Path) -> None:
-    repo = _books(tmp_path, bot_a=1)
-    account = _FakeReadPort()
-    try:
-        later(repo, AFTER_THE_WAIT - repo.clock())
-
-        outcome = await _asked_to_end(repo, account, "bot-b")
-
-        assert (outcome.result, outcome.reason_code) == ("refused", "OPTION_OWNER_ENDING_NOTHING_HELD")
-        assert bookings(repo) == [] and held(repo, "bot-a") == {CALL: 1.0}
+        assert (outcome.result, outcome.reason_code) == ("refused", reason_code), "the ending is refused, by name"
+        assert bookings(repo) == [] and held(repo, "bot-a") == {CALL: float(contracts)}, "nothing is booked and bot-a keeps its contract"
     finally:
         repo.close()
 

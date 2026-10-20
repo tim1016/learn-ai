@@ -730,26 +730,68 @@ def test_append_flag_event_derives_actor_and_snapshots_evidence(tmp_path) -> Non
     assert ledger_raw["flag_events"][0]["flagged_by"] == TEST_FLAG_ACTOR
 
 
-def test_reference_code_uses_service_fallback_when_repo_reference_absent(tmp_path) -> None:
+@pytest.mark.parametrize(
+    (
+        "strategy_key",
+        "display_name",
+        "description",
+        "validation_state",
+        "deployable",
+        "audit_copy_ref",
+        "audit_copy_sha256",
+    ),
+    [
+        pytest.param(
+            "deployment_validation",
+            "Deployment Validation",
+            "Two-green-minute deployment validation primitive.",
+            "validated",
+            True,
+            "references/qc-shadow/DeploymentValidationAlgorithm.py",
+            # #1672 changed the audit copy's session-boundary literals; this
+            # pins the current file's hash, not the manifest's — the manifest's
+            # pinned hash is deliberately left stale until a fresh QC Cloud
+            # reconciliation is run (see tests/routers/test_strategy_validation.py).
+            "64f7293e351be0469a3cd76df1d5a57806cf4cab25c4d2f1737ddbb9b35286a4",
+            id="reference_code_uses_service_fallback_when_repo_reference_absent",
+        ),
+        pytest.param(
+            "ema_crossover_signal",
+            "EMA Crossover Signal",
+            "Canonical SPY EMA crossover signal.",
+            "needs_validation",
+            False,
+            "references/qc-shadow/SpyEmaCrossoverAlgorithm.py",
+            "cfc7f18877b8dcf9b99af4bb26e4f36f0b7ac6799fa5f4d6dc286945653d6078",
+            id="ema_reference_code_uses_service_fallback_when_repo_reference_absent",
+        ),
+    ],
+)
+def test_reference_code_uses_service_fallback_when_repo_reference_absent(
+    tmp_path,
+    strategy_key: str,
+    display_name: str,
+    description: str,
+    validation_state: str,
+    deployable: bool,
+    audit_copy_ref: str,
+    audit_copy_sha256: str,
+) -> None:
     entry = StrategyValidationEntry(
-        strategy_key="deployment_validation",
-        display_name="Deployment Validation",
-        description="Two-green-minute deployment validation primitive.",
-        validation_state="validated",
-        deployable=True,
-        audit_copy_ref="references/qc-shadow/DeploymentValidationAlgorithm.py",
-        # #1672 changed the audit copy's session-boundary literals; this
-        # pins the current file's hash, not the manifest's — the manifest's
-        # pinned hash is deliberately left stale until a fresh QC Cloud
-        # reconciliation is run (see tests/routers/test_strategy_validation.py).
-        audit_copy_sha256="64f7293e351be0469a3cd76df1d5a57806cf4cab25c4d2f1737ddbb9b35286a4",
+        strategy_key=strategy_key,
+        display_name=display_name,
+        description=description,
+        validation_state=validation_state,
+        deployable=deployable,
+        audit_copy_ref=audit_copy_ref,
+        audit_copy_sha256=audit_copy_sha256,
     )
 
     code = reference_code_for_entry(entry, repo_root=tmp_path)
 
-    assert code is not None
-    assert code.path == "references/qc-shadow/DeploymentValidationAlgorithm.py"
-    assert "class DeploymentValidationAlgorithm" in code.source
+    assert code is not None, "the service's own copy stands in when the repo reference is absent"
+    assert code.path == audit_copy_ref, "the code is reported at the entry's audit copy path"
+    assert f"class {Path(audit_copy_ref).stem}" in code.source, "the fallback source is the audit copy's algorithm"
 
 
 def test_qc_shadow_container_fallback_copies_are_byte_identical_to_references() -> None:
@@ -770,24 +812,6 @@ def test_qc_shadow_container_fallback_copies_are_byte_identical_to_references() 
         assert (fallback_dir / name).read_bytes() == (references_dir / name).read_bytes(), (
             f"{name} has drifted between references/qc-shadow and the container fallback copy"
         )
-
-
-def test_ema_reference_code_uses_service_fallback_when_repo_reference_absent(tmp_path) -> None:
-    entry = StrategyValidationEntry(
-        strategy_key="ema_crossover_signal",
-        display_name="EMA Crossover Signal",
-        description="Canonical SPY EMA crossover signal.",
-        validation_state="needs_validation",
-        deployable=False,
-        audit_copy_ref="references/qc-shadow/SpyEmaCrossoverAlgorithm.py",
-        audit_copy_sha256="cfc7f18877b8dcf9b99af4bb26e4f36f0b7ac6799fa5f4d6dc286945653d6078",
-    )
-
-    code = reference_code_for_entry(entry, repo_root=tmp_path)
-
-    assert code is not None
-    assert code.path == "references/qc-shadow/SpyEmaCrossoverAlgorithm.py"
-    assert "class SpyEmaCrossoverAlgorithm" in code.source
 
 
 def test_append_flag_event_drops_qc_id_when_no_proof_is_registered(tmp_path) -> None:

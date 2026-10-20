@@ -88,10 +88,12 @@ async def test_snapshot_unknown_symbol_returns_empty(
     assert fresh_aggregator.status("AAPL") == LiveLineStatus(status="idle")
 
 
-async def test_stream_error_survives_across_resubscribe_polls(
+async def test_stream_error_is_recorded_and_survives_resubscribe_polls(
     fresh_aggregator: LiveBarAggregator, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Regression for the snapshot-hides-error bug.
+    """A stream error marks the line errored without raising.
+
+    Regression for the snapshot-hides-error bug.
 
     The earlier implementation cleared ``last_error`` + reset status
     to 'subscribing' inside ``ensure_subscribed`` whenever the prior
@@ -122,11 +124,16 @@ async def test_stream_error_survives_across_resubscribe_polls(
         await asyncio.sleep(0.01)
     first_error = state.last_error
 
+    assert state.status == "errored", "a stream error marks the line errored without raising"
+    assert state.last_error is not None, "the stream error is recorded as last_error"
+    assert "IBKR connection lost" in state.last_error, "last_error carries the stream's message"
+    assert fresh_aggregator.snapshot("SPY") == [], "an errored stream leaves the buffer empty"
+
     # Second poll: simulates the next 5-second snapshot. The prior
     # task is done — ensure_subscribed restarts it — but the snapshot
     # endpoint must still see the prior failure, not "subscribing".
     state_again = await fresh_aggregator.ensure_subscribed("SPY")
-    assert state_again is state
+    assert state_again is state, "resubscribe returns the same line state"
     assert state.status == "errored", (
         "resubscribe must preserve 'errored' until the new task yields a bar"
     )
@@ -135,29 +142,6 @@ async def test_stream_error_survives_across_resubscribe_polls(
     )
 
     await fresh_aggregator.shutdown()
-
-
-async def test_stream_error_marks_errored_without_raising(
-    fresh_aggregator: LiveBarAggregator, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    async def fake_stream(_client, _symbol, **_kw) -> AsyncIterator[IbkrMinuteBar]:
-        if False:
-            yield  # pragma: no cover
-        raise RuntimeError("IBKR connection lost")
-
-    monkeypatch.setattr(agg_mod, "stream_minute_bars", fake_stream)
-
-    state = await fresh_aggregator.ensure_subscribed("SPY")
-    # Wait for the task to error out.
-    for _ in range(20):
-        if state.status == "errored":
-            break
-        await asyncio.sleep(0.01)
-
-    assert state.status == "errored"
-    assert state.last_error is not None
-    assert "IBKR connection lost" in state.last_error
-    assert fresh_aggregator.snapshot("SPY") == []
 
 
 async def test_ensure_subscribed_5s_buffers_raw_bars(

@@ -16,6 +16,7 @@ Coverage:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date
 
 import pytest
@@ -195,27 +196,43 @@ async def test_backtest_rejects_an_unknown_fill_mode_naming_the_modes(fill_mode:
     assert "signal_bar_close, next_bar_open or decision_minute_open" in resp.json()["detail"]
 
 
-async def test_backtest_rejects_unsupported_spec_feature_with_400() -> None:
-    """A spec that schema-validates but uses a feature the evaluator
-    cannot run (Phase 2 ``FixedContracts`` sizing) must surface as 400,
-    not as a 200 + ``success=false``. Otherwise API consumers cannot
-    distinguish a client-side spec mistake from a transient run failure.
-
-    The constructor refuses it (an entry that never fires used to
-    return a 200 with zero trades), and the route turns that into 4xx.
-    """
+# A spec that schema-validates but that the run cannot honor must surface as
+# 400, not as a 200 + ``success=false``. Otherwise API consumers cannot
+# distinguish a client-side spec mistake from a transient run failure.
+@pytest.mark.parametrize(
+    ("edit_spec", "detail_part"),
+    [
+        # Replace the SetHoldings sizing with a Phase-2 FixedContracts value. The
+        # schema accepts it (forward-compat); the evaluator's constructor raises
+        # NotImplementedError (an entry that never fires used to return a 200 with
+        # zero trades), and the route turns that into 4xx.
+        pytest.param(
+            lambda spec: spec["entry"].update(size={"kind": "FixedContracts", "value": 1}),
+            "unsupported feature",
+            id="unsupported_spec_feature",
+        ),
+        # This route has no prediction set to pair a ``predictions`` block with;
+        # that is the caller's spec, so 400 with the reason, not an unhandled
+        # ValueError.
+        pytest.param(
+            lambda spec: spec.update(predictions=[{"id": "p", "prediction_set_id": "ps_probe"}]),
+            "declares predictions",
+            id="declares_predictions_it_cannot_load",
+        ),
+    ],
+)
+async def test_backtest_answers_400_for_a_spec_the_run_cannot_honor(
+    edit_spec: Callable[[dict], object], detail_part: str
+) -> None:
     app.dependency_overrides[get_data_source_factory] = _make_synthetic_factory
 
     try:
         async with await _client() as client:
             spec_resp = await client.get("/api/spec-strategy/fixtures/sma_crossover")
-            assert spec_resp.status_code == 200
+            assert spec_resp.status_code == 200, "the canonical fixture is served"
             spec_payload = spec_resp.json()
             spec_payload["symbols"] = [SYMBOL]
-            # Replace the SetHoldings sizing with a Phase-2 FixedContracts
-            # value. The schema accepts it (forward-compat); the
-            # evaluator's constructor raises NotImplementedError.
-            spec_payload["entry"]["size"] = {"kind": "FixedContracts", "value": 1}
+            edit_spec(spec_payload)
 
             resp = await client.post(
                 "/api/spec-strategy/backtest",
@@ -229,38 +246,8 @@ async def test_backtest_rejects_unsupported_spec_feature_with_400() -> None:
     finally:
         app.dependency_overrides.pop(get_data_source_factory, None)
 
-    assert resp.status_code == 400, (
-        f"expected 400 for unsupported feature, got {resp.status_code}: {resp.text}"
-    )
-    body = resp.json()
-    assert "unsupported feature" in body["detail"].lower()
-
-
-async def test_backtest_answers_400_for_a_spec_that_declares_predictions_it_cannot_load() -> None:
-    """This route has no prediction set to pair a ``predictions`` block with; that is the
-    caller's spec, so 400 with the reason, not an unhandled ValueError."""
-    app.dependency_overrides[get_data_source_factory] = _make_synthetic_factory
-
-    try:
-        async with await _client() as client:
-            spec_payload = (await client.get("/api/spec-strategy/fixtures/sma_crossover")).json()
-            spec_payload["symbols"] = [SYMBOL]
-            spec_payload["predictions"] = [{"id": "p", "prediction_set_id": "ps_probe"}]
-
-            resp = await client.post(
-                "/api/spec-strategy/backtest",
-                json={
-                    "spec": spec_payload,
-                    "start_date": "2024-01-02",
-                    "end_date": "2024-12-31",
-                    "initial_cash": 100000.0,
-                },
-            )
-    finally:
-        app.dependency_overrides.pop(get_data_source_factory, None)
-
-    assert resp.status_code == 400, resp.text
-    assert "declares predictions" in resp.json()["detail"]
+    assert resp.status_code == 400, f"expected 400 for a spec the run cannot honor, got {resp.status_code}: {resp.text}"
+    assert detail_part in resp.json()["detail"], "the 400 names the reason"
 
 
 async def test_a_data_source_that_cannot_be_built_is_reported_and_logged(caplog: pytest.LogCaptureFixture) -> None:

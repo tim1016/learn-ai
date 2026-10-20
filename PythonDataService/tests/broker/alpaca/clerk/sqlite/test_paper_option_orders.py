@@ -964,30 +964,27 @@ async def test_a_wait_asked_with_a_limit_already_past_is_refused_for_an_unproven
     assert "ENTRY_SETTLED" in [kind for kind, _summary, _facts in paper.log()]
 
 
-async def test_a_limit_already_past_still_answers_an_entry_that_is_proven_or_was_settled_before(paper: PaperOptions) -> None:  # noqa: F811
+@pytest.mark.parametrize(
+    "limit_from_the_clock_ms", [-60_000, A_WEEK_MS + 1], ids=["a limit already past", "a limit too far ahead"]
+)
+async def test_a_limit_past_or_too_far_ahead_still_answers_an_entry_that_is_already_proven(
+    paper: PaperOptions, limit_from_the_clock_ms: int  # noqa: F811
+) -> None:
     order_ref = await paper.resting(decision="d-1")
     await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
-    long_ago = paper.clock() - 60_000
-
-    proven = await paper.clerk.await_entry_outcome(strategy_instance_id="a", decision_id="d-1", until_ms=long_ago)
-    again = await paper.clerk.await_entry_outcome(strategy_instance_id="a", decision_id="d-1", until_ms=long_ago - 1)
-
-    assert (proven.settlement, proven.standing, proven.recorded) == (EntrySettlement.ENTERED, EntryStanding.FILLED, True)
-    assert again == proven
-
-
-async def test_a_limit_too_far_ahead_still_answers_an_entry_that_is_already_proven(paper: PaperOptions) -> None:  # noqa: F811
-    order_ref = await paper.resting(decision="d-1")
-    await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
+    until_ms = paper.clock() + limit_from_the_clock_ms
 
     proven = await asyncio.wait_for(
-        paper.clerk.await_entry_outcome(
-            strategy_instance_id="a", decision_id="d-1", until_ms=paper.clock() + A_WEEK_MS + 1
-        ),
-        timeout=2,
+        paper.clerk.await_entry_outcome(strategy_instance_id="a", decision_id="d-1", until_ms=until_ms), timeout=2
+    )
+    again = await asyncio.wait_for(
+        paper.clerk.await_entry_outcome(strategy_instance_id="a", decision_id="d-1", until_ms=until_ms - 1), timeout=2
     )
 
-    assert (proven.settlement, proven.standing, proven.recorded) == (EntrySettlement.ENTERED, EntryStanding.FILLED, True)
+    assert (proven.settlement, proven.standing, proven.recorded) == (
+        EntrySettlement.ENTERED, EntryStanding.FILLED, True,
+    ), "a proven entry is answered as entered whatever the limit says"
+    assert again == proven, "asked again, a settled entry is answered from its record"
 
 
 @pytest.mark.parametrize(
@@ -1018,14 +1015,28 @@ async def test_an_entry_settled_before_is_answered_from_its_record_whatever_the_
 # ── the owner's order terms, where the Clerk takes them ──────────────────
 
 
-@pytest.mark.parametrize("wait_ms", [0, MIN_ENTRY_WAIT_MS - 1, MAX_ENTRY_WAIT_MS + 1, 6 * 60 * 60 * 1000, 10**18])
-async def test_an_entry_wait_of_nothing_of_hours_or_of_no_time_at_all_is_refused_by_name(
-    paper: PaperOptions, wait_ms: int  # noqa: F811
+@pytest.mark.parametrize(
+    ("term", "value_ms"),
+    [
+        pytest.param("entry_wait_ms", 0, id="entry wait of nothing"),
+        pytest.param("entry_wait_ms", MIN_ENTRY_WAIT_MS - 1, id="entry wait under the minimum"),
+        pytest.param("entry_wait_ms", MAX_ENTRY_WAIT_MS + 1, id="entry wait over the maximum"),
+        pytest.param("entry_wait_ms", 6 * 60 * 60 * 1000, id="entry wait of hours"),
+        pytest.param("entry_wait_ms", 10**18, id="entry wait of no time at all"),
+        pytest.param("cancel_allowance_ms", MAX_ORDER_TERM_MS + 1, id="cancel allowance longer than a session"),
+        pytest.param("entry_margin_ms", MAX_ORDER_TERM_MS + 1, id="entry margin longer than a session"),
+        pytest.param("expiry_close_lead_ms", MAX_ORDER_TERM_MS + 1, id="expiry close lead longer than a session"),
+        pytest.param("sold_leg_close_lead_ms", MAX_ORDER_TERM_MS + 1, id="sold leg close lead longer than a session"),
+    ],
+)
+async def test_an_order_term_out_of_bounds_is_refused_by_name(
+    paper: PaperOptions, term: str, value_ms: int  # noqa: F811
 ) -> None:
-    refused = await paper.enter(evidence=paper.evidence(terms=CloseTerms(entry_wait_ms=wait_ms)))
+    refused = await paper.enter(evidence=paper.evidence(terms=CloseTerms(**{term: value_ms})))
 
     _refused(refused, "OPTION_ENTRY_EVIDENCE_INCOMPLETE")
-    assert paper.venue.option_submit_calls == [] and paper.set_aside_cents() == 0
+    assert paper.venue.option_submit_calls == [], "no order is sent"
+    assert paper.set_aside_cents() == 0, "nothing is set aside"
 
 
 @pytest.mark.parametrize("wait_ms", [MIN_ENTRY_WAIT_MS, MAX_ENTRY_WAIT_MS])
@@ -1083,16 +1094,6 @@ async def test_an_entry_reached_for_sending_after_the_cutoff_of_its_own_terms_is
     not_sent = paper.repo.last_order_transition(order_ref=order_ref, transition_kind="ENTER_SUBMISSION_REFUSED")
     assert not_sent is not None and not_sent["summary_code"] == "OPTION_CONTRACT_PAST_ENTRY_CUTOFF"
     assert paper.venue.option_submit_calls == [] and paper.set_aside_cents() == 0
-
-
-@pytest.mark.parametrize(
-    "term", ["cancel_allowance_ms", "entry_margin_ms", "expiry_close_lead_ms", "sold_leg_close_lead_ms"]
-)
-async def test_any_other_order_term_longer_than_a_session_is_refused_by_name(paper: PaperOptions, term: str) -> None:  # noqa: F811
-    refused = await paper.enter(evidence=paper.evidence(terms=CloseTerms(**{term: MAX_ORDER_TERM_MS + 1})))
-
-    _refused(refused, "OPTION_ENTRY_EVIDENCE_INCOMPLETE")
-    assert paper.venue.option_submit_calls == []
 
 
 @pytest.mark.parametrize(

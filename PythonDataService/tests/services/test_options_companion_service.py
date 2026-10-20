@@ -48,42 +48,55 @@ class TestSlotLabel:
 
 
 class TestSelectStrikesWithSlots:
-    def test_returns_offset_contract_pairs_centered_on_atm(self):
-        # 21 strikes spaced $1 apart, prior close at 110
-        contracts = [_c(f"O:T{i}", 100.0 + i) for i in range(21)]
-        slotted = _select_strikes_with_slots(contracts, prior_close=110.0, strikes_each_side=3)
-        offsets = [s for s, _ in slotted]
-        strikes = [c["strike_price"] for _, c in slotted]
-        assert offsets == [-3, -2, -1, 0, 1, 2, 3]
-        # ATM=110 → offsets map to 107..113
-        assert strikes == [107.0, 108.0, 109.0, 110.0, 111.0, 112.0, 113.0]
-
     @pytest.mark.parametrize(
-        ("prior_close", "expected_offsets"),
+        ("strikes", "prior_close", "strikes_each_side", "expected_offsets", "expected_strikes"),
         [
+            # 21 strikes spaced $1 apart, prior close at 110: ATM=110 → offsets map to 107..113
+            pytest.param(
+                tuple(100.0 + i for i in range(21)),
+                110.0,
+                3,
+                [-3, -2, -1, 0, 1, 2, 3],
+                [107.0, 108.0, 109.0, 110.0, 111.0, 112.0, 113.0],
+                id="returns_offset_contract_pairs_centered_on_atm",
+            ),
             # ATM at index 0 — no strikes below; only offsets 0..+3 fit
-            pytest.param(100.0, [0, 1, 2, 3], id="clipped_at_low_edge_omits_negative_offsets"),
+            pytest.param(
+                tuple(100.0 + i for i in range(10)),
+                100.0,
+                3,
+                [0, 1, 2, 3],
+                [100.0, 101.0, 102.0, 103.0],
+                id="clipped_at_low_edge_omits_negative_offsets",
+            ),
             # ATM at idx 9 (last) — only -3..0 fit
-            pytest.param(109.0, [-3, -2, -1, 0], id="clipped_at_high_edge_omits_positive_offsets"),
+            pytest.param(
+                tuple(100.0 + i for i in range(10)),
+                109.0,
+                3,
+                [-3, -2, -1, 0],
+                [106.0, 107.0, 108.0, 109.0],
+                id="clipped_at_high_edge_omits_positive_offsets",
+            ),
+            pytest.param((), 100.0, 3, [], [], id="empty_contracts_returns_empty"),
+            # closest to 100.0 is 100.25 → ATM, then ±1
+            pytest.param(
+                (99.5, 100.25, 101.0),
+                100.0,
+                1,
+                [-1, 0, 1],
+                [99.5, 100.25, 101.0],
+                id="atm_picks_nearest_when_exact_strike_missing",
+            ),
         ],
     )
-    def test_clipped_at_an_edge_omits_the_offsets_that_do_not_fit(self, prior_close, expected_offsets):
-        contracts = [_c(f"O:T{i}", 100.0 + i) for i in range(10)]
-        slotted = _select_strikes_with_slots(contracts, prior_close=prior_close, strikes_each_side=3)
-        offsets = [s for s, _ in slotted]
-        assert offsets == expected_offsets
-
-    def test_empty_contracts_returns_empty(self):
-        assert _select_strikes_with_slots([], prior_close=100.0, strikes_each_side=3) == []
-
-    def test_atm_picks_nearest_when_exact_strike_missing(self):
-        contracts = [_c("O:T1", 99.5), _c("O:T2", 100.25), _c("O:T3", 101.0)]
-        slotted = _select_strikes_with_slots(contracts, prior_close=100.0, strikes_each_side=1)
-        # closest to 100.0 is 100.25 → ATM, then ±1
-        offset_to_strike = {s: c["strike_price"] for s, c in slotted}
-        assert offset_to_strike[0] == 100.25
-        assert -1 in offset_to_strike and offset_to_strike[-1] == 99.5
-        assert 1 in offset_to_strike and offset_to_strike[1] == 101.0
+    def test_slots_are_offsets_from_the_atm_strike(
+        self, strikes, prior_close, strikes_each_side, expected_offsets, expected_strikes
+    ):
+        contracts = [_c(f"O:T{i}", strike) for i, strike in enumerate(strikes)]
+        slotted = _select_strikes_with_slots(contracts, prior_close=prior_close, strikes_each_side=strikes_each_side)
+        assert [s for s, _ in slotted] == expected_offsets, "the slot offsets run from the ATM strike, clipped at an edge"
+        assert [c["strike_price"] for _, c in slotted] == expected_strikes, "each offset maps to its strike"
 
 
 class TestColumnsFor:
@@ -178,17 +191,13 @@ class TestMarkDiscontinuity:
             pytest.param(["O:A"], [1], id="first_row_is_one"),
             pytest.param(["O:A", "O:A", "O:A"], [1, 0, 0], id="subsequent_same_ticker_is_zero"),
             pytest.param(["O:A", "O:A", "O:B", "O:B", "O:C"], [1, 0, 1, 0, 1], id="change_of_ticker_marks_one"),
+            pytest.param([], [], id="empty_rows_is_noop"),
         ],
     )
     def test_discontinuity_marks_the_first_row_and_each_change_of_ticker(self, tickers, expected):
         rows = [{"unix_ts": ts, "contract_ticker": ticker} for ts, ticker in enumerate(tickers, start=1)]
         _mark_discontinuity(rows)
         assert [r["discontinuity"] for r in rows] == expected
-
-    def test_empty_rows_is_noop(self):
-        rows: list[dict] = []
-        _mark_discontinuity(rows)
-        assert rows == []
 
 
 class TestPriorDayCloseMap:
@@ -213,90 +222,84 @@ class TestPriorDayCloseMap:
 
 class TestBarGridFloor:
     @pytest.mark.parametrize(
-        ("ts", "multiplier", "period_ms"),
+        ("aligned", "into_the_bar_ms", "timespan", "multiplier", "period_ms"),
         [
-            pytest.param(1749547837500, 1, 60_000, id="minute_grid_floors_to_minute_start"),
-            pytest.param(1_749_547_920_000, 5, 300_000, id="5minute_grid_lands_on_5minute_boundary"),
-        ],
-    )
-    def test_minute_grid_floors_to_the_start_of_its_bar(self, ts, multiplier, period_ms):
-        floored = _bar_grid_floor_ms(ts, "minute", multiplier)
-        assert floored % period_ms == 0, "the floor lands on a bar boundary"
-        assert floored <= ts < floored + period_ms, "the timestamp lies inside the bar the floor starts"
-
-    @pytest.mark.parametrize(
-        ("aligned", "into_the_bar_ms", "timespan", "period_ms"),
-        [
-            pytest.param(1_735_693_200_000, 1_800_000, "hour", 3_600_000, id="hour_grid_floors_to_hour_start"),
+            # 1749547837500 is 37.5 s into the minute that opens at 1749547800000
+            pytest.param(1_749_547_800_000, 37_500, "minute", 1, 60_000, id="minute_grid_floors_to_minute_start"),
+            # 1_749_547_920_000 is 2 min into the 5-minute bar that opens at 1_749_547_800_000
             pytest.param(
-                1_735_689_600_000, 12 * 3_600_000, "day", 86_400_000, id="day_grid_floors_to_utc_midnight"
+                1_749_547_800_000, 120_000, "minute", 5, 300_000, id="5minute_grid_lands_on_5minute_boundary"
+            ),
+            pytest.param(1_735_693_200_000, 1_800_000, "hour", 1, 3_600_000, id="hour_grid_floors_to_hour_start"),
+            pytest.param(
+                1_735_689_600_000, 12 * 3_600_000, "day", 1, 86_400_000, id="day_grid_floors_to_utc_midnight"
             ),
         ],
     )
-    def test_hour_and_day_grids_floor_to_their_aligned_start(self, aligned, into_the_bar_ms, timespan, period_ms):
-        floored = _bar_grid_floor_ms(aligned + into_the_bar_ms, timespan, 1)
+    def test_a_grid_floors_a_time_to_the_aligned_start_of_its_bar(
+        self, aligned, into_the_bar_ms, timespan, multiplier, period_ms
+    ):
+        ts = aligned + into_the_bar_ms
+        floored = _bar_grid_floor_ms(ts, timespan, multiplier)
         assert floored == aligned, "a time inside the bar floors to the bar's aligned start"
         assert floored % period_ms == 0, "the floor lands on a bar boundary"
+        assert floored <= ts < floored + period_ms, "the timestamp lies inside the bar the floor starts"
 
 
 class TestUnderlyingCloseMapAlignment:
-    def test_option_ts_looked_up_via_floored_key(self):
-        df = pd.DataFrame(
-            {
-                "timestamp": [1_749_547_860_000, 1_749_547_920_000, 1_749_547_980_000],
-                "close": [100.0, 101.0, 102.0],
-            }
-        )
-        lookup = _underlying_close_map(df, "minute", 1)
-        assert lookup.get(_bar_grid_floor_ms(1_749_547_920_000, "minute", 1)) == pytest.approx(101.0)
-
-    def test_5min_aggregate_keys_align(self):
-        df = pd.DataFrame(
-            {
-                "timestamp": [1_749_547_800_000, 1_749_548_100_000],
-                "close": [200.0, 201.5],
-            }
-        )
-        lookup = _underlying_close_map(df, "minute", 5)
-        key = _bar_grid_floor_ms(1_749_548_100_000, "minute", 5)
-        assert lookup[key] == pytest.approx(201.5)
+    @pytest.mark.parametrize(
+        ("timestamps", "closes", "multiplier", "option_ts", "expected_close"),
+        [
+            pytest.param(
+                (1_749_547_860_000, 1_749_547_920_000, 1_749_547_980_000),
+                (100.0, 101.0, 102.0),
+                1,
+                1_749_547_920_000,
+                101.0,
+                id="option_ts_looked_up_via_floored_key",
+            ),
+            pytest.param(
+                (1_749_547_800_000, 1_749_548_100_000),
+                (200.0, 201.5),
+                5,
+                1_749_548_100_000,
+                201.5,
+                id="5min_aggregate_keys_align",
+            ),
+        ],
+    )
+    def test_an_option_timestamp_finds_its_underlying_close_by_the_floored_key(
+        self, timestamps, closes, multiplier, option_ts, expected_close
+    ):
+        df = pd.DataFrame({"timestamp": list(timestamps), "close": list(closes)})
+        lookup = _underlying_close_map(df, "minute", multiplier)
+        assert lookup.get(_bar_grid_floor_ms(option_ts, "minute", multiplier)) == pytest.approx(expected_close)
 
 
 class TestResolveTargetExpiry:
     """Strict-DTE policy: only an exact-match listed expiry is accepted."""
 
     @pytest.mark.parametrize(
-        ("dte_distance", "expected"),
+        ("dte_distance", "target_is_listed", "expected"),
         [
-            pytest.param(7, date(2025, 6, 17), id="returns_target_when_listed"),
-            pytest.param(0, date(2025, 6, 10), id="zero_dte_uses_trading_day_directly"),
+            pytest.param(7, True, date(2025, 6, 17), id="returns_target_when_listed"),
+            pytest.param(0, True, date(2025, 6, 10), id="zero_dte_uses_trading_day_directly"),
+            pytest.param(7, False, None, id="returns_none_when_no_listed_expiry_at_target_date"),
         ],
     )
-    def test_returns_the_listed_target_expiry(self, dte_distance, expected):
+    def test_returns_the_listed_target_expiry_or_none(self, dte_distance, target_is_listed, expected):
         from datetime import date
 
         from app.services.options_companion_service import _resolve_target_expiry
 
         class _FakePolygon:
             def list_options_expirations(self, **kwargs):
-                # Echo back the requested anchor as if it's listed
-                return [kwargs["expiration_ms_gte"]]
+                # Echo back the requested anchor as if it's listed, or list nothing at the target
+                return [kwargs["expiration_ms_gte"]] if target_is_listed else []
 
         cfg = OptionsCompanionConfig(enabled=True, dte_distance=dte_distance)
         result = _resolve_target_expiry(_FakePolygon(), "SPY", date(2025, 6, 10), cfg)
         assert result == expected
-
-    def test_returns_none_when_no_listed_expiry_at_target_date(self):
-        from datetime import date
-
-        from app.services.options_companion_service import _resolve_target_expiry
-
-        class _FakePolygon:
-            def list_options_expirations(self, **kwargs):
-                return []  # nothing listed at target
-
-        cfg = OptionsCompanionConfig(enabled=True, dte_distance=7)
-        assert _resolve_target_expiry(_FakePolygon(), "SPY", date(2025, 6, 10), cfg) is None
 
     def test_lookup_failure_propagates_instead_of_reading_as_no_chain(self):
         from datetime import date
@@ -572,56 +575,36 @@ class TestComputeRowGreeksStatusLabels:
             dividend_yield=0.0,
         )
 
-    def test_expired_status_when_bar_is_after_close(self):
+    @pytest.mark.parametrize(
+        ("option_close", "bar_ts", "expiry_close_offset_ms", "expected_status"),
+        [
+            # 2025-06-10 19:00 UTC = 15:00 ET; the expiry close is 1 hour before the bar
+            pytest.param(1.50, 1_749_596_400_000, -60 * 60 * 1000, "expired", id="expired_status_when_bar_is_after_close"),
+            # 2025-06-10 09:30 ET (RTH); the expiry close is 6 hours later
+            pytest.param(
+                0.0, 1_749_562_200_000, 6 * 60 * 60 * 1000, "no_price", id="no_price_status_when_option_close_is_zero"
+            ),
+            pytest.param(
+                None, 1_749_562_200_000, 6 * 60 * 60 * 1000, "no_price", id="no_price_status_when_option_close_is_none"
+            ),
+        ],
+    )
+    def test_guard_branches_give_their_status_and_no_greeks(
+        self, option_close, bar_ts, expiry_close_offset_ms, expected_status
+    ):
         from app.services.options_companion_service import _compute_row_greeks
 
-        bar_ts = 1_749_596_400_000  # 2025-06-10 19:00 UTC = 15:00 ET
-        expiry_close = bar_ts - 60 * 60 * 1000  # 1 hour before bar
         out, status = _compute_row_greeks(
-            option_close=1.50,
+            option_close=option_close,
             underlying_spot=710.0,
             strike=709.0,
             bar_ts_ms=bar_ts,
-            expiry_close_ms=expiry_close,
+            expiry_close_ms=bar_ts + expiry_close_offset_ms,
             is_call=True,
             config=self._config(),
         )
-        assert status == "expired"
-        assert out["iv"] is None
-        assert out["delta"] is None
-
-    def test_no_price_status_when_option_close_is_zero(self):
-        from app.services.options_companion_service import _compute_row_greeks
-
-        bar_ts = 1_749_562_200_000  # 2025-06-10 09:30 ET (RTH)
-        expiry_close = bar_ts + 6 * 60 * 60 * 1000  # 6 hours later
-        out, status = _compute_row_greeks(
-            option_close=0.0,
-            underlying_spot=710.0,
-            strike=709.0,
-            bar_ts_ms=bar_ts,
-            expiry_close_ms=expiry_close,
-            is_call=True,
-            config=self._config(),
-        )
-        assert status == "no_price"
-        assert all(v is None for v in out.values())
-
-    def test_no_price_status_when_option_close_is_none(self):
-        from app.services.options_companion_service import _compute_row_greeks
-
-        bar_ts = 1_749_562_200_000
-        expiry_close = bar_ts + 6 * 60 * 60 * 1000
-        _, status = _compute_row_greeks(
-            option_close=None,
-            underlying_spot=710.0,
-            strike=709.0,
-            bar_ts_ms=bar_ts,
-            expiry_close_ms=expiry_close,
-            is_call=True,
-            config=self._config(),
-        )
-        assert status == "no_price"
+        assert status == expected_status, "the guard branch names its reason in the status label"
+        assert all(v is None for v in out.values()), "a guarded row carries no IV or Greek values"
 
     def test_ok_status_populates_all_greeks(self):
         from app.services.options_companion_service import _compute_row_greeks

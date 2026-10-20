@@ -66,24 +66,24 @@ def _ema():
 # ── Reading a requested plan ─────────────────────────────────────────────
 
 
-def test_a_request_without_a_seed_starts_from_the_incumbent_in_canonical_form() -> None:
+def test_a_request_without_a_seed_starts_from_the_incumbent_in_canonical_form_and_values_no_canonical_point_admits_are_kept() -> None:
     request = plan_request("spy")
     request["incumbent"]["params"] = {"symbol": "spy", "gap": 0.30000000000000004, "fast_period": 5.0, "rsi_min": 50, "rsi_max": 70.0}
 
     protocol = protocol_from_request(request)
 
     canonical = {"symbol": "SPY", "gap": 0.3, "gap_bps": 0.0, "rsi_min": 50.0, "rsi_max": 70.0}
-    assert protocol.symbol == "SPY"
-    assert protocol.incumbent.params == canonical and protocol.seed == canonical
+    assert protocol.symbol == "SPY", "the symbol is read in canonical form"
+    assert (
+        protocol.incumbent.params == canonical and protocol.seed == canonical
+    ), "a request without a seed starts from the incumbent in canonical form"
 
+    out_of_domain = protocol_from_request(plan_request("SPY", seed={"symbol": "SPY", "gap": 9.0}))
 
-def test_values_no_canonical_point_admits_are_kept_for_validation_to_name() -> None:
-    request = plan_request("SPY", seed={"symbol": "SPY", "gap": 9.0})
-
-    protocol = protocol_from_request(request)
-
-    assert protocol.seed == {"symbol": "SPY", "gap": 9.0}
-    assert "SEED_OUTSIDE_DOMAIN" in {refusal.code for refusal in review(protocol, _ema()).refusals}
+    assert out_of_domain.seed == {"symbol": "SPY", "gap": 9.0}, "values no canonical point admits are kept for validation to name"
+    assert "SEED_OUTSIDE_DOMAIN" in {
+        refusal.code for refusal in review(out_of_domain, _ema()).refusals
+    }, "validation names a seed outside the domain"
 
 
 def test_a_request_that_is_not_a_plan_is_refused_as_malformed() -> None:
@@ -102,14 +102,30 @@ def _ranked(request: dict[str, object], scores: dict[str, int | None]) -> dict[s
     return {**request, "knobs": knobs}
 
 
-def test_importance_orders_the_frozen_search_highest_first_with_ties_in_the_declared_order() -> None:
+def test_importance_orders_the_frozen_search_highest_first_with_ties_in_the_declared_order_and_no_importance_keeps_the_plans_own() -> None:
     request = plan_request("SPY")
     shuffled = {**request, "knobs": list(reversed(request["knobs"]))}
     protocol = protocol_from_request(_ranked(shuffled, {"hold_bars": 9, "rsi_min": 7, "gap": 7}))
-    assert [knob.name for knob in protocol.knobs] == ["hold_bars", "gap", "rsi_min", "rsi_max", "fast_period", "slow_period", "gap_bps"]
-    assert [knob.name for knob in protocol.search_knobs] == ["hold_bars", "gap"]
+    assert [knob.name for knob in protocol.knobs] == [
+        "hold_bars",
+        "gap",
+        "rsi_min",
+        "rsi_max",
+        "fast_period",
+        "slow_period",
+        "gap_bps",
+    ], "importance orders the frozen knobs highest first with ties in the declared order"
+    assert [knob.name for knob in protocol.search_knobs] == ["hold_bars", "gap"], "the search knobs are the two ranked highest"
     # The scores are part of the frozen plan.
-    assert protocol.protocol_hash() != protocol_from_request(_ranked(request, {})).protocol_hash()
+    assert (
+        protocol.protocol_hash() != protocol_from_request(_ranked(request, {})).protocol_hash()
+    ), "the importance scores are part of the frozen plan"
+
+    unranked = protocol_from_request(shuffled)
+    assert [knob.name for knob in unranked.knobs] == [
+        knob["name"] for knob in shuffled["knobs"]
+    ], "a plan without importance keeps its own order"
+    assert all("importance" not in knob for knob in unranked.as_dict()["knobs"]), "a plan without importance writes no score"
 
 
 ORDER_FIXTURE = Path(__file__).resolve().parents[4] / "contracts" / "fixtures" / "golden-search-importance-order-v1.json"
@@ -121,14 +137,6 @@ def test_the_search_order_matches_the_order_the_plan_page_shows() -> None:
     for case in fixture["cases"]:
         knobs = [KnobPlan(name=name, mode="fixed", low=0.0, high=0.0, fixed_value=0.0, importance=case["scores"][name]) for name in reversed(fixture["declared"])]
         assert [knob.name for knob in by_importance(knobs, fixture["declared"])] == case["order"]
-
-
-def test_a_plan_without_importance_keeps_its_own_order_and_writes_no_score() -> None:
-    request = plan_request("SPY")
-    shuffled = {**request, "knobs": list(reversed(request["knobs"]))}
-    protocol = protocol_from_request(shuffled)
-    assert [knob.name for knob in protocol.knobs] == [knob["name"] for knob in shuffled["knobs"]]
-    assert all("importance" not in knob for knob in protocol.as_dict()["knobs"])
 
 
 @pytest.mark.parametrize("bad", [0, 11, True, None])
@@ -190,11 +198,25 @@ def test_a_window_behind_an_early_close_needs_one_more_run_up_session() -> None:
     assert _sessions_needed(et_midnight_ms(date(2024, 12, 9)), 20, fifteen_minutes) == 1
 
 
-def test_a_run_up_the_lake_cannot_supply_before_development_is_refused_never_carved(tmp_path: Path) -> None:
+def test_a_run_up_the_lake_cannot_supply_before_development_is_refused_never_carved_and_names_no_start_when_none_keeps_a_fold(
+    tmp_path: Path,
+) -> None:
     symbol = unique_symbol()
     seed_lake(tmp_path, symbol, start=DEVELOPMENT[0])
     plan = review_plan(protocol_from_request(plan_request(symbol)), roots=[tmp_path])
-    assert [refusal.code for refusal in plan.refusals] == ["RUN_UP_HISTORY_MISSING"] and plan.run_up is None
+    assert (
+        [refusal.code for refusal in plan.refusals] == ["RUN_UP_HISTORY_MISSING"] and plan.run_up is None
+    ), "a run-up the lake cannot supply before development is refused and never carved"
+
+    # Two months of training and one of test fill the three development months: one fold, none to drop.
+    one_fold = review_plan(protocol_from_request(plan_request(symbol, training_months=2)), roots=[tmp_path])
+
+    [refusal] = one_fold.refusals
+
+    assert (
+        refusal.code == "RUN_UP_HISTORY_MISSING" and refusal.nearest_valid_ms == ()
+    ), "a run-up refusal names no start when no later one keeps a fold"
+    assert refusal.message.endswith("the run-up is never carved from the scored range."), "the refusal says the run-up is never carved"
 
 
 @pytest.mark.parametrize(
@@ -221,18 +243,6 @@ def test_a_development_start_inside_a_hole_in_the_lake_is_refused_naming_the_ear
     assert refusal.message.endswith(f" The earliest start the lake can serve with whole folds is {servable.isoformat()}.")
     moved = review_plan(replace(asked, development_start_ms=refusal.nearest_valid_ms[0]), roots=[tmp_path])
     assert moved.refusals == () and moved.run_up is not None
-
-
-def test_a_run_up_refusal_names_no_start_when_no_later_one_keeps_a_fold(tmp_path: Path) -> None:
-    symbol = unique_symbol()
-    seed_lake(tmp_path, symbol, start=DEVELOPMENT[0])
-    # Two months of training and one of test fill the three development months: one fold, none to drop.
-    plan = review_plan(protocol_from_request(plan_request(symbol, training_months=2)), roots=[tmp_path])
-
-    [refusal] = plan.refusals
-
-    assert refusal.code == "RUN_UP_HISTORY_MISSING" and refusal.nearest_valid_ms == ()
-    assert refusal.message.endswith("the run-up is never carved from the scored range.")
 
 
 def test_a_run_up_the_lake_holds_but_cannot_read_is_refused_as_unreadable_not_as_missing(
@@ -519,52 +529,58 @@ def _note(fit: RangeFit, *, final: int = 3, training: int = 6, test: int = 2) ->
     return range_fit_sentence(fit, final_months=final, training_months=training, test_months=test)
 
 
-def test_a_picked_range_ends_the_final_test_with_the_range_and_starts_development_on_its_first_whole_fold() -> None:
+def test_a_picked_range_ends_the_final_test_with_the_range_starts_development_on_its_first_whole_fold_and_says_what_it_leaves_out() -> None:
     fit = _fit()
 
     # 21 months lie before the final test; 6 of training and seven 2-month tests take 20 of them.
-    assert (fit.development_start, fit.final_start, fit.final_end) == (date(2024, 11, 3), date(2026, 7, 3), date(2026, 10, 3))
-    assert (len(fit.unused_sessions), fit.unused_sessions[0], fit.unused_sessions[-1]) == (22, date(2024, 10, 3), date(2024, 11, 1))
-    assert fit.lake_from is None and fit.final_early_days == 0
+    assert (fit.development_start, fit.final_start, fit.final_end) == (
+        date(2024, 11, 3),
+        date(2026, 7, 3),
+        date(2026, 10, 3),
+    ), "a picked range ends the final test with the range and starts development on its first whole fold"
+    assert (len(fit.unused_sessions), fit.unused_sessions[0], fit.unused_sessions[-1]) == (
+        22,
+        date(2024, 10, 3),
+        date(2024, 11, 1),
+    ), "the sessions before development are left out"
+    assert fit.lake_from is None and fit.final_early_days == 0, "a range clear of the lake's start and on whole months holds nothing back"
     assert _note(fit) == (
         "Development starts on 2024-11-03. The 22 sessions from 2024-10-03 to 2024-11-01 are left out: "
         "the months before the final test have to split into 6 months of training and whole tests of 2 months."
-    )
+    ), "the note says where development starts and what is left out"
 
+    even = _fit(StudyRange(date(2024, 11, 3), date(2026, 10, 3)))
 
-def test_a_range_that_splits_evenly_is_used_whole_and_says_nothing() -> None:
-    fit = _fit(StudyRange(date(2024, 11, 3), date(2026, 10, 3)))
-
-    assert fit.development_start == date(2024, 11, 3) and fit.unused_sessions == ()
-    assert _note(fit) is None
+    assert even.development_start == date(2024, 11, 3) and even.unused_sessions == (), "a range that splits evenly is used whole"
+    assert _note(even) is None, "a range that splits evenly says nothing"
     # A range starting on a weekend leaves no session out either: 2024-11-03 is a Sunday.
     one_month_tests = _fit(test=1)
-    assert one_month_tests.development_start == date(2024, 10, 3) and one_month_tests.unused_sessions == ()
+    assert (
+        one_month_tests.development_start == date(2024, 10, 3) and one_month_tests.unused_sessions == ()
+    ), "a range starting on a weekend leaves no session out"
 
-
-def test_a_range_from_the_lakes_first_session_keeps_its_first_month_for_the_run_up() -> None:
     # The lake starts on 2024-10-03, so December is the first month with a whole month behind it.
-    fit = _fit(earliest_session=date(2024, 10, 3))
+    from_the_lake = _fit(earliest_session=date(2024, 10, 3))
 
-    assert fit.development_start == date(2025, 1, 3) and fit.lake_from == date(2024, 10, 3)
-    assert _note(fit) == (
+    assert (
+        from_the_lake.development_start == date(2025, 1, 3) and from_the_lake.lake_from == date(2024, 10, 3)
+    ), "a range from the lake's first session keeps its first month for the run-up"
+    assert _note(from_the_lake) == (
         "Development starts on 2025-01-03. The 63 sessions from 2024-10-03 to 2025-01-02 are left out: "
         "the lake's unbroken history starts on 2024-10-03, its first month is kept for the run-up, "
         "and the rest has to split into 6 months of training and whole tests of 2 months."
-    )
+    ), "the note says the lake's first month is kept for the run-up"
     # A range that starts after that month is not held back.
-    assert _fit(earliest_session=date(2023, 1, 3)).lake_from is None
+    assert _fit(earliest_session=date(2023, 1, 3)).lake_from is None, "a range that starts after the lake's first month is not held back"
 
-
-def test_one_session_left_out_is_named_as_one() -> None:
     # 2024-11-01 is a Friday; development starts on Sunday the 3rd.
-    fit = _fit(StudyRange(date(2024, 11, 1), date(2026, 10, 3)), test=1, training=1)
+    one_left_out = _fit(StudyRange(date(2024, 11, 1), date(2026, 10, 3)), test=1, training=1)
 
-    assert fit.development_start == date(2024, 11, 3)
-    assert _note(fit, training=1, test=1) == (
+    assert one_left_out.development_start == date(2024, 11, 3), "one session left out still starts development on the Sunday"
+    assert _note(one_left_out, training=1, test=1) == (
         "Development starts on 2024-11-03. The session on 2024-11-01 is left out: "
         "the months before the final test have to split into 1 month of training and whole tests of 1 month."
-    )
+    ), "one session left out is named as one"
 
 
 def test_a_range_too_short_for_one_fold_is_refused_with_what_the_plan_needs() -> None:
@@ -663,19 +679,16 @@ def test_the_default_plan_starts_every_knob_at_the_middle_importance_and_searche
     assert review(protocol, _ema()).lockable, "the default plan is lockable"
 
 
-def test_a_qualified_incumbent_off_the_registry_on_a_fixed_knob_still_yields_a_lockable_default_plan() -> None:
+def test_a_qualified_incumbent_off_the_registry_yields_a_lockable_default_plan_whose_ranges_widen_to_hold_it_inside_the_domain() -> None:
     registry = registry_incumbent(EMA, "SPY")
-    qualified = IncumbentRef(source="qualification", qualification_id="gq-1", params={**registry.params, "gap": 0.35, "gap_bps": 1.5})
-    protocol = default_protocol(EMA, "SPY", qualified, now_ms=OCTOBER_15, earliest_session=None)
+    off_a_fixed_knob = IncumbentRef(source="qualification", qualification_id="gq-1", params={**registry.params, "gap": 0.35, "gap_bps": 1.5})
+    fixed_protocol = default_protocol(EMA, "SPY", off_a_fixed_knob, now_ms=OCTOBER_15, earliest_session=None)
 
     # The folds start from the registry point, and the fixed knobs agree with that start.
-    assert protocol.seed == registry.params
-    assert next(plan for plan in protocol.knobs if plan.name == "gap_bps").fixed_value == 0.0
-    assert review(protocol, _ema()).lockable
+    assert fixed_protocol.seed == registry.params, "a qualified incumbent off the registry on a fixed knob starts the folds from the registry point"
+    assert next(plan for plan in fixed_protocol.knobs if plan.name == "gap_bps").fixed_value == 0.0, "the fixed knob agrees with the registry start"
+    assert review(fixed_protocol, _ema()).lockable, "that default plan is lockable"
 
-
-def test_a_default_range_widens_to_hold_the_seed_and_the_incumbent_and_stays_inside_the_domain_on_the_quantum() -> None:
-    registry = registry_incumbent(EMA, "SPY")
     # The declared fast range is 3–12 and slow 8–30; this qualified incumbent sits outside both.
     qualified = IncumbentRef(source="qualification", qualification_id="gq-2", params={**registry.params, "fast_period": 2, "slow_period": 34})
     protocol = default_protocol(EMA, "SPY", qualified, now_ms=OCTOBER_15, earliest_session=None)

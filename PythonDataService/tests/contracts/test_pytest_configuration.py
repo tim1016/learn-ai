@@ -49,28 +49,29 @@ def test_python_pr_suite_targets_two_minutes_and_fails_past_three() -> None:
     assert "python -m scripts.run_fast_tests" in CI_WORKFLOW.read_text(encoding="utf-8")
 
 
-def test_frontend_shard_job_records_its_start_before_any_other_step() -> None:
+def test_frontend_shard_job_records_its_start_and_stops_a_setup_step_that_hangs() -> None:
     # The frontend shard's target and limit bind the whole job (#2873). The
-    # test script counts from this variable and, without it, times the test
-    # step alone and says nothing, so the step must exist, stay first and
-    # keep the name the script reads.
+    # test script counts from CI_JOB_STARTED_AT_MS and, without it, times the
+    # test step alone and says nothing, so the step must exist, stay first and
+    # keep the name the script reads. The script enforces the three-minute
+    # limit only once it runs; the job's own timeout bounds the steps before
+    # it, and sits past the script's limit so the script's message is the one
+    # a slow run shows.
     workflow = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
     first_step = workflow["jobs"]["frontend-test-shard"]["steps"][0]
     script = REPOSITORY_ROOT / "Frontend/scripts/run-test-budget.cjs"
+    script_text = script.read_text(encoding="utf-8")
 
-    assert first_step["run"] == 'echo "CI_JOB_STARTED_AT_MS=$(date +%s%3N)" >> "$GITHUB_ENV"'
-    assert 'const JOB_STARTED_AT_ENV = "CI_JOB_STARTED_AT_MS";' in script.read_text(encoding="utf-8")
-
-
-def test_frontend_shard_job_stops_a_setup_step_that_hangs() -> None:
-    # The test script enforces the three-minute limit, but only once it runs
-    # (#2873). The job's own timeout bounds the steps before it, and sits past
-    # the script's limit so the script's message is the one a slow run shows.
-    workflow = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
-    script = REPOSITORY_ROOT / "Frontend/scripts/run-test-budget.cjs"
-
-    assert "const TEST_LIMIT_MS = 180_000;" in script.read_text(encoding="utf-8")
-    assert workflow["jobs"]["frontend-test-shard"]["timeout-minutes"] == 4
+    assert first_step["run"] == 'echo "CI_JOB_STARTED_AT_MS=$(date +%s%3N)" >> "$GITHUB_ENV"', (
+        "#2873: the first step of the frontend shard job records its start"
+    )
+    assert 'const JOB_STARTED_AT_ENV = "CI_JOB_STARTED_AT_MS";' in script_text, (
+        "#2873: the test script reads the job start from the name the first step writes"
+    )
+    assert "const TEST_LIMIT_MS = 180_000;" in script_text, "#2873: the test script enforces the three-minute limit"
+    assert workflow["jobs"]["frontend-test-shard"]["timeout-minutes"] == 4, (
+        "#2873: the job's own timeout sits past the script's limit and stops a setup step that hangs"
+    )
 
 
 def test_python_pr_shards_balance_by_measured_duration() -> None:

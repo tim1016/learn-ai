@@ -16,6 +16,7 @@ import logging
 import shutil
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -85,40 +86,24 @@ def test_initialize_creates_db_mirror_and_registry_entry(tmp_path: Path) -> None
     repo.close()
 
 
-def test_initialize_refuses_virtiofs_for_wal_authority(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("filesystem", ["virtiofs", "fuseblk"], ids=["virtiofs", "fuseblk"])
+def test_initialize_refuses_an_unsupported_filesystem_for_wal_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filesystem: str
 ) -> None:
     monkeypatch.setattr(
         repository_lifecycle,
         "_linux_filesystem_type",
-        lambda _path: "virtiofs",
+        lambda _path: filesystem,
     )
 
-    with pytest.raises(UnsupportedWalFilesystem, match="virtiofs"):
+    with pytest.raises(UnsupportedWalFilesystem, match=filesystem):
         ClerkSqliteRepository.initialize(
             account_id=ACCOUNT_ID,
             artifacts_root=tmp_path,
             clock=_clock_seq(),
         )
 
-    assert not (tmp_path / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db").exists()
-
-
-def test_initialize_refuses_fuseblk_for_wal_authority(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        repository_lifecycle,
-        "_linux_filesystem_type",
-        lambda _path: "fuseblk",
-    )
-
-    with pytest.raises(UnsupportedWalFilesystem, match="fuseblk"):
-        ClerkSqliteRepository.initialize(
-            account_id=ACCOUNT_ID,
-            artifacts_root=tmp_path,
-            clock=_clock_seq(),
-        )
+    assert not (tmp_path / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db").exists(), "no database file is created"
 
 
 def test_configure_connection_refuses_a_file_database_that_retains_a_rollback_journal(
@@ -416,11 +401,16 @@ def test_reconcilable_effect_projection_matches_authority_for_every_state_and_or
     repo.close()
 
 
-def test_initialize_twice_raises_already_initialized(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "create",
+    [ClerkSqliteRepository.initialize, ClerkSqliteRepository.rebuild_from_mirror],
+    ids=["initialize_twice", "rebuild_with_the_database_in_place"],
+)
+def test_initialize_or_rebuild_over_an_existing_database_raises_already_initialized(tmp_path: Path, create: Any) -> None:
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
     repo.close()
     with pytest.raises(AlreadyInitialized):
-        ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
+        create(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
 
 
 def test_open_a_never_initialized_account_raises_file_not_found(tmp_path: Path) -> None:
@@ -928,15 +918,6 @@ def test_rebuild_that_cannot_configure_its_connection_leaves_no_database_file(
     rebuilt.close()
 
 
-def test_rebuild_refuses_when_db_path_already_exists(tmp_path: Path) -> None:
-    clock = _clock_seq()
-    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
-    repo.close()
-
-    with pytest.raises(AlreadyInitialized):
-        ClerkSqliteRepository.rebuild_from_mirror(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
-
-
 def test_tampered_mirror_line_fails_closed_on_rebuild(tmp_path: Path) -> None:
     """Tamper with a mirror line and prove hash-chain-break detection fails
     closed (no tampered import)."""
@@ -996,24 +977,21 @@ def test_mirror_sequence_gap_fails_closed_on_rebuild(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "record",
-    [{"sequence": 1, "row_hash": "h"}, {"phase": "BOGUS", "sequence": 1, "row_hash": "h"}],
-    ids=["no_phase", "unknown_phase"],
+    ("record", "match"),
+    [
+        pytest.param({"sequence": 1, "row_hash": "h"}, "unknown mirror record phase", id="no_phase"),
+        pytest.param(
+            {"phase": "BOGUS", "sequence": 1, "row_hash": "h"}, "unknown mirror record phase", id="unknown_phase"
+        ),
+        pytest.param({"phase": "PREPARE", "sequence": 1}, "PREPARE record has no row_hash", id="prepare_without_row_hash"),
+        pytest.param({"phase": "FINALIZE", "sequence": 1}, "FINALIZE record has no row_hash", id="finalize_without_row_hash"),
+    ],
 )
-def test_a_mirror_record_with_no_known_phase_is_a_chain_break(tmp_path: Path, record: dict) -> None:
+def test_a_malformed_mirror_record_is_a_chain_break(tmp_path: Path, record: dict, match: str) -> None:
     mirror_path = tmp_path / "custody_transitions.mirror"
     mirror_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
 
-    with pytest.raises(MirrorChainBroken, match="unknown mirror record phase"):
-        MirrorFile(mirror_path).rebuild()
-
-
-@pytest.mark.parametrize("phase", ["PREPARE", "FINALIZE"])
-def test_a_mirror_transition_without_row_hash_is_a_chain_break(tmp_path: Path, phase: str) -> None:
-    mirror_path = tmp_path / "custody_transitions.mirror"
-    mirror_path.write_text(json.dumps({"phase": phase, "sequence": 1}) + "\n", encoding="utf-8")
-
-    with pytest.raises(MirrorChainBroken, match=f"{phase} record has no row_hash"):
+    with pytest.raises(MirrorChainBroken, match=match):
         MirrorFile(mirror_path).rebuild()
 
 

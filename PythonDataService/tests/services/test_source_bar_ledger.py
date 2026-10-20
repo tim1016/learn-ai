@@ -403,7 +403,7 @@ def test_bars_and_events_share_one_causal_order_per_run(tmp_path: Path) -> None:
         ledger.close()
 
 
-def test_every_continuity_event_field_has_a_column_to_land_in(tmp_path: Path) -> None:
+def test_every_provenance_and_continuity_field_has_a_column_to_land_in(tmp_path: Path) -> None:
     """The module docstring's durability claim, made checkable.
 
     ``RetainedContinuityEvent`` subclasses ``FeedContinuityEvent`` with
@@ -413,20 +413,15 @@ def test_every_continuity_event_field_has_a_column_to_land_in(tmp_path: Path) ->
     """
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
     try:
-        columns = {
-            str(row[1])
-            for row in ledger._conn.execute("PRAGMA table_info(source_stream_events)")
-        }
-    finally:
-        ledger.close()
-
-    assert set(FeedContinuityEvent.model_fields) <= columns
-
-
-def test_the_contribution_count_of_a_short_minute_survives_the_round_trip(tmp_path: Path) -> None:
-    """A refusal that says 'nine of twelve' is a different fact from one that does not."""
-    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
-    try:
+        substitute = _bar(start_ms=1_700_000_000_000).model_copy(
+            update={
+                "provenance": "historical_substitute",
+                "authorization_id": "auth-1",
+                "continuity_event_ref": "run-a:7",
+            }
+        )
+        retained = ledger.append(substitute, run_id="run-a")
+        # A refusal that says 'nine of twelve' is a different fact from one that does not.
         ledger.append_event(
             _event(
                 kind="refused",
@@ -442,29 +437,20 @@ def test_the_contribution_count_of_a_short_minute_survives_the_round_trip(tmp_pa
             run_id="run-a",
         )
         counts = [event.contribution_count for event in ledger.events(run_id="run-a")]
+        read_back = ledger.bars(provider="polygon-minute", symbol="SPY")[0]
+        columns = {
+            str(row[1])
+            for row in ledger._conn.execute("PRAGMA table_info(source_stream_events)")
+        }
     finally:
         ledger.close()
 
-    assert counts == [9, None]
-
-
-def test_provenance_and_continuity_columns_persist(tmp_path: Path) -> None:
-    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
-    try:
-        substitute = _bar(start_ms=1_700_000_000_000).model_copy(
-            update={
-                "provenance": "historical_substitute",
-                "authorization_id": "auth-1",
-                "continuity_event_ref": "run-a:7",
-            }
-        )
-        retained = ledger.append(substitute, run_id="run-a")
-        assert retained.provenance == "historical_substitute"
-        assert retained.authorization_id == "auth-1"
-        assert retained.continuity_event_ref == "run-a:7"
-        assert ledger.bars(provider="polygon-minute", symbol="SPY")[0].provenance == "historical_substitute"
-    finally:
-        ledger.close()
+    assert set(FeedContinuityEvent.model_fields) <= columns, "every continuity event field has a column in the events table"
+    assert counts == [9, None], "the contribution count of a short minute survives the round trip, and its absence too"
+    assert retained.provenance == "historical_substitute", "the retained bar keeps its provenance"
+    assert retained.authorization_id == "auth-1", "the retained bar keeps its authorization id"
+    assert retained.continuity_event_ref == "run-a:7", "the retained bar keeps its continuity event ref"
+    assert read_back.provenance == "historical_substitute", "the bar read back from the ledger keeps its provenance"
 
 
 _PRE_CHANNEL_SCHEMA_REWRITE = """
@@ -551,12 +537,31 @@ def test_append_event_refuses_an_unknown_continuity_kind(tmp_path: Path) -> None
         ledger.close()
 
 
-def test_append_event_rolls_back_the_event_when_its_journal_row_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("table", "append", "read_back"),
+    [
+        # A continuity fact with no journal position is evidence outside the run's
+        # causal order -- and ``events`` inner-joins the journal, so it could not even
+        # be read back. The event row must not survive its journal row failing.
+        pytest.param(
+            "source_stream_events",
+            lambda ledger: ledger.append_event(_event(cause="socket_down"), run_id="run-a"),
+            lambda ledger: ledger.events(run_id="run-a"),
+            id="append_event_rolls_back_the_event_when_its_journal_row_fails",
+        ),
+        # The same pairing for the other half: a retained bar with no journal
+        # position could never be ordered against the run's continuity events.
+        pytest.param(
+            "source_bars",
+            lambda ledger: ledger.append(_bar(start_ms=1_700_000_000_000), run_id="run-a"),
+            lambda ledger: ledger.bars(provider="polygon-minute", symbol="SPY"),
+            id="append_rolls_back_the_bar_when_its_journal_row_fails",
+        ),
+    ],
+)
+def test_append_rolls_back_the_row_when_its_journal_row_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, table: str, append, read_back
 ) -> None:
-    """A continuity fact with no journal position is evidence outside the run's
-    causal order -- and ``events`` inner-joins the journal, so it could not even
-    be read back. The event row must not survive its journal row failing."""
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
     try:
         # The journal writer moved to ``source_bar_store_schema``; patch the
@@ -564,31 +569,11 @@ def test_append_event_rolls_back_the_event_when_its_journal_row_fails(
         monkeypatch.setattr(source_bar_ledger, "journal_row", _refuse_journal)
 
         with pytest.raises(RuntimeError, match="journal unavailable"):
-            ledger.append_event(_event(cause="socket_down"), run_id="run-a")
+            append(ledger)
 
-        assert _row_count(ledger.path, "source_stream_events") == 0
-        assert _row_count(ledger.path, "source_evidence_journal") == 0
-    finally:
-        ledger.close()
-
-
-def test_append_rolls_back_the_bar_when_its_journal_row_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The same pairing for the other half: a retained bar with no journal
-    position could never be ordered against the run's continuity events."""
-    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
-    try:
-        # The journal writer moved to ``source_bar_store_schema``; patch the
-        # name the ledger module imported, which is what its appends call.
-        monkeypatch.setattr(source_bar_ledger, "journal_row", _refuse_journal)
-
-        with pytest.raises(RuntimeError, match="journal unavailable"):
-            ledger.append(_bar(start_ms=1_700_000_000_000), run_id="run-a")
-
-        assert _row_count(ledger.path, "source_bars") == 0
-        assert _row_count(ledger.path, "source_evidence_journal") == 0
-        assert ledger.bars(provider="polygon-minute", symbol="SPY") == []
+        assert _row_count(ledger.path, table) == 0, "the appended row does not survive its journal row failing"
+        assert _row_count(ledger.path, "source_evidence_journal") == 0, "no journal row is left behind"
+        assert read_back(ledger) == [], "nothing is left to read back"
     finally:
         ledger.close()
 

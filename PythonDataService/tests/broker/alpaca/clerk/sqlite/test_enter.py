@@ -223,13 +223,14 @@ def test_enter_identity_payload_hash_differs_for_an_extended_hours_leg() -> None
 # ── Capture-before-contact, concurrency, and the definitive outcomes ────────
 
 
-def test_accept_alone_commits_accepted_state_before_any_broker_attempt(
+def test_accept_alone_commits_accepted_state_bound_to_the_active_run_before_any_broker_attempt(
     repo: ClerkSqliteRepository,
 ) -> None:
     """ADR 0035 binding annex §4/§5: a fresh ENTER lands its command and effect
     operation in ``accepted`` — not ``in_progress`` — since no broker or
     local work has begun yet. ``in_progress`` is reserved for the moment a
-    broker attempt (or its resolution) actually starts."""
+    broker attempt (or its resolution) actually starts. The accept also binds
+    the active run onto the command and the effect operation."""
     accepted = accept_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
@@ -238,17 +239,21 @@ def test_accept_alone_commits_accepted_state_before_any_broker_attempt(
         lifecycle_run_id=RUN_ID,
         leg=_leg(),
     )
-    assert accepted.created
-    assert accepted.command.state == "accepted"
+    assert accepted.created, "a fresh ENTER is created"
+    assert accepted.command.state == "accepted", "the command lands in accepted, not in_progress"
     effect = repo.effect_operation(accepted.effect_operation_id)
-    assert effect is not None
-    assert effect.state == "accepted"
-    assert effect.kind == "ENTER"
+    assert effect is not None, "the accept wrote an effect operation"
+    assert effect.state == "accepted", "the effect operation lands in accepted, not in_progress"
+    assert effect.kind == "ENTER", "the effect operation is an ENTER"
     order = repo.order(accepted.order_ref)
-    assert order is not None
-    assert order.role == "ENTRY"
-    assert order.broker_order_id is None
-    assert order.client_order_id == accepted.order_ref
+    assert order is not None, "the accept wrote an order row"
+    assert order.role == "ENTRY", "the order is the entry"
+    assert order.broker_order_id is None, "no broker attempt has begun, so the order has no broker id"
+    assert order.client_order_id == accepted.order_ref, "the client order id is the order ref"
+    active = repo.active_run(SID)
+    assert active is not None, "the bot has an active run"
+    assert accepted.command.run_id == active.run_id, "the accept binds the active run onto the command"
+    assert effect.run_id == active.run_id, "the accept binds the active run onto the effect operation"
 
 
 async def test_intent_commits_before_the_broker_is_ever_called(repo: ClerkSqliteRepository) -> None:
@@ -474,31 +479,17 @@ async def test_submit_ack_with_a_mismatched_client_order_id_folds_uncertain_not_
 # ── Lost response → UNKNOWN → grace-gated resolution by client_order_id ─────
 
 
-async def test_lost_response_resolves_immediately_when_order_is_found(
-    repo: ClerkSqliteRepository,
-) -> None:
-    trade = _FakeTrade(submit_error=BrokerUnavailable("timeout", broker="alpaca"))
-    submission = await submit_budgeted_test_enter(
-        repo,
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=SID,
-        decision_id="dec-1",
-        lifecycle_run_id=RUN_ID,
-        leg=_leg(),
-        trade=trade,
-    )
-    effect = repo.effect_operation(submission.effect_operation_id)
-    assert effect is not None and effect.state == "in_progress"
-    order = repo.order(submission.order_ref)
-    assert order is not None and order.broker_order_id == f"bo-{submission.order_ref}"
-
-
-async def test_lost_response_absent_within_grace_stays_unknown_not_failed(
-    repo: ClerkSqliteRepository,
+@pytest.mark.parametrize(
+    ("lookup_absent", "expected_state", "order_acknowledged"),
+    [(False, "in_progress", True), (True, "unknown", False)],
+    ids=["order-found-resolves-immediately", "absent-within-grace-stays-unknown-not-failed"],
+)
+async def test_lost_response_resolves_when_the_order_is_found_and_stays_unknown_when_absent_within_grace(
+    repo: ClerkSqliteRepository, lookup_absent: bool, expected_state: str, order_acknowledged: bool
 ) -> None:
     """A first absent lookup must not be treated as terminal — the order may
     still be in flight at the broker."""
-    trade = _FakeTrade(submit_error=BrokerUnavailable("timeout", broker="alpaca"), lookup_absent=True)
+    trade = _FakeTrade(submit_error=BrokerUnavailable("timeout", broker="alpaca"), lookup_absent=lookup_absent)
     submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
@@ -509,7 +500,9 @@ async def test_lost_response_absent_within_grace_stays_unknown_not_failed(
         trade=trade,
     )
     effect = repo.effect_operation(submission.effect_operation_id)
-    assert effect is not None and effect.state == "unknown"
+    assert effect is not None and effect.state == expected_state, "a lost response resolves by lookup: found is in progress, absent within grace stays unknown and not failed"
+    order = repo.order(submission.order_ref)
+    assert order is not None and order.broker_order_id == (f"bo-{submission.order_ref}" if order_acknowledged else None), "the order is acknowledged only when the lookup found it"
 
 
 async def test_absence_past_the_grace_window_resolves_failed(tmp_path: Path) -> None:
@@ -912,12 +905,20 @@ async def test_duplicate_fill_observation_does_not_double_count(
     assert len(repo.fills_for_order(submission.order_ref)) == 1
 
 
-async def test_out_of_order_broker_state_event_does_not_regress_orders_broker_state(
-    repo: ClerkSqliteRepository,
+@pytest.mark.parametrize(
+    ("acked_at_ms", "stale_at_ms"),
+    [(1_700_000_001_000, 1_700_000_000_600), (1_700_000_000_900, None)],
+    ids=["event-older-than-the-recorded-value", "event-with-no-source-timestamp"],
+)
+async def test_an_older_or_undated_broker_state_event_does_not_regress_orders_broker_state(
+    repo: ClerkSqliteRepository, acked_at_ms: int, stale_at_ms: int | None
 ) -> None:
     """Annex §3c: an event whose source timestamp is older than the value already
-    recorded must not regress ``orders.broker_state``."""
-    trade = _FakeTrade(submit_result=_broker_order("x", status="accepted", updated_at_ms=1_700_000_001_000))
+    recorded must not regress ``orders.broker_state``. ``BrokerOrder.updated_at_ms``
+    is optional (Alpaca can omit it); a ``None`` source timestamp must never crash
+    the idempotency guard, and must never be treated as newer than an
+    already-recorded real one."""
+    trade = _FakeTrade(submit_result=_broker_order("x", status="accepted", updated_at_ms=acked_at_ms))
     submission = await submit_budgeted_test_enter(
         repo,
         account_id=ACCOUNT_ID,
@@ -928,13 +929,13 @@ async def test_out_of_order_broker_state_event_does_not_regress_orders_broker_st
         trade=trade,
     )
     order = repo.order(submission.order_ref)
-    assert order is not None and order.broker_state == "accepted"
+    assert order is not None and order.broker_state == "accepted", "the ack recorded the accepted broker state"
 
-    stale = _broker_order(submission.order_ref, status="pending_new", updated_at_ms=1_700_000_000_600)
+    stale = _broker_order(submission.order_ref, status="pending_new", updated_at_ms=stale_at_ms)
     fold_order_evidence(repo, effect_operation_id=submission.effect_operation_id, order=stale)
 
     order = repo.order(submission.order_ref)
-    assert order is not None and order.broker_state == "accepted"  # not regressed
+    assert order is not None and order.broker_state == "accepted", "the older or undated event did not regress the broker state, and did not crash"
 
 
 def test_fill_quantity_with_no_avg_price_withholds_ack_and_folds_uncertain(
@@ -1071,69 +1072,18 @@ def test_fill_is_durable_before_ack_so_a_crash_between_them_recovers_cleanly(
     assert len(repo.fills_for_order(accepted.order_ref)) == 1
 
 
-async def test_ack_with_no_source_timestamp_does_not_crash_or_regress_broker_state(
-    repo: ClerkSqliteRepository,
-) -> None:
-    """``BrokerOrder.updated_at_ms`` is optional (Alpaca can omit it); a
-    ``None`` source timestamp must never crash the annex §3c idempotency guard,
-    and must never be treated as newer than an already-recorded real one."""
-    trade = _FakeTrade(submit_result=_broker_order("x", status="accepted", updated_at_ms=1_700_000_000_900))
-    submission = await submit_budgeted_test_enter(
-        repo,
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=SID,
-        decision_id="dec-1",
-        lifecycle_run_id=RUN_ID,
-        leg=_leg(),
-        trade=trade,
-    )
-    order = repo.order(submission.order_ref)
-    assert order is not None and order.broker_state == "accepted"
-
-    undated = _broker_order(submission.order_ref, status="pending_new", updated_at_ms=None)
-    fold_order_evidence(repo, effect_operation_id=submission.effect_operation_id, order=undated)
-
-    order = repo.order(submission.order_ref)
-    assert order is not None and order.broker_state == "accepted"  # not regressed, no crash
-
-
 # ── Identity/validation guardrails, matching commands.py's precedent ───────
 
 
-def test_accept_rejects_a_colon_in_strategy_instance_id(repo: ClerkSqliteRepository) -> None:
+@pytest.mark.parametrize(
+    "field",
+    ["strategy_instance_id", "decision_id", "lifecycle_run_id"],
+    ids=["colon-in-strategy-instance-id", "colon-in-decision-id", "colon-in-lifecycle-run-id"],
+)
+def test_accept_rejects_a_colon_in_an_identity_field(repo: ClerkSqliteRepository, field: str) -> None:
+    identity = {"strategy_instance_id": SID, "decision_id": "dec-1", "lifecycle_run_id": RUN_ID, field: "a:b"}
     with pytest.raises(InvalidIdentityError):
-        accept_budgeted_test_enter(
-            repo,
-            account_id=ACCOUNT_ID,
-            strategy_instance_id="a:b",
-            decision_id="dec-1",
-            lifecycle_run_id=RUN_ID,
-            leg=_leg(),
-        )
-
-
-def test_accept_rejects_a_colon_in_decision_id(repo: ClerkSqliteRepository) -> None:
-    with pytest.raises(InvalidIdentityError):
-        accept_budgeted_test_enter(
-            repo,
-            account_id=ACCOUNT_ID,
-            strategy_instance_id=SID,
-            decision_id="a:b",
-            lifecycle_run_id=RUN_ID,
-            leg=_leg(),
-        )
-
-
-def test_accept_rejects_a_colon_in_lifecycle_run_id(repo: ClerkSqliteRepository) -> None:
-    with pytest.raises(InvalidIdentityError):
-        accept_budgeted_test_enter(
-            repo,
-            account_id=ACCOUNT_ID,
-            strategy_instance_id=SID,
-            decision_id="dec-1",
-            lifecycle_run_id="a:b",
-            leg=_leg(),
-        )
+        accept_budgeted_test_enter(repo, account_id=ACCOUNT_ID, leg=_leg(), **identity)
 
 
 def test_accept_on_unknown_strategy_instance_is_a_typed_error_not_a_raw_500(
@@ -1148,24 +1098,6 @@ def test_accept_on_unknown_strategy_instance_is_a_typed_error_not_a_raw_500(
             lifecycle_run_id=RUN_ID,
             leg=_leg(),
         )
-
-
-def test_accept_binds_the_active_run_onto_command_and_effect_operation(
-    repo: ClerkSqliteRepository,
-) -> None:
-    accepted = accept_budgeted_test_enter(
-        repo,
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=SID,
-        decision_id="dec-1",
-        lifecycle_run_id=RUN_ID,
-        leg=_leg(),
-    )
-    active = repo.active_run(SID)
-    assert active is not None
-    assert accepted.command.run_id == active.run_id
-    effect = repo.effect_operation(accepted.effect_operation_id)
-    assert effect is not None and effect.run_id == active.run_id
 
 
 def test_evidence_transitions_carry_the_same_run_id_as_the_accept(

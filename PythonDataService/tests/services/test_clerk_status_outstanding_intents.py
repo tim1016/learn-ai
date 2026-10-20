@@ -7,6 +7,7 @@ has no execution of its own (its legs carry the fills), so "filled with nothing 
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
@@ -30,36 +31,39 @@ def _enter(*orders: ProjectedOrder) -> SimpleNamespace:
 
 
 @pytest.mark.parametrize(
-    ("filled", "requires_reconciliation"),
+    ("orders", "requires_reconciliation"),
     [
-        pytest.param(1.0, False, id="filled_single_leg_entry_with_its_fill_is_settled"),
-        pytest.param(0.0, True, id="filled_order_with_nothing_filled_is_still_unsettled"),
+        pytest.param(
+            lambda: (_order("a", filled=1.0),), False,
+            id="filled_single_leg_entry_with_its_fill_is_settled",
+        ),
+        pytest.param(
+            lambda: (_order("a", filled=0.0),), True,
+            id="filled_order_with_nothing_filled_is_still_unsettled",
+        ),
+        pytest.param(
+            lambda: (
+                _order("p", filled=0.0, symbol=None, side=None),
+                _order("p~1", filled=1.0), _order("p~2", filled=1.0, side="sell"),
+            ), False,
+            id="filled_several_leg_parent_is_settled_by_its_legs_fills",
+        ),
+        pytest.param(
+            lambda: (
+                _order("p", filled=0.0, symbol=None, side=None),
+                _order("p~1", filled=0.0), _order("p~2", filled=0.0, side="sell"),
+            ), True,
+            id="filled_several_leg_parent_whose_legs_show_no_fill_is_unsettled",
+        ),
+        pytest.param(
+            lambda: (_order("a", filled=0.0), _order("b", filled=1.0)), True,
+            id="filled_order_that_names_a_symbol_is_not_excused_by_a_neighbours_fill",
+        ),
     ],
 )
-def test_a_filled_single_leg_entry_is_settled_only_by_its_own_fill(
-    filled: float, requires_reconciliation: bool
+def test_a_filled_entry_is_settled_only_by_the_fills_that_belong_to_it(
+    orders: Callable[[], tuple[ProjectedOrder, ...]], requires_reconciliation: bool
 ) -> None:
-    assert _operation_requires_reconciliation(_enter(_order("a", filled=filled))) is requires_reconciliation, (
-        "a filled single-leg entry needs reconciliation only when nothing is filled"
+    assert _operation_requires_reconciliation(_enter(*orders())) is requires_reconciliation, (
+        "an entry needs reconciliation only when none of the fills that belong to it is there"
     )
-
-
-def test_a_filled_several_leg_parent_is_settled_by_its_legs_fills() -> None:
-    parent = _order("p", filled=0.0, symbol=None, side=None)
-    legs = (_order("p~1", filled=1.0), _order("p~2", filled=1.0, side="sell"))
-
-    assert _operation_requires_reconciliation(_enter(parent, *legs)) is False
-
-
-def test_a_filled_several_leg_parent_whose_legs_show_no_fill_is_unsettled() -> None:
-    parent = _order("p", filled=0.0, symbol=None, side=None)
-    legs = (_order("p~1", filled=0.0), _order("p~2", filled=0.0, side="sell"))
-
-    assert _operation_requires_reconciliation(_enter(parent, *legs)) is True
-
-
-def test_a_filled_order_that_names_a_symbol_is_not_excused_by_a_neighbours_fill() -> None:
-    lone = _order("a", filled=0.0)
-    other = _order("b", filled=1.0)
-
-    assert _operation_requires_reconciliation(_enter(lone, other)) is True

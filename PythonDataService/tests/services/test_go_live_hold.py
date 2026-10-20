@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -55,35 +56,39 @@ def test_a_marker_holds_and_says_which_bundle_put_it_there(tmp_path: Path) -> No
     assert state.problem is None
 
 
-def test_an_unparseable_marker_holds_with_the_problem_named(tmp_path: Path) -> None:
-    (tmp_path / GO_LIVE_HOLD_MARKER).write_text("[]", encoding="utf-8")
-
-    state = read_go_live_hold(tmp_path)
-
-    assert state.held is True
-    assert state.marker is None
-    assert state.problem_kind == "marker_unparseable"
-    assert GO_LIVE_HOLD_MARKER in (state.problem or "")
+def _unparseable_marker(lane_root: Path) -> Path:
+    (lane_root / GO_LIVE_HOLD_MARKER).write_text("[]", encoding="utf-8")
+    return lane_root
 
 
-def test_a_missing_lane_root_holds(tmp_path: Path) -> None:
-    state = read_go_live_hold(tmp_path / "absent")
-
-    assert state.held is True
-    assert state.problem_kind == "root_unreadable"
-    assert "not a readable directory" in (state.problem or "")
+def _missing_lane_root(lane_root: Path) -> Path:
+    return lane_root / "absent"
 
 
-def test_a_marker_the_lane_cannot_read_holds(tmp_path: Path) -> None:
+def _marker_that_is_a_directory(lane_root: Path) -> Path:
     # A directory where the file belongs: the read fails with an OSError
     # other than "not found", so the lane cannot tell — and holds.
-    (tmp_path / GO_LIVE_HOLD_MARKER).mkdir()
+    (lane_root / GO_LIVE_HOLD_MARKER).mkdir()
+    return lane_root
 
-    state = read_go_live_hold(tmp_path)
 
-    assert state.held is True
-    assert state.problem_kind == "marker_unreachable"
-    assert "could not be read" in (state.problem or "")
+@pytest.mark.parametrize(
+    ("break_the_lane", "problem_kind", "problem_text"),
+    [
+        pytest.param(_unparseable_marker, "marker_unparseable", GO_LIVE_HOLD_MARKER, id="an_unparseable_marker"),
+        pytest.param(_missing_lane_root, "root_unreadable", "not a readable directory", id="a_missing_lane_root"),
+        pytest.param(_marker_that_is_a_directory, "marker_unreachable", "could not be read", id="a_marker_the_lane_cannot_read"),
+    ],
+)
+def test_a_lane_that_cannot_read_its_marker_cleanly_holds_with_the_problem_named(
+    tmp_path: Path, break_the_lane: Callable[[Path], Path], problem_kind: str, problem_text: str
+) -> None:
+    state = read_go_live_hold(break_the_lane(tmp_path))
+
+    assert state.held is True, "the lane holds"
+    assert state.marker is None, "no marker is read out of what could not be read"
+    assert state.problem_kind == problem_kind, "the kind of problem"
+    assert problem_text in (state.problem or ""), "the problem is named"
 
 
 def _unreadable_marker(monkeypatch: pytest.MonkeyPatch) -> None:

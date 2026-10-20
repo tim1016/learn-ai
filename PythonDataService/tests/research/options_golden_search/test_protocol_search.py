@@ -74,15 +74,26 @@ def test_a_search_ranks_money_exactly_keeps_a_tie_escapes_an_ineligible_seed_and
     assert run_search(audited, p.development, both_legs).winner.net_profit_usd == 10, "pair audit: the audit finds the region needing simultaneous leg changes"
 
 
-def test_stable_leg_ids_and_frozen_structure():
+def test_stable_leg_ids_and_frozen_structure_sessions_and_budget():
     p = protocol()
     updated = materialize(p, {"legs.call_a.stop_loss.value": "20"})
-    assert updated.legs[1] == p.setup.legs[1]
-    assert updated.legs[0].contracts == p.setup.legs[0].contracts
+    assert updated.legs[1] == p.setup.legs[1], "a stable leg id leaves the other leg as saved"
+    assert updated.legs[0].contracts == p.setup.legs[0].contracts, "a stable leg id leaves the edited leg's contracts as saved"
     with pytest.raises(ValueError, match="unsupported"):
         protocol(knobs=[Knob(path="legs.call_a.contracts", values=(1, 2))])
     with pytest.raises(ValueError, match="unknown stable leg"):
         protocol(knobs=[Knob(path="legs.0.stop_loss.value", values=("10", "20"))])
+
+    dates = [t for fold in p.folds for t in fold.forward.session_ms]
+    assert len(dates) == len(set(dates)), "the frozen forward sessions are disjoint"
+    assert p.folds[-1].forward.end_ms == p.development.end_ms == p.final.start_ms, "the last forward window ends where development ends and the final test starts"
+    budget = budget_plan(p)
+    assert budget.mandatory_downstream > budget.final > p.finalist_count, "the budget includes the mandatory downstream work"
+    assert budget.unique_upper_bound > budget.selection_total, "the unique upper bound exceeds the selection total"
+    assert budget.replay_session_upper_bound > budget.unique_upper_bound, "the replay session bound exceeds the unique upper bound"
+    with pytest.raises(ValueError):
+        freeze_protocol(setup(), p.knobs, start_ms=p.development.start_ms,
+                        end_ms=et_midnight_ms(date(2025, 6, 1)))
 
 
 def test_illegal_dependency_is_excluded_and_zero_reentry_is_canonical_absence():
@@ -106,20 +117,6 @@ def test_fold_selection_resets_original_ranges_and_cannot_observe_future():
     assert [f.selection.winner.point_hash for f in before] == [f.selection.winner.point_hash for f in after]
     assert [f.selection.trials[0].point_hash for f in before] == [point_hash(p.setup)] * 3
     assert before[0].selection.winner.point_hash != before[1].selection.winner.point_hash
-
-
-def test_frozen_sessions_disjoint_and_budget_includes_downstream():
-    p = protocol()
-    dates = [t for fold in p.folds for t in fold.forward.session_ms]
-    assert len(dates) == len(set(dates))
-    assert p.folds[-1].forward.end_ms == p.development.end_ms == p.final.start_ms
-    budget = budget_plan(p)
-    assert budget.mandatory_downstream > budget.final > p.finalist_count
-    assert budget.unique_upper_bound > budget.selection_total
-    assert budget.replay_session_upper_bound > budget.unique_upper_bound
-    with pytest.raises(ValueError):
-        freeze_protocol(setup(), p.knobs, start_ms=p.development.start_ms,
-                        end_ms=et_midnight_ms(date(2025, 6, 1)))
 
 
 def test_apply_scenario_keeps_the_estimated_policy_and_refuses_a_stress_of_zero_saved_costs():

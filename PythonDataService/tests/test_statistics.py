@@ -192,33 +192,33 @@ class TestMaxDrawdown:
                 2,
                 id="equal_drawdowns_from_same_peak_choose_earliest_trough",
             ),
+            pytest.param(
+                ((3, 80.0), (1, 100.0), (2, 150.0), (2, 120.0)),
+                1 / 3,
+                2,
+                3,
+                id="duplicate_timestamp_uses_last_input_occurrence",
+            ),
+            pytest.param(
+                ((3, 80.0), (1, 100.0), (2, 120.0)),
+                1 / 3,
+                2,
+                3,
+                id="unsorted_input_list_is_not_mutated",
+            ),
         ],
     )
     def test_max_drawdown_reports_peak_and_trough(self, points, max_dd, peak, trough) -> None:
-        result = max_drawdown(list(points))
+        arg = list(points)
+
+        result = max_drawdown(arg)
 
         assert result == {
             "max_drawdown": max_dd,
             "peak_timestamp": peak,
             "trough_timestamp": trough,
-        }
-
-    def test_max_drawdown_duplicate_timestamp_uses_last_input_occurrence(self) -> None:
-        points = [(3, 80.0), (1, 100.0), (2, 150.0), (2, 120.0)]
-
-        result = max_drawdown(points)
-
-        assert result["max_drawdown"] == pytest.approx(1 / 3)
-        assert result["peak_timestamp"] == 2
-        assert result["trough_timestamp"] == 3
-
-    def test_max_drawdown_does_not_mutate_input(self) -> None:
-        points = [(3, 80.0), (1, 100.0), (2, 120.0)]
-        original = list(points)
-
-        max_drawdown(points)
-
-        assert points == original
+        }, "max drawdown with its peak and trough timestamps"
+        assert arg == list(points), "the caller's list is not mutated"
 
     @pytest.mark.parametrize("invalid_equity", [0.0, -1.0])
     def test_max_drawdown_rejects_nonpositive_finite_equity(self, invalid_equity: float) -> None:
@@ -226,19 +226,16 @@ class TestMaxDrawdown:
             max_drawdown([(1, 100.0), (2, invalid_equity)])
 
     @pytest.mark.parametrize(
-        "curve",
+        ("curve", "expected"),
         [
-            pytest.param((100, 110, 120, 130), id="monotonic_up"),
-            pytest.param((), id="empty_curve"),
-            pytest.param((100,), id="single_point"),
+            pytest.param((100, 110, 120, 130), 0.0, id="no_drawdown_monotonic_up"),
+            pytest.param((), 0.0, id="no_drawdown_empty_curve"),
+            pytest.param((100,), 0.0, id="no_drawdown_single_point"),
+            pytest.param((100, 120, 90, 110), 0.25, id="simple_drawdown"),  # 30/120 = 0.25
         ],
     )
-    def test_no_drawdown_is_zero(self, curve: tuple[int, ...]) -> None:
-        assert _max_drawdown(list(curve)) == 0.0
-
-    def test_simple_drawdown(self) -> None:
-        dd = _max_drawdown([100, 120, 90, 110])
-        assert abs(dd - 0.25) < 1e-10  # 30/120 = 0.25
+    def test_max_drawdown_fraction(self, curve: tuple[int, ...], expected: float) -> None:
+        assert _max_drawdown(list(curve)) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -284,48 +281,48 @@ class TestSortino:
 # Unit tests: daily resampling
 # ---------------------------------------------------------------------------
 class TestResampleToDaily:
-    def test_multiple_points_per_day(self) -> None:
-        base = datetime(2024, 1, 2, 10, 0, tzinfo=UTC)
-        points = [
-            EquityPoint(timestamp_ms=to_ms_utc(base), equity=100.0),
-            EquityPoint(timestamp_ms=to_ms_utc(base + timedelta(hours=2)), equity=101.0),
-            EquityPoint(timestamp_ms=to_ms_utc(base + timedelta(hours=4)), equity=102.0),
-            EquityPoint(timestamp_ms=to_ms_utc(base + timedelta(days=1)), equity=103.0),
-            EquityPoint(timestamp_ms=to_ms_utc(base + timedelta(days=1, hours=2)), equity=104.0),
-        ]
-        daily = _resample_to_daily(points)
-        assert len(daily) == 2
-        assert daily[0] == 102.0  # last value of day 1
-        assert daily[1] == 104.0  # last value of day 2
+    @pytest.mark.parametrize(
+        ("points", "expected"),
+        [
+            pytest.param(
+                (
+                    (datetime(2024, 1, 2, 10, 0, tzinfo=UTC), 100.0),
+                    (datetime(2024, 1, 2, 12, 0, tzinfo=UTC), 101.0),
+                    (datetime(2024, 1, 2, 14, 0, tzinfo=UTC), 102.0),
+                    (datetime(2024, 1, 3, 10, 0, tzinfo=UTC), 103.0),
+                    (datetime(2024, 1, 3, 12, 0, tzinfo=UTC), 104.0),
+                ),
+                [102.0, 104.0],  # last value of each day
+                id="multiple_points_per_day",
+            ),
+            pytest.param((), [], id="empty"),
+            # 2024-01-05 03:00 UTC is 2024-01-04 22:00 ET — still the prior ET
+            # trading date. Bucketing by the raw UTC date (the pre-fix behavior)
+            # would merge it into the same bucket as a same-UTC-date point that
+            # is actually a different ET trading date.
+            pytest.param(
+                (
+                    (datetime(2024, 1, 5, 3, 0, tzinfo=UTC), 100.0),
+                    (datetime(2024, 1, 5, 20, 0, tzinfo=UTC), 101.0),
+                ),
+                [100.0, 101.0],
+                id="buckets_by_et_calendar_date_not_utc_calendar_date",
+            ),
+        ],
+    )
+    def test_resample_to_daily_keeps_last_value_per_et_date(self, points, expected) -> None:
+        equity_points = [EquityPoint(timestamp_ms=to_ms_utc(at), equity=equity) for at, equity in points]
 
-    def test_empty(self) -> None:
-        assert _resample_to_daily([]) == []
+        daily = _resample_to_daily(equity_points)
 
-    def test_buckets_by_et_calendar_date_not_utc_calendar_date(self) -> None:
-        """2024-01-05 03:00 UTC is 2024-01-04 22:00 ET — still the prior ET
-        trading date. Bucketing by the raw UTC date (the pre-fix behavior)
-        would merge it into the same bucket as a same-UTC-date point that
-        is actually a different ET trading date."""
-        points = [
-            EquityPoint(timestamp_ms=to_ms_utc(datetime(2024, 1, 5, 3, 0, tzinfo=UTC)), equity=100.0),
-            EquityPoint(timestamp_ms=to_ms_utc(datetime(2024, 1, 5, 20, 0, tzinfo=UTC)), equity=101.0),
-        ]
-
-        daily = _resample_to_daily(points)
-
-        assert daily == [100.0, 101.0]
+        assert daily == expected
 
 
 class TestDailyReturns:
-    def test_basic(self) -> None:
-        rets = _daily_returns([110.0, 105.0], initial_cash=100.0)
-        assert len(rets) == 2
-        assert abs(rets[0] - 0.1) < 1e-10
-        assert abs(rets[1] - (-5 / 110)) < 1e-10
-
     @pytest.mark.parametrize(
         ("daily_values", "expected"),
         [
+            pytest.param((110.0, 105.0), (0.1, -5 / 110), id="basic"),
             pytest.param((90.0,), (-0.1,), id="single_value"),
             pytest.param((), (), id="empty"),
             pytest.param((100.0, 110.0), (0.0, 0.1), id="flat_first_session_is_one_observation"),
@@ -335,7 +332,7 @@ class TestDailyReturns:
         self, daily_values: tuple[float, ...], expected: tuple[float, ...]
     ) -> None:
         assert _daily_returns(list(daily_values), initial_cash=100.0) == pytest.approx(
-            list(expected), abs=1e-9, rel=0
+            list(expected), abs=1e-10, rel=0
         )
 
 
@@ -591,23 +588,26 @@ class TestValidateTradeLog:
         assert len(errors) == 1, "exactly one error"
         assert errors[0].code == "invalid_trade_times", "error code is invalid_trade_times"
 
-    def test_a_labelled_terminal_forced_close_may_share_its_entry_instant(self) -> None:
-        """A position opened on the final bar of the window is force-closed at
-        that same instant by the engine's terminal sweep (issue #1928). The
-        round trip is genuinely zero-duration; there is no later instant to
-        move the exit to, and none may be invented."""
+    @pytest.mark.parametrize(
+        ("is_synthetic_exit", "expected_codes"),
+        [
+            # A position opened on the final bar of the window is force-closed at
+            # that same instant by the engine's terminal sweep (issue #1928). The
+            # round trip is genuinely zero-duration; there is no later instant to
+            # move the exit to, and none may be invented.
+            pytest.param(True, [], id="labelled_terminal_forced_close_may_share_its_entry_instant_1928"),
+            # Only the engine's forced-close label earns the exemption. An equal
+            # pair from the ordinary signal path is still an accounting error.
+            pytest.param(False, ["invalid_trade_times"], id="unlabelled_zero_duration_trade_still_fails"),
+        ],
+    )
+    def test_a_zero_duration_trade_passes_only_when_labelled_a_forced_close(
+        self, is_synthetic_exit: bool, expected_codes: list[str]
+    ) -> None:
         ms = to_ms_utc(datetime(2024, 1, 2, 21, 0, tzinfo=UTC))
-        t = FakeTrade(Decimal("0"), Decimal("0"), "LOSS", ms, ms, is_synthetic_exit=True)
+        t = FakeTrade(Decimal("0"), Decimal("0"), "LOSS", ms, ms, is_synthetic_exit=is_synthetic_exit)
 
-        assert validate_trade_log([t]) == []
-
-    def test_an_unlabelled_zero_duration_trade_still_fails(self) -> None:
-        """Only the engine's forced-close label earns the exemption. An equal
-        pair from the ordinary signal path is still an accounting error."""
-        ms = to_ms_utc(datetime(2024, 1, 2, 21, 0, tzinfo=UTC))
-        t = FakeTrade(Decimal("0"), Decimal("0"), "LOSS", ms, ms)
-
-        assert [e.code for e in validate_trade_log([t])] == ["invalid_trade_times"]
+        assert [e.code for e in validate_trade_log([t])] == expected_codes
 
     def test_nan_pnl(self) -> None:
         t = FakeTrade(Decimal("nan"), Decimal("nan"), "WIN")
@@ -635,14 +635,21 @@ class TestSummarizeFiniteSanitization:
     JSON-serializable unchanged.
     """
 
-    def test_all_wins_profit_factor_is_none_not_inf(self) -> None:
-        trades = [
-            FakeTrade(Decimal("1"), Decimal("0.01"), "WIN"),
-            FakeTrade(Decimal("1"), Decimal("0.02"), "WIN"),
-            FakeTrade(Decimal("1"), Decimal("0.005"), "WIN"),
-        ]
+    @pytest.mark.parametrize(
+        ("pnl_pcts", "final_equity"),
+        [
+            pytest.param(("0.01", "0.02", "0.005"), 103_500.0, id="three_wins"),
+            pytest.param(("0.01",) * 5, 105_000.0, id="five_equal_wins"),
+        ],
+    )
+    def test_all_wins_ratios_are_none_not_inf_and_summary_is_json_serializable(
+        self, pnl_pcts: tuple[str, ...], final_equity: float
+    ) -> None:
+        import json
 
-        stats = summarize(initial_cash=100_000.0, final_equity=103_500.0, trades=trades)
+        trades = [FakeTrade(Decimal("1"), Decimal(pct), "WIN") for pct in pnl_pcts]
+
+        stats = summarize(initial_cash=100_000.0, final_equity=final_equity, trades=trades)
 
         assert stats["profit_factor"] is None, (
             f"All-wins profit_factor must coerce to None, got {stats['profit_factor']!r}"
@@ -650,15 +657,7 @@ class TestSummarizeFiniteSanitization:
         assert stats["payoff_ratio"] is None, (
             f"All-wins payoff_ratio must coerce to None, got {stats['payoff_ratio']!r}"
         )
-
-    def test_summary_is_json_serializable(self) -> None:
-        """The bug's user-visible manifestation: json.dumps raises on inf."""
-        import json
-
-        trades = [FakeTrade(Decimal("1"), Decimal("0.01"), "WIN") for _ in range(5)]
-        stats = summarize(initial_cash=100_000.0, final_equity=105_000.0, trades=trades)
-
-        # Would raise ValueError on non-finite floats before the fix (with allow_nan=False).
+        # The bug's user-visible manifestation: json.dumps raised on inf (with allow_nan=False).
         json.dumps(stats, allow_nan=False)
 
     def test_zero_trades_does_not_raise(self) -> None:

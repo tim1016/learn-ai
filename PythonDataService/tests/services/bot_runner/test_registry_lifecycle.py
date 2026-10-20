@@ -685,21 +685,6 @@ async def test_crash_records_typed_evidence_and_reaps(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_feed_death_records_feed_death_crash(tmp_path: Path) -> None:
-    feed = _FakeFeed([_bar(_T0)], mode="crash", error=MarketDataFeedError("gateway lost"))
-    registry = _registry(tmp_path, feed)
-    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
-
-    await _wait_for(lambda: not registry.status("alpaca", _SID).running)
-
-    view = registry.status("alpaca", _SID)
-    assert view.duty_outcome is not None
-    assert view.duty_outcome.kind == "CRASHED"
-    assert view.duty_outcome.reason_code == "FEED_DEATH"
-    assert view.desired_state == "STOPPED"
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "reason",
     ["WARMUP_HISTORY_UNAVAILABLE", "RESUME_HOLE_AFTER_HOURS", "RESUME_HOLE_UNFILLED"],
@@ -731,19 +716,33 @@ async def test_refused_warmup_records_its_own_reason_and_stops_the_run(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("reason", sorted(FEED_REFUSAL_REASON_CODES))
-async def test_refused_before_deciding_records_its_own_reason_and_stops_the_run(
-    tmp_path: Path, reason: str
+@pytest.mark.parametrize(
+    ("message", "feed_reason", "recorded_as"),
+    [
+        pytest.param("gateway lost", None, "FEED_DEATH", id="a lost connection is FEED_DEATH"),
+        pytest.param(
+            "minute not recovered", "DECISION_BAR_MISSED", "FEED_DEATH", id="a typed refusal outside the refusal set keeps FEED_DEATH"
+        ),
+        *(
+            pytest.param("refused on data it never decided on", reason, reason, id=reason)
+            for reason in sorted(FEED_REFUSAL_REASON_CODES)
+        ),
+    ],
+)
+async def test_a_run_the_feed_ends_is_recorded_under_its_typed_reason_or_feed_death_and_stops(
+    tmp_path: Path, message: str, feed_reason: str | None, recorded_as: str
 ) -> None:
     """#2365, #2314, #2444: through the real ``_supervise`` -> ``finalize_crash``
     path, a run refused on data it never decided on is recorded under its typed
     reason, reaped, and left STOPPED -- never resumed on its own and never
     shown as FEED_DEATH. Parametrized over the production set so a new refusal
-    code cannot land without this coverage following it."""
+    code cannot land without this coverage following it. Every other feed
+    failure -- a lost connection, or a typed refusal outside that set -- keeps
+    the long-standing FEED_DEATH outcome code."""
     feed = _FakeFeed(
         [_bar(_T0)],
         mode="crash",
-        error=MarketDataFeedError("refused on data it never decided on", reason=reason),
+        error=MarketDataFeedError(message, reason=feed_reason),
     )
     registry = _registry(tmp_path, feed)
     await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
@@ -751,30 +750,13 @@ async def test_refused_before_deciding_records_its_own_reason_and_stops_the_run(
     await _wait_for(lambda: not registry.status("alpaca", _SID).running)
 
     view = registry.status("alpaca", _SID)
-    assert view.running is False
-    assert view.duty_outcome is not None
-    assert view.duty_outcome.kind == "CRASHED"
-    assert view.duty_outcome.reason_code == reason
-    assert view.desired_state == "STOPPED"
-    assert _desired_json(tmp_path)["desired_state"] == "STOPPED"
-    assert _lifecycle_json(tmp_path)["duty_outcome"]["reason_code"] == reason
-
-
-@pytest.mark.asyncio
-async def test_other_typed_feed_refusals_keep_the_feed_death_code(tmp_path: Path) -> None:
-    feed = _FakeFeed(
-        [_bar(_T0)],
-        mode="crash",
-        error=MarketDataFeedError("minute not recovered", reason="DECISION_BAR_MISSED"),
-    )
-    registry = _registry(tmp_path, feed)
-    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
-
-    await _wait_for(lambda: not registry.status("alpaca", _SID).running)
-
-    view = registry.status("alpaca", _SID)
-    assert view.duty_outcome is not None
-    assert view.duty_outcome.reason_code == "FEED_DEATH"
+    assert view.running is False, "the crashed run is reaped, never rendered running"
+    assert view.duty_outcome is not None, "the crash is recorded as a duty outcome"
+    assert view.duty_outcome.kind == "CRASHED", "a feed error ends the run as a crash"
+    assert view.duty_outcome.reason_code == recorded_as, "the crash is recorded under the reason the feed gave, or FEED_DEATH"
+    assert view.desired_state == "STOPPED", "the crashed run is left STOPPED, never resumed on its own"
+    assert _desired_json(tmp_path)["desired_state"] == "STOPPED", "the raw desired state agrees: STOPPED"
+    assert _lifecycle_json(tmp_path)["duty_outcome"]["reason_code"] == recorded_as, "the raw lifecycle record agrees on the reason"
 
 
 @pytest.mark.asyncio
@@ -783,7 +765,7 @@ async def test_count_complete_interruption_keeps_the_run_running(
 ) -> None:
     """#1921: a reconnect the feed recovered from is not a duty outcome.
 
-    The companion of ``test_feed_death_records_feed_death_crash`` above: a
+    The companion of ``test_a_run_the_feed_ends_is_recorded_under_its_typed_reason_or_feed_death_and_stops`` above: a
     connection loss the feed survived -- every minute still accounted for --
     must leave the bot on duty, where before #1921 any interruption reached
     the runner as ``FEED_DEATH``.

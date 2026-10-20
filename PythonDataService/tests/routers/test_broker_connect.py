@@ -126,39 +126,39 @@ def broker_disabled(monkeypatch, reset_settings):
     yield
 
 
-async def test_connect_returns_503_when_disabled(broker_disabled):
+@pytest.mark.parametrize(
+    "path",
+    [
+        pytest.param("/api/broker/connect", id="connect_returns_503_when_disabled"),
+        pytest.param("/api/broker/disconnect", id="disconnect_returns_503_when_disabled"),
+        pytest.param("/api/broker/reconnect", id="reconnect_returns_503_when_disabled"),
+    ],
+)
+async def test_endpoint_returns_503_when_disabled(broker_disabled, path: str):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post("/api/broker/connect")
-    assert response.status_code == 503
-
-
-async def test_disconnect_returns_503_when_disabled(broker_disabled):
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post("/api/broker/disconnect")
-    assert response.status_code == 503
-
-
-async def test_reconnect_returns_503_when_disabled(broker_disabled):
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post("/api/broker/reconnect")
-    assert response.status_code == 503
+        response = await client.post(path)
+    assert response.status_code == 503, "a disabled broker refuses the endpoint"
 
 
 # ─── happy path ────────────────────────────────────────────────────────
 
 
-async def test_connect_from_disconnected_invokes_connect_once(installed_fake_client):
+async def test_connect_from_disconnected_invokes_connect_once_and_re_arms_the_monitor(installed_fake_client):
     fake = installed_fake_client
-    assert not fake.is_connected()
+    assert not fake.is_connected(), "the client starts disconnected"
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/api/broker/connect")
 
-    assert response.status_code == 200
+    assert response.status_code == 200, "connect from disconnected answers 200"
     body = response.json()
-    assert body["connected"] is True
-    assert body["account_id"] == "DU1234567"
-    assert fake.connect_calls == 1
+    assert body["connected"] is True, "the answer reports connected"
+    assert body["account_id"] == "DU1234567", "the answer carries the account id"
+    assert fake.connect_calls == 1, "connect is invoked exactly once"
+    assert fake.is_connected(), "the client ends connected"
+    # Dual of the disconnect: operator's Connect re-arms the monitor.
+    assert fake.desired_connected is True, "the operator's connect sets the desired state to connected"
+    assert True in fake.set_desired_calls, "the desired state was set to True"
 
 
 async def test_connect_when_already_connected_is_idempotent(installed_fake_client):
@@ -193,19 +193,6 @@ async def test_disconnect_when_connected_calls_disconnect(installed_fake_client)
     # state to False so the AutoReconnectMonitor stops auto-reconnecting.
     assert fake.desired_connected is False
     assert False in fake.set_desired_calls
-
-
-async def test_connect_endpoint_sets_desired_connected_true(installed_fake_client):
-    """Dual of the above — operator's Connect re-arms the monitor."""
-    fake = installed_fake_client
-    fake._desired_connected = False
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post("/api/broker/connect")
-
-    assert response.status_code == 200
-    assert fake.desired_connected is True
-    assert True in fake.set_desired_calls
 
 
 async def test_disconnect_when_not_connected_is_idempotent(installed_fake_client):
@@ -253,71 +240,51 @@ async def test_reconnect_disconnects_then_connects(installed_fake_client):
 # ─── error translation ────────────────────────────────────────────────
 
 
-async def test_connect_sentinel_mismatch_returns_502(monkeypatch, reset_settings):
+@pytest.mark.parametrize(
+    ("make_error", "status_code", "detail_text"),
+    [
+        pytest.param(
+            lambda: ConnectionRefusedDueToSentinelError("paper/live mismatch"),
+            502,
+            "mismatch",
+            id="connect_sentinel_mismatch_returns_502",
+        ),
+        pytest.param(
+            lambda: IbkrClientIdInUseError(client_id=1, host="127.0.0.1", port=4002),
+            409,
+            "in use",
+            id="connect_client_id_in_use_returns_409",
+        ),
+        pytest.param(
+            lambda: BrokerError("Gateway unreachable"),
+            502,
+            "Gateway unreachable",
+            id="connect_generic_broker_error_returns_502",
+        ),
+        # OSError from connectAsync (socket-level failure) must map to 502.
+        pytest.param(
+            lambda: OSError("socket closed"),
+            502,
+            "socket closed",
+            id="connect_os_error_returns_502",
+        ),
+    ],
+)
+async def test_connect_failure_is_translated_to_its_status(
+    monkeypatch, reset_settings, make_error, status_code: int, detail_text: str
+):
     monkeypatch.setenv("IBKR_BROKER_ENABLED", "true")
     from app.broker.ibkr import client as ibkr_client_module
     from app.routers import broker as broker_router
 
-    fake = FakeClient(connect_raises=ConnectionRefusedDueToSentinelError("paper/live mismatch"))
+    fake = FakeClient(connect_raises=make_error())
     ibkr_client_module.set_client(fake)  # type: ignore[arg-type]
     monkeypatch.setattr(broker_router, "_ibkr_client_factory", lambda: fake)
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post("/api/broker/connect")
-        assert response.status_code == 502
-        assert "mismatch" in response.json()["detail"]
-    finally:
-        ibkr_client_module.set_client(None)
-
-
-async def test_connect_client_id_in_use_returns_409(monkeypatch, reset_settings):
-    monkeypatch.setenv("IBKR_BROKER_ENABLED", "true")
-    from app.broker.ibkr import client as ibkr_client_module
-    from app.routers import broker as broker_router
-
-    fake = FakeClient(connect_raises=IbkrClientIdInUseError(client_id=1, host="127.0.0.1", port=4002))
-    ibkr_client_module.set_client(fake)  # type: ignore[arg-type]
-    monkeypatch.setattr(broker_router, "_ibkr_client_factory", lambda: fake)
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post("/api/broker/connect")
-        assert response.status_code == 409
-        assert "in use" in response.json()["detail"]
-    finally:
-        ibkr_client_module.set_client(None)
-
-
-async def test_connect_generic_broker_error_returns_502(monkeypatch, reset_settings):
-    monkeypatch.setenv("IBKR_BROKER_ENABLED", "true")
-    from app.broker.ibkr import client as ibkr_client_module
-    from app.routers import broker as broker_router
-
-    fake = FakeClient(connect_raises=BrokerError("Gateway unreachable"))
-    ibkr_client_module.set_client(fake)  # type: ignore[arg-type]
-    monkeypatch.setattr(broker_router, "_ibkr_client_factory", lambda: fake)
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post("/api/broker/connect")
-        assert response.status_code == 502
-        assert "Gateway unreachable" in response.json()["detail"]
-    finally:
-        ibkr_client_module.set_client(None)
-
-
-async def test_connect_os_error_returns_502(monkeypatch, reset_settings):
-    """OSError from connectAsync (socket-level failure) must map to 502."""
-    monkeypatch.setenv("IBKR_BROKER_ENABLED", "true")
-    from app.broker.ibkr import client as ibkr_client_module
-    from app.routers import broker as broker_router
-
-    fake = FakeClient(connect_raises=OSError("socket closed"))
-    ibkr_client_module.set_client(fake)  # type: ignore[arg-type]
-    monkeypatch.setattr(broker_router, "_ibkr_client_factory", lambda: fake)
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post("/api/broker/connect")
-        assert response.status_code == 502
-        assert "socket closed" in response.json()["detail"]
+        assert response.status_code == status_code, "the connect failure maps to its HTTP status"
+        assert detail_text in response.json()["detail"], "the detail carries the failure text"
     finally:
         ibkr_client_module.set_client(None)
 

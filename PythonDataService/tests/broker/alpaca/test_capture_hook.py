@@ -92,32 +92,26 @@ def test_hook_records_query_params(tmp_path: Path) -> None:
 
 
 @responses.activate
-def test_activities_path_routes_to_activities_family(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("path", "body", "family"),
+    [
+        pytest.param("/v2/account/activities", b"[]", "activities", id="activities path routes to activities family"),
+        pytest.param(
+            "/v2/account/portfolio/history", b"{}", "portfolio_history",
+            id="portfolio history path routes to portfolio_history family",
+        ),
+    ],
+)
+def test_a_request_path_routes_to_its_own_family(tmp_path: Path, path: str, body: bytes, family: str) -> None:
     journal = _journal(tmp_path)
     session = Session()
     install_capture_hook(session, journal)
-    responses.add(
-        responses.GET, f"{_BASE}/v2/account/activities", body=b"[]", status=200
-    )
+    responses.add(responses.GET, f"{_BASE}{path}", body=body, status=200)
 
-    session.get(f"{_BASE}/v2/account/activities")
+    session.get(f"{_BASE}{path}")
 
-    assert len(_records(tmp_path, "activities")) == 1
-    assert _records(tmp_path, "account") == []
-
-
-@responses.activate
-def test_portfolio_history_path_routes_to_portfolio_history_family(tmp_path: Path) -> None:
-    journal = _journal(tmp_path)
-    session = Session()
-    install_capture_hook(session, journal)
-    responses.add(
-        responses.GET, f"{_BASE}/v2/account/portfolio/history", body=b"{}", status=200
-    )
-
-    session.get(f"{_BASE}/v2/account/portfolio/history")
-
-    assert len(_records(tmp_path, "portfolio_history")) == 1
+    assert len(_records(tmp_path, family)) == 1, "the exchange is journaled under its own family"
+    assert _records(tmp_path, "account") == [], "and not under the account family its path starts with"
 
 
 @responses.activate

@@ -640,15 +640,20 @@ def test_reset_refuses_virtiofs_before_preserving_the_old_generation(
 
 @pytest.mark.parametrize(
     ("positions", "open_orders", "message"),
-    [({"SPY": 1.0}, (), "broker-flat"), ({}, ("order-1",), "no open broker orders")],
+    [
+        pytest.param({"SPY": 1.0}, (), "broker-flat", id="exposure"),
+        pytest.param({}, ("order-1",), "no open broker orders", id="open_orders"),
+        pytest.param({"SPY": float("nan")}, (), "finite", id="non_finite_position"),
+    ],
 )
-def test_reset_refuses_exposure_or_open_orders_without_changing_generation(
+def test_reset_refuses_a_broker_proof_that_is_not_flat_without_changing_generation(
     tmp_path: Path,
     positions: dict[str, float],
     open_orders: tuple[str, ...],
     message: str,
 ) -> None:
     repo = _initialized(tmp_path)
+    db_path = repo.db_path
     repo.close()
     proof = ResetBrokerProof(
         account_id=ACCOUNT_ID,
@@ -672,32 +677,8 @@ def test_reset_refuses_exposure_or_open_orders_without_changing_generation(
     established = EstablishedAccountsRegistry(tmp_path / "accounts" / "alpaca").latest(
         ACCOUNT_ID
     )
-    assert established is not None and established.authority_generation == 1
-
-
-def test_reset_rejects_non_finite_position_without_moving_database(tmp_path: Path) -> None:
-    repo = _initialized(tmp_path)
-    db_path = repo.db_path
-    repo.close()
-
-    with pytest.raises(RecoveryRefused, match="finite"):
-        reset_authority(
-            account_id=ACCOUNT_ID,
-            artifacts_root=tmp_path,
-            broker_proof=ResetBrokerProof(
-                account_id=ACCOUNT_ID,
-                observed_at_ms=NOW_MS,
-                proof_reference="fake-broker-proof",
-                positions={"SPY": float("nan")},
-                open_order_ids=(),
-            ),
-            stopped_strategy_instance_ids=(),
-            expected_strategy_instance_ids=(),
-            max_proof_age_ms=1_000,
-            clock=_clock,
-        )
-
-    assert db_path.is_file()
+    assert established is not None and established.authority_generation == 1, "the authority generation is unchanged"
+    assert db_path.is_file(), "the database is not moved"
 
 
 def test_reset_preflights_all_generation_files_before_moving_any(tmp_path: Path) -> None:

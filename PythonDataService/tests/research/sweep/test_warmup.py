@@ -53,19 +53,17 @@ def test_probe_reproduces_the_reviewed_readiness_thresholds(strategy_key: str, p
     assert probe.bar_span_ms == FIFTEEN_MIN_MS, "the decision cadence is fifteen minutes"
 
 
-def test_probe_ignores_the_hold_which_never_delays_readiness() -> None:
+def test_probe_ignores_the_hold_and_reads_the_decision_cadence_from_the_program() -> None:
     held = probe_warmup_samples("ema_crossover_signal", {"symbol": "SPY", "hold_bars": 26})
-
-    assert held.required_samples == probe_warmup_samples("ema_crossover_signal", {"symbol": "SPY"}).required_samples
-
-
-def test_probe_reads_the_decision_cadence_from_the_program() -> None:
     hourly = probe_warmup_samples("sma_crossover", {"symbol": "SPY", "short_window": 2, "long_window": 3, "resolution_minutes": 60})
     daily = probe_warmup_samples("sma_crossover", {"symbol": "SPY", "short_window": 2, "long_window": 3, "resolution_minutes": 1440})
 
-    assert hourly.bar_span_ms == 60 * 60_000
-    assert daily.bar_span_ms == DAY_MS
-    assert hourly.required_samples == daily.required_samples == 4
+    assert held.required_samples == probe_warmup_samples("ema_crossover_signal", {"symbol": "SPY"}).required_samples, (
+        "the hold never delays readiness"
+    )
+    assert hourly.bar_span_ms == 60 * 60_000, "an hourly program decides on hour bars"
+    assert daily.bar_span_ms == DAY_MS, "a daily program decides on day bars"
+    assert hourly.required_samples == daily.required_samples == 4, "the requirement does not depend on the cadence"
 
 
 def test_probe_refuses_an_unknown_strategy() -> None:

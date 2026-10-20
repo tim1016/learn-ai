@@ -172,25 +172,44 @@ def _serving_warmup(bars: list[MarketDataBar]) -> Callable[..., Awaitable[list[M
     return _recent
 
 
+@pytest.mark.parametrize(
+    ("trigger_ms", "delivered_after_close_ms"),
+    [
+        # The allowance is inclusive: 20 000 ms after the close is still on time.
+        pytest.param(
+            _T0 + 60_000, 20_000, id="a_recovered_decision_bar_exactly_at_its_allowance_is_admitted"
+        ),
+        # Lateness only bites on a bar the consumer decides on. Every other recovered minute
+        # is warmup and consolidator input; refusing it for arriving late would turn a
+        # survivable reconnect back into a crash -- the exact failure #1921 exists to close.
+        # The trigger is a full bucket away, so this bar's close (_T0 + 60_000) is an
+        # ordinary minute rather than a decision.
+        pytest.param(_T0 + 15 * 60_000, 20_001, id="late_non_trigger_bar_is_admitted"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_a_recovered_decision_bar_exactly_at_its_allowance_is_admitted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+async def test_a_recovered_bar_that_is_not_late_for_a_decision_is_admitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, trigger_ms: int, delivered_after_close_ms: int
 ) -> None:
-    """The allowance is inclusive: 20 000 ms after the close is still on time."""
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
-    policy, events = _recording_policy(trigger_ms=_T0 + 60_000)
-    on_time = _bar(_T0).model_copy(update={"provenance": "realtime_across_reconnect"})
-    monkeypatch.setattr("app.services.feed_continuity_policy.now_ms_utc", lambda: _T0 + 60_000 + 20_000)
+    policy, events = _recording_policy(trigger_ms=trigger_ms)
+    recovered = _bar(_T0).model_copy(update={"provenance": "realtime_across_reconnect"})
+    # The clock ``admit_on_delivery`` actually reads lives in the policy module.
+    monkeypatch.setattr(
+        "app.services.feed_continuity_policy.now_ms_utc", lambda: _T0 + 60_000 + delivered_after_close_ms
+    )
     try:
         feed = _RetainedSourceBarFeed(
-            _FakeFeed([on_time], mode="finite"), ledger, run_id="run-x", session=_RTH_SESSION, continuity=policy
+            _FakeFeed([recovered], mode="finite"), ledger, run_id="run-x", session=_RTH_SESSION, continuity=policy
         )
         delivered = [bar async for bar in feed.stream_bars("SPY", use_rth=True)]
+        retained = ledger.bars(provider="fake", symbol="SPY")
     finally:
         ledger.close()
 
-    assert [bar.start_ms for bar in delivered] == [_T0]
-    assert events == []
+    assert [bar.start_ms for bar in delivered] == [_T0], "the recovered bar is delivered to the consumer"
+    assert len(retained) == 1, "the recovered bar is retained once"
+    assert events == [], "admitting it records no continuity event"
 
 
 @pytest.mark.asyncio
@@ -446,36 +465,6 @@ async def test_warmup_bars_fetched_from_the_source_are_journalled_to_this_run(
         await feed.recent_closed_bars("SPY", use_rth=True)
 
         assert [row.run_id for row in ledger.bars(provider="fake", symbol="SPY")] == ["run-x"]
-    finally:
-        ledger.close()
-
-
-@pytest.mark.asyncio
-async def test_late_non_trigger_bar_is_admitted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Lateness only bites on a bar the consumer decides on.
-
-    Every other recovered minute is warmup and consolidator input; refusing it
-    for arriving late would turn a survivable reconnect back into a crash --
-    the exact failure #1921 exists to close.
-    """
-
-    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="acct")
-    # The trigger is a full bucket away, so this bar's close (_T0 + 60_000) is
-    # an ordinary minute rather than a decision.
-    policy, events = _recording_policy(trigger_ms=_T0 + 15 * 60_000)
-    late = _bar(_T0).model_copy(update={"provenance": "realtime_across_reconnect"})
-    # The clock ``admit_on_delivery`` actually reads lives in the policy module.
-    monkeypatch.setattr("app.services.feed_continuity_policy.now_ms_utc", lambda: _T0 + 60_000 + 20_001)
-    try:
-        feed = _RetainedSourceBarFeed(
-            _FakeFeed([late], mode="finite"), ledger, run_id="run-x", session=_RTH_SESSION, continuity=policy
-        )
-
-        async for _ in feed.stream_bars("SPY", use_rth=True):
-            pass
-
-        assert len(ledger.bars(provider="fake", symbol="SPY")) == 1
-        assert events == []
     finally:
         ledger.close()
 

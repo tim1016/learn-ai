@@ -83,7 +83,7 @@ def _bins(nets: list[float]) -> list[tuple[float, float, int, int, int]]:
     return [(b["low"], b["high"], b["trades"], b["wins"], b["losses"]) for b in histogram(nets)["bins"]]
 
 
-def test_bins_are_freedman_diaconis_wide_with_zero_an_edge() -> None:
+def test_histogram_bins_are_freedman_diaconis_wide_with_zero_an_edge_and_fall_back_to_one_bin_sturges_or_the_cap() -> None:
     # Quartiles (type 7) 1.25 and 45, so IQR 43.75 and h = 2 · 43.75 · 8^(−1/3) = 43.75.
     nets = [-30.0, -10.0, 5.0, 15.0, 20.0, 40.0, 60.0, 100.0]
     assert histogram(nets)["bin_width"] == pytest.approx(43.75, abs=1e-9, rel=0) and histogram(nets)["rule"] == "freedman_diaconis", "the bin width is the Freedman-Diaconis one"
@@ -94,33 +94,27 @@ def test_bins_are_freedman_diaconis_wide_with_zero_an_edge() -> None:
     h = 2 * 2 ** (-1 / 3)
     assert _bins([-1.0, 1.0]) == pytest.approx([(-h, 0.0, 1, 0, 1), (0.0, h, 1, 1, 0)], abs=1e-9, rel=0), "a win and a loss never share a bin"
 
-
-def test_with_no_spread_between_the_quartiles_the_width_falls_back_to_sturges() -> None:
     # IQR 0, so h = 14 / ⌈log2 6 + 1⌉ = 3.5; the empty bins between stay, as zero trades.
-    assert histogram([-5.0, 1.0, 1.0, 1.0, 1.0, 9.0])["rule"] == "sturges"
+    assert histogram([-5.0, 1.0, 1.0, 1.0, 1.0, 9.0])["rule"] == "sturges", "with no spread between the quartiles the width falls back to Sturges"
     assert _bins([-5.0, 1.0, 1.0, 1.0, 1.0, 9.0]) == pytest.approx(
         [(-7.0, -3.5, 1, 0, 1), (-3.5, 0.0, 0, 0, 0), (0.0, 3.5, 4, 4, 0), (3.5, 7.0, 0, 0, 0), (7.0, 10.5, 1, 1, 0)], abs=1e-9, rel=0
-    )
+    ), "the Sturges bins keep the empty bins between as zero trades"
 
-
-def test_trades_that_all_net_the_same_make_one_bin() -> None:
     assert histogram([-2.0, -2.0]) == {"bin_width": 0.0, "rule": "single", "bins": [{"low": -2.0, "high": -2.0, "trades": 2, "wins": 0, "losses": 2}]}, "two equal losses make one bin"
     assert _bins([7.5]) == [(7.5, 7.5, 1, 1, 0)], "one trade makes one bin"
     # Six trades each moving $0.10 on 100 shares, less $2 of commission: every one nets $8.00 to the cent.
-    nets = [((price + 0.1) - price) * 100 - 2.0 for price in (100.0, 101.37, 250.55, 512.13, 33.3, 77.77)]
-    assert len(set(nets)) > 1, "the float noise is real"
-    assert histogram(nets) == {"bin_width": 0.0, "rule": "single", "bins": [{"low": 8.0, "high": 8.0, "trades": 6, "wins": 6, "losses": 0}]}, "float noise never splits trades that net the same cents"
+    same_cents = [((price + 0.1) - price) * 100 - 2.0 for price in (100.0, 101.37, 250.55, 512.13, 33.3, 77.77)]
+    assert len(set(same_cents)) > 1, "the float noise is real"
+    assert histogram(same_cents) == {"bin_width": 0.0, "rule": "single", "bins": [{"low": 8.0, "high": 8.0, "trades": 6, "wins": 6, "losses": 0}]}, "float noise never splits trades that net the same cents"
     # A trade that nets a few attodollars is $0: neither a win nor a loss.
     assert _bins([5.6e-17, 10.0])[0][2:] == (1, 0, 0), "a trade netting a few attodollars is $0, neither a win nor a loss"
 
-
-def test_one_outlier_widens_the_bins_to_at_most_the_cap() -> None:
     # The quartile spread of a cent would need hundreds of thousands of bins.
-    result = histogram([0.0, 0.01, 0.02, 0.03, 10_000.0])
-    assert result["rule"] == "capped"
-    assert result["bin_width"] == pytest.approx(10_000.0 / (MAX_BINS - 2), abs=1e-9, rel=0)
-    assert len(result["bins"]) <= MAX_BINS
-    assert sum(b["trades"] for b in result["bins"]) == 5
+    capped = histogram([0.0, 0.01, 0.02, 0.03, 10_000.0])
+    assert capped["rule"] == "capped", "one outlier widens the bins to the cap"
+    assert capped["bin_width"] == pytest.approx(10_000.0 / (MAX_BINS - 2), abs=1e-9, rel=0), "the capped width spreads the outlier over the cap"
+    assert len(capped["bins"]) <= MAX_BINS, "the capped bins are at most the cap"
+    assert sum(b["trades"] for b in capped["bins"]) == 5, "the capped bins hold every trade"
 
 
 # ── RSI bands ────────────────────────────────────────────────────────────
@@ -152,7 +146,7 @@ def _cells(result: dict[str, Any]) -> dict[tuple[str, str], tuple[int, float, fl
     }
 
 
-def test_entries_fall_in_their_eastern_half_hour_across_daylight_saving_and_a_cell_needs_five_trades() -> None:
+def test_entries_fall_in_their_eastern_half_hour_a_cell_needs_five_trades_and_the_rows_are_the_weekdays_the_sessions_hold() -> None:
     # A summer 10:00 (EDT) and a winter 10:15 (EST) are both Thursday 10:00 ET.
     result = entry_times([(_et(date(2024, 7, 18), 10, 0), 10.0), (_et(date(2024, 1, 18), 10, 15), 20.0)], session_windows_ms_utc(date(2024, 1, 18), date(2024, 7, 18)))
     assert _cells(result) == {("Thu", "10:00"): (2, 15.0, 30.0, True)}, "a summer and a winter entry share one Thursday 10:00 cell, too few to count"
@@ -163,13 +157,11 @@ def test_entries_fall_in_their_eastern_half_hour_across_daylight_saving_and_a_ce
     entries = [(_et(monday, 11, 5), 1.0) for monday in mondays]
     assert _cells(entry_times(entries, session_windows_ms_utc(mondays[0], mondays[-1])))[("Mon", "11:00")] == (5, 1.0, 5.0, False), "a cell needs five trades to count"
 
-
-def test_the_rows_are_the_weekdays_the_sessions_hold_and_an_off_session_entry_adds_its_half_hour() -> None:
     # 2024-07-04 is a Thursday holiday, so 1 to 5 July holds no Thursday session.
-    result = entry_times([(_et(date(2024, 7, 5), 16, 0), -3.0)], session_windows_ms_utc(date(2024, 7, 1), date(2024, 7, 5)))
-    assert result["weekdays"] == ["Mon", "Tue", "Wed", "Fri"]
-    assert result["half_hours"][-2:] == ["15:30", "16:00"]
-    assert _cells(result) == {("Fri", "16:00"): (1, -3.0, -3.0, True)}
+    off_session = entry_times([(_et(date(2024, 7, 5), 16, 0), -3.0)], session_windows_ms_utc(date(2024, 7, 1), date(2024, 7, 5)))
+    assert off_session["weekdays"] == ["Mon", "Tue", "Wed", "Fri"], "the rows are the weekdays the sessions hold"
+    assert off_session["half_hours"][-2:] == ["15:30", "16:00"], "an off-session entry adds its half hour"
+    assert _cells(off_session) == {("Fri", "16:00"): (1, -3.0, -3.0, True)}, "the off-session entry sits in its own cell"
 
 
 # ── The charts together ──────────────────────────────────────────────────
@@ -194,7 +186,7 @@ def _charts(trades: list[dict[str, Any]], net: float, *, span: int | None = FIFT
     return trade_charts(metrics(1.0, net=net, trades=len(trades)), detail, commission_per_order=COMMISSION, bar_span_ms=span, rsi_gates=gates)
 
 
-def test_each_trade_carries_its_net_running_net_and_hold_in_exit_order_and_ties_run_in_entry_order() -> None:
+def test_each_trade_carries_its_net_running_net_and_hold_in_exit_order_an_unread_cadence_counts_no_hold_and_nothing_to_draw_says_why() -> None:
     day = date(2024, 7, 18)
     # Listed out of order: the second exits first.
     late = _trade(_et(day, 11, 0), _et(day, 15, 0), -40.0, window_end=True)
@@ -210,21 +202,17 @@ def test_each_trade_carries_its_net_running_net_and_hold_in_exit_order_and_ties_
     tied = _charts([later, earlier], 12.0)
     assert [(t["net_profit"], t["running_net_profit"]) for t in tied["trades"]] == pytest.approx([(7.0, 7.0), (5.0, 12.0)], abs=1e-9, rel=0), "trades exiting together run in entry order"
 
-
-def test_a_cadence_off_the_half_hour_or_unread_counts_no_hold_and_keeps_the_other_charts() -> None:
-    day = date(2024, 7, 18)
     trades = [_trade(_et(day, 10, 0), _et(day, 11, 0), 5.0)]
     for span, reason in ((60 * 60_000, UNALIGNED_CADENCE), (None, NO_CADENCE)):
-        charts = _charts(trades, 5.0, span=span)
-        assert (charts["status"], charts["hold_reason"], charts["bar_span_ms"]) == ("measured", reason, None)
-        assert charts["trades"][0]["bars_held"] is None and charts["histogram"]["bins"]
+        off_cadence = _charts(trades, 5.0, span=span)
+        assert (off_cadence["status"], off_cadence["hold_reason"], off_cadence["bar_span_ms"]) == ("measured", reason, None), f"a cadence of {span} counts no hold: {reason}"
+        assert off_cadence["trades"][0]["bars_held"] is None and off_cadence["histogram"]["bins"], f"a cadence of {span} keeps the other charts"
 
-
-def test_a_chart_with_nothing_to_draw_says_why() -> None:
-    day = date(2024, 7, 18)
-    charts = _charts([_trade(_et(day, 10, 0), _et(day, 10, 30), 100.0)], 250.0)
-    assert charts == {"status": "missing", "reason": "Its trades add up to $100.00 after commission, but the run's net profit is $250.00, so the trades do not account for the whole result."}, "trades that do not reconcile draw no trade chart"
+    unreconciled = _charts([_trade(_et(day, 10, 0), _et(day, 10, 30), 100.0)], 250.0)
+    assert unreconciled == {"status": "missing", "reason": "Its trades add up to $100.00 after commission, but the run's net profit is $250.00, so the trades do not account for the whole result."}, "trades that do not reconcile draw no trade chart"
     assert _charts([], 0.0) == {"status": "missing", "reason": "The development run made no trades."}, "a run with no trades says so"
-    trades = [_trade(_et(day, 10, 0), _et(day, 10, 30), 5.0, rsi=None)]
-    assert _charts(trades, 5.0)["entry_rsi"] == {"status": "missing", "reason": NO_RSI_RECORDED}, "no RSI recorded says why"
-    assert _charts(trades, 5.0, gates=NO_RSI_GATES)["entry_rsi"] == {"status": "missing", "reason": NO_RSI_GATES}, "no RSI gates says why"
+    no_rsi = [_trade(_et(day, 10, 0), _et(day, 10, 30), 5.0, rsi=None)]
+    assert _charts(no_rsi, 5.0)["entry_rsi"] == {"status": "missing", "reason": NO_RSI_RECORDED}, "no RSI recorded says why"
+    assert _charts(no_rsi, 5.0, gates=NO_RSI_GATES)["entry_rsi"] == {"status": "missing", "reason": NO_RSI_GATES}, "no RSI gates says why"
+
+

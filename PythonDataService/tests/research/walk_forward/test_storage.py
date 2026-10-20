@@ -97,10 +97,17 @@ def test_save_refuses_to_overwrite(tmp_path: Path):
         save_walk_forward(config, result, root=tmp_path)
 
 
-def test_save_rejects_id_mismatch(tmp_path: Path):
-    config = _make_config()
-    result = _make_result(walk_forward_id="z" * 32)
-    with pytest.raises(ValueError, match="walk_forward_id"):
+@pytest.mark.parametrize(
+    ("config_id", "result_id", "match"),
+    [
+        pytest.param("a" * 32, "z" * 32, "walk_forward_id", id="id_mismatch"),
+        pytest.param("../escape", "../escape", None, id="malformed_id"),
+    ],
+)
+def test_save_refuses_a_mismatched_or_malformed_id(tmp_path: Path, config_id: str, result_id: str, match: str | None):
+    config = _make_config(walk_forward_id=config_id)
+    result = _make_result(walk_forward_id=result_id)
+    with pytest.raises(ValueError, match=match):
         save_walk_forward(config, result, root=tmp_path)
 
 
@@ -131,13 +138,6 @@ def test_load_with_malformed_id_raises_value_error(tmp_path: Path):
     for bad in bad_ids:
         with pytest.raises(ValueError):
             load_walk_forward(bad, root=tmp_path)
-
-
-def test_save_with_malformed_id_raises_value_error(tmp_path: Path):
-    config = _make_config(walk_forward_id="../escape")
-    result = _make_result(walk_forward_id="../escape")
-    with pytest.raises(ValueError):
-        save_walk_forward(config, result, root=tmp_path)
 
 
 # ---------------------------------------------------------------------------

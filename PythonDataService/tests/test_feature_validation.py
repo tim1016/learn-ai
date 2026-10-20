@@ -133,21 +133,6 @@ def test_cost_viability_erasure_threshold_is_half_gross_spread():
     assert cost.viable_at_assumption is True
 
 
-def test_cost_viability_flips_to_not_viable_when_cost_high():
-    bins = [
-        {"bin_number": 1, "mean_return": 0.0},
-        {"bin_number": 5, "mean_return": 0.0001},  # 1 bp gross spread
-    ]
-
-    cost = compute_cost_viability(
-        bins, cost_assumption_one_way_bps=1.0, expected_direction="positive"
-    )
-
-    # gross = 1 bp, round-trip = 2 bps → net = -1 bp.
-    assert cost.viable_at_assumption is False
-    assert cost.net_spread_bps_at_assumption < 0
-
-
 def test_cost_viability_handles_empty_bins():
     cost = compute_cost_viability([], cost_assumption_one_way_bps=1.0)
 
@@ -172,6 +157,10 @@ def test_cost_viability_handles_empty_bins():
         # Signed = -10 bps; directional (positive direction = Q5-Q1) = -10 bps.
         # Net at 1 bp one-way = -12 bps. Not viable.
         pytest.param(0.0005, -0.0005, "positive", -10.0, -10.0, False, id="direction_mismatch_fails_economic_screen"),
+        # 1 bp gross spread, round-trip = 2 bps -> net = -1 bp: cost flips it to not viable.
+        pytest.param(0.0, 0.0001, "positive", 1.0, 1.0, False, id="cost_high_flips_to_not_viable"),
+        # Two-sided spec trades either sign: directional spread is |Q5-Q1| = 20 bps.
+        pytest.param(0.0010, -0.0010, "two_sided", -20.0, 20.0, True, id="two_sided_direction_uses_absolute_spread"),
     ],
 )
 def test_cost_viability_directional_spread(
@@ -189,19 +178,9 @@ def test_cost_viability_directional_spread(
     assert cost.gross_spread_bps_signed == pytest.approx(signed_bps, abs=1e-9), "signed Q5-Q1 spread"
     assert cost.directional_spread_bps == pytest.approx(directional_bps, abs=1e-9), "directional spread"
     assert cost.viable_at_assumption is viable, "economic viability at the cost assumption"
-
-
-def test_cost_viability_two_sided_direction_uses_absolute_spread():
-    bins = [
-        {"bin_number": 1, "mean_return": 0.0010},
-        {"bin_number": 5, "mean_return": -0.0010},
-    ]
-
-    cost = compute_cost_viability(
-        bins, cost_assumption_one_way_bps=1.0, expected_direction="two_sided"
+    assert cost.net_spread_bps_at_assumption == pytest.approx(directional_bps - 2.0, abs=1e-9), (
+        "net spread is the directional spread minus the round-trip cost (2 x 1 bp one-way)"
     )
-
-    assert cost.directional_spread_bps == pytest.approx(20.0, abs=1e-9)
 
 
 # ─── evaluate_feature_validation — stage assignment ──────────────────────
@@ -259,47 +238,89 @@ def test_evaluate_strong_inputs_verdict():
     )
 
 
-def test_evaluate_returns_stage_0_when_statistical_screen_fails_required_check():
-    """|IC| below Stage 1 floor must trip Stage 0 regardless of OOS / cost."""
-    spec = get_spec("momentum_5m")
+@pytest.mark.parametrize(
+    ("spec_name", "corrupt", "reason_fragment"),
+    [
+        # |IC| below the Stage 1 floor must trip Stage 0 regardless of OOS / cost.
+        pytest.param(
+            "momentum_5m",
+            lambda a: a.update(mean_ic=0.005),  # below STAGE1_MIN_ABS_IC = 0.03
+            "materiality threshold",
+            id="abs_ic_below_the_stage_1_floor",
+        ),
+        # RSI's spec requires stationarity -> non-stationary trips Stage 0.
+        pytest.param(
+            "rsi_14",
+            lambda a: a.update(is_stationary=False),
+            "Stationarity required",
+            id="stationarity_required_but_not_stationary",
+        ),
+    ],
+)
+def test_evaluate_returns_stage_0_when_statistical_screen_fails_required_check(spec_name, corrupt, reason_fragment):
+    spec = get_spec(spec_name)
     args = _strong_args(spec)
-    args["mean_ic"] = 0.005  # below STAGE1_MIN_ABS_IC = 0.03
+    corrupt(args)
 
     verdict = evaluate_feature_validation(**args)
 
-    assert verdict.stage_info.stage == 0
-    assert verdict.statistical_screen.passed is False
-    assert "Statistical association" in verdict.stage_info.failed_screens
+    assert verdict.stage_info.stage == 0, "a failed required statistical check is Stage 0"
+    assert verdict.statistical_screen.passed is False, "the statistical screen fails"
+    assert "Statistical association" in verdict.stage_info.failed_screens, "the statistical screen is named as failed"
+    assert any(reason_fragment in r for r in verdict.statistical_screen.failure_reasons), (
+        f"the failure reasons say why: {reason_fragment}"
+    )
 
 
-def test_evaluate_returns_stage_1_when_oos_screen_fails():
-    """OOS retention is diagnostic at Stage 1, gating at Stage 2+."""
+@pytest.mark.parametrize(
+    ("corrupt", "failing_screen"),
+    [
+        # OOS retention is diagnostic at Stage 1, gating at Stage 2+: it is not
+        # required-for-stage1, so it doesn't pull us down to Stage 0.
+        pytest.param(
+            lambda a: a.update(oos_retention=0.20, test_mean_ic=0.005),  # below STAGE2_MIN_OOS_RETENTION / STAGE2_MIN_ABS_TEST_IC
+            "oos_screen",
+            id="oos_screen_fails",
+        ),
+        pytest.param(
+            lambda a: a.update(
+                quantile_bins=[
+                    {"bin_number": 1, "mean_return": 0.0},
+                    {"bin_number": 5, "mean_return": 0.00005},  # 0.5 bps gross — cost erodes
+                ]
+            ),
+            "economic_screen",
+            id="cost_erases_alpha",
+        ),
+        # Diagnostic at Stage 1 — does NOT pull to Stage 0.
+        pytest.param(
+            lambda a: a.update(regimes_observed=2),  # below REGIME_STABILITY_MIN_REGIMES_OBSERVED = 4
+            "regime_stability_screen",
+            id="regime_too_few_buckets",
+        ),
+        pytest.param(
+            lambda a: a.update(regime_sign_flip_fraction=0.50),  # half the buckets disagree with the overall sign
+            "regime_stability_screen",
+            id="regime_signs_flip",
+        ),
+        # Even with all numeric Stage 3 thresholds met, regime instability keeps the verdict out of Stage 3.
+        pytest.param(
+            lambda a: a.update(regime_sign_flip_fraction=0.40),  # above the 0.34 threshold
+            "regime_stability_screen",
+            id="regime_signs_flip_blocks_stage_3",
+        ),
+    ],
+)
+def test_evaluate_returns_stage_1_when_a_diagnostic_screen_fails(corrupt, failing_screen):
     spec = get_spec("momentum_5m")
     args = _strong_args(spec)
-    args["oos_retention"] = 0.20  # below STAGE2_MIN_OOS_RETENTION
-    args["test_mean_ic"] = 0.005  # also below STAGE2_MIN_ABS_TEST_IC
+    corrupt(args)
 
     verdict = evaluate_feature_validation(**args)
 
-    assert verdict.stage_info.stage == 1
-    assert verdict.statistical_screen.passed is True
-    assert verdict.oos_screen.passed is False
-    # OOS is not required-for-stage1, so it doesn't pull us down to Stage 0.
-
-
-def test_evaluate_returns_stage_1_when_cost_erases_alpha():
-    spec = get_spec("momentum_5m")
-    args = _strong_args(spec)
-    args["quantile_bins"] = [
-        {"bin_number": 1, "mean_return": 0.0},
-        {"bin_number": 5, "mean_return": 0.00005},  # 0.5 bps gross — cost erodes
-    ]
-
-    verdict = evaluate_feature_validation(**args)
-
-    assert verdict.stage_info.stage == 1
-    assert verdict.economic_screen.passed is False
-    assert verdict.statistical_screen.passed is True
+    assert verdict.stage_info.stage == 1, "a failed diagnostic screen leaves the verdict at Stage 1"
+    assert verdict.statistical_screen.passed is True, "the statistical screen still passes"
+    assert getattr(verdict, failing_screen).passed is False, f"the {failing_screen} fails"
 
 
 def test_evaluate_stage_2_when_effective_n_is_below_the_stage_3_floor():
@@ -321,20 +342,6 @@ def test_evaluate_stage_2_when_effective_n_is_below_the_stage_3_floor():
         "advance criteria reference the stage 3 effective N threshold: current value"
     )
     assert n_eff_criterion.met is False, "advance criteria reference the stage 3 effective N threshold: not met"
-
-
-def test_evaluate_stationarity_required_kills_when_not_stationary():
-    """RSI's spec requires stationarity → non-stationary trips Stage 0."""
-    spec = get_spec("rsi_14")
-    args = _strong_args(spec)
-    args["is_stationary"] = False
-
-    verdict = evaluate_feature_validation(**args)
-
-    assert verdict.stage_info.stage == 0
-    assert any(
-        "Stationarity required" in r for r in verdict.statistical_screen.failure_reasons
-    )
 
 
 def test_evaluate_stationarity_not_required_for_macd_passes_when_non_stationary():
@@ -461,42 +468,6 @@ def test_evaluate_direction_unknown_accepts_any_sign():
     verdict = evaluate_feature_validation(**args)
 
     assert verdict.direction_matches_spec is True
-
-
-def test_evaluate_regime_stability_screen_fails_when_too_few_buckets():
-    spec = get_spec("momentum_5m")
-    args = _strong_args(spec)
-    args["regimes_observed"] = 2  # below REGIME_STABILITY_MIN_REGIMES_OBSERVED = 4
-
-    verdict = evaluate_feature_validation(**args)
-
-    assert verdict.regime_stability_screen.passed is False
-    # Diagnostic at Stage 1 — does NOT pull to Stage 0.
-    assert verdict.stage_info.stage == 1
-
-
-def test_evaluate_regime_stability_screen_fails_when_signs_flip():
-    """Half the regime buckets disagreeing with the overall sign trips the screen."""
-    spec = get_spec("momentum_5m")
-    args = _strong_args(spec)
-    args["regime_sign_flip_fraction"] = 0.50  # above the 0.34 threshold
-
-    verdict = evaluate_feature_validation(**args)
-
-    assert verdict.regime_stability_screen.passed is False
-
-
-def test_evaluate_stage_3_blocked_when_regime_stability_fails():
-    """Even with all numeric Stage 3 thresholds met, regime instability
-    should keep the verdict at Stage 2."""
-    spec = get_spec("momentum_5m")
-    args = _strong_args(spec)
-    args["regime_sign_flip_fraction"] = 0.40  # above 0.34 threshold
-
-    verdict = evaluate_feature_validation(**args)
-
-    assert verdict.regime_stability_screen.passed is False
-    assert verdict.stage_info.stage <= 2
 
 
 def test_evaluate_stage_3_no_longer_requires_higher_ic_than_stage_2():

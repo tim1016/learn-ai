@@ -8,6 +8,7 @@ AM-004 and AM-005).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 
 import numpy as np
@@ -97,11 +98,6 @@ def test_an_iron_condor_gains_with_a_day_what_its_sold_legs_lose_less_what_its_b
     _close(seen.total, 30.00)
 
 
-def test_a_sold_leg_gains_what_its_contract_loses() -> None:
-    sold = _structure(("sold", "short", "call", 590, 1))
-
-    _close(structure_daily_decay(sold, _ONE, {"sold": _lost(-0.30)}, underlying_price=_SPOT).total, 30.00)
-
 
 def test_a_legs_ratio_and_the_contracts_own_multiplier_both_count() -> None:
     """A butterfly: one, two sold, one. -0.10 + 2 x 0.45 - 0.12 = +0.68 a share. At ten shares a contract, $6.80."""
@@ -117,14 +113,23 @@ def test_a_legs_ratio_and_the_contracts_own_multiplier_both_count() -> None:
     _close(seen.total, 13.60)
 
 
-def test_a_position_that_gains_with_a_day_is_shown_gaining_and_never_held_at_zero() -> None:
-    """A put deep in the money ahead of an ex-date gains the interest on its strike: +0.035 a share was measured."""
-    bought_put = _structure(("deep", "long", "put", 600, 1))
+@pytest.mark.parametrize(
+    ("leg", "per_share", "gain"),
+    [
+        pytest.param(("sold", "short", "call", 590, 1), -0.30, 30.00, id="a sold leg gains what its contract loses"),
+        # A put deep in the money ahead of an ex-date gains the interest on its strike: +0.035 a share was measured.
+        pytest.param(
+            ("deep", "long", "put", 600, 1), 0.035, 3.50, id="a position that gains with a day is shown gaining and never held at zero"
+        ),
+    ],
+)
+def test_a_position_that_gains_with_a_day_is_shown_gaining(leg: tuple[str, str, str, int, int], per_share: float, gain: float) -> None:
+    position = _structure(leg)
 
-    seen = structure_daily_decay(bought_put, _ONE, {"deep": _lost(0.035)}, underlying_price=_SPOT)
+    seen = structure_daily_decay(position, _ONE, {leg[0]: _lost(per_share)}, underlying_price=_SPOT)
 
-    _close(seen.total, 3.50)
-    assert seen.total > 0
+    _close(seen.total, gain)
+    assert seen.total > 0, "a gain is shown as a gain and never held at zero"
 
 
 @pytest.mark.parametrize("why", list(DecayNotEstimated))
@@ -242,13 +247,6 @@ def test_a_dividend_going_ex_inside_the_day_takes_about_itself_off_a_call_deep_i
     assert all(-1.75 <= moved(strike) <= 0.02 for strike in (540, 560, 570, 575, 580, 585, 590, 595))
 
 
-def test_a_structures_decay_is_a_figure_or_a_reason_and_never_both_or_neither() -> None:
-    with pytest.raises(ValueError, match="never both"):
-        decay.StructureDecay(None, None, None)
-    with pytest.raises(ValueError, match="never both"):
-        decay.StructureDecay(-0.2, -20.0, -20.0, why_not=DecayNotEstimated.NOT_PRICED)
-
-
 def test_a_decay_for_a_leg_the_structure_does_not_have_or_none_for_one_it_has_is_the_callers_mistake() -> None:
     with pytest.raises(ValueError, match="one decay for each of the legs"):
         structure_daily_decay(_SPREAD, _ONE, {"bought": _lost(-0.50)}, underlying_price=_SPOT)
@@ -256,11 +254,24 @@ def test_a_decay_for_a_leg_the_structure_does_not_have_or_none_for_one_it_has_is
         structure_daily_decay(_SPREAD, _ONE, {"bought": _lost(-0.50), "sold": _lost(-0.30), "third": _lost(-0.1)}, underlying_price=_SPOT)
 
 
-def test_a_legs_decay_is_a_figure_or_a_reason_and_never_both_or_neither() -> None:
-    with pytest.raises(ValueError):
-        LegDecay(None)
-    with pytest.raises(ValueError):
-        LegDecay(_lost(-0.5).worked, DecayNotEstimated.NOT_PRICED)
+@pytest.mark.parametrize(
+    ("build", "match"),
+    [
+        pytest.param(lambda: decay.StructureDecay(None, None, None), "never both", id="a structure with neither a figure nor a reason"),
+        pytest.param(
+            lambda: decay.StructureDecay(-0.2, -20.0, -20.0, why_not=DecayNotEstimated.NOT_PRICED),
+            "never both",
+            id="a structure with a figure and a reason",
+        ),
+        pytest.param(lambda: LegDecay(None), None, id="a leg with neither a figure nor a reason"),
+        pytest.param(
+            lambda: LegDecay(_lost(-0.5).worked, DecayNotEstimated.NOT_PRICED), None, id="a leg with a figure and a reason"
+        ),
+    ],
+)
+def test_a_decay_is_a_figure_or_a_reason_and_never_both_or_neither(build: Callable[[], object], match: str | None) -> None:
+    with pytest.raises(ValueError, match=match):
+        build()
 
 
 # ---- Each pick's own decay, as the search works it out ----------------------------------------

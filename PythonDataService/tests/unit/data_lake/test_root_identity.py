@@ -168,32 +168,24 @@ class TestAtomicWriteMarkerConcurrency:
     the write itself in both administrative functions) — issue #1876
     review fix 2."""
 
-    def test_second_write_to_an_already_marked_root_raises(self, tmp_path: Path):
+    def test_a_second_write_to_an_already_marked_root_loses_and_leaves_the_first_intact(self, tmp_path: Path):
         _atomic_write_marker(tmp_path, _ROOT_A)
 
         with pytest.raises(LakeRootIdentityError, match="concurrently"):
             _atomic_write_marker(tmp_path, _ROOT_B)
 
-    def test_the_first_writers_marker_survives_the_second_writers_attempt(self, tmp_path: Path):
-        _atomic_write_marker(tmp_path, _ROOT_A)
-
-        with pytest.raises(LakeRootIdentityError):
-            _atomic_write_marker(tmp_path, _ROOT_B)
-
         marker = read_marker(tmp_path)
-        assert marker is not None
-        assert marker.data_root_id == _ROOT_A
-
-    def test_no_leftover_staged_temp_file_after_a_losing_write(self, tmp_path: Path):
-        """The loser's staged file is cleaned up rather than left on disk."""
-        _atomic_write_marker(tmp_path, _ROOT_A)
-
-        with pytest.raises(LakeRootIdentityError):
-            _atomic_write_marker(tmp_path, _ROOT_B)
-
+        assert marker is not None, "the first writer's marker is still on disk"
+        assert marker.data_root_id == _ROOT_A, "the first writer's marker survives the second writer's attempt"
+        assert json.loads(marker_path(tmp_path).read_text()) == {
+            "schema_version": 1,
+            "data_root_id": str(_ROOT_A),
+        }, "the first writer's marker file is byte-for-byte what it wrote"
+        # The loser's staged file is cleaned up rather than left on disk.
         container = lake_container_within(tmp_path)
         leftovers = [p for p in container.iterdir() if p.name.startswith(f"{MARKER_FILENAME}.tmp-")]
-        assert leftovers == []
+        assert leftovers == [], "no leftover staged temp file after a losing write"
+        assert [p.name for p in container.iterdir()] == [MARKER_FILENAME], "only the first writer's marker is left in the container"
 
 
 class TestStampExistingRoot:
@@ -220,30 +212,30 @@ class TestStampExistingRoot:
 
         assert read_marker(tmp_path) is None, "a refused stamp leaves no marker"
 
-    def test_stamps_a_populated_root_with_the_legacy_root_id_when_forced(self, tmp_path: Path):
-        """The legitimate rollout path: the EF migration backfilled every
-        pre-existing catalog row to LEGACY_ROOT_ID, so stamping the
-        physical root that holds that data with the same id is safe."""
-        container = lake_container_within(tmp_path)
-        container.mkdir(parents=True)
-        (container / "raw").mkdir()
+    @pytest.mark.parametrize(
+        ("populated", "root_id"),
+        [
+            # The legitimate rollout path: the EF migration backfilled every
+            # pre-existing catalog row to LEGACY_ROOT_ID, so stamping the
+            # physical root that holds that data with the same id is safe.
+            pytest.param(True, LEGACY_ROOT_ID, id="stamps_a_populated_root_with_the_legacy_root_id"),
+            # An empty root has no existing catalog rows to orphan, so the
+            # genuine "new secondary root" path still accepts any UUID.
+            pytest.param(False, _ROOT_A, id="stamps_an_empty_root_with_a_non_legacy_root_id"),
+        ],
+    )
+    def test_stamps_a_root_when_forced(self, tmp_path: Path, populated: bool, root_id: UUID):
+        if populated:
+            container = lake_container_within(tmp_path)
+            container.mkdir(parents=True)
+            (container / "raw").mkdir()
 
-        ctx = stamp_existing_root(tmp_path, LEGACY_ROOT_ID, force=True)
+        ctx = stamp_existing_root(tmp_path, root_id, force=True)
 
-        assert ctx.root_id == LEGACY_ROOT_ID
+        assert ctx.root_id == root_id, "the stamp returns a context naming the root id"
         marker = read_marker(tmp_path)
-        assert marker is not None
-        assert marker.data_root_id == LEGACY_ROOT_ID
-
-    def test_stamps_an_empty_root_with_a_non_legacy_root_id_when_forced(self, tmp_path: Path):
-        """An empty root has no existing catalog rows to orphan, so the
-        genuine "new secondary root" path still accepts any UUID."""
-        ctx = stamp_existing_root(tmp_path, _ROOT_A, force=True)
-
-        assert ctx.root_id == _ROOT_A
-        marker = read_marker(tmp_path)
-        assert marker is not None
-        assert marker.data_root_id == _ROOT_A
+        assert marker is not None, "a marker is written"
+        assert marker.data_root_id == root_id, "the marker carries the stamped root id"
 
     def test_refuses_to_overwrite_an_existing_marker_even_when_forced(self, tmp_path: Path):
         _write_marker(tmp_path, data_root_id=str(_ROOT_A))

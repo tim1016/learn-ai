@@ -1047,23 +1047,48 @@ def _trade_update_frame(event: str, order: dict[str, object], **extra: object) -
     )
 
 
-async def test_a_live_id_less_order_is_contained_and_the_stream_keeps_folding(
+@pytest.mark.parametrize(
+    ("contained_values", "execution_id", "unfoldable_refs"),
+    [
+        # An id-less order once failed the adapter on the live stream (#2643).
+        #
+        # That was a parse error: the frame's evidence was dropped and the stream
+        # marked unhealthy. The order is now contained to itself under the
+        # anonymous-order sentinel, and the next frame for our own order folds.
+        pytest.param(
+            (("id", None), ("client_order_id", "alpaca-console:anon-1")),
+            "exec-live-1",
+            [UNIDENTIFIED_BROKER_ORDER_ID],
+            id="id-less-order-2643",
+        ),
+        # A boolean fill count once failed the order mapping on the live stream (#2648).
+        #
+        # That was a parse error -- the frame's evidence was dropped and the stream
+        # marked unhealthy -- while the same row on the orders read refused the
+        # whole answer. The row now maps with its fill count named unreadable, and
+        # the order is contained to itself under its id; the next frame for our
+        # own order folds.
+        pytest.param(
+            (("id", "unreadable-live-1"), ("client_order_id", "alpaca-console:unreadable-1"), ("filled_qty", True)),
+            "exec-live-2",
+            ["unreadable-live-1"],
+            id="unreadable-values-2648",
+        ),
+    ],
+)
+async def test_a_live_order_the_sink_cannot_fold_is_contained_and_the_stream_keeps_folding(
     tmp_path: Path,
+    contained_values: tuple[tuple[str, object], ...],
+    execution_id: str,
+    unfoldable_refs: list[str],
 ) -> None:
-    """An id-less order once failed the adapter on the live stream (#2643).
-
-    That was a parse error: the frame's evidence was dropped and the stream
-    marked unhealthy. The order is now contained to itself under the
-    anonymous-order sentinel, and the next frame for our own order folds.
-    """
-
     class _Reconciler:
         async def reconcile_account(self, *, trigger: str) -> SimpleNamespace:
             return SimpleNamespace(verdict="clean")
 
     repo, order_ref = _initialize_owned_order(tmp_path)
     base = load_alpaca_fixture_file("trade_updates", "trade_updates.json")[2]["data"]["order"]
-    id_less = {**base, "id": None, "client_order_id": "alpaca-console:anon-1", "status": "new"}
+    contained = {**base, "status": "new", **dict(contained_values)}
     owned = {
         **base,
         "id": "broker-order-1",
@@ -1077,8 +1102,8 @@ async def test_a_live_id_less_order_is_contained_and_the_stream_keeps_folding(
     def _frames() -> AsyncIterator[bytes | str]:
         async def _live() -> AsyncIterator[bytes | str]:
             yield '{"stream":"authorization","data":{"status":"authorized"}}'
-            yield _trade_update_frame("new", id_less)
-            yield _trade_update_frame("fill", owned, execution_id="exec-live-1", price="101.0", qty="5")
+            yield _trade_update_frame("new", contained)
+            yield _trade_update_frame("fill", owned, execution_id=execution_id, price="101.0", qty="5")
 
         return _live()
 
@@ -1095,81 +1120,17 @@ async def test_a_live_id_less_order_is_contained_and_the_stream_keeps_folding(
     try:
         await consumer.run()
 
-        assert consumer.counters.parse_errors == 0
-        assert consumer.counters.unfoldable_orders >= 1
-        assert _unfoldable_evidence_refs(repo) == [UNIDENTIFIED_BROKER_ORDER_ID]
-        assert repo.position(STRATEGY_INSTANCE_ID, "SPY") == 5.0
+        assert consumer.counters.parse_errors == 0, "the frame is contained, not a parse error"
+        assert consumer.counters.unfoldable_orders >= 1, "the contained order is counted"
+        assert _unfoldable_evidence_refs(repo) == unfoldable_refs, "the contained order is named in its episode"
+        assert repo.position(STRATEGY_INSTANCE_ID, "SPY") == 5.0, "the next frame for our own order folds"
         reduce = decide_capability(
             repo,
             capability=Capability.REDUCE,
             strategy_instance_id=STRATEGY_INSTANCE_ID,
             reduction_intent=ReductionIntent(symbol="SPY", side="sell", quantity=5.0),
         )
-        assert reduce.allowed is True, reduce
-    finally:
-        repo.close()
-
-
-async def test_a_live_order_with_unreadable_values_is_contained_and_the_stream_keeps_folding(
-    tmp_path: Path,
-) -> None:
-    """A boolean fill count once failed the order mapping on the live stream (#2648).
-
-    That was a parse error -- the frame's evidence was dropped and the stream
-    marked unhealthy -- while the same row on the orders read refused the
-    whole answer. The row now maps with its fill count named unreadable, and
-    the order is contained to itself under its id; the next frame for our
-    own order folds.
-    """
-
-    class _Reconciler:
-        async def reconcile_account(self, *, trigger: str) -> SimpleNamespace:
-            return SimpleNamespace(verdict="clean")
-
-    repo, order_ref = _initialize_owned_order(tmp_path)
-    base = load_alpaca_fixture_file("trade_updates", "trade_updates.json")[2]["data"]["order"]
-    unreadable = {
-        **base,
-        "id": "unreadable-live-1",
-        "client_order_id": "alpaca-console:unreadable-1",
-        "status": "new",
-        "filled_qty": True,
-    }
-    owned = {
-        **base,
-        "id": "broker-order-1",
-        "client_order_id": order_ref,
-        "qty": "5",
-        "filled_qty": "5",
-        "filled_avg_price": "101.0",
-        "status": "filled",
-    }
-
-    def _frames() -> AsyncIterator[bytes | str]:
-        async def _live() -> AsyncIterator[bytes | str]:
-            yield '{"stream":"authorization","data":{"status":"authorized"}}'
-            yield _trade_update_frame("new", unreadable)
-            yield _trade_update_frame("fill", owned, execution_id="exec-live-2", price="101.0", qty="5")
-
-        return _live()
-
-    consumer = TradeUpdatesConsumer(
-        evidence_sink=SqliteTradeUpdateEvidenceSink(
-            repo=repo, intake=ReentrantAsyncLock(), reconciler=_Reconciler()
-        ),
-        read=cast(BrokerReadPort, _ClosedOrderRead()),
-        frame_source=_frames,
-        journal=cast(CaptureJournal, _Capture()),
-        backoff=lambda _attempt: _no_backoff(),
-        max_reconnects=1,
-    )
-    try:
-        await consumer.run()
-
-        assert consumer.counters.parse_errors == 0
-        assert consumer.counters.unfoldable_orders >= 1
-        assert _unfoldable_evidence_refs(repo) == ["unreadable-live-1"]
-        assert repo.position(STRATEGY_INSTANCE_ID, "SPY") == 5.0
+        assert reduce.allowed is True, f"a REDUCE elsewhere on the account is still admitted: {reduce}"
     finally:
         repo.close()
 

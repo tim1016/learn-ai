@@ -220,7 +220,7 @@ def test_a_leg_marked_and_not_sold_is_a_mark_and_its_entry_is_the_only_fill() ->
     )
 
 
-def test_a_buy_refused_for_want_of_cash_ends_the_legs_waiting_at_the_minute_the_buy_was_decided() -> None:
+def test_a_buy_refused_for_want_of_cash_ends_the_waiting_at_the_decision_and_a_record_missing_either_is_not_drawn() -> None:
     written = setup(leg("call", momentum=("percent_up", "10")))
     market = TableMarket(
         underlying=steady("500.00"),
@@ -234,7 +234,9 @@ def test_a_buy_refused_for_want_of_cash_ends_the_legs_waiting_at_the_minute_the_
 
     outcome = replay(written, market, cash="100")
 
-    assert outcome.trades == () and EventKind.ENTRY_REFUSED_FOR_CASH in {e.kind for e in outcome.events}
+    assert (
+        outcome.trades == () and EventKind.ENTRY_REFUSED_FOR_CASH in {e.kind for e in outcome.events}
+    ), "a buy refused for want of cash trades nothing and says so"
     assert [
         (e.kind, minute_of(e.at_ms))
         for e in outcome.events
@@ -242,11 +244,37 @@ def test_a_buy_refused_for_want_of_cash_ends_the_legs_waiting_at_the_minute_the_
     ] == [
         (EventKind.MOMENTUM_HIT, 8),
         (EventKind.ENTRY_REFUSED_FOR_CASH, 9),
-    ]
+    ], "the momentum was hit at m8 and the buy refused a minute later, at m9"
     assert _lines(levels_of(written, outcome), at(0)) == [
         (SP, "call", 0, CALL.occ_symbol, D("2.00"), 5, 8),
         (MOM, "call", 0, CALL.occ_symbol, D("2.20"), 5, 8),
-    ]
+    ], "the leg's waiting ends at m8, the minute the buy was decided"
+
+    without_the_decision = replace(
+        outcome, events=tuple(e for e in outcome.events if e.kind is not EventKind.MOMENTUM_HIT)
+    )
+    without_the_refusal = replace(
+        outcome, events=tuple(e for e in outcome.events if e.kind is not EventKind.ENTRY_REFUSED_FOR_CASH)
+    )
+
+    with pytest.raises(SessionRecordInconsistent, match="momentum was never reached"):
+        levels_of(written, without_the_decision)
+
+    # What is left of the waiting: a starting price at m5 and the decision at m8, with no cancel and no refusal. An attempt
+    # that waited for its level ends exactly once, so this one ended 0 times and the reader must not take the decision
+    # for an end.
+    waiting = (
+        EventKind.STARTING_PRICE_TAKEN,
+        EventKind.MOMENTUM_HIT,
+        EventKind.LEG_CANCELLED,
+        EventKind.ENTRY_REFUSED_FOR_CASH,
+    )
+    assert [(e.kind, minute_of(e.at_ms)) for e in without_the_refusal.events if e.kind in waiting] == [
+        (EventKind.STARTING_PRICE_TAKEN, 5),
+        (EventKind.MOMENTUM_HIT, 8),
+    ], "without the refusal what is left of the waiting is a starting price at m5 and the decision at m8"
+    with pytest.raises(SessionRecordInconsistent, match="ended 0 times"):
+        levels_of(written, without_the_refusal)
 
 
 def test_a_buy_that_was_dropped_and_decided_again_before_it_was_refused_for_cash_ends_at_the_last_decision() -> None:
@@ -326,7 +354,7 @@ def test_a_re_entry_refused_for_want_of_cash_ends_its_lines_at_the_minute_its_bu
     ]
 
 
-def test_a_leg_with_no_momentum_rule_whose_buy_is_refused_for_want_of_cash_waited_for_nothing_and_has_no_line() -> None:
+def test_a_leg_with_no_momentum_rule_refused_for_cash_has_no_line_and_no_trade_to_hold_an_event_to() -> None:
     written = setup(leg("call"))
     market = TableMarket(
         underlying=steady("500.00"),
@@ -338,46 +366,18 @@ def test_a_leg_with_no_momentum_rule_whose_buy_is_refused_for_want_of_cash_waite
 
     outcome = replay(written, market, cash="100")
 
-    assert outcome.trades == () and EventKind.ENTRY_REFUSED_FOR_CASH in {e.kind for e in outcome.events}
-    assert levels_of(written, outcome) == ()
-    assert fills_of(outcome.trades) == () and marks_of(outcome.trades) == ()
+    assert outcome.trades == (), "a buy refused for want of cash trades nothing"
+    assert EventKind.ENTRY_REFUSED_FOR_CASH in {e.kind for e in outcome.events}, "the refusal for want of cash is said"
+    assert levels_of(written, outcome) == (), "a leg with no momentum rule waited for nothing and has no line"
+    assert (
+        fills_of(outcome.trades) == () and marks_of(outcome.trades) == ()
+    ), "a leg whose buy was refused has no fill and no mark"
 
+    picked_event = next(e for e in outcome.events if e.kind is EventKind.PICKED)
+    elsewhere = replace(picked_event, contract=PUT)
 
-def test_an_attempt_refused_for_cash_whose_momentum_was_never_reached_or_that_nothing_ended_cannot_be_drawn() -> None:
-    written = setup(leg("call", momentum=("percent_up", "10")))
-    market = TableMarket(
-        underlying=steady("500.00"),
-        picks=_picks(("call", CALL)),
-        # The starting price at m5 is 2.00, so the level is 2.00 x 1.1 = 2.200. m8 closes at 2.30: reached, the buy is
-        # decided. It would fill at the open of m9 for 2.30 x 100 = 230.00 against 100.00 of cash: refused at m9.
-        options={CALL: {5: ("2.00", "2.00"), **flat("2.00", 6, 7), 8: ("2.30", "2.30"), 9: ("2.30", "2.30")}},
-    )
-    outcome = replay(written, market, cash="100")
-    without_the_decision = replace(
-        outcome, events=tuple(e for e in outcome.events if e.kind is not EventKind.MOMENTUM_HIT)
-    )
-    without_the_refusal = replace(
-        outcome, events=tuple(e for e in outcome.events if e.kind is not EventKind.ENTRY_REFUSED_FOR_CASH)
-    )
-
-    with pytest.raises(SessionRecordInconsistent, match="momentum was never reached"):
-        levels_of(written, without_the_decision)
-
-    # What is left of the waiting: a starting price at m5 and the decision at m8, with no cancel and no refusal. An attempt
-    # that waited for its level ends exactly once, so this one ended 0 times and the reader must not take the decision
-    # for an end.
-    waiting = (
-        EventKind.STARTING_PRICE_TAKEN,
-        EventKind.MOMENTUM_HIT,
-        EventKind.LEG_CANCELLED,
-        EventKind.ENTRY_REFUSED_FOR_CASH,
-    )
-    assert [(e.kind, minute_of(e.at_ms)) for e in without_the_refusal.events if e.kind in waiting] == [
-        (EventKind.STARTING_PRICE_TAKEN, 5),
-        (EventKind.MOMENTUM_HIT, 8),
-    ], "without the refusal what is left of the waiting is a starting price at m5 and the decision at m8"
-    with pytest.raises(SessionRecordInconsistent, match="ended 0 times"):
-        levels_of(written, without_the_refusal)
+    # The pick names the put, and the attempt was refused for cash: there is no trade to disagree with.
+    levels_of(written, replace(outcome, events=tuple(elsewhere if e is picked_event else e for e in outcome.events)))
 
 
 def test_a_complete_square_off_ends_the_waiting_of_a_leg_that_had_not_bought_at_the_minute_of_the_stop() -> None:
@@ -443,7 +443,7 @@ def test_a_trade_with_a_starting_price_that_no_event_took_or_that_was_taken_twic
         levels_of(scene.setup, differs_from_the_trades)
 
 
-def test_an_attempt_that_waited_and_was_neither_cancelled_nor_refused_or_was_ended_twice_cannot_be_drawn(
+def test_an_attempt_that_waited_cannot_be_drawn_if_it_never_ended_ended_twice_or_its_rule_is_gone_from_the_setup(
     scene: RunResult,
 ) -> None:
     outcome = scene.sessions[2].outcome
@@ -455,6 +455,32 @@ def test_an_attempt_that_waited_and_was_neither_cancelled_nor_refused_or_was_end
         levels_of(scene.setup, never_ended)
     with pytest.raises(SessionRecordInconsistent, match="lag"):
         levels_of(scene.setup, ended_twice)
+
+    without_momentum = scene.setup.model_copy(
+        update={
+            "legs": tuple(
+                each.model_copy(update={"momentum": None}) if each.leg_id == "lag" else each
+                for each in scene.setup.legs
+            )
+        }
+    )
+    # Friday's lag leg took a starting price (1.00 at m5) and was cancelled at m60 without trading, so its momentum line
+    # is the leg's own rule applied to 1.00. With the leg called "lag2" in the setup, no leg is called "lag": there is no
+    # rule to apply, and nothing to draw it from without a guess. The setup is still a valid setup.
+    renamed = scene.setup.model_copy(
+        update={
+            "legs": tuple(
+                each.model_copy(update={"leg_id": "lag2"}) if each.leg_id == "lag" else each
+                for each in scene.setup.legs
+            )
+        }
+    )
+    assert [each.leg_id for each in renamed.legs] == ["call", "put", "lag2"], "the renamed setup is still a valid setup"
+
+    with pytest.raises(SessionRecordInconsistent, match="momentum rule"):
+        levels_of(without_momentum, outcome)
+    with pytest.raises(SessionRecordInconsistent, match=r"leg 'lag', entry 0: .*setup"):
+        levels_of(renamed, outcome)
 
 
 @pytest.mark.parametrize(
@@ -490,37 +516,6 @@ def test_a_starting_price_taken_on_another_contract_than_the_trade_is_on_cannot_
 
     with pytest.raises(SessionRecordInconsistent, match=r"leg 'call', entry 0: .*different contract"):
         levels_of(scene.setup, on_another)
-
-
-def test_a_setup_edited_so_that_a_leg_that_waited_has_no_rule_or_is_no_longer_in_it_cannot_be_drawn(
-    scene: RunResult,
-) -> None:
-    friday = scene.sessions[2].outcome
-    without_momentum = scene.setup.model_copy(
-        update={
-            "legs": tuple(
-                each.model_copy(update={"momentum": None}) if each.leg_id == "lag" else each
-                for each in scene.setup.legs
-            )
-        }
-    )
-    # Friday's lag leg took a starting price (1.00 at m5) and was cancelled at m60 without trading, so its momentum line
-    # is the leg's own rule applied to 1.00. With the leg called "lag2" in the setup, no leg is called "lag": there is no
-    # rule to apply, and nothing to draw it from without a guess. The setup is still a valid setup.
-    renamed = scene.setup.model_copy(
-        update={
-            "legs": tuple(
-                each.model_copy(update={"leg_id": "lag2"}) if each.leg_id == "lag" else each
-                for each in scene.setup.legs
-            )
-        }
-    )
-    assert [each.leg_id for each in renamed.legs] == ["call", "put", "lag2"], "the renamed setup is still a valid setup"
-
-    with pytest.raises(SessionRecordInconsistent, match="momentum rule"):
-        levels_of(without_momentum, friday)
-    with pytest.raises(SessionRecordInconsistent, match=r"leg 'lag', entry 0: .*setup"):
-        levels_of(renamed, friday)
 
 
 def test_a_fill_shows_the_price_seen_and_the_different_price_it_filled_at_after_slippage() -> None:
@@ -668,7 +663,7 @@ def _a_credit_spread(*, long_stop: tuple[str, str] | None = None) -> tuple[Optio
     return written, replay(written, market)
 
 
-def test_a_sold_legs_fills_are_charted_on_the_side_they_traded_and_its_closing_fill_is_a_purchase() -> None:
+def test_a_sold_legs_fills_are_charted_on_the_side_they_traded_and_a_record_that_says_otherwise_cannot_be_drawn() -> None:
     written, outcome = _a_credit_spread()
 
     assert [(f.kind, f.side, f.leg_id, f.filled) for f in fills_of(outcome.trades)] == [
@@ -676,12 +671,34 @@ def test_a_sold_legs_fills_are_charted_on_the_side_they_traded_and_its_closing_f
         ("entry", "sell", "short", D("2.20")),
         ("exit", "sell", "long", D("0.60")),
         ("exit", "buy", "short", D("1.50")),
-    ]
-    assert marks_of(outcome.trades) == ()
-    assert levels_of(written, outcome) == ()
+    ], "a sold leg's fills are charted on the side they traded and its closing fill is a purchase"
+    assert marks_of(outcome.trades) == (), "a credit spread closed by fills has no mark"
+    assert levels_of(written, outcome) == (), "a credit spread with no stop or momentum rule has no line"
+
+    # The setup's short leg sells; its stored trade says it opened on the buy side, and its entry_filled event says it
+    # filled.
+    short = next(t for t in outcome.trades if t.leg_id == "short")
+    wrong_entry = replace(short, entry=replace(short.entry, side="buy"))
+    broken = replace(outcome, trades=tuple(wrong_entry if t is short else t for t in outcome.trades))
+
+    with pytest.raises(SessionRecordInconsistent, match=r"leg 'short', entry 0: .*entry_filled.*sell side"):
+        levels_of(written, broken)
+
+    assert isinstance(short.exit, Fill) and short.exit.side == "buy", "the sold leg is closed by a purchase"
+    # A sold leg is closed by a purchase. A close that traded on the sell side, as its entry did, is the other leg's.
+    wrong_exit = replace(short, exit=replace(short.exit, side="sell"))
+    broken = replace(outcome, trades=tuple(wrong_exit if t is short else t for t in outcome.trades))
+
+    with pytest.raises(SessionRecordInconsistent, match=r"leg 'short', entry 0: .*close_filled.*opened on"):
+        levels_of(written, broken)
+
+    event = Event(EventKind.MARKED_NOT_BOUGHT_BACK, short.exit.bar_close_ms, "short", 0, short.contract, D("1.50"))
+
+    with pytest.raises(SessionRecordInconsistent, match=r"leg 'short', entry 0: .*marked.*closed by a fill"):
+        levels_of(written, replace(outcome, events=(*outcome.events, event)))
 
 
-def test_a_sold_leg_marked_and_not_bought_back_is_an_owed_mark_and_a_bought_leg_marked_is_not() -> None:
+def test_a_sold_leg_marked_and_not_bought_back_is_an_owed_mark_and_a_close_filled_on_a_marked_trade_cannot_be_drawn() -> None:
     thursday = a_selling_run().sessions[1].outcome
 
     marks = marks_of(thursday.trades)
@@ -691,8 +708,15 @@ def test_a_sold_leg_marked_and_not_bought_back_is_an_owed_mark_and_a_bought_leg_
     assert [(m.leg_id, m.contract.strike, m.price, m.owed) for m in marks] == [
         ("long", D("495"), D("1.00"), False),
         ("short", D("500"), D("2.40"), True),
-    ]
-    assert all(isinstance(mark, ChartedMark) for mark in marks)
+    ], "a sold leg marked and not bought back is an owed mark and a bought leg marked is not"
+    assert all(isinstance(mark, ChartedMark) for mark in marks), "every mark is a charted mark"
+
+    long = next(t for t in thursday.trades if t.leg_id == "long")
+    assert not isinstance(long.exit, Fill), "the bought leg was marked, not closed by a fill"
+    event = Event(EventKind.CLOSE_FILLED, long.exit.bar_close_ms, "long", 0, long.contract, D("1.00"))
+
+    with pytest.raises(SessionRecordInconsistent, match=r"leg 'long', entry 0: .*close_filled.*marked, not closed"):
+        levels_of(None, replace(thursday, events=(*thursday.events, event)))
 
 
 def test_a_session_that_agrees_with_itself_is_drawn_whatever_the_side_of_its_legs() -> None:
@@ -773,56 +797,6 @@ def test_an_event_that_names_another_contract_than_its_trades_cannot_be_drawn(
         levels_of(scene.setup, broken)
 
 
-def test_an_event_of_an_attempt_that_never_filled_has_no_trade_to_be_held_to() -> None:
-    written = setup(leg("call"))
-    market = TableMarket(
-        underlying=steady("500.00"),
-        picks=_picks(("call", CALL)),
-        options={CALL: {5: ("2.00", "2.00"), 6: ("2.00", "2.00")}},
-    )
-    outcome = replay(written, market, cash="100")
-    assert outcome.trades == ()
-    picked_event = next(e for e in outcome.events if e.kind is EventKind.PICKED)
-    elsewhere = replace(picked_event, contract=PUT)
-
-    # The pick names the put, and the attempt was refused for cash: there is no trade to disagree with.
-    levels_of(written, replace(outcome, events=tuple(elsewhere if e is picked_event else e for e in outcome.events)))
-
-
-def test_an_entry_fill_on_the_side_a_leg_does_not_trade_cannot_be_drawn() -> None:
-    written, outcome = _a_credit_spread()
-    # The setup's short leg sells; its stored trade says it opened on the buy side, and its entry_filled event says it
-    # filled.
-    short = next(t for t in outcome.trades if t.leg_id == "short")
-    wrong = replace(short, entry=replace(short.entry, side="buy"))
-    broken = replace(outcome, trades=tuple(wrong if t is short else t for t in outcome.trades))
-
-    with pytest.raises(SessionRecordInconsistent, match=r"leg 'short', entry 0: .*entry_filled.*sell side"):
-        levels_of(written, broken)
-
-
-def test_a_close_fill_on_the_side_the_leg_opened_on_cannot_be_drawn() -> None:
-    written, outcome = _a_credit_spread()
-    short = next(t for t in outcome.trades if t.leg_id == "short")
-    assert isinstance(short.exit, Fill) and short.exit.side == "buy"
-    # A sold leg is closed by a purchase. A close that traded on the sell side, as its entry did, is the other leg's.
-    wrong = replace(short, exit=replace(short.exit, side="sell"))
-    broken = replace(outcome, trades=tuple(wrong if t is short else t for t in outcome.trades))
-
-    with pytest.raises(SessionRecordInconsistent, match=r"leg 'short', entry 0: .*close_filled.*opened on"):
-        levels_of(written, broken)
-
-
-def test_a_close_that_filled_on_a_trade_that_was_marked_cannot_be_drawn() -> None:
-    thursday = a_selling_run().sessions[1].outcome
-    long = next(t for t in thursday.trades if t.leg_id == "long")
-    assert not isinstance(long.exit, Fill)
-    event = Event(EventKind.CLOSE_FILLED, long.exit.bar_close_ms, "long", 0, long.contract, D("1.00"))
-
-    with pytest.raises(SessionRecordInconsistent, match=r"leg 'long', entry 0: .*close_filled.*marked, not closed"):
-        levels_of(None, replace(thursday, events=(*thursday.events, event)))
-
-
 @pytest.mark.parametrize(
     ("stored", "relabelled", "match"),
     [
@@ -849,15 +823,6 @@ def test_a_mark_on_the_wrong_side_for_its_leg_cannot_be_drawn(
 
     with pytest.raises(SessionRecordInconsistent, match=match):
         levels_of(None, replace(thursday, events=events))
-
-
-def test_a_mark_event_on_a_trade_that_closed_by_a_fill_cannot_be_drawn() -> None:
-    written, outcome = _a_credit_spread()
-    short = next(t for t in outcome.trades if t.leg_id == "short")
-    event = Event(EventKind.MARKED_NOT_BOUGHT_BACK, short.exit.bar_close_ms, "short", 0, short.contract, D("1.50"))
-
-    with pytest.raises(SessionRecordInconsistent, match=r"leg 'short', entry 0: .*marked.*closed by a fill"):
-        levels_of(written, replace(outcome, events=(*outcome.events, event)))
 
 
 def test_a_close_with_its_protection_of_a_leg_that_opened_by_a_purchase_cannot_be_drawn() -> None:

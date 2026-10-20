@@ -74,12 +74,14 @@ def _write_artifact(
 
 
 # ----- happy path ----------------------------------------------------
-def test_load_succeeds_on_valid_artifact(tmp_path: Path) -> None:
+def test_load_succeeds_on_valid_artifact_and_it_pairs_with_a_matching_spec(tmp_path: Path) -> None:
     set_dir = _write_artifact(tmp_path)
     pset = PredictionSet.load(set_dir)
-    assert pset.manifest.prediction_set_id == "pred_spy_test_v001"
-    assert set(pset.index.keys()) == {900_000, 960_000, 1_020_000}
-    assert pset.index[960_000] == {"prediction": 0.5}
+    assert pset.manifest.prediction_set_id == "pred_spy_test_v001", "the loaded manifest names the artifact"
+    assert set(pset.index.keys()) == {900_000, 960_000, 1_020_000}, "the index holds every row's timestamp"
+    assert pset.index[960_000] == {"prediction": 0.5}, "a row's fields are indexed by its timestamp"
+    # A spec on the artifact's symbol and resolution pairs with it: no error.
+    pset.assert_pairs_with(_spec_for("SPY", 1))
 
 
 # ----- intrinsic validation ------------------------------------------
@@ -90,7 +92,7 @@ def test_load_fails_when_manifest_missing(tmp_path: Path) -> None:
         PredictionSet.load(set_dir)
 
 
-def test_load_fails_when_rows_hash_mismatched(tmp_path: Path) -> None:
+def test_load_fails_when_a_hash_is_mismatched_a_chunk_leaks_or_a_row_is_outside_its_window(tmp_path: Path) -> None:
     set_dir = _write_artifact(tmp_path)
     manifest_path = set_dir / "manifest.json"
     raw = json.loads(manifest_path.read_text())
@@ -100,9 +102,7 @@ def test_load_fails_when_rows_hash_mismatched(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="rows_hash"):
         PredictionSet.load(set_dir)
 
-
-def test_load_fails_when_prediction_set_hash_mismatched(tmp_path: Path) -> None:
-    set_dir = _write_artifact(tmp_path)
+    set_dir = _write_artifact(tmp_path / "set_hash")
     manifest_path = set_dir / "manifest.json"
     raw = json.loads(manifest_path.read_text())
     raw["prediction_set_hash"] = "f" * 64
@@ -110,10 +110,8 @@ def test_load_fails_when_prediction_set_hash_mismatched(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="prediction_set_hash"):
         PredictionSet.load(set_dir)
 
-
-def test_load_fails_on_leakage_chunk_start_at_or_before_trained_through(tmp_path: Path) -> None:
-    """A chunk with start_ms == trained_through_ms is rejected at the
-    manifest layer (ChunkRef invariant) before the loader runs."""
+    # A chunk with start_ms == trained_through_ms is rejected at the manifest layer (ChunkRef invariant) before the
+    # loader runs.
     set_dir = tmp_path / "pred_leak"
     chunk_dir = set_dir / "chunks"
     chunk_dir.mkdir(parents=True)
@@ -143,10 +141,8 @@ def test_load_fails_on_leakage_chunk_start_at_or_before_trained_through(tmp_path
     with pytest.raises(ValueError, match="start_ms must be > trained_through_ms"):
         PredictionSet.load(set_dir)
 
-
-def test_load_fails_on_row_outside_chunk_window(tmp_path: Path) -> None:
     chunks = [(0, [_row(900_000, 0.0), _row(2_000_000, 0.0)])]
-    set_dir = _write_artifact(tmp_path, chunks=chunks)
+    set_dir = _write_artifact(tmp_path / "outside_window", chunks=chunks)
     manifest_path = set_dir / "manifest.json"
     raw = json.loads(manifest_path.read_text())
     raw["chunks"][0]["end_ms"] = 1_000_000
@@ -181,12 +177,6 @@ def _spec_for(symbol: str, period_minutes: int) -> StrategySpec:
         exit=ExitBlock(logic="AND", conditions=[]),
         position=EquityLongPosition(kind="EQUITY_LONG"),
     )
-
-
-def test_assert_pairs_with_spec_succeeds_on_match(tmp_path: Path) -> None:
-    set_dir = _write_artifact(tmp_path)
-    pset = PredictionSet.load(set_dir)
-    pset.assert_pairs_with(_spec_for("SPY", 1))
 
 
 @pytest.mark.parametrize(

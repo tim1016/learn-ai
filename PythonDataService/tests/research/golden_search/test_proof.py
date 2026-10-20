@@ -236,20 +236,23 @@ def test_stage_proof_inputs_refuses_sessions_split_across_raw_and_adjusted_roots
         stage_proof_inputs(split, roots=[lake, raw], window=WINDOW, blob_store=blobs)
 
 
-def test_materialize_writes_every_input_at_its_relative_path(
+def test_materialize_writes_every_input_at_its_relative_path_and_refuses_a_destination_inside_a_managed_lake(
     snapshot: DataSnapshot, lake: Path, blobs: BlobStore, tmp_path: Path
 ) -> None:
     inputs = stage_proof_inputs(snapshot, roots=[lake], window=WINDOW, blob_store=blobs)
 
     data_root = materialize(inputs, blobs, tmp_path / "restore")
 
-    assert data_root.name == "polygon_split_adjusted"
+    assert data_root.name == "polygon_split_adjusted", "the restored tree is rooted at the adjusted lake"
     restored = {
         path.relative_to(data_root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in data_root.rglob("*")
         if path.is_file()
     }
-    assert restored == inputs.artifacts
+    assert restored == inputs.artifacts, "every input is written at its relative path"
+
+    with pytest.raises(ValueError, match="managed lake root"):
+        materialize(inputs, blobs, tmp_path / "elsewhere" / "lake")
 
 
 def test_restored_replay_verifies_the_corporate_action_basis(
@@ -279,15 +282,6 @@ def test_materialize_refuses_a_tampered_blob(
         materialize(inputs, blobs, tmp_path / "restore")
 
     assert excinfo.value.code == "BLOB_CORRUPT"
-
-
-def test_materialize_refuses_a_destination_inside_a_managed_lake(
-    snapshot: DataSnapshot, lake: Path, blobs: BlobStore, tmp_path: Path
-) -> None:
-    inputs = stage_proof_inputs(snapshot, roots=[lake], window=WINDOW, blob_store=blobs)
-
-    with pytest.raises(ValueError, match="managed lake root"):
-        materialize(inputs, blobs, tmp_path / "elsewhere" / "lake")
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +343,7 @@ def test_decision_trace_refuses_parameters_for_another_symbol(snapshot: DataSnap
 # ---------------------------------------------------------------------------
 # Proof and re-proof
 # ---------------------------------------------------------------------------
-def test_build_proof_restored_replay_equals_lake_replay_and_the_record_round_trips_and_hashes_its_canonical_json(
+def test_build_proof_restored_replay_equals_lake_replay_and_the_record_round_trips_hashes_its_canonical_json_and_refuses_a_malformed_payload(
     snapshot: DataSnapshot, lake: Path, blobs: BlobStore
 ) -> None:
     record = _build(snapshot, lake, blobs)
@@ -371,12 +365,6 @@ def test_build_proof_restored_replay_equals_lake_replay_and_the_record_round_tri
     assert payload["window"] == {"start_ms": WINDOW.start_ms, "end_ms": WINDOW.end_ms}, "the payload carries the window"
     assert payload["warmup_from_ms"] == WINDOW.warmup_from_ms, "the payload carries the warmup start"
     assert payload["schema_version"] == 1, "the payload carries the schema version"
-
-
-def test_proof_record_from_dict_refuses_a_malformed_payload(
-    snapshot: DataSnapshot, lake: Path, blobs: BlobStore
-) -> None:
-    payload = _build(snapshot, lake, blobs).as_dict()
 
     with pytest.raises(ValueError, match="malformed proof record"):
         ProofRecord.from_dict({**payload, "adjusted": "false"})
@@ -448,41 +436,41 @@ def test_build_proof_over_a_raw_lake_restores_and_reproves_without_adjustment_re
     assert reproved.restored_trace_root == record.restored_trace_root
 
 
-def test_reprove_refuses_a_tampered_blob(snapshot: DataSnapshot, lake: Path, blobs: BlobStore) -> None:
-    record = _build(snapshot, lake, blobs)
+def _tamper_with_a_blob(record: ProofRecord, blobs: BlobStore) -> ProofRecord:
     digest = record.manifest[_zip(date(2025, 2, 4))]
     (blobs.root / digest[:2] / digest).write_bytes(b"tampered")
-
-    with pytest.raises(ProofMismatchError) as excinfo:
-        reprove(record, blobs, artifact_digest=ARTIFACT_DIGEST, wiring_digest=WIRING_DIGEST)
-
-    assert excinfo.value.code == "BLOB_CORRUPT"
+    return record
 
 
 @pytest.mark.parametrize(
     ("change", "code"),
     [
         pytest.param(
-            lambda record: dataclasses.replace(record, restored_trace_root="0" * 64),
+            lambda record, _blobs: dataclasses.replace(record, restored_trace_root="0" * 64),
             "TRACE_MISMATCH",
             id="a-replay-that-no-longer-reproduces-the-root",
         ),
         pytest.param(
-            lambda record: dataclasses.replace(record, program_version="ema-crossover-signal/v0"),
+            lambda record, _blobs: dataclasses.replace(record, program_version="ema-crossover-signal/v0"),
             "PROGRAM_CHANGED",
             id="a-changed-program-version",
         ),
         pytest.param(
-            lambda record: dataclasses.replace(record, params={**record.params, "retired_knob": 1}),
+            lambda record, _blobs: dataclasses.replace(record, params={**record.params, "retired_knob": 1}),
             "PARAMETERS_CHANGED",
             id="parameters-the-schema-no-longer-accepts",
         ),
+        pytest.param(_tamper_with_a_blob, "BLOB_CORRUPT", id="a-tampered-blob"),
     ],
 )
-def test_reprove_refuses_a_record_whose_replay_program_or_parameters_no_longer_hold(
-    snapshot: DataSnapshot, lake: Path, blobs: BlobStore, change: Callable[[ProofRecord], ProofRecord], code: str
+def test_reprove_refuses_a_record_whose_replay_program_parameters_or_blobs_no_longer_hold(
+    snapshot: DataSnapshot,
+    lake: Path,
+    blobs: BlobStore,
+    change: Callable[[ProofRecord, BlobStore], ProofRecord],
+    code: str,
 ) -> None:
-    changed = change(_build(snapshot, lake, blobs))
+    changed = change(_build(snapshot, lake, blobs), blobs)
 
     with pytest.raises(ProofMismatchError) as excinfo:
         reprove(changed, blobs, artifact_digest=ARTIFACT_DIGEST, wiring_digest=WIRING_DIGEST)

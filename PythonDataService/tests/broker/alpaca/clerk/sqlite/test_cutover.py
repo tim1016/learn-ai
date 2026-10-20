@@ -282,52 +282,23 @@ def test_initialize_refuses_tampered_normalized_runner_binding(
     assert not (account_dir / "clerk.db").exists()
 
 
-def test_initialize_ignores_a_valid_non_alpaca_binding_in_the_shared_runner_root(
-    tmp_path: Path,
-) -> None:
-    clerk_root = tmp_path / "clerk"
-    runner_root = tmp_path / "runner"
-    _write_stopped_runner_bot(runner_root, strategy_instance_id="spy")
-    _write_stopped_runner_bot(
-        runner_root,
-        strategy_instance_id="ibkr-spy",
-        broker="ibkr",
-    )
-    account_dir = clerk_root / "accounts" / "alpaca" / ACCOUNT_ID
-    account_dir.mkdir(parents=True)
-    (account_dir / "order_journal.jsonl").write_text("{}\n", encoding="utf-8")
-
-    receipt = initialize_cutover_authority(
-        account_id=ACCOUNT_ID,
-        artifacts_root=clerk_root,
-        runner_artifacts_root=runner_root,
-        broker_evidence=BrokerCutoverEvidence(
-            account_id=ACCOUNT_ID,
-            account_mode="paper",
-            observed_at_ms=PLAN_MS,
-            proof_reference="fake-alpaca-account-snapshot",
-            positions={},
-            open_order_ids=(),
+@pytest.mark.parametrize(
+    "other_bot",
+    [
+        pytest.param({"strategy_instance_id": "ibkr-spy", "broker": "ibkr"}, id="valid-non-alpaca-binding"),
+        pytest.param(
+            {"strategy_instance_id": "other-account-running", "account_id": "PAOTHER", "desired_state": DesiredState.RUNNING},
+            id="running-bot-of-another-account",
         ),
-        max_broker_evidence_age_ms=1_000,
-        clock=_Clock(PLAN_MS),
-    )
-
-    assert tuple(item.strategy_instance_id for item in receipt.runner_roster) == ("spy",)
-
-
-def test_initialize_scopes_runner_roster_to_the_cutover_account(
-    tmp_path: Path,
+    ],
+)
+def test_initialize_scopes_the_runner_roster_to_the_cutover_accounts_alpaca_bots(
+    tmp_path: Path, other_bot: dict[str, Any]
 ) -> None:
     clerk_root = tmp_path / "clerk"
     runner_root = tmp_path / "runner"
     _write_stopped_runner_bot(runner_root, strategy_instance_id="spy")
-    _write_stopped_runner_bot(
-        runner_root,
-        strategy_instance_id="other-account-running",
-        account_id="PAOTHER",
-        desired_state=DesiredState.RUNNING,
-    )
+    _write_stopped_runner_bot(runner_root, **other_bot)
     account_dir = clerk_root / "accounts" / "alpaca" / ACCOUNT_ID
     account_dir.mkdir(parents=True)
     (account_dir / "order_journal.jsonl").write_text("{}\n", encoding="utf-8")
@@ -1143,73 +1114,22 @@ def test_apply_rejects_changed_evidence_without_quarantining_or_activating(
     assert ActivationStore(clerk_root / "accounts" / "alpaca").latest(ACCOUNT_ID) is None
 
 
-def test_apply_activates_sqlite_and_quarantines_exact_legacy_artifacts(tmp_path: Path) -> None:
-    clerk_root, account_dir, runner_root, evidence, clock = _setup(tmp_path)
-    plan = plan_cutover(
-        account_id=ACCOUNT_ID,
-        artifacts_root=clerk_root,
-        runner_artifacts_root=runner_root,
-        broker_evidence=evidence,
-        max_broker_evidence_age_ms=1_000,
-        clock=clock,
-    )
-
-    receipt = apply_cutover(
-        plan=plan,
-        confirmation_token=plan.confirmation_token,
-        artifacts_root=clerk_root,
-        runner_artifacts_root=runner_root,
-        broker_evidence=evidence,
-        max_broker_evidence_age_ms=1_000,
-        clock=clock,
-    )
-
-    assert not (account_dir / "order_inbox.jsonl").exists()
-    assert not (account_dir / "order_journal.jsonl").exists()
-    store = ActivationStore(clerk_root / "accounts" / "alpaca")
-    resolved = store.resolve(
-        ACCOUNT_ID,
-        plan.database.authority_generation,
-        plan.database.db_identity_token,
-        artifacts_root=clerk_root,
-    )
-    assert resolved == receipt.activation
-    assert (clerk_root / receipt.receipt_reference).is_file()
-    quarantine_manifest = clerk_root / receipt.activation.legacy_quarantine_manifest
-    quarantine_dir = quarantine_manifest.parent
-    assert (
-        quarantine_dir / "accounts" / "alpaca" / ACCOUNT_ID / "order_inbox.jsonl"
-    ).is_file()
-    assert (
-        quarantine_dir / "accounts" / "alpaca" / ACCOUNT_ID / "order_journal.jsonl"
-    ).is_file()
-    assert (
-        quarantine_dir
-        / "accounts"
-        / ACCOUNT_ID
-        / "bots"
-        / "spy"
-        / "decision_journal.jsonl"
-    ).is_file()
-
-
-def test_apply_activates_sqlite_and_quarantines_exact_legacy_artifacts_for_a_graduating_live_account(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("account_id", "account_mode"),
+    [
+        pytest.param(ACCOUNT_ID, "paper", id="paper"),
+        pytest.param(LIVE_ACCT, "live", id="graduating-live-account"),
+    ],
+)
+def test_apply_activates_sqlite_and_quarantines_exact_legacy_artifacts(
+    tmp_path: Path, account_id: str, account_mode: str
 ) -> None:
-    """Same activation outcome as the paper happy path, for live evidence (ADR 0059 slice 7, R3).
-
-    A sibling test rather than a parametrization of the paper test above: the
-    paper test's assertions are hardcoded to the module-level ``ACCOUNT_ID``,
-    and rewriting them to a parametrized account id would touch every one of
-    its existing lines. This reuses ``_setup`` (extended with optional
-    ``account_id``/``account_mode`` keywords, defaulted to preserve the paper
-    call sites byte-for-byte) instead.
-    """
+    """The same activation outcome for paper evidence and for a graduating live account's live evidence (ADR 0059 slice 7, R3)."""
     clerk_root, account_dir, runner_root, evidence, clock = _setup(
-        tmp_path, account_id=LIVE_ACCT, account_mode="live"
+        tmp_path, account_id=account_id, account_mode=account_mode
     )
     plan = plan_cutover(
-        account_id=LIVE_ACCT,
+        account_id=account_id,
         artifacts_root=clerk_root,
         runner_artifacts_root=runner_root,
         broker_evidence=evidence,
@@ -1231,7 +1151,7 @@ def test_apply_activates_sqlite_and_quarantines_exact_legacy_artifacts_for_a_gra
     assert not (account_dir / "order_journal.jsonl").exists()
     store = ActivationStore(clerk_root / "accounts" / "alpaca")
     resolved = store.resolve(
-        LIVE_ACCT,
+        account_id,
         plan.database.authority_generation,
         plan.database.db_identity_token,
         artifacts_root=clerk_root,
@@ -1241,15 +1161,15 @@ def test_apply_activates_sqlite_and_quarantines_exact_legacy_artifacts_for_a_gra
     quarantine_manifest = clerk_root / receipt.activation.legacy_quarantine_manifest
     quarantine_dir = quarantine_manifest.parent
     assert (
-        quarantine_dir / "accounts" / "alpaca" / LIVE_ACCT / "order_inbox.jsonl"
+        quarantine_dir / "accounts" / "alpaca" / account_id / "order_inbox.jsonl"
     ).is_file()
     assert (
-        quarantine_dir / "accounts" / "alpaca" / LIVE_ACCT / "order_journal.jsonl"
+        quarantine_dir / "accounts" / "alpaca" / account_id / "order_journal.jsonl"
     ).is_file()
     assert (
         quarantine_dir
         / "accounts"
-        / LIVE_ACCT
+        / account_id
         / "bots"
         / "spy"
         / "decision_journal.jsonl"

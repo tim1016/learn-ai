@@ -53,16 +53,6 @@ async def test_health_returns_disconnected_when_no_client(monkeypatch) -> None:
         cfg.reset_settings_for_testing()
 
 
-@pytest.mark.asyncio
-async def test_expirations_returns_503_when_disconnected() -> None:
-    set_client(None)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/broker/expirations/SPY")
-
-    assert resp.status_code == 503
-
-
 async def test_expirations_returns_the_typed_anchor_list(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(broker_router, "require_connected_client", lambda: object())
 
@@ -75,36 +65,6 @@ async def test_expirations_returns_the_typed_anchor_list(monkeypatch: pytest.Mon
 
     assert resp.status_code == 200
     assert resp.json() == {"symbol": "SPY", "expirations_ms": [1_800_046_800_000]}
-
-
-@pytest.mark.asyncio
-async def test_chain_returns_422_when_strikes_missing() -> None:
-    set_client(None)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get(
-            "/api/broker/option-chain/SPY",
-            params={"expiry_ms": 1_800_046_800_000},
-        )
-
-    # FastAPI rejects the missing required query before the handler runs.
-    assert resp.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_chain_returns_400_when_strike_is_non_positive() -> None:
-    set_client(None)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get(
-            "/api/broker/option-chain/SPY",
-            params=[
-                ("expiry_ms", 1_800_046_800_000),
-                ("strikes", 0),
-            ],
-        )
-
-    assert resp.status_code == 400
 
 
 async def test_chain_refuses_more_lines_than_the_default_ibkr_allocation() -> None:
@@ -210,116 +170,58 @@ async def test_unexpected_stream_failure_propagates_without_a_false_error_frame(
         _ = [chunk async for chunk in response.body_iterator]
 
 
-@pytest.mark.asyncio
-async def test_strikes_rejects_non_positive_expiry_ms() -> None:
-    """Regression (B-13): expiry_ms <= 0 must be rejected at the boundary with
-    a 422, not flow into expiry_ms_to_yyyymmdd to produce a 1970 date that
-    silently matches nothing."""
-    set_client(None)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/broker/strikes/SPY", params={"expiry_ms": 0})
-
-    # Query validation (gt=0) runs before the handler / connection check.
-    assert resp.status_code == 422
+# ── Boundary checks: with no client installed, each route answers its status before any Gateway access ──
 
 
-@pytest.mark.asyncio
-async def test_chain_rejects_non_positive_expiry_ms() -> None:
-    """Regression (B-13): same boundary guard on the option-chain stream."""
-    set_client(None)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get(
-            "/api/broker/option-chain/SPY",
-            params=[("expiry_ms", -5), ("strikes", 420)],
-        )
-
-    assert resp.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_strikes_endpoint_returns_503_when_disconnected() -> None:
-    set_client(None)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get(
-            "/api/broker/strikes/SPY",
-            params={"expiry_ms": 1_800_046_800_000},
-        )
-
-    assert resp.status_code == 503
-
-
-@pytest.mark.asyncio
-async def test_strikes_endpoint_rejects_missing_expiry_ms() -> None:
-    set_client(None)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/broker/strikes/SPY")
-
-    assert resp.status_code == 422
-
-
-# ── /option-surface boundary checks ────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_surface_returns_422_when_expiries_missing() -> None:
-    set_client(None)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get(
+@pytest.mark.parametrize(
+    ("path", "params", "status"),
+    [
+        pytest.param("/api/broker/expirations/SPY", (), 503, id="expirations_disconnected"),
+        # FastAPI rejects the missing required query before the handler runs.
+        pytest.param(
+            "/api/broker/option-chain/SPY", (("expiry_ms", 1_800_046_800_000),), 422, id="chain_strikes_missing",
+        ),
+        pytest.param(
+            "/api/broker/option-chain/SPY", (("expiry_ms", 1_800_046_800_000), ("strikes", 0)), 400,
+            id="chain_strike_non_positive",
+        ),
+        # Regression (B-13): expiry_ms <= 0 is rejected at the boundary with a 422, not passed into
+        # expiry_ms_to_yyyymmdd to produce a 1970 date that silently matches nothing. Query validation
+        # (gt=0) runs before the handler / connection check.
+        pytest.param("/api/broker/strikes/SPY", (("expiry_ms", 0),), 422, id="b13_strikes_expiry_ms_non_positive"),
+        pytest.param(
+            "/api/broker/option-chain/SPY", (("expiry_ms", -5), ("strikes", 420)), 422,
+            id="b13_chain_expiry_ms_non_positive",
+        ),
+        pytest.param("/api/broker/strikes/SPY", (("expiry_ms", 1_800_046_800_000),), 503, id="strikes_disconnected"),
+        pytest.param("/api/broker/strikes/SPY", (), 422, id="strikes_expiry_ms_missing"),
+        pytest.param("/api/broker/option-surface/SPY", (("strikes", 420),), 422, id="surface_expiries_missing"),
+        pytest.param(
+            "/api/broker/option-surface/SPY", (("expiry_ms", 1_800_046_800_000),), 422, id="surface_strikes_missing",
+        ),
+        # NaN slips past Pydantic's float coercion; the boundary guard catches it before contract qualification.
+        pytest.param(
+            "/api/broker/option-surface/SPY", (("expiry_ms", 1_800_046_800_000), ("strikes", "nan")), 400,
+            id="surface_strike_nan",
+        ),
+        pytest.param(
             "/api/broker/option-surface/SPY",
-            params=[("strikes", 420)],
-        )
-
-    assert resp.status_code == 422
-
-
+            (("expiry_ms", 1_800_046_800_000), ("strikes", 420), ("strikes", 425)),
+            503,
+            id="surface_disconnected",
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_surface_returns_422_when_strikes_missing() -> None:
+async def test_option_routes_answer_their_boundary_status_with_no_client_installed(
+    path: str, params: tuple[tuple[str, object], ...], status: int,
+) -> None:
     set_client(None)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get(
-            "/api/broker/option-surface/SPY",
-            params=[("expiry_ms", 1_800_046_800_000)],
-        )
+        resp = await ac.get(path, params=list(params))
 
-    assert resp.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_surface_rejects_nan_strikes() -> None:
-    """NaN slips past Pydantic's float coercion; the boundary guard must
-    catch it before it reaches contract qualification."""
-    set_client(None)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get(
-            "/api/broker/option-surface/SPY",
-            params=[("expiry_ms", 1_800_046_800_000), ("strikes", "nan")],
-        )
-
-    assert resp.status_code == 400
-
-
-@pytest.mark.asyncio
-async def test_surface_returns_503_when_disconnected() -> None:
-    set_client(None)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get(
-            "/api/broker/option-surface/SPY",
-            params=[
-                ("expiry_ms", 1_800_046_800_000),
-                ("strikes", 420),
-                ("strikes", 425),
-            ],
-        )
-
-    assert resp.status_code == 503
+    assert resp.status_code == status, resp.text
 
 
 @pytest.mark.parametrize(
