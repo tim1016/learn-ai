@@ -98,8 +98,8 @@ def test_a_fee_is_the_same_whatever_decimal_context_the_caller_works_in() -> Non
     """137 contracts sold at $2.10, twice in a day, worked out by a caller whose context keeps two digits.
 
     ORF is 137 × 0.015 = $2.055 a sale; two digits would make it 2.1. The day:
-    SEC 2 × 0.592662 → $1.19, CAT 2 × 0.0411 → $0.09, ORF $4.11, OCC 2 × 3.425 = $6.85, the TAF
-    paused: $12.24, which two digits would make 12.
+    SEC 2 × 0.592662 → $1.19, CAT 2 × 0.0411 → $0.09, ORF $4.11, OCC rounded sale by sale 2 × 3.43 =
+    $6.86, the TAF paused: $12.25, which two digits would make 12.
     """
 
     def priced() -> tuple[object, ...]:
@@ -116,9 +116,9 @@ def test_a_fee_is_the_same_whatever_decimal_context_the_caller_works_in() -> Non
         Decimal("0.592662"), Decimal("0.0411"), Decimal("2.055"), Decimal("3.425"),
     )
     assert (day.sec, day.taf, day.cat, day.orf, day.occ) == (
-        Decimal("1.19"), Decimal("0.00"), Decimal("0.09"), Decimal("4.11"), Decimal("6.85"),
+        Decimal("1.19"), Decimal("0.00"), Decimal("0.09"), Decimal("4.11"), Decimal("6.86"),
     )
-    assert (total, cents) == (Decimal("12.24"), 1224)
+    assert (total, cents) == (Decimal("12.25"), 1225)
 
 
 def test_a_premium_with_more_digits_than_the_callers_context_keeps_still_settles_to_the_right_cent() -> None:
@@ -218,18 +218,19 @@ def test_an_unpinned_option_rate_is_refused_wherever_an_unpinned_stock_rate_is()
     assert refused.value.components == ("cat", "orf", "occ")
 
 
-def test_each_fee_type_is_summed_over_the_day_and_then_rounded_up_to_the_cent() -> None:
+def test_each_fee_type_but_occ_is_summed_over_the_day_and_then_rounded_up_to_the_cent() -> None:
     """Three sales of 1 contract at $2.20. Each owes $0.004532 of SEC fee: $0.013596 on the day, charged $0.02.
 
-    Rounded sale by sale it would be three cents.
+    Rounded sale by sale it would be three cents. OCC is the exception: Alpaca posts it per execution, so each
+    sale owes 1 × $0.025 rounded up to $0.03, and the day $0.09 (day-rounded it would be $0.08).
     """
     sale = _fees(OrderSide.SELL, contracts="1", premium="2.20")
     settled = settle_option_session([sale, sale, sale])
     assert settled.sec == Decimal("0.02")
     assert (settled.taf, settled.cat, settled.orf, settled.occ) == (
-        Decimal("0.00"), Decimal("0.01"), Decimal("0.05"), Decimal("0.08"),
+        Decimal("0.00"), Decimal("0.01"), Decimal("0.05"), Decimal("0.09"),
     )
-    assert settled.total == Decimal("0.16")
+    assert settled.total == Decimal("0.17")
 
 
 def test_a_day_with_no_option_fill_owes_nothing() -> None:
@@ -273,28 +274,29 @@ _SPREADS_MARKETS = {
 def test_a_spreads_provision_is_each_leg_filled_at_the_price_it_is_entered_at() -> None:
     """One 585 call bought at its ask and one 590 sold at its bid of 2.18, on 2026-10-06. The SEC fee on the
     $218.00 sold is 0.45 of a cent, which rounds up to 1. CAT on 200 shares is 0.06 of a cent: 1. ORF is
-    2 x 1.5 = 3 and OCC 2 x 2.5 = 5. The TAF is paused. Ten cents."""
+    2 x 1.5 = 3 and OCC, one contract a leg rounded up leg by leg, 3 + 3 = 6. The TAF is paused. Eleven cents."""
     one = entry_fee_provision_cents(_SPREAD, _SPREADS_MARKETS, EntrySize(multiplier=100, units=1), trade_date_ms=_TUESDAY)
     three = entry_fee_provision_cents(_SPREAD, _SPREADS_MARKETS, EntrySize(multiplier=100, units=3), trade_date_ms=_TUESDAY)
 
-    assert one == 10
-    # Six contracts: SEC on the $654.00 sold is 1.35 cents, 2; CAT on 600 shares 0.18, 1; ORF 9; OCC 15.
-    assert three == 27
+    assert one == 11
+    # Six contracts: SEC on the $654.00 sold is 1.35 cents, 2; CAT on 600 shares 0.18, 1; ORF 9; OCC three contracts
+    # a leg, 7.5 up to 8 a leg: 16.
+    assert three == 28
 
 
 def test_a_leg_of_two_contracts_a_structure_is_charged_as_two_contracts() -> None:
     """A call butterfly on 2026-10-06: one 580 call bought, two 585 calls sold at a bid of 4.00, one 590 call
     bought. That is four contracts a structure, and the body is two of them.
 
-    ORF is 4 x 1.5 = 6 cents and OCC 4 x 2.5 = 10. CAT on 400 shares is 0.12 of a cent, which rounds up to 1.
-    The SEC fee is on the $800.00 the two sold contracts bring: 1.648 cents, which rounds up to 2. The TAF is
-    paused. Nineteen cents.
+    ORF is 4 x 1.5 = 6 cents. OCC rounds leg by leg: 2.5 up to 3 for the lower, 5 for the body, 3 for the
+    upper: 11. CAT on 400 shares is 0.12 of a cent, which rounds up to 1. The SEC fee is on the $800.00 the two
+    sold contracts bring: 1.648 cents, which rounds up to 2. The TAF is paused. Twenty cents.
 
-    Charged as one contract, the body would bring $400.00: three contracts, ORF 4.5 rounding up to 5, OCC 7.5
-    to 8, CAT 1 and an SEC fee of 0.824 rounding up to 1. Fifteen cents.
+    Charged as one contract, the body would bring $400.00: three contracts, ORF 4.5 rounding up to 5, OCC 3 a
+    leg, 9, CAT 1 and an SEC fee of 0.824 rounding up to 1. Sixteen cents.
 
-    Two structures are eight contracts: ORF 12, OCC 20, CAT on 800 shares 0.24 of a cent, 1, and the SEC fee on
-    $1,600.00 3.296 cents, 4. Thirty-seven cents.
+    Two structures are eight contracts: ORF 12, OCC 5 + 10 + 5 = 20, CAT on 800 shares 0.24 of a cent, 1, and the
+    SEC fee on $1,600.00 3.296 cents, 4. Thirty-seven cents.
     """
     butterfly = _structure(("lower", "long", 580, 1), ("body", "short", 585, 2), ("upper", "long", 590, 1))
     markets = {
@@ -306,7 +308,7 @@ def test_a_leg_of_two_contracts_a_structure_is_charged_as_two_contracts() -> Non
     one = entry_fee_provision_cents(butterfly, markets, EntrySize(multiplier=100, units=1), trade_date_ms=_TUESDAY)
     two = entry_fee_provision_cents(butterfly, markets, EntrySize(multiplier=100, units=2), trade_date_ms=_TUESDAY)
 
-    assert (one, two) == (19, 37)
+    assert (one, two) == (20, 37)
 
 
 def test_the_sold_leg_is_charged_on_its_bid_and_not_on_its_ask() -> None:
@@ -318,7 +320,7 @@ def test_the_sold_leg_is_charged_on_its_bid_and_not_on_its_ask() -> None:
         "bought": LegQuote(bid=Decimal("1.89"), ask=Decimal("1.93")),
     }
 
-    assert entry_fee_provision_cents(sold_first, markets, EntrySize(multiplier=100, units=1), trade_date_ms=_TUESDAY) == 10
+    assert entry_fee_provision_cents(sold_first, markets, EntrySize(multiplier=100, units=1), trade_date_ms=_TUESDAY) == 11
 
 
 def test_a_provision_for_a_day_with_no_pinned_rate_is_refused_and_is_never_nothing() -> None:

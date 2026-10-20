@@ -191,13 +191,14 @@ def test_a_day_of_option_fills_alone_shares_its_row_by_the_option_models_weights
     """Bot A buys ten calls and bot B one; nothing else trades. Alpaca posts $0.46 for the day.
 
     A buy owes no SEC fee and no TAF. A's weight is CAT 0.003 + ORF 0.15 + OCC 0.25 = 0.403
-    and B's 0.0403. A's part is 46 x 0.403 / 0.4433 = 41.82 cents and B's 4.18: 41 and 4,
-    and the odd cent is A's. $0.42 and $0.04.
+    and B's CAT 0.0003 + ORF 0.015 + OCC 0.03 = 0.0453: OCC counts as the cents a fill is charged,
+    and B's one contract is charged 0.025 up to 0.03. A's part is 46 x 0.403 / 0.4483 = 41.35
+    cents and B's 4.65: 41 and 4, and the odd cent is B's, the larger remainder. $0.41 and $0.05.
     """
     shared = _the_day([BOT_A[0], *BOT_B], [_row("fee-of-the-day", "0.46")])
 
     assert shared.known and shared.unattributed == 0
-    assert _charged(shared, "observed") == {("fee-of-the-day", "bot:a"): D("0.42"), ("fee-of-the-day", "bot:b"): D("0.04")}
+    assert _charged(shared, "observed") == {("fee-of-the-day", "bot:a"): D("0.41"), ("fee-of-the-day", "bot:b"): D("0.05")}
     assert _total(shared) == shared.observed_total == D("0.46")
 
 
@@ -286,3 +287,21 @@ def test_a_day_before_the_option_rates_are_pinned_shares_no_row_and_is_never_fre
 
     assert not early.known and early.predicted_total is None
     assert (early.shares, early.unattributed) == ((), D("0.06"))
+
+
+def test_a_posted_occ_row_for_one_execution_leaves_the_others_the_cents_each_is_charged() -> None:
+    """Bot A buys 10 contracts in one execution and 10 more in ten executions of one.
+
+    OCC is charged per execution: the first is 10 x 0.025 = $0.25, each of the others 0.025 up to $0.03, $0.30 in all.
+    Alpaca has posted the $0.25 row for the first; the ten are still estimates and must keep their own $0.30. Weighing
+    them by unrounded accruals (0.25 against ten of 0.025) would give the first 27 of the 55 cents and leave the ten $0.28.
+    """
+    fills = [_contracts("x", "bot:a", OrderSide.BUY, 10, "1.94")] + [
+        _contracts(f"y{i}", "bot:a", OrderSide.BUY, 1, "1.94") for i in range(10)
+    ]
+
+    result = _the_day(fills, [_row("occ-x", "0.25", component="occ", covers_fill_ids=("x",))])
+
+    assert result.known
+    assert _charged(result, "observed")[("occ-x", "bot:a")] == D("0.25")
+    assert _charged(result, "estimated")[(f"model:{DAY_TEXT}:option:occ", "bot:a")] == D("0.30")

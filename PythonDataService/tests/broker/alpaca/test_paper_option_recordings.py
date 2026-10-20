@@ -43,6 +43,7 @@ from app.broker.alpaca.adapter import (
     to_alpaca_option_order_request,
 )
 from app.broker.alpaca.option_fees import fees_for_option_fill, settle_option_session
+from app.broker.alpaca.regulatory_fees import ceil_cents
 from app.broker.contract.models import OrderSide, OrderType
 from app.broker.contract.options import (
     MultiLegOptionOrderRequest,
@@ -255,7 +256,7 @@ def test_recorded_option_fees_are_read_as_non_trade_activities_for_the_fill_day(
 
     Paper does charge them: they are non-trade activities of type FEE dated the trading
     day, one per leg's clearing fee and one each for ORF, OPT REG, OPT TAF and CAT. These are observed
-    postings, not an endorsement of the fee model: #3306 tracks the OCC and OPT TAF discrepancies.
+    postings, not an endorsement of the fee model: #3306 tracks the OPT TAF discrepancy.
     """
     fees: dict[str, Any] = {}
     for line in _lines(step, "activities"):
@@ -299,8 +300,50 @@ def test_credit_spread_clearing_fees_link_to_each_leg_execution() -> None:
     assert all(Decimal(row["net_amount"]) == Decimal("-0.03") for row in clearing)
 
 
-def test_credit_spread_recorded_fills_model_eighteen_cents_before_the_posted_three_cent_difference() -> None:
-    """#3306: canonical option_fees.py predicts OCC $0.02 and TAF $0.01 less than Paper posted."""
+def test_every_recorded_occ_row_is_the_models_occ_for_the_one_contract_fill_it_names() -> None:
+    """#3306: Paper posts OCC per execution, linked to its fill by execution ID.
+
+    Every OCC row in the recordings (50 distinct ones, on 2026-10-13, -14 and -15, repeated across the
+    captures) names a fill of exactly one contract, and is that fill's OCC rounded up to the cent
+    (1 x $0.025 -> $0.03). Fills of several contracts are not recorded, so this does not say how Alpaca
+    rounds one: the model reads it as contracts x $0.025 rounded up.
+    """
+    checked = 0
+    for path in sorted(_RECORDINGS.glob("*/activities.jsonl")):
+        step = path.parent.name
+        rows = {
+            row["id"]: row
+            for line in _lines(step, "activities")
+            if isinstance(body := _body(line), list)
+            for row in body
+        }
+        fills = {
+            execution_id_from_activity_id(activity.activity_id): activity
+            for activity in map(from_alpaca_activity, rows.values())
+            if activity.activity_type == "FILL"
+        }
+        for row in rows.values():
+            if row["activity_type"] != "FEE" or row.get("activity_sub_type") != "OCC":
+                continue
+            fill = fills[row["execution_id"]]
+            assert fill.occurred_at_ms is not None and fill.side is not None and fill.price is not None
+            assert fill.quantity == 1, f"{step}: only one-contract executions are recorded"
+            modelled = fees_for_option_fill(
+                trade_date_ms=fill.occurred_at_ms,
+                side=OrderSide.SELL if fill.side == "sell_short" else OrderSide(fill.side),
+                contracts=Decimal(str(fill.quantity)),
+                premium=Decimal(str(fill.price)),
+                multiplier=100,
+            )
+            assert modelled.occ is not None
+            assert ceil_cents(modelled.occ) == -Decimal(row["net_amount"]), f"{step}: {row['execution_id']}"
+            checked += 1
+    assert checked > 0
+
+
+def test_credit_spread_recorded_fills_model_every_posted_cent_but_the_one_cent_of_tafs() -> None:
+    """#3306: canonical option_fees.py matches Paper's OCC (four $0.03 rows, one per leg execution) and predicts
+    the TAF $0.01 Paper posted inside FINRA's pause at zero."""
     evidence = json.loads((_RECORDINGS / "3225-credit-sign-check" / "outside_fee_evidence.json").read_text())
     contracts = {contract.symbol: contract for contract in map(from_alpaca_option_contract, evidence["contracts"])}
     fills = list(map(from_alpaca_activity, evidence["activities"]))
@@ -323,7 +366,7 @@ def test_credit_spread_recorded_fills_model_eighteen_cents_before_the_posted_thr
 
     model = settle_option_session(accrued)
     assert (model.sec, model.taf, model.cat, model.orf, model.occ, model.total) == tuple(
-        map(Decimal, ("0.01", "0.00", "0.01", "0.06", "0.10", "0.18"))
+        map(Decimal, ("0.01", "0.00", "0.01", "0.06", "0.12", "0.20"))
     )
     rows = {
         row["id"]: from_alpaca_activity(row)
@@ -335,7 +378,7 @@ def test_credit_spread_recorded_fills_model_eighteen_cents_before_the_posted_thr
         if activity.activity_type == "FEE" and activity.occurred_at_ms is not None
         and et_date_at_ms(activity.occurred_at_ms) == date(2026, 10, 15)
     )
-    assert posted - model.total == Decimal("0.03")
+    assert posted - model.total == Decimal("0.01")
 
 
 # ── The first several-leg order: a bull call spread, 2026-10-14 ──────────────

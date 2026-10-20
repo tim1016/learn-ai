@@ -12,11 +12,11 @@ Canonical implementation: ``app/broker/alpaca/option_fees.py`` for every rate an
 Validated against: tests/options_backtest/test_fees.py, which compares a day of fills with the model's own day
   settlement.
 
-An accepted divergence. The model settles a whole day: each fee type is added up over the day's fills and the sum is
-rounded up to the cent once. A replay needs a fee at each fill, so each fee type of each fill is rounded up on its own.
-A fill's fee is therefore never less than its share of the day's settlement, and over a day of n fills each fee type
-is at most n - 1 cents more than the model's settlement (five types, so at most 5(n - 1) cents). The estimate leans
-high by cents a day, and never low.
+An accepted divergence. The model settles SEC, TAF, CAT and ORF over a whole day: each is added up over the day's fills
+and the sum is rounded up to the cent once (OCC it rounds per fill, as this file does). A replay needs a fee at each
+fill, so each fee type of each fill is rounded up on its own. A fill's fee is therefore never less than its share of
+the day's settlement, and over a day of n fills each of those four fee types is at most n - 1 cents more than the
+model's settlement (so at most 4(n - 1) cents). The estimate leans high by cents a day, and never low.
 
 An unknown fee is never a zero. The model has no pinned rate for some fee types on early dates; a fill on such a date
 raises ``FeeRateNotPublished`` naming the date and the types. Whether a date is priced, and so the first date that is,

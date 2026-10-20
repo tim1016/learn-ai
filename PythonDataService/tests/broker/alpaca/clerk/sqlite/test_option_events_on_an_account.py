@@ -920,7 +920,8 @@ async def test_a_sale_booked_against_a_bot_is_counted_once_by_the_fees_and_the_m
     By hand, the day's fees over the bot's two fills (one contract bought,
     one sold at $0.40), each fee type rounded up to the cent once for the
     day: SEC 40.00 x 0.0000206, 1 cent; TAF 0.00329, 1; CAT 2 x 0.0003, 1;
-    ORF 2 x 0.015, 3; OCC 2 x 0.025, 5. Eleven cents. The sale brings in
+    ORF 2 x 0.015, 3; OCC, rounded up on each fill instead,
+    3 + 3, 6. Twelve cents. The sale brings in
     1 x 0.40 x 100 = $40.00.
     """
     await _holding_one_call(paper)
@@ -936,7 +937,7 @@ async def test_a_sale_booked_against_a_bot_is_counted_once_by_the_fees_and_the_m
     fees = paper.repo.fee_attribution(now_ms=paper.clock())
     assert fees.known, fees.unresolved
     assert fees.external_fills == ()
-    assert fees.predicted_total == fees.total_for(bot_subject_id("a")) == Decimal("0.11")
+    assert fees.predicted_total == fees.total_for(bot_subject_id("a")) == Decimal("0.12")
     # The cash was last read before the sale: its proceeds are still to come, once.
     money = paper.repo.account_money(cash=100_000 - 194, seen_before_ms=sold_at)
     assert money.unseen_sales == Decimal("40")

@@ -1066,9 +1066,10 @@ def test_a_fee_row_of_a_day_with_only_option_fills_is_shared_among_their_bots_an
     """Bot A buys ten AAPL calls and bot B one, on 2026-09-08. A buy owes no SEC fee and no TAF.
 
     By the option model A's fill owes CAT $0.003, ORF $0.15 and OCC $0.25, $0.403 in all, and
-    B's a tenth of that, $0.0403. Alpaca posts $0.46 for the day. A's part is
-    46 x 0.403 / 0.4433 = 41.82 cents and B's 4.18: 41 and 4 whole cents, and the odd cent
-    goes to the larger remainder, A's. $0.42 and $0.04.
+    B's CAT $0.0003, ORF $0.015 and OCC $0.03 (its one contract is charged 0.025 up to 0.03),
+    $0.0453. Alpaca posts $0.46 for the day. A's part is 46 x 0.403 / 0.4483 = 41.35 cents and
+    B's 4.65: 41 and 4 whole cents, and the odd cent goes to the larger remainder, B's.
+    $0.41 and $0.05.
     """
     repo = _budgeted_books(tmp_path, bots={"bot-a": "AAPL", "bot-b": "AAPL"}, budget_cents=200_000)
     try:
@@ -1080,14 +1081,14 @@ def test_a_fee_row_of_a_day_with_only_option_fills_is_shared_among_their_bots_an
 
         assert fees.known and fees.unattributed == 0
         assert {(share.subject_id, share.charge_id, share.state): share.amount for share in fees.shares} == {
-            (bot_subject_id("bot-a"), "fee-of-the-day", "observed"): Decimal("0.42"),
-            (bot_subject_id("bot-b"), "fee-of-the-day", "observed"): Decimal("0.04"),
+            (bot_subject_id("bot-a"), "fee-of-the-day", "observed"): Decimal("0.41"),
+            (bot_subject_id("bot-b"), "fee-of-the-day", "observed"): Decimal("0.05"),
         }
         assert fees.observed_total == Decimal("0.46")
         # No charge is nobody's, so the account's budget answers and each bot carries its own part.
         budget = repo.account_budget(cash=5_000, seen_before_ms=repo.clock() + 1)
         assert {bot.strategy_instance_id: bot.fees for bot in budget.deployments} == {
-            "bot-a": Decimal("0.42"), "bot-b": Decimal("0.04"),
+            "bot-a": Decimal("0.41"), "bot-b": Decimal("0.05"),
         }
     finally:
         repo.close()

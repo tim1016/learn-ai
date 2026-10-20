@@ -126,7 +126,7 @@
     }
   },
   "provision_cents": {
-    "one_bull_call_spread": 10,
+    "one_bull_call_spread": 11,
     "two_contracts_bought": 9
   }
 }

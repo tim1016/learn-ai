@@ -288,7 +288,7 @@ async def test_a_preview_answers_in_the_published_shape_with_money_in_cents_and_
     assert isinstance(bought["delta"], float)
     money = seen["money"]
     assert (money["net_price"], money["premium_is"], money["net_entry_premium_cents"]) == ("1.94", "paid", 19_400)
-    assert (money["broker_requirement_cents"], money["fee_estimate_cents"], money["entry_commitment_cents"]) == (0, 10, 19_410)
+    assert (money["broker_requirement_cents"], money["fee_estimate_cents"], money["entry_commitment_cents"]) == (0, 11, 19_411)
     assert (seen["at_expiry"]["loss_cents"], seen["at_expiry"]["gain_cents"]) == (19_400, 30_600)
     assert seen["at_expiry"]["gain_holds"] == [{"from_price": "590", "to_price": None}]
     assert seen["at_expiry"]["break_even_prices"] == ["586.94"]

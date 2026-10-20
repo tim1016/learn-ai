@@ -162,7 +162,7 @@ A setup charges no fee, a fee per contract, or an estimate. The result says whic
 
 Estimated fees come from the canonical dated option fee model (ADR 0076 decisions 13 and 16). They exist only from the first date the model has a published rate for every fee type of an option fill. A session before it cannot be tested with estimated fees. Check data says so, and a run refuses before it reads anything. The owner can choose a fee per contract or none for those dates.
 
-Each fee type of each fill is rounded up to a cent. The model settles a whole day and rounds once. So a day charged per fill is never less than the model's settlement, and at most n − 1 cents per fee type more over n fills. The estimate leans high by cents a day and never low. This is an accepted divergence.
+Each fee type of each fill is rounded up to a cent. The model settles a whole day and rounds once, except OCC, which it rounds per fill as Alpaca posts it (ADR 0076 decision 13, amended by #3306). So a day charged per fill is never less than the model's settlement, and at most n − 1 cents per fee type more over n fills for SEC, TAF, CAT and ORF. The estimate leans high by cents a day and never low. This is an accepted divergence.
 
 *Rejected:* charging nothing where the model has no rate.
 

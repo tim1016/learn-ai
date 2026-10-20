@@ -813,8 +813,9 @@ async def test_a_simulated_option_round_trip_is_charged_the_option_fees_of_its_d
 
     SEC, on the $240.00 sold: $0.004944. TAF, on the one contract sold:
     $0.00329. CAT, on two hundred equivalent shares: $0.0006. ORF, two
-    contracts: $0.03. OCC, two contracts: $0.05. Each fee type is rounded up
-    to the cent: 1 + 1 + 1 + 3 + 5.
+    contracts: $0.03. OCC, $0.025 a fill, rounded up to $0.03 for each of the
+    two fills. SEC, TAF, CAT and ORF are rounded up to the cent over the day:
+    1 + 1 + 1 + 3, and OCC 3 + 3.
     """
     await dry_run.enter(dry_run.evidence())
     after_the_buy = dry_run.fees()
@@ -825,10 +826,10 @@ async def test_a_simulated_option_round_trip_is_charged_the_option_fees_of_its_d
 
     assert after_the_buy.known and after_the_buy.total_for(f"bot:{SID}") == Decimal("0.06")
     assert fees.known, fees.unresolved
-    assert fees.total_for(f"bot:{SID}") == Decimal("0.11")
+    assert fees.total_for(f"bot:{SID}") == Decimal("0.12")
     assert {share.charge_id.rsplit(":", 1)[-1]: share.amount for share in fees.shares} == {
         "sec": Decimal("0.01"), "taf": Decimal("0.01"), "cat": Decimal("0.01"),
-        "orf": Decimal("0.03"), "occ": Decimal("0.05"),
+        "orf": Decimal("0.03"), "occ": Decimal("0.06"),
     }
 
 

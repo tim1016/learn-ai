@@ -114,9 +114,9 @@ def test_the_received_spread_is_sent_at_a_net_price_below_zero_and_sets_aside_it
     assert entry.money.net_entry_premium_cents == -30_700
     assert entry.money.broker_requirement_cents == 50_000
     assert entry.money.loss_at_expiry_cents == 19_300
-    # SEC: $5.31 x 100 x 0.0000206 = $0.01093866 -> 2 cents. TAF -> 1. CAT: 2 x $0.0003 -> 1. ORF 3. OCC 5. Together 12.
-    assert entry.money.fee_provision_cents == 12
-    assert entry.money.entry_commitment_cents == 19_312
+    # SEC: $5.31 x 100 x 0.0000206 = $0.01093866 -> 2 cents. TAF -> 1. CAT: 2 x $0.0003 -> 1. ORF 3. OCC: $0.025 up to 3 a leg, 6. Together 13.
+    assert entry.money.fee_provision_cents == 13
+    assert entry.money.entry_commitment_cents == 19_313
     assert entry.unit_set_aside == Decimal("193.00")
 
 
@@ -126,11 +126,11 @@ def test_the_fee_provision_of_a_four_leg_entry_is_every_legs_fill_settled_as_one
     assert isinstance(one, MultiLegOptionEntryFacts) and isinstance(three, MultiLegOptionEntryFacts)
     assert len(one.legs) == 4
     # One unit: $2.10 + $1.20 sold = $330.00. SEC: 330 x 0.0000206 = $0.006798 -> 1 cent.
-    # TAF: 2 sold x $0.00329 = $0.00658 -> 1. CAT: 4 x $0.0003 = $0.0012 -> 1. ORF: 4 x $0.015 = 6. OCC: 4 x $0.025 = 10.
-    assert one.money.fee_provision_cents == 1 + 1 + 1 + 6 + 10
+    # TAF: 2 sold x $0.00329 = $0.00658 -> 1. CAT: 4 x $0.0003 = $0.0012 -> 1. ORF: 4 x $0.015 = 6. OCC: $0.025 up to 3 a leg, 12.
+    assert one.money.fee_provision_cents == 1 + 1 + 1 + 6 + 12
     # Three units: SEC: 990 x 0.0000206 = $0.020394 -> 3. TAF: 6 x $0.00329 = $0.01974 -> 2.
-    # CAT: 12 x $0.0003 = $0.0036 -> 1. ORF: 12 x $0.015 = 18. OCC: 12 x $0.025 = 30.
-    assert three.money.fee_provision_cents == 3 + 2 + 1 + 18 + 30
+    # CAT: 12 x $0.0003 = $0.0036 -> 1. ORF: 12 x $0.015 = 18. OCC: 3 x $0.025 = $0.075 up to 8 a leg, 32.
+    assert three.money.fee_provision_cents == 3 + 2 + 1 + 18 + 32
     # Bought at $1.34 and $0.54, sold at $2.10 and $1.20: $1.42 received a share.
     assert one.net_limit_price == Decimal("-1.42")
     # One side can lose at a time: the requirement is the $5 between one side's strikes, $500.00.
