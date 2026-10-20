@@ -199,7 +199,8 @@
         </div>
       }
 
-      <div class="chart-stage">
+      <div class="chart-viewport">
+      <div class="chart-stage" [style.min-height.px]="activePremiumPanes().length ? 320 + activePremiumPanes().length * 160 : null">
         @if (premiumNotice(); as notice) { <p role="status">{{ notice }}</p> }
         @for (premium of premiumCaptions(); track premium.symbol) {
           <p class="premium-caption" [class.premium-caption--placed]="premiumCaptionTops()[premium.symbol] !== undefined" [style.top.px]="premiumCaptionTops()[premium.symbol]">
@@ -209,7 +210,7 @@
             @if (premium.notice) { <span role="status">{{ premium.notice }}</span> }
           </p>
         }
-        <div #chartContainer class="chart-container" [style.min-height.px]="activePremiumPanes().length ? 320 + activePremiumPanes().length * 160 : null" aria-hidden="true"></div>
+        <div #chartContainer class="chart-container" aria-hidden="true"></div>
         @if (activeIndicatorChips().length) {
           <ul class="chart-indicator-legend" aria-label="Plotted indicators">
             <li class="chart-indicator-legend__title">Indicators</li>
@@ -247,6 +248,7 @@
             <span>{{ activePane() === 'live' ? 'The live tape will draw when IBKR publishes the next bar.' : 'Try a wider Polygon range.' }}</span>
           </div>
         }
+      </div>
       </div>
 
       <app-chart-lanes [lanes]="placedLanes()" />
