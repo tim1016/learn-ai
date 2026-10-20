@@ -461,3 +461,45 @@ def test_parse_durations_sums_phases_and_keeps_node_ids_with_spaces() -> None:
         "tests/test_a.py::test_x[with a space]": 1.7,
         "tests/test_a.py::test_y": 0.01,
     }
+
+
+def test_pytest_command_saves_junit_in_the_family_that_names_each_testcases_file() -> None:
+    from scripts.run_fast_tests import pytest_command
+
+    command = pytest_command(shard_index=2, shard_count=16, junitxml=Path("TestResults/python-shard-2.xml"))
+
+    assert command[-4:] == ["--junitxml", "TestResults/python-shard-2.xml", "-o", "junit_family=xunit1"]
+    assert "--junitxml" not in pytest_command(shard_index=2, shard_count=16)
+
+
+def test_junit_timings_are_keyed_by_file_and_name_and_averaged_over_the_runs_that_held_them(tmp_path: Path) -> None:
+    from scripts.update_pr_shard_durations import mean_durations, read_junit_run
+
+    def suite(*cases: str) -> str:
+        return f"<testsuites><testsuite>{''.join(cases)}</testsuite></testsuites>"
+
+    def case(file: str, name: str, seconds: str, classname: str = "x") -> str:
+        return f'<testcase classname="{classname}" name="{name}" file="{file}" time="{seconds}"/>'
+
+    first = tmp_path / "run-1"
+    first.mkdir()
+    (first / "python-shard-1.xml").write_text(
+        suite(case("tests/a.py", "test_x[with a space]", "1.50"), case("tests/a.py", "test_y", "0.25", "x.TestK"))
+    )
+    (first / "python-shard-2.xml").write_text(suite(case("tests/b.py", "test_z", "2.00")))
+    second = tmp_path / "run-2.xml"  # a single file is a run too
+    second.write_text(suite(case("tests/a.py", "test_x[with a space]", "2.50"), case("tests/a.py", "test_y", "0.75")))
+
+    runs = [read_junit_run(first), read_junit_run(second)]
+
+    assert runs[0] == {"tests/a.py::test_x[with a space]": 1.5, "tests/a.py::test_y": 0.25, "tests/b.py::test_z": 2.0}
+    assert mean_durations(runs) == {
+        "tests/a.py::test_x[with a space]": 2.0, "tests/a.py::test_y": 0.5, "tests/b.py::test_z": 2.0,
+    }
+
+
+def test_a_junit_testcase_that_cannot_name_its_file_is_refused_not_skipped() -> None:
+    from scripts.update_pr_shard_durations import parse_junit
+
+    with pytest.raises(ValueError, match="without a file"):
+        parse_junit('<testsuite><testcase classname="x" name="test_t" time="1.0"/></testsuite>')
