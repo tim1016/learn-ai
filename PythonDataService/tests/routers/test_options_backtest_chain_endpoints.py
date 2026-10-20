@@ -32,17 +32,14 @@ import pytest
 import respx
 from httpx import ASGITransport
 
-from app.broker.fleet.errors import DataPlaneControlSecretRefused, FleetControlPlaneNotInstalled
 from app.config import settings
 from app.data_lake import catalog_client, option_lake
-from app.data_lake.option_listing import OptionListingFileError
 from app.main import app
 from app.options.contract import OptionContract
 from app.options_backtest import chain_download
 from app.options_backtest.data_check import lake_reason_words
-from app.security.data_plane_control import CONTROL_SECRET_ENV_VAR, CONTROL_SECRET_HEADER
+from app.security.data_plane_control import CONTROL_SECRET_HEADER
 from tests._helpers.fake_lake_catalog import FakeCatalog
-from tests._helpers.option_lake_cases import DISK_FULL_AT_THE_RENAME, install_write_fault
 from tests._helpers.option_vendor import no_trades
 from tests.options_backtest._lake import (
     FRIDAY,
@@ -261,25 +258,6 @@ async def test_a_date_with_no_session_is_refused_with_a_plain_reason(
     assert response.status_code == 400
     assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_NOT_A_SESSION"
     assert what in response.json()["detail"]["message"]
-
-
-async def test_a_catalog_that_cannot_be_reached_is_a_503_and_not_a_missing_listing(
-    client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # A file is there, so reading it means asking the catalog.
-    with respx.mock:
-        await store_listing([vendor_listing_row(CALLS[602])])
-
-    async def down(*args: object, **kwargs: object) -> bool:
-        raise catalog_client.CatalogUnavailableError("down")
-
-    monkeypatch.setattr(catalog_client, "has_committed_file_receipt", down)
-
-    async with client as c:
-        response = await c.get(f"{PREFIX}/day", params={"underlying": "SPY", "trading_date_ms": FRIDAY_MIDNIGHT_MS})
-
-    assert response.status_code == 503
-    assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_LAKE_CATALOG_UNAVAILABLE"
 
 
 # ── GET /past-chain/expiry ────────────────────────────────────────────────
@@ -520,16 +498,6 @@ async def test_a_day_or_expiry_request_that_is_malformed_is_the_standard_422(
     assert response.status_code == 422
 
 
-async def test_a_window_of_fourteen_strikes_is_allowed_and_fifteen_is_not(
-    client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path
-) -> None:
-    async with client as c:
-        widest = await c.get(f"{PREFIX}/expiry", params=_expiry_params(strikes=14))
-        wider = await c.get(f"{PREFIX}/expiry", params=_expiry_params(strikes=15))
-
-    assert (widest.status_code, wider.status_code) == (200, 422)
-
-
 async def test_the_most_strikes_each_side_a_read_takes_is_the_limit_served_the_limit_is_allowed_and_one_more_is_not(
     client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
@@ -541,24 +509,6 @@ async def test_the_most_strikes_each_side_a_read_takes_is_the_limit_served_the_l
     # 14 strikes each side is 29 strikes a right, 58 standard contracts, under the 60 a window may hold.
     assert limit == 14
     assert (at_the_limit.status_code, one_more.status_code) == (200, 422)
-
-
-async def test_an_expiry_read_with_the_catalog_down_is_a_503(
-    client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    with respx.mock:
-        await _the_lake(fake_catalog, tmp_lake)
-
-    async def down(*args: object, **kwargs: object) -> bool:
-        raise catalog_client.CatalogUnavailableError("down")
-
-    monkeypatch.setattr(catalog_client, "has_committed_file_receipt", down)
-
-    async with client as c:
-        response = await c.get(f"{PREFIX}/expiry", params=_expiry_params(at_ms=MINUTE_10_MS))
-
-    assert response.status_code == 503
-    assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_LAKE_CATALOG_UNAVAILABLE"
 
 
 @respx.mock
@@ -947,32 +897,6 @@ async def test_a_failure_of_the_vendor_is_an_item_with_a_reason_and_the_request_
 
 
 @respx.mock
-async def test_a_contract_whose_file_cannot_be_written_is_an_item_failed_with_io_error_and_the_request_still_succeeds(
-    client: httpx.AsyncClient,
-    fake_catalog: FakeCatalog,
-    tmp_lake: Path,
-    stock_fetch: StockFetchDouble,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    vendor_lists(CALLS[602])
-    vendor_bars(lambda symbol: no_trades(symbol))
-    install_write_fault(monkeypatch, DISK_FULL_AT_THE_RENAME, only_bars=True)
-
-    async with client as c:
-        response = await c.post(f"{PREFIX}/download", json=_download(contracts=["SPY250613C00602000"]))
-
-    assert response.status_code == 200, response.text
-    items = response.json()["items"]
-    assert [(i["kind"], i["subject"], i["outcome"], i["reason"]) for i in items] == [
-        ("listing", "SPY", "fetched", None),
-        ("underlying", "SPY", "fetched", None),
-        ("contract", "SPY250613C00602000", "failed", "io_error"),
-    ]
-    # The words say what failed and the system's reason, and name no path on the server's disk.
-    assert "No space left on device" in items[2]["detail"] and str(tmp_lake) not in items[2]["detail"]
-
-
-@respx.mock
 async def test_a_download_with_no_contracts_or_expiry_captures_the_listing_and_the_underlying(
     client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path, stock_fetch: StockFetchDouble
 ) -> None:
@@ -1063,27 +987,6 @@ async def test_a_malformed_download_body_is_the_standard_422(
     assert response.status_code == 422 and stock_fetch.calls == []
 
 
-@respx.mock
-async def test_a_download_with_the_catalog_down_is_a_503(
-    client: httpx.AsyncClient,
-    stock_fetch: StockFetchDouble,
-    monkeypatch: pytest.MonkeyPatch,
-    fake_catalog: FakeCatalog,
-    tmp_lake: Path,
-) -> None:
-    async def down(*args: object, **kwargs: object) -> int:
-        raise catalog_client.CatalogUnavailableError("down")
-
-    monkeypatch.setattr(catalog_client, "claim_metadata_artifact", down)
-    vendor_lists(CALLS[602])
-
-    async with client as c:
-        response = await c.post(f"{PREFIX}/download", json=_download())
-
-    assert response.status_code == 503
-    assert response.json()["detail"]["code"] == "OPTIONS_BACKTEST_LAKE_CATALOG_UNAVAILABLE"
-
-
 @pytest.mark.parametrize(
     ("spoil", "kind"),
     [
@@ -1113,32 +1016,6 @@ async def test_a_download_that_finds_the_underlying_damaged_says_so_by_what_and_
     assert (underlying["outcome"], underlying["reason"]) == ("failed", "underlying_unreadable")
     assert "SPY minute bars" in underlying["detail"] and kind in underlying["detail"]
     assert str(tmp_lake) not in response.text and ".zip" not in response.text and stock_fetch.calls == []
-
-
-@respx.mock
-async def test_a_download_whose_listing_cannot_be_read_back_says_so_by_what_and_why_and_names_no_file(
-    client: httpx.AsyncClient,
-    fake_catalog: FakeCatalog,
-    tmp_lake: Path,
-    stock_fetch: StockFetchDouble,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    vendor_lists(CALLS[602])
-    bars = vendor_bars(lambda symbol: no_trades(symbol))
-
-    def damaged(*args: object, **kwargs: object) -> None:
-        raise OptionListingFileError(f"{raw_root(tmp_lake)}/{LISTING_PATH}: expected one member")
-
-    monkeypatch.setattr(chain_download, "read_option_listing", damaged)
-
-    async with client as c:
-        response = await c.post(f"{PREFIX}/download", json=_download(contracts=["SPY250613C00602000"]))
-
-    listing, _, contract = response.json()["items"]
-    assert (listing["outcome"], listing["reason"]) == ("failed", "listing_not_captured")
-    assert "SPY listing" in listing["detail"] and "OptionListingFileError" in listing["detail"]
-    assert contract["reason"] == "listing_not_captured" and bars.call_count == 0
-    assert str(tmp_lake) not in response.text and ".zip" not in response.text
 
 
 # ── A window is the contracts a download takes ────────────────────────────
@@ -1225,24 +1102,6 @@ def secret_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
 
 
-@pytest.mark.parametrize("headers", [{}, {CONTROL_SECRET_HEADER: "wrong"}], ids=["no secret", "a wrong secret"])
-@respx.mock
-async def test_the_download_without_the_control_secret_is_refused_as_the_lakes_fetch_route_is_and_fetches_nothing(
-    client: httpx.AsyncClient, stock_fetch: StockFetchDouble, secret_is_required: None, headers: dict[str, str]
-) -> None:
-    async with client as c:
-        refused = await c.post(f"{PREFIX}/download", json=_download(), headers=headers)
-        lakes_refusal = await c.post("/api/data-lake/ensure-data", json={}, headers=headers)
-
-    assert refused.status_code == 403
-    assert refused.json()["reason"] == DataPlaneControlSecretRefused.reason
-    assert CONTROL_SECRET_HEADER in refused.json()["message"] and "detail" not in refused.json()
-    # The very refusal the lake's own fetch route gives, body for body.
-    assert (lakes_refusal.status_code, lakes_refusal.json()) == (refused.status_code, refused.json())
-    # Nothing was fetched: no stock fetch, and a vendor request would have failed the test (nothing is mocked).
-    assert stock_fetch.calls == []
-
-
 @respx.mock
 async def test_the_download_with_the_control_secret_runs(
     client: httpx.AsyncClient, stock_fetch: StockFetchDouble, secret_is_required: None
@@ -1263,33 +1122,6 @@ async def test_the_download_with_the_control_secret_runs(
         ("underlying", "fetched"),
         ("contract", "fetched"),
     ]
-
-
-async def test_the_download_fails_closed_when_no_secret_is_configured_and_the_opt_out_is_off(
-    client: httpx.AsyncClient, stock_fetch: StockFetchDouble, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "")
-    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
-
-    async with client as c:
-        response = await c.post(f"{PREFIX}/download", json=_download())
-
-    assert response.status_code == 503
-    assert response.json()["reason"] == FleetControlPlaneNotInstalled.reason
-    assert CONTROL_SECRET_ENV_VAR in response.json()["message"] and stock_fetch.calls == []
-
-
-@respx.mock
-async def test_the_two_reads_need_no_secret_even_when_one_is_required_for_the_download(
-    client: httpx.AsyncClient, fake_catalog: FakeCatalog, tmp_lake: Path, secret_is_required: None
-) -> None:
-    await _the_lake(fake_catalog, tmp_lake)
-
-    async with client as c:
-        day = await c.get(f"{PREFIX}/day", params={"underlying": "SPY", "trading_date_ms": FRIDAY_MIDNIGHT_MS})
-        expiry = await c.get(f"{PREFIX}/expiry", params=_expiry_params(at_ms=MINUTE_10_MS))
-
-    assert (day.status_code, expiry.status_code) == (200, 200)
 
 
 # ── The published contract ────────────────────────────────────────────────

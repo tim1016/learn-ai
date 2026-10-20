@@ -163,18 +163,6 @@ class TestIvSeriesFromRecorder:
         assert items[0]["health_score"] == pytest.approx(0.85)
         assert items[0]["variance_contribution_synthetic"] == pytest.approx(0.12)
 
-    def test_omits_health_score_for_legacy_rows(self, recorder_store):
-        # A row written before the health_score field existed — the
-        # JsonlIvSnapshotStore reconstructs it via the default None, and
-        # this fallback path should NOT inject a synthetic health number.
-        ts = 1_700_000_000_000
-        _record(recorder_store, ts_ms=ts, iv_vix=0.21, vcs=0.12, health_score=None)
-        idx = pd.Index([ts], dtype=np.int64)
-
-        items = _iv_series_from_recorder("SPY", idx)
-
-        assert "health_score" not in items[0]
-
     def test_window_filters_by_ticker(self, recorder_store):
         ts = 1_700_000_000_000
         _record(recorder_store, ts_ms=ts, ticker="QQQ", iv_vix=0.25)

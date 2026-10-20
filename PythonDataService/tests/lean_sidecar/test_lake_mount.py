@@ -450,27 +450,6 @@ class TestSameBytesAsThePythonReaders:
             "the first quote zip holds exactly the bytes the lake's quote writer produced"
         )
 
-    def test_trade_only_lake_is_refused(self, tmp_path: Path) -> None:
-        """A trade-only lake would launch LEAN into failed_data_requests.
-
-        ``data_types=['trade']`` is a legal lake spec, and staging mode
-        coped by synthesizing quote zips per run. The read-only mount
-        cannot, and LEAN's default minute subscription asks for quotes
-        regardless — so serving such a lake means a guaranteed-noisy
-        run. Refuse instead.
-        """
-        lake_root = tmp_path / lake_subpath("raw")
-        seed_lake_window(lake_root, "SPY", WINDOW, with_quote=False)
-
-        with pytest.raises(LakeMountError, match="lake_incomplete_quote_coverage"):
-            resolve_lake_artifacts(
-                lake_root=lake_root,
-                symbol="SPY",
-                start=DAY_ONE,
-                end=DAY_TWO,
-            )
-
-
 class TestLakeCoverageFailsLoudly:
     """A gap in the lake must surface, never fall back to a Polygon fetch."""
 

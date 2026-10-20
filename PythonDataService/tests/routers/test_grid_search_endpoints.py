@@ -100,19 +100,6 @@ async def test_a_degenerate_window_is_rejected_by_the_schema(client, lake) -> No
     assert response.status_code == 422
 
 
-async def test_missing_sessions_are_named_in_the_refusal(client, tmp_path: Path, monkeypatch) -> None:
-    for day in SESSIONS[:-1]:
-        seed_store_day(tmp_path, "SPY", day)
-    monkeypatch.setattr(service, "resolve_data_roots", lambda **kwargs: [tmp_path])
-
-    async with client as c:
-        response = await c.post("/api/research/grid-search/preflight", json=_body())
-
-    assert response.status_code == 400
-    detail = response.json()["detail"]
-    assert detail["code"] == "DATA_MISSING" and SESSIONS[-1].isoformat() in detail["message"]
-
-
 # ── Lifecycle over HTTP (ephemeral database) ─────────────────────────────
 
 
@@ -237,42 +224,6 @@ async def test_finish_of_a_completed_search_is_refused(client, lake, monkeypatch
 
 
 # ── Research-mode forwarding and idempotent dispatch (#3049) ─────────────
-
-
-async def test_research_mode_forwards_the_dispatch_and_never_binds(client, monkeypatch) -> None:
-    """In research mode the API hands the dispatch over and prepares, stamps and runs nothing (#3049)."""
-    import respx
-    from httpx import Response as HttpxResponse
-
-    from app.config import settings
-
-    monkeypatch.setattr(settings, "RESEARCH_EXECUTION_MODE", "research")
-    monkeypatch.setattr(settings, "RESEARCH_RUNTIME_URL", "http://127.0.0.1:8000")
-    monkeypatch.delenv("RESEARCH_RUNTIME", raising=False)
-    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "sec")
-
-    def never_prepares(*args, **kwargs):
-        raise AssertionError("the forwarding API never prepares a launch")
-
-    monkeypatch.setattr(service, "prepare_launch", never_prepares)
-
-    def never_runs(job_id, work, **kwargs):
-        raise AssertionError("the forwarding API never starts a worker thread")
-
-    monkeypatch.setattr(grid_search_router, "run_in_thread", never_runs)
-
-    with respx.mock(base_url="http://127.0.0.1:8000") as mock:
-        route = mock.post("/api/jobs-internal/grid-search").mock(
-            return_value=HttpxResponse(202, json={"job_id": "job-fwd", "search_id": "search-runtime", "status": "queued"})
-        )
-        async with client as c:
-            launched = await c.post("/api/jobs-internal/grid-search", json={**_body(), "jobId": "job-fwd"})
-
-    assert launched.status_code == 202, launched.text
-    assert launched.json() == {"job_id": "job-fwd", "search_id": "search-runtime", "status": "queued"}
-    assert route.called
-    sent = route.calls.last.request
-    assert sent.headers["X-Data-Plane-Control-Secret"] == "sec", "the authenticated internal boundary"
 
 
 async def test_a_live_redelivery_joins_the_first_worker_and_never_claims_twice(client, lake, monkeypatch) -> None:

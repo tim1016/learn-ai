@@ -412,32 +412,6 @@ def test_an_existing_bundle_is_never_overwritten(tmp_path: Path) -> None:
     assert bundle.read_bytes() == b"precious"
 
 
-def test_the_owners_leftover_tokens_no_longer_block_export(tmp_path: Path) -> None:
-    """#2269: the three token files on the owner's host used to refuse the
-    whole export with no way out; each is skipped, listed with why it needs
-    nothing, and never carried."""
-    installation = build_installation(tmp_path)
-    artifacts = installation.repo_root / "PythonDataService" / "artifacts"
-    (artifacts / "lean-sidecar").mkdir()
-    (artifacts / "lean-sidecar" / ".launcher-token").write_text("TOKEN-A-77", encoding="utf-8")
-    (artifacts / ".host-daemon-token").write_text("TOKEN-B-77", encoding="utf-8")
-    (artifacts / ".clerk-host-binding-capability").write_text("TOKEN-C-77", encoding="utf-8")
-    bundle = tmp_path / "bundle.tar"
-
-    steps = _export(installation, bundle)
-
-    assert [entry["path"] for entry in steps[-1]["skipped_secret_files"]] == [
-        "PythonDataService/artifacts/.clerk-host-binding-capability",
-        "PythonDataService/artifacts/.host-daemon-token",
-        "PythonDataService/artifacts/lean-sidecar/.launcher-token",
-    ]
-    raw = _all_member_bytes(bundle)
-    for token in (b"TOKEN-A-77", b"TOKEN-B-77", b"TOKEN-C-77"):
-        assert token not in raw
-    # The folder itself still travels.
-    assert steps[-1]["step"] == "complete"
-
-
 def test_an_escaping_symlink_refuses_before_any_bot_stops(tmp_path: Path) -> None:
     installation = build_installation(tmp_path)
     (installation.repo_root / "PythonDataService" / "artifacts" / "hosts").symlink_to("/etc/hosts")

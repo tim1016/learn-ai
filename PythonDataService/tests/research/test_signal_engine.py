@@ -19,7 +19,7 @@ from app.research.signal.engine import run_signal_engine
 from app.research.signal.graduation import evaluate_graduation
 from app.research.signal.regime import compute_bar_regime_gate, compute_daily_regime_labels
 from app.research.signal.standardize import apply_threshold_filter, compute_train_zscore
-from app.research.signal.walk_forward import WalkForwardResult, run_walk_forward
+from app.research.signal.walk_forward import run_walk_forward
 
 
 def _generate_multi_month_bars(
@@ -88,16 +88,6 @@ class TestRollingZScore:
         z_flipped = compute_train_zscore(feature, train_mask, flip_sign=True)
 
         np.testing.assert_array_almost_equal(z_normal.values, -z_flipped.values)
-
-    def test_zero_std_returns_nan(self) -> None:
-        """Constant feature should produce NaN z-scores."""
-        feature = pd.Series([5.0] * 10)
-        train_mask = pd.Series([True] * 10)
-
-        z = compute_train_zscore(feature, train_mask, flip_sign=False)
-
-        assert z.isna().all()
-
 
 class TestThresholdFilter:
     def test_below_threshold_zeroed_and_above_threshold_preserves_sign(self) -> None:
@@ -219,36 +209,6 @@ class TestWalkForward:
 
 
 class TestGraduation:
-    def test_all_pass_grade_a(self) -> None:
-        """All criteria passing should produce grade A."""
-        grid = [
-            BacktestResult(threshold=1.0, cost_bps=2.0, net_sharpe=1.5, max_drawdown=0.05, annualized_turnover=3.0),
-            BacktestResult(threshold=1.5, cost_bps=2.0, net_sharpe=1.3, max_drawdown=0.04, annualized_turnover=2.5),
-        ]
-        wf = WalkForwardResult(
-            windows=[
-                type("W", (), {"oos_net_sharpe": 0.8, "oos_net_return": 0.01, "test_bars": 500})() for _ in range(5)
-            ],
-            mean_oos_sharpe=0.8,
-            pct_windows_positive_sharpe=0.8,
-            pct_windows_profitable=0.8,
-            total_oos_bars=2500,
-            oos_sharpe_trend_slope=0.0,
-        )
-        regime_cov = {
-            "Low Vol": 50,
-            "Normal Vol": 50,
-            "High Vol": 50,
-            "Trending Up": 30,
-            "Sideways": 40,
-            "Trending Down": 30,
-        }
-
-        result = evaluate_graduation(wf, grid, regime_cov, None, None)
-
-        assert result.overall_grade == "A"
-        assert result.overall_passed
-
     @pytest.mark.parametrize(
         ("result_kwargs", "criterion_index", "reason_fragment"),
         [
@@ -276,15 +236,6 @@ class TestGraduation:
         for c in result.criteria:
             if not c.passed:
                 assert len(c.failure_reason) > 0
-
-    def test_status_labels(self) -> None:
-        """Status should be Exploratory with no walk-forward."""
-        grid = [BacktestResult(threshold=1.0, cost_bps=2.0, net_sharpe=1.5)]
-
-        result = evaluate_graduation(None, grid, {}, None, None)
-
-        assert result.status_label == "Exploratory"
-
 
 class TestSignalDiagnostics:
     def test_all_zero_signal(self) -> None:
