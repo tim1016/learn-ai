@@ -792,21 +792,42 @@ async def test_broker_flat_outside_fill_is_shown_as_a_record_difference(authorit
     ]
 
 
-async def test_free_to_deploy_is_the_deploy_previews_unreserved_cash_and_money_after_carves_new(authority: tuple) -> None:
+async def test_the_deploy_preview_draws_the_accounts_bar_and_carves_a_new_slice_only_for_an_amount_it_admits(
+    authority: tuple,
+) -> None:
     repo, _, _ = _committed_view(authority)
     view = await budget_deploy.account_money_view(repo.account_id)
 
     preview = budget_deploy.preview_budget(repo.account_id, _request(), resolved_parameters={})
-    assert view.free_to_deploy_usd == preview.unreserved_usd == "800.00"
-    assert preview.money_after == _bar_only(view)  # no amount yet: today's bar, read from the same observation
+    assert view.free_to_deploy_usd == preview.unreserved_usd == "800.00", "free to deploy is the preview's unreserved cash"
+    # no amount yet: today's bar, read from the same observation
+    assert preview.money_after == _bar_only(view), "with no amount the preview draws today's bar"
 
     request = _request(budget=DeploymentBudgetInput(amount_usd="300", risk_revision=1))
     after = budget_deploy.preview_budget(repo.account_id, request, resolved_parameters={}).money_after
-    assert after is not None and after.state == "ready"
+    assert after is not None and after.state == "ready", "an admitted amount returns a ready bar"
     assert _segments(after) == [
         ("bot", "view", "200.00", 2_000), ("new", "new bot", "300.00", 3_000), ("free", "free to deploy", "500.00", 5_000),
-    ]
-    assert after.total_usd == view.total_usd
+    ], "money after carves the new bot's slice out of free to deploy"
+    assert after.total_usd == view.total_usd, "carving the new slice leaves the account's total as it was"
+
+    # A refused amount still returns the bar the money step draws, with no new slice.
+    for amount, why in (
+        ("900", "This budget is $900.00, but the account has only $800.00 unreserved."),
+        ("50", "This budget is only $50.00. The entry needs $100.02 including its fee provision."),
+    ):
+        refused = budget_deploy.preview_budget(
+            repo.account_id, _request(budget=DeploymentBudgetInput(amount_usd=amount, risk_revision=1)), resolved_parameters={},
+        )
+        assert refused.state == "unavailable" and why in refused.detail, f"a budget of {amount} is refused, and says why"
+        assert refused.review_token is None and refused.unreserved_usd == "800.00", (
+            f"a refused budget of {amount} carries no review token and the unreserved cash"
+        )
+        assert refused.money_after == _bar_only(view), f"a refused budget of {amount} still returns today's bar"
+    dry = _request(execution_mode="dry_run", budget=DeploymentBudgetInput(amount_usd="2000", risk_revision=0))
+    assert budget_deploy.preview_budget(repo.account_id, dry, resolved_parameters={}).money_after is None, (
+        "a Dry Run's preview draws no bar of the account's"
+    )
 
 
 async def test_the_deploy_preview_reads_the_account_once_under_its_fence(authority: tuple, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -821,23 +842,6 @@ async def test_the_deploy_preview_reads_the_account_once_under_its_fence(authori
 
     assert preview.state == "ready" and preview.money_after is not None
     assert calls == ["account_money"]
-
-
-async def test_a_refused_amount_still_returns_the_bar_the_money_step_draws(authority: tuple) -> None:
-    repo, _, _ = _committed_view(authority)
-    today = await budget_deploy.account_money_view(repo.account_id)
-    for amount, why in (
-        ("900", "This budget is $900.00, but the account has only $800.00 unreserved."),
-        ("50", "This budget is only $50.00. The entry needs $100.02 including its fee provision."),
-    ):
-        refused = budget_deploy.preview_budget(
-            repo.account_id, _request(budget=DeploymentBudgetInput(amount_usd=amount, risk_revision=1)), resolved_parameters={},
-        )
-        assert refused.state == "unavailable" and why in refused.detail
-        assert refused.review_token is None and refused.unreserved_usd == "800.00"
-        assert refused.money_after == _bar_only(today)  # the bar, with no new slice
-    dry = _request(execution_mode="dry_run", budget=DeploymentBudgetInput(amount_usd="2000", risk_revision=0))
-    assert budget_deploy.preview_budget(repo.account_id, dry, resolved_parameters={}).money_after is None
 
 
 async def test_a_loss_hold_withdraws_admission_but_never_the_accounts_money(authority: tuple) -> None:
@@ -1230,12 +1234,16 @@ def _statement(view: DeploymentBudgetView) -> list[tuple[str, str, bool]]:
     return [(line.label, line.amount_usd, line.total) for line in view.statement]
 
 
-def test_a_running_bot_reads_its_money_as_a_statement(authority: tuple) -> None:
-    _, runtime, _ = _committed_view(authority)
+def test_a_running_bot_reads_its_money_as_a_statement_and_serves_every_limit_with_its_terms_source_and_age(
+    authority: tuple,
+) -> None:
+    """A real paper account: the budget and the account's headroom are known as of the reading; Alpaca's option
+    buying power is an unknown figure that says it is read at Deploy and around each entry, never a zero."""
+    _, runtime, gate = _committed_view(authority)
 
     view = budget_deploy._budget_view(runtime, "view")
 
-    assert view.headline == "Ready for its next entry"
+    assert view.headline == "Ready for its next entry", "a running bot reads ready for its next entry"
     assert _statement(view) == [
         ("Budget set aside at deploy", "200.00", False),
         ("Realized gains and losses", "0.00", False),
@@ -1246,8 +1254,29 @@ def test_a_running_bot_reads_its_money_as_a_statement(authority: tuple) -> None:
         ("Free to trade", "200.00", False),
         # One SPY at $100.001 plus its modelled BUY fee costs $100.02.
         ("Short of its next entry", "0.00", False),
-    ]
-    assert view.note == "The budget limits new entries. Market fills and losses can go past it."
+    ], "the running bot's money reads as a statement"
+    assert view.note == "The budget limits new entries. Market fills and losses can go past it.", "the budget note"
+    funding = view.funding
+    assert funding is not None, "the bot page serves its funding answer"
+    read_at = gate.latest_observation().observed_at_ms
+    budget, headroom, broker = funding.free_budget, funding.account_headroom, funding.broker_buying_power
+    assert (budget.state, budget.amount_usd, budget.source) == ("known", "200.00", "Clerk books"), (
+        "the bot's free budget is known from the Clerk books"
+    )
+    assert [(term.label, term.amount_usd) for term in budget.terms][:1] == [("Budget set aside at deploy", "200.00")], (
+        "the free budget names its first term"
+    )
+    assert (headroom.state, headroom.amount_usd, headroom.as_of_ms) == ("known", "1000.00", read_at), (
+        "the account's headroom is known as of the reading"
+    )
+    assert [(term.label, term.amount_usd) for term in headroom.terms] == [
+        ("Unreserved account cash", "800.00"), ("This bot's own claim", "200.00"),
+    ], "the headroom names its terms"
+    assert broker is not None and (broker.state, broker.amount_usd, broker.terms) == ("unknown", None, ()), (
+        "Alpaca's option buying power is an unknown figure, never a zero"
+    )
+    assert "read at Deploy and around each entry" in broker.source, "the unknown buying power says when it is read"
+    assert funding.binding == "bot_budget", "the bot's budget is the binding limit"
 
 
 def test_a_bot_short_of_its_next_entry_says_by_how_much(authority: tuple) -> None:
@@ -1830,27 +1859,6 @@ def test_the_bot_page_and_the_clerks_admission_give_one_verdict_with_the_same_fi
     assert admitted_view.funding is not None
     assert (admitted_view.funding.admits, admitted_view.funding.shortfall_usd, admitted_view.funding.fits) == (True, None, 1)
     assert enter(100, "admitted").created
-
-
-def test_the_bot_page_serves_every_limit_with_its_terms_source_and_age(authority: tuple) -> None:
-    """A real paper account: the budget and the account's headroom are known as of the reading; Alpaca's option
-    buying power is an unknown figure that says it is read at Deploy and around each entry, never a zero."""
-    _, runtime, gate = _committed_view(authority)
-
-    funding = budget_deploy._budget_view(runtime, "view").funding
-
-    assert funding is not None
-    read_at = gate.latest_observation().observed_at_ms
-    budget, headroom, broker = funding.free_budget, funding.account_headroom, funding.broker_buying_power
-    assert (budget.state, budget.amount_usd, budget.source) == ("known", "200.00", "Clerk books")
-    assert [(term.label, term.amount_usd) for term in budget.terms][:1] == [("Budget set aside at deploy", "200.00")]
-    assert (headroom.state, headroom.amount_usd, headroom.as_of_ms) == ("known", "1000.00", read_at)
-    assert [(term.label, term.amount_usd) for term in headroom.terms] == [
-        ("Unreserved account cash", "800.00"), ("This bot's own claim", "200.00"),
-    ]
-    assert broker is not None and (broker.state, broker.amount_usd, broker.terms) == ("unknown", None, ())
-    assert "read at Deploy and around each entry" in broker.source
-    assert funding.binding == "bot_budget"
 
 
 def test_a_reading_past_its_age_limit_is_stale_on_the_page_and_the_entry_is_not_promised(authority: tuple) -> None:

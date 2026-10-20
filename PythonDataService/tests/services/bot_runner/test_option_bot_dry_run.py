@@ -196,50 +196,66 @@ async def test_an_option_bot_buys_the_call_its_rules_pick_at_its_ask_and_sells_i
     assert (ACCOUNT, SID) == ("sim:dry-run-buys-a-call", "dry-run-buys-a-call")
 
 
-async def test_the_journal_names_the_contract_its_multiplier_and_how_each_fill_was_priced(floor: Floor) -> None:
-    """What the bot page lists as this run's fills: a contract, never a share of SPY at four dollars."""
-    ran = await floor.run(_round_trip())
-
-    bought, sold = ran.journal
-    assert (bought.intent, bought.symbol, bought.side, bought.quantity, bought.fill_price) == (
-        "ENTER", CALL, "buy", 1.0, 4.12,
-    )
-    assert (bought.underlying, bought.multiplier, bought.fill_model, bought.quote_age_ms) == (
-        "SPY", 100, "natural_price", 0,
-    )
-    # A Dry Run has no broker reference to ask: the listing IBKR gave is the contract's, and the entry says so.
-    assert (bought.contract_reference, sold.contract_reference) == ("ibkr_listing", None)
-    assert (sold.intent, sold.symbol, sold.side, sold.quantity, sold.fill_price) == ("EXIT", CALL, "sell", 1.0, 4.30)
-    assert (sold.underlying, sold.multiplier, sold.fill_model, sold.quote_age_ms) == ("SPY", 100, "natural_price", 0)
-    # Each is stamped when the simulation filled it, after the quotes were read again, and names its own order.
-    assert (bought.recorded_at_ms, sold.recorded_at_ms) == (ENTER_MS + DELIVERY_MS, EXIT_MS + DELIVERY_MS)
-    assert bought.order_ref != sold.order_ref
-    assert {bought.price_bar_end_ms, sold.price_bar_end_ms} == {None}
-
-
 def _decisions(ran: Ran) -> dict[str, str]:
     """Each decision's own id, as the runner named it to the Clerk, by its outcome."""
     return {outcome: facts["evaluation_id"] for outcome, facts in ran.receipts}
 
 
-async def test_the_clerk_says_what_each_decision_filled_when_asked_by_the_decisions_own_name(floor: Floor) -> None:
-    """The runner asks the Clerk what a decision filled. It takes no order out of a receipt by its place:
-    an EXIT's receipt names the entry it closes before the order that closed it."""
+async def test_the_journal_and_the_clerk_name_each_fill_by_its_contract_its_multiplier_its_pricing_and_its_decision(
+    floor: Floor,
+) -> None:
+    """What the bot page lists as this run's fills: a contract, never a share of SPY at four dollars. The runner
+    asks the Clerk what a decision filled. It takes no order out of a receipt by its place: an EXIT's receipt
+    names the entry it closes before the order that closed it."""
     ran = await floor.run(_round_trip())
     decided = _decisions(ran)
 
-    (bought,) = floor.clerk.option_fills_of_decision(SID, decided["enter_intent"])
-    (sold,) = floor.clerk.option_fills_of_decision(SID, decided["exit_intent"])
+    bought, sold = ran.journal
+    assert (bought.intent, bought.symbol, bought.side, bought.quantity, bought.fill_price) == (
+        "ENTER", CALL, "buy", 1.0, 4.12,
+    ), "the journal's entry row names the contract, its side, its quantity and its price"
+    assert (bought.underlying, bought.multiplier, bought.fill_model, bought.quote_age_ms) == (
+        "SPY", 100, "natural_price", 0,
+    ), "the journal's entry row names the underlying, the multiplier and how the fill was priced"
+    # A Dry Run has no broker reference to ask: the listing IBKR gave is the contract's, and the entry says so.
+    assert (bought.contract_reference, sold.contract_reference) == ("ibkr_listing", None), (
+        "the entry's contract reference is the IBKR listing and the exit has none"
+    )
+    assert (sold.intent, sold.symbol, sold.side, sold.quantity, sold.fill_price) == ("EXIT", CALL, "sell", 1.0, 4.30), (
+        "the journal's exit row names the contract, its side, its quantity and its price"
+    )
+    assert (sold.underlying, sold.multiplier, sold.fill_model, sold.quote_age_ms) == ("SPY", 100, "natural_price", 0), (
+        "the journal's exit row names the underlying, the multiplier and how the fill was priced"
+    )
+    # Each is stamped when the simulation filled it, after the quotes were read again, and names its own order.
+    assert (bought.recorded_at_ms, sold.recorded_at_ms) == (ENTER_MS + DELIVERY_MS, EXIT_MS + DELIVERY_MS), (
+        "each row is stamped when the simulation filled it"
+    )
+    assert bought.order_ref != sold.order_ref, "each journal row names its own order"
+    assert {bought.price_bar_end_ms, sold.price_bar_end_ms} == {None}, "a fill priced at its own minute names no older bar"
 
-    assert (bought.contract, bought.side, bought.quantity, bought.price, bought.multiplier) == (CALL, "buy", 1.0, 4.12, 100)
-    assert (sold.contract, sold.side, sold.quantity, sold.price, sold.multiplier) == (CALL, "sell", 1.0, 4.30, 100)
-    assert (bought.fill_model, bought.quote_age_ms, bought.filled_at_ms) == ("natural_price", 0, ENTER_MS + DELIVERY_MS)
-    assert (sold.fill_model, sold.quote_age_ms, sold.filled_at_ms) == ("natural_price", 0, EXIT_MS + DELIVERY_MS)
-    assert bought.order_ref != sold.order_ref, "each is the fill of its own decision's order"
-    assert [row.order_ref for row in ran.journal] == [bought.order_ref, sold.order_ref]
+    (filled_buy,) = floor.clerk.option_fills_of_decision(SID, decided["enter_intent"])
+    (filled_sell,) = floor.clerk.option_fills_of_decision(SID, decided["exit_intent"])
+
+    assert (filled_buy.contract, filled_buy.side, filled_buy.quantity, filled_buy.price, filled_buy.multiplier) == (
+        CALL, "buy", 1.0, 4.12, 100,
+    ), "the Clerk says the entry's decision filled one bought contract"
+    assert (filled_sell.contract, filled_sell.side, filled_sell.quantity, filled_sell.price, filled_sell.multiplier) == (
+        CALL, "sell", 1.0, 4.30, 100,
+    ), "the Clerk says the exit's decision filled one sold contract"
+    assert (filled_buy.fill_model, filled_buy.quote_age_ms, filled_buy.filled_at_ms) == (
+        "natural_price", 0, ENTER_MS + DELIVERY_MS,
+    ), "the Clerk prices and stamps the entry's fill"
+    assert (filled_sell.fill_model, filled_sell.quote_age_ms, filled_sell.filled_at_ms) == (
+        "natural_price", 0, EXIT_MS + DELIVERY_MS,
+    ), "the Clerk prices and stamps the exit's fill"
+    assert filled_buy.order_ref != filled_sell.order_ref, "each is the fill of its own decision's order"
+    assert [row.order_ref for row in ran.journal] == [filled_buy.order_ref, filled_sell.order_ref], (
+        "the journal rows name the orders the Clerk says the decisions filled"
+    )
     # A decision that made no order, and one the Clerk never heard of, filled nothing.
-    assert floor.clerk.option_fills_of_decision(SID, decided["no_action"]) == ()
-    assert floor.clerk.option_fills_of_decision(SID, "a-decision-nobody-made") == ()
+    assert floor.clerk.option_fills_of_decision(SID, decided["no_action"]) == (), "a decision that made no order filled nothing"
+    assert floor.clerk.option_fills_of_decision(SID, "a-decision-nobody-made") == (), "a decision the Clerk never heard of filled nothing"
 
 
 async def test_the_watched_window_is_asked_for_from_the_start_and_follows_the_underlyings_bars(floor: Floor) -> None:
@@ -987,23 +1003,8 @@ def _round_trip_whose_exit_arrives(as_the_exit_arrives: Callable[[Floor], Any]) 
     ]
 
 
-async def test_an_exit_whose_contract_was_last_quoted_a_minute_ago_is_sold_at_that_quote_and_says_its_age(
-    floor: Floor,
-) -> None:
-    """The call has not ticked since the bar before. The runner hands over what it has; the Clerk sells at its
-    bid and says the quote was a minute old."""
-    ran = await floor.run(_round_trip_whose_exit_arrives(lambda _floor: None))
-
-    handed = _what_the_exit_was_handed(floor)
-    _bought, sold = floor.simulated_fills()
-    assert handed is not None and list(handed["quotes"]) == [CALL]
-    assert (sold.fill_model, sold.fill_price, sold.quote_age_ms) == (
-        SimulatedFillModel.NATURAL_PRICE_OLDER_QUOTE, Decimal("4.08"), MINUTE,
-    )
-    assert floor.holds() == {}
-    assert [(row.intent, row.fill_model, row.quote_age_ms) for row in ran.journal][-1] == (
-        "EXIT", "natural_price_older_quote", MINUTE,
-    )
+def _the_call_has_not_ticked(floor: Floor) -> None:
+    """The call has not ticked since the bar before: nothing changes as the EXIT arrives."""
 
 
 def _only_delayed_data(floor: Floor) -> None:
@@ -1016,25 +1017,31 @@ def _no_quote_source_any_more(floor: Floor) -> None:
 
 
 @pytest.mark.parametrize(
-    "as_the_exit_arrives",
+    ("as_the_exit_arrives", "handed_quotes"),
     [
-        pytest.param(_only_delayed_data, id="the line has only delayed data"),
-        pytest.param(_no_quote_source_any_more, id="the process has lost its quote source"),
+        # The runner hands over what it has; the Clerk sells at its bid and says the quote was a minute old.
+        pytest.param(_the_call_has_not_ticked, [CALL], id="the call was last quoted a minute ago"),
+        pytest.param(_only_delayed_data, None, id="the line has only delayed data"),
+        pytest.param(_no_quote_source_any_more, None, id="the process has lost its quote source"),
     ],
 )
-async def test_an_exit_with_no_quote_to_hand_over_is_still_sent_and_priced_from_the_last_one_kept(
-    floor: Floor, as_the_exit_arrives: Callable[[Floor], None]
+async def test_an_exit_is_sent_whatever_the_quote_and_priced_from_the_last_one_kept(
+    floor: Floor, as_the_exit_arrives: Callable[[Floor], None], handed_quotes: list[str] | None
 ) -> None:
-    """An EXIT is never held back for want of a quote. The Clerk kept the call's quote a minute ago, with no
-    runner handing it over, and sells at that bid."""
-    await floor.run(_round_trip_whose_exit_arrives(as_the_exit_arrives))
+    """An EXIT is never held back for want of a quote. The Clerk kept the call's quote a minute ago, with or
+    without a runner handing it over, and sells at that bid."""
+    ran = await floor.run(_round_trip_whose_exit_arrives(as_the_exit_arrives))
 
+    handed = _what_the_exit_was_handed(floor)
     _bought, sold = floor.simulated_fills()
-    assert _what_the_exit_was_handed(floor) is None
+    assert (None if handed is None else list(handed["quotes"])) == handed_quotes, "the runner hands the Clerk the quotes it has, or none"
     assert (sold.fill_model, sold.fill_price, sold.quote_age_ms) == (
         SimulatedFillModel.NATURAL_PRICE_OLDER_QUOTE, Decimal("4.08"), MINUTE,
-    )
-    assert floor.holds() == {}
+    ), "the Clerk sells at the bid it kept and says the quote was a minute old"
+    assert floor.holds() == {}, "the bot is flat"
+    assert [(row.intent, row.fill_model, row.quote_age_ms) for row in ran.journal][-1] == (
+        "EXIT", "natural_price_older_quote", MINUTE,
+    ), "the journal's exit row says the same"
 
 
 async def test_an_exit_nobody_bids_for_sells_nothing_and_the_run_goes_on_holding(floor: Floor) -> None:
@@ -1748,33 +1755,32 @@ def _claims_no_money_is_enough(view: Any) -> None:
     assert [label for label in _lines(view) if "next entry" in label.lower()] == []
 
 
-async def test_an_option_bots_money_view_prices_no_next_entry_from_a_share_of_the_underlying(floor: Floor) -> None:
+async def test_an_option_bots_money_view_prices_no_next_entry_and_shows_its_limits(floor: Floor) -> None:
     """Running and flat with $1,000.00 free, and the 585 call offered at $4.12. One contract would cost
     $412.00; a share of SPY is no price of it. The view gives no figure for the next entry and makes no
-    claim that the money is enough: it says the entry is priced when its contracts are picked."""
+    claim that the money is enough: it says the entry is priced when its contracts are picked. Nothing is
+    priced, so nothing is judged: the page shows the bot's free budget and what its account can fund for it,
+    no figure for an entry, and no broker figure, since a Dry Run has none."""
     view = await _money_view(floor)
 
-    assert (view.state, view.world) == ("ready", "synthetic")
+    assert (view.state, view.world) == ("ready", "synthetic"), "the view is a ready, synthetic one"
     _claims_no_money_is_enough(view)
-    assert "picked" in view.headline and "option" in view.detail.lower()
-    assert _lines(view)["Free to trade"] == "1000.00"
-
-
-async def test_an_option_bots_page_shows_its_limits_while_no_entry_is_priced(floor: Floor) -> None:
-    """Nothing is priced, so nothing is judged: the page shows the bot's free budget and what its account
-    can fund for it, no figure for an entry, and no broker figure, since a Dry Run has none."""
-    view = await _money_view(floor)
-
+    assert "picked" in view.headline and "option" in view.detail.lower(), "the entry is said to be priced when its contracts are picked"
+    assert _lines(view)["Free to trade"] == "1000.00", "the money view shows the free budget"
     funding = view.funding
-    assert funding is not None
-    assert (funding.free_budget.state, funding.free_budget.amount_usd) == ("known", "1000.00")
-    assert (funding.account_headroom.state, funding.account_headroom.amount_usd) == ("known", "1000.00")
-    assert funding.broker_buying_power is None
-    assert (funding.need, funding.admits, funding.shortfall_usd, funding.fits, funding.action) == (None, None, None, None, None)
-    assert funding.binding == "bot_budget"
+    assert funding is not None, "the page carries a funding statement"
+    assert (funding.free_budget.state, funding.free_budget.amount_usd) == ("known", "1000.00"), "the page shows the bot's free budget"
+    assert (funding.account_headroom.state, funding.account_headroom.amount_usd) == ("known", "1000.00"), (
+        "the page shows what the account can fund for the bot"
+    )
+    assert funding.broker_buying_power is None, "a Dry Run has no broker figure"
+    assert (funding.need, funding.admits, funding.shortfall_usd, funding.fits, funding.action) == (None, None, None, None, None), (
+        "no entry is priced, so none is judged"
+    )
+    assert funding.binding == "bot_budget", "the bot's own budget is the binding limit"
     assert funding.sentence == (
         "This bot has $1,000.00 free and the account can fund $1,000.00 after protecting other positions."
-    )
+    ), "the funding sentence names the free budget and what the account can fund"
 
 
 async def test_an_option_bots_page_says_what_getting_out_costs_while_it_holds_the_call_and_nothing_once_flat(

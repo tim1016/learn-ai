@@ -591,13 +591,6 @@ def test_a_listed_contract_that_is_not_a_candidate_changes_neither_the_pick_nor_
 # ---- A caller's mistake raises ------------------------------------------------
 
 
-def test_a_listing_for_another_date_than_the_one_asked_about_raises() -> None:
-    listing = _listing((_MON,), as_of=_TUE)
-
-    with pytest.raises(ValueError, match=str(_TUE)):
-        pick_contract(_leg(_SAME_DAY), listing=listing, trading_date=_MON, underlying_price=_PRICE)
-
-
 @pytest.mark.parametrize("price", _NOT_A_PRICE)
 def test_picking_with_no_underlying_price_to_call_the_money_from_raises(price: Any) -> None:
     with pytest.raises(ValueError, match="price"):

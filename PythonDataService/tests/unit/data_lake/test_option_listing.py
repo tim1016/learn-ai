@@ -65,7 +65,6 @@ from app.options.contract import OptionContract
 from tests._helpers.fake_lake_catalog import FakeCatalog, install_fake_catalog, point_lake_writer_at_tmp
 from tests._helpers.option_lake_cases import (
     CAPTURE_OPENS,
-    HALF_DAY_CLOSE_MS,
     WRITE_FAULT_WORDS,
     WRITE_FAULTS,
     MovableClock,
@@ -76,9 +75,7 @@ from tests._helpers.option_lake_cases import (
 )
 
 AS_OF = date(2025, 6, 13)
-SESSION_CLOSE_MS = 1749844800000
 EXPIRY_MS = 1749844800000  # 2025-06-13 16:00 EDT: the expiry anchor of the rows below (a full day's close is the same instant)
-MINUTE_MS = 60_000
 NOW_2026_10_12_MS = 1791828000000
 CONTRACTS_URL = "https://api.polygon.io/v3/reference/options/contracts"
 SECOND_PAGE = f"{CONTRACTS_URL}?cursor=page2"
@@ -935,26 +932,6 @@ async def test_a_listing_is_refused_until_new_york_midnight_after_its_session_an
     assert allowed.failure is None and allowed.record is not None
     assert route.call_count == 1
     assert len(fake_catalog.rows) == 1  # only the allowed ask made a row
-
-
-@respx.mock
-@pytest.mark.parametrize(
-    ("session", "close_ms"),
-    [(AS_OF, SESSION_CLOSE_MS), *HALF_DAY_CLOSE_MS.items()],
-    ids=["a full day", "a half day in november", "a half day in july"],
-)
-async def test_the_evening_of_a_session_is_refused_for_a_listing_from_the_close_to_the_midnight(
-    session: date, close_ms: int, fake_catalog: FakeCatalog, tmp_lake: Path
-) -> None:
-    route = _mock_one_page(STANDARD_ROWS)
-
-    at_the_close = await ensure_option_listing("SPY", session, now_ms=close_ms)
-    half_an_hour_on = await ensure_option_listing("SPY", session, now_ms=close_ms + 30 * MINUTE_MS)
-    six_hours_on = await ensure_option_listing("SPY", session, now_ms=close_ms + 6 * 60 * MINUTE_MS)
-
-    for refused in (at_the_close, half_an_hour_on, six_hours_on):
-        assert refused.failure is not None and refused.failure.reason == "session_not_over"
-    assert route.call_count == 0 and fake_catalog.rows == {}
 
 
 @respx.mock

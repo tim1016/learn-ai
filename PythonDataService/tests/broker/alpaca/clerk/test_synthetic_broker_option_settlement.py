@@ -156,25 +156,11 @@ async def test_a_call_in_the_money_is_sold_at_its_exercise_value_and_no_shares_a
     assert await _held(simulation) == {}
 
 
-async def test_a_put_in_the_money_is_sold_at_its_exercise_value_and_leaves_no_short(
-    simulation: SyntheticBroker, bars: SourceBarLedger, clock: list[int]
-) -> None:
-    """One put struck at 585 with SPY closing at 580.00: 5.00 a share, $500.00. Exercised, it would have sold 100 shares short."""
-    await _buys(simulation, PUT, clock)
-    _spy_bar(bars, close="580", end_ms=LAST_SESSION_CLOSE)
-    clock[0] = SATURDAY
-
-    [settlement] = _settle(simulation).settled
-
-    assert (settlement.record.outcome, settlement.record.booked_price, settlement.record.cash_cents) == (
-        SimulatedOutcome.SETTLED_IN_CASH, Decimal(5), 50_000
-    )
-    assert await _held(simulation) == {}
-
-
 @pytest.mark.parametrize(
     ("contract", "close", "outcome", "booked", "cash_cents"),
     [
+        # One put struck at 585 with SPY closing at 580.00: 5.00 a share, $500.00. Exercised, it would have sold 100 shares short.
+        pytest.param(PUT, "580", SimulatedOutcome.SETTLED_IN_CASH, "5", 50_000, id="a put in the money is sold at its exercise value and leaves no short"),
         pytest.param(CALL, "585.01", SimulatedOutcome.SETTLED_IN_CASH, "0.01", 100, id="a call a cent in the money"),
         pytest.param(PUT, "584.99", SimulatedOutcome.SETTLED_IN_CASH, "0.01", 100, id="a put a cent in the money"),
         pytest.param(CALL, "585.12345", SimulatedOutcome.SETTLED_IN_CASH, "0.12", 1_200, id="rounded down to the cent"),

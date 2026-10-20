@@ -709,58 +709,59 @@ async def test_coverage_window_accepts_any_anchor_inside_the_et_day(
     assert [d["trading_date_ms"] for d in responses[0]] == [at_open]
 
 
-async def test_coverage_422_on_a_ms_value_that_is_not_a_representable_instant(make_data_lake_app):
-    """The likeliest way to get this parameter wrong is seconds-for-ms.
-
-    A caller sending an out-of-range magnitude must get the typed 422 that
-    names the unit, not a 500 from the timezone conversion underneath.
-    """
-    app = make_data_lake_app(include_data_lake=True)
-    status_code, body = await _get(
-        app,
-        f"/api/data-lake/coverage?symbol=SPY&price_adjustment_mode={_PRICE_MODE}"
-        "&start_trading_date_ms=999999999999999999"
-        "&end_trading_date_ms=999999999999999999",
-    )
-    assert status_code == 422
-    assert body["detail"]["reason"] == "invalid_trading_date_ms"
-    assert "milliseconds" in body["detail"]["message"]
-
-
-async def test_coverage_422_when_range_inverted(make_data_lake_app):
-    app = make_data_lake_app(include_data_lake=True)
-    status_code, body = await _get(
-        app,
-        f"/api/data-lake/coverage?symbol=SPY&price_adjustment_mode={_PRICE_MODE}&{_window(date(2024, 5, 24), date(2024, 5, 20))}",
-    )
-    assert status_code == 422
-    assert body["detail"]["reason"] == "invalid_range"
-
-
+# A request the router refuses at the boundary answers a typed 422 that names
+# the reason. The symbol rows (#1845 P2-4) validate with DataRunSpec's own
+# pattern and length limit: an invalid symbol used to sail straight through to
+# the catalog query, which would find nothing and report every session
+# "missing" -- honest-empty, but for the wrong reason, because it was never
+# checked at all. The ms row is the likeliest way to get the window wrong
+# (seconds-for-ms): an out-of-range magnitude must get the typed 422 that names
+# the unit, not a 500 from the timezone conversion underneath.
 @pytest.mark.parametrize(
-    "symbol",
+    ("symbol", "window", "reason", "message_part"),
     [
-        "spy",  # lowercase — SYMBOL_RE requires uppercase
-        "SP Y",  # whitespace
-        "S" * (MAX_SYMBOL_LENGTH + 1),  # exceeds the catalog's storable length
-        "1SPY",  # must start with a letter
+        # lowercase -- SYMBOL_RE requires uppercase
+        pytest.param(
+            "spy", _window(date(2024, 5, 20), date(2024, 5, 24)), "invalid_symbol", "symbol must match",
+            id="lowercase_symbol_1845_p2_4",
+        ),
+        pytest.param(
+            "SP Y", _window(date(2024, 5, 20), date(2024, 5, 24)), "invalid_symbol", "symbol must match",
+            id="whitespace_in_symbol_1845_p2_4",
+        ),
+        # exceeds the catalog's storable length
+        pytest.param(
+            "S" * (MAX_SYMBOL_LENGTH + 1), _window(date(2024, 5, 20), date(2024, 5, 24)),
+            "invalid_symbol", "symbol must match",
+            id="symbol_longer_than_the_catalog_stores_1845_p2_4",
+        ),
+        # must start with a letter
+        pytest.param(
+            "1SPY", _window(date(2024, 5, 20), date(2024, 5, 24)), "invalid_symbol", "symbol must match",
+            id="symbol_starting_with_a_digit_1845_p2_4",
+        ),
+        pytest.param(
+            "SPY", _window(date(2024, 5, 24), date(2024, 5, 20)), "invalid_range", "is after end_trading_date",
+            id="range_inverted",
+        ),
+        pytest.param(
+            "SPY", "start_trading_date_ms=999999999999999999&end_trading_date_ms=999999999999999999",
+            "invalid_trading_date_ms", "milliseconds",
+            id="ms_value_that_is_not_a_representable_instant",
+        ),
     ],
 )
-async def test_coverage_422_when_symbol_invalid(symbol: str, make_data_lake_app):
-    """#1845 P2-4: validate at the boundary with DataRunSpec's own pattern + length limit.
-
-    An invalid symbol used to sail straight through to the catalog query
-    (which would just find nothing and report every session "missing" —
-    honest-empty, but for the wrong reason: not because the query was
-    validated, because it was never checked at all).
-    """
+async def test_coverage_422_names_the_reason_for_a_bad_request(
+    symbol: str, window: str, reason: str, message_part: str, make_data_lake_app
+):
     app = make_data_lake_app(include_data_lake=True)
     status_code, body = await _get(
         app,
-        f"/api/data-lake/coverage?symbol={quote(symbol)}&price_adjustment_mode={_PRICE_MODE}&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
+        f"/api/data-lake/coverage?symbol={quote(symbol)}&price_adjustment_mode={_PRICE_MODE}&{window}",
     )
-    assert status_code == 422
-    assert body["detail"]["reason"] == "invalid_symbol"
+    assert status_code == 422, "a bad coverage request is a 422"
+    assert body["detail"]["reason"] == reason, "the 422 carries the typed reason"
+    assert message_part in body["detail"]["message"], "the 422 message names what was wrong"
 
 
 async def test_coverage_200_when_symbol_valid(monkeypatch: pytest.MonkeyPatch, make_data_lake_app):
@@ -779,67 +780,53 @@ async def test_coverage_200_when_symbol_valid(monkeypatch: pytest.MonkeyPatch, m
     assert status_code == 200
 
 
-async def test_coverage_422_when_range_exceeds_max_days(monkeypatch: pytest.MonkeyPatch, make_data_lake_app):
-    """One day past the shared cap must 422.
-
-    Imports the same MAX_TRADING_RANGE_DAYS + trading_range_span_days that
-    both the router and DataRunSpec's validator use, so this boundary can't
-    silently drift from the real cap the way the two used to (#1835 review
-    round 2, MAJOR 3).
-    """
-
+# The cap boundary, from both sides. Imports the same MAX_TRADING_RANGE_DAYS +
+# trading_range_span_days that both the router and DataRunSpec's validator use,
+# so this boundary can't silently drift from the real cap the way the two used
+# to (#1835 review round 2, MAJOR 3). A window right at the cap is treated
+# identically by both -- the case the pre-fix drift got wrong -- and one day
+# past it is refused. The endpoint builds the whole range's NYSE schedule in
+# one session_windows_ms_utc() call instead of one session_open_ms_utc() call
+# per returned day (#1845 P2-5), so even a 5-year-wide request resolves in well
+# under a second -- test_coverage_builds_one_schedule_for_the_whole_range pins
+# that call count directly.
+@pytest.mark.parametrize(
+    ("window_days", "expected_span_days", "expected_status", "expected_reason"),
+    [
+        pytest.param(
+            MAX_TRADING_RANGE_DAYS, MAX_TRADING_RANGE_DAYS + 1, 422, "range_too_large",
+            id="one_day_past_the_cap_is_refused_1835",
+        ),
+        pytest.param(
+            MAX_TRADING_RANGE_DAYS - 1, MAX_TRADING_RANGE_DAYS, 200, None,
+            id="exactly_the_cap_is_accepted_1835",
+        ),
+    ],
+)
+async def test_coverage_range_cap_boundary(
+    window_days: int,
+    expected_span_days: int,
+    expected_status: int,
+    expected_reason: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+    make_data_lake_app,
+):
     async def _empty_coverage(**kwargs) -> list[ArtifactCoverageRow]:
         return []
 
     monkeypatch.setattr(catalog_client, "select_artifact_coverage", _empty_coverage)
 
     start = date(2020, 1, 1)
-    # span_days = trading_range_span_days(start, end) = MAX_TRADING_RANGE_DAYS + 1
-    end = start + timedelta(days=MAX_TRADING_RANGE_DAYS)
-    assert trading_range_span_days(start, end) == MAX_TRADING_RANGE_DAYS + 1
+    end = start + timedelta(days=window_days)
+    assert trading_range_span_days(start, end) == expected_span_days, "the window sits where the row says against the cap"
 
     app = make_data_lake_app(include_data_lake=True)
     status_code, body = await _get(
         app,
         f"/api/data-lake/coverage?symbol=SPY&price_adjustment_mode={_PRICE_MODE}&{_window(start, end)}",
     )
-    assert status_code == 422
-    assert body["detail"]["reason"] == "range_too_large"
-
-
-async def test_coverage_200_at_exactly_max_range_days(monkeypatch: pytest.MonkeyPatch, make_data_lake_app):
-    """The cap boundary itself (span_days == MAX_TRADING_RANGE_DAYS) must be accepted.
-
-    Pins the off-by-one boundary from the other side: DataRunSpec's
-    validator and this endpoint now share one formula (trading_range_span_days)
-    and one constant, so a window right at the cap is treated identically by
-    both — this is the case the pre-fix drift got wrong.
-
-    No longer stubs the calendar walk (round-2 review flagged this as a
-    concern, #1845 P2-5 made it a real fix): the endpoint now builds the
-    whole range's NYSE schedule in one session_windows_ms_utc() call instead
-    of one session_open_ms_utc() call per returned day, so even this
-    5-year-wide request resolves in well under a second — see
-    test_coverage_builds_one_schedule_for_the_whole_range below, which pins
-    that call count directly.
-    """
-
-    async def _empty_coverage(**kwargs) -> list[ArtifactCoverageRow]:
-        return []
-
-    monkeypatch.setattr(catalog_client, "select_artifact_coverage", _empty_coverage)
-
-    start = date(2020, 1, 1)
-    # span_days = trading_range_span_days(start, end) == MAX_TRADING_RANGE_DAYS exactly.
-    end = start + timedelta(days=MAX_TRADING_RANGE_DAYS - 1)
-    assert trading_range_span_days(start, end) == MAX_TRADING_RANGE_DAYS
-
-    app = make_data_lake_app(include_data_lake=True)
-    status_code, _ = await _get(
-        app,
-        f"/api/data-lake/coverage?symbol=SPY&price_adjustment_mode={_PRICE_MODE}&{_window(start, end)}",
-    )
-    assert status_code == 200
+    assert status_code == expected_status, "the window is judged against the shared cap"
+    assert (body.get("detail") or {}).get("reason") == expected_reason, "a refusal names range_too_large; an accepted window has none"
 
 
 # ---------------------------------------------------------------------------
@@ -873,120 +860,103 @@ async def test_artifact_detail_returns_full_receipt_with_int_ms_timestamps(
     assert body["trading_date_ms"] == session_open_ms_utc(date(2024, 5, 20))
 
 
-async def test_artifact_detail_trading_date_ms_is_none_for_non_day_keyed_artifacts(
-    monkeypatch: pytest.MonkeyPatch, make_data_lake_app
+# An artifact's receipt reports each field honestly: what is absent stays None
+# (never a fabricated "" or date), and a failed row carries what fail_artifact()
+# persisted.
+#   * factor_file/map_file/metadata rows carry no TradingDate -- must stay None,
+#     not fabricated. content_hash is also None there, not "": an empty string
+#     would read as a real (if empty) hash on a receipt surface (#1835 review
+#     round 2, MAJOR 4).
+#   * A 'fetching' (not yet complete) artifact reports content_hash=None -- the
+#     exact scenario MAJOR 4 flagged: select_artifact_by_id has no Status
+#     filter, so a still-fetching or failed row must not emit "" as if it were
+#     a real (empty) hash on a surface documented as a full receipt.
+#   * #1845 P2-6: a 'failed' row's receipt must carry what fail_artifact()
+#     (catalog_client.py) wrote -- LastError, ErrorMessage and the incremented
+#     AttemptCount -- which select_artifact_by_id used to omit from the
+#     projected receipt, leaving an operator no way to see why it failed.
+@pytest.mark.parametrize(
+    ("artifact_id", "overrides", "expected"),
+    [
+        pytest.param(
+            5,
+            (
+                ("artifact_kind", "metadata"),
+                ("trading_date_ms", None),
+                ("resolution", None),
+                ("data_type", None),
+                ("price_adjustment_mode", None),
+                ("data_contract_hash", "c" * 64),
+                ("content_hash", None),
+                ("file_path", "equity/usa/metadata/spy.json"),
+                ("file_size_bytes", 512),
+                ("row_count", None),
+                ("first_bar_start_ms", None),
+                ("last_bar_start_ms", None),
+            ),
+            (("trading_date_ms", None), ("content_hash", None)),
+            id="non_day_keyed_artifact_has_no_trading_date_or_content_hash",
+        ),
+        pytest.param(
+            7,
+            (
+                ("trading_date_ms", session_open_ms_utc(date(2024, 5, 21))),
+                ("data_contract_hash", "d" * 64),
+                ("content_hash", None),
+                ("file_path", "equity/usa/minute/spy/20240521_trade.zip"),
+                ("file_size_bytes", None),
+                ("status", "fetching"),
+                ("row_count", None),
+                ("first_bar_start_ms", None),
+                ("last_bar_start_ms", None),
+                ("completed_at_ms", None),
+            ),
+            (("status", "fetching"), ("content_hash", None), ("file_size_bytes", None)),
+            id="content_hash_is_none_until_complete_1835",
+        ),
+        pytest.param(
+            9,
+            (
+                ("content_hash", None),
+                ("file_size_bytes", None),
+                ("status", "failed"),
+                ("row_count", None),
+                ("first_bar_start_ms", None),
+                ("last_bar_start_ms", None),
+                ("completed_at_ms", None),
+                ("attempt_count", 3),
+                ("last_error", "provider_rate_limited"),
+                ("error_message", "429 Too Many Requests from Polygon after 3 attempts"),
+            ),
+            (
+                ("status", "failed"),
+                ("attempt_count", 3),
+                ("last_error", "provider_rate_limited"),
+                ("error_message", "429 Too Many Requests from Polygon after 3 attempts"),
+            ),
+            id="failed_artifact_returns_failure_diagnostics_1845_p2_6",
+        ),
+    ],
+)
+async def test_artifact_detail_reports_absent_fields_as_none_and_failures_with_diagnostics(
+    artifact_id: int,
+    overrides: tuple[tuple[str, object], ...],
+    expected: tuple[tuple[str, object], ...],
+    monkeypatch: pytest.MonkeyPatch,
+    make_data_lake_app,
 ):
-    """factor_file/map_file/metadata rows carry no TradingDate — must stay None, not fabricated.
-
-    content_hash is also None here, not "" — an empty string would read as
-    a real (if empty) hash on a receipt surface (#1835 review round 2,
-    MAJOR 4; see test_artifact_detail_content_hash_is_none_until_complete
-    below for the status-gated scenario the finding was actually about).
-    """
-
-    async def _detail(artifact_id: int) -> ArtifactDetail:
-        return ArtifactDetail(
-            **_artifact_detail_kwargs(
-                id=5,
-                artifact_kind="metadata",
-                trading_date_ms=None,
-                resolution=None,
-                data_type=None,
-                price_adjustment_mode=None,
-                data_contract_hash="c" * 64,
-                content_hash=None,
-                file_path="equity/usa/metadata/spy.json",
-                file_size_bytes=512,
-                row_count=None,
-                first_bar_start_ms=None,
-                last_bar_start_ms=None,
-            )
-        )
+    async def _detail(requested_id: int) -> ArtifactDetail:
+        return ArtifactDetail(**_artifact_detail_kwargs(id=artifact_id, **dict(overrides)))
 
     monkeypatch.setattr(catalog_client, "select_artifact_by_id", _detail)
 
     app = make_data_lake_app(include_data_lake=True)
-    status_code, body = await _get(app, "/api/data-lake/artifacts/5")
+    status_code, body = await _get(app, f"/api/data-lake/artifacts/{artifact_id}")
 
-    assert status_code == 200
-    assert body["trading_date_ms"] is None
-    assert body["content_hash"] is None
-
-
-async def test_artifact_detail_content_hash_is_none_until_complete(monkeypatch: pytest.MonkeyPatch, make_data_lake_app):
-    """A 'fetching' (not yet complete) artifact reports content_hash=None.
-
-    This is the exact scenario MAJOR 4 flagged: select_artifact_by_id has no
-    Status filter, so a still-fetching or failed row must not emit "" as if
-    it were a real (empty) hash on a surface documented as a full receipt.
-    """
-
-    async def _detail(artifact_id: int) -> ArtifactDetail:
-        return ArtifactDetail(
-            **_artifact_detail_kwargs(
-                id=7,
-                trading_date_ms=session_open_ms_utc(date(2024, 5, 21)),
-                data_contract_hash="d" * 64,
-                content_hash=None,
-                file_path="equity/usa/minute/spy/20240521_trade.zip",
-                file_size_bytes=None,
-                status="fetching",
-                row_count=None,
-                first_bar_start_ms=None,
-                last_bar_start_ms=None,
-                completed_at_ms=None,
-            )
-        )
-
-    monkeypatch.setattr(catalog_client, "select_artifact_by_id", _detail)
-
-    app = make_data_lake_app(include_data_lake=True)
-    status_code, body = await _get(app, "/api/data-lake/artifacts/7")
-
-    assert status_code == 200
-    assert body["status"] == "fetching"
-    assert body["content_hash"] is None
-    assert body["file_size_bytes"] is None
-
-
-async def test_artifact_detail_returns_failure_diagnostics_for_failed_artifact(
-    monkeypatch: pytest.MonkeyPatch, make_data_lake_app
-):
-    """#1845 P2-6: a 'failed' row's receipt must carry what fail_artifact() persisted.
-
-    fail_artifact() (catalog_client.py) writes LastError, ErrorMessage, and
-    increments AttemptCount, but select_artifact_by_id used to omit all
-    three from the projected receipt — an operator looking at a failed
-    artifact's detail had no way to see why it failed.
-    """
-
-    async def _detail(artifact_id: int) -> ArtifactDetail:
-        return ArtifactDetail(
-            **_artifact_detail_kwargs(
-                id=9,
-                content_hash=None,
-                file_size_bytes=None,
-                status="failed",
-                row_count=None,
-                first_bar_start_ms=None,
-                last_bar_start_ms=None,
-                completed_at_ms=None,
-                attempt_count=3,
-                last_error="provider_rate_limited",
-                error_message="429 Too Many Requests from Polygon after 3 attempts",
-            )
-        )
-
-    monkeypatch.setattr(catalog_client, "select_artifact_by_id", _detail)
-
-    app = make_data_lake_app(include_data_lake=True)
-    status_code, body = await _get(app, "/api/data-lake/artifacts/9")
-
-    assert status_code == 200
-    assert body["status"] == "failed"
-    assert body["attempt_count"] == 3
-    assert body["last_error"] == "provider_rate_limited"
-    assert body["error_message"] == "429 Too Many Requests from Polygon after 3 attempts"
+    assert status_code == 200, "the artifact receipt is served"
+    assert {field: body[field] for field in dict(expected)} == dict(expected), (
+        "the receipt reports the row's fields as stored, absent ones as None"
+    )
 
 
 async def test_artifact_detail_404_when_row_does_not_exist(monkeypatch: pytest.MonkeyPatch, make_data_lake_app):

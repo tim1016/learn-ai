@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
@@ -89,9 +90,25 @@ def _clerk_double() -> ActiveAlpacaClerk:
     return cast(ActiveAlpacaClerk, object())
 
 
-def test_primary_custody_kind_refuses_to_guess_with_no_authority_installed() -> None:
+@pytest.mark.parametrize(
+    "install",
+    [
+        pytest.param(reset_alpaca_clerk_for_testing, id="no_authority_installed"),
+        # No primary boot selects synthetic, so it is not a world to file evidence in.
+        # ``primary_custody_world`` answers ``None`` for every kind outside the two
+        # real custody worlds, and this caller refuses rather than filing a
+        # binding's evidence in an isolated Dry Run namespace.
+        pytest.param(
+            lambda: set_active_clerk_runtime(
+                ActiveClerkRuntime(authority_kind="synthetic", clerk=_clerk_double(), account_id="sim:bot-a")
+            ),
+            id="synthetic_runtime",
+        ),
+    ],
+)
+def test_primary_custody_kind_refuses_to_guess(install: Callable[[], None]) -> None:
     """The one function deciding where a live-account bot's evidence lands."""
-    reset_alpaca_clerk_for_testing()
+    install()
     try:
         with pytest.raises(StartAdmissionUnavailable):
             primary_custody_kind()
@@ -99,47 +116,31 @@ def test_primary_custody_kind_refuses_to_guess_with_no_authority_installed() -> 
         reset_alpaca_clerk_for_testing()
 
 
-def test_primary_custody_kind_on_the_real_paper_compat_seam_is_real_paper() -> None:
-    """``set_alpaca_clerk`` declares no authority kind; the fallback keeps paper evidence stable."""
-    set_alpaca_clerk(_clerk_double())
+@pytest.mark.parametrize(
+    ("install", "custody_kind"),
+    [
+        # ``set_alpaca_clerk`` declares no authority kind; the fallback keeps paper evidence stable.
+        pytest.param(lambda: set_alpaca_clerk(_clerk_double()), "real_paper", id="real_paper_compat_seam"),
+        pytest.param(
+            lambda: set_active_clerk_runtime(
+                ActiveClerkRuntime(
+                    authority_kind="shadow",
+                    clerk=_clerk_double(),
+                    account_id="shadow:9LIVE0001",
+                    account_authority_kind="shadow",
+                )
+            ),
+            "shadow",
+            id="shadow_authority",
+        ),
+    ],
+)
+def test_primary_custody_kind_names_the_custody_world_of_the_installed_authority(
+    install: Callable[[], None], custody_kind: str
+) -> None:
+    install()
     try:
-        assert primary_custody_kind() == "real_paper"
-    finally:
-        reset_alpaca_clerk_for_testing()
-
-
-def test_primary_custody_kind_on_the_shadow_authority_is_shadow() -> None:
-    set_active_clerk_runtime(
-        ActiveClerkRuntime(
-            authority_kind="shadow",
-            clerk=_clerk_double(),
-            account_id="shadow:9LIVE0001",
-            account_authority_kind="shadow",
-        )
-    )
-    try:
-        assert primary_custody_kind() == "shadow"
-    finally:
-        reset_alpaca_clerk_for_testing()
-
-
-def test_primary_custody_kind_on_a_synthetic_runtime_refuses_to_guess() -> None:
-    """No primary boot selects synthetic, so it is not a world to file evidence in.
-
-    ``primary_custody_world`` answers ``None`` for every kind outside the two
-    real custody worlds, and this caller refuses rather than filing a
-    binding's evidence in an isolated Dry Run namespace.
-    """
-    set_active_clerk_runtime(
-        ActiveClerkRuntime(
-            authority_kind="synthetic",
-            clerk=_clerk_double(),
-            account_id="sim:bot-a",
-        )
-    )
-    try:
-        with pytest.raises(StartAdmissionUnavailable):
-            primary_custody_kind()
+        assert primary_custody_kind() == custody_kind, "the custody world of the installed authority"
     finally:
         reset_alpaca_clerk_for_testing()
 

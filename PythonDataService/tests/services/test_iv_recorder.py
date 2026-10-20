@@ -10,6 +10,7 @@ Three layers:
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -245,31 +246,51 @@ class TestRecorderService:
         assert abs(row.iv30_vix_style - 0.20) < 0.01
         assert store.read_series("SPY") == [row]
 
-    def test_a_snapshot_with_no_spot_persists_an_insufficient_snapshot_row(self):
-        store = InMemoryIvSnapshotStore()
-        polygon = MagicMock()
-        polygon.list_snapshot_options_chain.return_value = {"underlying": {"price": 0.0}, "contracts": []}
-
-        row = record_iv_snapshot(
-            ticker="SPY", slot="16:00", store=store, polygon=polygon,
-            asof=datetime(2026, 4, 28, 20, 0, tzinfo=UTC),
-        )
-
-        assert row.error is not None and row.error.startswith("insufficient_snapshot")
-        assert row.iv30_vix_style is None
-        assert store.read_series("SPY") == [row]
-
-    def test_a_chain_that_cannot_straddle_the_target_persists_a_replication_failed_row(self):
+    @pytest.mark.parametrize(
+        ("payload_for", "slot", "asof", "error_prefix", "quotes_kept"),
+        [
+            pytest.param(
+                lambda _asof: {"underlying": {"price": 0.0}, "contracts": []},
+                "16:00", datetime(2026, 4, 28, 20, 0, tzinfo=UTC), "insufficient_snapshot", False,
+                id="a_snapshot_with_no_spot_persists_an_insufficient_snapshot_row",
+            ),
+            pytest.param(
+                lambda asof: _bs_chain_payload(
+                    spot=591.0, sigma=0.20, rate=0.045, asof=asof,
+                    expiry_days=[7, 14],  # both inside 30 days: nothing above the target
+                    strikes=[float(k) for k in range(540, 651, 5)],
+                ),
+                "09:35", datetime(2026, 4, 28, 13, 35, tzinfo=UTC), "replication_failed", True,
+                id="a_chain_that_cannot_straddle_the_target_persists_a_replication_failed_row",
+            ),
+            # The grouping of quotes used to sit outside the try: a 500 and no row (#3221).
+            pytest.param(
+                lambda _asof: {
+                    "underlying": {"ticker": "SPY", "price": 591.0},
+                    "contracts": [
+                        {
+                            "ticker": "O:SPY260520C00590000",
+                            "contract_type": "call",
+                            "strike_price": 590.0,
+                            "expiration_ms": option_expiry_anchor_ms(date(2026, 5, 20)),
+                            "last_quote": "n/a",
+                        }
+                    ],
+                },
+                "09:35", datetime(2026, 4, 28, 13, 35, tzinfo=UTC), "replication_failed", True,
+                id="3221-a_quote_that_is_not_a_quote_still_writes_the_audit_row",
+            ),
+        ],
+    )
+    def test_a_snapshot_that_cannot_be_turned_into_an_iv30_still_persists_its_error_row(
+        self, payload_for: Callable[[datetime], dict], slot: str, asof: datetime, error_prefix: str,
+        quotes_kept: bool,
+    ):
         from app.services.rate_dividend_service import RateAndDividend
 
         store = InMemoryIvSnapshotStore()
         polygon = MagicMock()
-        asof = datetime(2026, 4, 28, 13, 35, tzinfo=UTC)
-        polygon.list_snapshot_options_chain.return_value = _bs_chain_payload(
-            spot=591.0, sigma=0.20, rate=0.045, asof=asof,
-            expiry_days=[7, 14],  # both inside 30 days: nothing above the target
-            strikes=[float(k) for k in range(540, 651, 5)],
-        )
+        polygon.list_snapshot_options_chain.return_value = payload_for(asof)
 
         with patch(
             "app.services.iv_recorder.get_rate_and_dividend",
@@ -277,43 +298,12 @@ class TestRecorderService:
                 rate=0.045, dividend_yield=0.0, source_rate="FRED", source_dividend="Polygon TTM"
             ),
         ):
-            row = record_iv_snapshot(ticker="SPY", slot="09:35", store=store, polygon=polygon, asof=asof)
+            row = record_iv_snapshot(ticker="SPY", slot=slot, store=store, polygon=polygon, asof=asof)
 
-        assert row.error is not None and row.error.startswith("replication_failed")
-        assert row.iv30_vix_style is None
-        assert len(row.raw_chain) > 0  # the quotes are kept, so the slot can be re-derived
-        assert store.read_series("SPY") == [row]
-
-    def test_a_quote_that_is_not_a_quote_still_writes_the_audit_row(self):
-        """The grouping of quotes used to sit outside the try: a 500 and no row (#3221)."""
-        from app.services.rate_dividend_service import RateAndDividend
-
-        store = InMemoryIvSnapshotStore()
-        polygon = MagicMock()
-        asof = datetime(2026, 4, 28, 13, 35, tzinfo=UTC)
-        polygon.list_snapshot_options_chain.return_value = {
-            "underlying": {"ticker": "SPY", "price": 591.0},
-            "contracts": [
-                {
-                    "ticker": "O:SPY260520C00590000",
-                    "contract_type": "call",
-                    "strike_price": 590.0,
-                    "expiration_ms": option_expiry_anchor_ms(date(2026, 5, 20)),
-                    "last_quote": "n/a",
-                }
-            ],
-        }
-
-        with patch(
-            "app.services.iv_recorder.get_rate_and_dividend",
-            return_value=RateAndDividend(
-                rate=0.045, dividend_yield=0.0, source_rate="FRED", source_dividend="Polygon TTM"
-            ),
-        ):
-            row = record_iv_snapshot(ticker="SPY", slot="09:35", store=store, polygon=polygon, asof=asof)
-
-        assert row.error is not None and row.error.startswith("replication_failed")
-        assert store.read_series("SPY") == [row]
+        assert row.error is not None and row.error.startswith(error_prefix), "the row names why it failed"
+        assert row.iv30_vix_style is None, "a failed snapshot has no IV30"
+        assert (len(row.raw_chain) > 0) is quotes_kept, "the quotes are kept so the slot can be re-derived"
+        assert store.read_series("SPY") == [row], "the error row is the one row persisted"
 
     def test_the_dominance_gate_event_carries_only_what_the_replicator_reports(self, caplog):
         import logging

@@ -134,43 +134,37 @@ async def test_a_run_end_close_fills_at_the_last_bar_its_run_saw_stamped_when_it
     )
 
 
-async def test_a_run_end_close_after_quiet_minutes_is_as_old_as_the_last_trade(tmp_path: Path) -> None:
-    """The feed delivers a bar for a minute nothing traded in, repeating the last trade's price.
-
-    A thin asset that last traded at noon and was quiet for five hours is
-    closed overnight at a price fourteen hours old, not nine.
-    """
-    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id=ACCOUNT)
-    _retain(ledger, end_ms=NOON, close="600.00")
-    _retain(ledger, end_ms=NOON + 5 * 60 * 60_000, close="600.00", volume=0)
-    broker = _broker(ledger, now_ms=OVERNIGHT, quote=None)
-
-    assert broker.bind_run_end_close_bar("bot:ema:close", symbol="SPY") is True
-    order = await broker.submit(BrokerOrderLeg(symbol="SPY", side="sell", quantity=1), client_order_id="bot:ema:close")
-
-    assert (order.status, order.filled_avg_price, order.filled_at_ms) == ("filled", 600.0, OVERNIGHT)
-    assert broker.synthesized_fill_anchors()["bot:ema:close"].restated_bar_end_ms == NOON
-
-
 @pytest.mark.parametrize(
-    "last_trade_close",
-    [pytest.param("600.00", id="last-trade-at-another-price"), pytest.param(None, id="no-trade-retained")],
+    ("last_trade_close", "quiet_end_ms", "quiet_close", "price", "restated_bar_end_ms"),
+    [
+        # The feed delivers a bar for a minute nothing traded in, repeating the last trade's price. A thin
+        # asset that last traded at noon and was quiet for five hours is closed overnight at a price
+        # fourteen hours old, not nine.
+        pytest.param("600.00", NOON + 5 * 60 * 60_000, "600.00", 600.0, NOON, id="quiet-minutes-as-old-as-the-last-trade"),
+        # A quiet minute's price that no retained trade made: when it traded is not known, so no time is recorded.
+        pytest.param("600.00", NOON + 60_000, "601.00", 601.0, None, id="last-trade-at-another-price"),
+        pytest.param(None, NOON + 60_000, "601.00", 601.0, None, id="no-trade-retained"),
+    ],
 )
-async def test_a_run_end_close_keeps_no_time_for_a_price_no_retained_trade_made(
-    tmp_path: Path, last_trade_close: str | None
+async def test_a_run_end_close_states_when_its_price_last_traded_or_no_time(
+    tmp_path: Path, last_trade_close: str | None, quiet_end_ms: int, quiet_close: str, price: float,
+    restated_bar_end_ms: int | None,
 ) -> None:
-    """A quiet minute's price that no retained trade made: when it traded is not known, so no time is recorded."""
     ledger = SourceBarLedger(artifacts_root=tmp_path, account_id=ACCOUNT)
     if last_trade_close is not None:
         _retain(ledger, end_ms=NOON, close=last_trade_close)
-    _retain(ledger, end_ms=NOON + 60_000, close="601.00", volume=0)
+    _retain(ledger, end_ms=quiet_end_ms, close=quiet_close, volume=0)
     broker = _broker(ledger, now_ms=OVERNIGHT, quote=None)
 
-    assert broker.bind_run_end_close_bar("bot:ema:close", symbol="SPY") is True
+    assert broker.bind_run_end_close_bar("bot:ema:close", symbol="SPY") is True, "the run's last bar is bound"
     order = await broker.submit(BrokerOrderLeg(symbol="SPY", side="sell", quantity=1), client_order_id="bot:ema:close")
 
-    assert (order.status, order.filled_avg_price, order.filled_at_ms) == ("filled", 601.0, OVERNIGHT)
-    assert broker.synthesized_fill_anchors()["bot:ema:close"].restated_bar_end_ms is None
+    assert (order.status, order.filled_avg_price, order.filled_at_ms) == (
+        "filled", price, OVERNIGHT,
+    ), "the close fills at the run's last bar, stamped when it is sent"
+    assert (
+        broker.synthesized_fill_anchors()["bot:ema:close"].restated_bar_end_ms == restated_bar_end_ms
+    ), "its record keeps when the price last traded, or no time when no retained trade made it"
 
 
 async def test_a_run_end_close_still_sells_when_this_clock_runs_behind_the_feed(tmp_path: Path) -> None:

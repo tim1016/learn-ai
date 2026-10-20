@@ -177,33 +177,28 @@ def test_discover_cache_zips_missing_minute_tree_returns_empty(tmp_path: Path):
     assert discover_cache_zips(tmp_path) == ([], [])
 
 
-def test_discover_cache_zips_surfaces_mis_named_file_as_unrecognized(tmp_path: Path):
+@pytest.mark.parametrize(
+    ("stray_name", "detail_fragment"),
+    [
+        # Matches the *_trade.zip glob but not the <yyyymmdd>_trade.zip shape.
+        pytest.param("spy_2024-05-21_trade.zip", "spy_2024-05-21_trade.zip", id="mis_named_file"),
+        # 8 digits, matches the regex shape, but month 13 doesn't exist -- must
+        # not raise an uncaught ValueError out of discover_cache_zips.
+        pytest.param("20241332_trade.zip", "20241332", id="invalid_calendar_date"),
+    ],
+)
+def test_discover_cache_zips_surfaces_unrecognized_trade_zip(tmp_path: Path, stray_name: str, detail_fragment: str):
     _write_valid_zip(tmp_path, "SPY", date(2024, 5, 20))
     stray_dir = tmp_path / "equity" / "usa" / "minute" / "spy"
-    # Matches the *_trade.zip glob but not the <yyyymmdd>_trade.zip shape.
-    (stray_dir / "spy_2024-05-21_trade.zip").write_bytes(b"whatever")
+    (stray_dir / stray_name).write_bytes(b"whatever")
 
     refs, unrecognized = discover_cache_zips(tmp_path)
 
-    assert len(refs) == 1  # the well-formed zip is still found
-    assert len(unrecognized) == 1
-    assert unrecognized[0].symbol == "SPY"
-    assert unrecognized[0].path.name == "spy_2024-05-21_trade.zip"
-
-
-def test_discover_cache_zips_surfaces_invalid_calendar_date_as_unrecognized(tmp_path: Path):
-    _write_valid_zip(tmp_path, "SPY", date(2024, 5, 20))
-    stray_dir = tmp_path / "equity" / "usa" / "minute" / "spy"
-    # 8 digits, matches the regex shape, but month 13 doesn't exist -- must
-    # not raise an uncaught ValueError out of discover_cache_zips.
-    (stray_dir / "20241332_trade.zip").write_bytes(b"whatever")
-
-    refs, unrecognized = discover_cache_zips(tmp_path)
-
-    assert len(refs) == 1
-    assert len(unrecognized) == 1
-    assert unrecognized[0].symbol == "SPY"
-    assert "20241332" in unrecognized[0].detail
+    assert len(refs) == 1, "the well-formed zip is still found"
+    assert len(unrecognized) == 1, "the stray file is surfaced as unrecognized"
+    assert unrecognized[0].symbol == "SPY", "unrecognized entry carries the symbol"
+    assert unrecognized[0].path.name == stray_name, "unrecognized entry names the stray file"
+    assert detail_fragment in unrecognized[0].detail, "unrecognized detail names what was wrong"
 
 
 # ---------------------------------------------------------------------------
@@ -521,24 +516,6 @@ def test_verify_and_read_zip_valid_zip_returns_metadata(tmp_path: Path):
     assert verified.raw_bytes == zip_path.read_bytes()
 
 
-def test_verify_and_read_zip_encrypted_member_raises(tmp_path: Path):
-    trading_date = date(2024, 5, 20)
-    day_dir = tmp_path / "equity" / "usa" / "minute" / "spy"
-    day_dir.mkdir(parents=True)
-    zip_path = day_dir / "20240520_trade.zip"
-    with zipfile.ZipFile(zip_path, "w") as zf:
-        zf.writestr("20240520_spy_minute_trade.csv", "34200000,5000000,5000000,5000000,5000000,100\n")
-        for info in zf.infolist():
-            # Flip the "encrypted" bit (bit 0 of the general-purpose flag) in
-            # the central-directory entry so a read without a password
-            # raises RuntimeError -- no third-party AES-zip library needed
-            # just to build the fixture.
-            info.flag_bits |= 0x1
-
-    with pytest.raises(CorruptCacheZipError):
-        verify_and_read_zip(zip_path, "SPY", trading_date)
-
-
 def test_verify_and_read_zip_bad_crc_member_raises(tmp_path: Path):
     """finding 6: a corrupted (bad-CRC) member raises zipfile.BadZipFile at
     *read* time, distinct from the open-time BadZipFile the "not a valid zip
@@ -566,65 +543,84 @@ def test_verify_and_read_zip_bad_crc_member_raises(tmp_path: Path):
         verify_and_read_zip(zip_path, "SPY", trading_date)
 
 
-def test_verify_and_read_zip_not_a_zip_raises(tmp_path: Path):
-    trading_date = date(2024, 5, 20)
-    day_dir = tmp_path / "equity" / "usa" / "minute" / "spy"
-    day_dir.mkdir(parents=True)
-    bad = day_dir / "20240520_trade.zip"
-    bad.write_bytes(b"this is not a zip file at all")
+def _write_member_zip(member_name: str, csv_text: str) -> Callable[[Path], None]:
+    def build(zip_path: Path) -> None:
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr(member_name, csv_text)
 
-    with pytest.raises(CorruptCacheZipError):
-        verify_and_read_zip(bad, "SPY", trading_date)
+    return build
 
 
-def test_verify_and_read_zip_missing_file_raises(tmp_path: Path):
-    with pytest.raises(CorruptCacheZipError):
-        verify_and_read_zip(tmp_path / "does_not_exist.zip", "SPY", date(2024, 5, 20))
+def _write_encrypted_member_zip(zip_path: Path) -> None:
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("20240520_spy_minute_trade.csv", "34200000,5000000,5000000,5000000,5000000,100\n")
+        for info in zf.infolist():
+            # Flip the "encrypted" bit (bit 0 of the general-purpose flag) in
+            # the central-directory entry so a read without a password
+            # raises RuntimeError -- no third-party AES-zip library needed
+            # just to build the fixture.
+            info.flag_bits |= 0x1
+
+
+def _write_non_zip(zip_path: Path) -> None:
+    zip_path.write_bytes(b"this is not a zip file at all")
+
+
+def _write_nothing(zip_path: Path) -> None:
+    """The file is simply absent."""
 
 
 @pytest.mark.parametrize(
-    ("member_name", "csv_text"),
+    "write_zip",
     [
-        pytest.param("wrong_name.csv", "34200000,5000000,5000000,5000000,5000000,100\n", id="wrong_member_name"),
+        pytest.param(
+            _write_member_zip("wrong_name.csv", "34200000,5000000,5000000,5000000,5000000,100\n"),
+            id="wrong_member_name",
+        ),
         # Missing a field (only 5 columns instead of 6).
         pytest.param(
-            "20240520_spy_minute_trade.csv", "34200000,5000000,5000000,5000000,5000000\n", id="malformed_row"
+            _write_member_zip("20240520_spy_minute_trade.csv", "34200000,5000000,5000000,5000000,5000000\n"),
+            id="malformed_row",
         ),
         pytest.param(
-            "20240520_spy_minute_trade.csv",
-            "34200000,NOT_A_PRICE,5000000,5000000,5000000,100\n",
+            _write_member_zip("20240520_spy_minute_trade.csv", "34200000,NOT_A_PRICE,5000000,5000000,5000000,100\n"),
             id="non_integer_field",
         ),
         # finding 10: a negative price field is upstream corruption, refused
         # the same way app.data_lake.lean_writer.to_deci_cent refuses it.
         pytest.param(
-            "20240520_spy_minute_trade.csv",
-            "34200000,-5000000,5000000,5000000,5000000,100\n",
+            _write_member_zip("20240520_spy_minute_trade.csv", "34200000,-5000000,5000000,5000000,5000000,100\n"),
             id="negative_price",
         ),
         # finding 1: finite ingestion is fail-fast -- a duplicate
         # ms_since_midnight is refused, never silently deduplicated.
         pytest.param(
-            "20240520_spy_minute_trade.csv",
-            "34200000,5000000,5000000,5000000,5000000,100\n34200000,5001000,5001000,5001000,5001000,50\n",
+            _write_member_zip(
+                "20240520_spy_minute_trade.csv",
+                "34200000,5000000,5000000,5000000,5000000,100\n34200000,5001000,5001000,5001000,5001000,50\n",
+            ),
             id="duplicate_timestamp",
         ),
         # finding 1: an out-of-order row is refused, never silently reordered.
         pytest.param(
-            "20240520_spy_minute_trade.csv",
-            "34260000,5000000,5000000,5000000,5000000,100\n34200000,5001000,5001000,5001000,5001000,50\n",
+            _write_member_zip(
+                "20240520_spy_minute_trade.csv",
+                "34260000,5000000,5000000,5000000,5000000,100\n34200000,5001000,5001000,5001000,5001000,50\n",
+            ),
             id="out_of_order_timestamp",
         ),
-        pytest.param("20240520_spy_minute_trade.csv", "", id="zero_rows"),
+        pytest.param(_write_member_zip("20240520_spy_minute_trade.csv", ""), id="zero_rows"),
+        pytest.param(_write_encrypted_member_zip, id="encrypted_member"),
+        pytest.param(_write_non_zip, id="not_a_zip"),
+        pytest.param(_write_nothing, id="missing_file"),
     ],
 )
-def test_verify_and_read_zip_corrupt_content_raises(tmp_path: Path, member_name: str, csv_text: str):
+def test_verify_and_read_zip_refuses_corrupt_zip(tmp_path: Path, write_zip: Callable[[Path], None]):
     trading_date = date(2024, 5, 20)
     day_dir = tmp_path / "equity" / "usa" / "minute" / "spy"
     day_dir.mkdir(parents=True)
     zip_path = day_dir / "20240520_trade.zip"
-    with zipfile.ZipFile(zip_path, "w") as zf:
-        zf.writestr(member_name, csv_text)
+    write_zip(zip_path)
 
     with pytest.raises(CorruptCacheZipError):
         verify_and_read_zip(zip_path, "SPY", trading_date)

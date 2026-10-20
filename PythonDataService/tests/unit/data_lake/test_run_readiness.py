@@ -50,50 +50,63 @@ def _write_record(root: Path, version: str, *, payload: bytes = PRICE_BYTES) -> 
     _write(root, relative, record)
 
 
-def test_adjusted_file_gap_is_none_when_the_record_binds_the_current_version(adjusted_root: Path) -> None:
-    version = _publish_snapshot(adjusted_root, "GLD", b"no actions")
-    price = _write(adjusted_root, RELATIVE, PRICE_BYTES)
-    _write_record(adjusted_root, version)
+def _record_binds_the_current_version(root: Path) -> Path:
+    version = _publish_snapshot(root, "GLD", b"no actions")
+    price = _write(root, RELATIVE, PRICE_BYTES)
+    _write_record(root, version)
+    return price
 
-    assert adjusted_file_gap(price, PRICE_SHA, "GLD") is None
 
-
-def test_adjusted_file_gap_names_a_missing_record(adjusted_root: Path) -> None:
+def _record_is_missing(root: Path) -> Path:
     """A file written before the lake kept adjustment records: on disk, and unreadable."""
-    price = _write(adjusted_root, RELATIVE, PRICE_BYTES)
-
-    assert adjusted_file_gap(price, PRICE_SHA, "GLD") == "adjustment_record_missing"
+    return _write(root, RELATIVE, PRICE_BYTES)
 
 
-def test_adjusted_file_gap_rejects_a_record_of_a_superseded_version(adjusted_root: Path) -> None:
-    old_version = _publish_snapshot(adjusted_root, "GLD", b"before the dividend")
-    price = _write(adjusted_root, RELATIVE, PRICE_BYTES)
-    _write_record(adjusted_root, old_version)
-    _publish_snapshot(adjusted_root, "GLD", b"after the dividend")
-
-    assert adjusted_file_gap(price, PRICE_SHA, "GLD") == "adjustment_record_rejected"
-
-
-def test_adjusted_file_gap_rejects_a_record_bound_to_other_bytes(adjusted_root: Path) -> None:
-    version = _publish_snapshot(adjusted_root, "GLD", b"no actions")
-    price = _write(adjusted_root, RELATIVE, PRICE_BYTES)
-    _write_record(adjusted_root, version, payload=b"a different price file")
-
-    assert adjusted_file_gap(price, PRICE_SHA, "GLD") == "adjustment_record_rejected"
+def _record_is_of_a_superseded_version(root: Path) -> Path:
+    old_version = _publish_snapshot(root, "GLD", b"before the dividend")
+    price = _write(root, RELATIVE, PRICE_BYTES)
+    _write_record(root, old_version)
+    _publish_snapshot(root, "GLD", b"after the dividend")
+    return price
 
 
-def test_adjusted_file_gap_names_a_missing_price_file(adjusted_root: Path) -> None:
-    version = _publish_snapshot(adjusted_root, "GLD", b"no actions")
-    _write_record(adjusted_root, version)
+def _record_is_bound_to_other_bytes(root: Path) -> Path:
+    version = _publish_snapshot(root, "GLD", b"no actions")
+    price = _write(root, RELATIVE, PRICE_BYTES)
+    _write_record(root, version, payload=b"a different price file")
+    return price
 
-    assert adjusted_file_gap(adjusted_root / RELATIVE, PRICE_SHA, "GLD") == "price_file_missing"
+
+def _price_file_is_missing(root: Path) -> Path:
+    version = _publish_snapshot(root, "GLD", b"no actions")
+    _write_record(root, version)
+    return root / RELATIVE
 
 
-def test_adjusted_file_gap_asks_nothing_of_a_raw_file(tmp_path: Path) -> None:
+def _raw_file(root: Path) -> Path:
     """Raw prices carry no adjustment record, so there is none to miss."""
-    price = _write(tmp_path / "lake" / "raw", RELATIVE, PRICE_BYTES)
+    return _write(root.parent / "raw", RELATIVE, PRICE_BYTES)
 
-    assert adjusted_file_gap(price, PRICE_SHA, "GLD") is None
+
+@pytest.mark.parametrize(
+    ("arrange", "expected_gap"),
+    [
+        pytest.param(_record_binds_the_current_version, None, id="none_when_the_record_binds_the_current_version"),
+        pytest.param(_record_is_missing, "adjustment_record_missing", id="names_a_missing_record"),
+        pytest.param(
+            _record_is_of_a_superseded_version, "adjustment_record_rejected", id="rejects_a_record_of_a_superseded_version"
+        ),
+        pytest.param(
+            _record_is_bound_to_other_bytes, "adjustment_record_rejected", id="rejects_a_record_bound_to_other_bytes"
+        ),
+        pytest.param(_price_file_is_missing, "price_file_missing", id="names_a_missing_price_file"),
+        pytest.param(_raw_file, None, id="asks_nothing_of_a_raw_file"),
+    ],
+)
+def test_adjusted_file_gap(adjusted_root: Path, arrange, expected_gap: str | None) -> None:
+    price = arrange(adjusted_root)
+
+    assert adjusted_file_gap(price, PRICE_SHA, "GLD") == expected_gap
 
 
 def test_coverage_gaps_checks_only_complete_sessions(adjusted_root: Path) -> None:

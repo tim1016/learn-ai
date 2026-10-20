@@ -248,17 +248,37 @@ class TestPublishArtifact:
         assert seen["file_size_bytes"] == len(content)
 
     @pytest.mark.asyncio
-    async def test_refuses_to_promote_when_the_catalog_denies_the_lease(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        ("content", "rel", "companions"),
+        [
+            # The zombie-writer fix's core unit-level proof: a refusal must
+            # leave the lake path untouched. The catalog never calls ``promote``,
+            # so the canonical file is not reachable from a losing writer at all.
+            pytest.param(b"stale bytes", "a.zip", (), id="denied_lease_never_reaches_the_lake_path"),
+            # Staging is request/worker/attempt-scoped with no sweeper behind
+            # it, so a contended path that leaked its staged copy would accumulate
+            # whole artifacts on the lake filesystem forever.
+            pytest.param(b"x" * 4096, "a.zip", (), id="refusal_leaves_no_staged_bytes_behind"),
+            pytest.param(
+                b"stale csv",
+                "factor_files/spy.csv",
+                (("factor_files/spy.coverage.json", b"stale record"),),
+                id="refused_publication_promotes_no_companion_and_leaves_none_staged",
+            ),
+        ],
+    )
+    async def test_a_refused_publication_leaves_nothing_in_the_lake_or_in_staging(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        content: bytes,
+        rel: str,
+        companions: tuple[tuple[str, bytes], ...],
     ):
-        """The zombie-writer fix's core unit-level proof: a refusal must
-        leave the lake path untouched. The catalog never calls ``promote``,
-        so the canonical file is not reachable from a losing writer at all."""
         lake_root = tmp_path / "lake"
         staging_root = tmp_path / "staging"
         lake_root.mkdir()
         staging_root.mkdir()
-        rel = PurePosixPath("a.zip")
 
         async def fake_publish(**kwargs):
             raise ArtifactLeaseLostError("artifact 7: not authorized to publish")
@@ -267,10 +287,10 @@ class TestPublishArtifact:
 
         with pytest.raises(ArtifactLeaseLostError, match="not authorized to publish"):
             await publish_artifact(
-                content=b"stale bytes",
+                content=content,
                 lake_root=lake_root,
                 staging_root=staging_root,
-                rel_lake_path=rel,
+                rel_lake_path=PurePosixPath(rel),
                 request_id=UUID("12345678-1234-5678-1234-567812345678"),
                 worker_id="w-1",
                 attempt=1,
@@ -279,41 +299,14 @@ class TestPublishArtifact:
                 row_count=1,
                 first_bar_start_ms=0,
                 last_bar_start_ms=0,
+                companions=tuple((PurePosixPath(path), body) for path, body in companions),
             )
 
-        assert not (lake_root / "a.zip").exists(), "a denied lease must never reach the lake path"
-
-    @pytest.mark.asyncio
-    async def test_refusal_leaves_no_staged_bytes_behind(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        """Staging is request/worker/attempt-scoped with no sweeper behind
-        it, so a contended path that leaked its staged copy would accumulate
-        whole artifacts on the lake filesystem forever."""
-        lake_root = tmp_path / "lake"
-        staging_root = tmp_path / "staging"
-        lake_root.mkdir()
-        staging_root.mkdir()
-
-        async def fake_publish(**kwargs):
-            raise ArtifactLeaseLostError("artifact 7: not authorized to publish")
-
-        monkeypatch.setattr(catalog_client, "publish_under_lease", fake_publish)
-
-        with pytest.raises(ArtifactLeaseLostError):
-            await publish_artifact(
-                content=b"x" * 4096,
-                lake_root=lake_root,
-                staging_root=staging_root,
-                rel_lake_path=PurePosixPath("a.zip"),
-                request_id=UUID("12345678-1234-5678-1234-567812345678"),
-                worker_id="w-1",
-                attempt=1,
-                artifact_id=7,
-                lease_generation=1,
-                row_count=1,
-                first_bar_start_ms=0,
-                last_bar_start_ms=0,
+        assert not (lake_root / rel).exists(), "a denied lease must never reach the lake path"
+        for companion_rel, _body in companions:
+            assert not (lake_root / companion_rel).exists(), (
+                f"a writer that lost its lease replaces no companion: {companion_rel}"
             )
-
         leftovers = [p for p in staging_root.rglob("*") if p.is_file()]
         assert leftovers == [], f"staged bytes survived a refused publication: {leftovers}"
 
@@ -404,39 +397,4 @@ class TestPublishArtifact:
         assert (lake_root / str(record)).read_bytes() == b"record bytes"
         assert (lake_root / str(artifact)).read_bytes() == b"csv bytes"
         assert sha == hashlib.sha256(b"csv bytes").hexdigest(), "the receipt hashes the artifact, not a companion"
-        assert [p for p in staging_root.rglob("*") if p.is_file()] == []
-
-    @pytest.mark.asyncio
-    async def test_a_refused_publication_promotes_no_companion_and_leaves_none_staged(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        lake_root = tmp_path / "lake"
-        staging_root = tmp_path / "staging"
-        lake_root.mkdir()
-        staging_root.mkdir()
-        record = PurePosixPath("factor_files/spy.coverage.json")
-
-        async def fake_publish(**kwargs):
-            raise ArtifactLeaseLostError("artifact 7: not authorized to publish")
-
-        monkeypatch.setattr(catalog_client, "publish_under_lease", fake_publish)
-
-        with pytest.raises(ArtifactLeaseLostError):
-            await publish_artifact(
-                content=b"stale csv",
-                lake_root=lake_root,
-                staging_root=staging_root,
-                rel_lake_path=PurePosixPath("factor_files/spy.csv"),
-                request_id=UUID("12345678-1234-5678-1234-567812345678"),
-                worker_id="w-1",
-                attempt=1,
-                artifact_id=7,
-                lease_generation=1,
-                row_count=1,
-                first_bar_start_ms=0,
-                last_bar_start_ms=0,
-                companions=((record, b"stale record"),),
-            )
-
-        assert not (lake_root / str(record)).exists(), "a writer that lost its lease replaces no companion"
         assert [p for p in staging_root.rglob("*") if p.is_file()] == []

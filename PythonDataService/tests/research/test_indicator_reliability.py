@@ -139,20 +139,24 @@ class TestComputeIndicatorReliabilityWithOos:
             include_slope=False,
         )
 
-        assert len(results) == 1
-        assert slope_results is None
+        assert len(results) == 1, "one result per requested horizon"
+        assert slope_results is None, "no slope results unless requested"
 
         r = results[0]
-        assert r.horizon == 10
-        assert -1 <= r.is_mean_ic <= 1
-        assert r.is_effective_n > 0
-        assert r.strength_label in {"Noise", "Weak", "Moderate", "Strong"}
-        assert r.stability_label in {"Low", "Moderate", "High"}
-        assert r.direction_label in {"Mean-Reversion", "Momentum", "None"}
-        assert 0.0 <= r.is_hit_rate <= 1.0
+        assert r.horizon == 10, "the result carries its horizon"
+        assert -1 <= r.is_mean_ic <= 1, "the in-sample IC is a correlation"
+        assert r.is_effective_n > 0, "the in-sample effective n is positive"
+        assert r.strength_label in {"Noise", "Weak", "Moderate", "Strong"}, "the strength label is one of the buckets"
+        assert r.stability_label in {"Low", "Moderate", "High"}, "the stability label is one of the buckets"
+        assert r.direction_label in {"Mean-Reversion", "Momentum", "None"}, "the direction label is one of the buckets"
+        assert 0.0 <= r.is_hit_rate <= 1.0, "the in-sample hit rate is a fraction"
 
-        assert "train_bars" in metadata
-        assert "test_bars" in metadata
+        assert "train_bars" in metadata, "metadata reports the train bars"
+        assert "test_bars" in metadata, "metadata reports the test bars"
+
+        # Retention delta is populated whenever OOS evidence is present.
+        if r.oos_mean_ic is not None and abs(r.is_mean_ic) > 1e-10:
+            assert r.retention_delta_pct is not None, "retention delta is populated when OOS is present"
 
     # ~14 s: five horizons through the full IS/OOS pipeline. A PR shard that
     # drew it ran past the 120 s gate (#2611), so it runs daily.
@@ -191,17 +195,6 @@ class TestComputeIndicatorReliabilityWithOos:
         assert len(slope_results) == 2
         # Slope flags are computed by the router; dataclass default is None here.
         assert slope_results[0].slope_adds_value is None
-
-    def test_retention_delta_populated_when_oos_present(self):
-        df = _create_test_df(500)
-        results, _, _ = compute_indicator_reliability_with_oos(
-            df=df,
-            indicator_column="rsi_14",
-            horizons=[10],
-        )
-        r = results[0]
-        if r.oos_mean_ic is not None and abs(r.is_mean_ic) > 1e-10:
-            assert r.retention_delta_pct is not None
 
     def test_missing_column_raises(self):
         df = _create_test_df(100)
@@ -443,23 +436,27 @@ class TestNextSteps:
         defaults.update(kwargs)
         return _make_analysis(**defaults)
 
-    def test_flags_missing_oos(self):
-        results = [self._r(oos_mean_ic=None)]
+    @pytest.mark.parametrize(
+        ("kwargs", "expected_keyword"),
+        [
+            pytest.param({"oos_mean_ic": None}, "out-of-sample", id="flags_missing_oos"),
+            pytest.param(
+                {
+                    "is_mean_ic": 0.10,
+                    "strength_label": "Strong",
+                    "stability_label": "High",
+                    "oos_mean_ic": 0.09,
+                    "oos_p_value": 0.02,
+                },
+                "threshold",
+                id="suggests_threshold_when_strong_stable_validated",
+            ),
+        ],
+    )
+    def test_next_step_mentions_keyword(self, kwargs, expected_keyword):
+        results = [self._r(**kwargs)]
         steps = generate_next_steps(results, None, None, 10)
-        assert any("out-of-sample" in s.lower() for s in steps)
-
-    def test_suggests_threshold_when_strong_stable_validated(self):
-        results = [
-            self._r(
-                is_mean_ic=0.10,
-                strength_label="Strong",
-                stability_label="High",
-                oos_mean_ic=0.09,
-                oos_p_value=0.02,
-            )
-        ]
-        steps = generate_next_steps(results, None, None, 10)
-        assert any("threshold" in s.lower() for s in steps)
+        assert any(expected_keyword in s.lower() for s in steps), f"a next step mentions {expected_keyword!r}"
 
     def test_no_best_horizon_returns_prompt(self):
         results = [self._r()]

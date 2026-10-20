@@ -33,15 +33,12 @@ from app.engine.live.order_identity import (
 )
 
 
-def test_mint_intent_id_is_22_char_base64url() -> None:
+def test_mint_intent_id_is_22_char_base64url_and_unique() -> None:
     iid = mint_intent_id()
-    assert len(iid) == INTENT_ID_LEN == 22
-    assert "/" not in iid and ":" not in iid
-    assert len(base64.urlsafe_b64decode(iid + "==")) == 16
-
-
-def test_mint_intent_id_unique() -> None:
-    assert len({mint_intent_id() for _ in range(1000)}) == 1000
+    assert len(iid) == INTENT_ID_LEN == 22, "an intent id is 22 characters"
+    assert "/" not in iid and ":" not in iid, "an intent id holds neither the path nor the ref delimiter"
+    assert len(base64.urlsafe_b64decode(iid + "==")) == 16, "an intent id decodes to 16 bytes of base64url"
+    assert len({mint_intent_id() for _ in range(1000)}) == 1000, "a thousand minted intent ids are all distinct"
 
 
 @pytest.mark.parametrize(
@@ -113,18 +110,19 @@ def test_build_order_ref_fails_closed_over_cap() -> None:
 
 
 def test_instance_id_length_rule_is_cap_minus_overhead() -> None:
-    assert ORDER_REF_FIXED_OVERHEAD == 35
-    assert max_strategy_instance_id_len(60) == 25
-    assert validate_broker_owned_instance_id("a" * 25, order_ref_max_length=60) == "a" * 25
+    assert ORDER_REF_FIXED_OVERHEAD == 35, "the fixed order-ref overhead is 35 characters"
+    assert max_strategy_instance_id_len(60) == 25, "the longest instance id under a 60 cap is the cap minus the overhead"
+    assert validate_broker_owned_instance_id("a" * 25, order_ref_max_length=60) == "a" * 25, (
+        "an instance id of the longest allowed length is accepted"
+    )
     with pytest.raises(InstanceIdTooLongError):
         validate_broker_owned_instance_id("a" * 26, order_ref_max_length=60)
 
-
-def test_order_ref_at_max_len_sid_builds_to_exactly_cap() -> None:
+    # An order_ref at max-length sid builds to exactly the cap.
     sid = "a" * max_strategy_instance_id_len(60)
     ns = build_bot_order_namespace(sid)
     ref = build_order_ref(ns, mint_intent_id(), max_length=60)
-    assert len(ref) == 60
+    assert len(ref) == 60, "an order_ref for a longest-allowed instance id is exactly the cap"
 
 
 def test_classify_ownership_ladder() -> None:

@@ -754,39 +754,37 @@ _LOOKBACK_DAYS_AT_LONG_PERIODS: dict[str, int] = {
 }
 
 
-@pytest.mark.parametrize("program_key", sorted(_LOOKBACK_DAYS_AT_LONG_PERIODS))
+@pytest.mark.parametrize(
+    "program_key", sorted(_LOOKBACK_DAYS_AT_LONG_PERIODS), ids=lambda program_key: program_key
+)
 def test_a_long_period_deploy_seals_the_lookback_its_periods_need(program_key: str) -> None:
-    """Every program sealed its default lookback whatever periods the deploy ran (#2841)."""
-    binding, seal = _off_validated_seal(program_key, LONG_PERIODS[program_key])
-    contract = _STRATEGY_REGISTRY[program_key].signal_program_contract
-    assert contract is not None
+    """Every program sealed its default lookback whatever periods the deploy ran (#2841).
 
-    sealed_days = seal.configured_signal.clock.warmup_lookback_days
-    assert sealed_days == _LOOKBACK_DAYS_AT_LONG_PERIODS[program_key]
-    assert sealed_days > contract.warmup_lookback_days
-    assert prove_running_program_build(binding, verified_at_ms=_NOW).state == "PROVEN"
-
-
-@pytest.mark.parametrize("program_key", sorted(_LOOKBACK_DAYS_AT_LONG_PERIODS))
-def test_a_seal_naming_the_default_lookback_for_a_long_period_deploy_fails_closed(program_key: str) -> None:
-    """A seal is checked against the lookback its *own* parameters resolve.
-
-    The seal these programs minted before #2841 names a warmup the bot cannot
-    fill at these periods.
+    A seal is checked against the lookback its *own* parameters resolve. The seal
+    these programs minted before #2841 names a warmup the bot cannot fill at
+    these periods.
     """
     binding, seal = _off_validated_seal(program_key, LONG_PERIODS[program_key])
     contract = _STRATEGY_REGISTRY[program_key].signal_program_contract
-    assert contract is not None
+    assert contract is not None, "#2841: the program has a registered contract"
+
+    sealed_days = seal.configured_signal.clock.warmup_lookback_days
+    proven = prove_running_program_build(binding, verified_at_ms=_NOW)
     stale_clock = seal.configured_signal.clock.model_copy(update={"warmup_lookback_days": contract.warmup_lookback_days})
     stale = seal.configured_signal.model_copy(update={"clock": stale_clock})
-    binding = binding.model_copy(update={"sealed_program": seal.model_copy(update={"configured_signal": stale})})
+    stale_binding = binding.model_copy(update={"sealed_program": seal.model_copy(update={"configured_signal": stale})})
+    refused = prove_running_program_build(stale_binding, verified_at_ms=_NOW)
 
-    proof = prove_running_program_build(binding, verified_at_ms=_NOW)
-
-    assert proof.state == "UNPROVEN"
-    assert "warmup requirement" in proof.explanation
+    assert sealed_days == _LOOKBACK_DAYS_AT_LONG_PERIODS[program_key], "#2841: the seal records the lookback its periods need"
+    assert sealed_days > contract.warmup_lookback_days, "#2841: the sealed lookback is above the program's default"
+    assert proven.state == "PROVEN", "#2841: a seal naming the lookback its periods need proves its build"
+    assert (
+        stale_clock.warmup_lookback_days == contract.warmup_lookback_days != sealed_days
+    ), "#2841: the stale seal names the program's default lookback, not the one its periods need"
+    assert refused.state == "UNPROVEN", "#2841: a seal naming the default lookback for a long-period deploy fails closed"
+    assert "warmup requirement" in refused.explanation, "#2841: the refusal names the warmup requirement"
     # Re-qualifying cannot repair a seal; only a new deploy seals the new lookback.
-    assert proof.next_step == "Deploy the bot again."
+    assert refused.next_step == "Deploy the bot again.", "#2841: only a new deploy repairs it"
 
 
 @pytest.mark.parametrize("resolution_minutes", [391, 1440])

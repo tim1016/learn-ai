@@ -363,27 +363,15 @@ def _compat_request():
     )
 
 
-def test_compatibility_fixture_receipts_the_factor_file(tmp_path: Path) -> None:
-    """The dividend schedule's input binds to the same receipt as the bars (#3000 review)."""
+def test_compatibility_fixture_receipts_the_factor_file_and_its_identity_covers_it(tmp_path: Path) -> None:
+    """The dividend schedule's input binds to the same receipt as the bars, and
+    identical bars with different factor files must not share one fixture
+    identity (#3000 review)."""
     import hashlib
 
     from app.services.engine_backtest_service import _pin_compatibility_fixture
 
-    root, factor_file = _compat_root_with_factor_file(tmp_path)
-    request = _compat_request()
-
-    manifest = _pin_compatibility_fixture(request, [root])
-
-    assert manifest is not None
-    key = "equity/usa/factor_files/spy.csv"
-    assert manifest[key] == hashlib.sha256(factor_file.read_bytes()).hexdigest()
-
-
-def test_compatibility_fixture_identity_covers_the_factor_file(tmp_path: Path) -> None:
-    """Identical bars with different factor files must not share one fixture identity (#3000 review)."""
-    from app.services.engine_backtest_service import _pin_compatibility_fixture
-
-    root_a, _factor_a = _compat_root_with_factor_file(tmp_path / "a")
+    root_a, factor_a = _compat_root_with_factor_file(tmp_path / "a")
     root_b = tmp_path / "b"
     (root_b / "equity/usa/minute/spy").mkdir(parents=True)
     (root_b / "equity/usa/minute/spy/20250113_trade.zip").write_bytes(b"day-one")
@@ -397,10 +385,17 @@ def test_compatibility_fixture_identity_covers_the_factor_file(tmp_path: Path) -
     pinned_a = _pin_compatibility_fixture(request_a, [root_a])
     pinned_b = _pin_compatibility_fixture(request_b, [root_b])
 
-    assert pinned_a is not None and pinned_b is not None
-    assert pinned_a["equity/usa/factor_files/spy.csv"] != pinned_b["equity/usa/factor_files/spy.csv"]
-    assert request_a.data_policy is not None and request_b.data_policy is not None
-    assert request_a.data_policy.fixture_sha256 != request_b.data_policy.fixture_sha256
+    key = "equity/usa/factor_files/spy.csv"
+    assert pinned_a is not None, "the first fixture is pinned"
+    assert pinned_b is not None, "the second fixture is pinned"
+    assert pinned_a[key] == hashlib.sha256(factor_a.read_bytes()).hexdigest(), (
+        "#3000 review: the fixture receipts the factor file's digest"
+    )
+    assert pinned_a[key] != pinned_b[key], "#3000 review: different factor files receipt different digests"
+    assert request_a.data_policy is not None and request_b.data_policy is not None, "both policies carry a fixture"
+    assert request_a.data_policy.fixture_sha256 != request_b.data_policy.fixture_sha256, (
+        "#3000 review: identical bars with different factor files do not share one fixture identity"
+    )
 
 
 def test_compatibility_run_accepts_a_supplied_snapshot_with_a_factor_file(

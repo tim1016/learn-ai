@@ -125,15 +125,30 @@ def _child_state(identity: dict[str, Any] | None = None) -> dict[str, Any]:
 # ── The wire and its outcome translation ──────────────────────────────────
 
 
-def test_a_ready_cell_wires_its_own_identity_interval_and_execution() -> None:
+def test_a_ready_cell_wires_its_own_identity_interval_and_execution_and_the_builder_freezes_the_receipt_parts_into_each_item() -> None:
     wire = _ready(1).as_wire()
 
-    assert wire["kind"] == GRID_WIRE_KIND
-    assert wire["key"] == "hash-1" and wire["attempt"] == 1 and wire["task_gen"] == 1
-    assert wire["candidate"]["params_hash"] == "hash-1"
+    assert wire["kind"] == GRID_WIRE_KIND, "a ready cell wires the grid kind"
+    assert wire["key"] == "hash-1" and wire["attempt"] == 1 and wire["task_gen"] == 1, "a ready cell wires its own key, attempt and generation"
+    assert wire["candidate"]["params_hash"] == "hash-1", "a ready cell wires its candidate's hash"
     assert wire["interval"] == INTERVAL, "the receipt's ms interval, never ISO strings"
-    assert wire["execution"]["strategy_key"] == "sma_crossover"
-    assert wire["identity"] == IDENTITY
+    assert wire["execution"]["strategy_key"] == "sma_crossover", "a ready cell wires its execution"
+    assert wire["identity"] == IDENTITY, "a ready cell wires its identity"
+
+    spec = GridSearchSpec(strategy_key="sma_crossover", symbol="SPY", param_ranges={}, start_ms=0, end_ms=1)
+    build = ready_cell_builder(_search_row(), spec, attempt=3)
+
+    item = build(_candidate(0))
+
+    assert item.attempt == 3 and item.task_gen == 1, "the builder freezes the attempt and the first generation into each item"
+    assert item.interval == {
+        key: INTERVAL[key] for key in ("data_start_ms", "evaluation_start_ms", "evaluation_end_ms")
+    }, "the builder freezes the receipt's interval into each item"
+    assert (
+        item.execution["strategy_key"] == "sma_crossover" and item.identity == IDENTITY
+    ), "the builder freezes the receipt's execution and identity into each item"
+    wired = item.as_wire()
+    assert wired["attempt"] == 3 and wired["candidate"]["params_hash"] == "hash-0", "a built item wires its attempt and candidate"
 
 
 def test_child_answers_translate_to_the_outcomes_the_runner_consumes() -> None:
@@ -577,19 +592,6 @@ def _search_row() -> SearchRow:
         incomplete=False,
         failure_reason=None,
     )
-
-
-def test_ready_cell_builder_freezes_the_receipt_parts_into_each_item() -> None:
-    spec = GridSearchSpec(strategy_key="sma_crossover", symbol="SPY", param_ranges={}, start_ms=0, end_ms=1)
-    build = ready_cell_builder(_search_row(), spec, attempt=3)
-
-    item = build(_candidate(0))
-
-    assert item.attempt == 3 and item.task_gen == 1
-    assert item.interval == {key: INTERVAL[key] for key in ("data_start_ms", "evaluation_start_ms", "evaluation_end_ms")}
-    assert item.execution["strategy_key"] == "sma_crossover" and item.identity == IDENTITY
-    wired = item.as_wire()
-    assert wired["attempt"] == 3 and wired["candidate"]["params_hash"] == "hash-0"
 
 
 # ── A real spawned child (slow: real process, real engine) ────────────────

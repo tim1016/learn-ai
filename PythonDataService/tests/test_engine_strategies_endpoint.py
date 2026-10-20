@@ -45,7 +45,7 @@ def _list_strategies():
     return [s.model_dump() for s in list_engine_strategies()]
 
 
-def test_deployment_validation_catalog_entry():
+def test_the_catalog_lists_the_registered_strategies_with_their_lean_twins():
     strategies = _list_strategies()
     names = {s["name"] for s in strategies}
     assert "deployment_validation" in names, "deployment_validation is registered"
@@ -65,6 +65,35 @@ def test_deployment_validation_catalog_entry():
     )
     assert {name for name, notice in notices.items() if notice is not None} == {"deployment_validation"}, (
         "#2607: DV is the only strategy that carries an experimental notice"
+    )
+
+    assert names >= EXPECTED_STRATEGY_KEYS, (
+        f"registry regressed — at least one expected strategy is missing: {EXPECTED_STRATEGY_KEYS - names}"
+    )
+
+    by_name = {entry["name"]: entry for entry in strategies}
+    assert by_name["ema_crossover_signal"]["lean_twin"] == "ema_crossover_signal", (
+        "ema_signal advertises its matching LEAN validation template"
+    )
+    assert by_name["rsi_mean_reversion"]["lean_twin"] == "rsi_mean_reversion", (
+        "rsi_mean_reversion advertises its matching LEAN validation template"
+    )
+
+    # Strategy Lab's LEAN-only run sends these settings and refuses the rest (#2904).
+    for name, entry in by_name.items():
+        registration = _STRATEGY_REGISTRY[name]
+        assert entry["lean_parameter_names"] == list(registration.lean_parameter_names), (
+            f"#2904: {name} names the settings its LEAN twin reads"
+        )
+        assert entry["lean_data_policy_parameter_names"] == list(registration.lean_data_policy_parameter_names), (
+            f"#2904: {name} names the data-policy settings its LEAN twin reads"
+        )
+    # Both kinds must be on the wire, or the loop above proves nothing.
+    assert by_name["ema_crossover_signal"]["lean_parameter_names"] == ["gap", "gap_bps", "rsi_min", "rsi_max"], (
+        "#2904: ema_crossover_signal puts its LEAN parameter names on the wire"
+    )
+    assert by_name["rsi_mean_reversion"]["lean_data_policy_parameter_names"] == ["resolution_minutes"], (
+        "#2904: rsi_mean_reversion puts its LEAN data-policy parameter names on the wire"
     )
 
 
@@ -101,21 +130,6 @@ def test_an_engine_lab_backtest_refuses_a_parameter_its_strategy_hides(monkeypat
 
     assert exc.value.status_code == 400
     assert exc.value.detail["params_errors"][0]["loc"] == ["params", "long_window"]
-
-
-def test_expected_strategies_are_registered():
-    strategies = _list_strategies()
-    names = {s["name"] for s in strategies}
-    assert names >= EXPECTED_STRATEGY_KEYS, (
-        f"registry regressed — at least one expected strategy is missing: {EXPECTED_STRATEGY_KEYS - names}"
-    )
-
-
-@pytest.mark.parametrize("name", ["ema_crossover_signal", "rsi_mean_reversion"], ids=["ema_signal", "rsi_mean_reversion"])
-def test_strategy_advertises_its_matching_lean_validation_template(name):
-    strategy = next(strategy for strategy in _list_strategies() if strategy["name"] == name)
-
-    assert strategy["lean_twin"] == name
 
 
 def test_ema_signal_exposes_the_normalized_gap_floor_as_a_parameter() -> None:
@@ -161,45 +175,26 @@ def test_ema_signal_registry_build_forwards_the_normalized_gap_parameters() -> N
     assert strategy._rsi_gate_bounds() == (Decimal("52"), Decimal("68"))
 
 
-def test_params_schema_is_round_trippable_json():
-    """params_schema must be plain JSON the frontend can consume."""
-    for s in _list_strategies():
-        dumped = json.dumps(s["params_schema"])
-        assert json.loads(dumped) == s["params_schema"]
+def test_the_catalog_advertises_json_params_recency_and_bar_cadence_to_the_picker():
+    strategies = _list_strategies()
+    by_name = {entry["name"]: entry for entry in strategies}
 
+    # params_schema must be plain JSON the frontend can consume.
+    for entry in strategies:
+        dumped = json.dumps(entry["params_schema"])
+        assert json.loads(dumped) == entry["params_schema"], f"{entry['name']}: params_schema round-trips through JSON"
 
-def test_recency_supported_flags_numeric_only_strategies_true():
-    """Recency Chart eligibility — numeric-param strategies."""
-    strategies = {strategy["name"]: strategy for strategy in _list_strategies()}
+    # Recency Chart eligibility — numeric-param strategies.
     for key in ("ema_crossover_signal", "sma_crossover", "rsi_mean_reversion"):
-        assert strategies[key]["recency_supported"] is True, key
+        assert by_name[key]["recency_supported"] is True, f"{key}: numeric-param strategies are recency-supported"
 
-
-def test_registry_exposes_strategy_bar_cadence_without_frontend_name_heuristics():
-    strategies = {strategy["name"]: strategy for strategy in _list_strategies()}
-
-    assert strategies["ema_crossover_signal"]["strategy_bars"] == {
+    assert by_name["ema_crossover_signal"]["strategy_bars"] == {
         "timespan": "minute",
         "multiplier": 15,
         "parameter": None,
-    }
-    assert strategies["sma_crossover"]["strategy_bars"] == {
+    }, "the registry serves ema_crossover_signal's bar cadence, with no frontend name heuristics"
+    assert by_name["sma_crossover"]["strategy_bars"] == {
         "timespan": "minute",
         "multiplier": 15,
         "parameter": "resolution_minutes",
-    }
-
-
-def test_catalog_names_the_settings_each_lean_twin_reads() -> None:
-    """Strategy Lab's LEAN-only run sends these settings and refuses the rest (#2904)."""
-    strategies = {strategy["name"]: strategy for strategy in _list_strategies()}
-
-    for name, strategy in strategies.items():
-        registration = _STRATEGY_REGISTRY[name]
-        assert strategy["lean_parameter_names"] == list(registration.lean_parameter_names), name
-        assert strategy["lean_data_policy_parameter_names"] == list(
-            registration.lean_data_policy_parameter_names
-        ), name
-    # Both kinds must be on the wire, or the loop above proves nothing.
-    assert strategies["ema_crossover_signal"]["lean_parameter_names"] == ["gap", "gap_bps", "rsi_min", "rsi_max"]
-    assert strategies["rsi_mean_reversion"]["lean_data_policy_parameter_names"] == ["resolution_minutes"]
+    }, "the registry serves sma_crossover's bar cadence and the parameter that moves it"

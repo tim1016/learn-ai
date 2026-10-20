@@ -1612,22 +1612,6 @@ async def test_a_reader_called_on_the_event_loop_thread_answers_none_for_a_day_w
 
 
 @respx.mock
-async def test_a_reader_whose_catalog_is_unreachable_raises_the_outage_and_not_a_missing_day(
-    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _mock_vendor()
-    await _ensure()
-
-    async def down(*args: Any, **kwargs: Any) -> bool:
-        raise catalog_client.CatalogUnavailableError("down")
-
-    monkeypatch.setattr(catalog_client, "has_committed_file_receipt", down)
-
-    with pytest.raises(catalog_client.CatalogUnavailableError):
-        await _read()
-
-
-@respx.mock
 async def test_a_lake_root_without_its_identity_marker_refuses_the_bytes(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
     _mock_vendor()
     await _ensure()

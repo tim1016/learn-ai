@@ -111,19 +111,36 @@ def test_preflight_plans_whole_folds_and_admits_on_combinations_times_folds_time
     assert pre.sweep.estimated_seconds > 0
 
 
-def test_preflight_refuses_a_range_that_does_not_make_whole_folds_and_names_the_nearest_ends(lake: Path) -> None:
+@pytest.mark.parametrize(
+    ("overrides", "code", "named_in_message"),
+    [
+        # Inclusive end dates, as the form takes them.
+        pytest.param(
+            {"end_ms": et_midnight_ms(date(2025, 3, 15))},
+            "FOLDS_INVALID",
+            ("2025-02-28", "2025-03-31"),
+            id="a_range_that_does_not_make_whole_folds_names_the_nearest_ends",
+        ),
+        # 1300 combos × 2 folds × 2 = 5200
+        pytest.param(
+            {
+                "param_ranges": {
+                    "short_window": ValueListRange(tuple(float(v) for v in range(2, 52))),
+                    "long_window": ValueListRange(tuple(float(v) for v in range(60, 86))),
+                }
+            },
+            "WORKLOAD_LIMIT",
+            (),
+            id="the_total_backtest_limit_applies_across_folds",
+        ),
+    ],
+)
+def test_preflight_refuses_a_study_the_limits_cannot_admit(lake: Path, overrides: dict, code: str, named_in_message: tuple) -> None:
     with pytest.raises(service.GridSearchRefusal) as excinfo:
-        service.preflight(_spec(end_ms=et_midnight_ms(date(2025, 3, 15))), roots=[lake])
+        service.preflight(_spec(**overrides), roots=[lake])
 
-    assert excinfo.value.code == "FOLDS_INVALID"
-    assert "2025-02-28" in str(excinfo.value) and "2025-03-31" in str(excinfo.value)  # inclusive, as the form takes them
-
-
-def test_preflight_applies_the_total_backtest_limit_across_folds(lake: Path) -> None:
-    ranges = {"short_window": ValueListRange(tuple(float(v) for v in range(2, 52))), "long_window": ValueListRange(tuple(float(v) for v in range(60, 86)))}
-    with pytest.raises(service.GridSearchRefusal) as excinfo:
-        service.preflight(_spec(param_ranges=ranges), roots=[lake])  # 1300 combos × 2 folds × 2 = 5200
-    assert excinfo.value.code == "WORKLOAD_LIMIT"
+    assert excinfo.value.code == code, "the refusal carries its code"
+    assert all(text in str(excinfo.value) for text in named_in_message), "the refusal names what the form needs"
 
 
 def test_a_study_that_names_no_fill_mode_is_frozen_and_swept_at_the_decision_minute_open(lake: Path) -> None:

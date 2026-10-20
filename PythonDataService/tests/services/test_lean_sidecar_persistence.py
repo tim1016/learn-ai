@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
@@ -56,10 +57,39 @@ def _filled_event(
     }
 
 
-def test_pair_empty_events_returns_empty_list() -> None:
-    trades, open_lot = pair_order_events([])
-    assert trades == []
-    assert open_lot is None
+@pytest.mark.parametrize(
+    ("events_for", "trade_count", "open_lot_facts"),
+    [
+        pytest.param(lambda: [], 0, None, id="pair_empty_events_returns_empty_list"),
+        pytest.param(
+            lambda: [
+                {**_filled_event(1, "buy", 1_700_000_000_000, 100.0, 10), "status": "submitted"},
+                _filled_event(1, "buy", 1_700_000_060_000, 100.0, 10, fee=0.5),
+                _filled_event(2, "sell", 1_700_000_120_000, 101.0, 10, fee=0.5),
+            ],
+            1,
+            None,
+            id="pair_skips_non_filled_events",
+        ),
+        pytest.param(
+            lambda: [_filled_event(1, "buy", 1_700_000_000_000, 100.0, 10, fee=0.5)],
+            0,
+            (1_700_000_000_000, 100.0, 10, [0.5]),
+            id="pair_half_open_returns_open_lot",
+        ),
+    ],
+)
+def test_pairing_closes_filled_round_trips_and_leaves_the_rest_as_an_open_lot(
+    events_for: Callable[[], list[dict]],
+    trade_count: int,
+    open_lot_facts: tuple[int, float, int, list[float]] | None,
+) -> None:
+    trades, open_lot = pair_order_events(events_for())
+    assert len(trades) == trade_count, "closed round trips"
+    assert [t.trade_number for t in trades] == list(range(1, trade_count + 1)), "round trips are numbered from one"
+    assert (open_lot is None) is (open_lot_facts is None), "an open lot is left only when a position is still open"
+    facts = None if open_lot is None else (open_lot.entry_ms_utc, open_lot.entry_price, open_lot.quantity, open_lot.fees)
+    assert facts == open_lot_facts, "open lot (entry ms, entry price, quantity, fees), None when nothing is open"
 
 
 def test_a_failed_lean_payload_keeps_its_engine_parameters_and_parity_group(tmp_path: Path) -> None:
@@ -175,17 +205,6 @@ def test_parity_payload_execution_receipt_matches_eligible_python_run(tmp_path: 
     assert set(python_receipt) == {"compatibility_profile", "warmup_from_date", "slippage_per_share"}
 
 
-def test_pair_skips_non_filled_events() -> None:
-    events = [
-        {**_filled_event(1, "buy", 1_700_000_000_000, 100.0, 10), "status": "submitted"},
-        _filled_event(1, "buy", 1_700_000_060_000, 100.0, 10, fee=0.5),
-        _filled_event(2, "sell", 1_700_000_120_000, 101.0, 10, fee=0.5),
-    ]
-    trades, open_lot = pair_order_events(events)
-    assert len(trades) == 1
-    assert open_lot is None
-
-
 def test_pair_single_round_trip() -> None:
     events = [
         _filled_event(1, "buy", 1_700_000_000_000, 100.0, 10, fee=0.5),
@@ -218,19 +237,6 @@ def test_pair_multiple_round_trips() -> None:
     assert len(trades) == 2
     assert [t.trade_number for t in trades] == [1, 2]
     assert trades[1].pnl == pytest.approx((100.0 - 102.0) * 10 - 1.0)
-
-
-def test_pair_half_open_returns_open_lot() -> None:
-    events = [
-        _filled_event(1, "buy", 1_700_000_000_000, 100.0, 10, fee=0.5),
-    ]
-    trades, open_lot = pair_order_events(events)
-    assert trades == []
-    assert open_lot is not None
-    assert open_lot.entry_ms_utc == 1_700_000_000_000
-    assert open_lot.entry_price == pytest.approx(100.0)
-    assert open_lot.quantity == 10
-    assert open_lot.fees == [0.5]
 
 
 def test_pair_raises_on_pyramiding() -> None:
@@ -1005,42 +1011,17 @@ def test_build_persist_payload_empty_order_events(tmp_path: Path) -> None:
     assert payload["trades"] == []
 
 
-def test_build_persist_payload_corrupt_json_returns_failed_payload(tmp_path: Path) -> None:
-    """Corrupt result.json must not raise — returns a failed-run payload."""
-    from app.services.lean_sidecar_persistence import build_persist_payload
-
-    ws = tmp_path / "ui_run_corrupt"
+def _corrupt_result_workspace(base: Path, run_id: str) -> Path:
+    ws = base / run_id
     (ws / "normalized").mkdir(parents=True)
     (ws / "normalized" / "result.json").write_text("{ this is not valid JSON }")
-
-    payload = build_persist_payload(
-        workspace_path=ws,
-        run_id="ui_run_corrupt",
-        starting_cash=100_000.0,
-        symbol="SPY",
-        algorithm_name="ema_crossover",
-        start_date=date(2023, 11, 14),
-        start_date_ms=1_700_000_000_000,
-        end_date=date(2023, 11, 14),
-        end_date_ms=1_700_000_600_000,
-    )
-
-    assert payload["lean_run_id"] == "ui_run_corrupt"
-    assert payload["total_trades"] == 0
-    assert payload["trades"] == []
-    # Canonical-shape failure payload — see test_build_persist_payload_missing_normalized_result.
-    stats = payload["lean_statistics"]
-    assert set(stats.keys()) == {"portfolio", "trade", "runtime"}
-    assert stats["trade"]["total_number_of_trades"] == 0
+    return ws
 
 
-def test_build_persist_payload_pyramiding_returns_failed_payload(tmp_path: Path) -> None:
-    """Pyramiding in order events must not raise — returns a failed-run payload."""
-    from app.services.lean_sidecar_persistence import build_persist_payload
-
-    ws = _write_fixture_workspace(
-        tmp_path,
-        "ui_run_pyramiding",
+def _pyramiding_workspace(base: Path, run_id: str) -> Path:
+    return _write_fixture_workspace(
+        base,
+        run_id,
         order_events=[
             # Two consecutive buys without an intervening sell — pyramiding.
             _filled_event(1, "buy", 1_700_000_000_000, 100.0, 10, fee=0.5),
@@ -1052,9 +1033,25 @@ def test_build_persist_payload_pyramiding_returns_failed_payload(tmp_path: Path)
         ],
     )
 
+
+@pytest.mark.parametrize(
+    ("run_id", "workspace_for"),
+    [
+        pytest.param("ui_run_corrupt", _corrupt_result_workspace, id="corrupt_json"),
+        pytest.param("ui_run_pyramiding", _pyramiding_workspace, id="pyramiding"),
+    ],
+)
+def test_build_persist_payload_returns_a_failed_payload_instead_of_raising(
+    tmp_path: Path, run_id: str, workspace_for: Callable[[Path, str], Path]
+) -> None:
+    """A corrupt result.json or pyramiding in the order events must not raise."""
+    from app.services.lean_sidecar_persistence import build_persist_payload
+
+    ws = workspace_for(tmp_path, run_id)
+
     payload = build_persist_payload(
         workspace_path=ws,
-        run_id="ui_run_pyramiding",
+        run_id=run_id,
         starting_cash=100_000.0,
         symbol="SPY",
         algorithm_name="ema_crossover",
@@ -1064,13 +1061,13 @@ def test_build_persist_payload_pyramiding_returns_failed_payload(tmp_path: Path)
         end_date_ms=1_700_000_600_000,
     )
 
-    assert payload["lean_run_id"] == "ui_run_pyramiding"
-    assert payload["total_trades"] == 0
-    assert payload["trades"] == []
+    assert payload["lean_run_id"] == run_id, "the failed row carries the run id"
+    assert payload["total_trades"] == 0, "a failed run has no trades"
+    assert payload["trades"] == [], "a failed run has no trade rows"
     # Canonical-shape failure payload — see test_build_persist_payload_missing_normalized_result.
     stats = payload["lean_statistics"]
-    assert set(stats.keys()) == {"portfolio", "trade", "runtime"}
-    assert stats["trade"]["total_number_of_trades"] == 0
+    assert set(stats.keys()) == {"portfolio", "trade", "runtime"}, "lean_statistics is the canonical shape"
+    assert stats["trade"]["total_number_of_trades"] == 0, "lean_statistics trade count is zero"
 
 
 # ---------------------------------------------------------------------------

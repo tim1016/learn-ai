@@ -213,30 +213,26 @@ def _refused(receipt: EffectOperationReceipt, code: str) -> None:
 
 
 @pytest.mark.usefixtures("judged")
+@pytest.mark.parametrize(
+    ("price", "shows", "paid_cents"),
+    [("1.94", "99806.00", 19_400), ("1.93", "99807.00", 19_300)],
+    ids=["a fall of exactly the premium paid", "a fill better than the limit is compared with what was paid"],
+)
 async def test_a_fall_of_exactly_the_premium_paid_is_consistent_and_the_fee_provision_raises_nothing(
-    paper: Paper,
+    paper: Paper, price: str, shows: str, paid_cents: int
 ) -> None:
-    order_ref = await paper.filled(price="1.94", shows="99806.00")
+    order_ref = await paper.filled(price=price, shows=shows)
 
     found = await paper.compared(order_ref)
 
     # $194.00 fell; $194.06 was set aside. The six cents of fees Alpaca has not taken are not a difference.
+    # A fill better than the limit is compared with what was paid, not with the limit.
     assert (found.result, found.reason_code, found.holds) == ("consistent", None, False)
-    assert (found.fall_cents, found.premium_paid_cents, found.cost_of_filled_cents) == (19_400, 19_400, 19_400)
+    assert (found.fall_cents, found.premium_paid_cents, found.cost_of_filled_cents) == (paid_cents, paid_cents, paid_cents)
     assert (found.commitment_cents, found.set_aside_for_filled_cents) == (SET_ASIDE, SET_ASIDE)
     assert (found.contracts_asked, found.contracts_filled) == (1, 1)
-    assert (found.first_buying_power, found.second_buying_power) == ("100000", "99806.00")
+    assert (found.first_buying_power, found.second_buying_power) == ("100000", shows)
     assert paper.notices() == []
-
-
-@pytest.mark.usefixtures("judged")
-async def test_a_fill_better_than_the_limit_is_compared_with_what_was_paid_not_with_the_limit(paper: Paper) -> None:
-    order_ref = await paper.filled(price="1.93", shows="99807.00")
-
-    found = await paper.compared(order_ref)
-
-    assert (found.result, found.fall_cents, found.premium_paid_cents) == ("consistent", 19_300, 19_300)
-    assert found.set_aside_for_filled_cents == SET_ASIDE
 
 
 @pytest.mark.usefixtures("judged")

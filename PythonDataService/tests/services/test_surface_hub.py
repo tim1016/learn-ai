@@ -773,7 +773,7 @@ async def test_snapshot_watchers_are_latest_wins_queue_one() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stop_closes_snapshot_watchers() -> None:
+async def test_stop_closes_snapshot_watchers_and_a_subscribe_after_stop_is_terminal_and_not_retained() -> None:
     hub = SurfaceHub(
         strategy_instance_id="bot-a",
         assemble=lambda: asyncio.sleep(
@@ -783,31 +783,15 @@ async def test_stop_closes_snapshot_watchers() -> None:
         refresh_interval_seconds=3_600,
     )
     await hub.start()
-    queue = hub.subscribe()
-    await queue.get()
+    watcher = hub.subscribe()
+    await watcher.get()
 
     await hub.stop(timeout_seconds=0.1)
+    after_stop = hub.subscribe()
 
-    assert await queue.get() is None
-
-
-@pytest.mark.asyncio
-async def test_subscribe_after_stop_is_terminal_and_not_retained() -> None:
-    hub = SurfaceHub(
-        strategy_instance_id="bot-a",
-        assemble=lambda: asyncio.sleep(
-            0,
-            result=_snapshot(generated_at_ms=1_700_000_000_100),
-        ),
-        refresh_interval_seconds=3_600,
-    )
-    await hub.start()
-    await hub.stop(timeout_seconds=0.1)
-
-    queue = hub.subscribe()
-
-    assert await queue.get() is None
-    assert queue not in hub._watchers
+    assert await watcher.get() is None, "stop closes a snapshot watcher that was subscribed before it"
+    assert await after_stop.get() is None, "a subscriber after stop is handed the terminal marker"
+    assert after_stop not in hub._watchers, "a subscriber after stop is not retained"
 
 
 @pytest.mark.asyncio

@@ -637,19 +637,6 @@ async def test_stop_rejects_unknown_or_unbounded_input_before_commit(
 
 
 @pytest.mark.asyncio
-async def test_stop_after_start_succeeds(api: FastAPI) -> None:
-    _start_run()
-    async with _client(api) as client:
-        stop = await client.post(
-            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/stop",
-            json={"lifecycle_run_id": "run-1"},
-        )
-        assert stop.status_code == 202
-        assert stop.json()["state"] == "succeeded"
-        assert stop.json()["action"] == "STOP"
-
-
-@pytest.mark.asyncio
 async def test_stop_refuses_the_reason_reserved_for_the_clerks_stop_at_a_bots_end(api: FastAPI) -> None:
     """#2607 review: ``scheduled_end`` is the Clerk's own reason for its STOP at a bot's end,
     and the runner reads a run stopped with it as the end's to carry out -- keeping a SELL end
@@ -690,7 +677,7 @@ async def test_stop_in_a_process_with_no_bot_runner_lands_and_says_it_cancelled_
 
 
 @pytest.mark.asyncio
-async def test_stop_retry_after_run_stopped_replays_the_completed_result_over_http(
+async def test_stop_after_start_succeeds_and_its_retry_replays_the_completed_result_over_http(
     api: FastAPI,
 ) -> None:
     """The HTTP-level proof of the corrective foundation slice's central
@@ -706,9 +693,12 @@ async def test_stop_retry_after_run_stopped_replays_the_completed_result_over_ht
             f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/stop",
             json={"lifecycle_run_id": "run-1"},
         )
-        assert first.status_code == 202
-        assert retry.status_code == 202
-        assert first.json()["command_id"] == retry.json()["command_id"]
+        assert first.status_code == 202, "stop after start is accepted"
+        assert first.json()["state"] == "succeeded", "stop after start succeeds"
+        assert first.json()["action"] == "STOP", "the committed command is a STOP"
+        assert retry.status_code == 202, "the lost-response retry is accepted"
+        assert retry.json()["state"] == "succeeded", "the retry replays the completed state"
+        assert first.json()["command_id"] == retry.json()["command_id"], "the retry replays the original completed command"
 
 
 @pytest.mark.asyncio

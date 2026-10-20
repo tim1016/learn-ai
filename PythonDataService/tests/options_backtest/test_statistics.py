@@ -808,72 +808,103 @@ def test_a_session_is_without_momentum_when_a_leg_took_a_starting_price_and_no_l
     assert summarize_run(sessions, starting_cash_usd=STARTING).sessions_without_momentum == 2
 
 
-def test_a_trade_that_gained_on_the_price_and_lost_on_its_fees_is_a_lost_trade() -> None:
+def test_a_summary_with_a_ratio_that_is_zero_or_undefined_says_so_and_a_summary_of_no_sessions_is_empty() -> None:
     # Bought 1.00 and sold 1.01: +1.00 on the price; fees 0.65 + 0.65 = 1.30 make it -0.30.
-    sessions = [
-        a_session(
-            OCT_7,
-            "10000.00",
-            status=SessionStatus.TRADED,
-            trades=(
-                a_trade(
-                    "a",
-                    entry=("1.00", "1.00"),
-                    exit=("1.01", "1.01"),
-                    reason=ExitReason.EXIT_TIME,
-                    fees=("0.65", "0.65"),
+    lost_on_fees = summarize_run(
+        [
+            a_session(
+                OCT_7,
+                "10000.00",
+                status=SessionStatus.TRADED,
+                trades=(
+                    a_trade(
+                        "a",
+                        entry=("1.00", "1.00"),
+                        exit=("1.01", "1.01"),
+                        reason=ExitReason.EXIT_TIME,
+                        fees=("0.65", "0.65"),
+                    ),
                 ),
-            ),
-        )
-    ]
+            )
+        ],
+        starting_cash_usd=STARTING,
+    )
 
-    summary = summarize_run(sessions, starting_cash_usd=STARTING)
-
-    assert (summary.trades_won, summary.trades_lost, summary.trades_break_even) == (0, 1, 0)
-    assert (summary.gross_profit_usd, summary.gross_loss_usd, summary.net_profit_usd) == (D("0"), D("0.30"), D("-0.30"))
+    assert (
+        lost_on_fees.trades_won,
+        lost_on_fees.trades_lost,
+        lost_on_fees.trades_break_even,
+    ) == (0, 1, 0), "a trade that gained on the price and lost on its fees is a lost trade"
+    assert (lost_on_fees.gross_profit_usd, lost_on_fees.gross_loss_usd, lost_on_fees.net_profit_usd) == (
+        D("0"),
+        D("0.30"),
+        D("-0.30"),
+    ), "a trade that gained on the price and lost on its fees loses its fees less its gain"
     # No winning trade over a loss: a factor of exactly nothing, not an absent one.
-    assert summary.profit_factor == Ratio(D("0"), D("0.30"))
-    assert summary.profit_factor.exact() == D("0")
+    assert lost_on_fees.profit_factor == Ratio(
+        D("0"), D("0.30")
+    ), "no winning trade over a loss is a profit factor of nothing"
+    assert lost_on_fees.profit_factor.exact() == D("0"), "that profit factor is exactly zero"
 
+    only_wins = summarize_run(
+        [
+            a_session(
+                OCT_7,
+                "10000.00",
+                status=SessionStatus.TRADED,
+                trades=(a_trade("a", entry=("2.00", "2.00"), exit=("3.00", "3.00"), reason=ExitReason.EXIT_TIME),),
+            )
+        ],
+        starting_cash_usd=STARTING,
+    )
 
-def test_with_no_losing_trade_there_is_no_profit_factor() -> None:
-    sessions = [
-        a_session(
-            OCT_7,
-            "10000.00",
-            status=SessionStatus.TRADED,
-            trades=(a_trade("a", entry=("2.00", "2.00"), exit=("3.00", "3.00"), reason=ExitReason.EXIT_TIME),),
-        )
-    ]
+    assert only_wins.profit_factor is None, "with no losing trade there is no profit factor"
+    assert (
+        only_wins.gross_profit_usd == D("100.00") and only_wins.gross_loss_usd == D("0")
+    ), "a run of one winning trade has its gross profit and no gross loss"
+    assert (
+        only_wins.trade_win_rate == Ratio(D("1"), D("1")) and only_wins.trade_win_rate.exact() == D("1")
+    ), "a run of one winning trade wins every trade"
+    assert (
+        only_wins.drawdown_by_fraction is None and only_wins.drawdown_by_dollars is None
+    ), "equity only rose, so there is no drawdown"
 
-    summary = summarize_run(sessions, starting_cash_usd=STARTING)
+    nothing_traded = summarize_run(
+        [
+            a_session(SEP_30, "10000.00", status=SessionStatus.NO_TRADE),
+            a_session(OCT_1, "10000.00", status=SessionStatus.SKIPPED, skip_reason=SkipReason.WINDOW_DOES_NOT_FIT),
+        ],
+        starting_cash_usd=STARTING,
+    )
 
-    assert summary.profit_factor is None
-    assert summary.gross_profit_usd == D("100.00") and summary.gross_loss_usd == D("0")
-    assert summary.trade_win_rate == Ratio(D("1"), D("1")) and summary.trade_win_rate.exact() == D("1")
-    assert summary.drawdown_by_fraction is None and summary.drawdown_by_dollars is None  # equity only rose
+    assert (
+        nothing_traded.sessions_tested,
+        nothing_traded.sessions_traded,
+        nothing_traded.trades,
+    ) == (2, 0, 0), "a run in which nothing traded still counts its sessions"
+    assert (
+        nothing_traded.daily_win_rate is None
+        and nothing_traded.trade_win_rate is None
+        and nothing_traded.profit_factor is None
+    ), "a run in which nothing traded has no rates"
+    assert (
+        nothing_traded.drawdown_by_fraction is None and nothing_traded.drawdown_by_dollars is None
+    ), "a run in which nothing traded has no drawdown"
+    assert (nothing_traded.net_profit_usd, nothing_traded.ending_cash_usd) == (
+        D("0"),
+        STARTING,
+    ), "a run in which nothing traded leaves its cash unchanged"
+    assert nothing_traded.skipped_by_reason == (
+        (SkipReason.WINDOW_DOES_NOT_FIT, 1),
+        (SkipReason.UNDERLYING_DID_NOT_TRADE, 0),
+    ), "a run in which nothing traded counts its one skipped session by its reason"
 
+    empty = summarize_run([], starting_cash_usd=STARTING)
 
-def test_a_run_in_which_nothing_traded_has_no_rates_and_no_drawdown_and_its_cash_unchanged() -> None:
-    sessions = [
-        a_session(SEP_30, "10000.00", status=SessionStatus.NO_TRADE),
-        a_session(OCT_1, "10000.00", status=SessionStatus.SKIPPED, skip_reason=SkipReason.WINDOW_DOES_NOT_FIT),
-    ]
-
-    summary = summarize_run(sessions, starting_cash_usd=STARTING)
-
-    assert (summary.sessions_tested, summary.sessions_traded, summary.trades) == (2, 0, 0)
-    assert summary.daily_win_rate is None and summary.trade_win_rate is None and summary.profit_factor is None
-    assert summary.drawdown_by_fraction is None and summary.drawdown_by_dollars is None
-    assert (summary.net_profit_usd, summary.ending_cash_usd) == (D("0"), STARTING)
-    assert summary.skipped_by_reason == ((SkipReason.WINDOW_DOES_NOT_FIT, 1), (SkipReason.UNDERLYING_DID_NOT_TRADE, 0))
-
-
-def test_a_summary_of_no_sessions_is_empty_and_still_says_what_cash_it_started_with() -> None:
-    summary = summarize_run([], starting_cash_usd=STARTING)
-
-    assert summary.sessions_tested == 0 and summary.by_day == () and summary.by_month == ()
-    assert summary.ending_cash_usd == STARTING
+    assert (
+        empty.sessions_tested == 0 and empty.by_day == () and empty.by_month == ()
+    ), "a summary of no sessions is empty"
+    assert empty.ending_cash_usd == STARTING, "a summary of no sessions still says what cash it started with"
 
 
 @pytest.mark.parametrize(
@@ -907,14 +938,12 @@ def test_a_ratio_is_exact_where_it_ends_and_rounds_half_to_even_where_it_is_show
     assert ratio.rounded_to_6_places().as_tuple().exponent == -6
 
 
-def test_a_ratio_divides_by_something_above_zero() -> None:
+def test_a_ratio_divides_by_something_above_zero_and_shows_its_percent_whatever_the_decimal_context() -> None:
     with pytest.raises(ValueError, match="above zero"):
         Ratio(D("1"), D("0"))
     with pytest.raises(ValueError, match="above zero"):
         Ratio(D("1"), D("-2"))
 
-
-def test_a_ratio_display_percent_rounds_the_exact_fraction_whatever_the_decimal_context_it_is_asked_in() -> None:
     assert Ratio(D(217), D(471)).percent_1_place() == D("46.1"), "217 / 471 shows as 46.1 percent"
     assert Ratio(D("960"), D("10837.90")).percent_1_place() == D("8.9"), "960 / 10837.90 shows as 8.9 percent"
     assert Ratio(D(1), D(16)).percent_1_place() == D("6.2"), "1 / 16 shows as 6.2 percent"

@@ -122,127 +122,78 @@ async def test_ema_trade_bot_releases_backtest_chart_bars(
 
 
 @pytest.mark.asyncio
-async def test_trade_bot_enters_after_two_green_bars_in_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("bars", "quantity", "purposes"),
+    [
+        pytest.param(
+            # One red bar then two green bars inside the detection window, then hold. One semantic ENTER after the
+            # second consecutive green bar. The runtime never supplies a broker side; the Clerk derives that from the plan.
+            [(_red_bar, _WIN_START_MS + 60_000), (_green_bar, _WIN_START_MS + 120_000), (_green_bar, _WIN_START_MS + 180_000)],
+            2,
+            ["ENTER"],
+            id="enters after two green bars in window",
+        ),
+        pytest.param(
+            # Two green bars strictly before the 09:45 ET window start (09:31 ET and 09:32 ET). The default quantity is 1.
+            [(_green_bar, _SESSION_OPEN_MS + 60_000), (_green_bar, _SESSION_OPEN_MS + 120_000)],
+            1,
+            [],
+            id="no entry before window",
+        ),
+        pytest.param(
+            # Entry triggered after the second green bar; in-position bars 1 and 2 are red, bar 3 is green and exits.
+            [
+                (_green_bar, _WIN_START_MS + 60_000),
+                (_green_bar, _WIN_START_MS + 120_000),
+                (_red_bar, _WIN_START_MS + 180_000),
+                (_red_bar, _WIN_START_MS + 240_000),
+                (_green_bar, _WIN_START_MS + 300_000),
+            ],
+            3,
+            ["ENTER", "EXIT"],
+            id="exits three bars after entry",
+        ),
+        pytest.param(
+            # The second green bar triggers BUY; bar 1 in position is red; a bar past the window end FLATTENs.
+            [
+                (_green_bar, _WIN_START_MS + 60_000),
+                (_green_bar, _WIN_START_MS + 120_000),
+                (_red_bar, _WIN_START_MS + 180_000),
+                (_green_bar, _WIN_END_MS + 1),
+            ],
+            1,
+            ["ENTER", "EXIT"],
+            id="flattens at window end",
+        ),
+        pytest.param(
+            [(_green_bar, _WIN_START_MS + 60_000), (_green_bar, _WIN_START_MS + 120_000)],
+            7,
+            ["ENTER"],
+            id="quantity plumbed from binding",
+        ),
+    ],
+)
+async def test_trade_bot_sends_the_clerk_the_decisions_its_window_mechanics_call_for(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bars: list[tuple], quantity: int, purposes: list[str]
+) -> None:
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
     admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
-
-    # One red bar then two green bars inside the detection window, then hold.
-    bars = [
-        _red_bar(_WIN_START_MS + 60_000),
-        _green_bar(_WIN_START_MS + 120_000),
-        _green_bar(_WIN_START_MS + 180_000),
-    ]
-    feed = _FakeFeed(bars, mode="hold")
+    feed = _FakeFeed([make_bar(end_ms) for make_bar, end_ms in bars], mode="hold")
     registry = _registry(tmp_path, feed)
 
-    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade", quantity=2)
-    await _wait_for(lambda: feed.bars_consumed == 3)
+    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade", quantity=quantity)
+    await _wait_for(lambda: feed.bars_consumed == len(bars))
     await registry.stop("alpaca", _SID)
 
-    # One semantic ENTER after the second consecutive green bar.  The runtime
-    # never supplies a broker side; the Clerk derives that from the plan.
-    assert len(clerk.calls) == 1
-    assert clerk.calls[0]["purpose"] == "ENTER"
-    assert clerk.calls[0]["quantity"] == 2
-    assert clerk.calls[0]["strategy_instance_id"] == _SID
-
-
-@pytest.mark.asyncio
-async def test_trade_bot_no_entry_before_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    clerk = _FakeClerk()
-    _install_fake_clerk(monkeypatch, clerk)
-    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
-
-    # Two green bars strictly before the 09:45 ET window start.
-    pre_window_1 = _SESSION_OPEN_MS + 60_000  # 09:31 ET
-    pre_window_2 = _SESSION_OPEN_MS + 120_000  # 09:32 ET
-    bars = [
-        _green_bar(pre_window_1),
-        _green_bar(pre_window_2),
-    ]
-    feed = _FakeFeed(bars, mode="hold")
-    registry = _registry(tmp_path, feed)
-
-    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade")
-    await _wait_for(lambda: feed.bars_consumed == 2)
-    await registry.stop("alpaca", _SID)
-
-    assert clerk.calls == []
-
-
-@pytest.mark.asyncio
-async def test_trade_bot_exits_three_bars_after_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    clerk = _FakeClerk()
-    _install_fake_clerk(monkeypatch, clerk)
-    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
-
-    base = _WIN_START_MS + 60_000
-    bars = [
-        _green_bar(base),
-        _green_bar(base + 60_000),  # entry triggered after this bar
-        _red_bar(base + 120_000),  # in-position bar 1
-        _red_bar(base + 180_000),  # in-position bar 2
-        _green_bar(base + 240_000),  # in-position bar 3 → exit
-    ]
-    feed = _FakeFeed(bars, mode="hold")
-    registry = _registry(tmp_path, feed)
-
-    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade", quantity=3)
-    await _wait_for(lambda: feed.bars_consumed == 5)
-    await registry.stop("alpaca", _SID)
-
-    assert len(clerk.calls) == 2
-    assert [call["purpose"] for call in clerk.calls] == ["ENTER", "EXIT"]
-    assert clerk.calls[1]["quantity"] == 3
-
-
-@pytest.mark.asyncio
-async def test_trade_bot_flattens_at_window_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    clerk = _FakeClerk()
-    _install_fake_clerk(monkeypatch, clerk)
-    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
-
-    base = _WIN_START_MS + 60_000
-    bars = [
-        _green_bar(base),
-        _green_bar(base + 60_000),  # triggers BUY
-        _red_bar(base + 120_000),  # bar 1 in position
-        _green_bar(_WIN_END_MS + 1),  # past window end → FLATTEN
-    ]
-    feed = _FakeFeed(bars, mode="hold")
-    registry = _registry(tmp_path, feed)
-
-    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade", quantity=1)
-    await _wait_for(lambda: feed.bars_consumed == 4)
-    await registry.stop("alpaca", _SID)
-
-    assert len(clerk.calls) == 2
-    assert [call["purpose"] for call in clerk.calls] == ["ENTER", "EXIT"]
-
-
-@pytest.mark.asyncio
-async def test_trade_bot_quantity_plumbed_from_binding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    clerk = _FakeClerk()
-    _install_fake_clerk(monkeypatch, clerk)
-    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
-
-    base = _WIN_START_MS + 60_000
-    bars = [_green_bar(base), _green_bar(base + 60_000)]
-    feed = _FakeFeed(bars, mode="hold")
-    registry = _registry(tmp_path, feed)
-
-    await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade", quantity=7)
-    await _wait_for(lambda: feed.bars_consumed == 2)
-    await registry.stop("alpaca", _SID)
-
-    assert clerk.calls[0]["quantity"] == 7
-
+    assert [call["purpose"] for call in clerk.calls] == purposes, "the Clerk is sent exactly these decisions, in this order"
+    assert all(call["quantity"] == quantity for call in clerk.calls), "every decision carries the binding's quantity"
+    assert all(call["strategy_instance_id"] == _SID for call in clerk.calls), "every decision names the bot"
     # Immutable instance artifact carries deployment semantics.
     instance = _strategy_instance_json(tmp_path)
-    assert instance["quantity"] == 7
-    assert instance["mode"] == "trade"
-    assert instance["action_plan"]["on_enter"][0]["position"] == "long"
+    assert instance["quantity"] == quantity, "the instance artifact carries the binding's quantity"
+    assert instance["mode"] == "trade", "the instance artifact carries the trade mode"
+    assert instance["action_plan"]["on_enter"][0]["position"] == "long", "the instance artifact's entry is a long position"
 
 
 @pytest.mark.asyncio

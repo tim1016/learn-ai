@@ -237,12 +237,85 @@ def test_shifted_trade_timestamp_is_a_decision_mismatch() -> None:
     assert verdict["counts_by_category"] == {"DECISION_MISMATCH": 1}
 
 
-def test_changed_resolved_parameter_is_not_a_comparable_pair() -> None:
-    status, verdict = _verdict(parameters_json='{"symbol": "SPY", "gap": 0.25}')
+@pytest.mark.parametrize(
+    ("field", "value", "status", "reason", "axis", "axis_fields_json"),
+    [
+        pytest.param(
+            "parameters_json",
+            '{"symbol": "SPY", "gap": 0.25}',
+            "unavailable",
+            "strategy_parameter_mismatch",
+            "parameter_parity",
+            '{"mismatched_fields": ["gap"]}',
+            id="changed_resolved_parameter_is_not_a_comparable_pair",
+        ),
+        pytest.param(
+            "program_version",
+            "ema-crossover-v2",
+            "unavailable",
+            "program_version_mismatch",
+            "program_version_parity",
+            '{"status": "mismatch"}',
+            id="changed_program_version_is_not_a_comparable_pair",
+        ),
+        pytest.param(
+            "execution_config_json",
+            json.dumps({**json.loads(_run(2, "lean-sidecar").execution_config_json or "{}"), "slippage_per_share": 0.01}),
+            "unavailable",
+            "compatibility_input_mismatch",
+            "input_parity",
+            '{"mismatched_fields": ["execution_configuration"]}',
+            id="changed_execution_configuration_is_not_a_comparable_pair",
+        ),
+        pytest.param(
+            "data_policy_json",
+            json.dumps(data_policy("SPY", fixture_id="bar-store-v1-changed")),
+            "unavailable",
+            "compatibility_input_mismatch",
+            "input_parity",
+            '{"mismatched_fields": ["fixture_id"], "fixture_id": "bar-store-v1-changed"}',
+            id="a_shared_fixture_mismatch_is_not_a_comparable_pair_and_names_the_fixture",
+        ),
+        pytest.param(
+            "run_verdict_json",
+            json.dumps(
+                {
+                    **MATCHING_RUN_VERDICT,
+                    "parity_signature": {**MATCHING_RUN_VERDICT["parity_signature"], "contract_id": "readiness-core-v3"},
+                }
+            ),
+            "unavailable",
+            "production_readiness_parity_unavailable",
+            "readiness_parity",
+            '{"status": "unavailable", "reason": "readiness_contract_version_differs"}',
+            id="a_different_readiness_contract_version_is_unavailable_not_a_mismatch",
+        ),
+        pytest.param(
+            "run_verdict_json",
+            json.dumps(
+                {
+                    **MATCHING_RUN_VERDICT,
+                    "grade": "B",
+                    "parity_signature": {**MATCHING_RUN_VERDICT["parity_signature"], "grade": "B"},
+                }
+            ),
+            "diverged",
+            "production_readiness_mismatch",
+            "readiness_parity",
+            '{"mismatched_fields": ["parity_signature"]}',
+            id="a_readiness_mismatch_names_the_signature_in_the_receipt",
+        ),
+    ],
+)
+def test_a_pair_that_differs_freezes_its_status_and_reason_and_the_axis_that_says_why(
+    field: str, value: str, status: str, reason: str, axis: str, axis_fields_json: str
+) -> None:
+    frozen, verdict = _verdict(**{field: value})
+    axis_fields = json.loads(axis_fields_json)
 
-    assert status == "unavailable"
-    assert verdict["reason"] == "strategy_parameter_mismatch"
-    assert verdict["parameter_parity"]["mismatched_fields"] == ["gap"]
+    assert frozen == status, f"a pair that differs in {field} freezes {status}"
+    assert verdict["reason"] == reason, f"the verdict names why: {reason}"
+    assert {key: verdict[axis][key] for key in axis_fields} == axis_fields, f"the {axis} axis says why"
 
 
 @pytest.mark.parametrize(
@@ -309,25 +382,6 @@ def test_hard_coded_twin_does_not_treat_non_default_python_values_as_twin_values
     assert verdict["parameter_parity"]["mismatched_fields"] == ["window"]
 
 
-def test_changed_program_version_is_not_a_comparable_pair() -> None:
-    status, verdict = _verdict(program_version="ema-crossover-v2")
-
-    assert status == "unavailable"
-    assert verdict["reason"] == "program_version_mismatch"
-    assert verdict["program_version_parity"]["status"] == "mismatch"
-
-
-def test_changed_execution_configuration_is_not_a_comparable_pair() -> None:
-    changed = json.loads(_run(2, "lean-sidecar").execution_config_json or "{}")
-    changed["slippage_per_share"] = 0.01
-
-    status, verdict = _verdict(execution_config_json=json.dumps(changed))
-
-    assert status == "unavailable"
-    assert verdict["reason"] == "compatibility_input_mismatch"
-    assert verdict["input_parity"]["mismatched_fields"] == ["execution_configuration"]
-
-
 def test_missing_fixture_identity_is_unavailable() -> None:
     status, verdict = _verdict(data_policy_json=json.dumps(data_policy("SPY")))
 
@@ -341,28 +395,6 @@ def test_missing_fixture_identity_is_unavailable() -> None:
         "fixture_sha256": None,
         "mismatched_fields": [],
     }
-
-
-def test_a_readiness_mismatch_names_the_signature_in_the_receipt() -> None:
-    right_verdict = json.loads(json.dumps(MATCHING_RUN_VERDICT))
-    right_verdict["grade"] = right_verdict["parity_signature"]["grade"] = "B"
-
-    status, verdict = _verdict(run_verdict_json=json.dumps(right_verdict))
-
-    assert status == "diverged" and verdict["reason"] == "production_readiness_mismatch"
-    assert verdict["readiness_parity"]["mismatched_fields"] == ["parity_signature"]
-
-
-def test_a_different_readiness_contract_version_is_unavailable_not_a_mismatch() -> None:
-    right_verdict = json.loads(json.dumps(MATCHING_RUN_VERDICT))
-    right_verdict["parity_signature"]["contract_id"] = "readiness-core-v3"
-
-    status, verdict = _verdict(run_verdict_json=json.dumps(right_verdict))
-
-    assert status == "unavailable"
-    assert verdict["readiness_parity"]["status"] == "unavailable"
-    assert verdict["readiness_parity"]["reason"] == "readiness_contract_version_differs"
-    assert verdict["reason"] == "production_readiness_parity_unavailable"
 
 
 def test_the_readiness_receipt_ignores_presentation_noise_outside_the_signature() -> None:
@@ -439,14 +471,6 @@ def test_empty_readiness_documents_are_unavailable() -> None:
 
     assert verdict["status"] == "unavailable"
     assert verdict["readiness_parity"]["reason"] == "readiness_fields_missing"
-
-
-def test_a_shared_fixture_mismatch_is_not_a_comparable_pair_and_names_the_fixture() -> None:
-    status, verdict = _verdict(data_policy_json=json.dumps(data_policy("SPY", fixture_id="bar-store-v1-changed")))
-
-    assert status == "unavailable" and verdict["reason"] == "compatibility_input_mismatch"
-    assert verdict["input_parity"]["mismatched_fields"] == ["fixture_id"]
-    assert verdict["input_parity"]["fixture_id"] == "bar-store-v1-changed"
 
 
 def test_cash_window_and_fill_mode_are_compared_as_inputs() -> None:

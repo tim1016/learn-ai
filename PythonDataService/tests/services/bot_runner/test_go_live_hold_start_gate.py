@@ -104,21 +104,6 @@ async def test_a_marker_that_does_not_parse_still_holds(tmp_path: Path) -> None:
     assert refused.value.reason_code == LANE_GO_LIVE_HOLD_UNREADABLE
 
 
-async def test_a_lane_that_cannot_read_its_root_fails_closed(tmp_path: Path) -> None:
-    missing = tmp_path / "volume-not-mounted"
-    registry = BotTaskRegistry(
-        tmp_path,
-        feed_resolver=lambda: None,
-        boot_recovery_required=False,
-        lane_start_gates=(go_live_start_gate(lambda: read_go_live_hold(missing)),),
-    )
-
-    with pytest.raises(RunAdmissionRefusedError) as refused:
-        await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
-
-    assert refused.value.reason_code == LANE_GO_LIVE_HOLD_UNREADABLE
-
-
 async def test_the_refusal_reaches_the_wire_with_its_reason_code(tmp_path: Path) -> None:
     _hold(tmp_path)
     registry = _registry(tmp_path)

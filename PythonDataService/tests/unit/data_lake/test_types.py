@@ -158,21 +158,22 @@ class TestDataRunSpec:
         assert spec.end_trading_date == date(2024, 5, 24), "end_trading_date derives from end_trading_date_ms"
 
     @pytest.mark.parametrize(
-        "corrupt",
+        ("corrupt", "match"),
         [
-            pytest.param(lambda p: p.update(symbols=[]), id="empty_symbols"),
+            pytest.param(lambda p: p.update(symbols=[]), None, id="empty_symbols"),
             # lean_image_digest has no default; omitting it must be a ValidationError.
-            pytest.param(lambda p: p.pop("lean_image_digest"), id="lean_image_digest_required"),
+            pytest.param(lambda p: p.pop("lean_image_digest"), None, id="lean_image_digest_required"),
             # Unknown keys must raise ValidationError (extra='forbid'). Pydantic's default
             # is to silently ignore extra fields; for DataRunSpec, silent drops would allow
             # typos (e.g. 'include_lean_metadata') to fall back to defaults without the
             # caller knowing.
-            pytest.param(lambda p: p.update(typo_field="should_be_rejected"), id="extra_fields"),
+            pytest.param(lambda p: p.update(typo_field="should_be_rejected"), None, id="extra_fields"),
             # #1877 boundary matrix. A numeric string that would parse to an on-anchor ms
             # value must still be refused — the wire type is int64, not a string that
             # happens to parse to the right number.
             pytest.param(
                 lambda p: p.update(start_trading_date_ms=str(p["start_trading_date_ms"])),
+                None,
                 id="numeric_string_value_1877",
             ),
             # An integral float (e.g. 1716206400000.0) that would parse to an on-anchor ms
@@ -180,25 +181,19 @@ class TestDataRunSpec:
             # silently accept it.
             pytest.param(
                 lambda p: p.update(start_trading_date_ms=float(p["start_trading_date_ms"])),
+                None,
                 id="integral_float_value_1877",
             ),
+            # data_types=['quote'] without 'trade' must be rejected. Quote artifacts are
+            # derived from same-day trade bytes; without a source trade artifact, quote
+            # synthesis cannot proceed.
+            pytest.param(lambda p: p.update(data_types=["quote"]), "trade", id="quote_without_trade"),
         ],
     )
-    def test_invalid_payload_rejected(self, corrupt):
+    def test_invalid_payload_rejected(self, corrupt, match):
         payload = self._valid_payload()
         corrupt(payload)
-        with pytest.raises(ValidationError):
-            DataRunSpec(**payload)
-
-    def test_quote_without_trade_rejected(self):
-        """data_types=['quote'] without 'trade' must be rejected.
-
-        Quote artifacts are derived from same-day trade bytes; without a source
-        trade artifact, quote synthesis cannot proceed.
-        """
-        payload = self._valid_payload()
-        payload["data_types"] = ["quote"]
-        with pytest.raises(ValidationError, match="trade"):
+        with pytest.raises(ValidationError, match=match):
             DataRunSpec(**payload)
 
     def test_quote_with_trade_accepted(self):

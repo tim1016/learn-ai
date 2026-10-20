@@ -1062,24 +1062,39 @@ def _complete_with_artifacts(spec: DataRunSpec, *, lake_root: Path, artifacts: l
     )
 
 
-def test_materialize_engine_run_refuses_when_a_reused_artifacts_file_is_gone(monkeypatch, tmp_path: Path):
-    """Codex finding 6: a catalog row marked complete does not mean the
-    bytes are still there.
-
-    ``ensure_data``'s claim machinery only ever checks the catalog once a
-    row is 'complete' — a reused artifact is never re-touched, so a volume
-    restored from an older snapshot (or a manual prune) can leave a
-    'complete' row naming a file that is no longer on disk. Without this
-    check, the LEAN reader would silently treat the missing day as an
-    ordinary hole in the series rather than a torn promise.
-    """
+@pytest.mark.parametrize(
+    ("on_disk", "recorded_size", "match"),
+    [
+        # Codex finding 6: a catalog row marked complete does not mean the
+        # bytes are still there.
+        #
+        # ``ensure_data``'s claim machinery only ever checks the catalog once a
+        # row is 'complete' -- a reused artifact is never re-touched, so a volume
+        # restored from an older snapshot (or a manual prune) can leave a
+        # 'complete' row naming a file that is no longer on disk. Without this
+        # check, the LEAN reader would silently treat the missing day as an
+        # ordinary hole in the series rather than a torn promise.
+        pytest.param(
+            None,
+            len(b"stand-in for a real zip; only the byte count matters here"),
+            "not on disk",
+            id="file_is_gone",
+        ),
+        # A file that exists but no longer matches the catalog's recorded size
+        # is refused too -- not just a missing file.
+        pytest.param(b"the wrong number of bytes", 999_999, "the catalog recorded", id="size_has_drifted"),
+    ],
+)
+def test_materialize_engine_run_refuses_when_a_reused_artifact_does_not_match_the_disk(
+    monkeypatch, tmp_path: Path, on_disk: bytes | None, recorded_size: int, match: str
+):
     lake_root = tmp_path / "lake"
     rel_path = f"equity/usa/minute/spy/{TRADING_DAY:%Y%m%d}_trade.zip"
     file_path = lake_root / rel_path
     file_path.parent.mkdir(parents=True)
-    payload = b"stand-in for a real zip; only the byte count matters here"
-    file_path.write_bytes(payload)
-    record = _minute_record(rel_path, file_size_bytes=len(payload))
+    if on_disk is not None:
+        file_path.write_bytes(on_disk)
+    record = _minute_record(rel_path, file_size_bytes=recorded_size)
 
     monkeypatch.setattr(
         run_materialization,
@@ -1087,29 +1102,7 @@ def test_materialize_engine_run_refuses_when_a_reused_artifacts_file_is_gone(mon
         lambda spec, **_kwargs: _complete_with_artifacts(spec, lake_root=lake_root, artifacts=[record]),
     )
 
-    file_path.unlink()  # the gap this check exists to catch
-
-    with pytest.raises(LakeMaterializationError, match="not on disk"):
-        materialize_engine_run(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, resolution="minute")
-
-
-def test_materialize_engine_run_refuses_when_a_reused_artifacts_size_has_drifted(monkeypatch, tmp_path: Path):
-    """A file that exists but no longer matches the catalog's recorded size
-    is refused too — not just a missing file."""
-    lake_root = tmp_path / "lake"
-    rel_path = f"equity/usa/minute/spy/{TRADING_DAY:%Y%m%d}_trade.zip"
-    file_path = lake_root / rel_path
-    file_path.parent.mkdir(parents=True)
-    file_path.write_bytes(b"the wrong number of bytes")
-    record = _minute_record(rel_path, file_size_bytes=999_999)  # does not match what's on disk
-
-    monkeypatch.setattr(
-        run_materialization,
-        "_materialize_run_data_sync",
-        lambda spec, **_kwargs: _complete_with_artifacts(spec, lake_root=lake_root, artifacts=[record]),
-    )
-
-    with pytest.raises(LakeMaterializationError, match="the catalog recorded"):
+    with pytest.raises(LakeMaterializationError, match=match):
         materialize_engine_run(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, resolution="minute")
 
 
@@ -1303,26 +1296,48 @@ def test_chart_spec_is_trade_only_minute_with_no_rollups_or_corp_actions():
     assert spec.fetch_timeout_seconds == 120
 
 
+def _nothing_to_arrange(monkeypatch) -> None:
+    """The symbol or the window alone is what makes the capture impossible."""
+
+
+def _unpin_the_lean_image(monkeypatch) -> None:
+    monkeypatch.setattr("app.lean_sidecar.config.PINNED_LEAN_IMAGE_DIGEST", None)
+
+
+def _catalog_is_unavailable(monkeypatch) -> None:
+    from app.data_lake.catalog_client import CatalogUnavailableError
+
+    def _fake(spec, *, resolution):
+        raise CatalogUnavailableError("POSTGRES_URL is empty")
+
+    monkeypatch.setattr(run_materialization, "_materialize_run_data_sync", _fake)
+
+
 @pytest.mark.parametrize(
-    ("symbol", "start", "end", "reason"),
+    ("symbol", "start", "end", "reason", "arrange"),
     [
-        pytest.param("BRK-B", TRADING_DAY, WIDER_WINDOW_END, "not lake-addressable", id="symbols_the_writer_refuses"),
-        pytest.param("SPY", WIDER_WINDOW_END, TRADING_DAY, "inverted", id="inverted_windows"),
+        pytest.param(
+            "BRK-B", TRADING_DAY, WIDER_WINDOW_END, "not lake-addressable", _nothing_to_arrange,
+            id="symbols_the_writer_refuses",
+        ),
+        pytest.param("SPY", WIDER_WINDOW_END, TRADING_DAY, "inverted", _nothing_to_arrange, id="inverted_windows"),
+        pytest.param(
+            "SPY", TRADING_DAY, WIDER_WINDOW_END, "pinned LEAN image digest", _unpin_the_lean_image,
+            id="without_a_pinned_digest",
+        ),
+        pytest.param(
+            "SPY", TRADING_DAY, WIDER_WINDOW_END, "catalog unavailable", _catalog_is_unavailable,
+            id="when_catalog_unavailable",
+        ),
     ],
 )
-def test_materialize_chart_range_skips_what_it_cannot_capture(symbol, start, end, reason):
+def test_materialize_chart_range_skips_what_it_cannot_capture(monkeypatch, symbol, start, end, reason, arrange):
+    arrange(monkeypatch)
+
     result = run_materialization.materialize_chart_range(symbol=symbol, start=start, end=end)
+
     assert result.status == "skipped", "the chart range is skipped"
     assert reason in (result.detail or ""), f"the detail says why: {reason}"
-
-
-def test_materialize_chart_range_skips_without_a_pinned_digest(monkeypatch):
-    monkeypatch.setattr("app.lean_sidecar.config.PINNED_LEAN_IMAGE_DIGEST", None)
-    result = run_materialization.materialize_chart_range(
-        symbol="SPY", start=TRADING_DAY, end=WIDER_WINDOW_END
-    )
-    assert result.status == "skipped"
-    assert "pinned LEAN image digest" in (result.detail or "")
 
 
 def test_materialize_chart_range_complete_when_nothing_withholds_minute_bars(monkeypatch):
@@ -1426,20 +1441,6 @@ def test_materialize_chart_range_partial_when_the_ingest_does_not_finish(monkeyp
     )
     assert result.status == "partial", "the chart degrades to partial"
     assert "120s" in (result.detail or ""), "the detail names the 120s wait bound"
-
-
-def test_materialize_chart_range_skips_when_catalog_unavailable(monkeypatch):
-    from app.data_lake.catalog_client import CatalogUnavailableError
-
-    def _fake(spec, *, resolution):
-        raise CatalogUnavailableError("POSTGRES_URL is empty")
-
-    monkeypatch.setattr(run_materialization, "_materialize_run_data_sync", _fake)
-    result = run_materialization.materialize_chart_range(
-        symbol="SPY", start=TRADING_DAY, end=WIDER_WINDOW_END
-    )
-    assert result.status == "skipped"
-    assert "catalog unavailable" in (result.detail or "")
 
 
 def test_init_pool_translates_connection_refused_to_catalog_unavailable(monkeypatch):

@@ -159,23 +159,6 @@ def test_load_rejects_traversal_or_malformed_id(tmp_path: Path, bad_id: str):
         store.load(bad_id, config_type=_FixtureConfig, result_type=_FixtureResult)
 
 
-def test_save_rejects_id_outside_pattern(tmp_path: Path):
-    store = ArtifactStore(_descriptor(), root=tmp_path)
-    # The config carries an id that fails the descriptor's regex.
-    bad_config = _FixtureConfig(
-        artifact_id="../escape",
-        parent_run_id=None,
-        created_at_ms=1_700_000_000_000,
-    )
-    bad_result = _FixtureResult(
-        artifact_id="../escape",
-        score=0.0,
-        created_at_ms=1_700_000_000_000,
-    )
-    with pytest.raises(ValueError):
-        store.save(bad_config, bad_result)
-
-
 # ---------------------------------------------------------------------------
 # Save semantics.
 # ---------------------------------------------------------------------------

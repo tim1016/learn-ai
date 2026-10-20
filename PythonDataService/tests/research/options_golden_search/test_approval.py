@@ -33,8 +33,27 @@ def _command(kind: str = "approve", comment: str = "", waived_gate_ids: tuple[st
     return Command(command=kind, expected_revision=1, idempotency_key="approve", candidate_hash=POINT, comment=comment, waived_gate_ids=waived_gate_ids)
 
 
-def test_a_complete_final_comparison_can_approve_the_passing_candidate_despite_other_performance_failures() -> None:
+def test_a_complete_final_comparison_can_approve_the_passing_candidate_despite_other_performance_failures_and_refuses_what_cannot_be_excused() -> None:
     validate_approval(_row(), _command())
+
+    # A technical failure in another mandatory finalist cannot receive an exception.
+    technical = _row()
+    technical["final_results"][1]["verdict"] = "could_not_evaluate"
+    with pytest.raises(ValueError, match="technically"):
+        validate_approval(technical, _command("approve_exception", "Accept risk"))
+
+    # Normal approval cannot smuggle a waiver.
+    with pytest.raises(ValueError, match="cannot waive"):
+        validate_approval(_row(), _command("approve", "", ("final:profit",)))
+
+    # The full stress scope is preserved, and an explicit nonoverridable rule cannot be waived.
+    stressed = _row()
+    gate = {**_gate("final:fees", status="not_enough_evidence"), "overridable": True}
+    stressed["final_results"][0]["gate_outcomes"] = [gate]
+    validate_approval(stressed, _command("approve_exception", "Acknowledge fee stress.", ("final:fees:profit",)))
+    gate["overridable"] = False
+    with pytest.raises(ValueError, match="Technical invalidity"):
+        validate_approval(stressed, _command("approve_exception", "Acknowledge fee stress.", ("final:fees:profit",)))
 
 
 @pytest.mark.parametrize("scope", ["procedure", "development", "final"])
@@ -77,13 +96,6 @@ def test_an_unfinished_or_duplicated_frozen_finalist_blocks_both_approval_paths(
         validate_approval(row, _command("approve_exception", "Accept risk"))
 
 
-def test_technical_failure_in_another_mandatory_finalist_cannot_receive_an_exception() -> None:
-    row = _row()
-    row["final_results"][1]["verdict"] = "could_not_evaluate"
-    with pytest.raises(ValueError, match="technically"):
-        validate_approval(row, _command("approve_exception", "Accept risk"))
-
-
 @pytest.mark.parametrize("scope", ["procedure", "development", "final"])
 def test_missing_input_or_proof_is_never_a_performance_exception(scope: str) -> None:
     row = _row()
@@ -110,16 +122,6 @@ def test_exception_rejects_missing_unrelated_or_duplicate_gate_acknowledgements(
     validate_approval(row, _command("approve_exception", "I reviewed every scope.", exact))
 
 
-def test_full_stress_scope_is_preserved_and_explicit_nonoverridable_rule_cannot_be_waived() -> None:
-    row = _row()
-    gate = {**_gate("final:fees", status="not_enough_evidence"), "overridable": True}
-    row["final_results"][0]["gate_outcomes"] = [gate]
-    validate_approval(row, _command("approve_exception", "Acknowledge fee stress.", ("final:fees:profit",)))
-    gate["overridable"] = False
-    with pytest.raises(ValueError, match="Technical invalidity"):
-        validate_approval(row, _command("approve_exception", "Acknowledge fee stress.", ("final:fees:profit",)))
-
-
 def test_read_review_and_command_share_the_exact_complete_failure_set_and_batch_blocker() -> None:
     from app.research.options_golden_search.projections import approval_reviews
 
@@ -134,11 +136,6 @@ def test_read_review_and_command_share_the_exact_complete_failure_set_and_batch_
     assert {gate["gate_id"] for gate in review["failures"]} == {"forward_0:profit", "development:profit", "final:profit", "final:exposure"}
     row["final_results"][1]["verdict"] = "could_not_evaluate"
     assert "technically" in approval_reviews(row)[POINT]["blocked_reason"]
-
-
-def test_normal_approval_cannot_smuggle_a_waiver() -> None:
-    with pytest.raises(ValueError, match="cannot waive"):
-        validate_approval(_row(), _command("approve", "", ("final:profit",)))
 
 
 def test_implicit_final_shortlist_excludes_rejected_diagnostics_and_enforces_budget():

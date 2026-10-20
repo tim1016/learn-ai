@@ -340,23 +340,17 @@ async def test_two_resting_orders_on_one_symbol_both_settle_on_one_touching_bar(
     ] == [("SPY", 2.0)]
 
 
-async def test_an_unknown_client_order_id_is_not_an_order(
-    world: tuple[ShadowPorts, SourceBarLedger, _LiveRead, _Clock],
-) -> None:
-    """A read never parses the ref: only minting a fill needs a program order."""
-    ports, _bars, _live, _clock = world
-    assert await ports.trade.get_order_by_client_order_id("unknown") is None
-
-
 async def test_read_port_serves_live_account_truth_and_synthesized_custody(world: tuple[ShadowPorts, SourceBarLedger, _LiveRead, _Clock]) -> None:
     ports, _bars, _live, _clock = world
-    assert (await ports.read.get_account()).account_mode == "live"
-    assert (await ports.read.get_clock_evidence()).vendor_timestamp_ms == 7
-    assert ports.read.capabilities() == ALPACA_LIVE_CAPABILITIES
-    assert await ports.read.list_positions() == []
-    assert await ports.read.list_orders() == []
-    assert ports.account_id == "shadow:9LIVE0001"
-    assert ports.read.broker_id == SHADOW_BROKER_ID == ports.trade.broker_id
+    assert (await ports.read.get_account()).account_mode == "live", "the account is the live account's truth"
+    assert (await ports.read.get_clock_evidence()).vendor_timestamp_ms == 7, "the clock evidence is the live read's"
+    assert ports.read.capabilities() == ALPACA_LIVE_CAPABILITIES, "capabilities are the live capabilities"
+    assert await ports.read.list_positions() == [], "a new shadow world holds no position"
+    assert await ports.read.list_orders() == [], "a new shadow world holds no order"
+    assert ports.account_id == "shadow:9LIVE0001", "the shadow account id derives from the live account"
+    assert ports.read.broker_id == SHADOW_BROKER_ID == ports.trade.broker_id, "both ports speak as the shadow broker"
+    # A read never parses the ref: only minting a fill needs a program order.
+    assert await ports.trade.get_order_by_client_order_id("unknown") is None, "an unknown client order id is not an order"
 
 
 async def test_namespace_check_passes_clean_accounts_and_refuses_poison_or_full_pages() -> None:

@@ -203,6 +203,26 @@ def test_the_setups_leg_order_is_a_tuple_whatever_it_was_built_from() -> None:
             "exact decimal",
             id="float cash",
         ),
+        pytest.param(
+            lambda: may_leave(book("AB", bought("A", "call", "680"), sold("B", "call", "675")), "B"),
+            "bought legs that are held",
+            id="may_leave is asked of bought legs that are held: a sold leg",
+        ),
+        pytest.param(
+            lambda: may_leave(book("AB", bought("A", "call", "680")), "B"),
+            "bought legs that are held",
+            id="may_leave is asked of bought legs that are held: a leg that holds nothing",
+        ),
+        pytest.param(
+            lambda: leaving_plan(book("AB", bought("A", "call", "680"), sold("B", "call", "675")), ["B"]),
+            "bought legs that are held",
+            id="a leaving leg must be a bought leg that is held: a sold leg",
+        ),
+        pytest.param(
+            lambda: leaving_plan(book("AB", bought("A", "call", "680"), sold("B", "call", "675")), ["Z"]),
+            "bought legs that are held",
+            id="a leaving leg must be a bought leg that is held: a leg the setup does not list",
+        ),
     ],
 )
 def test_a_book_or_position_the_book_cannot_judge_is_refused(make: Callable[[], object], reason: str) -> None:
@@ -263,6 +283,11 @@ def test_a_book_or_position_the_book_cannot_judge_is_refused(make: Callable[[], 
             id="a sold put with its bought put pledges the width",
         ),
         pytest.param(
+            book("AB", bought("A", "call", "680"), sold("B", "call", "675")),
+            D("500.00"),
+            id="a sold call with its bought call pledges the width",
+        ),
+        pytest.param(
             book("AB", bought("A", "call", "680"), bought("B", "put", "660", expiry=LATER)),
             D("0.00"),
             id="bought legs pledge nothing even across expiries",
@@ -275,13 +300,8 @@ def test_a_book_or_position_the_book_cannot_judge_is_refused(make: Callable[[], 
     ],
 )
 def test_the_collateral_a_book_pledges(held: Held, pledged: Decimal) -> None:
-    assert collateral(held) == pledged
-
-
-def test_collateral_is_in_whole_cents_as_a_decimal() -> None:
-    held = book("AB", bought("A", "call", "680"), sold("B", "call", "675"))
-
-    assert str(collateral(held)) == "500.00"
+    assert collateral(held) == pledged, "the collateral a book pledges"
+    assert str(collateral(held)) == str(pledged), "collateral is in whole cents as a decimal"
 
 
 def test_a_loss_with_no_limit_is_a_broken_invariant_and_is_never_estimated() -> None:
@@ -698,15 +718,6 @@ def test_a_bought_leg_may_not_leave_when_every_sold_contract_stays_covered_but_t
     assert may_leave(held, "B") is True
 
 
-def test_may_leave_is_asked_of_bought_legs_that_are_held() -> None:
-    held = book("AB", bought("A", "call", "680"), sold("B", "call", "675"))
-
-    with pytest.raises(ValueError, match="bought legs that are held"):
-        may_leave(held, "B")
-    with pytest.raises(ValueError, match="bought legs that are held"):
-        may_leave(book("AB", bought("A", "call", "680")), "B")
-
-
 # ---- Which sold legs go with a leaving bought leg -----------------------------
 
 
@@ -830,15 +841,6 @@ def test_the_plan_is_judged_against_the_collateral_held_before(
 ) -> None:
     assert collateral(held) == pledged_now, "the collateral pledged now"
     assert leaving_plan(held, ["A"]) == plan, "the sold legs that close with A"
-
-
-def test_a_leaving_leg_must_be_a_bought_leg_that_is_held() -> None:
-    held = book("AB", bought("A", "call", "680"), sold("B", "call", "675"))
-
-    with pytest.raises(ValueError, match="bought legs that are held"):
-        leaving_plan(held, ["B"])
-    with pytest.raises(ValueError, match="bought legs that are held"):
-        leaving_plan(held, ["Z"])
 
 
 # ---- Assignment obligation ----------------------------------------------------

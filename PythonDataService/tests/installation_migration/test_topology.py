@@ -81,22 +81,17 @@ def _remount(topology: dict, service: str, old: str, new: str) -> dict:
     return changed
 
 
-def test_only_the_coordinator_writes_a_bundled_host_folder() -> None:
+def test_the_committed_topology_names_the_folder_writer_and_the_fleet_env_files() -> None:
     topology = load_topology(_REPO)
 
     assert containers_writing_folders(
         topology, [folder.key for folder in BUNDLED_FOLDERS]
-    ) == ["polygon-data-service"]
-
-
-def test_the_fleet_env_files_are_the_three_committed_lane_and_coordinator_files() -> None:
-    topology = load_topology(_REPO)
-
+    ) == ["polygon-data-service"], "only the coordinator writes a bundled host folder"
     assert [path.name for path in required_fleet_env_files(_REPO, topology)] == [
         "coordinator.env",
         "live.env",
         "paper.env",
-    ]
+    ], "the fleet env files are the three committed lane and coordinator files"
 
 
 def test_the_namespace_defaults_to_the_overlay_value(
