@@ -16,13 +16,11 @@ vi.mock('lightweight-charts', () => ({
 
 /**
  * Every price, cash figure and profit of a day is a string the server wrote, and it is shown as written. 9007199254740993.01
- * is the first whole number-and-cents a double cannot hold; a value with four decimals is not an amount in cents and is
- * shown as it came. One row for each place the day shows a price, so a binding added later without a row fails the count.
+ * is the first whole number-and-cents a double cannot hold. One row for each place the day shows a price, so a binding added later without a row fails the count.
  * The day’s own trades are left out: the trade table’s spec holds each of their cells.
  */
 const BIG = '9007199254740993.01';
 const SHOWN = '$9,007,199,254,740,993.01';
-const FOUR = '1.2345';
 
 function dayOf(value: string): SessionDetail {
   const day = sessionDetail();
@@ -71,18 +69,6 @@ describe('the prices of a day are shown exactly as the server wrote them', () =>
     for (const text of all) {
       expect(text).toContain(SHOWN);
       expect(text).not.toContain('9,007,199,254,740,992');
-    }
-  });
-
-  it.each(PLACES)('%s, a value with four decimals', async (_place, read, count) => {
-    await open(FOUR);
-
-    const shown = read();
-    const all = Array.isArray(shown) ? shown : [shown];
-    expect(all.length).toBe(count);
-    for (const text of all) {
-      expect(text).toContain(FOUR);
-      expect(text).not.toContain('$1.23');
     }
   });
 

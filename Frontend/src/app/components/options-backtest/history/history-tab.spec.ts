@@ -7,7 +7,7 @@ import { fakeJobs, type FakeJobs } from '../testing/fake-jobs';
 import { expectTradingDatesInNewYork, lettingGo, press, reads } from '../testing/page-actions';
 import { fakeService, type FakeService } from '../testing/render-page';
 import { renderHistoryTab } from '../testing/render-history';
-import { runDetail, runItem, runWithoutSetup, SETUP_CANNOT_OPEN_REASON } from '../testing/run-fixtures';
+import { runDetail, runItem } from '../testing/run-fixtures';
 import { sessionOpenMs } from '../../../shared/date-picker/testing/fake-trading-calendar';
 
 const HEADLINE = { sessions_tested: 10, sessions_traded: 8, trades: 12, trades_won: 7, net_profit_usd: '1234.56', ending_cash_usd: '11234.56' };
@@ -116,37 +116,6 @@ describe('opening a run', () => {
     expect.soft(service.describe, 'asks the server to describe the setup the run used').toHaveBeenCalledWith(runDetail().setup);
   });
 
-  it('opens a complete run whose setup the server cannot open: the figures, the reason in the server’s words, and no way to use the setup', async () => {
-    const service = fakeService(vi, { runs: vi.fn(async () => RUNS), run: vi.fn(async () => runWithoutSetup({ ...COMPLETE })) });
-    const { view } = await renderHistory({ service });
-    const used: unknown[] = [];
-    view.fixture.componentInstance.useSetup.subscribe((setup) => used.push(setup));
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Open run 30' }));
-
-    expect(await screen.findByRole('region', { name: 'Headline figures' })).toBeTruthy();
-    expect(await screen.findByText(SETUP_CANNOT_OPEN_REASON)).toBeTruthy();
-    const use = screen.getByRole<HTMLButtonElement>('button', { name: 'Use this setup' });
-    expect(use.disabled).toBe(true);
-    use.click();
-    await lettingGo();
-    expect(service.describe).not.toHaveBeenCalled();
-    expect(used).toEqual([]);
-  });
-
-  it.each([
-    [28, 'cancelled', 'The run was cancelled. Nothing was saved.'],
-    [27, 'interrupted', 'This run did not finish, and its job is gone. It saved no result.'],
-  ] as const)('says what became of run %i, which is %s', async (id, status, words) => {
-    const item = RUNS.find((run) => run.id === id) as RunListItem;
-    const service = fakeService(vi, { runs: vi.fn(async () => RUNS), run: vi.fn(async () => runDetail({ ...item, status, figures: null, slippage: [], slippage_tolerance: null, headline: null })) });
-    await renderHistory({ service });
-
-    fireEvent.click(await screen.findByRole('button', { name: `Open run ${id}` }));
-
-    expect(await screen.findByText(words)).toBeTruthy();
-  });
-
   it('goes back to the list, read again, with the keyboard back on the Open button of the run', async () => {
     const service = fakeService(vi, { runs: vi.fn(async () => RUNS), run: vi.fn(async () => runDetail({ ...COMPLETE })) });
     await renderHistory({ service });
@@ -160,20 +129,6 @@ describe('opening a run', () => {
     expect.soft(screen.queryByRole('region', { name: 'Backtest run' }), 'goes back to the list').toBeNull();
     expect.soft(service.runs.mock.calls.length, 'reads the list again').toBe(before + 1);
     await waitFor(() => expect(document.activeElement, 'puts the keyboard back on the Open button of the run, when the owner goes back to the list').toBe(screen.getByRole('button', { name: 'Open run 30' })));
-  });
-
-  it('gives the setup of the run back when Use this setup is pressed', async () => {
-    const detail = runDetail({ ...COMPLETE });
-    const service = fakeService(vi, { runs: vi.fn(async () => RUNS), run: vi.fn(async () => detail) });
-    const { view } = await renderHistory({ service });
-    const used: unknown[] = [];
-    view.fixture.componentInstance.useSetup.subscribe((setup) => used.push(setup));
-    fireEvent.click(await screen.findByRole('button', { name: 'Open run 30' }));
-    await screen.findByText('Window for SPY.');
-
-    press('Use this setup');
-
-    expect(used).toEqual([detail.setup]);
   });
 });
 

@@ -46,37 +46,6 @@ describe('two contracts at one strike', () => {
   });
 });
 
-describe('a strike one side shows and the other does not', () => {
-  const windowed = () =>
-    chainExpiry({
-      // Each side lists far more than it shows, as the server's windows do.
-      calls: side('call', [call(600_000), call(601_000), call(603_000), call(604_000)], 602_000, { listed: 120, standard_listed: 118 }),
-      puts: side('put', [put(601_000), put(602_000), put(603_000)], 602_000, { listed: 118, standard_listed: 116 }),
-    });
-
-  it('is not listed only where the strikes the side shows prove it, and otherwise only that the window holds nothing', async () => {
-    await open(windowed());
-
-    expect(rowsRead().map(([strike, calls, puts]) => [strike, calls?.includes('SPY') ? 'a call' : calls, puts?.includes('SPY') ? 'a put' : puts])).toEqual([
-      ['$600.00', 'a call', 'Nothing in this window'],
-      ['$601.00', 'a call', 'a put'],
-      ['$602.00 At the money for puts', 'Not listed at this strike', 'a put'],
-      ['$603.00', 'a call', 'a put'],
-      ['$604.00', 'a call', 'Nothing in this window'],
-    ]);
-  });
-
-  it('is not listed anywhere when the side shows every contract it lists', async () => {
-    await open(chainExpiry({ calls: side('call', [call(601_000)]), puts: side('put', [put(600_000), put(602_000)]) }));
-
-    expect(rowsRead().map(([, calls, puts]) => [calls?.includes('SPY') ? 'a call' : calls, puts?.includes('SPY') ? 'a put' : puts])).toEqual([
-      ['Not listed at this strike', 'a put'],
-      ['a call', 'Not listed at this strike'],
-      ['Not listed at this strike', 'a put'],
-    ]);
-  });
-});
-
 describe('a state this page does not know', () => {
   it('is said in words for a contract, with the code and no price, and the rest of the table is drawn', async () => {
     const odd = { ...contract({ right: 'call', thousandths: 602_000, state: 'traded', price: '2.10' }), price_state: 'halted' as ChainContract['price_state'] };

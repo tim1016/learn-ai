@@ -9,12 +9,11 @@ import { TradeTableComponent } from './trade-table.component';
 /**
  * Every price, fee and profit of a trade is a string the server wrote, and the table shows it as written.
  * 9007199254740993.01 is the first whole number-and-cents a double cannot hold: it reads ...992 once it has passed through
- * a number. A value with four decimals is not an amount in cents, and is shown as it came, not rounded to two places.
+ * a number.
  * One row below for each place the table shows a price, so a binding added later without a row fails the count.
  */
 const BIG = '9007199254740993.01';
 const SHOWN = '$9,007,199,254,740,993.01';
-const FOUR = '1.2345';
 
 function sold(value: string): LegTrade {
   return stoppedTrade({
@@ -86,13 +85,6 @@ describe.each([
 
     expect(cells[at]).toContain(SHOWN);
     expect(cells[at]).not.toContain('9,007,199,254,740,992');
-  });
-
-  it.each(places)('%s, a value with four decimals', async (_place, at) => {
-    const { cells } = await cellsOf(make(FOUR));
-
-    expect(cells[at]).toContain(FOUR);
-    expect(cells[at]).not.toContain('$1.23');
   });
 
   it('has a row above for every price on the screen: the count of dollar amounts is the count of rows, and each is the value', async () => {

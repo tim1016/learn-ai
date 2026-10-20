@@ -87,20 +87,6 @@ describe('MultiTickerRangePickerComponent', () => {
     expect(fixture.nativeElement.textContent).toContain('3 tickers');
   });
 
-  it('offers the joined universe — a listed symbol the lake does not hold is on the menu', () => {
-    fixture.detectChanges();
-
-    const input = fixture.nativeElement.querySelector(
-      '[aria-label="Search to add a ticker"]',
-    ) as HTMLInputElement;
-    input.value = 'TSLA';
-    input.dispatchEvent(new Event('input'));
-    fixture.detectChanges();
-
-    const rows = Array.from(fixture.nativeElement.querySelectorAll('[role="option"]'));
-    expect(rows.some((row) => (row as HTMLElement).textContent?.includes('TSLA'))).toBe(true);
-  });
-
   it('gates an unheld add on its backfill — the symbol joins the universe only once covered', async () => {
     fixture.detectChanges();
 

@@ -150,6 +150,38 @@ class TypeScriptCountingTests(unittest.TestCase):
 
         self.assertEqual(counts.functions, 8)
 
+    def test_table_type_arguments_may_hold_parentheses_and_arrows(self) -> None:
+        counts = _ts(
+            """
+            describe('suite', () => {
+              it.each<[string, () => void]>([['a', () => {}]])('fn type %s', (name, run) => {});
+              it.each<[string, (world: World) => void, Record<string, unknown>]>([
+                ['a', (world) => {}, {}],
+              ])('arrow and nested generic %s', (name, run, out) => {});
+              it.each<{ key: Key; from: string }>([{ key: 'a', from: 'b' }])('object %s', (row) => {});
+              test.each<[Array<number>, Map<string, (n: number) => string>]>([[[1], new Map()]])('map %s', () => {});
+              it('plain after the tables', () => {});
+            });
+            """
+        )
+
+        self.assertEqual(counts.functions, 5)
+
+    def test_a_comparison_on_a_variable_named_it_is_not_a_table(self) -> None:
+        counts = _ts(
+            """
+            const small = it < limit;
+            if (count > (limit)) {}
+            const same = test < other && other > (1);
+            """
+        )
+
+        self.assertEqual(counts.functions, 0)
+
+    def test_a_table_type_argument_list_that_never_closes_stops_the_count(self) -> None:
+        with self.assertRaisesRegex(CountError, "type-argument list after .each is not closed"):
+            _ts("it.each<[string, () => void]([['a', () => {}]])('open %s', () => {});")
+
     def test_comments_strings_and_member_calls_do_not_count(self) -> None:
         counts = _ts(
             """
@@ -280,6 +312,19 @@ class SuiteWalkTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertEqual(out, "")
         self.assertIn("test_bad.py: cannot parse", err)
+
+    def test_unclosed_table_type_arguments_fail_loudly_with_the_spec_path(self) -> None:
+        self._layout()
+        self._write(
+            "Frontend/src/app/components/bots/bad.spec.ts",
+            "it.each<[string, () => void]([['a', () => {}]])('x %s', () => {});\n",
+        )
+
+        code, out, err = self._run("--suite", "frontend")
+
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertIn("bad.spec.ts: a type-argument list after .each is not closed", err)
 
     def test_missing_root_fails_loudly(self) -> None:
         code, _, err = self._run("--suite", "frontend")

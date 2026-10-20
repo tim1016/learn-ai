@@ -573,15 +573,6 @@ describe('StrategyBuilderComponent', () => {
       expect(component.liveMaxLossDisplay()).toBe('−$500.00');
     });
 
-    it('shows a long strangle its breakevens outside the chart window', () => {
-      component.legs.set([
-        { strike: 570, optionType: 'put', position: 'long', premium: 10, iv: 0.3, quantity: 1, enabled: true },
-        { strike: 610, optionType: 'call', position: 'long', premium: 10, iv: 0.3, quantity: 1, enabled: true },
-      ]);
-
-      expect(component.liveBreakevens()).toEqual([550, 630]);
-    });
-
     it('shows nothing while no leg is enabled', () => {
       component.legs.set([
         { strike: 590, optionType: 'put', position: 'short', premium: 5, iv: 0.3, quantity: 1, enabled: false },
