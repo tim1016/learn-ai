@@ -645,6 +645,7 @@ export class BotPanelShellComponent {
       workingOrders: panel.working_orders,
       feedEvents: this.feedContinuity().events,
       tradedFeed: panel.traded_feed_lane ?? null,
+      optionUnderlying: panel.traded?.kind === 'option' ? panel.traded.symbol : undefined,
     };
   });
 

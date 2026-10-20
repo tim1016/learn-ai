@@ -239,6 +239,7 @@
                   [fillCount]="runFillCount()"
                   [runStartedAtMs]="runStartedAtMs()"
                   [showAsset]="!!panelData.traded"
+                  [optionUnderlying]="panelData.traded?.kind === 'option' ? panelData.traded.symbol : undefined"
                 />
               }
             </div>
