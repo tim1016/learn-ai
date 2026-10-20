@@ -30,6 +30,7 @@ export interface StrategyRunContext {
   /** The owner's end while it is still ahead. */
   readonly scheduledEndAtMs: number | null;
   readonly fills: readonly ChartFillMarker[];
+  readonly optionUnderlying?: string;
   readonly workingOrders: readonly WorkingOrder[];
   /** Market-data continuity, including the partial first minute a mid-minute join omits. */
   readonly feedEvents: readonly FeedEvent[];
@@ -103,7 +104,7 @@ function decisionLane(view: StrategyViewResponse, clock: LaneClock): ChartLane {
 
 function orderLane(context: StrategyRunContext, clock: LaneClock): ChartLane {
   const fills = context.fills.map((fill): LaneMark => {
-    const contract = fill.symbol ? optionContractFromSymbol(fill.symbol) : null;
+    const contract = fill.symbol ? optionContractFromSymbol(fill.symbol, context.optionUnderlying) : null;
     return {
     key: `fill:${fill.event_key}`,
     atMs: fill.filled_at_ms,

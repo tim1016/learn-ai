@@ -420,7 +420,11 @@ async def test_a_first_reading_that_never_answers_is_given_up_on_and_the_entry_i
     assert paper.venue.option_submit_calls == [order_ref] and paper.clock() == taken_at
     await paper.stream_fill(order_ref, contracts=1, filled_in_all=1, price="1.94", execution_id="x-1")
     await paper.pass_and_round()
-    assert paper.comparison(order_ref).reason_code == "FIRST_READING_NOT_READY"
+    found = paper.comparison(order_ref)
+    # A busy loop may observe the read's timeout before send; otherwise send cancels
+    # the pending read. Either leaves no buying-power evidence and never blocks entry.
+    assert found.reason_code in {"FIRST_READING_NOT_READY", "FIRST_READING_FAILED"}
+    assert (found.result, found.first_buying_power, found.second_began_ms) == ("unknown", None, None)
 
 
 @pytest.mark.usefixtures("judged")
