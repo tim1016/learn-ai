@@ -13610,6 +13610,11 @@ export interface components {
              */
             detail: string;
         };
+        /**
+         * EventKind
+         * @enum {string}
+         */
+        EventKind: "picked" | "pick_refused" | "starting_price_taken" | "no_starting_price" | "momentum_hit" | "entry_filled" | "entry_dropped" | "entry_refused_for_cash" | "entry_refused_for_cover" | "entry_refused_for_second_expiry" | "entry_refused_for_other_side" | "sale_not_taken_at_zero" | "stop_hit" | "squared_off" | "closed_with_its_protection" | "exit_time" | "close_filled" | "re_entry_earned" | "re_entry_blocked_by_cutoff" | "re_entry_lost" | "leg_cancelled" | "marked_not_sold" | "marked_not_bought_back";
         /** EvidenceApplicability */
         EvidenceApplicability: {
             /**
@@ -24823,6 +24828,23 @@ export interface components {
              */
             version?: 1;
         };
+        /** OptionsBotEventView */
+        OptionsBotEventView: {
+            /** At Ms */
+            at_ms: number;
+            contract?: components["schemas"]["OptionContract"] | null;
+            /** Detail */
+            detail?: string | null;
+            /** Entry Number */
+            entry_number: number;
+            kind: components["schemas"]["EventKind"];
+            /** Leg Id */
+            leg_id: string;
+            /** Price */
+            price?: string | null;
+            /** Reason */
+            reason?: string | null;
+        };
         /** OptionsBotLegView */
         OptionsBotLegView: {
             /** Average Fill Price */
@@ -24835,8 +24857,16 @@ export interface components {
             held_contracts: number;
             /** Leg Id */
             leg_id: string;
+            /** Momentum Level */
+            momentum_level?: string | null;
+            /** Open Pnl Usd */
+            open_pnl_usd?: string | null;
             /** Phase */
             phase: string;
+            /** Pnl Notice */
+            pnl_notice?: string | null;
+            /** Realized Pnl Usd */
+            realized_pnl_usd?: string | null;
             /** Reentries Left */
             reentries_left: number;
             /**
@@ -24844,8 +24874,14 @@ export interface components {
              * @enum {string}
              */
             side: "buy" | "sell";
+            /** Starting Price */
+            starting_price?: string | null;
             /** Stop Level */
             stop_level?: string | null;
+            /** Waiting Contract */
+            waiting_contract?: string | null;
+            /** Watched Contracts */
+            watched_contracts?: components["schemas"]["OptionsWatchedPremiumView"][];
         };
         /** OptionsBotSessionView */
         OptionsBotSessionView: {
@@ -24854,9 +24890,10 @@ export interface components {
             /** Entry Hold Reason */
             entry_hold_reason?: string | null;
             /** Events */
-            events: Record<string, never>[];
+            events: components["schemas"]["OptionsBotEventView"][];
             /** Execution Hold Reason */
             execution_hold_reason?: string | null;
+            exit_terms?: components["schemas"]["ExitTerms"] | null;
             /** Golden Setup Id */
             golden_setup_id: string;
             /** Last Minute Ms */
@@ -24865,6 +24902,7 @@ export interface components {
             legs: components["schemas"]["OptionsBotLegView"][];
             /** Next Entry Ms */
             next_entry_ms?: number | null;
+            order_terms?: components["schemas"]["SealedOptionOrderTerms-Output"] | null;
             /** Pending Decisions */
             pending_decisions: number;
             /** Resume Allowed */
@@ -25179,6 +25217,15 @@ export interface components {
             budget?: components["schemas"]["DeploymentBudgetInput"] | null;
             /** Idempotency Key */
             idempotency_key: string;
+        };
+        /** OptionsWatchedPremiumView */
+        OptionsWatchedPremiumView: {
+            /** Close Ms */
+            close_ms?: number | null;
+            /** Premium */
+            premium?: string | null;
+            /** Symbol */
+            symbol: string;
         };
         /**
          * OrderSide

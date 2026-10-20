@@ -15,12 +15,36 @@
         <article>
           <strong>{{ leg.leg_id }}</strong> · {{ leg.side | receiptLabel }} · {{ leg.phase | receiptLabel }}
           @if (leg.contract; as contract) { <p><app-option-contract [contract]="contract" size="xs" /></p> }
+          @if (leg.waiting; as contract) { <p>Waiting on <app-option-contract [contract]="contract" size="xs" /></p> }
           <p>Held: {{ leg.held_contracts }} · Filled entries: {{ leg.entries_filled }} · Re-entries left: {{ leg.reentries_left }}</p>
           @if (leg.average_fill_price) { <p>Average confirmed fill: {{ leg.average_fill_price | authoredUsd }}</p> }
           @if (leg.stop_level) { <p>Stop level: {{ leg.stop_level | authoredUsd }}</p> }
+          @if (leg.starting_price) { <p>Starting price: {{ leg.starting_price | authoredUsd }}</p> }
+          @if (leg.momentum_level) { <p>Momentum level: {{ leg.momentum_level | authoredUsd }}</p> }
+          @for (watched of leg.watched; track watched.symbol) {
+            <p>@if (watched.contract; as contract) { <app-option-contract [contract]="contract" size="xs" /> }
+              Latest premium: @if (watched.premium; as premium) { {{ premium | authoredUsd }} } @else { Unavailable }
+              <app-timestamp-display [value]="watched.close_ms" mode="local" granularity="time" />
+            </p>
+          }
+          <p>Realized P&amp;L: @if (leg.realized_pnl_usd; as pnl) { {{ pnl | authoredUsd }} } @else { Unavailable }
+            · Open P&amp;L: @if (leg.open_pnl_usd; as pnl) { {{ pnl | authoredUsd }} } @else { Unavailable }</p>
+          @if (leg.pnl_notice) { <p>{{ leg.pnl_notice }}</p> }
         </article>
       }
     </div>
+    <dl>
+      @if (state.order_terms; as terms) {
+        <div><dt>Entry gap limit</dt><dd>{{ terms.gap_limit_percent }}%</dd></div>
+        <div><dt>Entry wait</dt><dd>{{ terms.entry_wait_seconds }} seconds</dd></div>
+        <div><dt>Cost limit</dt><dd>{{ terms.cost_limit_percent }}%</dd></div>
+        <div><dt>Expiry close lead</dt><dd>{{ terms.expiry_close_lead_minutes }} minutes</dd></div>
+      }
+      @if (state.exit_terms; as terms) {
+        <div><dt>Exit allowance</dt><dd>{{ terms.exit_allowance_bps ?? 'Not set' }} bps</dd></div>
+        <div><dt>Exit band · spread cap</dt><dd>{{ terms.band_multiple }}× · {{ terms.spread_cap_bps }} bps</dd></div>
+      }
+    </dl>
     <p>{{ state.resume_explanation }}</p>
     @if (state.resume_allowed) {
       <div class="actions">
@@ -45,6 +69,17 @@
   @if (problem(); as why) { <p class="problem">{{ why }}</p> }
   @if (retryNeeded()) { <button type="button" [disabled]="locked() || !fenceVerdict().ok" (click)="retry()">Retry the same Resume request</button> }
   @if (outcome(); as message) { <p>{{ message }}</p> }
+  <button type="button" (click)="proofOpen.set(!proofOpen())">{{ proofOpen() ? 'Hide proof' : 'Build proof' }}</button>
+  @if (proofOpen()) { <app-options-bot-proof [configuration]="configuration()" /> }
+  @if (session.hasValue()) { @let events = session.value().events;
+    <details><summary>Session events ({{ events.length }})</summary><ol>
+      @for (event of events; track $index) {
+        <li><app-timestamp-display [value]="event.at_ms" mode="local" /> · {{ event.leg_id }} · {{ event.kind | receiptLabel }}
+          @if (event.detail) { {{ event.detail }} }
+        </li>
+      }
+    </ol></details>
+  }
   <details>
     <summary>Tested rules and assumptions</summary>
     @if (words.hasValue()) { <app-options-backtest-setup-sentences [summary]="words.value()" /> }

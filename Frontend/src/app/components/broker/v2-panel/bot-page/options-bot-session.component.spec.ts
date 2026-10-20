@@ -7,6 +7,7 @@ import { resourceTarget } from '../../../../fleet/resource-target';
 import { goldenSetup } from '../../../options-backtest/testing/golden-fixture';
 import { summaryFor } from '../../../options-backtest/testing/fixtures';
 import { OptionsBacktestService } from '../../../options-backtest/options-backtest.service';
+import { GoldenOptionSetupsService } from '../../../options-backtest/golden-option-setups.service';
 import { OptionsBotDeployService, type OptionsBotConfiguration, type OptionsBotSession } from '../../broker-deploy-page/options-bot-deploy.service';
 import type { DeploymentBudgetInput, DeploymentBudgetPreview } from '../lib/broker-v2-panel.service';
 import { OptionsBotSessionComponent } from './options-bot-session.component';
@@ -40,6 +41,7 @@ async function setup(state: OptionsBotSession = SESSION) {
       directory,
       { provide: OptionsBacktestService, useValue: { describe: async () => summaryFor('Tested setup') } },
       { provide: OptionsBotDeployService, useValue: { session, resume, reviewResume } },
+      { provide: GoldenOptionSetupsService, useValue: { get: async () => goldenSetup() } },
     ],
   });
   await screen.findByText('This interrupted bot can resume its retained session.');
@@ -47,6 +49,31 @@ async function setup(state: OptionsBotSession = SESSION) {
 }
 
 describe('Options session recovery', () => {
+  it('says when saved premiums and leg P&L are unavailable', async () => {
+    await setup({ ...SESSION, legs: [{ ...SESSION.legs[0], realized_pnl_usd: null, open_pnl_usd: null,
+      watched_contracts: [{ symbol: 'SPY261016C00500000', premium: null, close_ms: null }],
+      pnl_notice: 'The session’s attributed fills are unavailable.' }] });
+    expect(screen.getByText(/Latest premium:.*Unavailable/)).toBeTruthy();
+    expect(screen.getByText(/Realized P&L:.*Unavailable.*Open P&L:.*Unavailable/)).toBeTruthy();
+    expect(screen.getByText('The session’s attributed fills are unavailable.')).toBeTruthy();
+  });
+  it('shows the waiting contract, trigger, premium and deployed terms, and opens retained proof', async () => {
+    await setup({ ...SESSION,
+      order_terms: { gap_limit_percent: '10', entry_wait_seconds: 20, cost_limit_percent: '5', expiry_close_lead_minutes: 45 },
+      exit_terms: { band_multiple: 2, spread_cap_bps: 25, exit_allowance_bps: 15, provenance: 'deployed' },
+      legs: [{ ...SESSION.legs[0], held_contract: null, held_contracts: 0, phase: 'waiting', waiting_contract: 'SPY261016C00500000',
+        starting_price: '2', momentum_level: '2.50', watched_contracts: [{ symbol: 'SPY261016C00500000', premium: '2.30', close_ms: SESSION.last_minute_ms }],
+        realized_pnl_usd: '0', open_pnl_usd: '0' }],
+    });
+    expect(screen.getByText(/Waiting on/)).toBeTruthy();
+    expect(screen.getByText(/Momentum level:.*\$2.50/)).toBeTruthy();
+    expect(screen.getByText(/Latest premium:.*\$2.30/)).toBeTruthy();
+    expect(screen.getByText('20 seconds')).toBeTruthy();
+    expect(screen.getByText('45 minutes')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Build proof' }));
+    await screen.findByRole('heading', { name: 'Build proof' });
+    await screen.findByText(goldenSetup().status_explanation);
+  });
   it('refuses Resume when the lane moves beyond the inherited frozen target', async () => {
     const { directory, fixture, resume } = await setup();
     directory.rebind({ observed_at_ms: 1791828000001, clerks: [testLane({ clerk_id: 'clrk_spec', effective_binding_generation: 4, routing_epoch: 5 })] });

@@ -249,6 +249,11 @@ class OptionsBotJournal:
             "SELECT * FROM observed_orders WHERE session_open_ms=?", (session,)
         )}
 
+    def order_legs(self, session: int) -> dict[tuple[str, str], str]:
+        return {(row["order_ref"], row["symbol"]): row["leg_id"] for row in self._conn.execute(
+            "SELECT * FROM observed_orders WHERE session_open_ms=?", (session,)
+        )}
+
     def sessions(self, from_ms: int, to_ms: int) -> tuple[SessionState, ...]:
         return tuple(SessionState.model_validate_json(row[0]) for row in self._conn.execute(
             "SELECT state_json FROM sessions WHERE open_ms<? ORDER BY open_ms", (to_ms,)
@@ -350,7 +355,7 @@ class OptionsBotJournal:
                 "pending_decisions": len(pending),
                 "execution_hold_reason": next((row.explanation for row in pending if row.explanation), None),
                 "legs": [] if state is None else state.model_dump(mode="json")["legs"],
-                "events": [] if state is None else state.model_dump(mode="json")["events"][-100:],
+                "events": [] if state is None else state.model_dump(mode="json")["events"],
             }
         )
         return status

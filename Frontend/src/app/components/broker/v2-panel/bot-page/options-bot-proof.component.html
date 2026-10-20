@@ -1,0 +1,12 @@
+<section aria-label="Build proof">
+  <h4>Build proof</h4>
+  <p>Golden version <code>{{ configuration().golden_setup_id }}</code></p>
+  <p>Exact setup <code>{{ configuration().setup_sha256 }}</code> <app-copy-button [text]="configuration().setup_sha256" ariaLabel="Copy setup hash" /></p>
+  <p>Rules <code>{{ configuration().rules_digest }}</code></p>
+  @if (proof.hasValue()) { @let retained = proof.value();
+    <p>{{ retained.status_explanation }}</p>
+    <p>Source backtest {{ retained.source_run_id }} · Proof <code>{{ retained.proof_sha256 }}</code></p>
+    <app-options-qualification-evidence [evidence]="retained.evidence" />
+  } @else if (proof.isLoading()) { <p>Reading retained proof…</p> }
+  @if (problem(); as why) { <p role="status">{{ why }}</p><button type="button" (click)="proof.reload()">Read proof again</button> }
+</section>

@@ -187,7 +187,7 @@
             <div class="bot-board__panel bot-board__setup">
               @if (panelData.bot_kind === 'options') {
                 @if (panelData.options_bot; as configuration) {
-                  <app-options-bot-session [target]="optionsTarget()" [sid]="sid()" [configuration]="configuration" [revision]="panelData.revision" [locked]="actionPending()" (pendingChange)="optionsPending.set($event)" (resumed)="refreshOptionsBot()" />
+                  <app-options-bot-session [(proofOpen)]="proofOpen" [target]="optionsTarget()" [sid]="sid()" [configuration]="configuration" [revision]="panelData.revision" [locked]="actionPending()" (pendingChange)="optionsPending.set($event)" (resumed)="refreshOptionsBot()" />
                 } @else { <p>The approved Options setup could not be read.</p> }
               } @else {
                 <app-bot-setup [panel]="panelData" [settings]="strategyViewValue()?.settings ?? null" [(proofOpen)]="proofOpen" />

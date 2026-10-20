@@ -40,6 +40,7 @@ export class BotHealthGroupsComponent {
   /** The two symbols, to head each read when there are two. */
   readonly listensTo = input<string | null>(null);
   readonly trades = input<string | null>(null);
+  protected readonly distinctTradedMarketPulse = computed(() => this.listensTo() !== null && this.trades() === this.listensTo() ? null : this.tradedMarketPulse());
   /** How the run is joining its warmup to the live stream (#2410), while it says. */
   readonly startupJoin = input<StartupJoinView | null>(null);
   /** How the run ended, and what it left at the broker, as the runner recorded it. */

@@ -15716,6 +15716,35 @@
         "title": "ErrorDetailResponse",
         "type": "object"
       },
+      "EventKind": {
+        "enum": [
+          "picked",
+          "pick_refused",
+          "starting_price_taken",
+          "no_starting_price",
+          "momentum_hit",
+          "entry_filled",
+          "entry_dropped",
+          "entry_refused_for_cash",
+          "entry_refused_for_cover",
+          "entry_refused_for_second_expiry",
+          "entry_refused_for_other_side",
+          "sale_not_taken_at_zero",
+          "stop_hit",
+          "squared_off",
+          "closed_with_its_protection",
+          "exit_time",
+          "close_filled",
+          "re_entry_earned",
+          "re_entry_blocked_by_cutoff",
+          "re_entry_lost",
+          "leg_cancelled",
+          "marked_not_sold",
+          "marked_not_bought_back"
+        ],
+        "title": "EventKind",
+        "type": "string"
+      },
       "EvidenceApplicability": {
         "additionalProperties": false,
         "properties": {
@@ -44868,6 +44897,79 @@
         "title": "OptionsBotConfiguration",
         "type": "object"
       },
+      "OptionsBotEventView": {
+        "properties": {
+          "at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "At Ms",
+            "type": "integer"
+          },
+          "contract": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionContract"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "entry_number": {
+            "minimum": 0.0,
+            "title": "Entry Number",
+            "type": "integer"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/EventKind"
+          },
+          "leg_id": {
+            "title": "Leg Id",
+            "type": "string"
+          },
+          "price": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "kind",
+          "at_ms",
+          "leg_id",
+          "entry_number"
+        ],
+        "title": "OptionsBotEventView",
+        "type": "object"
+      },
       "OptionsBotLegView": {
         "properties": {
           "average_fill_price": {
@@ -44904,9 +45006,53 @@
             "title": "Leg Id",
             "type": "string"
           },
+          "momentum_level": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Momentum Level"
+          },
+          "open_pnl_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Open Pnl Usd"
+          },
           "phase": {
             "title": "Phase",
             "type": "string"
+          },
+          "pnl_notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pnl Notice"
+          },
+          "realized_pnl_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Realized Pnl Usd"
           },
           "reentries_left": {
             "title": "Reentries Left",
@@ -44920,6 +45066,17 @@
             "title": "Side",
             "type": "string"
           },
+          "starting_price": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Starting Price"
+          },
           "stop_level": {
             "anyOf": [
               {
@@ -44930,6 +45087,24 @@
               }
             ],
             "title": "Stop Level"
+          },
+          "waiting_contract": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Waiting Contract"
+          },
+          "watched_contracts": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsWatchedPremiumView"
+            },
+            "title": "Watched Contracts",
+            "type": "array"
           }
         },
         "required": [
@@ -44962,7 +45137,7 @@
           },
           "events": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/OptionsBotEventView"
             },
             "title": "Events",
             "type": "array"
@@ -44977,6 +45152,16 @@
               }
             ],
             "title": "Execution Hold Reason"
+          },
+          "exit_terms": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExitTerms"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "golden_setup_id": {
             "title": "Golden Setup Id",
@@ -45014,6 +45199,16 @@
               }
             ],
             "title": "Next Entry Ms"
+          },
+          "order_terms": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SealedOptionOrderTerms-Output"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "pending_decisions": {
             "title": "Pending Decisions",
@@ -45724,6 +45919,43 @@
           "idempotency_key"
         ],
         "title": "OptionsResumeRequest",
+        "type": "object"
+      },
+      "OptionsWatchedPremiumView": {
+        "properties": {
+          "close_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Close Ms"
+          },
+          "premium": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Premium"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol"
+        ],
+        "title": "OptionsWatchedPremiumView",
         "type": "object"
       },
       "OrderSide": {
