@@ -76,5 +76,4 @@ describe('what the chart does not draw', () => {
     expect(items[0].querySelector('code')).toBeNull();
     expect(items[1].querySelector('.option-chip')?.getAttribute('aria-label')).toBe("SPY Oct 16 '26 585 Call");
   });
-
 });

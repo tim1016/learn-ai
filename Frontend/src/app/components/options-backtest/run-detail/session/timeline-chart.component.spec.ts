@@ -300,7 +300,6 @@ describe('the one-day chart, the tooltip', () => {
 
     await waitFor(() => expect(document.querySelector('.tip')).toBeNull());
   });
-
 });
 
 describe('the one-day chart, redrawing and taking down', () => {
@@ -327,5 +326,4 @@ describe('the one-day chart, redrawing and taking down', () => {
     expect(fake.chart.unsubscribeCrosshairMove).toHaveBeenCalledWith(handler);
     expect(fake.chart.remove).toHaveBeenCalledTimes(1);
   });
-
 });

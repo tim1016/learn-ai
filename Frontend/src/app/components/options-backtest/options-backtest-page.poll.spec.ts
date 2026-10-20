@@ -44,7 +44,6 @@ describe('Start comes free when the record says the backtest is over', () => {
     await waitFor(() => expect(startButton().disabled).toBe(false));
     expect(screen.queryByText('A backtest is already running.')).toBeNull();
   });
-
 });
 
 describe('once the job has started, not finding its run never says the backtest was not started, and never frees Start', () => {

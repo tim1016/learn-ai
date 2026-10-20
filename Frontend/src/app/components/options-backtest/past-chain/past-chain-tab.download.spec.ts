@@ -43,7 +43,6 @@ describe('what the download offers', () => {
     await screen.findByRole('button', { name: 'Download missing data' });
     expect(words()).toBe("Fetches the listing and the underlying's bars if they are missing.");
   });
-
 });
 
 describe('the request a download makes', () => {

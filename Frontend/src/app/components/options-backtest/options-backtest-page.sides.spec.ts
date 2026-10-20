@@ -45,7 +45,6 @@ describe('the Buy or Sell switch', () => {
     expect(lastBody(service).legs.map((leg) => leg.side ?? 'buy')).toEqual(['buy', 'sell', 'buy']);
     expect(lineOf(3)).toMatch(/^Buy · 1 contract · Put/);
   });
-
 });
 
 describe('a stop loss on a sold leg', () => {

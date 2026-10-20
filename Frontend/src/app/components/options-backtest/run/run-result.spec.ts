@@ -224,7 +224,6 @@ describe('the slippage tolerance', () => {
     const own = screen.getByText('this setup').closest('tr');
     expect.soft(own?.classList.contains('own'), 'marks the setup’s own row').toBe(true);
   });
-
 });
 
 describe('a complete run with no figures', () => {

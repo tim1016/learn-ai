@@ -223,7 +223,6 @@ describe('times', () => {
     expect(problemsOf(loaded).get('exit')).toMatch(/after the entry/);
     expect(built({ ...loaded, exitClock: formatClockText(CLOSE - 46) }).exit).toEqual(minutes(46, 'close'));
   });
-
 });
 
 describe('costs and the other typed numbers', () => {

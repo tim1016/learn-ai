@@ -300,5 +300,4 @@ describe("StrategyLabChartComponent indicator catalog failure", () => {
     expect(alert?.textContent).toContain("Indicators could not be loaded.");
     expect(rail.textContent).not.toContain("No indicators available");
   });
-
 });

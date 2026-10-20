@@ -130,7 +130,6 @@ describe('opening a run', () => {
     expect.soft(service.runs.mock.calls.length, 'reads the list again').toBe(before + 1);
     await waitFor(() => expect(document.activeElement, 'puts the keyboard back on the Open button of the run, when the owner goes back to the list').toBe(screen.getByRole('button', { name: 'Open run 30' })));
   });
-
 });
 
 describe('deleting a run', () => {

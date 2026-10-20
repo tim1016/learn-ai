@@ -58,7 +58,6 @@ describe('what is posted', () => {
     // 2026-09-14 00:00 EDT, and the midnight after Friday the 18th, both written out from the clock.
     expect([startMs, endMs]).toEqual([1_789_358_400_000, 1_789_790_400_000 + 0]);
   });
-
 });
 
 describe('the panel', () => {
@@ -369,7 +368,6 @@ describe('closing the panel', () => {
     expect(dateFields()).toEqual({ from: '2026-09-14', to: '2026-09-18' });
     expect(screen.queryByText(/Range changed to/)).toBeNull();
   });
-
 });
 
 describe('when Check data does not give an answer', () => {

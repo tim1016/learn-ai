@@ -64,7 +64,6 @@ describe('starting a backtest', () => {
     expect.soft(within(panel).getByRole('button', { name: 'Cancel' }), 'offers Cancel on the run going').toBeTruthy();
     await waitFor(() => expect(document.activeElement, 'moves the focus to the heading of the run').toBe(within(panel).getByRole('heading', { name: 'Backtest run' })));
   });
-
 });
 
 describe('the name a run is recorded under', () => {
@@ -261,7 +260,6 @@ describe('when the server will not start the backtest', () => {
     expect(screen.queryByText(/Try again/)).toBeNull();
     expect(startButton().disabled).toBe(false);
   });
-
 });
 
 describe('coming back to the page while a backtest is going', () => {
@@ -287,7 +285,6 @@ describe('coming back to the page while a backtest is going', () => {
     shiftEnter();
     expect(service.startRun).not.toHaveBeenCalled();
   });
-
 });
 
 describe('when the page cannot tell whether a backtest is going', () => {

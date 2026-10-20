@@ -69,5 +69,4 @@ describe('formatReceiptLabel', () => {
     expect.soft(formatReceiptValue('attempt_count', 3), 'formats code-like receipt values when the label is not opaque: attempt_count').toBe('3');
     expect.soft(formatReceiptValue('available', true), 'formats code-like receipt values when the label is not opaque: available').toBe('True');
   });
-
 });

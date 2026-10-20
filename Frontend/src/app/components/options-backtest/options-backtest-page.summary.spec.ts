@@ -264,6 +264,16 @@ describe('a problem lands at its field', () => {
 });
 
 describe('typed times', () => {
+  it('say what is stored beside each time', async () => {
+    await renderPage(fakeService(vi));
+
+    typeInto('Entry time', formatClockText(OPEN + 5));
+    typeInto('Exit time', formatClockText(CLOSE - 46));
+
+    expect(screen.getByText('5 minutes after the open')).toBeTruthy();
+    expect(screen.getByText('46 minutes before the close')).toBeTruthy();
+  });
+
   it('an entry at the open and an exit at the close are refused at their own fields with the rule, not left to the server', async () => {
     const service = fakeService(vi);
     await renderPage(service);

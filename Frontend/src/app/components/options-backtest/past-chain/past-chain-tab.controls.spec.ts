@@ -279,7 +279,6 @@ describe('the strikes each side of the money', () => {
     expect(await screen.findByRole('table', { name: /Calls on the left/ })).toBeTruthy();
     expect(screen.queryByText('Input should be less than or equal to 14')).toBeNull();
   });
-
 });
 
 describe('the strikes box being read', () => {

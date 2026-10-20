@@ -118,5 +118,4 @@ describe('SymbolPickerComponent', () => {
     expect(coverage.ensureCalls).toEqual([]);
     expect(component.symbol()).toBe('QQQ');
   });
-
 });

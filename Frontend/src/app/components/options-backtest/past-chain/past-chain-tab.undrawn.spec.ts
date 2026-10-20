@@ -151,7 +151,6 @@ describe('a chain in which one side shows nothing', () => {
     const cells = within(chainTable()).getAllByRole('row').slice(1).map((row) => reads(row.querySelectorAll('td')[0] ?? null));
     expect(cells).toEqual(['Nothing in this window', 'Nothing in this window']);
   });
-
 });
 
 describe('the Past chain tab with the day picked and nothing opened', () => {
