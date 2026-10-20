@@ -12,7 +12,8 @@ per folder and per suite,
     ``*_test.py`` module, which is pytest's own collection rule; it matches
     ``pytest --collect-only`` file by file. TypeScript:
     every ``it(``, ``test(``, ``it.each(``, ``test.each(`` call (``.only``,
-    ``.skip``, ``.todo`` and friends included).
+    ``.skip``, ``.todo`` and friends included, and a ``<...>`` type-argument
+    list before the call, as in ``it.each<[string, () => void]>(...)``).
 
 ``lines``
     Physical lines. Python counts every ``.py`` file under the test roots, so
@@ -215,11 +216,13 @@ _REGEX_PRECEDERS = frozenset("(,=:[!&|?{};+-*%<>~^")
 _REGEX_PRECEDING_WORDS = frozenset({"return", "typeof", "case", "in", "of", "void", "delete"})
 _IDENT_CHAR = re.compile(r"[\w$]")
 
-_TS_TEST_CALL = re.compile(
+_TS_TEST_CALL_HEAD = re.compile(
     r"(?<![\w$.])(?:it|test)"
     r"(?:\.(?:each|only|skip|todo|concurrent|sequential|fails|runIf|skipIf))*"
-    r"\s*(?:<[^()]*>)?\s*[(`]"
+    r"\s*"
 )
+# How far a ``<...>`` type argument list may run (an object type spans lines).
+_TS_TYPE_ARGUMENTS_REACH = 800
 _TS_ASSERTION_CALL = re.compile(r"(?<![\w$.])expect(?:\.soft)?\s*\(")
 
 
@@ -352,11 +355,41 @@ def blank_ts_noncode(source: str) -> str:
     return "".join(out)
 
 
+def _after_type_arguments(code: str, start: int) -> int:
+    """Index past the ``<...>`` that opens at ``start``; ``start`` when there is none.
+
+    ``it.each<[string, () => void]>(...)`` holds parentheses and an arrow, so the
+    brackets are matched by depth and the ``>`` of ``=>`` is not a closer.
+    """
+    if code[start : start + 1] != "<":
+        return start
+    depth = 0
+    for i in range(start, min(len(code), start + _TS_TYPE_ARGUMENTS_REACH)):
+        if code[i] == "<":
+            depth += 1
+        elif code[i] == ">" and code[i - 1] != "=":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return start
+
+
+def _count_ts_test_calls(code: str) -> int:
+    count = 0
+    for head in _TS_TEST_CALL_HEAD.finditer(code):
+        i = _after_type_arguments(code, head.end())
+        while code[i : i + 1].isspace():
+            i += 1
+        if code[i : i + 1] in ("(", "`"):
+            count += 1
+    return count
+
+
 def count_typescript_source(source: str) -> Counts:
     code = blank_ts_noncode(source)
     return Counts(
         files=1,
-        functions=len(_TS_TEST_CALL.findall(code)),
+        functions=_count_ts_test_calls(code),
         lines=len(source.splitlines()),
         assertions=len(_TS_ASSERTION_CALL.findall(code)),
     )

@@ -150,6 +150,23 @@ class TypeScriptCountingTests(unittest.TestCase):
 
         self.assertEqual(counts.functions, 8)
 
+    def test_table_type_arguments_may_hold_parentheses_and_arrows(self) -> None:
+        counts = _ts(
+            """
+            describe('suite', () => {
+              it.each<[string, () => void]>([['a', () => {}]])('fn type %s', (name, run) => {});
+              it.each<[string, (world: World) => void, Record<string, unknown>]>([
+                ['a', (world) => {}, {}],
+              ])('arrow and nested generic %s', (name, run, out) => {});
+              it.each<{ key: Key; from: string }>([{ key: 'a', from: 'b' }])('object %s', (row) => {});
+              test.each<[Array<number>, Map<string, (n: number) => string>]>([[[1], new Map()]])('map %s', () => {});
+              it('plain after the tables', () => {});
+            });
+            """
+        )
+
+        self.assertEqual(counts.functions, 5)
+
     def test_comments_strings_and_member_calls_do_not_count(self) -> None:
         counts = _ts(
             """
