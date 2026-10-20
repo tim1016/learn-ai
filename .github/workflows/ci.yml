@@ -274,7 +274,17 @@ jobs:
       # hard 180-second wall-clock limit that fails the job. Slow,
       # PostgreSQL-backed and browser coverage runs daily instead.
       - name: Run quick tests
-        run: python -m scripts.run_fast_tests --shard "${{ matrix.shard }}/16"
+        run: python -m scripts.run_fast_tests --shard "${{ matrix.shard }}/16" --junitxml "TestResults/python-shard-${{ matrix.shard }}.xml"
+      # Each test's seconds as this shard ran it, with CI's workers on CI's
+      # hardware: what the shard balance is calibrated from (#3144).
+      - name: Upload Python shard timings
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-shard-${{ matrix.shard }}-test-results
+          path: PythonDataService/TestResults/python-shard-${{ matrix.shard }}.xml
+          if-no-files-found: warn
+          retention-days: 14
 
   # The one check master requires. It waits on every other job, so adding
   # or cutting a job only edits `needs` here, never the branch ruleset.

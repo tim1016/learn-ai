@@ -93,7 +93,7 @@ _CASES: tuple[tuple[str, date, str, str, str, int], ...] = (
     ("sell_1_before_alpaca_rows", date(2026, 1, 15), "sell", "1", "1.00", 100),
 )
 
-# Days settled on their own: every fee type summed, then rounded up to the cent.
+# Days settled on their own: SEC, TAF, CAT and ORF summed, then rounded up to the cent; OCC rounded up per fill.
 _SESSIONS: dict[str, tuple[str, ...]] = {
     "three_fills_on_2026_10_05": ("buy_2_at_1_50", "sell_2_at_2_10", "sell_10_of_a_ten_share_contract"),
     "one_sale_last_day_before_taf_pause": ("sell_2_at_2_10_last_day_before_taf_pause",),
@@ -135,7 +135,11 @@ def _settle(fees: list[dict[str, Decimal | None]]) -> dict[str, Decimal]:
     for fee_type in _TYPES:
         accruals = [fill[fee_type] for fill in fees]
         assert all(accrual is not None for accrual in accruals), "a settled day holds only pinned rates"
-        settled[fee_type] = _ceil_cents(sum(accruals, Decimal("0")))
+        if fee_type == "occ":
+            # Alpaca Paper posts OCC as one row per execution (#3306): each fill rounds up on its own.
+            settled[fee_type] = sum((_ceil_cents(accrual) for accrual in accruals), Decimal("0"))
+        else:
+            settled[fee_type] = _ceil_cents(sum(accruals, Decimal("0")))
     return settled
 
 
@@ -165,7 +169,7 @@ Read on 2026-10-06. No account, order or broker API call was used: every rate is
 | OCC clearing | per contract; buys and sells | `0.025`, printed "(no cap)" (revision of 2026-02-12, unchanged since) | same schedule and captures |
 | FINRA CAT | per executed-equivalent share; buys and sells; one contract counts its multiplier (100, "or applicable multiplier") | `0.000003` (first listed under Options in the revision of 2026-07-01) | same schedule; the conversion is also in SEC Release 34-105449 (SR-FINRA-2026-010). |
 
-Settlement is from the same schedule, "How fees are charged" (in the revisions of 2026-07-01 and later): fees use the exact executed quantity; each fee type is summed separately per account per day; each total is then rounded up to the next cent.
+Settlement is from the same schedule, "How fees are charged" (in the revisions of 2026-07-01 and later): fees use the exact executed quantity; each fee type is summed separately per account per day; each total is then rounded up to the next cent. **OCC is the exception, read from Alpaca Paper's posted rows rather than the schedule (#3306):** it is posted as one row per execution, linked by `execution_id`, and every recorded row (one-contract fills, `1 × 0.025` up to `0.03`) is that fill's OCC rounded up to the cent, so the oracle rounds each fill's OCC up and adds the cents. Executions of several contracts are not recorded.
 
 ## What these dates are, and are not
 
@@ -173,7 +177,7 @@ Settlement is from the same schedule, "How fees are charged" (in the revisions o
 - **ORF, OCC and CAT dates are Alpaca's revision dates.** Alpaca states no effective dates, so the day it began charging each figure is not known. A case dated near one of these steps shows what the model does, not what Alpaca charged that day.
 - Alpaca calls its ORF figure an average of what it remits to the exchanges.
 - Before 2026-02-12 the ORF and OCC rows are not pinned, and before 2026-07-01 the CAT row is not: the model answers `null` there, never zero. Alpaca's earlier schedules print other figures (ORF `0.02685`, OCC `0.02` with a $55 cap), with no date to hang them on.
-- **This is documentation, not a recording.** No option fee activity from an Alpaca account has been seen. Whether Alpaca posts option fees as these five types, on which days, and how a day that also traded stock rounds SEC, TAF and CAT is unverified. Replace this fixture's expectations with a recorded day when one exists.
+- **The rates are documentation, not a recording.** Only the OCC settlement rule above comes from Alpaca's posted rows (`tests/broker/alpaca/test_paper_option_recordings.py`). How a day that also traded stock rounds SEC, TAF and CAT is unverified. Paper posted OPT TAF on 2026-10-13 to 2026-10-15, inside FINRA's pause, so the TAF figures here are the regulators', not what Alpaca Paper charged (#3306).
 
 ## Independent numerical oracle
 
@@ -188,8 +192,8 @@ Settlement is from the same schedule, "How fees are charged" (in the revisions o
 - `buy_5_last_day_of_old_orf` (2026-06-30) and `buy_5_first_day_of_new_orf` (2026-07-01): orf `5 × 0.02295 = 0.11475` then `5 × 0.015 = 0.075`; cat `null` then `0.001500`.
 - `sell_1_before_sec_fee_resumed` (2026-04-02; 2026-04-03 was Good Friday) and `sell_1_after_sec_fee_resumed` (2026-04-06): sec `0` then `500 × 0.0000206 = 0.0103000`.
 - `buy_1_before_alpaca_rows` and `sell_1_before_alpaca_rows` (2026-01-15): orf, occ and cat `null`; the sale's sec is a pinned `0` and its taf `0.00329`.
-- Day `three_fills_on_2026_10_05`: sec `0.0086520 + 0.00113300 = 0.00978500 → 0.01`; taf `0 → 0.00`; cat `0.000600 + 0.000600 + 0.000300 = 0.001500 → 0.01`; orf `0.210 → 0.21`; occ `0.350 → 0.35`; total `0.58`.
-- Provision `one_bull_call_spread` (buy 1 at $4.10, sell 1 at $2.20, 2026-10-05): sec `220 × 0.0000206 = 0.0045320 → 0.01`; taf `0.00`; cat `0.000600 → 0.01`; orf `0.030 → 0.03`; occ `0.050 → 0.05`; `10` cents.
+- Day `three_fills_on_2026_10_05`: sec `0.0086520 + 0.00113300 = 0.00978500 → 0.01`; taf `0 → 0.00`; cat `0.000600 + 0.000600 + 0.000300 = 0.001500 → 0.01`; orf `0.210 → 0.21`; occ `0.050 + 0.050 + 0.250`, each already whole cents, `= 0.35`; total `0.58`.
+- Provision `one_bull_call_spread` (buy 1 at $4.10, sell 1 at $2.20, 2026-10-05): sec `220 × 0.0000206 = 0.0045320 → 0.01`; taf `0.00`; cat `0.000600 → 0.01`; orf `0.030 → 0.03`; occ one contract a leg, `0.025 → 0.03` twice, `= 0.06`; `11` cents.
 - Provision `two_contracts_bought`: cat `0.01`, orf `0.03`, occ `0.05`; `9` cents.
 
 ## Timestamps

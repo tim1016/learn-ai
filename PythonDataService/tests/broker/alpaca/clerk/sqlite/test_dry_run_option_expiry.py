@@ -238,13 +238,14 @@ async def test_a_contract_bought_on_its_expiry_day_is_settled_and_the_days_pnl_i
     """Bought at noon on the expiry day itself at $1.94, closed 5.25 in the money. The read of that day's
     settlements starts on that same date.
 
-    Both fills are of one day, and a day's fees are rounded up once for each
-    fee type over all its fills: SEC 0.010815, two cents; TAF 0.00329, one;
-    CAT 0.0003 + 0.0003, one; ORF 0.015 + 0.015, three; OCC 0.025 + 0.025,
-    five. Twelve cents, where the two fills on two days would be fifteen.
+    Both fills are of one day, and a day's SEC, TAF, CAT and ORF are each rounded
+    up once over all its fills: SEC 0.010815, two cents; TAF 0.00329, one;
+    CAT 0.0003 + 0.0003, one; ORF 0.015 + 0.015, three. OCC is rounded up on
+    each fill: 0.025 to 0.03, twice, six. Thirteen cents, where the two fills on
+    two days would be fifteen.
 
     The day's P&L, read at the close: the account began the day with
-    $1,000.00 and ends it with 1,000.00 + 331.00 - 0.12 = $1,330.88. It made $330.88.
+    $1,000.00 and ends it with 1,000.00 + 331.00 - 0.13 = $1,330.87. It made $330.87.
     """
     _wait_until(dry_run, EXPIRY_NOON)
     publish_quotes(EXPIRY_NOON, SPY=585.0)
@@ -260,9 +261,9 @@ async def test_a_contract_bought_on_its_expiry_day_is_settled_and_the_days_pnl_i
     assert [booked["summary_code"] for booked in _booked(dry_run)] == ["OPTION_SETTLED_IN_CASH"]
     reading = dry_run.account_reading()
     day = observed_day_pnl(observation=reading, now_ms=dry_run.clock())
-    assert _fees(dry_run) == Decimal("0.12")
-    assert (reading.last_equity_usd, reading.equity_usd) == (Decimal(1000), Decimal("1330.88"))
-    assert day.display_total_usd == Decimal("330.88")
+    assert _fees(dry_run) == Decimal("0.13")
+    assert (reading.last_equity_usd, reading.equity_usd) == (Decimal(1000), Decimal("1330.87"))
+    assert day.display_total_usd == Decimal("330.87")
 
 
 # ── the record, and what is settled as ───────────────────────────────────

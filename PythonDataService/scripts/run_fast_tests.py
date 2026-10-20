@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Sequence
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ def pytest_command(
     *,
     shard_index: int | None = None,
     shard_count: int | None = None,
+    junitxml: Path | None = None,
 ) -> list[str]:
     """Build the bounded PR-suite command."""
     if (shard_index is None) != (shard_count is None):
@@ -62,6 +64,9 @@ def pytest_command(
                 str(shard_count),
             )
         )
+    if junitxml is not None:
+        # xunit1 names each test's file, which the shard balance is dealt by.
+        command.extend(("--junitxml", str(junitxml), "-o", "junit_family=xunit1"))
     return command
 
 
@@ -121,6 +126,7 @@ def run_fast_tests(
     *,
     shard_index: int | None = None,
     shard_count: int | None = None,
+    junitxml: Path | None = None,
 ) -> int:
     """Run pytest and return 124 when the suite passes the hard limit."""
     started = time.monotonic()
@@ -128,6 +134,7 @@ def run_fast_tests(
         pytest_command(
             shard_index=shard_index,
             shard_count=shard_count,
+            junitxml=junitxml,
         ),
         start_new_session=os.name == "posix",
     )
@@ -160,6 +167,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="INDEX/COUNT",
         help="run one deterministic, one-based CI shard",
     )
+    parser.add_argument(
+        "--junitxml",
+        type=Path,
+        help="save each test's outcome and seconds, to calibrate the shard balance on CI hardware (#3144)",
+    )
     args = parser.parse_args(argv)
 
     shard_index: int | None = None
@@ -178,6 +190,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     return run_fast_tests(
         shard_index=shard_index,
         shard_count=shard_count,
+        junitxml=args.junitxml,
     )
 
 

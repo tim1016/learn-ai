@@ -8,8 +8,10 @@ Formula:
                                                                             in executed-equivalent shares)
     ORF (both sides)           orf = contracts × r_orf(d)
     OCC clearing (both sides)  occ = contracts × r_occ(d)
-    Day settlement             each fee type summed over the account's ET trade date, then rounded UP to
-                               the cent; the charge is the sum of the five rounded types
+    Day settlement             SEC, TAF, CAT and ORF are each summed over the account's ET trade date, then
+                               rounded UP to the cent. OCC is rounded UP to the cent on each fill (Alpaca
+                               posts one row per execution) and those cents are summed; the charge is the
+                               sum of the five settled types
     Entry provision            the entry's own fills settled as a day of their own, in whole cents;
                                each leg is one fill of structures × ratio contracts at the price it is
                                entered at: its ask when bought, its bid when sold
@@ -28,10 +30,20 @@ Canonical implementation: this file, over the date lookup, cent rounding and day
     ``regulatory_fees``, which the stock model uses too.
 Validated against:
     tests/broker/alpaca/test_option_fees.py;
-    tests/fixtures/test_alpaca_option_fees_fixture.py (golden FEE-002).
+    tests/fixtures/test_alpaca_option_fees_fixture.py (golden FEE-002);
+    tests/broker/alpaca/test_paper_option_recordings.py (Alpaca Paper's posted ``FEE`` rows, 2026-10-13
+    to 2026-10-16).
 
 Observed ``FEE`` activities are the truth (ADR 0059 D6); this model predicts them. Every figure it
 gives is an estimate until Alpaca posts the day's fees:
+
+- Alpaca Paper posts OCC clearing as one row per execution, each linked to its fill by ``execution_id``,
+  and every one of the 50 distinct recorded rows (8 on 2026-10-13, 38 on 10-14, 4 on 10-15) is $0.03 for a
+  one-contract fill: 1 × $0.025 rounded up to the cent. So OCC is rounded per fill (#3306). No
+  multi-contract execution has been recorded, so whether a fill of n contracts is rounded as
+  n × $0.025 (this model) or as n × $0.03 is not observed.
+- Alpaca Paper posted OPT TAF on 2026-10-13, 2026-10-14 and 2026-10-15, inside FINRA's pause below,
+  at about $0.003 a contract; this model still pins TAF to zero from 2026-10-01 (#3306).
 
 - Alpaca dates its schedule by revision and states no effective dates. The ORF, OCC and CAT rows
   below are dated by the revision that first printed them. SEC and TAF are dated by the regulator.
@@ -43,13 +55,13 @@ gives is an estimate until Alpaca posts the day's fees:
 
 Every product, sum and conversion to cents is taken in the Clerk's exact money context
 (``clerk.money.money_context``), so no figure depends on the caller's decimal context. The one
-step that drops digits is the rule's own: each fee type's day total, rounded up to the cent.
+step that drops digits is the rule's own: the day total of SEC, TAF, CAT and ORF, and each fill's OCC,
+rounded up to the cent.
 
 The money path calls it in two places. An option entry's fee provision is set aside from it
 (``clerk/sqlite/option_admission.py``). And the fee attribution
 (``app/services/alpaca_fee_attribution.py``) prices every option fill by it: as the fill's
-estimate, and as its weight when a fee row of its day is shared among the day's fills. None of
-Alpaca's own fee activities for an option trade has been seen.
+estimate, and as its weight when a fee row of its day is shared among the day's fills.
 """
 
 from __future__ import annotations
@@ -63,6 +75,7 @@ from typing import TYPE_CHECKING, Literal
 from app.broker.alpaca.clerk.money import MoneyInputError, contract_multiplier, money_context, normalize_money
 from app.broker.alpaca.regulatory_fees import (
     RateNotPinnedError,
+    ceil_cents,
     in_force,
     settle_components,
     unpinned_components,
@@ -140,7 +153,7 @@ class OptionFillFees:
 
 @dataclass(frozen=True)
 class OptionSessionFees:
-    """What a day's option fills are charged: each fee type's accrual rounded up to the cent."""
+    """What a day's option fills are charged, in whole cents: each fee type settled as the module docstring says."""
 
     sec: Decimal
     taf: Decimal
@@ -224,11 +237,12 @@ def fees_for_option_fill(
 
 
 def settle_option_session(fills: Sequence[OptionFillFees]) -> OptionSessionFees:
-    """Sum each fee type over one account's ET trade date and round it UP to the cent.
+    """Settle one account's ET trade date: SEC, TAF, CAT and ORF summed then rounded UP, OCC rounded UP per fill.
 
     This is the charge for a day that holds only these fills. Alpaca settles a
     fee type over the account's whole day, stock fills included, so a day that
-    also traded stock rounds SEC, TAF and CAT once across both.
+    also traded stock rounds SEC, TAF and CAT once across both. OCC is posted
+    per execution, so each fill's own OCC is rounded up and the cents are added.
 
     Raises ``OptionRateNotPinnedError`` if any fill has an unpinned fee type: a
     day containing an unknown cannot settle to a number.
@@ -236,15 +250,22 @@ def settle_option_session(fills: Sequence[OptionFillFees]) -> OptionSessionFees:
     with money_context() as exact:
         # Rounding up to the cent is the one step that drops digits, and it is the rule.
         exact.traps[Inexact] = False
-        return OptionSessionFees(**settle_components(fills, _COMPONENTS, not_pinned=OptionRateNotPinnedError))
+        settled = settle_components(fills, _COMPONENTS, not_pinned=OptionRateNotPinnedError)
+        # OCC is posted per execution: each fill rounds up on its own and the cents are added.
+        occ = ceil_cents(_ZERO)
+        for fill in fills:
+            assert fill.occ is not None  # settle_components refused an unpinned fee type above
+            occ += ceil_cents(fill.occ)
+        return OptionSessionFees(**{**settled, "occ": occ})
 
 
 def option_fee_provision_cents(fills: Sequence[OptionFillFees]) -> int:
     """What an entry sets aside for its own fees, in whole cents: its fills settled as a day of their own.
 
-    Each fee type is rounded up for this entry alone. The day's charge rounds
-    once across every fill of the account, so the entry's share of it can
-    differ from this by up to a cent per fee type, either way. It is the one
+    SEC, TAF, CAT and ORF are rounded up for this entry alone. The day's charge
+    rounds them once across every fill of the account, so the entry's share of
+    it can differ from this by up to a cent per such type, either way. OCC is
+    rounded per fill, so the entry's OCC is exactly its share of the day's. It is the one
     figure of an entry's money that rounds (ADR 0076 decision 2).
     """
     with money_context():

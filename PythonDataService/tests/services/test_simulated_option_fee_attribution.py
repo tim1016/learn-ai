@@ -10,6 +10,8 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
+import pytest
+
 from app.broker.contract.models import OrderSide
 from app.services.alpaca_fee_attribution import FeeFill, attribute_simulated_option_fees
 from app.utils.session_anchors import et_midnight_ms
@@ -32,8 +34,9 @@ def _charged(fills: list[FeeFill], *, session_ended: bool = False) -> dict[tuple
     return {(share.subject_id, share.charge_id.rsplit(":", 1)[-1]): share.amount for share in result.shares}
 
 
-def test_one_bots_round_trip_is_charged_each_fee_type_rounded_up_once_for_the_day() -> None:
-    """Bought at $1.94 and sold at $2.40: SEC $0.004944, TAF $0.00329, CAT $0.0006, ORF $0.03, OCC $0.05."""
+def test_one_bots_round_trip_is_charged_each_fee_type_but_occ_rounded_up_once_for_the_day() -> None:
+    """Bought at $1.94 and sold at $2.40: SEC $0.004944, TAF $0.00329, CAT $0.0006, ORF $0.03; OCC $0.025 a fill,
+    each rounded up to $0.03."""
     charged = _charged([
         _fill("buy", "bot:a", OrderSide.BUY, 1, "1.94"),
         _fill("sell", "bot:a", OrderSide.SELL, 1, "2.40"),
@@ -41,12 +44,12 @@ def test_one_bots_round_trip_is_charged_each_fee_type_rounded_up_once_for_the_da
 
     assert charged == {
         ("bot:a", "sec"): Decimal("0.01"), ("bot:a", "taf"): Decimal("0.01"), ("bot:a", "cat"): Decimal("0.01"),
-        ("bot:a", "orf"): Decimal("0.03"), ("bot:a", "occ"): Decimal("0.05"),
+        ("bot:a", "orf"): Decimal("0.03"), ("bot:a", "occ"): Decimal("0.06"),
     }
 
 
 def test_two_bots_share_each_fee_types_cents_by_what_each_accrued() -> None:
-    """Bot A buys ten contracts and bot B one. ORF: $0.165, charged $0.17; OCC: $0.275, charged $0.28.
+    """Bot A buys ten contracts and bot B one. ORF: $0.165, charged $0.17; OCC: $0.25 and $0.03 a fill, charged $0.28.
 
     Of the ORF's 17 cents A's exact share is 15.45 and B's 1.55: fifteen and
     one whole cents, and the odd cent goes to the larger remainder, B's. Of
@@ -120,3 +123,28 @@ def test_no_option_fills_is_no_charge() -> None:
     )
 
     assert result.known and result.shares == () and result.predicted_total == 0
+
+
+@pytest.mark.parametrize(
+    ("bot_a", "bot_b", "occ_a", "occ_b"),
+    [
+        # Both accrue 2 x 0.025 = 0.05 of OCC, but A's one execution is charged 0.05 and B's two are charged 0.03 each.
+        pytest.param([("a", 2)], [("b1", 1), ("b2", 1)], "0.05", "0.06", id="two contracts in one execution against two in two"),
+        # A: ten executions of one, 10 x 0.03 = 0.30. B: one of ten, 0.25. Both accrue 0.25 raw.
+        pytest.param([(f"a{i}", 1) for i in range(10)], [("b", 10)], "0.30", "0.25", id="ten executions against one of ten"),
+    ],
+)
+def test_each_bot_owes_the_occ_of_its_own_executions_each_rounded_up_to_the_cent(
+    bot_a: list[tuple[str, int]], bot_b: list[tuple[str, int]], occ_a: str, occ_b: str
+) -> None:
+    """Alpaca posts OCC per execution, so a bot's share of the day's OCC is the sum of its executions' rounded cents.
+
+    Splitting the day's total by the executions' unrounded accruals would tie these bots and hand the odd cent to
+    whichever name sorts first.
+    """
+    charged = _charged(
+        [_fill(fill_id, "bot:a", OrderSide.BUY, contracts, "1.94") for fill_id, contracts in bot_a]
+        + [_fill(fill_id, "bot:b", OrderSide.BUY, contracts, "1.94") for fill_id, contracts in bot_b]
+    )
+
+    assert (charged[("bot:a", "occ")], charged[("bot:b", "occ")]) == (Decimal(occ_a), Decimal(occ_b))
