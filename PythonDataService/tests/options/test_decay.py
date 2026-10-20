@@ -98,7 +98,6 @@ def test_an_iron_condor_gains_with_a_day_what_its_sold_legs_lose_less_what_its_b
     _close(seen.total, 30.00)
 
 
-
 def test_a_legs_ratio_and_the_contracts_own_multiplier_both_count() -> None:
     """A butterfly: one, two sold, one. -0.10 + 2 x 0.45 - 0.12 = +0.68 a share. At ten shares a contract, $6.80."""
     butterfly = _structure(

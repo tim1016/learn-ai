@@ -52,6 +52,7 @@ class TestWorkspaceSizeBytesScandir:
         ghost = tmp_path / "does_not_exist"
         assert workspace_size_bytes_scandir(ghost) == 0
 
+
 class TestWorkspacePollerLifecycle:
     """Thread lifecycle: start/stop are idempotent in spirit; the
     poller must shut down promptly when the stop event is set."""

@@ -89,6 +89,7 @@ class TestRollingZScore:
 
         np.testing.assert_array_almost_equal(z_normal.values, -z_flipped.values)
 
+
 class TestThresholdFilter:
     def test_below_threshold_zeroed_and_above_threshold_preserves_sign(self) -> None:
         # Values below threshold should become 0.
@@ -236,6 +237,7 @@ class TestGraduation:
         for c in result.criteria:
             if not c.passed:
                 assert len(c.failure_reason) > 0
+
 
 class TestSignalDiagnostics:
     def test_all_zero_signal(self) -> None:

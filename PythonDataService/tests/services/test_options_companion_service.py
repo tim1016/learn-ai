@@ -604,6 +604,7 @@ class TestComputeRowGreeksStatusLabels:
             config=self._config(),
         )
         assert status == expected_status, "the guard branch names its reason in the status label"
+        assert set(out) == {"iv", "delta", "gamma", "theta", "vega", "rho"}, "a guarded row still carries every key"
         assert all(v is None for v in out.values()), "a guarded row carries no IV or Greek values"
 
     def test_ok_status_populates_all_greeks(self):

@@ -450,6 +450,7 @@ class TestSameBytesAsThePythonReaders:
             "the first quote zip holds exactly the bytes the lake's quote writer produced"
         )
 
+
 class TestLakeCoverageFailsLoudly:
     """A gap in the lake must surface, never fall back to a Polygon fetch."""
 
@@ -596,6 +597,7 @@ class TestRequiredLakeMetadata:
 
         with pytest.raises(LakeMountError, match=r"\['market_hours'\]"):
             require_lake_metadata(lake_root)
+
 
 class TestLakeModeGivesLeanTheSameShapeStagingWould:
     """Carry-forward A3: what the lake lacks that a staged data folder has.

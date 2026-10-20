@@ -436,6 +436,16 @@ def _round_trip(*sell_minute_prices: _Step) -> list[_Step]:
     ]
 
 
+async def test_a_simulated_sell_waits_for_its_own_minutes_price(run: Any) -> None:
+    """A Live Shadow fills its own sale, so it needs a price: the one for its minute, a moment later."""
+    ran = await run(_round_trip(_Step(_qqq(_EXIT_MS, close="40.60"), after_s=0.02)), wait_ms=5_000, synthesized=True)
+
+    _enter, sell = ran.calls
+    assert (sell["purpose"], sell["pricing_bar"].end_ms, sell["pricing_bar"].close) == (
+        "EXIT", _EXIT_MS, Decimal("40.60"),
+    )
+
+
 async def test_a_simulated_sell_with_no_price_of_its_minute_is_handed_the_newest_earlier_trade(run: Any) -> None:
     """Never held back, never priced from the signal: QQQ's 10:01 trade, with its own time on it."""
     ran = await run(_round_trip(), wait_ms=20, synthesized=True)
