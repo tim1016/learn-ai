@@ -522,7 +522,7 @@ def _require_every_sibling_leg_recorded(repo: ClerkSqliteRepository, external_or
     if missing:
         raise ExternalOrderReviewIncompleteError(
             f"The legs of this multi-leg order are not all recorded yet (missing {', '.join(missing)}). "
-            "Choose Reconcile now, then review it again."
+            "They are recorded when the account next reconciles or the order stream reconnects; review it then."
         )
 
 
