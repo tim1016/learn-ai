@@ -41,7 +41,7 @@
         <div><dt>Expiry close lead</dt><dd>{{ terms.expiry_close_lead_minutes }} minutes</dd></div>
       }
       @if (state.exit_terms; as terms) {
-        <div><dt>Exit allowance</dt><dd>{{ terms.exit_allowance_bps ?? 'Not set' }} bps</dd></div>
+        <div><dt>Exit allowance</dt><dd>@if (terms.exit_allowance_bps !== null) { {{ terms.exit_allowance_bps }} bps } @else { Not set }</dd></div>
         <div><dt>Exit band · spread cap</dt><dd>{{ terms.band_multiple }}× · {{ terms.spread_cap_bps }} bps</dd></div>
       }
     </dl>

@@ -7,7 +7,7 @@ const seconds = (ms: number): UTCTimestamp => Math.floor(ms / 1000) as UTCTimest
 
 export function ruleLinePlans(rules: readonly ChartRuleLine[], bars: readonly ChartBar[]) {
   return rules.map((rule) => {
-    const covered = bars.filter((bar) => bar.end_ms >= rule.from_ms
+    const covered = bars.filter((bar) => bar.end_ms > rule.from_ms
       && (rule.to_ms == null || bar.start_ms < rule.to_ms));
     const endpoints = covered.length > 1 ? [covered[0], covered[covered.length - 1]] : covered;
     return {

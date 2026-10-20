@@ -379,7 +379,9 @@ export class BotPanelShellComponent {
 
   // ── Internal state ────────────────────────────────────────────────────────
 
-  protected readonly selectedHistoryTimeframe = signal<ChartHistoryTimeframe>('1m');
+  protected readonly selectedHistoryTimeframe = linkedSignal<string, ChartHistoryTimeframe>({
+    source: () => this.routeIdentity(), computation: () => '1m',
+  });
   private readonly requestedLiveResolution = linkedSignal<string, ChartLiveResolution | undefined>({
     source: () => this.routeIdentity(), computation: () => undefined,
   });
