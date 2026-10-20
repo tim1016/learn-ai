@@ -9,7 +9,8 @@
     </tr>
   </thead>
   <tbody>
-    @for (fill of fills(); track fill.event_key) {
+    @for (row of rows(); track row.fill.event_key) {
+      @let fill = row.fill;
       <tr
         class="fill-table__row"
         [class.fill-table__row--buy]="fill.side === 'buy'"
@@ -19,7 +20,11 @@
         <td class="fill-table__side">{{ fill.side | receiptLabel }}</td>
         <td>{{ fill.quantity }}</td>
         @if (showAsset()) {
-          <td>@if (fill.symbol; as asset) { <app-asset-identity [symbol]="asset" size="xs" /> } @else { — }</td>
+          <td>
+            @if (row.contract; as contract) { <app-option-contract [contract]="contract" size="xs" /> }
+            @else if (fill.symbol; as asset) { <app-asset-identity [symbol]="asset" size="xs" /> }
+            @else { — }
+          </td>
         }
         <td>
           {{ fmtCurrency(fill.price) }}

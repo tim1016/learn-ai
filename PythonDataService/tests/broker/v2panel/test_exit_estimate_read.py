@@ -145,7 +145,7 @@ async def test_a_real_account_with_no_live_quote_states_no_price_says_the_run_is
 
     for name, figure in (("net_close", estimate.net_close), ("gross_buy_back", estimate.gross_buy_back)):
         assert (figure.state, figure.amount_cents, figure.terms) == ("unknown", None, ()), f"{name} states no price"
-        assert "real accounts keep no option quotes" in figure.source, f"{name} says real accounts keep no quotes"
+        assert "this estimate reads this Clerk's live IBKR quotes" in figure.source, f"{name} says it reads the Clerk's live quotes"
         assert "the bot's run is not asking for any" in figure.source, f"{name} says the run is not asking"
     assert {quality.state for quality in estimate.quotes} == {"unknown"}, "every contract's quote is unknown"
     served_net, served_buy_back = view.net_close, view.gross_buy_back

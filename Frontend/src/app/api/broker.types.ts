@@ -10525,6 +10525,8 @@ export interface components {
         ChartHistoryResponse: {
             /** As Of Ms */
             as_of_ms: number;
+            /** Backtest Notice */
+            backtest_notice?: string | null;
             /** Bars */
             bars: components["schemas"]["ChartBar"][];
             /** Fill Markers */
@@ -10540,6 +10542,12 @@ export interface components {
             /** Overlay Notices */
             overlay_notices?: components["schemas"]["ChartOverlayNoticeView"][];
             position?: components["schemas"]["ChartPositionPane"] | null;
+            /** Premium Notice */
+            premium_notice?: string | null;
+            /** Premium Panes */
+            premium_panes?: components["schemas"]["ChartPremiumPane"][];
+            /** Rule Lines */
+            rule_lines?: components["schemas"]["ChartRuleLine"][];
             /** Strategy Instance Id */
             strategy_instance_id: string;
             /** Symbol */
@@ -10689,6 +10697,8 @@ export interface components {
         ChartLiveResponse: {
             /** As Of Ms */
             as_of_ms: number;
+            /** Backtest Notice */
+            backtest_notice?: string | null;
             /** Bars */
             bars: components["schemas"]["ChartBar"][];
             feed: components["schemas"]["ChartFeedView"];
@@ -10697,11 +10707,17 @@ export interface components {
             /** Overlay Notices */
             overlay_notices: components["schemas"]["ChartOverlayNoticeView"][];
             position?: components["schemas"]["ChartPositionPane"] | null;
+            /** Premium Notice */
+            premium_notice?: string | null;
+            /** Premium Panes */
+            premium_panes?: components["schemas"]["ChartPremiumPane"][];
             /**
              * Resolution
              * @enum {string}
              */
             resolution: "5s" | "1m";
+            /** Rule Lines */
+            rule_lines?: components["schemas"]["ChartRuleLine"][];
             /** Strategy Instance Id */
             strategy_instance_id: string;
             /** Symbol */
@@ -10722,22 +10738,24 @@ export interface components {
             message: string;
             /**
              * Source
-             * @constant
+             * @enum {string}
              */
-            source: "polygon";
+            source: "polygon" | "ibkr";
         };
         /**
          * ChartPositionPane
          * @description The pane under a bot's chart for what it trades, when that is not what it listens to (#2915).
          *
-         *     ``points`` has one entry per bar of the chart it comes with, in the same
-         *     order, so the pane shares the chart's time axis exactly. ``kind`` says
-         *     what a value is: ``price`` is the traded stock's or ETF's own bar close.
+         *     Price points follow the underlying bars. Value points follow retained quote
+         *     minutes and can extend into the forming minute before an underlying candle
+         *     closes. ``price`` is the traded stock's or ETF's own bar close; ``value``
+         *     is the option structure's net close-now cost, positive paid and negative received.
          *     ``fill_markers`` are the bot's fills in the traded asset, which the
          *     chart of the symbol it listens to leaves off. ``heading`` says what the
          *     pane is and leaves the asset to ``symbol``.
          */
         ChartPositionPane: {
+            exit_estimate?: components["schemas"]["ExitEstimateView"] | null;
             feed?: components["schemas"]["ChartFeedView"] | null;
             /** Fill Markers */
             fill_markers: components["schemas"]["ChartFillMarker"][];
@@ -10745,9 +10763,9 @@ export interface components {
             heading: string;
             /**
              * Kind
-             * @constant
+             * @enum {string}
              */
-            kind: "price";
+            kind: "price" | "value";
             /** Overlay Notices */
             overlay_notices?: components["schemas"]["ChartOverlayNoticeView"][];
             /** Points */
@@ -10764,6 +10782,33 @@ export interface components {
             start_ms: number;
             /** Value */
             value: string | null;
+        };
+        /** ChartPremiumPane */
+        ChartPremiumPane: {
+            /**
+             * Backtest Only
+             * @default false
+             */
+            backtest_only?: boolean;
+            /** Backtest Points */
+            backtest_points?: components["schemas"]["PremiumPoint"][];
+            contract: components["schemas"]["OptionContract"];
+            /** Entry Numbers */
+            entry_numbers: number[];
+            /** Fill Markers */
+            fill_markers: components["schemas"]["PremiumFill"][];
+            /** Leg Ids */
+            leg_ids: string[];
+            /** Multiplier */
+            multiplier: number;
+            /** Notice */
+            notice?: string | null;
+            /** Points */
+            points: components["schemas"]["PremiumPoint"][];
+            /** Rule Lines */
+            rule_lines: components["schemas"]["ChartRuleLine"][];
+            /** Symbol */
+            symbol: string;
         };
         /**
          * ChartQualityReport
@@ -10846,6 +10891,30 @@ export interface components {
         ChartRangePresetsResponse: {
             /** Presets */
             presets: components["schemas"]["ChartRangePreset"][];
+        };
+        /** ChartRuleLine */
+        ChartRuleLine: {
+            /** Entry Number */
+            entry_number: number;
+            /** From Ms */
+            from_ms: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "starting_price" | "momentum" | "stop";
+            /** Leg Id */
+            leg_id: string;
+            /** Price */
+            price: string;
+            /**
+             * Source
+             * @default live
+             * @enum {string}
+             */
+            source?: "live" | "backtest";
+            /** To Ms */
+            to_ms?: number | null;
         };
         /**
          * ChronologicalSplitPolicySpec
@@ -13560,6 +13629,11 @@ export interface components {
              */
             detail: string;
         };
+        /**
+         * EventKind
+         * @enum {string}
+         */
+        EventKind: "picked" | "pick_refused" | "starting_price_taken" | "no_starting_price" | "momentum_hit" | "entry_filled" | "entry_dropped" | "entry_refused_for_cash" | "entry_refused_for_cover" | "entry_refused_for_second_expiry" | "entry_refused_for_other_side" | "sale_not_taken_at_zero" | "stop_hit" | "squared_off" | "closed_with_its_protection" | "exit_time" | "close_filled" | "re_entry_earned" | "re_entry_blocked_by_cutoff" | "re_entry_lost" | "leg_cancelled" | "marked_not_sold" | "marked_not_bought_back";
         /** EvidenceApplicability */
         EvidenceApplicability: {
             /**
@@ -22420,6 +22494,23 @@ export interface components {
             /** Sentence */
             sentence: string;
         };
+        /**
+         * OptionContract
+         * @description One listed option contract: what an order names and a position holds.
+         */
+        OptionContract: {
+            /** Expiry Ms */
+            expiry_ms: number;
+            /**
+             * Right
+             * @enum {string}
+             */
+            right: "call" | "put";
+            /** Root */
+            root: string;
+            /** Strike Thousandths */
+            strike_thousandths: number;
+        };
         /** OptionContractView */
         OptionContractView: {
             /**
@@ -24756,6 +24847,23 @@ export interface components {
              */
             version?: 1;
         };
+        /** OptionsBotEventView */
+        OptionsBotEventView: {
+            /** At Ms */
+            at_ms: number;
+            contract?: components["schemas"]["OptionContract"] | null;
+            /** Detail */
+            detail?: string | null;
+            /** Entry Number */
+            entry_number: number;
+            kind: components["schemas"]["EventKind"];
+            /** Leg Id */
+            leg_id: string;
+            /** Price */
+            price?: string | null;
+            /** Reason */
+            reason?: string | null;
+        };
         /** OptionsBotLegView */
         OptionsBotLegView: {
             /** Average Fill Price */
@@ -24768,8 +24876,16 @@ export interface components {
             held_contracts: number;
             /** Leg Id */
             leg_id: string;
+            /** Momentum Level */
+            momentum_level?: string | null;
+            /** Open Pnl Usd */
+            open_pnl_usd?: string | null;
             /** Phase */
             phase: string;
+            /** Pnl Notice */
+            pnl_notice?: string | null;
+            /** Realized Pnl Usd */
+            realized_pnl_usd?: string | null;
             /** Reentries Left */
             reentries_left: number;
             /**
@@ -24777,8 +24893,14 @@ export interface components {
              * @enum {string}
              */
             side: "buy" | "sell";
+            /** Starting Price */
+            starting_price?: string | null;
             /** Stop Level */
             stop_level?: string | null;
+            /** Waiting Contract */
+            waiting_contract?: string | null;
+            /** Watched Contracts */
+            watched_contracts?: components["schemas"]["OptionsWatchedPremiumView"][];
         };
         /** OptionsBotSessionView */
         OptionsBotSessionView: {
@@ -24787,9 +24909,10 @@ export interface components {
             /** Entry Hold Reason */
             entry_hold_reason?: string | null;
             /** Events */
-            events: Record<string, never>[];
+            events: components["schemas"]["OptionsBotEventView"][];
             /** Execution Hold Reason */
             execution_hold_reason?: string | null;
+            exit_terms?: components["schemas"]["ExitTerms"] | null;
             /** Golden Setup Id */
             golden_setup_id: string;
             /** Last Minute Ms */
@@ -24798,6 +24921,7 @@ export interface components {
             legs: components["schemas"]["OptionsBotLegView"][];
             /** Next Entry Ms */
             next_entry_ms?: number | null;
+            order_terms?: components["schemas"]["SealedOptionOrderTerms-Output"] | null;
             /** Pending Decisions */
             pending_decisions: number;
             /** Resume Allowed */
@@ -25112,6 +25236,15 @@ export interface components {
             budget?: components["schemas"]["DeploymentBudgetInput"] | null;
             /** Idempotency Key */
             idempotency_key: string;
+        };
+        /** OptionsWatchedPremiumView */
+        OptionsWatchedPremiumView: {
+            /** Close Ms */
+            close_ms?: number | null;
+            /** Premium */
+            premium?: string | null;
+            /** Symbol */
+            symbol: string;
         };
         /**
          * OrderSide
@@ -25999,6 +26132,41 @@ export interface components {
             warnings: string[];
             /** Windows */
             windows: components["schemas"]["WindowReview"][];
+        };
+        /** PremiumFill */
+        PremiumFill: {
+            /** Event Key */
+            event_key: string;
+            /** Exit Reason */
+            exit_reason?: string | null;
+            /** Filled At Ms */
+            filled_at_ms: number;
+            /** Order Ref */
+            order_ref: string;
+            /** Price */
+            price: number;
+            /** Quantity */
+            quantity: number;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "buy" | "sell";
+            /**
+             * Source
+             * @default live
+             * @enum {string}
+             */
+            source?: "live" | "backtest";
+            /** Symbol */
+            symbol: string;
+        };
+        /** PremiumPoint */
+        PremiumPoint: {
+            /** Start Ms */
+            start_ms: number;
+            /** Value */
+            value: string | null;
         };
         /**
          * PriceRangeView
@@ -30657,6 +30825,32 @@ export interface components {
             kind: "stock" | "option";
             /** Label */
             label?: string | null;
+            /** Legs */
+            legs?: components["schemas"]["TradedOptionLegView"][];
+            /** Legs Notice */
+            legs_notice?: string | null;
+            /** Symbol */
+            symbol: string;
+        };
+        /**
+         * TradedOptionLegView
+         * @description A held contract and its recorded entry terms; never an unresolved selector.
+         */
+        TradedOptionLegView: {
+            contract: components["schemas"]["OptionContract"];
+            /** Leg Id */
+            leg_id: string | null;
+            /** Multiplier */
+            multiplier: number;
+            /** Quantity */
+            quantity: number;
+            /** Ratio */
+            ratio: number | null;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "long" | "short";
             /** Symbol */
             symbol: string;
         };
@@ -35048,7 +35242,7 @@ export interface operations {
     get_live_snapshot_scoped_api_brokers__broker__accounts__account_id__bots__sid__live_snapshot_get: {
         parameters: {
             query?: {
-                resolution?: "5s" | "1m";
+                resolution?: ("5s" | "1m") | null;
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;
@@ -35094,7 +35288,7 @@ export interface operations {
     stream_live_snapshot_scoped_api_brokers__broker__accounts__account_id__bots__sid__live_stream_get: {
         parameters: {
             query?: {
-                resolution?: "5s" | "1m";
+                resolution?: ("5s" | "1m") | null;
                 cursor?: string | null;
             };
             header?: {

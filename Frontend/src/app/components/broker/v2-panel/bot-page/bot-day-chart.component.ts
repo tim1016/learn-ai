@@ -47,6 +47,7 @@ export class BotDayChartComponent {
   readonly initialPane = input<ChartPane>('live');
   /** The run's lanes, drawn under the tape on its clock (#2808). */
   readonly lanes = input<LaneSource | null>(null);
+  readonly optionsBot = input(false);
 
   readonly historyTimeframeChange = output<ChartHistoryTimeframe>();
   readonly liveResolutionChange = output<ChartLiveResolution>();

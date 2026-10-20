@@ -36,6 +36,7 @@ from app.broker.fleet.delivery import lane_forward_is_authorized
 from app.broker.fleet.errors import flat_refusal_body
 from app.broker.fleet.history_batch import INTERNAL_HISTORY_BATCH_PATH
 from app.broker.fleet.option_model_inputs import INTERNAL_OPTION_MODEL_INPUTS_PATH
+from app.broker.fleet.options_overlay import INTERNAL_OPTIONS_OVERLAY_PATH
 from app.config import fleet_settings
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import now_ms_utc
@@ -48,7 +49,7 @@ _COMPATIBILITY_ROUTE_FAMILIES = RETIRED_COMPATIBILITY_ROUTE_FAMILIES
 _COMPATIBILITY_RESPONSE_CLASSES = frozenset({"2xx", "3xx", "4xx", "5xx"})
 _MAX_FLUSH_ATTEMPTS = 3
 # The fleet's own internal reads that are spelled POST and change nothing.
-_INTERNAL_POST_READS = frozenset({INTERNAL_HISTORY_BATCH_PATH, INTERNAL_OPTION_MODEL_INPUTS_PATH})
+_INTERNAL_POST_READS = frozenset({INTERNAL_HISTORY_BATCH_PATH, INTERNAL_OPTION_MODEL_INPUTS_PATH, INTERNAL_OPTIONS_OVERLAY_PATH})
 logger = logging.getLogger(__name__)
 
 

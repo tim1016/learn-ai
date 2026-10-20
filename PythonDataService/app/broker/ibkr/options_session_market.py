@@ -227,6 +227,7 @@ class IbkrOptionsSessionMarket:
         self._stock: Any = None
         self._at_ms: int | None = None
         self._underlying: Decimal | None = None
+        self._underlying_bar: MinuteBar | None = None
         self._picks: dict[str, Picked | PickRefused] = {}
         self._bars: dict[str, MinuteBar | None] = {}
 
@@ -356,6 +357,7 @@ class IbkrOptionsSessionMarket:
                 picks,
                 bars,
             )
+            self._underlying_bar = underlying_bar
             return candidate_hold
         except OptionsMarketUnavailable:
             raise
@@ -410,6 +412,10 @@ class IbkrOptionsSessionMarket:
     def underlying_close(self, close_ms: int) -> Decimal | None:
         self._require_minute(close_ms)
         return self._underlying
+
+    def underlying_bar(self, close_ms: int) -> MinuteBar | None:
+        self._require_minute(close_ms)
+        return self._underlying_bar
 
     def pick(self, leg: LegSetup, *, at_ms: int, underlying_price: Decimal) -> Picked | PickRefused:
         self._require_minute(at_ms)

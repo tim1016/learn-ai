@@ -105,6 +105,52 @@ function liveBar(startMs: number, endMs = startMs + 5_000): ChartBar {
 }
 
 describe('DualPaneChartComponent', () => {
+  it('shows watched contracts under a fixed one-minute Options tape', async () => {
+    await render(DualPaneChartComponent, {
+      inputs: { symbol: 'SPY', fixedMinute: true, liveResolution: '1m',
+        livePremiumPanes: [{ symbol: 'SPY261009C00500000',
+          contract: { root: 'SPY', expiry_ms: 1_791_576_000_000, right: 'call', strike_thousandths: 500000 },
+          multiplier: 100, leg_ids: ['call'], entry_numbers: [0], points: [], rule_lines: [], fill_markers: [],
+          notice: 'No saved premium minutes for this contract in this session.' }],
+      },
+    });
+    expect(screen.getByText('call')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '1m' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '5s' })).toBeNull();
+    expect(screen.getByText('No saved premium minutes for this contract in this session.')).toBeTruthy();
+  });
+  it('counts real premium fills while keeping modeled fills out of the live tally', async () => {
+    const start = 1_791_552_600_000;
+    const fill = { filled_at_ms: start + 1_000, side: 'buy' as const, quantity: 1, price: 2,
+      symbol: 'SPY261009C00500000', order_ref: 'entry', event_key: 'live-fill' };
+    const { container } = await render(DualPaneChartComponent, {
+      inputs: { symbol: 'SPY', fixedMinute: true, liveResolution: '1m',
+        liveBars: [liveBar(start, start + 60_000)],
+        livePremiumPanes: [{ symbol: fill.symbol,
+          contract: { root: 'SPY', expiry_ms: 1_791_576_000_000, right: 'call', strike_thousandths: 500000 },
+          multiplier: 100, leg_ids: ['call'], entry_numbers: [0], points: [], rule_lines: [],
+          fill_markers: [fill, { ...fill, filled_at_ms: start + 120_000, event_key: 'outside' },
+            { ...fill, source: 'backtest', event_key: 'modeled' }],
+        }],
+      },
+    });
+    expect(container.querySelector('.tape-readout')?.textContent).toContain('1 plotted / 2 fills');
+  });
+  it('names the comparison and identifies a contract only the backtest picked', async () => {
+    await render(DualPaneChartComponent, {
+      inputs: { symbol: 'SPY', fixedMinute: true, liveResolution: '1m',
+        liveBacktestNotice: 'Comparison not ready: the session has not finished.',
+        livePremiumPanes: [{ symbol: 'SPY261009C00500000',
+          contract: { root: 'SPY', expiry_ms: 1_791_576_000_000, right: 'call', strike_thousandths: 500000 },
+          multiplier: 100, leg_ids: ['call'], entry_numbers: [0], points: [], rule_lines: [], fill_markers: [],
+          backtest_only: true, backtest_points: [],
+        }],
+      },
+    });
+    expect(screen.getByText(/Live: solid lines · Backtest: faint markers and dashed lines/).textContent)
+      .toContain('Comparison not ready: the session has not finished.');
+    expect(screen.getByText('Backtest only')).toBeTruthy();
+  });
   beforeEach(() => {
     TestBed.configureTestingModule({
       providers: [
@@ -403,6 +449,17 @@ describe('DualPaneChartComponent', () => {
     });
     const renderTrading = (livePosition: ChartPositionPane) =>
       render(DualPaneChartComponent, { inputs: { symbol: 'SPY', liveBars: bars, histBars: [], livePosition } });
+
+    it('draws signed close-now values with contract-named fills even in a quote gap', async () => {
+      const { container } = await renderTrading(pane({
+        kind: 'value', symbol: 'SPY', heading: 'Close-now position value',
+        points: bars.map((bar, index) => ({ start_ms: bar.start_ms, value: index === 1 ? null : '-400.00' })),
+        fill_markers: [{ ...fillAt(bars[1].start_ms + 1, 'option-fill'), symbol: 'SPY261023C00585000', price: 2 }],
+      }));
+      expect(container.querySelector('.chart-position-caption')?.textContent).toContain('Close-now position value');
+      expect(container.querySelector('.tape-readout')?.textContent).toContain('1 fill');
+      expect(paneLines()).toHaveLength(3); // Two value stretches and a fill anchor across the missing minute.
+    });
 
     it('draws the traded asset under the candles, a bar with no price as a gap, and says what it is', async () => {
       const { container } = await renderTrading(pane());

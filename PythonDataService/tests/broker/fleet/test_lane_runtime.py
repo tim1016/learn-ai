@@ -225,7 +225,7 @@ async def test_every_read_slot_held_a_command_is_admitted_without_the_queue_dead
         assert _status(status) == 200
 
 
-@pytest.mark.parametrize("internal_read", ["/internal/fleet/history/batch", "/internal/fleet/option-model-inputs"])
+@pytest.mark.parametrize("internal_read", ["/internal/fleet/history/batch", "/internal/fleet/option-model-inputs", "/internal/fleet/options-overlay"])
 async def test_a_held_internal_read_takes_the_read_slot_and_leaves_the_command_slot_free(
     tmp_path: Path, internal_read: str
 ) -> None:
@@ -236,8 +236,9 @@ async def test_a_held_internal_read_takes_the_read_slot_and_leaves_the_command_s
     """
     from app.broker.fleet.history_batch import INTERNAL_HISTORY_BATCH_PATH
     from app.broker.fleet.option_model_inputs import INTERNAL_OPTION_MODEL_INPUTS_PATH
+    from app.broker.fleet.options_overlay import INTERNAL_OPTIONS_OVERLAY_PATH
 
-    assert internal_read in (INTERNAL_HISTORY_BATCH_PATH, INTERNAL_OPTION_MODEL_INPUTS_PATH)
+    assert internal_read in (INTERNAL_HISTORY_BATCH_PATH, INTERNAL_OPTION_MODEL_INPUTS_PATH, INTERNAL_OPTIONS_OVERLAY_PATH)
     entered = asyncio.Event()
     release = asyncio.Event()
 

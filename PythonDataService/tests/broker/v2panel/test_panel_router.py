@@ -241,6 +241,7 @@ class _FakeRegistry:
             strategy_key="deployment_validation",
             strategy_params=None,
             sealed_program=None,
+            options_bot=None,
             exit_terms=None,
             mode="trade",
         )
@@ -1000,7 +1001,7 @@ async def test_stalled_live_projection_producer_is_served_stale_never_live(
         # the frozen frame as an explicitly stale bootstrap, then the stall,
         # so the panel and its Pause/Stop/Flatten controls still mount.
         cold_response = await broker_v2_panel.stream_live_snapshot_scoped(
-            "alpaca", ACCT, SID, "5s", None
+            "alpaca", ACCT, SID, None, None
         )
         cold = cold_response.body_iterator
         try:

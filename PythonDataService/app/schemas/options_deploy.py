@@ -7,10 +7,12 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.json_schema import SkipJsonSchema
 
+from app.options.contract import OptionContract
+from app.options_backtest.results import EventKind
 from app.schemas.bot_end import BotEndInput, refuse_explicit_null_end
 from app.schemas.broker_bots import SUBMISSION_KEY_PATTERN
 from app.schemas.deployment_budget import DeploymentBudgetInput, DeploymentBudgetPreview
-from app.schemas.exit_terms import ExitTermsInput
+from app.schemas.exit_terms import ExitTerms, ExitTermsInput
 from app.schemas.golden_option_setups import GoldenOptionSetupView
 from app.schemas.option_order_terms import SealedOptionOrderTerms
 from app.schemas.signal_program_seal import semantic_payload_hash
@@ -63,6 +65,23 @@ class OptionsResumeRequest(BaseModel):
     budget: DeploymentBudgetInput | None = None
 
 
+class OptionsWatchedPremiumView(BaseModel):
+    symbol: str
+    premium: str | None = None
+    close_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+
+
+class OptionsBotEventView(BaseModel):
+    kind: EventKind
+    at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    leg_id: str
+    entry_number: int = Field(ge=0)
+    contract: OptionContract | None = None
+    price: str | None = None
+    reason: str | None = None
+    detail: str | None = None
+
+
 class OptionsBotLegView(BaseModel):
     leg_id: str
     side: Literal["buy", "sell"]
@@ -73,6 +92,13 @@ class OptionsBotLegView(BaseModel):
     held_contracts: int
     average_fill_price: str | None = None
     stop_level: str | None = None
+    waiting_contract: str | None = None
+    starting_price: str | None = None
+    momentum_level: str | None = None
+    watched_contracts: list[OptionsWatchedPremiumView] = Field(default_factory=list)
+    realized_pnl_usd: str | None = None
+    open_pnl_usd: str | None = None
+    pnl_notice: str | None = None
 
 
 class OptionsBotSessionView(BaseModel):
@@ -89,4 +115,6 @@ class OptionsBotSessionView(BaseModel):
     resume_allowed: bool
     resume_explanation: str
     legs: list[OptionsBotLegView]
-    events: list[dict[str, object]]
+    events: list[OptionsBotEventView]
+    order_terms: SealedOptionOrderTerms | None = None
+    exit_terms: ExitTerms | None = None

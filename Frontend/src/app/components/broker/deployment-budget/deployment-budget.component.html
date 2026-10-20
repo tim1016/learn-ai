@@ -23,8 +23,10 @@
       @if (report.funding; as funding) {
         <app-funding-answer [funding]="funding" />
       }
-      @if (report.exit_estimate; as exitEstimate) {
+      @if (shownExitEstimate(); as exitEstimate) {
         <app-exit-estimate [estimate]="exitEstimate" />
+      } @else if (exitEstimateOverride() !== undefined) {
+        <p class="deployment-budget__fine">The current close-now value is not available yet.</p>
       }
       @if (report.note) {
         <p class="deployment-budget__fine">{{ report.note }}</p>

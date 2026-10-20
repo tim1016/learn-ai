@@ -49,6 +49,13 @@ const BLOCKED: BotPanelView['mission_verdict'] = {
 };
 
 describe('BotHealthGroupsComponent (#2794)', () => {
+  it('shows one market read when listened and traded underlying are the same', async () => {
+    const pulse = fakeBotPanelView().market_pulse;
+    await render(BotHealthGroupsComponent, { inputs: {
+      health: HEALTH, marketPulse: pulse, tradedMarketPulse: pulse, listensTo: 'SPY', trades: 'SPY',
+    } });
+    expect(screen.getAllByRole('heading', { name: 'Market right now' })).toHaveLength(1);
+  });
   it('renders each backend health line with its state, value and explanation', async () => {
     await render(BotHealthGroupsComponent, {
       inputs: { health: {

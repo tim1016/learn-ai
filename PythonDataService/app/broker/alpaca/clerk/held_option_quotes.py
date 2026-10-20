@@ -1,4 +1,4 @@
-"""The quotes a Dry Run's Clerk keeps for the option contracts its bots hold, runner or no runner (ADR 0076).
+"""The IBKR quotes each Clerk keeps for the option contracts its bots hold, runner or no runner (ADR 0076).
 
 A Live Shadow's Clerk keeps them the same way, for the same reason: its
 order book fills and its account reading marks from quotes kept, and it
@@ -16,8 +16,9 @@ own is made here: no runner states a mark between its two decisions.
 
 **What is held is read from the Clerk's books**, never from a runner: a
 position in a recorded contract, or an order working in one
-(``reads.option_contracts_requiring_quotes``). Each Dry Run's Clerk and each Live
-Shadow's is followed while it is composed.
+(``reads.option_contracts_requiring_quotes``). Every Paper, Live, Dry Run and Live Shadow Clerk is followed while composed.
+Each keeps a separate first observation per contract and minute for the value
+chart (#3368), including usable one-sided evidence that leaves a chart gap.
 
 **What is held is asked for** as the supervisor's first class of quote line
 (``requests``), so a held contract keeps its line when the runner that bought
@@ -237,6 +238,7 @@ class _Account:
     held: tuple[OptionContract, ...] = ()
     # When each held contract's quote was last handed over, by OCC symbol.
     kept_at_ms: dict[str, int] = field(default_factory=dict)
+    minute_kept: dict[str, int] = field(default_factory=dict)
     # What was last put back of a held contract whose line showed one side, by OCC symbol. Gone once
     # the contract is marked again.
     put_back: dict[str, tuple[int, Decimal | None, Decimal | None]] = field(default_factory=dict)
@@ -253,6 +255,7 @@ class _Writes:
     marks: dict[str, HeldQuote] = field(default_factory=dict)
     # What a line shows with one side still to arrive: put back as of its own receipt, and no mark.
     one_sided: dict[str, HeldQuote] = field(default_factory=dict)
+    minute_quotes: dict[str, HeldQuote] = field(default_factory=dict)
 
 
 class FollowedBooks:
@@ -277,7 +280,7 @@ def _under_way(task: asyncio.Task[Any] | None) -> bool:
 
 
 class HeldOptionQuotes:
-    """Every option contract this process's Dry Run Clerks hold: asked for, and its quotes kept."""
+    """Every option contract this process's Clerks hold: asked for, and its quotes kept."""
 
     def __init__(
         self,
@@ -408,6 +411,8 @@ class HeldOptionQuotes:
         still = {contract.occ_symbol for contract in account.held}
         for symbol in [symbol for symbol in account.kept_at_ms if symbol not in still]:
             del account.kept_at_ms[symbol]
+        for symbol in [symbol for symbol in account.minute_kept if symbol not in still]:
+            del account.minute_kept[symbol]
         for symbol in [symbol for symbol in account.put_back if symbol not in still]:
             del account.put_back[symbol]
         for key in [key for key in self._not_kept if key[0] == account.account_id and key[1] not in still]:
@@ -580,6 +585,14 @@ class HeldOptionQuotes:
                 symbol = contract.occ_symbol
                 watched = None if chain is None else chain.watched.get(symbol)
                 quote = None if watched is None else watched.quote
+                fault = None if quote is None else mark_fault(
+                    quote, generation=feed.generation, session_open_ms=session_open_ms, now_ms=now_ms
+                )
+                minute = now_ms // 60_000 * 60_000
+                if quote is not None and account.minute_kept.get(symbol) != minute and (fault is None or shows_one_side(
+                    quote, generation=feed.generation, session_open_ms=session_open_ms, now_ms=now_ms,
+                )):
+                    due.setdefault(account.account_id, _Writes(account)).minute_quotes[symbol] = quote
                 if (
                     quote is not None
                     and shows_one_side(quote, generation=feed.generation, session_open_ms=session_open_ms, now_ms=now_ms)
@@ -590,9 +603,6 @@ class HeldOptionQuotes:
                 last = account.kept_at_ms.get(symbol)
                 if last is not None and now_ms - last < self._keep_every_ms:
                     continue
-                fault = None if quote is None else mark_fault(
-                    quote, generation=feed.generation, session_open_ms=session_open_ms, now_ms=now_ms
-                )
                 if quote is not None and fault is None:
                     due.setdefault(account.account_id, _Writes(account)).marks[symbol] = quote
                 else:
@@ -618,31 +628,32 @@ class HeldOptionQuotes:
 
     async def _write(self, wanted: _Writes, now_ms: int) -> int:
         """Append one account's hand-over to its file, and note when each quote was handed over. Returns
-        how many marks it stated."""
+        how many marks it stated. The chart's minute observations are kept after, and as their own fault
+        (#3368): a minute file that cannot be written must not stop the marks that price a close."""
         account, marks, one_sided = wanted.account, wanted.marks, wanted.one_sided
-        key = ("write", account.account_id)
 
-        def write() -> None:
+        def write_marks() -> None:
             if marks:
                 account.kept.keep_all(marks, kept_at_ms=now_ms)
             for symbol, quote in one_sided.items():
                 # As of its own receipt, never as of now: it says what the line shows, and is no mark.
                 account.kept.restore(symbol, quote, now_ms=now_ms)
 
-        try:
-            await to_thread(write)
-        except Exception as failed:
-            # Tried again on the next round. A mark that lapses meanwhile says so itself.
-            self._faults.failed(
-                key, "Could not keep the quotes of held option contracts; tried again on the next round",
-                kind=type(failed).__name__, error=failed,
-                extra={"action": "held_option_quotes_not_written", "account_id": account.account_id},
-            )
-            return 0
-        self._faults.cleared(
-            key, "The quotes of held option contracts are being kept again",
-            extra={"action": "held_option_quotes_written_again", "account_id": account.account_id},
+        def write_minutes() -> None:
+            account.kept.keep_minutes(wanted.minute_quotes, observed_at_ms=now_ms)
+
+        marks_kept = not (marks or one_sided) or await self._attempt(
+            account, write_marks, step="write", what="the quotes", action="held_option_quotes",
         )
+        if wanted.minute_quotes and await self._attempt(
+            account, write_minutes, step="write_minutes", what="the first quote of each minute",
+            action="held_option_quote_minutes",
+        ):
+            minute = now_ms // 60_000 * 60_000
+            for symbol in wanted.minute_quotes:
+                account.minute_kept[symbol] = max(minute, account.minute_kept.get(symbol, minute))
+        if not marks_kept:
+            return 0
         for symbol, quote in one_sided.items():
             account.put_back[symbol] = _sides_shown(quote)
         for symbol in marks:
@@ -656,6 +667,27 @@ class HeldOptionQuotes:
                     extra={"action": "held_option_quote_kept", "account_id": account.account_id, "contract": symbol},
                 )
         return len(marks)
+
+    async def _attempt(
+        self, account: _Account, write: Callable[[], None], *, step: str, what: str, action: str,
+    ) -> bool:
+        """Run one of an account's writes off the loop. A failure is its own logged fault, tried again on the
+        next round; a mark that lapses meanwhile says so itself."""
+        key = (step, account.account_id)
+        try:
+            await to_thread(write)
+        except Exception as failed:
+            self._faults.failed(
+                key, f"Could not keep {what} of held option contracts; tried again on the next round",
+                kind=type(failed).__name__, error=failed,
+                extra={"action": f"{action}_not_written", "account_id": account.account_id},
+            )
+            return False
+        self._faults.cleared(
+            key, f"{what.capitalize()} of held option contracts are being kept again",
+            extra={"action": f"{action}_written_again", "account_id": account.account_id},
+        )
+        return True
 
     def _say_feed_trouble(self, trouble: str | None) -> None:
         """Said once for the feed, not once for each contract, and once more when it is over."""
@@ -694,7 +726,7 @@ _held = HeldOptionQuotes()
 
 
 def get_held_option_quotes() -> HeldOptionQuotes:
-    """What this process's Dry Run Clerks hold in option contracts. The process's IBKR supervisor reads it."""
+    """What this process's Clerks hold in option contracts. The process's IBKR supervisor reads it."""
     return _held
 
 

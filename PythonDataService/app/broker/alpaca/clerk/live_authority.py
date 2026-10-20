@@ -33,6 +33,8 @@ from app.broker.alpaca.clerk.active_runtime import (
     developer_reset_refusal,
     unavailable_runtime,
 )
+from app.broker.alpaca.clerk.held_option_quotes import get_held_option_quotes
+from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes
 from app.broker.alpaca.clerk.live_arming_ledger import LiveArmingLedger
 from app.broker.alpaca.clerk.live_envelope import (
     LIVE_ENVELOPE_MISSING,
@@ -195,6 +197,11 @@ async def select_live_clerk_runtime(
         _sqlite_repository=composed.repository,
         account_id=account.account_id,
         account_authority_kind="real_live",
+        option_books=get_held_option_quotes().follow(
+            account.account_id,
+            books=composed.repository.option_contracts_requiring_quotes,
+            kept=KeptOptionQuotes.of_account(artifacts_root=artifacts_root, account_id=account.account_id),
+        ),
     )
 
 

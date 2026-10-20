@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -36,6 +37,23 @@ def _quote(bid: str | None, ask: str | None, *, bid_at: int = 1_000, ask_at: int
 
 def _store(tmp_path: Path) -> KeptOptionQuotes:
     return KeptOptionQuotes.of_account(artifacts_root=tmp_path, account_id="sim:buys-a-call")
+
+
+def test_minute_observations_survive_compaction_and_never_price_an_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(kept_option_quotes, "COMPACT_ABOVE_ROWS", 2)
+    store = _store(tmp_path)
+    for minute in range(5):
+        at = 1_000 + minute * 60_000
+        first = _quote("2", "2.10", bid_at=at, ask_at=at)
+        store.keep_minutes({SYMBOL: first}, observed_at_ms=at)
+        store.keep_minutes({SYMBOL: _quote("9", "10", bid_at=at + 1, ask_at=at + 1)}, observed_at_ms=at + 1)
+        store.keep(SYMBOL, _quote("3", "3.10", bid_at=at + 2, ask_at=at + 2), kept_at_ms=at + 2)
+    rows = store.minutes(from_ms=0, to_ms=400_000)
+    assert len(rows) == 5 and all(row.quote.bid == Decimal(2) for row in rows)
+    assert [row.minute_ms for row in rows] == [0, 60_000, 120_000, 180_000, 240_000]
+    assert store.newest(SYMBOL).quote.bid == Decimal(3)
+    reopened = _store(tmp_path)
+    assert reopened.minutes(from_ms=0, to_ms=400_000) == rows
 
 
 def test_the_newest_kept_is_the_one_received_last_not_the_one_written_last(tmp_path: Path) -> None:
@@ -587,3 +605,36 @@ def test_a_whole_line_that_is_not_a_kept_quote_makes_the_quotes_unavailable_by_n
         assert isinstance(unavailable.value, BrokerUnavailable)
     assert _rows(tmp_path) == 2, "nothing was written over a file that could not be read"
 
+
+
+def test_indexed_minutes_preserve_legacy_history_and_do_not_expand_the_pricing_file(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.path.parent.mkdir(parents=True, exist_ok=True)
+    legacy = KeptOptionQuote(seq=1, symbol=SYMBOL, quote=RecordedQuote.of(_quote("1.90", "1.94")), kept_at_ms=1_000, minute_ms=0)
+    original = (legacy.model_dump_json() + "\n").encode()
+    store.path.write_bytes(original)
+    later = 365 * 86_400_000 + 1_000
+    store.keep_minutes({SYMBOL: _quote("8", "9")}, observed_at_ms=2_000)
+    store.keep_minutes({SYMBOL: _quote("2", "2.1", bid_at=later, ask_at=later)}, observed_at_ms=later)
+    assert store.path.read_bytes() == original
+    reopened = _store(tmp_path)
+    assert reopened.minutes(from_ms=0, to_ms=60_000) == [legacy]
+    current, = reopened.minutes(from_ms=later - 1_000, to_ms=later + 1)
+    assert current.quote.bid == Decimal(2)
+    assert current.ref != legacy.ref
+    assert reopened.newest(SYMBOL) is None, "historical minute quotes must never price an order"
+
+
+def test_a_minute_read_decodes_only_its_indexed_window_and_leaves_pricing_available(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.keep(SYMBOL, _quote("1.90", "1.94"), kept_at_ms=1_000)
+    store.keep_minutes({SYMBOL: _quote("1.90", "1.94")}, observed_at_ms=1_000)
+    later = 365 * 86_400_000 + 1_000
+    store.keep_minutes({SYMBOL: _quote("2", "2.1", bid_at=later, ask_at=later)}, observed_at_ms=later)
+    with sqlite3.connect(store.path.with_suffix(".minutes.sqlite3")) as connection:
+        connection.execute("UPDATE minute_quotes SET quote_json = ? WHERE minute_ms = 0", ("an unreadable old row",))
+    current, = _store(tmp_path).minutes(from_ms=later - 1_000, to_ms=later + 1)
+    assert current.quote.bid == Decimal(2)
+    with pytest.raises(KeptOptionQuotesUnavailable, match="minutes could not be read"):
+        store.minutes(from_ms=0, to_ms=60_000)
+    assert store.newest(SYMBOL).quote.bid == Decimal("1.90")

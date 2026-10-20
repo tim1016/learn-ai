@@ -145,6 +145,8 @@ export type ChartFeedView = components['schemas']['ChartFeedView'];
 export type ChartHistoryResponse = components['schemas']['ChartHistoryResponse'];
 /** The pane under a bot's chart for what it trades, when that is not what it listens to (#2915). */
 export type ChartPositionPane = components['schemas']['ChartPositionPane'];
+export type ChartPremiumPane = components['schemas']['ChartPremiumPane'];
+export type ChartRuleLine = components['schemas']['ChartRuleLine'];
 /** The traded asset's lane under a bot's chart: the entries its price feed refused (#2915). */
 export type TradedFeedLaneView = components['schemas']['TradedFeedLaneView'];
 

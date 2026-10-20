@@ -49,7 +49,7 @@
   }
   @if (marketPulse(); as pulse) {
     <h4 class="health__group">
-      Market right now@if (tradedMarketPulse() && listensTo(); as symbol) { · listens to {{ symbol }} }
+      Market right now@if (distinctTradedMarketPulse() && listensTo(); as symbol) { · listens to {{ symbol }} }
     </h4>
     <p class="health__market" [class.health__market--attention]="pulse.attention_required">
       <strong>{{ pulse.headline }}</strong>
@@ -59,7 +59,7 @@
       }
     </p>
   }
-  @if (tradedMarketPulse(); as pulse) {
+  @if (distinctTradedMarketPulse(); as pulse) {
     <h4 class="health__group">Market right now@if (trades(); as symbol) { · trades {{ symbol }} }</h4>
     <p class="health__market" [class.health__market--attention]="pulse.attention_required">
       <strong>{{ pulse.headline }}</strong>

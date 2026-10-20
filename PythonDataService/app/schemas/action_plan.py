@@ -41,7 +41,7 @@ from pydantic import (
     model_validator,
 )
 
-from app.options.contract import MAX_STRIKE_THOUSANDTHS, require_symbol_expiry, strike_thousandths
+from app.options.contract import MAX_STRIKE_THOUSANDTHS, OptionContract, require_symbol_expiry, strike_thousandths
 from app.options.expiry import OptionExpiryMs
 from app.options.named_structures import LegKind, NamedStructure, is_made_as_named, made_of_in_words
 from app.options.structure import MAX_OPTION_LEGS
@@ -477,6 +477,20 @@ def traded_market_symbol(action_plan: BotActionPlan, signal_symbol: str) -> str 
     return None if traded == signal_symbol.upper() else traded
 
 
+class TradedOptionLegView(BaseModel):
+    """A held contract and its recorded entry terms; never an unresolved selector."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    leg_id: str | None
+    contract: OptionContract
+    symbol: str
+    side: Literal["long", "short"]
+    ratio: int | None = Field(ge=1)
+    multiplier: int = Field(ge=1)
+    quantity: int = Field(ge=1)
+
+
 class TradedInstrumentView(BaseModel):
     """What a bot trades, when that is not shares of the symbol it listens to (#2912).
 
@@ -497,6 +511,8 @@ class TradedInstrumentView(BaseModel):
     # (#2913). Absent for a stock, whose row is written as it was before these existed.
     label: str | None = None
     in_a_sentence: str | None = None
+    legs: list[TradedOptionLegView] = Field(default_factory=list)
+    legs_notice: str | None = None
 
     # No return annotation: the view's published schema stays this model's own fields.
     @model_serializer(mode="wrap")
@@ -505,6 +521,9 @@ class TradedInstrumentView(BaseModel):
         for name in ("label", "in_a_sentence"):
             if view.get(name) is None:
                 view.pop(name, None)
+        if self.kind == "stock" or not {"legs", "legs_notice"}.intersection(self.model_fields_set):
+            view.pop("legs", None)
+            view.pop("legs_notice", None)
         return view
 
     @classmethod

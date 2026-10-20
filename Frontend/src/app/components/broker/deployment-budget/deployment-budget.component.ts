@@ -5,7 +5,7 @@ import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-d
 import { ExitEstimateComponent } from '../exit-estimate/exit-estimate.component';
 import { FundingAnswerComponent } from '../funding-answer/funding-answer.component';
 import { MoneyBarComponent } from '../money-bar/money-bar.component';
-import { BrokerV2PanelService } from '../v2-panel/lib/broker-v2-panel.service';
+import { BrokerV2PanelService, type DeploymentBudgetView } from '../v2-panel/lib/broker-v2-panel.service';
 import type { BotPanelView } from '../v2-panel/lib/broker-v2-panel.types';
 
 /** The panel's open gain or loss on shares: Python's dollars and the way they
@@ -43,6 +43,8 @@ export class DeploymentBudgetComponent {
   /** The bot's open gain or loss on shares, as Python wrote it — pass the
    * panel itself. Its dollars are `null` when there is no current price. */
   readonly openPnl = input<BotOpenPnl | null>(null);
+  /** Signal option values and their current estimate come from one live-chart evidence cut. */
+  readonly exitEstimateOverride = input<DeploymentBudgetView['exit_estimate']>(undefined);
 
   protected readonly headingId = `deployment-budget-heading-${nextHeadingId++}`;
   private readonly service = inject(BrokerV2PanelService);
@@ -52,4 +54,6 @@ export class DeploymentBudgetComponent {
   });
   protected readonly view = computed(() => this.budget.hasValue() ? this.budget.value() : null);
   protected readonly statement = computed(() => this.view()?.statement ?? []);
+  protected readonly shownExitEstimate = computed(() => this.exitEstimateOverride() === undefined
+    ? this.view()?.exit_estimate ?? null : this.exitEstimateOverride());
 }

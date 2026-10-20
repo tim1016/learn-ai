@@ -4,6 +4,8 @@
   min-width: 0;
 }
 
+.backtest-legend { margin: 0; padding: .35rem .6rem; color: var(--text-muted); font-size: .75rem; }
+
 .market-tape {
   --source-accent: var(--info);
   display: flex;
@@ -317,6 +319,14 @@
   font-size: var(--fs-xs);
 }
 
+.chart-viewport {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
 .chart-stage {
   position: relative;
   min-height: 0;
@@ -355,6 +365,16 @@
 .chart-indicator-legend__title { color: var(--text-muted); letter-spacing: 0.06em; text-transform: uppercase; }
 
 /* Over the lowest pane, which is the position pane's. */
+.premium-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font: 600 var(--fs-xxs)/1.2 var(--font-mono);
+  &--placed { position: absolute; z-index: 1; left: var(--space-2); }
+}
+
 .chart-position-caption {
   position: absolute;
   z-index: 1;

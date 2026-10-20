@@ -35,6 +35,13 @@ function lane(lanes: readonly ChartLane[], key: LaneKey): ChartLane {
 }
 
 describe('chartLanes (#2794)', () => {
+  it('names option fills by contract in the Orders lane', () => {
+    const marks = lane(chartLanes(fakeStrategyView(), context({ optionUnderlying: 'BRK.B', fills: [{
+      filled_at_ms: barCloseMs(3), side: 'sell', quantity: 2, price: 1.5,
+      symbol: 'BRKB261023P00585000', order_ref: 'exit', event_key: 'put-fill',
+    }] })), 'orders').marks;
+    expect(marks[0].label).toContain("Sold 2 BRK.B Oct 23 '26 585 Put @ 1.5");
+  });
   it('draws four lanes in order: decisions, orders, market data, the bot', () => {
     expect(chartLanes(fakeStrategyView(), context()).map(({ title }) => title))
       .toEqual(['Decisions', 'Orders', 'Market data', 'Bot']);

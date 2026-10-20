@@ -8227,6 +8227,17 @@
             "title": "As Of Ms",
             "type": "integer"
           },
+          "backtest_notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backtest Notice"
+          },
           "bars": {
             "items": {
               "$ref": "#/components/schemas/ChartBar"
@@ -8276,6 +8287,31 @@
                 "type": "null"
               }
             ]
+          },
+          "premium_notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Premium Notice"
+          },
+          "premium_panes": {
+            "items": {
+              "$ref": "#/components/schemas/ChartPremiumPane"
+            },
+            "title": "Premium Panes",
+            "type": "array"
+          },
+          "rule_lines": {
+            "items": {
+              "$ref": "#/components/schemas/ChartRuleLine"
+            },
+            "title": "Rule Lines",
+            "type": "array"
           },
           "strategy_instance_id": {
             "title": "Strategy Instance Id",
@@ -8617,6 +8653,17 @@
             "title": "As Of Ms",
             "type": "integer"
           },
+          "backtest_notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backtest Notice"
+          },
           "bars": {
             "items": {
               "$ref": "#/components/schemas/ChartBar"
@@ -8651,6 +8698,24 @@
               }
             ]
           },
+          "premium_notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Premium Notice"
+          },
+          "premium_panes": {
+            "items": {
+              "$ref": "#/components/schemas/ChartPremiumPane"
+            },
+            "title": "Premium Panes",
+            "type": "array"
+          },
           "resolution": {
             "enum": [
               "5s",
@@ -8658,6 +8723,13 @@
             ],
             "title": "Resolution",
             "type": "string"
+          },
+          "rule_lines": {
+            "items": {
+              "$ref": "#/components/schemas/ChartRuleLine"
+            },
+            "title": "Rule Lines",
+            "type": "array"
           },
           "strategy_instance_id": {
             "title": "Strategy Instance Id",
@@ -8703,8 +8775,12 @@
             "type": "string"
           },
           "source": {
-            "const": "polygon",
-            "title": "Source"
+            "enum": [
+              "polygon",
+              "ibkr"
+            ],
+            "title": "Source",
+            "type": "string"
           }
         },
         "required": [
@@ -8716,8 +8792,18 @@
         "type": "object"
       },
       "ChartPositionPane": {
-        "description": "The pane under a bot's chart for what it trades, when that is not what it listens to (#2915).\n\n``points`` has one entry per bar of the chart it comes with, in the same\norder, so the pane shares the chart's time axis exactly. ``kind`` says\nwhat a value is: ``price`` is the traded stock's or ETF's own bar close.\n``fill_markers`` are the bot's fills in the traded asset, which the\nchart of the symbol it listens to leaves off. ``heading`` says what the\npane is and leaves the asset to ``symbol``.",
+        "description": "The pane under a bot's chart for what it trades, when that is not what it listens to (#2915).\n\nPrice points follow the underlying bars. Value points follow retained quote\nminutes and can extend into the forming minute before an underlying candle\ncloses. ``price`` is the traded stock's or ETF's own bar close; ``value``\nis the option structure's net close-now cost, positive paid and negative received.\n``fill_markers`` are the bot's fills in the traded asset, which the\nchart of the symbol it listens to leaves off. ``heading`` says what the\npane is and leaves the asset to ``symbol``.",
         "properties": {
+          "exit_estimate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExitEstimateView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "feed": {
             "anyOf": [
               {
@@ -8740,8 +8826,12 @@
             "type": "string"
           },
           "kind": {
-            "const": "price",
-            "title": "Kind"
+            "enum": [
+              "price",
+              "value"
+            ],
+            "title": "Kind",
+            "type": "string"
           },
           "overlay_notices": {
             "items": {
@@ -8798,6 +8888,91 @@
           "value"
         ],
         "title": "ChartPositionPoint",
+        "type": "object"
+      },
+      "ChartPremiumPane": {
+        "properties": {
+          "backtest_only": {
+            "default": false,
+            "title": "Backtest Only",
+            "type": "boolean"
+          },
+          "backtest_points": {
+            "items": {
+              "$ref": "#/components/schemas/PremiumPoint"
+            },
+            "title": "Backtest Points",
+            "type": "array"
+          },
+          "contract": {
+            "$ref": "#/components/schemas/OptionContract"
+          },
+          "entry_numbers": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Entry Numbers",
+            "type": "array"
+          },
+          "fill_markers": {
+            "items": {
+              "$ref": "#/components/schemas/PremiumFill"
+            },
+            "title": "Fill Markers",
+            "type": "array"
+          },
+          "leg_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Leg Ids",
+            "type": "array"
+          },
+          "multiplier": {
+            "title": "Multiplier",
+            "type": "integer"
+          },
+          "notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notice"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/PremiumPoint"
+            },
+            "title": "Points",
+            "type": "array"
+          },
+          "rule_lines": {
+            "items": {
+              "$ref": "#/components/schemas/ChartRuleLine"
+            },
+            "title": "Rule Lines",
+            "type": "array"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "contract",
+          "symbol",
+          "multiplier",
+          "leg_ids",
+          "entry_numbers",
+          "points",
+          "rule_lines",
+          "fill_markers"
+        ],
+        "title": "ChartPremiumPane",
         "type": "object"
       },
       "ChartQualityReport": {
@@ -8946,6 +9121,69 @@
           "presets"
         ],
         "title": "ChartRangePresetsResponse",
+        "type": "object"
+      },
+      "ChartRuleLine": {
+        "properties": {
+          "entry_number": {
+            "minimum": 0.0,
+            "title": "Entry Number",
+            "type": "integer"
+          },
+          "from_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "From Ms",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "starting_price",
+              "momentum",
+              "stop"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "leg_id": {
+            "title": "Leg Id",
+            "type": "string"
+          },
+          "price": {
+            "title": "Price",
+            "type": "string"
+          },
+          "source": {
+            "default": "live",
+            "enum": [
+              "live",
+              "backtest"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "to_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Ms"
+          }
+        },
+        "required": [
+          "kind",
+          "price",
+          "from_ms",
+          "leg_id",
+          "entry_number"
+        ],
+        "title": "ChartRuleLine",
         "type": "object"
       },
       "ChronologicalSplitPolicySpec": {
@@ -15538,6 +15776,35 @@
         ],
         "title": "ErrorDetailResponse",
         "type": "object"
+      },
+      "EventKind": {
+        "enum": [
+          "picked",
+          "pick_refused",
+          "starting_price_taken",
+          "no_starting_price",
+          "momentum_hit",
+          "entry_filled",
+          "entry_dropped",
+          "entry_refused_for_cash",
+          "entry_refused_for_cover",
+          "entry_refused_for_second_expiry",
+          "entry_refused_for_other_side",
+          "sale_not_taken_at_zero",
+          "stop_hit",
+          "squared_off",
+          "closed_with_its_protection",
+          "exit_time",
+          "close_filled",
+          "re_entry_earned",
+          "re_entry_blocked_by_cutoff",
+          "re_entry_lost",
+          "leg_cancelled",
+          "marked_not_sold",
+          "marked_not_bought_back"
+        ],
+        "title": "EventKind",
+        "type": "string"
       },
       "EvidenceApplicability": {
         "additionalProperties": false,
@@ -38016,6 +38283,45 @@
         "title": "OptionBuyingPowerReasonCount",
         "type": "object"
       },
+      "OptionContract": {
+        "additionalProperties": false,
+        "description": "One listed option contract: what an order names and a position holds.",
+        "properties": {
+          "expiry_ms": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 253402300799999.0,
+            "title": "Expiry Ms",
+            "type": "integer"
+          },
+          "right": {
+            "enum": [
+              "call",
+              "put"
+            ],
+            "title": "Right",
+            "type": "string"
+          },
+          "root": {
+            "pattern": "^[A-Z]{1,6}$",
+            "title": "Root",
+            "type": "string"
+          },
+          "strike_thousandths": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 99999999.0,
+            "title": "Strike Thousandths",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "root",
+          "expiry_ms",
+          "right",
+          "strike_thousandths"
+        ],
+        "title": "OptionContract",
+        "type": "object"
+      },
       "OptionContractView": {
         "additionalProperties": false,
         "properties": {
@@ -44652,6 +44958,79 @@
         "title": "OptionsBotConfiguration",
         "type": "object"
       },
+      "OptionsBotEventView": {
+        "properties": {
+          "at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "At Ms",
+            "type": "integer"
+          },
+          "contract": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionContract"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "entry_number": {
+            "minimum": 0.0,
+            "title": "Entry Number",
+            "type": "integer"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/EventKind"
+          },
+          "leg_id": {
+            "title": "Leg Id",
+            "type": "string"
+          },
+          "price": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "kind",
+          "at_ms",
+          "leg_id",
+          "entry_number"
+        ],
+        "title": "OptionsBotEventView",
+        "type": "object"
+      },
       "OptionsBotLegView": {
         "properties": {
           "average_fill_price": {
@@ -44688,9 +45067,53 @@
             "title": "Leg Id",
             "type": "string"
           },
+          "momentum_level": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Momentum Level"
+          },
+          "open_pnl_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Open Pnl Usd"
+          },
           "phase": {
             "title": "Phase",
             "type": "string"
+          },
+          "pnl_notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pnl Notice"
+          },
+          "realized_pnl_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Realized Pnl Usd"
           },
           "reentries_left": {
             "title": "Reentries Left",
@@ -44704,6 +45127,17 @@
             "title": "Side",
             "type": "string"
           },
+          "starting_price": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Starting Price"
+          },
           "stop_level": {
             "anyOf": [
               {
@@ -44714,6 +45148,24 @@
               }
             ],
             "title": "Stop Level"
+          },
+          "waiting_contract": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Waiting Contract"
+          },
+          "watched_contracts": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsWatchedPremiumView"
+            },
+            "title": "Watched Contracts",
+            "type": "array"
           }
         },
         "required": [
@@ -44746,7 +45198,7 @@
           },
           "events": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/OptionsBotEventView"
             },
             "title": "Events",
             "type": "array"
@@ -44761,6 +45213,16 @@
               }
             ],
             "title": "Execution Hold Reason"
+          },
+          "exit_terms": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExitTerms"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "golden_setup_id": {
             "title": "Golden Setup Id",
@@ -44798,6 +45260,16 @@
               }
             ],
             "title": "Next Entry Ms"
+          },
+          "order_terms": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SealedOptionOrderTerms-Output"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "pending_decisions": {
             "title": "Pending Decisions",
@@ -45508,6 +45980,43 @@
           "idempotency_key"
         ],
         "title": "OptionsResumeRequest",
+        "type": "object"
+      },
+      "OptionsWatchedPremiumView": {
+        "properties": {
+          "close_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Close Ms"
+          },
+          "premium": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Premium"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol"
+        ],
+        "title": "OptionsWatchedPremiumView",
         "type": "object"
       },
       "OrderSide": {
@@ -47717,6 +48226,102 @@
           "windows"
         ],
         "title": "Preflight",
+        "type": "object"
+      },
+      "PremiumFill": {
+        "properties": {
+          "event_key": {
+            "title": "Event Key",
+            "type": "string"
+          },
+          "exit_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Reason"
+          },
+          "filled_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Filled At Ms",
+            "type": "integer"
+          },
+          "order_ref": {
+            "title": "Order Ref",
+            "type": "string"
+          },
+          "price": {
+            "title": "Price",
+            "type": "number"
+          },
+          "quantity": {
+            "title": "Quantity",
+            "type": "number"
+          },
+          "side": {
+            "enum": [
+              "buy",
+              "sell"
+            ],
+            "title": "Side",
+            "type": "string"
+          },
+          "source": {
+            "default": "live",
+            "enum": [
+              "live",
+              "backtest"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "filled_at_ms",
+          "side",
+          "quantity",
+          "price",
+          "symbol",
+          "order_ref",
+          "event_key"
+        ],
+        "title": "PremiumFill",
+        "type": "object"
+      },
+      "PremiumPoint": {
+        "properties": {
+          "start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Start Ms",
+            "type": "integer"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "start_ms",
+          "value"
+        ],
+        "title": "PremiumPoint",
         "type": "object"
       },
       "PriceRangeView": {
@@ -59745,6 +60350,24 @@
             ],
             "title": "Label"
           },
+          "legs": {
+            "items": {
+              "$ref": "#/components/schemas/TradedOptionLegView"
+            },
+            "title": "Legs",
+            "type": "array"
+          },
+          "legs_notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Legs Notice"
+          },
           "symbol": {
             "title": "Symbol",
             "type": "string"
@@ -59755,6 +60378,71 @@
           "symbol"
         ],
         "title": "TradedInstrumentView",
+        "type": "object"
+      },
+      "TradedOptionLegView": {
+        "additionalProperties": false,
+        "description": "A held contract and its recorded entry terms; never an unresolved selector.",
+        "properties": {
+          "contract": {
+            "$ref": "#/components/schemas/OptionContract"
+          },
+          "leg_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leg Id"
+          },
+          "multiplier": {
+            "minimum": 1.0,
+            "title": "Multiplier",
+            "type": "integer"
+          },
+          "quantity": {
+            "minimum": 1.0,
+            "title": "Quantity",
+            "type": "integer"
+          },
+          "ratio": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ratio"
+          },
+          "side": {
+            "enum": [
+              "long",
+              "short"
+            ],
+            "title": "Side",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "leg_id",
+          "contract",
+          "symbol",
+          "side",
+          "ratio",
+          "multiplier",
+          "quantity"
+        ],
+        "title": "TradedOptionLegView",
         "type": "object"
       },
       "TradesAnotherStock": {
@@ -69060,13 +69748,19 @@
             "name": "resolution",
             "required": false,
             "schema": {
-              "default": "5s",
-              "enum": [
-                "5s",
-                "1m"
+              "anyOf": [
+                {
+                  "enum": [
+                    "5s",
+                    "1m"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ],
-              "title": "Resolution",
-              "type": "string"
+              "title": "Resolution"
             }
           },
           {
@@ -69160,13 +69854,19 @@
             "name": "resolution",
             "required": false,
             "schema": {
-              "default": "5s",
-              "enum": [
-                "5s",
-                "1m"
+              "anyOf": [
+                {
+                  "enum": [
+                    "5s",
+                    "1m"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ],
-              "title": "Resolution",
-              "type": "string"
+              "title": "Resolution"
             }
           },
           {

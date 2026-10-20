@@ -1,5 +1,7 @@
 import { formatReceiptLabel } from '../../../../shared/pipes/receipt-label.pipe';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
+import { optionContractFromSymbol } from '../../../../shared/option-contract/option-contract-symbol';
+import { optionContractName } from '../../../../shared/option-contract/option-contract.component';
 import type {
   BotPanelView,
   ChartFillMarker,
@@ -28,6 +30,7 @@ export interface StrategyRunContext {
   /** The owner's end while it is still ahead. */
   readonly scheduledEndAtMs: number | null;
   readonly fills: readonly ChartFillMarker[];
+  readonly optionUnderlying?: string;
   readonly workingOrders: readonly WorkingOrder[];
   /** Market-data continuity, including the partial first minute a mid-minute join omits. */
   readonly feedEvents: readonly FeedEvent[];
@@ -100,14 +103,18 @@ function decisionLane(view: StrategyViewResponse, clock: LaneClock): ChartLane {
 }
 
 function orderLane(context: StrategyRunContext, clock: LaneClock): ChartLane {
-  const fills = context.fills.map((fill): LaneMark => ({
+  const fills = context.fills.map((fill): LaneMark => {
+    const contract = fill.symbol ? optionContractFromSymbol(fill.symbol, context.optionUnderlying) : null;
+    return {
     key: `fill:${fill.event_key}`,
     atMs: fill.filled_at_ms,
     endMs: null,
     glyph: fill.side === 'buy' ? 'up' : 'down',
     tone: fill.side === 'buy' ? 'bull' : 'bear',
-    label: `${minuteOf(fill.filled_at_ms, clock)} · ${fill.side === 'buy' ? 'Bought' : 'Sold'} ${fill.quantity} @ ${fill.price}`,
-  }));
+    label: `${minuteOf(fill.filled_at_ms, clock)} · ${fill.side === 'buy' ? 'Bought' : 'Sold'} ${fill.quantity}`
+      + `${contract ? ` ${optionContractName(contract)}` : ''} @ ${fill.price}`,
+    };
+  });
   const working = context.workingOrders.map((order): LaneMark => ({
     key: `order:${order.order_ref}`,
     atMs: order.observed_at_ms,

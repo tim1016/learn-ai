@@ -39,6 +39,8 @@ import type {
   ChartLiveResolution,
   ChartOverlayNoticeView,
   ChartPositionPane,
+  ChartPremiumPane,
+  ChartRuleLine,
   ChartSource,
 } from '../lib/broker-v2-panel.types';
 import { toCandle } from '../lib/chart-bar-mapping';
@@ -61,7 +63,10 @@ import { ChartLanesComponent } from '../strategy-view/chart-lanes.component';
 import type { LogicalCoordinateScale } from '../strategy-view/strategy-chart-overlay';
 import { BotChartIndicatorService } from './bot-chart-indicator.service';
 import { chartIndicatorCatalog } from './chart-indicator-catalog';
-import { positionRuns, type PositionRun } from './dual-pane-chart-position';
+import { positionClock, positionRuns, type PositionRun } from './dual-pane-chart-position';
+import { premiumPanePlans, ruleLinePlans } from './premium-pane-plan';
+import { OptionContractComponent, optionContractName } from '../../../../shared/option-contract/option-contract.component';
+import { optionContractFromSymbol } from '../../../../shared/option-contract/option-contract-symbol';
 import {
   type SelectedChartIndicator,
   indicatorFailureMessage,
@@ -112,9 +117,9 @@ function sameBar(left: ChartBar, right: ChartBar): boolean {
 }
 
 /** Return the exact candle whose half-open interval contains the fill. */
-function markerTime(
+function markerTime<Bar extends Pick<ChartBar, 'start_ms' | 'end_ms'>>(
   marker: ChartFillMarker,
-  bars: readonly ChartBar[],
+  bars: readonly Bar[],
 ): UTCTimestamp | null {
   for (const bar of bars) {
     if (bar.start_ms > marker.filled_at_ms) break;
@@ -133,6 +138,12 @@ interface FillMarkerGroup {
 
 function markerText(group: FillMarkerGroup): string {
   const side = group.side.toUpperCase();
+  if (group.fills.some(fill => fill.symbol && optionContractFromSymbol(fill.symbol))) {
+    return group.fills.map(fill => {
+      const contract = fill.symbol ? optionContractFromSymbol(fill.symbol) : null;
+      return `${side} ${fill.quantity} ${contract ? optionContractName(contract) : fill.symbol ?? ''} @ ${fill.price}`;
+    }).join(' · ');
+  }
   if (group.fills.length !== 1) return `${side} · ${group.fills.length} fills`;
   const [fill] = group.fills;
   return `${side} ${fill.quantity} @ ${fill.price}`;
@@ -145,9 +156,9 @@ function markerText(group: FillMarkerGroup): string {
  * under-reported it — two grouped fills plus one off-window fill rendered as
  * "1 plotted / 3 fills".
  */
-export function countPlottedFills(
+export function countPlottedFills<Bar extends Pick<ChartBar, 'start_ms' | 'end_ms'>>(
   markers: readonly ChartFillMarker[],
-  bars: readonly ChartBar[],
+  bars: readonly Bar[],
 ): number {
   let plotted = 0;
   for (const marker of markers) {
@@ -156,9 +167,9 @@ export function countPlottedFills(
   return plotted;
 }
 
-export function toSeriesMarkers(
+export function toSeriesMarkers<Bar extends Pick<ChartBar, 'start_ms' | 'end_ms'>>(
   markers: readonly ChartFillMarker[],
-  bars: readonly ChartBar[],
+  bars: readonly Bar[],
 ): SeriesMarker<UTCTimestamp>[] {
   const groups = new Map<string, FillMarkerGroup>();
   for (const marker of markers) {
@@ -273,6 +284,7 @@ function barCoordinateScale(timeScale: ITimeScaleApi<Time>, bars: readonly Chart
     AssetIdentityComponent,
     ChartIndicatorRailComponent,
     ChartLanesComponent,
+    OptionContractComponent,
     PanelInstrumentQuoteComponent,
     ReceiptLabelPipe,
     TimestampDisplayComponent,
@@ -313,6 +325,26 @@ export class DualPaneChartComponent implements AfterViewInit {
    * listens to (#2915): a pane under the indicators, sharing the time axis. */
   readonly livePosition = input<ChartPositionPane | null>(null);
   readonly histPosition = input<ChartPositionPane | null>(null);
+  readonly livePremiumPanes = input<readonly ChartPremiumPane[]>([]);
+  readonly histPremiumPanes = input<readonly ChartPremiumPane[]>([]);
+  readonly livePremiumNotice = input<string | null>(null);
+  readonly histPremiumNotice = input<string | null>(null);
+  readonly liveBacktestNotice = input<string | null>(null);
+  readonly histBacktestNotice = input<string | null>(null);
+  readonly fixedMinute = input(false);
+  readonly liveRuleLines = input<readonly ChartRuleLine[]>([]);
+  readonly histRuleLines = input<readonly ChartRuleLine[]>([]);
+  protected readonly activePremiumPanes = computed(() => this.activePane() === 'live'
+    ? this.livePremiumPanes() : this.histPremiumPanes());
+  protected readonly premiumNotice = computed(() => this.activePane() === 'live'
+    ? this.livePremiumNotice() : this.histPremiumNotice());
+  protected readonly backtestNotice = computed(() => this.activePane() === 'live'
+    ? this.liveBacktestNotice() : this.histBacktestNotice());
+  protected readonly premiumCaptions = computed(() => this.activePremiumPanes().map((pane) => ({
+    ...pane, identity: optionContractFromSymbol(pane.symbol, pane.contract.root),
+  })));
+  protected readonly premiumCaptionTops = signal<Readonly<Record<string, number>>>({});
+  private premiumFirstPane = 1;
 
   readonly historyTimeframeChange = output<ChartHistoryTimeframe>();
   readonly liveResolutionChange = output<ChartLiveResolution>();
@@ -397,17 +429,20 @@ export class DualPaneChartComponent implements AfterViewInit {
   protected readonly activeLoading = computed(() =>
     this.activePane() === 'live' ? this.liveLoading() : this.historyLoading(),
   );
-  /** Fills on the candles and on the position pane, which draws the traded asset's (#2915). */
+  private readonly premiumFills = computed(() => this.activePremiumPanes()
+    .flatMap(pane => pane.fill_markers.filter(fill => fill.source !== 'backtest')));
+  /** Real fills on the candles, position pane and watched premium panes. */
   protected readonly fillCount = computed(
-    () => this.activeMarkers().length + (this.activePosition()?.fill_markers.length ?? 0),
+    () => this.activeMarkers().length + (this.activePosition()?.fill_markers.length ?? 0) + this.premiumFills().length,
   );
   protected readonly visibleFillCount = computed(() => {
     const bars = this.activeBars();
     const position = this.activePosition();
     const onPosition = position === null
       ? 0
+      : position.kind === 'value' ? countPlottedFills(position.fill_markers, positionClock(position, bars))
       : positionRuns(position, bars).reduce((sum, run) => sum + countPlottedFills(position.fill_markers, run.bars), 0);
-    return countPlottedFills(this.activeMarkers(), bars) + onPosition;
+    return countPlottedFills(this.activeMarkers(), bars) + onPosition + countPlottedFills(this.premiumFills(), bars);
   });
   protected readonly activeIndicatorKeys = computed(() =>
     this.selectedIndicators().map((indicator) => indicator.name),
@@ -683,6 +718,13 @@ export class DualPaneChartComponent implements AfterViewInit {
   private measure(): void {
     this.plotWidth.set(this.chart?.timeScale().width() ?? 0);
     this.geometry.update((tick) => tick + 1);
+    const container = this.chartContainer().nativeElement;
+    const origin = container.parentElement?.getBoundingClientRect().top ?? 0;
+    const panes = this.chart?.panes?.() ?? [];
+    this.premiumCaptionTops.set(Object.fromEntries(this.activePremiumPanes().flatMap((pane, index) => {
+      const element = panes[this.premiumFirstPane + index]?.getHTMLElement();
+      return element === null || element === undefined ? [] : [[pane.symbol, element.getBoundingClientRect().top - origin + 4]];
+    })));
   }
 
   private cleanup(): void {
@@ -691,6 +733,7 @@ export class DualPaneChartComponent implements AfterViewInit {
     this.series = null;
     this.markers = null;
     this.indicatorSeries = [];
+
     this.renderedViewKey = null;
     this.renderedBars = [];
   }
@@ -722,6 +765,16 @@ export class DualPaneChartComponent implements AfterViewInit {
     if (!this.chart) return;
     for (const rendered of this.indicatorSeries) this.chart.removeSeries(rendered);
     this.indicatorSeries = [];
+
+    const rules = this.activePane() === 'live' ? this.liveRuleLines() : this.histRuleLines();
+    for (const rule of ruleLinePlans(rules, bars)) {
+      const line = this.chart.addSeries(LineSeries, {
+        color: rule.color, title: rule.title, lineWidth: 1, priceLineVisible: false,
+        lastValueVisible: false, pointMarkersVisible: true,
+      });
+      line.setData(rule.points);
+      this.indicatorSeries.push(line);
+    }
 
     const paneIndices = new Map<string, number>();
     for (const plan of toIndicatorSeriesPlans(results, bars, selected, colorOverrides)) {
@@ -760,6 +813,51 @@ export class DualPaneChartComponent implements AfterViewInit {
       this.indicatorSeries.push(rendered);
     }
     if (position !== null) this.renderPosition(position, bars, paneIndices.size + 1);
+    this.renderPremiums(bars, paneIndices.size + (position === null ? 1 : 2));
+  }
+
+  private renderPremiums(bars: readonly ChartBar[], firstPane: number): void {
+    const chart = this.chart;
+    if (chart === null) return;
+    this.premiumFirstPane = firstPane;
+    premiumPanePlans(this.activePremiumPanes(), bars).forEach((plan, index) => {
+      const pane = firstPane + index;
+      const runs = plan.runs.length ? plan.runs : [{ points: [] }];
+      for (const run of runs) {
+        const line = chart.addSeries(LineSeries, {
+          color: '#60a5fa', lineWidth: 2, title: plan.symbol, priceLineVisible: false,
+          pointMarkersVisible: true,
+        }, pane);
+        line.setData([...run.points]);
+        this.indicatorSeries.push(line);
+      }
+      for (const rule of plan.rules) {
+        const line = chart.addSeries(LineSeries, {
+          color: rule.color, title: rule.title, lineWidth: 1,
+          lineStyle: rule.backtest ? 2 : 0,
+          priceLineVisible: false, lastValueVisible: false, pointMarkersVisible: true,
+        }, pane);
+        line.setData(rule.points);
+        this.indicatorSeries.push(line);
+      }
+      for (const run of plan.backtestRuns) {
+        const line = chart.addSeries(LineSeries, {
+          color: 'rgba(148, 163, 184, 0.4)', lineWidth: 1, lineStyle: 2,
+          priceLineVisible: false, lastValueVisible: false, pointMarkersVisible: true,
+        }, pane);
+        line.setData([...run.points]);
+        this.indicatorSeries.push(line);
+      }
+      if (plan.fills.length) {
+        plan.fillBounds.forEach((bounds, index) => {
+          const anchors = chart.addSeries(LineSeries, { lineVisible: false, priceLineVisible: false, lastValueVisible: false }, pane);
+          anchors.setData(bounds);
+          if (index === 0) createSeriesMarkers(anchors, plan.fills);
+          this.indicatorSeries.push(anchors);
+        });
+      }
+    });
+    requestAnimationFrame(() => { if (this.chart !== null) this.measure(); });
   }
 
   /**
@@ -779,10 +877,18 @@ export class DualPaneChartComponent implements AfterViewInit {
         priceLineVisible: false,
         lastValueVisible: index === stretches.length - 1,
         crosshairMarkerVisible: false,
+        pointMarkersVisible: position.kind === 'value',
       }, paneIndex);
       line.setData([...run.points]);
-      createSeriesMarkers(line, toSeriesMarkers(position.fill_markers, run.bars));
+      if (position.kind === 'price') createSeriesMarkers(line, toSeriesMarkers(position.fill_markers, run.bars));
       this.indicatorSeries.push(line);
     });
+    if (position.kind === 'value') {
+      const clock = positionClock(position, bars);
+      const anchor = chart.addSeries(LineSeries, { lineVisible: false, crosshairMarkerVisible: false, priceLineVisible: false, lastValueVisible: false }, paneIndex);
+      anchor.setData(clock.map(bar => ({ time: Math.floor(bar.start_ms / 1000) as UTCTimestamp, value: 0 })));
+      createSeriesMarkers(anchor, toSeriesMarkers(position.fill_markers, clock));
+      this.indicatorSeries.push(anchor);
+    }
   }
 }

@@ -68,6 +68,7 @@ from app.broker.alpaca.clerk.sqlite.economic_projection_models import (
     FillPage,
     FillWindowProjection,
     MarketMark,
+    OptionValueHistory,
     RunActivity,
     RunScope,
     SessionEconomicProjection,
@@ -396,6 +397,22 @@ class SqliteEconomicProjectionReader:
                 control_revision=meta.control_revision,
                 fills=fills,
             )
+
+    def bot_option_value_history(self, strategy_instance_id: str) -> OptionValueHistory | None:
+        """All effective inventory events, including residue discharges, in one verified read cut.
+
+        This is a holdings replay, not a bounded chart-marker window. It must include carry-in
+        inventory and therefore uses the same complete event stream as the economic snapshot.
+        """
+        with self._read_transaction():
+            meta = self._verified_meta()
+            if self._conn.execute("SELECT 1 FROM strategy_instances WHERE strategy_instance_id = ?", (strategy_instance_id,)).fetchone() is None:
+                return None
+            rows = self._effective_fill_rows(strategy_instance_ids=(strategy_instance_id,), from_ms=None, to_ms=None, cursor_key=None, limit=None)
+            fills = tuple(sorted((_to_fill_record(row, account_id=self._account_id) for row in rows), key=lambda record: (record.filled_at_ms, record.ledger_sequence)))
+            write_offs = written_off_lot_events(self._conn, strategy_instance_ids=(strategy_instance_id,)).get(strategy_instance_id, ())
+            _assert_effective_fills_match_positions(fills, self._exposure(strategy_instance_id), write_offs)
+            return OptionValueHistory(control_revision=meta.control_revision, fills=fills, write_offs=write_offs)
 
     def account_executions(
         self,

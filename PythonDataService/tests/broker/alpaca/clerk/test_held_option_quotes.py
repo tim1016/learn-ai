@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import json
 import logging
+import sqlite3
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
@@ -103,8 +106,8 @@ class _Account:
         return None if stated is None else (stated.quote.bid, stated.quote.ask, stated.kept_at_ms)
 
     def rows(self) -> int:
-        """How many quotes the account's file holds."""
-        return len(self.kept.path.read_text().splitlines()) if self.kept.path.exists() else 0
+        """How many pricing statements the account holds; chart observations are a separate fact."""
+        return sum(json.loads(line).get("minute_ms") is None for line in self.kept.path.read_text().splitlines()) if self.kept.path.exists() else 0
 
 
 def _quote(bid: str | None, ask: str | None, received_ms: int, **changes: object) -> HeldQuote:
@@ -128,6 +131,33 @@ def held(clock: _Clock) -> HeldOptionQuotes:
 
 
 # ---- What is handed over, and when ------------------------------------------------
+
+
+@pytest.mark.parametrize("account_id", ["sim:minute-bot", "paper-account", "live-account"])
+async def test_every_account_keeps_one_held_leg_observation_per_minute(
+    held: HeldOptionQuotes, clock: _Clock, tmp_path: Path, account_id: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account, ibkr = _Account(held, tmp_path, account_id), _Supervisor()
+    saved: list[int] = []
+    keep_minutes = account.kept.keep_minutes
+    def observed(quotes: Mapping[str, HeldQuote], *, observed_at_ms: int) -> None:
+        saved.append(observed_at_ms)
+        keep_minutes(quotes, observed_at_ms=observed_at_ms)
+    monkeypatch.setattr(account.kept, "keep_minutes", observed)
+    account.holds = [CALL.occ_symbol]
+    await held.read_books()
+    ibkr.quotes[CALL.occ_symbol] = _quote("4.08", "4.12", NOW - 100)
+    await held.keep(ibkr)
+    clock.value += 1_000
+    ibkr.quotes[CALL.occ_symbol] = _quote("5", "5.10", clock.value - 100)
+    await held.keep(ibkr)
+    clock.value += MINUTE
+    ibkr.quotes[CALL.occ_symbol] = _quote("6", None, clock.value - 100)
+    await held.keep(ibkr)
+    rows = account.kept.minutes(from_ms=NOW - MINUTE, to_ms=clock.value + 1)
+    assert [row.quote.bid for row in rows] == [Decimal("4.08"), Decimal(6)]
+    assert rows[-1].quote.ask is None
+    assert saved == [NOW, clock.value], "same-minute rounds must not schedule another minute write"
 
 
 async def test_the_newest_quote_of_a_held_contract_is_kept_and_again_fifteen_seconds_on(
@@ -1102,6 +1132,33 @@ async def test_a_file_that_cannot_be_written_is_logged_once_with_its_stack_then_
     ]
     assert kept_again == 1
     assert len(_said(caplog, "held_option_quotes_written_again")) == 1
+
+
+async def test_a_minute_store_that_cannot_be_written_does_not_stop_the_marks_that_price_a_close(
+    held: HeldOptionQuotes, clock: _Clock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The chart's minute observations live in their own file, apart from the marks that price a simulated
+    close. A corrupt minute file is its own fault, said under its own action, and every mark still lands."""
+    caplog.set_level(logging.INFO, logger=LOGGER)
+    account, ibkr = _Account(held, tmp_path), _Supervisor()
+    account.holds = [CALL.occ_symbol]
+    await held.read_books()
+
+    def malformed(*_: object, **__: object) -> None:
+        raise sqlite3.DatabaseError("database disk image is malformed")
+
+    monkeypatch.setattr(account.kept, "keep_minutes", malformed)
+    marked = []
+    for _ in range(3):
+        ibkr.quotes[CALL.occ_symbol] = _quote("4.08", "4.12", clock.value - 100)
+        marked.append(await held.keep(ibkr))
+        clock.value += KEEP_EVERY_MS
+
+    assert marked == [1, 1, 1], "every round's mark is handed over"
+    assert account.mark(CALL, clock.value - KEEP_EVERY_MS) is not None, "the account still prices from the quote"
+    assert len(_said(caplog, "held_option_quote_minutes_not_written")) == 1, "the minute fault is said once"
+    assert not _said(caplog, "held_option_quotes_not_written"), "the marks' own fault is not raised"
 
 
 async def test_books_that_cannot_be_read_are_logged_once_not_at_every_pass(

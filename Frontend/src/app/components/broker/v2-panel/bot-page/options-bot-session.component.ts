@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, inject, input, output, resource, signal, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, inject, input, model, output, resource, signal, untracked } from '@angular/core';
 import { disabled, FormField, form } from '@angular/forms/signals';
 
 import { FleetDirectoryService } from '../../../../fleet/fleet-directory.service';
@@ -16,6 +16,7 @@ import { canonicalJson } from '../../broker-deploy-page/deploy-draft.store';
 import { OptionsBotDeployService, type OptionsBotConfiguration, type OptionsResumeRequest } from '../../broker-deploy-page/options-bot-deploy.service';
 import { extractServerMessage } from '../../operation-error';
 import type { DeploymentBudgetPreview } from '../lib/broker-v2-panel.service';
+import { OptionsBotProofComponent } from './options-bot-proof.component';
 
 interface ResumeAttempt {
   readonly context: string;
@@ -26,7 +27,7 @@ interface ResumeAttempt {
 
 @Component({
   selector: 'app-options-bot-session',
-  imports: [AuthoredUsdPipe, FormField, OptionContractComponent, ReceiptLabelPipe, SetupSentencesComponent, TimestampDisplayComponent],
+  imports: [AuthoredUsdPipe, FormField, OptionContractComponent, OptionsBotProofComponent, ReceiptLabelPipe, SetupSentencesComponent, TimestampDisplayComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './options-bot-session.component.html',
   styleUrl: './options-bot-session.component.scss',
@@ -37,6 +38,7 @@ export class OptionsBotSessionComponent {
   readonly configuration = input.required<OptionsBotConfiguration>();
   readonly revision = input.required<number>();
   readonly locked = input(false);
+  readonly proofOpen = model(false);
   readonly resumed = output();
   readonly pendingChange = output<boolean>();
 
@@ -62,6 +64,9 @@ export class OptionsBotSessionComponent {
   });
   protected readonly legs = computed(() => this.session.hasValue() ? this.session.value().legs.map((leg) => ({
     ...leg, contract: leg.held_contract ? optionContractFromSymbol(leg.held_contract, this.configuration().setup.underlying) : null,
+    waiting: leg.waiting_contract ? optionContractFromSymbol(leg.waiting_contract, this.configuration().setup.underlying) : null,
+    watched: (leg.watched_contracts ?? []).map((watched) => ({ ...watched,
+      contract: optionContractFromSymbol(watched.symbol, this.configuration().setup.underlying) })),
   })) : []);
   protected readonly readProblem = computed(() => this.session.error() === undefined
     ? null : extractServerMessage(this.session.error(), 'This Options session could not be read.'));

@@ -71,6 +71,9 @@ class Market:
     def underlying_close(self, _at_ms: int) -> Decimal:
         return D(500)
 
+    def underlying_bar(self, close_ms: int) -> MinuteBar:
+        return MinuteBar(close_ms, D(500), D(500), D(500), D(500))
+
     def pick(self, leg: Any, **_kwargs: Any) -> Picked:
         return Picked(
             OptionContract.of(
@@ -211,7 +214,7 @@ def _fill(
     option: OptionContract, quantity: int, price: float, instant: int, *, side: str = "buy"
 ) -> OptionDecisionFill:
     return OptionDecisionFill(
-        order_ref="order",
+        order_ref=f"{side}-order",
         contract=option.occ_symbol,
         multiplier=100,
         side=side,

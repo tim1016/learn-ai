@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Literal
 
+from app.broker.alpaca.clerk.fifo_pnl import LotWriteOff
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.contract.models import BrokerPosition, OrderSide
 
@@ -103,6 +104,15 @@ class FillWindowProjection:
     authority_generation: int
     control_revision: int
     fills: tuple[FillRecord, ...]
+
+
+@dataclass(frozen=True)
+class OptionValueHistory:
+    """Complete inventory events for a historical valuation, verified against current custody."""
+
+    control_revision: int
+    fills: tuple[FillRecord, ...]
+    write_offs: tuple[LotWriteOff, ...]
 
 
 @dataclass(frozen=True)

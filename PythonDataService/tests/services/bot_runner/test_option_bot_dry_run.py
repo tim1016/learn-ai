@@ -1799,7 +1799,7 @@ async def test_an_option_bots_page_says_what_getting_out_costs_while_it_holds_th
     estimate = held["view"].exit_estimate
     assert estimate is not None
     assert (estimate.net_close.state, estimate.net_close.amount_usd) == ("known", "-408.00")
-    assert estimate.net_close.source == "Quotes kept for this Dry Run"
+    assert estimate.net_close.source == "Saved held-leg minute quotes from IBKR"
     assert [(term.label, term.amount_usd) for term in estimate.net_close.terms] == [
         (f"Sell 1 {CALL} at the bid", "-408.00"),
     ]

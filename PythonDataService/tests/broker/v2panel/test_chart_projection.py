@@ -804,7 +804,7 @@ async def test_live_snapshot_uses_its_captured_sqlite_fills(
     captured: list[tuple[FillRecord, ...]] = []
 
     async def panel_with_entries(*_args: object, **_kwargs: object):
-        return SimpleNamespace(symbol="SPY", traded=None, market_pulse=None), expected_fills
+        return SimpleNamespace(symbol="SPY", traded=None, market_pulse=None, options_bot=None), expected_fills
 
     async def build_from_fills(
         _sid: str,
@@ -901,8 +901,9 @@ async def test_active_history_uses_sqlite_chart_evidence_not_legacy_journal(
     assert [marker.order_ref for marker in result.fill_markers] == [expected_fills[0].order_ref]
 
 
+@pytest.mark.parametrize("options", [False, True])
 async def test_a_sparse_symbols_candles_keep_the_fills_they_reach_back_to(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, options: bool,
 ) -> None:
     """Candles that start before the planned fill window still draw the fills under them.
 
@@ -961,11 +962,23 @@ async def test_a_sparse_symbols_candles_keep_the_fills_they_reach_back_to(
         lambda: _batch_provider_from_source(_source),
     )
 
+    pane_fills = []
+    if options:
+        status = status.model_copy(update={"options_bot": object()})
+        monkeypatch.setattr(panel_chart_data_source, "require_options_minute", lambda *_args: None)
+
+        def with_panes(chart, _broker, _sid, chart_fills):
+            pane_fills.extend(chart_fills)
+            return chart
+
+        monkeypatch.setattr(panel_chart_data_source, "with_options_panes", with_panes)
     result = await panel_chart_data_source.get_history_chart("alpaca", "paper-account", SID, "1m")
 
     assert result.from_ms == first_candle_ms
     assert len(result.bars) == 300
     assert [marker.event_key for marker in result.fill_markers] == ["under-the-early-candles", "inside-the-plan"]
+    if options:
+        assert [fill.event_key for fill in pane_fills] == ["under-the-early-candles", "inside-the-plan"]
 
 
 @pytest.mark.parametrize(
@@ -1045,7 +1058,7 @@ async def _history_chart_of(
         return account_id
 
     async def chart_evidence(*_args: object, **_kwargs: object) -> SimpleNamespace:
-        return SimpleNamespace(status=status, fills=SimpleNamespace(fills=fills))
+        return SimpleNamespace(status=status, fills=SimpleNamespace(fills=fills, control_revision=0))
 
     async def batch_provider(query: HistoryBatchQuery) -> HistoryBatchResponse:
         asked_for.append(query.symbol)
@@ -1117,7 +1130,7 @@ async def test_a_bot_that_trades_what_it_listens_to_has_no_position_pane(monkeyp
     assert asked_for == ["SPY"]
 
 
-async def test_an_option_bot_has_no_price_pane(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_an_option_structure_has_a_value_pane_and_never_uses_underlying_share_prices(monkeypatch: pytest.MonkeyPatch) -> None:
     """A pane of bar closes is a stock's; an option structure's mark is not drawn from its underlying's shares."""
     chart, asked_for = await _history_chart_of(
         monkeypatch,
@@ -1125,7 +1138,9 @@ async def test_an_option_bot_has_no_price_pane(monkeypatch: pytest.MonkeyPatch) 
         {"SPY": [_minute_bar(_NOW - 60_000, "450.00")]},
     )
 
-    assert chart.position is None
+    assert chart.position is not None and chart.position.kind == "value"
+    assert all(point.value is None for point in chart.position.points)
+    assert chart.position.overlay_notices
     assert asked_for == ["SPY"]
 
 
@@ -1137,7 +1152,7 @@ async def test_the_live_chart_carries_the_traded_assets_price_too(monkeypatch: p
     }
 
     async def panel_with_entries(*_args: object, **_kwargs: object):
-        panel = SimpleNamespace(symbol="SPY", traded=TradedInstrumentView(kind="stock", symbol="QQQ"))
+        panel = SimpleNamespace(symbol="SPY", traded=TradedInstrumentView(kind="stock", symbol="QQQ"), options_bot=None)
         return panel, ()
 
     line_of = {"SPY": ChartFeedStatus(state="LIVE"), "QQQ": ChartFeedStatus(state="STALLED", last_bar_ms=first)}

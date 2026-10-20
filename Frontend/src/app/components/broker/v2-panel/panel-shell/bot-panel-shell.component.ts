@@ -92,6 +92,7 @@ import { BotOptionBuyingPowerComponent } from '../bot-page/bot-option-buying-pow
 import { BotOrderRecordsComponent } from '../bot-page/bot-order-records.component';
 import { BotSetupComponent } from '../bot-page/bot-setup.component';
 import { OptionsBotSessionComponent } from '../bot-page/options-bot-session.component';
+import { BotOptionLegsComponent } from '../bot-page/bot-option-legs.component';
 import { OperatorRunHistoryComponent } from '../bot-run-history/operator-run-history.component';
 import { DeploymentBudgetComponent } from '../../deployment-budget/deployment-budget.component';
 import { RunFillsListComponent } from '../bot-page/run-fills-list.component';
@@ -268,6 +269,7 @@ const RUN_TAPE_PADDING_MS = 15 * 60_000;
     BotPageNoticesComponent,
     BotSetupComponent,
     OptionsBotSessionComponent,
+    BotOptionLegsComponent,
     BotToolbarComponent,
     OperatorRunHistoryComponent,
     RouterLink,
@@ -377,8 +379,14 @@ export class BotPanelShellComponent {
 
   // ── Internal state ────────────────────────────────────────────────────────
 
-  protected readonly selectedHistoryTimeframe = signal<ChartHistoryTimeframe>('1m');
-  protected readonly liveResolution = signal<ChartLiveResolution>('5s');
+  protected readonly selectedHistoryTimeframe = linkedSignal<string, ChartHistoryTimeframe>({
+    source: () => this.routeIdentity(), computation: () => '1m',
+  });
+  private readonly requestedLiveResolution = linkedSignal<string, ChartLiveResolution | undefined>({
+    source: () => this.routeIdentity(), computation: () => undefined,
+  });
+  protected readonly liveResolution = computed<ChartLiveResolution>(() =>
+    this.requestedLiveResolution() ?? this.liveStore.snapshot()?.live_chart.resolution ?? '5s');
   protected readonly actionPending = signal(false);
   /** Changes for route reuse and for a rebinding of the same visible lane. */
   /** The lane and bot this page is showing, as a value.
@@ -637,6 +645,7 @@ export class BotPanelShellComponent {
       workingOrders: panel.working_orders,
       feedEvents: this.feedContinuity().events,
       tradedFeed: panel.traded_feed_lane ?? null,
+      optionUnderlying: panel.traded?.kind === 'option' ? panel.traded.symbol : undefined,
     };
   });
 
@@ -735,7 +744,7 @@ export class BotPanelShellComponent {
       const target = this.target();
       void this.liveStore.start({
         ...this.routeParams(),
-        resolution: this.liveResolution(),
+        resolution: this.requestedLiveResolution(),
         bindingGeneration: target.bindingGeneration,
         routingEpoch: target.routingEpoch,
       });
@@ -864,7 +873,7 @@ export class BotPanelShellComponent {
   }
 
   protected onLiveResolutionChange(resolution: ChartLiveResolution): void {
-    this.liveResolution.set(resolution);
+    this.requestedLiveResolution.set(resolution);
   }
 
   protected onTransactionSelected(transactionRef: string): void {

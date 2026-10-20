@@ -128,6 +128,7 @@
           }
           <ng-template #tape>
             <app-bot-day-chart
+              [optionsBot]="panelData.bot_kind === 'options'"
               [symbol]="panelData.symbol"
               [liveChart]="liveChart()"
               [histChart]="histChart.hasValue() ? histChart.value() : null"
@@ -154,6 +155,7 @@
                 [revision]="panelData.revision"
                 [holdsShares]="holdsShares()"
                 [openPnl]="panelData"
+                [exitEstimateOverride]="panelData.bot_kind !== 'options' && panelData.traded?.kind === 'option' && holdsShares() ? liveChart()?.position?.exit_estimate ?? null : undefined"
               />
             </div>
 
@@ -186,9 +188,12 @@
             <div class="bot-board__panel bot-board__setup">
               @if (panelData.bot_kind === 'options') {
                 @if (panelData.options_bot; as configuration) {
-                  <app-options-bot-session [target]="optionsTarget()" [sid]="sid()" [configuration]="configuration" [revision]="panelData.revision" [locked]="actionPending()" (pendingChange)="optionsPending.set($event)" (resumed)="refreshOptionsBot()" />
+                  <app-options-bot-session [(proofOpen)]="proofOpen" [target]="optionsTarget()" [sid]="sid()" [configuration]="configuration" [revision]="panelData.revision" [locked]="actionPending()" (pendingChange)="optionsPending.set($event)" (resumed)="refreshOptionsBot()" />
                 } @else { <p>The approved Options setup could not be read.</p> }
               } @else {
+                @if (panelData.traded?.kind === 'option') {
+                  @if (panelData.traded; as traded) { <app-bot-option-legs [traded]="traded" /> }
+                }
                 <app-bot-setup [panel]="panelData" [settings]="strategyViewValue()?.settings ?? null" [(proofOpen)]="proofOpen" />
               }
               <details class="bot-board__runs">
@@ -235,6 +240,7 @@
                   [fillCount]="runFillCount()"
                   [runStartedAtMs]="runStartedAtMs()"
                   [showAsset]="!!panelData.traded"
+                  [optionUnderlying]="panelData.traded?.kind === 'option' ? panelData.traded.symbol : undefined"
                 />
               }
             </div>

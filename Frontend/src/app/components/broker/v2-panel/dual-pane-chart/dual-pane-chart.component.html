@@ -105,13 +105,13 @@
         @if (activePane() === 'live') {
           <div class="interval-group" role="group" aria-label="Live chart interval">
             <span class="toolbar-label">Interval</span>
-            @for (resolution of liveResolutions; track resolution) {
+            @for (resolution of fixedMinute() ? ['1m'] : liveResolutions; track resolution) {
               <button
                 type="button"
                 class="interval-button"
                 [class.interval-button--active]="liveResolution() === resolution"
                 [attr.aria-pressed]="liveResolution() === resolution"
-                (click)="selectLiveResolution(resolution)"
+                (click)="selectLiveResolution(resolution === '1m' ? '1m' : '5s')"
               >{{ resolution }}</button>
             }
           </div>
@@ -129,7 +129,7 @@
         } @else {
           <div class="interval-group" role="group" aria-label="Polygon chart timeframe">
             <span class="toolbar-label">Timeframe</span>
-            @for (timeframe of polygonTimeframes; track timeframe.value) {
+            @for (timeframe of fixedMinute() ? polygonTimeframes.slice(0, 1) : polygonTimeframes; track timeframe.value) {
               <button
                 type="button"
                 class="interval-button"
@@ -199,7 +199,21 @@
         </div>
       }
 
-      <div class="chart-stage">
+      @if (fixedMinute()) {
+        <p class="backtest-legend">Live: solid lines · Backtest: faint markers and dashed lines. {{ backtestNotice() }}</p>
+      }
+      <div class="chart-viewport">
+      <div class="chart-stage" [style.min-height.px]="activePremiumPanes().length ? 320 + activePremiumPanes().length * 160 : null">
+        @if (premiumNotice(); as notice) { <p role="status">{{ notice }}</p> }
+        @for (premium of premiumCaptions(); track premium.symbol) {
+          <p class="premium-caption" [class.premium-caption--placed]="premiumCaptionTops()[premium.symbol] !== undefined" [style.top.px]="premiumCaptionTops()[premium.symbol]">
+            @if (premium.identity; as identity) { <app-option-contract [contract]="identity" size="xs" /> }
+            <strong>{{ premium.leg_ids.join(', ') }}</strong>
+            @if (premium.backtest_only) { <strong>Backtest only</strong> }
+            <span>Premium · Starting price · Momentum · Stop</span>
+            @if (premium.notice) { <span role="status">{{ premium.notice }}</span> }
+          </p>
+        }
         <div #chartContainer class="chart-container" aria-hidden="true"></div>
         @if (activeIndicatorChips().length) {
           <ul class="chart-indicator-legend" aria-label="Plotted indicators">
@@ -238,6 +252,7 @@
             <span>{{ activePane() === 'live' ? 'The live tape will draw when IBKR publishes the next bar.' : 'Try a wider Polygon range.' }}</span>
           </div>
         }
+      </div>
       </div>
 
       <app-chart-lanes [lanes]="placedLanes()" />

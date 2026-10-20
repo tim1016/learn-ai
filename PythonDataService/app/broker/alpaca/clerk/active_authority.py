@@ -341,6 +341,11 @@ async def select_active_clerk_runtime(
         _sqlite_repository=composed.repository,
         account_id=account.account_id,
         account_authority_kind="real_paper",
+        option_books=get_held_option_quotes().follow(
+            account.account_id,
+            books=composed.repository.option_contracts_requiring_quotes,
+            kept=KeptOptionQuotes.of_account(artifacts_root=artifacts_root, account_id=account.account_id),
+        ),
     )
 
 

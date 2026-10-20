@@ -23,6 +23,11 @@ function pane(values: readonly (string | null)[]): ChartPositionPane {
 }
 
 describe('positionRuns (#2915)', () => {
+  it('draws a current value point before its underlying candle closes', () => {
+    const current = { ...pane(['-600.00', '-400.00']), kind: 'value' as const };
+    const runs = positionRuns(current, [bar(0)]);
+    expect(runs[0].points.map(point => point.value)).toEqual([-600, -400]);
+  });
   it('breaks the line at a bar with no price instead of joining its neighbours', () => {
     const bars = [bar(0), bar(1), bar(2), bar(3)];
 

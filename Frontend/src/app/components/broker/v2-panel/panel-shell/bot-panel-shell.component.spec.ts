@@ -708,6 +708,7 @@ async function renderShell(
     /** The bot's end on its page (#2607), and the service's change of it. */
     end?: BotEndView;
     editBotEnd?: ReturnType<typeof vi.fn>;
+    traded?: BotPanelView['traded'];
   } = {},
 ) {
   // A persistent mock, not `mockResolvedValueOnce`: a rebind restarts the
@@ -723,6 +724,7 @@ async function renderShell(
       actions: [RECONCILE_ACTION],
       primary_action: 'reconcile_now',
       ...(overrides.end ? { end: overrides.end } : {}),
+      ...(overrides.traded ? { traded: overrides.traded } : {}),
     })),
     ...(overrides.runBotAction ? { runBotAction: overrides.runBotAction } : {}),
     ...(overrides.editBotEnd ? { editBotEnd: overrides.editBotEnd } : {}),
@@ -745,6 +747,41 @@ async function renderShell(
 }
 
 describe('BotPanelShellComponent', () => {
+  it('shows a held-legs card for a Signal option structure', async () => {
+    await renderShell({ traded: { kind: 'option', symbol: 'SPY', legs: [], legs_notice: 'No contracts held yet.' } });
+    expect(screen.getByRole('heading', { name: 'Held option legs' })).toBeTruthy();
+    expect(screen.getByText('No contracts held yet.')).toBeTruthy();
+    expect(screen.queryByText('The current close-now value is not available yet.')).toBeNull();
+  });
+
+  it('keeps the held-legs card off a stock bot page', async () => {
+    await renderShell({ traded: { kind: 'stock', symbol: 'SPY' } });
+    expect(screen.queryByRole('heading', { name: 'Held option legs' })).toBeNull();
+  });
+
+  it('resets the history interval when the route opens another bot', async () => {
+    const { fixture } = await renderShell();
+    await showTape(fixture);
+    await userEvent.click(screen.getByRole('tab', { name: /History · Polygon/ }));
+    await userEvent.click(screen.getByRole('button', { name: '15m' }));
+    await vi.waitFor(() => expect(mockService.getHistoryChart).toHaveBeenLastCalledWith(
+      expect.anything(), 'sid-001', '15m', null,
+    ));
+    fixture.componentRef.setInput('sid', 'sid-002');
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(mockService.getHistoryChart).toHaveBeenLastCalledWith(expect.anything(), 'sid-002', '1m', null);
+  });
+  it('lets a new bot choose its default interval after a stock interval was selected', async () => {
+    const { fixture, service } = await renderShell();
+    await showTape(fixture);
+    await userEvent.click(screen.getByRole('button', { name: '5s' }));
+    await vi.waitFor(() => expect(service.getLiveSnapshot).toHaveBeenLastCalledWith(expect.anything(), 'sid-001', '5s'));
+    fixture.componentRef.setInput('sid', 'sid-002');
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(service.getLiveSnapshot).toHaveBeenLastCalledWith(expect.anything(), 'sid-002', undefined);
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
@@ -912,7 +949,7 @@ describe('BotPanelShellComponent', () => {
         broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'DUM284968', entityId: 'sid-001',
       }),
       'sid-001',
-      '5s',
+      undefined,
     );
     expect(screen.queryByText('run-current')).toBeNull();
     expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);

@@ -33,6 +33,7 @@ from app.services.broker_v2_panel.chart_projection_service import (
     run_chart_window,
 )
 from app.services.broker_v2_panel.history_batch_client import build_history_batch_provider
+from app.services.broker_v2_panel.option_position_value import with_option_position
 from app.services.broker_v2_panel.panel_data_source import get_panel_with_chart_fills
 from app.services.broker_v2_panel.panel_errors import (
     BotRunnerUnavailableError,
@@ -55,6 +56,8 @@ from app.services.live_chart_window import (
     coerce_chart_timeframe,
     resolve_chart_window,
 )
+from app.services.options_bot_chart import require_options_minute, with_options_panes
+from app.services.options_bot_overlay import with_options_overlay
 from app.services.sqlite_clerk_compat import custody_account_id_for_route
 from app.utils.timestamps import now_ms_utc
 
@@ -113,8 +116,8 @@ async def _build_live_chart_from_fills(
 def _position_pane_symbol(traded: TradedInstrumentView | None) -> str | None:
     """The asset a bot's position pane draws, or ``None`` when its chart has no such pane (#2915).
 
-    A pane of bar closes is a stock's or an ETF's. An option structure's pane
-    is a mark from its legs' quotes, which this cannot draw.
+    A pane of bar closes is a stock's or an ETF's. Option value panes use
+    the separate retained-quote projection.
     """
     return traded.symbol if traded is not None and traded.kind == "stock" else None
 
@@ -172,6 +175,8 @@ async def get_live_snapshot_parts(
         sid,
         now_ms=observed_at_ms,
     )
+    if panel.options_bot is not None:
+        require_options_minute(broker, sid, resolution)
     chart = await _build_live_chart_from_fills(
         sid,
         panel.symbol,
@@ -185,6 +190,11 @@ async def get_live_snapshot_parts(
             sid, traded_symbol, fills, resolution=resolution, now_ms=observed_at_ms
         )
         chart = chart.model_copy(update={"position": position_pane(chart, traded_chart)})
+    if panel.options_bot is not None:
+        chart = with_options_panes(chart, broker, sid, fills)
+        chart = await with_options_overlay(chart, broker, sid, now_ms=observed_at_ms)
+    elif panel.traded is not None and panel.traded.kind == "option":
+        chart = await with_option_position(chart, broker, sid, symbol=panel.traded.symbol, through_ms=observed_at_ms, expected_revision=panel.revision)
     return panel, chart
 
 
@@ -272,12 +282,22 @@ async def get_history_chart(
     custody_account_id = custody_account_id_for_route(broker, resolved)
     evidence = await _chart_evidence(broker, custody_account_id, sid, from_ms=from_ms, to_ms=to_ms)
     status = evidence.status
+    if status.options_bot is not None:
+        require_options_minute(broker, sid, timeframe)
     fills = evidence.fills.fills
     batch_provider = build_history_batch_provider()
 
     async def chart_of(symbol: str) -> ChartHistoryResponse:
+        chart, chart_fills = await raw_chart_of(symbol)
+        if status.options_bot is not None:
+            return await with_options_overlay(with_options_panes(chart, broker, sid, chart_fills), broker, sid, now_ms=observed_at_ms)
+        if status.traded is not None and status.traded.kind == "option":
+            return await with_option_position(chart, broker, sid, symbol=status.traded.symbol, through_ms=observed_at_ms, expected_revision=evidence.fills.control_revision)
+        return chart
+
+    async def raw_chart_of(symbol: str) -> tuple[ChartHistoryResponse, Sequence[FillRecord]]:
         if window is not None:
-            return await build_run_window_chart(
+            chart = await build_run_window_chart(
                 timeframe,
                 fills,
                 strategy_instance_id=sid,
@@ -286,6 +306,7 @@ async def get_history_chart(
                 window=(from_ms, to_ms),
                 now_ms=observed_at_ms,
             )
+            return chart, fills
         chart = await build_history_chart(
             timeframe,
             fills,
@@ -295,7 +316,7 @@ async def get_history_chart(
             now_ms=observed_at_ms,
         )
         if chart.from_ms >= from_ms:
-            return chart
+            return chart, fills
         # The candles start before the window the fills were read for: a sparse
         # symbol needs more sessions to fill its bars than the plan counted, and
         # a daily bar starts at midnight. Read the fills those candles stand on.
@@ -306,7 +327,7 @@ async def get_history_chart(
                     reached.fills.fills, from_ms=chart.from_ms, to_ms=chart.to_ms, charted_symbol=symbol
                 )
             }
-        )
+        ), reached.fills.fills
 
     if asset == "trades":
         return await chart_of(order_symbol(status.symbol, status.traded))

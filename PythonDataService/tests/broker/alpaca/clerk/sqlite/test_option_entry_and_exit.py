@@ -14,10 +14,12 @@ a contract: one contract costs $194.00 to buy.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -49,6 +51,12 @@ from app.schemas.deployment_budget import DeployBudgetConsent
 from app.services import market_liveness
 from app.services.bot_binding_authority import SyntheticBindingAuthority
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
+from app.services.broker_v2_panel import option_position_value, option_structure_view
+from app.services.broker_v2_panel.chart_projection_service import build_live_chart
+from app.services.broker_v2_panel.exit_estimate_read import read_exit_estimate
+from app.services.broker_v2_panel.option_structure_view import with_held_structure
+from app.services.broker_v2_panel.sqlite_roster_status import build_roster_status
+from app.services.live_chart_window import CHART_FEED_NOT_EXPECTED, ChartWindowResult
 from app.services.source_bar_ledger import RetainedSourceBar
 from tests._helpers.market_quotes import publish_quotes
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
@@ -270,6 +278,74 @@ async def test_an_entry_buys_the_picked_contract_at_its_ask_and_the_bot_holds_it
     assert dry_run.fills() == [(SYMBOL, "buy", 1.0, 1.94, 100)]
     [order_ref] = bought.child_order_refs
     assert order_contract(dry_run.repo, order_ref) == ContractTerms(symbol=SYMBOL, multiplier=100)
+
+
+async def test_the_panel_names_actual_held_contracts_and_their_recorded_entry_terms(dry_run: _DryRun) -> None:
+    registration = dry_run.repo.strategy_instance(SID)
+    assert registration is not None
+    status = build_roster_status("alpaca", registration, dry_run.repo)
+    before = with_held_structure(status, dry_run.repo)
+    assert before.traded is not None and before.traded.legs == []
+    assert "No option contracts held" in (before.traded.legs_notice or "")
+
+    await dry_run.enter(dry_run.evidence(), units=2)
+    held = with_held_structure(status, dry_run.repo)
+    assert held.traded is not None
+    leg, = held.traded.legs
+    assert (leg.leg_id, leg.symbol, leg.contract, leg.side, leg.ratio, leg.multiplier, leg.quantity) == (
+        LEG, SYMBOL, CALL, "long", 1, 100, 2,
+    )
+    assert held.traded.legs_notice is None
+
+
+@pytest.mark.parametrize("malformed", ["fractional", "symbol"])
+async def test_an_unreadable_held_structure_preserves_the_bot_status_and_controls(
+    dry_run: _DryRun, monkeypatch: pytest.MonkeyPatch, malformed: str,
+) -> None:
+    registration = dry_run.repo.strategy_instance(SID)
+    assert registration is not None
+    status = build_roster_status("alpaca", registration, dry_run.repo)
+    def unreadable(*_args: object) -> dict[tuple[str, int], int]:
+        if malformed == "fractional":
+            raise ValueError("held option quantity must be whole contracts")
+        return {("not-an-option-symbol", 100): 1}
+    monkeypatch.setattr(option_structure_view, "held_option_legs", unreadable)
+    view = with_held_structure(status, dry_run.repo)
+    assert view.model_dump(exclude={"traded"}) == status.model_dump(exclude={"traded"})
+    assert view.traded is not None and view.traded.legs == []
+    assert "Held contracts cannot be read" in view.traded.legs_notice
+
+
+async def test_saved_value_and_current_card_share_the_minute_and_never_fall_back_to_an_older_one(
+    dry_run: _DryRun, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await dry_run.enter(dry_run.evidence(), units=2)
+    now = dry_run.clock()
+    start = now // 60_000 * 60_000
+    kept = KeptOptionQuotes.beside(dry_run.repo.db_path)
+    kept.keep_minutes({SYMBOL: _quote("2.00", "2.10", received_ms=now - 100)}, observed_at_ms=now)
+    chart = build_live_chart(ChartWindowResult(bars=[], timeframe="1m", resolution="1m", feed=CHART_FEED_NOT_EXPECTED), (),
+                             strategy_instance_id=SID, symbol="SPY", window=(start, start + 60_000), now_ms=now)
+    @asynccontextmanager
+    async def projection(_binding: object):
+        yield get_clerk_runtime(dry_run.binding.sealed_account_id)
+    registry = SimpleNamespace(binding_for_control=lambda *_args: dry_run.binding,
+                               synthetic_runtime_for_projection=projection)
+    monkeypatch.setattr(option_position_value, "get_bot_task_registry", lambda: registry)
+    answer = await option_position_value.with_option_position(chart, "alpaca", SID, symbol="SPY", through_ms=now,
+        expected_revision=dry_run.repo.control_meta_snapshot().control_revision)
+    estimate = read_exit_estimate(dry_run.repo, SID, now_ms=now)
+    assert answer.position is not None and answer.position.points[0].value == "-400.00"
+    assert chart.bars == [], "the current value exists before the underlying minute candle closes"
+    assert answer.position.exit_estimate is not None and answer.position.exit_estimate.net_close.amount_usd == "-400.00"
+    assert estimate is not None and estimate.net_close.amount_cents == -40000
+    # No observation of the next minute: even though entry/old minute quotes remain readable,
+    # the current value is explicitly unknown until this minute is observed.
+    later = start + 65_000
+    estimate = read_exit_estimate(dry_run.repo, SID, now_ms=later)
+    assert estimate is not None and estimate.net_close.state == "unknown"
+    assert estimate.net_close.amount_cents is None
+    assert "this minute" in estimate.net_close.source
 
 
 async def test_the_entry_keeps_the_contract_the_quote_and_the_money_it_was_admitted_on(dry_run: _DryRun) -> None:
