@@ -82,6 +82,7 @@ from app.broker.alpaca.regulatory_fees import (
     FillFees,
     RateNotPinnedError,
     SessionFees,
+    ceil_cents,
     fees_for_fill,
     settle_session,
 )
@@ -389,6 +390,22 @@ def _components(price: FillFees | OptionFillFees) -> tuple[OptionFeeComponent, .
     return OPTION_COMPONENTS if isinstance(price, OptionFillFees) else COMPONENTS
 
 
+def _weight(price: FillFees | OptionFillFees, name: OptionFeeComponent) -> Decimal | None:
+    """What one fill carries in one fee type's charge: what its model predicts, in whole cents for OCC.
+
+    OCC is posted, and charged by the option model, per execution, so what a
+    fill carries of it is its own rounded cents. Weighing by the unrounded
+    accrual would tie bots whose executions round differently and hand the
+    odd cent to the first name.
+    """
+    value = getattr(price, name)
+    if name != "occ" or value is None:
+        return value
+    with localcontext() as rounding:
+        rounding.traps[Inexact] = False
+        return ceil_cents(value)
+
+
 def _weights(
     fills: Sequence[FeeFill], priced: Sequence[FillFees | OptionFillFees], component: OptionFeeComponent | None
 ) -> dict[str, Decimal]:
@@ -407,7 +424,7 @@ def _weights(
             components = (component,)
         else:
             components = ()
-        values = [getattr(price, name) for name in components]
+        values = [_weight(price, name) for name in components]
         if any(value is None for value in values):
             raise ValueError("the fee component has no pinned rate")
         weights[fill.subject_id] = weights.get(fill.subject_id, ZERO) + sum(values, ZERO)
@@ -430,7 +447,7 @@ def _provisions_by_fill(modelled: _ModelledFills) -> dict[tuple[str, OptionFeeCo
             getattr(modelled.charge, component), _weights(modelled.fills, modelled.priced, component)
         )
         for subject, amount in subjects.items():
-            weights = {fill.fill_id: getattr(price, component)
+            weights = {fill.fill_id: _weight(price, component)
                        for fill, price in grouped[subject]}
             for fill_id, value in apportion_cents(amount, weights).items():
                 provisions[fill_id, component] = value
