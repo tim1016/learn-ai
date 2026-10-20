@@ -84,33 +84,26 @@ def test_consolidator_rejects_non_positive_period():
         TradeBarConsolidator(timedelta(seconds=0))
 
 
-def test_update_does_not_fire_until_period_boundary():
-    consolidator = TradeBarConsolidator(timedelta(minutes=15))
-    start = datetime(2024, 1, 1, 9, 30, tzinfo=UTC)
-
-    # 14 minute bars inside 09:30–09:45 — should not emit.
-    for i in range(14):
-        fired = consolidator.update(_minute_bar(start + timedelta(minutes=i), "100"))
-        assert fired is None
-
-
-def test_update_fires_at_first_bar_of_next_period():
+def test_update_fires_only_at_first_bar_of_next_period():
     consolidator = TradeBarConsolidator(timedelta(minutes=15))
     start = datetime(2024, 1, 1, 9, 30, tzinfo=UTC)
     emitted: list[TradeBar] = []
     consolidator.on_data_consolidated = emitted.append
 
+    # 14 minute bars inside 09:30–09:45 — should not emit.
+    for i in range(14):
+        fired = consolidator.update(_minute_bar(start + timedelta(minutes=i), str(100 + i)))
+        assert fired is None, f"minute bar {i} inside the 09:30 period does not fire"
     # Bars 09:30 through 09:44 accumulate into the 09:30 bar.
-    for i in range(15):
-        consolidator.update(_minute_bar(start + timedelta(minutes=i), str(100 + i)))
+    consolidator.update(_minute_bar(start + timedelta(minutes=14), str(100 + 14)))
     # The 09:45 minute bar arrives — triggers emission of the 09:30 consolidated bar.
     fired = consolidator.update(_minute_bar(start + timedelta(minutes=15), "200"))
 
-    assert fired is not None
-    assert fired.start_ms == to_ms_utc(start)
-    assert fired.symbol == "SPY"
-    assert len(emitted) == 1
-    assert emitted[0] is fired
+    assert fired is not None, "the first bar of the next period fires the consolidated bar"
+    assert fired.start_ms == to_ms_utc(start), "the fired bar starts at the period boundary"
+    assert fired.symbol == "SPY", "the fired bar carries the symbol"
+    assert len(emitted) == 1, "exactly one bar is emitted"
+    assert emitted[0] is fired, "the emitted bar is the fired bar"
 
 
 def test_consolidated_bar_ohlc_aggregates_correctly():
@@ -171,29 +164,21 @@ def test_bucket_missing_its_last_minute_still_ends_at_the_period_boundary():
     assert fired.close == Decimal("101")
 
 
-def test_scan_does_not_emit_if_period_not_reached():
-    consolidator = TradeBarConsolidator(timedelta(minutes=15))
-    start = datetime(2024, 1, 1, 9, 30, tzinfo=UTC)
-
-    consolidator.update(_minute_bar(start, "100"))
-    # 10 minutes into the period — scan should not fire.
-    fired = consolidator.scan(to_ms_utc(start + timedelta(minutes=10)))
-
-    assert fired is None
-
-
-def test_scan_emits_trailing_partial_bar_once_period_elapsed():
+def test_scan_emits_trailing_partial_bar_only_once_period_elapsed():
     consolidator = TradeBarConsolidator(timedelta(minutes=15))
     start = datetime(2024, 1, 1, 9, 30, tzinfo=UTC)
     emitted: list[TradeBar] = []
     consolidator.on_data_consolidated = emitted.append
 
     consolidator.update(_minute_bar(start, "100"))
+    # 10 minutes into the period — scan should not fire.
+    early = consolidator.scan(to_ms_utc(start + timedelta(minutes=10)))
     fired = consolidator.scan(to_ms_utc(start + timedelta(minutes=15)))
 
-    assert fired is not None
-    assert fired.start_ms == to_ms_utc(start)
-    assert emitted == [fired]
+    assert early is None, "scan does not emit if the period is not reached"
+    assert fired is not None, "scan emits the trailing partial bar once the period has elapsed"
+    assert fired.start_ms == to_ms_utc(start), "the scanned bar starts at the period boundary"
+    assert emitted == [fired], "the scanned bar is the one emitted"
 
 
 def test_multiple_consecutive_consolidated_bars_fire_in_order():

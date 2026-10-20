@@ -59,16 +59,56 @@ _ROOT_B = UUID("22222222-2222-2222-2222-222222222222")
 
 
 class TestLeanMetadataFiles:
-    def test_missing_interest_rate_key_fails_validation(self):
-        """An incomplete/pre-#1859 receipt omits the key entirely -- must be
-        untrusted (fails validation), never silently read as 'not produced'."""
-        with pytest.raises(Exception, match="interest_rate"):
-            LeanMetadataFiles.model_validate(
-                {
+    @pytest.mark.parametrize(
+        ("payload", "match"),
+        [
+            # An incomplete/pre-#1859 receipt omits the key entirely -- must be
+            # untrusted (fails validation), never silently read as 'not produced'.
+            pytest.param(
+                lambda: {
                     "market_hours": {"file_path": "market-hours/market-hours-database.json", "sha256": "a" * 64},
                     "symbol_properties": {"file_path": "symbol-properties/symbol-properties-database.csv", "sha256": "b" * 64},
-                }
-            )
+                },
+                "interest_rate",
+                id="missing_interest_rate_key_fails_validation",
+            ),
+            # Codex P2, PR #1884. A receipt with market_hours.file_path pointing
+            # at the symbol_properties file's real, on-disk path would pass
+            # verify_bundle cleanly (the hash legitimately matches that file's
+            # content) even though LEAN always reads market_hours from its own
+            # fixed canonical location, never from whatever the receipt names.
+            pytest.param(
+                lambda: {
+                    "market_hours": {
+                        "file_path": "symbol-properties/symbol-properties-database.csv",
+                        "sha256": "a" * 64,
+                    },
+                    "symbol_properties": {
+                        "file_path": "symbol-properties/symbol-properties-database.csv",
+                        "sha256": "b" * 64,
+                    },
+                    "interest_rate": None,
+                },
+                "market_hours",
+                id="market_hours_entry_at_another_kinds_canonical_path_pr_1884",
+            ),
+            pytest.param(
+                lambda: {
+                    "market_hours": {"file_path": "market-hours/market-hours-database.json", "sha256": "a" * 64},
+                    "symbol_properties": {
+                        "file_path": "symbol-properties/symbol-properties-database.csv",
+                        "sha256": "b" * 64,
+                    },
+                    "interest_rate": {"file_path": "alternative/interest-rate/usa/wrong.csv", "sha256": "c" * 64},
+                },
+                "interest_rate",
+                id="interest_rate_entry_at_the_wrong_path_when_present",
+            ),
+        ],
+    )
+    def test_rejects_an_invalid_files_payload(self, payload, match):
+        with pytest.raises(Exception, match=match):
+            LeanMetadataFiles.model_validate(payload())
 
     def test_explicit_null_interest_rate_is_accepted(self):
         files = LeanMetadataFiles.model_validate(
@@ -79,40 +119,6 @@ class TestLeanMetadataFiles:
             }
         )
         assert files.interest_rate is None
-
-    def test_rejects_a_market_hours_entry_pointing_at_another_kinds_canonical_path(self):
-        """Codex P2, PR #1884. A receipt with market_hours.file_path pointing
-        at the symbol_properties file's real, on-disk path would pass
-        verify_bundle cleanly (the hash legitimately matches that file's
-        content) even though LEAN always reads market_hours from its own
-        fixed canonical location, never from whatever the receipt names."""
-        with pytest.raises(Exception, match="market_hours"):
-            LeanMetadataFiles.model_validate(
-                {
-                    "market_hours": {
-                        "file_path": "symbol-properties/symbol-properties-database.csv",
-                        "sha256": "a" * 64,
-                    },
-                    "symbol_properties": {
-                        "file_path": "symbol-properties/symbol-properties-database.csv",
-                        "sha256": "b" * 64,
-                    },
-                    "interest_rate": None,
-                }
-            )
-
-    def test_rejects_an_interest_rate_entry_at_the_wrong_path_when_present(self):
-        with pytest.raises(Exception, match="interest_rate"):
-            LeanMetadataFiles.model_validate(
-                {
-                    "market_hours": {"file_path": "market-hours/market-hours-database.json", "sha256": "a" * 64},
-                    "symbol_properties": {
-                        "file_path": "symbol-properties/symbol-properties-database.csv",
-                        "sha256": "b" * 64,
-                    },
-                    "interest_rate": {"file_path": "alternative/interest-rate/usa/wrong.csv", "sha256": "c" * 64},
-                }
-            )
 
 
 class TestMetadataFileEntry:

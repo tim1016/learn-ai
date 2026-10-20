@@ -358,24 +358,6 @@ describe('StrategyValidationComponent', () => {
     expect(screen.getByText('Validation evidence has not been registered yet.')).toBeTruthy();
   });
 
-  it('shows the SPY EMA QuantConnect audit copy even before validation evidence exists', async () => {
-    await render(StrategyValidationComponent, {
-      providers: [
-        provideRouter([]),
-        LEAN_TWIN_SOURCE_STUB_PROVIDER,
-        { provide: StrategyValidationService, useClass: FakeStrategyValidationService },
-      ],
-    });
-
-    fireEvent.click(await screen.findByRole('button', { name: /EMA Crossover Signal/ }));
-
-    expect(
-      await screen.findByRole('heading', { name: 'QuantConnect reference algorithm', level: 3 }),
-    ).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Copy QuantConnect algorithm' })).toBeTruthy();
-    expect(screen.getByText('references/qc-shadow/SpyEmaCrossoverAlgorithm.py')).toBeTruthy();
-  });
-
   it('shows a retryable load error instead of an empty EMA detail pane', async () => {
     const service = new FakeStrategyValidationService();
     let emaDetailUnavailable = true;

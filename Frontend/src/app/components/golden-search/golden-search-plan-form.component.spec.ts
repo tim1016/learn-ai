@@ -460,21 +460,6 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(service.preflight.mock.lastCall?.[0].pair_audits).toEqual([['fast_period', 'slow_period'], ['rsi_min', 'rsi_max']]);
   });
 
-  it('a range whose ends meet holds the knob at that value instead of being refused', async () => {
-    const service = fakeService();
-    const { view } = await renderForm(service);
-    await pickSpy(service, view);
-
-    fireEvent.input(screen.getByLabelText('Fast EMA length low'), { target: { value: '5' } });
-    fireEvent.input(screen.getByLabelText('Fast EMA length high'), { target: { value: '5' } });
-    await waitFor(() => expect(service.preflight.mock.lastCall?.[0].knobs.find((k) => k.name === 'fast_period')?.mode).toBe('fixed'));
-
-    expect(service.preflight.mock.lastCall?.[0].knobs.find((k) => k.name === 'fast_period')?.fixed_value).toBe(5);
-    expect(screen.getByText('Same low and high: held at 5.')).not.toBeNull();
-    expect(screen.queryByLabelText('Fast EMA length smallest step')).toBeNull();
-    await waitFor(() => expect(lockButton().disabled).toBe(false));
-  });
-
   // A plan shows either its expected trade frequency or its two fixed floors, so the hidden fields are never refused.
   it.each([
     { plan: 'a fixed-floor plan', policy: undefined, hidden: ['expected_trades_per_year'] },

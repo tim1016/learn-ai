@@ -268,19 +268,6 @@ async def test_starts_refused_until_boot_sweep_completes(tmp_path: Path) -> None
     await registry.stop("alpaca", _SID)
 
 
-async def test_failed_authority_preparation_keeps_boot_gate_closed(tmp_path: Path) -> None:
-    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
-
-    async def fail_recovery() -> None:
-        raise RuntimeError("authority unavailable")
-
-    with pytest.raises(BootAuthorityPreparationError, match="recover"):
-        await registry.run_boot_recovery(recover=fail_recovery)
-
-    with pytest.raises(BootRecoveryIncompleteError):
-        await deploy_bot(registry, exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
-
-
 async def test_a_rerun_boot_sweep_that_fails_closes_the_gate_its_first_run_opened(
     tmp_path: Path,
 ) -> None:

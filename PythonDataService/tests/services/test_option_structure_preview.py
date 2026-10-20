@@ -323,19 +323,6 @@ async def test_a_structure_that_costs_most_of_itself_to_trade_is_shown_with_its_
     assert seen.verdict.red is False
 
 
-async def test_the_cost_is_held_to_the_limit_the_owner_set_and_not_to_the_one_they_start_from(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """$8.00 of the $194.10 set aside is 4.12%: inside the 10% an owner starts from, and over a limit of 4%."""
-    desk = Desk(monkeypatch)
-    strict = _BULL_CALL_SPREAD.model_copy(update={"cost_limit_percent": Decimal(4)})
-
-    seen = await desk.quoted(strict, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
-
-    assert (seen.money.cost_limit_percent, seen.money.over_cost_limit) == (Decimal(4), True)
-    assert "4%" in seen.money.cost_sentence and "10%" not in seen.money.cost_sentence
-
-
 async def test_each_side_of_each_quote_is_shown_with_its_own_age_and_the_oldest_is_named(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -503,35 +490,44 @@ async def test_the_verdict_never_says_the_structure_can_be_entered_beside_an_ent
     assert "skipped" not in fine.verdict.resolves_sentence and "skipped" not in fine.entry_sentence
 
 
-async def test_a_custom_structure_is_said_to_be_one_that_can_be_entered_only_when_no_entry_would_be_refused(
+async def test_the_cost_and_the_gap_are_held_to_the_limits_the_owner_set_and_not_to_the_ones_they_start_from(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fine = await Desk(monkeypatch).quoted(_CUSTOM_SPREAD, **_NOTHING_WRONG)
-
-    assert fine.entry_refusals == [] and "can be entered" in fine.verdict.resolves_sentence
-
-
-async def test_the_gap_is_held_to_the_limit_the_owner_set_and_not_to_the_one_they_start_from(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Four cents on a mid of 2.20 is 1.82%: inside 8%, and over a limit of 1.5%. On 4.10 it is 0.98%: inside both."""
+    """$8.00 of the $194.10 set aside is 4.12%: inside the 10% an owner starts from, and over a limit of 4%.
+    Four cents on a mid of 2.20 is 1.82%: inside 8%, and over a limit of 1.5%. On 4.10 it is 0.98%: inside both."""
     desk = Desk(monkeypatch)
-    strict = _BULL_CALL_SPREAD.model_copy(update={"gap_limit_percent": Decimal("1.5")})
+    strict_cost = _BULL_CALL_SPREAD.model_copy(update={"cost_limit_percent": Decimal(4)})
+    strict_gap = _BULL_CALL_SPREAD.model_copy(update={"gap_limit_percent": Decimal("1.5")})
 
-    seen = await desk.quoted(strict, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
+    by_cost = await desk.quoted(strict_cost, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
+    by_gap = await desk.preview(strict_gap)
 
-    assert [leg.over_gap_limit for leg in seen.legs] == [False, True]
-    assert (seen.gap_limit_percent, seen.order_terms.gap_limit_percent) == (Decimal("1.5"), Decimal("1.5"))
-    assert [(refused.reason_code, refused.leg_ids) for refused in seen.entry_refusals] == [(_GAP_OVER, ["short_call"])]
-    assert "1.5%" in seen.legs[1].gap_sentence and "8%" not in seen.legs[1].gap_sentence
+    assert (by_cost.money.cost_limit_percent, by_cost.money.over_cost_limit) == (
+        Decimal(4), True,
+    ), "the cost is held to the owner's 4% and is over it"
+    assert (
+        "4%" in by_cost.money.cost_sentence and "10%" not in by_cost.money.cost_sentence
+    ), "the cost sentence says the owner's limit, not the one an owner starts from"
+    assert [leg.over_gap_limit for leg in by_gap.legs] == [False, True], "only the leg quoted wider than the owner's gap limit is over it"
+    assert (by_gap.gap_limit_percent, by_gap.order_terms.gap_limit_percent) == (
+        Decimal("1.5"), Decimal("1.5"),
+    ), "the gap limit served is the owner's, in the answer and in the order terms"
+    assert [(refused.reason_code, refused.leg_ids) for refused in by_gap.entry_refusals] == [
+        (_GAP_OVER, ["short_call"]),
+    ], "the one leg over the owner's gap limit is an entry's refusal"
+    assert (
+        "1.5%" in by_gap.legs[1].gap_sentence and "8%" not in by_gap.legs[1].gap_sentence
+    ), "the leg's gap sentence says the owner's limit, not the one an owner starts from"
     # The refusal says the same limit as the leg's own line: the owner's, not the one an owner starts from.
-    (by_gap,) = seen.entry_refusals
-    assert "Leg 2" in by_gap.sentence and "1.82%" in by_gap.sentence
-    assert "1.5%" in by_gap.sentence and "8%" not in by_gap.sentence
+    (by_gap_refusal,) = by_gap.entry_refusals
+    assert "Leg 2" in by_gap_refusal.sentence and "1.82%" in by_gap_refusal.sentence, "the refusal names leg 2 and its gap"
+    assert (
+        "1.5%" in by_gap_refusal.sentence and "8%" not in by_gap_refusal.sentence
+    ), "the refusal says the owner's gap limit, not the one an owner starts from"
     # A wide leg alone, with the cost inside its limit, is enough for the verdict to say an entry would be skipped.
-    assert seen.money is not None and seen.money.over_cost_limit is False
-    assert "would be skipped" in seen.verdict.resolves_sentence
-    assert "can be entered" not in seen.verdict.resolves_sentence
+    assert by_gap.money is not None and by_gap.money.over_cost_limit is False, "a wide leg alone leaves the cost inside its limit"
+    assert "would be skipped" in by_gap.verdict.resolves_sentence, "the verdict says an entry would be skipped"
+    assert "can be entered" not in by_gap.verdict.resolves_sentence, "the verdict does not say the structure can be entered"
 
 
 async def test_an_entry_that_nothing_here_would_refuse_is_said_apart_from_one_that_would_be_skipped(
@@ -540,12 +536,19 @@ async def test_an_entry_that_nothing_here_would_refuse_is_said_apart_from_one_th
     desk = Desk(monkeypatch)
 
     fine = await desk.quoted(_BULL_CALL_SPREAD, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
+    custom = await desk.preview(_CUSTOM_SPREAD)
     costly = await Desk(monkeypatch).quoted(_BULL_CALL_SPREAD, c585=("4.98", "5.02"), c590=("4.88", "4.92"))
 
-    assert fine.entry_refusals == [] and [refused.reason_code for refused in costly.entry_refusals] == [_COST_OVER]
-    assert fine.entry_sentence and costly.entry_sentence and fine.entry_sentence != costly.entry_sentence
+    assert fine.entry_refusals == [], "an entry nothing here would refuse has no entry refusal"
+    assert [refused.reason_code for refused in costly.entry_refusals] == [_COST_OVER], "a costly structure's entry would be refused for its cost"
+    assert (
+        fine.entry_sentence and costly.entry_sentence and fine.entry_sentence != costly.entry_sentence
+    ), "an entry nothing here would refuse is said apart from one that would be skipped"
     # The budget, the account and the quotes of an entry's own moment are not asked here, and that is said.
-    assert "budget" in fine.entry_sentence
+    assert "budget" in fine.entry_sentence, "the entry sentence says the budget is not asked here"
+    assert (
+        custom.entry_refusals == [] and "can be entered" in custom.verdict.resolves_sentence
+    ), "a custom structure is said to be one that can be entered only when no entry would be refused"
 
 
 # ---- What a day takes ---------------------------------------------------------------
@@ -766,43 +769,6 @@ async def test_a_dividend_more_than_three_days_off_brings_neither_note(monkeypat
 # ---- Money a screen shows as it is, and the line to draw ---------------------------------
 
 
-async def test_every_amount_of_cents_is_written_out_in_dollars_and_no_leg_serves_a_decay_of_its_own(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    desk = Desk(monkeypatch)
-
-    seen = await desk.quoted(_BULL_CALL_SPREAD, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
-
-    money = seen.money
-    assert (money.net_price_usd, money.premium_usd, money.premium_per_structure_usd) == (
-        "$1.94", "$194.00", "$194.00",
-    ), "the net price and the premium are written out in dollars"
-    assert (money.premium_is, money.premium_is_label) == ("paid", "paid"), "a premium paid is labelled paid"
-    assert (
-        money.premium_usd in money.premium_sentence and money.net_price_usd in money.premium_sentence
-    ), "the premium sentence carries the premium and the net price in dollars"
-    assert (money.broker_requirement_usd, money.fee_estimate_usd) == (
-        usd(0), usd(money.fee_estimate_cents),
-    ), "the broker requirement and the fee estimate are written out in dollars"
-    assert (money.entry_commitment_usd, money.round_trip_cost_usd) == (
-        usd(19_410), usd(800),
-    ), "the entry commitment and the round-trip cost are written out in dollars"
-    assert (seen.at_expiry.loss_usd, seen.at_expiry.gain_usd) == (
-        usd(19_400), usd(30_600),
-    ), "the loss and the gain at expiry are written out in dollars"
-    # Level at the $194.00 lost up to 585, up to the $306.00 gained at 590, and level again: drawn from 583 to 592.
-    assert [(point.price, point.result_cents) for point in seen.at_expiry.sketch] == [
-        (Decimal(583), -19_400), (Decimal(585), -19_400), (Decimal(590), 30_600), (Decimal(592), 30_600),
-    ], "the line to draw runs level at the loss, up to the gain, and level again, from 583 to 592"
-
-    # A contract's own decay is a share's worth and is not signed by the leg's side: beside a sold leg it reads
-    # as a loss where the position gains. Only the structure's decay is served, in cents and in dollars.
-    served = seen.model_dump(mode="json")
-    assert seen.decay.estimated and all(
-        "decay" not in name for leg in served["legs"] for name in leg
-    ), "no leg serves a decay of its own: only the structure's decay is served"
-
-
 async def test_a_premium_received_is_written_without_a_sign_and_said_to_be_received(monkeypatch: pytest.MonkeyPatch) -> None:
     desk = Desk(monkeypatch)
     received = _asking(
@@ -824,45 +790,33 @@ async def test_a_premium_received_is_written_without_a_sign_and_said_to_be_recei
 # ---- What was asked, said back; and how long the figures stand -----------------------------
 
 
-async def test_every_answer_says_each_leg_back_by_its_place_with_its_rules_in_words(monkeypatch: pytest.MonkeyPatch) -> None:
-    desk = Desk(monkeypatch)
-
-    waiting = await desk.preview(_BULL_CALL_SPREAD)
-    resolved = await desk.quoted(_BULL_CALL_SPREAD, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
-    refused = await desk.preview(_asking(_leg("short_call", "short", "call", _AT_THE_MONEY)))
-
-    for seen in (waiting, resolved):
-        first, second = seen.legs_asked
-        assert (first.leg_id, first.number, first.side_label) == ("long_call", 1, "Buy")
-        assert (second.leg_id, second.number, second.side_label) == ("short_call", 2, "Sell")
-        assert "$5" in second.sentence and "leg 1" in second.sentence and "long_call" not in second.sentence
-        assert "Oct 9 '26" in first.sentence
-    assert waiting.state not in {"resolved", "plan_refused"}
-    assert (resolved.state, refused.state) == ("resolved", "plan_refused")
-    assert [(leg.number, leg.side_label) for leg in refused.legs_asked] == [(1, "Sell")]
-
-
-async def test_a_structure_is_named_as_a_list_writes_it_and_as_a_sentence_takes_it(monkeypatch: pytest.MonkeyPatch) -> None:
-    desk = Desk(monkeypatch)
-    custom = _asking(_leg("only", "long", "call", _AT_THE_MONEY))
-    condor = _as_the_builder_starts(NamedStructure.IRON_CONDOR)
-
-    named, unnamed, with_an = [await desk.preview(asked) for asked in (_BULL_CALL_SPREAD, custom, condor)]
-
-    assert (named.structure_label, named.structure_in_a_sentence) == ("Bull call spread", "a bull call spread on")
-    assert (unnamed.structure, unnamed.structure_label) == (None, "Custom")
-    assert unnamed.structure_in_a_sentence.endswith(" on") and unnamed.structure_in_a_sentence != named.structure_in_a_sentence
-    assert with_an.structure_in_a_sentence == "an iron condor on"
-
-
-async def test_figures_stand_as_long_as_a_pages_request_does_and_are_read_together_while_a_waiting_answer_has_none(
+async def test_an_answer_says_back_what_was_asked_and_a_figured_one_says_its_money_in_dollars_and_how_long_it_stands(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     desk = Desk(monkeypatch)
 
     waiting = await desk.preview(_BULL_CALL_SPREAD)
     seen = await desk.quoted(_BULL_CALL_SPREAD, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
+    refused = await desk.preview(_asking(_leg("short_call", "short", "call", _AT_THE_MONEY)))
 
+    # Every answer says each leg back by its place, with its rules in words.
+    for which, answer in (("a waiting answer", waiting), ("a resolved answer", seen)):
+        first, second = answer.legs_asked
+        assert (first.leg_id, first.number, first.side_label) == (
+            "long_call", 1, "Buy",
+        ), f"{which} says the first leg back as leg 1, a Buy"
+        assert (second.leg_id, second.number, second.side_label) == (
+            "short_call", 2, "Sell",
+        ), f"{which} says the second leg back as leg 2, a Sell"
+        assert (
+            "$5" in second.sentence and "leg 1" in second.sentence and "long_call" not in second.sentence
+        ), f"{which} says the second leg's rule in words, by place and not by id"
+        assert "Oct 9 '26" in first.sentence, f"{which} says the first leg's expiry in words"
+    assert waiting.state not in {"resolved", "plan_refused"}, "a waiting answer is neither resolved nor refused"
+    assert (seen.state, refused.state) == ("resolved", "plan_refused"), "a quoted answer resolves; a lone sold leg is refused"
+    assert [(leg.number, leg.side_label) for leg in refused.legs_asked] == [(1, "Sell")], "a refused answer says its leg back too"
+
+    # Figures stand as long as a page's request does, and are read together while a waiting answer has none.
     assert FIGURES_GOOD_FOR_MS == PREVIEW_LEASE_MS == 60_000, "figures are good for as long as a page's request for quotes stands"
     assert (seen.figures_good_for_ms, seen.figures_good_until_ms) == (
         60_000, seen.quotes_read_ms + 60_000,
@@ -891,6 +845,48 @@ async def test_figures_stand_as_long_as_a_pages_request_does_and_are_read_togeth
     assert (
         "583" in seen.watched.ranges[0].sentence and "592" in seen.watched.ranges[0].sentence
     ), "the range sentence names its lowest and highest strike"
+
+    # Every amount of cents is written out in dollars, and no leg serves a decay of its own.
+    money = seen.money
+    assert (money.net_price_usd, money.premium_usd, money.premium_per_structure_usd) == (
+        "$1.94", "$194.00", "$194.00",
+    ), "the net price and the premium are written out in dollars"
+    assert (money.premium_is, money.premium_is_label) == ("paid", "paid"), "a premium paid is labelled paid"
+    assert (
+        money.premium_usd in money.premium_sentence and money.net_price_usd in money.premium_sentence
+    ), "the premium sentence carries the premium and the net price in dollars"
+    assert (money.broker_requirement_usd, money.fee_estimate_usd) == (
+        usd(0), usd(money.fee_estimate_cents),
+    ), "the broker requirement and the fee estimate are written out in dollars"
+    assert (money.entry_commitment_usd, money.round_trip_cost_usd) == (
+        usd(19_410), usd(800),
+    ), "the entry commitment and the round-trip cost are written out in dollars"
+    assert (seen.at_expiry.loss_usd, seen.at_expiry.gain_usd) == (
+        usd(19_400), usd(30_600),
+    ), "the loss and the gain at expiry are written out in dollars"
+    # Level at the $194.00 lost up to 585, up to the $306.00 gained at 590, and level again: drawn from 583 to 592.
+    assert [(point.price, point.result_cents) for point in seen.at_expiry.sketch] == [
+        (Decimal(583), -19_400), (Decimal(585), -19_400), (Decimal(590), 30_600), (Decimal(592), 30_600),
+    ], "the line to draw runs level at the loss, up to the gain, and level again, from 583 to 592"
+    # A contract's own decay is a share's worth and is not signed by the leg's side: beside a sold leg it reads
+    # as a loss where the position gains. Only the structure's decay is served, in cents and in dollars.
+    served = seen.model_dump(mode="json")
+    assert seen.decay.estimated and all(
+        "decay" not in name for leg in served["legs"] for name in leg
+    ), "no leg serves a decay of its own: only the structure's decay is served"
+
+
+async def test_a_structure_is_named_as_a_list_writes_it_and_as_a_sentence_takes_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    desk = Desk(monkeypatch)
+    custom = _asking(_leg("only", "long", "call", _AT_THE_MONEY))
+    condor = _as_the_builder_starts(NamedStructure.IRON_CONDOR)
+
+    named, unnamed, with_an = [await desk.preview(asked) for asked in (_BULL_CALL_SPREAD, custom, condor)]
+
+    assert (named.structure_label, named.structure_in_a_sentence) == ("Bull call spread", "a bull call spread on")
+    assert (unnamed.structure, unnamed.structure_label) == (None, "Custom")
+    assert unnamed.structure_in_a_sentence.endswith(" on") and unnamed.structure_in_a_sentence != named.structure_in_a_sentence
+    assert with_an.structure_in_a_sentence == "an iron condor on"
 
 
 async def test_the_figures_minute_is_counted_from_the_read_of_the_quotes_and_not_from_the_ask(
@@ -1041,27 +1037,6 @@ async def test_a_structure_with_a_sold_leg_previewed_too_late_in_the_session_is_
     assert too_late.figures_good_until_ms == cutoff + FIGURES_GOOD_FOR_MS
 
 
-@pytest.mark.parametrize(
-    ("wait_seconds", "no_entry_from"),
-    [
-        pytest.param(1, (15, 48, 59), id="the shortest wait an owner may choose"),
-        pytest.param(30, (15, 48, 30), id="the longest"),
-    ],
-)
-async def test_the_moment_an_entry_is_too_late_moves_with_the_owners_own_entry_wait(
-    monkeypatch: pytest.MonkeyPatch, wait_seconds: int, no_entry_from: tuple[int, int, int]
-) -> None:
-    """The sold leg's close at 15:50, less the owner's wait, 30 seconds to prove a cancel and 30 of margin."""
-    asked = _credit_spread(entry_wait_seconds=wait_seconds)
-    cutoff = scenes._at(TUESDAY, *no_entry_from)
-
-    in_time = await _read_at(monkeypatch, cutoff - 1, asked, **_PAYS)
-    too_late = await _read_at(monkeypatch, cutoff, asked, **_PAYS)
-
-    assert (_cutoff_refusals(in_time), _cutoff_refusals(too_late)) == ([], [_PAST_CUTOFF])
-    assert too_late.order_terms.entry_wait_seconds == wait_seconds
-
-
 async def test_a_bought_structure_expiring_another_day_owes_no_close_today_and_is_never_too_late(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1147,6 +1122,13 @@ _EXPIRING_TODAY_CLOSED_LATE = _credit_spread(TUESDAY, expiry_close_lead_minutes=
     [
         pytest.param(_credit_spread(), FRIDAY, (15, 48, 40), id="a sold leg, expiring another day"),
         pytest.param(_credit_spread(entry_wait_seconds=7), FRIDAY, (15, 48, 53), id="a wait of the owner's own"),
+        # The sold leg's close at 15:50, less the owner's wait, 30 seconds to prove a cancel and 30 of margin.
+        pytest.param(
+            _credit_spread(entry_wait_seconds=1), FRIDAY, (15, 48, 59), id="the shortest wait an owner may choose"
+        ),
+        pytest.param(
+            _credit_spread(entry_wait_seconds=30), FRIDAY, (15, 48, 30), id="the longest wait an owner may choose"
+        ),
         pytest.param(_EXPIRING_TODAY_CLOSED_LATE, TUESDAY, (15, 48, 40), id="a sold leg, expiring today"),
     ],
 )
@@ -1165,36 +1147,46 @@ async def test_the_preview_says_an_entry_is_too_late_at_exactly_the_moments_the_
         seen = await _read_at(monkeypatch, at_ms, asked, expiry=expiry, **_PAYS)
         by_the_clerk = entry_past_cutoff(_as_the_clerk_would_hold_it(seen), now_ms=seen.quotes_read_ms, terms=terms)
 
-        assert _cutoff_refusals(seen) == ([] if by_the_clerk is None else [by_the_clerk.reason_code]), at_ms
+        assert _cutoff_refusals(seen) == (
+            [] if by_the_clerk is None else [by_the_clerk.reason_code]
+        ), f"the preview refuses at {at_ms} exactly when the Clerk would, under one code"
+        assert (
+            seen.order_terms.entry_wait_seconds == asked.entry_wait_seconds
+        ), f"the cutoff moves with the owner's own entry wait ({at_ms})"
         refused_at.append(by_the_clerk is not None)
 
-    # The moments straddle the cutoff, so that agreeing is not agreeing about nothing.
-    assert refused_at == [False, False, False, True, True, True]
+    assert refused_at == [
+        False, False, False, True, True, True,
+    ], "the moments straddle the cutoff, so that agreeing is not agreeing about nothing"
 
 
-async def test_where_the_owners_close_falls_against_alpacas_hour_is_said_three_ways(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_the_owners_own_close_gap_and_wait_are_said_in_words_in_the_order_terms(monkeypatch: pytest.MonkeyPatch) -> None:
     desk = Desk(monkeypatch)
+    asked = _BULL_CALL_SPREAD.model_copy(update={"gap_limit_percent": Decimal("6.5"), "entry_wait_seconds": 25})
 
     said = []
     for minutes in (45, 60, 90):
         seen = await desk.preview(_BULL_CALL_SPREAD.model_copy(update={"expiry_close_lead_minutes": minutes}))
         said.append(seen.order_terms.expiry_close_sentence)
+    with_own_terms = await desk.preview(asked)
 
-    assert all(str(minutes) in words for minutes, words in zip((45, 60, 90), said, strict=True))
+    # Where the owner's close falls against Alpaca's hour is said three ways.
+    assert all(
+        str(minutes) in words for minutes, words in zip((45, 60, 90), said, strict=True)
+    ), "each close sentence says the owner's lead in minutes"
     # Inside the hour, as it begins, and before it: three things said, whatever the number in each.
-    assert len({words.replace(str(minutes), "N") for minutes, words in zip((45, 60, 90), said, strict=True)}) == 3
+    assert (
+        len({words.replace(str(minutes), "N") for minutes, words in zip((45, 60, 90), said, strict=True)}) == 3
+    ), "inside the hour, as it begins and before it are said three different ways"
     # The owner's close is counted from the session's close. Alpaca's hour is counted from "expiry", in its
     # own words, and each sentence says that it takes the two as one moment: on a half day they may not be.
-    assert all("before expiry" in words and " if " in words for words in said)
-
-
-async def test_how_the_orders_go_is_said_in_one_line_with_the_owners_own_gap_and_wait(monkeypatch: pytest.MonkeyPatch) -> None:
-    asked = _BULL_CALL_SPREAD.model_copy(update={"gap_limit_percent": Decimal("6.5"), "entry_wait_seconds": 25})
-
-    seen = await Desk(monkeypatch).preview(asked)
-
-    assert "6.5%" in seen.order_terms.orders_sentence and "25 s" in seen.order_terms.orders_sentence
-    assert "8%" not in seen.order_terms.orders_sentence and "20 s" not in seen.order_terms.orders_sentence
+    assert all(
+        "before expiry" in words and " if " in words for words in said
+    ), "each close sentence says Alpaca counts from expiry and that it takes the two as one moment"
+    # How the orders go is said in one line with the owner's own gap and wait.
+    orders = with_own_terms.order_terms.orders_sentence
+    assert "6.5%" in orders and "25 s" in orders, "the orders sentence says the owner's own gap and wait"
+    assert "8%" not in orders and "20 s" not in orders, "the orders sentence does not say the gap and wait an owner starts from"
 
 
 # ---- A leg is named by its place, never by its id --------------------------------------------
@@ -1309,35 +1301,48 @@ async def test_no_sentence_of_a_starting_structures_preview_names_a_leg_by_its_i
     assert _names_no_leg_by_its_id(seen, *(leg.leg_id for leg in asked.legs))
 
 
-async def test_two_legs_given_one_id_are_refused_by_their_places_and_ask_for_no_quotes(monkeypatch: pytest.MonkeyPatch) -> None:
-    desk = Desk(monkeypatch)
-    twice = _asking(
-        _leg("same", "long", "call", _AT_THE_MONEY), _leg("other", "long", "put", _AT_THE_MONEY),
-        _leg("same", "long", "call", {"selector": "atm_offset", "offset": 2}),
-    )
-
-    seen = await desk.preview(twice)
-
-    assert (seen.state, seen.reason_code, seen.leg_ids) == ("plan_refused", "OPTION_PREVIEW_LEGS_SHARE_AN_ID", ["same"])
-    assert "1 and 3" in seen.notice and "'same'" not in seen.notice
-    assert (seen.verdict.can_be_deployed, seen.verdict.red) == (False, True)
-    assert desk.watch.requests() == ()
-
-
-async def test_two_pairs_of_legs_that_each_share_an_id_are_said_as_two_pairs_and_not_as_four_legs_with_one_id(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("request_", "shared_ids", "says", "never_says"),
+    [
+        pytest.param(
+            _asking(
+                _leg("same", "long", "call", _AT_THE_MONEY), _leg("other", "long", "put", _AT_THE_MONEY),
+                _leg("same", "long", "call", {"selector": "atm_offset", "offset": 2}),
+            ),
+            ["same"],
+            ("1 and 3",),
+            ("'same'",),
+            id="two legs given one id are refused by their places",
+        ),
+        pytest.param(
+            _asking(
+                _leg("zulu", "long", "call", _AT_THE_MONEY), _leg("alpha", "long", "put", _AT_THE_MONEY),
+                _leg("zulu", "long", "call", {"selector": "atm_offset", "offset": 2}),
+                _leg("alpha", "long", "put", {"selector": "atm_offset", "offset": -2}),
+            ),
+            ["zulu", "alpha"],
+            ("1 and 3", "2 and 4"),
+            ("1, 2, 3 and 4",),
+            id="two pairs of legs that each share an id are said as two pairs",
+        ),
+    ],
+)
+async def test_legs_that_share_an_id_are_refused_by_their_places_and_ask_for_no_quotes(
+    monkeypatch: pytest.MonkeyPatch, request_: OptionStructurePreviewRequest, shared_ids: list[str],
+    says: tuple[str, ...], never_says: tuple[str, ...],
 ) -> None:
-    two_pairs = _asking(
-        _leg("zulu", "long", "call", _AT_THE_MONEY), _leg("alpha", "long", "put", _AT_THE_MONEY),
-        _leg("zulu", "long", "call", {"selector": "atm_offset", "offset": 2}),
-        _leg("alpha", "long", "put", {"selector": "atm_offset", "offset": -2}),
-    )
+    desk = Desk(monkeypatch)
 
-    seen = await Desk(monkeypatch).preview(two_pairs)
+    seen = await desk.preview(request_)
 
-    assert (seen.reason_code, seen.leg_ids) == ("OPTION_PREVIEW_LEGS_SHARE_AN_ID", ["zulu", "alpha"])
-    assert "1 and 3" in seen.notice and "2 and 4" in seen.notice
-    assert "1, 2, 3 and 4" not in seen.notice and _names_no_leg_by_its_id(seen, "zulu", "alpha")
+    assert (seen.state, seen.reason_code, seen.leg_ids) == (
+        "plan_refused", "OPTION_PREVIEW_LEGS_SHARE_AN_ID", shared_ids,
+    ), "the legs that share an id are refused as such, naming the ids shared"
+    assert all(said in seen.notice for said in says), "the notice says the places of the legs that share an id"
+    assert not any(never in seen.notice for never in never_says), "the notice never says a leg by its id or as one run of legs"
+    assert _names_no_leg_by_its_id(seen, *shared_ids), "no sentence names a leg by its id"
+    assert (seen.verdict.can_be_deployed, seen.verdict.red) == (False, True), "the verdict is red: it cannot be deployed"
+    assert desk.watch.requests() == (), "a refused plan asks for no quotes"
 
 
 async def test_a_leg_measured_from_a_leg_that_is_not_there_is_told_by_its_place_and_never_by_the_missing_legs_id(

@@ -339,23 +339,14 @@ def test_commands_terminal_state_cannot_regress(repo: ClerkSqliteRepository) -> 
         )
 
 
-def test_effect_operations_terminal_state_cannot_regress(repo: ClerkSqliteRepository) -> None:
-    submission = submit_budgeted_test_run(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1"
-    )
-    repo._conn.execute(
-        "INSERT INTO effect_operations (effect_operation_id, authority_generation, subject_id, "
-        "idempotency_key, command_id, strategy_instance_id, run_id, kind, state, "
-        "custody_owner, created_at_ms, updated_at_ms, terminal_receipt_id) "
-        "VALUES ('eff:1', 1, 'bot:spy-bot', 'eff-key', ?, ?, ?, 'ENTER', 'succeeded', 'ACCOUNT_CLERK', 1, 1, NULL)",
-        (submission.command.command_id, SID_A, submission.command.run_id),
-    )
-    repo._conn.commit()
-    with pytest.raises(sqlite3.IntegrityError):
-        repo._conn.execute("UPDATE effect_operations SET state = 'failed' WHERE effect_operation_id = 'eff:1'")
-
-
-def test_rejected_effect_operation_cannot_regress_either(repo: ClerkSqliteRepository) -> None:
+@pytest.mark.parametrize(
+    ("terminal", "regressed_to"),
+    [("succeeded", "failed"), ("rejected", "accepted")],
+    ids=["succeeded-cannot-become-failed", "rejected-is-terminal-too"],
+)
+def test_effect_operations_terminal_state_cannot_regress(
+    repo: ClerkSqliteRepository, terminal: str, regressed_to: str
+) -> None:
     """Rejected effects are terminal: 'rejected' is part of
     effect_operations.state's own CHECK vocabulary, so the terminal-state
     backstop must cover it too, not only succeeded/failed — otherwise a
@@ -368,12 +359,14 @@ def test_rejected_effect_operation_cannot_regress_either(repo: ClerkSqliteReposi
         "INSERT INTO effect_operations (effect_operation_id, authority_generation, subject_id, "
         "idempotency_key, command_id, strategy_instance_id, run_id, kind, state, "
         "custody_owner, created_at_ms, updated_at_ms, terminal_receipt_id) "
-        "VALUES ('eff:2', 1, 'bot:spy-bot', 'eff-key-2', ?, ?, ?, 'ENTER', 'rejected', 'ACCOUNT_CLERK', 1, 1, NULL)",
-        (submission.command.command_id, SID_A, submission.command.run_id),
+        "VALUES ('eff:1', 1, 'bot:spy-bot', 'eff-key', ?, ?, ?, 'ENTER', ?, 'ACCOUNT_CLERK', 1, 1, NULL)",
+        (submission.command.command_id, SID_A, submission.command.run_id, terminal),
     )
     repo._conn.commit()
     with pytest.raises(sqlite3.IntegrityError):
-        repo._conn.execute("UPDATE effect_operations SET state = 'accepted' WHERE effect_operation_id = 'eff:2'")
+        repo._conn.execute(
+            "UPDATE effect_operations SET state = ? WHERE effect_operation_id = 'eff:1'", (regressed_to,)
+        )
 
 
 def test_rejected_command_has_a_durable_rejection_receipt(repo: ClerkSqliteRepository) -> None:

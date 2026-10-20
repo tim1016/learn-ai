@@ -10,6 +10,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import date
+from decimal import Decimal
+from typing import Literal
+
+import pytest
 
 from app.options.contract import OptionContract
 from app.options_backtest.data import Captured
@@ -62,21 +66,29 @@ def test_cash_is_carried_over_a_win_a_loss_and_a_skipped_session() -> None:
 
     result = run_sessions(setup(leg()), [WED, THU, FRI], fake_data(days))
 
-    assert [session.cash_before_usd for session in result.sessions] == [D("10000"), D("10100.00"), D("10050.00")]
-    assert [session.cash_after_usd for session in result.sessions] == [D("10100.00"), D("10050.00"), D("10050.00")]
-    assert [session.pnl_usd for session in result.sessions] == [D("100.00"), D("-50.00"), D("0")]
+    assert [session.cash_before_usd for session in result.sessions] == [D("10000"), D("10100.00"), D("10050.00")], (
+        "each session starts with the cash the one before it ended with"
+    )
+    assert [session.cash_after_usd for session in result.sessions] == [D("10100.00"), D("10050.00"), D("10050.00")], (
+        "a win adds to the cash, a loss takes from it and a skipped session leaves it"
+    )
+    assert [session.pnl_usd for session in result.sessions] == [D("100.00"), D("-50.00"), D("0")], (
+        "the profits are the win, the loss and nothing"
+    )
     assert [session.status for session in result.sessions] == [
         SessionStatus.TRADED,
         SessionStatus.TRADED,
         SessionStatus.SKIPPED,
-    ]
+    ], "the first two sessions traded and the third was skipped"
     assert [session.outcome.skip_reason for session in result.sessions] == [
         None,
         None,
         SkipReason.UNDERLYING_DID_NOT_TRADE,
-    ]
+    ], "only the third session has a skip reason: the underlying did not trade"
     bought_and_sold = [(trade.entry.filled, trade.exit_price) for s in result.sessions for trade in s.outcome.trades]
-    assert bought_and_sold == [(D("2.00"), D("3.00")), (D("4.00"), D("3.50"))]
+    assert bought_and_sold == [(D("2.00"), D("3.00")), (D("4.00"), D("3.50"))], "each traded session bought and sold at its own prices"
+    again = run_sessions(setup(leg()), [WED, THU, FRI], fake_data(days))
+    assert result == again, "the same inputs give an equal result twice"
 
 
 def test_a_session_keeps_the_calendars_open_and_close_in_ms_and_derives_its_date_from_the_open() -> None:
@@ -129,30 +141,42 @@ def test_cash_after_is_cash_before_plus_the_profit_with_the_marks_in_it_on_every
         assert after.cash_before_usd == before.cash_after_usd
 
 
-def test_a_fee_per_contract_comes_out_of_each_sessions_profit_and_cash() -> None:
-    # 0.65 a contract, one contract: 0.65 on the buy and 0.65 on the sale.
-    # Wednesday: (3.00 - 2.00) x 100 - 0.65 - 0.65 = 98.70. Cash that moved: -200.00 - 0.65 + 300.00 - 0.65 = 98.70.
-    paying = changed(setup(leg()), fees=FeePolicy(kind="per_contract", per_contract_usd=D("0.65")))
+@pytest.mark.parametrize(
+    ("kind", "per_contract_usd", "entry_fee", "exit_fee", "pnl", "cash_after"),
+    [
+        # 0.65 a contract, one contract: 0.65 on the buy and 0.65 on the sale.
+        # Wednesday: (3.00 - 2.00) x 100 - 0.65 - 0.65 = 98.70. Cash that moved: -200.00 - 0.65 + 300.00 - 0.65 = 98.70.
+        pytest.param(
+            "per_contract", D("0.65"), D("0.65"), D("0.65"), D("98.70"), D("10098.70"),
+            id="a fee per contract comes out of each sessions profit and cash",
+        ),
+        # On 2026-10-07: a buy of 1 owes CAT 0.0003 up to 0.01, ORF 0.015 up to 0.02, OCC 0.025 up to 0.03: 0.06.
+        # The sale of 1 at 3.00 owes SEC 1 x 3.00 x 100 x 0.0000206 = 0.00618 up to 0.01, TAF 0 (paused), CAT 0.01,
+        # ORF 0.02, OCC 0.03: 0.07. Profit (3.00 - 2.00) x 100 - 0.06 - 0.07 = 99.87.
+        pytest.param(
+            "estimated", None, D("0.06"), D("0.07"), D("99.87"), D("10099.87"),
+            id="estimated fees are priced by the fee model on the date of each fill",
+        ),
+    ],
+)
+def test_fees_come_out_of_each_sessions_profit_and_cash(
+    kind: Literal["estimated", "per_contract"],
+    per_contract_usd: Decimal | None,
+    entry_fee: Decimal,
+    exit_fee: Decimal,
+    pnl: Decimal,
+    cash_after: Decimal,
+) -> None:
+    paying = changed(setup(leg()), fees=FeePolicy(kind=kind, per_contract_usd=per_contract_usd))
 
     result = run_sessions(paying, [WED], fake_data({WED: _trade_day("2.00", "3.00")}))
 
     session = result.sessions[0]
-    assert session.fees_usd == D("1.30")
-    assert session.pnl_usd == D("98.70")
-    assert session.cash_after_usd == D("10098.70")
-
-
-def test_estimated_fees_are_priced_by_the_fee_model_on_the_date_of_each_fill() -> None:
-    # On 2026-10-07: a buy of 1 owes CAT 0.0003 up to 0.01, ORF 0.015 up to 0.02, OCC 0.025 up to 0.03: 0.06.
-    # The sale of 1 at 3.00 owes SEC 1 x 3.00 x 100 x 0.0000206 = 0.00618 up to 0.01, TAF 0 (paused), CAT 0.01,
-    # ORF 0.02, OCC 0.03: 0.07. Profit (3.00 - 2.00) x 100 - 0.06 - 0.07 = 99.87.
-    estimated = changed(setup(leg()), fees=FeePolicy(kind="estimated"))
-
-    result = run_sessions(estimated, [WED], fake_data({WED: _trade_day("2.00", "3.00")}))
-
-    [trade] = result.sessions[0].outcome.trades
-    assert (trade.entry_fee_usd, trade.exit_fee_usd) == (D("0.06"), D("0.07"))
-    assert result.sessions[0].pnl_usd == D("99.87")
+    [trade] = session.outcome.trades
+    assert (trade.entry_fee_usd, trade.exit_fee_usd) == (entry_fee, exit_fee), "the buy and the sale each owe their own fee"
+    assert session.fees_usd == entry_fee + exit_fee, "the session's fees are those of its two fills"
+    assert session.pnl_usd == pnl, "the fees come out of the session's profit"
+    assert session.cash_after_usd == cash_after, "the fees come out of the session's cash"
 
 
 def test_a_session_keeps_the_sha256_of_everything_it_read() -> None:
@@ -219,19 +243,6 @@ def test_only_the_contracts_a_session_needs_are_read_and_each_is_read_once() -> 
         ("option", WED, contract_on(WED, "call", 500).occ_symbol),
         ("option", WED, contract_on(WED, "put", 500).occ_symbol),
     ]
-
-
-def test_the_same_inputs_give_an_equal_result_twice() -> None:
-    days = {
-        WED: _trade_day("2.00", "3.00"),
-        THU: _trade_day("4.00", "3.50"),
-        FRI: _day_with_no_underlying_trade_at_the_entry_time(),
-    }
-
-    first = run_sessions(setup(leg()), [WED, THU, FRI], fake_data(days))
-    second = run_sessions(setup(leg()), [WED, THU, FRI], fake_data(days))
-
-    assert first == second
 
 
 def test_a_run_holds_one_sessions_data_at_a_time_and_none_of_it_when_it_ends() -> None:

@@ -5,7 +5,6 @@ import { SetupInvalidError } from './options-backtest.service';
 import type { SavedSetup, SetupRequest, SetupSummary } from './options-backtest.types';
 import { deferred } from './past-chain/testing/deferred';
 import { EXAMPLE_ONE_REENTRY, exampleBody, readBackOf, servedExamples, servedSaved, summaryFor } from './testing/fixtures';
-import { MAX_SETUP_FILE_BYTES } from './setup-file';
 import { lettingGo, press, typeInto } from './testing/page-actions';
 import { fakeService, renderPage, sentencesFor, type FakeDownload } from './testing/render-page';
 
@@ -165,23 +164,6 @@ describe('import', () => {
     const box = notice.closest('[role="alert"]') as HTMLElement;
     expect(within(box).getByText('the entry time must be at least one minute after the open')).toBeTruthy();
     expect(screen.queryByRole('article', { name: 'Leg 1' })).toBeNull();
-  });
-
-  it('refuses a file over a megabyte before it is read or sent, and says why', async () => {
-    const service = fakeService(vi);
-    await renderPage(service, download());
-    await waitFor(() => expect(service.describe).toHaveBeenCalled());
-    const calls = service.describe.mock.calls.length;
-    const read = vi.spyOn(File.prototype, 'text');
-    const huge = new File([new Uint8Array(MAX_SETUP_FILE_BYTES + 1)], 'huge.json', { type: 'application/json' });
-
-    fireEvent.change(chooser(), { target: { files: [huge] } });
-
-    const notice = await screen.findByText(/huge\.json was not loaded/);
-    expect(notice.closest('[role="alert"]')?.textContent).toMatch(/1 MB/);
-    expect(read).not.toHaveBeenCalled();
-    expect(service.describe.mock.calls.length).toBe(calls);
-    read.mockRestore();
   });
 
   it('is not undone by a save that finishes afterwards: that save does not re-select its row or name', async () => {

@@ -97,20 +97,20 @@ def test_serialize_news_article_preserves_every_documented_field_and_converts_pu
     assert "published_utc" not in row, "the vendor's published_utc string is not kept"
 
 
-def test_serialize_news_article_survives_unparseable_published_utc() -> None:
-    """One bad vendor timestamp nulls its own ms — it must not discard the row."""
-    row = PolygonClientService._serialize_news_article(_article(published_utc="not-a-date"))
+@pytest.mark.parametrize(
+    ("overrides", "field", "expected"),
+    [
+        # One bad vendor timestamp nulls its own ms — it must not discard the row.
+        pytest.param({"published_utc": "not-a-date"}, "published_utc_ms", None, id="unparseable_published_utc_nulls_its_own_ms"),
+        pytest.param({"published_utc": "not-a-date"}, "title", "SPY climbs", id="unparseable_published_utc_keeps_the_row"),
+        pytest.param({"publisher": None, "insights": None}, "publisher", None, id="absent_publisher_stays_none"),
+        pytest.param({"publisher": None, "insights": None}, "insights", [], id="absent_insights_become_an_empty_list"),
+    ],
+)
+def test_serialize_news_article_tolerates_a_degenerate_vendor_field(overrides: dict[str, Any], field: str, expected: Any) -> None:
+    row = PolygonClientService._serialize_news_article(_article(**overrides))
 
-    assert row["published_utc_ms"] is None
-    assert row["title"] == "SPY climbs"
-
-
-def test_serialize_news_article_tolerates_absent_publisher_and_insights() -> None:
-    row = PolygonClientService._serialize_news_article(_article(publisher=None, insights=None))
-
-    assert row["publisher"] is None
-    assert row["insights"] == []
-
+    assert row[field] == expected, "the degenerate field degrades on its own and the row survives"
 
 
 # ── The vendor seam ──────────────────────────────────────────────────────
@@ -189,21 +189,14 @@ def test_list_news_forwards_every_parameter_to_the_sdk() -> None:
     assert (sent["sort"], sent["order"], sent["limit"]) == ("published_utc", "desc", 7)
 
 
-def test_list_news_caps_limit_at_the_upstream_page_ceiling() -> None:
-    service, sdk, _ = _client_with({"results": []})
+def test_list_news_caps_the_limit_at_the_upstream_page_ceiling_and_paces_the_request() -> None:
+    service, sdk, throttle = _client_with({"results": []})
 
     service.list_news(ticker="SPY", limit=5000)
 
-    assert sdk.calls[0]["limit"] == 1000
-
-
-def test_list_news_paces_the_request() -> None:
-    """The plan ceiling is 5/min; an unpaced news poll would burn it."""
-    service, _, throttle = _client_with({"results": []})
-
-    service.list_news(ticker="SPY")
-
-    assert throttle.labels == ["news:SPY"]
+    assert sdk.calls[0]["limit"] == 1000, "the limit is capped at the upstream page ceiling"
+    # The plan ceiling is 5/min; an unpaced news poll would burn it.
+    assert throttle.labels == ["news:SPY"], "the request is paced"
 
 
 def test_list_news_tolerates_a_payload_with_no_results_key() -> None:

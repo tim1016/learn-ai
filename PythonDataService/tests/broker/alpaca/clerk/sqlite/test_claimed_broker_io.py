@@ -219,25 +219,24 @@ async def test_a_claim_lost_before_the_broker_is_called_is_the_plain_claim_error
     assert trade.submitted == []
 
 
-@pytest.mark.parametrize("call", ["submit", "cancel"])
-async def test_a_claim_lost_after_a_broker_error_still_names_the_broker_call(call: str) -> None:
+@pytest.mark.parametrize(
+    ("call", "lose_on_call", "claim_gone_from_call", "lost"),
+    [
+        ("submit", 0, 2, ClaimLostAfterBrokerIO),
+        ("cancel", 0, 2, ClaimLostAfterBrokerIO),
+        ("submit", 2, 0, ExecutionLeaseLostAfterBrokerIO),
+        ("cancel", 2, 0, ExecutionLeaseLostAfterBrokerIO),
+    ],
+    ids=["claim-lost-submit", "claim-lost-cancel", "lease-lost-submit", "lease-lost-cancel"],
+)
+async def test_a_claim_or_lease_lost_after_a_broker_error_still_names_the_broker_call(
+    call: str, lose_on_call: int, claim_gone_from_call: int, lost: type[Exception]
+) -> None:
     """A transport error leaves the outcome unknown; it must not read as "nothing was sent"."""
     trade = _UnavailableTrade()
-    io = _io(_Repo(claim_gone_from_call=2), trade)
+    io = _io(_Repo(lose_on_call=lose_on_call, claim_gone_from_call=claim_gone_from_call), trade)
 
-    with pytest.raises(ClaimLostAfterBrokerIO):
-        if call == "submit":
-            await io.submit(object(), client_order_id="c-1")
-        else:
-            await io.cancel("b-1", order_ref="c-1")
-
-
-@pytest.mark.parametrize("call", ["submit", "cancel"])
-async def test_a_lease_lost_after_a_broker_error_still_names_the_broker_call(call: str) -> None:
-    trade = _UnavailableTrade()
-    io = _io(_Repo(lose_on_call=2), trade)
-
-    with pytest.raises(ExecutionLeaseLostAfterBrokerIO):
+    with pytest.raises(lost):
         if call == "submit":
             await io.submit(object(), client_order_id="c-1")
         else:
@@ -303,15 +302,29 @@ async def _cancel_while_in_flight(call: str, repo: _Repo) -> asyncio.Task[Any]:
     return task
 
 
-@pytest.mark.parametrize("call", ["submit", "cancel"])
-async def test_cancelling_a_call_whose_claim_is_gone_stays_a_cancellation(
-    call: str, folds: list[dict[str, Any]]
+@pytest.mark.parametrize(
+    ("call", "claim_gone_from_call", "expected_folds"),
+    [
+        ("submit", 2, ()),
+        ("cancel", 2, ()),
+        ("submit", 0, ("c-1",)),
+        ("cancel", 0, ("c-1",)),
+    ],
+    ids=[
+        "submit-claim-gone-stays-a-cancellation",
+        "cancel-claim-gone-stays-a-cancellation",
+        "submit-claim-held-folds-the-unknown",
+        "cancel-claim-held-folds-the-unknown",
+    ],
+)
+async def test_cancelling_a_call_stays_a_cancellation_and_folds_the_unknown_only_while_it_holds_its_claim(
+    call: str, claim_gone_from_call: int, expected_folds: tuple[str, ...], folds: list[dict[str, Any]]
 ) -> None:
-    task = await _cancel_while_in_flight(call, _Repo(claim_gone_from_call=2))
+    task = await _cancel_while_in_flight(call, _Repo(claim_gone_from_call=claim_gone_from_call))
 
     # A task group must see its own cancellation, not an OperationClaimError in its place.
-    assert task.cancelled()
-    assert folds == []
+    assert task.cancelled(), "the task stays a cancellation, whether or not its claim is gone"
+    assert [fold["order_ref"] for fold in folds] == list(expected_folds), "the unknown is folded only while the call still holds its claim"
 
 
 async def test_cancelling_a_send_whose_claim_renewal_already_failed_stays_a_cancellation(
@@ -334,16 +347,6 @@ async def test_cancelling_a_send_whose_claim_renewal_already_failed_stays_a_canc
     # The in-flight renewal proved the claim lost; the cancel must still surface as a cancel.
     assert task.cancelled()
     assert folds == []
-
-
-@pytest.mark.parametrize("call", ["submit", "cancel"])
-async def test_cancelling_a_call_that_still_holds_its_claim_folds_the_unknown(
-    call: str, folds: list[dict[str, Any]]
-) -> None:
-    task = await _cancel_while_in_flight(call, _Repo())
-
-    assert task.cancelled()
-    assert [fold["order_ref"] for fold in folds] == ["c-1"]
 
 
 @pytest.mark.parametrize("call", ["submit", "cancel"])

@@ -1106,10 +1106,18 @@ async def test_still_working_after_cancel_and_poll_leaves_no_reducing_order(
 # ── resolve_exit: zero-remaining, reducing order, verification ──────────────
 
 
-async def test_zero_remaining_quantity_skips_the_reducing_order_entirely(
+async def test_zero_remaining_quantity_skips_the_reducing_order_and_the_timeline_nests_under_the_exit(
     repo: ClerkSqliteRepository,
 ) -> None:
+    """Nothing filled before the clean cancel, so no reducing order is needed and
+    the EXIT is attributed flat.
+
+    #1379 acceptance: the operation-first timeline nests the child-order
+    transitions under the EXIT operation — every transition appended against
+    entry_ref during EXIT must carry EXIT's own effect_operation_id, not
+    ENTER's."""
     entry_ref = await _make_entry(repo, status="accepted", filled_quantity=0.0)
+    enter_effect_id_before = repo.order(entry_ref).effect_operation_id  # type: ignore[union-attr]
     accepted = accept_exit(
         repo,
         account_id=ACCOUNT_ID,
@@ -1118,16 +1126,36 @@ async def test_zero_remaining_quantity_skips_the_reducing_order_entirely(
         lifecycle_run_id=RUN_ID,
         entry_order_ref=entry_ref,
     )
-    assert accepted.effect_operation_id is not None
+    assert accepted.effect_operation_id is not None, "accept_exit created an effect operation"
+    assert accepted.effect_operation_id != enter_effect_id_before, "#1379 nested timeline: the EXIT has its own effect operation, not the ENTER's"
     trade = _FakeTrade(lookup_results=[_broker_order(entry_ref, status="canceled", filled_quantity=0.0)])
     result = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY, read=None)
 
-    assert trade.submit_calls == []
-    assert result.reducing_order_ref is None
+    assert trade.submit_calls == [], "zero remaining quantity: no reducing order is submitted"
+    assert result.reducing_order_ref is None, "zero remaining quantity: no reducing order is created"
+    assert result.effect_operation_id == accepted.effect_operation_id, "resolve_exit answers for the EXIT that was accepted"
     effect = repo.effect_operation(accepted.effect_operation_id)
-    assert effect is not None and effect.state == "succeeded"
+    assert effect is not None and effect.state == "succeeded", "the EXIT succeeds with nothing to reduce"
     transitions = repo.transitions_for_order(entry_ref)
-    assert any(t["transition_kind"] == "EXIT_ATTRIBUTED_FLAT" for t in transitions)
+    assert any(t["transition_kind"] == "EXIT_ATTRIBUTED_FLAT" for t in transitions), "the EXIT is attributed flat"
+    exit_accepted_seq = next(t["sequence"] for t in transitions if t["transition_kind"] == "EXIT_ACCEPTED")
+    # Everything from EXIT_ACCEPTED onward is unambiguously EXIT's — the
+    # entry's own pre-EXIT history (ENTER_ACCEPTED, and ENTER's own initial
+    # ORDER_SUBMIT_ACKED from when submit_enter first acked it) correctly
+    # predates the EXIT custody link and still names the ENTER effect.
+    post_accept = [t for t in transitions if t["sequence"] >= exit_accepted_seq]
+    assert len(post_accept) >= 2, "#1379 nested timeline: EXIT_ACCEPTED itself + at least the cancel-poll evidence"
+    for transition in post_accept:
+        assert transition["effect_operation_id"] == accepted.effect_operation_id, (
+            f"#1379 nested timeline: transition {transition['sequence']} from EXIT_ACCEPTED onward names the EXIT"
+        )
+
+    pre_accept = [t for t in transitions if t["sequence"] < exit_accepted_seq]
+    assert pre_accept, "#1379 nested timeline: ENTER_ACCEPTED + the entry's own initial ack predate the EXIT"
+    for transition in pre_accept:
+        assert transition["effect_operation_id"] == enter_effect_id_before, (
+            f"#1379 nested timeline: transition {transition['sequence']} before EXIT_ACCEPTED still names the ENTER"
+        )
 
 
 async def test_reducing_order_fully_filled_yields_a_succeeded_terminal_receipt(
@@ -1630,46 +1658,6 @@ async def test_in_flight_duplicate_exit_returns_existing_snapshot(
     trade.release_submit.set()
     await first
     assert len(trade.submit_calls) == 1
-
-
-async def test_nested_timeline_carries_the_exit_effect_operation_id_not_the_enters(
-    repo: ClerkSqliteRepository,
-) -> None:
-    """#1379 acceptance: the operation-first timeline nests the child-order
-    transitions under the EXIT operation — every transition appended against
-    entry_ref during EXIT must carry EXIT's own effect_operation_id, not
-    ENTER's."""
-    entry_ref = await _make_entry(repo, status="accepted", filled_quantity=0.0)
-    enter_effect_id_before = repo.order(entry_ref).effect_operation_id  # type: ignore[union-attr]
-    accepted = accept_exit(
-        repo,
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=SID,
-        decision_id="exit-1",
-        lifecycle_run_id=RUN_ID,
-        entry_order_ref=entry_ref,
-    )
-    assert accepted.effect_operation_id is not None
-    assert accepted.effect_operation_id != enter_effect_id_before
-
-    trade = _FakeTrade(lookup_results=[_broker_order(entry_ref, status="canceled", filled_quantity=0.0)])
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY, read=None)
-
-    transitions = repo.transitions_for_order(entry_ref)
-    exit_accepted_seq = next(t["sequence"] for t in transitions if t["transition_kind"] == "EXIT_ACCEPTED")
-    # Everything from EXIT_ACCEPTED onward is unambiguously EXIT's — the
-    # entry's own pre-EXIT history (ENTER_ACCEPTED, and ENTER's own initial
-    # ORDER_SUBMIT_ACKED from when submit_enter first acked it) correctly
-    # predates the EXIT custody link and still names the ENTER effect.
-    post_accept = [t for t in transitions if t["sequence"] >= exit_accepted_seq]
-    assert len(post_accept) >= 2  # EXIT_ACCEPTED itself + at least the cancel-poll evidence
-    for transition in post_accept:
-        assert transition["effect_operation_id"] == accepted.effect_operation_id
-
-    pre_accept = [t for t in transitions if t["sequence"] < exit_accepted_seq]
-    assert pre_accept  # ENTER_ACCEPTED + the entry's own initial ack
-    for transition in pre_accept:
-        assert transition["effect_operation_id"] == enter_effect_id_before
 
 
 async def test_an_accepted_exit_drives_the_full_happy_path_in_one_resolve(repo: ClerkSqliteRepository) -> None:

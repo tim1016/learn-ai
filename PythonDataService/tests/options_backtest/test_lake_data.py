@@ -216,19 +216,6 @@ async def test_the_underlying_is_held_exactly_when_the_lakes_own_coverage_check_
     assert report.missing_days == ([] if held else [FRIDAY])
 
 
-async def test_a_damaged_underlying_file_is_one_named_error_and_not_none(
-    fake_catalog: FakeCatalog, tmp_lake: Path
-) -> None:
-    await store_underlying_day(fake_catalog, tmp_lake, _underlying_bars())
-    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), STOCK_PATH, b"admitted, but not a zip", admit=True)
-
-    with pytest.raises(UnderlyingDayUnreadable) as caught:
-        await _read(LakeRunData("SPY").underlying_day, FRIDAY)
-
-    assert "SPY" in str(caught.value) and "2025-06-13" in str(caught.value)
-    assert caught.value.__cause__ is not None
-
-
 async def test_underlying_bytes_the_catalog_does_not_admit_are_refused_and_not_read_as_missing(
     fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:

@@ -147,6 +147,9 @@ async def test_a_call_in_the_money_is_settled_in_cash_at_its_exercise_value_and_
 
     Exercised, it would have bought 100 shares for $58,500.00 on a $1,000.00
     budget. No share is bought, and the bot is held for none.
+
+    A Dry Run's fills are never recorded as a real account's evidence, and a
+    settlement's are no exception.
     """
     await dry_run.enter(dry_run.evidence())
     _keeps_spy(dry_run, "590.25")
@@ -154,23 +157,28 @@ async def test_a_call_in_the_money_is_settled_in_cash_at_its_exercise_value_and_
 
     await dry_run.clerk.reconcile_once()
 
-    assert dry_run.held() == {}
-    assert dry_run.fills() == [(SYMBOL, "buy", 1.0, 1.94, 100), (SYMBOL, "sell", 1.0, 5.25, 100)]
-    assert dry_run.realized_pnl() == Decimal("331")
+    assert dry_run.held() == {}, "the bot holds no contract and no share after the settlement"
+    assert dry_run.fills() == [(SYMBOL, "buy", 1.0, 1.94, 100), (SYMBOL, "sell", 1.0, 5.25, 100)], "the books hold the buy and the cash sale at the exercise value"
+    assert dry_run.realized_pnl() == Decimal("331"), "made 525.00 - 194.00"
     [booked] = _booked(dry_run)
-    assert booked["summary_code"] == "OPTION_SETTLED_IN_CASH" and booked["ended_by"] == "settled_in_cash"
-    assert (booked["close_price"], booked.get("shares"), booked["simulated"]) == ("5.25", None, True)
-    assert _fees(dry_run) == Decimal("0.15")
+    assert booked["summary_code"] == "OPTION_SETTLED_IN_CASH" and booked["ended_by"] == "settled_in_cash", "booked as a settlement in cash"
+    assert (booked["close_price"], booked.get("shares"), booked["simulated"]) == ("5.25", None, True), "sold at 5.25 a share, never exercised into shares, marked simulated"
+    assert _fees(dry_run) == Decimal("0.15"), "fees: the entry's six cents and the sale's nine"
     budget = _budget(dry_run)
-    assert (budget.realized_gross, budget.fees, budget.position_cost) == (Decimal("331"), Decimal("0.15"), 0)
-    assert (budget.balance, budget.free) == (Decimal("1330.85"), Decimal("1330.85"))
+    assert (budget.realized_gross, budget.fees, budget.position_cost) == (Decimal("331"), Decimal("0.15"), 0), "the bot's statement: made, fees and nothing in position"
+    assert (budget.balance, budget.free) == (Decimal("1330.85"), Decimal("1330.85")), "balance 1,000.00 + 331.00 - 0.15"
     reading = dry_run.account_reading()
     assert (reading.cash_available_usd, reading.equity_usd, reading.position_count) == (
         Decimal("1330.85"), Decimal("1330.85"), 0
-    )
+    ), "the account reads cash and equity, with no position"
     # The simulation's broker holds what the books hold: nothing.
-    assert await dry_run.clerk._read.list_positions() == []
-    assert await _page_notices(dry_run) == {}
+    assert await dry_run.clerk._read.list_positions() == [], "the simulation's broker holds nothing"
+    assert await _page_notices(dry_run) == {}, "no notice is raised"
+    with dry_run.repo.write_fence() as conn:
+        sources = {
+            row[0] for row in conn.execute("SELECT evidence_source FROM fills WHERE fill_id LIKE 'option-event:%'")
+        }
+    assert sources == {"simulated_execution"}, "a settlement's fills are on the books as a simulated execution, never a real account's evidence"
 
 
 async def test_a_put_in_the_money_is_settled_in_cash_and_leaves_no_short_and_a_budget_that_still_reads(
@@ -282,21 +290,6 @@ async def test_the_books_record_says_it_is_a_simulations_rule_with_the_price_it_
     )
     assert said["settled_at_ms"] == SATURDAY_NOON
     assert booked["broker"] == "synthetic" and booked["source_code"] == "SIMULATED_CASH_SETTLEMENT"
-
-
-async def test_what_a_simulation_settled_is_on_the_books_as_a_simulated_execution(dry_run: _DryRun) -> None:  # noqa: F811
-    """A Dry Run's fills are never recorded as a real account's evidence, and a settlement's are no exception."""
-    await dry_run.enter(dry_run.evidence())
-    _keeps_spy(dry_run, "590.25")
-    _wait_until(dry_run, SATURDAY_NOON)
-
-    await dry_run.clerk.reconcile_once()
-
-    with dry_run.repo.write_fence() as conn:
-        sources = {
-            row[0] for row in conn.execute("SELECT evidence_source FROM fills WHERE fill_id LIKE 'option-event:%'")
-        }
-    assert sources == {"simulated_execution"}
 
 
 # ── when it is settled ───────────────────────────────────────────────────

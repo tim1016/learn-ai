@@ -52,17 +52,6 @@ class TestWorkspaceSizeBytesScandir:
         ghost = tmp_path / "does_not_exist"
         assert workspace_size_bytes_scandir(ghost) == 0
 
-    def test_handles_disappearing_file_mid_walk(self, tmp_path: Path) -> None:
-        """A file vanishing between scandir entry and stat() must not
-        propagate the OSError — the poller is racing a still-shutting-
-        down LEAN process and the next walk catches up."""
-        from app.lean_sidecar.workspace_poller import workspace_size_bytes_scandir
-
-        (tmp_path / "stable.bin").write_bytes(b"s" * 100)
-        # Walk an empty subtree where a file path is unreadable; under
-        # normal POSIX semantics any race-induced OSError is swallowed.
-        assert workspace_size_bytes_scandir(tmp_path) == 100
-
 
 class TestWorkspacePollerLifecycle:
     """Thread lifecycle: start/stop are idempotent in spirit; the

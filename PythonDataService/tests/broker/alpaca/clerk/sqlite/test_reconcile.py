@@ -412,21 +412,31 @@ def _our_order_ref(intent_id: str = "abc") -> str:
     return build_order_ref(build_bot_order_namespace(SID), intent_id)
 
 
-def test_plan_flags_unexplained_order_for_a_foreign_client_order_id() -> None:
-    foreign = _broker_order("manual/someone/v1:xyz")
+@pytest.mark.parametrize(
+    ("client_order_id", "broker_positions", "attributed_positions"),
+    [
+        pytest.param("manual/someone/v1:xyz", (), (), id="a foreign client order id"),
+        pytest.param(None, (), (), id="no client order id is foreign"),
+        pytest.param(
+            "manual/someone/v1:xyz", (("SPY", 5),), (("SPY", 3.0),),
+            id="an unexplained order outranks a position drift",
+        ),
+    ],
+)
+def test_plan_flags_unexplained_order(
+    client_order_id: str | None,
+    broker_positions: tuple[tuple[str, float], ...],
+    attributed_positions: tuple[tuple[str, float], ...],
+) -> None:
+    foreign = _broker_order("placeholder").model_copy(update={"client_order_id": client_order_id})
     plan = plan_account_reconciliation(
-        namespaces=_namespaces(), broker_orders=[foreign], broker_positions=[], attributed_positions={}
+        namespaces=_namespaces(),
+        broker_orders=[foreign],
+        broker_positions=[_position(symbol, quantity=quantity) for symbol, quantity in broker_positions],
+        attributed_positions=dict(attributed_positions),
     )
-    assert plan.verdict == "unexplained_order"
-    assert plan.foreign_orders == (foreign,)
-
-
-def test_plan_treats_an_order_with_no_client_order_id_as_foreign() -> None:
-    manual = _broker_order("placeholder").model_copy(update={"client_order_id": None})
-    plan = plan_account_reconciliation(
-        namespaces=_namespaces(), broker_orders=[manual], broker_positions=[], attributed_positions={}
-    )
-    assert plan.verdict == "unexplained_order"
+    assert plan.verdict == "unexplained_order", "the verdict is unexplained_order"
+    assert plan.foreign_orders == (foreign,), "the order is listed as foreign"
 
 
 @pytest.mark.parametrize(
@@ -501,17 +511,6 @@ def test_plan_flags_position_drift_verdict_when_drift_and_indeterminate_both_pre
     assert plan.verdict == "position_drift"
     assert plan.drifted_symbols == ("SPY",)
     assert plan.indeterminate_symbols == ("QQQ",)
-
-
-def test_plan_prioritizes_unexplained_order_over_position_drift() -> None:
-    foreign = _broker_order("manual/someone/v1:xyz")
-    plan = plan_account_reconciliation(
-        namespaces=_namespaces(),
-        broker_orders=[foreign],
-        broker_positions=[_position("SPY", quantity=5)],
-        attributed_positions={"SPY": 3.0},
-    )
-    assert plan.verdict == "unexplained_order"
 
 
 def test_plan_drift_tolerance_ignores_float_residue_within_epsilon() -> None:
@@ -681,7 +680,9 @@ async def test_account_reconciliation_records_unknown_effect_attempt(repo: Clerk
     await _reconcile_unknown_effect(repo, trigger="OPERATOR_RECONCILE_NOW", trade=_FakeTrade())
     transitions = repo.transitions_for_order(order_ref)
     reconciliation_rows = [t for t in transitions if t["transition_kind"] == "RECONCILIATION_ATTEMPTED"]
-    assert len(reconciliation_rows) == 1
+    assert len(reconciliation_rows) == 1, "the unknown effect's attempt is recorded once"
+    facts = json.loads(reconciliation_rows[0]["facts_json"])
+    assert facts["trigger"] == "OPERATOR_RECONCILE_NOW", "the attempt records the operator's reconcile-now trigger"
 
 
 async def test_account_reconciliation_delegates_an_exit_owned_entry_to_resolve_exit(
@@ -1414,57 +1415,6 @@ class _RawOrdersClient:
         return []
 
 
-@pytest.mark.parametrize(
-    ("unnamed", "contained_as"),
-    [
-        pytest.param({"id": None}, UNIDENTIFIED_BROKER_ORDER_ID, id="id-less"),
-        pytest.param(
-            {"id": "mleg-open-1", "order_class": "mleg", "symbol": _ABSENT, "side": _ABSENT},
-            "mleg-open-1",
-            id="multi-leg-parent",
-        ),
-    ],
-)
-async def test_reconcile_contains_one_unnamed_order_and_keeps_reading_the_rest(
-    repo: ClerkSqliteRepository,
-    unnamed: dict[str, object],
-    contained_as: str,
-) -> None:
-    """One order with no id or symbol once refused the whole snapshot (#2643).
-
-    That was ``BROKER_SNAPSHOT_STALE``, which admits no reduction: one bad
-    broker record froze exits account-wide, the failure #2363 contains per
-    order. The unnamed order is now contained alone, with reductions admitted,
-    and the rest of the snapshot is judged as usual.
-    """
-    from app.broker.alpaca.broker import AlpacaBroker
-
-    base = load_alpaca_fixture_file("orders", "orders.json")[1]
-    readable = {**base, "id": "external-order-1", "client_order_id": "alpaca-console:operator-order-1"}
-    poisoned = {
-        key: value
-        for key, value in {**base, "client_order_id": "alpaca-console:unnamed-1", **unnamed}.items()
-        if value is not _ABSENT
-    }
-    read = AlpacaBroker(client=_RawOrdersClient([poisoned, readable]))  # type: ignore[arg-type]
-
-    result = await reconcile_account(repo, read=read, trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
-
-    assert result.verdict == "unexplained_order"
-    assert (
-        repo.active_uncertainty(scope="ACCOUNT_CLERK", reason_code="BROKER_SNAPSHOT_STALE", strategy_instance_id=None)
-        is None
-    )
-    episode = repo.active_uncertainty(
-        scope="ACCOUNT_CLERK", reason_code="UNFOLDABLE_BROKER_ORDER", strategy_instance_id=None
-    )
-    assert episode is not None and bool(episode["allows_reduction"])
-    assert json.loads(episode["evidence_refs_json"]) == [contained_as]
-    hold = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD")
-    assert hold is not None and json.loads(hold["evidence_refs_json"]) == ["external-order-1"]
-    assert [row["broker_order_id"] for row in repo.external_orders()] == ["external-order-1"]
-
-
 # A row whose fill count, timestamp or session flag cannot be parsed once
 # refused the whole orders answer (#2648) -- the account-wide reduction hold
 # #2363 removed for text (#2643). Each shape is one unreadable value on an
@@ -1476,47 +1426,68 @@ _UNREADABLE_ORDER_VALUES = [
 ]
 
 
-@pytest.mark.parametrize("unreadable", _UNREADABLE_ORDER_VALUES)
-async def test_reconcile_contains_one_order_with_unreadable_values_and_keeps_reading_the_rest(
+@pytest.mark.parametrize(
+    ("poison", "contained_as"),
+    [
+        pytest.param({"client_order_id": "alpaca-console:unnamed-1", "id": None}, UNIDENTIFIED_BROKER_ORDER_ID, id="id-less"),
+        pytest.param(
+            {
+                "client_order_id": "alpaca-console:unnamed-1",
+                "id": "mleg-open-1", "order_class": "mleg", "symbol": _ABSENT, "side": _ABSENT,
+            },
+            "mleg-open-1",
+            id="multi-leg-parent",
+        ),
+        *(
+            pytest.param(
+                {"id": "unreadable-order-1", "client_order_id": "alpaca-console:unreadable-1", **unreadable.values[0]},
+                "unreadable-order-1",
+                id=unreadable.id,
+            )
+            for unreadable in _UNREADABLE_ORDER_VALUES
+        ),
+    ],
+)
+async def test_reconcile_contains_one_unnamed_or_unreadable_order_and_keeps_reading_the_rest(
     repo: ClerkSqliteRepository,
-    unreadable: dict[str, object],
+    poison: dict[str, object],
+    contained_as: str,
 ) -> None:
-    """One row a value of which cannot be parsed once refused the whole orders read (#2648).
+    """One order with no id or symbol once refused the whole snapshot (#2643); so did one value that cannot be parsed (#2648).
 
     That was ``BROKER_SNAPSHOT_STALE``, which admits no reduction: one bad
-    broker record froze exits account-wide. The row now maps with that value
-    named unreadable, so the Clerk cannot state it truthfully, and is
-    contained alone under its id with reductions admitted, the same
-    per-order rule missing text follows (#2643), and the rest of the
-    snapshot is judged as usual.
+    broker record froze exits account-wide, the failure #2363 contains per
+    order. The order is now contained alone under its id, with reductions
+    admitted (an unreadable value maps with that value named unreadable, so
+    the Clerk cannot state it truthfully; the same per-order rule missing
+    text follows), and the rest of the snapshot is judged as usual.
     """
     from app.broker.alpaca.broker import AlpacaBroker
 
     base = load_alpaca_fixture_file("orders", "orders.json")[1]
     readable = {**base, "id": "external-order-1", "client_order_id": "alpaca-console:operator-order-1"}
-    poisoned = {
-        **base,
-        "id": "unreadable-order-1",
-        "client_order_id": "alpaca-console:unreadable-1",
-        **unreadable,
-    }
+    poisoned = {key: value for key, value in {**base, **poison}.items() if value is not _ABSENT}
     read = AlpacaBroker(client=_RawOrdersClient([poisoned, readable]))  # type: ignore[arg-type]
 
     result = await reconcile_account(repo, read=read, trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
 
-    assert result.verdict == "unexplained_order"
+    assert result.verdict == "unexplained_order", "the rest of the snapshot is judged as usual"
     assert (
         repo.active_uncertainty(scope="ACCOUNT_CLERK", reason_code="BROKER_SNAPSHOT_STALE", strategy_instance_id=None)
         is None
-    )
+    ), "the snapshot is not held stale"
     episode = repo.active_uncertainty(
         scope="ACCOUNT_CLERK", reason_code="UNFOLDABLE_BROKER_ORDER", strategy_instance_id=None
     )
-    assert episode is not None and bool(episode["allows_reduction"])
-    assert json.loads(episode["evidence_refs_json"]) == ["unreadable-order-1"]
+    assert episode is not None and bool(episode["allows_reduction"]), "the order is contained with reductions admitted"
+    assert json.loads(episode["evidence_refs_json"]) == [contained_as], "the contained order is named by its id"
     hold = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD")
-    assert hold is not None and json.loads(hold["evidence_refs_json"]) == ["external-order-1"]
-    assert [row["broker_order_id"] for row in repo.external_orders()] == ["external-order-1"]
+    assert (
+        hold is not None and json.loads(hold["evidence_refs_json"]) == ["external-order-1"]
+    ), "the readable order is held as unexplained"
+    assert [row["broker_order_id"] for row in repo.external_orders()] == [
+        "external-order-1"
+    ], "only the readable order is recorded as external"
 
 
 @pytest.mark.parametrize("unreadable", _UNREADABLE_ORDER_VALUES)
@@ -2139,21 +2110,6 @@ async def test_reconcile_missing_enter_order_remains_unresolved(
     assert decision.reason_code == "RECONCILIATION_INCOMPLETE"
 
 
-async def test_reconcile_account_operator_reconcile_now_trigger_is_recorded(
-    repo: ClerkSqliteRepository,
-) -> None:
-    order_ref = await _make_uncertain_order(repo)
-    read = _FakeRead(orders=[], positions=[])
-
-    await reconcile_account(repo, read=read, trade=_FakeTrade(), trigger="OPERATOR_RECONCILE_NOW", pricing=UNPRICEABLE_RECOVERY)
-    transitions = repo.transitions_for_order(order_ref)
-    reconciliation_facts = next(t for t in transitions if t["transition_kind"] == "RECONCILIATION_ATTEMPTED")
-    import json
-
-    facts = json.loads(reconciliation_facts["facts_json"])
-    assert facts["trigger"] == "OPERATOR_RECONCILE_NOW"
-
-
 # ── ReconciliationSweep ──────────────────────────────────────────────────────
 
 
@@ -2617,7 +2573,13 @@ def _raise_exit_not_flat(
     )
 
 
-async def test_reconcile_account_redrives_stale_exit_not_flat(clocked_repo) -> None:
+@pytest.mark.parametrize(
+    ("past_the_age_gate_ms", "redriven", "submits"),
+    [pytest.param(1, True, 1, id="stale"), pytest.param(-1, False, 0, id="fresh")],
+)
+async def test_reconcile_account_redrives_an_exit_not_flat_only_once_it_is_stale(
+    clocked_repo, past_the_age_gate_ms: int, redriven: bool, submits: int
+) -> None:
     repo, clock = clocked_repo
     await _held_position(repo)
     _raise_exit_not_flat(repo, attributed_qty=10.0)
@@ -2626,8 +2588,8 @@ async def test_reconcile_account_redrives_stale_exit_not_flat(clocked_repo) -> N
         reason_code=EXIT_NOT_FLAT_REASON_CODE,
         strategy_instance_id=WATCHDOG_SID,
     )
-    assert episode is not None
-    clock.advance(_exit_not_flat_redrive_policy().after_ms + 1)
+    assert episode is not None, "the EXIT_NOT_FLAT episode is open"
+    clock.advance(_exit_not_flat_redrive_policy().after_ms + past_the_age_gate_ms)
     trade = _FakeTrade()
 
     await reconcile_account(
@@ -2638,8 +2600,9 @@ async def test_reconcile_account_redrives_stale_exit_not_flat(clocked_repo) -> N
     )
 
     token = hashlib.sha256(episode["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
-    assert repo.get_command(f"cmd:{WATCHDOG_SID}:exit-redrive-{token}-1") is not None
-    assert len(trade.submit_calls) == 1  # the recovery reducing order reached the broker
+    command = repo.get_command(f"cmd:{WATCHDOG_SID}:exit-redrive-{token}-1")
+    assert (command is not None) is redriven, "the re-drive command exists only for a stale episode"
+    assert len(trade.submit_calls) == submits, "the re-drive's order reaches the broker only for a stale episode"
 
 
 def _assert_redrive_deferred(repo: ClerkSqliteRepository, episode: dict[str, Any], trade: _FakeTrade) -> None:
@@ -3281,29 +3244,6 @@ async def test_watchdog_waits_for_the_actual_regular_open(clocked_repo) -> None:
     assert transition is not None
     facts = ExitReducingOrderCreatedFacts.from_facts_json(transition["facts_json"])
     assert (facts.order_type, facts.extended_hours) == ("market", False)
-
-
-async def test_reconcile_account_does_not_redrive_a_fresh_exit_not_flat(clocked_repo) -> None:
-    repo, clock = clocked_repo
-    await _held_position(repo)
-    _raise_exit_not_flat(repo, attributed_qty=10.0)
-    episode = repo.active_uncertainty(
-        scope="CUSTODY_SUBJECT",
-        reason_code=EXIT_NOT_FLAT_REASON_CODE,
-        strategy_instance_id=WATCHDOG_SID,
-    )
-    assert episode is not None
-    clock.advance(_exit_not_flat_redrive_policy().after_ms - 1)
-
-    await reconcile_account(
-        repo,
-        read=_FakeRead(positions=[_position("SPY", quantity=10.0)]),
-        trade=_FakeTrade(),
-        pricing=UNPRICEABLE_RECOVERY,
-    )
-
-    token = hashlib.sha256(episode["uncertainty_id"].encode("utf-8")).hexdigest()[:12]
-    assert repo.get_command(f"cmd:{WATCHDOG_SID}:exit-redrive-{token}-1") is None
 
 
 async def test_reconcile_account_escalates_exit_stuck_after_redrive_cap(

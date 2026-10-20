@@ -221,6 +221,20 @@ def test_rolling_split_emits_multiple_folds_and_aggregates_only_count_completed_
     assert result.pct_profitable_folds is not None, "aggregates count completed folds: pct_profitable_folds is set"
     assert 0.0 <= result.pct_profitable_folds <= 1.0, "aggregates count completed folds: pct_profitable_folds is in [0, 1]"
 
+    # Compounded curve: each fold's start equity equals the previous
+    # fold's end equity. Timestamps should be monotonically non-decreasing
+    # across the concatenated curve.
+    if not result.combined_oos_equity_curve:
+        pytest.skip("synthetic series produced empty fold curves")
+
+    timestamps = [p.timestamp_ms for p in result.combined_oos_equity_curve]
+    # Compounded curve is the concatenation of fold curves; within a
+    # fold the timestamps are strictly increasing, but at fold
+    # boundaries the next fold may start at exactly the previous
+    # fold's last timestamp + 1 minute. Just verify non-decreasing.
+    for prev, cur in itertools.pairwise(timestamps):
+        assert cur >= prev, f"combined OOS curve: timestamps not monotonic at {prev} → {cur}"
+
 
 def test_parameter_search_persists_train_receipts_and_freezes_winner_for_test(
     tmp_path: Path,
@@ -506,38 +520,6 @@ def test_oos_retention_uses_parent_sharpe(tmp_path: Path, fake_factory_long):
         abs=1e-12,
         rel=0,
     )
-
-
-# ---------------------------------------------------------------------------
-# Combined OOS curve — compounded across folds.
-# ---------------------------------------------------------------------------
-def test_combined_oos_curve_is_monotonically_concatenated(tmp_path: Path, fake_factory_long):
-    """Compounded curve: each fold's start equity equals the previous
-    fold's end equity. Timestamps should be monotonically non-decreasing
-    across the concatenated curve.
-    """
-    request = WalkForwardRequest(
-        spec=_build_test_spec(),
-        start_ms=date_str_to_ms("2024-01-02"),
-        end_ms=date_str_to_ms("2024-02-22"),
-        split_policy=RollingSplitPolicy(train_days=10, test_days=5, step_days=5),
-    )
-    _, result = run_walk_forward(
-        request,
-        data_source_factory=fake_factory_long,
-        artifacts_root=tmp_path,
-        data_root_revision="test-rev",
-    )
-    if not result.combined_oos_equity_curve:
-        pytest.skip("synthetic series produced empty fold curves")
-
-    timestamps = [p.timestamp_ms for p in result.combined_oos_equity_curve]
-    # Compounded curve is the concatenation of fold curves; within a
-    # fold the timestamps are strictly increasing, but at fold
-    # boundaries the next fold may start at exactly the previous
-    # fold's last timestamp + 1 minute. Just verify non-decreasing.
-    for prev, cur in itertools.pairwise(timestamps):
-        assert cur >= prev, f"timestamps not monotonic at {prev} → {cur}"
 
 
 # ---------------------------------------------------------------------------

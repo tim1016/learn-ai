@@ -137,33 +137,34 @@ def test_daily_snapshot_and_bound_reader(tmp_path: Path) -> None:
         list(ManifestBoundDailyReader([tmp_path], snapshot.artifacts).iter_bars("SPY", *WINDOW))
 
 
-def test_a_warm_bound_daily_reader_refuses_bytes_changed_after_its_first_read(tmp_path: Path) -> None:
-    """#3037: the manifest check cannot be skipped by the history cache's hit branch.
-
-    The base reader's old early return handed back decoded bars without
-    traversing the subclass's ``_read_zip``, so a warm bound reader served
-    history that no longer matched the receipted manifest.
-    """
+# #3037: the manifest check cannot be skipped by the history cache's hit branch.
+# The base reader's old early return handed back decoded bars without
+# traversing the subclass's ``_read_zip``, so a warm bound reader served
+# history that no longer matched the receipted manifest.
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        pytest.param(
+            lambda root: write_lean_daily_zip(root, "SPY", [_daily_bar(SESSIONS[0], "501")]),
+            "changed since the snapshot",
+            id="bytes_changed_after_its_first_read_3037",
+        ),
+        pytest.param(
+            lambda root: (root / "equity" / "usa" / "daily" / "spy.zip").unlink(),
+            "was receipted at launch but is missing now",
+            id="receipted_archive_deleted_after_the_first_read",
+        ),
+    ],
+)
+def test_a_warm_bound_daily_reader_refuses_an_archive_that_moved_after_its_first_read(tmp_path: Path, mutate, message: str) -> None:
     write_lean_daily_zip(tmp_path, "SPY", [_daily_bar(day, "500") for day in SESSIONS])
     snapshot = capture_data_snapshot(roots=[tmp_path], symbol="SPY", resolution="daily", data_start=WINDOW[0], data_end=WINDOW[1])
     bound = ManifestBoundDailyReader([tmp_path], snapshot.artifacts)
-    assert len(list(bound.iter_bars("SPY", *WINDOW))) == len(SESSIONS)
+    assert len(list(bound.iter_bars("SPY", *WINDOW))) == len(SESSIONS), "the first read serves every session"
 
-    write_lean_daily_zip(tmp_path, "SPY", [_daily_bar(SESSIONS[0], "501")])
+    mutate(tmp_path)
 
-    with pytest.raises(DataSnapshotMismatchError, match="changed since the snapshot"):
-        list(bound.iter_bars("SPY", *WINDOW))
-
-
-def test_a_warm_bound_daily_reader_refuses_a_receipted_archive_deleted_after_the_first_read(tmp_path: Path) -> None:
-    write_lean_daily_zip(tmp_path, "SPY", [_daily_bar(day, "500") for day in SESSIONS])
-    snapshot = capture_data_snapshot(roots=[tmp_path], symbol="SPY", resolution="daily", data_start=WINDOW[0], data_end=WINDOW[1])
-    bound = ManifestBoundDailyReader([tmp_path], snapshot.artifacts)
-    assert list(bound.iter_bars("SPY", *WINDOW))
-
-    (tmp_path / "equity" / "usa" / "daily" / "spy.zip").unlink()
-
-    with pytest.raises(DataSnapshotMismatchError, match="was receipted at launch but is missing now"):
+    with pytest.raises(DataSnapshotMismatchError, match=message):
         list(bound.iter_bars("SPY", *WINDOW))
 
 
@@ -207,7 +208,22 @@ def test_a_warm_bound_daily_reader_refuses_a_changed_adjustment_basis(tmp_path, 
         list(bound.iter_bars("SPY", *WINDOW))
 
 
-def test_a_warm_bound_daily_reader_refuses_a_companion_deleted_after_the_first_read(tmp_path, seeded_lake_catalog) -> None:
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        pytest.param(
+            lambda companion: companion.unlink(),
+            "corporate-action version receipt is missing",
+            id="companion_deleted",
+        ),
+        pytest.param(
+            lambda companion: companion.write_bytes(companion.read_bytes() + b"\n"),
+            "changed since the snapshot",
+            id="companion_changed",
+        ),
+    ],
+)
+def test_a_warm_bound_daily_reader_refuses_a_companion_that_moved_after_the_first_read(tmp_path, seeded_lake_catalog, mutate, message) -> None:
     from uuid import UUID
 
     from app.data_lake.adjustment_versions import companion_path
@@ -218,31 +234,11 @@ def test_a_warm_bound_daily_reader_refuses_a_companion_deleted_after_the_first_r
     seed_lake_daily(root, "SPY", list(SESSIONS))
     snapshot = capture_data_snapshot(roots=[root], symbol="SPY", resolution="daily", data_start=WINDOW[0], data_end=WINDOW[1])
     bound = ManifestBoundDailyReader([root], snapshot.artifacts)
-    assert list(bound.iter_bars("SPY", *WINDOW))
+    assert list(bound.iter_bars("SPY", *WINDOW)), "the first read serves bars"
 
-    companion_path(root / "equity" / "usa" / "daily" / "spy.zip").unlink()
+    mutate(companion_path(root / "equity" / "usa" / "daily" / "spy.zip"))
 
-    with pytest.raises(DataSnapshotMismatchError, match="corporate-action version receipt is missing"):
-        list(bound.iter_bars("SPY", *WINDOW))
-
-
-def test_a_warm_bound_daily_reader_refuses_a_companion_changed_after_the_first_read(tmp_path, seeded_lake_catalog) -> None:
-    from uuid import UUID
-
-    from app.data_lake.adjustment_versions import companion_path
-    from app.data_lake.root_identity import init_empty_root
-    from tests._helpers.lake_fixture import seed_lake_daily
-
-    root = init_empty_root(tmp_path / "store", UUID(int=2456)).lake_root("polygon_split_adjusted")
-    seed_lake_daily(root, "SPY", list(SESSIONS))
-    snapshot = capture_data_snapshot(roots=[root], symbol="SPY", resolution="daily", data_start=WINDOW[0], data_end=WINDOW[1])
-    bound = ManifestBoundDailyReader([root], snapshot.artifacts)
-    assert list(bound.iter_bars("SPY", *WINDOW))
-
-    companion = companion_path(root / "equity" / "usa" / "daily" / "spy.zip")
-    companion.write_bytes(companion.read_bytes() + b"\n")
-
-    with pytest.raises(DataSnapshotMismatchError, match="changed since the snapshot"):
+    with pytest.raises(DataSnapshotMismatchError, match=message):
         list(bound.iter_bars("SPY", *WINDOW))
 
 

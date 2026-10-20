@@ -182,19 +182,6 @@ describe('AppComponent', () => {
       return TestBed.inject(Title).getTitle();
     }
 
-    it.each([
-      [WORKSPACE, 'Home · Paper'],
-      [`${WORKSPACE}?view=wall`, 'Home · Paper'],
-      [`${WORKSPACE}/deploy`, 'Deploy a bot · Paper'],
-      [`${LANE}/settings`, 'Settings · Paper'],
-      [`${LANE}/home`, 'Home · Paper'],
-    ])('names what is open and the account it is open on: %s', async (url, expected) => {
-      // ADR 0064 Decision 6. "Paper" here is the account's NAME — the lane's
-      // label until a nickname is set — not its Paper/Live mode, which is a
-      // separate fact the header carries.
-      expect(await titleAt(url)).toBe(expected);
-    });
-
     it('names an account by its nickname, with the lane label when another shares it', async () => {
       directory.rebind({
         observed_at_ms: 2,

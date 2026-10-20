@@ -1567,27 +1567,32 @@ def test_a_journal_row_written_before_entries_said_what_they_came_to_reads_and_w
 
 
 @pytest.mark.parametrize(
-    "not_an_entrys_fill_in_a_contract",
+    ("changes", "match"),
     [
-        {"intent": "EXIT", "side": "sell", "contract_reference": None},
-        {
-            "symbol": "SPY", "underlying": None, "multiplier": None, "fill_model": None, "quote_age_ms": None,
-            "contract_reference": None,
-        },
+        pytest.param(
+            {"entry_outcome": "filled", "intent": "EXIT", "side": "sell", "contract_reference": None},
+            r"entry came to|option contract",
+            id="an exit",
+        ),
+        pytest.param(
+            {
+                "entry_outcome": "filled", "symbol": "SPY", "underlying": None, "multiplier": None, "fill_model": None,
+                "quote_age_ms": None, "contract_reference": None,
+            },
+            r"entry came to|option contract",
+            id="a fill in shares",
+        ),
+        # A row with a fill never says its entry bought nothing, nor a word outside the set.
+        pytest.param({"entry_outcome": "cancelled_unfilled"}, None, id="cancelled_unfilled on a row with a fill"),
+        pytest.param({"entry_outcome": "rejected"}, None, id="rejected on a row with a fill"),
+        pytest.param({"entry_outcome": "bought"}, None, id="a word outside the set"),
     ],
-    ids=["an exit", "a fill in shares"],
 )
-def test_only_an_entrys_fill_in_a_contract_says_what_its_entry_came_to(
-    not_an_entrys_fill_in_a_contract: dict[str, Any]
+def test_a_journal_row_refuses_an_entry_outcome_that_is_not_true_of_its_fill(
+    changes: dict[str, Any], match: str | None
 ) -> None:
-    with pytest.raises(ValueError, match=r"entry came to|option contract"):
-        _row(entry_outcome="filled", **not_an_entrys_fill_in_a_contract)
-
-
-@pytest.mark.parametrize("word", ["cancelled_unfilled", "rejected", "bought"])
-def test_a_journal_row_never_says_an_entry_with_a_fill_bought_nothing_nor_a_word_outside_the_set(word: str) -> None:
-    with pytest.raises(ValueError):
-        _row(entry_outcome=word)
+    with pytest.raises(ValueError, match=match):
+        _row(**changes)
 
 
 @pytest.mark.parametrize("word", ["filled", "part_filled_then_cancelled", "resting", "unproven"])

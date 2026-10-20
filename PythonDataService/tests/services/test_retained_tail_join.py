@@ -107,21 +107,32 @@ class _HistoryFeed:
 # ── owed minutes ─────────────────────────────────────────────────────────────
 
 
-def test_a_mid_session_stop_owes_every_regular_minute_it_skipped() -> None:
-    owed = owed_regular_minute_ends(after_ms=_et(_THU, 10, 7), now_ms=_et(_THU, 13, 0) + 30_000)
+@pytest.mark.parametrize(
+    ("after_ms", "now_ms", "owed_count", "first_and_last_owed"),
+    [
+        pytest.param(
+            _et(_THU, 10, 7),
+            _et(_THU, 13, 0) + 30_000,
+            173,
+            (_et(_THU, 10, 8), _et(_THU, 13, 0)),
+            id="a_mid_session_stop_owes_every_regular_minute_it_skipped",
+        ),
+        pytest.param(
+            session_window_for_date(_WED).close_ms_utc,
+            session_window_for_date(_THU).open_ms_utc,
+            0,
+            (),
+            id="a_closed_night_owes_no_regular_minute",
+        ),
+    ],
+)
+def test_the_regular_minutes_a_stop_owes(
+    after_ms: int, now_ms: int, owed_count: int, first_and_last_owed: tuple[int, ...]
+) -> None:
+    owed = owed_regular_minute_ends(after_ms=after_ms, now_ms=now_ms)
 
-    assert owed[0] == _et(_THU, 10, 8)
-    assert owed[-1] == _et(_THU, 13, 0)
-    assert len(owed) == 173
-
-
-def test_a_closed_night_owes_no_regular_minute() -> None:
-    owed = owed_regular_minute_ends(
-        after_ms=session_window_for_date(_WED).close_ms_utc,
-        now_ms=session_window_for_date(_THU).open_ms_utc,
-    )
-
-    assert owed == ()
+    assert len(owed) == owed_count, "the count of regular minutes owed"
+    assert owed[:1] + owed[-1:] == first_and_last_owed, "the first and last minute ends owed (a tuple, empty if none)"
 
 
 def test_an_extended_session_owes_its_first_after_hours_minute() -> None:

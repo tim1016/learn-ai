@@ -462,40 +462,32 @@ async def test_a_cancel_during_the_download_marks_the_run_cancelled_and_saves_no
     assert vendor.listing_requests == [TUE], "no session after the one in flight was begun"
 
 
+@pytest.mark.parametrize(
+    "stop_at",
+    [
+        pytest.param(2, id="a-cancel-during-the-replay-saves-no-part-of-it"),
+        # The replay asks to stop before each session and never after the last, so a cancel that arrives while the
+        # last one is replayed is found only by the check made before the save.
+        pytest.param(4, id="a-cancel-during-the-last-session-still-cancels-the-run-before-it-is-saved"),
+    ],
+)
 @respx.mock
 async def test_a_cancel_during_the_replay_marks_the_run_cancelled_and_saves_no_part_of_it(
-    fake_catalog: FakeCatalog, tmp_lake: Path
+    stop_at: int, fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
     Vendor(the_scene()).mount()
     job, store = Job(), FakeStore()
-    job.on_progress_hook = lambda phase, done, _total: job.stop.set() if (phase, done) == ("replaying", 2) else None
+    job.on_progress_hook = lambda phase, done, _total: job.stop.set() if (phase, done) == ("replaying", stop_at) else None
 
     with pytest.raises(RunCancelled):
         await _execute(store, job)
 
-    assert store.cancelled == [(7, FINISHED_AT_MS)]
-    assert store.completed == [] and store.failed == []
-    assert [(done) for phase, done, _ in job.progress if phase == "replaying"] == [1, 2], (
-        "the third session was never begun"
-    )
-    assert "saving" not in job.phases
-
-
-@respx.mock
-async def test_a_cancel_that_comes_during_the_last_session_still_cancels_the_run_before_it_is_saved(
-    fake_catalog: FakeCatalog, tmp_lake: Path
-) -> None:
-    # The replay asks to stop before each session and never after the last, so a cancel that arrives while the last
-    # one is replayed is found only by the check made before the save.
-    Vendor(the_scene()).mount()
-    job, store = Job(), FakeStore()
-    job.on_progress_hook = lambda phase, done, _total: job.stop.set() if (phase, done) == ("replaying", 4) else None
-
-    with pytest.raises(RunCancelled):
-        await _execute(store, job)
-
-    assert store.cancelled == [(7, FINISHED_AT_MS)] and store.completed == []
-    assert "saving" not in job.phases
+    assert store.cancelled == [(7, FINISHED_AT_MS)], "the run is marked cancelled with the finishing clock reading"
+    assert store.completed == [] and store.failed == [], "a cancelled run is not also recorded as saved or failed"
+    assert [done for phase, done, _ in job.progress if phase == "replaying"] == list(
+        range(1, stop_at + 1)
+    ), "no session after the one in flight was begun"
+    assert "saving" not in job.phases, "a cancelled run never reaches the save"
 
 
 @respx.mock
@@ -583,25 +575,54 @@ async def test_a_cancel_while_waiting_for_the_gate_marks_the_run_cancelled(
 # ── What a failure says ──────────────────────────────────────────────────
 
 
-def test_a_session_whose_data_is_missing_fails_with_the_session_named() -> None:
-    failure = failure_of(SessionDataMissing(WED, underlying=False, listing=True, contracts=()))
+def test_failure_of_says_each_known_error_in_words_naming_its_session_by_its_open() -> None:
+    missing = failure_of(SessionDataMissing(WED, underlying=False, listing=True, contracts=()))
+    assert missing.code == "DATA_MISSING", "a session whose data is missing fails as DATA_MISSING"
+    assert (
+        "contract listing" in missing.reason and "underlying" not in missing.reason
+    ), "a session whose data is missing names the listing it lacks and not the underlying"
+    _says_no_date(missing)
+    assert (
+        missing.items[0].session_open_ms == session_window_for_date(WED).open_ms_utc
+    ), "a session whose data is missing is named by its open"
 
-    assert failure.code == "DATA_MISSING"
-    assert "contract listing" in failure.reason and "underlying" not in failure.reason
-    _says_no_date(failure)
-    assert failure.items[0].session_open_ms == session_window_for_date(WED).open_ms_utc
-
-
-def test_an_unpublished_fee_rate_fails_with_its_session_and_types() -> None:
-    failure = failure_of(FeeRateNotPublished(date(2026, 6, 1), ("cat", "orf")))
-
-    assert failure.code == "FEE_RATE_NOT_PUBLISHED"
-    assert "cat, orf" in failure.reason
-    _says_no_date(failure)
-    assert (failure.items[0].session_open_ms, failure.items[0].code) == (
+    unpublished = failure_of(FeeRateNotPublished(date(2026, 6, 1), ("cat", "orf")))
+    assert unpublished.code == "FEE_RATE_NOT_PUBLISHED", "an unpublished fee rate fails as FEE_RATE_NOT_PUBLISHED"
+    assert "cat, orf" in unpublished.reason, "an unpublished fee rate names its types"
+    _says_no_date(unpublished)
+    assert (unpublished.items[0].session_open_ms, unpublished.items[0].code) == (
         session_window_for_date(date(2026, 6, 1)).open_ms_utc,
         "no_published_fee_rates",
+    ), "an unpublished fee rate is named by its session's open, with its own item code"
+
+    assert (
+        failure_of(CatalogUnavailableError("down")).code == "DATA_CATALOG_UNAVAILABLE"
+    ), "an unreachable catalog fails as DATA_CATALOG_UNAVAILABLE"
+    waited = failure_of(CallerStoppedWaitingError("still running"))
+    assert (
+        waited.code == "DOWNLOAD_FAILED" and "run again" in waited.reason
+    ), "a wait that ran out is a DOWNLOAD_FAILED that says to run again, told apart from an unreachable catalog"
+
+    unexpected = failure_of(KeyError("secret detail"))
+    assert unexpected.code == "INTERNAL_ERROR", "an unexpected error fails as INTERNAL_ERROR"
+    assert (
+        "KeyError" in unexpected.reason and "Nothing was saved" in unexpected.reason
+    ), "an unexpected error is named by its type and says nothing was saved"
+    assert "secret detail" not in unexpected.reason, "an unexpected error does not copy its detail"
+
+    wholly = failure_of(DownloadFailed(session=None, what="the minute bars of SPY", reason="x", detail="y"))
+    assert (
+        wholly.code == "DOWNLOAD_FAILED" and wholly.items[0].session_open_ms is None
+    ), "a download failure with no session is a failure of the run as a whole"
+    _says_no_date(wholly)
+
+    in_a_session = failure_of(
+        DownloadFailed(session=WED, what="the bars of SPY261007C00500000", reason="provider_api_error", detail="x")
     )
+    assert [(item.session_open_ms, item.code) for item in in_a_session.items] == [
+        (_open(WED), "provider_api_error")
+    ], "a download failure in a session names that session by its open"
+    _says_no_date(in_a_session)
 
 
 @pytest.mark.parametrize(
@@ -624,27 +645,6 @@ def test_a_stored_file_or_stored_bars_that_cannot_be_read_are_a_failure_that_say
     assert failure.code == "DATA_UNREADABLE", "an unreadable stored file or stored bars fail the run as DATA_UNREADABLE"
     assert says in failure.reason, "the failure names what could not be read"
     assert "Nothing was saved" in failure.reason, "the failure says nothing was saved"
-
-
-def test_an_unreachable_catalog_and_a_wait_that_ran_out_are_told_apart() -> None:
-    assert failure_of(CatalogUnavailableError("down")).code == "DATA_CATALOG_UNAVAILABLE"
-    waited = failure_of(CallerStoppedWaitingError("still running"))
-    assert waited.code == "DOWNLOAD_FAILED" and "run again" in waited.reason
-
-
-def test_an_unexpected_error_is_named_by_its_type_and_says_nothing_was_saved() -> None:
-    failure = failure_of(KeyError("secret detail"))
-
-    assert failure.code == "INTERNAL_ERROR"
-    assert "KeyError" in failure.reason and "Nothing was saved" in failure.reason
-    assert "secret detail" not in failure.reason
-
-
-def test_a_download_failure_with_no_session_is_a_failure_of_the_run_as_a_whole() -> None:
-    failure = failure_of(DownloadFailed(session=None, what="the minute bars of SPY", reason="x", detail="y"))
-
-    assert failure.code == "DOWNLOAD_FAILED" and failure.items[0].session_open_ms is None
-    _says_no_date(failure)
 
 
 # ── Every way a run fails is said in plain words ─────────────────────────
@@ -1079,24 +1079,25 @@ def test_an_instant_that_is_not_new_york_midnight_is_refused_naming_the_one_to_s
     assert_plain(caught.value.message)
 
 
-def test_a_range_of_exactly_the_most_sessions_a_run_takes_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(service, "MAX_RANGE_SESSIONS", 4)
-
-    assert len(sessions_of_range(et_midnight_ms(TUE), et_day_end_ms(FRI))) == 4
-
-
-def test_a_range_past_the_calendars_reach_or_longer_than_a_run_takes_is_refused(
+def test_a_range_is_taken_up_to_the_most_sessions_a_run_takes_and_refused_past_the_calendars_reach_or_that_many(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(service, "MAX_RANGE_SESSIONS", 4)
+    assert (
+        len(sessions_of_range(et_midnight_ms(TUE), et_day_end_ms(FRI))) == 4
+    ), "a range of exactly the most sessions a run takes is accepted"
+
     with pytest.raises(RunRefused) as far:
         sessions_of_range(et_midnight_ms(WED), et_midnight_ms(date(2300, 1, 1)))
-    assert far.value.code == "OPTIONS_BACKTEST_RANGE_TOO_FAR"
+    assert far.value.code == "OPTIONS_BACKTEST_RANGE_TOO_FAR", "a range past the calendar's reach is refused as too far"
 
     monkeypatch.setattr(service, "MAX_RANGE_SESSIONS", 3)
     with pytest.raises(RunRefused) as long:
         sessions_of_range(et_midnight_ms(TUE), et_day_end_ms(FRI))
-    assert long.value.code == "OPTIONS_BACKTEST_RANGE_TOO_LONG" and "4 trading days" in long.value.message
-    assert MAX_RANGE_SESSIONS == 1_300
+    assert (
+        long.value.code == "OPTIONS_BACKTEST_RANGE_TOO_LONG" and "4 trading days" in long.value.message
+    ), "a range longer than a run takes is refused as too long, naming its 4 trading days"
+    assert MAX_RANGE_SESSIONS == 1_300, "the most sessions a run takes is 1,300"
 
 
 # ── Saved to the database ────────────────────────────────────────────────
@@ -1198,15 +1199,6 @@ async def test_a_run_cancelled_before_it_starts_is_saved_cancelled(
 
     stored = await get_run(conn, run_id, is_live=lambda _job_id: False)
     assert stored is not None and stored.record.status == "cancelled" and stored.figures is None
-
-
-def test_a_download_failure_in_a_session_names_that_session_by_its_open_and_no_date_in_words() -> None:
-    failure = failure_of(
-        DownloadFailed(session=WED, what="the bars of SPY261007C00500000", reason="provider_api_error", detail="x")
-    )
-
-    assert [(item.session_open_ms, item.code) for item in failure.items] == [(_open(WED), "provider_api_error")]
-    _says_no_date(failure)
 
 
 @pytest.mark.parametrize(

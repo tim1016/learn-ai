@@ -130,23 +130,34 @@ async def test_a_real_accounts_estimate_is_priced_from_the_live_quotes_and_names
     )
 
 
-async def test_a_real_account_with_no_live_quote_states_no_price_and_says_the_run_is_not_asking(
+async def test_a_real_account_with_no_live_quote_states_no_price_says_the_run_is_not_asking_and_is_served_no_amount(
     world, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Real accounts keep no option quotes. With no supervisor in this process, nothing is estimated from a mark,
-    a fill or a share of the underlying, and the reason is stated."""
+    a fill or a share of the underlying, and the reason is stated. The page is served no amount, never zero."""
     books, _ = world
     await opened(world, RECEIVED_SPREAD, RECEIVED_PICKS, units=2)
     _supervisor(monkeypatch, feed=None)
 
     estimate = read_exit_estimate(books, "bot-a", now_ms=NOON)
+    assert estimate is not None, "an estimate is read for the bot's held option position"
+    view = exit_estimate_view(estimate)
 
-    assert estimate is not None
-    for figure in (estimate.net_close, estimate.gross_buy_back):
-        assert (figure.state, figure.amount_cents, figure.terms) == ("unknown", None, ())
-        assert "this estimate reads this Clerk's live IBKR quotes" in figure.source
-        assert "the bot's run is not asking for any" in figure.source
-    assert {quality.state for quality in estimate.quotes} == {"unknown"}
+    for name, figure in (("net_close", estimate.net_close), ("gross_buy_back", estimate.gross_buy_back)):
+        assert (figure.state, figure.amount_cents, figure.terms) == ("unknown", None, ()), f"{name} states no price"
+        assert "this estimate reads this Clerk's live IBKR quotes" in figure.source, f"{name} says it reads the Clerk's live quotes"
+        assert "the bot's run is not asking for any" in figure.source, f"{name} says the run is not asking"
+    assert {quality.state for quality in estimate.quotes} == {"unknown"}, "every contract's quote is unknown"
+    served_net, served_buy_back = view.net_close, view.gross_buy_back
+    assert (served_net.state, served_net.amount_usd, served_net.terms, served_net.as_of_ms) == (
+        "unknown", None, (), None,
+    ), "the served net close has no amount and is never zero"
+    assert (served_buy_back.state, served_buy_back.amount_usd, served_buy_back.terms, served_buy_back.as_of_ms) == (
+        "unknown", None, (), None,
+    ), "the served buy-back has no amount and is never zero"
+    assert [(leg.state, leg.age_ms, leg.missing, leg.gap_usd) for leg in view.quotes] == [
+        ("unknown", None, ("bid", "ask"), None)
+    ] * 2, "each served contract is unknown with no age, no bid or ask and no gap"
 
 
 async def test_an_unhealthy_feed_is_why_a_real_accounts_figures_are_unknown(
@@ -248,24 +259,6 @@ async def test_the_accounts_picture_reads_each_holding_bots_estimate_from_the_ho
 
     assert list(estimates) == ["bot-a"]
     assert estimates["bot-a"] == read_exit_estimate(books, "bot-a", now_ms=NOON)
-
-
-async def test_an_unknown_figure_is_served_with_no_amount_and_never_zero(
-    world, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    books, _ = world
-    await opened(world, RECEIVED_SPREAD, RECEIVED_PICKS, units=2)
-    _supervisor(monkeypatch, feed=None)
-    estimate = read_exit_estimate(books, "bot-a", now_ms=NOON)
-    assert estimate is not None
-
-    view = exit_estimate_view(estimate)
-
-    for figure in (view.net_close, view.gross_buy_back):
-        assert (figure.state, figure.amount_usd, figure.terms, figure.as_of_ms) == ("unknown", None, (), None)
-    assert [(leg.state, leg.age_ms, leg.missing, leg.gap_usd) for leg in view.quotes] == [
-        ("unknown", None, ("bid", "ask"), None)
-    ] * 2
 
 
 # ---- what the close owes -------------------------------------------------------------------------------------

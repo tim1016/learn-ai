@@ -46,11 +46,15 @@ def test_require_qualification_secret_admits_the_exact_secret() -> None:
     require_qualification_secret("probe-secret", "probe-secret")
 
 
-def test_qualification_router_has_no_execution_operation() -> None:
+def test_qualification_router_has_no_execution_operation_and_its_hold_command_route_is_a_post() -> None:
     """The opt-in surface is observation and held ASGI work only -- never an
     order, fill, or position (issue #2206 widens this from the original
     "read-only, no POST" invariant to add the command-pool probe, still
     behind this router's own secret gate and not an execution op).
+
+    The hold command route must be POST so the deployed middleware's
+    method-based split (``_requires_command_capacity``) classifies it into
+    the command pool rather than the request pool.
     """
     router = qualification_router(
         role="clerk_agent",
@@ -59,31 +63,21 @@ def test_qualification_router_has_no_execution_operation() -> None:
         broker_url="http://fake",
         market_data_url="http://market",
     )
-    assert router is not None
-    paths = {route.path for route in router.routes}
-    assert paths == {
+    assert router is not None, "the router exists when every guard holds"
+    routes = {route.path: route for route in router.routes}
+    assert len(router.routes) == len(routes), "no path is registered twice"
+    assert set(routes) == {
         "/internal/fleet-qualification/dependency/market-data",
         "/internal/fleet-qualification/hold/request",
         "/internal/fleet-qualification/hold/stream",
         "/internal/fleet-qualification/hold/command",
-    }
-
-
-def test_qualification_hold_command_route_is_a_post() -> None:
-    """Issue #2206: must be POST so the deployed middleware's method-based
-    split (``_requires_command_capacity``) classifies it into the command
-    pool rather than the request pool."""
-    router = qualification_router(
-        role="clerk_agent",
-        namespace="compose:fleetqualificationx",
-        secret="qualification-secret",
-        broker_url="http://fake",
-        market_data_url="http://market",
+    }, "no execution operation: only observation and held ASGI work (#2206)"
+    assert routes["/internal/fleet-qualification/hold/command"].methods == {"POST"}, (
+        "the hold command route is a POST so the middleware classifies it into the command pool (#2206)"
     )
-    assert router is not None
-    routes = {route.path: route for route in router.routes}
-    assert routes["/internal/fleet-qualification/hold/command"].methods == {"POST"}
-    assert routes["/internal/fleet-qualification/hold/request"].methods == {"GET"}
+    assert routes["/internal/fleet-qualification/hold/request"].methods == {"GET"}, (
+        "the hold request route is a GET so the middleware classifies it into the request pool (#2206)"
+    )
 
 
 def test_is_qualification_coordinator_lane_from_environment_reads_the_probe_secret(

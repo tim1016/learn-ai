@@ -379,24 +379,31 @@ def _the_underlying_with_a_minute_twice(*, replaced: bool) -> SessionCheck:
     )
 
 
-def test_stored_underlying_bars_that_break_the_rules_of_a_bar_and_that_a_download_keeps_cannot_be_tested() -> None:
-    session = _the_underlying_with_a_minute_twice(replaced=False)
+def test_stored_underlying_bars_that_break_the_rules_of_a_bar_cannot_be_tested_unless_a_download_replaces_them() -> None:
+    kept = _the_underlying_with_a_minute_twice(replaced=False)
+    replaced = _the_underlying_with_a_minute_twice(replaced=True)
 
-    assert session.verdict is SessionVerdict.CANNOT_BE_TESTED
-    assert [problem.code for problem in session.problems] == [ProblemCode.STORED_DATA_IS_MALFORMED]
-    [problem] = session.problems
-    assert "the underlying" in problem.message and "break the rules of a bar" in problem.message
+    assert kept.verdict is SessionVerdict.CANNOT_BE_TESTED, "bars a download keeps cannot be tested"
+    assert [problem.code for problem in kept.problems] == [ProblemCode.STORED_DATA_IS_MALFORMED], (
+        "bars a download keeps give the one malformed-data problem"
+    )
+    [problem] = kept.problems
+    assert "the underlying" in problem.message and "break the rules of a bar" in problem.message, (
+        "the problem names the underlying and the rules of a bar"
+    )
     assert_plain(problem.message)
-    assert session.notes == ()
+    assert kept.notes == (), "bars a download keeps carry no note"
 
-
-def test_stored_underlying_bars_that_break_the_rules_of_a_bar_and_that_a_download_replaces_need_a_download() -> None:
-    session = _the_underlying_with_a_minute_twice(replaced=True)
-
-    assert session.verdict is SessionVerdict.NEEDS_DOWNLOAD
-    assert (session.missing, session.problems) == ((DataKind.UNDERLYING_BARS,), ())
-    assert session.contracts == ContractNeeds(needed=None, missing=None)  # the contracts are not known without the day
-    assert any("underlying bars" in note and "will be fetched again" in note for note in session.notes)
+    assert replaced.verdict is SessionVerdict.NEEDS_DOWNLOAD, "bars a download replaces need a download"
+    assert (replaced.missing, replaced.problems) == ((DataKind.UNDERLYING_BARS,), ()), (
+        "bars a download replaces are named missing and are no problem"
+    )
+    assert replaced.contracts == ContractNeeds(needed=None, missing=None), (
+        "the contracts are not known without the day"
+    )
+    assert any("underlying bars" in note and "will be fetched again" in note for note in replaced.notes), (
+        "a note says the underlying bars will be fetched again"
+    )
 
 
 def test_stored_option_bars_that_break_the_rules_of_a_bar_cannot_be_tested_and_name_the_contract_but_no_date() -> None:

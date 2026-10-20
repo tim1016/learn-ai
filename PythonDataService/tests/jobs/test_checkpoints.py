@@ -77,38 +77,95 @@ def test_the_read_only_check_still_observes_cancellation(fake: _FakeRedis, monke
     assert fake.expires == []
 
 
-def test_an_accepted_advancing_checkpoint_renews_the_lease_once(fake: _FakeRedis, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("first", "second", "first_accepted", "second_accepted"),
+    [
+        pytest.param(
+            _checkpoint(1, 100),
+            _checkpoint(2, 200),
+            True,
+            True,
+            id="an_accepted_advancing_checkpoint_renews_the_lease",
+        ),
+        # A dispatch, an acceptance or a durable completion is evidence at one cursor.
+        pytest.param(
+            _checkpoint(1, 100),
+            _checkpoint(2, 100, kind="durable_completions", transition=True),
+            True,
+            True,
+            id="a_real_transition_renews_even_without_cursor_advance",
+        ),
+        pytest.param(
+            _checkpoint(1, 100, generation=GENERATION - 1),
+            _checkpoint(2, 100),
+            False,
+            True,
+            id="a_current_generation_checkpoint_after_a_stale_one_is_accepted",
+        ),
+    ],
+)
+def test_each_accepted_checkpoint_renews_the_lease_once_and_a_rejected_one_renews_nothing(
+    fake: _FakeRedis,
+    monkeypatch: pytest.MonkeyPatch,
+    first: ExecutionCheckpoint,
+    second: ExecutionCheckpoint,
+    first_accepted: bool,
+    second_accepted: bool,
+) -> None:
     monkeypatch.setattr(progress, "get_redis", lambda: fake)
     gate = CheckpointGate("pooled-1", GENERATION)
 
-    assert gate.accept(_checkpoint(1, 100)) is True
-    assert gate.accept(_checkpoint(2, 200)) is True
+    assert gate.accept(first) is first_accepted, "the first checkpoint is judged as the row says"
+    assert gate.accept(second) is second_accepted, "the second checkpoint is judged as the row says"
+    assert fake.expires == [(LEASE, gate._lease_ttl_s)] * [first_accepted, second_accepted].count(True), (
+        "each accepted checkpoint renews the lease once and a rejected one renews nothing"
+    )
 
-    assert fake.expires == [(LEASE, gate._lease_ttl_s)] * 2
 
-
-def test_repeated_sequence_cursor_polls_and_ticks_renew_nothing(fake: _FakeRedis, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("first", "second", "third", "first_accepted", "second_accepted", "third_accepted"),
+    [
+        # Only the first advancing checkpoint renews: a repeated sequence or a repeated cursor is a poll or a tick.
+        pytest.param(
+            _checkpoint(5, 100),
+            _checkpoint(5, 200),
+            _checkpoint(6, 100),
+            True,
+            False,
+            False,
+            id="repeated_sequence_cursor_polls_and_ticks_renew_nothing",
+        ),
+        # Cursor values are kind-local: blocks cursor 1 is past the artifacts ground, not behind it.
+        pytest.param(
+            _checkpoint(1, 12, kind="admitted_artifacts"),
+            _checkpoint(2, 1, kind="processed_blocks"),
+            _checkpoint(3, 1, kind="processed_blocks"),
+            True,
+            True,
+            False,
+            id="cursor_ground_is_per_kind_not_per_task",
+        ),
+    ],
+)
+def test_the_gate_judges_a_run_of_three_checkpoints_and_renews_once_per_accepted_one(
+    fake: _FakeRedis,
+    monkeypatch: pytest.MonkeyPatch,
+    first: ExecutionCheckpoint,
+    second: ExecutionCheckpoint,
+    third: ExecutionCheckpoint,
+    first_accepted: bool,
+    second_accepted: bool,
+    third_accepted: bool,
+) -> None:
     monkeypatch.setattr(progress, "get_redis", lambda: fake)
     gate = CheckpointGate("pooled-1", GENERATION)
-    assert gate.accept(_checkpoint(5, 100)) is True
 
-    repeated_sequence = gate.accept(_checkpoint(5, 200))
-    repeated_cursor = gate.accept(_checkpoint(6, 100))
-
-    assert repeated_sequence is False
-    assert repeated_cursor is False
-    assert fake.expires == [(LEASE, gate._lease_ttl_s)], "only the first advancing checkpoint renewed"
-
-
-def test_a_real_transition_renews_even_without_cursor_advance(fake: _FakeRedis, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A dispatch, an acceptance or a durable completion is evidence at one cursor."""
-    monkeypatch.setattr(progress, "get_redis", lambda: fake)
-    gate = CheckpointGate("pooled-1", GENERATION)
-    assert gate.accept(_checkpoint(1, 100)) is True
-
-    assert gate.accept(_checkpoint(2, 100, kind="durable_completions", transition=True)) is True
-
-    assert len(fake.expires) == 2
+    assert gate.accept(first) is first_accepted, "the first checkpoint is judged as the row says"
+    assert gate.accept(second) is second_accepted, "the second checkpoint is judged as the row says"
+    assert gate.accept(third) is third_accepted, "the third checkpoint is judged as the row says"
+    assert fake.expires == [(LEASE, gate._lease_ttl_s)] * [first_accepted, second_accepted, third_accepted].count(True), (
+        "each accepted checkpoint renews the lease once and a rejected one renews nothing"
+    )
 
 
 def test_an_expired_lease_cannot_be_recreated_by_a_checkpoint(fake: _FakeRedis, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -131,14 +188,6 @@ def test_stale_generation_events_are_rejected_and_renew_nothing(fake: _FakeRedis
     assert stale_attempt is False and stale_task is False
     assert seen == [] and fake.expires == []
     assert gate.last_accepted("task-a", "processed_blocks") is None, "a stale event may not seed the task's ordering state"
-
-
-def test_a_current_generation_checkpoint_after_a_stale_one_is_accepted(fake: _FakeRedis, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(progress, "get_redis", lambda: fake)
-    gate = CheckpointGate("pooled-1", GENERATION)
-
-    assert gate.accept(_checkpoint(1, 100, generation=GENERATION - 1)) is False
-    assert gate.accept(_checkpoint(2, 100)) is True
 
 
 def test_each_task_owns_its_silence_deadline() -> None:
@@ -191,18 +240,6 @@ def test_an_unknown_phase_is_refused_rather_than_silently_unbounded() -> None:
     watch = TaskSilence()
     with pytest.raises(ValueError, match="no silence limit"):
         watch.record("task-a", "unknown-phase", at_ms=0)
-
-
-def test_cursor_ground_is_per_kind_not_per_task(fake, monkeypatch) -> None:
-    """A task switching from admitted artifacts to processed blocks restarts its cursor's ground."""
-    monkeypatch.setattr(progress, "get_redis", lambda: fake)
-    gate = CheckpointGate("pooled-1", GENERATION)
-
-    assert gate.accept(_checkpoint(1, 12, kind="admitted_artifacts")) is True
-    assert gate.accept(_checkpoint(2, 1, kind="processed_blocks")) is True, (
-        "cursor values are kind-local: blocks cursor 1 is past the artifacts ground, not behind it"
-    )
-    assert gate.accept(_checkpoint(3, 1, kind="processed_blocks")) is False
 
 
 def test_a_store_failure_consumes_nothing(fake, monkeypatch) -> None:

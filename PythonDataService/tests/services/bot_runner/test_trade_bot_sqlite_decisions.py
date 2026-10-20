@@ -234,13 +234,24 @@ async def test_sqlite_trade_bot_records_every_evaluated_bar_for_panel_health(
 
 
 @pytest.mark.asyncio
-async def test_sqlite_trade_bot_does_not_label_an_uncertain_effect_as_entered(
+@pytest.mark.parametrize(
+    ("effect_state", "outcome", "reason_code", "has_refusal_reason"),
+    [
+        pytest.param("uncertain", "enter_intent", "STRATEGY_ENTER", False, id="an uncertain effect is not labelled entered"),
+        pytest.param("rejected", "blocked", "CLERK_ADMISSION_REJECTED", True, id="a rejected enter is a blocked decision"),
+    ],
+)
+async def test_sqlite_trade_bot_records_the_enter_decision_its_effect_state_calls_for(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    effect_state: str,
+    outcome: str,
+    reason_code: str,
+    has_refusal_reason: bool,
 ) -> None:
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
     repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
-    clerk = _FakeClerk(effect_state="uncertain", repository=repo)
+    clerk = _FakeClerk(effect_state=effect_state, repository=repo)
     clerk.authority_kind = "sqlite"
     clerk.account_id = "PA-TEST"
     admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
@@ -263,47 +274,10 @@ async def test_sqlite_trade_bot_does_not_label_an_uncertain_effect_as_entered(
         await registry.stop("alpaca", _SID)
 
         decisions = repo.decision_receipt_tail(strategy_instance_id=_SID, limit=2)
-        assert decisions[-1].outcome == "enter_intent"
-        assert json.loads(decisions[-1].facts_json)["reason_code"] == "STRATEGY_ENTER"
-    finally:
-        set_alpaca_clerk(None)
-        repo.close()
-
-
-@pytest.mark.asyncio
-async def test_sqlite_trade_bot_records_a_rejected_enter_as_a_blocked_decision(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
-    repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
-    clerk = _FakeClerk(effect_state="rejected", repository=repo)
-    clerk.authority_kind = "sqlite"
-    clerk.account_id = "PA-TEST"
-    admit_canary_pairing(monkeypatch, "deployment_validation", "paper-account")
-    feed = _FakeFeed(
-        [_bar(_RTH_MS + offset * 60_000) for offset in range(2)],
-        mode="hold",
-    )
-    registry = _registry(tmp_path, feed)
-    set_alpaca_clerk(clerk)
-    try:
-        await deploy_bot(registry,
-            exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
-            strategy_instance_id=_SID,
-            strategy_key="deployment_validation",
-            symbol="SPY",
-            mode="trade",
-            quantity=1,
-        )
-        await _wait_for(lambda: len(clerk.calls) == 1)
-        await registry.stop("alpaca", _SID)
-
-        decisions = repo.decision_receipt_tail(strategy_instance_id=_SID, limit=2)
-        assert decisions[-1].outcome == "blocked"
         facts = json.loads(decisions[-1].facts_json)
-        assert facts["reason_code"] == "CLERK_ADMISSION_REJECTED"
-        assert "refusal_reason" in facts
+        assert decisions[-1].outcome == outcome, "the last decision's outcome follows the effect state"
+        assert facts["reason_code"] == reason_code, "the last decision's reason follows the effect state"
+        assert ("refusal_reason" in facts) is has_refusal_reason, "only a rejected enter carries a refusal reason"
     finally:
         set_alpaca_clerk(None)
         repo.close()

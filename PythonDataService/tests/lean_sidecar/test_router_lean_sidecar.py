@@ -360,22 +360,23 @@ class TestPostTrustedRunValidation:
         model = TrustedRunRequestModel.model_validate(payload)
         assert model.algorithm_source is None
 
-    async def test_algorithm_source_empty_string_rejected(self, client: AsyncClient) -> None:
+    @pytest.mark.parametrize(
+        ("source", "words"),
+        [
+            pytest.param("   \n\t  ", ("empty", "whitespace"), id="algorithm_source_empty_string_rejected"),
+            # Phase 4c: ADR-mandated 256 KiB cap on user source. Exceeding must 422 before the launcher
+            # round-trip; 300 KiB of ASCII is over the 256 KiB cap.
+            pytest.param("x" * (300 * 1024), ("bytes", "max"), id="algorithm_source_oversize_rejected"),
+        ],
+    )
+    async def test_algorithm_source_unusable_is_rejected(
+        self, client: AsyncClient, source: str, words: tuple[str, ...]
+    ) -> None:
         payload = _good_payload()
-        payload["algorithm_source"] = "   \n\t  "
+        payload["algorithm_source"] = source
         r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
-        assert r.status_code == 422
-        assert "empty" in r.text.lower() or "whitespace" in r.text.lower()
-
-    async def test_algorithm_source_oversize_rejected(self, client: AsyncClient) -> None:
-        """Phase 4c: ADR-mandated 256 KiB cap on user source. Exceeding
-        must 422 before the launcher round-trip."""
-        payload = _good_payload()
-        # 300 KiB of ASCII — over the 256 KiB cap.
-        payload["algorithm_source"] = "x" * (300 * 1024)
-        r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
-        assert r.status_code == 422
-        assert "bytes" in r.text.lower() or "max" in r.text.lower()
+        assert r.status_code == 422, "an unusable algorithm_source is rejected with 422"
+        assert any(word in r.text.lower() for word in words), f"the 422 says why, naming one of {words}"
 
     async def test_algorithm_source_within_cap_accepted(self) -> None:
         """Right at the boundary — a 200 KiB source must pass schema.
@@ -541,8 +542,18 @@ class TestPostTrustedRunHappyPath:
                 "/api/lean-sidecar/trusted-runs",
                 json=_good_payload("router_unreach"),
             )
-        assert r.status_code == 503
-        assert r.json()["detail"]["reason"] == "launcher_unreachable"
+        assert r.status_code == 503, "an unreachable launcher surfaces as 503"
+        assert r.json()["detail"]["reason"] == "launcher_unreachable", "the 503 names launcher_unreachable"
+        # The manifest is written even when no LaunchResponse comes back. This is the most common
+        # silent-failure path historically — launcher down, operator restarts compose, no audit of
+        # the staged work.
+        ws = resolve_workspace("router_unreach", patched_artifacts_root)
+        assert ws.manifest_path.exists(), "an unreachable launcher still writes a failure manifest"
+        manifest = json.loads(ws.manifest_path.read_text(encoding="utf-8"))
+        notes = manifest.get("notes", [])
+        assert any("LauncherUnreachable" in n for n in notes), (
+            f"the failure manifest notes should name the unreachable exception: {notes}"
+        )
 
     async def test_launcher_rejection_writes_failure_manifest(
         self,
@@ -591,34 +602,6 @@ class TestPostTrustedRunHappyPath:
         assert any("LauncherRejected" in n for n in notes), f"manifest notes should name the exception type: {notes}"
         # is_clean=False — failure path must NEVER paint as clean.
         assert any("is_clean=False" in n for n in notes)
-
-    async def test_launcher_unreachable_writes_failure_manifest(
-        self,
-        client: AsyncClient,
-        patched_pin: str,
-        patched_artifacts_root: Path,
-        stub_image_extract: None,
-        stub_normalized_parser: None,
-    ) -> None:
-        """Same as above for the unreachable-launcher path: the manifest
-        is written even when no LaunchResponse comes back. This is the
-        most common silent-failure path historically — launcher down,
-        operator restarts compose, no audit of the staged work."""
-        async with respx.mock(base_url=DEFAULT_LAUNCHER_URL) as mock:
-            _mock_launcher_healthz(mock)
-            mock.post("/launch").mock(side_effect=httpx.ConnectError("refused"))
-            r = await client.post(
-                "/api/lean-sidecar/trusted-runs",
-                json=_good_payload("router_unreach_manifest"),
-            )
-        assert r.status_code == 503
-        ws = resolve_workspace("router_unreach_manifest", patched_artifacts_root)
-        assert ws.manifest_path.exists()
-        manifest = json.loads(ws.manifest_path.read_text(encoding="utf-8"))
-        notes = manifest.get("notes", [])
-        assert any("LauncherUnreachable" in n for n in notes), (
-            f"manifest notes should name the unreachable exception: {notes}"
-        )
 
     async def test_reused_run_id_returns_409(
         self,

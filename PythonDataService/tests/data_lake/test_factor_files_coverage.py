@@ -340,7 +340,7 @@ def _read(lake_root: Path, sessions: list[date]) -> object:
     return read_covering_factor_rows(lake_root, market="usa", symbol=SYMBOL, sessions=sessions)
 
 
-def test_the_record_stores_session_open_anchors_as_int64_ms_utc(tmp_path: Path) -> None:
+def test_the_record_stores_int64_ms_utc_anchors_and_runs_inside_the_covered_spans_are_covered(tmp_path: Path) -> None:
     _write(tmp_path, _BODY, [SPAN_1, SPAN_2])
 
     record = json.loads(
@@ -350,19 +350,16 @@ def test_the_record_stores_session_open_anchors_as_int64_ms_utc(tmp_path: Path) 
     assert record["covered_spans"][0] == {
         "first_session_open_ms_utc": session_open_ms_utc(date(2024, 7, 1)),
         "last_session_open_ms_utc": session_open_ms_utc(date(2024, 7, 8)),
-    }
-    assert isinstance(record["covered_spans"][0]["first_session_open_ms_utc"], int)
-
-
-def test_runs_inside_the_covered_spans_are_covered(tmp_path: Path) -> None:
-    _write(tmp_path, _BODY, [SPAN_1, SPAN_2])
-
+    }, "the record stores session-open anchors as ms UTC"
+    assert isinstance(record["covered_spans"][0]["first_session_open_ms_utc"], int), "the anchors are int64"
     assert _read(tmp_path, [date(2024, 7, 1), date(2024, 7, 2), date(2024, 7, 3)]) == parse_factor_file(
         _BODY.decode("ascii")
-    )
+    ), "a run inside the first span is covered"
     # 07-09 is not read, so 07-08 and 07-10 are separate runs, one per span.
-    assert _read(tmp_path, [date(2024, 7, 5), date(2024, 7, 8), date(2024, 7, 10)])
-    assert _read(tmp_path, []) == parse_factor_file(_BODY.decode("ascii"))
+    assert _read(tmp_path, [date(2024, 7, 5), date(2024, 7, 8), date(2024, 7, 10)]), (
+        "runs inside the covered spans are covered, one per span"
+    )
+    assert _read(tmp_path, []) == parse_factor_file(_BODY.decode("ascii")), "reading no sessions is covered"
 
 
 @pytest.mark.parametrize(
@@ -398,17 +395,20 @@ def test_a_factor_file_without_a_record_covers_nothing(tmp_path: Path) -> None:
         _read(tmp_path, [date(2024, 7, 1)])
 
 
-def test_a_record_bound_to_other_bytes_covers_nothing(tmp_path: Path) -> None:
-    _write(tmp_path, _BODY, [SPAN_1, SPAN_2])
+@pytest.mark.parametrize(
+    ("spans", "record_symbol", "body_on_disk"),
+    [
+        # A narrower rebuild without its record.
+        pytest.param((SPAN_1, SPAN_2), SYMBOL, b"20240711,1,1,50\n", id="a-record-bound-to-other-bytes"),
+        pytest.param((SPAN_1,), "QQQ", _BODY, id="a-record-for-another-symbol"),
+    ],
+)
+def test_a_record_that_does_not_belong_to_the_file_covers_nothing(
+    tmp_path: Path, spans: tuple[SessionRun, ...], record_symbol: str, body_on_disk: bytes
+) -> None:
+    _write(tmp_path, _BODY, list(spans), record_symbol=record_symbol)
     csv_path = tmp_path.joinpath(*LeanFactorFilePath(market="usa", symbol=SYMBOL).relative_path().parts)
-    csv_path.write_bytes(b"20240711,1,1,50\n")  # a narrower rebuild without its record
-
-    with pytest.raises(FactorFileNotCoveringError, match="different bytes"):
-        _read(tmp_path, [date(2024, 7, 1)])
-
-
-def test_a_record_for_another_symbol_covers_nothing(tmp_path: Path) -> None:
-    _write(tmp_path, _BODY, [SPAN_1], record_symbol="QQQ")
+    csv_path.write_bytes(body_on_disk)
 
     with pytest.raises(FactorFileNotCoveringError, match="different bytes"):
         _read(tmp_path, [date(2024, 7, 1)])

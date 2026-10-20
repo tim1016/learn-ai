@@ -642,13 +642,16 @@ def test_an_ask_that_will_not_wait_is_told_the_coordinator_is_still_looking_and_
     """A page asks every second. It is not answered "unknown" for a lookup that is only still running."""
     coordinator = Coordinator(monkeypatch, ModelInputsBeingRead("another Clerk's lookup is running"))
 
-    with pytest.raises(ModelInputsBeingRead):
+    with pytest.raises(ModelInputsBeingRead) as still_looking:
         _read(wait=False)
+    asked_once = len(coordinator.sent)
     coordinator.read = READ
     a_second_later = _read(at_ms=NOW + 1_000, wait=False)
 
-    assert [wait for _, _, _, wait in coordinator.asked] == [False, False]
-    assert a_second_later.dividends == READ.dividends
+    assert asked_once == 1, "a coordinator still looking is asked once, and told to both facts"
+    assert "the rate and the dividends for SPY" in str(still_looking.value), "it says the coordinator is looking up both facts"
+    assert [wait for _, _, _, wait in coordinator.asked] == [False, False], "both asks said they will not wait"
+    assert a_second_later.dividends == READ.dividends, "nothing was kept: the next ask is answered afresh"
 
 
 def test_a_caller_that_will_not_wait_is_not_made_to_while_this_clerk_is_already_asking(
@@ -688,15 +691,6 @@ def test_one_ask_of_the_coordinator_answers_for_the_rate_and_the_dividends_both(
         _read()
 
     assert len(coordinator.sent) == 5
-
-
-def test_a_coordinator_still_looking_is_asked_once_and_told_to_both_facts(monkeypatch: pytest.MonkeyPatch) -> None:
-    coordinator = Coordinator(monkeypatch, ModelInputsBeingRead("another Clerk's lookup is running"))
-
-    with pytest.raises(ModelInputsBeingRead):
-        _read(wait=False)
-
-    assert len(coordinator.sent) == 1
 
 
 def test_a_default_rate_from_the_coordinator_is_asked_again_half_a_minute_after_the_ask_ended(

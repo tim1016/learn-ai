@@ -9,6 +9,8 @@ rely on wall-clock time.
 
 from __future__ import annotations
 
+import pytest
+
 from app.utils.throttle import TtlCache
 
 
@@ -26,24 +28,22 @@ class _Clock:
         self._t += dt
 
 
-def test_ttl_cache_returns_value_within_ttl() -> None:
+@pytest.mark.parametrize(
+    ("advance_s", "expected"),
+    [
+        pytest.param(0.0, 42, id="returns_value_when_just_set"),
+        pytest.param(4.9, 42, id="returns_value_within_ttl"),
+        pytest.param(5.1, None, id="expires_value_after_ttl"),
+    ],
+)
+def test_ttl_cache_value_by_age(advance_s: float, expected: int | None) -> None:
     clock = _Clock()
     cache: TtlCache[str, int] = TtlCache(ttl_seconds=5.0, max_size=10, now=clock)
 
     cache.set("k", 42)
-    assert cache.get("k") == 42
+    clock.advance(advance_s)
 
-    clock.advance(4.9)
-    assert cache.get("k") == 42
-
-
-def test_ttl_cache_expires_value_after_ttl() -> None:
-    clock = _Clock()
-    cache: TtlCache[str, int] = TtlCache(ttl_seconds=5.0, max_size=10, now=clock)
-
-    cache.set("k", 42)
-    clock.advance(5.1)
-    assert cache.get("k") is None
+    assert cache.get("k") == expected
 
 
 def test_ttl_cache_evicts_oldest_when_full() -> None:

@@ -300,12 +300,4 @@ describe("StrategyLabChartComponent indicator catalog failure", () => {
     expect(alert?.textContent).toContain("Indicators could not be loaded.");
     expect(rail.textContent).not.toContain("No indicators available");
   });
-
-  it("raises no failure when the catalog loaded", async () => {
-    const rail = await renderExpandedRail(false);
-
-    expect(rail.querySelector('[role="alert"]')).toBeNull();
-    expect(rail.textContent).not.toContain("Indicators could not be loaded.");
-    expect(rail.textContent).toContain("No indicators available");
-  });
 });

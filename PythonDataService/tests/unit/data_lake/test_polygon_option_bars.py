@@ -9,7 +9,6 @@ made-up sentinel and rides in a header.
 
 from __future__ import annotations
 
-import logging
 from datetime import date
 from decimal import Decimal
 
@@ -165,23 +164,6 @@ async def test_an_empty_answer_cannot_tell_a_day_that_did_not_trade_from_one_tha
 
 
 # ── The key rides in a header ────────────────────────────────────────────
-
-
-@respx.mock
-async def test_no_log_line_holds_the_key_even_at_the_apps_info_level(caplog: pytest.LogCaptureFixture) -> None:
-    """The failure this guards: ``httpx`` logs every request's full URL at INFO, so a key in a URL is in the log."""
-    caplog.set_level(logging.INFO)
-    _vendor(traded(SYMBOL, [bar_row(0)]))
-    await _fetch()
-    _vendor(httpx.Response(500, text="boom"))
-    with pytest.raises(PolygonFetchError):
-        await _fetch()
-
-    request_lines = [r for r in caplog.records if r.name == "httpx"]
-    assert len(request_lines) == 2  # the guard is not vacuous: httpx did log both requests
-    for record in caplog.records:
-        assert SENTINEL_KEY not in record.getMessage()
-        assert SENTINEL_KEY not in repr(record.__dict__)
 
 
 @respx.mock

@@ -90,58 +90,48 @@ def test_coverage_passes_when_predictions_are_a_superset_of_bars() -> None:
     assert_bar_clock_coverage(pset, bars, refs=[_ref()])
 
 
-def test_coverage_error_lists_missing_timestamps() -> None:
+def test_coverage_error_lists_missing_timestamps_and_names_the_lookup_that_found_no_row_or_field() -> None:
     bars = _bars(5)
     timestamps = [b.end_ms for b in bars[:2]]
     pset = _pset(timestamps)
     first_missing_ts = bars[2].end_ms
     with pytest.raises(PredictionCoverageError) as exc:
         assert_bar_clock_coverage(pset, bars, refs=[_ref()])
-    assert str(first_missing_ts) in str(exc.value)
+    assert str(first_missing_ts) in str(exc.value), "the coverage error lists the missing timestamps"
 
-
-def test_coverage_exact_bar_close_missing_row_raises_descriptive_error() -> None:
+    # exact_bar_close: no prediction row at the last fired bar.
     bars = _bars(3)
-    timestamps = [b.end_ms for b in bars[:-1]]
-    pset = _pset(timestamps)
+    pset = _pset([b.end_ms for b in bars[:-1]])
     refs = [_ref(lookup="exact_bar_close", field="prediction")]
     with pytest.raises(PredictionCoverageError, match=r"exact_bar_close.*no prediction row at fired bar"):
         assert_bar_clock_coverage(pset, bars, refs=refs)
 
-
-def test_coverage_exact_bar_close_missing_field_raises() -> None:
+    # exact_bar_close: the row is there but lacks the field the ref reads.
     bars = _bars(2)
-    rows = [(b.end_ms, {"prediction": 0.0}) for b in bars]
-    pset = _pset_with_fields(rows)
+    pset = _pset_with_fields([(b.end_ms, {"prediction": 0.0}) for b in bars])
     refs = [_ref(lookup="exact_bar_close", field="confidence")]
     with pytest.raises(PredictionCoverageError, match=r"missing field 'confidence'.*available"):
         assert_bar_clock_coverage(pset, bars, refs=refs)
 
-
-def test_coverage_next_after_no_later_row_raises_with_fired_ts_in_message() -> None:
-    """For next_after_bar_close, every fired bar must have a strictly-greater
-    row. With predictions covering only the fired bars themselves, the LAST
-    fired bar has no successor and coverage must fail."""
+    # For next_after_bar_close, every fired bar must have a strictly-greater row. With predictions covering only the
+    # fired bars themselves, the LAST fired bar has no successor and coverage must fail.
     bars = _bars(3)
-    timestamps = [b.end_ms for b in bars]
-    pset = _pset(timestamps)
+    pset = _pset([b.end_ms for b in bars])
     refs = [_ref(lookup="next_after_bar_close", field="prediction")]
     last_fired_ts = bars[-1].end_ms
     with pytest.raises(PredictionCoverageError, match=rf"next_after_bar_close.*{last_fired_ts}"):
         assert_bar_clock_coverage(pset, bars, refs=refs)
 
-
-def test_coverage_next_after_later_row_missing_field_reports_matched_ts() -> None:
-    """If the next-row exists but lacks the required field, the error must
-    name both the fired ts AND the matched next-row ts (so the user can
-    locate the corrupt row in the prediction set)."""
+    # If the next-row exists but lacks the required field, the error must name both the fired ts AND the matched
+    # next-row ts (so the user can locate the corrupt row in the prediction set).
     bars = _bars(2)
-    rows = [
-        (bars[0].end_ms, {"prediction": 1.0, "confidence": 0.5}),
-        (bars[1].end_ms, {"prediction": 2.0, "confidence": 0.6}),
-        (bars[1].end_ms + 1, {"prediction": 3.0}),
-    ]
-    pset = _pset_with_fields(rows)
+    pset = _pset_with_fields(
+        [
+            (bars[0].end_ms, {"prediction": 1.0, "confidence": 0.5}),
+            (bars[1].end_ms, {"prediction": 2.0, "confidence": 0.6}),
+            (bars[1].end_ms + 1, {"prediction": 3.0}),
+        ]
+    )
     refs = [_ref(lookup="next_after_bar_close", field="confidence")]
     matched_ts = bars[1].end_ms + 1
     with pytest.raises(
@@ -150,16 +140,10 @@ def test_coverage_next_after_later_row_missing_field_reports_matched_ts() -> Non
     ):
         assert_bar_clock_coverage(pset, bars, refs=refs)
 
-
-def test_coverage_mixed_lookup_modes_validates_both() -> None:
-    """Spec with two refs (one exact, one next_after) is valid only when both
-    constraints hold on every fired bar simultaneously."""
+    # A spec with two refs (one exact, one next_after) is valid only when both constraints hold on every fired bar
+    # simultaneously.
     bars = _bars(2)
-    rows = [
-        (bars[0].end_ms, {"prediction": 1.0}),
-        (bars[1].end_ms, {"prediction": 2.0}),
-    ]
-    pset = _pset_with_fields(rows)
+    pset = _pset_with_fields([(bars[0].end_ms, {"prediction": 1.0}), (bars[1].end_ms, {"prediction": 2.0})])
     refs = [
         _ref(lookup="exact_bar_close", field="prediction"),
         _ref(lookup="next_after_bar_close", field="prediction"),

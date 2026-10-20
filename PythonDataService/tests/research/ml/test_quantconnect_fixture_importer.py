@@ -48,15 +48,13 @@ def _write_export(tmp_path: Path, records: list[dict]) -> Path:
 # ----- QcExport closed shape (bare list) -----------------------------
 
 
-def test_qc_export_round_trips_as_bare_list() -> None:
+def test_qc_export_round_trips_as_bare_list_and_rejects_an_envelope_object() -> None:
     e = QcExport.model_validate(_good_export_records())
-    assert len(e.root) == 3
-    assert e.root[0].date == "2024-01-02"
-    assert e.root[0].prediction_by_symbol == {"SPY": 0.0123, "QQQ": -0.011}
+    assert len(e.root) == 3, "the export holds its three records"
+    assert e.root[0].date == "2024-01-02", "a record keeps its date"
+    assert e.root[0].prediction_by_symbol == {"SPY": 0.0123, "QQQ": -0.011}, "a record keeps its predictions by symbol"
 
-
-def test_qc_export_rejects_envelope_object() -> None:
-    """QC's emitted file is a list, not an object. Reject envelope shapes."""
+    # QC's emitted file is a list, not an object. Reject envelope shapes.
     bad = {"predictions": _good_export_records()}
     with pytest.raises(ValidationError):
         QcExport.model_validate(bad)
@@ -78,7 +76,7 @@ def test_qc_prediction_record_rejects_invalid(symbol_predictions: tuple, extra_f
 # ----- importer: happy path + validation rails ----------------------
 
 
-def test_import_qc_fixture_happy_path(tmp_path: Path) -> None:
+def test_import_qc_fixture_happy_path_skips_days_without_the_symbol_and_anchors_each_day_at_int64_ms(tmp_path: Path) -> None:
     export_path = _write_export(tmp_path, _good_export_records())
     output_root = tmp_path / "artifacts" / "predictions"
 
@@ -90,26 +88,21 @@ def test_import_qc_fixture_happy_path(tmp_path: Path) -> None:
         **_provenance_kwargs(),
     )
 
-    assert isinstance(manifest, PredictionSetManifest)
-    assert isinstance(manifest.generator, QuantConnectPrecomputedFixtureGenerator)
-    assert manifest.generator.qc_symbol_filter == "SPY"
-    assert manifest.generator.qc_exported_at_ms == 1746880496000
-    assert manifest.generator.qc_daily_anchor_tz == "America/New_York"
-    assert manifest.generator.qc_daily_anchor_hhmm == "16:00"
-    assert manifest.symbol == "SPY"
-    assert len(manifest.chunks) == 1
-    assert manifest.chunks[0].row_count == 3
+    assert isinstance(manifest, PredictionSetManifest), "the import returns a prediction-set manifest"
+    assert isinstance(manifest.generator, QuantConnectPrecomputedFixtureGenerator), "the generator is the QC precomputed fixture"
+    assert manifest.generator.qc_symbol_filter == "SPY", "the generator keeps the symbol filter"
+    assert manifest.generator.qc_exported_at_ms == 1746880496000, "the generator keeps the export time"
+    assert manifest.generator.qc_daily_anchor_tz == "America/New_York", "the daily anchor is in New York"
+    assert manifest.generator.qc_daily_anchor_hhmm == "16:00", "the daily anchor is the 16:00 close"
+    assert manifest.symbol == "SPY", "the manifest names the symbol"
+    assert len(manifest.chunks) == 1, "the import writes one chunk"
+    assert manifest.chunks[0].row_count == 3, "the chunk holds the three days"
 
     pset = PredictionSet.load(output_root / "qc_spy_precomputed_v001")
-    assert len(pset.index) == 3
+    assert len(pset.index) == 3, "the written set loads with the three days"
 
-
-def test_import_skips_days_without_symbol_in_map(tmp_path: Path) -> None:
-    """QC may omit a symbol on days the universe filter excludes it.
-    Those records are skipped, not errors."""
-    records = _good_export_records()
-    export_path = _write_export(tmp_path, records)
-    manifest = import_qc_fixture(
+    # QC may omit a symbol on days the universe filter excludes it. Those records are skipped, not errors.
+    qqq = import_qc_fixture(
         qc_export_path=export_path,
         prediction_set_id="qc_qqq_v001",
         output_root=tmp_path / "artifacts" / "predictions",
@@ -117,10 +110,23 @@ def test_import_skips_days_without_symbol_in_map(tmp_path: Path) -> None:
         **_provenance_kwargs(),
     )
     # Only 2 of the 3 records have QQQ.
-    assert manifest.chunks[0].row_count == 2
+    assert qqq.chunks[0].row_count == 2, "days without the symbol in the map are skipped"
+
+    # Sanity check: 2024-01-02 16:00 America/New_York is 2024-01-02 21:00 UTC.
+    # 21:00 UTC on 2024-01-02 = 1704229200000 ms (DST: NY is UTC-5 in January).
+    anchor_path = _write_export(tmp_path, [{"date": "2024-01-02", "prediction_by_symbol": {"SPY": 0.0}}])
+    import_qc_fixture(
+        qc_export_path=anchor_path,
+        prediction_set_id="qc_anchor_test",
+        output_root=tmp_path / "artifacts" / "predictions",
+        symbol="SPY",
+        **_provenance_kwargs(),
+    )
+    anchored = PredictionSet.load(tmp_path / "artifacts" / "predictions" / "qc_anchor_test")
+    assert 1704229200000 in anchored.index, "an anchor of 16:00 New York lands at the right int64 ms"
 
 
-def test_import_rejects_duplicate_date(tmp_path: Path) -> None:
+def test_import_rejects_a_duplicate_date_and_a_tz_aware_date_string(tmp_path: Path) -> None:
     records = _good_export_records()
     records.append({"date": "2024-01-02", "prediction_by_symbol": {"SPY": 0.999}})
     export_path = _write_export(tmp_path, records)
@@ -133,11 +139,8 @@ def test_import_rejects_duplicate_date(tmp_path: Path) -> None:
             **_provenance_kwargs(),
         )
 
-
-def test_import_rejects_tz_aware_date_string(tmp_path: Path) -> None:
-    """The date-only conversion path expects 'YYYY-MM-DD' strictly. A
-    tz-aware ISO 8601 string is ambiguous (which tz applies — embedded or
-    anchor?) and must be rewritten by the caller."""
+    # The date-only conversion path expects 'YYYY-MM-DD' strictly. A tz-aware ISO 8601 string is ambiguous (which tz
+    # applies — embedded or anchor?) and must be rewritten by the caller.
     records = _good_export_records()
     records[0]["date"] = "2024-01-02T16:00:00-05:00"
     export_path = _write_export(tmp_path, records)
@@ -170,17 +173,3 @@ def test_import_rejects_invalid_symbol_or_id(tmp_path: Path, prediction_set_id: 
         )
 
 
-def test_import_anchor_time_lands_at_correct_int64_ms(tmp_path: Path) -> None:
-    """Sanity check: 2024-01-02 16:00 America/New_York is 2024-01-02 21:00 UTC.
-    21:00 UTC on 2024-01-02 = 1704229200000 ms (DST: NY is UTC-5 in January)."""
-    records = [{"date": "2024-01-02", "prediction_by_symbol": {"SPY": 0.0}}]
-    export_path = _write_export(tmp_path, records)
-    import_qc_fixture(
-        qc_export_path=export_path,
-        prediction_set_id="qc_anchor_test",
-        output_root=tmp_path / "artifacts" / "predictions",
-        symbol="SPY",
-        **_provenance_kwargs(),
-    )
-    pset = PredictionSet.load(tmp_path / "artifacts" / "predictions" / "qc_anchor_test")
-    assert 1704229200000 in pset.index

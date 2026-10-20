@@ -21,6 +21,8 @@ from app.lean_sidecar.runner import (
 from app.lean_sidecar.workspace import resolve_workspace
 
 DUMMY_DIGEST = "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+_TMPFS_FLAGS = ("--tmpfs", "/tmp:rw,noexec,nosuid,size=256m")
+_DOTNET_ENV_FLAGS = (*_TMPFS_FLAGS, "--env", "DOTNET_ReadyToRun=0", "--env", "DOTNET_TieredCompilation=0")
 
 
 @pytest.fixture
@@ -253,31 +255,42 @@ class TestBuildCommand:
         with pytest.raises(RunnerConfigurationError, match=match):
             build_command(ws, DUMMY_DIGEST, hardening_flags=hardening_flags)
 
-    def test_accepts_allow_listed_hardening_tokens(
+    @pytest.mark.parametrize(
+        ("hardening_flags", "token"),
+        [
+            # All tokens here must be in ALLOWED_HARDENING_TOKENS. Phase
+            # 1c moved --read-only and --user out of the allow-list and
+            # into the mandatory shape, so the only opt-in surface left
+            # is --tmpfs + spec. --read-only is in the mandatory shape,
+            # not the allow-list; still expect it in the constructed argv.
+            pytest.param(_TMPFS_FLAGS, "--read-only", id="allow_listed_tokens_keep_the_mandatory_read_only"),
+            pytest.param(_TMPFS_FLAGS, "--tmpfs", id="allow_listed_tokens_reach_argv_tmpfs"),
+            pytest.param(_TMPFS_FLAGS, _TMPFS_FLAGS[1], id="allow_listed_tokens_reach_argv_tmpfs_spec"),
+            # The AppleHV-podman work-around: ``--env DOTNET_ReadyToRun=0``
+            # and ``--env DOTNET_TieredCompilation=0`` must pass the allow-
+            # list + pair validator and reach the constructed argv.
+            #
+            # Backend's ``compose.yaml`` documents the same pair as the fix
+            # for csc SIGILL (exit 132) on Apple Silicon; the LEAN sidecar
+            # exhibits the identical crash on wider trade-zip windows.
+            pytest.param(_DOTNET_ENV_FLAGS, "--env", id="pinned_dotnet_env_pair_reaches_argv_env"),
+            pytest.param(_DOTNET_ENV_FLAGS, "DOTNET_ReadyToRun=0", id="pinned_dotnet_env_pair_reaches_argv_ready_to_run"),
+            pytest.param(
+                _DOTNET_ENV_FLAGS, "DOTNET_TieredCompilation=0", id="pinned_dotnet_env_pair_reaches_argv_tiered_compilation"
+            ),
+        ],
+    )
+    def test_accepts_allow_listed_hardening_flags(
         self,
         tmp_artifacts_root: Path,
         _allow_dummy_digest: None,
+        hardening_flags: tuple[str, ...],
+        token: str,
     ) -> None:
-        ws = resolve_workspace("run_x7", tmp_artifacts_root)
+        ws = resolve_workspace("run_hardening_accepted", tmp_artifacts_root)
         ws.ensure_layout()
-        # All tokens here must be in ALLOWED_HARDENING_TOKENS. Phase
-        # 1c moved --read-only and --user out of the allow-list and
-        # into the mandatory shape, so the only opt-in surface left
-        # is --tmpfs + spec.
-        plan = build_command(
-            ws,
-            DUMMY_DIGEST,
-            hardening_flags=(
-                "--tmpfs",
-                "/tmp:rw,noexec,nosuid,size=256m",
-            ),
-        )
-        argv = plan.argv
-        # --read-only is in the mandatory shape, not the allow-list;
-        # still expect it in the constructed argv.
-        assert "--read-only" in argv
-        assert "--tmpfs" in argv
-        assert "/tmp:rw,noexec,nosuid,size=256m" in argv
+        plan = build_command(ws, DUMMY_DIGEST, hardening_flags=hardening_flags)
+        assert token in plan.argv, f"{token} reaches the constructed argv"
 
     def test_container_user_spec_matches_host_uid_on_posix(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Reviewer P1: on Linux, the container UID must match the
@@ -418,38 +431,6 @@ class TestBuildCommand:
 
         monkeypatch.delattr(runner.os, "geteuid", raising=False)
         assert runner._is_rootless_podman("/usr/bin/podman") is False
-
-    def test_accepts_pinned_dotnet_env_pair(
-        self,
-        tmp_artifacts_root: Path,
-        _allow_dummy_digest: None,
-    ) -> None:
-        """The AppleHV-podman work-around: ``--env DOTNET_ReadyToRun=0``
-        and ``--env DOTNET_TieredCompilation=0`` must pass the allow-
-        list + pair validator and reach the constructed argv.
-
-        Backend's ``compose.yaml`` documents the same pair as the fix
-        for csc SIGILL (exit 132) on Apple Silicon; the LEAN sidecar
-        exhibits the identical crash on wider trade-zip windows.
-        """
-        ws = resolve_workspace("run_dotnet_env", tmp_artifacts_root)
-        ws.ensure_layout()
-        plan = build_command(
-            ws,
-            DUMMY_DIGEST,
-            hardening_flags=(
-                "--tmpfs",
-                "/tmp:rw,noexec,nosuid,size=256m",
-                "--env",
-                "DOTNET_ReadyToRun=0",
-                "--env",
-                "DOTNET_TieredCompilation=0",
-            ),
-        )
-        argv = plan.argv
-        assert "--env" in argv
-        assert "DOTNET_ReadyToRun=0" in argv
-        assert "DOTNET_TieredCompilation=0" in argv
 
 
 class TestExecuteTimeoutKillsContainer:

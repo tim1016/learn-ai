@@ -52,20 +52,23 @@ def _xy(result: ProcedureResult) -> tuple[Any, Any]:
     return result.winner["x"], result.winner["y"]
 
 
-def test_run_zoom_separable_landscape_converges_to_the_peak() -> None:
+def test_run_zoom_separable_landscape_converges_to_the_peak_and_its_result_round_trips_through_its_dict() -> None:
     decl = declaration(knob("x", high="10"), knob("y", high="10"))
     plan = protocol(decl)
     landscape = Landscape(lambda p: -float((p["x"] - 3) ** 2 + (p["y"] - 7) ** 2))
 
     result = _zoom(decl, plan, landscape)
 
-    assert _xy(result) == (3, 7)
-    assert result.winner_hash == point_hash(STRATEGY, synthetic_point({"x": 3, "y": 7}))
-    assert result.winner_metrics == metrics(0.0)
+    assert _xy(result) == (3, 7), "a separable landscape converges to the peak"
+    assert result.winner_hash == point_hash(STRATEGY, synthetic_point({"x": 3, "y": 7})), "the winner's hash is the peak's"
+    assert result.winner_metrics == metrics(0.0), "the winner's metrics are the peak's"
     # Every knob was refined down to its quantum and the second pass moved nothing.
-    assert result.stop_reason == "quantization_limit"
-    assert [r.moved for r in result.rounds if r.pass_index == 1] == [False] * len([r for r in result.rounds if r.pass_index == 1])
-    assert result.edge_hits == ()
+    assert result.stop_reason == "quantization_limit", "every knob was refined down to its quantum"
+    assert [r.moved for r in result.rounds if r.pass_index == 1] == [False] * len(
+        [r for r in result.rounds if r.pass_index == 1]
+    ), "the second pass moved nothing"
+    assert result.edge_hits == (), "the peak is no edge hit"
+    assert ProcedureResult.from_dict(result.as_dict()) == result, "the result round-trips through its dict"
 
 
 def test_run_zoom_pairwise_trap_from_the_methodology_note_keeps_the_start() -> None:
@@ -157,7 +160,7 @@ def test_run_zoom_ineligible_current_moves_to_the_nearest_then_smaller_tied_valu
     assert result.winner["x"] == 1
 
 
-def test_run_zoom_budget_exhausted_mid_pass_returns_the_current_point() -> None:
+def test_run_zoom_budget_exhausted_returns_the_current_point_or_before_the_seed_the_seed_without_metrics() -> None:
     decl = declaration(knob("x", high="10"), knob("y", high="10"))
     plan = protocol(decl)
     inner = Landscape(lambda p: -float((p["x"] - 3) ** 2 + (p["y"] - 7) ** 2))
@@ -173,25 +176,23 @@ def test_run_zoom_budget_exhausted_mid_pass_returns_the_current_point() -> None:
     result = _zoom(decl, plan, evaluate)
 
     # Batch 1 is the seed, batch 2 moves x from 0 to 2, batch 3 is refused.
-    assert result.stop_reason == "budget"
-    assert _xy(result) == (2, 0)
-    assert result.winner_metrics == metrics(-50.0)
-    assert len(result.rounds) == 1
+    assert result.stop_reason == "budget", "a budget exhausted mid-pass stops the search for the budget"
+    assert _xy(result) == (2, 0), "a budget exhausted mid-pass returns the current point"
+    assert result.winner_metrics == metrics(-50.0), "the current point keeps its metrics"
+    assert len(result.rounds) == 1, "one round was finished before the refusal"
 
+    seedless_decl = declaration()
+    seedless_plan = protocol(seedless_decl)
 
-def test_run_zoom_budget_exhausted_before_the_seed_returns_the_seed_without_metrics() -> None:
-    decl = declaration()
-    plan = protocol(decl)
-
-    def evaluate(points):  # type: ignore[no-untyped-def]
+    def refuse_everything(points):  # type: ignore[no-untyped-def]
         raise BudgetExhausted
 
-    result = _zoom(decl, plan, evaluate)
+    seedless = _zoom(seedless_decl, seedless_plan, refuse_everything)
 
-    assert result.stop_reason == "budget"
-    assert _xy(result) == (0, 0)
-    assert result.winner_metrics is None
-    assert result.evaluated_hashes == ()
+    assert seedless.stop_reason == "budget", "a budget exhausted before the seed stops the search for the budget"
+    assert _xy(seedless) == (0, 0), "a budget exhausted before the seed returns the seed"
+    assert seedless.winner_metrics is None, "the seed comes back without metrics"
+    assert seedless.evaluated_hashes == (), "nothing was evaluated"
 
 
 def test_run_zoom_quantization_limit_stops_refining_and_ends_the_search() -> None:
@@ -206,7 +207,7 @@ def test_run_zoom_quantization_limit_stops_refining_and_ends_the_search() -> Non
     assert result.stop_reason == "quantization_limit"
 
 
-def test_run_zoom_refines_down_to_the_plan_step_and_never_finer() -> None:
+def test_run_zoom_refines_down_to_the_plan_step_and_never_finer_samples_a_narrow_range_at_once_and_includes_the_current_value() -> None:
     gap = knob("gap", kind="decimal", high="2", quantum="0.01", default="0.2")
     decl = declaration(gap)
     plan = protocol(
@@ -219,34 +220,52 @@ def test_run_zoom_refines_down_to_the_plan_step_and_never_finer() -> None:
 
     # Spacing 0.15, then 0.075, then 0.0375 <= 0.05: the third round samples the 0.05 lattice and ends the knob.
     first_pass = [r for r in result.rounds if r.pass_index == 0]
-    assert [(r.round_index, r.quantization_limit) for r in first_pass] == [(0, False), (1, False), (2, True)]
-    assert first_pass[1].values == (0.15, 0.22, 0.3, 0.38, 0.45)
-    assert first_pass[2].values == (0.35, 0.38, 0.4, 0.45)
-    assert result.winner["gap"] == 0.38
-    assert result.stop_reason == "quantization_limit"
+    assert [(r.round_index, r.quantization_limit) for r in first_pass] == [
+        (0, False),
+        (1, False),
+        (2, True),
+    ], "the third round samples the 0.05 lattice and ends the knob"
+    assert first_pass[1].values == (0.15, 0.22, 0.3, 0.38, 0.45), "the second round halves the spacing"
+    assert first_pass[2].values == (0.35, 0.38, 0.4, 0.45), "the third round samples the step lattice"
+    assert result.winner["gap"] == 0.38, "the search ends on the lattice point nearest the peak"
+    assert result.stop_reason == "quantization_limit", "the search ends at the quantization limit"
     for r in result.rounds:
         sampled = sorted(Decimal(str(value)) for value in r.values if value != r.current_before)
-        assert all(b - a >= Decimal("0.05") for a, b in pairwise(sampled)), r
+        assert all(b - a >= Decimal("0.05") for a, b in pairwise(sampled)), f"no round samples finer than the plan step: {r}"
 
+    narrow_decl = declaration(knob("rsi", high="100", default="50"))
+    narrow_plan = protocol(narrow_decl, knobs=(KnobPlan("rsi", "search", 40.0, 55.0, 50.0, step=5.0),), zoom=ZoomSettings(points=5))
 
-def test_run_zoom_a_range_narrower_than_its_points_samples_the_step_lattice_at_once() -> None:
-    decl = declaration(knob("rsi", high="100", default="50"))
-    plan = protocol(decl, knobs=(KnobPlan("rsi", "search", 40.0, 55.0, 50.0, step=5.0),), zoom=ZoomSettings(points=5))
-
-    result = _zoom(decl, plan, Landscape(lambda p: -abs(p["rsi"] - 44)))
+    narrow = _zoom(narrow_decl, narrow_plan, Landscape(lambda p: -abs(p["rsi"] - 44)))
 
     # Five points over 40..55 would be 3.75 apart, finer than the step of 5.
-    assert result.rounds[0].values == (40.0, 45.0, 50.0, 55.0)
-    assert result.rounds[0].quantization_limit
-    assert result.winner["rsi"] == 45
+    assert narrow.rounds[0].values == (40.0, 45.0, 50.0, 55.0), "a range narrower than its points samples the step lattice at once"
+    assert narrow.rounds[0].quantization_limit, "the first round of a narrow range is at the quantization limit"
+    assert narrow.winner["rsi"] == 45, "the narrow range's winner is the lattice point nearest the peak"
+
+    current_plan = protocol(
+        decl, knobs=(KnobPlan("gap", "search", 0.0, 0.6, 0.2, step=0.01),), zoom=ZoomSettings(points=5, refinements=3, passes=2)
+    )
+
+    including = _zoom(decl, current_plan, Landscape(lambda p: -abs(p["gap"] - 0.37)))
+
+    assert including.rounds[0].values == (0.0, 0.15, 0.2, 0.3, 0.45, 0.6), "the first round includes the current value among its points"
+    for r in including.rounds:
+        assert r.current_before in [value for value, _ in r.results], f"every round includes the current value: {r}"
 
 
-def test_run_zoom_refuses_a_searched_knob_without_a_step() -> None:
+def test_run_zoom_refuses_a_searched_knob_without_a_step_and_a_seed_that_breaks_a_constraint() -> None:
     decl = declaration()
     plan = protocol(decl, knobs=tuple(dataclasses.replace(k, step=None) for k in plans_for(decl)))
 
     with pytest.raises(ValueError, match="without a step"):
         _zoom(decl, plan, Landscape(lambda p: 1.0))
+
+    constrained = declaration(constraints=(KnobConstraint("x", "<", "y", "x must be below y"),))
+    broken_seed = protocol(constrained, seed=synthetic_point({"x": 3, "y": 1}))
+
+    with pytest.raises(ValueError, match="x must be below y"):
+        _zoom(constrained, broken_seed, Landscape(lambda p: 1.0))
 
 
 def test_run_zoom_no_eligible_point_returns_the_seed() -> None:
@@ -259,18 +278,6 @@ def test_run_zoom_no_eligible_point_returns_the_seed() -> None:
     assert _xy(result) == (1, 3)
     assert result.winner_metrics == metrics(1.0, trades=10)
     assert all(code == "TOO_FEW_TRADES" for r in result.rounds for _, code in r.results)
-
-
-def test_run_zoom_includes_the_current_value_in_every_round() -> None:
-    gap = knob("gap", kind="decimal", high="2", quantum="0.01", default="0.2")
-    decl = declaration(gap)
-    plan = protocol(decl, knobs=(KnobPlan("gap", "search", 0.0, 0.6, 0.2, step=0.01),), zoom=ZoomSettings(points=5, refinements=3, passes=2))
-
-    result = _zoom(decl, plan, Landscape(lambda p: -abs(p["gap"] - 0.37)))
-
-    assert result.rounds[0].values == (0.0, 0.15, 0.2, 0.3, 0.45, 0.6)
-    for r in result.rounds:
-        assert r.current_before in [value for value, _ in r.results]
 
 
 def test_run_zoom_never_sends_more_points_than_its_bound() -> None:
@@ -314,22 +321,6 @@ def test_run_zoom_never_evaluates_a_constraint_violating_point() -> None:
     assert all(message == "x must be below y" for r in result.rounds for _, message in r.invalid)
     assert result.invalid_points > 0
     assert result.winner["x"] < result.winner["y"]
-
-
-def test_run_zoom_refuses_a_seed_that_breaks_a_constraint() -> None:
-    decl = declaration(constraints=(KnobConstraint("x", "<", "y", "x must be below y"),))
-    plan = protocol(decl, seed=synthetic_point({"x": 3, "y": 1}))
-
-    with pytest.raises(ValueError, match="x must be below y"):
-        _zoom(decl, plan, Landscape(lambda p: 1.0))
-
-
-def test_procedure_result_round_trips_through_its_dict() -> None:
-    decl = declaration(knob("x", high="10"), knob("y", high="10"))
-    plan = protocol(decl)
-    result = _zoom(decl, plan, Landscape(lambda p: -float((p["x"] - 3) ** 2 + (p["y"] - 7) ** 2)))
-
-    assert ProcedureResult.from_dict(result.as_dict()) == result
 
 
 def test_a_legacy_round_without_width_accounting_stays_absent_never_zero() -> None:

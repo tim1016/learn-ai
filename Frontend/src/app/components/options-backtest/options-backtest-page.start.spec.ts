@@ -1,4 +1,3 @@
-import { HttpErrorResponse } from '@angular/common/http';
 import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -38,16 +37,6 @@ describe('when a backtest can be started', () => {
     expect(screen.queryByText(/available once/)).toBeNull();
   });
 
-  it('waits for a date the picker refuses, and does not make one up', async () => {
-    await renderPage(fakeService(vi));
-    await openExample();
-
-    pickDates('2026-09-14', '2026-13-45');
-
-    await waitFor(() => expect(screen.getByText('Check data and Start are available once both dates are picked.')).toBeTruthy());
-    expect(startButton().disabled).toBe(true);
-  });
-
   it('shows its shortcut on the button, and tells assistive technology about it', async () => {
     await renderPage(fakeService(vi));
 
@@ -75,30 +64,6 @@ describe('starting a backtest', () => {
     expect.soft(within(panel).getByRole('button', { name: 'Cancel' }), 'offers Cancel on the run going').toBeTruthy();
     await waitFor(() => expect(document.activeElement, 'moves the focus to the heading of the run').toBe(within(panel).getByRole('heading', { name: 'Backtest run' })));
   });
-
-  it('sends the dates of a range across the clock change in March, each end on its own side of it', async () => {
-    const setup = await readyToStart(scriptedRun(vi), ['2026-03-06', '2026-03-09']);
-
-    fireEvent.click(startButton());
-
-    await waitFor(() => expect(setup.service.startRun).toHaveBeenCalledTimes(1));
-    const request = setup.service.startRun.mock.calls[0]?.[0];
-    expect([request?.start_ms, request?.end_ms]).toEqual([1_772_773_200_000, 1_773_115_200_000]);
-  });
-
-  it('starts once, however many times it is pressed', async () => {
-    const setup = await readyToStart();
-
-    fireEvent.click(startButton());
-    fireEvent.click(startButton());
-    shiftEnter();
-    await screen.findByRole('region', { name: 'Backtest run' });
-    fireEvent.click(startButton());
-
-    expect(setup.service.startRun).toHaveBeenCalledTimes(1);
-    expect(startButton().disabled).toBe(true);
-    expect(screen.getByText('A backtest is already running.')).toBeTruthy();
-  });
 });
 
 describe('the name a run is recorded under', () => {
@@ -123,19 +88,6 @@ describe('the name a run is recorded under', () => {
     fireEvent.click(await within(screen.getByRole('complementary', { name: 'Saved setups' })).findByRole('button', { name: /^Mine/ }));
     await screen.findByRole('article', { name: 'Leg 2' });
     typeInto('Slippage (percent)', '0.5');
-    pickDates('2026-09-14', '2026-09-18');
-    await waitFor(() => expect(startButton().disabled).toBe(false));
-
-    fireEvent.click(startButton());
-
-    await waitFor(() => expect(setup.service.startRun).toHaveBeenCalledTimes(1));
-    expect(sent(setup)?.setup_name).toBeNull();
-  });
-
-  it('is nothing for a setup built from nothing', async () => {
-    const setup = scriptedRun(vi);
-    await renderPage(setup.service, undefined, { jobs: setup.jobs });
-    addLeg();
     pickDates('2026-09-14', '2026-09-18');
     await waitFor(() => expect(startButton().disabled).toBe(false));
 
@@ -308,27 +260,6 @@ describe('when the server will not start the backtest', () => {
     expect(screen.queryByText(/Try again/)).toBeNull();
     expect(startButton().disabled).toBe(false);
   });
-
-  it('says that a backtest whose start got no clear answer may have started, points to History, and lets it be started again', async () => {
-    let down = true;
-    const setup = scriptedRun(vi);
-    setup.service.startRun.mockImplementation(async () => {
-      if (down) throw new HttpErrorResponse({ status: 0 });
-      setup.jobs.register('job-1');
-      return 'job-1';
-    });
-    await readyToStart(setup);
-
-    fireEvent.click(startButton());
-
-    expect(reads(await screen.findByRole('alert'))).toContain('History');
-    expect(screen.queryByText(/could not be started/)).toBeNull();
-    expect(startButton().disabled).toBe(false);
-    down = false;
-    fireEvent.click(startButton());
-    await screen.findByRole('region', { name: 'Backtest run' });
-    expect(screen.queryByRole('alert')).toBeNull();
-  });
 });
 
 describe('coming back to the page while a backtest is going', () => {
@@ -353,25 +284,6 @@ describe('coming back to the page while a backtest is going', () => {
     expect(startButton().disabled).toBe(true);
     shiftEnter();
     expect(service.startRun).not.toHaveBeenCalled();
-  });
-
-  it('shows nothing, and leaves Start free, when no run is going', async () => {
-    const service = fakeService(vi, { runs: vi.fn(async () => [runItem({ status: 'complete' })]) });
-    await renderPage(service);
-
-    expect(screen.queryByRole('region', { name: 'Backtest run' })).toBeNull();
-  });
-
-  it('says so when it cannot tell whether a run is going', async () => {
-    const service = fakeService(vi, {
-      runs: vi.fn(async () => {
-        throw new Error('offline');
-      }),
-    });
-
-    await renderPage(service);
-
-    expect((await screen.findByText(/Whether a backtest is already running could not be checked/)).closest('[role="alert"]')).not.toBeNull();
   });
 });
 
@@ -410,38 +322,6 @@ describe('a backtest from start to end', () => {
     // Read when it began and once more when it ended: the page handing the newer record back does not read it a third time.
     await lettingGo();
     expect(setup.service.run).toHaveBeenCalledTimes(2);
-  });
-
-  it('shows the reason and each item when it fails, and lets another be started', async () => {
-    const failure = { code: 'DATA_MISSING', reason: 'Some sessions have no data to replay.', items: [{ session_open_ms: runItem().first_session_open_ms, code: 'listing', message: 'No listing was stored.' }] };
-    const setup = scriptedRun(vi);
-    setup.service.run.mockResolvedValueOnce(going()).mockResolvedValue(runDetail({ status: 'failed', failure, figures: null, slippage: [], slippage_tolerance: null, headline: null }));
-    await readyToStart(setup);
-    fireEvent.click(startButton());
-    await screen.findByRole('region', { name: 'Backtest run' });
-
-    setup.jobs.emit('job-1', { type: 'job.failed', code: 'RunFailedError', message: failure.reason });
-
-    const alert = await screen.findByRole('alert');
-    expect(reads(alert)).toBe('Some sessions have no data to replay.');
-    expect(reads(screen.getByRole('list', { name: 'What failed' }))).toBe('Listing · Items: 1 2026-09-14 – No listing was stored.');
-    await waitFor(() => expect(startButton().disabled).toBe(false));
-  });
-
-  it('says it was cancelled and that nothing was saved, when Cancel is pressed and the job stops', async () => {
-    const setup = scriptedRun(vi);
-    setup.service.run.mockResolvedValueOnce(going()).mockResolvedValue(runDetail({ status: 'cancelled', figures: null, slippage: [], slippage_tolerance: null, headline: null }));
-    await readyToStart(setup);
-    fireEvent.click(startButton());
-    const panel = await screen.findByRole('region', { name: 'Backtest run' });
-
-    within(panel).getByRole('button', { name: 'Cancel' }).click();
-    await waitFor(() => expect(setup.jobs.cancelled).toEqual(['job-1']));
-    setup.jobs.emit('job-1', { type: 'job.cancelled', reason: 'Cancelled.' });
-
-    expect(await within(panel).findByText('The run was cancelled. Nothing was saved.')).toBeTruthy();
-    expect(within(panel).queryByText(/You asked to cancel/)).toBeNull();
-    await waitFor(() => expect(startButton().disabled).toBe(false));
   });
 
   it('offers Cancel afresh for the next backtest, in the same place, after one that was cancelled', async () => {

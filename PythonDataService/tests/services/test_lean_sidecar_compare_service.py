@@ -58,18 +58,28 @@ def test_matching_trade_lists_have_no_divergences(trades: tuple[tuple[int, int, 
     assert result.first_divergence_ms_utc is None, "no first divergence"
 
 
-def test_decision_mismatch_when_one_side_has_extra_trade() -> None:
+_TWO_TRADES = (
+    (1, 1_700_000_000_000, 1_700_000_300_000, Decimal("100.0"), Decimal("101.0")),
+    (2, 1_700_000_600_000, 1_700_000_900_000, Decimal("101.0"), Decimal("102.0")),
+)
+
+
+@pytest.mark.parametrize(
+    ("left_count", "divergence_count"),
+    [
+        pytest.param(1, 1, id="decision_mismatch_when_one_side_has_extra_trade"),
+        pytest.param(0, 2, id="one_empty_side_yields_decision_mismatches"),
+    ],
+)
+def test_a_trade_only_one_side_made_is_a_decision_mismatch(left_count: int, divergence_count: int) -> None:
     from app.services.lean_sidecar_compare_service import reconcile_trade_lists
 
-    left = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, Decimal("100.0"), Decimal("101.0"))]
-    right = [
-        _trade(1, 1_700_000_000_000, 1_700_000_300_000, Decimal("100.0"), Decimal("101.0")),
-        _trade(2, 1_700_000_600_000, 1_700_000_900_000, Decimal("101.0"), Decimal("102.0")),
-    ]
+    left = [_trade(*args) for args in _TWO_TRADES[:left_count]]
+    right = [_trade(*args) for args in _TWO_TRADES]
     result = reconcile_trade_lists(left_trades=left, right_trades=right)
-    assert len(result.divergences) >= 1
-    assert any(d.category == "DECISION_MISMATCH" for d in result.divergences)
-    assert result.first_divergence_ms_utc is not None
+    assert len(result.divergences) == divergence_count, "one divergence per trade the left side lacks"
+    assert all(d.category == "DECISION_MISMATCH" for d in result.divergences), "each is a DECISION_MISMATCH"
+    assert result.first_divergence_ms_utc is not None, "a first divergence is reported"
 
 
 @pytest.mark.parametrize(
@@ -151,19 +161,6 @@ def test_first_divergence_ms_is_earliest() -> None:
     ]
     result = reconcile_trade_lists(left_trades=left, right_trades=right, fill_price_atol=Decimal("0.01"))
     assert result.first_divergence_ms_utc == 1_700_000_000_000
-
-
-def test_one_empty_side_yields_decision_mismatches() -> None:
-    from app.services.lean_sidecar_compare_service import reconcile_trade_lists
-
-    left = []
-    right = [
-        _trade(1, 1_700_000_000_000, 1_700_000_300_000, Decimal("100.0"), Decimal("101.0")),
-        _trade(2, 1_700_000_600_000, 1_700_000_900_000, Decimal("101.0"), Decimal("102.0")),
-    ]
-    result = reconcile_trade_lists(left_trades=left, right_trades=right)
-    assert len(result.divergences) == 2
-    assert all(d.category == "DECISION_MISMATCH" for d in result.divergences)
 
 
 @pytest.mark.parametrize(

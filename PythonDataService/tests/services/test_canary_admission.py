@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -70,7 +71,10 @@ def test_canary_allowlist_ships_empty() -> None:
     this test failing. Operational activation lives in the audited local
     ledger and never mutates this source constant, adds a default, or falls
     back to an environment variable."""
-    assert frozenset() == CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS
+    assert frozenset() == CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS, "#1729: the shipped allowlist is empty"
+    assert canary_pairing_admitted(program_key="ema_crossover_signal", account_id="paper-account") is False, (
+        "no pairing is admitted against the empty shipped allowlist"
+    )
 
 
 @pytest.mark.parametrize(
@@ -98,10 +102,6 @@ def test_canary_pairing_admitted_matches_only_the_exact_tuple(monkeypatch: pytes
     assert canary_pairing_admitted(program_key="ema_crossover_signal", account_id="paper-account") is True
     assert canary_pairing_admitted(program_key="ema_crossover_signal", account_id="other-account") is False
     assert canary_pairing_admitted(program_key="sma_crossover_signal", account_id="paper-account") is False
-
-
-def test_canary_pairing_admitted_is_false_against_the_empty_shipped_allowlist() -> None:
-    assert canary_pairing_admitted(program_key="ema_crossover_signal", account_id="paper-account") is False
 
 
 def test_plan_canary_activation_is_read_only_and_binds_current_ema_proof(tmp_path: Path) -> None:
@@ -369,17 +369,7 @@ def test_revoke_canary_pairing_is_append_only_and_blocks_future_admission(tmp_pa
     assert [event["action"] for event in raw["events"]] == ["activated", "revoked"]
 
 
-def test_valid_prefix_rollback_fails_closed_against_monotonic_checkpoint(
-    tmp_path: Path,
-) -> None:
-    ledger_path = tmp_path / "canary-admission.json"
-    plan = _ema_plan(ledger_path)
-    apply_canary_activation(
-        plan=plan,
-        confirmation_token=plan.confirmation_token,
-        ledger_path=ledger_path,
-        clock=lambda: _NOW + 1,
-    )
+def _roll_back_to_the_activation_only_ledger(ledger_path: Path) -> None:
     activation_only_ledger = ledger_path.read_bytes()
     revoke_canary_pairing(
         program_key="ema_crossover_signal",
@@ -392,16 +382,26 @@ def test_valid_prefix_rollback_fails_closed_against_monotonic_checkpoint(
 
     ledger_path.write_bytes(activation_only_ledger)
 
-    with pytest.raises(CanaryAdmissionLedgerError, match="monotonic checkpoint"):
-        active_canary_pairings(ledger_path=ledger_path)
-    assert canary_pairing_admitted(
-        program_key="ema_crossover_signal",
-        account_id="paper-account",
-        ledger_path=ledger_path,
-    ) is False
+
+def _tamper_with_the_first_event(ledger_path: Path) -> None:
+    raw = json.loads(ledger_path.read_text(encoding="utf-8"))
+    raw["events"][0]["reason"] = "Tampered after activation."
+    ledger_path.write_text(json.dumps(raw), encoding="utf-8")
 
 
-def test_canary_pairing_admission_fails_closed_on_a_tampered_ledger(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("damage", "refusal"),
+    [
+        pytest.param(
+            _roll_back_to_the_activation_only_ledger, "monotonic checkpoint",
+            id="valid_prefix_rollback_against_monotonic_checkpoint",
+        ),
+        pytest.param(_tamper_with_the_first_event, "invalid", id="tampered_ledger"),
+    ],
+)
+def test_canary_pairing_admission_fails_closed_on_a_damaged_ledger(
+    tmp_path: Path, damage: Callable[[Path], None], refusal: str,
+) -> None:
     ledger_path = tmp_path / "canary-admission.json"
     plan = _ema_plan(ledger_path)
     apply_canary_activation(
@@ -410,17 +410,16 @@ def test_canary_pairing_admission_fails_closed_on_a_tampered_ledger(tmp_path: Pa
         ledger_path=ledger_path,
         clock=lambda: _NOW + 1,
     )
-    raw = json.loads(ledger_path.read_text(encoding="utf-8"))
-    raw["events"][0]["reason"] = "Tampered after activation."
-    ledger_path.write_text(json.dumps(raw), encoding="utf-8")
 
-    with pytest.raises(CanaryAdmissionLedgerError, match="invalid"):
+    damage(ledger_path)
+
+    with pytest.raises(CanaryAdmissionLedgerError, match=refusal):
         active_canary_pairings(ledger_path=ledger_path)
     assert canary_pairing_admitted(
         program_key="ema_crossover_signal",
         account_id="paper-account",
         ledger_path=ledger_path,
-    ) is False
+    ) is False, "a damaged ledger admits no pairing"
 
 
 def _legacy_activation_evidence_payload() -> dict:

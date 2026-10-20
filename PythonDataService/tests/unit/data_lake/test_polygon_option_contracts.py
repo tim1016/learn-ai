@@ -582,12 +582,17 @@ async def test_a_paging_that_passes_its_budget_on_page_three_is_a_typed_timeout_
 
 @respx.mock
 @pytest.mark.parametrize(
-    ("budget_s", "timed_out"), [(100.0, True), (100.5, False)], ids=["spent to the second", "half a second to spare"]
+    ("budget_s", "timed_out", "pages_asked"),
+    [(100.0, True, 1), (100.5, False, 2), (0, True, 0)],
+    ids=["spent to the second", "half a second to spare", "already gone"],
 )
 async def test_a_paging_whose_budget_is_exactly_spent_asks_no_more_pages_and_one_with_time_to_spare_goes_on(
-    budget_s: float, timed_out: bool, monkeypatch: pytest.MonkeyPatch
+    budget_s: float, timed_out: bool, pages_asked: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Two pages of 100 s each: the second is asked at 100 s after the call, so a budget of 100 s is already gone."""
+    """Two pages of 100 s each: the second is asked at 100 s after the call, so a budget of 100 s is already gone.
+
+    A budget already gone before the first page asks nothing at all.
+    """
     clock = MovableClock()
     monkeypatch.setattr(contracts_module, "_now_s", clock)
     route = respx.get(CONTRACTS_URL).mock(
@@ -597,24 +602,10 @@ async def test_a_paging_whose_budget_is_exactly_spent_asks_no_more_pages_and_one
     if timed_out:
         with pytest.raises(PolygonListingTimeoutError):
             await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY, budget_s=budget_s)
-        assert route.call_count == 1
+        assert route.call_count == pages_asked
     else:
         contracts = await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY, budget_s=budget_s)
-        assert len(contracts) == 2 and route.call_count == 2
-
-
-@respx.mock
-async def test_a_budget_already_gone_asks_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
-    clock = MovableClock()
-    monkeypatch.setattr(contracts_module, "_now_s", clock)
-    route = respx.get(CONTRACTS_URL).mock(
-        side_effect=slow_listing_pages(clock, pages=2, seconds_per_page=1, contracts_url=CONTRACTS_URL)
-    )
-
-    with pytest.raises(PolygonListingTimeoutError):
-        await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY, budget_s=0)
-
-    assert route.call_count == 0
+        assert len(contracts) == 2 and route.call_count == pages_asked
 
 
 @respx.mock

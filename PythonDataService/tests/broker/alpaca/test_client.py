@@ -171,60 +171,52 @@ async def test_get_asset_404_returns_none(make_api_error: ApiErrorFactory) -> No
     assert await _client(fake).get_asset("MISSING") is None
 
 
-async def test_list_activities_calls_low_level_endpoint() -> None:
+@pytest.mark.parametrize(
+    ("limit", "page_token", "activity_type", "expected_path", "expected_data"),
+    [
+        pytest.param(25, None, None, "/account/activities", {"page_size": 25, "direction": "desc"}, id="the newest page"),
+        pytest.param(
+            25, "activity-25", None, "/account/activities",
+            {"page_size": 25, "direction": "desc", "page_token": "activity-25"},
+            id="a page token",
+        ),
+        pytest.param(
+            100, None, "TRANS", "/account/activities/TRANS", {"page_size": 100, "direction": "desc"},
+            id="the cash transaction group",
+        ),
+    ],
+)
+async def test_list_activities_calls_low_level_endpoint(
+    limit: int, page_token: str | None, activity_type: str | None, expected_path: str,
+    expected_data: dict[str, Any],
+) -> None:
     fake = _FakeAlpaca()
-    await _client(fake).list_activities(limit=25)
+    await _client(fake).list_activities(limit=limit, page_token=page_token, activity_type=activity_type)
 
     path, data = fake.activities_call
-    assert path == "/account/activities"
-    assert data == {"page_size": 25, "direction": "desc"}
+    assert path == expected_path
+    assert data == expected_data
 
 
-async def test_list_activities_passes_page_token_to_low_level_endpoint() -> None:
+@pytest.mark.parametrize(
+    ("page_token", "extra_data"),
+    [
+        # Alpaca's pages spell the option exercise two ways; the category names neither (#2913).
+        pytest.param(None, {}, id="asked for by category and never by an activity code"),
+        pytest.param("20240301000000000::fee-0099", {"page_token": "20240301000000000::fee-0099"}, id="a walk continues from its page token"),
+    ],
+)
+async def test_non_trade_activities_are_asked_for_by_category_and_never_by_an_activity_code(
+    page_token: str | None, extra_data: dict[str, str]
+) -> None:
     fake = _FakeAlpaca()
-    await _client(fake).list_activities(limit=25, page_token="activity-25")
+    payload = await _client(fake).list_non_trade_activities(limit=100, page_token=page_token)
 
     assert fake.activities_call == (
         "/account/activities",
-        {"page_size": 25, "direction": "desc", "page_token": "activity-25"},
-    )
-
-
-async def test_list_activities_can_request_the_cash_transaction_group() -> None:
-    fake = _FakeAlpaca()
-    await _client(fake).list_activities(limit=100, activity_type="TRANS")
-
-    assert fake.activities_call == (
-        "/account/activities/TRANS",
-        {"page_size": 100, "direction": "desc"},
-    )
-
-
-async def test_non_trade_activities_are_asked_for_by_category_and_never_by_an_activity_code() -> None:
-    """Alpaca's pages spell the option exercise two ways; the category names neither (#2913)."""
-    fake = _FakeAlpaca()
-    payload = await _client(fake).list_non_trade_activities(limit=100)
-
-    assert fake.activities_call == (
-        "/account/activities",
-        {"page_size": 100, "direction": "desc", "category": "non_trade_activity"},
+        {"page_size": 100, "direction": "desc", "category": "non_trade_activity", **extra_data},
     )
     assert payload == [{"id": "act1"}]
-
-
-async def test_a_non_trade_activity_walk_continues_from_its_page_token() -> None:
-    fake = _FakeAlpaca()
-    await _client(fake).list_non_trade_activities(limit=100, page_token="20240301000000000::fee-0099")
-
-    assert fake.activities_call == (
-        "/account/activities",
-        {
-            "page_size": 100,
-            "direction": "desc",
-            "category": "non_trade_activity",
-            "page_token": "20240301000000000::fee-0099",
-        },
-    )
 
 
 async def test_submit_order_posts_to_orders_endpoint_and_returns_raw() -> None:
@@ -398,32 +390,25 @@ async def test_a_not_found_after_a_non_object_lookup_answer_is_still_not_absent(
         await client.get_order_by_broker_order_id(_BROKER_ORDER_ID)
 
 
-async def test_cancel_order_deletes_by_id_and_returns_none() -> None:
-    fake = _FakeAlpaca()
-
-    result = await _client(fake).cancel_order(_BROKER_ORDER_ID)
-
-    assert fake.delete_call == (f"/orders/{_BROKER_ORDER_ID}", None)
-    assert result is None
-
-
 @pytest.mark.parametrize(
     "spelling",
     [
+        _BROKER_ORDER_ID,
         _BROKER_ORDER_ID.upper(),
         _BROKER_ORDER_ID.replace("-", ""),
         "{" + _BROKER_ORDER_ID + "}",
         "urn:uuid:" + _BROKER_ORDER_ID,
     ],
-    ids=["upper-case", "no-hyphens", "braces", "urn"],
+    ids=["canonical", "upper-case", "no-hyphens", "braces", "urn"],
 )
 async def test_cancel_order_sends_the_canonical_spelling_of_the_id(spelling: str) -> None:
     """The id goes into the URL path, so every spelling of one UUID is sent as its one canonical form (#3216)."""
     fake = _FakeAlpaca()
 
-    await _client(fake).cancel_order(spelling)
+    result = await _client(fake).cancel_order(spelling)
 
-    assert fake.delete_call == (f"/orders/{_BROKER_ORDER_ID}", None)
+    assert fake.delete_call == (f"/orders/{_BROKER_ORDER_ID}", None), "a cancel deletes the order by its canonical id"
+    assert result is None, "Alpaca's 204 has no body, so a cancel returns none"
 
 
 @pytest.mark.parametrize(
@@ -702,17 +687,22 @@ async def test_get_order_by_broker_order_id_refuses_an_id_that_is_not_a_uuid(not
     assert not hasattr(fake, "broker_id_lookup_call")
 
 
-async def test_api_error_maps_to_contract_error(make_api_error: ApiErrorFactory) -> None:
+async def test_a_throttled_read_maps_to_rate_limited_and_is_not_retried(make_api_error: ApiErrorFactory) -> None:
+    # Only writes retry. A throttled read surfaces immediately so the sweep
+    # cadence is not silently slowed.
     fake = _FakeAlpaca()
+    calls = {"n": 0}
 
     def raise_rate_limited() -> dict:
+        calls["n"] += 1
         raise make_api_error(429, headers={"Retry-After": "1"})
 
     fake.get_account = raise_rate_limited  # type: ignore[method-assign]
 
     with pytest.raises(BrokerRateLimited) as excinfo:
         await _client(fake).get_account()
-    assert excinfo.value.retry_after_ms == 1000
+    assert excinfo.value.retry_after_ms == 1000, "a 429 maps to a rate-limit error that carries its Retry-After"
+    assert calls["n"] == 1, "the read path does not retry on a rate limit"
 
 
 async def _noop_sleep(_seconds: float) -> None:
@@ -827,25 +817,6 @@ async def test_cancel_retries_on_rate_limit_then_succeeds(
 
     assert result is None
     assert calls["n"] == 2
-
-
-async def test_read_path_does_not_retry_on_rate_limit(
-    make_api_error: ApiErrorFactory,
-) -> None:
-    # Only writes retry. A throttled read surfaces immediately so the sweep
-    # cadence is not silently slowed.
-    fake = _FakeAlpaca()
-    calls = {"n": 0}
-
-    def throttle(*_a: Any, **_k: Any) -> dict[str, Any]:
-        calls["n"] += 1
-        raise make_api_error(429, headers={"Retry-After": "1"})
-
-    fake.get_account = throttle  # type: ignore[method-assign]
-
-    with pytest.raises(BrokerRateLimited):
-        await _client(fake).get_account()
-    assert calls["n"] == 1
 
 
 async def test_missing_credentials_map_to_auth_error(

@@ -270,35 +270,40 @@ def _a_clerk_not_set_up_to_ask(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(option_model_inputs, "_fred_rate", lambda *_: pytest.fail("a Clerk asked FRED"))
 
 
-def test_on_a_clerk_a_rate_lookup_handed_in_answers_for_the_rate_and_the_dividends_stay_the_coordinators_to_give(
+def test_on_a_clerk_a_lookup_handed_in_answers_for_its_own_fact_and_the_other_stays_the_coordinators_to_give(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A Clerk boots with no Polygon key (#2204), and this one has no coordinator to ask. It must not answer
     that no dividend is declared."""
     _a_clerk_not_set_up_to_ask(monkeypatch)
 
-    read = read_option_model_inputs("SPY", at_ms=NOW, latest_expiry=_FRIDAY, rate=lambda _days, _today: (0.05, RATE_SOURCE_FRED))
-
-    assert read.dividends is None and read.model is None
-    assert read.dividends_unknown_why == WhyNotKnown.COORDINATOR_NOT_CONFIGURED
-    # The lookup handed in answers for its own fact, and for no other.
-    assert (read.rate, read.rate_is_default, read.rate_default_why) == (0.05, False, None)
-    with pytest.raises(DividendsUnknown):
-        declared_dividend_lookup()("SPY", _TUESDAY, _FRIDAY)
-
-
-def test_on_a_clerk_a_dividend_lookup_handed_in_answers_for_the_dividends_and_the_rate_stays_the_coordinators_to_give(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _a_clerk_not_set_up_to_ask(monkeypatch)
-
-    read = read_option_model_inputs(
+    rate_handed_in = read_option_model_inputs(
+        "SPY", at_ms=NOW, latest_expiry=_FRIDAY, rate=lambda _days, _today: (0.05, RATE_SOURCE_FRED)
+    )
+    option_model_inputs.clear_cache()
+    dividends_handed_in = read_option_model_inputs(
         "SPY", at_ms=NOW, latest_expiry=_FRIDAY, dividends=lambda *_: [DeclaredDividend(_FRIDAY, 1.80)]
     )
 
-    assert read.dividends == (DividendOn(ex_ms=session_open_ms_utc(_FRIDAY), cash=1.80),)
-    assert (read.rate, read.rate_is_default, read.rate_default_why) == (
-        DEFAULT_RISK_FREE_RATE, True, WhyNotKnown.COORDINATOR_NOT_CONFIGURED,
+    assert rate_handed_in.dividends is None and rate_handed_in.model is None, (
+        "a rate lookup handed in leaves the dividends unknown, never none declared"
+    )
+    assert rate_handed_in.dividends_unknown_why == WhyNotKnown.COORDINATOR_NOT_CONFIGURED, (
+        "the dividends say why they are not known"
+    )
+    # The lookup handed in answers for its own fact, and for no other.
+    assert (rate_handed_in.rate, rate_handed_in.rate_is_default, rate_handed_in.rate_default_why) == (
+        0.05, False, None,
+    ), "the rate handed in answers for the rate"
+    with pytest.raises(DividendsUnknown):
+        declared_dividend_lookup()("SPY", _TUESDAY, _FRIDAY)
+    assert dividends_handed_in.dividends == (DividendOn(ex_ms=session_open_ms_utc(_FRIDAY), cash=1.80),), (
+        "a dividend lookup handed in answers for the dividends"
+    )
+    assert (
+        dividends_handed_in.rate, dividends_handed_in.rate_is_default, dividends_handed_in.rate_default_why
+    ) == (DEFAULT_RISK_FREE_RATE, True, WhyNotKnown.COORDINATOR_NOT_CONFIGURED), (
+        "the rate stays the coordinators to give: the default, and why"
     )
 
 

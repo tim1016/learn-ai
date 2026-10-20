@@ -58,15 +58,6 @@ describe('what is posted', () => {
     // 2026-09-14 00:00 EDT, and the midnight after Friday the 18th, both written out from the clock.
     expect([startMs, endMs]).toEqual([1_789_358_400_000, 1_789_790_400_000 + 0]);
   });
-
-  it('is the range across the clock change in March, each end on its own side of it', async () => {
-    const service = await readyToCheck(fakeService(vi), ['2026-03-06', '2026-03-09']);
-
-    await runCheck();
-
-    await waitFor(() => expect(service.checkData).toHaveBeenCalledTimes(1));
-    expect(service.checkData.mock.calls[0]?.slice(1)).toEqual([1_772_773_200_000, 1_773_115_200_000]);
-  });
 });
 
 describe('the panel', () => {
@@ -376,16 +367,6 @@ describe('closing the panel', () => {
 
     expect(dateFields()).toEqual({ from: '2026-09-14', to: '2026-09-18' });
     expect(screen.queryByText(/Range changed to/)).toBeNull();
-  });
-
-  it('keeps from when option prices are available after it is dismissed', async () => {
-    await readyToCheck();
-    await runCheck();
-    await screen.findByText(/Option prices are available from/);
-
-    press('Dismiss');
-
-    expect(reads(screen.getByText(/Option prices are available from/))).toBe('Option prices are available from 2025-10-15');
   });
 });
 

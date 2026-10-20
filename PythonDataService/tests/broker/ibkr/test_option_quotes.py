@@ -384,15 +384,23 @@ async def test_a_kind_of_data_ibkr_has_no_name_for_is_not_live(monkeypatch: pyte
     assert _held(lines, 585).data_type is not QuoteDataType.LIVE
 
 
-async def test_a_line_with_no_callback_yet_holds_no_quote(monkeypatch: pytest.MonkeyPatch) -> None:
-    status, lines, _, _ = _watching(monkeypatch, _bot())
+async def test_a_bots_settled_chain_holds_no_quote_before_a_callback_and_reads_only_the_expiries_its_plan_comes_to(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status, lines, ibkr, _ = _watching(monkeypatch, _bot())
     await _settle(status)
 
     chain = lines.chain("SPY")
 
-    assert set(chain.watched) == _symbols(583, 584, 585, 586, 587)
-    assert all(watched.quote is None for watched in chain.watched.values())
-    assert chain.expiry_dates == scenes._EXPIRIES
+    assert set(chain.watched) == _symbols(583, 584, 585, 586, 587), "the bot's window is watched"
+    assert all(watched.quote is None for watched in chain.watched.values()), "a line with no callback yet holds no quote"
+    assert chain.expiry_dates == scenes._EXPIRIES, "the chain lists the underlying's expiries"
+    assert {listing.contract.expiry_date for listing in chain.listings} == {FRIDAY}, (
+        "only the expiries a plan comes to have their contracts read"
+    )
+    assert chain.expiry_dates == scenes._EXPIRIES, "reading one expiry's contracts leaves the expiry list whole"
+    assert ibkr.client.ib.reqContractDetailsAsync.await_count == 1, "one expiry's contracts were read"
+    assert ibkr.client.ib.reqSecDefOptParamsAsync.await_count == 1, "the expiry list was read once"
 
 
 # ---- Which contracts hold a line ----------------------------------------------
@@ -1361,18 +1369,6 @@ async def test_a_line_is_still_opened_from_yesterdays_listing_while_todays_canno
     await _settle(status, passes=2)
 
     assert ibkr.open_option_lines() == _symbols(588, 589, 590, 591, 592)
-
-
-async def test_only_the_expiries_a_plan_comes_to_have_their_contracts_read(monkeypatch: pytest.MonkeyPatch) -> None:
-    status, lines, ibkr, _ = _watching(monkeypatch, _bot())
-    await _settle(status)
-
-    chain = lines.chain("SPY")
-
-    assert {listing.contract.expiry_date for listing in chain.listings} == {FRIDAY}
-    assert chain.expiry_dates == scenes._EXPIRIES
-    assert ibkr.client.ib.reqContractDetailsAsync.await_count == 1
-    assert ibkr.client.ib.reqSecDefOptParamsAsync.await_count == 1
 
 
 async def test_a_listing_that_cannot_be_read_is_tried_again_and_watches_nothing_meanwhile(
