@@ -962,7 +962,7 @@ def test_external_transaction_history_and_detail_stay_outside_bot_economics(tmp_
 def test_an_outside_legs_history_row_shows_its_execution_and_a_reopened_review_counts_one_event(
     tmp_path: Path,
 ) -> None:
-    """#3309: the leg's fill is what Alpaca says it is; a leg a cancel reopened is not yet reviewed."""
+    """#3309: a leg reviewed while it rested is open again once it fills, and shows what Alpaca says it filled."""
     import json
 
     from app.broker.alpaca import adapter
@@ -974,18 +974,11 @@ def test_an_outside_legs_history_row_shows_its_execution_and_a_reopened_review_c
         for line in (recording / "3225-credit-sign-check" / "stream.jsonl").read_text(encoding="utf-8").splitlines()
         if "event" in json.loads(json.loads(line)["raw_body"]).get("data", {})
     ]
-    filled = adapter.from_alpaca_order(frames[2], observed_at_ms=1_800_000_000_000)
-    cancelled = adapter.from_alpaca_order(
-        {
-            **frames[2],
-            "status": "canceled",
-            "legs": [{**leg, "status": "canceled", "filled_qty": "0", "filled_avg_price": None} for leg in frames[2]["legs"]],
-        },
-        observed_at_ms=1_800_000_000_100,
-    )
+    resting = adapter.from_alpaca_order(frames[1], observed_at_ms=1_800_000_000_000)
+    filled = adapter.from_alpaca_order(frames[2], observed_at_ms=1_800_000_000_100)
     leg_id = "00000000-0000-0000-0000-000000000356"
     repo = ClerkSqliteRepository.initialize(account_id="PA-ACCOUNT-DESK", artifacts_root=tmp_path)
-    observe_or_record_unfoldable(repo, order=filled)
+    observe_or_record_unfoldable(repo, order=resting)
     acknowledge_external_order(repo, external_order_id=leg_id, operator="operator-1")
     broker = _UnusedBroker()
     set_active_clerk_runtime(
@@ -1007,15 +1000,15 @@ def test_an_outside_legs_history_row_shows_its_execution_and_a_reopened_review_c
 
     try:
         reviewed = row()
-        observe_or_record_unfoldable(repo, order=cancelled)
+        observe_or_record_unfoldable(repo, order=filled)
         reopened = row()
     finally:
         set_active_clerk_runtime(None)
         repo.close()
 
-    assert (reviewed.execution_quantity, reviewed.execution_price) == (1.0, 0.6)
+    assert (reviewed.execution_quantity, reviewed.execution_price) == (None, None)
     assert (reviewed.lifecycle_state, reviewed.event_count) == ("reviewed", 2)
-    assert (reopened.execution_quantity, reopened.execution_price) == (None, None)
+    assert (reopened.execution_quantity, reopened.execution_price) == (1.0, 0.6)
     assert (reopened.lifecycle_state, reopened.event_count) == ("review_required", 1)
 
 

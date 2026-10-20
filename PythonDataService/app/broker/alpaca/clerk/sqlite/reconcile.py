@@ -31,7 +31,12 @@ from app.broker.alpaca.clerk.sqlite.exit_watchdog import (
     redrive_or_escalate_stale_exits,
     revalidate_recovery_evaluations,
 )
-from app.broker.alpaca.clerk.sqlite.external_orders import observe_or_record_unfoldable, outside_orders_of
+from app.broker.alpaca.clerk.sqlite.external_orders import (
+    MISSING_CLIENT_ORDER_ID_PREFIX,
+    observe_or_record_unfoldable,
+    outside_legs_awaiting_review,
+    outside_orders_of,
+)
 from app.broker.alpaca.clerk.sqlite.facts import (
     ReconciliationAttemptedFacts,
 )
@@ -560,16 +565,25 @@ def _sync_unexplained_order_hold(repo: ClerkSqliteRepository, foreign_orders: tu
     acknowledgement cannot release their account-wide safety fence.
     """
     evidence_refs = sorted(
-        member.order_id
-        for foreign in foreign_orders
-        # An outside multi-leg parent is held by its legs, the orders a review can release (#3309).
-        for member in outside_orders_of(foreign)
-        if (
-            (observation := repo.external_order_by_broker_order_id(member.order_id)) is None
-            or observation.acknowledged_at_ms is None
-        )
-        # An order in an option contract a bot holds is held against that bot (ADR 0076 decision 22).
-        and not _held_against_a_bot(repo, member)
+        {
+            member.order_id
+            for foreign in foreign_orders
+            # An outside multi-leg parent is held by its legs, the orders a review can release (#3309).
+            for member in outside_orders_of(foreign)
+            if (
+                (observation := repo.external_order_by_broker_order_id(member.order_id)) is None
+                or observation.acknowledged_at_ms is None
+            )
+            # An order in an option contract a bot holds is held against that bot (ADR 0076 decision 22).
+            and not _held_against_a_bot(repo, member.symbol, member.side, member.order_id)
+        }
+        # A leg of an outside multi-leg order is held until it is reviewed, open or not, as its parent was
+        # held as an unfoldable order (#3309).
+        | {
+            leg.broker_order_id
+            for leg in outside_legs_awaiting_review(repo)
+            if not _held_against_a_bot(repo, leg.symbol, leg.side, leg.broker_order_id)
+        }
     )
     if not evidence_refs:
         resolve_account_hold(
@@ -586,10 +600,10 @@ def _sync_unexplained_order_hold(repo: ClerkSqliteRepository, foreign_orders: tu
     )
 
 
-def _held_against_a_bot(repo: ClerkSqliteRepository, order: BrokerOrder) -> bool:
+def _held_against_a_bot(repo: ClerkSqliteRepository, symbol: str, side: str, broker_order_id: str) -> bool:
     with repo.write_fence() as conn:
         return outside_order_reduces_a_bots_contract(
-            conn, symbol=order.symbol, side=order.side, broker_order_id=order.order_id
+            conn, symbol=symbol, side=side, broker_order_id=broker_order_id
         )
 
 
@@ -856,13 +870,12 @@ async def _refresh_external_order_evidence(
     leaves the retained obligation unknown. Acknowledgement changes neither
     the worklist nor the economics. Broker I/O always stays outside intake.
     """
-    # An outside multi-leg parent's legs are nested in its answer (#3309).
-    in_snapshot = {member.order_id for order in broker_orders for member in (order, *order.legs)}
+    in_snapshot = {member.order_id for order in broker_orders for member in outside_orders_of(order)}
     for known in await to_thread(repo.external_order_resources):
         if (known.broker_order_id in in_snapshot
                 or (known.broker_state in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
                     and known.filled_quantity is not None)
-                or known.client_order_id == f"missing-client-order-id:{known.broker_order_id}"):
+                or known.client_order_id == f"{MISSING_CLIENT_ORDER_ID_PREFIX}{known.broker_order_id}"):
             continue
         try:
             observed = await trade.get_order_by_client_order_id(known.client_order_id)
@@ -872,9 +885,7 @@ async def _refresh_external_order_evidence(
                 "broker_order_id": known.broker_order_id, "error": str(exc),
             })
             continue
-        # A leg shares its parent's client order id, so the exact answer is its parent's, legs nested.
-        if (observed is not None
-                and known.broker_order_id in {observed.order_id, *(leg.order_id for leg in observed.legs)}
+        if (observed is not None and observed.order_id == known.broker_order_id
                 and observed.client_order_id == known.client_order_id
                 and observed.observed_at_ms >= known.observed_at_ms):
             await _under_intake(intake, _fold_external_order_lookup, repo, known, observed)

@@ -102,6 +102,11 @@ _EXTERNAL_ORDER_COLUMNS: tuple[str, ...] = (
 OUTSIDE_PARENT_REF_PREFIX = "mleg-parent:"
 OUTSIDE_SIBLING_REF_PREFIX = "mleg-leg:"
 
+
+def is_a_leg_of_an_outside_order(evidence_refs: Collection[str]) -> bool:
+    """Whether these evidence refs say their order is a leg of an outside multi-leg parent (#3309)."""
+    return any(ref.startswith(OUTSIDE_PARENT_REF_PREFIX) for ref in evidence_refs)
+
 #: What the journal says of each outside order, from one walk of it (#3216): the
 #: sequence of its first observation, of its newest one, and of its latest
 #: review. The records' times and facts are read by those sequences below. No

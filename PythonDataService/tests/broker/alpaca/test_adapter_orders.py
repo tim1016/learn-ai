@@ -578,10 +578,9 @@ def test_a_multi_leg_parent_reads_its_legs_as_the_single_symbol_orders_they_are(
         ("SPY261016C00776000", "sell", 1.0, 0.6),
         ("SPY261016C00777000", "buy", 1.0, 0.46),
     ]
-    assert {leg.parent_order_id for leg in parent.legs} == {payload["id"]}
     assert all(leg.legs == () for leg in parent.legs)
     # Not part of the wire shape: no router serializes a parent's legs.
-    assert "legs" not in parent.model_dump() and "parent_order_id" not in parent.legs[0].model_dump()
+    assert "legs" not in parent.model_dump()
 
 
 @pytest.mark.parametrize(

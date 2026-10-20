@@ -367,29 +367,38 @@ async def test_a_sweep_holds_an_outside_parent_by_its_legs_and_releases_when_the
     assert len(repo.custody_transitions()) == chain + 2
 
 
-async def test_a_leg_left_working_by_a_missed_cancel_is_refreshed_from_its_parents_exact_answer(
+def _legs_with_their_own_client_order_ids(body: str) -> str:
+    """The frame as Alpaca documents a multi-leg answer: each leg has a client order id of its own."""
+    message = json.loads(body)
+    for leg in message["data"]["order"]["legs"]:
+        leg["client_order_id"] = f"leg-client-{leg['id'][-3:]}"
+    return json.dumps(message)
+
+
+async def test_a_leg_left_working_by_a_missed_cancel_is_refreshed_by_its_own_exact_answer(
     repo: ClerkSqliteRepository,
 ) -> None:
-    """The legs share their parent's client order id, so the retained-order lookup finds the parent."""
-    _, new, canceled = _event_bodies(_RESTING_ORDER)[:3]
+    _, new, canceled = (_legs_with_their_own_client_order_ids(body) for body in _event_bodies(_RESTING_ORDER)[:3])
     await _deliver(repo, [new])
-    answer = adapter.from_alpaca_order(_parent_payload(canceled), observed_at_ms=2**41)
+    answers = {
+        leg.client_order_id: leg
+        for leg in adapter.from_alpaca_order(_parent_payload(canceled), observed_at_ms=2**41).legs
+    }
 
     class _ExactLookup(_Trade):
-        def __init__(self) -> None:
-            self.asked: list[str] = []
-
         async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
-            self.asked.append(client_order_id)
-            return answer if client_order_id == _CLIENT_ORDER_ID else None
+            return answers.get(client_order_id)
 
-    trade = _ExactLookup()
-    await reconcile_account(repo, read=cast(Any, _Snapshot([])), trade=cast(Any, trade), pricing=UNPRICEABLE_RECOVERY)
+    await reconcile_account(
+        repo, read=cast(Any, _Snapshot([])), trade=cast(Any, _ExactLookup()), pricing=UNPRICEABLE_RECOVERY
+    )
 
-    assert trade.asked
     for leg_id in (_id(370), _id(371)):
         row = repo.external_order(leg_id)
         assert row is not None and row.broker_state == "canceled"
+        assert row.evidence_refs == tuple(
+            sorted({leg_id, f"mleg-parent:{_id(369)}", f"mleg-leg:{_id(371 if leg_id == _id(370) else 370)}"})
+        )
 
 
 async def test_a_leg_the_open_orders_already_show_is_not_looked_up_again(repo: ClerkSqliteRepository) -> None:
@@ -402,3 +411,79 @@ async def test_a_leg_the_open_orders_already_show_is_not_looked_up_again(repo: C
 
     await reconcile_account(repo, read=cast(Any, snapshot), trade=cast(Any, _NoLookup()), pricing=UNPRICEABLE_RECOVERY)
     await reconcile_account(repo, read=cast(Any, snapshot), trade=cast(Any, _NoLookup()), pricing=UNPRICEABLE_RECOVERY)
+
+
+async def test_unreviewed_legs_keep_holding_after_their_parent_leaves_the_open_orders(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """The sweep holds from the open orders, but a leg awaiting review is held until it is reviewed."""
+    await _deliver(repo, _event_bodies(_CREDIT_SPREADS))
+    snapshot = _Snapshot([])
+
+    async def sweep() -> None:
+        await reconcile_account(repo, read=cast(Any, snapshot), trade=cast(Any, _Trade()), pricing=UNPRICEABLE_RECOVERY)
+
+    await sweep()
+    assert _held_ids(repo) == sorted(_LEGS)
+
+    for leg_id in sorted(_LEGS):
+        acknowledge_external_order(repo, external_order_id=leg_id, operator="operator-1")
+    await sweep()
+    assert _held_ids(repo) == []
+
+
+async def test_a_reopened_review_survives_the_next_sweep(repo: ClerkSqliteRepository) -> None:
+    pending, new, canceled = _event_bodies(_RESTING_ORDER)[:3]
+    resting = (_id(370), _id(371))
+    await _deliver(repo, [pending, new])
+    for leg_id in resting:
+        acknowledge_external_order(repo, external_order_id=leg_id, operator="operator-1")
+    await _deliver(repo, [canceled])
+
+    await reconcile_account(repo, read=cast(Any, _Snapshot([])), trade=cast(Any, _Trade()), pricing=UNPRICEABLE_RECOVERY)
+
+    assert _held_ids(repo) == sorted(resting)
+    for leg_id in resting:
+        row = repo.external_order(leg_id)
+        assert row is not None and row.acknowledged_at_ms is None
+
+
+async def test_an_older_read_of_a_reviewed_leg_does_not_reopen_its_review(repo: ClerkSqliteRepository) -> None:
+    """A leg reviewed as cancelled is not un-reviewed by a read that still shows it working."""
+    pending, new, canceled = _event_bodies(_RESTING_ORDER)[:3]
+    await _deliver(repo, [pending, new, canceled])
+    for leg_id in (_id(370), _id(371)):
+        acknowledge_external_order(repo, external_order_id=leg_id, operator="operator-1")
+
+    await _deliver(repo, [new])
+
+    assert _held_ids(repo) == []
+    for leg_id in (_id(370), _id(371)):
+        row = repo.external_order(leg_id)
+        assert row is not None and row.acknowledged_at_ms is not None
+
+
+@pytest.mark.parametrize("reviewed_again", [False, True], ids=["reopened", "reviewed-again"])
+async def test_a_store_rebuilt_from_its_mirror_folds_a_reopened_review_as_the_live_store_did(
+    tmp_path: Path, reviewed_again: bool
+) -> None:
+    pending, new, canceled = _event_bodies(_RESTING_ORDER)[:3]
+    live = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    await _deliver(live, [pending, new])
+    for leg_id in (_id(370), _id(371)):
+        acknowledge_external_order(live, external_order_id=leg_id, operator="operator-1")
+    await _deliver(live, [canceled])
+    if reviewed_again:
+        for leg_id in (_id(370), _id(371)):
+            acknowledge_external_order(live, external_order_id=leg_id, operator="operator-2")
+    expected = (live.external_orders(), live.active_hold(scope="ACCOUNT_CLERK", reason_code=_UNEXPLAINED))
+    clock = live.clock
+    db_path = live.db_path
+    live.close()
+    db_path.rename(db_path.with_suffix(".db.preserved"))
+
+    rebuilt = ClerkSqliteRepository.rebuild_from_mirror(account_id="PA-TEST", artifacts_root=tmp_path, clock=clock)
+    try:
+        assert (rebuilt.external_orders(), rebuilt.active_hold(scope="ACCOUNT_CLERK", reason_code=_UNEXPLAINED)) == expected
+    finally:
+        rebuilt.close()

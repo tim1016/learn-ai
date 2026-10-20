@@ -127,7 +127,7 @@ def observe_or_record_unfoldable(
     """
     try:
         if order.legs:
-            observations = _leg_observations(order)
+            observations = [observation for _, observation in _group_members(order)]
             with repo.unfoldable_order_write_serialized():
                 for observation in observations:
                     _append_observation(repo, observation, proof_reference)
@@ -402,8 +402,8 @@ def acknowledge_external_order(
 MISSING_CLIENT_ORDER_ID_PREFIX = "missing-client-order-id:"
 
 
-def _leg_observations(parent: BrokerOrder) -> list[ExternalOrderResource]:
-    """The outside orders an outside multi-leg parent is custody of, every one checked first (#3309).
+def _group_members(parent: BrokerOrder) -> list[tuple[BrokerOrder, ExternalOrderResource]]:
+    """Each leg of an outside multi-leg parent as the outside order it is, every one checked first (#3309).
 
     Alpaca gives the parent no symbol or side, so it has no row: each leg is
     the single-symbol outside order it is, its evidence refs naming the parent
@@ -431,19 +431,18 @@ def _leg_observations(parent: BrokerOrder) -> list[ExternalOrderResource]:
         raise ExternalOrderObservationError(
             f"external multi-leg parent needs two to {MAX_OPTION_LEGS} distinct legs, none its own"
         )
-    observations: list[ExternalOrderResource] = []
+    members: list[tuple[BrokerOrder, ExternalOrderResource]] = []
     for leg, leg_id in zip(legs, leg_ids, strict=True):
+        member = _as_outside_leg(parent, leg)
         links = (
             f"{reads.OUTSIDE_PARENT_REF_PREFIX}{parent_id}",
             *(f"{reads.OUTSIDE_SIBLING_REF_PREFIX}{other}" for other in leg_ids if other != leg_id),
         )
         try:
-            observations.append(
-                _observation_from_broker_order(_as_outside_leg(parent, leg), extra_evidence_refs=links)
-            )
+            members.append((member, _observation_from_broker_order(member, extra_evidence_refs=links)))
         except ExternalOrderObservationError as exc:
             raise ExternalOrderObservationError(f"leg {leg_id} of a multi-leg parent: {exc}") from exc
-    return observations
+    return members
 
 
 def outside_orders_of(order: BrokerOrder) -> tuple[BrokerOrder, ...]:
@@ -455,22 +454,17 @@ def outside_orders_of(order: BrokerOrder) -> tuple[BrokerOrder, ...]:
     if not order.legs:
         return (order,)
     try:
-        _leg_observations(order)
+        return tuple(member for member, _ in _group_members(order))
     except ExternalOrderObservationError:
         return (order,)
-    return tuple(_as_outside_leg(order, leg) for leg in sorted(order.legs, key=lambda leg: leg.order_id))
 
 
 def _as_outside_leg(parent: BrokerOrder, leg: BrokerOrder) -> BrokerOrder:
-    """A leg as a single-symbol order. Its type or time in force may come blank: it takes its parent's.
-
-    A leg's client order id is its parent's, as Alpaca states it.
-    """
+    """A leg as a single-symbol order. Its type or time in force may come blank: it takes its parent's."""
     return leg.model_copy(
         update={
             "order_type": leg.order_type or parent.order_type,
             "time_in_force": leg.time_in_force or parent.time_in_force,
-            "client_order_id": leg.client_order_id if leg.client_order_id is not None else parent.client_order_id,
         }
     )
 
@@ -486,9 +480,7 @@ def _with_what_is_known_of_a_leg(
     never un-learns what an earlier one stated, so the two never alternate
     observations. Any other order is as observed.
     """
-    if recorded is None or not any(
-        ref.startswith(reads.OUTSIDE_PARENT_REF_PREFIX) for ref in (*recorded.evidence_refs, *observed.evidence_refs)
-    ):
+    if recorded is None or not reads.is_a_leg_of_an_outside_order((*recorded.evidence_refs, *observed.evidence_refs)):
         return observed
     return replace(
         observed,
@@ -499,6 +491,15 @@ def _with_what_is_known_of_a_leg(
         ),
         evidence_refs=tuple(sorted({*recorded.evidence_refs, *observed.evidence_refs})),
     )
+
+
+def outside_legs_awaiting_review(repo: ClerkSqliteRepository) -> list[ExternalOrderResource]:
+    """Every leg of an outside multi-leg order whose review is open (#3309)."""
+    return [
+        row
+        for row in repo.external_order_resources()
+        if row.acknowledged_at_ms is None and reads.is_a_leg_of_an_outside_order(row.evidence_refs)
+    ]
 
 
 def _require_every_sibling_leg_recorded(repo: ClerkSqliteRepository, external_order_id: str) -> None:
@@ -606,6 +607,7 @@ __all__ = [
     "acknowledge_unfoldable_broker_order",
     "observe_external_order",
     "observe_or_record_unfoldable",
+    "outside_legs_awaiting_review",
     "outside_orders_of",
     "record_unfoldable_broker_order",
     "unfoldable_broker_order_is_unreviewed",

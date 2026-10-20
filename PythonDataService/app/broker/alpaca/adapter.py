@@ -652,11 +652,7 @@ def _multi_leg_parents_legs(payload: Mapping[str, Any], *, observed_at_ms: int |
     raw_legs = payload.get("legs")
     if not isinstance(raw_legs, list) or any(not isinstance(leg, Mapping) or leg.get("legs") for leg in raw_legs):
         return ()
-    parent_id = str_or_blank(payload.get("id"))
-    return tuple(
-        from_alpaca_order(leg, observed_at_ms=observed_at_ms).model_copy(update={"parent_order_id": parent_id})
-        for leg in raw_legs
-    )
+    return tuple(from_alpaca_order(leg, observed_at_ms=observed_at_ms) for leg in raw_legs)
 
 
 # The full set of Alpaca ``trade_updates`` event names, per Alpaca's websocket
