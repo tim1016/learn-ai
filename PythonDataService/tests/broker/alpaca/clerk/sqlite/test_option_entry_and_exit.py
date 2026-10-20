@@ -14,6 +14,7 @@ a contract: one contract costs $194.00 to buy.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal
@@ -307,7 +308,11 @@ async def test_saved_value_and_current_card_share_the_minute_and_never_fall_back
     kept.keep_minutes({SYMBOL: _quote("2.00", "2.10", received_ms=now - 100)}, observed_at_ms=now)
     chart = build_live_chart(ChartWindowResult(bars=[], timeframe="1m", resolution="1m", feed=CHART_FEED_NOT_EXPECTED), (),
                              strategy_instance_id=SID, symbol="SPY", window=(start, start + 60_000), now_ms=now)
-    registry = SimpleNamespace(binding_for_control=lambda *_args: dry_run.binding)
+    @asynccontextmanager
+    async def projection(_binding: object):
+        yield get_clerk_runtime(dry_run.binding.sealed_account_id)
+    registry = SimpleNamespace(binding_for_control=lambda *_args: dry_run.binding,
+                               synthetic_runtime_for_projection=projection)
     monkeypatch.setattr(option_position_value, "get_bot_task_registry", lambda: registry)
     answer = await option_position_value.with_option_position(chart, "alpaca", SID, symbol="SPY", through_ms=now,
         expected_revision=dry_run.repo.control_meta_snapshot().control_revision)

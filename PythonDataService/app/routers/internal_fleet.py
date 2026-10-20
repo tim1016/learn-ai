@@ -36,6 +36,7 @@ default ``app/main.py`` installs for every non-qualifying process.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from functools import partial
@@ -63,6 +64,7 @@ from app.schemas.fleet_option_model_inputs import (
     OptionModelInputsRequest,
     OptionModelInputsResponse,
 )
+from app.schemas.fleet_options_overlay import OptionsOverlayRequest, OptionsOverlayResponse
 from app.services.broker_v2_panel.history_batch_walk import build_coordinator_history_batch
 from app.services.option_model_inputs import ModelInputsBeingRead, off_the_loop, read_option_model_inputs
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
@@ -521,3 +523,18 @@ async def option_model_inputs(
 
 
 __all__ = ["production_history_batch_provider", "router"]
+
+
+@router.post("/options-overlay", response_model=OptionsOverlayResponse)
+async def options_overlay(
+    payload: OptionsOverlayRequest, request: Request,
+    x_fleet_agent_token: Annotated[str | None, Header(alias="X-Fleet-Agent-Token")] = None,
+    x_fleet_clerk_id: Annotated[str | None, Header(alias="X-Fleet-Clerk-Id")] = None,
+) -> OptionsOverlayResponse:
+    """Replay admitted lake data only on the authenticated coordinator surface (#3368)."""
+    from app.services.options_bot_overlay import comparison_for_sessions
+
+    _authorized_agent(request, payload.clerk_id, x_fleet_agent_token or "", header_clerk_id=x_fleet_clerk_id)
+    answer = await asyncio.to_thread(comparison_for_sessions, payload.chart, payload.configuration,
+                                     payload.session_opens, now_ms=payload.now_ms)
+    return OptionsOverlayResponse.from_engine_result(payload, answer)

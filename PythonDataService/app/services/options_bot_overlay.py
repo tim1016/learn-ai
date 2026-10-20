@@ -11,11 +11,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import date
-from functools import lru_cache
 from pathlib import Path
+from threading import Lock
 
+from app.config import fleet_settings
 from app.data_lake.admission import LakeAdmissionError
 from app.data_lake.catalog_client import CatalogUnavailableError
 from app.data_lake.option_bars import OptionBarsFileError
@@ -32,6 +34,7 @@ from app.options_backtest.replay import replay_session
 from app.options_backtest.results import EventKind, SessionOutcome
 from app.options_backtest.run import SessionDataMissing, load_session_market
 from app.options_backtest.session_levels import fills_of, levels_of
+from app.options_backtest.session_result import SessionPins
 from app.options_backtest.setup import MS_PER_MINUTE, OptionsBacktestSetup
 from app.options_bots.golden_proof import GoldenProofError, current_rules_digest
 from app.options_bots.journal import JOURNAL_FILENAME, OptionsBotJournal
@@ -40,6 +43,7 @@ from app.schemas.option_chart import ChartPremiumPane, ChartRuleLine, PremiumFil
 from app.schemas.options_bot import OptionsBotConfiguration
 from app.services.bot_runner import get_bot_task_registry
 from app.services.options_bot_chart import EXIT_WORDS
+from app.services.options_bot_overlay_client import fetch_options_overlay
 from app.utils.session_anchors import et_date_at_ms
 
 logger = logging.getLogger(__name__)
@@ -66,17 +70,32 @@ class _Replay:
     days: dict[OptionContract, tuple[MinuteBar, ...]]
 
 
-@lru_cache(maxsize=64)
+_REPLAYS: OrderedDict[tuple[str, str, str, str, int, SessionPins], _Replay] = OrderedDict()
+_REPLAY_LOCK = Lock()
+
+
 def _replay(
     golden_id: str, setup_sha256: str, rules_digest: str, setup_json: str, session_open_ms: int,
 ) -> _Replay:
     setup = OptionsBacktestSetup.model_validate_json(setup_json)
     data = _ReplayData(setup.underlying)
-    market, _pins = load_session_market(setup, et_date_at_ms(session_open_ms), data)
+    market, pins = load_session_market(setup, et_date_at_ms(session_open_ms), data)
+    key = (golden_id, setup_sha256, rules_digest, setup_json, session_open_ms, pins)
+    with _REPLAY_LOCK:
+        cached = _REPLAYS.get(key)
+        if cached is not None:
+            _REPLAYS.move_to_end(key)
+            return cached
     outcome = replay_session(setup, market, cash_usd=setup.starting_cash_usd, fee_for=fee_for_policy(setup.fees))
     if current_rules_digest() != rules_digest:
         raise GoldenProofError("The sealed Options rules changed while the comparison ran.")
-    return _Replay(setup, outcome, data.days)
+    answer = _Replay(setup, outcome, data.days)
+    with _REPLAY_LOCK:
+        _REPLAYS[key] = answer
+        _REPLAYS.move_to_end(key)
+        if len(_REPLAYS) > 64:
+            _REPLAYS.popitem(last=False)
+    return answer
 
 
 def add_overlay(
@@ -103,10 +122,9 @@ def add_overlay(
             pane.leg_ids.append(event.leg_id)
         if event.entry_number not in pane.entry_numbers:
             pane.entry_numbers.append(event.entry_number)
-        if pane.backtest_only:
-            closes = {bar.close_ms: str(bar.close) for bar in replay.days.get(contract, ())}
-            existing = {point.start_ms: point.value for point in pane.backtest_points}
-            pane.backtest_points = [PremiumPoint(start_ms=bar.start_ms, value=closes.get(bar.end_ms, existing.get(bar.start_ms))) for bar in chart.bars]
+        closes = {bar.close_ms: str(bar.close) for bar in replay.days.get(contract, ())}
+        existing = {point.start_ms: point.value for point in pane.backtest_points}
+        pane.backtest_points = [PremiumPoint(start_ms=bar.start_ms, value=closes.get(bar.end_ms, existing.get(bar.start_ms))) for bar in chart.bars]
     for level in levels_of(replay.setup, replay.outcome):
         panes[level.contract.occ_symbol].rule_lines.append(ChartRuleLine(
             kind=level.kind.value, price=str(level.price), from_ms=level.from_ms, to_ms=level.to_ms,
@@ -132,6 +150,7 @@ def comparison_for_sessions(
     if configuration.rules_digest != current_rules_digest():
         return chart.model_copy(update={"backtest_notice": "Comparison not ready: this deployment's sealed rules differ from the running replay."})
     reasons = []
+    ready = []
     if not session_opens:
         reasons.append("the saved session identity is unavailable")
     for opened in session_opens:
@@ -142,12 +161,15 @@ def comparison_for_sessions(
         try:
             replay = _replay(configuration.golden_setup_id, configuration.setup_sha256, configuration.rules_digest,
                              configuration.setup.model_dump_json(), opened)
-            chart = add_overlay(chart, replay)
+            ready.append(replay)
         except (SessionDataMissing, LakeAdmissionError, CatalogUnavailableError, OptionBarsFileError,
                 OptionListingFileError, UnderlyingDayUnreadable, GoldenProofError, ValueError, OSError) as exc:
             logger.info("Options comparison is not ready", extra={"action": "options_overlay_not_ready", "session_open_ms": opened, "reason": str(exc)})
             reasons.append(f"the complete Polygon day is not available in the lake ({exc})")
     notice = "Comparison not ready: " + "; ".join(dict.fromkeys(reasons)) + "." if reasons else "Same-day backtest ready · faint markers and dashed rule lines."
+    if not reasons:
+        for replay in ready:
+            chart = add_overlay(chart, replay)
     return chart.model_copy(update={"backtest_notice": notice})
 
 
@@ -161,7 +183,7 @@ async def with_options_overlay(
     assert binding.options_bot is not None
     folder = strategy_instance_artifact_dir(registry.artifacts_root, "live_state", sid)
 
-    def read() -> ChartLiveResponse | ChartHistoryResponse:
+    def read_opens() -> tuple[int, ...]:
         lower, upper = ((chart.trading_date_open_ms, chart.trading_date_close_ms)
                         if isinstance(chart, ChartLiveResponse) else (chart.from_ms, chart.to_ms))
         opens: tuple[int, ...] = ()
@@ -171,10 +193,15 @@ async def with_options_overlay(
                 opens = tuple(state.session_open_ms for state in journal.sessions(lower, upper))
             finally:
                 journal.close()
-        return comparison_for_sessions(chart, binding.options_bot, opens, now_ms=now_ms)
+        return opens
 
     try:
-        return await asyncio.to_thread(read)
+        opens = await asyncio.to_thread(read_opens)
+        if fleet_settings.ROLE == "clerk_agent":
+            return await fetch_options_overlay(chart, binding.options_bot, opens, now_ms=now_ms)
+        if fleet_settings.ROLE in {"combined", "fleet_coordinator"}:
+            return await asyncio.to_thread(comparison_for_sessions, chart, binding.options_bot, opens, now_ms=now_ms)
+        return chart.model_copy(update={"backtest_notice": "Comparison not ready: this process has no replay authority."})
     except (sqlite3.Error, ValueError, GoldenProofError) as exc:
         logger.exception("Options comparison could not be read", extra={"action": "options_overlay_read_failed", "strategy_instance_id": sid})
         return chart.model_copy(update={"backtest_notice": f"Comparison not ready: {exc}"})

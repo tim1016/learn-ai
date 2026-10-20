@@ -1322,7 +1322,7 @@ def _hold_one_sold_contract(repo: ClerkSqliteRepository, monkeypatch: pytest.Mon
 def test_a_real_accounts_bot_holding_an_option_is_served_an_exit_estimate_that_states_no_price_without_a_live_quote(
     authority: tuple, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Real accounts keep no option quotes, and no supervisor here holds one for the bot's run. The bot holds one
+    """No supervisor here holds a current option quote for the bot's run. The bot holds one
     sold contract: its buy-back needs an ask nothing states, so both figures are unknown, with the reason, and no
     amount is invented from anything else on the page (#3100)."""
     repo, runtime, _ = _committed_view(authority)
@@ -1333,7 +1333,7 @@ def test_a_real_accounts_bot_holding_an_option_is_served_an_exit_estimate_that_s
     assert view.state == "ready" and view.exit_estimate is not None
     for figure in (view.exit_estimate.net_close, view.exit_estimate.gross_buy_back):
         assert (figure.state, figure.amount_usd, figure.terms) == ("unknown", None, ())
-        assert "real accounts keep no option quotes" in figure.source
+        assert "no live option quote source" in figure.source
         assert "the bot's run is not asking for any" in figure.source
     [leg] = view.exit_estimate.quotes
     assert (leg.contract.occ_symbol, leg.contracts, leg.state, leg.missing) == (SOLD_CONTRACT, -1, "unknown", ("bid", "ask"))
