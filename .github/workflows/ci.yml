@@ -170,6 +170,16 @@ jobs:
           cache: npm
           cache-dependency-path: Frontend/package-lock.json
       - run: npm ci
+      # Angular's build cache is off in CI unless angular.json says "all", and
+      # without a saved copy every shard rebuilds its specs from scratch: the
+      # build is a third of the test step (#3144). The cache is keyed by file
+      # content, so an entry from another commit is reused only where its input
+      # is unchanged.
+      - uses: actions/cache@v4
+        with:
+          path: Frontend/.angular/cache
+          key: angular-build-cache-${{ runner.os }}-${{ matrix.shard }}-${{ github.sha }}
+          restore-keys: angular-build-cache-${{ runner.os }}-${{ matrix.shard }}-
       - run: npm test -- --runner-config=vitest.ci.config.ts
 
   backend-lint:
