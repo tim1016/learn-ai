@@ -419,7 +419,9 @@ class AlpacaTradingClient:
             kwargs["symbols"] = list(symbols)
         if until_ms is not None:
             kwargs["until"] = _ms_to_utc(until_ms)
-        request = GetOrdersRequest(direction=Sort.DESC, **kwargs)
+        # ``nested`` rolls a multi-leg parent's legs up under it: a parent the Clerk takes custody of as its
+        # legs (#3309) must not arrive without them.
+        request = GetOrdersRequest(direction=Sort.DESC, nested=True, **kwargs)
         return await self._call(lambda c: c.get_orders(filter=request), describe="orders")
 
     async def list_activities(

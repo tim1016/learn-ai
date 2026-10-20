@@ -885,7 +885,9 @@ async def _refresh_external_order_evidence(
                 "broker_order_id": known.broker_order_id, "error": str(exc),
             })
             continue
-        if (observed is not None and observed.order_id == known.broker_order_id
+        # A leg may be answered as itself or, sharing its parent's client order id, as its parent with the legs nested.
+        if (observed is not None
+                and known.broker_order_id in {member.order_id for member in outside_orders_of(observed)}
                 and observed.client_order_id == known.client_order_id
                 and observed.observed_at_ms >= known.observed_at_ms):
             await _under_intake(intake, _fold_external_order_lookup, repo, known, observed)

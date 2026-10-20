@@ -401,6 +401,27 @@ async def test_a_leg_left_working_by_a_missed_cancel_is_refreshed_by_its_own_exa
         )
 
 
+async def test_a_leg_sharing_its_parents_client_order_id_is_refreshed_from_the_parents_nested_answer(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """The recordings give every nested leg its parent's client order id, so the exact lookup may answer the parent."""
+    _, new, canceled = _event_bodies(_RESTING_ORDER)[:3]
+    await _deliver(repo, [new])
+    answer = adapter.from_alpaca_order(_parent_payload(canceled), observed_at_ms=2**41)
+
+    class _ExactLookup(_Trade):
+        async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
+            return answer if client_order_id == _CLIENT_ORDER_ID else None
+
+    await reconcile_account(
+        repo, read=cast(Any, _Snapshot([])), trade=cast(Any, _ExactLookup()), pricing=UNPRICEABLE_RECOVERY
+    )
+
+    for leg_id in (_id(370), _id(371)):
+        row = repo.external_order(leg_id)
+        assert row is not None and row.broker_state == "canceled"
+
+
 async def test_a_leg_the_open_orders_already_show_is_not_looked_up_again(repo: ClerkSqliteRepository) -> None:
     resting = _parent(_event_bodies(_RESTING_ORDER)[1])
     snapshot = _Snapshot([resting])
@@ -487,3 +508,34 @@ async def test_a_store_rebuilt_from_its_mirror_folds_a_reopened_review_as_the_li
         assert (rebuilt.external_orders(), rebuilt.active_hold(scope="ACCOUNT_CLERK", reason_code=_UNEXPLAINED)) == expected
     finally:
         rebuilt.close()
+
+
+async def test_a_correction_that_changes_only_the_nested_legs_is_not_taken_for_a_duplicate(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """An event key reused for a parent frame whose legs now complete is a new answer, not a redelivery."""
+    complete = _event_bodies(_CREDIT_SPREADS)[1]
+    incomplete = json.loads(complete)
+    incomplete["data"]["order"]["legs"] = incomplete["data"]["order"]["legs"][:1]
+
+    await _deliver(repo, [json.dumps(incomplete), complete])
+
+    assert {row["broker_order_id"] for row in repo.external_orders()} == {_id(356), _id(358)}
+
+
+async def test_legs_without_a_type_or_time_in_force_are_recorded_by_the_parent_and_by_their_fill_frames(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """The legs of a fill frame take their parent's type and time in force wherever they are read from."""
+    fill = json.loads(_event_bodies(_CREDIT_SPREADS)[2])
+    for leg in fill["data"]["order"]["legs"]:
+        for term in ("type", "order_type", "time_in_force"):
+            leg.pop(term, None)
+
+    await _deliver(repo, [json.dumps(fill)])
+
+    assert _unfoldable_ids(repo) == []
+    rows = {row["broker_order_id"]: row for row in repo.external_orders()}
+    assert set(rows) == {_id(356), _id(358)}
+    assert {row["order_type"] for row in rows.values()} == {"limit"}
+    assert all(row["client_order_id"] == _CLIENT_ORDER_ID for row in rows.values())

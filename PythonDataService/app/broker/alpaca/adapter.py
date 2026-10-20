@@ -652,7 +652,26 @@ def _multi_leg_parents_legs(payload: Mapping[str, Any], *, observed_at_ms: int |
     raw_legs = payload.get("legs")
     if not isinstance(raw_legs, list) or any(not isinstance(leg, Mapping) or leg.get("legs") for leg in raw_legs):
         return ()
-    return tuple(from_alpaca_order(leg, observed_at_ms=observed_at_ms) for leg in raw_legs)
+    return tuple(
+        from_alpaca_order(nested_leg_with_its_parents_terms(payload, leg), observed_at_ms=observed_at_ms)
+        for leg in raw_legs
+    )
+
+
+def nested_leg_with_its_parents_terms(parent: Mapping[str, Any], leg: Mapping[str, Any]) -> dict[str, Any]:
+    """A nested leg's answer, taking its parent's order type and time in force where it states none (#3309).
+
+    Alpaca's nested leg may omit its own type. Wherever a leg is read as an
+    order on its own -- from its parent's answer, or from the fill frame the
+    consumer synthesizes for it -- it is the parent's type and time in force
+    it trades under.
+    """
+    terms: dict[str, Any] = {}
+    if not (str_or_blank(leg.get("order_type")) or str_or_blank(leg.get("type"))):
+        terms["order_type"] = str_or_blank(parent.get("order_type")) or str_or_blank(parent.get("type"))
+    if not str_or_blank(leg.get("time_in_force")):
+        terms["time_in_force"] = str_or_blank(parent.get("time_in_force"))
+    return {**leg, **terms}
 
 
 # The full set of Alpaca ``trade_updates`` event names, per Alpaca's websocket

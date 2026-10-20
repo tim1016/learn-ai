@@ -433,13 +433,12 @@ def _group_members(parent: BrokerOrder) -> list[tuple[BrokerOrder, ExternalOrder
         )
     members: list[tuple[BrokerOrder, ExternalOrderResource]] = []
     for leg, leg_id in zip(legs, leg_ids, strict=True):
-        member = _as_outside_leg(parent, leg)
         links = (
             f"{reads.OUTSIDE_PARENT_REF_PREFIX}{parent_id}",
             *(f"{reads.OUTSIDE_SIBLING_REF_PREFIX}{other}" for other in leg_ids if other != leg_id),
         )
         try:
-            members.append((member, _observation_from_broker_order(member, extra_evidence_refs=links)))
+            members.append((leg, _observation_from_broker_order(leg, extra_evidence_refs=links)))
         except ExternalOrderObservationError as exc:
             raise ExternalOrderObservationError(f"leg {leg_id} of a multi-leg parent: {exc}") from exc
     return members
@@ -457,16 +456,6 @@ def outside_orders_of(order: BrokerOrder) -> tuple[BrokerOrder, ...]:
         return tuple(member for member, _ in _group_members(order))
     except ExternalOrderObservationError:
         return (order,)
-
-
-def _as_outside_leg(parent: BrokerOrder, leg: BrokerOrder) -> BrokerOrder:
-    """A leg as a single-symbol order. Its type or time in force may come blank: it takes its parent's."""
-    return leg.model_copy(
-        update={
-            "order_type": leg.order_type or parent.order_type,
-            "time_in_force": leg.time_in_force or parent.time_in_force,
-        }
-    )
 
 
 def _with_what_is_known_of_a_leg(

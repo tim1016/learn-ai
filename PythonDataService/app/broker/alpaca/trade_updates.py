@@ -219,6 +219,9 @@ def _broker_order_fingerprint_fields(broker_order: BrokerOrder) -> dict[str, obj
     }
     if broker_order.unreadable_fields:
         fields["unreadable_fields"] = list(broker_order.unreadable_fields)
+    if broker_order.legs:
+        # A parent's legs carry its custody and executions (#3309): an answer that changes only them is not a duplicate.
+        fields["legs"] = [_broker_order_fingerprint_fields(leg) for leg in broker_order.legs]
     return fields
 
 
@@ -805,7 +808,7 @@ class TradeUpdatesConsumer:
                     "price": execution.get("price"),
                     "qty": execution.get("qty"),
                     # A leg's client order id holds no Clerk identity: it resolves by its broker order id.
-                    "order": {**leg_order, "client_order_id": None},
+                    "order": {**adapter.nested_leg_with_its_parents_terms(order, leg_order), "client_order_id": None},
                 }
             )
         if self._counters.parse_errors > parse_errors_before:
