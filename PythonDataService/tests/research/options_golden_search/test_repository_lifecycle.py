@@ -337,7 +337,8 @@ async def test_batched_diagnostic_query_returns_only_scalar_summaries(conn: asyn
     for index in range(2):
         key = f"summary-{index}"
         await repo.reserve(conn, row["id"], row["attempt"], key, {"point": index}, cap=2)
-        await repo.begin_execution(conn, row["id"], row["attempt"], key, max_attempts=1)
+        # The bound is the study's, not each evaluation's: two evaluations start, so two starts are allowed.
+        await repo.begin_execution(conn, row["id"], row["attempt"], key, max_attempts=2)
         await repo.complete(conn, row["id"], row["attempt"], key,
             {"metrics": {"net_profit_usd": str(index)}, "complete": index == 0, "evidence_blob": "retained-separately"})
     assert await repo.evaluation_summaries(conn, row["id"], ["summary-0", "summary-1"]) == {

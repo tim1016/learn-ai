@@ -70,8 +70,11 @@ jobs:
     # slow tests share one PostgreSQL), plus ~5 min of migration and pip
     # setup. A 60-minute cap cancelled the 2026-10-08 run at 92% with no
     # failed test recorded, so the budget must clear the slowest observed
-    # day, not the median one.
-    timeout-minutes: 90
+    # day, not the median one. The suite has grown since: 77 min for the main
+    # step on 2026-10-17, 86 on 2026-10-20 (23,484 tests), which with 2 min
+    # for the data-lake step and 1 of setup ran into a 90-minute cap one
+    # second before the job ended (#3345).
+    timeout-minutes: 120
     services:
       postgres:
         image: postgres:16
