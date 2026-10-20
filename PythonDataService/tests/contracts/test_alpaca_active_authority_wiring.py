@@ -126,7 +126,7 @@ def test_every_reconciliation_sweep_publishes_its_verdict_and_retires_runs_whose
     assert constructions > 0, "run ownership: no sweep construction found; update this guard"
     assert ownership_wired == constructions, (
         f"{constructions} ReconciliationSweep construction(s) but {ownership_wired} pass "
-        "the facade's `run_ownership`; that sweep never retires a dead runner's run"
+        "the facade's `run_ownership`; that sweep never retires a dead runner's run (#2369)"
     )
 
 

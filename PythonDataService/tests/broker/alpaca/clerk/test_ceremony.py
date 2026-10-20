@@ -28,7 +28,7 @@ def test_the_ttl_must_be_a_whole_millisecond_count_inside_the_bound() -> None:
             require_confirmation_ttl_ms(bad, refused=_Refused)  # type: ignore[arg-type]
 
 
-def test_the_token_of_a_fixed_payload_is_pinned_to_a_literal_is_its_own_canonical_digest_and_is_key_order_free() -> None:
+def test_the_token_of_a_fixed_payload_is_pinned_to_a_literal_and_is_its_own_canonical_digest_and_key_order_free() -> None:
     """The bytes that are hashed are part of the contract, not an implementation detail.
 
     Every cutover plan token an operator is holding was minted over

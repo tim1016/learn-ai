@@ -15,8 +15,6 @@ from decimal import Decimal
 from fractions import Fraction
 from pathlib import Path
 
-import pytest
-
 from app.broker.alpaca.clerk.fifo_pnl import (
     LotWriteOff,
     compute_fifo_pnl,
@@ -96,31 +94,39 @@ def test_simple_round_trip() -> None:
 # ── Scenario 2: partial close ─────────────────────────────────────────────────
 
 
-def test_partial_close_without_and_with_a_mark() -> None:
+def test_partial_close() -> None:
     """BUY 100 @ $10, SELL 60 @ $12.
 
     Realized: (12 - 10) × 60 = $120.00.
     Open: 40 shares @ $10 (no mark → open_pnl is None, marks_complete=False).
-
-    With mark=$15: Realized: $120. Open: 40 × ($15 - $10) = $200. marks_complete: True.
     """
     fills = [
         _fill(side=OrderSide.BUY, qty=100, price=10.0, ts_ms=1000),
         _fill(side=OrderSide.SELL, qty=60, price=12.0, ts_ms=2000),
     ]
     result = compute_fifo_pnl(fills)
-    assert _close(result.realized_pnl, 120.0), "partial close without a mark realizes $120"
+    assert _close(result.realized_pnl, 120.0)
     assert result.open_pnl is None, "no mark supplied — open_pnl must be None"
-    assert result.marks_complete is False, "no mark supplied — marks are not complete"
-    assert len(result.open_lots) == 1, "one open lot is left"
-    assert _close(result.open_lots[0].qty, 40.0), "the open lot holds 40 shares"
-    assert _close(result.open_lots[0].cost, 10.0), "the open lot costs $10"
+    assert result.marks_complete is False
+    assert len(result.open_lots) == 1
+    assert _close(result.open_lots[0].qty, 40.0)
+    assert _close(result.open_lots[0].cost, 10.0)
 
-    marked = compute_fifo_pnl(fills, mark_prices={"SPY": 15.0})
-    assert _close(marked.realized_pnl, 120.0), "partial close with a mark realizes $120"
-    assert marked.open_pnl is not None, "a mark supplied — open_pnl is stated"
-    assert _close(marked.open_pnl, 200.0), "open P&L is 40 × ($15 - $10) = $200"
-    assert marked.marks_complete is True, "a mark supplied — marks are complete"
+
+def test_partial_close_with_mark() -> None:
+    """BUY 100 @ $10, SELL 60 @ $12, mark=$15.
+
+    Realized: $120. Open: 40 × ($15 - $10) = $200. marks_complete: True.
+    """
+    fills = [
+        _fill(side=OrderSide.BUY, qty=100, price=10.0, ts_ms=1000),
+        _fill(side=OrderSide.SELL, qty=60, price=12.0, ts_ms=2000),
+    ]
+    result = compute_fifo_pnl(fills, mark_prices={"SPY": 15.0})
+    assert _close(result.realized_pnl, 120.0)
+    assert result.open_pnl is not None
+    assert _close(result.open_pnl, 200.0)
+    assert result.marks_complete is True
 
 
 # ── Scenario 3: multi-lot FIFO ────────────────────────────────────────────────
@@ -149,25 +155,27 @@ def test_multi_lot_fifo() -> None:
 # ── Scenario 6: fees not reported ────────────────────────────────────────────
 
 
-@pytest.mark.parametrize(
-    ("buy_fee", "sell_fee"),
-    [
-        # Any fill with fee=None must cause fee_total=None ('Fees not reported').
-        pytest.param(None, None, id="fee-none-propagates"),
-        # Even one fill with fee=None must make fee_total None.
-        pytest.param(1.0, None, id="fee-partial-none-propagates"),
-    ],
-)
-def test_a_fill_with_no_fee_makes_the_fee_total_none(buy_fee: float | None, sell_fee: float | None) -> None:
+def test_fee_none_propagates() -> None:
+    """Any fill with fee=None must cause fee_total=None ('Fees not reported')."""
     fills = [
-        _fill(side=OrderSide.BUY, qty=100, price=10.0, ts_ms=1000, fee=buy_fee),
-        _fill(side=OrderSide.SELL, qty=100, price=12.0, ts_ms=2000, fee=sell_fee),
+        _fill(side=OrderSide.BUY, qty=100, price=10.0, ts_ms=1000, fee=None),
+        _fill(side=OrderSide.SELL, qty=100, price=12.0, ts_ms=2000, fee=None),
     ]
     result = compute_fifo_pnl(fills)
     assert result.fee_total is None, (
         "fee_total must be None when any fill has fee=None — "
         "must render as 'Fees not reported', never $0.00"
     )
+
+
+def test_fee_partial_none_propagates() -> None:
+    """Even one fill with fee=None must make fee_total None."""
+    fills = [
+        _fill(side=OrderSide.BUY, qty=100, price=10.0, ts_ms=1000, fee=1.0),
+        _fill(side=OrderSide.SELL, qty=100, price=12.0, ts_ms=2000, fee=None),
+    ]
+    result = compute_fifo_pnl(fills)
+    assert result.fee_total is None
 
 
 # ── Scenario 7: fees reported ────────────────────────────────────────────────
@@ -198,23 +206,24 @@ def test_empty_fills() -> None:
     assert result.open_lots == []
 
 
-def test_single_open_fill_without_and_with_a_mark() -> None:
-    """Single BUY with no mark → open_pnl is None, marks_complete=False.
-
-    Single BUY 100 @ $10, mark=$11 → open_pnl = 100 × $1 = $100, marks_complete=True.
-    """
+def test_single_open_fill_no_mark() -> None:
+    """Single BUY with no mark → open_pnl is None, marks_complete=False."""
     fills = [_fill(side=OrderSide.BUY, qty=100, price=10.0, ts_ms=1000)]
     result = compute_fifo_pnl(fills)
-    assert _close(result.realized_pnl, 0.0), "a single open fill without a mark realizes nothing"
-    assert result.open_pnl is None, "no mark supplied — open_pnl must be None"
-    assert result.marks_complete is False, "no mark supplied — marks are not complete"
-    assert len(result.open_lots) == 1, "one open lot is held"
+    assert _close(result.realized_pnl, 0.0)
+    assert result.open_pnl is None
+    assert result.marks_complete is False
+    assert len(result.open_lots) == 1
 
-    marked = compute_fifo_pnl(fills, mark_prices={"SPY": 11.0})
-    assert _close(marked.realized_pnl, 0.0), "a single open fill with a mark realizes nothing"
-    assert marked.open_pnl is not None, "a mark supplied — open_pnl is stated"
-    assert _close(marked.open_pnl, 100.0), "open P&L is 100 × ($11 - $10) = $100"
-    assert marked.marks_complete is True, "a mark supplied — marks are complete"
+
+def test_single_open_fill_with_mark() -> None:
+    """Single BUY 100 @ $10, mark=$11 → open_pnl = 100 × $1 = $100, marks_complete=True."""
+    fills = [_fill(side=OrderSide.BUY, qty=100, price=10.0, ts_ms=1000)]
+    result = compute_fifo_pnl(fills, mark_prices={"SPY": 11.0})
+    assert _close(result.realized_pnl, 0.0)
+    assert result.open_pnl is not None
+    assert _close(result.open_pnl, 100.0)
+    assert result.marks_complete is True
 
 
 def test_short_open_lot_open_pnl() -> None:
@@ -229,45 +238,67 @@ def test_short_open_lot_open_pnl() -> None:
 # ── realized_pnl_today — correct behavior ─────────────────────────────────────
 
 
-@pytest.mark.parametrize(
-    ("buy_ts_ms", "sell_ts_ms", "sell_price", "session_close", "expected"),
-    [
-        # BUY before session, SELL in session — correctly yields realized P&L.
-        #
-        # Regression test for the pre-fix bug: the old implementation pre-filtered
-        # fills to the session window BEFORE running FIFO.  A BUY at ts=500_000
-        # (before session_open=1_000_000) was excluded, so the in-session SELL
-        # opened a new short lot and returned $0 realized.
-        #
-        # Correct behavior: run FIFO over ALL history, then filter closed lots by
-        # closed_at_ms.  The SELL at ts=1_500_000 closes the BUY at ts=500_000:
-        # realized = (12 - 10) × 100 = $200.  The closed lot's closed_at_ms is
-        # 1_500_000, which is within [1_000_000, 2_000_000) → counted.
-        pytest.param(500_000, 1_500_000, 12.0, 2_000_000, 200.0, id="overnight-buy-correct-prefilter-regression"),
-        # BUY + SELL both within session → full realized P&L counted.
-        pytest.param(1_500_000, 2_500_000, 13.0, 3_000_000, 300.0, id="round-trip-in-session"),
-        # BUY in session, SELL after session_close → not counted in today's P&L.
-        # Closed lot's closed_at_ms=3_000_000 is NOT in [1_000_000, 2_000_000) → $0
-        pytest.param(1_500_000, 3_000_000, 12.0, 2_000_000, 0.0, id="sell-outside-session-not-counted"),
-    ],
-)
-def test_realized_pnl_today_counts_the_lots_closed_inside_the_session(
-    buy_ts_ms: int, sell_ts_ms: int, sell_price: float, session_close: int, expected: float,
-) -> None:
+def test_realized_pnl_today_overnight_buy_correct() -> None:
+    """BUY before session, SELL in session — correctly yields realized P&L.
+
+    Regression test for the pre-fix bug: the old implementation pre-filtered
+    fills to the session window BEFORE running FIFO.  A BUY at ts=500_000
+    (before session_open=1_000_000) was excluded, so the in-session SELL
+    opened a new short lot and returned $0 realized.
+
+    Correct behavior: run FIFO over ALL history, then filter closed lots by
+    closed_at_ms.  The SELL at ts=1_500_000 closes the BUY at ts=500_000:
+    realized = (12 - 10) × 100 = $200.  The closed lot's closed_at_ms is
+    1_500_000, which is within [1_000_000, 2_000_000) → counted.
+    """
     session_open = 1_000_000
+    session_close = 2_000_000
     fills = [
-        _fill(side=OrderSide.BUY, qty=100, price=10.0, ts_ms=buy_ts_ms),
-        _fill(side=OrderSide.SELL, qty=100, price=sell_price, ts_ms=sell_ts_ms),
+        _fill(side=OrderSide.BUY, qty=100, price=10.0, ts_ms=500_000),    # before session
+        _fill(side=OrderSide.SELL, qty=100, price=12.0, ts_ms=1_500_000), # in session
     ]
     pnl = realized_pnl_today(
         fills,
         session_open_ms=session_open,
         session_close_ms=session_close,
     )
-    assert _close(pnl, expected), (
-        f"expected ${expected} realized today; got {pnl}. "
-        "If the overnight-buy row reads 0.0, the old pre-filter bug was reintroduced."
+    assert _close(pnl, 200.0), (
+        f"expected $200.0 realized (overnight buy + in-session sell); got {pnl}. "
+        "If you see 0.0, the old pre-filter bug was reintroduced."
     )
+
+
+def test_realized_pnl_today_round_trip_in_session() -> None:
+    """BUY + SELL both within session → full realized P&L counted."""
+    session_open = 1_000_000
+    session_close = 3_000_000
+    fills = [
+        _fill(side=OrderSide.BUY, qty=100, price=10.0, ts_ms=1_500_000),
+        _fill(side=OrderSide.SELL, qty=100, price=13.0, ts_ms=2_500_000),
+    ]
+    pnl = realized_pnl_today(
+        fills,
+        session_open_ms=session_open,
+        session_close_ms=session_close,
+    )
+    assert _close(pnl, 300.0)
+
+
+def test_realized_pnl_today_sell_outside_session_not_counted() -> None:
+    """BUY in session, SELL after session_close → not counted in today's P&L."""
+    session_open = 1_000_000
+    session_close = 2_000_000
+    fills = [
+        _fill(side=OrderSide.BUY, qty=100, price=10.0, ts_ms=1_500_000),  # in session
+        _fill(side=OrderSide.SELL, qty=100, price=12.0, ts_ms=3_000_000), # after session
+    ]
+    pnl = realized_pnl_today(
+        fills,
+        session_open_ms=session_open,
+        session_close_ms=session_close,
+    )
+    # Closed lot's closed_at_ms=3_000_000 is NOT in [1_000_000, 2_000_000) → $0
+    assert _close(pnl, 0.0)
 
 
 # ── marks_complete ─────────────────────────────────────────────────────────────

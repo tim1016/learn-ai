@@ -161,7 +161,7 @@ def test_an_expiry_may_end_a_bought_position_or_a_sold_one(position_change: int)
     assert event.contracts == 2
 
 
-@pytest.mark.parametrize("day",[date(2024, 3, 1), date(2024, 3, 2), date(2024, 3, 4)], ids=["the day", "the Saturday", "the Monday"])
+@pytest.mark.parametrize("day", [date(2024, 3, 1), date(2024, 3, 2), date(2024, 3, 4)], ids=["the day", "the Saturday", "the Monday"])
 def test_an_expiry_is_dated_on_its_contracts_expiry_date_or_after(day: date) -> None:
     event = _event(
         kind=OptionEventKind.EXPIRED, activity_type="OPEXP", position_change=-1, activity_date_ms=et_midnight_ms(day)
