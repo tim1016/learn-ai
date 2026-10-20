@@ -49,9 +49,9 @@ describe('the one-day chart, making it', () => {
   it('makes the chart once the view has rendered, in an element of its own that has a name, tall enough for its panes, with its surface read from the theme', async () => {
     const fake = fakeTimelineChart(vi);
     await renderChart(fake);
-    const options = optionsOf(fake);
 
     expect.soft(fake.created.length, 'makes the chart once the view has rendered').toBe(1);
+    const options = optionsOf(fake);
     const element = screen.getByRole('img', { name: /^Minute closes of SPY\. Contracts drawn: 2\./ });
     expect.soft(fake.created[0].container, 'makes the chart in an element of its own that has a name').toBe(element);
     expect.soft(options.autoSize, 'sizes the chart to its element').toBe(true);

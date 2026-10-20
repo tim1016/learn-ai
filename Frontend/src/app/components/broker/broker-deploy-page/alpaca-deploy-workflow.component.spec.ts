@@ -448,6 +448,7 @@ describe('AlpacaDeployWorkflowComponent — four steps (PRD #2560 D8)', () => {
   it('lays out What → How → Money → Confirm, folds complete steps to one line with Edit, and opens every passing check in a popover', async () => {
     await renderWorkflow();
 
+    expect.soft(screen.queryByText(/Can’t deploy yet/), 'shows no “Can’t deploy yet” while every check passes').toBeNull();
     const steps = screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent);
     expect.soft(steps, 'lays out What → How → Money → Confirm').toEqual(['What', 'How', 'Money', 'Confirm']);
     for (const name of ['What', 'How', 'Money', 'Confirm']) {
@@ -470,7 +471,6 @@ describe('AlpacaDeployWorkflowComponent — four steps (PRD #2560 D8)', () => {
     expect.soft(screen.queryByLabelText('Bot name'), 'asks for no bot name').toBeNull();
     expect.soft(screen.queryByRole('link', { name: 'Open account recovery' }), 'links no account recovery').toBeNull();
 
-    expect.soft(screen.queryByText(/Can’t deploy yet/), 'shows no “Can’t deploy yet” while every check passes').toBeNull();
     const open = screen.getByRole('button', { name: 'Every check and the last Start check' });
     const checks = document.getElementById(open.getAttribute('popovertarget') ?? '');
     expect.soft(checks?.hasAttribute('popover'), 'opens every check in a popover').toBe(true);
@@ -745,9 +745,19 @@ describe('AlpacaDeployWorkflowComponent — four steps (PRD #2560 D8)', () => {
     expect(within(blockers).queryByText('Fix: Enter exit allowance, band multiple and spread cap.')).toBeNull();
   });
 
-  it('reviews a Paper Deploy: no typed phrase, the world and amount on the button, the authored name, trade, account, exits, budget and loss limit, and no same-symbol warning', async () => {
+  it('asks for no typed phrase on Paper, and names the world and the amount on the button', async () => {
     await renderWorkflow();
-    expect.soft(deployButton().disabled, 'asks for money before the Paper Deploy opens').toBe(true);
+
+    expect(deployButton().disabled).toBe(true);
+    await chooseMoney();
+
+    expect(screen.queryByLabelText(/type/i)).toBeNull();
+    expect(deployButton().textContent?.trim()).toBe('Deploy paper bot · set aside $1,000.00');
+    expect(deployButton().disabled).toBe(false);
+  });
+
+  it('reviews the name the backend will author, the trade, the account, the exits, the budget and the loss limit, and shows no same-symbol warning when no other bot trades the symbol', async () => {
+    await renderWorkflow();
     // Before a preview the name is only promised, in the owner's words.
     expect.soft(
       within(screen.getByLabelText('Deploy review')).getByText('Bot').nextElementSibling?.textContent,
@@ -755,10 +765,6 @@ describe('AlpacaDeployWorkflowComponent — four steps (PRD #2560 D8)', () => {
     ).toBe('Named when you deploy.');
     await chooseMoney();
 
-    expect.soft(screen.queryByLabelText(/type/i), 'asks for no typed phrase on Paper').toBeNull();
-    expect.soft(deployButton().textContent?.trim(), 'names the world and the amount on the button')
-      .toBe('Deploy paper bot · set aside $1,000.00');
-    expect.soft(deployButton().disabled, 'opens the Paper Deploy once the money is reviewed').toBe(false);
     const text = screen.getByLabelText('Deploy review').textContent ?? '';
     expect.soft(text, 'reviews the name the backend will author').toContain(BOT_NAME_NOTE);
     expect.soft(text, 'reviews the trade').toContain('Deployment Validation · SPY · 1 share');
@@ -889,7 +895,8 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
   // Each of these is a refusal the backend leaves unsettled: the first bot
   // may have started, or the key's earlier Deploy could not be read. The
   // page keeps the key, says the outcome is unknown in the backend's words,
-  // and offers the status read (B2-3).
+  // and offers the status read (B2-3). The two 409 rows are the key's earlier
+  // Deploy still being sent, and sent with other settings.
   it.each([
     {
       kind: 'the outcome-not-readable 409',

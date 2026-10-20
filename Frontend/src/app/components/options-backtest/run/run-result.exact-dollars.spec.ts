@@ -103,7 +103,7 @@ const PLACES: readonly (readonly [string, () => string | string[], string | stri
   ['the net profit of each day', () => column('By day', 7), DAY_ROWS.map(() => SHOWN)],
   ['the fees of each day', () => column('By day', 8), DAY_ROWS.map(() => SHOWN)],
   ['equity chart scale', () => [...screen.getByRole('region', { name: 'Equity and daily profit and loss' }).querySelectorAll('.equity-scale span')].map((item) => reads(item)), [SHOWN, SHOWN]],
-  ['the exact source amount on the positive and negative daily scale',() => reads(screen.getByRole('region', { name: 'Equity and daily profit and loss' }).querySelector('.pnl-scale')), `${SHOWN} $0 − ${SHOWN}`],
+  ['the exact source amount on the positive and negative daily scale', () => reads(screen.getByRole('region', { name: 'Equity and daily profit and loss' }).querySelector('.pnl-scale')), `${SHOWN} $0 − ${SHOWN}`],
   ['monthly heatmap values', () => [...screen.getByRole('region', { name: 'By month' }).querySelectorAll('.month-heat strong')].map((item) => reads(item)), MONTH_ROWS.map(() => SHOWN)],
   ['the net profit of each month', () => column('By month', 7), MONTH_ROWS.map(() => SHOWN)],
   ['the fees of each month', () => column('By month', 8), MONTH_ROWS.map(() => SHOWN)],
