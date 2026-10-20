@@ -50,7 +50,7 @@ from tests.options_backtest._lake import tmp_lake as tmp_lake
 from tests.options_backtest._market import D, at
 from tests.options_bots.test_golden import MemoryGoldenStore
 from tests.options_bots.test_golden_proof import _run
-from tests.options_bots.test_runtime import Clock, Market
+from tests.options_bots.test_options_bot_runtime import Clock, Market
 
 
 @respx.mock

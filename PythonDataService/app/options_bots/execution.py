@@ -5,7 +5,7 @@ Reference: the definition of a quantity-weighted average over the Clerk's effect
     execution records (ADR 0079). This is not a price estimated from market bars.
 Canonical implementation: this file for a single Options attempt's observed
     execution average; position accounting remains the Clerk's.
-Validated against: tests/options_bots/test_runtime.py, hand-worked partial fills.
+Validated against: tests/options_bots/test_options_bot_runtime.py, hand-worked partial fills.
 
 The weighted average uses a fixed fifty-digit, half-even decimal context. A
 repeating rational average must be represented finitely; this rounding is far

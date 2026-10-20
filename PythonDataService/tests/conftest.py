@@ -4,6 +4,10 @@ import os
 from collections.abc import AsyncIterator, Iterable, Iterator
 from pathlib import Path
 
+# anyio imports its asyncio backend on first use and hands the half-built
+# module to any second thread that asks meanwhile (#3384). Import it here, on
+# the main thread, before a test starts a thread.
+import anyio._backends._asyncio  # noqa: F401
 import pytest
 from httpx import ASGITransport, AsyncClient
 

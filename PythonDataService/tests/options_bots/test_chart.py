@@ -24,7 +24,7 @@ from app.schemas.fleet_history_batch import HistoryBatchResponse
 from app.services import options_bot_chart
 from app.services.broker_v2_panel import panel_chart_data_source as source
 from tests.options_backtest._market import D, TableMarket, at, contract, flat, leg, picked, setup, steady
-from tests.options_bots.test_runtime import Clerk, Clock, _binding, _duty
+from tests.options_bots.test_options_bot_runtime import Clerk, Clock, _binding, _duty
 from tests.options_bots.test_session import _observed
 
 CALL = contract("call", "500")

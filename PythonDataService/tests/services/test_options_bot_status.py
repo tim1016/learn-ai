@@ -23,7 +23,7 @@ from app.schemas.options_deploy import OptionsBotSessionView
 from app.services import options_bot_status as status_service
 from app.services.options_bot_status import leg_views
 from tests.options_backtest._market import D, TableMarket, at, contract, flat, leg, picked, setup, steady
-from tests.options_bots.test_runtime import _binding
+from tests.options_bots.test_options_bot_runtime import _binding
 from tests.options_bots.test_session import _observed
 
 CALL = contract("call", "500")
