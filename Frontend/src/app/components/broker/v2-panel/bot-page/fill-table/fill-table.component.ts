@@ -28,9 +28,10 @@ export class FillTableComponent {
    * than the symbol it listens to (#2912). An ordinary bot's table has no
    * such column. */
   readonly showAsset = input(false);
+  readonly optionUnderlying = input<string | undefined>(undefined);
 
   protected readonly rows = computed(() => this.fills().map(fill => ({
-    fill, contract: fill.symbol ? optionContractFromSymbol(fill.symbol) : null,
+    fill, contract: fill.symbol ? optionContractFromSymbol(fill.symbol, this.optionUnderlying()) : null,
   })));
 
   protected readonly fmtCurrency = fmtCurrency;

@@ -979,3 +979,11 @@ async def test_the_admission_preview_holds_an_option_deploy_to_the_same_fences_a
 
     assert taken.status_code == 200, taken.text
     assert spread.status_code == 200, spread.text
+
+
+def test_unloaded_structure_legs_are_omitted_from_catalog_shape() -> None:
+    unloaded = TradedInstrumentView(kind="option", symbol="SPY")
+    assert "legs" not in unloaded.model_dump() and "legs_notice" not in unloaded.model_dump()
+    loaded = unloaded.model_copy(update={"legs": [], "legs_notice": "No option contracts held."})
+    assert loaded.model_dump()["legs"] == []
+    assert loaded.model_dump()["legs_notice"] == "No option contracts held."

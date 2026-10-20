@@ -521,7 +521,7 @@ class TradedInstrumentView(BaseModel):
         for name in ("label", "in_a_sentence"):
             if view.get(name) is None:
                 view.pop(name, None)
-        if self.kind == "stock":
+        if self.kind == "stock" or not {"legs", "legs_notice"}.intersection(self.model_fields_set):
             view.pop("legs", None)
             view.pop("legs_notice", None)
         return view

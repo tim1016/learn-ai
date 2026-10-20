@@ -751,6 +751,7 @@ describe('BotPanelShellComponent', () => {
     await renderShell({ traded: { kind: 'option', symbol: 'SPY', legs: [], legs_notice: 'No contracts held yet.' } });
     expect(screen.getByRole('heading', { name: 'Held option legs' })).toBeTruthy();
     expect(screen.getByText('No contracts held yet.')).toBeTruthy();
+    expect(screen.queryByText('The current close-now value is not available yet.')).toBeNull();
   });
 
   it('keeps the held-legs card off a stock bot page', async () => {
