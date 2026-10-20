@@ -4,6 +4,10 @@ This module is intentionally the only path that turns a foreign Alpaca order
 into an ``external_orders`` row.  It does not create an ``orders`` row, a
 ``fills`` row, or a position update, so external account activity can never
 be misattributed to a bot's economics.
+
+An outside multi-leg parent has no symbol or side of its own, so it has no row
+of its own either (#3309): its legs are the outside orders, each a
+single-symbol row whose evidence refs name the parent and the sibling legs.
 """
 
 from __future__ import annotations
@@ -35,12 +39,17 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     UnfoldableBrokerOrderCause,
 )
 from app.broker.contract.models import BrokerOrder
+from app.options.structure import MAX_OPTION_LEGS
 
 logger = logging.getLogger(__name__)
 
 
 class ExternalOrderObservationError(ValueError):
     """The broker supplied insufficient evidence for a truthful observation."""
+
+
+class ExternalOrderReviewIncompleteError(ValueError):
+    """An outside multi-leg order's legs are not all durable yet, so none can be reviewed."""
 
 
 def observe_external_order(
@@ -56,38 +65,47 @@ def observe_external_order(
     Repeated identical broker snapshots return the existing row without
     growing either the hash chain or the hold evidence.
     """
-    expected = _observation_from_broker_order(order)
-    facts = ExternalOrderObservedFacts(
-        external_order_id=expected.external_order_id,
-        broker_order_id=expected.broker_order_id,
-        client_order_id=expected.client_order_id,
-        symbol=expected.symbol,
-        side=expected.side,
-        qty=expected.qty,
-        order_type=expected.order_type,
-        limit_price=expected.limit_price,
-        stop_price=expected.stop_price,
-        filled_avg_price=expected.filled_avg_price,
-        observed_at_ms=expected.observed_at_ms,
-        evidence_refs=list(expected.evidence_refs),
-        broker_state=expected.broker_state,
-        filled_quantity=expected.filled_quantity,
-    )
-    return repo.append_external_order_observation_if_changed(
-        expected=expected,
-        build_transition=lambda: TransitionInput(
-            transition_kind="EXTERNAL_ORDER_OBSERVED",
-            custody_owner="ACCOUNT_CLERK",
-            execution_authority="ACCOUNT_CLERK",
-            operation_state="succeeded",
+    return _append_observation(repo, _observation_from_broker_order(order), proof_reference)
+
+
+def _append_observation(
+    repo: ClerkSqliteRepository, expected: ExternalOrderResource, proof_reference: str | None
+) -> ExternalOrderResource:
+    with repo.unfoldable_order_write_serialized():
+        expected = _with_what_is_known_of_a_leg(
+            repo.external_order_by_broker_order_id(expected.broker_order_id), expected
+        )
+        facts = ExternalOrderObservedFacts(
+            external_order_id=expected.external_order_id,
             broker_order_id=expected.broker_order_id,
-            proof_reference=proof_reference or expected.broker_order_id,
-            source_event_at_ms=expected.observed_at_ms,
-            clerk_observed_at_ms=repo.clock(),
-            summary_code="EXTERNAL_ORDER_OBSERVED",
-            facts_json=facts.to_facts_json(),
-        ),
-    )
+            client_order_id=expected.client_order_id,
+            symbol=expected.symbol,
+            side=expected.side,
+            qty=expected.qty,
+            order_type=expected.order_type,
+            limit_price=expected.limit_price,
+            stop_price=expected.stop_price,
+            filled_avg_price=expected.filled_avg_price,
+            observed_at_ms=expected.observed_at_ms,
+            evidence_refs=list(expected.evidence_refs),
+            broker_state=expected.broker_state,
+            filled_quantity=expected.filled_quantity,
+        )
+        return repo.append_external_order_observation_if_changed(
+            expected=expected,
+            build_transition=lambda: TransitionInput(
+                transition_kind="EXTERNAL_ORDER_OBSERVED",
+                custody_owner="ACCOUNT_CLERK",
+                execution_authority="ACCOUNT_CLERK",
+                operation_state="succeeded",
+                broker_order_id=expected.broker_order_id,
+                proof_reference=proof_reference or expected.broker_order_id,
+                source_event_at_ms=expected.observed_at_ms,
+                clerk_observed_at_ms=repo.clock(),
+                summary_code="EXTERNAL_ORDER_OBSERVED",
+                facts_json=facts.to_facts_json(),
+            ),
+        )
 
 
 def observe_or_record_unfoldable(
@@ -100,15 +118,21 @@ def observe_or_record_unfoldable(
 
     Both the trade-update sink and the reconciliation verdict call this, so a
     broker order no ``external_orders`` row can state truthfully (a multi-leg
-    parent with a null ``side``, or a row naming ``unreadable_fields``, #2648)
-    is contained identically on both: recorded by name under
+    parent whose legs cannot be stated, or a row naming ``unreadable_fields``,
+    #2648) is contained identically on both: recorded by name under
     ``UNFOLDABLE_BROKER_ORDER`` and never allowed to raise out of the
     caller's loop. Only :class:`ExternalOrderObservationError` is
     contained -- it is raised before anything is appended. Storage and
     transport errors still propagate.
     """
     try:
-        observe_external_order(repo, order=order, proof_reference=proof_reference)
+        if order.legs:
+            observations = _leg_observations(order)
+            with repo.unfoldable_order_write_serialized():
+                for observation in observations:
+                    _append_observation(repo, observation, proof_reference)
+        else:
+            observe_external_order(repo, order=order, proof_reference=proof_reference)
     except ExternalOrderObservationError as exc:
         record_unfoldable_broker_order(
             repo, order=order, reason=str(exc), proof_reference=proof_reference
@@ -352,6 +376,7 @@ def acknowledge_external_order(
         raise ValueError("external_order_id must be non-empty")
     if not operator or len(operator) > 64:
         raise ValueError("operator must be between 1 and 64 characters")
+    _require_every_sibling_leg_recorded(repo, external_order_id)
     facts = ExternalOrderAcknowledgedFacts(
         external_order_id=external_order_id,
         ack_operator=operator,
@@ -373,7 +398,136 @@ def acknowledge_external_order(
     )
 
 
-def _observation_from_broker_order(order: BrokerOrder) -> ExternalOrderResource:
+# What stands in for a client order id the broker supplied none of.
+MISSING_CLIENT_ORDER_ID_PREFIX = "missing-client-order-id:"
+
+
+def _leg_observations(parent: BrokerOrder) -> list[ExternalOrderResource]:
+    """The outside orders an outside multi-leg parent is custody of, every one checked first (#3309).
+
+    Alpaca gives the parent no symbol or side, so it has no row: each leg is
+    the single-symbol outside order it is, its evidence refs naming the parent
+    and its sibling legs. Nothing is appended unless every leg can be stated,
+    so a group the Clerk cannot state is contained whole as the parent
+    (:func:`record_unfoldable_broker_order`) and never half-recorded.
+    """
+    if parent.unreadable_fields:
+        raise ExternalOrderObservationError(
+            f"broker sent values this app could not read: {', '.join(parent.unreadable_fields)}"
+        )
+    parent_id = parent.order_id.strip()
+    if not parent_id:
+        raise ExternalOrderObservationError("broker order id must be non-empty")
+    if parent.symbol.strip():
+        raise ExternalOrderObservationError("external multi-leg parent states a symbol of its own")
+    legs = sorted(parent.legs, key=lambda leg: leg.order_id.strip())
+    leg_ids = [leg.order_id.strip() for leg in legs]
+    if (
+        not 2 <= len(legs) <= MAX_OPTION_LEGS
+        or not all(leg_ids)
+        or len(set(leg_ids)) != len(leg_ids)
+        or parent_id in leg_ids
+    ):
+        raise ExternalOrderObservationError(
+            f"external multi-leg parent needs two to {MAX_OPTION_LEGS} distinct legs, none its own"
+        )
+    observations: list[ExternalOrderResource] = []
+    for leg, leg_id in zip(legs, leg_ids, strict=True):
+        links = (
+            f"{reads.OUTSIDE_PARENT_REF_PREFIX}{parent_id}",
+            *(f"{reads.OUTSIDE_SIBLING_REF_PREFIX}{other}" for other in leg_ids if other != leg_id),
+        )
+        try:
+            observations.append(
+                _observation_from_broker_order(_as_outside_leg(parent, leg), extra_evidence_refs=links)
+            )
+        except ExternalOrderObservationError as exc:
+            raise ExternalOrderObservationError(f"leg {leg_id} of a multi-leg parent: {exc}") from exc
+    return observations
+
+
+def outside_orders_of(order: BrokerOrder) -> tuple[BrokerOrder, ...]:
+    """The orders the Clerk takes custody of for one outside broker order.
+
+    An outside multi-leg parent whose legs can all be stated is its legs; any
+    other order, a parent the Clerk cannot state included, is itself.
+    """
+    if not order.legs:
+        return (order,)
+    try:
+        _leg_observations(order)
+    except ExternalOrderObservationError:
+        return (order,)
+    return tuple(_as_outside_leg(order, leg) for leg in sorted(order.legs, key=lambda leg: leg.order_id))
+
+
+def _as_outside_leg(parent: BrokerOrder, leg: BrokerOrder) -> BrokerOrder:
+    """A leg as a single-symbol order. Its type or time in force may come blank: it takes its parent's.
+
+    A leg's client order id is its parent's, as Alpaca states it.
+    """
+    return leg.model_copy(
+        update={
+            "order_type": leg.order_type or parent.order_type,
+            "time_in_force": leg.time_in_force or parent.time_in_force,
+            "client_order_id": leg.client_order_id if leg.client_order_id is not None else parent.client_order_id,
+        }
+    )
+
+
+def _with_what_is_known_of_a_leg(
+    recorded: ExternalOrderResource | None, observed: ExternalOrderResource
+) -> ExternalOrderResource:
+    """Keep what the Clerk already knows of a leg of an outside multi-leg order (#3309).
+
+    The parent's answer names the parent and the siblings; the fill frame the
+    consumer synthesizes for each leg, and a leg read on its own, name neither
+    and carry no client order id. Either may come second, and a later one
+    never un-learns what an earlier one stated, so the two never alternate
+    observations. Any other order is as observed.
+    """
+    if recorded is None or not any(
+        ref.startswith(reads.OUTSIDE_PARENT_REF_PREFIX) for ref in (*recorded.evidence_refs, *observed.evidence_refs)
+    ):
+        return observed
+    return replace(
+        observed,
+        client_order_id=(
+            recorded.client_order_id
+            if observed.client_order_id.startswith(MISSING_CLIENT_ORDER_ID_PREFIX)
+            else observed.client_order_id
+        ),
+        evidence_refs=tuple(sorted({*recorded.evidence_refs, *observed.evidence_refs})),
+    )
+
+
+def _require_every_sibling_leg_recorded(repo: ClerkSqliteRepository, external_order_id: str) -> None:
+    """A leg of an outside multi-leg order is reviewed only once its whole group is durable (#3309).
+
+    The legs are appended one after another, so a process that dies between
+    two leaves a leg whose sibling the hold cannot yet name. Its review would
+    release a hold over an order the Clerk has not recorded.
+    """
+    recorded = repo.external_order(external_order_id)
+    if recorded is None:
+        return
+    missing = [
+        sibling
+        for ref in recorded.evidence_refs
+        if ref.startswith(reads.OUTSIDE_SIBLING_REF_PREFIX)
+        and repo.external_order_by_broker_order_id(sibling := ref.removeprefix(reads.OUTSIDE_SIBLING_REF_PREFIX))
+        is None
+    ]
+    if missing:
+        raise ExternalOrderReviewIncompleteError(
+            f"The legs of this multi-leg order are not all recorded yet (missing {', '.join(missing)}). "
+            "Choose Reconcile now, then review it again."
+        )
+
+
+def _observation_from_broker_order(
+    order: BrokerOrder, *, extra_evidence_refs: tuple[str, ...] = ()
+) -> ExternalOrderResource:
     # Ahead of every other check, so the recorded reason names the real
     # cause: the adapter reads a value it could not parse as absent and names
     # it rather than refusing the whole orders answer (#2648), and an absent
@@ -382,6 +536,8 @@ def _observation_from_broker_order(order: BrokerOrder) -> ExternalOrderResource:
         raise ExternalOrderObservationError(
             f"broker sent values this app could not read: {', '.join(order.unreadable_fields)}"
         )
+    if order.legs:
+        raise ExternalOrderObservationError("a multi-leg parent is recorded as its legs, never as one order")
     broker_order_id = order.order_id.strip()
     symbol = order.symbol.strip().upper()
     side = order.side.upper()
@@ -422,7 +578,7 @@ def _observation_from_broker_order(order: BrokerOrder) -> ExternalOrderResource:
         client_order_id=(
             order.client_order_id
             if order.client_order_id is not None
-            else f"missing-client-order-id:{broker_order_id}"
+            else f"{MISSING_CLIENT_ORDER_ID_PREFIX}{broker_order_id}"
         ),
         symbol=symbol,
         side=side,
@@ -434,20 +590,23 @@ def _observation_from_broker_order(order: BrokerOrder) -> ExternalOrderResource:
         observed_at_ms=order.observed_at_ms,
         acknowledged_at_ms=None,
         ack_operator=None,
-        evidence_refs=(broker_order_id,),
+        evidence_refs=tuple(sorted({broker_order_id, *extra_evidence_refs})),
         broker_state=order.status.strip().lower(),
         filled_quantity=order.filled_quantity,
     )
 
 
 __all__ = [
+    "MISSING_CLIENT_ORDER_ID_PREFIX",
     "UNIDENTIFIED_BROKER_ORDER_ID",
     "ExternalOrderObservationError",
+    "ExternalOrderReviewIncompleteError",
     "UnfoldableBrokerOrderAcknowledgement",
     "acknowledge_external_order",
     "acknowledge_unfoldable_broker_order",
     "observe_external_order",
     "observe_or_record_unfoldable",
+    "outside_orders_of",
     "record_unfoldable_broker_order",
     "unfoldable_broker_order_is_unreviewed",
 ]

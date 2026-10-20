@@ -414,13 +414,6 @@ current budget, risk-edit and mode behavior is recorded in ADRs 0059 and 0060.
   the exact comparisons are in the Paper qualification runbook. This supplies
   stronger attribution for investigating rounding; it does not establish a
   replacement fee schedule or resolve the OPT TAF discrepancy.
-- **Outside multi-leg parents have no reviewable custody row (P2,
-  2026-10-15, #3309).** Alpaca gives an `mleg` parent no single symbol or side.
-  `PythonDataService/app/broker/alpaca/clerk/sqlite/external_orders.py` contains
-  it as an unfoldable broker order; #3225's opening and closing parents needed
-  individual acknowledgement after the Paper account was verified flat. The
-  hold was safe, but the outside order's leg executions remain unrepresented
-  in the Clerk's transaction history.
 
 
 ## 13. Data Lab workspace redesign residuals (2026-09-12)

@@ -634,6 +634,28 @@ def from_alpaca_order(
         observed_at_ms=_observed(observed_at_ms),
         fill_latency_seconds=fill_latency_seconds(submitted_at_ms, filled_at_ms),
         unreadable_fields=tuple(sorted(unreadable)),
+        legs=_multi_leg_parents_legs(payload, observed_at_ms=observed_at_ms),
+    )
+
+
+def _multi_leg_parents_legs(payload: Mapping[str, Any], *, observed_at_ms: int | None) -> tuple[BrokerOrder, ...]:
+    """The legs a multi-leg parent answer nests, each read as the single-symbol order it is (#3309).
+
+    Alpaca gives the parent no symbol or side and nests the legs that carry
+    both. A leg that is read with values it could not parse names them in its
+    own ``unreadable_fields``; the Clerk decides whether the group is stated.
+    Anything that is not a list of leg objects with no legs of their own is
+    no legs at all, so the parent is held to what it states: nothing.
+    """
+    if payload.get("order_class") != _ALPACA_MULTI_LEG_ORDER_CLASS:
+        return ()
+    raw_legs = payload.get("legs")
+    if not isinstance(raw_legs, list) or any(not isinstance(leg, Mapping) or leg.get("legs") for leg in raw_legs):
+        return ()
+    parent_id = str_or_blank(payload.get("id"))
+    return tuple(
+        from_alpaca_order(leg, observed_at_ms=observed_at_ms).model_copy(update={"parent_order_id": parent_id})
+        for leg in raw_legs
     )
 
 

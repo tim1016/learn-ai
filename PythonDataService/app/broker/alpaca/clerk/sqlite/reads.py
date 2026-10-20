@@ -95,6 +95,13 @@ _EXTERNAL_ORDER_COLUMNS: tuple[str, ...] = (
     "evidence_refs_json",
 )
 
+#: Evidence refs that say an outside order is a leg of a multi-leg parent
+#: (#3309): the parent's broker order id, and each sibling leg's. They are the
+#: whole link -- the parent has no row of its own, because Alpaca gives it no
+#: symbol or side. Their spelling is part of every observation already hashed.
+OUTSIDE_PARENT_REF_PREFIX = "mleg-parent:"
+OUTSIDE_SIBLING_REF_PREFIX = "mleg-leg:"
+
 #: What the journal says of each outside order, from one walk of it (#3216): the
 #: sequence of its first observation, of its newest one, and of its latest
 #: review. The records' times and facts are read by those sequences below. No

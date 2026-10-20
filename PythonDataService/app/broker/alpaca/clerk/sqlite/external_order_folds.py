@@ -94,7 +94,13 @@ def fold_external_order_observed(conn: sqlite3.Connection, payload: dict[str, An
     observed = reads.external_order_by_broker_order_id(conn, facts.broker_order_id)
     assert observed is not None
     if observed.acknowledged_at_ms is not None:
-        return
+        if not _a_reviewed_leg_moved_on(conn, facts):
+            return
+        conn.execute(
+            "UPDATE external_orders SET acknowledged_at_ms = NULL, ack_operator = NULL "
+            "WHERE external_order_id = ?",
+            (facts.external_order_id,),
+        )
     if outside_order_reduces_a_bots_contract(
         conn, symbol=facts.symbol, side=facts.side, broker_order_id=facts.broker_order_id
     ):
@@ -119,6 +125,31 @@ def fold_external_order_observed(conn: sqlite3.Connection, payload: dict[str, An
     merged = sorted({*current_refs, facts.broker_order_id})
     if merged != current_refs:
         _update_unexplained_order_hold(conn, hold_id=active["hold_id"], evidence_refs=merged)
+
+
+def _a_reviewed_leg_moved_on(conn: sqlite3.Connection, facts: ExternalOrderObservedFacts) -> bool:
+    """Whether the broker state of a reviewed leg of an outside multi-leg order has changed (#3309).
+
+    A review covers the state the operator saw. A later fill or cancel of the
+    leg is new broker evidence, so the leg is open to review again. Learning
+    only its parent, its siblings or its client order id is not a change, and
+    an ordinary outside order, or one observed before the link was recorded,
+    keeps the review it has: a replay of an earlier chain folds as it did.
+    """
+    if not any(ref.startswith(reads.OUTSIDE_PARENT_REF_PREFIX) for ref in facts.evidence_refs):
+        return False
+    previous = conn.execute(
+        "SELECT facts_json FROM custody_transitions WHERE transition_kind = 'EXTERNAL_ORDER_OBSERVED' "
+        "AND broker_order_id = ? AND sequence < ? ORDER BY sequence DESC LIMIT 1",
+        (facts.broker_order_id, _transition_sequence(conn)),
+    ).fetchone()
+    if previous is None:
+        return False
+    before = ExternalOrderObservedFacts.from_facts_json(previous["facts_json"])
+    return before.broker_state is not None and (before.broker_state, before.filled_quantity) != (
+        facts.broker_state,
+        facts.filled_quantity,
+    )
 
 
 def fold_external_order_acknowledged(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:

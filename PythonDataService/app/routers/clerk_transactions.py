@@ -7,6 +7,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Path, Query, status
 
+from app.broker.alpaca.clerk.sqlite.external_orders import ExternalOrderReviewIncompleteError
 from app.broker.alpaca.clerk.sqlite.projection_errors import InvalidTimelineCursor
 from app.broker.alpaca.clerk.sqlite.repository import ExecutionLeaseLost, RepositoryPoisoned
 from app.schemas.clerk_transaction_projection import (
@@ -61,6 +62,8 @@ async def acknowledge_external_order_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="External order observation was not found for this account.",
         ) from exc
+    except ExternalOrderReviewIncompleteError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ClerkTransactionAccountNotActive as exc:
         raise _account_not_active() from exc
     except (ClerkTransactionProjectionUnavailable, ExecutionLeaseLost, RepositoryPoisoned) as exc:
