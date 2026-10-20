@@ -503,3 +503,26 @@ def test_a_junit_testcase_that_cannot_name_its_file_is_refused_not_skipped() -> 
 
     with pytest.raises(ValueError, match="without a file"):
         parse_junit('<testsuite><testcase classname="x" name="test_t" time="1.0"/></testsuite>')
+
+
+def test_a_ci_calibration_writes_one_entry_per_test_file_that_the_shard_plugin_reads_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from scripts import pytest_shard, update_pr_shard_durations
+
+    run = tmp_path / "run-1.xml"
+    run.write_text(
+        "<testsuites><testsuite>"
+        '<testcase classname="x" name="test_one" file="tests/a.py" time="1.25"/>'
+        '<testcase classname="x" name="test_two[3]" file="tests/a.py" time="0.75"/>'
+        '<testcase classname="y" name="test_three" file="tests/b.py" time="4.0"/>'
+        "</testsuite></testsuites>"
+    )
+    durations_file = tmp_path / "durations.json"
+    monkeypatch.setattr(update_pr_shard_durations, "DURATIONS_PATH", durations_file)
+    monkeypatch.setattr(pytest_shard, "DURATIONS_PATH", durations_file)
+
+    assert update_pr_shard_durations.main(["--from-junit", str(run)]) == 0
+
+    assert json.loads(durations_file.read_text()) == {"tests/a.py": 2.0, "tests/b.py": 4.0}
+    assert pytest_shard.file_durations(pytest_shard.load_pr_shard_durations()) == {"tests/a.py": 2.0, "tests/b.py": 4.0}
