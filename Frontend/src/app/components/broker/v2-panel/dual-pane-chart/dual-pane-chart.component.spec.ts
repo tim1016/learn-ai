@@ -119,6 +119,21 @@ describe('DualPaneChartComponent', () => {
     expect(screen.queryByRole('button', { name: '5s' })).toBeNull();
     expect(screen.getByText('No saved premium minutes for this contract in this session.')).toBeTruthy();
   });
+  it('names the comparison and identifies a contract only the backtest picked', async () => {
+    await render(DualPaneChartComponent, {
+      inputs: { symbol: 'SPY', fixedMinute: true, liveResolution: '1m',
+        liveBacktestNotice: 'Comparison not ready: the session has not finished.',
+        livePremiumPanes: [{ symbol: 'SPY261009C00500000',
+          contract: { root: 'SPY', expiry_ms: 1_791_576_000_000, right: 'call', strike_thousandths: 500000 },
+          multiplier: 100, leg_ids: ['call'], entry_numbers: [0], points: [], rule_lines: [], fill_markers: [],
+          backtest_only: true, backtest_points: [],
+        }],
+      },
+    });
+    expect(screen.getByText(/Live: solid lines · Backtest: faint markers and dashed lines/).textContent)
+      .toContain('Comparison not ready: the session has not finished.');
+    expect(screen.getByText('Backtest only')).toBeTruthy();
+  });
   beforeEach(() => {
     TestBed.configureTestingModule({
       providers: [

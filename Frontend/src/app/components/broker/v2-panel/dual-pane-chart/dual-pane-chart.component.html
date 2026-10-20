@@ -199,6 +199,9 @@
         </div>
       }
 
+      @if (fixedMinute()) {
+        <p class="backtest-legend">Live: solid lines · Backtest: faint markers and dashed lines. {{ backtestNotice() }}</p>
+      }
       <div class="chart-viewport">
       <div class="chart-stage" [style.min-height.px]="activePremiumPanes().length ? 320 + activePremiumPanes().length * 160 : null">
         @if (premiumNotice(); as notice) { <p role="status">{{ notice }}</p> }
@@ -206,6 +209,7 @@
           <p class="premium-caption" [class.premium-caption--placed]="premiumCaptionTops()[premium.symbol] !== undefined" [style.top.px]="premiumCaptionTops()[premium.symbol]">
             @if (premium.identity; as identity) { <app-option-contract [contract]="identity" size="xs" /> }
             <strong>{{ premium.leg_ids.join(', ') }}</strong>
+            @if (premium.backtest_only) { <strong>Backtest only</strong> }
             <span>Premium · Starting price · Momentum · Stop</span>
             @if (premium.notice) { <span role="status">{{ premium.notice }}</span> }
           </p>

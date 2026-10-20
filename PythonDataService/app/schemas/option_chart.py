@@ -19,6 +19,7 @@ class ChartRuleLine(BaseModel):
     to_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     leg_id: str
     entry_number: int = Field(ge=0)
+    source: Literal["live", "backtest"] = "live"
 
 
 class PremiumPoint(BaseModel):
@@ -35,6 +36,7 @@ class PremiumFill(BaseModel):
     order_ref: str
     event_key: str
     exit_reason: str | None = None
+    source: Literal["live", "backtest"] = "live"
 
 
 class ChartPremiumPane(BaseModel):
@@ -47,3 +49,5 @@ class ChartPremiumPane(BaseModel):
     rule_lines: list[ChartRuleLine]
     fill_markers: list[PremiumFill]
     notice: str | None = None
+    backtest_only: bool = False
+    backtest_points: list[PremiumPoint] = Field(default_factory=list)

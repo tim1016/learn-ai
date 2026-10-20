@@ -57,6 +57,7 @@ from app.services.live_chart_window import (
     resolve_chart_window,
 )
 from app.services.options_bot_chart import require_options_minute, with_options_panes
+from app.services.options_bot_overlay import with_options_overlay
 from app.services.sqlite_clerk_compat import custody_account_id_for_route
 from app.utils.timestamps import now_ms_utc
 
@@ -191,6 +192,7 @@ async def get_live_snapshot_parts(
         chart = chart.model_copy(update={"position": position_pane(chart, traded_chart)})
     if panel.options_bot is not None:
         chart = with_options_panes(chart, broker, sid, fills)
+        chart = await with_options_overlay(chart, broker, sid, now_ms=observed_at_ms)
     elif panel.traded is not None and panel.traded.kind == "option":
         chart = await with_option_position(chart, broker, sid, symbol=panel.traded.symbol, through_ms=observed_at_ms, expected_revision=panel.revision)
     return panel, chart
@@ -288,7 +290,7 @@ async def get_history_chart(
     async def chart_of(symbol: str) -> ChartHistoryResponse:
         chart, chart_fills = await raw_chart_of(symbol)
         if status.options_bot is not None:
-            return with_options_panes(chart, broker, sid, chart_fills)
+            return await with_options_overlay(with_options_panes(chart, broker, sid, chart_fills), broker, sid, now_ms=observed_at_ms)
         if status.traded is not None and status.traded.kind == "option":
             return await with_option_position(chart, broker, sid, symbol=status.traded.symbol, through_ms=observed_at_ms, expected_revision=evidence.fills.control_revision)
         return chart

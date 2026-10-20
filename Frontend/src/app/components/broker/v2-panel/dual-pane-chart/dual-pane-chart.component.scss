@@ -4,6 +4,8 @@
   min-width: 0;
 }
 
+.backtest-legend { margin: 0; padding: .35rem .6rem; color: var(--text-muted); font-size: .75rem; }
+
 .market-tape {
   --source-accent: var(--info);
   display: flex;

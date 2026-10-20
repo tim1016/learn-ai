@@ -329,6 +329,8 @@ export class DualPaneChartComponent implements AfterViewInit {
   readonly histPremiumPanes = input<readonly ChartPremiumPane[]>([]);
   readonly livePremiumNotice = input<string | null>(null);
   readonly histPremiumNotice = input<string | null>(null);
+  readonly liveBacktestNotice = input<string | null>(null);
+  readonly histBacktestNotice = input<string | null>(null);
   readonly fixedMinute = input(false);
   readonly liveRuleLines = input<readonly ChartRuleLine[]>([]);
   readonly histRuleLines = input<readonly ChartRuleLine[]>([]);
@@ -336,6 +338,8 @@ export class DualPaneChartComponent implements AfterViewInit {
     ? this.livePremiumPanes() : this.histPremiumPanes());
   protected readonly premiumNotice = computed(() => this.activePane() === 'live'
     ? this.livePremiumNotice() : this.histPremiumNotice());
+  protected readonly backtestNotice = computed(() => this.activePane() === 'live'
+    ? this.liveBacktestNotice() : this.histBacktestNotice());
   protected readonly premiumCaptions = computed(() => this.activePremiumPanes().map((pane) => ({
     ...pane, identity: optionContractFromSymbol(pane.symbol, pane.contract.root),
   })));
@@ -828,16 +832,27 @@ export class DualPaneChartComponent implements AfterViewInit {
       for (const rule of plan.rules) {
         const line = chart.addSeries(LineSeries, {
           color: rule.color, title: rule.title, lineWidth: 1,
+          lineStyle: rule.backtest ? 2 : 0,
           priceLineVisible: false, lastValueVisible: false, pointMarkersVisible: true,
         }, pane);
         line.setData(rule.points);
         this.indicatorSeries.push(line);
       }
+      for (const run of plan.backtestRuns) {
+        const line = chart.addSeries(LineSeries, {
+          color: 'rgba(148, 163, 184, 0.4)', lineWidth: 1, lineStyle: 2,
+          priceLineVisible: false, lastValueVisible: false, pointMarkersVisible: true,
+        }, pane);
+        line.setData([...run.points]);
+        this.indicatorSeries.push(line);
+      }
       if (plan.fills.length) {
-        const anchors = chart.addSeries(LineSeries, { lineVisible: false, priceLineVisible: false, lastValueVisible: false }, pane);
-        anchors.setData([...new Map(plan.fills.map((fill) => [fill.time, { time: fill.time, value: fill.value }])).values()]);
-        createSeriesMarkers(anchors, plan.fills);
-        this.indicatorSeries.push(anchors);
+        plan.fillBounds.forEach((bounds, index) => {
+          const anchors = chart.addSeries(LineSeries, { lineVisible: false, priceLineVisible: false, lastValueVisible: false }, pane);
+          anchors.setData(bounds);
+          if (index === 0) createSeriesMarkers(anchors, plan.fills);
+          this.indicatorSeries.push(anchors);
+        });
       }
     });
     requestAnimationFrame(() => { if (this.chart !== null) this.measure(); });

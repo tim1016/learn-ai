@@ -1275,6 +1275,7 @@ class ChartLiveResponse(BaseModel):
     position: ChartPositionPane | None = None
     premium_panes: list[ChartPremiumPane] = Field(default_factory=list)
     premium_notice: str | None = None
+    backtest_notice: str | None = None
     rule_lines: list[ChartRuleLine] = Field(default_factory=list)
 
 
@@ -1353,6 +1354,7 @@ class ChartHistoryResponse(BaseModel):
     position: ChartPositionPane | None = None
     premium_panes: list[ChartPremiumPane] = Field(default_factory=list)
     premium_notice: str | None = None
+    backtest_notice: str | None = None
     rule_lines: list[ChartRuleLine] = Field(default_factory=list)
 
 # ── Lane attention (one lane's bell items, #2228) ────────────────────────────

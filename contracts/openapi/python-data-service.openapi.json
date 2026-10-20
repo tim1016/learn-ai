@@ -8227,6 +8227,17 @@
             "title": "As Of Ms",
             "type": "integer"
           },
+          "backtest_notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backtest Notice"
+          },
           "bars": {
             "items": {
               "$ref": "#/components/schemas/ChartBar"
@@ -8642,6 +8653,17 @@
             "title": "As Of Ms",
             "type": "integer"
           },
+          "backtest_notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backtest Notice"
+          },
           "bars": {
             "items": {
               "$ref": "#/components/schemas/ChartBar"
@@ -8770,7 +8792,7 @@
         "type": "object"
       },
       "ChartPositionPane": {
-        "description": "The pane under a bot's chart for what it trades, when that is not what it listens to (#2915).\n\n``points`` has one entry per bar of the chart it comes with, in the same\norder, so the pane shares the chart's time axis exactly. ``kind`` says\nwhat a value is: ``price`` is the traded stock's or ETF's own bar close.\n``fill_markers`` are the bot's fills in the traded asset, which the\nchart of the symbol it listens to leaves off. ``heading`` says what the\npane is and leaves the asset to ``symbol``.",
+        "description": "The pane under a bot's chart for what it trades, when that is not what it listens to (#2915).\n\nPrice points follow the underlying bars. Value points follow retained quote\nminutes and can extend into the forming minute before an underlying candle\ncloses. ``price`` is the traded stock's or ETF's own bar close; ``value``\nis the option structure's net close-now cost, positive paid and negative received.\n``fill_markers`` are the bot's fills in the traded asset, which the\nchart of the symbol it listens to leaves off. ``heading`` says what the\npane is and leaves the asset to ``symbol``.",
         "properties": {
           "exit_estimate": {
             "anyOf": [
@@ -8870,6 +8892,18 @@
       },
       "ChartPremiumPane": {
         "properties": {
+          "backtest_only": {
+            "default": false,
+            "title": "Backtest Only",
+            "type": "boolean"
+          },
+          "backtest_points": {
+            "items": {
+              "$ref": "#/components/schemas/PremiumPoint"
+            },
+            "title": "Backtest Points",
+            "type": "array"
+          },
           "contract": {
             "$ref": "#/components/schemas/OptionContract"
           },
@@ -9117,6 +9151,15 @@
           },
           "price": {
             "title": "Price",
+            "type": "string"
+          },
+          "source": {
+            "default": "live",
+            "enum": [
+              "live",
+              "backtest"
+            ],
+            "title": "Source",
             "type": "string"
           },
           "to_ms": {
@@ -48226,6 +48269,15 @@
               "sell"
             ],
             "title": "Side",
+            "type": "string"
+          },
+          "source": {
+            "default": "live",
+            "enum": [
+              "live",
+              "backtest"
+            ],
+            "title": "Source",
             "type": "string"
           },
           "symbol": {

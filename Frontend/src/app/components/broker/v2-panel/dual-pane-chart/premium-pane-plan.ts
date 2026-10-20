@@ -11,7 +11,9 @@ export function ruleLinePlans(rules: readonly ChartRuleLine[], bars: readonly Ch
       && (rule.to_ms == null || bar.start_ms < rule.to_ms));
     const endpoints = covered.length > 1 ? [covered[0], covered[covered.length - 1]] : covered;
     return {
-      color: RULE_COLORS[rule.kind], title: `${rule.leg_id} ${rule.kind.replaceAll('_', ' ')}`,
+      color: rule.source === 'backtest' ? 'rgba(148, 163, 184, 0.55)' : RULE_COLORS[rule.kind],
+      backtest: rule.source === 'backtest',
+      title: `${rule.source === 'backtest' ? 'Backtest · ' : ''}${rule.leg_id} ${rule.kind.replaceAll('_', ' ')}`,
       points: endpoints.map((bar) => ({ time: seconds(bar.start_ms), value: Number(rule.price) })),
     };
   });
@@ -19,19 +21,32 @@ export function ruleLinePlans(rules: readonly ChartRuleLine[], bars: readonly Ch
 
 /** Saved server prices, placed on the underlying's clock without bridging missing minutes. */
 export function premiumPanePlans(panes: readonly ChartPremiumPane[], bars: readonly ChartBar[]) {
-  return panes.map((pane) => ({
-    symbol: pane.symbol,
-    runs: positionRuns(pane, bars),
-    rules: ruleLinePlans(pane.rule_lines, bars),
-    fills: pane.fill_markers.flatMap((fill) => {
+  return panes.map((pane) => {
+    const fills = pane.fill_markers.flatMap((fill) => {
       const bar = bars.find((bar) => bar.start_ms <= fill.filled_at_ms && fill.filled_at_ms < bar.end_ms);
       return bar === undefined ? [] : [{
         time: seconds(bar.start_ms), value: fill.price,
-        position: fill.side === 'buy' ? 'belowBar' as const : 'aboveBar' as const,
+        position: 'atPriceMiddle' as const, price: fill.price,
         shape: fill.side === 'buy' ? 'arrowUp' as const : 'arrowDown' as const,
-        color: fill.side === 'buy' ? '#34d399' : '#fb7185',
-        text: `${fill.symbol} · ${fill.exit_reason ?? fill.side} ${fill.quantity} @ ${fill.price}`,
+        color: fill.source === 'backtest' ? 'rgba(148, 163, 184, 0.55)' : fill.side === 'buy' ? '#34d399' : '#fb7185',
+        text: `${fill.source === 'backtest' ? 'Backtest · ' : ''}${fill.symbol} · ${fill.exit_reason ?? fill.side} ${fill.quantity} @ ${fill.price}`,
       }];
-    }).sort((a, b) => a.time - b.time),
-  }));
+    }).sort((a, b) => a.time - b.time);
+    const ranges = new Map<UTCTimestamp, { time: UTCTimestamp; low: number; high: number }>();
+    for (const fill of fills) {
+      const prior = ranges.get(fill.time);
+      ranges.set(fill.time, { time: fill.time,
+        low: Math.min(prior?.low ?? fill.price, fill.price),
+        high: Math.max(prior?.high ?? fill.price, fill.price),
+      });
+    }
+    return {
+      symbol: pane.symbol, runs: positionRuns(pane, bars),
+      backtestRuns: positionRuns({ points: pane.backtest_points ?? [] }, bars),
+      rules: ruleLinePlans(pane.rule_lines, bars), fills,
+      fillBounds: ['low', 'high'].map(bound => [...ranges.values()].map(point => ({
+        time: point.time, value: bound === 'low' ? point.low : point.high,
+      }))),
+    };
+  });
 }

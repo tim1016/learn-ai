@@ -10525,6 +10525,8 @@ export interface components {
         ChartHistoryResponse: {
             /** As Of Ms */
             as_of_ms: number;
+            /** Backtest Notice */
+            backtest_notice?: string | null;
             /** Bars */
             bars: components["schemas"]["ChartBar"][];
             /** Fill Markers */
@@ -10695,6 +10697,8 @@ export interface components {
         ChartLiveResponse: {
             /** As Of Ms */
             as_of_ms: number;
+            /** Backtest Notice */
+            backtest_notice?: string | null;
             /** Bars */
             bars: components["schemas"]["ChartBar"][];
             feed: components["schemas"]["ChartFeedView"];
@@ -10742,9 +10746,10 @@ export interface components {
          * ChartPositionPane
          * @description The pane under a bot's chart for what it trades, when that is not what it listens to (#2915).
          *
-         *     ``points`` has one entry per bar of the chart it comes with, in the same
-         *     order, so the pane shares the chart's time axis exactly. ``kind`` says
-         *     what a value is: ``price`` is the traded stock's or ETF's own bar close.
+         *     Price points follow the underlying bars. Value points follow retained quote
+         *     minutes and can extend into the forming minute before an underlying candle
+         *     closes. ``price`` is the traded stock's or ETF's own bar close; ``value``
+         *     is the option structure's net close-now cost, positive paid and negative received.
          *     ``fill_markers`` are the bot's fills in the traded asset, which the
          *     chart of the symbol it listens to leaves off. ``heading`` says what the
          *     pane is and leaves the asset to ``symbol``.
@@ -10780,6 +10785,13 @@ export interface components {
         };
         /** ChartPremiumPane */
         ChartPremiumPane: {
+            /**
+             * Backtest Only
+             * @default false
+             */
+            backtest_only?: boolean;
+            /** Backtest Points */
+            backtest_points?: components["schemas"]["PremiumPoint"][];
             contract: components["schemas"]["OptionContract"];
             /** Entry Numbers */
             entry_numbers: number[];
@@ -10895,6 +10907,12 @@ export interface components {
             leg_id: string;
             /** Price */
             price: string;
+            /**
+             * Source
+             * @default live
+             * @enum {string}
+             */
+            source?: "live" | "backtest";
             /** To Ms */
             to_ms?: number | null;
         };
@@ -26134,6 +26152,12 @@ export interface components {
              * @enum {string}
              */
             side: "buy" | "sell";
+            /**
+             * Source
+             * @default live
+             * @enum {string}
+             */
+            source?: "live" | "backtest";
             /** Symbol */
             symbol: string;
         };
