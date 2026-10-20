@@ -11,14 +11,15 @@ quotes (``kept_option_quotes``), and a simulated close is priced from the
 newest of them. The estimate reads the same file the same way
 (``KeptOptionQuotes.newest``), so it prices a close as the simulation would.
 
-**A real account keeps none.** What its quotes are is the live ones in this
-process's own IBKR supervisor, and they exist only while the bot's run asks
-for them. With none the estimate says so and states no price: no figure is
-invented from a mark, a fill or a share of the underlying (ADR 0076).
+**Signal option structures use the current saved minute on every account.**
+Their chart and current figure share the retained bid/ask evidence (#3368).
+Until every held leg has a two-sided quote this minute, the figure is unknown.
+Other option readers retain their existing simulated or live quote policy.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Mapping, Sequence
 
@@ -26,7 +27,12 @@ from app.broker.alpaca.clerk.account_authority import simulated_account_named
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.exit_estimate import ExitEstimate, OwedClose, exit_estimate
 from app.broker.alpaca.clerk.funding import Figure
-from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes, KeptOptionQuotesUnavailable
+from app.broker.alpaca.clerk.kept_option_quotes import (
+    HELD_MARK_MAX_AGE_MS,
+    KeptOptionQuote,
+    KeptOptionQuotes,
+    KeptOptionQuotesUnavailable,
+)
 from app.broker.alpaca.clerk.sqlite.option_entry import held_option_legs
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.scheduled_close import held_contracts
@@ -36,13 +42,14 @@ from app.options.contract import OptionContract
 from app.options.quotes import HeldQuote
 from app.options.requirement import ContractAtMultiplier
 from app.options.resolver import Chain
+from app.schemas.action_plan import parse_bot_action_plan, traded_instrument
 from app.schemas.deployment_budget import ExitEstimateView, ExitLegQuoteView, FigureView
 from app.services.option_preview_views import contract_view
 
 logger = logging.getLogger(__name__)
 
 _LIVE_QUOTES = "Live option quotes from this Clerk's IBKR feed"
-_REAL_KEEPS_NONE = "real accounts keep no option quotes"
+_REAL_KEEPS_NONE = "this estimate reads this Clerk's live IBKR quotes"
 
 
 def exit_estimate_view(estimate: ExitEstimate) -> ExitEstimateView:
@@ -67,14 +74,12 @@ def exit_estimate_view(estimate: ExitEstimate) -> ExitEstimateView:
 
 
 def read_quotes_ahead(repo: ClerkSqliteRepository) -> None:
-    """Read a simulated account's kept quotes before the custody fence is taken, never under it.
+    """Read an account's kept quotes before the custody fence is taken, never under it.
 
     What is kept is then already in memory when the estimate asks for it. A
     file that cannot be read is not an error here: the estimate itself says
     so, as its figures' reason.
     """
-    if simulated_account_named(repo.account_id) is None:
-        return
     read_kept_option_quotes_ahead(KeptOptionQuotes.beside(repo.db_path), account_id=repo.account_id)
 
 
@@ -134,6 +139,14 @@ def estimate_of_legs(
 ) -> ExitEstimate:
     """The estimate for ``legs`` a bot holds, priced from the quotes its account keeps or is shown."""
     symbols = sorted(symbol for (symbol, _), contracts in legs.items() if contracts)
+    if _uses_minute_quotes(repo, strategy_instance_id):
+        kept = KeptOptionQuotes.beside(repo.db_path)
+        try:
+            minute = kept.minutes(from_ms=now_ms // 60_000 * 60_000, to_ms=now_ms + 1)
+        except KeptOptionQuotesUnavailable:
+            minute = []
+        return minute_exit_estimate(legs, minute, now_ms=now_ms,
+                                    owed_closes=owed_closes_for_position(repo, strategy_instance_id, now_ms=now_ms))
     simulated = simulated_account_named(repo.account_id)
     if simulated is None:
         quotes, quotes_from, none_held = _live_quotes(symbols)
@@ -141,8 +154,32 @@ def estimate_of_legs(
         quotes, quotes_from, none_held = _kept_quotes(repo, symbols, simulated=simulated, now_ms=now_ms)
     return exit_estimate(
         legs, quotes, now_ms=now_ms, quotes_from=quotes_from, none_held=none_held,
-        owed_closes=_owed_closes(repo, strategy_instance_id, now_ms=now_ms),
+        owed_closes=owed_closes_for_position(repo, strategy_instance_id, now_ms=now_ms),
     )
+
+
+def minute_exit_estimate(
+    legs: Mapping[ContractAtMultiplier, int], rows: Sequence[KeptOptionQuote], *, now_ms: int,
+    owed_closes: Sequence[OwedClose] | None = (),
+) -> ExitEstimate:
+    """Value the current held legs from one captured current-minute quote cut, without fallback."""
+    minute = now_ms // 60_000 * 60_000
+    quotes = {
+        row.symbol: row.quote.held if row.quote.bid is not None and row.quote.ask is not None
+        and now_ms - row.kept_at_ms <= HELD_MARK_MAX_AGE_MS else None
+        for row in rows if row.minute_ms == minute and row.kept_at_ms <= now_ms
+    }
+    return exit_estimate(legs, quotes, now_ms=now_ms, quotes_from="Saved held-leg minute quotes from IBKR",
+                         none_held="this minute has no usable two-sided quote for this leg", owed_closes=owed_closes)
+
+
+def _uses_minute_quotes(repo: ClerkSqliteRepository, strategy_instance_id: str) -> bool:
+    configuration = repo.bot_config(strategy_instance_id)
+    if configuration is None:
+        return False
+    declared = json.loads(configuration.config_json)
+    plan = declared.get("action_plan")
+    return declared.get("options_bot") is None and plan is not None and traded_instrument(parse_bot_action_plan(plan)).kind == "option"
 
 
 def _kept_quotes(
@@ -188,7 +225,7 @@ def _live_quotes(symbols: Sequence[str]) -> tuple[dict[str, HeldQuote | None], s
     )
 
 
-def _owed_closes(repo: ClerkSqliteRepository, strategy_instance_id: str, *, now_ms: int) -> tuple[OwedClose, ...] | None:
+def owed_closes_for_position(repo: ClerkSqliteRepository, strategy_instance_id: str, *, now_ms: int) -> tuple[OwedClose, ...] | None:
     """The closes the Clerk owes this bot's position, and any a session ended on: its own read of what is held.
 
     ``held_contracts`` is the one read the Clerk's scheduled closes act on.
@@ -211,4 +248,5 @@ def _owed_closes(repo: ClerkSqliteRepository, strategy_instance_id: str, *, now_
     return tuple(closes)
 
 
-__all__ = ["estimate_of_legs", "exit_estimate_view", "read_exit_estimate", "read_exit_estimates", "read_quotes_ahead"]
+__all__ = ["estimate_of_legs", "exit_estimate_view", "minute_exit_estimate", "owed_closes_for_position",
+           "read_exit_estimate", "read_exit_estimates", "read_quotes_ahead"]

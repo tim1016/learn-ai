@@ -63,9 +63,9 @@ import { ChartLanesComponent } from '../strategy-view/chart-lanes.component';
 import type { LogicalCoordinateScale } from '../strategy-view/strategy-chart-overlay';
 import { BotChartIndicatorService } from './bot-chart-indicator.service';
 import { chartIndicatorCatalog } from './chart-indicator-catalog';
-import { positionRuns, type PositionRun } from './dual-pane-chart-position';
+import { positionClock, positionRuns, type PositionRun } from './dual-pane-chart-position';
 import { premiumPanePlans, ruleLinePlans } from './premium-pane-plan';
-import { OptionContractComponent } from '../../../../shared/option-contract/option-contract.component';
+import { OptionContractComponent, optionContractName } from '../../../../shared/option-contract/option-contract.component';
 import { optionContractFromSymbol } from '../../../../shared/option-contract/option-contract-symbol';
 import {
   type SelectedChartIndicator,
@@ -117,9 +117,9 @@ function sameBar(left: ChartBar, right: ChartBar): boolean {
 }
 
 /** Return the exact candle whose half-open interval contains the fill. */
-function markerTime(
+function markerTime<Bar extends Pick<ChartBar, 'start_ms' | 'end_ms'>>(
   marker: ChartFillMarker,
-  bars: readonly ChartBar[],
+  bars: readonly Bar[],
 ): UTCTimestamp | null {
   for (const bar of bars) {
     if (bar.start_ms > marker.filled_at_ms) break;
@@ -138,6 +138,12 @@ interface FillMarkerGroup {
 
 function markerText(group: FillMarkerGroup): string {
   const side = group.side.toUpperCase();
+  if (group.fills.some(fill => fill.symbol && optionContractFromSymbol(fill.symbol))) {
+    return group.fills.map(fill => {
+      const contract = fill.symbol ? optionContractFromSymbol(fill.symbol) : null;
+      return `${side} ${fill.quantity} ${contract ? optionContractName(contract) : fill.symbol ?? ''} @ ${fill.price}`;
+    }).join(' · ');
+  }
   if (group.fills.length !== 1) return `${side} · ${group.fills.length} fills`;
   const [fill] = group.fills;
   return `${side} ${fill.quantity} @ ${fill.price}`;
@@ -150,9 +156,9 @@ function markerText(group: FillMarkerGroup): string {
  * under-reported it — two grouped fills plus one off-window fill rendered as
  * "1 plotted / 3 fills".
  */
-export function countPlottedFills(
+export function countPlottedFills<Bar extends Pick<ChartBar, 'start_ms' | 'end_ms'>>(
   markers: readonly ChartFillMarker[],
-  bars: readonly ChartBar[],
+  bars: readonly Bar[],
 ): number {
   let plotted = 0;
   for (const marker of markers) {
@@ -161,9 +167,9 @@ export function countPlottedFills(
   return plotted;
 }
 
-export function toSeriesMarkers(
+export function toSeriesMarkers<Bar extends Pick<ChartBar, 'start_ms' | 'end_ms'>>(
   markers: readonly ChartFillMarker[],
-  bars: readonly ChartBar[],
+  bars: readonly Bar[],
 ): SeriesMarker<UTCTimestamp>[] {
   const groups = new Map<string, FillMarkerGroup>();
   for (const marker of markers) {
@@ -428,6 +434,7 @@ export class DualPaneChartComponent implements AfterViewInit {
     const position = this.activePosition();
     const onPosition = position === null
       ? 0
+      : position.kind === 'value' ? countPlottedFills(position.fill_markers, positionClock(position, bars))
       : positionRuns(position, bars).reduce((sum, run) => sum + countPlottedFills(position.fill_markers, run.bars), 0);
     return countPlottedFills(this.activeMarkers(), bars) + onPosition;
   });
@@ -853,10 +860,18 @@ export class DualPaneChartComponent implements AfterViewInit {
         priceLineVisible: false,
         lastValueVisible: index === stretches.length - 1,
         crosshairMarkerVisible: false,
+        pointMarkersVisible: position.kind === 'value',
       }, paneIndex);
       line.setData([...run.points]);
-      createSeriesMarkers(line, toSeriesMarkers(position.fill_markers, run.bars));
+      if (position.kind === 'price') createSeriesMarkers(line, toSeriesMarkers(position.fill_markers, run.bars));
       this.indicatorSeries.push(line);
     });
+    if (position.kind === 'value') {
+      const clock = positionClock(position, bars);
+      const anchor = chart.addSeries(LineSeries, { lineVisible: false, crosshairMarkerVisible: false, priceLineVisible: false, lastValueVisible: false }, paneIndex);
+      anchor.setData(clock.map(bar => ({ time: Math.floor(bar.start_ms / 1000) as UTCTimestamp, value: 0 })));
+      createSeriesMarkers(anchor, toSeriesMarkers(position.fill_markers, clock));
+      this.indicatorSeries.push(anchor);
+    }
   }
 }

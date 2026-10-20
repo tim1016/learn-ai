@@ -211,6 +211,7 @@ const LEGACY: DeploymentBudgetView = {
 };
 
 interface CardInputs {
+  exitEstimateOverride?: DeploymentBudgetView['exit_estimate'];
   readonly holdsShares?: boolean;
   /** The panel's authored open gain or loss, as the page shell passes it. */
   readonly openPnl?: BotOpenPnl | null;
@@ -226,12 +227,13 @@ async function renderCard(getBudget: ReturnType<typeof vi.fn>, inputs: CardInput
   const revision = signal(1);
   const result = await render(
     `<main aria-label="Bot"><app-deployment-budget [target]="target" strategyInstanceId="spy-ema-a" [revision]="revision()"
-      [holdsShares]="holdsShares" [openPnl]="openPnl" /></main>`,
+      [holdsShares]="holdsShares" [openPnl]="openPnl" [exitEstimateOverride]="exitEstimateOverride" /></main>`,
     {
       imports: [DeploymentBudgetComponent],
       componentProperties: {
         target: TARGET, revision,
         holdsShares: inputs.holdsShares ?? false, openPnl: inputs.openPnl ?? null,
+        exitEstimateOverride: inputs.exitEstimateOverride,
       },
       providers: [{ provide: BrokerV2PanelService, useValue: { getBudget } }],
     },
@@ -467,6 +469,19 @@ describe("This bot's money", () => {
     expect(card?.textContent).toContain('-$408.00');
     expect(card?.textContent).toContain("Alpaca's own expiry-day cutoff has not been verified.");
     expect(container.querySelector('app-funding-answer + app-exit-estimate')).not.toBeNull();
+  });
+
+  it('uses the chart cut for the current estimate and withholds a separately read budget estimate', async () => {
+    const { container } = await renderCard(vi.fn().mockResolvedValue({ ...RUNNING, exit_estimate: EXIT_ESTIMATE }), { exitEstimateOverride: null });
+    await screen.findByText('Holding its position');
+    expect(container.querySelector('app-exit-estimate')).toBeNull();
+    expect(screen.getByText('The current close-now value is not available yet.')).toBeTruthy();
+  });
+
+  it('renders the chart estimate even before a separate budget read carries one', async () => {
+    const { container } = await renderCard(vi.fn().mockResolvedValue(RUNNING), { exitEstimateOverride: EXIT_ESTIMATE });
+    await screen.findByText('Holding its position');
+    expect(container.querySelector('app-exit-estimate')?.textContent).toContain('-$408.00');
   });
 
   it('shows no exit estimate for a bot that holds no option position', async () => {

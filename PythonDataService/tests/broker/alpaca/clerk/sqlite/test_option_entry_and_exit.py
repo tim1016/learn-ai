@@ -18,6 +18,7 @@ from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -49,8 +50,12 @@ from app.schemas.deployment_budget import DeployBudgetConsent
 from app.services import market_liveness
 from app.services.bot_binding_authority import SyntheticBindingAuthority
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
+from app.services.broker_v2_panel import option_position_value
+from app.services.broker_v2_panel.chart_projection_service import build_live_chart
+from app.services.broker_v2_panel.exit_estimate_read import read_exit_estimate
 from app.services.broker_v2_panel.option_structure_view import with_held_structure
 from app.services.broker_v2_panel.sqlite_roster_status import build_roster_status
+from app.services.live_chart_window import CHART_FEED_NOT_EXPECTED, ChartWindowResult
 from app.services.source_bar_ledger import RetainedSourceBar
 from tests._helpers.market_quotes import publish_quotes
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock
@@ -290,6 +295,34 @@ async def test_the_panel_names_actual_held_contracts_and_their_recorded_entry_te
         LEG, SYMBOL, CALL, "long", 1, 100, 2,
     )
     assert held.traded.legs_notice is None
+
+
+async def test_saved_value_and_current_card_share_the_minute_and_never_fall_back_to_an_older_one(
+    dry_run: _DryRun, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await dry_run.enter(dry_run.evidence(), units=2)
+    now = dry_run.clock()
+    start = now // 60_000 * 60_000
+    kept = KeptOptionQuotes.beside(dry_run.repo.db_path)
+    kept.keep_minutes({SYMBOL: _quote("2.00", "2.10", received_ms=now - 100)}, observed_at_ms=now)
+    chart = build_live_chart(ChartWindowResult(bars=[], timeframe="1m", resolution="1m", feed=CHART_FEED_NOT_EXPECTED), (),
+                             strategy_instance_id=SID, symbol="SPY", window=(start, start + 60_000), now_ms=now)
+    registry = SimpleNamespace(binding_for_control=lambda *_args: dry_run.binding)
+    monkeypatch.setattr(option_position_value, "get_bot_task_registry", lambda: registry)
+    answer = await option_position_value.with_option_position(chart, "alpaca", SID, symbol="SPY", through_ms=now,
+        expected_revision=dry_run.repo.control_meta_snapshot().control_revision)
+    estimate = read_exit_estimate(dry_run.repo, SID, now_ms=now)
+    assert answer.position is not None and answer.position.points[0].value == "-400.00"
+    assert chart.bars == [], "the current value exists before the underlying minute candle closes"
+    assert answer.position.exit_estimate is not None and answer.position.exit_estimate.net_close.amount_usd == "-400.00"
+    assert estimate is not None and estimate.net_close.amount_cents == -40000
+    # No observation of the next minute: even though entry/old minute quotes remain readable,
+    # the current value is explicitly unknown until this minute is observed.
+    later = start + 65_000
+    estimate = read_exit_estimate(dry_run.repo, SID, now_ms=later)
+    assert estimate is not None and estimate.net_close.state == "unknown"
+    assert estimate.net_close.amount_cents is None
+    assert "this minute" in estimate.net_close.source
 
 
 async def test_the_entry_keeps_the_contract_the_quote_and_the_money_it_was_admitted_on(dry_run: _DryRun) -> None:

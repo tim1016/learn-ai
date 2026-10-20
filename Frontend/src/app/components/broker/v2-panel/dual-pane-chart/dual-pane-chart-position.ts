@@ -18,7 +18,7 @@ export interface PositionRun {
  * bar is a gap. `bars` are the chart's bars, which the pane's points follow
  * one for one.
  */
-export function positionRuns(pane: Pick<ChartPositionPane, 'points'>, bars: readonly ChartBar[]): readonly PositionRun[] {
+export function positionRuns(pane: Pick<ChartPositionPane, 'points'> & Partial<Pick<ChartPositionPane, 'kind'>>, bars: readonly ChartBar[]): readonly PositionRun[] {
   const barAt = new Map(bars.map((bar) => [bar.start_ms, bar]));
   const runs: PositionRun[] = [];
   let points: { time: UTCTimestamp; value: number }[] = [];
@@ -30,13 +30,22 @@ export function positionRuns(pane: Pick<ChartPositionPane, 'points'>, bars: read
   };
   for (const point of pane.points) {
     const bar = barAt.get(point.start_ms);
-    if (point.value == null || bar === undefined) {
+    if (point.value == null || (bar === undefined && pane.kind !== 'value')) {
       close();
       continue;
     }
     points.push({ time: Math.floor(point.start_ms / 1000) as UTCTimestamp, value: Number(point.value) });
-    covered.push(bar);
+    if (bar !== undefined) covered.push(bar);
   }
   close();
   return runs;
+}
+
+/** A forming value minute extends the shared time axis without inventing an underlying candle. */
+export function positionClock(pane: ChartPositionPane, bars: readonly ChartBar[]): readonly Pick<ChartBar, 'start_ms' | 'end_ms'>[] {
+  const starts = new Set(bars.map(bar => bar.start_ms));
+  const last = bars.at(-1);
+  const interval = last ? last.end_ms - last.start_ms : 60_000;
+  return [...bars, ...pane.points.filter(point => !starts.has(point.start_ms)).map(point => ({ start_ms: point.start_ms, end_ms: point.start_ms + interval }))]
+    .sort((a, b) => a.start_ms - b.start_ms);
 }

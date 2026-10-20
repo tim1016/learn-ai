@@ -38,6 +38,23 @@ def _store(tmp_path: Path) -> KeptOptionQuotes:
     return KeptOptionQuotes.of_account(artifacts_root=tmp_path, account_id="sim:buys-a-call")
 
 
+def test_minute_observations_survive_compaction_and_never_price_an_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(kept_option_quotes, "COMPACT_ABOVE_ROWS", 2)
+    store = _store(tmp_path)
+    for minute in range(5):
+        at = 1_000 + minute * 60_000
+        first = _quote("2", "2.10", bid_at=at, ask_at=at)
+        store.keep_minutes({SYMBOL: first}, observed_at_ms=at)
+        store.keep_minutes({SYMBOL: _quote("9", "10", bid_at=at + 1, ask_at=at + 1)}, observed_at_ms=at + 1)
+        store.keep(SYMBOL, _quote("3", "3.10", bid_at=at + 2, ask_at=at + 2), kept_at_ms=at + 2)
+    rows = store.minutes(from_ms=0, to_ms=400_000)
+    assert len(rows) == 5 and all(row.quote.bid == Decimal(2) for row in rows)
+    assert [row.minute_ms for row in rows] == [0, 60_000, 120_000, 180_000, 240_000]
+    assert store.newest(SYMBOL).quote.bid == Decimal(3)
+    reopened = _store(tmp_path)
+    assert reopened.minutes(from_ms=0, to_ms=400_000) == rows
+
+
 def test_the_newest_kept_is_the_one_received_last_not_the_one_written_last(tmp_path: Path) -> None:
     store = _store(tmp_path)
     store.keep(SYMBOL, _quote("2.00", "2.04", bid_at=9_000, ask_at=9_000), kept_at_ms=10_000)

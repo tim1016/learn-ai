@@ -35,14 +35,15 @@ Nothing here judges a quote. Whether one is usable for a decision is
 held contract's mark is ``held_option_quotes.mark_fault``'s, and how a fill
 is priced from one is ``app.options.simulated_fill``'s.
 
-**What is kept is bounded.** A hand-over every few seconds would otherwise
+**Pricing statements are compacted; minute observations are retained.** A hand-over every few seconds would otherwise
 grow the file without end, and every reader would pay for all of it. So the
 file is cut back as it grows to the rows a later reader can still be
 answered from (``rows_still_answerable``), and what it holds is also held in
 memory, read again only when the file has changed. A reader asks about now
 or later, or about a session's close: the mark a contract held overnight
-starts the next day from. Those answers survive every cut. An answer about
-some other past instant does not, and nothing asks for one.
+starts the next day from. Those answers survive every cut. Separately tagged minute observations
+retain the first quote per contract and minute for historical position valuation
+(#3368); they never price orders or replace a held mark.
 
 A fill or a baseline that used a kept quote records the quote itself, or its
 figure. The reference it carries (``KeptOptionQuote.ref``) says where the
@@ -105,6 +106,8 @@ class KeptOptionQuote(BaseModel):
     symbol: str = Field(min_length=1)
     quote: RecordedQuote
     kept_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    # A held-book observation, separate from the quotes that price simulated orders (#3368).
+    minute_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
 
     @property
     def received_ms(self) -> int:
@@ -183,9 +186,12 @@ def rows_still_answerable(rows: Sequence[KeptOptionQuote], *, as_of_ms: int) -> 
         return []
     closes = _session_closes(min(as_of_ms, *(row.kept_at_ms for row in rows)), as_of_ms)
     kept = {rows[-1].seq}
+    kept.update(row.seq for row in rows if row.minute_ms is not None)
     newest: dict[str, KeptOptionQuote] = {}
     stated: dict[tuple[str, _Side, int], KeptOptionQuote] = {}
     for row in rows:
+        if row.minute_ms is not None:
+            continue
         received_ms = row.received_ms
         if received_ms > as_of_ms:
             kept.add(row.seq)
@@ -338,6 +344,20 @@ class KeptOptionQuotes:
         """
         self._append([(symbol, quote, kept_at_ms) for symbol, quote in quotes.items()], now_ms=kept_at_ms)
 
+    def keep_minutes(self, quotes: Mapping[str, HeldQuote], *, observed_at_ms: int) -> None:
+        """Keep the first held-book observation per contract and UTC minute. Later observations never replace it."""
+        self._append(
+            [(symbol, quote, observed_at_ms) for symbol, quote in quotes.items()],
+            now_ms=observed_at_ms, minute_ms=observed_at_ms // SOURCE_BAR_MS * SOURCE_BAR_MS,
+        )
+
+    def minutes(self, *, from_ms: int, to_ms: int) -> list[KeptOptionQuote]:
+        """The retained minute observations, including one-sided quotes, in observation order."""
+        with _KEEP_LOCK:
+            return [row for row in self._held().all_rows()
+                    if row.minute_ms is not None and from_ms <= row.minute_ms < to_ms
+                    and row.kept_at_ms < to_ms]
+
     def restore(self, symbol: str, quote: HeldQuote, *, now_ms: int | None = None) -> None:
         """Put back a quote the caller holds, if it is not kept: as of its own receipt, never as of now.
 
@@ -352,7 +372,9 @@ class KeptOptionQuotes:
         if times:
             self._append([(symbol, quote, max(times))], now_ms=now_ms)
 
-    def _append(self, statements: Sequence[tuple[str, HeldQuote, int]], *, now_ms: int | None) -> None:
+    def _append(
+        self, statements: Sequence[tuple[str, HeldQuote, int]], *, now_ms: int | None, minute_ms: int | None = None,
+    ) -> None:
         said = [(symbol, RecordedQuote.of(quote), kept_at_ms) for symbol, quote, kept_at_ms in statements if receipt_times(quote)]
         if not said:
             return
@@ -362,12 +384,15 @@ class KeptOptionQuotes:
             rows: list[KeptOptionQuote] = []
             for symbol, recorded, kept_at_ms in said:
                 already = any(
-                    row.quote == recorded and row.kept_at_ms == kept_at_ms
+                    row.minute_ms == minute_ms and (
+                        minute_ms is not None or (row.quote == recorded and row.kept_at_ms == kept_at_ms)
+                    )
                     for row in (*held.by_symbol.get(symbol, ()), *(new for new in rows if new.symbol == symbol))
                 )
                 if not already:
                     rows.append(
-                        KeptOptionQuote(seq=held.last_seq + len(rows) + 1, symbol=symbol, quote=recorded, kept_at_ms=kept_at_ms)
+                        KeptOptionQuote(seq=held.last_seq + len(rows) + 1, symbol=symbol, quote=recorded,
+                                        kept_at_ms=kept_at_ms, minute_ms=minute_ms)
                     )
             if not rows:
                 return
@@ -390,7 +415,7 @@ class KeptOptionQuotes:
 
     def _kept_for(self, symbol: str) -> list[KeptOptionQuote]:
         with _KEEP_LOCK:
-            return list(self._held().by_symbol.get(symbol, ()))
+            return [row for row in self._held().by_symbol.get(symbol, ()) if row.minute_ms is None]
 
     def newest(self, symbol: str, *, at_or_before_ms: int | None = None) -> KeptOptionQuote | None:
         """The quote kept for ``symbol`` whose sides were received last, whatever sides it has.

@@ -8753,8 +8753,12 @@
             "type": "string"
           },
           "source": {
-            "const": "polygon",
-            "title": "Source"
+            "enum": [
+              "polygon",
+              "ibkr"
+            ],
+            "title": "Source",
+            "type": "string"
           }
         },
         "required": [
@@ -8768,6 +8772,16 @@
       "ChartPositionPane": {
         "description": "The pane under a bot's chart for what it trades, when that is not what it listens to (#2915).\n\n``points`` has one entry per bar of the chart it comes with, in the same\norder, so the pane shares the chart's time axis exactly. ``kind`` says\nwhat a value is: ``price`` is the traded stock's or ETF's own bar close.\n``fill_markers`` are the bot's fills in the traded asset, which the\nchart of the symbol it listens to leaves off. ``heading`` says what the\npane is and leaves the asset to ``symbol``.",
         "properties": {
+          "exit_estimate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExitEstimateView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "feed": {
             "anyOf": [
               {
@@ -8790,8 +8804,12 @@
             "type": "string"
           },
           "kind": {
-            "const": "price",
-            "title": "Kind"
+            "enum": [
+              "price",
+              "value"
+            ],
+            "title": "Kind",
+            "type": "string"
           },
           "overlay_notices": {
             "items": {

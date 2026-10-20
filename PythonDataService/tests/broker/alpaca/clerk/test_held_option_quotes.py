@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import json
 import logging
 import threading
 import time
@@ -103,8 +104,8 @@ class _Account:
         return None if stated is None else (stated.quote.bid, stated.quote.ask, stated.kept_at_ms)
 
     def rows(self) -> int:
-        """How many quotes the account's file holds."""
-        return len(self.kept.path.read_text().splitlines()) if self.kept.path.exists() else 0
+        """How many pricing statements the account holds; chart observations are a separate fact."""
+        return sum(json.loads(line).get("minute_ms") is None for line in self.kept.path.read_text().splitlines()) if self.kept.path.exists() else 0
 
 
 def _quote(bid: str | None, ask: str | None, received_ms: int, **changes: object) -> HeldQuote:
@@ -128,6 +129,26 @@ def held(clock: _Clock) -> HeldOptionQuotes:
 
 
 # ---- What is handed over, and when ------------------------------------------------
+
+
+@pytest.mark.parametrize("account_id", ["sim:minute-bot", "paper-account", "live-account"])
+async def test_every_account_keeps_one_held_leg_observation_per_minute(
+    held: HeldOptionQuotes, clock: _Clock, tmp_path: Path, account_id: str,
+) -> None:
+    account, ibkr = _Account(held, tmp_path, account_id), _Supervisor()
+    account.holds = [CALL.occ_symbol]
+    await held.read_books()
+    ibkr.quotes[CALL.occ_symbol] = _quote("4.08", "4.12", NOW - 100)
+    await held.keep(ibkr)
+    clock.value += 1_000
+    ibkr.quotes[CALL.occ_symbol] = _quote("5", "5.10", clock.value - 100)
+    await held.keep(ibkr)
+    clock.value += MINUTE
+    ibkr.quotes[CALL.occ_symbol] = _quote("6", None, clock.value - 100)
+    await held.keep(ibkr)
+    rows = account.kept.minutes(from_ms=NOW - MINUTE, to_ms=clock.value + 1)
+    assert [row.quote.bid for row in rows] == [Decimal("4.08"), Decimal(6)]
+    assert rows[-1].quote.ask is None
 
 
 async def test_the_newest_quote_of_a_held_contract_is_kept_and_again_fifteen_seconds_on(

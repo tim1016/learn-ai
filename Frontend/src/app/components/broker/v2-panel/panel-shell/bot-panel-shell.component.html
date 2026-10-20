@@ -155,6 +155,7 @@
                 [revision]="panelData.revision"
                 [holdsShares]="holdsShares()"
                 [openPnl]="panelData"
+                [exitEstimateOverride]="panelData.bot_kind !== 'options' && panelData.traded?.kind === 'option' ? liveChart()?.position?.exit_estimate ?? null : undefined"
               />
             </div>
 

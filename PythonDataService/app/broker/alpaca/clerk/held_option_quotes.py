@@ -1,4 +1,4 @@
-"""The quotes a Dry Run's Clerk keeps for the option contracts its bots hold, runner or no runner (ADR 0076).
+"""The IBKR quotes each Clerk keeps for the option contracts its bots hold, runner or no runner (ADR 0076).
 
 A Live Shadow's Clerk keeps them the same way, for the same reason: its
 order book fills and its account reading marks from quotes kept, and it
@@ -16,8 +16,9 @@ own is made here: no runner states a mark between its two decisions.
 
 **What is held is read from the Clerk's books**, never from a runner: a
 position in a recorded contract, or an order working in one
-(``reads.option_contracts_requiring_quotes``). Each Dry Run's Clerk and each Live
-Shadow's is followed while it is composed.
+(``reads.option_contracts_requiring_quotes``). Every Paper, Live, Dry Run and Live Shadow Clerk is followed while composed.
+Each keeps a separate first observation per contract and minute for the value
+chart (#3368), including usable one-sided evidence that leaves a chart gap.
 
 **What is held is asked for** as the supervisor's first class of quote line
 (``requests``), so a held contract keeps its line when the runner that bought
@@ -253,6 +254,7 @@ class _Writes:
     marks: dict[str, HeldQuote] = field(default_factory=dict)
     # What a line shows with one side still to arrive: put back as of its own receipt, and no mark.
     one_sided: dict[str, HeldQuote] = field(default_factory=dict)
+    minute_quotes: dict[str, HeldQuote] = field(default_factory=dict)
 
 
 class FollowedBooks:
@@ -277,7 +279,7 @@ def _under_way(task: asyncio.Task[Any] | None) -> bool:
 
 
 class HeldOptionQuotes:
-    """Every option contract this process's Dry Run Clerks hold: asked for, and its quotes kept."""
+    """Every option contract this process's Clerks hold: asked for, and its quotes kept."""
 
     def __init__(
         self,
@@ -580,6 +582,13 @@ class HeldOptionQuotes:
                 symbol = contract.occ_symbol
                 watched = None if chain is None else chain.watched.get(symbol)
                 quote = None if watched is None else watched.quote
+                fault = None if quote is None else mark_fault(
+                    quote, generation=feed.generation, session_open_ms=session_open_ms, now_ms=now_ms
+                )
+                if quote is not None and (fault is None or shows_one_side(
+                    quote, generation=feed.generation, session_open_ms=session_open_ms, now_ms=now_ms,
+                )):
+                    due.setdefault(account.account_id, _Writes(account)).minute_quotes[symbol] = quote
                 if (
                     quote is not None
                     and shows_one_side(quote, generation=feed.generation, session_open_ms=session_open_ms, now_ms=now_ms)
@@ -590,9 +599,6 @@ class HeldOptionQuotes:
                 last = account.kept_at_ms.get(symbol)
                 if last is not None and now_ms - last < self._keep_every_ms:
                     continue
-                fault = None if quote is None else mark_fault(
-                    quote, generation=feed.generation, session_open_ms=session_open_ms, now_ms=now_ms
-                )
                 if quote is not None and fault is None:
                     due.setdefault(account.account_id, _Writes(account)).marks[symbol] = quote
                 else:
@@ -623,6 +629,7 @@ class HeldOptionQuotes:
         key = ("write", account.account_id)
 
         def write() -> None:
+            account.kept.keep_minutes(wanted.minute_quotes, observed_at_ms=now_ms)
             if marks:
                 account.kept.keep_all(marks, kept_at_ms=now_ms)
             for symbol, quote in one_sided.items():
@@ -694,7 +701,7 @@ _held = HeldOptionQuotes()
 
 
 def get_held_option_quotes() -> HeldOptionQuotes:
-    """What this process's Dry Run Clerks hold in option contracts. The process's IBKR supervisor reads it."""
+    """What this process's Clerks hold in option contracts. The process's IBKR supervisor reads it."""
     return _held
 
 

@@ -48,6 +48,7 @@ from app.schemas.alpaca_clerk_sqlite import (
 from app.schemas.bot_end import BotEndView
 from app.schemas.bot_history import BotHistoryStatus
 from app.schemas.bot_page import BotPageView
+from app.schemas.deployment_budget import ExitEstimateView
 from app.schemas.exit_terms import ExitTerms
 from app.schemas.operator_blocker import OperatorBlocker, OperatorConfirmationCopy
 from app.schemas.option_chart import ChartPremiumPane, ChartRuleLine
@@ -1179,7 +1180,7 @@ class ChartOverlayNoticeView(BaseModel):
 
     code: str
     message: str
-    source: Literal["polygon"]
+    source: Literal["polygon", "ibkr"]
 
 
 class ChartFeedView(BaseModel):
@@ -1223,9 +1224,10 @@ class ChartPositionPoint(BaseModel):
 class ChartPositionPane(BaseModel):
     """The pane under a bot's chart for what it trades, when that is not what it listens to (#2915).
 
-    ``points`` has one entry per bar of the chart it comes with, in the same
-    order, so the pane shares the chart's time axis exactly. ``kind`` says
-    what a value is: ``price`` is the traded stock's or ETF's own bar close.
+    Price points follow the underlying bars. Value points follow retained quote
+    minutes and can extend into the forming minute before an underlying candle
+    closes. ``price`` is the traded stock's or ETF's own bar close; ``value``
+    is the option structure's net close-now cost, positive paid and negative received.
     ``fill_markers`` are the bot's fills in the traded asset, which the
     chart of the symbol it listens to leaves off. ``heading`` says what the
     pane is and leaves the asset to ``symbol``.
@@ -1233,11 +1235,13 @@ class ChartPositionPane(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    kind: Literal["price"]
+    kind: Literal["price", "value"]
     symbol: str
     heading: str
     points: list[ChartPositionPoint]
     fill_markers: list[ChartFillMarker]
+    # The current value card and live point share this exact immutable quote/inventory cut.
+    exit_estimate: ExitEstimateView | None = None
     # Why the traded asset's bars could not be read, when they could not: the
     # pane then has no line, and says so rather than looking like a quiet day.
     overlay_notices: list[ChartOverlayNoticeView] = Field(default_factory=list)

@@ -10734,9 +10734,9 @@ export interface components {
             message: string;
             /**
              * Source
-             * @constant
+             * @enum {string}
              */
-            source: "polygon";
+            source: "polygon" | "ibkr";
         };
         /**
          * ChartPositionPane
@@ -10750,6 +10750,7 @@ export interface components {
          *     pane is and leaves the asset to ``symbol``.
          */
         ChartPositionPane: {
+            exit_estimate?: components["schemas"]["ExitEstimateView"] | null;
             feed?: components["schemas"]["ChartFeedView"] | null;
             /** Fill Markers */
             fill_markers: components["schemas"]["ChartFillMarker"][];
@@ -10757,9 +10758,9 @@ export interface components {
             heading: string;
             /**
              * Kind
-             * @constant
+             * @enum {string}
              */
-            kind: "price";
+            kind: "price" | "value";
             /** Overlay Notices */
             overlay_notices?: components["schemas"]["ChartOverlayNoticeView"][];
             /** Points */

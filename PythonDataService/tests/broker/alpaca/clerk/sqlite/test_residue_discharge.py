@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
+from app.broker.alpaca.clerk.sqlite.economic_projection import SqliteEconomicProjectionReader
 from app.broker.alpaca.clerk.sqlite.facts import AttributedResidueDischargedFacts
 from app.broker.alpaca.clerk.sqlite.folds import DEFAULT_FOLD_REGISTRY
 from app.broker.alpaca.clerk.sqlite.lane_quiet import observe_account_quiet
@@ -100,6 +101,23 @@ def _discharges(repo: ClerkSqliteRepository) -> list[dict]:
         for transition in repo.custody_transitions()
         if transition["transition_kind"] == ATTRIBUTED_RESIDUE_DISCHARGED
     ]
+
+
+async def test_option_value_history_keeps_discharge_events_with_its_complete_fill_cut(clocked_repo) -> None:  # noqa: F811
+    repo, _clock = clocked_repo
+    await _stranded(repo)
+    await _discharge(repo, _FakeRead(positions=[]))
+    reader = SqliteEconomicProjectionReader.from_repository(repo)
+    try:
+        history = reader.bot_option_value_history(WATCHDOG_SID)
+        assert history is not None
+        assert history.control_revision == repo.control_meta_snapshot().control_revision
+        assert len(history.fills) == 1
+        assert len(history.write_offs) == 1
+        assert history.write_offs[0].symbol == "SPY"
+        assert history.write_offs[0].exact_qty == 10
+    finally:
+        reader.close()
 
 
 async def test_flat_broker_discharges_the_residue_and_resolves_the_exit_fences(clocked_repo) -> None:  # noqa: F811

@@ -427,6 +427,17 @@ describe('DualPaneChartComponent', () => {
     const renderTrading = (livePosition: ChartPositionPane) =>
       render(DualPaneChartComponent, { inputs: { symbol: 'SPY', liveBars: bars, histBars: [], livePosition } });
 
+    it('draws signed close-now values with contract-named fills even in a quote gap', async () => {
+      const { container } = await renderTrading(pane({
+        kind: 'value', symbol: 'SPY', heading: 'Close-now position value',
+        points: bars.map((bar, index) => ({ start_ms: bar.start_ms, value: index === 1 ? null : '-400.00' })),
+        fill_markers: [{ ...fillAt(bars[1].start_ms + 1, 'option-fill'), symbol: 'SPY261023C00585000', price: 2 }],
+      }));
+      expect(container.querySelector('.chart-position-caption')?.textContent).toContain('Close-now position value');
+      expect(container.querySelector('.tape-readout')?.textContent).toContain('1 fill');
+      expect(paneLines()).toHaveLength(3); // Two value stretches and a fill anchor across the missing minute.
+    });
+
     it('draws the traded asset under the candles, a bar with no price as a gap, and says what it is', async () => {
       const { container } = await renderTrading(pane());
 

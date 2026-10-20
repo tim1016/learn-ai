@@ -33,6 +33,7 @@ from app.services.broker_v2_panel.chart_projection_service import (
     run_chart_window,
 )
 from app.services.broker_v2_panel.history_batch_client import build_history_batch_provider
+from app.services.broker_v2_panel.option_position_value import with_option_position
 from app.services.broker_v2_panel.panel_data_source import get_panel_with_chart_fills
 from app.services.broker_v2_panel.panel_errors import (
     BotRunnerUnavailableError,
@@ -114,8 +115,8 @@ async def _build_live_chart_from_fills(
 def _position_pane_symbol(traded: TradedInstrumentView | None) -> str | None:
     """The asset a bot's position pane draws, or ``None`` when its chart has no such pane (#2915).
 
-    A pane of bar closes is a stock's or an ETF's. An option structure's pane
-    is a mark from its legs' quotes, which this cannot draw.
+    A pane of bar closes is a stock's or an ETF's. Option value panes use
+    the separate retained-quote projection.
     """
     return traded.symbol if traded is not None and traded.kind == "stock" else None
 
@@ -190,6 +191,8 @@ async def get_live_snapshot_parts(
         chart = chart.model_copy(update={"position": position_pane(chart, traded_chart)})
     if panel.options_bot is not None:
         chart = with_options_panes(chart, broker, sid, fills)
+    elif panel.traded is not None and panel.traded.kind == "option":
+        chart = await with_option_position(chart, broker, sid, symbol=panel.traded.symbol, through_ms=observed_at_ms, expected_revision=panel.revision)
     return panel, chart
 
 
@@ -284,7 +287,11 @@ async def get_history_chart(
 
     async def chart_of(symbol: str) -> ChartHistoryResponse:
         chart, chart_fills = await raw_chart_of(symbol)
-        return with_options_panes(chart, broker, sid, chart_fills) if status.options_bot is not None else chart
+        if status.options_bot is not None:
+            return with_options_panes(chart, broker, sid, chart_fills)
+        if status.traded is not None and status.traded.kind == "option":
+            return await with_option_position(chart, broker, sid, symbol=status.traded.symbol, through_ms=observed_at_ms, expected_revision=evidence.fills.control_revision)
+        return chart
 
     async def raw_chart_of(symbol: str) -> tuple[ChartHistoryResponse, Sequence[FillRecord]]:
         if window is not None:

@@ -1058,7 +1058,7 @@ async def _history_chart_of(
         return account_id
 
     async def chart_evidence(*_args: object, **_kwargs: object) -> SimpleNamespace:
-        return SimpleNamespace(status=status, fills=SimpleNamespace(fills=fills))
+        return SimpleNamespace(status=status, fills=SimpleNamespace(fills=fills, control_revision=0))
 
     async def batch_provider(query: HistoryBatchQuery) -> HistoryBatchResponse:
         asked_for.append(query.symbol)
@@ -1130,7 +1130,7 @@ async def test_a_bot_that_trades_what_it_listens_to_has_no_position_pane(monkeyp
     assert asked_for == ["SPY"]
 
 
-async def test_an_option_bot_has_no_price_pane(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_an_option_structure_has_a_value_pane_and_never_uses_underlying_share_prices(monkeypatch: pytest.MonkeyPatch) -> None:
     """A pane of bar closes is a stock's; an option structure's mark is not drawn from its underlying's shares."""
     chart, asked_for = await _history_chart_of(
         monkeypatch,
@@ -1138,7 +1138,9 @@ async def test_an_option_bot_has_no_price_pane(monkeypatch: pytest.MonkeyPatch) 
         {"SPY": [_minute_bar(_NOW - 60_000, "450.00")]},
     )
 
-    assert chart.position is None
+    assert chart.position is not None and chart.position.kind == "value"
+    assert all(point.value is None for point in chart.position.points)
+    assert chart.position.overlay_notices
     assert asked_for == ["SPY"]
 
 
