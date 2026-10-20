@@ -20,9 +20,9 @@ never a guessed deployment debit. Simulations never consume broker activities.
 
 A fill of an option contract is one more fee-bearing fill of its day (ADR
 0076). The option fee model prices it and the stock model never does. Until
-a fee row covers it, it is charged the option model's own figure: each of
-the five fee types summed over the day's option fills, rounded up to the
-cent, and shared among the bots by this file's one rule. On a simulated
+a fee row covers it, it is charged the option model's own figure: SEC, TAF,
+CAT and ORF each summed over the day's option fills and rounded up to the
+cent, OCC rounded up on each fill, and shared among the bots by this file's one rule. On a simulated
 account that is the whole of it. On a real account it is an estimate until
 a fee row of its day is seen.
 
@@ -235,7 +235,8 @@ def attribute_simulated_option_fees(
     """One day's option fills of a simulated account, charged by the option fee model.
 
     Formula: for each fee type, the day's charge is the sum of the fills'
-      accruals rounded up to the cent (``settle_option_session``); it is
+      accruals rounded up to the cent, OCC's rounded up fill by fill
+      (``settle_option_session``); it is
       shared among the custody subjects in proportion to their own accruals
       of that type (``apportion_cents``).
     Reference: ADR 0076; the rates and the settlement rule are
@@ -332,7 +333,8 @@ class _ModelledFills:
     """One day's fills of one kind, each priced by that kind's own fee model.
 
     ``charge`` is what the model charges the day for them, each fee type
-    rounded up to the cent once; ``None`` when a rate is not pinned.
+    rounded up to the cent once (an option fill's OCC, on each fill);
+    ``None`` when a rate is not pinned.
     """
 
     fills: Sequence[FeeFill]

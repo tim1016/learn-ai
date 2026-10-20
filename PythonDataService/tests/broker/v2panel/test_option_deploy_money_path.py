@@ -711,8 +711,8 @@ def test_a_negative_buying_power_is_written_with_its_sign_before_the_dollar() ->
 
 
 async def test_the_rows_of_a_spread_that_pays_add_up_with_a_premium_received(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Three bear call spreads, five dollars wide: $921.00 received, $1,500.00 required, 29 cents of fees. What
-    is set aside is the requirement less the premium, with the fees: $579.29."""
+    """Three bear call spreads, five dollars wide: $921.00 received, $1,500.00 required, 30 cents of fees. What
+    is set aside is the requirement less the premium, with the fees: $579.30."""
     desk = Desk(monkeypatch)
     received = _asking(
         _leg("short_call", "short", "call", _AT_THE_MONEY),
@@ -733,21 +733,21 @@ async def test_the_rows_of_a_spread_that_pays_add_up_with_a_premium_received(mon
 
     rows = {row.key: row for row in review.money_rows}
     assert [(row.key, row.amount_cents, row.amount_usd) for row in review.money_rows if row.part_of_set_aside] == [
-        ("premium", -92_100, "$921.00"), ("broker_requirement", 150_000, "$1,500.00"), ("fees", 29, "$0.29"),
+        ("premium", -92_100, "$921.00"), ("broker_requirement", 150_000, "$1,500.00"), ("fees", 30, "$0.30"),
     ]
     assert rows["premium"].note == "received", "the dollars carry no sign: the note says which way"
-    assert (rows["set_aside"].amount_cents, rows["set_aside"].amount_usd) == (57_929, "$579.29")
-    assert sum(row.amount_cents or 0 for row in review.money_rows if row.part_of_set_aside) == 57_929
+    assert (rows["set_aside"].amount_cents, rows["set_aside"].amount_usd) == (57_930, "$579.30")
+    assert sum(row.amount_cents or 0 for row in review.money_rows if row.part_of_set_aside) == 57_930
     assert [(pick.number, pick.side_label, pick.ratio) for pick in review.picks] == [(1, "Sell", 1), (2, "Buy", 1)]
     assert review.end_sentence is not None and "10 minutes" in review.end_sentence
-    assert option_deploy.price_of(seen).commitment_cents == 57_929
+    assert option_deploy.price_of(seen).commitment_cents == 57_930
 
 
 async def test_the_requirement_a_structure_adds_equals_its_own_on_a_flat_account_and_is_smaller_beside_an_offset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Three bear call spreads need $1,500.00 alone. On a flat account they add that. Beside the opposite
-    three-lot spread they net to nothing, so they add $0.00, and the bot still sets aside the $579.29.
+    three-lot spread they net to nothing, so they add $0.00, and the bot still sets aside the $579.30.
 
     The account's holdings and the picked contracts are added count by count: the offsetting lot nets to zero
     on each contract, where laying the picks over the holdings would have left $1,500.00 again."""
@@ -769,7 +769,7 @@ async def test_the_requirement_a_structure_adds_equals_its_own_on_a_flat_account
     entry = option_deploy.price_of(seen)
     short_585, long_590 = (leg.contract.occ_symbol for leg in seen.legs)
     answer = deploy_funding_answer(
-        None, amount_cents=100_000, need=EntryNeed.for_options(commitment_cents=57_929, fee_provision_cents=29),
+        None, amount_cents=100_000, need=EntryNeed.for_options(commitment_cents=57_930, fee_provision_cents=30),
         broker_buying_power=None, observed_at_ms=NOON, now_ms=NOON, simulated=True,
     )
     review = option_deploy.review_of(request, plan_of(request.options), seen, blockers=[], notes=[])
@@ -783,7 +783,7 @@ async def test_the_requirement_a_structure_adds_equals_its_own_on_a_flat_account
     assert offset.change.amount_cents == 0 and offset.change.amount_cents < entry.requirement_cents
     assert offset.netting is not None and "does not spend the $1,500.00 that netting saves" in offset.netting
     assert (said["incremental_requirement"].amount_cents, said["incremental_requirement"].note) == (0, offset.netting)
-    assert said["set_aside"].amount_cents == 57_929, "the bot's own reservation is the same beside the offset"
+    assert said["set_aside"].amount_cents == 57_930, "the bot's own reservation is the same beside the offset"
 
 
 async def test_an_account_whose_loss_has_no_limit_has_an_unknown_requirement_that_says_why(

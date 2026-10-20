@@ -337,13 +337,13 @@ def _charged_per_fill(fills: list[Fill]) -> Decimal:
             id="a buy and its sale cost a cent more charged per fill than settled as the day",
         ),
         # By fill each buy owes CAT 0.0003 up to 0.01, ORF 0.015 up to 0.02, OCC 0.025 up to 0.03: 0.06, five times
-        # 0.30. As a day: CAT 5 x 0.0003 = 0.0015 up to 0.01; ORF 5 x 0.015 = 0.075 up to 0.08; OCC 5 x 0.025 = 0.125 up
-        # to 0.13: 0.22.
+        # 0.30. As a day: CAT 5 x 0.0003 = 0.0015 up to 0.01; ORF 5 x 0.015 = 0.075 up to 0.08; OCC is rounded per
+        # fill like the replay's, 5 x 0.03 = 0.15: 0.24.
         pytest.param(
             (("buy", 1, "1.00"),) * 5,
             "0.30",
-            "0.22",
-            id="five one-contract buys cost eight cents more charged per fill than settled as the day",
+            "0.24",
+            id="five one-contract buys cost six cents more charged per fill than settled as the day",
         ),
         pytest.param(
             (("sell", 10, "12.00"),),
@@ -364,7 +364,8 @@ def test_a_day_charged_per_fill_against_the_same_day_settled_as_one(
 
 def test_over_any_day_per_fill_is_never_less_than_the_settlement_and_at_most_a_cent_a_fill_per_type_more() -> None:
     # Each fee type's sum of rounded-up parts is at least the rounded-up sum, and each part adds under a cent, so
-    # n fills leave at most n - 1 cents over per type: five types, 5 x (n - 1) cents at the most.
+    # n fills leave at most n - 1 cents over per type. OCC is rounded per fill by the model too, so it leaves none:
+    # four types, 4 x (n - 1) cents at the most.
     rng = random.Random(20261012)
     for trial in range(300):
         day = rng.choice([date(2026, 7, 1), date(2026, 9, 30), date(2026, 10, 9), date(2027, 3, 3)])
@@ -378,4 +379,4 @@ def test_over_any_day_per_fill_is_never_less_than_the_settlement_and_at_most_a_c
             for _ in range(rng.randint(1, 12))
         ]
         settled, per_fill = _settled(fills), _charged_per_fill(fills)
-        assert settled <= per_fill <= settled + D("0.01") * 5 * (len(fills) - 1), f"trial {trial} on {day}"
+        assert settled <= per_fill <= settled + D("0.01") * 4 * (len(fills) - 1), f"trial {trial} on {day}"

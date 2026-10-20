@@ -32,8 +32,9 @@ def _charged(fills: list[FeeFill], *, session_ended: bool = False) -> dict[tuple
     return {(share.subject_id, share.charge_id.rsplit(":", 1)[-1]): share.amount for share in result.shares}
 
 
-def test_one_bots_round_trip_is_charged_each_fee_type_rounded_up_once_for_the_day() -> None:
-    """Bought at $1.94 and sold at $2.40: SEC $0.004944, TAF $0.00329, CAT $0.0006, ORF $0.03, OCC $0.05."""
+def test_one_bots_round_trip_is_charged_each_fee_type_but_occ_rounded_up_once_for_the_day() -> None:
+    """Bought at $1.94 and sold at $2.40: SEC $0.004944, TAF $0.00329, CAT $0.0006, ORF $0.03; OCC $0.025 a fill,
+    each rounded up to $0.03."""
     charged = _charged([
         _fill("buy", "bot:a", OrderSide.BUY, 1, "1.94"),
         _fill("sell", "bot:a", OrderSide.SELL, 1, "2.40"),
@@ -41,12 +42,12 @@ def test_one_bots_round_trip_is_charged_each_fee_type_rounded_up_once_for_the_da
 
     assert charged == {
         ("bot:a", "sec"): Decimal("0.01"), ("bot:a", "taf"): Decimal("0.01"), ("bot:a", "cat"): Decimal("0.01"),
-        ("bot:a", "orf"): Decimal("0.03"), ("bot:a", "occ"): Decimal("0.05"),
+        ("bot:a", "orf"): Decimal("0.03"), ("bot:a", "occ"): Decimal("0.06"),
     }
 
 
 def test_two_bots_share_each_fee_types_cents_by_what_each_accrued() -> None:
-    """Bot A buys ten contracts and bot B one. ORF: $0.165, charged $0.17; OCC: $0.275, charged $0.28.
+    """Bot A buys ten contracts and bot B one. ORF: $0.165, charged $0.17; OCC: $0.25 and $0.03 a fill, charged $0.28.
 
     Of the ORF's 17 cents A's exact share is 15.45 and B's 1.55: fifteen and
     one whole cents, and the odd cent goes to the larger remainder, B's. Of
