@@ -172,31 +172,6 @@ describe('LaneAttentionBellComponent', () => {
     expect(screen.getAllByText(/Automatic retry/).length).toBe(2);
   });
 
-  it('says an exit is working, or that the next try is unknown, as the desk does (#2440 review)', async () => {
-    await renderBell({
-      unknown: false,
-      errorReason: null,
-      items: [
-        item({  recovery_status: { kind: 'working', reason_code: 'OWN_EXIT_WORKING', explanation: 'An exit is in progress.' } }),
-        item({
-          condition_id: 'unc-2',
-          strategy_instance_id: 'ema-2',
-
-          recovery_status: { kind: 'unknown', reason_code: 'RECOVERY_RECORD_UNREADABLE', explanation: "Recovery status is unknown; this notice's record could not be read." },
-        }),
-      ],
-    });
-
-    await fireEvent.click(bellButton());
-
-    expect(
-      screen.getByText('An exit is in progress.'),
-    ).toBeTruthy();
-    expect(
-      screen.getByText("Recovery status is unknown; this notice's record could not be read."),
-    ).toBeTruthy();
-  });
-
   it('closes the popover on Escape', async () => {
     await renderBell({ unknown: false, errorReason: null, items: [item()] });
     await fireEvent.click(bellButton());

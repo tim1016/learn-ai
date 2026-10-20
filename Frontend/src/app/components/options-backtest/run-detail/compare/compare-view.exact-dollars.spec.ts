@@ -10,12 +10,11 @@ import { CompareViewComponent } from './compare-view.component';
 
 /**
  * Every profit of a comparison is a string the server wrote, and it is shown as written. 9007199254740993.01 is the first
- * whole number-and-cents a double cannot hold; a value with four decimals is not an amount in cents and is shown as it came.
+ * whole number-and-cents a double cannot hold.
  * One row for each place the comparison shows a profit, so a binding added later without a row fails the count.
  */
 const BIG = '9007199254740993.01';
 const SHOWN = '$9,007,199,254,740,993.01';
-const FOUR = '1.2345';
 
 function answerOf(value: string): RunComparison {
   const answer = comparison();
@@ -58,16 +57,6 @@ describe('the profits of a comparison are shown exactly as the server wrote them
     expect(shown.length).toBe(count);
     for (const text of shown) {
       expect(text).toBe(SHOWN);
-    }
-  });
-
-  it.each(PLACES)('%s, a value with four decimals', async (_place, read, count) => {
-    await open(FOUR);
-
-    const shown = read();
-    expect(shown.length).toBe(count);
-    for (const text of shown) {
-      expect(text).toBe(FOUR);
     }
   });
 

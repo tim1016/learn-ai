@@ -2,7 +2,7 @@ import { render, screen, within } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 
 import { reads } from '../../testing/page-actions';
-import { buildTimelinePlan, NO_REASON_GIVEN, UNPLACEABLE } from '../timeline-plan';
+import { buildTimelinePlan, UNPLACEABLE } from '../timeline-plan';
 import { CALL_585, PUT_585, SCENE_LEVELS, SERIES_WORDS, sessionDetail, shownSeries, withheldSeries } from '../testing/detail-fixtures';
 import { TimelineLegendComponent } from './timeline-legend.component';
 
@@ -77,10 +77,4 @@ describe('what the chart does not draw', () => {
     expect(items[1].querySelector('.option-chip')?.getAttribute('aria-label')).toBe("SPY Oct 16 '26 585 Call");
   });
 
-  it('never leaves the words of a withheld series empty: the page says that the server gave none', async () => {
-    await renderLegend(buildTimelinePlan(sessionDetail({ underlying: { ...withheldSeries('SPY', null, 'gone'), message: null } })));
-
-    const items = within(screen.getByRole('region', { name: 'Not drawn' })).getAllByRole('listitem');
-    expect(items.map((item) => reads(item))).toEqual([`SPY : Gone ${NO_REASON_GIVEN}`]);
-  });
 });

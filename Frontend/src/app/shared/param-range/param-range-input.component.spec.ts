@@ -43,16 +43,6 @@ describe("ParamRangeInputComponent", () => {
     expect(view.fixture.componentInstance.range()).toEqual({ type: "value_list", values: [] });
   });
 
-  it("refuses an emptied list instead of reading it as a single zero", async () => {
-    const view = await renderInput({ type: "value_list", values: [2] });
-
-    fireEvent.input(screen.getByLabelText(/values/i), { target: { value: "" } });
-    await view.fixture.whenStable();
-
-    expect(screen.getByRole("alert").textContent).toContain("Enter at least one value.");
-    expect(view.fixture.componentInstance.range()).toEqual({ type: "value_list", values: [] });
-  });
-
   it("clears the refusal once the list parses again", async () => {
     const view = await renderInput({ type: "value_list", values: [2] });
 

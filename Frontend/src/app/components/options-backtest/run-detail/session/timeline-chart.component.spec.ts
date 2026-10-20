@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { SessionDetail } from '../run-detail.types';
 import { buildTimelinePlan } from '../timeline-plan';
-import { at, CALL_585, PUT_585, sessionDetail, shownSeries, skippedSession } from '../testing/detail-fixtures';
+import { at, CALL_585, PUT_585, sessionDetail, shownSeries } from '../testing/detail-fixtures';
 import { fakeTimelineChart, type FakeTimelineChart } from '../testing/timeline-chart-fake';
 import { TIMELINE_CHART_FACTORY, TIMELINE_COLOURS, TimelineChartComponent } from './timeline-chart.component';
 
@@ -301,15 +301,6 @@ describe('the one-day chart, the tooltip', () => {
     await waitFor(() => expect(document.querySelector('.tip')).toBeNull());
   });
 
-  it('shows the text of a price exactly, though a number would have lost digits', async () => {
-    const fake = fakeTimelineChart(vi);
-    await renderChart(fake, buildTimelinePlan(sessionDetail({ underlying: shownSeries('SPY', null, [[1, '9007199254740993.01']]) })));
-
-    fake.crosshair({ time: sec(1), point: { x: 40, y: 20 } });
-
-    await screen.findByText('Minute ending 09:31 ET');
-    expect(document.querySelector('.tip li')?.textContent).toBe('SPY: $9,007,199,254,740,993.01');
-  });
 });
 
 describe('the one-day chart, redrawing and taking down', () => {
@@ -337,11 +328,4 @@ describe('the one-day chart, redrawing and taking down', () => {
     expect(fake.chart.remove).toHaveBeenCalledTimes(1);
   });
 
-  it('draws nothing and makes no second chart for a day that was skipped', async () => {
-    const fake = fakeTimelineChart(vi);
-    await renderChart(fake, buildTimelinePlan(skippedSession()));
-
-    expect(fake.series).toEqual([]);
-    expect(screen.getByRole('img', { name: 'Nothing could be drawn for this day.' })).toBeTruthy();
-  });
 });

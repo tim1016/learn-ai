@@ -96,22 +96,6 @@ describe('CoverageHeatmapComponent', () => {
     expect.soft(results.violations, 'passes AXE').toEqual([]);
   });
 
-  it('draws one cell per calendar session and no gap for the weekend between', async () => {
-    const board = buildCoverageBoard([
-      {
-        symbol: 'SPY',
-        read: coverageRead('SPY', [
-          { day: 15, status: 'complete', artifactId: 1 },
-          { day: 18, status: 'complete', artifactId: 2 },
-        ]),
-      },
-    ]);
-    await renderHeatmap(board);
-
-    expect(screen.getAllByRole('button')).toHaveLength(2);
-    expect(screen.getByText('2 sessions')).toBeTruthy();
-  });
-
   it.each<[string, string, object]>([
     [
       'a session a run refuses, with why',

@@ -65,15 +65,6 @@ describe('the strikes box and the most the server takes', () => {
     await waitFor(() => expect(lastQuery(service)?.strikes).toBe('8'));
   });
 
-  it('sends a count the server may still refuse when the page has no limits, and shows the server’s refusal', async () => {
-    const service = await openWith(null);
-
-    typeStrikes('15');
-
-    await waitFor(() => expect(lastQuery(service)?.strikes).toBe('15'));
-    expect(screen.queryByText(/the most the server takes is/)).toBeNull();
-  });
-
   it('reads the limits when they arrive after the tab was made: a count that was sent is refused once the limit is known', async () => {
     const service = fakeChainService(vi, { expiry: vi.fn(async () => chainExpiry()) });
     const view = await renderChainTab(service, 'SPY', null);

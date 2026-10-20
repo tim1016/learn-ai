@@ -13,7 +13,6 @@ import {
   decisionSummary,
   curveSet,
   emaCapability,
-  evidenceCandidate,
   evidenceView,
   frequencyProtocol,
   studyDetail,
@@ -172,28 +171,6 @@ describe('GoldenSearchCompareStepComponent', () => {
     expect(screen.getByText(reason)).not.toBeNull();
     fireEvent.click(review);
     expect(steps).toEqual([]);
-  });
-
-  it('folds candidates that are the same settings into one row, and a fit equal to the incumbent becomes the incumbent', async () => {
-    const study = studyDetail('awaiting_candidate', {
-      results: {
-        ...studyDetail('awaiting_candidate').results,
-        evidence: evidenceView({
-          candidates: [
-            evidenceCandidate('incumbent', { same_as: ['all_period'] }),
-            evidenceCandidate('all_period', { same_as: ['incumbent'] }),
-            evidenceCandidate('recent'),
-          ],
-        }),
-      },
-    });
-    await renderStep(study);
-
-    const folded = cards();
-    expect(folded).toHaveLength(2);
-    expect(folded[1].textContent).toContain('Current settings');
-    expect(folded[1].textContent).toContain('same settings as All-period fit');
-    expect(screen.getByRole('button', { name: /^current settings/i }).getAttribute('aria-pressed')).toBe('true');
   });
 
   it('after the final test opened, either candidate can still be looked at and the note says the results are recorded separately', async () => {

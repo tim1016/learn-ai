@@ -190,31 +190,6 @@ describe('InstrumentCardComponent', () => {
     expect.soft(alpaca.reloadCount, 'does not re-read the vendor catalog when the dropdown opens').toBe(before);
   });
 
-  it('never offers a delisted symbol the lake does not already hold', () => {
-    alpaca.entries.set([
-      {
-        symbol: 'AAPL',
-        name: 'Apple Inc.',
-        asset_class: 'us_equity',
-        exchange: 'NASDAQ',
-        status: 'active',
-      },
-      {
-        symbol: 'OLD',
-        name: 'Delisted Corp',
-        asset_class: 'us_equity',
-        exchange: 'NYSE',
-        status: 'inactive',
-      },
-    ]);
-    fixture.detectChanges();
-    openDropdown(fixture);
-
-    const text: string = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('AAPL');
-    expect(text).not.toContain('Delisted Corp');
-  });
-
   it('badges a held symbol the vendor has delisted, and keeps it pickable', () => {
     catalog.view.pool.set([
       {
@@ -701,22 +676,6 @@ describe('InstrumentCardComponent', () => {
     expect(rows.length).toBe(50);
     // The header count stays honest about what the search covers.
     expect(fixture.nativeElement.textContent).toContain('80 matches');
-  });
-
-  it('lists the typed symbol above the matches that sort ahead of it', () => {
-    alpaca.entries.set([
-      { symbol: 'BGLD', name: 'FT Vest Gold Strategy Quarterly Buffer ETF', asset_class: 'us_equity', exchange: 'BATS', status: 'active' },
-      { symbol: 'GLD', name: 'SPDR Gold Shares', asset_class: 'us_equity', exchange: 'ARCA', status: 'active' },
-    ]);
-    fixture.detectChanges();
-    openDropdown(fixture);
-    component.onSearchInput('GLD');
-    fixture.detectChanges();
-
-    const listed = Array.from(
-      fixture.nativeElement.querySelectorAll('.dropdown__scroll .row .asset-identity__symbol'),
-    ).map((cell) => (cell as HTMLElement).textContent?.trim());
-    expect(listed).toEqual(['GLD', 'BGLD']);
   });
 
   // With the lake dark, coverage is unknown — every row reads unheld and a

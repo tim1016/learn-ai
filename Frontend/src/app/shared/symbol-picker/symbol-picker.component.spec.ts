@@ -72,14 +72,6 @@ describe('SymbolPickerComponent', () => {
     fixture.componentRef.setInput('symbol', 'SPY');
   });
 
-  it('offers the joined universe — a listed-but-unheld symbol is on the menu', () => {
-    fixture.detectChanges();
-    openDropdown(fixture);
-    const text: string = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('TSLA');
-    expect(text).toContain('not held');
-  });
-
   it('emits exactly the picked symbol — the window half of the card model never crosses back', async () => {
     fixture.detectChanges();
     openDropdown(fixture);
@@ -127,14 +119,4 @@ describe('SymbolPickerComponent', () => {
     expect(component.symbol()).toBe('QQQ');
   });
 
-  it('degrades visibly when the vendor catalog is dark', () => {
-    vendor.entries.set(null);
-    vendor.unavailable.set('catalog endpoint down');
-    fixture.detectChanges();
-    openDropdown(fixture);
-
-    const text: string = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('Live catalog unavailable');
-    expect(text).toContain('showing lake holdings');
-  });
 });

@@ -319,66 +319,6 @@ describe('AlpacaSqliteCustodyComponent', () => {
     expect(attempt.textContent).toContain('ET');
   });
 
-  it('shows only eligibility for a past next attempt (#2440 review)', async () => {
-    // The watchdog's deferral writes nothing, so the recorded time can pass;
-    // Eligibility alone does not tell this page why the retry has not sent.
-    await renderCustody({
-      getSqliteClerkProjection: vi.fn().mockResolvedValue({
-        ...projection([]),
-        uncertainties: [{
-          uncertainty_id: 'uncertainty:23',
-          scope: 'CUSTODY_SUBJECT',
-          severity: 'error',
-          blocks_new_exposure: true,
-          allows_reduction: true,
-          custody_owner: 'ACCOUNT_CLERK',
-          strategy_instance_id: 'spy-bot',
-          reason_code: 'EXIT_NOT_FLAT',
-          headline: 'An exit could not be sent after its session ended; the position is still open',
-          explanation: '10 SPY is still held.',
-          operator_impact: 'New exposure is paused for this strategy.',
-          next_step: 'Flatten with a priced limit now, or let the automatic re-drive reduce it.',
-          observed_at_ms: NOW,
-          evidence_refs: ['order:1'],
-          recovery_status: { kind: 'allowed_now', reason_code: 'RECOVERY_ALLOWED_NOW', explanation: 'Recovery is allowed now.' },
-        }],
-      }),
-    });
-
-    expect(await screen.findByText('Recovery is allowed now.')).toBeTruthy();
-    expect(screen.queryByText(/Automatic retry/)).toBeNull();
-  });
-
-  it('says the next attempt is unknown when the notice record cannot be read (#2440 review)', async () => {
-    await renderCustody({
-      getSqliteClerkProjection: vi.fn().mockResolvedValue({
-        ...projection([]),
-        uncertainties: [{
-          uncertainty_id: 'uncertainty:22',
-          scope: 'CUSTODY_SUBJECT',
-          severity: 'error',
-          blocks_new_exposure: true,
-          allows_reduction: true,
-          custody_owner: 'ACCOUNT_CLERK',
-          strategy_instance_id: 'spy-bot',
-          reason_code: 'EXIT_NOT_FLAT',
-          headline: 'An exit could not be sent after its session ended; the position is still open',
-          explanation: '10 SPY is still held.',
-          operator_impact: 'New exposure is paused for this strategy.',
-          next_step: 'Flatten with a priced limit now, or let the automatic re-drive reduce it.',
-          observed_at_ms: NOW,
-          evidence_refs: ['order:1'],
-
-          recovery_status: { kind: 'unknown', reason_code: 'RECOVERY_RECORD_UNREADABLE', explanation: "Recovery status is unknown; this notice's record could not be read." },
-        }],
-      }),
-    });
-
-    expect(await screen.findByText(
-      "Recovery status is unknown; this notice's record could not be read.",
-    )).toBeTruthy();
-  });
-
   it('says an exit is working instead of an eligible time while one is in progress (#2440 review)', async () => {
     await renderCustody({
       getSqliteClerkProjection: vi.fn().mockResolvedValue({

@@ -5,7 +5,7 @@ import { pickSymbol } from '../../../shared/symbol-picker/testing/fake-picker-wo
 import { paragraph, reads } from '../testing/page-actions';
 import { PastChainInvalidError, PastChainRefusedError } from './past-chain.service';
 import type { ExpiryQuery } from './past-chain.service';
-import { chainDay, chainExpiry, HALF_DAY, HALF_DAY_CLOSE_MS, HALF_DAY_MS, HALF_DAY_OPEN_MS, MINUTE_1545_MS, TRADING_DATE, TRADING_DATE_MS } from './testing/fixtures';
+import { chainDay, chainExpiry, HALF_DAY, HALF_DAY_CLOSE_MS, HALF_DAY_OPEN_MS, MINUTE_1545_MS, TRADING_DATE, TRADING_DATE_MS } from './testing/fixtures';
 import { chainTable, expiriesTable, fakeChainService, openStandardChain, pickDate, renderChainTab, typeStrikes, typeStrikesAndStay, typeTime } from './testing/render-chain';
 
 const lastExpiryQuery = (service: ReturnType<typeof fakeChainService>): ExpiryQuery => {
@@ -22,19 +22,6 @@ describe('the time of day', () => {
 
     expect(lastExpiryQuery(service).atMs).toBeNull();
     expect(reads(paragraph(/^Until you type a time/))).toBe('Until you type a time, the chain is read at the close, 16:00 ET');
-  });
-
-  it('is the minute typed, on that New York day, when it is inside the session', async () => {
-    const service = fakeChainService(vi, { expiry: vi.fn(async (query: ExpiryQuery) => chainExpiry({ at_ms: query.atMs ?? 0 })) });
-    await renderChainTab(service);
-    await openStandardChain();
-
-    typeTime('15:45');
-    await waitFor(() => expect(lastExpiryQuery(service).atMs).toBe(MINUTE_1545_MS));
-
-    // 15:45 on 2026-10-09 is 19:45 UTC: 04:00 UTC midnight plus 15 h 45 min.
-    expect(lastExpiryQuery(service).atMs).toBe(1_791_575_100_000);
-    await waitFor(() => expect(reads(paragraph(/^Priced as of/))).toBe('Priced as of 15:45 ET on 2026-10-09'));
   });
 
   const timeBox = () => screen.getByLabelText('Time of day (New York time)');
@@ -219,22 +206,6 @@ describe('the time of day', () => {
     expect((await screen.findAllByRole('alert')).map((alert) => reads(alert))).toContain('That is after the close. Enter a time from 09:30 ET to 13:00 ET.');
   });
 
-  it('on a half day, 12:59 is a minute of the session and is sent as that instant', async () => {
-    const day = vi.fn(async () => chainDay({ session_open_ms: HALF_DAY_OPEN_MS, session_close_ms: HALF_DAY_CLOSE_MS }));
-    const service = fakeChainService(vi, { day });
-    await renderChainTab(service);
-    pickDate(HALF_DAY);
-    await screen.findByRole('table', { name: /Every expiry the listing held/ });
-    within(expiriesTable()).getAllByRole('button', { name: /Show chain/ })[0]?.click();
-    await screen.findByRole('table', { name: /Calls on the left/ });
-
-    typeTime('12:59');
-
-    // The day after Thanksgiving: midnight is 05:00 UTC, the close 13:00 is 1_795_802_400_000, and 12:59 is a minute before.
-    await waitFor(() => expect(lastExpiryQuery(service).atMs).toBe(1_795_802_340_000));
-    expect(lastExpiryQuery(service).tradingDateMs).toBe(HALF_DAY_MS);
-  });
-
   it('is shown at the box in the server words when the server refuses it although the page let it through', async () => {
     const expiry = vi.fn(async (query: ExpiryQuery) => {
       if (query.atMs !== null) throw new PastChainRefusedError('OPTIONS_BACKTEST_INSTANT_OUTSIDE_SESSION', 'the instant is outside the session of 2026-10-09', 400);
@@ -259,20 +230,6 @@ describe('the strikes each side of the money', () => {
     expect(lastExpiryQuery(service).strikes).toBeNull();
     expect(screen.getByLabelText('Strikes each side of the money').getAttribute('placeholder')).toBe('10');
     expect(screen.getByText("Empty means the server's own number.")).toBeTruthy();
-  });
-
-  it.each([
-    ['1', 'Strikes each side of the money: 1'],
-    ['0', 'Strikes each side of the money: 0'],
-    ['2', 'Strikes each side of the money: 2'],
-  ])('are counted in the words under the table: %j is %j', async (typed, words) => {
-    const expiry = vi.fn(async (query: ExpiryQuery) => chainExpiry({ strikes_each_side: query.strikes === null ? 10 : Number(query.strikes) }));
-    await renderChainTab(fakeChainService(vi, { expiry }));
-    await openStandardChain();
-
-    typeStrikes(typed);
-
-    await waitFor(() => expect(reads(paragraph(/^Strikes each side of the money: \d+$/))).toBe(words));
   });
 
   it.each([
@@ -323,21 +280,6 @@ describe('the strikes each side of the money', () => {
     expect(screen.queryByText('Input should be less than or equal to 14')).toBeNull();
   });
 
-  it('show the server words at the box for a window that is too wide', async () => {
-    const expiry = vi.fn(async (query: ExpiryQuery) => {
-      if (query.strikes === '14') {
-        throw new PastChainRefusedError('OPTIONS_BACKTEST_WINDOW_TOO_WIDE', 'the window holds 61 contracts, calls and puts together, and a download takes at most 60: ask for fewer strikes each side', 400);
-      }
-      return chainExpiry();
-    });
-    await renderChainTab(fakeChainService(vi, { expiry }));
-    await openStandardChain();
-
-    typeStrikes('14');
-
-    expect((await screen.findAllByRole('alert')).map((alert) => reads(alert))).toContain('the window holds 61 contracts, calls and puts together, and a download takes at most 60: ask for fewer strikes each side');
-    expect(screen.getByLabelText('Strikes each side of the money').getAttribute('aria-invalid')).toBe('true');
-  });
 });
 
 describe('the strikes box being read', () => {

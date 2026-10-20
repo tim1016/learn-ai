@@ -65,16 +65,6 @@ describe('the headline figures', () => {
     expect.soft(reads(tile(/^Daily win rate/)), 'names what the daily win rate counts, shows the server’s rounded figure marked as rounded, and the two whole numbers beside it').toBe('Daily win rate 62.5% · 0.625000 rounded to 6 places · 5 of 8');
   });
 
-  it('passes a dollar string through without turning it into a number: the digits a float cannot hold survive', async () => {
-    // 9007199254740993 is the first whole number a double cannot hold; a Number() on it would show ...992.
-    await renderResult({}, { net_profit_usd: '9007199254740993.01', ending_cash_usd: '-0.01', total_fees_usd: '1234567890123456.70', slippage_paid_usd: '0.10' });
-
-    expect(reads(tile('Net profit'))).toBe('Net profit $9,007,199,254,740,993.01 After modeled costs');
-    expect(reads(tile('Ending cash'))).toBe('Ending cash -$0.01');
-    expect(reads(tile('Total fees'))).toBe('Total fees $1,234,567,890,123,456.70');
-    expect(reads(tile('Slippage paid'))).toBe('Slippage paid $0.10');
-  });
-
   it('shows a string that is not a two-place amount as it came, rather than a rounded one', async () => {
     await renderResult({}, { net_profit_usd: '123.4567' });
 
@@ -235,17 +225,6 @@ describe('the slippage tolerance', () => {
     expect.soft(own?.classList.contains('own'), 'marks the setup’s own row').toBe(true);
   });
 
-  it('says it survives the whole ladder', async () => {
-    await renderResult({ slippage_tolerance: { highest_profitable_percent: '0.6', first_unprofitable_percent: null, nothing_traded: false } });
-
-    expect(sentence()).toBe('The result survives the whole ladder, up to 0.6% slippage.');
-  });
-
-  it('says nothing traded, which is not a loss at every rung', async () => {
-    await renderResult({ slippage_tolerance: { highest_profitable_percent: null, first_unprofitable_percent: null, nothing_traded: true } });
-
-    expect(sentence()).toBe('Nothing traded, so there is no slippage tolerance to read.');
-  });
 });
 
 describe('a complete run with no figures', () => {

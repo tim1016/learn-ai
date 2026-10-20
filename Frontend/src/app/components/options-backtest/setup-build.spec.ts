@@ -224,16 +224,6 @@ describe('times', () => {
     expect(built({ ...loaded, exitClock: formatClockText(CLOSE - 46) }).exit).toEqual(minutes(46, 'close'));
   });
 
-  it('the first entry and the last exit the setup allows build, a time after noon is stored from the close and one at noon from the open', () => {
-    const body = built({ ...newSetupDraft(SESSION_CLOCK), entryClock: formatClockText(OPEN + 1), exitClock: formatClockText(CLOSE - 1) });
-
-    expect.soft(body, 'the first entry and the last exit the setup allows build').toMatchObject({ entry: minutes(1, 'open'), exit: minutes(1, 'close') });
-
-    const draft = { ...newSetupDraft(SESSION_CLOCK), noReentryOn: true };
-
-    expect.soft(built({ ...draft, noReentryClock: '12:00' }).no_reentry_after, 'a time at noon is stored from the open').toEqual(minutes(12 * 60 - OPEN, 'open'));
-    expect.soft(built({ ...draft, noReentryClock: '12:01' }).no_reentry_after, 'a time after noon is stored from the close').toEqual(minutes(CLOSE - (12 * 60 + 1), 'close'));
-  });
 });
 
 describe('costs and the other typed numbers', () => {

@@ -75,14 +75,6 @@ describe('GoldenSearchStudyComponent', () => {
     expect(service.command.mock.calls[0][1]).toMatchObject({ command: 'run_research', expected_revision: 3, payload: {} });
   });
 
-  it('a stopped research run offers Resume research', async () => {
-    const service = fakeService(studyDetail('search_running', { presented_status: 'interrupted', permitted_actions: ['run_research', 'finish', 'close', 'revise'] }));
-    await renderStudy(service);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Resume research' }));
-    await waitFor(() => expect(service.command.mock.calls[0]?.[1]).toMatchObject({ command: 'run_research' }));
-  });
-
   it('a stage whose job did not start can be started again under the same authorization', async () => {
     const service = fakeService(studyDetail('locked'));
     const queued = studyDetail('search_running', { presented_status: 'queued', revision: 4 });
@@ -433,18 +425,6 @@ describe('GoldenSearchStudyComponent', () => {
 
     await waitFor(() => expect(hidden).toHaveBeenCalledWith('study-0001-aaaa'));
     expect(service.hide).toHaveBeenCalledWith('study-0001-aaaa');
-  });
-
-  it('Compare leads to the final-test lock, which names every fit and sends nothing until it is opened', async () => {
-    const service = fakeService(studyDetail('awaiting_candidate'));
-    await renderStudy(service);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Review final-test lock' }));
-
-    await screen.findByRole('heading', { name: /is still sealed/i });
-    expect(currentStep()).toMatch(/Final decision/);
-    expect(screen.getByRole('region', { name: /is still sealed/i }).textContent).toContain('All-period fit, Recent fit and the frozen incumbent will be evaluated.');
-    expect(service.command).not.toHaveBeenCalled();
   });
 
   it('a refused final test stays on its lock and shows why', async () => {

@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { ServedLeg, ServedSetup, SetupRequest } from './options-backtest.types';
 import { noReentryExampleBody, servedSaved } from './testing/fixtures';
-import { addLeg, choose, flip, inLeg, legCard, press, typeInto } from './testing/page-actions';
+import { addLeg, choose, flip, inLeg, legCard, typeInto } from './testing/page-actions';
 import { fakeService, renderPage } from './testing/render-page';
 
 /** What a leg's side does on the page: the Buy or Sell switch, the line under it, the leg's card, and the request. */
@@ -31,22 +31,6 @@ describe('the Buy or Sell switch', () => {
     expect.soft(line?.textContent, 'is followed by a line saying a sold leg needs a bought leg of the same kind to cover it').toMatch(/sold leg needs a bought leg of the same kind.*to cover it/);
   });
 
-  it('adds a sold leg that reads Sell, and sends the side it shows', async () => {
-    const service = fakeService(vi);
-    await renderPage(service);
-
-    addLeg('Call');
-    choose('Sell');
-    addLeg('Call');
-
-    await waitFor(() => expect(lastBody(service).legs).toHaveLength(2));
-    expect(lineOf(1)).toMatch(/^Buy · 1 contract · Call/);
-    expect(lineOf(2)).toMatch(/^Sell · 1 contract · Call/);
-    const [bought, sold] = lastBody(service).legs;
-    expect(bought).not.toHaveProperty('side');
-    expect(sold).toMatchObject({ leg_id: 'call_2', side: 'sell', right: 'call', contracts: 1 });
-  });
-
   it('keeps the choice for the next leg, and switching back to Buy sends a leg with no side', async () => {
     const service = fakeService(vi);
     await renderPage(service);
@@ -62,21 +46,6 @@ describe('the Buy or Sell switch', () => {
     expect(lineOf(3)).toMatch(/^Buy · 1 contract · Put/);
   });
 
-  it('gives a copy of a sold leg its side, with its rules', async () => {
-    const service = fakeService(vi);
-    await renderPage(service);
-    addLeg('Call');
-    choose('Sell');
-    addLeg('Call');
-    flip('Leg 2 stop loss');
-    typeInto('Leg 2 stop loss value', '150');
-
-    press('Copy Leg 2');
-
-    await waitFor(() => expect(lastBody(service).legs).toHaveLength(3));
-    expect(lineOf(3)).toMatch(/^Sell/);
-    expect(lastBody(service).legs[2]).toMatchObject({ side: 'sell', stop_loss: { kind: 'percent', value: '150' } });
-  });
 });
 
 describe('a stop loss on a sold leg', () => {

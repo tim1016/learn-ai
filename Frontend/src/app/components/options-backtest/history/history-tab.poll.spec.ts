@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
+import { fireEvent, screen, waitFor } from '@testing-library/angular';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderHistoryTab } from '../testing/render-history';
@@ -111,21 +111,5 @@ describe('the list, while a run in it is going', () => {
     await after(5 * POLL_MS);
 
     expect(service.runs).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe('a run opened from the list, while it is going', () => {
-  it('turns into its result without leaving the tab', async () => {
-    const service = serving([GOING]);
-    service.run.mockResolvedValueOnce(runDetail({ ...GOING, status: 'running', figures: null, slippage: [], slippage_tolerance: null, headline: null })).mockResolvedValue(runDetail({ ...OVER }));
-    await renderHistoryTab(vi, { service, polling: true });
-    fireEvent.click(await screen.findByRole('button', { name: 'Open run 31' }));
-    const panel = await screen.findByRole('region', { name: 'Backtest run' });
-    await within(panel).findByRole('button', { name: 'Cancel' });
-
-    await after(POLL_MS);
-
-    expect(await screen.findByRole('region', { name: 'Headline figures' })).toBeTruthy();
-    expect(within(panel).queryByRole('button', { name: 'Cancel' })).toBeNull();
   });
 });

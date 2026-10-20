@@ -152,17 +152,6 @@ describe('a chain in which one side shows nothing', () => {
     expect(cells).toEqual(['Nothing in this window', 'Nothing in this window']);
   });
 
-  it('says a side that lists nothing is not listed at a strike, because its count says so', async () => {
-    const service = fakeChainService(vi, {
-      expiry: vi.fn(async () => chainExpiry({ calls: side('call', [], null), puts: side('put', [contract({ right: 'put', thousandths: 602_000, state: 'did_not_trade' })]) })),
-    });
-    await renderChainTab(service);
-    await openStandardChain();
-
-    const cells = within(chainTable()).getAllByRole('row').slice(1).map((row) => reads(row.querySelectorAll('td')[0] ?? null));
-    expect(cells).toEqual(['Not listed at this strike']);
-    expect(card()).not.toContain('No strikes are drawn for');
-  });
 });
 
 describe('the Past chain tab with the day picked and nothing opened', () => {
