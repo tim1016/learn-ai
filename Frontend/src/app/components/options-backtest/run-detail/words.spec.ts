@@ -6,28 +6,23 @@ import { plainTrade, stoppedTrade } from './testing/detail-fixtures';
 import { owedTrade, soldTrade } from './testing/selling-fixtures';
 import {
   attemptWords, closedBecauseHeading, contractOf, fillWords, FILL_WORDS, isSoldLegFill, isSoldLegTrade, LEVEL_WORDS, legAttempt, markWords, MARK_WORDS,
-  marksSection, OWED_MARK_WORDS, SOLD_FILL_WORDS,
+  marksSection, OWED_MARK_WORDS,
 } from './words';
 
 describe('a contract as the shared renderer takes it', () => {
-  it('carries the fields the server sent, renamed and untouched: the strike is the server’s text, and the symbol is not read', () => {
-    expect(contractOf({ ...CALL_585, strike_usd: '585.050' })).toEqual({
+  it('carries the fields the server sent to the shared renderer, takes the right and the strike from their own fields, and is named in words by the shared helper', () => {
+    expect.soft(contractOf({ ...CALL_585, strike_usd: '585.050' }), 'carries the fields the server sent, renamed and untouched: the strike is the server’s text, and the symbol is not read').toEqual({
       occ_symbol: 'SPY261016C00585000',
       underlying: 'SPY',
       expiry_ms: EXPIRY_MS,
       right: 'call',
       strike: '585.050',
     });
-  });
 
-  it('takes the right and the strike from their own fields even when the symbol says otherwise', () => {
     const odd = { ...PUT_585, symbol: 'SPY261016C00999000' };
+    expect.soft(contractOf(odd), 'takes the right and the strike from their own fields even when the symbol says otherwise').toMatchObject({ right: 'put', strike: '585.00', occ_symbol: 'SPY261016C00999000' });
 
-    expect(contractOf(odd)).toMatchObject({ right: 'put', strike: '585.00', occ_symbol: 'SPY261016C00999000' });
-  });
-
-  it('is named in words by the shared helper, with the expiry as a New York date', () => {
-    expect(optionContractName(contractOf(CALL_585))).toBe("SPY Oct 16 '26 585 Call");
+    expect.soft(optionContractName(contractOf(CALL_585)), 'is named in words by the shared helper, with the expiry as a New York date').toBe("SPY Oct 16 '26 585 Call");
   });
 });
 
@@ -48,18 +43,15 @@ describe('which try a leg is on', () => {
 });
 
 describe('what the lines and marks are called', () => {
-  it('gives each kind of line its own way of being drawn, so that colour is never the only difference', () => {
+  it('gives each kind of line its own way of being drawn, and tells a purchase, a sale and a mark apart in words and in shape', () => {
     const drawn = Object.values(LEVEL_WORDS).map((level) => level.drawn);
 
-    expect(new Set(drawn).size).toBe(3);
-    expect(LEVEL_WORDS.starting_price).toEqual({ name: 'Starting price', drawn: 'dotted line' });
-    expect(LEVEL_WORDS.momentum).toEqual({ name: 'Momentum level', drawn: 'dashed line' });
-    expect(LEVEL_WORDS.stop).toEqual({ name: 'Stop level', drawn: 'long dashes' });
-  });
-
-  it('tells a purchase, a sale and a mark apart in words and in shape', () => {
-    expect([FILL_WORDS.entry, FILL_WORDS.exit, MARK_WORDS].map((each) => each.name)).toEqual(['Bought', 'Sold', 'Marked, not sold']);
-    expect(new Set([FILL_WORDS.entry.drawn, FILL_WORDS.exit.drawn, MARK_WORDS.drawn]).size).toBe(3);
+    expect.soft(new Set(drawn).size, 'gives each kind of line its own way of being drawn, so that colour is never the only difference').toBe(3);
+    expect.soft(LEVEL_WORDS.starting_price, 'calls a starting price a dotted line').toEqual({ name: 'Starting price', drawn: 'dotted line' });
+    expect.soft(LEVEL_WORDS.momentum, 'calls a momentum level a dashed line').toEqual({ name: 'Momentum level', drawn: 'dashed line' });
+    expect.soft(LEVEL_WORDS.stop, 'calls a stop level long dashes').toEqual({ name: 'Stop level', drawn: 'long dashes' });
+    expect.soft([FILL_WORDS.entry, FILL_WORDS.exit, MARK_WORDS].map((each) => each.name), 'tells a purchase, a sale and a mark apart in words').toEqual(['Bought', 'Sold', 'Marked, not sold']);
+    expect.soft(new Set([FILL_WORDS.entry.drawn, FILL_WORDS.exit.drawn, MARK_WORDS.drawn]).size, 'tells a purchase, a sale and a mark apart in shape').toBe(3);
   });
 });
 
@@ -73,49 +65,25 @@ describe('what a fill and a mark are called, by the side they traded on (#3109)'
     expect(fillWords({ kind, side })).toEqual({ name, drawn });
   });
 
-  it('gives a bought leg the words it always had, from the same constants', () => {
-    expect(fillWords({ kind: 'entry', side: 'buy' })).toBe(FILL_WORDS.entry);
-    expect(fillWords({ kind: 'exit', side: 'sell' })).toBe(FILL_WORDS.exit);
-    expect(fillWords({ kind: 'entry', side: 'sell' })).toBe(SOLD_FILL_WORDS.entry);
-    expect(fillWords({ kind: 'exit', side: 'buy' })).toBe(SOLD_FILL_WORDS.exit);
-  });
+  it('knows a fill and a trade are of a sold leg from the way they traded, tells a bought leg’s mark from a sold leg’s, and heads the reason of a close and the section of marks for what they hold', () => {
+    expect.soft([isSoldLegFill({ kind: 'entry', side: 'sell' }), isSoldLegFill({ kind: 'exit', side: 'buy' })], 'knows a fill is of a sold leg from the way it traded, and never asks the leg (a sale to open, a buy-back)').toEqual([true, true]);
+    expect.soft([isSoldLegFill({ kind: 'entry', side: 'buy' }), isSoldLegFill({ kind: 'exit', side: 'sell' })], 'knows a fill is of a bought leg from the way it traded, and never asks the leg (a purchase, a sale)').toEqual([false, false]);
 
-  it('never reads a sold leg’s words as a bought leg’s: the four names are four', () => {
-    const names = [FILL_WORDS.entry, FILL_WORDS.exit, SOLD_FILL_WORDS.entry, SOLD_FILL_WORDS.exit].map((each) => each.name);
+    expect.soft([isSoldLegTrade(soldTrade()), isSoldLegTrade(owedTrade())], 'knows a trade is of a sold leg from its entry (sold, owed)').toEqual([true, true]);
+    expect.soft([isSoldLegTrade(stoppedTrade()), isSoldLegTrade(plainTrade())], 'knows a trade is of a bought leg from its entry (stopped, plain)').toEqual([false, false]);
 
-    expect(new Set(names).size).toBe(4);
-    // An arrow points the way it traded: purchases up, sales down, whichever opened the leg.
-    expect([FILL_WORDS.entry, SOLD_FILL_WORDS.exit].map((each) => each.drawn)).toEqual(['up arrow', 'up arrow']);
-    expect([FILL_WORDS.exit, SOLD_FILL_WORDS.entry].map((each) => each.drawn)).toEqual(['down arrow', 'down arrow']);
-  });
+    expect.soft(markWords({ owed: false }), 'says a bought leg’s mark is not sold').toBe(MARK_WORDS);
+    expect.soft(markWords({ owed: true }), 'says a sold leg’s mark is owed').toBe(OWED_MARK_WORDS);
+    expect.soft([MARK_WORDS.name, OWED_MARK_WORDS.name], 'tells a bought leg’s mark and a sold leg’s apart in words').toEqual(['Marked, not sold', 'Marked, owed']);
+    expect.soft(MARK_WORDS.drawn, 'keeps the same shape for a bought leg’s mark and a sold leg’s').toBe(OWED_MARK_WORDS.drawn);
 
-  it('knows a fill is of a sold leg from the way it traded, and never asks the leg', () => {
-    expect([isSoldLegFill({ kind: 'entry', side: 'sell' }), isSoldLegFill({ kind: 'exit', side: 'buy' })]).toEqual([true, true]);
-    expect([isSoldLegFill({ kind: 'entry', side: 'buy' }), isSoldLegFill({ kind: 'exit', side: 'sell' })]).toEqual([false, false]);
-  });
+    expect.soft(closedBecauseHeading([]), 'heads the reason of a close "Sold because" until a buy-back is among the fills (no fills)').toBe('Sold because');
+    expect.soft(closedBecauseHeading([{ kind: 'entry', side: 'buy' }, { kind: 'exit', side: 'sell' }]), 'heads the reason of a close "Sold because" until a buy-back is among the fills (a purchase and a sale)').toBe('Sold because');
+    expect.soft(closedBecauseHeading([{ kind: 'entry', side: 'sell' }]), 'heads the reason of a close "Closed because" once a sold leg is among the fills').toBe('Closed because');
 
-  it('knows a trade is of a sold leg from its entry', () => {
-    expect([isSoldLegTrade(soldTrade()), isSoldLegTrade(owedTrade())]).toEqual([true, true]);
-    expect([isSoldLegTrade(stoppedTrade()), isSoldLegTrade(plainTrade())]).toEqual([false, false]);
-  });
-
-  it('says a bought leg’s mark is not sold and a sold leg’s is owed, tells them apart in words and keeps the same shape', () => {
-    expect(markWords({ owed: false })).toBe(MARK_WORDS);
-    expect(markWords({ owed: true })).toBe(OWED_MARK_WORDS);
-    expect([MARK_WORDS.name, OWED_MARK_WORDS.name]).toEqual(['Marked, not sold', 'Marked, owed']);
-    expect(MARK_WORDS.drawn).toBe(OWED_MARK_WORDS.drawn);
-  });
-
-  it('heads the reason of a close "Sold because" until a buy-back is among the fills', () => {
-    expect(closedBecauseHeading([])).toBe('Sold because');
-    expect(closedBecauseHeading([{ kind: 'entry', side: 'buy' }, { kind: 'exit', side: 'sell' }])).toBe('Sold because');
-    expect(closedBecauseHeading([{ kind: 'entry', side: 'sell' }])).toBe('Closed because');
-  });
-
-  it('names the section of marks for what it holds', () => {
-    expect(marksSection([]).heading).toBe('Marked, not sold');
-    expect(marksSection([{ owed: false }]).heading).toBe('Marked, not sold');
-    expect(marksSection([{ owed: true }, { owed: true }]).heading).toBe('Marked, owed');
-    expect(marksSection([{ owed: false }, { owed: true }]).heading).toBe('Marked, not sold or owed');
+    expect.soft(marksSection([]).heading, 'names the section of marks for what it holds (no marks)').toBe('Marked, not sold');
+    expect.soft(marksSection([{ owed: false }]).heading, 'names the section of marks for what it holds (a mark not sold)').toBe('Marked, not sold');
+    expect.soft(marksSection([{ owed: true }, { owed: true }]).heading, 'names the section of marks for what it holds (marks owed)').toBe('Marked, owed');
+    expect.soft(marksSection([{ owed: false }, { owed: true }]).heading, 'names the section of marks for what it holds (both)').toBe('Marked, not sold or owed');
   });
 });

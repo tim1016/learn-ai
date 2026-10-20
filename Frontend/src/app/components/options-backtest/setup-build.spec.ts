@@ -52,24 +52,22 @@ function noReentryExampleByHand(): SetupDraft {
 }
 
 describe('building the shipped examples by hand', () => {
-  it('produces exactly the one-re-entry example JSON', () => {
-    expect(built(exampleByHand())).toEqual(exampleBody());
-  });
+  it('produces exactly the one-re-entry example JSON, and the no-re-entry example JSON with neither the re-entry rule nor the cutoff in it', () => {
+    expect.soft(built(exampleByHand()), 'produces exactly the one-re-entry example JSON').toEqual(exampleBody());
 
-  it('produces exactly the no-re-entry example JSON, with neither the re-entry rule nor the cutoff in it', () => {
     const body = built(noReentryExampleByHand());
 
-    expect(body).toEqual(noReentryExampleBody());
-    expect(body).not.toHaveProperty('no_reentry_after');
-    expect(body.legs[0]).not.toHaveProperty('reentry_on_stop');
+    expect.soft(body, 'produces exactly the no-re-entry example JSON').toEqual(noReentryExampleBody());
+    expect.soft(body, 'leaves the cutoff out of the no-re-entry example JSON').not.toHaveProperty('no_reentry_after');
+    expect.soft(body.legs[0], 'leaves the re-entry rule out of the no-re-entry example JSON').not.toHaveProperty('reentry_on_stop');
   });
 });
 
 describe('a new setup', () => {
-  it('starts on SPY with the times read from the clock and no legs', () => {
+  it('starts on SPY with the times read from the clock and no legs, has no times before the clock is read, and builds the body of a new setup, with no legs yet, from its defaults', () => {
     const draft = newSetupDraft(SESSION_CLOCK);
 
-    expect(draft).toMatchObject({
+    expect.soft(draft, 'starts on SPY with the times read from the clock and no legs').toMatchObject({
       underlying: 'SPY',
       entryClock: formatClockText(OPEN + 5),
       exitClock: formatClockText(CLOSE - 15),
@@ -79,17 +77,12 @@ describe('a new setup', () => {
       feeKind: 'not_charged',
       legs: [],
     });
-  });
+    expect.soft(newSetupDraft(null), 'has no times before the clock is read').toMatchObject({ entryClock: '', exitClock: '', noReentryClock: '' });
 
-  it('has no times before the clock is read', () => {
-    expect(newSetupDraft(null)).toMatchObject({ entryClock: '', exitClock: '', noReentryClock: '' });
-  });
-
-  it('builds the body of a new setup, with no legs yet, from its defaults', () => {
     const body = built(newSetupDraft(SESSION_CLOCK));
 
-    expect(body).toMatchObject({ version: 1, entry: minutes(5, 'open'), exit: minutes(15, 'close'), legs: [], price_step_usd: '0.01' });
-    expect('no_reentry_after' in body).toBe(false);
+    expect.soft(body, 'builds the body of a new setup, with no legs yet, from its defaults').toMatchObject({ version: 1, entry: minutes(5, 'open'), exit: minutes(15, 'close'), legs: [], price_step_usd: '0.01' });
+    expect.soft('no_reentry_after' in body, 'leaves the "no re-entry after" time out of the body of a new setup').toBe(false);
   });
 });
 
@@ -99,38 +92,30 @@ describe('a switched-off rule', () => {
     legs: [{ ...legFromBuilder(newLegBuilder(), []), ...changes }],
   });
 
-  it('sends nothing, whatever its fields hold', () => {
+  it('sends nothing, whatever its fields hold, sends only the rule that is on, and turns the "no re-entry after" time off the same way', () => {
     const body = built(leg({ stopLossValue: 'not a number', momentumValue: '', reentryCount: 'many' }));
 
-    expect(body.legs[0]).toEqual({ leg_id: 'call', right: 'call', contracts: 1, expiry: { kind: 'this_week' }, strike: { kind: 'atm' } });
-  });
+    expect.soft(body.legs[0], 'sends nothing, whatever its fields hold').toEqual({ leg_id: 'call', right: 'call', contracts: 1, expiry: { kind: 'this_week' }, strike: { kind: 'atm' } });
 
-  it('sends the stop loss when it is on', () => {
-    expect(built(leg({ stopLossOn: true, stopLossKind: 'points', stopLossValue: ' 1.5 ' })).legs[0]).toMatchObject({ stop_loss: { kind: 'points', value: '1.5' } });
-  });
-
-  it('sends the momentum when it is on', () => {
-    expect(built(leg({ momentumOn: true, momentumKind: 'points_down', momentumValue: '0.4' })).legs[0]).toMatchObject({ momentum: { kind: 'points_down', value: '0.4' } });
-  });
-
-  it('sends the re-entry, with its count as a number, when it is on', () => {
-    expect(built(leg({ reentryOn: true, reentryKind: 'at_once', reentryCount: '3' })).legs[0]).toMatchObject({ reentry_on_stop: { kind: 'at_once', count: 3 } });
-  });
-
-  it('sends only the rule that is on, leaving the others off', () => {
     const sent = built(leg({ momentumOn: true, momentumValue: '10' })).legs[0];
 
-    expect(sent).toHaveProperty('momentum');
-    expect(sent).not.toHaveProperty('stop_loss');
-    expect(sent).not.toHaveProperty('reentry_on_stop');
-  });
+    expect.soft(sent, 'sends only the rule that is on: the momentum').toHaveProperty('momentum');
+    expect.soft(sent, 'leaves the stop loss off when only the momentum is on').not.toHaveProperty('stop_loss');
+    expect.soft(sent, 'leaves the re-entry off when only the momentum is on').not.toHaveProperty('reentry_on_stop');
 
-  it('turns the "no re-entry after" time off the same way', () => {
     const on = built({ ...newSetupDraft(SESSION_CLOCK), noReentryOn: true });
     const off = built({ ...newSetupDraft(SESSION_CLOCK), noReentryOn: false, noReentryClock: 'garbage' });
 
-    expect(on.no_reentry_after).toEqual(minutes(60, 'close'));
-    expect(off).not.toHaveProperty('no_reentry_after');
+    expect.soft(on.no_reentry_after, 'sends the "no re-entry after" time when it is on').toEqual(minutes(60, 'close'));
+    expect.soft(off, 'turns the "no re-entry after" time off the same way').not.toHaveProperty('no_reentry_after');
+  });
+
+  it.each([
+    ['sends the stop loss when it is on', { stopLossOn: true, stopLossKind: 'points', stopLossValue: ' 1.5 ' }, { stop_loss: { kind: 'points', value: '1.5' } }],
+    ['sends the momentum when it is on', { momentumOn: true, momentumKind: 'points_down', momentumValue: '0.4' }, { momentum: { kind: 'points_down', value: '0.4' } }],
+    ['sends the re-entry, with its count as a number, when it is on', { reentryOn: true, reentryKind: 'at_once', reentryCount: '3' }, { reentry_on_stop: { kind: 'at_once', count: 3 } }],
+  ] as const)('%s', (_name, changes, sent) => {
+    expect(built(leg(changes)).legs[0]).toMatchObject(sent);
   });
 });
 
@@ -148,20 +133,15 @@ describe('a rule that is on but cannot be read', () => {
     expect([...problemsOf(leg(changes)).keys()]).toEqual([legKey('call', field)]);
   });
 
-  it('is not turned into a number to judge it: a huge or odd value is left to the server', () => {
-    expect(built(leg({ stopLossOn: true, stopLossValue: '999999999999999999999.123456789' })).legs[0]).toMatchObject({
+  it('is not turned into a number to judge it, says why re-entering on momentum cannot stand without a momentum rule, and allows it once momentum is on', () => {
+    expect.soft(built(leg({ stopLossOn: true, stopLossValue: '999999999999999999999.123456789' })).legs[0], 'is not turned into a number to judge it: a huge or odd value is left to the server').toMatchObject({
       stop_loss: { value: '999999999999999999999.123456789' },
     });
-  });
 
-  it('says why re-entering on momentum cannot stand without a momentum rule', () => {
     const problems = problemsOf(leg({ reentryOn: true, reentryKind: 'on_momentum', momentumOn: false }));
 
-    expect(problems.get(legKey('call', 'reentry'))).toMatch(/momentum/i);
-  });
-
-  it('allows re-entering on momentum once momentum is on', () => {
-    expect(built(leg({ reentryOn: true, reentryKind: 'on_momentum', momentumOn: true, momentumValue: '5' })).legs[0]).toMatchObject({
+    expect.soft(problems.get(legKey('call', 'reentry')), 'says why re-entering on momentum cannot stand without a momentum rule').toMatch(/momentum/i);
+    expect.soft(built(leg({ reentryOn: true, reentryKind: 'on_momentum', momentumOn: true, momentumValue: '5' })).legs[0], 'allows re-entering on momentum once momentum is on').toMatchObject({
       reentry_on_stop: { kind: 'on_momentum' },
     });
   });
@@ -176,14 +156,12 @@ describe('a leg’s side', () => {
     ],
   });
 
-  it('is sent for a sold leg, and a bought leg sends none, as the server writes none for it', () => {
+  it('is sent for a sold leg and none for a bought one, reads back from a served selling setup into the draft and builds the body it came from, and is bought for a leg the server served with none', () => {
     const [bought, sold] = built(selling()).legs;
 
-    expect(bought).not.toHaveProperty('side');
-    expect(sold).toMatchObject({ leg_id: 'call_2', side: 'sell', strike: { kind: 'atm_offset', steps: 2 } });
-  });
+    expect.soft(bought, 'a bought leg sends none, as the server writes none for it').not.toHaveProperty('side');
+    expect.soft(sold, 'is sent for a sold leg').toMatchObject({ leg_id: 'call_2', side: 'sell', strike: { kind: 'atm_offset', steps: 2 } });
 
-  it('reads back from a served selling setup into the draft, and builds the body it came from', () => {
     const served: ServedSetup = {
       ...noReentryExampleBody(),
       legs: [
@@ -203,40 +181,39 @@ describe('a leg’s side', () => {
     const draft = draftFromSetup(served, SESSION_CLOCK);
     const body = built(draft);
 
-    expect(draft.legs.map((leg) => [leg.id, leg.side])).toEqual([
+    expect.soft(draft.legs.map((leg) => [leg.id, leg.side]), 'reads back from a served selling setup into the draft: the sides').toEqual([
       ['long_call', 'buy'],
       ['short_call', 'sell'],
     ]);
-    expect(draft.legs[1]).toMatchObject({ stopLossOn: true, stopLossKind: 'percent', stopLossValue: '150' });
-    expect(body.legs).toEqual(served.legs);
-  });
+    expect.soft(draft.legs[1], 'reads back from a served selling setup into the draft: the stop loss of the sold leg').toMatchObject({ stopLossOn: true, stopLossKind: 'percent', stopLossValue: '150' });
+    expect.soft(body.legs, 'builds the body it came from').toEqual(served.legs);
 
-  it('is bought for a leg the server served with none, as it serves every bought leg', () => {
-    const draft = draftFromSetup(exampleBody(), SESSION_CLOCK);
+    const unsided = draftFromSetup(exampleBody(), SESSION_CLOCK);
 
-    expect(draft.legs.map((leg) => leg.side)).toEqual(['buy', 'buy']);
+    expect.soft(unsided.legs.map((leg) => leg.side), 'is bought for a leg the server served with none, as it serves every bought leg').toEqual(['buy', 'buy']);
   });
 });
 
 describe('times', () => {
-  it('a time outside the full session is a problem at its field and there is no body', () => {
-    const problems = problemsOf({ ...newSetupDraft(SESSION_CLOCK), entryClock: formatClockText(OPEN - 1), exitClock: formatClockText(CLOSE + 1) });
+  it('a time outside the session, an entry at the open and an exit at the close, and a time beside a good one are problems at their own fields and there is no body; the "no re-entry after" time is judged only while it is on', () => {
+    const outside = problemsOf({ ...newSetupDraft(SESSION_CLOCK), entryClock: formatClockText(OPEN - 1), exitClock: formatClockText(CLOSE + 1) });
 
-    expect([...problems.keys()].sort()).toEqual(['entry', 'exit']);
-  });
+    expect.soft([...outside.keys()].sort(), 'a time outside the full session is a problem at its field and there is no body').toEqual(['entry', 'exit']);
 
-  it('an entry at the open and an exit at the close are problems at their own fields, and there is no body', () => {
-    const problems = problemsOf({ ...newSetupDraft(SESSION_CLOCK), entryClock: formatClockText(OPEN), exitClock: formatClockText(CLOSE) });
+    const atTheEdges = problemsOf({ ...newSetupDraft(SESSION_CLOCK), entryClock: formatClockText(OPEN), exitClock: formatClockText(CLOSE) });
 
-    expect([...problems.keys()].sort()).toEqual(['entry', 'exit']);
-    expect(problems.get('entry')).toMatch(/at least a minute after the open/);
-    expect(problems.get('exit')).toMatch(/at least a minute before the close/);
-  });
+    expect.soft([...atTheEdges.keys()].sort(), 'an entry at the open and an exit at the close are problems at their own fields, and there is no body').toEqual(['entry', 'exit']);
+    expect.soft(atTheEdges.get('entry'), 'an entry at the open says it must be at least a minute after the open').toMatch(/at least a minute after the open/);
+    expect.soft(atTheEdges.get('exit'), 'an exit at the close says it must be at least a minute before the close').toMatch(/at least a minute before the close/);
 
-  it('the first entry and the last exit the setup allows build', () => {
-    const body = built({ ...newSetupDraft(SESSION_CLOCK), entryClock: formatClockText(OPEN + 1), exitClock: formatClockText(CLOSE - 1) });
+    const beside = problemsOf({ ...newSetupDraft(SESSION_CLOCK), entryClock: formatClockText(OPEN - 1) });
 
-    expect(body).toMatchObject({ entry: minutes(1, 'open'), exit: minutes(1, 'close') });
+    expect.soft([...beside.keys()], 'a time that is outside the session is not also judged against the other').toEqual(['entry']);
+
+    const draft = { ...newSetupDraft(SESSION_CLOCK), noReentryClock: formatClockText(CLOSE + 1) };
+
+    expect.soft(problemsOf({ ...draft, noReentryOn: true }).has('noReentry'), 'the "no re-entry after" time is judged while it is on').toBe(true);
+    expect.soft(buildSetup({ ...draft, noReentryOn: false }, SESSION_CLOCK).ok, 'the "no re-entry after" time is not judged while it is off').toBe(true);
   });
 
   it('two times a loaded setup counts from the same end must be in order, and the exit says so', () => {
@@ -247,60 +224,44 @@ describe('times', () => {
     expect(built({ ...loaded, exitClock: formatClockText(CLOSE - 46) }).exit).toEqual(minutes(46, 'close'));
   });
 
-  it('a time that is outside the session is not also judged against the other', () => {
-    const problems = problemsOf({ ...newSetupDraft(SESSION_CLOCK), entryClock: formatClockText(OPEN - 1) });
+  it('the first entry and the last exit the setup allows build, a time after noon is stored from the close and one at noon from the open', () => {
+    const body = built({ ...newSetupDraft(SESSION_CLOCK), entryClock: formatClockText(OPEN + 1), exitClock: formatClockText(CLOSE - 1) });
 
-    expect([...problems.keys()]).toEqual(['entry']);
-  });
+    expect.soft(body, 'the first entry and the last exit the setup allows build').toMatchObject({ entry: minutes(1, 'open'), exit: minutes(1, 'close') });
 
-  it('the "no re-entry after" time is judged only while it is on', () => {
-    const draft = { ...newSetupDraft(SESSION_CLOCK), noReentryClock: formatClockText(CLOSE + 1) };
-
-    expect(problemsOf({ ...draft, noReentryOn: true }).has('noReentry')).toBe(true);
-    expect(buildSetup({ ...draft, noReentryOn: false }, SESSION_CLOCK).ok).toBe(true);
-  });
-
-  it('a time after noon is stored from the close and one at noon from the open', () => {
     const draft = { ...newSetupDraft(SESSION_CLOCK), noReentryOn: true };
 
-    expect(built({ ...draft, noReentryClock: '12:00' }).no_reentry_after).toEqual(minutes(12 * 60 - OPEN, 'open'));
-    expect(built({ ...draft, noReentryClock: '12:01' }).no_reentry_after).toEqual(minutes(CLOSE - (12 * 60 + 1), 'close'));
+    expect.soft(built({ ...draft, noReentryClock: '12:00' }).no_reentry_after, 'a time at noon is stored from the open').toEqual(minutes(12 * 60 - OPEN, 'open'));
+    expect.soft(built({ ...draft, noReentryClock: '12:01' }).no_reentry_after, 'a time after noon is stored from the close').toEqual(minutes(CLOSE - (12 * 60 + 1), 'close'));
   });
 });
 
 describe('costs and the other typed numbers', () => {
-  it('leave as the text typed, trimmed, and never as numbers', () => {
+  it('leave as the text typed, trimmed, and never as numbers; the per-contract fee is sent and read only for the per-contract policy; an underlying is asked for when none is picked', () => {
     const body = built({ ...newSetupDraft(SESSION_CLOCK), slippage: ' 0.25 ', cash: '25000.50' });
 
-    expect(body.slippage_percent).toBe('0.25');
-    expect(body.starting_cash_usd).toBe('25000.50');
-    expect(typeof body.slippage_percent).toBe('string');
-    expect(typeof body.starting_cash_usd).toBe('string');
+    expect.soft(body.slippage_percent, 'leaves the slippage as the text typed, trimmed').toBe('0.25');
+    expect.soft(body.starting_cash_usd, 'leaves the starting cash as the text typed').toBe('25000.50');
+    expect.soft(typeof body.slippage_percent, 'never turns the slippage into a number').toBe('string');
+    expect.soft(typeof body.starting_cash_usd, 'never turns the starting cash into a number').toBe('string');
+
+    const sentFee = { ...newSetupDraft(SESSION_CLOCK), perContractFee: '0.65' };
+
+    expect.soft(built({ ...sentFee, feeKind: 'per_contract' }).fees, 'sends the per-contract fee for the per-contract policy').toEqual({ kind: 'per_contract', per_contract_usd: '0.65' });
+    expect.soft(built({ ...sentFee, feeKind: 'estimated' }).fees, 'sends no per-contract fee for the estimated policy').toEqual({ kind: 'estimated' });
+    expect.soft(built({ ...sentFee, feeKind: 'not_charged' }).fees, 'sends no per-contract fee for the not-charged policy').toEqual({ kind: 'not_charged' });
+
+    const readFee = { ...newSetupDraft(SESSION_CLOCK), perContractFee: 'free' };
+
+    expect.soft(buildSetup({ ...readFee, feeKind: 'estimated' }, SESSION_CLOCK).ok, 'does not read the per-contract fee for the estimated policy').toBe(true);
+    expect.soft([...problemsOf({ ...readFee, feeKind: 'per_contract' }).keys()], 'reads the per-contract fee for the per-contract policy').toEqual(['perContractFee']);
+    expect.soft([...problemsOf({ ...newSetupDraft(SESSION_CLOCK), underlying: '' }).keys()], 'asks for an underlying when none is picked').toEqual(['underlying']);
   });
 
   it.each(['', 'abc', '1e3', '-1', '1,5', '.5'])('does not read "%s" as a decimal', (text) => {
     const problems = problemsOf({ ...newSetupDraft(SESSION_CLOCK), slippage: text, cash: text });
 
     expect([...problems.keys()].sort()).toEqual(['cash', 'slippage']);
-  });
-
-  it('sends the per-contract fee only for the per-contract policy', () => {
-    const draft = { ...newSetupDraft(SESSION_CLOCK), perContractFee: '0.65' };
-
-    expect(built({ ...draft, feeKind: 'per_contract' }).fees).toEqual({ kind: 'per_contract', per_contract_usd: '0.65' });
-    expect(built({ ...draft, feeKind: 'estimated' }).fees).toEqual({ kind: 'estimated' });
-    expect(built({ ...draft, feeKind: 'not_charged' }).fees).toEqual({ kind: 'not_charged' });
-  });
-
-  it('reads the per-contract fee only for the per-contract policy', () => {
-    const draft = { ...newSetupDraft(SESSION_CLOCK), perContractFee: 'free' };
-
-    expect(buildSetup({ ...draft, feeKind: 'estimated' }, SESSION_CLOCK).ok).toBe(true);
-    expect([...problemsOf({ ...draft, feeKind: 'per_contract' }).keys()]).toEqual(['perContractFee']);
-  });
-
-  it('asks for an underlying when none is picked', () => {
-    expect([...problemsOf({ ...newSetupDraft(SESSION_CLOCK), underlying: '' }).keys()]).toEqual(['underlying']);
   });
 });
 
@@ -315,48 +276,36 @@ describe('opening a served setup and sending it back', () => {
     expect(built(draftFromSetup(served, SESSION_CLOCK))).toEqual(sent);
   });
 
-  it('keeps the ids of the legs it was given', () => {
-    const draft = draftFromSetup(exampleBody(), SESSION_CLOCK);
-
-    expect(draft.legs.map((leg) => leg.id)).toEqual(['call', 'put']);
-  });
-
-  it('leaves a decimal the served setup lacks empty, with its problem, and fills in no default of its own', () => {
+  it('leaves a decimal the served setup lacks empty, with its problem, and fills in no default of its own, and reads every decimal as the text the server served it as', () => {
     const { slippage_percent: _slippage, price_step_usd: _step, ...bare } = exampleBody();
 
-    const draft = draftFromSetup(bare, SESSION_CLOCK);
+    const bareDraft = draftFromSetup(bare, SESSION_CLOCK);
 
-    expect(draft).toMatchObject({ slippage: '', priceStep: '' });
-    expect(problemsOf(draft).has('slippage')).toBe(true);
-  });
+    expect.soft(bareDraft, 'leaves a decimal the served setup lacks empty, and fills in no default of its own').toMatchObject({ slippage: '', priceStep: '' });
+    expect.soft(problemsOf(bareDraft).has('slippage'), 'leaves a decimal the served setup lacks empty, with its problem').toBe(true);
 
-  it('reads every decimal as the text the server served it as', () => {
     const served: ServedSetup = { ...exampleBody(), slippage_percent: '0.25', starting_cash_usd: '5000.50', fees: { kind: 'per_contract', per_contract_usd: '0.65' } };
 
     const body = built(draftFromSetup(served, SESSION_CLOCK));
 
-    expect(body).toMatchObject({ slippage_percent: '0.25', starting_cash_usd: '5000.50', fees: { kind: 'per_contract', per_contract_usd: '0.65' } });
+    expect.soft(body, 'reads every decimal as the text the server served it as').toMatchObject({ slippage_percent: '0.25', starting_cash_usd: '5000.50', fees: { kind: 'per_contract', per_contract_usd: '0.65' } });
   });
 
-  it('keeps a time anchored the way the file had it while it is untouched, and applies the page rule once it is typed over', () => {
+  it('keeps a time anchored the way the file had it while it is untouched and applies the page rule once it is typed over, loads a time that names no clock time as an empty field with its problem, and reads the times with the clock it is given', () => {
     const afterNoonFromOpen = { ...exampleBody(), no_reentry_after: minutes(5 * 60, 'open') };
     const draft = draftFromSetup(afterNoonFromOpen, SESSION_CLOCK);
 
-    expect(built(draft).no_reentry_after).toEqual(minutes(5 * 60, 'open'));
+    expect.soft(built(draft).no_reentry_after, 'keeps a time anchored the way the file had it while it is untouched').toEqual(minutes(5 * 60, 'open'));
     const retyped = { ...draft, noReentryClock: formatClockText(OPEN + 5 * 60 + 1) };
-    expect(built(retyped).no_reentry_after).toEqual(minutes(CLOSE - (OPEN + 5 * 60 + 1), 'close'));
-  });
+    expect.soft(built(retyped).no_reentry_after, 'applies the page rule once the time is typed over').toEqual(minutes(CLOSE - (OPEN + 5 * 60 + 1), 'close'));
 
-  it('loads a time that names no clock time as an empty field with its problem', () => {
-    const draft = draftFromSetup({ ...exampleBody(), entry: minutes(2000, 'open') }, SESSION_CLOCK);
+    const unnamed = draftFromSetup({ ...exampleBody(), entry: minutes(2000, 'open') }, SESSION_CLOCK);
 
-    expect(draft.entryClock).toBe('');
-    expect(problemsOf(draft).has('entry')).toBe(true);
-  });
+    expect.soft(unnamed.entryClock, 'loads a time that names no clock time as an empty field').toBe('');
+    expect.soft(problemsOf(unnamed).has('entry'), 'loads a time that names no clock time with its problem').toBe(true);
 
-  it('reads the times with the clock it is given and not another', () => {
     const odd = { open_minute_et: 600, close_minute_et: 900 };
 
-    expect(draftFromSetup(exampleBody(), odd)).toMatchObject({ entryClock: '10:05', exitClock: '14:14' });
+    expect.soft(draftFromSetup(exampleBody(), odd), 'reads the times with the clock it is given and not another').toMatchObject({ entryClock: '10:05', exitClock: '14:14' });
   });
 });

@@ -60,18 +60,21 @@ describe('WalkForwardStudyFormComponent', () => {
     expect(await screen.findByRole('button', { name: '5Y, unavailable: SPY is held from 2021-09-21.' })).not.toBeNull();
   });
 
-  it('preflights the embedded grid plus the two month lengths and shows the fold plan', async () => {
+  it('preflights the embedded grid plus the two month lengths, shows the fold plan, and starts a new study at the decision minute open (#2599)', async () => {
     const preflight = vi.fn(async (_spec: WalkForwardStudySpecRequest) => PLAN);
     await renderForm({ preflight });
 
     await waitFor(() => expect(preflight).toHaveBeenCalled());
     const spec = preflight.mock.lastCall?.[0];
-    expect(spec?.training_months).toBe(12);
-    expect(spec?.test_months).toBe(3);
-    expect(spec?.strategy_key).toBe('sma_crossover');
-    expect(spec?.param_ranges['short_window']).toEqual({ type: 'value_list', values: [10] });
+    expect.soft(spec?.training_months, 'preflights the embedded grid plus the two month lengths: training months').toBe(12);
+    expect.soft(spec?.test_months, 'preflights the embedded grid plus the two month lengths: test months').toBe(3);
+    expect.soft(spec?.strategy_key, 'preflights the embedded grid plus the two month lengths: strategy key').toBe('sma_crossover');
+    expect.soft(spec?.param_ranges['short_window'], 'preflights the embedded grid plus the two month lengths: embedded grid range').toEqual({ type: 'value_list', values: [10] });
     await waitFor(() => expect(screen.getByText(/4 combinations × 3 folds × 2 windows = 24 backtests/)).not.toBeNull());
-    expect(screen.getByText('Fold calendar')).not.toBeNull();
+    expect.soft(screen.getByText('Fold calendar'), 'shows the fold plan').not.toBeNull();
+
+    await waitFor(() => expect(preflight.mock.lastCall?.[0].fill_mode).toBe('decision_minute_open'));
+    expect.soft((screen.getByLabelText('Fill mode') as HTMLSelectElement).value, 'starts a new study at the decision minute open (#2599)').toBe('decision_minute_open');
   });
 
   it('re-preflights when a month length changes and refuses non-positive lengths client-side', async () => {
@@ -122,14 +125,6 @@ describe('WalkForwardStudyFormComponent', () => {
     fireEvent.click(screen.getByRole('button', { name: /launch study/i }));
     await waitFor(() => expect(launched).toHaveBeenCalledWith({ jobId: 'job-42' }));
     expect(launch.mock.lastCall?.[0]).toEqual(spec);
-  });
-
-  it('starts a new study at the decision minute open (#2599)', async () => {
-    const preflight = vi.fn(async (_spec: WalkForwardStudySpecRequest) => PLAN);
-    await renderForm({ preflight });
-
-    await waitFor(() => expect(preflight.mock.lastCall?.[0].fill_mode).toBe('decision_minute_open'));
-    expect((screen.getByLabelText('Fill mode') as HTMLSelectElement).value).toBe('decision_minute_open');
   });
 
   it('seeds and shows the fill mode a stored search ran under, not the default (#2599)', async () => {

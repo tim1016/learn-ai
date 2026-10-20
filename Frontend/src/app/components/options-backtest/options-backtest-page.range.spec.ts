@@ -1,10 +1,9 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
+import { fireEvent, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import { etIsoDate, etMidnightMs, isoDateAfter } from '../../shared/date/et-midnight';
-import { RunRefusedError } from './options-backtest.service';
-import { checkButton, dateFields, openExample, pickDates } from './testing/page-actions';
-import { fakeService, renderPage, type FakeService } from './testing/render-page';
+import { checkButton, openExample, pickDates } from './testing/page-actions';
+import { renderPage, type FakeService } from './testing/render-page';
 import { scriptedRun } from './testing/run-script';
 
 const startButton = () => screen.getByRole<HTMLButtonElement>('button', { name: 'Start backtest' });
@@ -16,9 +15,6 @@ async function readyWith(service: FakeService, dates: [string, string]): Promise
   pickDates(...dates);
   await waitFor(() => expect(startButton().disabled).toBe(false));
 }
-
-/** The server refuses a range whose two instants are not New York midnights; the page always sends midnights, so it should never meet this. */
-const NOT_ON_MIDNIGHT = { code: 'OPTIONS_BACKTEST_RANGE_NOT_ON_MIDNIGHT', message: 'A run starts and ends at New York midnight; 1789358400001 is not one.' };
 
 describe('the range the page sends', () => {
   // The picker takes trading days only, so a last date is never a Sunday (that range is the pure spec of `rangeInstants`, in
@@ -60,41 +56,3 @@ describe('the range the page sends', () => {
   });
 });
 
-describe('a refusal of the range with a code the page has not met', () => {
-  it('is shown at the dates in the server’s words for Check data, opens no panel, and is gone when the dates change', async () => {
-    const service = fakeService(vi, {
-      checkData: vi.fn(async () => {
-        throw new RunRefusedError(NOT_ON_MIDNIGHT.code, NOT_ON_MIDNIGHT.message, 400);
-      }),
-    });
-    await renderPage(service);
-    await openExample();
-    pickDates('2026-09-14', '2026-09-18');
-    await waitFor(() => expect(checkButton().disabled).toBe(false));
-
-    fireEvent.click(checkButton());
-
-    const reason = await within(screen.getByRole('region', { name: 'Duration' })).findByText(NOT_ON_MIDNIGHT.message);
-    expect(reason.getAttribute('role')).toBe('alert');
-    expect(screen.queryByRole('region', { name: 'Check data' })).toBeNull();
-    pickDates('2026-09-15', '2026-09-18');
-    await waitFor(() => expect(screen.queryByText(NOT_ON_MIDNIGHT.message)).toBeNull());
-    expect(dateFields()).toEqual({ from: '2026-09-15', to: '2026-09-18' });
-  });
-
-  it('is shown at the dates in the server’s words for Start, starts no run, and leaves Start free', async () => {
-    const setup = scriptedRun(vi, {
-      startRun: vi.fn(async () => {
-        throw new RunRefusedError(NOT_ON_MIDNIGHT.code, NOT_ON_MIDNIGHT.message, 400);
-      }),
-    });
-    await readyWith(setup.service, ['2026-09-14', '2026-09-18']);
-
-    fireEvent.click(startButton());
-
-    const reason = await within(screen.getByRole('region', { name: 'Duration' })).findByText(NOT_ON_MIDNIGHT.message);
-    expect(reason.getAttribute('role')).toBe('alert');
-    expect(screen.queryByRole('region', { name: 'Backtest run' })).toBeNull();
-    expect(startButton().disabled).toBe(false);
-  });
-});

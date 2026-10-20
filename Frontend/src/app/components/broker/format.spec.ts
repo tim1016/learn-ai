@@ -44,22 +44,14 @@ describe('deltaAbsBand', () => {
     expect(deltaAbsBand(null)).toBeNull();
   });
 
-  it('classifies green up to 0.005 inclusive', () => {
-    expect(deltaAbsBand(0)).toBe('green');
-    expect(deltaAbsBand(0.001)).toBe('green');
-    expect(deltaAbsBand(0.005)).toBe('green');
-  });
-
-  it('classifies yellow above 0.005 up to 0.02 inclusive', () => {
-    expect(deltaAbsBand(0.005001)).toBe('yellow');
-    expect(deltaAbsBand(0.015)).toBe('yellow');
-    expect(deltaAbsBand(0.02)).toBe('yellow');
-  });
-
-  it('classifies red above 0.02', () => {
-    expect(deltaAbsBand(0.020001)).toBe('red');
-    expect(deltaAbsBand(0.1)).toBe('red');
-    expect(deltaAbsBand(1.0)).toBe('red');
+  it.each([
+    ['green up to 0.005 inclusive', 'green', 0, 0.001, 0.005],
+    ['yellow above 0.005 up to 0.02 inclusive', 'yellow', 0.005001, 0.015, 0.02],
+    ['red above 0.02', 'red', 0.020001, 0.1, 1.0],
+  ] as const)('classifies %s', (_name, band, low, mid, high) => {
+    expect(deltaAbsBand(low)).toBe(band);
+    expect(deltaAbsBand(mid)).toBe(band);
+    expect(deltaAbsBand(high)).toBe(band);
   });
 
   it('uses absolute magnitude — sign of the diff does not change the band', () => {

@@ -46,37 +46,40 @@ describe("MetricHelpModalComponent", () => {
     expect(document.body.textContent).toContain("Open this quantity in the full Strategy Lab manual");
   });
 
-  it("resolves a persisted LEAN quantity to its exact backend-recorded variant", async () => {
-    const fixture = await renderModal({
-      metricId: "maximum_drawdown",
-      label: "Max drawdown",
-      context: {
-        metric_id: "maximum_drawdown",
-        variant_id: "lean_native.portfolio.drawdown.v1",
-        producer: "lean_native",
-        contract_id: "lean-native-statistics-oracle-v1",
+  it.each<[string, Parameters<typeof renderModal>[0], string, string]>([
+    [
+      "resolves a persisted LEAN quantity to its exact backend-recorded variant",
+      {
+        metricId: "maximum_drawdown",
+        label: "Max drawdown",
+        context: {
+          metric_id: "maximum_drawdown",
+          variant_id: "lean_native.portfolio.drawdown.v1",
+          producer: "lean_native",
+          contract_id: "lean-native-statistics-oracle-v1",
+        },
       },
-    });
+      "Largest Strategy Equity peak-to-trough decline.",
+      "depth or persistence of capital stress",
+    ],
+    [
+      "opens an exact native-statistics variant without duplicating its authored content",
+      {
+        metricId: undefined,
+        variantId: "lean_native.portfolio.alpha.v1",
+        label: "Alpha",
+      },
+      "CAPM-style annual excess return over the aligned benchmark.",
+      "differentiated strategy behavior",
+    ],
+  ])("%s", async (_case, options, firstText, secondText) => {
+    const fixture = await renderModal(options);
 
     (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>("button")?.click();
     fixture.detectChanges();
 
-    expect(document.body.textContent).toContain("Largest Strategy Equity peak-to-trough decline.");
-    expect(document.body.textContent).toContain("depth or persistence of capital stress");
-  });
-
-  it("opens an exact native-statistics variant without duplicating its authored content", async () => {
-    const fixture = await renderModal({
-      metricId: undefined,
-      variantId: "lean_native.portfolio.alpha.v1",
-      label: "Alpha",
-    });
-
-    (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>("button")?.click();
-    fixture.detectChanges();
-
-    expect(document.body.textContent).toContain("CAPM-style annual excess return over the aligned benchmark.");
-    expect(document.body.textContent).toContain("differentiated strategy behavior");
+    expect(document.body.textContent).toContain(firstText);
+    expect(document.body.textContent).toContain(secondText);
   });
 
   it("shows an unavailable-guide warning instead of unrelated documentation for an unknown explicit variant", async () => {

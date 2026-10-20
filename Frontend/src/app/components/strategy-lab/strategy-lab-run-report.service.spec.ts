@@ -39,12 +39,13 @@ afterEach(() => {
 });
 
 describe("StrategyLabRunReport", () => {
-  it("does not read until a run is active", async () => {
+  it("stays idle with no run selected: reads nothing and does not call it missing", async () => {
     const { report, get } = makeReport(of(null), null);
     await Promise.resolve();
 
-    expect(report.run()).toBeNull();
-    expect(get).not.toHaveBeenCalled();
+    expect.soft(report.run(), "does not load a run until a run is active").toBeNull();
+    expect.soft(get, "does not read until a run is active").not.toHaveBeenCalled();
+    expect.soft(report.notFound(), "does not call an unselected run missing").toBe(false);
   });
 
   it("uses the producer-authored realized staircase instead of mark-to-market points", async () => {
@@ -127,19 +128,14 @@ describe("StrategyLabRunReport", () => {
     expect(report.notFound()).toBe(false);
   });
 
-  it("reports a run the server does not have as missing, not as a load failure", async () => {
+  it("reports a run the server does not have as missing, not as a load failure, and drops the displayed run", async () => {
     const { report } = makeReport(of(null), 404);
     await Promise.resolve();
 
-    expect(report.notFound()).toBe(true);
-    expect(report.loadError()).toBeUndefined();
-  });
-
-  it("does not call an unselected run missing", async () => {
-    const { report } = makeReport(of(null), null);
-    await Promise.resolve();
-
-    expect(report.notFound()).toBe(false);
+    expect.soft(report.notFound(), "reports a run the server does not have as missing").toBe(true);
+    expect.soft(report.loadError(), "does not report a run the server does not have as a load failure").toBeUndefined();
+    expect.soft(report.notFound(), "drops the displayed run when the replacement turns out not to exist: reports it missing").toBe(true);
+    expect.soft(report.displayRun(), "drops the displayed run when the replacement turns out not to exist").toBeNull();
   });
 
   it("keeps the loaded run on screen until its replacement arrives", async () => {
@@ -179,14 +175,6 @@ describe("StrategyLabRunReport", () => {
     await Promise.resolve();
 
     expect(report.displayRun()?.id).toBe(second.id);
-  });
-
-  it("drops the displayed run when the replacement turns out not to exist", async () => {
-    const { report } = makeReport(of(null), 404);
-    await Promise.resolve();
-
-    expect(report.notFound()).toBe(true);
-    expect(report.displayRun()).toBeNull();
   });
 
   it("re-reads on the poll cadence only while a parity verdict is pending", async () => {

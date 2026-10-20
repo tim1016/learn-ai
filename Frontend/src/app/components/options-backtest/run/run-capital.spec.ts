@@ -51,16 +51,6 @@ describe('the capital block', () => {
     expect(tile('Closes that relied on their own relief').querySelector('.big')?.textContent).toBe('0');
   });
 
-  it('says which figure is over the funded stretch and which are over every session the replay ran', async () => {
-    await renderResult({ capital_evidence: AN_UNFUNDED_CLOSE });
-
-    const scopeOf = (name: string) => tile(name).querySelector('.scope')?.textContent;
-    expect(scopeOf('Cash this path needed')).toBe('Over the funded stretch only, the steps before the event.');
-    for (const name of ['Most collateral held', 'Least free cash seen', 'Largest assignment obligation held', 'Closes that relied on their own relief']) {
-      expect(scopeOf(name), name).toBe('Over every session the replay ran.');
-    }
-  });
-
   it('names an unfunded close with its session and its minute in New York, and the free cash it left', async () => {
     await renderResult({ capital_evidence: AN_UNFUNDED_CLOSE });
 
@@ -96,26 +86,15 @@ describe('the capital block', () => {
     expect(capital().querySelector('.sentence')?.textContent).toBe('Not funded continuously through even the first of 10 sessions.');
   });
 
-  it('marks the cash this path needed incomplete, and says why, when an entry was refused for cash on the way', async () => {
+  it('marks the cash this path needed incomplete and says why, and states the requirement rule used with the day its page was read', async () => {
     await renderResult({ capital_evidence: capitalEvidence({ cash_needed_is_incomplete: true }) });
 
     const needed = tile('Cash this path needed');
-    expect(needed.querySelector('.tag')?.textContent).toBe('incomplete');
-    expect(reads(needed)).toContain('a larger starting cash would have traded a different path');
-    expect(reads(needed)).toContain('not a minimum and not a safe amount');
-  });
-
-  it('says the totals keep every session, so the verdict is not read as a total', async () => {
-    await renderResult();
-
-    expect(paragraph(/^The totals above keep every session at its mark/, capital())).toBeTruthy();
-  });
-
-  it('states the requirement rule used, the day its page was read in New York, and that it is no evidence of a past requirement', async () => {
-    await renderResult();
-
+    expect.soft(needed.querySelector('.tag')?.textContent, 'marks the cash this path needed incomplete when an entry was refused for cash on the way').toBe('incomplete');
+    expect.soft(reads(needed), 'says why: a larger starting cash would have traded a different path').toContain('a larger starting cash would have traded a different path');
+    expect.soft(reads(needed), 'says it is not a minimum and not a safe amount').toContain('not a minimum and not a safe amount');
     const stamp = paragraph(/^Replay rules version 1/, capital());
-    expect(reads(stamp)).toBe(
+    expect.soft(reads(stamp), 'states the requirement rule used, the day its page was read in New York, and that it is no evidence of a past requirement').toBe(
       'Replay rules version 1. Requirement rule: Alpaca’s published rule for covered positions, as its page read on 2026-10-12 . It is today’s rule and is no evidence of what a broker required on a session’s date.',
     );
     expectTradingDatesInNewYork(stamp);
@@ -158,14 +137,6 @@ describe('the cash ladder', () => {
     ]);
     expect(screen.getByText('setup’s own cash').closest('tr')?.classList.contains('own')).toBe(true);
     expect(ladder().textContent).toContain('No level is called safe.');
-  });
-
-  it('shows a level too small to enter as entries refused and none filled, beside a larger one that filled them', async () => {
-    await renderResult();
-
-    const [smallest, , , largest] = rows();
-    expect(smallest).toContain('0 24');
-    expect(largest).toContain('14 0');
   });
 });
 

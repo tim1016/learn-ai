@@ -20,7 +20,6 @@ import { AlpacaActivityPageComponent } from './components/brokers/alpaca-desk/ac
 import { BotPanelShellComponent } from './components/broker/v2-panel/panel-shell/bot-panel-shell.component';
 import { EntryComponent } from './components/entry/entry.component';
 import { OptionsBacktestPageComponent } from './components/options-backtest/options-backtest-page.component';
-import { alpacaSurfaceRedirectGuard } from './fleet/alpaca-surface-redirect.guard';
 import { accountWorkspaceFixRoute, type AccountWorkspaceFixDestination } from './fleet/account-workspace';
 import { routes } from './app.routes';
 
@@ -70,21 +69,6 @@ describe('routes', () => {
     expect(TestBed.inject(Router).serializeUrl(tree)).toBe(expectedUrl);
   });
 
-  it.each([
-    '/strategy-lab/runs/204/extra',
-    '/engine/runs/204/extra',
-  ])('does not treat %s as a persisted-run bookmark', async (url) => {
-    // Without pathMatch: 'full' the run routes prefix-match, so a trailing
-    // segment still fired the redirect with id 204 instead of falling through
-    // to the wildcard — a URL that is not a run bookmark opened a run.
-    TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
-    const router = TestBed.inject(Router);
-
-    await router.navigateByUrl(url);
-
-    expect(router.url).toBe('/data-lab/explore');
-  });
-
   it('opens on the entry page at the root address instead of jumping into the app', async () => {
     TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
     const router = TestBed.inject(Router);
@@ -95,22 +79,6 @@ describe('routes', () => {
     expect(router.routerState.snapshot.root.firstChild?.component).toBe(EntryComponent);
   });
 
-  it('resolves the legacy engine/runs/:id bookmark onto the one-page workbench', async () => {
-    // Angular's router does not chain a redirect target that is itself a
-    // redirect route within one navigation (it re-matches the redirected URL
-    // with redirects disallowed), so engine/runs/:id must redirect straight
-    // to the final /strategy-lab?run=N destination rather than hopping
-    // through strategy-lab/runs/:id. This is a full-router assertion, not a
-    // route-config shape check, because that is exactly the distinction that
-    // would otherwise hide the gap.
-    TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
-    const router = TestBed.inject(Router);
-
-    await router.navigateByUrl('/engine/runs/204');
-
-    expect(router.url).toBe('/strategy-lab?run=204');
-  });
-
   it.each([
     'options-lab',
     'strategy-lab',
@@ -119,21 +87,41 @@ describe('routes', () => {
   });
 
   it.each([
-    ['/broker', '/brokers/alpaca'],
-    ['/broker/accounts', '/brokers/alpaca'],
-    ['/broker/accounts/account-1', '/brokers/alpaca'],
-    ['/broker/account-monitor', '/brokers/alpaca'],
-    ['/broker/reconciliation', '/brokers/alpaca'],
-    ['/broker/orders', '/brokers/alpaca'],
-    ['/broker/session-mirror', '/brokers/alpaca'],
-    ['/broker/paper-run', '/brokers/alpaca'],
-    ['/broker/instances', '/brokers/alpaca'],
-    ['/broker/instances/bot-1', '/brokers/alpaca'],
-    ['/broker/bots', '/brokers/alpaca'],
-    ['/broker/bots/bot-1', '/brokers/alpaca'],
-    ['/broker/offline-replay', '/brokers/alpaca'],
-    ['/broker/deploy', '/brokers/alpaca'],
-  ])('navigates the deprecated %s URL to %s', async (path, expectedUrl) => {
+    ['deprecated broker URL', '/broker', '/brokers/alpaca'],
+    ['deprecated broker URL', '/broker/accounts', '/brokers/alpaca'],
+    ['deprecated broker URL', '/broker/accounts/account-1', '/brokers/alpaca'],
+    ['deprecated broker URL', '/broker/account-monitor', '/brokers/alpaca'],
+    ['deprecated broker URL', '/broker/reconciliation', '/brokers/alpaca'],
+    ['deprecated broker URL', '/broker/orders', '/brokers/alpaca'],
+    ['deprecated broker URL', '/broker/session-mirror', '/brokers/alpaca'],
+    ['deprecated broker URL', '/broker/paper-run', '/brokers/alpaca'],
+    ['deprecated broker URL', '/broker/instances', '/brokers/alpaca'],
+    ['deprecated broker URL', '/broker/instances/bot-1', '/brokers/alpaca'],
+    ['deprecated broker URL', '/broker/bots', '/brokers/alpaca'],
+    ['deprecated broker URL', '/broker/bots/bot-1', '/brokers/alpaca'],
+    ['deprecated broker URL', '/broker/offline-replay', '/brokers/alpaca'],
+    ['deprecated broker URL', '/broker/deploy', '/brokers/alpaca'],
+    // The guard still folds `?surface=bots` onto `/brokers/alpaca/bots`,
+    // which now redirects back to the list. The chain has to terminate on the
+    // list rather than loop or strand the bookmark.
+    ['account-list hop chain', '/brokers/alpaca?surface=bots', '/brokers/alpaca'],
+    ['account-list hop chain', '/brokers/alpaca?surface=gallery', '/brokers/alpaca'],
+    ['account-list hop chain', '/brokers/alpaca/bots', '/brokers/alpaca'],
+    ['account-list hop chain', '/brokers/alpaca/gallery', '/brokers/alpaca'],
+    // Without pathMatch: 'full' the run routes prefix-match, so a trailing
+    // segment still fired the redirect with id 204 instead of falling through
+    // to the wildcard — a URL that is not a run bookmark opened a run.
+    ['persisted-run URL with a trailing segment', '/strategy-lab/runs/204/extra', '/data-lab/explore'],
+    ['persisted-run URL with a trailing segment', '/engine/runs/204/extra', '/data-lab/explore'],
+    // Angular's router does not chain a redirect target that is itself a
+    // redirect route within one navigation (it re-matches the redirected URL
+    // with redirects disallowed), so engine/runs/:id must redirect straight
+    // to the final /strategy-lab?run=N destination rather than hopping
+    // through strategy-lab/runs/:id. This is a full-router assertion, not a
+    // route-config shape check, because that is exactly the distinction that
+    // would otherwise hide the gap.
+    ['legacy engine/runs/:id bookmark', '/engine/runs/204', '/strategy-lab?run=204'],
+  ])('%s: %s lands on %s', async (_kind, path, expectedUrl) => {
     TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
     const router = TestBed.inject(Router);
 
@@ -158,24 +146,6 @@ describe('routes', () => {
     expect(routes.find((candidate) => candidate.path === 'data-lab')?.loadChildren).toBeDefined();
   });
 
-  it('retires the broker-wide surface choosers onto the account list', async () => {
-    // A surface belongs to an account (ADR 0064 Decision 2), so these two
-    // bookmarks have no page of their own any more — they land on the one
-    // page that can name an account, rather than 404-ing.
-    for (const path of ['brokers/alpaca/bots', 'brokers/alpaca/gallery']) {
-      const route = routes.find((candidate) => candidate.path === path);
-
-      expect(route).toMatchObject({ redirectTo: '/brokers/alpaca', pathMatch: 'full' });
-      expect(route?.loadComponent).toBeUndefined();
-    }
-  });
-
-  it('retires the desk surface hints through the redirect guard', () => {
-    const desk = routes.find((candidate) => candidate.path === 'brokers/alpaca');
-
-    expect(desk?.canActivate).toContain(alpacaSurfaceRedirectGuard);
-  });
-
   it('serves the account list — and its ?deploy intent — from the one broker route', async () => {
     const list = routes.find((candidate) => candidate.path === 'brokers/alpaca');
 
@@ -186,42 +156,19 @@ describe('routes', () => {
   });
 
   it.each([
-    ['/brokers/alpaca?surface=bots'],
-    ['/brokers/alpaca?surface=gallery'],
-    ['/brokers/alpaca/bots'],
-    ['/brokers/alpaca/gallery'],
-  ])('lands %s on the account list, in however many hops it takes', async (path) => {
-    // The guard still folds `?surface=bots` onto `/brokers/alpaca/bots`,
-    // which now redirects back to the list. The chain has to terminate on the
-    // list rather than loop or strand the bookmark.
-    TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
-    const router = TestBed.inject(Router);
-
-    await router.navigateByUrl(path);
-
-    expect(router.url).toBe('/brokers/alpaca');
-  });
-
-  it.each([['/brokers/alpaca/settings'], ['/brokers/alpaca/configuration']])(
-    'lands the broker-wide Settings bookmark %s on the account list, never a dead page (#2567)',
-    async (from) => {
-      // Settings is one lane's page (FR-092); a bookmark naming no lane lands
-      // where the owner chooses the account, never on a page that cannot
-      // stage or Apply, and never on a lane picked for them (FR-096).
-      TestBed.configureTestingModule({ providers: appConfig.providers });
-      const router = TestBed.inject(Router);
-
-      await router.navigateByUrl(from);
-
-      expect(router.url).toBe('/brokers/alpaca');
-    },
-  );
-
-  it.each([
-    ['/brokers/ibkr/clerks/clrk_other/configuration', '/brokers/ibkr/clerks/clrk_other/settings'],
-  ])('redirects the Configuration bookmark %s to its Settings equivalent %s (#2566)', async (from, to) => {
+    // Settings is one lane's page (FR-092); a bookmark naming no lane lands
+    // where the owner chooses the account, never on a page that cannot
+    // stage or Apply, and never on a lane picked for them (FR-096).
+    ['broker-wide Settings bookmark, never a dead page (#2567)', '/brokers/alpaca/settings', '/brokers/alpaca'],
+    ['broker-wide Settings bookmark, never a dead page (#2567)', '/brokers/alpaca/configuration', '/brokers/alpaca'],
     // The address cannot prove an Alpaca lane, so it still renders the
     // in-place lane-unavailable page — under the Settings address.
+    [
+      'Configuration bookmark (#2566)',
+      '/brokers/ibkr/clerks/clrk_other/configuration',
+      '/brokers/ibkr/clerks/clrk_other/settings',
+    ],
+  ])('%s: %s lands on %s', async (_kind, from, to) => {
     TestBed.configureTestingModule({ providers: appConfig.providers });
     const router = TestBed.inject(Router);
 
@@ -267,76 +214,50 @@ describe('routes', () => {
       }
     });
 
-    it('opens a lane deep link without a tab on the one tab it can always serve', () => {
-      // Settings needs no confirmed binding, so it is the lane's own home —
-      // and the owner's way to connect an account.
-      expect(workspace?.children?.find((child) => child.path === '')).toMatchObject({
-        redirectTo: 'settings',
-        pathMatch: 'full',
-      });
-    });
-
     it.each([
-      ['settings', AlpacaSettingsPageComponent],
-      ['home', AlpacaSurfaceNotReadyTabComponent],
-    ])('loads the lane-scoped %s tab', async (path, expectedComponent) => {
-      const route = workspace?.children?.find((candidate) => candidate.path === path);
-      if (route === undefined) throw new Error(`Workspace tab ${path} is missing.`);
+      ['lane-scoped Settings tab', workspace?.children, 'settings', AlpacaSettingsPageComponent],
+      ['lane-scoped not-ready Home tab', workspace?.children, 'home', AlpacaSurfaceNotReadyTabComponent],
+      // Regression: an operator reported a clerk-scoped URL landing on the
+      // broker configuration page. Home stays a loadComponent route with no
+      // redirectTo and no canActivate retargeting.
+      ['account Home page', account?.children, '', AlpacaHomeComponent],
+      ['account Activity page', account?.children, 'activity', AlpacaActivityPageComponent],
+    ])('opens the %s on its own page — never a redirect', async (name, siblings, path, expectedComponent) => {
+      const route = siblings?.find((candidate) => candidate.path === path);
+      if (route === undefined) throw new Error(`The ${name} route is missing.`);
 
       expect(route.redirectTo).toBeUndefined();
       expect(route.canActivate).toBeUndefined();
       expect(await route.loadComponent?.()).toBe(expectedComponent);
     });
 
-    it('opens the account on Home — its own page, never a redirect to configuration', async () => {
-      // Regression: an operator reported a clerk-scoped URL landing on the
-      // broker configuration page. Home stays a loadComponent route with no
-      // redirectTo and no canActivate retargeting.
-      const route = account?.children?.find((candidate) => candidate.path === '');
-      if (route === undefined) throw new Error('Home is missing.');
-
-      expect(route.redirectTo).toBeUndefined();
-      expect(route.canActivate).toBeUndefined();
-      expect(await route.loadComponent?.()).toBe(AlpacaHomeComponent);
-    });
-
-    it('opens Activity on its own page — never a redirect', async () => {
-      const route = account?.children?.find((candidate) => candidate.path === 'activity');
-      if (route === undefined) throw new Error('Activity is missing.');
-
-      expect(route.redirectTo).toBeUndefined();
-      expect(route.canActivate).toBeUndefined();
-      expect(await route.loadComponent?.()).toBe(AlpacaActivityPageComponent);
-    });
-
     it.each([
-      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9'],
-      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9?view=wall'],
-      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery?lens=operator', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9?view=wall'],
-      ['/brokers/alpaca/clerks/clrk_spec/bots', '/brokers/alpaca/clerks/clrk_spec/home'],
-      ['/brokers/alpaca/clerks/clrk_spec/gallery', '/brokers/alpaca/clerks/clrk_spec/home?view=wall'],
-    ])('lands the retired tab %s on Home at %s', async (url, landed) => {
       // Overview, Bots and Gallery merged into Home (PRD #2560); Gallery is
       // its Wall view. A `?lens=` is retired with the lens and never travels.
-      TestBed.configureTestingModule({ providers: appConfig.providers });
-      const router = TestBed.inject(Router);
-
-      await router.navigateByUrl(url);
-
-      expect(router.url).toBe(landed);
-    });
-
-    it.each([
-      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9?lens=operator', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9'],
-      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9?view=wall&lens=trader', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9?view=wall'],
-      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/activity?lens=operator', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/activity'],
-      ['/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid-1?lens=operator', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid-1'],
-      ['/brokers/alpaca/clerks/clrk_spec/settings?lens=operator', '/brokers/alpaca/clerks/clrk_spec/settings'],
-      ['/brokers/alpaca?lens=operator', '/brokers/alpaca'],
-      ['/brokers/alpaca?surface=bots&lens=operator', '/brokers/alpaca'],
-    ])('drops the retired ?lens= from %s and lands on %s', async (url, landed) => {
+      ['retired tab on Home', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9'],
+      ['retired tab on Home', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9?view=wall'],
+      ['retired tab on Home', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery?lens=operator', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9?view=wall'],
+      ['retired tab on Home', '/brokers/alpaca/clerks/clrk_spec/bots', '/brokers/alpaca/clerks/clrk_spec/home'],
+      ['retired tab on Home', '/brokers/alpaca/clerks/clrk_spec/gallery', '/brokers/alpaca/clerks/clrk_spec/home?view=wall'],
       // The Trader/Operator lens is gone (PRD #2560 D2): an old link still
       // opens the page it named, with everything else it carried.
+      ['retired ?lens=', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9?lens=operator', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9'],
+      ['retired ?lens=', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9?view=wall&lens=trader', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9?view=wall'],
+      ['retired ?lens=', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/activity?lens=operator', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/activity'],
+      ['retired ?lens=', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid-1?lens=operator', '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid-1'],
+      ['retired ?lens=', '/brokers/alpaca/clerks/clrk_spec/settings?lens=operator', '/brokers/alpaca/clerks/clrk_spec/settings'],
+      ['retired ?lens=', '/brokers/alpaca?lens=operator', '/brokers/alpaca'],
+      ['retired ?lens=', '/brokers/alpaca?surface=bots&lens=operator', '/brokers/alpaca'],
+      // Configuration became Settings (PRD #2560, FR-092). A bookmark keeps
+      // working, and a review request from the desk keeps its query with it.
+      ['retired Configuration address (#2566)', '/brokers/alpaca/clerks/clrk_spec/configuration', '/brokers/alpaca/clerks/clrk_spec/settings'],
+      [
+        'retired Configuration address (#2566)',
+        '/brokers/alpaca/clerks/clrk_spec/configuration?profileId=profile-paper&revision=2',
+        '/brokers/alpaca/clerks/clrk_spec/settings?profileId=profile-paper&revision=2',
+      ],
+      ['retired Configuration address (#2566)', '/brokers/alpaca/clerks/clrk_spec', '/brokers/alpaca/clerks/clrk_spec/settings'],
+    ])('%s: %s lands on %s', async (_kind, url, landed) => {
       TestBed.configureTestingModule({ providers: appConfig.providers });
       const router = TestBed.inject(Router);
 
@@ -410,24 +331,6 @@ describe('routes', () => {
       while (route.firstChild !== null) route = route.firstChild;
       expect(route.params).toMatchObject({ clerkId: 'clrk_spec' });
       expect(route.params['accountId']).toBeUndefined();
-    });
-
-    it.each([
-      ['/brokers/alpaca/clerks/clrk_spec/configuration', '/brokers/alpaca/clerks/clrk_spec/settings'],
-      [
-        '/brokers/alpaca/clerks/clrk_spec/configuration?profileId=profile-paper&revision=2',
-        '/brokers/alpaca/clerks/clrk_spec/settings?profileId=profile-paper&revision=2',
-      ],
-      ['/brokers/alpaca/clerks/clrk_spec', '/brokers/alpaca/clerks/clrk_spec/settings'],
-    ])('redirects the retired Configuration address %s to %s (#2566)', async (from, to) => {
-      // Configuration became Settings (PRD #2560, FR-092). A bookmark keeps
-      // working, and a review request from the desk keeps its query with it.
-      TestBed.configureTestingModule({ providers: appConfig.providers });
-      const router = TestBed.inject(Router);
-
-      await router.navigateByUrl(from);
-
-      expect(router.url).toBe(to);
     });
 
     it("puts a bot's own page inside the workspace, not beside it", async () => {

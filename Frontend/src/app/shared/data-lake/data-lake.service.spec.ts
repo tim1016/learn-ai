@@ -145,39 +145,33 @@ describe('DataLakeService', () => {
 });
 
 describe('classifyDataLakeError', () => {
-  it('names an unreachable data plane instead of surfacing a bare status 0', () => {
-    const result = classifyDataLakeError(
-      new HttpErrorResponse({ status: 0, statusText: 'Unknown Error' }),
-    );
+  it('classifies every failure a data-lake read can end in', () => {
+    expect.soft(
+      classifyDataLakeError(new HttpErrorResponse({ status: 0, statusText: 'Unknown Error' })),
+      'names an unreachable data plane instead of surfacing a bare status 0',
+    ).toEqual({ kind: 'unavailable', message: 'The data plane did not respond.' });
 
-    expect(result).toEqual({ kind: 'unavailable', message: 'The data plane did not respond.' });
-  });
+    expect.soft(
+      classifyDataLakeError(new HttpErrorResponse({ status: 422, statusText: 'Unprocessable Entity', error: {} })),
+      'falls back to validation_failed when a 422 body carries no reason',
+    ).toMatchObject({ kind: 'rejected', reason: 'validation_failed' });
 
-  it('falls back to validation_failed when a 422 body carries no reason', () => {
-    const result = classifyDataLakeError(
-      new HttpErrorResponse({ status: 422, statusText: 'Unprocessable Entity', error: {} }),
-    );
-
-    expect(result).toMatchObject({ kind: 'rejected', reason: 'validation_failed' });
-  });
-
-  it('does not pretend a non-HTTP throw was an HTTP answer', () => {
-    expect(classifyDataLakeError(new Error('boom'))).toEqual({
+    expect.soft(
+      classifyDataLakeError(new Error('boom')),
+      'does not pretend a non-HTTP throw was an HTTP answer',
+    ).toEqual({
       kind: 'unavailable',
       message: 'boom',
     });
-  });
 
-  it('ignores a detail that is a string, however 404-shaped the status is', () => {
-    expect(
+    expect.soft(
       classifyDataLakeError(
         new HttpErrorResponse({ status: 404, statusText: 'Not Found', error: { detail: 'Not Found' } }),
       ),
+      'ignores a detail that is a string, however 404-shaped the status is',
     ).toMatchObject({ kind: 'unavailable' });
-  });
 
-  it('keeps a typed reason on any status, not just the two it was written for', () => {
-    expect(
+    expect.soft(
       classifyDataLakeError(
         new HttpErrorResponse({
           status: 503,
@@ -185,23 +179,26 @@ describe('classifyDataLakeError', () => {
           error: { detail: { reason: 'catalog_unreachable', message: 'pool exhausted' } },
         }),
       ),
+      'keeps a typed reason on any status, not just the two it was written for',
     ).toEqual({ kind: 'rejected', reason: 'catalog_unreachable', message: 'pool exhausted' });
   });
 });
 
 describe('describeFailure', () => {
-  it('gives every failure a reason code', () => {
-    expect(describeFailure({ kind: 'unavailable', message: 'no answer' })).toEqual({
+  it('describes a failed read by its reason code, and has nothing to say about one that succeeded or has not landed', () => {
+    expect.soft(
+      describeFailure({ kind: 'unavailable', message: 'no answer' }),
+      'gives every failure a reason code: an unavailable read',
+    ).toEqual({
       reason: 'unavailable',
       message: 'no answer',
     });
-    expect(
+    expect.soft(
       describeFailure({ kind: 'rejected', reason: 'artifact_not_found', message: 'artifact 99 not found' }),
+      'gives every failure a reason code: a rejected read',
     ).toEqual({ reason: 'artifact_not_found', message: 'artifact 99 not found' });
-  });
 
-  it('has nothing to say about a read that succeeded or has not landed', () => {
-    expect(describeFailure({ kind: 'ok', value: 1 })).toBeNull();
-    expect(describeFailure(undefined)).toBeNull();
+    expect.soft(describeFailure({ kind: 'ok', value: 1 }), 'has nothing to say about a read that succeeded').toBeNull();
+    expect.soft(describeFailure(undefined), 'has nothing to say about a read that has not landed').toBeNull();
   });
 });

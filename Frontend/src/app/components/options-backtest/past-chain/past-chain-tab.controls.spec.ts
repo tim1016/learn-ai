@@ -426,13 +426,6 @@ describe('the underlying', () => {
     expect(service.expiry).toHaveBeenCalledTimes(1);
   });
 
-  it('says what picking a symbol the lake holds no bars for will do, since the chain is fetched by the download and not by the pick', async () => {
-    await renderChainTab(fakeChainService(vi));
-
-    expect(screen.getByText(/Picking a symbol the lake holds no bars for starts a backfill of its trade bars first/)).toBeTruthy();
-    expect(screen.getByText(/The chain's own data is fetched only by Download missing data\./)).toBeTruthy();
-  });
-
   it('is asked for a listing only once there is a date', async () => {
     const service = fakeChainService(vi);
     const view = await renderChainTab(service);

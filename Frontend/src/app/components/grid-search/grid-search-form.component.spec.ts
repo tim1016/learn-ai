@@ -115,22 +115,28 @@ describe('GridSearchFormComponent', () => {
     expect(launch).not.toHaveBeenCalled();
   });
 
-  it('launches the exact preflighted spec and emits the job id', async () => {
+  it('launches the default search: the exact preflighted spec, the job id emitted, decision-minute-open with no fee unless asked (#2599, #2601)', async () => {
     const launch = vi.fn(async (_spec: GridSearchSpecRequest) => 'job-42');
     const view = await renderForm([strategy()], { launch });
     const launched = vi.fn();
     view.fixture.componentInstance.launched.subscribe(launched);
 
+    expect.soft(screen.getByText('Fees not charged'), 'says no fee is charged unless asked (#2599, #2601)').toBeTruthy();
+    expect.soft((screen.getByLabelText('Fill mode') as HTMLSelectElement).value, 'opens on the decision-minute-open fill mode (#2599, #2601)').toBe('decision_minute_open');
     await waitFor(() => expect((screen.getByRole('button', { name: /launch search/i }) as HTMLButtonElement).disabled).toBe(false));
+    expect.soft((screen.getByRole('button', { name: /launch search/i }) as HTMLButtonElement).disabled, 'enables Launch once the preflight is in (#2599, #2601)').toBe(false);
     fireEvent.click(screen.getByRole('button', { name: /launch search/i }));
     await waitFor(() => expect(launched).toHaveBeenCalledWith({ jobId: 'job-42' }));
 
     const spec = launch.mock.lastCall?.[0];
-    expect(spec?.symbol).toBe('SPY');
-    expect(spec?.measure).toBe('sharpe_ratio');
-    expect(spec?.min_trades).toBe(5);
+    expect.soft(launch, 'launches the search (#2599, #2601)').toHaveBeenCalled();
+    expect.soft(spec?.symbol, 'launches the preflighted symbol').toBe('SPY');
+    expect.soft(spec?.measure, 'launches the preflighted measure').toBe('sharpe_ratio');
+    expect.soft(spec?.min_trades, 'launches the preflighted minimum trades').toBe(5);
     // The window opens on the last 24 whole months the lake holds for SPY (held 2024-01-02 to 2026-09-18).
-    expect([etIsoDate(spec?.start_ms ?? 0), etIsoDate((spec?.end_ms ?? 0) - 1)]).toEqual(['2024-09-19', '2026-09-18']);
+    expect.soft([etIsoDate(spec?.start_ms ?? 0), etIsoDate((spec?.end_ms ?? 0) - 1)], 'launches the window of the last 24 whole months held').toEqual(['2024-09-19', '2026-09-18']);
+    expect.soft(spec?.fill_mode, 'launches under decision-minute-open (#2599, #2601)').toBe('decision_minute_open');
+    expect.soft(spec?.commission_per_order, 'charges no fee unless asked (#2599, #2601)').toBe(0);
   });
 
   it("reads the gaps in the symbol's held span and counts them under the window (#2858)", async () => {
@@ -178,21 +184,6 @@ describe('GridSearchFormComponent', () => {
     await waitFor(() => expect(screen.getByText('Pick the dates to search over.')).not.toBeNull());
     expect((screen.getByRole('button', { name: /launch search/i }) as HTMLButtonElement).disabled).toBe(true);
     expect(preflight.mock.calls.length).toBe(asked);
-  });
-
-  it('launches a decision-minute-open search that charges no fee unless asked (#2599, #2601)', async () => {
-    const launch = vi.fn(async (_spec: GridSearchSpecRequest) => 'job-7');
-    await renderForm([strategy()], { launch });
-
-    expect(screen.getByText('Fees not charged')).toBeTruthy();
-    expect((screen.getByLabelText('Fill mode') as HTMLSelectElement).value).toBe('decision_minute_open');
-    await waitFor(() => expect((screen.getByRole('button', { name: /launch search/i }) as HTMLButtonElement).disabled).toBe(false));
-    fireEvent.click(screen.getByRole('button', { name: /launch search/i }));
-    await waitFor(() => expect(launch).toHaveBeenCalled());
-
-    const spec = launch.mock.lastCall?.[0];
-    expect(spec?.fill_mode).toBe('decision_minute_open');
-    expect(spec?.commission_per_order).toBe(0);
   });
 
   it('launches under another fill mode when the researcher picks one', async () => {

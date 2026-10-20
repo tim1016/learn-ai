@@ -23,51 +23,57 @@ const bodyRows = () => [...screen.getAllByRole('row')].slice(1);
 const cells = (row: HTMLElement) => [...row.querySelectorAll('td')].map((cell) => reads(cell));
 
 describe('the table of leg trades, its columns', () => {
-  it('is a real table with a caption, and its region scrolls and is reachable by keyboard', async () => {
+  it('is a real table with a caption and twenty columns, and shows each trade with each column from its own field', async () => {
     await renderTable();
 
-    expect(screen.getByRole('table', { name: 'Leg trades' })).toBeTruthy();
+    expect.soft(screen.getByRole('table', { name: 'Leg trades' }), 'is a real table with a caption').toBeTruthy();
     const region = screen.getByRole('region', { name: 'Leg trades (scrolls sideways)' });
-    expect(region.getAttribute('tabindex')).toBe('0');
-  });
-
-  it('names its twenty columns', async () => {
-    await renderTable();
-
-    expect(screen.getAllByRole('columnheader').map((header) => reads(header))).toEqual([
+    expect.soft(region.getAttribute('tabindex'), 'its region scrolls and is reachable by keyboard').toBe('0');
+    expect.soft(screen.getAllByRole('columnheader').map((header) => reads(header)), 'names its twenty columns').toEqual([
       'Day', 'Leg', 'Entry', 'Contract', 'Contracts',
       'Entry decided', 'Entry filled in the minute ending', 'Entry price seen', 'Entry price filled',
       'Starting price', 'Momentum level', 'Stop level',
       'Left because', 'Exit decided', 'Exit filled in the minute ending', 'Exit price seen', 'Exit price filled',
       'Entry fee', 'Exit fee', 'Profit',
     ]);
-  });
 
-  it('shows a trade that was bought on momentum and stopped out, each column from its own field', async () => {
-    await renderTable();
-
-    const row = cells(bodyRows()[0]);
-    expect(row[0]).toBe('2026-09-15');
-    expect(row.slice(1, 3)).toEqual(['call', 'first entry']);
-    expect(row[3]).toContain("Call 585 Oct 16 '26");
-    expect(row.slice(4)).toEqual([
+    const stopped = cells(bodyRows()[0]);
+    expect.soft(stopped[0], 'shows a trade that was bought on momentum and stopped out, each column from its own field (the day)').toBe('2026-09-15');
+    expect.soft(stopped.slice(1, 3), 'shows a trade that was bought on momentum and stopped out, each column from its own field (the leg and the try)').toEqual(['call', 'first entry']);
+    expect.soft(stopped[3], 'shows a trade that was bought on momentum and stopped out, each column from its own field (the contract)').toContain("Call 585 Oct 16 '26");
+    expect.soft(stopped.slice(4), 'shows a trade that was bought on momentum and stopped out, each column from its own field (the rest)').toEqual([
       '1',
       '09:37:00 ET', '09:38 ET', '$2.55', '$2.57',
       '$2.00', '$2.50', '$1.93',
       'Stop', '09:40:00 ET', '09:41 ET', '$1.84', '$1.82',
       '$0.65', '$0.65', '-$76.30',
     ]);
-  });
 
-  it('shows a re-entry as one, with the stop it carries and none of the momentum figures it never had', async () => {
-    await renderTable();
+    const reentry = cells(bodyRows()[1]);
+    expect.soft(reentry.slice(1, 3), 'shows a re-entry as one (the leg and the try)').toEqual(['call', 're-entry 1']);
+    expect.soft(reentry[3], 'shows a re-entry as one (the contract)').toContain("Call 586 Oct 16 '26");
+    expect.soft(reentry.slice(9, 12), 'shows a re-entry with the stop it carries and none of the momentum figures it never had').toEqual(['— none', '— none', '$1.20']);
+    expect.soft(reentry.slice(12, 17), 'shows a re-entry with the way it left').toEqual(['Exit Time', '15:55:00 ET', '15:56 ET', '$1.90', '$1.88']);
+    expect.soft(reentry[19], 'shows a re-entry with its profit').toBe('$26.70');
 
-    const row = cells(bodyRows()[1]);
-    expect(row.slice(1, 3)).toEqual(['call', 're-entry 1']);
-    expect(row[3]).toContain("Call 586 Oct 16 '26");
-    expect(row.slice(9, 12)).toEqual(['— none', '— none', '$1.20']);
-    expect(row.slice(12, 17)).toEqual(['Exit Time', '15:55:00 ET', '15:56 ET', '$1.90', '$1.88']);
-    expect(row[19]).toBe('$26.70');
+    const markedRow = bodyRows()[2];
+    const marked = cells(markedRow);
+    expect.soft(marked.slice(1, 3), 'shows a leg that was marked and not sold (the leg and the try)').toEqual(['put', 'first entry']);
+    expect.soft(marked[4], 'shows a leg that was marked and not sold (the contracts)').toBe('2');
+    expect.soft(marked.slice(12, 14), 'shows a leg that was marked and not sold with the mark in the sale’s columns').toEqual(['Marked Not Sold', '16:00:00 ET']);
+    expect.soft(marked[14], 'shows a leg that was marked and not sold with a mark in words').toBe('Marked at $1.25, not sold, last traded in the minute ending 15:58 ET');
+    expect.soft(markedRow.querySelectorAll('td')[14].getAttribute('colspan'), 'shows the mark in words across the sale’s three columns').toBe('3');
+    // The fees and the profit follow the mark in the same columns as for a sale.
+    expect.soft(marked.slice(15), 'shows the fees and the profit after the mark').toEqual(['$1.30', '$0.00', '-$55.30']);
+    // Nothing of a sale: the row is three cells shorter than a sold trade's.
+    expect.soft(markedRow.querySelectorAll('td').length, 'shows no sale for a leg that was marked and not sold').toBe(cells(bodyRows()[0]).length - 2);
+
+    const secondDay = cells(bodyRows()[3]);
+    expect.soft(secondDay[0], 'shows the second day’s trade under its own date').toBe('2026-09-16');
+    expect.soft(secondDay.slice(1, 3), 'shows the second day’s trade (the leg and the try)').toEqual(['put', 'first entry']);
+    expect.soft(secondDay.slice(5, 9), 'shows the second day’s trade (its entry)').toEqual(['09:35:00 ET', '09:36 ET', '$3.10', '$3.12']);
+    expect.soft(secondDay.slice(12, 17), 'shows the second day’s trade (its exit)').toEqual(['Exit Time', '15:54:00 ET', '15:55 ET', '$3.40', '$3.38']);
+    expect.soft(secondDay[19], 'shows the second day’s trade (its profit)').toBe('$24.70');
   });
 
   it('says when a figure is absent, in a word a screen reader reads, and not as a zero', async () => {
@@ -75,33 +81,6 @@ describe('the table of leg trades, its columns', () => {
 
     expect(cells(bodyRows()[0]).slice(9, 12)).toEqual(['— none', '— none', '— none']);
     expect(bodyRows()[0].querySelectorAll('.none[aria-hidden="true"]').length).toBe(3);
-  });
-
-  it('shows a leg that was marked and not sold with a mark in words across the sale’s columns, and no sale', async () => {
-    await renderTable();
-
-    const row = bodyRows()[2];
-    const marked = cells(row);
-    expect(marked.slice(1, 3)).toEqual(['put', 'first entry']);
-    expect(marked[4]).toBe('2');
-    expect(marked.slice(12, 14)).toEqual(['Marked Not Sold', '16:00:00 ET']);
-    expect(marked[14]).toBe('Marked at $1.25, not sold, last traded in the minute ending 15:58 ET');
-    expect(row.querySelectorAll('td')[14].getAttribute('colspan')).toBe('3');
-    // The fees and the profit follow the mark in the same columns as for a sale.
-    expect(marked.slice(15)).toEqual(['$1.30', '$0.00', '-$55.30']);
-    // Nothing of a sale: the row is three cells shorter than a sold trade's.
-    expect(row.querySelectorAll('td').length).toBe(cells(bodyRows()[0]).length - 2);
-  });
-
-  it('shows the second day’s trade under its own date', async () => {
-    await renderTable();
-
-    const row = cells(bodyRows()[3]);
-    expect(row[0]).toBe('2026-09-16');
-    expect(row.slice(1, 3)).toEqual(['put', 'first entry']);
-    expect(row.slice(5, 9)).toEqual(['09:35:00 ET', '09:36 ET', '$3.10', '$3.12']);
-    expect(row.slice(12, 17)).toEqual(['Exit Time', '15:54:00 ET', '15:55 ET', '$3.40', '$3.38']);
-    expect(row[19]).toBe('$24.70');
   });
 
   it('keeps the trades in the order it was given', async () => {

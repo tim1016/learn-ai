@@ -36,17 +36,12 @@ const VARIANTS: MetricVariant[] = [
 ];
 
 describe("resolveMetricContext", () => {
-  it("selects the exact producer-specific variant from a Results link", () => {
+  it.each([
+    ["selects the exact producer-specific variant from a Results link", "lean_native"],
+    ["trims the producer before preserving a requested variant", " lean_native "],
+  ])("%s", (_case, producer) => {
     const resolution = resolveMetricContext(VARIANTS, {
-      metricId: "sharpe", variantId: "sharpe.lean_native.v1", producer: "lean_native", contractId: "lean-statistics-oracle-v1",
-    });
-
-    expect(resolution).toMatchObject({ variant: { variant_id: "sharpe.lean_native.v1" }, warning: null });
-  });
-
-  it("trims the producer before preserving a requested variant", () => {
-    const resolution = resolveMetricContext(VARIANTS, {
-      metricId: "sharpe", variantId: "sharpe.lean_native.v1", producer: " lean_native ", contractId: "lean-statistics-oracle-v1",
+      metricId: "sharpe", variantId: "sharpe.lean_native.v1", producer, contractId: "lean-statistics-oracle-v1",
     });
 
     expect(resolution).toMatchObject({ variant: { variant_id: "sharpe.lean_native.v1" }, warning: null });

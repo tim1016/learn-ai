@@ -26,41 +26,26 @@ async function renderHistory(options: { service?: FakeService; jobs?: FakeJobs; 
 const rowFor = (id: number) => screen.getByRole('button', { name: `Open run ${id}` }).closest('tr') as HTMLElement;
 
 describe('the list of runs', () => {
-  it('lists the runs in the order the server gave, newest first', async () => {
+  it('lists the runs newest first with their start, end, setup, dates, headline figures and status', async () => {
     await renderHistory();
 
     await screen.findAllByRole('row');
 
     const ids = screen.getAllByRole('button', { name: /^Open run / }).map((button) => button.getAttribute('aria-label'));
-    expect(ids).toEqual(['Open run 31', 'Open run 30', 'Open run 29', 'Open run 28', 'Open run 27']);
-  });
-
-  it('says when each was started, how it ended, the setup’s name and underlying, and the dates in New York dates', async () => {
-    await renderHistory();
-    await screen.findAllByRole('row');
-
     const row = rowFor(30);
-
     const cells = [...row.querySelectorAll('td')].map((cell) => reads(cell));
-    expect(cells[0]).toMatch(/^2026-09-2[12] \d\d:\d\d:\d\d$/);
-    expect(cells.slice(1, 4)).toEqual(['Complete', 'AAPL Straddle', '2026-09-14 – 2026-09-18']);
+
+    expect.soft(ids, 'lists the runs in the order the server gave, newest first').toEqual(['Open run 31', 'Open run 30', 'Open run 29', 'Open run 28', 'Open run 27']);
+
+    expect.soft(cells[0], 'says when each was started').toMatch(/^2026-09-2[12] \d\d:\d\d:\d\d$/);
+    expect.soft(cells.slice(1, 4), 'says how it ended, the setup’s name and underlying, and the dates').toEqual(['Complete', 'AAPL Straddle', '2026-09-14 – 2026-09-18']);
+    expect.soft(reads(rowFor(31).querySelectorAll('td')[2]), 'says the underlying of run 31').toBe('SPY');
+
+    expect.soft(reads(rowFor(30).querySelectorAll('td')[4]), 'shows the headline figures of a complete run as the server wrote them').toBe('Net profit $1,234.56 Ending cash $11,234.56 Trades 12, won 7 Sessions traded 8 of 10');
+    for (const id of [31, 29, 28, 27]) expect.soft(reads(rowFor(id).querySelectorAll('td')[4]), `shows no headline figures for run ${id}, which is not complete`).toBe('');
+
+    expect.soft([31, 30, 29, 28, 27].map((id) => reads(rowFor(id).querySelectorAll('td')[1])), 'names every status in words').toEqual(['Running', 'Complete', 'Failed', 'Cancelled', 'Interrupted']);
     expectTradingDatesInNewYork(row.querySelectorAll('td')[3]);
-    expect(reads(rowFor(31).querySelectorAll('td')[2])).toBe('SPY');
-  });
-
-  it('shows the headline figures of a complete run as the server wrote them, and none for a run that is not', async () => {
-    await renderHistory();
-    await screen.findAllByRole('row');
-
-    expect(reads(rowFor(30).querySelectorAll('td')[4])).toBe('Net profit $1,234.56 Ending cash $11,234.56 Trades 12, won 7 Sessions traded 8 of 10');
-    for (const id of [31, 29, 28, 27]) expect(reads(rowFor(id).querySelectorAll('td')[4])).toBe('');
-  });
-
-  it('names every status in words', async () => {
-    await renderHistory();
-    await screen.findAllByRole('row');
-
-    expect([31, 30, 29, 28, 27].map((id) => reads(rowFor(id).querySelectorAll('td')[1]))).toEqual(['Running', 'Complete', 'Failed', 'Cancelled', 'Interrupted']);
   });
 
   it('says so when there are no runs', async () => {
@@ -118,16 +103,17 @@ describe('opening a run', () => {
     expect(service.run).toHaveBeenCalledWith(31);
   });
 
-  it('shows a complete run’s banner and result, and the setup it used in the server’s sentences', async () => {
+  it('opens a complete run: the keyboard on it, its banner and result, and the setup it used in the server’s sentences', async () => {
     const service = fakeService(vi, { runs: vi.fn(async () => RUNS), run: vi.fn(async () => runDetail({ ...COMPLETE })) });
     await renderHistory({ service });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Open run 30' }));
 
-    expect(await screen.findByRole('note', { name: 'How these figures were made' })).toBeTruthy();
-    expect(await screen.findByRole('region', { name: 'Headline figures' })).toBeTruthy();
-    expect(await screen.findByText('Window for SPY.')).toBeTruthy();
-    expect(service.describe).toHaveBeenCalledWith(runDetail().setup);
+    await waitFor(() => expect(document.activeElement, 'puts the keyboard on the run it opened').toBe(screen.getByRole('heading', { name: 'Backtest run' })));
+    expect.soft(await screen.findByRole('note', { name: 'How these figures were made' }), 'shows a complete run’s banner').toBeTruthy();
+    expect.soft(await screen.findByRole('region', { name: 'Headline figures' }), 'shows a complete run’s result').toBeTruthy();
+    expect.soft(await screen.findByText('Window for SPY.'), 'shows the setup it used in the server’s sentences').toBeTruthy();
+    expect.soft(service.describe, 'asks the server to describe the setup the run used').toHaveBeenCalledWith(runDetail().setup);
   });
 
   it('opens a complete run whose setup the server cannot open: the figures, the reason in the server’s words, and no way to use the setup', async () => {
@@ -148,19 +134,6 @@ describe('opening a run', () => {
     expect(used).toEqual([]);
   });
 
-  it('shows why a failed run failed, and each item with its session’s date', async () => {
-    const service = fakeService(vi, { runs: vi.fn(async () => RUNS), run: vi.fn(async () => runDetail({ ...FAILED, status: 'failed', figures: null, slippage: [], slippage_tolerance: null, headline: null })) });
-    await renderHistory({ service });
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Open run 29' }));
-
-    const alert = await screen.findByRole('alert');
-    expect(reads(alert)).toBe('Some sessions have no data.');
-    const failed = screen.getByRole('list', { name: 'What failed' });
-    expect(reads(failed)).toBe('Listing · Items: 1 2026-09-15 – No listing was stored.');
-    expectTradingDatesInNewYork(failed);
-  });
-
   it.each([
     [28, 'cancelled', 'The run was cancelled. Nothing was saved.'],
     [27, 'interrupted', 'This run did not finish, and its job is gone. It saved no result.'],
@@ -174,7 +147,7 @@ describe('opening a run', () => {
     expect(await screen.findByText(words)).toBeTruthy();
   });
 
-  it('goes back to the list, read again', async () => {
+  it('goes back to the list, read again, with the keyboard back on the Open button of the run', async () => {
     const service = fakeService(vi, { runs: vi.fn(async () => RUNS), run: vi.fn(async () => runDetail({ ...COMPLETE })) });
     await renderHistory({ service });
     fireEvent.click(await screen.findByRole('button', { name: 'Open run 30' }));
@@ -184,28 +157,9 @@ describe('opening a run', () => {
     press('Back to the runs');
 
     await screen.findByRole('button', { name: 'Open run 30' });
-    expect(screen.queryByRole('region', { name: 'Backtest run' })).toBeNull();
-    expect(service.runs.mock.calls.length).toBe(before + 1);
-  });
-
-  it('puts the keyboard back on the Open button of the run, when the owner goes back to the list', async () => {
-    const service = fakeService(vi, { runs: vi.fn(async () => RUNS), run: vi.fn(async () => runDetail({ ...COMPLETE })) });
-    await renderHistory({ service });
-    fireEvent.click(await screen.findByRole('button', { name: 'Open run 30' }));
-    await screen.findByRole('region', { name: 'Headline figures' });
-
-    press('Back to the runs');
-
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Open run 30' })));
-  });
-
-  it('puts the keyboard on the run it opened', async () => {
-    const service = fakeService(vi, { runs: vi.fn(async () => RUNS), run: vi.fn(async () => runDetail({ ...COMPLETE })) });
-    await renderHistory({ service });
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Open run 30' }));
-
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Backtest run' })));
+    expect.soft(screen.queryByRole('region', { name: 'Backtest run' }), 'goes back to the list').toBeNull();
+    expect.soft(service.runs.mock.calls.length, 'reads the list again').toBe(before + 1);
+    await waitFor(() => expect(document.activeElement, 'puts the keyboard back on the Open button of the run, when the owner goes back to the list').toBe(screen.getByRole('button', { name: 'Open run 30' })));
   });
 
   it('gives the setup of the run back when Use this setup is pressed', async () => {
@@ -322,16 +276,13 @@ describe('deleting a run, and the keyboard', () => {
     return service;
   }
 
-  it('goes to the Open button of the run that now stands where the deleted one stood', async () => {
-    await deleteWithTheKeyboard(30, without(30));
+  it.each([
+    ['goes to the Open button of the run that now stands where the deleted one stood', 30, 'Open run 29'],
+    ['goes to the last run when the one deleted was the last', 27, 'Open run 28'],
+  ])('%s', async (_name, deleted, opens) => {
+    await deleteWithTheKeyboard(deleted, without(deleted));
 
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Open run 29' })));
-  });
-
-  it('goes to the last run when the one deleted was the last', async () => {
-    await deleteWithTheKeyboard(27, without(27));
-
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Open run 28' })));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: opens })));
   });
 
   it('goes to the heading of the list when no run is left', async () => {

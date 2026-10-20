@@ -16,14 +16,11 @@ describe('optionContractFromSymbol', () => {
     expect(contract && optionExpiryDate(contract.expiry_ms)).toBe(symbol.includes('270115') ? '2027-01-15' : '2026-10-09');
   });
 
-  it('preserves a supplied underlying whose punctuation is absent from the OCC root', () => {
-    expect(optionContractFromSymbol('BRKB250613C00500000', 'BRK.B')).toMatchObject({
+  it('takes the underlying the caller supplies, and flags a bare OCC root as a root rather than a verified symbol', () => {
+    expect.soft(optionContractFromSymbol('BRKB250613C00500000', 'BRK.B'), 'preserves a supplied underlying whose punctuation is absent from the OCC root').toMatchObject({
       underlying: 'BRK.B', underlyingIsRoot: false, occ_symbol: 'BRKB250613C00500000',
     });
-  });
-
-  it('does not claim an OCC root is a verified underlying symbol', () => {
-    expect(optionContractFromSymbol('BRKB250613C00500000')).toMatchObject({
+    expect.soft(optionContractFromSymbol('BRKB250613C00500000'), 'does not claim an OCC root is a verified underlying symbol').toMatchObject({
       underlying: 'BRKB', underlyingIsRoot: true,
     });
   });

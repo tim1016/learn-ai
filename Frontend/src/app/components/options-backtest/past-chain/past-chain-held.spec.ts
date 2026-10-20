@@ -13,33 +13,27 @@ function aRead() {
 }
 
 describe('the answer to show for a question that is asked again', () => {
-  it('is the answer itself while it is read, and not an answer being read again', () => {
+  it.each([
+    ['read (resolved)', 'resolved', 'first'],
+    ['reloading and still has one', 'reloading', 'kept'],
+  ] as const)('is its own value while it is %s, and not an answer being read again', (_name, status, answer) => {
     const read = aRead();
-    read.status.set('resolved');
-    read.answer.set('first');
+    read.status.set(status);
+    read.answer.set(answer);
 
-    expect(read.held()).toMatchObject({ answer: 'first', again: false });
+    expect(read.held()).toMatchObject({ answer, again: false });
   });
 
-  it('is the last answer to the same question while it is read again, and says so', () => {
+  it.each([
+    ['read again (loading)', 'loading'],
+    ['waiting on something else (idle)', 'idle'],
+  ] as const)('is the last answer to the same question while it is %s, and says so', (_name, status) => {
     const read = aRead();
     read.status.set('resolved');
     read.answer.set('first');
     expect(read.held().answer).toBe('first');
 
-    read.status.set('loading');
-    read.answer.set(null);
-
-    expect(read.held()).toMatchObject({ answer: 'first', again: true });
-  });
-
-  it('is the last answer while the read waits on something else (idle), for the same question', () => {
-    const read = aRead();
-    read.status.set('resolved');
-    read.answer.set('first');
-    expect(read.held().answer).toBe('first');
-
-    read.status.set('idle');
+    read.status.set(status);
     read.answer.set(null);
 
     expect(read.held()).toMatchObject({ answer: 'first', again: true });
@@ -105,13 +99,5 @@ describe('the answer to show for a question that is asked again', () => {
     read.status.set('idle');
     read.answer.set(null);
     expect(read.held()).toMatchObject({ answer: null, again: false });
-  });
-
-  it('is its own value while the read reloads and still has one', () => {
-    const read = aRead();
-    read.status.set('reloading');
-    read.answer.set('kept');
-
-    expect(read.held()).toMatchObject({ answer: 'kept', again: false });
   });
 });

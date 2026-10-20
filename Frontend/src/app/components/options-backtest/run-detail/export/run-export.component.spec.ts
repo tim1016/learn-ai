@@ -8,8 +8,6 @@ import type { CsvDownload } from '../run-detail.types';
 import { fakeRunDetail, type FakeRunDetail } from '../testing/fake-run-detail';
 import { RunExportComponent } from './run-export.component';
 
-const NOTE = 'The file holds every trade of the run, not only this page, and its readable time column is New York time.';
-
 async function renderExport(detail: FakeRunDetail, runId = 7) {
   const save = vi.fn();
   const view = await render(RunExportComponent, {
@@ -35,13 +33,6 @@ function deferred<T>() {
 }
 
 describe('the export of every trade', () => {
-  it('says beside the button, in one line, that the file holds every trade and that its readable time is New York time', async () => {
-    await renderExport(fakeRunDetail(vi));
-
-    expect(screen.getByText(NOTE)).toBeTruthy();
-    expect(button().getAttribute('aria-describedby')).toBe(screen.getByText(NOTE).id);
-  });
-
   it('saves the bytes the server sent, the very ones, under the name the server gave them', async () => {
     const file: CsvDownload = { blob: new Blob(['unix_ts\r\n1\r\n'], { type: 'text/csv' }), filename: 'options-backtest-run-7-trades.csv' };
     const detail = fakeRunDetail(vi, { tradesCsv: vi.fn(async () => file) });

@@ -33,14 +33,13 @@ describe('alpacaSurfaceRedirectGuard', () => {
     expect(router.url).toBe('/brokers/alpaca/gallery');
   });
 
-  it('carries co-traveling query parameters through the redirect, never the retired lens', async () => {
-    await router.navigateByUrl('/desk?surface=bots&deploy=&lens=operator');
-    expect(router.url).toBe('/brokers/alpaca/bots?deploy=');
-  });
-
-  it('drops a retired ?lens= from a desk URL it otherwise leaves alone', async () => {
-    await router.navigateByUrl('/desk?lens=operator&deploy=');
-    expect(router.url).toBe('/desk?deploy=');
+  it.each([
+    ['carries co-traveling query parameters through the redirect, never the retired lens',
+      '/desk?surface=bots&deploy=&lens=operator', '/brokers/alpaca/bots?deploy='],
+    ['drops a retired ?lens= from a desk URL it otherwise leaves alone', '/desk?lens=operator&deploy=', '/desk?deploy='],
+  ])('drops the retired ?lens=: %s', async (_name, url, expected) => {
+    await router.navigateByUrl(url);
+    expect(router.url).toBe(expected);
   });
 
   it('leaves every other desk URL alone, including unknown surface values', async () => {

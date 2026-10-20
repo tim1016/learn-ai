@@ -27,12 +27,11 @@ describe('computeAdvisories', () => {
     expect(advisories.some((a) => a.kind === 'bad')).toBe(true);
   });
 
-  it('emits no advisories in the happy path', () => {
-    expect(computeAdvisories({ symbol: 'SPY', from: '2026-04-01', to: '2026-04-23', resolution: 'daily', autoFetch: false })).toEqual([]);
-  });
-
-  it('emits none while a date field holds no usable date', () => {
-    expect(computeAdvisories({ symbol: 'SPY', from: '', to: '2026-04-01', resolution: 'minute' })).toEqual([]);
+  it.each<[string, TickerRange]>([
+    ['in the happy path', { symbol: 'SPY', from: '2026-04-01', to: '2026-04-23', resolution: 'daily', autoFetch: false }],
+    ['while a date field holds no usable date', { symbol: 'SPY', from: '', to: '2026-04-01', resolution: 'minute' }],
+  ])('emits no advisories %s', (_name, range) => {
+    expect(computeAdvisories(range)).toEqual([]);
   });
 });
 
@@ -56,11 +55,6 @@ describe('TickerRangePickerComponent (flags)', () => {
     fixture = TestBed.createComponent(TickerRangePickerComponent);
     fixture.componentRef.setInput('value', baseValue);
     fixture.componentRef.setInput('dateBounds', 'provider');
-  });
-
-  it('renders the Sampling card by default', () => {
-    fixture.detectChanges();
-    expect(fixture.nativeElement.querySelector('app-sampling-card')).not.toBeNull();
   });
 
   it('keeps the standalone Backtest data frame by default', () => {

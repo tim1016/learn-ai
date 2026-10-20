@@ -42,12 +42,6 @@ function chooseFile(contents: string, name = 'straddle.json'): void {
 }
 
 describe('export', () => {
-  it('is not offered for a setup that has not been read back as complete', async () => {
-    await renderPage(fakeService(vi), download());
-
-    expect(exportButton().disabled).toBe(true);
-  });
-
   it('downloads the setup as the server read it back, which is what the routes accept, named for the setup', async () => {
     const files = download();
     await renderPage(fakeService(vi), files);

@@ -161,51 +161,43 @@ describe("RunHistoryComponent — Bars summary column (PR B.3)", () => {
     expect(text(fixture)).toContain("Input M1 / Strategy M15");
   });
 
-  it("collapses to a single token when input_bars and strategy_bars match", async () => {
-    const fixture = await renderWith([
-      row({
-        id: "2",
-        dataPolicy: {
-          source: "polygon",
-          symbol: "SPY",
-          adjusted: true,
-          session: "regular",
-          input_bars: { timespan: "day", multiplier: 1 },
-          strategy_bars: { timespan: "day", multiplier: 1 },
-          timestamp_policy: "bar_close_ms_utc",
-          timezone: "America/New_York",
-          provider_kind: "live",
-          fixture_id: null,
-          fixture_sha256: null,
-        },
-      }),
-    ]);
+  it.each<[string, string, RunHistoryRow["dataPolicy"], string]>([
+    [
+      "collapses to a single token when input_bars and strategy_bars match",
+      "2",
+      {
+        source: "polygon",
+        symbol: "SPY",
+        adjusted: true,
+        session: "regular",
+        input_bars: { timespan: "day", multiplier: 1 },
+        strategy_bars: { timespan: "day", multiplier: 1 },
+        timestamp_policy: "bar_close_ms_utc",
+        timezone: "America/New_York",
+        provider_kind: "live",
+        fixture_id: null,
+        fixture_sha256: null,
+      },
+      "Input and strategy D1",
+    ],
+    ["renders an em-dash when DataPolicy is null (legacy row)", "3", null, "—"],
+  ])("%s", async (_name, id, dataPolicy, expected) => {
+    const fixture = await renderWith([row({ id, dataPolicy })]);
     const cell = (fixture.nativeElement as HTMLElement).querySelector(".bars-cell")?.textContent ?? "";
-    expect(cell.trim()).toBe("Input and strategy D1");
-  });
-
-  it("renders an em-dash when DataPolicy is null (legacy row)", async () => {
-    const fixture = await renderWith([row({ id: "3", dataPolicy: null })]);
-    const cell = (fixture.nativeElement as HTMLElement).querySelector(".bars-cell")?.textContent ?? "";
-    expect(cell.trim()).toBe("—");
+    expect(cell.trim()).toBe(expected);
   });
 });
 
 describe("RunHistoryComponent — inline notes editing (PR B.3)", () => {
-  it("starts in display mode with '+ note' when notes is null", async () => {
-    const fixture = await renderWith([row({ id: "1", notes: null })]);
+  it.each([
+    ["starts in display mode with '+ note' when notes is null", null, "+ note"],
+    ["shows the existing notes value in display mode", "great Sharpe", "great Sharpe"],
+  ])("%s", async (_name, notes, expected) => {
+    const fixture = await renderWith([row({ id: "1", notes })]);
     const editBtn = fixture.nativeElement.querySelector(
       'button[data-testid="notes-edit"]',
     ) as HTMLButtonElement;
-    expect(editBtn.textContent?.trim()).toBe("+ note");
-  });
-
-  it("shows the existing notes value in display mode", async () => {
-    const fixture = await renderWith([row({ id: "1", notes: "great Sharpe" })]);
-    const editBtn = fixture.nativeElement.querySelector(
-      'button[data-testid="notes-edit"]',
-    ) as HTMLButtonElement;
-    expect(editBtn.textContent?.trim()).toBe("great Sharpe");
+    expect(editBtn.textContent?.trim()).toBe(expected);
   });
 
   it("emits notesEdited with the new value when Save is clicked", async () => {

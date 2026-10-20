@@ -82,11 +82,10 @@ describe('FLEET_REFUSAL_COPY', () => {
 
 describe('fleetRefusalCopyFor', () => {
 
-  it('returns null for a code outside the closed vocabulary', () => {
-    expect(fleetRefusalCopyFor('not_a_real_fleet_reason')).toBeNull();
-  });
-
-  it('returns null for a null reason code', () => {
-    expect(fleetRefusalCopyFor(null)).toBeNull();
+  it.each([
+    ['a code outside the closed vocabulary', 'not_a_real_fleet_reason'],
+    ['a null reason code', null],
+  ])('returns null for %s', (_name, code) => {
+    expect(fleetRefusalCopyFor(code)).toBeNull();
   });
 });

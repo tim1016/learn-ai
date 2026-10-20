@@ -48,36 +48,39 @@ describe('formatBytes', () => {
     [1024, '1.00 KB'],
     [2_097_152, '2.00 MB'],
     [1_099_511_627_776, '1.00 TB'],
+    // A non-finite value gets no invented size.
+    [Number.NaN, '—'],
   ])('renders %i bytes as %s', (bytes, expected) => {
     expect(formatBytes(bytes)).toBe(expected);
-  });
-
-  it('refuses to invent a size for a non-finite value', () => {
-    expect(formatBytes(Number.NaN)).toBe('—');
   });
 });
 
 describe('artifactReceiptSections', () => {
-  it('marks a trading date as date-anchored and a fetch time as an instant', () => {
+  it('classifies every row of the default artifact receipt and drops the section that would render empty', () => {
     const detail = fakeDetail();
 
-    expect(rowFor(detail, 'trading_date')?.kind).toBe('date');
-    expect(rowFor(detail, 'fetched_at')?.kind).toBe('instant');
-  });
-
-  it('keeps hashes and the file path as verbatim audit tokens', () => {
-    const detail = fakeDetail();
+    expect
+      .soft(rowFor(detail, 'trading_date')?.kind, 'marks a trading date as date-anchored')
+      .toBe('date');
+    expect
+      .soft(rowFor(detail, 'fetched_at')?.kind, 'marks a fetch time as an instant')
+      .toBe('instant');
 
     for (const label of ['data_contract_hash', 'content_hash', 'file_path', 'artifact_id']) {
-      expect(rowFor(detail, label)?.kind).toBe('exact');
+      expect
+        .soft(rowFor(detail, label)?.kind, `keeps ${label} as a verbatim audit token`)
+        .toBe('exact');
     }
-  });
 
-  it('routes backend identifiers through the code channel, not verbatim', () => {
-    const detail = fakeDetail();
+    expect
+      .soft(rowFor(detail, 'artifact_kind')?.kind, 'routes artifact_kind through the code channel, not verbatim')
+      .toBe('code');
+    expect
+      .soft(rowFor(detail, 'status')?.kind, 'routes status through the code channel, not verbatim')
+      .toBe('code');
 
-    expect(rowFor(detail, 'artifact_kind')?.kind).toBe('code');
-    expect(rowFor(detail, 'status')?.kind).toBe('code');
+    const titles = artifactReceiptSections(detail).map((section) => section.title);
+    expect.soft(titles, 'drops a section that would otherwise render empty').not.toContain('Provider parameters');
   });
 
   it('reproduces the catalog symbol and market exactly, never title-cased', () => {
@@ -107,11 +110,5 @@ describe('artifactReceiptSections', () => {
     expect(rowFor(detail, 'adjusted')?.kind).toBe('code');
     expect(rowFor(detail, 'lean_image_digest')?.kind).toBe('exact');
     expect(rowFor(detail, 'window')).toMatchObject({ kind: 'exact', value: '{"limit":5}' });
-  });
-
-  it('drops a section that would otherwise render empty', () => {
-    const titles = artifactReceiptSections(fakeDetail()).map((section) => section.title);
-
-    expect(titles).not.toContain('Provider parameters');
   });
 });

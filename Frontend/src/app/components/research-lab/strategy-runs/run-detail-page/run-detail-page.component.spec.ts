@@ -138,51 +138,58 @@ describe('RunDetailPageComponent', () => {
     vi.clearAllMocks();
   });
 
-  it('reads the run_id from the route and fetches the run', () => {
-    expect(service.getRun).toHaveBeenCalledWith(
-      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    );
-    expect(component.runId()).toBe('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
-    expect(component.run()?.ledger.symbol).toBe('SPY');
-  });
+  it('renders a loaded run: route run_id fetched, spec id header, server-computed metrics, trade table, truncated provenance hashes', () => {
+    expect
+      .soft(service.getRun, 'reads the run_id from the route and fetches the run: fetch call')
+      .toHaveBeenCalledWith('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    expect
+      .soft(component.runId(), 'reads the run_id from the route and fetches the run: run id')
+      .toBe('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    expect
+      .soft(component.run()?.ledger.symbol, 'reads the run_id from the route and fetches the run: loaded run symbol')
+      .toBe('SPY');
 
-  it('renders the spec id in the header', () => {
     const heading = fixture.nativeElement.querySelector('.rd-title h1');
-    expect(heading?.textContent).toContain('spy_ema_crossover');
-  });
+    expect.soft(heading?.textContent, 'renders the spec id in the header').toContain('spy_ema_crossover');
 
-  it('renders metric values from the server payload (no client-side computation)', () => {
     const labels = Array.from(
       fixture.nativeElement.querySelectorAll('.rd-metric-label'),
     ).map((n) => (n as HTMLElement).textContent?.trim());
     // Sample of labels — order/exact set may evolve, but these must be present.
-    expect(labels).toEqual(
-      expect.arrayContaining(['Total return', 'Max drawdown', 'Sharpe', 'Trades']),
-    );
+    expect
+      .soft(labels, 'renders metric values from the server payload (no client-side computation): metric labels')
+      .toEqual(expect.arrayContaining(['Total return', 'Max drawdown', 'Sharpe', 'Trades']));
 
     const text: string = fixture.nativeElement.textContent ?? '';
     // 0.0543 → 5.43% via PercentPipe '1.2-2'
-    expect(text).toContain('5.43%');
+    expect
+      .soft(text, 'renders metric values from the server payload (no client-side computation): total return as a percent')
+      .toContain('5.43%');
     // 1.85 sharpe via DecimalPipe '1.2-2'
-    expect(text).toContain('1.85');
-  });
+    expect
+      .soft(text, 'renders metric values from the server payload (no client-side computation): sharpe')
+      .toContain('1.85');
 
-  it('renders the trade table with one row per trade', () => {
     const rows = fixture.nativeElement.querySelectorAll('.rd-trade-table tbody tr');
-    expect(rows.length).toBe(1);
+    expect.soft(rows.length, 'renders the trade table with one row per trade: row count').toBe(1);
     const cells = Array.from(rows[0].querySelectorAll('td')).map(
       (n) => (n as HTMLElement).textContent?.trim() ?? '',
     );
     // First cell is trade_number, last is result tag.
-    expect(cells[0]).toBe('1');
-    expect(cells[cells.length - 1]).toContain('WIN');
-  });
+    expect.soft(cells[0], 'renders the trade table with one row per trade: first cell is trade_number').toBe('1');
+    expect
+      .soft(cells[cells.length - 1], 'renders the trade table with one row per trade: last cell is the result tag')
+      .toContain('WIN');
 
-  it('renders provenance hashes truncated to 32 chars + ellipsis', () => {
-    const text: string = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('d'.repeat(32) + '…');
-    expect(text).toContain('r'.repeat(32) + '…');
-    expect(text).toContain('SPY|15|1704160800000|1735714800000|abc');
+    expect
+      .soft(text, 'renders provenance hashes truncated to 32 chars + ellipsis: spec hash')
+      .toContain('d'.repeat(32) + '…');
+    expect
+      .soft(text, 'renders provenance hashes truncated to 32 chars + ellipsis: result hash')
+      .toContain('r'.repeat(32) + '…');
+    expect
+      .soft(text, 'renders provenance hashes truncated to 32 chars + ellipsis: data snapshot id')
+      .toContain('SPY|15|1704160800000|1735714800000|abc');
   });
 
   it('surfaces service errors', async () => {

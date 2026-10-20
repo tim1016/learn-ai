@@ -12,45 +12,24 @@ describe('toMostRecentTradingDayIso', () => {
   // — output depends only on the input string, not on the browser
   // timezone.
 
-  it('returns the same day when input is already a weekday', () => {
-    expect(toMostRecentTradingDayIso('2026-05-25')).toBe('2026-05-25');
-  });
-
-  it('walks a Saturday input back to Friday', () => {
-    expect(toMostRecentTradingDayIso('2026-04-25')).toBe('2026-04-24');
-  });
-
-  it('walks a Sunday input back to Friday', () => {
-    expect(toMostRecentTradingDayIso('2025-05-25')).toBe('2025-05-23');
-  });
-
-  it('applies daysOffset before the weekday walk (pickTicker -30 case)', () => {
+  it.each([
+    ['returns the same day when input is already a weekday', '2026-05-25', undefined, '2026-05-25'],
+    ['walks a Saturday input back to Friday', '2026-04-25', undefined, '2026-04-24'],
+    ['walks a Sunday input back to Friday', '2025-05-25', undefined, '2025-05-23'],
     // Mon 2026-05-25 minus 30 = Sat 2026-04-25 → Fri 2026-04-24.
-    expect(toMostRecentTradingDayIso('2026-05-25', -30)).toBe('2026-04-24');
-  });
-
-  it('output is independent of the browser timezone (regression of PR #346 P1)', () => {
-    // The bug only manifested in west-of-UTC; the fix means the
-    // helper's behavior is fully determined by the ISO input and the
-    // numeric offset, regardless of where the browser thinks "now" is.
-    // This test pins the contract: same inputs → same outputs every time.
-    expect(toMostRecentTradingDayIso('2026-05-25')).toBe('2026-05-25');
-    expect(toMostRecentTradingDayIso('2026-05-26')).toBe('2026-05-26');
-    expect(toMostRecentTradingDayIso('2026-05-27')).toBe('2026-05-27');
+    ['applies daysOffset before the weekday walk (pickTicker -30 case)', '2026-05-25', -30, '2026-04-24'],
+  ])('%s', (_name, iso, daysOffset, expected) => {
+    expect(toMostRecentTradingDayIso(iso, daysOffset)).toBe(expected);
   });
 });
 
 describe('toNextTradingDayIso', () => {
-  it('returns the same date when it is already a weekday', () => {
-    expect(toNextTradingDayIso('2026-09-21')).toBe('2026-09-21');
-  });
-
-  it('walks a Saturday forward to Monday', () => {
-    expect(toNextTradingDayIso('2026-04-25')).toBe('2026-04-27');
-  });
-
-  it('walks a Sunday forward to Monday', () => {
-    expect(toNextTradingDayIso('2025-05-25')).toBe('2025-05-26');
+  it.each([
+    ['returns the same date when it is already a weekday', '2026-09-21', '2026-09-21'],
+    ['walks a Saturday forward to Monday', '2026-04-25', '2026-04-27'],
+    ['walks a Sunday forward to Monday', '2025-05-25', '2025-05-26'],
+  ])('%s', (_name, iso, expected) => {
+    expect(toNextTradingDayIso(iso)).toBe(expected);
   });
 
   // The reason this exists: a floor walked *backward* off a weekend lands

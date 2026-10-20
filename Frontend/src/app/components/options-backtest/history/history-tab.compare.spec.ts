@@ -36,11 +36,19 @@ const compareButton = () => screen.getByRole<HTMLButtonElement>('button', { name
 const hint = () => reads(document.querySelector('.hint'));
 
 describe('the history, choosing two runs to compare', () => {
-  it('has a column for it and a box for each run, named by the run', async () => {
+  it('has a column for it and a box for each run, named by the run, keeps its other columns where they were, and describes each box by the same sentence', async () => {
     await renderHistory();
 
-    expect(screen.getByRole('columnheader', { name: 'Compare' })).toBeTruthy();
-    expect(screen.getAllByRole('checkbox').map((each) => each.getAttribute('aria-label'))).toEqual(['Compare run 34', 'Compare run 33', 'Compare run 32', 'Compare run 30', 'Compare run 29']);
+    const row = screen.getByRole('button', { name: 'Open run 30' }).closest('tr') as HTMLElement;
+    const hintId = document.querySelector('.hint')?.id ?? '';
+
+    expect.soft(screen.getByRole('columnheader', { name: 'Compare' }), 'has a column for it').toBeTruthy();
+    expect.soft(screen.getAllByRole('checkbox').map((each) => each.getAttribute('aria-label')), 'has a box for each run, named by the run').toEqual(['Compare run 34', 'Compare run 33', 'Compare run 32', 'Compare run 30', 'Compare run 29']);
+    expect.soft([...row.querySelectorAll('td')].length, 'keeps its other columns where they were (count)').toBe(7);
+    expect.soft(reads(row.querySelectorAll('td')[1]), 'keeps its other columns where they were, so the cells read as they did (status)').toBe('Complete');
+    expect.soft(hintId, 'describes each box by the same sentence (the hint has an id)').not.toBe('');
+    expect.soft(screen.getAllByRole('checkbox').every((each) => each.getAttribute('aria-describedby') === hintId), 'describes each box by the same sentence, so a disabled box has its reason').toBe(true);
+    expect.soft(compareButton().getAttribute('aria-describedby'), 'describes the Compare button by the same sentence').toBe(hintId);
   });
 
   it('lets only a complete run be ticked: a running one and a failed one have a box that is disabled', async () => {
@@ -51,14 +59,6 @@ describe('the history, choosing two runs to compare', () => {
     await userEvent.click(box(29));
     expect([32, 29].map((id) => box(id).checked)).toEqual([false, false]);
     expect(hint()).toBe('Tick two complete runs to compare them.');
-  });
-
-  it('keeps its other columns where they were, so the cells read as they did', async () => {
-    await renderHistory();
-
-    const row = screen.getByRole('button', { name: 'Open run 30' }).closest('tr') as HTMLElement;
-    expect([...row.querySelectorAll('td')].length).toBe(7);
-    expect(reads(row.querySelectorAll('td')[1])).toBe('Complete');
   });
 
   it('offers Compare only when exactly two runs are ticked, and says what to do at each step', async () => {
@@ -80,15 +80,6 @@ describe('the history, choosing two runs to compare', () => {
     fireEvent.click(box(33));
     expect([30, 33, 34].map((id) => box(id).checked)).toEqual([true, false, true]);
     expect([compareButton().disabled, hint()]).toEqual([false, 'Run 30 and run 34 are ticked.']);
-  });
-
-  it('describes each box by the same sentence, so a disabled box has its reason', async () => {
-    await renderHistory();
-
-    const hintId = document.querySelector('.hint')?.id ?? '';
-    expect(hintId).not.toBe('');
-    expect(screen.getAllByRole('checkbox').every((each) => each.getAttribute('aria-describedby') === hintId)).toBe(true);
-    expect(compareButton().getAttribute('aria-describedby')).toBe(hintId);
   });
 
   it('leaves a run out of the two when it leaves the list, and says one more is needed', async () => {

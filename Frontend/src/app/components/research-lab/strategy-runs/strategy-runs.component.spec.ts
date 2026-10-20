@@ -120,17 +120,17 @@ describe('StrategyRunsComponent', () => {
     vi.clearAllMocks();
   });
 
-  it('loads runs from the service on construction', () => {
-    expect(service.listRuns).toHaveBeenCalledOnce();
-    expect(component.runs()).toHaveLength(1);
-    expect(component.runs()[0]?.symbol).toBe('SPY');
-  });
+  it('loads runs on construction and renders each run symbol through the shared asset identity', () => {
+    expect.soft(service.listRuns, 'loads runs from the service on construction: listRuns call').toHaveBeenCalledOnce();
+    expect.soft(component.runs(), 'loads runs from the service on construction: run count').toHaveLength(1);
+    expect.soft(component.runs()[0]?.symbol, 'loads runs from the service on construction: run symbol').toBe('SPY');
 
-  it('renders each run symbol through the shared asset identity', () => {
     const identity = fixture.nativeElement.querySelector('app-asset-identity');
 
-    expect(identity).not.toBeNull();
-    expect(identity.textContent).toContain('SPY');
+    expect.soft(identity, 'renders each run symbol through the shared asset identity: present').not.toBeNull();
+    expect
+      .soft(identity.textContent, 'renders each run symbol through the shared asset identity: carries SPY')
+      .toContain('SPY');
   });
 
   it('refresh() re-issues the listRuns call', async () => {
@@ -176,13 +176,10 @@ describe('StrategyRunsComponent', () => {
   });
 
   describe('shortHash', () => {
-    it('returns "—" for nullish input', () => {
-      expect(component.shortHash(null)).toBe('—');
-      expect(component.shortHash('')).toBe('—');
-    });
-
-    it('truncates to the requested length', () => {
-      expect(component.shortHash('abcdefghij', 4)).toBe('abcd');
+    it('returns "—" for nullish input and truncates to the requested length', () => {
+      expect.soft(component.shortHash(null), 'returns "—" for nullish input: null').toBe('—');
+      expect.soft(component.shortHash(''), 'returns "—" for nullish input: empty string').toBe('—');
+      expect.soft(component.shortHash('abcdefghij', 4), 'truncates to the requested length').toBe('abcd');
     });
   });
 });

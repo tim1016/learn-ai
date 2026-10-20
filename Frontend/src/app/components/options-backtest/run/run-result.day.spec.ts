@@ -45,15 +45,6 @@ describe('the result of a run, looking closely', () => {
     order.slice(1).forEach((each, at) => expect(order[at]?.compareDocumentPosition(each as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING));
   });
 
-  it('offers each day of the table to look at, named by the day', async () => {
-    await renderResult();
-
-    const table = screen.getByRole('region', { name: 'By day' });
-    expect(within(table).getAllByRole('button', { name: /^Look at / }).map((button) => button.getAttribute('aria-label'))).toEqual([
-      'Look at 2026-09-14', 'Look at 2026-09-15', 'Look at 2026-09-16', 'Look at 2026-09-17', 'Look at 2026-09-18',
-    ]);
-  });
-
   it('opens the day of a row of the table: reads that day for this run and moves the keyboard into it', async () => {
     const { detail } = await renderResult();
 

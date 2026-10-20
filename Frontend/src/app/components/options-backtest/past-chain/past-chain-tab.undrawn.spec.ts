@@ -38,21 +38,21 @@ describe('a chain whose underlying has no price at that time', () => {
     for (const sentence of FALSE_SENTENCES) expect(card()).not.toMatch(sentence);
   });
 
-  it('keeps the counts line as the server counted them', async () => {
+  it('keeps the counts line as the server counted them, and offers no later time at the close of the session', async () => {
     await renderUndrawn(withoutMoney({ state: 'no_bar_yet' }));
 
-    expect(screen.getByText('Calls: 120 listed, 118 standard. Puts: 118 listed, 116 standard.')).toBeTruthy();
+    expect.soft(screen.getByText('Calls: 120 listed, 118 standard. Puts: 118 listed, 116 standard.'), 'keeps the counts line as the server counted them').toBeTruthy();
+
+    expect.soft(card(), 'offers no later time at the close of the session').not.toContain('Pick a later time');
   });
 
-  it('offers a later time when the session runs on past the time asked for, and not when it was asked at the close', async () => {
-    await renderUndrawn(withoutMoney({ state: 'no_bar_yet' }, { at_ms: SESSION_OPEN_MS }));
-    expect(card()).toContain('Pick a later time to see them.');
-  });
+  it.each([
+    ['offers a later time when the session runs on past the time asked for', { at_ms: SESSION_OPEN_MS }, 'Pick a later time to see them.'],
+    ['says one call and one put with a label and a number, which needs no plural', { calls: sideWithoutMoney('call', 1, 1), puts: sideWithoutMoney('put', 1, 1) }, 'Calls listed: 1. Puts listed: 1.'],
+  ])('%s', async (_name, changes, said) => {
+    await renderUndrawn(withoutMoney({ state: 'no_bar_yet' }, changes));
 
-  it('offers no later time at the close of the session', async () => {
-    await renderUndrawn(withoutMoney({ state: 'no_bar_yet' }));
-
-    expect(card()).not.toContain('Pick a later time');
+    expect(card()).toContain(said);
   });
 
   it('points to the download when the bars are not stored, and the card above offers to fetch them', async () => {
@@ -84,24 +84,14 @@ describe('a chain whose underlying has no price at that time', () => {
     expect(screen.getByText(refusal.words)).toBeTruthy();
   });
 
-  it('says the code of an underlying state it does not know, in words, and not that the contracts are missing', async () => {
-    await renderUndrawn(withoutMoney({ state: 'stale' as UnderlyingPrice['state'] }));
+  it.each([
+    ['the underlying has a state this page does not know', { state: 'stale' as UnderlyingPrice['state'] }, 'This page does not know this state of the underlying\'s price, Stale, so it cannot say why there is no price to centre them on.'],
+    ['the server calls the underlying priced and sends no price', { state: 'priced' as const, price_time_ms: SESSION_OPEN_MS }, 'The server sent an incomplete price for the underlying, so there is no price to centre them on.'],
+  ])('says in words what is wrong, and never that a contract is missing, when %s', async (_name, price, why) => {
+    await renderUndrawn(withoutMoney(price));
 
-    expect(card()).toContain('This page does not know this state of the underlying\'s price, Stale, so it cannot say why there is no price to centre them on.');
+    expect(card()).toContain(why);
     for (const sentence of FALSE_SENTENCES) expect(card()).not.toMatch(sentence);
-  });
-
-  it('says so too when the server calls the underlying priced and sends no price', async () => {
-    await renderUndrawn(withoutMoney({ state: 'priced', price_time_ms: SESSION_OPEN_MS }));
-
-    expect(card()).toContain('The server sent an incomplete price for the underlying, so there is no price to centre them on.');
-    for (const sentence of FALSE_SENTENCES) expect(card()).not.toMatch(sentence);
-  });
-
-  it('says one call and one put with a label and a number, which needs no plural', async () => {
-    await renderUndrawn(withoutMoney({ state: 'no_bar_yet' }, { calls: sideWithoutMoney('call', 1, 1), puts: sideWithoutMoney('put', 1, 1) }));
-
-    expect(card()).toContain('Calls listed: 1. Puts listed: 1.');
   });
 });
 

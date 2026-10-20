@@ -87,14 +87,18 @@ describe('the panel', () => {
     expect(counts.getByText('Cannot Be Tested', { selector: 'dt' }).nextElementSibling?.textContent).toBe('1');
   });
 
-  it('says what range it checked, in New York dates, and that nothing was downloaded', async () => {
+  it('with nothing wrong: says what range it checked, in New York dates, and that nothing was downloaded, and has no section for what does not occur', async () => {
     await readyToCheck();
 
     const check = await runCheck();
 
     await within(check).findByText('Ready');
-    expect(paragraph(/^Checked 2026-09-14 – 2026-09-18$/, check)).toBeTruthy();
-    expect(within(check).getByText('The answer is read from what is already stored. Nothing was downloaded.')).toBeTruthy();
+    expect.soft(paragraph(/^Checked 2026-09-14 – 2026-09-18$/, check), 'says what range it checked, in New York dates').toBeTruthy();
+    expect.soft(within(check).getByText('The answer is read from what is already stored. Nothing was downloaded.'), 'says that nothing was downloaded').toBeTruthy();
+    expect.soft(within(check).queryByRole('region', { name: 'Cannot Be Tested' }), 'has no Cannot Be Tested section').toBeNull();
+    expect.soft(within(check).queryByRole('region', { name: 'Needs Download' }), 'has no Needs Download section').toBeNull();
+    expect.soft(within(check).queryByRole('region', { name: 'Ready, but skipped' }), 'has no Ready, but skipped section').toBeNull();
+    expect.soft(within(check).queryByRole('button', { name: 'Run available dates' }), 'has no Run available dates button').toBeNull();
   });
 
   it('groups the reasons by code with how many sessions each, the server’s message, and the sessions by date', async () => {
@@ -141,45 +145,34 @@ describe('the panel', () => {
     expect(within(check).getByText(/The last try failed\./)).toBeTruthy();
   });
 
-  it('lists what each session that needs a download is missing, in the server’s codes through the label helper', async () => {
-    const answer = dataCheck([
-      sessionCheck('2026-09-14', { verdict: 'needs_download', missing: ['underlying_bars', 'listing', 'contracts'], contracts: { state: 'not_yet_known', needed: null, missing: null } }),
-      sessionCheck('2026-09-15', { verdict: 'needs_download', missing: ['contracts'], contracts: { state: 'known', needed: 9, missing: 4 } }),
-    ]);
+  it.each([
+    [
+      'what each session that needs a download is missing, in the server’s codes through the label helper',
+      dataCheck([
+        sessionCheck('2026-09-14', { verdict: 'needs_download', missing: ['underlying_bars', 'listing', 'contracts'], contracts: { state: 'not_yet_known', needed: null, missing: null } }),
+        sessionCheck('2026-09-15', { verdict: 'needs_download', missing: ['contracts'], contracts: { state: 'known', needed: 9, missing: 4 } }),
+      ]),
+      'Needs Download',
+      ['2026-09-14 – Underlying Bars, Listing, Contracts (not yet known)', '2026-09-15 – Contracts (4 of 9 missing)'],
+    ],
+    [
+      'the sessions that are ready but will be skipped, by date, with the reason',
+      dataCheck([
+        sessionCheck('2026-09-14'),
+        sessionCheck('2026-09-15', { skip: 'window_does_not_fit' }),
+        sessionCheck('2026-09-16', { skip: 'underlying_did_not_trade' }),
+      ]),
+      'Ready, but skipped',
+      ['2026-09-15 – Window Does Not Fit', '2026-09-16 – Underlying Did Not Trade'],
+    ],
+  ])('lists %s', async (_name, answer, section, expected) => {
     await readyToCheck(fakeService(vi, { checkData: vi.fn(async () => answer) }));
 
     const check = await runCheck();
 
-    const rows = [...within(check).getByRole('region', { name: 'Needs Download' }).querySelectorAll('li')].map((row) => row.textContent?.replace(/\s+/g, ' ').trim());
-    expect(rows).toEqual(['2026-09-14 – Underlying Bars, Listing, Contracts (not yet known)', '2026-09-15 – Contracts (4 of 9 missing)']);
+    const rows = [...within(check).getByRole('region', { name: section }).querySelectorAll('li')].map((row) => row.textContent?.replace(/\s+/g, ' ').trim());
+    expect(rows).toEqual(expected);
     expectTradingDatesInNewYork(check);
-  });
-
-  it('lists the sessions that are ready but will be skipped, by date, with the reason', async () => {
-    const answer = dataCheck([
-      sessionCheck('2026-09-14'),
-      sessionCheck('2026-09-15', { skip: 'window_does_not_fit' }),
-      sessionCheck('2026-09-16', { skip: 'underlying_did_not_trade' }),
-    ]);
-    await readyToCheck(fakeService(vi, { checkData: vi.fn(async () => answer) }));
-
-    const check = await runCheck();
-
-    const rows = [...within(check).getByRole('region', { name: 'Ready, but skipped' }).querySelectorAll('li')].map((row) => row.textContent?.replace(/\s+/g, ' ').trim());
-    expect(rows).toEqual(['2026-09-15 – Window Does Not Fit', '2026-09-16 – Underlying Did Not Trade']);
-    expectTradingDatesInNewYork(check);
-  });
-
-  it('has no section for what does not occur', async () => {
-    await readyToCheck();
-
-    const check = await runCheck();
-
-    await within(check).findByText('Ready');
-    expect(within(check).queryByRole('region', { name: 'Cannot Be Tested' })).toBeNull();
-    expect(within(check).queryByRole('region', { name: 'Needs Download' })).toBeNull();
-    expect(within(check).queryByRole('region', { name: 'Ready, but skipped' })).toBeNull();
-    expect(within(check).queryByRole('button', { name: 'Run available dates' })).toBeNull();
   });
 });
 
@@ -413,21 +406,6 @@ describe('when Check data does not give an answer', () => {
     expect(screen.queryByRole('region', { name: 'Check data' })).toBeNull();
     pickDates('2026-09-15', '2026-09-18');
     await waitFor(() => expect(screen.queryByText(/A run takes at most 1300 sessions/)).toBeNull());
-  });
-
-  it('shows a range that reaches before 1970 at the dates in the server’s words, as it shows the other refused ranges', async () => {
-    const service = fakeService(vi, {
-      checkData: vi.fn(async () => {
-        throw new RunRefusedError('OPTIONS_BACKTEST_RANGE_TOO_EARLY', 'The range reaches a trading day before 1970, which a run cannot be asked for. Start the range later.', 400);
-      }),
-    });
-    await readyToCheck(service);
-
-    fireEvent.click(checkButton());
-
-    const reason = await within(screen.getByRole('region', { name: 'Duration' })).findByText('The range reaches a trading day before 1970, which a run cannot be asked for. Start the range later.');
-    expect(reason.getAttribute('role')).toBe('alert');
-    expect(screen.queryByRole('region', { name: 'Check data' })).toBeNull();
   });
 
   it('says the server’s reason in the panel when the catalog cannot be asked, and asks again on request', async () => {

@@ -28,22 +28,18 @@ describe('TradingSessions', () => {
     expect(sessions.lastCompleted(Date.UTC(2024, 10, 29, 17, 59))).toBe('2024-11-27');
   });
 
-  it('steps over weekends and holidays in both directions', () => {
+  it('steps over weekends and holidays in both directions, and counts the sessions in a range, both ends included', () => {
     const sessions = fakeSessions('2024-08-26', '2024-09-13', { '2024-09-02': 'Labor Day' });
 
     // Saturday 2024-08-31, Sunday, Labor Day Monday.
-    expect(sessions.onOrAfter('2024-08-31')).toBe('2024-09-03');
-    expect(sessions.onOrBefore('2024-09-02')).toBe('2024-08-30');
-    expect(sessions.onOrAfter('2024-09-03')).toBe('2024-09-03');
-    expect(sessions.onOrBefore('2024-09-03')).toBe('2024-09-03');
-  });
+    expect.soft(sessions.onOrAfter('2024-08-31'), 'steps over weekends and holidays in both directions: forward from a Saturday').toBe('2024-09-03');
+    expect.soft(sessions.onOrBefore('2024-09-02'), 'steps over weekends and holidays in both directions: back from Labor Day').toBe('2024-08-30');
+    expect.soft(sessions.onOrAfter('2024-09-03'), 'steps over weekends and holidays in both directions: a session forward is itself').toBe('2024-09-03');
+    expect.soft(sessions.onOrBefore('2024-09-03'), 'steps over weekends and holidays in both directions: a session back is itself').toBe('2024-09-03');
 
-  it('counts the sessions in a range, both ends included', () => {
-    const sessions = fakeSessions('2024-08-26', '2024-09-13', { '2024-09-02': 'Labor Day' });
-
-    expect(sessions.count('2024-08-30', '2024-09-04')).toBe(3);
-    expect(sessions.count('2024-08-31', '2024-09-02')).toBe(0);
-    expect(sessions.count('2024-09-04', '2024-09-03')).toBe(0);
+    expect.soft(sessions.count('2024-08-30', '2024-09-04'), 'counts the sessions in a range, both ends included').toBe(3);
+    expect.soft(sessions.count('2024-08-31', '2024-09-02'), 'counts no sessions in a range of closed days').toBe(0);
+    expect.soft(sessions.count('2024-09-04', '2024-09-03'), 'counts no sessions in an inverted range').toBe(0);
   });
 
   it('answers only inside the window it was read for', () => {

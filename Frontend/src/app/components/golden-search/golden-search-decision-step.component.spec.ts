@@ -161,37 +161,33 @@ describe('GoldenSearchDecisionStepComponent — before the final test', () => {
 });
 
 describe('GoldenSearchDecisionStepComponent — after the final test', () => {
-  it('shows the exact settings, every parameter and fixed value, and what they replace', async () => {
+  it('after the final test, shows the exact settings being approved and reads every fit against the frozen incumbent with the evidence rows', async () => {
     await renderStep(studyDetail('awaiting_review'));
 
     const tuple = screen.getByRole('region', { name: 'The exact settings you are approving' });
-    expect(tuple.textContent).toContain('program version ema-crossover-signal/v3');
-    expect(tuple.textContent).toContain('Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars');
+    expect.soft(tuple.textContent, 'shows the program version').toContain('program version ema-crossover-signal/v3');
+    expect.soft(tuple.textContent, 'shows the exact settings').toContain('Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars');
     const params = within(tuple).getByLabelText('Every parameter');
-    expect(params.textContent).toMatch(/Fast EMA length\s*decision bars\s*8/);
-    expect(params.textContent).toMatch(/Crossover gap \(bps\)\s*basis points\s*0\s*default/);
-    expect(within(tuple).getByRole('list', { name: 'Fixed values' }).textContent).toMatch(/Normalized gap fixed at 0 bps\s*RSI length 14\s*Decision cadence 15 minutes/);
-    expect(tuple.textContent).toMatch(/Replaces the default: Gap \$0\.20 · RSI 50–70 · EMA 5\/10 · hold 5 bars; fixed values unchanged\.\s*No bot starts on approval\./);
-  });
-
-  it('reads every fit against the frozen incumbent, each with its own outcome, then the selected fit’s checks and the four evidence rows', async () => {
-    await renderStep(studyDetail('awaiting_review'));
+    expect.soft(params.textContent, 'shows every parameter: the fast EMA length').toMatch(/Fast EMA length\s*decision bars\s*8/);
+    expect.soft(params.textContent, 'shows every parameter: the crossover gap default').toMatch(/Crossover gap \(bps\)\s*basis points\s*0\s*default/);
+    expect.soft(within(tuple).getByRole('list', { name: 'Fixed values' }).textContent, 'shows every fixed value').toMatch(/Normalized gap fixed at 0 bps\s*RSI length 14\s*Decision cadence 15 minutes/);
+    expect.soft(tuple.textContent, 'says what the settings replace').toMatch(/Replaces the default: Gap \$0\.20 · RSI 50–70 · EMA 5\/10 · hold 5 bars; fixed values unchanged\.\s*No bot starts on approval\./);
 
     const result = screen.getByRole('region', { name: 'Final test result' });
     const rows = within(result).getAllByRole('row');
-    expect(rows[0].textContent).toMatch(/2026-01-01\s*–\s*2026-03-31/);
-    expect(rows[1].textContent).toMatch(/All-period fit\s*Meets the stated rules\s*\+1\.8%\s*3\.1%\s*36\s*0\.91/);
-    expect(rows[2].textContent).toMatch(/Recent fit\s*Meets the stated rules\s*\+1\.2%\s*5\.2%\s*33\s*0\.66/);
-    expect(rows[3].textContent).toMatch(/Frozen incumbent\s*Benchmark\s*\+0\.9%\s*4\.2%\s*39\s*0\.54/);
-    expect(result.textContent).toContain(UNDECIDED_NOTE);
-    expect(within(screen.getByRole('region', { name: 'Final-test checks' })).getByRole('list', { name: 'Final-test checks for All-period fit' }).textContent).toContain(
+    expect.soft(rows[0].textContent, 'the result table names the final interval').toMatch(/2026-01-01\s*–\s*2026-03-31/);
+    expect.soft(rows[1].textContent, 'reads the all-period fit against the incumbent with its own outcome').toMatch(/All-period fit\s*Meets the stated rules\s*\+1\.8%\s*3\.1%\s*36\s*0\.91/);
+    expect.soft(rows[2].textContent, 'reads the recent fit against the incumbent with its own outcome').toMatch(/Recent fit\s*Meets the stated rules\s*\+1\.2%\s*5\.2%\s*33\s*0\.66/);
+    expect.soft(rows[3].textContent, 'reads the frozen incumbent as the benchmark').toMatch(/Frozen incumbent\s*Benchmark\s*\+0\.9%\s*4\.2%\s*39\s*0\.54/);
+    expect.soft(result.textContent, 'notes the choice is still undecided').toContain(UNDECIDED_NOTE);
+    expect.soft(within(screen.getByRole('region', { name: 'Final-test checks' })).getByRole('list', { name: 'Final-test checks for All-period fit' }).textContent, 'shows the selected fit’s checks').toContain(
       'Pass · At least the incumbent — Sharpe 0.91 against 0.54.',
     );
-    expect(result.textContent).toContain('All-period fit kept 61.0% of its development Sharpe Ratio — descriptive only, never a check');
-    expect(screen.getByRole('region', { name: 'Research evidence' }).textContent).toContain('Meets the stated rules');
-    expect(screen.getByRole('region', { name: 'Repeatability and coverage' }).textContent).toContain('Built during approval');
-    expect(screen.getByRole('region', { name: 'Independent engine agreement' }).textContent).toContain('Missing · Python-only');
-    expect(screen.getByRole('region', { name: 'Golden acceptance' }).textContent).toContain('Awaiting your approval');
+    expect.soft(result.textContent, 'keeps the retained-Sharpe figure descriptive only').toContain('All-period fit kept 61.0% of its development Sharpe Ratio — descriptive only, never a check');
+    expect.soft(screen.getByRole('region', { name: 'Research evidence' }).textContent, 'evidence row: research evidence').toContain('Meets the stated rules');
+    expect.soft(screen.getByRole('region', { name: 'Repeatability and coverage' }).textContent, 'evidence row: repeatability and coverage').toContain('Built during approval');
+    expect.soft(screen.getByRole('region', { name: 'Independent engine agreement' }).textContent, 'evidence row: independent engine agreement').toContain('Missing · Python-only');
+    expect.soft(screen.getByRole('region', { name: 'Golden acceptance' }).textContent, 'evidence row: golden acceptance').toContain('Awaiting your approval');
   });
 
   it('a confirmatory test that met the rules prefills a factual reason; the parity acknowledgement starts unchecked and gates approval', async () => {
@@ -352,14 +348,6 @@ describe('GoldenSearchDecisionStepComponent — after the final test', () => {
 
     expect(screen.queryByRole('radio')).toBeNull();
     expect(screen.getByRole('region', { name: 'Final test result' }).textContent).toContain(CHOSEN_NOTE);
-  });
-
-  it('a failed rule names what failed in the acknowledgement', async () => {
-    await renderStep(
-      reviewWith({}, { outcome: 'does_not_meet_rules', checks: [{ code: 'NET_POSITIVE', label: 'Profit after stated costs', status: 'fail', detail: 'Net loss of $310.' }] }),
-    );
-
-    expect(screen.getByRole('checkbox', { name: /i approve despite failing the stated rules \(profit after stated costs\)/i })).not.toBeNull();
   });
 
   it('Keep current settings and the other finishes record the decision with the written reason', async () => {

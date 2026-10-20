@@ -134,12 +134,25 @@ async function renderPanel(options: PanelOptions = {}) {
 }
 
 describe('LakeBackfillPanelComponent', () => {
-  it('starts the form on the window the page hands it', async () => {
+  it('starts the form on the window the page hands it, and passes AXE', async () => {
     await renderPanel();
 
     const dates = within(screen.getByRole('group', { name: 'Backfill dates' }));
-    expect(dates.getByRole<HTMLInputElement>('textbox', { name: 'Start date' }).value).toBe('2026-05-18');
-    expect(dates.getByRole<HTMLInputElement>('textbox', { name: 'End date' }).value).toBe('2026-05-22');
+    expect
+      .soft(dates.getByRole<HTMLInputElement>('textbox', { name: 'Start date' }).value, 'starts the form on the start of the window the page hands it')
+      .toBe('2026-05-18');
+    expect
+      .soft(dates.getByRole<HTMLInputElement>('textbox', { name: 'End date' }).value, 'starts the form on the end of the window the page hands it')
+      .toBe('2026-05-22');
+
+    const results = await axe.run(document.body, {
+      rules: {
+        'color-contrast': { enabled: false },
+        region: { enabled: false },
+      },
+    });
+
+    expect.soft(results.violations, 'passes AXE').toEqual([]);
   });
 
   it('picks additional symbols from the vendor catalog, not free text', async () => {
@@ -482,35 +495,24 @@ describe('LakeBackfillPanelComponent', () => {
     await vi.waitFor(() => expect(startJob).toHaveBeenCalled());
   });
 
-  it('blocks a window one day past the cap instead of letting the server refuse it', async () => {
-    const { startJob } = await renderPanel({
-      seedStartTradingDate: '2026-01-01',
-      seedEndTradingDate: '2031-01-05',
-    });
+  it.each<[string, PanelOptions, string | RegExp]>([
+    [
+      'a window one day past the cap, instead of letting the server refuse it',
+      { seedStartTradingDate: '2026-01-01', seedEndTradingDate: '2031-01-05' },
+      'That window is 1831 days; the data plane accepts at most 1830.',
+    ],
+    [
+      // Nothing derives lean_adjusted — it would come from raw bars plus
+      // factor files and no producer exists — so the job would succeed and
+      // leave the selected view exactly as empty as it started.
+      'the lean_adjusted view',
+      { priceAdjustmentMode: 'lean_adjusted' },
+      /Nothing derives/,
+    ],
+  ])('blocks a submit and starts no job: %s', async (_name, options, reason) => {
+    const { startJob } = await renderPanel(options);
 
-    expect(
-      screen.getByText('That window is 1831 days; the data plane accepts at most 1830.'),
-    ).toBeTruthy();
-    expect(
-      (
-        screen.getByRole('button', {
-          name: 'Run backfill',
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(true);
-    fireEvent.click(screen.getByRole('button', { name: 'Run backfill' }));
-    expect(startJob).not.toHaveBeenCalled();
-  });
-
-  it('refuses to backfill while the lean_adjusted view is selected', async () => {
-    // Nothing derives lean_adjusted — it would come from raw bars plus
-    // factor files and no producer exists — so the job would succeed and
-    // leave the selected view exactly as empty as it started.
-    const { startJob } = await renderPanel({
-      priceAdjustmentMode: 'lean_adjusted',
-    });
-
-    expect(screen.getByText(/Nothing derives/)).toBeTruthy();
+    expect(screen.getByText(reason)).toBeTruthy();
     expect(
       (
         screen.getByRole('button', {
@@ -627,18 +629,5 @@ describe('LakeBackfillPanelComponent', () => {
 
     expect(screen.getByText('Fetch Timeout')).toBeTruthy();
     expect(screen.getByText('Polygon did not answer within 600s.')).toBeTruthy();
-  });
-
-  it('passes AXE', async () => {
-    await renderPanel();
-
-    const results = await axe.run(document.body, {
-      rules: {
-        'color-contrast': { enabled: false },
-        region: { enabled: false },
-      },
-    });
-
-    expect(results.violations).toEqual([]);
   });
 });

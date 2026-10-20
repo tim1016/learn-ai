@@ -136,10 +136,13 @@ describe('BotChartPanelComponent (#2639)', () => {
     expect(localStorage.getItem('broker-v2.strategy-view.gate.v1:foo_cross')).toBe('g_mine');
   });
 
-  it('opens on the gate this viewer chose before, or the strategy’s default once that gate is gone', async () => {
-    localStorage.setItem('broker-v2.strategy-view.gate.v1:foo_cross', 'g_mine');
+  it.each([
+    ['opens on the gate this viewer chose before', 'g_mine', /^Gate: Foo over close/],
+    ['falls back to the strategy’s default gate when the remembered one no longer exists', 'g_deleted', /^Gate: Bar 3 in 20–80/],
+  ])('%s', async (_name, remembered, gate) => {
+    localStorage.setItem('broker-v2.strategy-view.gate.v1:foo_cross', remembered);
     await renderPanel();
-    expect(screen.getByRole('button', { name: /^Gate: Foo over close/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: gate })).toBeTruthy();
   });
 
   it('keeps the viewer’s gate through a re-read of the same strategy, even when this browser stores nothing', async () => {
@@ -158,12 +161,6 @@ describe('BotChartPanelComponent (#2639)', () => {
     } finally {
       blocked.mockRestore();
     }
-  });
-
-  it('falls back to the strategy’s default gate when the remembered one no longer exists', async () => {
-    localStorage.setItem('broker-v2.strategy-view.gate.v1:foo_cross', 'g_deleted');
-    await renderPanel();
-    expect(screen.getByRole('button', { name: /^Gate: Bar 3 in 20–80/ })).toBeTruthy();
   });
 
   it('lists the strategy’s own drawn values as always on, under the backend’s labels', async () => {

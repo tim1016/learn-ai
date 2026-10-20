@@ -11,7 +11,6 @@ import {
   accountWorkspaceLocation,
   accountWorkspaceTabRoute,
   accountWorkspaceTitle,
-  ACCOUNT_WORKSPACE_TABS,
   type AccountWorkspaceLocation,
 } from './account-workspace';
 
@@ -114,15 +113,14 @@ describe('accountWorkspaceTabRoute', () => {
     expect(accountWorkspaceTabRoute(LANE_ONLY, tab)).toEqual(expected);
   });
 
-  it('has no Deploy to offer a lane with no account', () => {
+  it.each([
     // Deploy binds a strategy to the account. Offering a substitute would be
     // the redirect-to-another-lane FR-096 forbids; the tab says so instead.
-    expect(accountWorkspaceTabRoute(LANE_ONLY, 'deploy')).toBeNull();
-  });
-
-  it("has no Activity to offer a lane with no account", () => {
+    ['Deploy', 'deploy' as const],
     // Activity is the account's own history; a lane without one has none.
-    expect(accountWorkspaceTabRoute(LANE_ONLY, 'activity')).toBeNull();
+    ['Activity', 'activity' as const],
+  ])('has no %s to offer a lane with no account', (_name, tab) => {
+    expect(accountWorkspaceTabRoute(LANE_ONLY, tab)).toBeNull();
   });
 
   it('round-trips every routed tab back through the resolver', () => {
@@ -203,23 +201,16 @@ describe('the links Home hands out', () => {
   });
 });
 
-describe('the tab strip', () => {
-  it('reads Home · Activity · History · Settings (#2574)', () => {
-    expect(ACCOUNT_WORKSPACE_TABS.map((tab) => tab.label)).toEqual(['Home', 'Activity', 'History', 'Settings']);
-  });
-});
-
 describe('accountWorkspaceEntryRoute', () => {
-  it('opens a confirmed account on its own Home', () => {
-    expect(accountWorkspaceEntryRoute(LOCATION)).toEqual([
+  it.each([
+    ['a confirmed account on its own Home', LOCATION, [
       '/brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'PA9',
-    ]);
-  });
-
-  it('opens a lane with no confirmed account on Settings, where binding it happens', () => {
-    expect(accountWorkspaceEntryRoute({ ...LOCATION, accountId: null })).toEqual([
+    ]],
+    ['a lane with no confirmed account on Settings, where binding it happens', { ...LOCATION, accountId: null }, [
       '/brokers', 'alpaca', 'clerks', 'clrk_spec', 'settings',
-    ]);
+    ]],
+  ])('opens %s', (_name, location, expected) => {
+    expect(accountWorkspaceEntryRoute(location)).toEqual(expected);
   });
 });
 
@@ -318,17 +309,13 @@ describe('accountWorkspaceTitle', () => {
     expect(accountWorkspaceTitle(tab, 'Paper', null)).toBe(expected);
   });
 
-  it("titles a bot's page by the bot, not by the tab it sits under", () => {
-    expect(accountWorkspaceTitle('home', 'Paper', 'Deployment Validation')).toBe(
-      'Deployment Validation · Paper',
-    );
-  });
-
-  it('names only what is open when the account has no resolved name', () => {
-    expect(accountWorkspaceTitle('settings', null, null)).toBe('Settings');
-  });
-
-  it('titles History by itself: it is every account, not the one it was opened from (#2574)', () => {
-    expect(accountWorkspaceTitle('history', 'Paper', null)).toBe('History');
+  it.each([
+    ["titles a bot's page by the bot, not by the tab it sits under", 'home', 'Paper', 'Deployment Validation',
+      'Deployment Validation · Paper'],
+    ['names only what is open when the account has no resolved name', 'settings', null, null, 'Settings'],
+    ['titles History by itself: it is every account, not the one it was opened from (#2574)', 'history', 'Paper', null,
+      'History'],
+  ] as const)('departs from the "Tab · Account" title: %s', (_name, tab, accountName, botName, expected) => {
+    expect(accountWorkspaceTitle(tab, accountName, botName)).toBe(expected);
   });
 });

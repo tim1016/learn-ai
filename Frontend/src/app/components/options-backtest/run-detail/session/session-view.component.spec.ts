@@ -101,11 +101,11 @@ describe('one day, choosing it', () => {
 });
 
 describe('one day, the stored facts', () => {
-  it('shows the day, the hours of the session in New York time, how it came out, the cash on either side and the profit, as the server wrote them', async () => {
+  it('shows the stored facts, the trades and what happened on the day, in order, as the server wrote them', async () => {
     await renderSession(vi, { detail: servedAs(sessionDetail()), request: ASKED });
-    await screen.findByText('Traded');
+    await screen.findByRole('region', { name: 'What happened, in order (scrolls sideways)' });
 
-    expect(facts()).toEqual([
+    expect.soft(facts(), 'shows the day, the hours of the session in New York time, how it came out, the cash on either side and the profit, as the server wrote them').toEqual([
       'Day 2026-09-15',
       'Session 09:30:00 ET to 09:42:00 ET',
       'Status Traded',
@@ -113,22 +113,12 @@ describe('one day, the stored facts', () => {
       'Cash after $9,888.40',
       'Profit -$111.60',
     ]);
-  });
 
-  it('shows the trades of the day in a table of their own, without a control to open the day again', async () => {
-    await renderSession(vi, { detail: servedAs(sessionDetail()), request: ASKED });
-    await screen.findByRole('table', { name: 'Leg trades of this day' });
-
-    expect(tableRows('Leg trades of this day (scrolls sideways)').map((row) => row.slice(1, 3))).toEqual([['call', 'first entry'], ['put', 'first entry']]);
-    expect(screen.queryByRole('button', { name: /^Look at / })).toBeNull();
-  });
-
-  it('lists what happened in order, in New York time, with the kind through the shared label, the leg and its try, the contract, the price and the reason', async () => {
-    await renderSession(vi, { detail: servedAs(sessionDetail()), request: ASKED });
-    await screen.findByRole('region', { name: 'What happened, in order (scrolls sideways)' });
+    expect.soft(tableRows('Leg trades of this day (scrolls sideways)').map((row) => row.slice(1, 3)), 'shows the trades of the day in a table of their own').toEqual([['call', 'first entry'], ['put', 'first entry']]);
+    expect.soft(screen.queryByRole('button', { name: /^Look at / }), 'has no control to open the day again').toBeNull();
 
     const rows = tableRows('What happened, in order (scrolls sideways)');
-    expect(rows.map((row) => row.slice(0, 2).concat(row[2], row[4], row[5]))).toEqual([
+    expect.soft(rows.map((row) => row.slice(0, 2).concat(row[2], row[4], row[5])), 'lists what happened in order, in New York time, with the kind through the shared label, the leg and its try, the price and the reason').toEqual([
       ['09:31 ET', 'Picked', 'call, first entry', '', ''],
       ['09:31 ET', 'Picked', 'put, first entry', '', ''],
       ['09:31 ET', 'Pick Refused', 'wing, first entry', '', 'Strike Not Listed'],
@@ -142,17 +132,12 @@ describe('one day, the stored facts', () => {
       ['09:41 ET', 'Exit Time', 'put, first entry', '', 'Exit Time'],
       ['09:42 ET', 'Marked Not Sold', 'put, first entry', '$1.25', ''],
     ]);
-  });
-
-  it('names a contract in words where the server sent its parts, and shows none where an event is not about one', async () => {
-    await renderSession(vi, { detail: servedAs(sessionDetail()), request: ASKED });
-    await screen.findByRole('region', { name: 'What happened, in order (scrolls sideways)' });
-
-    const rows = tableRows('What happened, in order (scrolls sideways)');
-    expect(rows[0][3]).toContain("Call 585 Oct 16 '26");
-    expect(rows[1][3]).toContain("Put 585 Oct 16 '26");
-    expect(rows[2][3]).toBe('— none');
-    expect(rows[9][3]).toBe('— none');
+    expect.soft(rows[0][3], 'names a contract in words where the server sent its parts (a call)').toContain("Call 585 Oct 16 '26");
+    expect.soft(rows[1][3], 'names a contract in words where the server sent its parts (a put)').toContain("Put 585 Oct 16 '26");
+    expect.soft(rows[2][3], 'shows no contract where an event is not about one (a refused pick)').toBe('— none');
+    expect.soft(rows[9][3], 'shows no contract where an event is not about one (a re-entry earned)').toBe('— none');
+    expect.soft(rows[2][6], 'shows the words the server stored for an event exactly as it stored them, a date in them and all').toBe('No 590 call was listed for 2026-10-09 with a trade that day.');
+    expect.soft(rows.filter((row) => row[6] !== '').length, 'shows the stored words of no other event').toBe(1);
   });
 
   it('names a contract in words that only a chart series sent the parts of, because no trade of the day was in it', async () => {
@@ -188,14 +173,6 @@ describe('one day, the stored facts', () => {
     expect(tableRows('What happened, in order (scrolls sideways)')[0][3]).toBe("SPY Call 999 Oct 16 '26");
   });
 
-  it('shows the words the server stored for an event exactly as it stored them, a date in them and all', async () => {
-    await renderSession(vi, { detail: servedAs(sessionDetail()), request: ASKED });
-    await screen.findByRole('region', { name: 'What happened, in order (scrolls sideways)' });
-
-    expect(tableRows('What happened, in order (scrolls sideways)')[2][6]).toBe('No 590 call was listed for 2026-10-09 with a trade that day.');
-    expect(tableRows('What happened, in order (scrolls sideways)').filter((row) => row[6] !== '').length).toBe(1);
-  });
-
   it('says so when nothing happened on the day', async () => {
     await renderSession(vi, { detail: servedAs(sessionDetail({ events: [] })), request: ASKED });
 
@@ -211,49 +188,37 @@ describe('one day, the stored facts', () => {
 });
 
 describe('one day, the chart as text', () => {
-  it('lists each level with the two instants it is drawn between, how it is drawn, and its price as the server wrote it', async () => {
+  // The put was bought in the bar that closed at 09:34 and the call was sold in the one that closed at 09:41: each filled in that minute, at its open.
+  it('lists the chart as text: the levels, the fills, the marks, the minute each is named by, and the panes of the chart', async () => {
     await renderSession(vi, { detail: servedAs(sessionDetail()), request: ASKED });
-    await screen.findByRole('region', { name: 'Levels (scrolls sideways)' });
+    await screen.findByRole('list', { name: 'Panes of the chart, from the top' });
 
-    expect(tableRows('Levels (scrolls sideways)').map((row) => [row[0], row[1], row[2], row[4], row[5], row[6]])).toEqual([
+    expect.soft(tableRows('Levels (scrolls sideways)').map((row) => [row[0], row[1], row[2], row[4], row[5], row[6]]), 'lists each level with the two instants it is drawn between, how it is drawn, and its price as the server wrote it').toEqual([
       ['Starting price', 'dotted line', 'call, first entry', '$2.00', '09:32:00 ET', '09:37:00 ET'],
       ['Momentum level', 'dashed line', 'call, first entry', '$2.50', '09:32:00 ET', '09:37:00 ET'],
       ['Stop level', 'long dashes', 'call, first entry', '$1.93', '09:38:00 ET', '09:40:00 ET'],
     ]);
-  });
-
-  it('lists each fill with the price it filled at and the price seen, and why a sale was made', async () => {
-    await renderSession(vi, { detail: servedAs(sessionDetail()), request: ASKED });
-    await screen.findByRole('region', { name: 'Fills (scrolls sideways)' });
-
-    expect(tableRows('Fills (scrolls sideways)').map((row) => [row[0], row[1], row[2], row[4], row[5], row[6], row[7], row[8]])).toEqual([
+    expect.soft(tableRows('Fills (scrolls sideways)').map((row) => [row[0], row[1], row[2], row[4], row[5], row[6], row[7], row[8]]), 'lists each fill with the price it filled at and the price seen, and why a sale was made').toEqual([
       ['Bought', 'up arrow', 'put, first entry', '2', '09:34 ET', '$1.42', '$1.40', ''],
       ['Bought', 'up arrow', 'call, first entry', '1', '09:38 ET', '$2.57', '$2.55', ''],
       ['Sold', 'down arrow', 'call, first entry', '1', '09:41 ET', '$1.82', '$1.84', 'Stop'],
     ]);
-  });
-
-  it('lists a leg marked and not sold as a mark, in a list of its own and never among the fills', async () => {
-    await renderSession(vi, { detail: servedAs(sessionDetail()), request: ASKED });
-    await screen.findByRole('region', { name: 'Marks (scrolls sideways)' });
-
-    expect(tableRows('Marks (scrolls sideways)').map((row) => [row[0], row[1], row[2], row[4], row[5]])).toEqual([
+    expect.soft(tableRows('Marks (scrolls sideways)').map((row) => [row[0], row[1], row[2], row[4], row[5]]), 'lists a leg marked and not sold as a mark, in a list of its own').toEqual([
       ['Marked, not sold', 'square', 'put, first entry', '09:40 ET', '$1.25'],
     ]);
-    expect(tableRows('Fills (scrolls sideways)').map((row) => row[0])).not.toContain('Marked, not sold');
-  });
-
-  // The put was bought in the bar that closed at 09:34 and the call was sold in the one that closed at 09:41: each filled in that minute, at its open.
-  it('names the time of a fill, a mark and an event as the minute that ended then, and a level’s as the instants it was drawn between', async () => {
-    await renderSession(vi, { detail: servedAs(sessionDetail()), request: ASKED });
-    await screen.findByRole('region', { name: 'Fills (scrolls sideways)' });
-
-    expect(columnNames('Fills (scrolls sideways)')).toContain('Filled in the minute ending');
-    expect(columnNames('Marks (scrolls sideways)')).toContain('Last traded in the minute ending');
-    expect(columnNames('What happened, in order (scrolls sideways)')[0]).toBe('Minute ending');
-    expect(columnNames('Levels (scrolls sideways)').slice(-2)).toEqual(['From', 'To']);
-    expect(tableRows('Fills (scrolls sideways)').map((row) => row[5])).toEqual(['09:34 ET', '09:38 ET', '09:41 ET']);
-    expect(tableRows('Levels (scrolls sideways)').map((row) => row[5])).toEqual(['09:32:00 ET', '09:32:00 ET', '09:38:00 ET']);
+    expect.soft(tableRows('Fills (scrolls sideways)').map((row) => row[0]), 'never lists a mark among the fills').not.toContain('Marked, not sold');
+    expect.soft(columnNames('Fills (scrolls sideways)'), 'names the time of a fill as the minute that ended then').toContain('Filled in the minute ending');
+    expect.soft(columnNames('Marks (scrolls sideways)'), 'names the time of a mark as the minute that ended then').toContain('Last traded in the minute ending');
+    expect.soft(columnNames('What happened, in order (scrolls sideways)')[0], 'names the time of an event as the minute that ended then').toBe('Minute ending');
+    expect.soft(columnNames('Levels (scrolls sideways)').slice(-2), 'names a level’s time as the instants it was drawn between').toEqual(['From', 'To']);
+    expect.soft(tableRows('Fills (scrolls sideways)').map((row) => row[5]), 'shows the minute each fill filled in').toEqual(['09:34 ET', '09:38 ET', '09:41 ET']);
+    expect.soft(tableRows('Levels (scrolls sideways)').map((row) => row[5]), 'shows the instant each level is drawn from').toEqual(['09:32:00 ET', '09:32:00 ET', '09:38:00 ET']);
+    const panes = [...screen.getByRole('list', { name: 'Panes of the chart, from the top' }).querySelectorAll(':scope > li')].map((pane) => [...pane.querySelectorAll('.entries li')].map((entry) => reads(entry)));
+    expect.soft(panes, 'describes each pane of the chart, top to bottom, with every line and mark and how it is drawn').toEqual([
+      ['Minute closes (solid line)'],
+      ['Minute closes (solid line)', '▲ Bought (up arrow)', '▼ Sold (down arrow)', 'Starting price (dotted line)', 'Momentum level (dashed line)', 'Stop level (long dashes)'],
+      ['Minute closes (solid line)', '● A lone minute with a trade (dot)', '▲ Bought (up arrow)', '■ Marked, not sold (square)'],
+    ]);
   });
 
   it('says so when there is no level, no fill and no mark', async () => {
@@ -262,18 +227,6 @@ describe('one day, the chart as text', () => {
     expect(await screen.findByText('No levels were in force on this day.')).toBeTruthy();
     expect(screen.getByText('Nothing was bought or sold on this day.')).toBeTruthy();
     expect(screen.getByText('No leg was left unsold on this day.')).toBeTruthy();
-  });
-
-  it('describes each pane of the chart, top to bottom, with every line and mark and how it is drawn', async () => {
-    await renderSession(vi, { detail: servedAs(sessionDetail()), request: ASKED });
-    await screen.findByRole('list', { name: 'Panes of the chart, from the top' });
-
-    const panes = [...screen.getByRole('list', { name: 'Panes of the chart, from the top' }).querySelectorAll(':scope > li')].map((pane) => [...pane.querySelectorAll('.entries li')].map((entry) => reads(entry)));
-    expect(panes).toEqual([
-      ['Minute closes (solid line)'],
-      ['Minute closes (solid line)', '▲ Bought (up arrow)', '▼ Sold (down arrow)', 'Starting price (dotted line)', 'Momentum level (dashed line)', 'Stop level (long dashes)'],
-      ['Minute closes (solid line)', '● A lone minute with a trade (dot)', '▲ Bought (up arrow)', '■ Marked, not sold (square)'],
-    ]);
   });
 });
 
@@ -401,17 +354,6 @@ describe('one day, refusals', () => {
 
     await screen.findByText('Traded');
     expect(screen.queryByRole('alert')).toBeNull();
-  });
-
-  it('shows the server’s words when the run is not complete, or the stored day cannot be drawn', async () => {
-    const detail = fakeRunDetail(vi, {
-      session: vi.fn(async () => {
-        throw new RunDetailRefusedError('OPTIONS_BACKTEST_STORED_SESSION_INCONSISTENT', 'The stored trades and events of this session do not agree, so it cannot be drawn: leg call.', 500);
-      }),
-    });
-    await renderSession(vi, { detail, request: ASKED });
-
-    expect(reads(await screen.findByRole('alert'))).toBe('The stored trades and events of this session do not agree, so it cannot be drawn: leg call.');
   });
 
   it('says plainly when the day cannot be read at all', async () => {

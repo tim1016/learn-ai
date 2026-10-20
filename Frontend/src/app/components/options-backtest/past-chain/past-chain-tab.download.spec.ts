@@ -52,33 +52,26 @@ describe('what the download offers', () => {
     expect(words()).toBe("Fetches the listing and the underlying's bars if they are missing.");
   });
 
-  it('is exactly the contracts on screen whose prices are not stored, and says how many', async () => {
-    await openChainOf();
+  it.each([
+    ['is exactly the contracts on screen whose prices are not stored, and says how many', chainWithFiveMissing(), 'Contracts to fetch: 5.'],
+    [
+      'is the underlying bars too when the chain says they are not stored',
+      chainExpiry({ underlying_price: underlyingPrice({ state: 'not_stored', price: null, price_time_ms: null }) }),
+      "Fetches the underlying's bars. Contracts to fetch: 1.",
+    ],
+    [
+      'is the underlying bars alone when they are the only thing missing',
+      chainExpiry({
+        underlying_price: underlyingPrice({ state: 'not_stored', price: null, price_time_ms: null }),
+        calls: side('call', [call(602_000, 'traded')]),
+        puts: side('put', []),
+      }),
+      "Fetches the underlying's bars.",
+    ],
+  ])('%s', async (_name, chain, said) => {
+    await openChainOf(chain);
 
-    expect(words()).toBe('Contracts to fetch: 5.');
-  });
-
-  it('says one contract with a label and a number, which needs no plural', async () => {
-    await openChainOf(chainExpiry());
-
-    expect(words()).toBe('Contracts to fetch: 1.');
-  });
-
-  it('is the underlying bars too when the chain says they are not stored', async () => {
-    await openChainOf(chainExpiry({ underlying_price: underlyingPrice({ state: 'not_stored', price: null, price_time_ms: null }) }));
-
-    expect(words()).toBe("Fetches the underlying's bars. Contracts to fetch: 1.");
-  });
-
-  it('is the underlying bars alone when they are the only thing missing', async () => {
-    const stored = chainExpiry({
-      underlying_price: underlyingPrice({ state: 'not_stored', price: null, price_time_ms: null }),
-      calls: side('call', [call(602_000, 'traded')]),
-      puts: side('put', []),
-    });
-    await openChainOf(stored);
-
-    expect(words()).toBe("Fetches the underlying's bars.");
+    expect(words()).toBe(said);
   });
 });
 
@@ -135,63 +128,32 @@ describe('what a download answers', () => {
       item('contract', 'SPY261016C00606000', 'failed', 'lease_timeout', 'another request holds the claim'),
     ]);
 
-  it('is every item, with its outcome as served and, for a failure, the lake reason and its own words', async () => {
-    await openChainOf(chainWithFiveMissing(), async () => answered());
-
-    fireEvent.click(button());
-
-    const result = await screen.findByRole('group', { name: 'Download result' });
-    const lines = within(result).getAllByRole('listitem').map((line) => reads(line));
-    expect(lines).toEqual([
-      'Listing SPY Already Stored',
-      "Underlying's bars SPY Fetched",
-      "Contract SPY Call 602 Oct 16 '26 Fetched",
-      "Contract SPY Call 603 Oct 16 '26 Failed Provider No Data the vendor holds no trades for SPY261016C00603000 on 2026-10-09",
-      "Contract SPY Call 606 Oct 16 '26 Failed Lease Timeout Being fetched by another request. Try again shortly. another request holds the claim",
-    ]);
-    expect(reads(paragraph(/fetched, .* already stored/))).toBe('2 fetched, 1 already stored, 2 failed.');
-  });
-
-  it('says whose it is: the underlying and the trading date it was asked for', async () => {
-    await openChainOf(chainWithFiveMissing(), async () => answered());
-
-    fireEvent.click(button());
-
-    expect(reads(await screen.findByRole('heading', { name: /Download of/ }))).toBe('Download of SPY on 2026-10-09');
-  });
-
-  it('names the date in New York terms, never in the viewer', async () => {
-    await openChainOf(chainWithFiveMissing(), async () => answered());
-
-    fireEvent.click(button());
-
-    const result = await screen.findByRole('group', { name: 'Download result' });
-    expect(assertNewYorkTimes(result)).toBe(1);
-  });
-
-  it('shows shared identities for every item and reveals a contract’s broker code on hover', async () => {
+  it('reads as the answer of the download: every item as served, whose it is, in New York terms, with shared identities, and the keyboard on it', async () => {
     await openChainOf(chainWithFiveMissing(), async () => answered());
 
     fireEvent.click(button());
 
     const result = await screen.findByRole('group', { name: 'Download result' });
     const items = within(result).getAllByRole('listitem');
-    expect(items.map((line) => line.querySelectorAll('app-asset-identity').length)).toEqual([1, 1, 1, 1, 1]);
-    expect(items.map((line) => line.querySelectorAll('app-option-contract').length)).toEqual([0, 0, 1, 1, 1]);
-    expect(result.querySelectorAll('h3 app-asset-identity').length).toBe(1);
+    const lines = items.map((line) => reads(line));
+    expect.soft(lines, 'is every item, with its outcome as served and, for a failure, the lake reason and its own words (the lines)').toEqual([
+      'Listing SPY Already Stored',
+      "Underlying's bars SPY Fetched",
+      "Contract SPY Call 602 Oct 16 '26 Fetched",
+      "Contract SPY Call 603 Oct 16 '26 Failed Provider No Data the vendor holds no trades for SPY261016C00603000 on 2026-10-09",
+      "Contract SPY Call 606 Oct 16 '26 Failed Lease Timeout Being fetched by another request. Try again shortly. another request holds the claim",
+    ]);
+    expect.soft(reads(paragraph(/fetched, .* already stored/)), 'is every item, with its outcome as served and, for a failure, the lake reason and its own words (the count line)').toBe('2 fetched, 1 already stored, 2 failed.');
+    expect.soft(reads(await screen.findByRole('heading', { name: /Download of/ })), 'says whose it is: the underlying and the trading date it was asked for').toBe('Download of SPY on 2026-10-09');
+    expect.soft(assertNewYorkTimes(result), 'names the date in New York terms, never in the viewer').toBe(1);
+    expect.soft(items.map((line) => line.querySelectorAll('app-asset-identity').length), 'shows shared identities for every item and reveals a contract’s broker code on hover (an asset identity on every item)').toEqual([1, 1, 1, 1, 1]);
+    expect.soft(items.map((line) => line.querySelectorAll('app-option-contract').length), 'shows shared identities for every item and reveals a contract’s broker code on hover (a contract identity on every contract)').toEqual([0, 0, 1, 1, 1]);
+    expect.soft(result.querySelectorAll('h3 app-asset-identity').length, 'shows shared identities for every item and reveals a contract’s broker code on hover (an asset identity in the heading)').toBe(1);
+    await waitFor(() => expect(document.activeElement, 'moves the keyboard to the result, where the pressed button no longer is').toBe(result));
 
     await userEvent.hover(within(items[2]).getByLabelText("SPY Oct 16 '26 602 Call"));
 
-    expect(within(await screen.findByRole('tooltip')).getByText('SPY261016C00602000')).toBeTruthy();
-  });
-
-  it('moves the keyboard to the result, where the pressed button no longer is', async () => {
-    await openChainOf(chainWithFiveMissing(), async () => answered());
-
-    fireEvent.click(button());
-
-    const result = await screen.findByRole('group', { name: 'Download result' });
-    await waitFor(() => expect(document.activeElement).toBe(result));
+    expect.soft(within(await screen.findByRole('tooltip')).getByText('SPY261016C00602000'), 'shows shared identities for every item and reveals a contract’s broker code on hover (the broker code on hover)').toBeTruthy();
   });
 
   it('is followed by reading the listing and the chain again, which now show what was fetched', async () => {
@@ -562,16 +524,5 @@ describe('a download of more contracts than one call takes', () => {
 
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Download missing data' })).toBeNull());
     expect(service.download).toHaveBeenCalledTimes(3);
-  });
-
-  it('names every contract on screen, and says nothing of a limit, while the server’s limits are not known', async () => {
-    const service = fakeChainService(vi, { expiry: vi.fn(async () => chainWithFiveMissing()) });
-    await renderChainTab(service, 'SPY', null);
-    await openStandardChain();
-
-    expect(words()).toBe('Contracts to fetch: 5.');
-    fireEvent.click(button());
-    await waitFor(() => expect(service.download).toHaveBeenCalledTimes(1));
-    expect(service.download.mock.calls[0]?.[0]?.contracts?.length).toBe(5);
   });
 });

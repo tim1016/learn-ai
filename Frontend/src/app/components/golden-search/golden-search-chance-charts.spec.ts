@@ -10,18 +10,14 @@ import type { CandidateRef } from './golden-search.types';
 const ALL_PERIOD: CandidateRef = { key: 'all_period', label: 'All-period fit' };
 
 describe('the chance comparison chart spec', () => {
-  it('draws a zero reference where the two settings tie, labelled as a tie', () => {
+  it('draws the default comparison with a zero tie reference and an interval labelled the middle 90%, never a confidence interval', () => {
     const spec = chanceComparisonSpec(ALL_PERIOD, chanceComparison(), 'all_period');
     const option = spec.option(FAKE_CHART_THEME) as { series: { markLine?: { data: { xAxis: number }[] } }[] };
     const marks = option.series[0]?.markLine?.data ?? [];
-    expect(marks).toContainEqual({ xAxis: 0 });
-  });
-
-  it('labels the interval the middle 90% of resampled differences, never a confidence interval', () => {
-    const spec = chanceComparisonSpec(ALL_PERIOD, chanceComparison(), 'all_period');
-    expect(spec.label).toBe('All-period fit resampled against the current settings');
-    expect(JSON.stringify(spec.option(FAKE_CHART_THEME))).toContain('Middle 90% of resampled differences');
-    expect(JSON.stringify(spec.option(FAKE_CHART_THEME))).not.toContain('confidence');
+    expect.soft(marks, 'draws a zero reference where the two settings tie, labelled as a tie').toContainEqual({ xAxis: 0 });
+    expect.soft(spec.label, 'labels the interval the middle 90% of resampled differences: the chart label').toBe('All-period fit resampled against the current settings');
+    expect.soft(JSON.stringify(spec.option(FAKE_CHART_THEME)), 'labels the interval the middle 90% of resampled differences: the interval label').toContain('Middle 90% of resampled differences');
+    expect.soft(JSON.stringify(spec.option(FAKE_CHART_THEME)), 'never a confidence interval').not.toContain('confidence');
   });
 
   it('carries the raw counts behind every rounded share, ties and undefined included', () => {

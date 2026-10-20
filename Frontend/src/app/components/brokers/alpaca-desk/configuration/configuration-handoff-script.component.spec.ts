@@ -99,18 +99,11 @@ describe('ConfigurationHandoffScriptComponent', () => {
     expect(screen.queryByText(/did not declare this lane's worker service/)).toBeNull();
   });
 
-  it('has no detectable accessibility violations', async () => {
-    await renderScript('podman compose restart alpaca-paper-clerk');
-
-    const results = await axe.run(document.body, {
-      rules: { 'color-contrast': { enabled: false } },
-    });
-
-    expect(results.violations).toEqual([]);
-  });
-
-  it('has no detectable accessibility violations when no worker service was declared', async () => {
-    await renderScript(null);
+  it.each([
+    ['with a declared worker service', 'podman compose restart alpaca-paper-clerk'],
+    ['when no worker service was declared', null],
+  ])('has no detectable accessibility violations %s', async (_name, restartCommand) => {
+    await renderScript(restartCommand);
 
     const results = await axe.run(document.body, {
       rules: { 'color-contrast': { enabled: false } },
@@ -128,14 +121,10 @@ describe('withWorkerExports', () => {
     expect(withWorkerExports(SCRIPT, "podman compose restart alpaca-paper-clerk's-clone")).toBe(SCRIPT);
   });
 
-  it('leaves the script untouched when the command does not match the known grammar', () => {
-    expect(withWorkerExports(SCRIPT, 'echo not-a-compose-command')).toBe(SCRIPT);
-  });
-
-  it('leaves the script untouched when the anchor line is missing', () => {
-    const scriptWithoutAnchor = '#!/usr/bin/env bash\necho hi\n';
-    expect(withWorkerExports(scriptWithoutAnchor, 'podman compose restart alpaca-paper-clerk')).toBe(
-      scriptWithoutAnchor,
-    );
+  it.each([
+    ['the command does not match the known grammar', SCRIPT, 'echo not-a-compose-command'],
+    ['the anchor line is missing', '#!/usr/bin/env bash\necho hi\n', 'podman compose restart alpaca-paper-clerk'],
+  ])('leaves the script untouched when %s', (_name, script, restartCommand) => {
+    expect(withWorkerExports(script, restartCommand)).toBe(script);
   });
 });

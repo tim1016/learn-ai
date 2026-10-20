@@ -193,19 +193,14 @@ describe('applyPlanEdit', () => {
     expect(applyPlanEdit(laidOut, { kind: 'range', from: '2025-09-19', to: '2026-09-18' }, emaCapability()).rangeNote).toBeUndefined();
   });
 
-  it("a picked range drops the cut the server made for the dates it replaces", () => {
+  it('drops the cut the server made for dates a picked range or a new final-month count replaces', () => {
     const laidOut: PlanDraft = { ...draft(), finalMonths: 3, finalSessionsCut: 3 };
     const ranged = applyPlanEdit(laidOut, { kind: 'range', from: '2024-09-19', to: '2026-09-18' }, emaCapability());
-
-    expect(ranged.finalSessionsCut).toBeUndefined();
-  });
-
-  it("a new final-month count drops the old count's cut until the server lays out the new dates", () => {
-    const laidOut: PlanDraft = { ...draft(), finalMonths: 3, finalSessionsCut: 3 };
     const recounted = applyPlanEdit(laidOut, { kind: 'number', field: 'final_months', raw: '4' }, emaCapability());
 
-    expect(recounted.finalMonths).toBe(4);
-    expect(recounted.finalSessionsCut).toBeUndefined();
+    expect.soft(ranged.finalSessionsCut, 'a picked range drops the cut the server made for the dates it replaces').toBeUndefined();
+    expect.soft(recounted.finalMonths, 'a new final-month count takes the new count').toBe(4);
+    expect.soft(recounted.finalSessionsCut, "a new final-month count drops the old count's cut until the server lays out the new dates").toBeUndefined();
   });
 
   it('forgets an unreadable value once its input is no longer shown, so no problem points at a hidden field', () => {

@@ -13,24 +13,19 @@ describe('resolveLegacyDataLabUrl — PRD §14 table', () => {
     });
   });
 
-  it('/data-quality → /data-lab/validate', () => {
-    expect(resolveLegacyDataLabUrl('/data-quality').route).toBe('/data-lab/validate');
-  });
-
-  it('?mode=explore → /data-lab/explore', () => {
-    expect(resolveLegacyDataLabUrl('/data-lab?mode=explore').route).toBe('/data-lab/explore');
-  });
-
-  it('?mode=build → /data-lab/export', () => {
-    expect(resolveLegacyDataLabUrl('/data-lab?mode=build').route).toBe('/data-lab/export');
-  });
-
-  it('?mode=export → /data-lab/export', () => {
-    expect(resolveLegacyDataLabUrl('/data-lab?mode=export').route).toBe('/data-lab/export');
-  });
-
-  it('?mode=validate → /data-lab/validate', () => {
-    expect(resolveLegacyDataLabUrl('/data-lab?mode=validate').route).toBe('/data-lab/validate');
+  it.each([
+    ['/data-quality → /data-lab/validate', '/data-quality', '/data-lab/validate'],
+    ['?mode=explore → /data-lab/explore', '/data-lab?mode=explore', '/data-lab/explore'],
+    ['?mode=build → /data-lab/export', '/data-lab?mode=build', '/data-lab/export'],
+    ['?mode=export → /data-lab/export', '/data-lab?mode=export', '/data-lab/export'],
+    ['?mode=validate → /data-lab/validate', '/data-lab?mode=validate', '/data-lab/validate'],
+    [
+      'an explicit mode still overrides an already-canonical child path (/data-lab/validate?mode=build → /data-lab/export)',
+      '/data-lab/validate?mode=build',
+      '/data-lab/export',
+    ],
+  ])('%s', (_name, url, route) => {
+    expect(resolveLegacyDataLabUrl(url).route).toBe(route);
   });
 
   it('legacy ticker/range/trading-session query survives verbatim', () => {
@@ -100,11 +95,6 @@ describe('resolveLegacyDataLabUrl — PRD §14 table', () => {
       to: '2026-06-30',
     });
     expect(res.warnings).toEqual([]);
-  });
-
-  it('an explicit mode still overrides an already-canonical child path', () => {
-    const res = resolveLegacyDataLabUrl('/data-lab/validate?mode=build');
-    expect(res.route).toBe('/data-lab/export');
   });
 
   it('drops known keys with empty values', () => {

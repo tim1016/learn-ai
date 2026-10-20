@@ -52,20 +52,15 @@ describe('where the keyboard goes when a leg changes', () => {
     expect(legCard(2).contains(document.activeElement)).toBe(true);
   });
 
-  it('goes to the delete control of the leg before when the last leg is deleted', async () => {
-    await renderWithLegs(3);
+  it.each([
+    ['the delete control of the leg before when the last leg is deleted', 3, 'Delete Leg 3', 'Delete Leg 2'],
+    ['Add leg when the only leg is deleted', 1, 'Delete Leg 1', 'Add leg'],
+  ])('goes to %s', async (_name, legs, deleted, lands) => {
+    await renderWithLegs(legs);
 
-    press('Delete Leg 3');
+    press(deleted);
 
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Delete Leg 2' })));
-  });
-
-  it('goes to Add leg when the only leg is deleted', async () => {
-    await renderWithLegs(1);
-
-    press('Delete Leg 1');
-
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Add leg' })));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: lands })));
   });
 
   it('goes to the first builder field instead, when Add leg cannot be pressed until something there is put right', async () => {

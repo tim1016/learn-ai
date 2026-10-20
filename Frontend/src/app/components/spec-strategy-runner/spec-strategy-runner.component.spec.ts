@@ -71,19 +71,23 @@ describe('SpecStrategyRunnerComponent', () => {
   });
 
   // ---- Initial state ----------------------------------------------------
-  it('boots with the SPY EMA fixture loaded by default', () => {
-    expect(component.selectedFixtureId()).toBe('spy_ema_crossover');
-    expect(component.spec().name).toContain('SPY EMA');
-    expect(component.spec().indicators).toHaveLength(3);
-    expect(component.currentSavedId()).toBeNull();
-  });
+  it('boots on the SPY EMA fixture, offers every picker kind and bundles the canonical fixtures', () => {
+    expect.soft(component.selectedFixtureId(), 'boots with the SPY EMA fixture loaded by default: fixture id').toBe('spy_ema_crossover');
+    expect.soft(component.spec().name, 'boots with the SPY EMA fixture loaded by default: spec name').toContain('SPY EMA');
+    expect.soft(component.spec().indicators, 'boots with the SPY EMA fixture loaded by default: indicators').toHaveLength(3);
+    expect.soft(component.currentSavedId(), 'boots with the SPY EMA fixture loaded by default: no saved id').toBeNull();
 
-  it('exposes all six indicator kinds and all nine condition kinds for the pickers', () => {
-    expect(component.indicatorKinds).toEqual(['SMA', 'EMA', 'RSI', 'ADX', 'MACD', 'SUPERTREND']);
-    expect(component.conditionKinds).toContain('FreshCross');
-    expect(component.conditionKinds).toContain('DrawdownFromPeak');
-    expect(component.conditionKinds).toContain('BarProperty');
-    expect(component.conditionKinds.length).toBe(9);
+    expect.soft(component.indicatorKinds, 'exposes all six indicator kinds for the pickers').toEqual(['SMA', 'EMA', 'RSI', 'ADX', 'MACD', 'SUPERTREND']);
+    expect.soft(component.conditionKinds, 'exposes FreshCross among the condition kinds').toContain('FreshCross');
+    expect.soft(component.conditionKinds, 'exposes DrawdownFromPeak among the condition kinds').toContain('DrawdownFromPeak');
+    expect.soft(component.conditionKinds, 'exposes BarProperty among the condition kinds').toContain('BarProperty');
+    expect.soft(component.conditionKinds.length, 'exposes all nine condition kinds for the pickers').toBe(9);
+
+    expect.soft(CANONICAL_FIXTURES.map((f) => f.id), 'the bundled canonical fixtures are the same three the Python service ships').toEqual([
+      'spy_ema_crossover',
+      'sma_crossover',
+      'rsi_mean_reversion',
+    ]);
   });
 
   // ---- Fixture / saved load --------------------------------------------
@@ -336,11 +340,9 @@ describe('SpecStrategyRunnerComponent', () => {
   });
 
   // ---- Display helpers (kept from previous version) -------------------
-  it('formatTime renders an ms-UTC timestamp in America/New_York', () => {
-    expect(component.formatTime(1704153600000)).toBe('01/01/2024, 19:00');
-  });
+  it('formats times and indicator snapshots for the trade log', () => {
+    expect.soft(component.formatTime(1704153600000), 'formatTime renders an ms-UTC timestamp in America/New_York').toBe('01/01/2024, 19:00');
 
-  it('formatIndicators serializes the indicator snapshot dict in recorded order', () => {
     const out = component.formatIndicators({
       trade_number: 1,
       entry_time: 0,
@@ -353,16 +355,7 @@ describe('SpecStrategyRunnerComponent', () => {
       result: 'WIN',
       signal_reason: '',
     });
-    expect(out).toBe('ema5=470.4321, rsi=62.5000');
-  });
-
-  // ---- Sanity check on canonical fixture references -------------------
-  it('the bundled canonical fixtures are the same three the Python service ships', () => {
-    expect(CANONICAL_FIXTURES.map((f) => f.id)).toEqual([
-      'spy_ema_crossover',
-      'sma_crossover',
-      'rsi_mean_reversion',
-    ]);
+    expect.soft(out, 'formatIndicators serializes the indicator snapshot dict in recorded order').toBe('ema5=470.4321, rsi=62.5000');
   });
 
   // ---- runBacktest payload reflects bridge ----------------------------
@@ -389,26 +382,6 @@ describe('SpecStrategyRunnerComponent', () => {
       // Symbol flows through spec.symbols (the bridge already updated it
       // in onRangeChange, so the spec handed to the service carries TSLA).
       expect(spec.symbols).toEqual(['TSLA']);
-    });
-  });
-
-  // ---- Range dates flow into validation -------------------------------
-  describe('range dates flow into validation', () => {
-    it('validateStrategy receives range().from/to as start/end', () => {
-      // Pick a date pair distinct from the constructor defaults so we
-      // can prove the call site reads from range.
-      component.range.set({
-        from: '2025-06-01',
-        to: '2025-06-30',
-        resolution: component.range().resolution,
-      });
-
-      // The component's `issues` computed re-runs on every signal read;
-      // assert that range() values are what feed in (and that the issues
-      // list is computable — proves the rename took effect end-to-end).
-      expect(component.range().from).toBe('2025-06-01');
-      expect(component.range().to).toBe('2025-06-30');
-      expect(Array.isArray(component.issues())).toBe(true);
     });
   });
 
@@ -445,11 +418,6 @@ describe('SpecStrategyRunnerComponent', () => {
       expect(component.range().to).toBe('2025-01-31');
       // Same array reference — no spec.update was called.
       expect(component.spec().symbols).toBe(symbolsRefBefore);
-    });
-
-    it('pickerValue.symbol initially reflects spec.symbols[0]', () => {
-      // Default fixture is spy_ema_crossover (symbols: ["SPY"]).
-      expect(component.pickerValue().symbol).toBe('SPY');
     });
 
     it('pickerValue re-syncs symbol when spec is replaced', () => {

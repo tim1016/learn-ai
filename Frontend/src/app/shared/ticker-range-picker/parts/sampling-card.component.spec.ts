@@ -28,16 +28,13 @@ describe('SamplingCardComponent', () => {
     component.changed.subscribe((change) => changes.push(change));
   });
 
-  it('renders the three resolution toggles by default', () => {
+  it('renders the defaults: three resolution toggles, no multiplier dropdown, a multiplier of 1', () => {
     fixture.detectChanges();
     const buttons = fixture.nativeElement.querySelectorAll('.res-btn');
-    expect(buttons.length).toBe(3);
-  });
-
-  it('does NOT render multiplier dropdown when availableMultipliers is empty', () => {
-    fixture.detectChanges();
+    expect.soft(buttons.length, 'renders the three resolution toggles by default').toBe(3);
     const select = fixture.nativeElement.querySelector('.multiplier__select');
-    expect(select).toBeNull();
+    expect.soft(select, 'does NOT render multiplier dropdown when availableMultipliers is empty').toBeNull();
+    expect.soft(component.effectiveMultiplier(), 'effectiveMultiplier defaults to 1 when undefined on the value').toBe(1);
   });
 
   it('renders multiplier dropdown when availableMultipliers is non-empty', () => {
@@ -57,11 +54,6 @@ describe('SamplingCardComponent', () => {
     fixture.detectChanges();
     component.setMultiplier(15);
     expect(changes).toEqual([{ multiplier: 15 }]);
-  });
-
-  it('effectiveMultiplier defaults to 1 when undefined on the value', () => {
-    fixture.detectChanges();
-    expect(component.effectiveMultiplier()).toBe(1);
   });
 
   it('setSession to extended is ignored when sessionMode=disabled', () => {

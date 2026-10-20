@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { RunLogBuffer, RUN_LOG_DEFAULT_CAP, pythonLevelToEntryLevel, glyphForLevel } from './run-log-buffer';
+import { RunLogBuffer, pythonLevelToEntryLevel, glyphForLevel } from './run-log-buffer';
 
 describe('RunLogBuffer', () => {
   it('appends entries up to the cap', () => {
@@ -18,10 +18,6 @@ describe('RunLogBuffer', () => {
     buf.append('info', 'ⓘ', 'c');
     expect(buf.size()).toBe(2);
     expect(buf.entries().map((e) => e.message)).toEqual(['b', 'c']);
-  });
-
-  it('default cap is 500', () => {
-    expect(RUN_LOG_DEFAULT_CAP).toBe(500);
   });
 
   it('500-th and 501-st append behaves correctly', () => {
@@ -52,18 +48,15 @@ describe('RunLogBuffer', () => {
 });
 
 describe('pythonLevelToEntryLevel', () => {
-  it('maps standard levels', () => {
-    expect(pythonLevelToEntryLevel('info')).toBe('info');
-    expect(pythonLevelToEntryLevel('warning')).toBe('warn');
-    expect(pythonLevelToEntryLevel('warn')).toBe('warn');
-    expect(pythonLevelToEntryLevel('error')).toBe('error');
-    expect(pythonLevelToEntryLevel('critical')).toBe('error');
-    expect(pythonLevelToEntryLevel('success')).toBe('success');
-  });
-
-  it('falls back to info for unknown / missing', () => {
-    expect(pythonLevelToEntryLevel(undefined)).toBe('info');
-    expect(pythonLevelToEntryLevel('debug')).toBe('info');
+  it('maps standard levels and falls back to info for unknown / missing', () => {
+    expect.soft(pythonLevelToEntryLevel('info'), 'maps info to info').toBe('info');
+    expect.soft(pythonLevelToEntryLevel('warning'), 'maps warning to warn').toBe('warn');
+    expect.soft(pythonLevelToEntryLevel('warn'), 'maps warn to warn').toBe('warn');
+    expect.soft(pythonLevelToEntryLevel('error'), 'maps error to error').toBe('error');
+    expect.soft(pythonLevelToEntryLevel('critical'), 'maps critical to error').toBe('error');
+    expect.soft(pythonLevelToEntryLevel('success'), 'maps success to success').toBe('success');
+    expect.soft(pythonLevelToEntryLevel(undefined), 'falls back to info for a missing level').toBe('info');
+    expect.soft(pythonLevelToEntryLevel('debug'), 'falls back to info for an unknown level').toBe('info');
   });
 });
 

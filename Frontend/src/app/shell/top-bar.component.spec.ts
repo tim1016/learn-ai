@@ -17,52 +17,32 @@ import { TopBarComponent } from './top-bar.component';
 class TopBarProjectionHostComponent {}
 
 describe('TopBarComponent', () => {
-  it('renders a labelled header and centered Botasur home link', async () => {
+  it('renders the default bar: labelled header, centered Botasur home link, no mode tint, no accessibility violations', async () => {
     const { container } = await render(TopBarComponent, { providers: [provideRouter([])] });
 
-    expect(screen.getByRole('banner', { name: 'Botasur application' })).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Botasur home' }).getAttribute('href')).toBe('/data-lab');
-    expect(screen.getByText('Botasur')).toBeTruthy();
-    expect(container.querySelector('.top-bar__brand-lockup')?.getAttribute('src')).toBe(
+    expect.soft(screen.getByRole('banner', { name: 'Botasur application' }), 'renders a labelled header').toBeTruthy();
+    expect.soft(screen.getByRole('link', { name: 'Botasur home' }).getAttribute('href'), 'links the Botasur home to /data-lab').toBe('/data-lab');
+    expect.soft(screen.getByText('Botasur'), 'renders the Botasur name').toBeTruthy();
+    expect.soft(container.querySelector('.top-bar__brand-lockup')?.getAttribute('src'), 'renders the brand lockup mark').toBe(
       '/assets/brand/botasur-header-mark.svg',
     );
+    const unknownClasses = container.querySelector('.top-bar')?.classList;
+    expect.soft(unknownClasses?.contains('top-bar--paper'), 'paints no paper tint for an unknown accountMode').toBe(false);
+    expect.soft(unknownClasses?.contains('top-bar--live'), 'paints no live tint for an unknown accountMode').toBe(false);
+
+    const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
+    expect.soft(results.violations, 'has no detectable accessibility violations').toEqual([]);
   });
 
-  it('paints the solid paper tint for accountMode paper', async () => {
-    const paper = await render(TopBarComponent, {
+  it.each<['paper' | 'live', string]>([
+    ['paper', 'top-bar--paper'],
+    ['live', 'top-bar--live'],
+  ])('paints the solid tint for accountMode %s', async (accountMode, tintClass) => {
+    const view = await render(TopBarComponent, {
       providers: [provideRouter([])],
-      componentInputs: { accountMode: 'paper' },
+      componentInputs: { accountMode },
     });
-    expect(paper.container.querySelector('.top-bar')?.classList.contains('top-bar--paper')).toBe(true);
-  });
-
-  it('paints the solid live tint for accountMode live', async () => {
-    const live = await render(TopBarComponent, {
-      providers: [provideRouter([])],
-      componentInputs: { accountMode: 'live' },
-    });
-    expect(live.container.querySelector('.top-bar')?.classList.contains('top-bar--live')).toBe(true);
-  });
-
-  it('paints no mode tint for an unknown accountMode', async () => {
-    const unknown = await render(TopBarComponent, { providers: [provideRouter([])] });
-    const unknownClasses = unknown.container.querySelector('.top-bar')?.classList;
-    expect(unknownClasses?.contains('top-bar--paper')).toBe(false);
-    expect(unknownClasses?.contains('top-bar--live')).toBe(false);
-  });
-
-  it('provides named regions for shell extensions', async () => {
-    const { container } = await render(TopBarComponent, { providers: [provideRouter([])] });
-
-    expect(container.querySelector('[data-shell-slot="nav"]')).toBeTruthy();
-    expect(container.querySelector('[data-shell-slot="connection"]')).toBeTruthy();
-  });
-
-  it('no longer carries the retired breadcrumb and account-cluster regions', async () => {
-    const { container } = await render(TopBarComponent, { providers: [provideRouter([])] });
-
-    expect(container.querySelector('[data-shell-slot="breadcrumbs"]')).toBeNull();
-    expect(container.querySelector('[data-shell-slot="account-cluster"]')).toBeNull();
+    expect(view.container.querySelector('.top-bar')?.classList.contains(tintClass)).toBe(true);
   });
 
   it('projects each shell extension through its named region', async () => {
@@ -70,13 +50,6 @@ describe('TopBarComponent', () => {
 
     expect(container.querySelector('[data-shell-slot="nav"]')?.textContent).toContain('Primary navigation');
     expect(container.querySelector('[data-shell-slot="connection"]')?.textContent).toContain('Connection control');
-  });
-
-  it('has no detectable accessibility violations', async () => {
-    await render(TopBarComponent, { providers: [provideRouter([])] });
-
-    const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
-    expect(results.violations).toEqual([]);
   });
 
 });

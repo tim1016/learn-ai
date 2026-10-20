@@ -22,17 +22,15 @@ describe('a bot’s end as the owner edits it (#2607)', () => {
     expect(botEndInput({ ...noEnd, noEnd: false })).toEqual({ end_at_ms: AT, end_action: 'SELL' });
   });
 
-  it('always sends the action, and Sell where Keep is not offered', () => {
+  it('sends Sell over a chosen Keep where Keep cannot apply: not offered, or "no end"', () => {
     const keep = botEndFields({ end_at_ms: AT, end_action: 'KEEP' });
 
-    expect(botEndInput(keep, false)).toEqual({ end_at_ms: AT, end_action: 'SELL' });
-    expect(botEndInput({ ...keep, noEnd: true }, false)).toEqual({ end_at_ms: null, end_action: 'SELL' });
-  });
-
-  it('sends "no end" with Sell even after Keep was chosen, since no end has no shares to keep', () => {
-    const keep = botEndFields({ end_at_ms: AT, end_action: 'KEEP' });
-
-    expect(botEndInput({ ...keep, noEnd: true })).toEqual({ end_at_ms: null, end_action: 'SELL' });
+    expect.soft(botEndInput(keep, false), 'always sends the action, and Sell where Keep is not offered')
+      .toEqual({ end_at_ms: AT, end_action: 'SELL' });
+    expect.soft(botEndInput({ ...keep, noEnd: true }, false), 'always sends the action, and Sell where Keep is not offered, under "no end"')
+      .toEqual({ end_at_ms: null, end_action: 'SELL' });
+    expect.soft(botEndInput({ ...keep, noEnd: true }), 'sends "no end" with Sell even after Keep was chosen, since no end has no shares to keep')
+      .toEqual({ end_at_ms: null, end_action: 'SELL' });
   });
 
   it('sends nothing while the date or time is not a real wall clock', () => {

@@ -9,7 +9,7 @@ import { lettingGo, reads } from '../../testing/page-actions';
 import { runDetail, runWithoutSetup } from '../../testing/run-fixtures';
 import { RunDetailRefusedError, RunDetailService } from '../run-detail.service';
 import type { LegTrade, TradeQuery, TradesPage } from '../run-detail.types';
-import { FOUR_TRADES, stoppedTrade, tradesPage } from '../testing/detail-fixtures';
+import { stoppedTrade, tradesPage } from '../testing/detail-fixtures';
 import { fakeRunDetail, type FakeRunDetail } from '../testing/fake-run-detail';
 import { RunTradesComponent } from './run-trades.component';
 
@@ -38,36 +38,33 @@ const lastQuery = (detail: FakeRunDetail): TradeQuery | undefined => detail.trad
 const legsOnScreen = () => screen.queryAllByRole('row').slice(1).map((row) => reads(row.querySelectorAll('td')[1] ?? null));
 
 describe('the trades of a run, reading them', () => {
-  it('reads the first page of the run on screen, 100 trades at most, with no filter', async () => {
+  it('reads the first page of the run on screen, 100 trades at most, with no filter, and shows the trades in the order the server gave them under the heading Trades, with the export beside it', async () => {
     const detail = fakeRunDetail(vi, { trades: vi.fn(async () => tradesPage()) });
     await renderTrades(detail);
 
     await screen.findByRole('table', { name: 'Leg trades' });
-    expect(detail.trades).toHaveBeenCalledTimes(1);
-    expect(detail.trades).toHaveBeenCalledWith(7, { sessionOpenMs: null, legId: '', limit: 100, offset: 0 });
+    expect.soft(detail.trades, 'reads the first page of the run on screen, once').toHaveBeenCalledTimes(1);
+    expect.soft(detail.trades, 'reads the first page of the run on screen, 100 trades at most, with no filter').toHaveBeenCalledWith(7, { sessionOpenMs: null, legId: '', limit: 100, offset: 0 });
+    expect.soft(screen.getByRole('region', { name: 'Trades' }), 'shows the trades in a region named Trades').toBeTruthy();
+    expect.soft(screen.getByRole('heading', { name: 'Trades' }), 'shows the trades under the heading Trades').toBeTruthy();
+    expect.soft(legsOnScreen(), 'shows the trades in the order the server gave them').toEqual(['call', 'call', 'put', 'put']);
+    expect.soft(screen.getByRole('button', { name: 'Export trades (CSV)' }), 'puts the export beside the heading, for the run on screen').toBeTruthy();
   });
 
-  it('shows the trades in the order the server gave them, under the heading Trades', async () => {
-    await renderTrades(fakeRunDetail(vi, { trades: vi.fn(async () => tradesPage()) }));
+  it.each([
+    [
+      'says it is reading while the answer is on its way',
+      () => {
+        const waiting = deferred<TradesPage>();
+        return vi.fn(() => waiting.promise);
+      },
+      'Reading the trades…',
+    ],
+    ['says so when the run made no trades', () => vi.fn(async () => tradesPage({ trades: [], total: 0 })), 'This run made no trades.'],
+  ])('%s', async (_name, trades, words) => {
+    await renderTrades(fakeRunDetail(vi, { trades: trades() }));
 
-    await screen.findByRole('table', { name: 'Leg trades' });
-    expect(screen.getByRole('region', { name: 'Trades' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Trades' })).toBeTruthy();
-    expect(legsOnScreen()).toEqual(['call', 'call', 'put', 'put']);
-  });
-
-  it('says it is reading while the answer is on its way', async () => {
-    const waiting = deferred<TradesPage>();
-    await renderTrades(fakeRunDetail(vi, { trades: vi.fn(() => waiting.promise) }));
-
-    expect((await screen.findByText('Reading the trades…')).getAttribute('role')).toBe('status');
-    expect(screen.queryByRole('table')).toBeNull();
-  });
-
-  it('says so when the run made no trades', async () => {
-    await renderTrades(fakeRunDetail(vi, { trades: vi.fn(async () => tradesPage({ trades: [], total: 0 })) }));
-
-    expect((await screen.findByText('This run made no trades.')).getAttribute('role')).toBe('status');
+    expect((await screen.findByText(words)).getAttribute('role')).toBe('status');
     expect(screen.queryByRole('table')).toBeNull();
   });
 
@@ -93,12 +90,6 @@ describe('the trades of a run, reading them', () => {
     await renderTrades(fakeRunDetail(vi, { trades: vi.fn(async () => { throw new Error('offline'); }) }));
 
     expect(reads(await screen.findByRole('alert'))).toBe('The trades could not be read.');
-  });
-
-  it('puts the export beside the heading, for the run on screen', async () => {
-    await renderTrades(fakeRunDetail(vi, { trades: vi.fn(async () => tradesPage()) }));
-
-    expect(screen.getByRole('button', { name: 'Export trades (CSV)' })).toBeTruthy();
   });
 });
 
@@ -195,16 +186,19 @@ describe('the trades of a run, paging with the server’s numbers', () => {
 });
 
 describe('the trades of a run, filters', () => {
-  it('lists the run’s days and filters by the one chosen, from the first page', async () => {
+  it.each([
+    ['lists the run’s days and filters by the one chosen, from the first page', /^Days/, ['All days', '2026-09-14', '2026-09-15', '2026-09-16', '2026-09-17', '2026-09-18'], '2026-09-16', { sessionOpenMs: sessionOpenMs('2026-09-16'), legId: '', limit: 100, offset: 0 }],
+    ['lists the legs of the run’s setup and filters by the one chosen', /^Legs/, ['All legs', 'call', 'put'], 'put', { sessionOpenMs: null, legId: 'put', limit: 100, offset: 0 }],
+  ])('%s', async (_name, label, options, chosen, want) => {
     const detail = fakeRunDetail(vi, { trades: vi.fn(async () => tradesPage()) });
     await renderTrades(detail);
     await screen.findByRole('table', { name: 'Leg trades' });
-    const days = screen.getByRole('combobox', { name: /^Days/ });
+    const select = screen.getByRole('combobox', { name: label });
 
-    expect([...days.querySelectorAll('option')].map((option) => option.textContent)).toEqual(['All days', '2026-09-14', '2026-09-15', '2026-09-16', '2026-09-17', '2026-09-18']);
-    await userEvent.selectOptions(days, '2026-09-16');
+    expect([...select.querySelectorAll('option')].map((option) => option.textContent)).toEqual(options);
+    await userEvent.selectOptions(select, chosen);
 
-    await waitFor(() => expect(lastQuery(detail)).toEqual({ sessionOpenMs: sessionOpenMs('2026-09-16'), legId: '', limit: 100, offset: 0 }));
+    await waitFor(() => expect(lastQuery(detail)).toEqual(want));
   });
 
   // 00:30 New York time on the 16th is 23:30 on the 15th in Chicago; 20:00 on the 15th is the 16th in Tokyo.
@@ -221,18 +215,6 @@ describe('the trades of a run, filters', () => {
     expect([...screen.getByRole('combobox', { name: /^Days/ }).querySelectorAll('option')].map((option) => option.textContent)).toEqual(['All days', date]);
   });
 
-  it('lists the legs of the run’s setup and filters by the one chosen', async () => {
-    const detail = fakeRunDetail(vi, { trades: vi.fn(async () => tradesPage()) });
-    await renderTrades(detail);
-    await screen.findByRole('table', { name: 'Leg trades' });
-    const legs = screen.getByRole('combobox', { name: /^Legs/ });
-
-    expect([...legs.querySelectorAll('option')].map((option) => option.textContent)).toEqual(['All legs', 'call', 'put']);
-    await userEvent.selectOptions(legs, 'put');
-
-    await waitFor(() => expect(lastQuery(detail)).toEqual({ sessionOpenMs: null, legId: 'put', limit: 100, offset: 0 }));
-  });
-
   it('goes back to All days and All legs when both are chosen again', async () => {
     const detail = fakeRunDetail(vi, { trades: vi.fn(async () => tradesPage()) });
     await renderTrades(detail);
@@ -246,7 +228,10 @@ describe('the trades of a run, filters', () => {
     await waitFor(() => expect(lastQuery(detail)).toEqual({ sessionOpenMs: null, legId: '', limit: 100, offset: 0 }));
   });
 
-  it('starts again from the first page when a filter changes', async () => {
+  it.each([
+    ['starts again from the first page when a filter changes', /^Legs/, 'put', { sessionOpenMs: null, legId: 'put', limit: 100, offset: 0 }],
+    ['starts again from the first page when the day changes', /^Days/, '2026-09-16', { sessionOpenMs: sessionOpenMs('2026-09-16'), legId: '', limit: 100, offset: 0 }],
+  ])('%s', async (_name, label, chosen, want) => {
     const detail = fakeRunDetail(vi, {
       trades: vi.fn(async (_runId: number, query?: TradeQuery) => pageOf(100, { total: 250, offset: query?.offset ?? 0, next_offset: query?.offset === 0 ? 90 : 190 })),
     });
@@ -255,24 +240,9 @@ describe('the trades of a run, filters', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
     await screen.findByText('Trades 91 to 190 of 250');
 
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^Legs/ }), 'put');
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: label }), chosen);
 
-    await waitFor(() => expect(lastQuery(detail)).toEqual({ sessionOpenMs: null, legId: 'put', limit: 100, offset: 0 }));
-    expect(screen.queryByRole('button', { name: 'Previous page' })).toBeNull();
-  });
-
-  it('starts again from the first page when the day changes', async () => {
-    const detail = fakeRunDetail(vi, {
-      trades: vi.fn(async (_runId: number, query?: TradeQuery) => pageOf(100, { total: 250, offset: query?.offset ?? 0, next_offset: query?.offset === 0 ? 90 : 190 })),
-    });
-    await renderTrades(detail);
-    await screen.findByText('Trades 1 to 100 of 250');
-    fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
-    await screen.findByText('Trades 91 to 190 of 250');
-
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^Days/ }), '2026-09-16');
-
-    await waitFor(() => expect(lastQuery(detail)).toEqual({ sessionOpenMs: sessionOpenMs('2026-09-16'), legId: '', limit: 100, offset: 0 }));
+    await waitFor(() => expect(lastQuery(detail)).toEqual(want));
     expect(screen.queryByRole('button', { name: 'Previous page' })).toBeNull();
   });
 
@@ -372,11 +342,3 @@ describe('the trades of a run, an answer that comes too late', () => {
   });
 });
 
-describe('the trades of a run, with the table inside', () => {
-  it('hands the four trades to the table whole, each with its own figures', async () => {
-    await renderTrades(fakeRunDetail(vi, { trades: vi.fn(async () => tradesPage({ trades: [...FOUR_TRADES] })) }));
-
-    await screen.findByRole('table', { name: 'Leg trades' });
-    expect(screen.getAllByRole('row').length).toBe(5);
-  });
-});

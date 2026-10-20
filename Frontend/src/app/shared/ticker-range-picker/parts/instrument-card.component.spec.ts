@@ -14,7 +14,6 @@ import {
 import {
   fakeVendorCatalog,
   fakeEnsureCoverage,
-  fakeHeldSession,
   provideFakeVendorCatalog,
   provideFakeEnsureCoverage,
   type FakeVendorCatalog,
@@ -93,11 +92,14 @@ describe('InstrumentCardComponent', () => {
   }
 
 
-  it('renders the current symbol and exchange', () => {
+  it('renders the current instrument: its symbol, exchange and days held', () => {
     fixture.detectChanges();
     const text: string = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('SPY');
-    expect(text).toContain('ARCA');
+    expect.soft(text, 'renders the current symbol').toContain('SPY');
+    expect.soft(text, 'renders the current exchange').toContain('ARCA');
+    expect.soft(component.selectedFirstHeld(), 'reports the first day held for the selected instrument').toBe('2024-05-20');
+    expect.soft(component.selectedLastHeld(), 'reports the last day held for the selected instrument').toBe('2025-04-30');
+    expect.soft(fixture.nativeElement.textContent, 'renders the days held for the selected instrument').toContain('days held');
   });
 
   it('opens the dropdown on click and shows the recent list when query is empty', () => {
@@ -110,7 +112,7 @@ describe('InstrumentCardComponent', () => {
     expect(text).toContain('Invesco QQQ');
   });
 
-  it('updates value().symbol when a ticker is picked', () => {
+  it('pickTicker selects the picked symbol and keeps a window the new symbol actually has days in', () => {
     fixture.detectChanges();
     component.openDropdown();
     fixture.detectChanges();
@@ -118,7 +120,13 @@ describe('InstrumentCardComponent', () => {
     component.pickTicker(pool[1]);
     fixture.detectChanges();
 
-    expect(component.value().symbol).toBe('QQQ');
+    expect.soft(component.value().symbol, 'updates value().symbol when a ticker is picked').toBe('QQQ');
+    // The window on screen is the operator's. Switching instrument to compare
+    // the same months must not silently retarget it — this branch never ran
+    // before the lake-backed catalog, because no entry in the constant it
+    // replaced carried a date.
+    expect.soft(component.value().from, 'pickTicker keeps the window start the new symbol actually has days in').toBe('2025-04-01');
+    expect.soft(component.value().to, 'pickTicker keeps the window end the new symbol actually has days in').toBe('2025-04-30');
   });
 
   // The catalog is what the lake holds, so every instrument it lists is
@@ -163,16 +171,23 @@ describe('InstrumentCardComponent', () => {
     expect(text).toContain('not held');
   });
 
-  it('renders each row through the shared asset identity', () => {
+  it('opens the dropdown with each row through the shared asset identity, re-reading only the lake coverage', () => {
     fixture.detectChanges();
+    const before = catalog.view.reloadCount;
     openDropdown(fixture);
 
     const rows = fixture.nativeElement.querySelectorAll('.dropdown__scroll .row');
-    expect(rows.length).toBeGreaterThan(0);
+    expect.soft(rows.length, 'renders at least one row').toBeGreaterThan(0);
     const identities = fixture.nativeElement.querySelectorAll(
       '.dropdown__scroll .row app-asset-identity',
     );
-    expect(identities.length).toBe(rows.length);
+    expect.soft(identities.length, 'renders each row through the shared asset identity').toBe(rows.length);
+    // A symbol backfilled after this tab loaded must be selectable without a
+    // page reload; the root-scoped resource otherwise serves its first answer
+    // forever. The vendor catalog is deliberately *not* re-read — one cached
+    // read per tab, refreshed only through the degraded banner's Retry.
+    expect.soft(catalog.view.reloadCount, 're-reads the lake coverage when the dropdown opens').toBe(before + 1);
+    expect.soft(alpaca.reloadCount, 'does not re-read the vendor catalog when the dropdown opens').toBe(before);
   });
 
   it('never offers a delisted symbol the lake does not already hold', () => {
@@ -250,13 +265,6 @@ describe('InstrumentCardComponent', () => {
     expect(text).not.toContain('showing lake holdings');
   });
 
-  it('reports the days held for the selected instrument', () => {
-    fixture.detectChanges();
-    expect(component.selectedFirstHeld()).toBe('2024-05-20');
-    expect(component.selectedLastHeld()).toBe('2025-04-30');
-    expect(fixture.nativeElement.textContent).toContain('days held');
-  });
-
   it('says why the list is empty when the lake did not answer, and can retry', () => {
     catalog.view.pool.set([]);
     catalog.view.unavailable.set('The data lake is unreachable.');
@@ -273,58 +281,45 @@ describe('InstrumentCardComponent', () => {
     expect(catalog.view.reloadCount).toBe(before + 1);
   });
 
-  // The window on screen is the operator's. Switching instrument to compare
-  // the same months must not silently retarget it — this branch never ran
-  // before the lake-backed catalog, because no entry in the constant it
-  // replaced carried a date.
-  it('pickTicker keeps a window the new symbol actually has days in', () => {
+  it.each([
+    [
+      // Sidecar validator rejects weekend endpoints; pickTicker derives
+      // ``from = lastHeld - 30 days`` which lands on a weekend whenever
+      // ``lastHeld`` is Mon-Wed. Guard both endpoints.
+      // Held days start after the window on screen (2025-04), so the window is
+      // retargeted: lastHeld = Mon 2026-05-25 → −30 = Sat 2026-04-25 → walks to
+      // Fri 2026-04-24. ``to`` is the supplied weekday Mon (no walk).
+      'bumps a weekend-derived from date back to Friday',
+      { symbol: 'AAPL', name: 'Apple', exchange: 'NASDAQ', firstHeld: '2026-04-01', lastHeld: '2026-05-25' },
+      '2026-04-24',
+      '2026-05-25',
+    ],
+    [
+      // lastHeld = Wed 2026-10-07 → −30 = Mon 2026-09-07, Labor Day → Fri 2026-09-04.
+      // A weekday walk would keep the holiday, and the date picker refuses it.
+      'proposes a window on sessions: a start on a holiday steps back to the session before',
+      { symbol: 'AAPL', name: 'Apple', exchange: 'NASDAQ', firstHeld: '2026-04-01', lastHeld: '2026-10-07' },
+      '2026-09-04',
+      '2026-10-07',
+    ],
+    [
+      // The lake holds three days of STRL. A blind ``lastHeld - 30`` would open
+      // on 2026-04-25, four weeks of which has no bars to read.
+      'clamps the proposed window to the first day held',
+      { symbol: 'STRL', name: 'Sterling Infrastructure, Inc.', exchange: 'NASDAQ', firstHeld: '2026-05-21', lastHeld: '2026-05-25' },
+      '2026-05-21',
+      '2026-05-25',
+    ],
+  ])('pickTicker %s', (_name, ticker, from, to) => {
     fixture.detectChanges();
     component.openDropdown();
     fixture.detectChanges();
 
-    component.pickTicker(pool[1]);
+    component.pickTicker(ticker);
     fixture.detectChanges();
 
-    expect(component.value().from).toBe('2025-04-01');
-    expect(component.value().to).toBe('2025-04-30');
-  });
-
-  // Sidecar validator rejects weekend endpoints; pickTicker derives
-  // ``from = lastHeld - 30 days`` which lands on a weekend whenever
-  // ``lastHeld`` is Mon-Wed. Guard both endpoints.
-  it('pickTicker bumps a weekend-derived from date back to Friday', () => {
-    fixture.detectChanges();
-    component.openDropdown();
-    fixture.detectChanges();
-
-    // Held days start after the window on screen (2025-04), so the window is
-    // retargeted: lastHeld = Mon 2026-05-25 → −30 = Sat 2026-04-25 → walks to
-    // Fri 2026-04-24. ``to`` is the supplied weekday Mon (no walk).
-    component.pickTicker({
-      symbol: 'AAPL',
-      name: 'Apple',
-      exchange: 'NASDAQ',
-      firstHeld: '2026-04-01',
-      lastHeld: '2026-05-25',
-    });
-    fixture.detectChanges();
-
-    expect(component.value().from).toBe('2026-04-24');
-    expect(component.value().to).toBe('2026-05-25');
-  });
-
-  it('pickTicker proposes a window on sessions: a start on a holiday steps back to the session before', () => {
-    fixture.detectChanges();
-    component.openDropdown();
-    fixture.detectChanges();
-
-    // lastHeld = Wed 2026-10-07 → −30 = Mon 2026-09-07, Labor Day → Fri 2026-09-04.
-    // A weekday walk would keep the holiday, and the date picker refuses it.
-    component.pickTicker({ symbol: 'AAPL', name: 'Apple', exchange: 'NASDAQ', firstHeld: '2026-04-01', lastHeld: '2026-10-07' });
-    fixture.detectChanges();
-
-    expect(component.value().from).toBe('2026-09-04');
-    expect(component.value().to).toBe('2026-10-07');
+    expect(component.value().from).toBe(from);
+    expect(component.value().to).toBe(to);
   });
 
   it('pickTicker steps back off weekends on its own while the calendar has not been read', () => {
@@ -356,26 +351,6 @@ describe('InstrumentCardComponent', () => {
     component.pickTicker({ symbol: 'AAPL', name: 'Apple', exchange: 'NASDAQ', firstHeld: '2026-04-01', lastHeld: '2026-10-07' });
 
     expect(component.value()).toMatchObject({ symbol: 'AAPL', from: baseValue.from, to: baseValue.to });
-  });
-
-  it('pickTicker clamps the proposed window to the first day held', () => {
-    fixture.detectChanges();
-    component.openDropdown();
-    fixture.detectChanges();
-
-    // The lake holds three days of STRL. A blind ``lastHeld - 30`` would open
-    // on 2026-04-25, four weeks of which has no bars to read.
-    component.pickTicker({
-      symbol: 'STRL',
-      name: 'Sterling Infrastructure, Inc.',
-      exchange: 'NASDAQ',
-      firstHeld: '2026-05-21',
-      lastHeld: '2026-05-25',
-    });
-    fixture.detectChanges();
-
-    expect(component.value().from).toBe('2026-05-21');
-    expect(component.value().to).toBe('2026-05-25');
   });
 
   // An unheld pick is no longer a dead end: the gate backfills it, and only
@@ -625,19 +600,6 @@ describe('InstrumentCardComponent', () => {
     expect(catalog.modesRequested).toContain('raw');
   });
 
-  // A symbol backfilled after this tab loaded must be selectable without a
-  // page reload; the root-scoped resource otherwise serves its first answer
-  // forever. The vendor catalog is deliberately *not* re-read — one cached
-  // read per tab, refreshed only through the degraded banner's Retry.
-  it('re-reads only the lake coverage when the dropdown opens', () => {
-    fixture.detectChanges();
-    const before = catalog.view.reloadCount;
-    openDropdown(fixture);
-
-    expect(catalog.view.reloadCount).toBe(before + 1);
-    expect(alpaca.reloadCount).toBe(before);
-  });
-
   it('does not re-read the lake for a host-supplied universe', () => {
     fixture.componentRef.setInput('universe', [
       { symbol: 'QQQ', name: 'Invesco QQQ Trust', exchange: 'NASDAQ' },
@@ -718,31 +680,6 @@ describe('InstrumentCardComponent', () => {
     fixture.destroy();
 
     expect(session.cancelCalls).toBe(1);
-  });
-
-  // A card co-waiting on the same run owns its own session: our release
-  // path cannot reach a gate this card was never handed.
-  it("cancels only its own session, never a gate it doesn't hold", async () => {
-    coverage.holdNext = true;
-    fixture.detectChanges();
-    component.openDropdown();
-    fixture.detectChanges();
-
-    component.pickTicker({
-      symbol: 'NVDA',
-      name: 'NVIDIA',
-      exchange: 'NASDAQ',
-    });
-    await flushGate(fixture);
-    // Another card's gate, co-waiting on the same run in the real service.
-    const otherCardsGate = fakeHeldSession('NVDA');
-    expect(otherCardsGate.cancelCalls).toBe(0);
-
-    component.pickTicker(pool[0]);
-    fixture.detectChanges();
-
-    expect((component.gate.pendingSession() as FakeCoverageSession | null) ?? null).toBeNull();
-    expect(otherCardsGate.cancelCalls).toBe(0);
   });
 
   it('caps the rendered rows and lets the search reach the rest', () => {

@@ -2,73 +2,76 @@ import { render, screen } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 
 import { TimestampDisplayComponent } from './timestamp-display.component';
-import { formatTimestampDisplay } from './timestamp-display';
+import { formatTimestampDisplay, type TimestampDisplayOptions } from './timestamp-display';
 import { TimestampDisplayPipe } from './timestamp-display.pipe';
 
 // 2026-06-19 16:00 America/New_York = 2026-06-19 20:00 UTC.
 const EXPIRY_ANCHOR_MS = Date.UTC(2026, 5, 19, 20, 0, 0);
 
 describe('formatTimestampDisplay', () => {
-  it('formats local datetime with a pinned local zone', () => {
-    expect(formatTimestampDisplay(EXPIRY_ANCHOR_MS, {
-      mode: 'local',
-      localTimeZone: 'America/New_York',
-    })).toBe('2026-06-19 16:00:00');
-  });
-
-  it('formats exchange-aligned datetimes in ET with a marker', () => {
-    expect(formatTimestampDisplay(EXPIRY_ANCHOR_MS, { mode: 'et' })).toBe(
+  it.each<[string, number | null, TimestampDisplayOptions, string]>([
+    [
+      'formats local datetime with a pinned local zone',
+      EXPIRY_ANCHOR_MS,
+      { mode: 'local', localTimeZone: 'America/New_York' },
+      '2026-06-19 16:00:00',
+    ],
+    [
+      'formats exchange-aligned datetimes in ET with a marker',
+      EXPIRY_ANCHOR_MS,
+      { mode: 'et' },
       '2026-06-19 16:00:00 ET',
-    );
-  });
-
-  it('keeps date-anchored values on their ET calendar date west of UTC', () => {
-    expect(formatTimestampDisplay(EXPIRY_ANCHOR_MS, {
-      mode: 'date-et',
-      localTimeZone: 'America/Los_Angeles',
-    })).toBe('2026-06-19');
-  });
-
-  it('preserves the ET marker when ET mode is date-only', () => {
-    expect(formatTimestampDisplay(EXPIRY_ANCHOR_MS, {
-      mode: 'et',
-      granularity: 'date',
-    })).toBe('2026-06-19 ET');
-  });
-
-  it('uses 00 rather than 24 at midnight', () => {
-    expect(formatTimestampDisplay(Date.UTC(2026, 0, 1, 0, 0, 0), {
-      mode: 'local',
-      localTimeZone: 'UTC',
-    })).toBe('2026-01-01 00:00:00');
-  });
-
-  it('formats a minute-boundary instant as hours and minutes only', () => {
-    expect(formatTimestampDisplay(EXPIRY_ANCHOR_MS, {
-      mode: 'local',
-      granularity: 'minute',
-      localTimeZone: 'America/Chicago',
-    })).toBe('15:00');
-  });
-
-  it('returns the fallback for absent values', () => {
-    expect(formatTimestampDisplay(null, { mode: 'et' })).toBe('—');
+    ],
+    [
+      'keeps date-anchored values on their ET calendar date west of UTC',
+      EXPIRY_ANCHOR_MS,
+      { mode: 'date-et', localTimeZone: 'America/Los_Angeles' },
+      '2026-06-19',
+    ],
+    [
+      'preserves the ET marker when ET mode is date-only',
+      EXPIRY_ANCHOR_MS,
+      { mode: 'et', granularity: 'date' },
+      '2026-06-19 ET',
+    ],
+    [
+      'uses 00 rather than 24 at midnight',
+      Date.UTC(2026, 0, 1, 0, 0, 0),
+      { mode: 'local', localTimeZone: 'UTC' },
+      '2026-01-01 00:00:00',
+    ],
+    [
+      'formats a minute-boundary instant as hours and minutes only',
+      EXPIRY_ANCHOR_MS,
+      { mode: 'local', granularity: 'minute', localTimeZone: 'America/Chicago' },
+      '15:00',
+    ],
+    [
+      'returns the fallback for absent values',
+      null,
+      { mode: 'et' },
+      '—',
+    ],
+  ])('%s', (_name, value, options, expected) => {
+    expect(formatTimestampDisplay(value, options)).toBe(expected);
   });
 
   describe('chart granularity', () => {
-    it('formats a short, no-year readout for a viewer-local instant', () => {
-      expect(formatTimestampDisplay(EXPIRY_ANCHOR_MS, {
-        mode: 'local',
-        granularity: 'chart',
-        localTimeZone: 'America/New_York',
-      })).toBe('Jun 19, 16:00:00');
-    });
-
-    it('adds the ET marker for exchange-time chart readouts', () => {
-      expect(formatTimestampDisplay(EXPIRY_ANCHOR_MS, {
-        mode: 'et',
-        granularity: 'chart',
-      })).toBe('Jun 19, 16:00:00 ET');
+    it.each<[string, number, TimestampDisplayOptions, string]>([
+      [
+        'formats a short, no-year readout for a viewer-local instant',
+        EXPIRY_ANCHOR_MS,
+        { mode: 'local', granularity: 'chart', localTimeZone: 'America/New_York' },
+        'Jun 19, 16:00:00',
+      ],
+      [
+        'adds the ET marker for exchange-time chart readouts',
+        EXPIRY_ANCHOR_MS,
+        { mode: 'et', granularity: 'chart' },
+        'Jun 19, 16:00:00 ET',
+      ],
+    ])('%s', (_name, value, options, expected) => {
+      expect(formatTimestampDisplay(value, options)).toBe(expected);
     });
 
     it('stays DST-aware across the spring-forward boundary (America/New_York)', () => {
@@ -84,29 +87,28 @@ describe('formatTimestampDisplay', () => {
         'Mar 08, 03:00:00 ET',
       );
     });
-
-    it('returns the fallback for absent values', () => {
-      expect(formatTimestampDisplay(undefined, { mode: 'et', granularity: 'chart' })).toBe('—');
-    });
   });
 
   describe('short-date granularity', () => {
     // 2026-10-09 16:00 America/New_York = 2026-10-09 20:00 UTC.
     const OCTOBER_EXPIRY_MS = Date.UTC(2026, 9, 9, 20, 0, 0);
 
-    it('says a date-anchored value as month, day and a two-digit year', () => {
-      expect(formatTimestampDisplay(OCTOBER_EXPIRY_MS, {
-        mode: 'date-et',
-        granularity: 'short-date',
-      })).toBe("Oct 9 '26");
-    });
-
-    it('keeps the year on a date in the year after this one', () => {
-      // 2027-01-15 16:00 America/New_York = 2027-01-15 21:00 UTC.
-      expect(formatTimestampDisplay(Date.UTC(2027, 0, 15, 21, 0, 0), {
-        mode: 'date-et',
-        granularity: 'short-date',
-      })).toBe("Jan 15 '27");
+    it.each<[string, number, TimestampDisplayOptions, string]>([
+      [
+        'says a date-anchored value as month, day and a two-digit year',
+        OCTOBER_EXPIRY_MS,
+        { mode: 'date-et', granularity: 'short-date' },
+        "Oct 9 '26",
+      ],
+      [
+        'keeps the year on a date in the year after this one',
+        // 2027-01-15 16:00 America/New_York = 2027-01-15 21:00 UTC.
+        Date.UTC(2027, 0, 15, 21, 0, 0),
+        { mode: 'date-et', granularity: 'short-date' },
+        "Jan 15 '27",
+      ],
+    ])('%s', (_name, value, options, expected) => {
+      expect(formatTimestampDisplay(value, options)).toBe(expected);
     });
 
     it('stays on the New York date where the viewer is already in the next day', () => {
@@ -121,10 +123,6 @@ describe('formatTimestampDisplay', () => {
         granularity: 'short-date',
         localTimeZone: 'Asia/Tokyo',
       })).toBe("Oct 9 '26");
-    });
-
-    it('returns the fallback for absent values', () => {
-      expect(formatTimestampDisplay(null, { mode: 'date-et', granularity: 'short-date' })).toBe('—');
     });
   });
 });

@@ -19,36 +19,17 @@ function block(top: number, bottom: number): HTMLElement {
 }
 
 describe('bringing a block of the read-back into view', () => {
-  it('does not move for a block that is already inside the frame', () => {
+  it.each([
+    ['does not move for a block that is already inside the frame', 150, 250, 400],
+    ['lines up the top of a block above the frame', 40, 120, 340],
+    ['lines up the bottom of a block below the frame', 280, 340, 440],
+    ['keeps the top of a block taller than the frame in view', 250, 650, 550],
+  ])('%s', (_name, top, bottom, scrollTop) => {
     const container = frame();
 
-    bringIntoView(container, block(150, 250));
+    bringIntoView(container, block(top, bottom));
 
-    expect(container.scrollTop).toBe(400);
-  });
-
-  it('lines up the top of a block above the frame', () => {
-    const container = frame();
-
-    bringIntoView(container, block(40, 120));
-
-    expect(container.scrollTop).toBe(340);
-  });
-
-  it('lines up the bottom of a block below the frame', () => {
-    const container = frame();
-
-    bringIntoView(container, block(280, 340));
-
-    expect(container.scrollTop).toBe(440);
-  });
-
-  it('keeps the top of a block taller than the frame in view', () => {
-    const container = frame();
-
-    bringIntoView(container, block(250, 650));
-
-    expect(container.scrollTop).toBe(550);
+    expect(container.scrollTop).toBe(scrollTop);
   });
 
   it('does not move a frame that holds all of its content', () => {

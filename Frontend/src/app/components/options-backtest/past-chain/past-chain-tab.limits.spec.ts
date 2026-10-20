@@ -20,22 +20,13 @@ async function openWith(limits: SetupLimits | null) {
 }
 
 describe('the strikes box and the most the server takes', () => {
-  it('says the most it takes beside what an empty box means', async () => {
-    await openWith(SERVED_LIMITS);
+  it.each([
+    ['says the number the server sent, whatever it is', { ...SERVED_LIMITS, max_strikes_each_side: 6 }, "Empty means the server's own number. The most it takes: 6."],
+    ['says nothing of a most while the page has no limits, and the server judges alone', null, "Empty means the server's own number."],
+  ])('%s', async (_name, limits, words) => {
+    await openWith(limits);
 
-    expect(note()).toBe("Empty means the server's own number. The most it takes: 14.");
-  });
-
-  it('says the number the server sent, whatever it is', async () => {
-    await openWith({ ...SERVED_LIMITS, max_strikes_each_side: 6 });
-
-    expect(note()).toBe("Empty means the server's own number. The most it takes: 6.");
-  });
-
-  it('says nothing of a most while the page has no limits, and the server judges alone', async () => {
-    await openWith(null);
-
-    expect(note()).toBe("Empty means the server's own number.");
+    expect(note()).toBe(words);
   });
 
   it('refuses a larger count at the box before asking, in words with the most in them, and takes the table away', async () => {

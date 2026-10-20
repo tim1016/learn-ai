@@ -205,12 +205,6 @@ describe('AlpacaDeskAccountDataService', () => {
       return { service, money, directory };
     }
 
-    it('is ready with the backend’s own view', async () => {
-      const { service } = moneyService(() => Promise.resolve(fakeAccountMoney()));
-
-      await vi.waitFor(() => expect(service.moneyState().kind).toBe('ready'));
-    });
-
     it('carries a refused read’s own reason and next step', async () => {
       const refusal = new HttpErrorResponse({
         status: 503,

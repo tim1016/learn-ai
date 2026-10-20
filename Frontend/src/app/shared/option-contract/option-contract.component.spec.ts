@@ -25,19 +25,17 @@ describe('OptionContractComponent', () => {
     expect(screen.queryByText(CALL.occ_symbol)).toBeNull();
   });
 
-  it.each(['587.5', '587.50', '587.500', 587.5])('preserves a fractional strike (%s) without display zeros', async (strike) => {
-    await render(OptionContractComponent, { inputs: { contract: { ...CALL, strike } } });
-    expect(screen.getByText('587.5')).toBeTruthy();
-  });
-
-  it('distinguishes puts with their word as well as their color', async () => {
-    await render(OptionContractComponent, { inputs: { contract: { ...CALL, right: 'put' } } });
-    expect(screen.getByText('Put')).toBeTruthy();
-  });
-
-  it.each([Date.UTC(2026, 9, 9, 4), Date.UTC(2026, 9, 10, 3, 59)])('reads the expiry as its New York date (%s)', async (expiry_ms) => {
-    await render(OptionContractComponent, { inputs: { contract: { ...CALL, expiry_ms } } });
-    expect(screen.getByText("Oct 9 '26")).toBeTruthy();
+  it.each<[string, Partial<OptionContract>, string]>([
+    ["a fractional strike given as the string '587.5', without display zeros", { strike: '587.5' }, '587.5'],
+    ["a fractional strike given as the string '587.50', without display zeros", { strike: '587.50' }, '587.5'],
+    ["a fractional strike given as the string '587.500', without display zeros", { strike: '587.500' }, '587.5'],
+    ['a fractional strike given as the number 587.5, without display zeros', { strike: 587.5 }, '587.5'],
+    ['a put as the word Put as well as its color', { right: 'put' }, 'Put'],
+    ["the expiry as its New York date at Oct 9 04:00 UTC, the day's first minute", { expiry_ms: Date.UTC(2026, 9, 9, 4) }, "Oct 9 '26"],
+    ["the expiry as its New York date at Oct 10 03:59 UTC, the day's last minute", { expiry_ms: Date.UTC(2026, 9, 10, 3, 59) }, "Oct 9 '26"],
+  ])('shows %s', async (_name, override, text) => {
+    await render(OptionContractComponent, { inputs: { contract: { ...CALL, ...override } } });
+    expect(screen.getByText(text)).toBeTruthy();
   });
 
   it('reveals the broker code on hover without inventing missing market facts', async () => {
