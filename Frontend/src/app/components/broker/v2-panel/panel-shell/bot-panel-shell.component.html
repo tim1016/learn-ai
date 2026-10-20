@@ -128,6 +128,7 @@
           }
           <ng-template #tape>
             <app-bot-day-chart
+              [optionsBot]="panelData.bot_kind === 'options'"
               [symbol]="panelData.symbol"
               [liveChart]="liveChart()"
               [histChart]="histChart.hasValue() ? histChart.value() : null"

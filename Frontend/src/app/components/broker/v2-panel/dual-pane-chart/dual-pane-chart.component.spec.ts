@@ -105,6 +105,20 @@ function liveBar(startMs: number, endMs = startMs + 5_000): ChartBar {
 }
 
 describe('DualPaneChartComponent', () => {
+  it('shows watched contracts under a fixed one-minute Options tape', async () => {
+    await render(DualPaneChartComponent, {
+      inputs: { symbol: 'SPY', fixedMinute: true, liveResolution: '1m',
+        livePremiumPanes: [{ symbol: 'SPY261009C00500000',
+          contract: { root: 'SPY', expiry_ms: 1_791_576_000_000, right: 'call', strike_thousandths: 500000 },
+          multiplier: 100, leg_ids: ['call'], entry_numbers: [0], points: [], rule_lines: [], fill_markers: [],
+          notice: 'No saved premium minutes for this contract in this session.' }],
+      },
+    });
+    expect(screen.getByText('call')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '1m' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '5s' })).toBeNull();
+    expect(screen.getByText('No saved premium minutes for this contract in this session.')).toBeTruthy();
+  });
   beforeEach(() => {
     TestBed.configureTestingModule({
       providers: [

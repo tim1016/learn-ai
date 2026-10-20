@@ -355,6 +355,16 @@
 .chart-indicator-legend__title { color: var(--text-muted); letter-spacing: 0.06em; text-transform: uppercase; }
 
 /* Over the lowest pane, which is the position pane's. */
+.premium-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font: 600 var(--fs-xxs)/1.2 var(--font-mono);
+  &--placed { position: absolute; z-index: 1; left: var(--space-2); }
+}
+
 .chart-position-caption {
   position: absolute;
   z-index: 1;

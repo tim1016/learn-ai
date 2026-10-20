@@ -28,6 +28,7 @@ from app.options_backtest.setup import MS_PER_MINUTE
 from app.options_bots.execution import observed_outcomes
 from app.options_bots.golden import get_ready_setup
 from app.options_bots.journal import OptionsBotJournal, PendingDecision, attempt_identity
+from app.options_bots.observations import ObservedMarket, ObservedOrder
 from app.options_bots.schedule import OptionsSessionWindow, first_eligible_session
 from app.options_bots.session import (
     CancelEntry,
@@ -94,6 +95,8 @@ class OptionsBotDuty:
             raise ValueError("the restored Options schedule must match its canonical calendar session")
         self.journal.note(next_session=asdict(self.window), next_entry_ms=self.window.entry_ms)
         self._session: OptionsSession | None = None
+        self._observations: ObservedMarket | None = None
+        self._observed_orders: list[ObservedOrder] = []
         self._market: Any = None
         self._market_entered = False
         self._qualified_minute: int | None = None
@@ -149,9 +152,10 @@ class OptionsBotDuty:
         if self._session is None:
             saved = self.journal.state
             self._market = self.market_factory(self.window)
+            self._observations = ObservedMarket(self._market, self.setup.underlying)
             self._session = OptionsSession(
                 self.setup,
-                self._market,
+                self._observations,
                 state=saved if saved is not None and saved.session_open_ms == self.window.open_ms else None,
             )
             self.journal.commit(self._session.state, OptionsStep((), ()))
@@ -181,6 +185,11 @@ class OptionsBotDuty:
             if row is None:
                 raise ValueError("a pending Options attempt has no durable opening decision")
             snapshot = self._snapshot(row)
+            for kind, fills in (("entry", snapshot.entry_fills), ("close", snapshot.close_fills)):
+                self._observed_orders.extend(
+                    ObservedOrder(fill.order_ref, row.attempt_id, leg.setup.leg_id, number, fill.contract, kind, fill.filled_at_ms)
+                    for fill in fills
+                )
             if snapshot.entry_decision_id is not None:
                 if row.status == "pending":
                     self.journal.finish(row.decision_id)
@@ -250,7 +259,7 @@ class OptionsBotDuty:
             allowed = False
         if state.last_minute_ms is not None:
             step = self._session.advance(state.last_minute_ms, outcomes, allow_entries=allowed, observed_at_ms=now)
-            self.journal.commit(state, step)
+            self._commit(step, now)
             outcomes = ()
         minutes = (
             (minute,) if state.last_minute_ms is None or state.last_minute_ms == minute
@@ -300,8 +309,15 @@ class OptionsBotDuty:
         at_ms = minute if ready else state.last_minute_ms
         if at_ms is not None:
             step = self._session.advance(at_ms, outcomes, allow_entries=allowed and ready, observed_at_ms=now)
-            self.journal.commit(state, step)
+            self._commit(step, now)
         return ready, allowed
+
+    def _commit(self, step: OptionsStep, now: int) -> None:
+        assert self._session is not None and self._observations is not None
+        self.journal.commit(self._session.state, step, minutes=self._observations.minutes,
+                            orders=self._observed_orders, read_at_ms=now)
+        self._observations.minutes.clear()
+        self._observed_orders.clear()
 
     def _log_prepared(self, minute: int, started: int) -> None:
         prepared = self.clock()

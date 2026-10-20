@@ -20,7 +20,7 @@ interface LivePanelRequest {
   readonly clerkId: string;
   readonly accountId: string;
   readonly sid: string;
-  readonly resolution: ChartLiveResolution;
+  readonly resolution: ChartLiveResolution | undefined;
   readonly bindingGeneration?: number | null;
   readonly routingEpoch?: number | null;
 }

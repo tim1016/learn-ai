@@ -18,7 +18,7 @@ export interface PositionRun {
  * bar is a gap. `bars` are the chart's bars, which the pane's points follow
  * one for one.
  */
-export function positionRuns(pane: ChartPositionPane, bars: readonly ChartBar[]): readonly PositionRun[] {
+export function positionRuns(pane: Pick<ChartPositionPane, 'points'>, bars: readonly ChartBar[]): readonly PositionRun[] {
   const barAt = new Map(bars.map((bar) => [bar.start_ms, bar]));
   const runs: PositionRun[] = [];
   let points: { time: UTCTimestamp; value: number }[] = [];

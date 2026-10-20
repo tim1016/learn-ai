@@ -10540,6 +10540,12 @@ export interface components {
             /** Overlay Notices */
             overlay_notices?: components["schemas"]["ChartOverlayNoticeView"][];
             position?: components["schemas"]["ChartPositionPane"] | null;
+            /** Premium Notice */
+            premium_notice?: string | null;
+            /** Premium Panes */
+            premium_panes?: components["schemas"]["ChartPremiumPane"][];
+            /** Rule Lines */
+            rule_lines?: components["schemas"]["ChartRuleLine"][];
             /** Strategy Instance Id */
             strategy_instance_id: string;
             /** Symbol */
@@ -10697,11 +10703,17 @@ export interface components {
             /** Overlay Notices */
             overlay_notices: components["schemas"]["ChartOverlayNoticeView"][];
             position?: components["schemas"]["ChartPositionPane"] | null;
+            /** Premium Notice */
+            premium_notice?: string | null;
+            /** Premium Panes */
+            premium_panes?: components["schemas"]["ChartPremiumPane"][];
             /**
              * Resolution
              * @enum {string}
              */
             resolution: "5s" | "1m";
+            /** Rule Lines */
+            rule_lines?: components["schemas"]["ChartRuleLine"][];
             /** Strategy Instance Id */
             strategy_instance_id: string;
             /** Symbol */
@@ -10764,6 +10776,26 @@ export interface components {
             start_ms: number;
             /** Value */
             value: string | null;
+        };
+        /** ChartPremiumPane */
+        ChartPremiumPane: {
+            contract: components["schemas"]["OptionContract"];
+            /** Entry Numbers */
+            entry_numbers: number[];
+            /** Fill Markers */
+            fill_markers: components["schemas"]["PremiumFill"][];
+            /** Leg Ids */
+            leg_ids: string[];
+            /** Multiplier */
+            multiplier: number;
+            /** Notice */
+            notice?: string | null;
+            /** Points */
+            points: components["schemas"]["PremiumPoint"][];
+            /** Rule Lines */
+            rule_lines: components["schemas"]["ChartRuleLine"][];
+            /** Symbol */
+            symbol: string;
         };
         /**
          * ChartQualityReport
@@ -10846,6 +10878,24 @@ export interface components {
         ChartRangePresetsResponse: {
             /** Presets */
             presets: components["schemas"]["ChartRangePreset"][];
+        };
+        /** ChartRuleLine */
+        ChartRuleLine: {
+            /** Entry Number */
+            entry_number: number;
+            /** From Ms */
+            from_ms: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "starting_price" | "momentum" | "stop";
+            /** Leg Id */
+            leg_id: string;
+            /** Price */
+            price: string;
+            /** To Ms */
+            to_ms?: number | null;
         };
         /**
          * ChronologicalSplitPolicySpec
@@ -22420,6 +22470,23 @@ export interface components {
             /** Sentence */
             sentence: string;
         };
+        /**
+         * OptionContract
+         * @description One listed option contract: what an order names and a position holds.
+         */
+        OptionContract: {
+            /** Expiry Ms */
+            expiry_ms: number;
+            /**
+             * Right
+             * @enum {string}
+             */
+            right: "call" | "put";
+            /** Root */
+            root: string;
+            /** Strike Thousandths */
+            strike_thousandths: number;
+        };
         /** OptionContractView */
         OptionContractView: {
             /**
@@ -25999,6 +26066,35 @@ export interface components {
             warnings: string[];
             /** Windows */
             windows: components["schemas"]["WindowReview"][];
+        };
+        /** PremiumFill */
+        PremiumFill: {
+            /** Event Key */
+            event_key: string;
+            /** Exit Reason */
+            exit_reason?: string | null;
+            /** Filled At Ms */
+            filled_at_ms: number;
+            /** Order Ref */
+            order_ref: string;
+            /** Price */
+            price: number;
+            /** Quantity */
+            quantity: number;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "buy" | "sell";
+            /** Symbol */
+            symbol: string;
+        };
+        /** PremiumPoint */
+        PremiumPoint: {
+            /** Start Ms */
+            start_ms: number;
+            /** Value */
+            value: string | null;
         };
         /**
          * PriceRangeView
@@ -35048,7 +35144,7 @@ export interface operations {
     get_live_snapshot_scoped_api_brokers__broker__accounts__account_id__bots__sid__live_snapshot_get: {
         parameters: {
             query?: {
-                resolution?: "5s" | "1m";
+                resolution?: ("5s" | "1m") | null;
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;
@@ -35094,7 +35190,7 @@ export interface operations {
     stream_live_snapshot_scoped_api_brokers__broker__accounts__account_id__bots__sid__live_stream_get: {
         parameters: {
             query?: {
-                resolution?: "5s" | "1m";
+                resolution?: ("5s" | "1m") | null;
                 cursor?: string | null;
             };
             header?: {

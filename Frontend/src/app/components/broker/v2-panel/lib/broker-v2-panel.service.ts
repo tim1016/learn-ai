@@ -563,9 +563,9 @@ export class BrokerV2PanelService {
   getLiveSnapshot(
     target: ResourceTarget,
     sid: string,
-    resolution: ChartLiveResolution,
+    resolution: ChartLiveResolution | undefined,
   ): Promise<BotPanelLiveSnapshot> {
-    const params = new HttpParams().set('resolution', resolution);
+    const params = resolution === undefined ? new HttpParams() : new HttpParams().set('resolution', resolution);
     return firstValueFrom(
       this.http.get<BotPanelLiveSnapshot>(
         operationUrl('bot_live_snapshot', { ...target, sid }),
@@ -581,10 +581,11 @@ export class BrokerV2PanelService {
   liveStreamUrl(
     target: ResourceTarget,
     sid: string,
-    resolution: ChartLiveResolution,
+    resolution: ChartLiveResolution | undefined,
     cursor?: string,
   ): string {
-    const params = new URLSearchParams({ resolution });
+    const params = new URLSearchParams();
+    if (resolution !== undefined) params.set('resolution', resolution);
     if (cursor) params.set('cursor', cursor);
     return `${operationUrl('bot_live_stream', { ...target, sid })}?${params.toString()}`;
   }

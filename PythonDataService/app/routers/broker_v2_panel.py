@@ -705,25 +705,37 @@ async def _live_hub(
     broker: str,
     account_id: str,
     sid: str,
-    resolution: Literal["5s", "1m"],
+    resolution: Literal["5s", "1m"] | None,
 ) -> SurfaceHub[BotPanelLiveSnapshot]:
     try:
         await panel_scope.validate_account_scope(broker, account_id, sid)
+        from app.services.options_bot_chart import require_options_minute
+
+        resolution = _selected_live_resolution(broker, sid, resolution)
+        require_options_minute(broker, sid, resolution)
         return await get_or_start_live_projection_hub(
             broker,
             account_id,
             sid,
             resolution=resolution,
         )
+    except ChartWindowError as exc:
+        raise HTTPException(status_code=422, detail={"message": str(exc), "why": None}) from exc
     except panel_errors.PanelDataError as error:
         _raise_panel_error(error)
+
+
+def _selected_live_resolution(broker: str, sid: str, resolution: Literal["5s", "1m"] | None) -> Literal["5s", "1m"]:
+    from app.services.options_bot_chart import options_chart_binding
+
+    return resolution if resolution is not None else "1m" if options_chart_binding(broker, sid) is not None else "5s"
 
 
 async def _live_snapshot(
     broker: str,
     account_id: str,
     sid: str,
-    resolution: Literal["5s", "1m"],
+    resolution: Literal["5s", "1m"] | None,
 ) -> BotPanelLiveSnapshot:
     hub = await _live_hub(broker, account_id, sid, resolution)
     try:
@@ -755,7 +767,7 @@ async def get_live_snapshot_scoped(
     broker: str,
     account_id: str,
     sid: str,
-    resolution: Literal["5s", "1m"] = Query("5s"),
+    resolution: Literal["5s", "1m"] | None = Query(None),
 ) -> BotPanelLiveSnapshot:
     return await _live_snapshot(broker, account_id, sid, resolution)
 
@@ -778,13 +790,14 @@ async def stream_live_snapshot_scoped(
     broker: str,
     account_id: str,
     sid: str,
-    resolution: Literal["5s", "1m"] = Query("5s"),
+    resolution: Literal["5s", "1m"] | None = Query(None),
     cursor: str | None = Query(default=None, max_length=128),
 ) -> StreamingResponse:
     # A stalled producer still opens the stream: the stream itself reports the
     # stall as a typed ``stale`` event. A client that does not hold the frozen
     # frame gets it first, so a cold load still mounts the panel's controls.
     hub = await _live_hub(broker, account_id, sid, resolution)
+    resolution = _selected_live_resolution(broker, sid, resolution)
     if not hub.is_available:
         raise _snapshot_unavailable(SnapshotUnavailableError(hub.strategy_instance_id))
     stream_epoch = hub.stream_epoch

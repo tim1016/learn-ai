@@ -50,6 +50,7 @@ from app.schemas.bot_history import BotHistoryStatus
 from app.schemas.bot_page import BotPageView
 from app.schemas.exit_terms import ExitTerms
 from app.schemas.operator_blocker import OperatorBlocker, OperatorConfirmationCopy
+from app.schemas.option_chart import ChartPremiumPane, ChartRuleLine
 from app.schemas.options_bot import OptionsBotConfiguration
 from app.schemas.run_admission import ProgramBuildAdmissionFact
 from app.schemas.signal_program_seal import SealedBotProgram
@@ -1268,6 +1269,9 @@ class ChartLiveResponse(BaseModel):
     as_of_ms: int
     # Present only for a bot that trades another asset than it listens to.
     position: ChartPositionPane | None = None
+    premium_panes: list[ChartPremiumPane] = Field(default_factory=list)
+    premium_notice: str | None = None
+    rule_lines: list[ChartRuleLine] = Field(default_factory=list)
 
 
 class BotPanelLiveSnapshot(BaseModel):
@@ -1343,6 +1347,9 @@ class ChartHistoryResponse(BaseModel):
     as_of_ms: int
     # Present only for a bot that trades another asset than it listens to.
     position: ChartPositionPane | None = None
+    premium_panes: list[ChartPremiumPane] = Field(default_factory=list)
+    premium_notice: str | None = None
+    rule_lines: list[ChartRuleLine] = Field(default_factory=list)
 
 # ── Lane attention (one lane's bell items, #2228) ────────────────────────────
 

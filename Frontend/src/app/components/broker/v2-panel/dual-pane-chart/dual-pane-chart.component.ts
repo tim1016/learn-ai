@@ -39,6 +39,8 @@ import type {
   ChartLiveResolution,
   ChartOverlayNoticeView,
   ChartPositionPane,
+  ChartPremiumPane,
+  ChartRuleLine,
   ChartSource,
 } from '../lib/broker-v2-panel.types';
 import { toCandle } from '../lib/chart-bar-mapping';
@@ -62,6 +64,9 @@ import type { LogicalCoordinateScale } from '../strategy-view/strategy-chart-ove
 import { BotChartIndicatorService } from './bot-chart-indicator.service';
 import { chartIndicatorCatalog } from './chart-indicator-catalog';
 import { positionRuns, type PositionRun } from './dual-pane-chart-position';
+import { premiumPanePlans, ruleLinePlans } from './premium-pane-plan';
+import { OptionContractComponent } from '../../../../shared/option-contract/option-contract.component';
+import { optionContractFromSymbol } from '../../../../shared/option-contract/option-contract-symbol';
 import {
   type SelectedChartIndicator,
   indicatorFailureMessage,
@@ -273,6 +278,7 @@ function barCoordinateScale(timeScale: ITimeScaleApi<Time>, bars: readonly Chart
     AssetIdentityComponent,
     ChartIndicatorRailComponent,
     ChartLanesComponent,
+    OptionContractComponent,
     PanelInstrumentQuoteComponent,
     ReceiptLabelPipe,
     TimestampDisplayComponent,
@@ -313,6 +319,22 @@ export class DualPaneChartComponent implements AfterViewInit {
    * listens to (#2915): a pane under the indicators, sharing the time axis. */
   readonly livePosition = input<ChartPositionPane | null>(null);
   readonly histPosition = input<ChartPositionPane | null>(null);
+  readonly livePremiumPanes = input<readonly ChartPremiumPane[]>([]);
+  readonly histPremiumPanes = input<readonly ChartPremiumPane[]>([]);
+  readonly livePremiumNotice = input<string | null>(null);
+  readonly histPremiumNotice = input<string | null>(null);
+  readonly fixedMinute = input(false);
+  readonly liveRuleLines = input<readonly ChartRuleLine[]>([]);
+  readonly histRuleLines = input<readonly ChartRuleLine[]>([]);
+  protected readonly activePremiumPanes = computed(() => this.activePane() === 'live'
+    ? this.livePremiumPanes() : this.histPremiumPanes());
+  protected readonly premiumNotice = computed(() => this.activePane() === 'live'
+    ? this.livePremiumNotice() : this.histPremiumNotice());
+  protected readonly premiumCaptions = computed(() => this.activePremiumPanes().map((pane) => ({
+    ...pane, identity: optionContractFromSymbol(pane.symbol, pane.contract.root),
+  })));
+  protected readonly premiumCaptionTops = signal<Readonly<Record<string, number>>>({});
+  private premiumFirstPane = 1;
 
   readonly historyTimeframeChange = output<ChartHistoryTimeframe>();
   readonly liveResolutionChange = output<ChartLiveResolution>();
@@ -683,6 +705,13 @@ export class DualPaneChartComponent implements AfterViewInit {
   private measure(): void {
     this.plotWidth.set(this.chart?.timeScale().width() ?? 0);
     this.geometry.update((tick) => tick + 1);
+    const container = this.chartContainer().nativeElement;
+    const origin = container.parentElement?.getBoundingClientRect().top ?? 0;
+    const panes = this.chart?.panes?.() ?? [];
+    this.premiumCaptionTops.set(Object.fromEntries(this.activePremiumPanes().flatMap((pane, index) => {
+      const element = panes[this.premiumFirstPane + index]?.getHTMLElement();
+      return element === null || element === undefined ? [] : [[pane.symbol, element.getBoundingClientRect().top - origin + 4]];
+    })));
   }
 
   private cleanup(): void {
@@ -691,6 +720,7 @@ export class DualPaneChartComponent implements AfterViewInit {
     this.series = null;
     this.markers = null;
     this.indicatorSeries = [];
+
     this.renderedViewKey = null;
     this.renderedBars = [];
   }
@@ -722,6 +752,16 @@ export class DualPaneChartComponent implements AfterViewInit {
     if (!this.chart) return;
     for (const rendered of this.indicatorSeries) this.chart.removeSeries(rendered);
     this.indicatorSeries = [];
+
+    const rules = this.activePane() === 'live' ? this.liveRuleLines() : this.histRuleLines();
+    for (const rule of ruleLinePlans(rules, bars)) {
+      const line = this.chart.addSeries(LineSeries, {
+        color: rule.color, title: rule.title, lineWidth: 1, priceLineVisible: false,
+        lastValueVisible: false, pointMarkersVisible: true,
+      });
+      line.setData(rule.points);
+      this.indicatorSeries.push(line);
+    }
 
     const paneIndices = new Map<string, number>();
     for (const plan of toIndicatorSeriesPlans(results, bars, selected, colorOverrides)) {
@@ -760,6 +800,40 @@ export class DualPaneChartComponent implements AfterViewInit {
       this.indicatorSeries.push(rendered);
     }
     if (position !== null) this.renderPosition(position, bars, paneIndices.size + 1);
+    this.renderPremiums(bars, paneIndices.size + (position === null ? 1 : 2));
+  }
+
+  private renderPremiums(bars: readonly ChartBar[], firstPane: number): void {
+    const chart = this.chart;
+    if (chart === null) return;
+    this.premiumFirstPane = firstPane;
+    premiumPanePlans(this.activePremiumPanes(), bars).forEach((plan, index) => {
+      const pane = firstPane + index;
+      const runs = plan.runs.length ? plan.runs : [{ points: [] }];
+      for (const run of runs) {
+        const line = chart.addSeries(LineSeries, {
+          color: '#60a5fa', lineWidth: 2, title: plan.symbol, priceLineVisible: false,
+          pointMarkersVisible: true,
+        }, pane);
+        line.setData([...run.points]);
+        this.indicatorSeries.push(line);
+      }
+      for (const rule of plan.rules) {
+        const line = chart.addSeries(LineSeries, {
+          color: rule.color, title: rule.title, lineWidth: 1,
+          priceLineVisible: false, lastValueVisible: false, pointMarkersVisible: true,
+        }, pane);
+        line.setData(rule.points);
+        this.indicatorSeries.push(line);
+      }
+      if (plan.fills.length) {
+        const anchors = chart.addSeries(LineSeries, { lineVisible: false, priceLineVisible: false, lastValueVisible: false }, pane);
+        anchors.setData([...new Map(plan.fills.map((fill) => [fill.time, { time: fill.time, value: fill.value }])).values()]);
+        createSeriesMarkers(anchors, plan.fills);
+        this.indicatorSeries.push(anchors);
+      }
+    });
+    requestAnimationFrame(() => { if (this.chart !== null) this.measure(); });
   }
 
   /**

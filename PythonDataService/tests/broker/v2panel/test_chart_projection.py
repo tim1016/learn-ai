@@ -804,7 +804,7 @@ async def test_live_snapshot_uses_its_captured_sqlite_fills(
     captured: list[tuple[FillRecord, ...]] = []
 
     async def panel_with_entries(*_args: object, **_kwargs: object):
-        return SimpleNamespace(symbol="SPY", traded=None, market_pulse=None), expected_fills
+        return SimpleNamespace(symbol="SPY", traded=None, market_pulse=None, options_bot=None), expected_fills
 
     async def build_from_fills(
         _sid: str,
@@ -1137,7 +1137,7 @@ async def test_the_live_chart_carries_the_traded_assets_price_too(monkeypatch: p
     }
 
     async def panel_with_entries(*_args: object, **_kwargs: object):
-        panel = SimpleNamespace(symbol="SPY", traded=TradedInstrumentView(kind="stock", symbol="QQQ"))
+        panel = SimpleNamespace(symbol="SPY", traded=TradedInstrumentView(kind="stock", symbol="QQQ"), options_bot=None)
         return panel, ()
 
     line_of = {"SPY": ChartFeedStatus(state="LIVE"), "QQQ": ChartFeedStatus(state="STALLED", last_bar_ms=first)}

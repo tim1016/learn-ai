@@ -745,6 +745,16 @@ async function renderShell(
 }
 
 describe('BotPanelShellComponent', () => {
+  it('lets a new bot choose its default interval after a stock interval was selected', async () => {
+    const { fixture, service } = await renderShell();
+    await showTape(fixture);
+    await userEvent.click(screen.getByRole('button', { name: '5s' }));
+    await vi.waitFor(() => expect(service.getLiveSnapshot).toHaveBeenLastCalledWith(expect.anything(), 'sid-001', '5s'));
+    fixture.componentRef.setInput('sid', 'sid-002');
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(service.getLiveSnapshot).toHaveBeenLastCalledWith(expect.anything(), 'sid-002', undefined);
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
@@ -912,7 +922,7 @@ describe('BotPanelShellComponent', () => {
         broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'DUM284968', entityId: 'sid-001',
       }),
       'sid-001',
-      '5s',
+      undefined,
     );
     expect(screen.queryByText('run-current')).toBeNull();
     expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);

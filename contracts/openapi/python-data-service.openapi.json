@@ -8277,6 +8277,31 @@
               }
             ]
           },
+          "premium_notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Premium Notice"
+          },
+          "premium_panes": {
+            "items": {
+              "$ref": "#/components/schemas/ChartPremiumPane"
+            },
+            "title": "Premium Panes",
+            "type": "array"
+          },
+          "rule_lines": {
+            "items": {
+              "$ref": "#/components/schemas/ChartRuleLine"
+            },
+            "title": "Rule Lines",
+            "type": "array"
+          },
           "strategy_instance_id": {
             "title": "Strategy Instance Id",
             "type": "string"
@@ -8651,6 +8676,24 @@
               }
             ]
           },
+          "premium_notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Premium Notice"
+          },
+          "premium_panes": {
+            "items": {
+              "$ref": "#/components/schemas/ChartPremiumPane"
+            },
+            "title": "Premium Panes",
+            "type": "array"
+          },
           "resolution": {
             "enum": [
               "5s",
@@ -8658,6 +8701,13 @@
             ],
             "title": "Resolution",
             "type": "string"
+          },
+          "rule_lines": {
+            "items": {
+              "$ref": "#/components/schemas/ChartRuleLine"
+            },
+            "title": "Rule Lines",
+            "type": "array"
           },
           "strategy_instance_id": {
             "title": "Strategy Instance Id",
@@ -8798,6 +8848,79 @@
           "value"
         ],
         "title": "ChartPositionPoint",
+        "type": "object"
+      },
+      "ChartPremiumPane": {
+        "properties": {
+          "contract": {
+            "$ref": "#/components/schemas/OptionContract"
+          },
+          "entry_numbers": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Entry Numbers",
+            "type": "array"
+          },
+          "fill_markers": {
+            "items": {
+              "$ref": "#/components/schemas/PremiumFill"
+            },
+            "title": "Fill Markers",
+            "type": "array"
+          },
+          "leg_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Leg Ids",
+            "type": "array"
+          },
+          "multiplier": {
+            "title": "Multiplier",
+            "type": "integer"
+          },
+          "notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notice"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/PremiumPoint"
+            },
+            "title": "Points",
+            "type": "array"
+          },
+          "rule_lines": {
+            "items": {
+              "$ref": "#/components/schemas/ChartRuleLine"
+            },
+            "title": "Rule Lines",
+            "type": "array"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "contract",
+          "symbol",
+          "multiplier",
+          "leg_ids",
+          "entry_numbers",
+          "points",
+          "rule_lines",
+          "fill_markers"
+        ],
+        "title": "ChartPremiumPane",
         "type": "object"
       },
       "ChartQualityReport": {
@@ -8946,6 +9069,60 @@
           "presets"
         ],
         "title": "ChartRangePresetsResponse",
+        "type": "object"
+      },
+      "ChartRuleLine": {
+        "properties": {
+          "entry_number": {
+            "minimum": 0.0,
+            "title": "Entry Number",
+            "type": "integer"
+          },
+          "from_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "From Ms",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "starting_price",
+              "momentum",
+              "stop"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "leg_id": {
+            "title": "Leg Id",
+            "type": "string"
+          },
+          "price": {
+            "title": "Price",
+            "type": "string"
+          },
+          "to_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Ms"
+          }
+        },
+        "required": [
+          "kind",
+          "price",
+          "from_ms",
+          "leg_id",
+          "entry_number"
+        ],
+        "title": "ChartRuleLine",
         "type": "object"
       },
       "ChronologicalSplitPolicySpec": {
@@ -38016,6 +38193,45 @@
         "title": "OptionBuyingPowerReasonCount",
         "type": "object"
       },
+      "OptionContract": {
+        "additionalProperties": false,
+        "description": "One listed option contract: what an order names and a position holds.",
+        "properties": {
+          "expiry_ms": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 253402300799999.0,
+            "title": "Expiry Ms",
+            "type": "integer"
+          },
+          "right": {
+            "enum": [
+              "call",
+              "put"
+            ],
+            "title": "Right",
+            "type": "string"
+          },
+          "root": {
+            "pattern": "^[A-Z]{1,6}$",
+            "title": "Root",
+            "type": "string"
+          },
+          "strike_thousandths": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 99999999.0,
+            "title": "Strike Thousandths",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "root",
+          "expiry_ms",
+          "right",
+          "strike_thousandths"
+        ],
+        "title": "OptionContract",
+        "type": "object"
+      },
       "OptionContractView": {
         "additionalProperties": false,
         "properties": {
@@ -47717,6 +47933,93 @@
           "windows"
         ],
         "title": "Preflight",
+        "type": "object"
+      },
+      "PremiumFill": {
+        "properties": {
+          "event_key": {
+            "title": "Event Key",
+            "type": "string"
+          },
+          "exit_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Reason"
+          },
+          "filled_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Filled At Ms",
+            "type": "integer"
+          },
+          "order_ref": {
+            "title": "Order Ref",
+            "type": "string"
+          },
+          "price": {
+            "title": "Price",
+            "type": "number"
+          },
+          "quantity": {
+            "title": "Quantity",
+            "type": "number"
+          },
+          "side": {
+            "enum": [
+              "buy",
+              "sell"
+            ],
+            "title": "Side",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "filled_at_ms",
+          "side",
+          "quantity",
+          "price",
+          "symbol",
+          "order_ref",
+          "event_key"
+        ],
+        "title": "PremiumFill",
+        "type": "object"
+      },
+      "PremiumPoint": {
+        "properties": {
+          "start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Start Ms",
+            "type": "integer"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "start_ms",
+          "value"
+        ],
+        "title": "PremiumPoint",
         "type": "object"
       },
       "PriceRangeView": {
@@ -69060,13 +69363,19 @@
             "name": "resolution",
             "required": false,
             "schema": {
-              "default": "5s",
-              "enum": [
-                "5s",
-                "1m"
+              "anyOf": [
+                {
+                  "enum": [
+                    "5s",
+                    "1m"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ],
-              "title": "Resolution",
-              "type": "string"
+              "title": "Resolution"
             }
           },
           {
@@ -69160,13 +69469,19 @@
             "name": "resolution",
             "required": false,
             "schema": {
-              "default": "5s",
-              "enum": [
-                "5s",
-                "1m"
+              "anyOf": [
+                {
+                  "enum": [
+                    "5s",
+                    "1m"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ],
-              "title": "Resolution",
-              "type": "string"
+              "title": "Resolution"
             }
           },
           {

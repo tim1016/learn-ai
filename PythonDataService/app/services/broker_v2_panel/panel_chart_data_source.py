@@ -55,6 +55,7 @@ from app.services.live_chart_window import (
     coerce_chart_timeframe,
     resolve_chart_window,
 )
+from app.services.options_bot_chart import require_options_minute, with_options_panes
 from app.services.sqlite_clerk_compat import custody_account_id_for_route
 from app.utils.timestamps import now_ms_utc
 
@@ -172,6 +173,8 @@ async def get_live_snapshot_parts(
         sid,
         now_ms=observed_at_ms,
     )
+    if panel.options_bot is not None:
+        require_options_minute(broker, sid, resolution)
     chart = await _build_live_chart_from_fills(
         sid,
         panel.symbol,
@@ -185,6 +188,8 @@ async def get_live_snapshot_parts(
             sid, traded_symbol, fills, resolution=resolution, now_ms=observed_at_ms
         )
         chart = chart.model_copy(update={"position": position_pane(chart, traded_chart)})
+    if panel.options_bot is not None:
+        chart = with_options_panes(chart, broker, sid, fills)
     return panel, chart
 
 
@@ -272,10 +277,16 @@ async def get_history_chart(
     custody_account_id = custody_account_id_for_route(broker, resolved)
     evidence = await _chart_evidence(broker, custody_account_id, sid, from_ms=from_ms, to_ms=to_ms)
     status = evidence.status
+    if status.options_bot is not None:
+        require_options_minute(broker, sid, timeframe)
     fills = evidence.fills.fills
     batch_provider = build_history_batch_provider()
 
     async def chart_of(symbol: str) -> ChartHistoryResponse:
+        chart = await raw_chart_of(symbol)
+        return with_options_panes(chart, broker, sid, fills) if status.options_bot is not None else chart
+
+    async def raw_chart_of(symbol: str) -> ChartHistoryResponse:
         if window is not None:
             return await build_run_window_chart(
                 timeframe,
