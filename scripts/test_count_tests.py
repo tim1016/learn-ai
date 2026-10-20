@@ -167,6 +167,21 @@ class TypeScriptCountingTests(unittest.TestCase):
 
         self.assertEqual(counts.functions, 5)
 
+    def test_a_comparison_on_a_variable_named_it_is_not_a_table(self) -> None:
+        counts = _ts(
+            """
+            const small = it < limit;
+            if (count > (limit)) {}
+            const same = test < other && other > (1);
+            """
+        )
+
+        self.assertEqual(counts.functions, 0)
+
+    def test_a_table_type_argument_list_that_never_closes_stops_the_count(self) -> None:
+        with self.assertRaisesRegex(CountError, "type-argument list after .each is not closed"):
+            _ts("it.each<[string, () => void]([['a', () => {}]])('open %s', () => {});")
+
     def test_comments_strings_and_member_calls_do_not_count(self) -> None:
         counts = _ts(
             """

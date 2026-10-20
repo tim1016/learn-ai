@@ -359,7 +359,8 @@ def _after_type_arguments(code: str, start: int) -> int:
     """Index past the ``<...>`` that opens at ``start``; ``start`` when there is none.
 
     ``it.each<[string, () => void]>(...)`` holds parentheses and an arrow, so the
-    brackets are matched by depth and the ``>`` of ``=>`` is not a closer.
+    brackets are matched by depth and the ``>`` of ``=>`` is not a closer. A list
+    that does not close within reach stops the run: a silent skip would hide a table.
     """
     if code[start : start + 1] != "<":
         return start
@@ -371,13 +372,15 @@ def _after_type_arguments(code: str, start: int) -> int:
             depth -= 1
             if depth == 0:
                 return i + 1
-    return start
+    raise CountError(f"a type-argument list after .each is not closed within {_TS_TYPE_ARGUMENTS_REACH} characters")
 
 
 def _count_ts_test_calls(code: str) -> int:
     count = 0
     for head in _TS_TEST_CALL_HEAD.finditer(code):
-        i = _after_type_arguments(code, head.end())
+        # Only a table (`.each`) takes type arguments; `it < limit` is a comparison.
+        is_table = head.group(0).rstrip().endswith(".each")
+        i = _after_type_arguments(code, head.end()) if is_table else head.end()
         while code[i : i + 1].isspace():
             i += 1
         if code[i : i + 1] in ("(", "`"):
@@ -421,7 +424,10 @@ def _count_file(path: Path, language: str) -> Counts:
             is_test_module=_PYTEST_TEST_FILE.match(path.name) is not None,
             path=str(path),
         )
-    return count_typescript_source(source)
+    try:
+        return count_typescript_source(source)
+    except CountError as exc:
+        raise CountError(f"{path}: {exc}") from exc
 
 
 def folder_key(base: Path, root: Path, path: Path, depth: int) -> str:
