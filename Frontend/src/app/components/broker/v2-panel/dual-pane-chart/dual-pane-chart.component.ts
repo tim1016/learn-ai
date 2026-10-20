@@ -429,9 +429,11 @@ export class DualPaneChartComponent implements AfterViewInit {
   protected readonly activeLoading = computed(() =>
     this.activePane() === 'live' ? this.liveLoading() : this.historyLoading(),
   );
-  /** Fills on the candles and on the position pane, which draws the traded asset's (#2915). */
+  private readonly premiumFills = computed(() => this.activePremiumPanes()
+    .flatMap(pane => pane.fill_markers.filter(fill => fill.source !== 'backtest')));
+  /** Real fills on the candles, position pane and watched premium panes. */
   protected readonly fillCount = computed(
-    () => this.activeMarkers().length + (this.activePosition()?.fill_markers.length ?? 0),
+    () => this.activeMarkers().length + (this.activePosition()?.fill_markers.length ?? 0) + this.premiumFills().length,
   );
   protected readonly visibleFillCount = computed(() => {
     const bars = this.activeBars();
@@ -440,7 +442,7 @@ export class DualPaneChartComponent implements AfterViewInit {
       ? 0
       : position.kind === 'value' ? countPlottedFills(position.fill_markers, positionClock(position, bars))
       : positionRuns(position, bars).reduce((sum, run) => sum + countPlottedFills(position.fill_markers, run.bars), 0);
-    return countPlottedFills(this.activeMarkers(), bars) + onPosition;
+    return countPlottedFills(this.activeMarkers(), bars) + onPosition + countPlottedFills(this.premiumFills(), bars);
   });
   protected readonly activeIndicatorKeys = computed(() =>
     this.selectedIndicators().map((indicator) => indicator.name),

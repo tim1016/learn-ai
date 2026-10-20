@@ -119,6 +119,6 @@ async def session(broker: Literal["alpaca"], account_id: str, sid: str) -> Optio
 
     try:
         await panel_scope.validate_account_scope(broker, account_id, sid)
-        return options_session_view(_runner(), broker, sid)
+        return await options_session_view(_runner(), broker, sid)
     except _ERRORS as exc:
         raise _refusal(exc) from exc

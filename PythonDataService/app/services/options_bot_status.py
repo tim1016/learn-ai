@@ -7,7 +7,6 @@ import sqlite3
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
 
-from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
 from app.broker.alpaca.clerk.fifo_pnl import compute_fifo_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicProjectionError, SqliteEconomicProjectionReader
@@ -23,12 +22,13 @@ from app.schemas.options_deploy import (
     OptionsWatchedPremiumView,
 )
 from app.services.bot_runner import BotTaskRegistry, RunAdmissionRefusedError
+from app.services.broker_v2_panel.bot_custody import binding_clerk_runtime
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
 
-def options_session_view(registry: BotTaskRegistry, broker: str, sid: str) -> OptionsBotSessionView:
+async def options_session_view(registry: BotTaskRegistry, broker: str, sid: str) -> OptionsBotSessionView:
     binding = registry.binding_for_control(broker, sid)
     if binding.options_bot is None:
         raise RunAdmissionRefusedError("This bot follows a Signal Program and has no Options session.")
@@ -46,20 +46,20 @@ def options_session_view(registry: BotTaskRegistry, broker: str, sid: str) -> Op
     status = registry.status(broker, sid)
     ended = registry.bot_end(broker, sid).status in {"ending", "ended"}
     resumable = not ended and status.duty_outcome is not None and status.duty_outcome.kind in {"CRASHED", "EXITED_UNVERIFIED"}
-    runtime = get_clerk_runtime(binding.sealed_account_id) if binding.sealed_account_id is not None else None
-    entries_enabled = status.running and runtime is not None and runtime.clerk.options_entries_enabled(sid)
-    fills = None
-    if runtime is not None and runtime.sqlite_repository is not None and state is not None:
-        reader = None
-        try:
-            reader = SqliteEconomicProjectionReader.from_repository(runtime.sqlite_repository)
-            observed = reader.bot_fill_window(sid, from_ms=state.session_open_ms, to_ms=now_ms_utc() + 1)
-            fills = None if observed is None else observed.fills
-        except (EconomicProjectionError, sqlite3.Error):
-            logger.exception("Options leg economics are unavailable", extra={"action": "options_leg_pnl_unavailable", "strategy_instance_id": sid})
-        finally:
-            if reader is not None:
-                reader.close()
+    async with binding_clerk_runtime(registry, binding) as runtime:
+        entries_enabled = status.running and runtime is not None and runtime.clerk.options_entries_enabled(sid)
+        fills = None
+        if runtime is not None and runtime.sqlite_repository is not None and state is not None:
+            reader = None
+            try:
+                reader = SqliteEconomicProjectionReader.from_repository(runtime.sqlite_repository)
+                observed = reader.bot_fill_window(sid, from_ms=state.session_open_ms, to_ms=now_ms_utc() + 1)
+                fills = None if observed is None else observed.fills
+            except (EconomicProjectionError, sqlite3.Error):
+                logger.exception("Options leg economics are unavailable", extra={"action": "options_leg_pnl_unavailable", "strategy_instance_id": sid})
+            finally:
+                if reader is not None:
+                    reader.close()
     legs = [] if state is None else leg_views(state, minutes=minutes, fills=fills, order_legs=order_legs)
     return OptionsBotSessionView(
         strategy_instance_id=sid, golden_setup_id=binding.options_bot.golden_setup_id,

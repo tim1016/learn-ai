@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
+from fastapi import FastAPI
 
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.contract.models import OrderSide
@@ -14,6 +18,8 @@ from app.options_backtest.market import MinuteBar
 from app.options_bots.journal import OptionsBotJournal
 from app.options_bots.observations import ConsumedMinute, ObservedOrder
 from app.options_bots.session import OptionsSession
+from app.routers import options_bots as router_module
+from app.schemas.options_deploy import OptionsBotSessionView
 from app.services import options_bot_status as status_service
 from app.services.options_bot_status import leg_views
 from tests.options_backtest._market import D, TableMarket, at, contract, flat, leg, picked, setup, steady
@@ -58,8 +64,11 @@ def test_leg_pnl_is_fifo_over_its_own_orders_with_a_missing_mark_left_unknown() 
     assert "not been attributed" in incomplete.pnl_notice
 
 
-def test_session_reads_a_partial_close_after_exchange_close_without_needing_an_event(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    binding = _binding(setup(leg(contracts=3)))
+@pytest.mark.parametrize("mode", ["trade", "dry_run"])
+async def test_stopped_session_reads_its_own_partial_close_after_exchange_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str,
+) -> None:
+    binding = _binding(setup(leg(contracts=3))).model_copy(update={"mode": mode, "sealed_account_id": "unregistered-session-account"})
     folder = strategy_instance_artifact_dir(tmp_path, "live_state", binding.strategy_instance_id)
     journal = OptionsBotJournal(folder, strategy_instance_id=binding.strategy_instance_id, setup_sha256=binding.options_bot.setup_sha256)
     market = TableMarket(underlying=steady("500"), picks=picked(("call", "500", CALL)), options={CALL: flat("2.6", 5, 60)})
@@ -84,12 +93,32 @@ def test_session_reads_a_partial_close_after_exchange_close_without_needing_an_e
         def close(self) -> None:
             return
     monkeypatch.setattr(status_service, "now_ms_utc", lambda: at(392))
-    monkeypatch.setattr(status_service, "get_clerk_runtime", lambda _: SimpleNamespace(sqlite_repository=object()))
     monkeypatch.setattr(status_service.SqliteEconomicProjectionReader, "from_repository", lambda _: Reader())
     registry = SimpleNamespace(artifacts_root=tmp_path, binding_for_control=lambda *_: binding,
                                status=lambda *_: SimpleNamespace(running=False, duty_outcome=None),
                                bot_end=lambda *_: SimpleNamespace(status="open"))
-    view = status_service.options_session_view(registry, "alpaca", binding.strategy_instance_id)
+    opened = []
+    @asynccontextmanager
+    async def selected(_registry: object, selected_binding: object) -> AsyncIterator[SimpleNamespace]:
+        assert selected_binding is binding
+        opened.append("opened")
+        try:
+            yield SimpleNamespace(sqlite_repository=object())
+        finally:
+            opened.append("closed")
+    async def valid_scope(*_args: object) -> None:
+        return
+    monkeypatch.setattr(status_service, "binding_clerk_runtime", selected)
+    monkeypatch.setattr(router_module, "_runner", lambda: registry)
+    monkeypatch.setattr(router_module.panel_scope, "validate_account_scope", valid_scope)
+    app = FastAPI()
+    app.include_router(router_module.router)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/brokers/alpaca/accounts/account/options-bots/{binding.strategy_instance_id}/session")
+    assert response.status_code == 200, response.text
+    view = OptionsBotSessionView.model_validate(response.json())
+    assert opened == ["opened", "closed"]
+    assert view.legs[0].realized_pnl_usd is not None
     assert view.legs[0].held_contracts == 2
     assert D(view.legs[0].realized_pnl_usd) == D(100)
     assert D(view.legs[0].open_pnl_usd) == D(120)

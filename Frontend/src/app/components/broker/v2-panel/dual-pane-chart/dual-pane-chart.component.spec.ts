@@ -119,6 +119,23 @@ describe('DualPaneChartComponent', () => {
     expect(screen.queryByRole('button', { name: '5s' })).toBeNull();
     expect(screen.getByText('No saved premium minutes for this contract in this session.')).toBeTruthy();
   });
+  it('counts real premium fills while keeping modeled fills out of the live tally', async () => {
+    const start = 1_791_552_600_000;
+    const fill = { filled_at_ms: start + 1_000, side: 'buy' as const, quantity: 1, price: 2,
+      symbol: 'SPY261009C00500000', order_ref: 'entry', event_key: 'live-fill' };
+    const { container } = await render(DualPaneChartComponent, {
+      inputs: { symbol: 'SPY', fixedMinute: true, liveResolution: '1m',
+        liveBars: [liveBar(start, start + 60_000)],
+        livePremiumPanes: [{ symbol: fill.symbol,
+          contract: { root: 'SPY', expiry_ms: 1_791_576_000_000, right: 'call', strike_thousandths: 500000 },
+          multiplier: 100, leg_ids: ['call'], entry_numbers: [0], points: [], rule_lines: [],
+          fill_markers: [fill, { ...fill, filled_at_ms: start + 120_000, event_key: 'outside' },
+            { ...fill, source: 'backtest', event_key: 'modeled' }],
+        }],
+      },
+    });
+    expect(container.querySelector('.tape-readout')?.textContent).toContain('1 plotted / 2 fills');
+  });
   it('names the comparison and identifies a contract only the backtest picked', async () => {
     await render(DualPaneChartComponent, {
       inputs: { symbol: 'SPY', fixedMinute: true, liveResolution: '1m',

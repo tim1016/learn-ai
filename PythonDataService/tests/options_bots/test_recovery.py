@@ -37,10 +37,10 @@ async def test_interrupted_session_no_longer_offers_resume_after_its_end(session
     )
     await account.clerk.stop_strategy_run(strategy_instance_id=SID, run_id=RUN, reason="options_interrupted:TEST_CRASH")
     registry._terminal.finalize(account.binding, kind="CRASHED", reason_code="TEST_CRASH")
-    assert options_session_view(registry, "alpaca", SID).resume_allowed
+    assert (await options_session_view(registry, "alpaca", SID)).resume_allowed
     account.wait(1_000)
 
-    state = options_session_view(registry, "alpaca", SID)
+    state = await options_session_view(registry, "alpaca", SID)
 
     assert not state.resume_allowed
     assert "end" in state.resume_explanation.lower()
