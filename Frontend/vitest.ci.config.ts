@@ -116,6 +116,9 @@ const testConfig = {
   // Match the hosted runner's four CPUs: two workers repeatedly exceeded the
   // job limit despite balanced shards. Each VM keeps the existing memory bound.
   maxWorkers: 4,
+  // Concurrent component renders can exceed Vitest's five-second default;
+  // the wrapper still enforces the unchanged 180-second whole-job limit.
+  testTimeout: 15_000,
   pool: "vmThreads",
   vmMemoryLimit: "1GB",
   // The wrapper already dealt Angular's --include paths in this mode.
