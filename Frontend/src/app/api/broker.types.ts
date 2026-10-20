@@ -10742,9 +10742,10 @@ export interface components {
          * ChartPositionPane
          * @description The pane under a bot's chart for what it trades, when that is not what it listens to (#2915).
          *
-         *     ``points`` has one entry per bar of the chart it comes with, in the same
-         *     order, so the pane shares the chart's time axis exactly. ``kind`` says
-         *     what a value is: ``price`` is the traded stock's or ETF's own bar close.
+         *     Price points follow the underlying bars. Value points follow retained quote
+         *     minutes and can extend into the forming minute before an underlying candle
+         *     closes. ``price`` is the traded stock's or ETF's own bar close; ``value``
+         *     is the option structure's net close-now cost, positive paid and negative received.
          *     ``fill_markers`` are the bot's fills in the traded asset, which the
          *     chart of the symbol it listens to leaves off. ``heading`` says what the
          *     pane is and leaves the asset to ``symbol``.

@@ -224,6 +224,8 @@ class _Held:
     stamp: tuple[int, int, int] | None = None
     read: bool = False
     by_symbol: dict[str, list[KeptOptionQuote]] = field(default_factory=dict)
+    pricing_by_symbol: dict[str, list[KeptOptionQuote]] = field(default_factory=dict)
+    minute_keys: set[tuple[str, int]] = field(default_factory=set)
     last_seq: int = 0
     rows: int = 0
     # How many rows the last cut left. The file is cut again once it holds twice as many.
@@ -233,8 +235,14 @@ class _Held:
 
     def hold(self, rows: Sequence[KeptOptionQuote], *, stamp: tuple[int, int, int] | None) -> None:
         self.by_symbol = {}
+        self.minute_keys = set()
+        self.pricing_by_symbol = {}
         for row in rows:
             self.by_symbol.setdefault(row.symbol, []).append(row)
+            if row.minute_ms is not None:
+                self.minute_keys.add((row.symbol, row.minute_ms))
+            else:
+                self.pricing_by_symbol.setdefault(row.symbol, []).append(row)
         self.last_seq = rows[-1].seq if rows else 0
         self.rows = len(rows)
         self.stamp, self.read = stamp, True
@@ -383,11 +391,9 @@ class KeptOptionQuotes:
             held = self._held()
             rows: list[KeptOptionQuote] = []
             for symbol, recorded, kept_at_ms in said:
-                already = any(
-                    row.minute_ms == minute_ms and (
-                        minute_ms is not None or (row.quote == recorded and row.kept_at_ms == kept_at_ms)
-                    )
-                    for row in (*held.by_symbol.get(symbol, ()), *(new for new in rows if new.symbol == symbol))
+                already = (symbol, minute_ms) in held.minute_keys if minute_ms is not None else any(
+                    row.quote == recorded and row.kept_at_ms == kept_at_ms
+                    for row in (*held.pricing_by_symbol.get(symbol, ()), *(new for new in rows if new.symbol == symbol))
                 )
                 if not already:
                     rows.append(
@@ -400,6 +406,10 @@ class KeptOptionQuotes:
             self._wal.append_many(rows)
             for row in rows:
                 held.by_symbol.setdefault(row.symbol, []).append(row)
+                if row.minute_ms is not None:
+                    held.minute_keys.add((row.symbol, row.minute_ms))
+                else:
+                    held.pricing_by_symbol.setdefault(row.symbol, []).append(row)
             held.last_seq, held.rows = rows[-1].seq, held.rows + len(rows)
             held.stamp = _stamp(self._wal.path)
             if now_ms is not None and held.rows > max(COMPACT_ABOVE_ROWS, 2 * held.rows_after_cut):
@@ -415,7 +425,7 @@ class KeptOptionQuotes:
 
     def _kept_for(self, symbol: str) -> list[KeptOptionQuote]:
         with _KEEP_LOCK:
-            return [row for row in self._held().by_symbol.get(symbol, ()) if row.minute_ms is None]
+            return list(self._held().pricing_by_symbol.get(symbol, ()))
 
     def newest(self, symbol: str, *, at_or_before_ms: int | None = None) -> KeptOptionQuote | None:
         """The quote kept for ``symbol`` whose sides were received last, whatever sides it has.

@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -97,3 +101,58 @@ def test_current_value_and_embedded_card_share_one_cut_without_a_completed_under
     assert pane.points[-1].value == "-400.00"
     assert pane.exit_estimate is not None and pane.exit_estimate.net_close.amount_usd == pane.points[-1].value
     assert len(live.bars) == 2
+
+
+async def test_stopped_dry_run_holds_its_projection_runtime_open_for_the_value_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.broker.alpaca.clerk.active_runtime import ActiveClerkRuntime
+    from app.broker.alpaca.clerk.kept_option_quotes import KeptOptionQuotes
+    from app.broker.alpaca.clerk.sqlite.economic_projection import SqliteEconomicProjectionReader
+    from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+    from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+    from app.services.broker_v2_panel import option_position_value as service
+
+    repo = ClerkSqliteRepository.initialize(account_id="sim:bot", artifacts_root=tmp_path)
+    repo.register_strategy_instance(strategy_instance_id="bot", symbol="SPY", config_hash="sealed")
+    clerk = SqliteAlpacaClerkFacade(account_mode="paper", repo=repo, read=SimpleNamespace(), trade=SimpleNamespace(), authority_kind="synthetic")
+    opened = []
+    @asynccontextmanager
+    async def projection(_binding: object) -> AsyncIterator[ActiveClerkRuntime]:
+        opened.append("opened")
+        try:
+            yield ActiveClerkRuntime(authority_kind="synthetic", clerk=clerk, _sqlite_repository=repo)
+        finally:
+            opened.append("closed")
+    binding = SimpleNamespace(mode="dry_run", broker="alpaca", sealed_account_id="sim:bot")
+    registry = SimpleNamespace(binding_for_control=lambda *_: binding, synthetic_runtime_for_projection=projection)
+    monkeypatch.setattr(service, "get_bot_task_registry", lambda: registry)
+    KeptOptionQuotes.beside(repo.db_path).keep_minutes({SYMBOLS[0]: _quote(START + 1_000)}, observed_at_ms=START + 1_000)
+    reader = SqliteEconomicProjectionReader.from_repository(repo)
+    try:
+        revision = reader.bot_option_value_history("bot").control_revision
+    finally:
+        reader.close()
+    try:
+        answer = await service.with_option_position(_chart(), "alpaca", "bot", symbol="SPY", through_ms=START + 180_000, expected_revision=revision)
+        assert opened == ["opened", "closed"]
+        assert answer.position is not None and answer.position.overlay_notices == []
+    finally:
+        repo.close()
+
+
+def test_coarse_history_values_only_the_observations_it_returns(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.broker_v2_panel import option_position_value as service
+
+    rows = [_row(0, minute) for minute in range(1_000)]
+    chart = _chart().model_copy(update={"bars": [
+        _chart().bars[0].model_copy(update={"end_ms": START + 500 * 60_000}),
+        _chart().bars[0].model_copy(update={"start_ms": START + 500 * 60_000, "end_ms": START + 1_000 * 60_000}),
+    ], "to_ms": START + 1_000 * 60_000})
+    original = service.held_at
+    observed = []
+    def counted(*args, **kwargs):
+        observed.append(args[1])
+        return original(*args, **kwargs)
+    monkeypatch.setattr(service, "held_at", counted)
+    answer = service.position_value_pane(chart, [_fill(0, 1)], rows, symbol="SPY", through_ms=chart.to_ms)
+    assert [point.value for point in answer.points] == ["-200.00", "-200.00"]
+    assert len(observed) == len(chart.bars), "lifetime minutes must not each replay lifetime inventory"

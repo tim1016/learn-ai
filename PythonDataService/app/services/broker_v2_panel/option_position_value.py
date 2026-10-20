@@ -11,10 +11,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
+from bisect import bisect_left
 from collections import defaultdict
 from collections.abc import Sequence
 
-from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
 from app.broker.alpaca.clerk.exit_estimate import OwedClose, exit_estimate
 from app.broker.alpaca.clerk.fifo_pnl import LotWriteOff, compute_fifo_pnl
 from app.broker.alpaca.clerk.fills import FillRecord
@@ -32,6 +32,7 @@ from app.schemas.broker_v2_panel import (
     ChartPositionPoint,
 )
 from app.services.bot_runner import get_bot_task_registry
+from app.services.broker_v2_panel.bot_custody import binding_clerk_runtime
 from app.services.broker_v2_panel.chart_projection_service import fill_to_marker
 from app.services.broker_v2_panel.exit_estimate_read import (
     exit_estimate_view,
@@ -66,8 +67,19 @@ def position_value_pane(
     for row in rows:
         if row.minute_ms is not None and row.kept_at_ms <= through_ms:
             minutes[row.minute_ms].append(row)
+    minute_clock = sorted(minutes)
+    selected: list[tuple[int, int | None]] = []
+    for bar in chart.bars:
+        if bar.end_ms - bar.start_ms < 60_000 and bar.end_ms % 60_000:
+            continue
+        index = bisect_left(minute_clock, bar.end_ms) - 1
+        minute = minute_clock[index] if index >= 0 else None
+        floor = bar.start_ms if bar.end_ms - bar.start_ms >= 60_000 else (bar.end_ms - 1) // 60_000 * 60_000
+        selected.append((bar.start_ms, minute if minute is not None and minute >= floor else None))
     values: dict[int, str | None] = {}
-    for minute, quotes in minutes.items():
+    # Coarser charts need only the latest observation in each returned bar (#3368).
+    for minute in sorted({minute for _, minute in selected if minute is not None}):
+        quotes = minutes[minute]
         at_ms = min(minute + 59_999, through_ms)
         held = held_at(fills, at_ms, write_offs)
         if not held:
@@ -81,14 +93,8 @@ def position_value_pane(
         estimate = exit_estimate(held, available, now_ms=at_ms, quotes_from="Saved minute quotes", none_held="No saved minute quote")
         figure = estimate.net_close
         values[minute] = dollars(figure.amount_cents) if complete and figure.state == "known" and figure.amount_cents is not None else None
-    points = []
-    for bar in chart.bars:
-        # A value minute sits on its ending bar on a finer tape, with no invented 5-second samples.
-        if bar.end_ms - bar.start_ms < 60_000 and bar.end_ms % 60_000:
-            continue
-        minute = (bar.end_ms - 1) // 60_000 * 60_000
-        observed = [at for at in values if bar.start_ms <= at < bar.end_ms] if bar.end_ms - bar.start_ms >= 60_000 else [minute]
-        points.append(ChartPositionPoint(start_ms=bar.start_ms, value=values.get(max(observed)) if observed else None))
+    points = [ChartPositionPoint(start_ms=start, value=values.get(minute) if minute is not None else None)
+              for start, minute in selected]
     current_held = held_at(fills, through_ms, write_offs) if isinstance(chart, ChartLiveResponse) else {}
     current_estimate = None if not current_held else minute_exit_estimate(current_held, rows, now_ms=through_ms, owed_closes=owed_closes)
     if isinstance(chart, ChartLiveResponse) and lower <= through_ms < upper:
@@ -116,8 +122,7 @@ async def with_option_position(
 ) -> ChartLiveResponse | ChartHistoryResponse:
     registry = get_bot_task_registry()
     binding = None if registry is None else registry.binding_for_control(broker, sid)
-    runtime = None if binding is None or binding.sealed_account_id is None else get_clerk_runtime(binding.sealed_account_id)
-    repo = None if runtime is None else runtime.sqlite_repository
+    repo = None
 
     def read() -> ChartPositionPane:
         if repo is None:
@@ -138,7 +143,11 @@ async def with_option_position(
             reader.close()
 
     try:
-        pane = await asyncio.to_thread(read)
+        if registry is None or binding is None:
+            raise ValueError("The bot's selected custody authority is unavailable.")
+        async with binding_clerk_runtime(registry, binding) as runtime:
+            repo = None if runtime is None else runtime.sqlite_repository
+            pane = await asyncio.to_thread(read)
     except (ValueError, EconomicProjectionError, KeptOptionQuotesUnavailable, sqlite3.Error) as exc:
         logger.exception("Option position value is unavailable", extra={"action": "option_position_value_unavailable", "strategy_instance_id": sid})
         pane = position_value_pane(chart, (), (), symbol=symbol, through_ms=through_ms).model_copy(update={
