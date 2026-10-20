@@ -313,6 +313,19 @@ class SuiteWalkTests(unittest.TestCase):
         self.assertEqual(out, "")
         self.assertIn("test_bad.py: cannot parse", err)
 
+    def test_unclosed_table_type_arguments_fail_loudly_with_the_spec_path(self) -> None:
+        self._layout()
+        self._write(
+            "Frontend/src/app/components/bots/bad.spec.ts",
+            "it.each<[string, () => void]([['a', () => {}]])('x %s', () => {});\n",
+        )
+
+        code, out, err = self._run("--suite", "frontend")
+
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertIn("bad.spec.ts: a type-argument list after .each is not closed", err)
+
     def test_missing_root_fails_loudly(self) -> None:
         code, _, err = self._run("--suite", "frontend")
 
