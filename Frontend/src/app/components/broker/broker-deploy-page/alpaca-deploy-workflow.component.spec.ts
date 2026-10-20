@@ -895,7 +895,7 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
   // Each of these is a refusal the backend leaves unsettled: the first bot
   // may have started, or the key's earlier Deploy could not be read. The
   // page keeps the key, says the outcome is unknown in the backend's words,
-  // and offers the status read (B2-3). The two 409 rows are the key's earlier
+  // and offers the status read (B2-3). The last two 409 rows are the key's earlier
   // Deploy still being sent, and sent with other settings.
   it.each([
     {
