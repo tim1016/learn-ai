@@ -45,6 +45,8 @@ async function optionsWorld(page: Page, loseAnswer = false) {
     const path = new URL(request.url()).pathname;
     if (path === '/api/research/golden-option-setups') {
       await route.fulfill({ json: [GOLDEN] });
+    } else if (path === `/api/research/golden-option-setups/${GOLDEN.id}`) {
+      await route.fulfill({ json: GOLDEN });
     } else if (path === '/api/research/options-backtest/setups/describe') {
       const summary: Schemas['SetupDescriptionResponse'] = {
         setup: GOLDEN.setup, window: ['The setup follows its approved trading session.'],

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import configparser
 import json
 import os
 import re
@@ -24,6 +25,30 @@ def test_root_conftest_defers_fastapi_app_import() -> None:
                 "import runpy, sys; "
                 "runpy.run_path('tests/conftest.py'); "
                 "raise SystemExit('app.main' in sys.modules)"
+            ),
+        ],
+        cwd=SERVICE_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_root_conftest_finishes_anyios_asyncio_backend_import_before_any_thread() -> None:
+    # anyio's get_asynclib() returns the backend module from sys.modules without
+    # the import lock, so a thread asking while another is still importing it
+    # gets a module with no CancelScope (#3384). The conftest imports it first.
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import runpy, sys; "
+                "runpy.run_path('tests/conftest.py'); "
+                "backend = sys.modules.get('anyio._backends._asyncio'); "
+                "raise SystemExit(backend is None or not hasattr(backend, 'CancelScope'))"
             ),
         ],
         cwd=SERVICE_ROOT,
@@ -381,6 +406,42 @@ def test_run_fast_tests_keeps_the_exit_code_when_the_step_summary_is_unwritable(
     with caplog.at_level(logging.WARNING, logger="scripts.run_fast_tests"):
         assert runner.run_fast_tests() == 3
     assert "Could not append the test time to GITHUB_STEP_SUMMARY" in caplog.text
+
+
+def _prepend_module_name(test_file: Path) -> str:
+    """The module name pytest's default import mode gives a test file.
+
+    The name starts at the first directory above the file that is not a
+    package, so two files in folders without ``__init__.py`` share a name when
+    their basenames match.
+    """
+    parts = [test_file.stem]
+    folder = test_file.parent
+    while (folder / "__init__.py").exists():
+        parts.append(folder.name)
+        folder = folder.parent
+    return ".".join(reversed(parts))
+
+
+def test_no_two_test_files_collect_under_one_module_name() -> None:
+    # Whole files are dealt to CI shards, so two same-named files in folders
+    # without __init__.py only meet in one process by hash luck: that process
+    # fails collection with "import file mismatch" and the other file's tests
+    # silently do not run (#3385, which also stopped the daily full run).
+    parser = configparser.ConfigParser()
+    parser.read(SERVICE_ROOT / "pytest.ini", encoding="utf-8")
+    roots = parser["pytest"]["testpaths"].split()
+
+    files_by_module: dict[str, list[str]] = {}
+    for root in roots:
+        for test_file in sorted((SERVICE_ROOT / root).rglob("*.py")):
+            if test_file.name.startswith("test_") or test_file.name.endswith("_test.py"):
+                files_by_module.setdefault(_prepend_module_name(test_file), []).append(
+                    str(test_file.relative_to(SERVICE_ROOT))
+                )
+
+    clashes = {name: files for name, files in files_by_module.items() if len(files) > 1}
+    assert not clashes, f"test files share a module name; rename one of each pair: {clashes}"
 
 
 def test_parse_durations_sums_phases_and_keeps_node_ids_with_spaces() -> None:

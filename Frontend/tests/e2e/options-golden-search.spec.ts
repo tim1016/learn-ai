@@ -78,7 +78,7 @@ test('keeps failed performance rules visible and requires a deliberate owner exc
   const exception = workbench.getByRole('button', { name: 'Approve owner exception' });
   await expect(exception).toBeDisabled();
   await expect(workbench.getByText('The final Sharpe floor was not met.', { exact: false }).last()).toBeVisible();
-  await expect(workbench.getByText('This interval was used in another recorded Options study.', { exact: false })).toBeVisible();
+  await expect(workbench.getByText('This interval was used in another recorded Options study.', { exact: true })).toBeVisible();
   await workbench.getByLabel('Owner review comment').fill('   ');
   await expect(exception).toBeDisabled();
   await workbench.getByLabel('Owner review comment').fill('Accepted the failed Sharpe hurdle and previously used interval.');
@@ -98,7 +98,8 @@ test('shows unverifiable results without allowing a technical exception', async 
   const world = await installOptionsSearchWorld(page, exceptionOptionsStudy(true));
   await page.goto(`/options-golden-search/${OPTIONS_SEARCH_ID}`);
   const workbench = page.locator('app-options-golden-search-page');
-  await expect(workbench.getByText('Could Not Evaluate', { exact: true })).toBeVisible();
+  await expect(workbench.getByRole('cell', { name: 'Could Not Evaluate' })).toBeVisible();
+  await expect(workbench.getByRole('article').getByText('Could Not Evaluate', { exact: true })).toBeVisible();
   await workbench.getByLabel('Owner review comment').fill('This comment cannot override missing marks.');
   await expect(workbench.getByRole('button', { name: 'Approve owner exception' })).toBeDisabled();
   await expect(workbench.getByRole('button', { name: 'Approve exact golden version' })).toBeDisabled();
