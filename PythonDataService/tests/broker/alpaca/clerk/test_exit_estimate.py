@@ -71,20 +71,32 @@ DEEP_IN_THE_MONEY = {SOLD: _quote("99.90", "100.00"), BOUGHT: _quote("95.00", "9
 # ---- the two figures --------------------------------------------------------------------------
 
 
-def test_a_five_wide_spread_deep_in_the_money_closes_whole_for_500_and_needs_10000_to_buy_its_sold_leg_back() -> None:
+def test_a_five_wide_spread_deep_in_the_money_closes_whole_for_500_and_needs_10000_to_buy_back_and_says_so() -> None:
     """The sold put is bought back at its ask, 100.00 a share: $10,000.00 for one contract of 100 shares.
-    The bought put is sold at its bid, 95.00: $9,500.00 comes back. The whole close pays $500.00."""
+    The bought put is sold at its bid, 95.00: $9,500.00 comes back. The whole close pays $500.00.
+    A sold leg adds the note that a buy-back alone is not funded by the close."""
     estimate = _estimate(SPREAD, DEEP_IN_THE_MONEY)
 
-    assert (estimate.net_close.state, estimate.net_close.amount_cents) == ("known", 50_000)
+    assert (estimate.net_close.state, estimate.net_close.amount_cents) == ("known", 50_000), (
+        "the whole close is known and pays $500.00"
+    )
     assert _terms(estimate.net_close) == [
         (f"Sell 1 {BOUGHT} at the bid", -950_000),
         (f"Buy back 1 {SOLD} at the ask", 1_000_000),
-    ]
-    assert (estimate.gross_buy_back.state, estimate.gross_buy_back.amount_cents) == ("known", 1_000_000)
-    assert _terms(estimate.gross_buy_back) == [(f"Buy back 1 {SOLD} at the ask", 1_000_000)]
-    assert estimate.gross_buy_back.amount_cents == 20 * estimate.net_close.amount_cents
-    assert estimate.net_close.source == estimate.gross_buy_back.source == FROM
+    ], "the whole close is the bought put sold at its bid less the sold put bought back at its ask"
+    assert (estimate.gross_buy_back.state, estimate.gross_buy_back.amount_cents) == ("known", 1_000_000), (
+        "the buy-back is known and needs $10,000.00"
+    )
+    assert _terms(estimate.gross_buy_back) == [(f"Buy back 1 {SOLD} at the ask", 1_000_000)], (
+        "the buy-back is the sold put bought back at its ask"
+    )
+    assert estimate.gross_buy_back.amount_cents == 20 * estimate.net_close.amount_cents, (
+        "the buy-back is twenty times the net close"
+    )
+    assert estimate.net_close.source == estimate.gross_buy_back.source == FROM, "both figures name the quotes they used"
+    assert estimate.conditions == (FEES_LINE, BUY_BACK_ALONE_LINE, CUTOFF_LINE), (
+        "a sold leg adds the note that a buy-back alone is not funded by the close"
+    )
 
 
 def test_each_figure_is_for_every_contract_held_at_each_contracts_own_multiplier() -> None:
@@ -237,16 +249,23 @@ def test_an_unknown_figure_is_unknown_even_when_another_leg_is_stale() -> None:
 # ---- rule 4: no sold leg --------------------------------------------------------------------------
 
 
-def test_a_position_with_no_sold_leg_has_a_buy_back_of_zero_known_and_no_note_about_one() -> None:
+def test_a_position_with_no_sold_leg_has_a_buy_back_of_zero_known_and_conditions_with_no_note_about_one() -> None:
     estimate = _estimate({(BOUGHT, 100): 1}, {BOUGHT: _quote("95.00", "95.10")})
 
     assert (estimate.gross_buy_back.state, estimate.gross_buy_back.amount_cents, estimate.gross_buy_back.terms) == (
         "known", 0, (),
-    )
+    ), "a position with no sold leg has a buy-back of zero, known, with no terms"
     # No quote was used for it, so it claims no quote's age.
-    assert estimate.gross_buy_back.as_of_ms is None
-    assert (estimate.net_close.state, estimate.net_close.amount_cents) == ("known", -950_000)
-    assert BUY_BACK_ALONE_LINE not in estimate.conditions
+    assert estimate.gross_buy_back.as_of_ms is None, "a buy-back of zero claims no quote's age"
+    assert (estimate.net_close.state, estimate.net_close.amount_cents) == ("known", -950_000), (
+        "the bought leg's sale comes back as a known negative net close"
+    )
+    assert BUY_BACK_ALONE_LINE not in estimate.conditions, "no note about a buy-back alone"
+    assert estimate.conditions == (FEES_LINE, CUTOFF_LINE), "the conditions say fees are not in it and Alpaca's cutoff is unverified"
+    assert FEES_LINE == "Amounts are before fees. A positive amount is paid and a negative one comes back.", (
+        "the fees line states the sign convention"
+    )
+    assert CUTOFF_LINE == "Alpaca's own expiry-day cutoff has not been verified.", "the cutoff line says it is not verified"
 
 
 def test_a_buy_back_of_zero_is_known_even_when_the_bought_leg_has_no_quote() -> None:
@@ -258,20 +277,6 @@ def test_a_buy_back_of_zero_is_known_even_when_the_bought_leg_has_no_quote() -> 
 
 
 # ---- conditions -----------------------------------------------------------------------------------
-
-
-def test_the_conditions_say_fees_are_not_in_it_and_that_alpacas_own_cutoff_is_not_verified() -> None:
-    estimate = _estimate({(BOUGHT, 100): 1}, {BOUGHT: _quote("95.00", "95.10")})
-
-    assert estimate.conditions == (FEES_LINE, CUTOFF_LINE)
-    assert FEES_LINE == "Amounts are before fees. A positive amount is paid and a negative one comes back."
-    assert CUTOFF_LINE == "Alpaca's own expiry-day cutoff has not been verified."
-
-
-def test_a_sold_leg_adds_the_note_that_a_buy_back_alone_is_not_funded_by_the_close() -> None:
-    estimate = _estimate(SPREAD, DEEP_IN_THE_MONEY)
-
-    assert estimate.conditions == (FEES_LINE, BUY_BACK_ALONE_LINE, CUTOFF_LINE)
 
 
 def test_the_close_the_clerk_owes_is_stated_in_its_own_time_before_the_cutoff_note() -> None:

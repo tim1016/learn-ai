@@ -19,26 +19,6 @@ _GOOD_START_MS = 1_736_173_800_000
 _GOOD_END_MS = 1_736_778_600_000
 
 
-def test_trusted_run_request_model_accepts_new_fields() -> None:
-    from app.routers.lean_sidecar import TrustedRunRequestModel
-
-    payload = {
-        "run_id": "test-payload",
-        "symbol": "SPY",
-        "start_ms_utc": _GOOD_START_MS,
-        "end_ms_utc": _GOOD_END_MS,
-        "starting_cash": 100_000.0,
-        "data_source": "polygon",
-        "bar_minutes": 15,
-        "session": "regular",
-        "adjustment": "raw",
-    }
-
-    model = TrustedRunRequestModel(**payload)
-    assert model.data_source == "polygon"
-    assert model.bar_minutes == 15
-
-
 def test_trusted_run_request_model_legacy_accepts_partial_payload_with_pr_a_defaults() -> None:
     """PR B (2026-05-20, P1 review): the legacy top-level shape preserves
     PR A's one-deprecation-cycle compatibility guarantee by defaulting
@@ -69,7 +49,16 @@ def test_trusted_run_request_model_legacy_accepts_partial_payload_with_pr_a_defa
     assert model.data_policy.adjusted is False  # legacy adjustment="raw" default
 
 
-def test_trusted_run_request_model_accepts_non_15_bar_minutes() -> None:
+@pytest.mark.parametrize(
+    ("data_source", "bar_minutes"),
+    [
+        pytest.param("polygon", 15, id="new fields"),
+        pytest.param("synthetic", 30, id="non-15 bar minutes"),
+    ],
+)
+def test_trusted_run_request_model_accepts_new_fields_and_non_15_bar_minutes(
+    data_source: str, bar_minutes: int
+) -> None:
     """PR B replaces PR A's ``bar_minutes: Literal[15]`` pin with a
     free integer; template-internal source code asserts the value at
     LEAN runtime. The router only enforces ``ge=1``.
@@ -77,18 +66,20 @@ def test_trusted_run_request_model_accepts_non_15_bar_minutes() -> None:
     from app.routers.lean_sidecar import TrustedRunRequestModel
 
     model = TrustedRunRequestModel(
-        run_id="test-non15-bm",
+        run_id="test-payload",
         symbol="SPY",
         start_ms_utc=_GOOD_START_MS,
         end_ms_utc=_GOOD_END_MS,
         starting_cash=100_000.0,
-        data_source="synthetic",
-        bar_minutes=30,
+        data_source=data_source,
+        bar_minutes=bar_minutes,
         session="regular",
         adjustment="raw",
     )
-    assert model.data_policy is not None
-    assert model.data_policy.strategy_bars.multiplier == 30
+    assert model.data_source == data_source, "the data source is carried"
+    assert model.bar_minutes == bar_minutes, "the bar minutes are carried"
+    assert model.data_policy is not None, "a data policy is derived"
+    assert model.data_policy.strategy_bars.multiplier == bar_minutes, "the strategy bars follow the bar minutes"
 
 
 @pytest.mark.asyncio

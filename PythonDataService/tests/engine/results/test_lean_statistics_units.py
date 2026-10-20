@@ -39,26 +39,28 @@ def _winner(quantity: int = 100) -> LoggedTrade:
     )
 
 
-def test_a_trade_record_carries_dollars_not_per_share_points() -> None:
+def test_a_100_share_winner_is_in_dollars_in_the_trade_record_and_the_native_statistics() -> None:
     record = _format_trade_record(1, _winner(quantity=100))
 
-    assert record.pnl == pytest.approx(200.0, abs=ATOL, rel=0)
-    assert record.pnl_pct == pytest.approx(0.02, abs=ATOL, rel=0)
+    assert record.pnl == pytest.approx(200.0, abs=ATOL, rel=0), "#3219 trade record pnl is dollars, not per-share points"
+    assert record.pnl_pct == pytest.approx(0.02, abs=ATOL, rel=0), "#3219 trade record pnl_pct is the 2% move"
 
+    stats = compute_lean_statistics(_daily_bars(), [record], start_capital=START_CAPITAL, total_fees=2.0, total_orders=2)
 
-def test_the_native_statistics_of_a_100_share_winner_are_in_dollars() -> None:
-    trades = [_format_trade_record(1, _winner(quantity=100))]
-
-    stats = compute_lean_statistics(_daily_bars(), trades, start_capital=START_CAPITAL, total_fees=2.0, total_orders=2)
-
-    assert stats.trade.total_profit_loss == pytest.approx(200.0, abs=ATOL, rel=0)
-    assert stats.trade.average_profit == pytest.approx(200.0, abs=ATOL, rel=0)
-    assert stats.portfolio.average_win_rate == pytest.approx(200.0 / START_CAPITAL, abs=ATOL, rel=0)
-    assert stats.fees == pytest.approx(2.0, abs=ATOL, rel=0)
-    assert stats.net_profit == pytest.approx(198.0, abs=ATOL, rel=0)  # $200 less $2 of commission
-    assert stats.equity == pytest.approx(START_CAPITAL + 198.0, abs=ATOL, rel=0)
-    assert stats.total_return == pytest.approx(198.0 / START_CAPITAL, abs=ATOL, rel=0)
-    assert stats.total_orders == 2
+    assert stats.trade.total_profit_loss == pytest.approx(200.0, abs=ATOL, rel=0), "#3219 native total_profit_loss is dollars"
+    assert stats.trade.average_profit == pytest.approx(200.0, abs=ATOL, rel=0), "#3219 native average_profit is dollars"
+    assert stats.portfolio.average_win_rate == pytest.approx(
+        200.0 / START_CAPITAL, abs=ATOL, rel=0
+    ), "#3219 native average_win_rate is dollars over start capital"
+    assert stats.fees == pytest.approx(2.0, abs=ATOL, rel=0), "#3219 native fees are the $2 passed in"
+    assert stats.net_profit == pytest.approx(
+        198.0, abs=ATOL, rel=0
+    ), "#3219 native net_profit is $200 less $2 of commission"
+    assert stats.equity == pytest.approx(START_CAPITAL + 198.0, abs=ATOL, rel=0), "#3219 native equity is start capital plus net profit"
+    assert stats.total_return == pytest.approx(
+        198.0 / START_CAPITAL, abs=ATOL, rel=0
+    ), "#3219 native total_return is net profit over start capital"
+    assert stats.total_orders == 2, "#3219 native total_orders is the 2 passed in"
 
 
 def test_orders_default_to_an_entry_and_an_exit_per_closed_trade() -> None:

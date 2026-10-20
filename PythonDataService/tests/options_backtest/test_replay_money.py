@@ -13,6 +13,7 @@ import pytest
 
 from app.options.contract import OptionContract
 from app.options_backtest.market import MinuteBar, Picked, PickRefused
+from app.options_backtest.replay import FeeFor
 from app.options_backtest.results import EventKind, Fill, SessionOutcome, SessionStatus
 from app.options_backtest.setup import LegSetup
 from tests.options_backtest._market import (
@@ -26,6 +27,7 @@ from tests.options_backtest._market import (
     leg,
     minute_of,
     minutes,
+    no_fee,
     picked,
     replay,
     row,
@@ -73,37 +75,54 @@ def test_a_refused_entry_names_the_price_it_would_have_filled_at_not_the_price_s
     assert [(minute_of(e.at_ms), e.price) for e in refused] == [(6, D("2.58"))]
 
 
-def test_an_entry_costing_exactly_the_cash_is_taken() -> None:
-    outcome = replay(setup(leg()), _call_at_two_and_put_at_three(), cash="200")
+@pytest.mark.parametrize(
+    ("legs", "cash", "fee_for", "taken", "refused"),
+    [
+        pytest.param(("call",), "200", no_fee, ("call",), (), id="an_entry_costing_exactly_the_cash_is_taken"),
+        pytest.param(
+            ("call",),
+            "200",
+            fee_per_contract("0.65"),
+            (),
+            ((6, "call"),),
+            # 200.00 + 0.65 = 200.65 against 200.00.
+            id="the_fee_counts_toward_what_an_entry_costs",
+        ),
+        pytest.param(
+            ("call", "put"),
+            "450",
+            no_fee,
+            (),
+            ((6, "call"), (6, "put")),
+            # 200.00 + 300.00 = 500.00 against 450.00: the call alone would fit, and is refused with the put.
+            id="two_entries_in_one_minute_that_together_exceed_the_cash_are_both_refused",
+        ),
+        pytest.param(
+            ("call", "put"),
+            "500",
+            no_fee,
+            ("call", "put"),
+            (),
+            id="two_entries_in_one_minute_that_together_equal_the_cash_are_both_taken",
+        ),
+    ],
+)
+def test_entries_are_taken_or_refused_by_what_they_and_their_fees_cost_against_the_cash(
+    legs: tuple[str, ...],
+    cash: str,
+    fee_for: FeeFor,
+    taken: tuple[str, ...],
+    refused: tuple[tuple[int, str], ...],
+) -> None:
+    written = setup(*(leg(leg_id, leg_id) for leg_id in legs))
 
-    assert [trade.leg_id for trade in outcome.trades] == ["call"]
-    assert outcome.cash_change_usd == D("0")  # 200.00 out, 200.00 back
+    outcome = replay(written, _call_at_two_and_put_at_three(), cash=cash, fee_for=fee_for)
 
-
-def test_the_fee_counts_toward_what_an_entry_costs() -> None:
-    # 200.00 + 0.65 = 200.65 against 200.00.
-    outcome = replay(setup(leg()), _call_at_two_and_put_at_three(), cash="200", fee_for=fee_per_contract("0.65"))
-
-    assert outcome.trades == ()
-    assert minutes(outcome, EventKind.ENTRY_REFUSED_FOR_CASH) == [6]
-
-
-def test_two_entries_in_one_minute_that_together_exceed_the_cash_are_both_refused() -> None:
-    # 200.00 + 300.00 = 500.00 against 450.00: the call alone would fit, and is refused with the put.
-    written = setup(leg("call", "call"), leg("put", "put"))
-
-    outcome = replay(written, _call_at_two_and_put_at_three(), cash="450")
-
-    assert outcome.trades == ()
-    refused = [event for event in outcome.events if event.kind is EventKind.ENTRY_REFUSED_FOR_CASH]
-    assert [(minute_of(e.at_ms), e.leg_id) for e in refused] == [(6, "call"), (6, "put")]
-    assert outcome.cash_change_usd == D("0")
-
-
-def test_two_entries_in_one_minute_that_together_equal_the_cash_are_both_taken() -> None:
-    outcome = replay(setup(leg("call", "call"), leg("put", "put")), _call_at_two_and_put_at_three(), cash="500")
-
-    assert [trade.leg_id for trade in outcome.trades] == ["call", "put"]
+    assert tuple(trade.leg_id for trade in outcome.trades) == taken, "the legs that were taken"
+    assert tuple(
+        (minute_of(e.at_ms), e.leg_id) for e in outcome.events if e.kind is EventKind.ENTRY_REFUSED_FOR_CASH
+    ) == refused, "the legs refused for cash, and the minute they were refused"
+    assert outcome.cash_change_usd == D("0"), "200.00 out, 200.00 back: flat prices leave the cash where it began"
 
 
 def test_a_leg_refused_for_cash_is_done_for_the_day_even_when_cash_comes_back() -> None:

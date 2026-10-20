@@ -140,25 +140,23 @@ class Lookups:
         )
 
 
-def test_the_rate_is_asked_for_the_days_left_to_the_latest_expiry_and_its_source_is_kept() -> None:
+def test_a_read_with_none_declared_asks_for_the_rate_and_knows_the_dividends() -> None:
+    """The rate is asked for the days left to the latest expiry and its source is kept; a rate that is only
+    the default says so in its source; none declared is known and is an empty list, not an unknown."""
     lookups = Lookups([])
 
     read = lookups.read()
-
-    assert lookups.rate_asked == [(10, _TUESDAY)]
-    assert (read.rate, read.model.rate) == (0.0512, 0.0512)
-    assert read.model.rate_source == read.rate_source
-
-
-def test_a_rate_that_is_only_the_default_says_so_in_its_source() -> None:
-    from_fred = Lookups([]).read()
     option_model_inputs.clear_cache()
-
     fell_back = Lookups([], rate=(DEFAULT_RISK_FREE_RATE, RATE_SOURCE_DEFAULT)).read()
 
-    assert (from_fred.rate_is_default, fell_back.rate_is_default) == (False, True)
-    assert fell_back.rate == DEFAULT_RISK_FREE_RATE
-    assert fell_back.rate_source != from_fred.rate_source
+    assert lookups.rate_asked == [(10, _TUESDAY)], "the rate is asked for the days left to the latest expiry"
+    assert (read.rate, read.model.rate) == (0.0512, 0.0512), "the rate it was asked for is the rate priced with"
+    assert read.model.rate_source == read.rate_source, "the source of the rate is kept"
+    assert (read.rate_is_default, fell_back.rate_is_default) == (False, True), "only the fallback rate is the default"
+    assert fell_back.rate == DEFAULT_RISK_FREE_RATE, "a rate that is only the default is the default rate"
+    assert fell_back.rate_source != read.rate_source, "a rate that is only the default says so in its source"
+    assert read.dividends == (), "none declared is an empty list, not an unknown"
+    assert read.model is not None and read.model.dividends == (), "none declared is known: the model has no dividends"
 
 
 def test_a_declared_dividend_goes_ex_at_the_open_of_its_ex_dates_session() -> None:
@@ -187,35 +185,25 @@ def test_a_dividend_whose_session_has_already_opened_is_in_the_price_and_left_ou
     assert [paid.cash for paid in before_the_open.dividends] == [1.80, 0.40]
 
 
-def test_none_declared_is_known_and_is_an_empty_list_not_an_unknown() -> None:
-    read = Lookups([]).read()
-
-    assert read.dividends == ()
-    assert read.model is not None and read.model.dividends == ()
-
-
 def test_a_lookup_that_fails_leaves_the_dividends_unknown_and_never_none_declared() -> None:
+    """What stands in for unknown dividends says in its source that it is not known; a kept failure stays unknown."""
     lookups = Lookups(DividendsUnknown("the source did not answer"))
 
     read = lookups.read()
-
-    assert read.dividends is None
-    assert read.model is None
-    assert read.dividends_source == "the source did not answer"
-    # The rate is still the rate.
-    assert read.rate == 0.0512
-
-
-def test_what_stands_in_for_unknown_dividends_says_in_its_source_that_it_is_not_known() -> None:
-    unknown = Lookups(DividendsUnknown("the source did not answer")).read()
+    again = lookups.read(at_ms=NOW + 1_000)
     known = Lookups([]).read(underlying="QQQ")
+    stand_in = read.unverified_model()
 
-    stand_in = unknown.unverified_model()
-
-    assert stand_in.dividends == ()
+    assert read.dividends is None, "a failed lookup leaves the dividends unknown, never none declared"
+    assert read.model is None, "unknown dividends leave no model"
+    assert read.dividends_source == "the source did not answer", "the failure says why"
+    # The rate is still the rate.
+    assert read.rate == 0.0512, "the rate is still the rate"
+    assert (read.dividends, again.dividends) == (None, None), "a failure kept is still unknown when read again"
+    assert stand_in.dividends == (), "the stand-in model has no dividends"
     # Its source is not the lookup's own words alone: it says the stand-in is one, and why.
-    assert stand_in.dividends_source != unknown.dividends_source
-    assert unknown.dividends_source in stand_in.dividends_source
+    assert stand_in.dividends_source != read.dividends_source, "the stand-in's source is not the lookup's words alone"
+    assert read.dividends_source in stand_in.dividends_source, "the stand-in's source keeps why they are not known"
     with pytest.raises(ValueError):
         known.unverified_model()
 
@@ -238,14 +226,6 @@ def test_what_was_learned_is_kept_for_an_hour_and_a_failure_is_asked_again_after
     assert (asked_within_the_hour, len(known.dividends_asked)) == (1, 2)
     assert (failures_asked_within_half_a_minute, len(failing.dividends_asked)) == (1, 2)
     assert len(known.rate_asked) == 2
-
-
-def test_a_failure_kept_is_still_unknown_when_read_again() -> None:
-    failing = Lookups(DividendsUnknown("no answer"))
-
-    first, again = failing.read(), failing.read(at_ms=NOW + 1_000)
-
-    assert (first.dividends, again.dividends) == (None, None)
 
 
 def test_polygons_rows_become_the_declared_cash_dividends_in_the_span_asked() -> None:

@@ -71,16 +71,16 @@ class _LiveRead:
         return "alpaca's option account"
 
 
-def test_alpaca_says_it_takes_option_orders_of_one_leg_and_of_several() -> None:
-    for capabilities in (ALPACA_PAPER_CAPABILITIES, ALPACA_LIVE_CAPABILITIES):
-        assert capabilities.supports_option_orders is True
-        assert capabilities.supports_multi_leg_option_orders is True
-
-
-def test_the_simulation_says_it_takes_single_and_multi_leg_option_orders() -> None:
-    assert SYNTHETIC_CAPABILITIES.supports_option_orders is True
-    assert SYNTHETIC_CAPABILITIES.supports_multi_leg_option_orders is True
-    assert SyntheticBroker(account_id="sim:options-1").capabilities() is SYNTHETIC_CAPABILITIES
+def test_alpaca_and_the_simulation_say_they_take_option_orders_of_one_leg_and_of_several() -> None:
+    assert ALPACA_PAPER_CAPABILITIES.supports_option_orders is True, "alpaca paper takes option orders"
+    assert ALPACA_PAPER_CAPABILITIES.supports_multi_leg_option_orders is True, "alpaca paper takes multi-leg option orders"
+    assert ALPACA_LIVE_CAPABILITIES.supports_option_orders is True, "alpaca live takes option orders"
+    assert ALPACA_LIVE_CAPABILITIES.supports_multi_leg_option_orders is True, "alpaca live takes multi-leg option orders"
+    assert SYNTHETIC_CAPABILITIES.supports_option_orders is True, "the simulation takes option orders"
+    assert SYNTHETIC_CAPABILITIES.supports_multi_leg_option_orders is True, "the simulation takes multi-leg option orders"
+    assert SyntheticBroker(account_id="sim:options-1").capabilities() is SYNTHETIC_CAPABILITIES, (
+        "the simulation broker reports the simulation's capabilities"
+    )
 
 
 def test_a_shadow_world_takes_multi_leg_orders_and_preserves_the_live_brokers_capabilities(tmp_path: Path) -> None:

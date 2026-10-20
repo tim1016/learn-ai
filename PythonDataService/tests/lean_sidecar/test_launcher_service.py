@@ -67,26 +67,18 @@ class TestLaunchValidation:
         launch(request, artifacts_root=tmp_artifacts_root, allowed_image_digests=frozenset({DUMMY_DIGEST}))
         assert f"{ws.data_dir}:/lean-run/data:ro" in plans[0].argv
 
-    def test_pydantic_rejects_bad_run_id(self) -> None:
+    @pytest.mark.parametrize(
+        ("field", "bad_value"),
+        [
+            pytest.param("run_id", "../escape", id="rejects_bad_run_id"),
+            pytest.param("image_digest", "quantconnect/lean:latest", id="rejects_unpinned_image"),
+            pytest.param("cpus", 0, id="rejects_nonpositive_limit"),
+        ],
+    )
+    def test_pydantic_rejects_invalid_launch_request_field(self, field: str, bad_value: object) -> None:
+        valid = _make_request("run_a").model_dump()
         with pytest.raises(ValidationError):
-            _make_request("../escape")
-
-    def test_pydantic_rejects_unpinned_image(self) -> None:
-        with pytest.raises(ValidationError):
-            _make_request("run_a", digest="quantconnect/lean:latest")
-
-    def test_pydantic_rejects_nonpositive_limit(self) -> None:
-        with pytest.raises(ValidationError):
-            LaunchRequest(
-                run_id="run_a",
-                image_digest=DUMMY_DIGEST,
-                cpus=0,
-                memory_mb=1,
-                pids_limit=1,
-                wall_clock_timeout_s=1,
-                workspace_max_mb=1,
-                log_tail_bytes=1,
-            )
+            LaunchRequest(**{**valid, field: bad_value})
 
     def test_rejects_when_workspace_not_staged(
         self,
@@ -127,53 +119,53 @@ class TestLaunchValidation:
 
 
 class TestPinnedImageReadiness:
-    def test_check_pinned_image_reports_local_pinned_image_as_ready(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from app.lean_sidecar.launcher import service as launcher_service
-
-        monkeypatch.setattr(launcher_service, "PINNED_LEAN_IMAGE_DIGEST", DUMMY_DIGEST)
-        monkeypatch.setattr(launcher_service, "_require_podman", lambda: "/usr/local/bin/podman")
-        completed = subprocess.CompletedProcess([], 0)
-        monkeypatch.setattr(launcher_service.subprocess, "run", lambda *args, **kwargs: completed)
-
-        readiness = check_pinned_image()
-
-        assert readiness == LauncherImageReadiness(
-            reference=f"{sidecar_config.LEAN_IMAGE_REPO}@{DUMMY_DIGEST}",
-            available=True,
-            detail="Pinned LEAN image is present in Podman's local image store.",
-        )
-
-    def test_check_pinned_image_reports_missing_local_image_without_running_a_container(
-        self, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        ("returncode", "available", "failure_reason", "detail"),
+        [
+            pytest.param(
+                0,
+                True,
+                None,
+                "Pinned LEAN image is present in Podman's local image store.",
+                id="reports_local_pinned_image_as_ready",
+            ),
+            pytest.param(
+                1,
+                False,
+                "missing",
+                "Pinned LEAN image is not present in Podman's local image store.",
+                id="reports_missing_local_image_without_running_a_container",
+            ),
+            pytest.param(
+                125,
+                False,
+                "check_failed",
+                "Podman could not determine pinned-image readiness (exit code 125).",
+                id="reports_podman_operational_failure_without_calling_it_missing",
+            ),
+        ],
+    )
+    def test_check_pinned_image_reports_podman_exit_status(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        returncode: int,
+        available: bool,
+        failure_reason: str | None,
+        detail: str,
     ) -> None:
         from app.lean_sidecar.launcher import service as launcher_service
 
         monkeypatch.setattr(launcher_service, "PINNED_LEAN_IMAGE_DIGEST", DUMMY_DIGEST)
         monkeypatch.setattr(launcher_service, "_require_podman", lambda: "/usr/local/bin/podman")
-        completed = subprocess.CompletedProcess([], 1)
-        monkeypatch.setattr(launcher_service.subprocess, "run", lambda *args, **kwargs: completed)
-        readiness = check_pinned_image()
-
-        assert readiness.reference == f"{sidecar_config.LEAN_IMAGE_REPO}@{DUMMY_DIGEST}"
-        assert readiness.available is False
-        assert readiness.failure_reason == "missing"
-        assert readiness.detail == "Pinned LEAN image is not present in Podman's local image store."
-
-    def test_check_pinned_image_reports_podman_operational_failure_without_calling_it_missing(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from app.lean_sidecar.launcher import service as launcher_service
-
-        monkeypatch.setattr(launcher_service, "PINNED_LEAN_IMAGE_DIGEST", DUMMY_DIGEST)
-        monkeypatch.setattr(launcher_service, "_require_podman", lambda: "/usr/local/bin/podman")
-        completed = subprocess.CompletedProcess([], 125)
+        completed = subprocess.CompletedProcess([], returncode)
         monkeypatch.setattr(launcher_service.subprocess, "run", lambda *args, **kwargs: completed)
 
         readiness = check_pinned_image()
 
-        assert readiness.available is False
-        assert readiness.failure_reason == "check_failed"
-        assert "exit code 125" in readiness.detail
+        assert readiness.reference == f"{sidecar_config.LEAN_IMAGE_REPO}@{DUMMY_DIGEST}", "reference is the pinned digest"
+        assert readiness.available is available, "availability mirrors podman's local image check"
+        assert readiness.failure_reason == failure_reason, "failure reason separates missing from check_failed"
+        assert readiness.detail == detail, "detail names the podman outcome"
 
     def test_check_pinned_image_bounds_probe_below_the_diagnostics_timeout(
         self, monkeypatch: pytest.MonkeyPatch

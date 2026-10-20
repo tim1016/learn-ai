@@ -740,35 +740,35 @@ async def test_a_row_with_nothing_but_a_ticker_is_kept_with_every_other_cell_emp
 
 
 @respx.mock
-async def test_a_standard_row_exactly_as_the_vendor_sends_it_is_stored_whole_and_standard(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+@pytest.mark.parametrize(
+    "overrides",
+    [(), (("contract_type", "CALL"), ("exercise_style", "American"))],
+    ids=["a_standard_row_exactly_as_the_vendor_sends_it", "a_value_in_another_case_is_read_as_the_value_it_names"],
+)
+async def test_a_standard_row_is_stored_whole_and_standard_in_the_vendors_case_or_another(
+    overrides: tuple[tuple[str, str], ...], fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
     """The probed row: nine keys, and no ``additional_underlyings``. Absent means none."""
     probed = {
         "cfi": "OCASPS", "contract_type": "call", "exercise_style": "american", "expiration_date": "2025-06-13",
         "primary_exchange": "BATO", "shares_per_contract": 100, "strike_price": 375, "ticker": "O:SPY250613C00375000",
         "underlying_ticker": "SPY",
     }
-    assert "additional_underlyings" not in probed
-    _mock_one_page([probed])
+    assert "additional_underlyings" not in probed, "the probed row has no additional_underlyings key"
+    _mock_one_page([{**probed, **dict(overrides)}])
 
     await ensure_option_listing("SPY", AS_OF)
 
     listing = await _read()
-    assert listing is not None
+    assert listing is not None, "the captured listing reads back"
     [row] = listing.rows
-    assert row.has_additional_underlyings is False and row.standard is True
-    assert (row.strike_thousandths, row.exercise_style, row.shares_per_contract) == (375000, "american", 100)
-
-
-@respx.mock
-async def test_a_value_in_another_case_is_read_as_the_value_it_names(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
-    _mock_one_page([_row("O:SPY250613C00375000", 375, contract_type="CALL", exercise_style="American")])
-
-    await ensure_option_listing("SPY", AS_OF)
-
-    listing = await _read()
-    assert listing is not None
-    [row] = listing.rows
-    assert (row.contract_type, row.exercise_style, row.standard) == ("call", "american", True)
+    assert row.has_additional_underlyings is False and row.standard is True, "absent additional_underlyings means none"
+    assert (row.strike_thousandths, row.exercise_style, row.shares_per_contract) == (375000, "american", 100), (
+        "the row is stored whole"
+    )
+    assert (row.contract_type, row.exercise_style, row.standard) == ("call", "american", True), (
+        "a value is read as the value it names, whatever its case"
+    )
 
 
 @respx.mock
@@ -1026,17 +1026,25 @@ async def test_a_second_capture_reuses_the_complete_row_without_asking_the_vendo
 
 
 @respx.mock
-async def test_a_complete_row_whose_file_has_gone_is_fetched_again(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+async def test_a_complete_row_whose_file_has_gone_is_fetched_again_and_keeps_its_row_complete(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
     route = _mock_one_page(STANDARD_ROWS)
     first = await ensure_option_listing("SPY", AS_OF)
     (_raw_root(tmp_lake) / RELATIVE_PATH).unlink()
 
-    again = await ensure_option_listing("SPY", AS_OF)
+    again = await ensure_option_listing("SPY", AS_OF)  # the file went, so the same row is refreshed and published again
 
-    assert route.call_count == 2
-    assert again.failure is None and again.reused is False
-    assert first.record is not None and again.record is not None and again.record.id == first.record.id
-    assert (_raw_root(tmp_lake) / RELATIVE_PATH).is_file()
+    assert route.call_count == 2, "a complete row whose file has gone is fetched again"
+    assert again.failure is None and again.reused is False, "the refetch is a fresh capture, not a reuse"
+    assert first.record is not None and again.record is not None and again.record.id == first.record.id, (
+        "the refetch refreshes the same row"
+    )
+    assert (_raw_root(tmp_lake) / RELATIVE_PATH).is_file(), "the file is published again"
+    assert first.record is not None and again.record is not None and again.record.id == first.record.id, (
+        "a listing asked for again under the same format keeps its row: the same row id"
+    )
+    assert fake_catalog.rows[again.record.id]["status"] == "complete", "the refreshed row stays complete"
 
 
 @respx.mock
@@ -1287,18 +1295,6 @@ async def test_reusing_a_listing_with_nothing_to_clean_up_changes_no_row(
     assert {row_id: row["status"] for row_id, row in fake_catalog.rows.items()} == before
 
 
-@respx.mock
-async def test_a_listing_asked_for_again_under_the_same_format_keeps_its_row_complete(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
-    _mock_one_page(STANDARD_ROWS)
-    first = await ensure_option_listing("SPY", AS_OF)
-    (_raw_root(tmp_lake) / RELATIVE_PATH).unlink()
-
-    again = await ensure_option_listing("SPY", AS_OF)  # the file went, so the same row is refreshed and published again
-
-    assert first.record is not None and again.record is not None and again.record.id == first.record.id
-    assert fake_catalog.rows[again.record.id]["status"] == "complete"
-
-
 # ── Reading is only through admission ───────────────────────────────────
 
 
@@ -1383,18 +1379,16 @@ async def test_a_lake_root_that_is_not_a_raw_lake_root_is_refused_rather_than_re
 # ── The file itself ─────────────────────────────────────────────────────
 
 
-def test_building_the_file_refuses_a_duplicate_ticker_rather_than_dropping_one() -> None:
-    contract = _vendor_contract("O:SPY250613C00375000", "375")
+@pytest.mark.parametrize(
+    "tickers",
+    [("O:SPY250613C00375000", "O:SPY250613C00375000"), ("O:SPY250613C00375000", "SPY250613C00375000")],
+    ids=["refuses_a_duplicate_ticker_rather_than_dropping_one", "treats_o_x_and_x_as_one_ticker"],
+)
+def test_building_the_file_refuses_a_duplicate_ticker(tickers: tuple[str, str]) -> None:
+    contracts = [_vendor_contract(ticker, "375") for ticker in tickers]
 
     with pytest.raises(OptionListingFileError, match="duplicate"):
-        build_option_listing_zip_bytes("SPY", AS_OF, [contract, contract])
-
-
-def test_building_the_file_treats_o_x_and_x_as_one_ticker() -> None:
-    with pytest.raises(OptionListingFileError, match="duplicate"):
-        build_option_listing_zip_bytes(
-            "SPY", AS_OF, [_vendor_contract("O:SPY250613C00375000", "375"), _vendor_contract("SPY250613C00375000", "375")]
-        )
+        build_option_listing_zip_bytes("SPY", AS_OF, contracts)
 
 
 def test_a_strike_finer_than_a_thousandth_is_stored_empty_not_rounded() -> None:
@@ -1534,21 +1528,22 @@ async def test_the_captured_dates_include_both_ends_of_the_range_and_nothing_out
 
 
 @respx.mock
-async def test_a_range_of_one_day_answers_for_that_day_alone(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
+async def test_a_range_of_one_day_answers_for_that_day_alone_and_a_range_outside_what_was_captured_is_empty(
+    fake_catalog: FakeCatalog, tmp_lake: Path
+) -> None:
     _mock_one_page(STANDARD_ROWS)
     await ensure_option_listing("SPY", AS_OF)
 
-    assert await captured_listing_dates("SPY", AS_OF, AS_OF) == (AS_OF,)
-    assert await captured_listing_dates("SPY", date(2025, 6, 12), date(2025, 6, 12)) == ()
-    assert await captured_listing_dates("SPY", date(2025, 6, 16), date(2025, 6, 16)) == ()
-
-
-@respx.mock
-async def test_a_range_outside_what_was_captured_is_empty(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
-    _mock_one_page(STANDARD_ROWS)
-    await ensure_option_listing("SPY", AS_OF)
-
-    assert await captured_listing_dates("SPY", date(2025, 7, 1), date(2025, 7, 31)) == ()
+    assert await captured_listing_dates("SPY", AS_OF, AS_OF) == (AS_OF,), "a range of one day answers for that day"
+    assert await captured_listing_dates("SPY", date(2025, 6, 12), date(2025, 6, 12)) == (), (
+        "a range of the day before the captured day is empty"
+    )
+    assert await captured_listing_dates("SPY", date(2025, 6, 16), date(2025, 6, 16)) == (), (
+        "a range of the day after the captured day is empty"
+    )
+    assert await captured_listing_dates("SPY", date(2025, 7, 1), date(2025, 7, 31)) == (), (
+        "a range outside what was captured is empty"
+    )
 
 
 # ── Listing rows stay out of every stock answer ─────────────────────────

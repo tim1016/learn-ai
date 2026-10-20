@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import pytest
 
 from app.services.dataset_service import _tag_session_column, filter_session
 
@@ -68,14 +69,22 @@ def test_spring_forward_rth_filter():
     assert len(filtered) == 0, "2024-03-10 is a Sunday — no RTH bars expected"
 
 
-def test_spring_forward_monday_rth_filter():
-    """RTH filter on 2024-03-11 (first business day after spring forward).
-
-    Now in EDT: 9:30 EDT = 13:30 UTC, 16:00 EDT = 20:00 UTC.
-    Before DST, 9:30 EST = 14:30 UTC, 16:00 EST = 21:00 UTC.
-    This test verifies the filter uses 13:30 UTC (EDT) not 14:30 UTC (EST).
-    """
-    df = _make_minute_bars("2024-03-11", 12, 21)
+@pytest.mark.parametrize(
+    ("date_str", "end_hour_utc"),
+    [
+        # Now in EDT: 9:30 EDT = 13:30 UTC, 16:00 EDT = 20:00 UTC.
+        # Before DST, 9:30 EST = 14:30 UTC, 16:00 EST = 21:00 UTC.
+        # Verifies the filter uses 13:30 UTC (EDT) not 14:30 UTC (EST).
+        pytest.param("2024-03-11", 21, id="spring_forward_monday_first_business_day"),
+        # Now in EST: 9:30 EST = 14:30 UTC, 16:00 EST = 21:00 UTC.
+        # Before DST change, 9:30 EDT = 13:30 UTC.
+        # Verifies the filter uses 14:30 UTC (EST) not 13:30 UTC (EDT).
+        pytest.param("2024-11-04", 22, id="fall_back_first_business_day"),
+    ],
+)
+def test_rth_filter_on_first_business_day_after_clock_change(date_str, end_hour_utc):
+    """RTH filter on the first business day after a clock change keeps exactly 9:30-16:00 ET."""
+    df = _make_minute_bars(date_str, 12, end_hour_utc)
 
     filtered = filter_session(df, "rth")
 
@@ -87,28 +96,6 @@ def test_spring_forward_monday_rth_filter():
     assert (time_mins < 16 * 60).all(), "All bars should be before 16:00 ET"
 
     # Should have 390 RTH minutes (9:30 to 16:00 = 6.5 hours = 390 minutes)
-    assert len(filtered) == 390, f"Expected 390 RTH bars, got {len(filtered)}"
-
-
-def test_fall_back_rth_filter():
-    """RTH filter on 2024-11-04 (first business day after fall back).
-
-    Now in EST: 9:30 EST = 14:30 UTC, 16:00 EST = 21:00 UTC.
-    Before DST change, 9:30 EDT = 13:30 UTC.
-    This test verifies the filter uses 14:30 UTC (EST) not 13:30 UTC (EDT).
-    """
-    df = _make_minute_bars("2024-11-04", 12, 22)
-
-    filtered = filter_session(df, "rth")
-
-    dt_utc = pd.to_datetime(filtered["timestamp"], unit="ms", utc=True)
-    dt_et = dt_utc.dt.tz_convert(_ET)
-
-    time_mins = dt_et.dt.hour * 60 + dt_et.dt.minute
-    assert (time_mins >= 9 * 60 + 30).all(), "All bars should be at or after 9:30 ET"
-    assert (time_mins < 16 * 60).all(), "All bars should be before 16:00 ET"
-
-    # Should have 390 RTH minutes
     assert len(filtered) == 390, f"Expected 390 RTH bars, got {len(filtered)}"
 
 

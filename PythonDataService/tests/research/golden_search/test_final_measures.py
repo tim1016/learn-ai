@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fractions import Fraction
+from typing import Any
 
 import pytest
 
@@ -10,19 +11,22 @@ from app.research.golden_search.final_measures import annualized_return, final_c
 from tests._helpers.golden_search import metrics
 
 
-def test_a_return_over_two_trading_years_is_its_square_root_rate_and_over_half_a_year_its_square() -> None:
-    # 1.21 over two years is 10% a year; 10% over half a year is 21% a year.
-    assert annualized_return(metrics(1.0, total_return=0.21).as_dict(), Fraction(2)) == pytest.approx(0.1, abs=1e-9, rel=0)
-    assert annualized_return(metrics(1.0, total_return=0.1).as_dict(), Fraction(1, 2)) == pytest.approx(0.21, abs=1e-9, rel=0)
-
-
-def test_a_wiped_out_account_loses_all_of_it_a_year_and_a_failed_missing_or_impossible_run_has_no_rate() -> None:
-    # 0^(1/2) − 1: the whole account lost is −100% a year over any span.
-    assert annualized_return(metrics(1.0, total_return=-1.0).as_dict(), Fraction(2)) == pytest.approx(-1.0, abs=1e-9, rel=0)
-    assert annualized_return(metrics(1.0, total_return=-1.2).as_dict(), Fraction(1)) is None
-    assert annualized_return(metrics(1.0, total_return=None).as_dict(), Fraction(1)) is None
-    assert annualized_return(metrics(None, total_return=None, status="failed").as_dict(), Fraction(1)) is None
-    assert annualized_return(None, Fraction(1)) is None
+@pytest.mark.parametrize(
+    ("observed", "years", "rate"),
+    [
+        # 1.21 over two years is 10% a year; 10% over half a year is 21% a year.
+        pytest.param(metrics(1.0, total_return=0.21), Fraction(2), pytest.approx(0.1, abs=1e-9, rel=0), id="a-return-over-two-trading-years-is-its-square-root-rate"),
+        pytest.param(metrics(1.0, total_return=0.1), Fraction(1, 2), pytest.approx(0.21, abs=1e-9, rel=0), id="a-return-over-half-a-year-is-its-square"),
+        # 0^(1/2) − 1: the whole account lost is −100% a year over any span.
+        pytest.param(metrics(1.0, total_return=-1.0), Fraction(2), pytest.approx(-1.0, abs=1e-9, rel=0), id="a-wiped-out-account-loses-all-of-it-a-year"),
+        pytest.param(metrics(1.0, total_return=-1.2), Fraction(1), None, id="an-impossible-run-has-no-rate"),
+        pytest.param(metrics(1.0, total_return=None), Fraction(1), None, id="a-missing-return-has-no-rate"),
+        pytest.param(metrics(None, total_return=None, status="failed"), Fraction(1), None, id="a-failed-run-has-no-rate"),
+        pytest.param(None, Fraction(1), None, id="a-missing-run-has-no-rate"),
+    ],
+)
+def test_annualized_return_is_the_yearly_rate_of_a_return_over_its_span_and_none_for_a_failed_missing_or_impossible_run(observed: Any, years: Fraction, rate: Any) -> None:
+    assert annualized_return(None if observed is None else observed.as_dict(), years) == rate, "the yearly rate of the run over its span"
 
 
 def test_each_measure_sits_beside_its_development_value_with_the_change() -> None:

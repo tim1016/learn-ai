@@ -120,17 +120,17 @@ class TestReplicateExpiry:
         expected_forward = spot * math.exp(rate * T_years)
         assert abs(rep.forward - expected_forward) < 0.5
 
-    def test_too_few_strikes_raises(self):
-        spot = 100.0
-        T = 30 / 365.0
-        chain = _bs_chain(spot=spot, strikes=[100.0], T_years=T, rate=0.05, sigma=0.20)
-        with pytest.raises(ValueError, match="at least 3"):
-            replicate_expiry_variance(chain, rate=0.05, T_years=T)
-
-    def test_zero_T_raises(self):
-        chain = _bs_chain(spot=100, strikes=[90, 100, 110], T_years=30 / 365.0, rate=0.05, sigma=0.20)
-        with pytest.raises(ValueError, match="T_years"):
-            replicate_expiry_variance(chain, rate=0.05, T_years=0)
+    @pytest.mark.parametrize(
+        ("strikes", "replicated_T_years", "match"),
+        [
+            pytest.param((100.0,), 30 / 365.0, "at least 3", id="too_few_strikes_raises"),
+            pytest.param((90, 100, 110), 0, "T_years", id="zero_T_raises"),
+        ],
+    )
+    def test_invalid_input_raises(self, strikes, replicated_T_years, match):
+        chain = _bs_chain(spot=100.0, strikes=list(strikes), T_years=30 / 365.0, rate=0.05, sigma=0.20)
+        with pytest.raises(ValueError, match=match):
+            replicate_expiry_variance(chain, rate=0.05, T_years=replicated_T_years)
 
     def test_zero_bid_walk_truncates_wings(self):
         # 16 strikes spanning 60–140. At σ=0.20, T=30d, deep-OTM puts (K≤75) and
@@ -659,7 +659,7 @@ class TestSingleStrikeDominanceGate:
         )
         return chain
 
-    def test_gate_drops_dominant_strike_and_recomputes(self):
+    def test_gate_drops_dominant_strike_and_recomputes_unless_disabled(self):
         spot = 100.0
         sigma_true = 0.20
         T_years = 30 / 365.0
@@ -675,34 +675,22 @@ class TestSingleStrikeDominanceGate:
             dominance_gate_threshold=0.50,
             dominance_gate_max_iterations=2,
         )
-
-        # Gate fired at least once — and the post-gate share is below
-        # threshold (the recompute should have flattened the dominator).
-        assert prov_gated.single_strike_dropped >= 1
-        assert prov_gated.single_strike_hard_failed is False
-        assert prov_gated.max_single_strike_share <= 0.50
-
-    def test_gate_disabled_returns_original_share(self):
-        spot = 100.0
-        sigma_true = 0.20
-        T_years = 30 / 365.0
-        rate = 0.05
-        strikes = [60, 65, 70, 75, 80, 85, 90, 92.5, 95, 97.5, 100,
-                   102.5, 105, 107.5, 110, 115, 120, 125, 130, 135, 140]
-        inflated = self._inflated_chain(
-            spot, sigma_true, T_years, rate, strikes, target_strike=95
-        )
-
         _, prov_ungated = replicate_expiry_variance_with_provenance(
             inflated, rate=rate, T_years=T_years,
             dominance_gate_threshold=None,
         )
 
+        # Gate fired at least once — and the post-gate share is below
+        # threshold (the recompute should have flattened the dominator).
+        assert prov_gated.single_strike_dropped >= 1, "gate drops the dominant strike at least once"
+        assert prov_gated.single_strike_hard_failed is False, "gate does not hard-fail when it can recompute"
+        assert prov_gated.max_single_strike_share <= 0.50, "post-gate share is below threshold"
+
         # Gate disabled — original (un-mitigated) share leaks through and
         # it exceeds threshold.
-        assert prov_ungated.single_strike_dropped == 0
-        assert prov_ungated.single_strike_hard_failed is False
-        assert prov_ungated.max_single_strike_share > 0.50
+        assert prov_ungated.single_strike_dropped == 0, "disabled gate drops nothing"
+        assert prov_ungated.single_strike_hard_failed is False, "disabled gate never hard-fails"
+        assert prov_ungated.max_single_strike_share > 0.50, "disabled gate returns the original share above threshold"
 
     def test_gate_hard_fails_when_floor_blocks_more_drops(self):
         # Tiny chain: dropping below the strike floor should hard-fail

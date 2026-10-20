@@ -24,26 +24,20 @@ def _bar(hour: int, minute: int, close: float) -> MinuteTradeBar:
     )
 
 
-def test_quote_zip_named_correctly():
+def test_quote_zip_is_named_correctly_and_its_csv_has_bid_equal_ask_with_zero_size():
     bars = [_bar(9, 30, 500.00)]
     payload = build_minute_quote_zip_bytes("SPY", "20240520", bars)
     with zipfile.ZipFile(io.BytesIO(payload)) as zf:
-        assert zf.namelist() == ["20240520_spy_minute_quote.csv"]
-
-
-def test_quote_csv_bid_equals_ask_zero_size():
-    bars = [_bar(9, 30, 500.00)]
-    payload = build_minute_quote_zip_bytes("SPY", "20240520", bars)
-    with zipfile.ZipFile(io.BytesIO(payload)) as zf:
+        assert zf.namelist() == ["20240520_spy_minute_quote.csv"], "quote zip is named correctly"
         csv = zf.read("20240520_spy_minute_quote.csv").decode("ascii")
     cols = csv.strip().split(",")
     # 11 columns: ms + 5 bid + 5 ask.
-    assert len(cols) == 11
+    assert len(cols) == 11, "11 columns: ms + 5 bid + 5 ask"
     # bid_close == ask_close == trade_close at deci-cent scale.
-    assert int(cols[4]) == int(cols[9]) == 5_000_000
+    assert int(cols[4]) == int(cols[9]) == 5_000_000, "bid_close == ask_close == trade_close at deci-cent scale"
     # bid_size = ask_size = 0.
-    assert int(cols[5]) == 0
-    assert int(cols[10]) == 0
+    assert int(cols[5]) == 0, "bid_size is 0"
+    assert int(cols[10]) == 0, "ask_size is 0"
 
 
 def test_quote_zip_is_deterministic():

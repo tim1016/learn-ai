@@ -63,25 +63,20 @@ def test_aggregate_minute_to_daily_two_days_two_aggregates():
     assert aggs[1].trading_date.strftime("%Y%m%d") == "20240521"
 
 
-def test_build_daily_zip_emits_csv_with_correct_name():
+def test_build_daily_zip_emits_csv_with_correct_name_and_is_deterministic():
     bars = [_bar("2024-05-20", 9, 30, 500.00)]
     aggs = aggregate_minute_to_daily(bars)
     payload = build_daily_zip_bytes(symbol="SPY", aggregates=aggs)
     with zipfile.ZipFile(io.BytesIO(payload)) as zf:
-        assert zf.namelist() == ["spy.csv"]
+        assert zf.namelist() == ["spy.csv"], "daily zip emits a csv with the correct name"
         csv = zf.read("spy.csv").decode("ascii")
     # One row, comma-separated, deci-cent prices.
     cols = csv.strip().split(",")
-    assert cols[0] == "20240520 00:00"
-    assert int(cols[4]) == 5_000_000  # close = 500.00 * 10000
-
-
-def test_build_daily_zip_is_deterministic():
-    bars = [_bar("2024-05-20", 9, 30, 500.00)]
-    aggs = aggregate_minute_to_daily(bars)
+    assert cols[0] == "20240520 00:00", "the row is dated the trading day at midnight"
+    assert int(cols[4]) == 5_000_000, "close = 500.00 * 10000"
     a = build_daily_zip_bytes("SPY", aggs)
     b = build_daily_zip_bytes("SPY", aggs)
-    assert a == b
+    assert a == b, "building the same aggregates twice gives identical bytes"
 
 
 # ── rth_daily_closes ──────────────────────────────────────────────────────

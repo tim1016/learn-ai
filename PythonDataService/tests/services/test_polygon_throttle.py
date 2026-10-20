@@ -7,6 +7,8 @@ subject — we don't hit Polygon's SDK at all.
 
 from __future__ import annotations
 
+import pytest
+
 from app.services.polygon_client import _PolygonThrottle
 
 
@@ -32,26 +34,22 @@ def _install_fake_clock(monkeypatch, clock: FakeClock) -> None:
     monkeypatch.setattr("app.services.polygon_client.time.sleep", clock.sleep)
 
 
-def test_throttle_disabled_when_max_is_zero(monkeypatch):
+@pytest.mark.parametrize(
+    ("max_per_min", "requests"),
+    [
+        pytest.param(0, 50, id="disabled_when_max_is_zero"),
+        pytest.param(5, 5, id="allows_first_n_requests_without_sleeping"),
+    ],
+)
+def test_throttle_does_not_sleep_within_its_allowance(monkeypatch, max_per_min, requests):
     clock = FakeClock()
     _install_fake_clock(monkeypatch, clock)
-    throttle = _PolygonThrottle(max_per_min=0)
+    throttle = _PolygonThrottle(max_per_min=max_per_min)
 
-    for _ in range(50):
+    for _ in range(requests):
         throttle.acquire()
 
-    assert clock.sleeps == [], "max=0 means no pacing, no sleeps"
-
-
-def test_throttle_allows_first_n_requests_without_sleeping(monkeypatch):
-    clock = FakeClock()
-    _install_fake_clock(monkeypatch, clock)
-    throttle = _PolygonThrottle(max_per_min=5)
-
-    for _ in range(5):
-        throttle.acquire()
-
-    assert clock.sleeps == [], "first 5 requests are the allowance — no pacing"
+    assert clock.sleeps == [], "within the allowance (max=0 means unlimited) there is no pacing, no sleeps"
 
 
 def test_throttle_paces_sixth_request_to_next_window(monkeypatch):

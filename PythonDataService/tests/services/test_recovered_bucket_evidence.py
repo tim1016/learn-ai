@@ -17,6 +17,8 @@ from __future__ import annotations
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.engine.strategy.signal_program import EvaluationMode, EvaluationTrace
 from app.marketdata.feed import MarketDataBar
@@ -118,8 +120,17 @@ def _ledger(tmp_path: Path, bars: list[MarketDataBar]) -> SourceBarLedger:
     return ledger
 
 
-def test_a_recovered_buckets_evidence_is_its_last_arrived_minute(tmp_path: Path) -> None:
-    ledger = _ledger(tmp_path, [_minute(_BUCKET_START_MS + (i + 1) * 60_000) for i in range(14)])
+@pytest.mark.parametrize(
+    ("minutes_arrived", "evidence_end_ms"),
+    [
+        pytest.param(14, _LAST_MINUTE_END_MS, id="a_recovered_buckets_evidence_is_its_last_arrived_minute"),
+        pytest.param(15, _BUCKET_CLOSE_MS, id="a_complete_buckets_evidence_is_its_closing_minute"),
+    ],
+)
+def test_a_buckets_decision_evidence_is_the_last_minute_it_holds(
+    tmp_path: Path, minutes_arrived: int, evidence_end_ms: int
+) -> None:
+    ledger = _ledger(tmp_path, [_minute(_BUCKET_START_MS + (i + 1) * 60_000) for i in range(minutes_arrived)])
     evaluation = _recovered_evaluation(_BUCKET_CLOSE_MS)
     binding = _binding()
 
@@ -128,27 +139,23 @@ def test_a_recovered_buckets_evidence_is_its_last_arrived_minute(tmp_path: Path)
     )
 
     # The bucket's own last minute — not None, and not the firing bar either.
-    assert retained is not None
-    assert retained.end_ms == _LAST_MINUTE_END_MS
-    assert evidence.bar_ref == retained.bar_ref
-    assert evidence.decision_bar_close_ms == _BUCKET_CLOSE_MS
+    assert retained is not None, "the bucket's evidence is a retained minute"
+    assert retained.end_ms == evidence_end_ms, "the evidence is the newest retained close at or before the boundary"
+    assert evidence.bar_ref == retained.bar_ref, "the evidence refers to that retained minute"
+    assert evidence.decision_bar_close_ms == _BUCKET_CLOSE_MS, "the decision close stays the bucket boundary"
 
 
-def test_a_complete_buckets_evidence_is_its_closing_minute(tmp_path: Path) -> None:
-    ledger = _ledger(tmp_path, [_minute(_BUCKET_START_MS + (i + 1) * 60_000) for i in range(15)])
-    evaluation = _recovered_evaluation(_BUCKET_CLOSE_MS)
-    binding = _binding()
-
-    retained, _ = _decision_bar_evidence(
-        binding, evaluation, evaluation.intents[0], source_bars=ledger, continuity=None
+@pytest.mark.parametrize(
+    ("close", "volume", "expected_price"),
+    [
+        pytest.param("501.30", 900, Decimal("501.30"), id="the_money_counts_from_the_recovered_minute"),
+        pytest.param("500.10", 0, None, id="the_money_refuses_a_recovered_minute_with_no_trade"),
+    ],
+)
+def test_the_money_of_a_recovered_bucket(tmp_path: Path, close: str, volume: int, expected_price: Decimal | None) -> None:
+    ledger = _ledger(
+        tmp_path, [_minute(_BUCKET_START_MS + (i + 1) * 60_000, close=close, volume=volume) for i in range(14)]
     )
-
-    assert retained is not None
-    assert retained.end_ms == _BUCKET_CLOSE_MS
-
-
-def test_the_money_counts_from_the_recovered_minute(tmp_path: Path) -> None:
-    ledger = _ledger(tmp_path, [_minute(_BUCKET_START_MS + (i + 1) * 60_000, close="501.30") for i in range(14)])
     evaluation = _recovered_evaluation(_BUCKET_CLOSE_MS)
     binding = _binding()
 
@@ -161,21 +168,4 @@ def test_the_money_counts_from_the_recovered_minute(tmp_path: Path) -> None:
         source_bars=ledger,
     )
 
-    assert price == Decimal("501.30")
-
-
-def test_the_money_refuses_a_recovered_minute_with_no_trade(tmp_path: Path) -> None:
-    ledger = _ledger(tmp_path, [_minute(_BUCKET_START_MS + (i + 1) * 60_000, volume=0) for i in range(14)])
-    evaluation = _recovered_evaluation(_BUCKET_CLOSE_MS)
-    binding = _binding()
-
-    price = _the_money(
-        binding,
-        evaluation,
-        evaluation.intents[0],
-        priced=None,  # type: ignore[arg-type]
-        pricing=None,
-        source_bars=ledger,
-    )
-
-    assert price is None
+    assert price == expected_price, "the strike anchor counts from the recovered minute, and only if it traded"

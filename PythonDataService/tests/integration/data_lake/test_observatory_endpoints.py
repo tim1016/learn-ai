@@ -74,7 +74,7 @@ def _ms(day: date) -> int:
 # silently read "missing" for data that actually existed under the other
 # root. A default that reads empty is indistinguishable from genuinely
 # absent data, so the parameter is now required with no default at all
-# (see test_coverage_422_when_price_adjustment_mode_omitted below). This
+# (see test_price_adjustment_mode_rejected_with_422 below). This
 # constant is just a convenient, explicit choice for tests that don't care
 # which mode they're pinning.
 _PRICE_MODE = "raw"
@@ -339,7 +339,23 @@ async def test_router_loop_and_engine_loop_each_get_their_own_pool(monkeypatch: 
 # ---------------------------------------------------------------------------
 
 
-async def test_coverage_422_when_price_adjustment_mode_omitted(make_data_lake_app):
+@pytest.mark.parametrize(
+    "url",
+    [
+        pytest.param(
+            f"/api/data-lake/coverage?symbol=SPY&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
+            id="coverage_mode_omitted_1890",
+        ),
+        pytest.param(
+            f"/api/data-lake/coverage?symbol=SPY&price_adjustment_mode=adjusted"
+            f"&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
+            id="coverage_mode_invalid",
+        ),
+        pytest.param("/api/data-lake/run-readiness", id="run_readiness_mode_omitted"),
+        pytest.param("/api/data-lake/storage-summary?price_adjustment_mode=nonsense", id="storage_summary_mode_unknown"),
+    ],
+)
+async def test_price_adjustment_mode_rejected_with_422(url: str, make_data_lake_app):
     """#1890: the endpoint must not silently default `price_adjustment_mode`.
 
     Before this fix, an omitted `price_adjustment_mode` fell back to "raw" —
@@ -355,32 +371,41 @@ async def test_coverage_422_when_price_adjustment_mode_omitted(make_data_lake_ap
     query params elsewhere on this same endpoint) are already validated: a
     request that doesn't even parse never reaches the router's own manual
     checks.
+
+    An out-of-vocabulary mode must 422, not silently coerce to a known one
+    (an unrecognised storage-summary mode is never a silent whole-lake
+    answer). Readiness is a property of one mode's tree; an unqualified
+    answer would be about neither.
     """
     app = make_data_lake_app(include_data_lake=True)
-    status_code, body = await _get(
-        app,
-        f"/api/data-lake/coverage?symbol=SPY&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
+    status_code, body = await _get(app, url)
+    assert status_code == 422, "an omitted or unrecognised price_adjustment_mode is a 422"
+    assert isinstance(body["detail"], list), "FastAPI's structural 422 carries a list-shaped detail"
+    assert any("price_adjustment_mode" in error.get("loc", []) for error in body["detail"]), (
+        "an error locates the price_adjustment_mode query parameter"
     )
-    assert status_code == 422
-    assert isinstance(body["detail"], list)
-    assert any("price_adjustment_mode" in error.get("loc", []) for error in body["detail"])
 
 
-async def test_coverage_422_when_price_adjustment_mode_invalid(make_data_lake_app):
-    """An out-of-vocabulary mode must 422, not silently coerce to a known one."""
-    app = make_data_lake_app(include_data_lake=True)
-    status_code, body = await _get(
-        app,
-        f"/api/data-lake/coverage?symbol=SPY&price_adjustment_mode=adjusted"
-        f"&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
-    )
-    assert status_code == 422
-    assert isinstance(body["detail"], list)
-    assert any("price_adjustment_mode" in error.get("loc", []) for error in body["detail"])
-
-
-async def test_coverage_forwards_the_explicit_price_adjustment_mode(
-    monkeypatch: pytest.MonkeyPatch, make_data_lake_app
+@pytest.mark.parametrize(
+    ("query", "scope_key", "expected"),
+    [
+        pytest.param(
+            "price_adjustment_mode=polygon_split_adjusted",
+            "price_adjustment_mode",
+            "polygon_split_adjusted",
+            id="explicit_price_adjustment_mode_forwarded",
+        ),
+        pytest.param(f"data_type=trade&price_adjustment_mode={_PRICE_MODE}", "provider", "polygon", id="trade_derives_polygon_provider"),
+        pytest.param(
+            f"data_type=quote&price_adjustment_mode={_PRICE_MODE}",
+            "provider",
+            "learn_ai_derived",
+            id="quote_derives_learn_ai_derived_provider_1845",
+        ),
+    ],
+)
+async def test_coverage_forwards_the_resolved_scope_to_the_catalog(
+    query: str, scope_key: str, expected: str, monkeypatch: pytest.MonkeyPatch, make_data_lake_app
 ):
     """A caller who names `polygon_split_adjusted` explicitly must get exactly
     that root's coverage back — never a silent read of `raw` instead.
@@ -388,6 +413,17 @@ async def test_coverage_forwards_the_explicit_price_adjustment_mode(
     Captures the kwargs `select_artifact_coverage` was actually called with,
     which is the one place a stale default could still leak in even after
     the request-level 422 above closes the "omitted" gap.
+
+    #1845 P1-2: quote coverage was unfindable.
+
+    expand_required_artifacts catalogs quote minute-bars under
+    Provider='learn_ai_derived' (they're synthesized from same-day trade
+    bytes, not fetched from Polygon directly) — but the coverage endpoint
+    used to accept only provider="polygon" as a query param and feed it
+    straight into the filter, so a quote artifact could never match. The
+    endpoint no longer takes a provider parameter at all: it derives one
+    from data_type via provider_for_data_type, the same function
+    expand_required_artifacts calls.
     """
     captured: dict[str, object] = {}
 
@@ -400,13 +436,12 @@ async def test_coverage_forwards_the_explicit_price_adjustment_mode(
     app = make_data_lake_app(include_data_lake=True)
     status_code, body = await _get(
         app,
-        f"/api/data-lake/coverage?symbol=SPY&price_adjustment_mode=polygon_split_adjusted"
-        f"&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
+        f"/api/data-lake/coverage?symbol=SPY&{query}&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
     )
 
-    assert status_code == 200
-    assert captured["price_adjustment_mode"] == "polygon_split_adjusted"
-    assert body["price_adjustment_mode"] == "polygon_split_adjusted"
+    assert status_code == 200, "the coverage request is accepted"
+    assert captured[scope_key] == expected, "select_artifact_coverage is called with the resolved scope"
+    assert body[scope_key] == expected, "the response echoes the resolved scope"
 
 
 async def test_coverage_keys_days_by_canonical_calendar_sessions_only(monkeypatch: pytest.MonkeyPatch, make_data_lake_app):
@@ -634,54 +669,6 @@ async def test_run_readiness_flags_the_sessions_missing_between_a_symbols_first_
     assert qqq["fill_first_trading_date_ms"] == session_open_ms_utc(hole[0])
     assert qqq["fill_last_trading_date_ms"] == session_open_ms_utc(hole[-1])
     assert (spy["gap_session_count"], spy["fill_first_trading_date_ms"]) == (0, None)
-
-
-async def test_run_readiness_422_when_price_adjustment_mode_omitted(make_data_lake_app):
-    """Readiness is a property of one mode's tree; an unqualified answer would be about neither."""
-    app = make_data_lake_app(include_data_lake=True)
-    status_code, _ = await _get(app, "/api/data-lake/run-readiness")
-    assert status_code == 422
-
-
-@pytest.mark.parametrize(
-    ("data_type", "expected_provider"),
-    [
-        ("trade", "polygon"),
-        ("quote", "learn_ai_derived"),
-    ],
-)
-async def test_coverage_derives_provider_from_data_type(
-    data_type: str, expected_provider: str, monkeypatch: pytest.MonkeyPatch, make_data_lake_app
-):
-    """#1845 P1-2: quote coverage was unfindable.
-
-    expand_required_artifacts catalogs quote minute-bars under
-    Provider='learn_ai_derived' (they're synthesized from same-day trade
-    bytes, not fetched from Polygon directly) — but the coverage endpoint
-    used to accept only provider="polygon" as a query param and feed it
-    straight into the filter, so a quote artifact could never match. The
-    endpoint no longer takes a provider parameter at all: it derives one
-    from data_type via provider_for_data_type, the same function
-    expand_required_artifacts calls.
-    """
-    captured: dict[str, object] = {}
-
-    async def _capturing_coverage(**kwargs) -> list[ArtifactCoverageRow]:
-        captured.update(kwargs)
-        return []
-
-    monkeypatch.setattr(catalog_client, "select_artifact_coverage", _capturing_coverage)
-
-    app = make_data_lake_app(include_data_lake=True)
-    status_code, body = await _get(
-        app,
-        f"/api/data-lake/coverage?symbol=SPY&data_type={data_type}"
-        f"&price_adjustment_mode={_PRICE_MODE}&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
-    )
-
-    assert status_code == 200
-    assert captured["provider"] == expected_provider
-    assert body["provider"] == expected_provider
 
 
 async def test_coverage_window_accepts_any_anchor_inside_the_et_day(
@@ -1149,10 +1136,3 @@ async def test_storage_summary_forwards_the_price_adjustment_mode(
     assert status_code == 200
     assert seen == {"kinds": None, "spans": None}
     assert seen_data_type == {"spans": None}
-
-
-async def test_storage_summary_rejects_an_unknown_price_adjustment_mode(make_data_lake_app):
-    """An unrecognised mode is a 422, never a silent whole-lake answer."""
-    app = make_data_lake_app(include_data_lake=True)
-    status_code, _ = await _get(app, "/api/data-lake/storage-summary?price_adjustment_mode=nonsense")
-    assert status_code == 422

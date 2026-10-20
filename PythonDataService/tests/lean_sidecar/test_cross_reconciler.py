@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
+import pytest
+
 from app.lean_sidecar.cross_reconciler import (
     CrossReconciliationTolerances,
     compare_cross_engine,
@@ -146,54 +148,79 @@ class TestCleanPath:
 
 
 class TestDecisionMismatch:
-    def test_only_engine_has_fill(self) -> None:
-        out = compare_cross_engine([], [_engine_fill()])
-        assert out.divergent_count == 1
-        assert out.gating_divergent_count == 1
-        assert out.passed is False
-        d = out.divergences[0]
-        assert d.category is DivergenceCategory.DECISION_MISMATCH
-        assert d.lean_fill is None
-        assert d.engine_fill is not None
+    def test_a_fill_on_only_one_side_is_a_decision_mismatch(self) -> None:
+        only_engine = compare_cross_engine([], [_engine_fill()])
+        assert only_engine.divergent_count == 1, "only the engine has a fill: one divergence"
+        assert only_engine.gating_divergent_count == 1, "only the engine has a fill: the divergence gates"
+        assert only_engine.passed is False, "only the engine has a fill: the report fails"
+        d = only_engine.divergences[0]
+        assert d.category is DivergenceCategory.DECISION_MISMATCH, "only the engine has a fill: decision mismatch"
+        assert d.lean_fill is None, "only the engine has a fill: the row has no LEAN fill"
+        assert d.engine_fill is not None, "only the engine has a fill: the row carries the engine fill"
 
-    def test_only_lean_has_fill(self) -> None:
-        out = compare_cross_engine([_lean_fill()], [])
-        assert out.divergent_count == 1
-        assert out.divergences[0].category is DivergenceCategory.DECISION_MISMATCH
-        assert out.divergences[0].lean_fill is not None
-        assert out.divergences[0].engine_fill is None
+        only_lean = compare_cross_engine([_lean_fill()], [])
+        assert only_lean.divergent_count == 1, "only LEAN has a fill: one divergence"
+        assert only_lean.divergences[0].category is DivergenceCategory.DECISION_MISMATCH, (
+            "only LEAN has a fill: decision mismatch"
+        )
+        assert only_lean.divergences[0].lean_fill is not None, "only LEAN has a fill: the row carries the LEAN fill"
+        assert only_lean.divergences[0].engine_fill is None, "only LEAN has a fill: the row has no engine fill"
 
 
 class TestQuantityMismatch:
-    def test_different_quantities_emit_quantity_mismatch(self) -> None:
+    @pytest.mark.parametrize(
+        ("lean_quantity", "engine_quantity"),
+        [
+            (100.0, 200),
+            # Review-fix (P2.8): int-truncating LEAN's float quantity hides
+            # fractional drift. Both sides should compare on Decimal-typed
+            # quantities. LEAN reports 100.5 shares, Engine reports 100. With
+            # int truncation on both sides, the comparator would emit zero
+            # divergences (both → 100). With Decimal preservation, the
+            # comparator surfaces a quantity_mismatch row.
+            (100.5, 100),
+        ],
+        ids=[
+            "different-quantities-emit-quantity-mismatch",
+            "fractional-lean-qty-does-not-collapse-to-int",
+        ],
+    )
+    def test_quantities_that_differ_emit_quantity_mismatch(
+        self, lean_quantity: float, engine_quantity: int
+    ) -> None:
         out = compare_cross_engine(
-            [_lean_fill(fill_quantity=100.0)],
-            [_engine_fill(fill_quantity=200)],
+            [_lean_fill(fill_quantity=lean_quantity)],
+            [_engine_fill(fill_quantity=engine_quantity)],
         )
         cats = [d.category for d in out.divergences]
-        assert DivergenceCategory.QUANTITY_MISMATCH in cats
-        assert out.passed is False
+        assert DivergenceCategory.QUANTITY_MISMATCH in cats, "the quantity difference is reported"
+        assert out.passed is False, "a quantity mismatch fails the report"
 
 
 class TestFillPriceDrift:
-    def test_price_diff_above_atol_emits_fill_price_drift(self) -> None:
+    @pytest.mark.parametrize(
+        ("engine_price", "drift_expected"),
+        [
+            ("580.55", True),
+            # The boundary case: 1 cent difference is exactly atol; the
+            # condition is ``>``, so this should NOT emit a divergence.
+            ("580.51", False),
+        ],
+        ids=[
+            "price-diff-above-atol-emits-fill-price-drift",
+            "price-diff-at-atol-does-not-emit",
+        ],
+    )
+    def test_fill_price_drift_is_emitted_only_above_atol(self, engine_price: str, drift_expected: bool) -> None:
         out = compare_cross_engine(
             [_lean_fill(fill_price=580.50)],
-            [_engine_fill(fill_price=Decimal("580.55"))],
+            [_engine_fill(fill_price=Decimal(engine_price))],
         )
         cats = [d.category for d in out.divergences]
-        assert DivergenceCategory.FILL_PRICE_DRIFT in cats
-        assert out.passed is False
-
-    def test_price_diff_at_atol_does_not_emit(self) -> None:
-        """The boundary case: 1 cent difference is exactly atol; the
-        condition is ``>``, so this should NOT emit a divergence."""
-        out = compare_cross_engine(
-            [_lean_fill(fill_price=580.50)],
-            [_engine_fill(fill_price=Decimal("580.51"))],
+        assert (DivergenceCategory.FILL_PRICE_DRIFT in cats) is drift_expected, (
+            "fill_price_drift is reported exactly when the price diff is above atol"
         )
-        cats = [d.category for d in out.divergences]
-        assert DivergenceCategory.FILL_PRICE_DRIFT not in cats
+        assert out.passed is not drift_expected, "the report fails exactly when fill_price_drift is reported"
 
 
 class TestCommissionDriftGatingPolicy:
@@ -201,28 +228,27 @@ class TestCommissionDriftGatingPolicy:
     Branch-A semantics (assert_fees=True): COMMISSION_DRIFT becomes
     gating."""
 
-    def test_drift_is_diagnostic_by_default(self) -> None:
-        out = compare_cross_engine(
+    def test_commission_drift_is_diagnostic_by_default_and_gating_with_assert_fees(self) -> None:
+        by_default = compare_cross_engine(
             [_lean_fill(order_fee_amount=5.00)],
             [_engine_fill(fee=Decimal("1.00"))],
         )
-        cats = [d.category for d in out.divergences]
+        cats = [d.category for d in by_default.divergences]
         # The divergence is reported...
-        assert DivergenceCategory.COMMISSION_DRIFT in cats
+        assert DivergenceCategory.COMMISSION_DRIFT in cats, "by default the commission drift is reported"
         # ...but the report still PASSES because it's diagnostic-only.
-        assert out.divergent_count == 1
-        assert out.gating_divergent_count == 0
-        assert out.passed is True
+        assert by_default.divergent_count == 1, "by default there is one divergence"
+        assert by_default.gating_divergent_count == 0, "by default the commission drift does not gate"
+        assert by_default.passed is True, "by default the report passes: drift is diagnostic-only"
 
-    def test_drift_becomes_gating_with_assert_fees(self) -> None:
-        out = compare_cross_engine(
+        with_assert_fees = compare_cross_engine(
             [_lean_fill(order_fee_amount=5.00)],
             [_engine_fill(fee=Decimal("1.00"))],
             assert_fees=True,
         )
-        assert out.divergent_count == 1
-        assert out.gating_divergent_count == 1
-        assert out.passed is False
+        assert with_assert_fees.divergent_count == 1, "with assert_fees there is one divergence"
+        assert with_assert_fees.gating_divergent_count == 1, "with assert_fees the commission drift gates"
+        assert with_assert_fees.passed is False, "with assert_fees the report fails"
 
 
 class TestLeanNonFilledStatusIgnored:
@@ -254,25 +280,6 @@ class TestTolerancesPropagateToOutput:
         )
         cats = [d.category for d in out.divergences]
         assert DivergenceCategory.FILL_PRICE_DRIFT not in cats
-
-
-class TestFractionalQuantityPreserved:
-    """Review-fix (P2.8): int-truncating LEAN's float quantity hides
-    fractional drift. Both sides should compare on Decimal-typed
-    quantities."""
-
-    def test_fractional_lean_qty_does_not_collapse_to_int(self) -> None:
-        """LEAN reports 100.5 shares, Engine reports 100. With int
-        truncation on both sides, the comparator would emit zero
-        divergences (both → 100). With Decimal preservation, the
-        comparator surfaces a quantity_mismatch row."""
-        out = compare_cross_engine(
-            [_lean_fill(fill_quantity=100.5)],
-            [_engine_fill(fill_quantity=100)],
-        )
-        cats = [d.category for d in out.divergences]
-        assert DivergenceCategory.QUANTITY_MISMATCH in cats
-        assert out.passed is False
 
 
 class TestPairingByTradingDate:

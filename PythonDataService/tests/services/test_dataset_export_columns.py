@@ -77,12 +77,17 @@ def _rows(csv_bytes: bytes) -> list[list[str]]:
 _PROJECTION = ["open", "high", "low", "close", "volume", "vwap", "transactions", "session", "rsi_length14"]
 
 
-def test_select_output_columns_keeps_canonical_order() -> None:
-    assert select_output_columns(_PROJECTION, ["rsi_length14", "close", "open"]) == ["open", "close", "rsi_length14"]
-
-
-def test_select_output_columns_empty_selection_exports_no_data_columns() -> None:
-    assert select_output_columns(_PROJECTION, []) == []
+@pytest.mark.parametrize(
+    ("selection", "expected"),
+    [
+        pytest.param(("rsi_length14", "close", "open"), ("open", "close", "rsi_length14"), id="keeps-canonical-order"),
+        pytest.param((), (), id="empty-selection-exports-no-data-columns"),
+    ],
+)
+def test_select_output_columns_returns_the_selection_in_canonical_order(
+    selection: tuple[str, ...], expected: tuple[str, ...]
+) -> None:
+    assert select_output_columns(_PROJECTION, list(selection)) == list(expected)
 
 
 def test_select_output_columns_unix_ts_is_not_selectable() -> None:

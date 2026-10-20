@@ -96,10 +96,6 @@ def _gitignored(path: str) -> bool:
 
 
 def test_bundled_volumes_are_exactly_the_topology_named_volumes() -> None:
-    assert {volume.name for volume in BUNDLED_VOLUMES} == _declared_volume_names()
-
-
-def test_bundled_volume_names_match_the_rendered_snapshot() -> None:
     import json
 
     snapshot = json.loads(
@@ -107,12 +103,18 @@ def test_bundled_volume_names_match_the_rendered_snapshot() -> None:
     )
     rendered = {spec["name"] for spec in snapshot["volumes"].values()}
 
-    assert rendered <= {volume.name for volume in BUNDLED_VOLUMES}
+    assert {volume.name for volume in BUNDLED_VOLUMES} == _declared_volume_names(), (
+        "bundled volumes are exactly the topology-named volumes"
+    )
+    assert rendered <= {volume.name for volume in BUNDLED_VOLUMES}, (
+        "bundled volume names cover the rendered snapshot"
+    )
 
 
 def test_every_gitignored_bind_is_bundled_or_excluded_with_a_reason() -> None:
     folders = {folder.key for folder in BUNDLED_FOLDERS}
-    ignored = {source for source in _bind_sources() if _gitignored(source)}
+    sources = _bind_sources()
+    ignored = {source for source in sources if _gitignored(source)}
 
     unaccounted = {
         source
@@ -121,24 +123,24 @@ def test_every_gitignored_bind_is_bundled_or_excluded_with_a_reason() -> None:
         if not any(source == key or source.startswith(f"{key}/") for key in folders)
     }
 
-    assert unaccounted == set()
+    assert unaccounted == set(), "every gitignored bind is bundled or excluded"
     assert folders <= ignored, "a bundled folder must be a gitignored mounted folder"
-
-
-def test_every_exclusion_is_a_real_mount_with_a_reason() -> None:
-    sources = _bind_sources()
     for source, reason in EXCLUDED_BIND_MOUNTS.items():
-        assert source in sources
-        assert reason.strip()
+        assert source in sources, f"the exclusion {source} is a real mount"
+        assert reason.strip(), f"the exclusion {source} states a reason"
 
 
-def test_the_owner_listed_contents_are_all_present() -> None:
+def test_the_owner_listed_contents_are_all_present_as_distinct_bundle_members() -> None:
+    members = [volume.member for volume in BUNDLED_VOLUMES] + [
+        folder.member for folder in BUNDLED_FOLDERS
+    ]
+
     assert {volume.name for volume in BUNDLED_VOLUMES} == {
         "learn-ai_pgdata",
         "learn-ai_alpaca-fleet-control",
         "learn-ai-alpaca-clerk-data",
         "learn-ai-alpaca-paper-clerk-data",
-    }
+    }, "the owner-listed volumes are all present"
     # Owner rule: every gitignored folder a container mounts goes in — which
     # carries the derived analytics cache too.
     assert {folder.key for folder in BUNDLED_FOLDERS} == {
@@ -146,17 +148,12 @@ def test_the_owner_listed_contents_are_all_present() -> None:
         "PythonDataService/artifacts",
         "PythonDataService/cache",
         "PythonDataService/lean-cache",
-    }
-    assert set(EXCLUDED_BIND_MOUNTS) == {"../Lean/Data"}
-
-
-def test_members_are_distinct_paths_inside_the_bundle() -> None:
-    members = [volume.member for volume in BUNDLED_VOLUMES] + [
-        folder.member for folder in BUNDLED_FOLDERS
-    ]
-
-    assert len(set(members)) == len(members)
-    assert all(member.startswith(("volumes/", "folders/")) for member in members)
+    }, "the owner-listed folders are all present"
+    assert set(EXCLUDED_BIND_MOUNTS) == {"../Lean/Data"}, "the owner-listed exclusions are all present"
+    assert len(set(members)) == len(members), "members are distinct paths inside the bundle"
+    assert all(member.startswith(("volumes/", "folders/")) for member in members), (
+        "members sit under volumes/ or folders/"
+    )
 
 
 def test_the_lake_path_comes_from_the_repo_root_dotenv_as_compose_reads_it(
@@ -192,47 +189,38 @@ def test_the_lake_folder_follows_its_host_path_override(
 
 
 @pytest.mark.parametrize(
-    "name",
+    ("name", "secret_shaped"),
     [
-        ".env",
-        "live.env",
-        "compose.override.yaml",
-        "compose.override.yml",
-        LAUNCHER_TOKEN_FILENAME,
-        ".host-daemon-token",
-        "coordinator-token",
-        "service_token",
-        ".clerk-host-binding-capability",
-        "server.pem",
-        "signing.key",
-        "id_rsa",
-        "id_ed25519.pub",
-        "client.p12",
-        "broker.pfx",
-        "truststore.jks",
-        "alpaca_secret.json",
-        "DB_PASSWORD.txt",
-        "gcp-credentials.json",
+        pytest.param(".env", True, id="secret-env"),
+        pytest.param("live.env", True, id="secret-live_env"),
+        pytest.param("compose.override.yaml", True, id="secret-compose_override_yaml"),
+        pytest.param("compose.override.yml", True, id="secret-compose_override_yml"),
+        pytest.param(LAUNCHER_TOKEN_FILENAME, True, id="secret-launcher_token"),
+        pytest.param(".host-daemon-token", True, id="secret-host_daemon_token"),
+        pytest.param("coordinator-token", True, id="secret-coordinator_token"),
+        pytest.param("service_token", True, id="secret-service_token"),
+        pytest.param(".clerk-host-binding-capability", True, id="secret-clerk_host_binding_capability"),
+        pytest.param("server.pem", True, id="secret-pem"),
+        pytest.param("signing.key", True, id="secret-key"),
+        pytest.param("id_rsa", True, id="secret-id_rsa"),
+        pytest.param("id_ed25519.pub", True, id="secret-id_ed25519_pub"),
+        pytest.param("client.p12", True, id="secret-p12"),
+        pytest.param("broker.pfx", True, id="secret-pfx"),
+        pytest.param("truststore.jks", True, id="secret-jks"),
+        pytest.param("alpaca_secret.json", True, id="secret-alpaca_secret_json"),
+        pytest.param("DB_PASSWORD.txt", True, id="secret-db_password_txt"),
+        pytest.param("gcp-credentials.json", True, id="secret-gcp_credentials_json"),
+        pytest.param("live.env.example", False, id="ordinary-live_env_example"),
+        pytest.param("environment.txt", False, id="ordinary-environment_txt"),
+        pytest.param("tokenizer.json", False, id="ordinary-tokenizer_json"),
+        pytest.param("run.json", False, id="ordinary-run_json"),
+        pytest.param("keys.parquet", False, id="ordinary-keys_parquet"),
+        pytest.param("identity.json", False, id="ordinary-identity_json"),
+        pytest.param("SPY_minute.zip", False, id="ordinary-spy_minute_zip"),
     ],
 )
-def test_secret_shaped_names(name: str) -> None:
-    assert is_secret_shaped(name)
-
-
-@pytest.mark.parametrize(
-    "name",
-    [
-        "live.env.example",
-        "environment.txt",
-        "tokenizer.json",
-        "run.json",
-        "keys.parquet",
-        "identity.json",
-        "SPY_minute.zip",
-    ],
-)
-def test_ordinary_names_are_not_secret_shaped(name: str) -> None:
-    assert not is_secret_shaped(name)
+def test_secret_shaped_names(name: str, secret_shaped: bool) -> None:
+    assert is_secret_shaped(name) == secret_shaped
 
 
 def test_the_auth_tokens_under_artifacts_are_secret_shaped_and_skipped(tmp_path: Path) -> None:

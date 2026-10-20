@@ -208,93 +208,97 @@ def _compose_holey(lake_root: Path, held_sessions: Sequence[date]) -> tuple[Any,
 # ──────────────────────────────────────────────
 # The calendar boundary
 # ──────────────────────────────────────────────
-def test_split_sessions_at_boundary_completes_a_half_day_at_its_early_close() -> None:
-    """13:05 ET on the half-day completes it; the same clock does not on a
-    regular session. Both facts come from the calendar, not from a literal."""
-    five_past_early_close = session_close_ms_utc(HALF_DAY) + 5 * 60_000
-
-    completed, live, boundary_ms = split_sessions_at_boundary(
-        REGULAR_BEFORE.isoformat(), LIVE_SESSION.isoformat(), five_past_early_close
+@pytest.mark.parametrize(
+    ("last_date", "now_ms", "session_args", "completed_dates", "live_dates", "boundary_ms"),
+    [
+        # 13:05 ET on the half-day completes it; the same clock does not on a
+        # regular session (next row). Both facts come from the calendar, not from a literal.
+        pytest.param(
+            LIVE_SESSION,
+            session_close_ms_utc(HALF_DAY) + 5 * 60_000,
+            (),
+            (REGULAR_BEFORE, HALF_DAY),
+            (LIVE_SESSION,),
+            session_open_ms_utc(LIVE_SESSION),
+            id="completes_a_half_day_at_its_early_close",
+        ),
+        pytest.param(
+            LIVE_SESSION,
+            session_open_ms_utc(REGULAR_BEFORE) + (session_close_ms_utc(HALF_DAY) - session_open_ms_utc(HALF_DAY)),
+            (),
+            (),
+            (REGULAR_BEFORE, HALF_DAY, LIVE_SESSION),
+            session_open_ms_utc(REGULAR_BEFORE),
+            id="keeps_a_regular_session_live_past_the_early_close_clock",
+        ),
+        pytest.param(
+            HALF_DAY,
+            session_close_ms_utc(HALF_DAY),
+            (),
+            (REGULAR_BEFORE, HALF_DAY),
+            (),
+            None,
+            id="has_no_live_tail_once_every_session_closed",
+        ),
+        # The boundary respects the requested session policy. After the regular
+        # close, an extended chart is still watching today's post-market tape
+        # fill — so today is not finished for that reader. For an RTH chart
+        # today is finished (rth row); for an extended one it is not (extended row).
+        pytest.param(
+            LIVE_SESSION,
+            session_close_ms_utc(LIVE_SESSION) + 60_000,
+            ("rth",),
+            (REGULAR_BEFORE, HALF_DAY, LIVE_SESSION),
+            (),
+            None,
+            id="holds_today_open_for_an_extended_request-rth_reader_finished",
+        ),
+        pytest.param(
+            LIVE_SESSION,
+            session_close_ms_utc(LIVE_SESSION) + 60_000,
+            ("extended",),
+            (REGULAR_BEFORE, HALF_DAY),
+            (LIVE_SESSION,),
+            session_open_ms_utc(LIVE_SESSION),
+            id="holds_today_open_for_an_extended_request-extended_reader_not_finished",
+        ),
+        pytest.param(
+            LIVE_SESSION,
+            session_open_ms_utc(next_trading_day(LIVE_SESSION)),
+            ("extended",),
+            (REGULAR_BEFORE, HALF_DAY, LIVE_SESSION),
+            (),
+            None,
+            id="completes_an_extended_day_once_the_date_rolls",
+        ),
+        # A half-day's regular session ends at 13:00 ET but its post-market tape
+        # runs on, so an extended chart must not treat it as finished either.
+        pytest.param(
+            HALF_DAY,
+            session_close_ms_utc(HALF_DAY) + 60_000,
+            ("extended",),
+            (REGULAR_BEFORE,),
+            (HALF_DAY,),
+            session_open_ms_utc(HALF_DAY),
+            id="holds_a_half_day_open_for_an_extended_request",
+        ),
+    ],
+)
+def test_split_sessions_at_boundary_splits_completed_from_live_by_calendar_and_session_policy(
+    last_date: date,
+    now_ms: int,
+    session_args: tuple[str, ...],
+    completed_dates: tuple[date, ...],
+    live_dates: tuple[date, ...],
+    boundary_ms: int | None,
+) -> None:
+    completed, live, boundary = split_sessions_at_boundary(
+        REGULAR_BEFORE.isoformat(), last_date.isoformat(), now_ms, *session_args
     )
 
-    assert [window.session_date for window in completed] == [REGULAR_BEFORE, HALF_DAY]
-    assert [window.session_date for window in live] == [LIVE_SESSION]
-    assert boundary_ms == session_open_ms_utc(LIVE_SESSION)
-
-
-def test_split_sessions_at_boundary_keeps_a_regular_session_live_past_the_early_close_clock() -> None:
-    same_wall_clock_on_regular_day = session_open_ms_utc(REGULAR_BEFORE) + (
-        session_close_ms_utc(HALF_DAY) - session_open_ms_utc(HALF_DAY)
-    )
-
-    completed, live, boundary_ms = split_sessions_at_boundary(
-        REGULAR_BEFORE.isoformat(), LIVE_SESSION.isoformat(), same_wall_clock_on_regular_day
-    )
-
-    assert completed == []
-    assert [window.session_date for window in live] == [REGULAR_BEFORE, HALF_DAY, LIVE_SESSION]
-    assert boundary_ms == session_open_ms_utc(REGULAR_BEFORE)
-
-
-def test_split_sessions_at_boundary_has_no_live_tail_once_every_session_closed() -> None:
-    completed, live, boundary_ms = split_sessions_at_boundary(
-        REGULAR_BEFORE.isoformat(),
-        HALF_DAY.isoformat(),
-        session_close_ms_utc(HALF_DAY),
-    )
-
-    assert [window.session_date for window in completed] == [REGULAR_BEFORE, HALF_DAY]
-    assert live == []
-    assert boundary_ms is None
-
-
-# ──────────────────────────────────────────────
-# The boundary respects the requested session policy
-# ──────────────────────────────────────────────
-def test_split_sessions_at_boundary_holds_today_open_for_an_extended_request() -> None:
-    """After the regular close, an extended chart is still watching today's
-    post-market tape fill — so today is not finished for that reader."""
-    after_rth_close = session_close_ms_utc(LIVE_SESSION) + 60_000
-
-    rth_completed, rth_live, _ = split_sessions_at_boundary(
-        REGULAR_BEFORE.isoformat(), LIVE_SESSION.isoformat(), after_rth_close, "rth"
-    )
-    ext_completed, ext_live, ext_boundary = split_sessions_at_boundary(
-        REGULAR_BEFORE.isoformat(), LIVE_SESSION.isoformat(), after_rth_close, "extended"
-    )
-
-    # For an RTH chart today is finished; for an extended one it is not.
-    assert [window.session_date for window in rth_completed] == [REGULAR_BEFORE, HALF_DAY, LIVE_SESSION]
-    assert rth_live == []
-    assert [window.session_date for window in ext_completed] == [REGULAR_BEFORE, HALF_DAY]
-    assert [window.session_date for window in ext_live] == [LIVE_SESSION]
-    assert ext_boundary == session_open_ms_utc(LIVE_SESSION)
-
-
-def test_split_sessions_at_boundary_completes_an_extended_day_once_the_date_rolls() -> None:
-    completed, live, boundary_ms = split_sessions_at_boundary(
-        REGULAR_BEFORE.isoformat(),
-        LIVE_SESSION.isoformat(),
-        session_open_ms_utc(next_trading_day(LIVE_SESSION)),
-        "extended",
-    )
-
-    assert [window.session_date for window in completed] == [REGULAR_BEFORE, HALF_DAY, LIVE_SESSION]
-    assert live == []
-    assert boundary_ms is None
-
-
-def test_split_sessions_at_boundary_holds_a_half_day_open_for_an_extended_request() -> None:
-    """A half-day's regular session ends at 13:00 ET but its post-market tape
-    runs on, so an extended chart must not treat it as finished either."""
-    after_early_close = session_close_ms_utc(HALF_DAY) + 60_000
-
-    completed, live, _ = split_sessions_at_boundary(
-        REGULAR_BEFORE.isoformat(), HALF_DAY.isoformat(), after_early_close, "extended"
-    )
-
-    assert [window.session_date for window in completed] == [REGULAR_BEFORE]
-    assert [window.session_date for window in live] == [HALF_DAY]
+    assert [window.session_date for window in completed] == list(completed_dates), "completed sessions"
+    assert [window.session_date for window in live] == list(live_dates), "live sessions"
+    assert boundary == boundary_ms, "boundary is the open of the first live session, None once every session closed"
 
 
 def test_compose_chart_bars_keeps_the_forming_extended_day_provider_backed(lake_root: Path) -> None:
@@ -326,7 +330,7 @@ def test_compose_chart_bars_keeps_the_forming_extended_day_provider_backed(lake_
 # ──────────────────────────────────────────────
 # The stitch
 # ──────────────────────────────────────────────
-def test_compose_chart_bars_stitches_lake_history_to_the_live_tail(lake_root: Path) -> None:
+def test_compose_chart_bars_stitches_two_lake_days_to_the_live_tail(lake_root: Path) -> None:
     _write_lake_day(lake_root, REGULAR_BEFORE)
     _write_lake_day(lake_root, HALF_DAY)
     provider = _ProviderSpy()
@@ -340,84 +344,66 @@ def test_compose_chart_bars_stitches_lake_history_to_the_live_tail(lake_root: Pa
         now_ms=_during(LIVE_SESSION),
         lake_root=lake_root,
     )
+    boundary_ms = session_open_ms_utc(LIVE_SESSION)
+    timestamps = [bar["timestamp"] for bar in composed.bars]
 
+    # stitches lake history to the live tail
     # Only the current session touched the provider.
-    assert provider.calls == [(LIVE_SESSION.isoformat(), LIVE_SESSION.isoformat())]
+    assert provider.calls == [(LIVE_SESSION.isoformat(), LIVE_SESSION.isoformat())], (
+        "stitch: only the current session touched the provider"
+    )
     assert [(span.source, span.reason) for span in composed.spans] == [
         ("lake", "completed_sessions"),
         ("provider", "current_session"),
-    ]
-    assert composed.notice_code is None
-    assert composed.boundary_ms_utc == session_open_ms_utc(LIVE_SESSION)
+    ], "stitch: lake history then the provider's current session"
+    assert composed.notice_code is None, "stitch: no fallback notice"
+    assert composed.boundary_ms_utc == boundary_ms, "stitch: boundary is the live session's open"
 
-
-def test_compose_chart_bars_produces_no_gap_and_no_duplicate_at_the_boundary(lake_root: Path) -> None:
-    """The stitched minute set is exactly the calendar's, over all three
-    sessions: a missing minute or a repeated one would break this equality."""
-    _write_lake_day(lake_root, REGULAR_BEFORE)
-    _write_lake_day(lake_root, HALF_DAY)
-
-    composed = compose_chart_bars(
-        ticker=_SYMBOL,
-        from_date=REGULAR_BEFORE.isoformat(),
-        to_date=LIVE_SESSION.isoformat(),
-        adjusted=False,
-        fetch_provider=_ProviderSpy(),
-        now_ms=_during(LIVE_SESSION),
-        lake_root=lake_root,
+    # produces no gap and no duplicate at the boundary
+    # The stitched minute set is exactly the calendar's, over all three
+    # sessions: a missing minute or a repeated one would break this equality.
+    assert timestamps == _expected_minutes([REGULAR_BEFORE, HALF_DAY, LIVE_SESSION]), (
+        "no gap at the boundary: the stitched minute set is exactly the calendar's"
     )
+    assert len(set(timestamps)) == len(timestamps), "no duplicate at the boundary"
 
-    timestamps = [bar["timestamp"] for bar in composed.bars]
-    assert timestamps == _expected_minutes([REGULAR_BEFORE, HALF_DAY, LIVE_SESSION])
-    assert len(set(timestamps)) == len(timestamps)
-
-
-def test_compose_chart_bars_holds_the_half_day_to_its_calendar_close(lake_root: Path) -> None:
-    _write_lake_day(lake_root, REGULAR_BEFORE)
-    _write_lake_day(lake_root, HALF_DAY)
-
-    composed = compose_chart_bars(
-        ticker=_SYMBOL,
-        from_date=REGULAR_BEFORE.isoformat(),
-        to_date=LIVE_SESSION.isoformat(),
-        adjusted=False,
-        fetch_provider=_ProviderSpy(),
-        now_ms=_during(LIVE_SESSION),
-        lake_root=lake_root,
-    )
-
+    # holds the half-day to its calendar close
     half_day_open = session_open_ms_utc(HALF_DAY)
     half_day_close = session_close_ms_utc(HALF_DAY)
-    half_day_bars = [b for b in composed.bars if half_day_open <= b["timestamp"] < session_open_ms_utc(LIVE_SESSION)]
-
-    assert len(half_day_bars) == (half_day_close - half_day_open) // 60_000
-    assert max(b["timestamp"] for b in half_day_bars) == half_day_close - 60_000
+    half_day_bars = [b for b in composed.bars if half_day_open <= b["timestamp"] < boundary_ms]
+    assert len(half_day_bars) == (half_day_close - half_day_open) // 60_000, "half-day holds its calendar minute count"
+    assert max(b["timestamp"] for b in half_day_bars) == half_day_close - 60_000, (
+        "half-day's last bar is its calendar close minute"
+    )
     # The holiday between the two lake sessions contributes nothing.
-    assert not [b for b in composed.bars if session_open_ms_utc(HOLIDAY) <= b["timestamp"] < half_day_open]
-
-
-def test_compose_chart_bars_transitions_straight_from_last_lake_bar_to_session_open(lake_root: Path) -> None:
-    _write_lake_day(lake_root, REGULAR_BEFORE)
-    _write_lake_day(lake_root, HALF_DAY)
-
-    composed = compose_chart_bars(
-        ticker=_SYMBOL,
-        from_date=REGULAR_BEFORE.isoformat(),
-        to_date=LIVE_SESSION.isoformat(),
-        adjusted=False,
-        fetch_provider=_ProviderSpy(),
-        now_ms=_during(LIVE_SESSION),
-        lake_root=lake_root,
+    assert not [b for b in composed.bars if session_open_ms_utc(HOLIDAY) <= b["timestamp"] < half_day_open], (
+        "the holiday between the two lake sessions contributes no bars"
     )
 
-    boundary_ms = session_open_ms_utc(LIVE_SESSION)
-    history = [b["timestamp"] for b in composed.bars if b["timestamp"] < boundary_ms]
-    tail = [b["timestamp"] for b in composed.bars if b["timestamp"] >= boundary_ms]
+    # transitions straight from the last lake bar to the session open
+    history = [t for t in timestamps if t < boundary_ms]
+    tail = [t for t in timestamps if t >= boundary_ms]
+    assert history[-1] == session_close_ms_utc(HALF_DAY) - 60_000, "last lake bar is the half-day's final minute"
+    assert tail[0] == boundary_ms, "first provider bar is the live session's open"
+    assert len(history) == composed.spans[0].bar_count, "lake span bar_count matches the history bars"
+    assert len(tail) == composed.spans[1].bar_count, "provider span bar_count matches the tail bars"
 
-    assert history[-1] == session_close_ms_utc(HALF_DAY) - 60_000
-    assert tail[0] == boundary_ms
-    assert len(history) == composed.spans[0].bar_count
-    assert len(tail) == composed.spans[1].bar_count
+    # spans report session-anchored ms boundaries
+    wire = composed.as_response_dict()
+    assert wire["notice_code"] is None, "wire: no notice code"
+    assert wire["boundary_ms_utc"] == boundary_ms, "wire: boundary is the live session's open"
+    assert wire["spans"][0] == {
+        "source": "lake",
+        "reason": "completed_sessions",
+        "from_session_open_ms_utc": session_open_ms_utc(REGULAR_BEFORE),
+        "to_session_open_ms_utc": session_open_ms_utc(HALF_DAY),
+        "session_count": 2,
+        "bar_count": len(_expected_minutes([REGULAR_BEFORE, HALF_DAY])),
+    }, "wire: the lake span is session-anchored"
+    # Every temporal value on the wire is an int64 ms UTC anchor, never a date.
+    for span in wire["spans"]:
+        assert isinstance(span["from_session_open_ms_utc"], int), "wire: span start is an int64 ms anchor"
+        assert isinstance(span["to_session_open_ms_utc"], int), "wire: span end is an int64 ms anchor"
 
 
 # ──────────────────────────────────────────────
@@ -516,6 +502,10 @@ def test_compose_chart_bars_reads_the_adjusted_root_for_an_adjusted_request(
     [
         pytest.param("I:SPX", id="index_prefix"),
         pytest.param("../../etc/passwd", id="path_traversal"),
+        # A hyphenated ticker survives the path check but ``DataRunSpec`` refuses
+        # it, so ensure_data can never seed it — reporting a lake *gap* would
+        # promise a backfill that cannot happen.
+        pytest.param("BRK-B", id="hyphenated_ticker_the_lake_writer_refuses"),
     ],
 )
 def test_compose_chart_bars_serves_a_lake_unaddressable_symbol_from_the_provider(
@@ -539,11 +529,13 @@ def test_compose_chart_bars_serves_a_lake_unaddressable_symbol_from_the_provider
 
     # One call over the whole requested range — not the composed split — so the
     # flag-on answer is the flag-off answer for the same input.
-    assert provider.calls == [(REGULAR_BEFORE.isoformat(), LIVE_SESSION.isoformat())]
+    assert provider.calls == [(REGULAR_BEFORE.isoformat(), LIVE_SESSION.isoformat())], (
+        "one provider fetch over the whole requested range"
+    )
     assert [(span.source, span.reason) for span in composed.spans] == [
         ("provider", "symbol_not_lake_addressable"),
-    ]
-    assert composed.notice_code == "symbol_provider_only"
+    ], "one provider span, reason symbol_not_lake_addressable"
+    assert composed.notice_code == "symbol_provider_only", "the notice says the symbol is provider-only"
 
 
 # ──────────────────────────────────────────────
@@ -687,27 +679,6 @@ def test_compose_chart_bars_raises_no_notice_when_only_warmup_missed_the_lake(la
     assert min(bar["timestamp"] for bar in composed.bars) < session_open_ms_utc(LIVE_SESSION)
 
 
-def test_compose_chart_bars_calls_a_symbol_the_lake_writer_refuses_provider_only(lake_root: Path) -> None:
-    """A hyphenated ticker survives the path check but ``DataRunSpec`` refuses
-    it, so ensure_data can never seed it — reporting a lake *gap* would promise
-    a backfill that cannot happen."""
-    _write_lake_day(lake_root, REGULAR_BEFORE)
-    _write_lake_day(lake_root, HALF_DAY)
-
-    composed = compose_chart_bars(
-        ticker="BRK-B",
-        from_date=REGULAR_BEFORE.isoformat(),
-        to_date=LIVE_SESSION.isoformat(),
-        adjusted=False,
-        fetch_provider=_ProviderSpy(),
-        now_ms=_during(LIVE_SESSION),
-        lake_root=lake_root,
-    )
-
-    assert [span.reason for span in composed.spans] == ["symbol_not_lake_addressable"]
-    assert composed.notice_code == "symbol_provider_only"
-
-
 def test_compose_chart_bars_rejects_a_provider_range_that_overlaps_the_lake(lake_root: Path) -> None:
     """A stitch that would duplicate a bar must fail loudly, never repair itself."""
     _write_lake_day(lake_root, REGULAR_BEFORE)
@@ -727,38 +698,6 @@ def test_compose_chart_bars_rejects_a_provider_range_that_overlaps_the_lake(lake
             now_ms=_during(LIVE_SESSION),
             lake_root=lake_root,
         )
-
-
-def test_compose_chart_bars_spans_report_session_anchored_ms_boundaries(lake_root: Path) -> None:
-    _write_lake_day(lake_root, REGULAR_BEFORE)
-    _write_lake_day(lake_root, HALF_DAY)
-
-    composed = compose_chart_bars(
-        ticker=_SYMBOL,
-        from_date=REGULAR_BEFORE.isoformat(),
-        to_date=LIVE_SESSION.isoformat(),
-        adjusted=False,
-        fetch_provider=_ProviderSpy(),
-        now_ms=_during(LIVE_SESSION),
-        lake_root=lake_root,
-    )
-
-    wire = composed.as_response_dict()
-
-    assert wire["notice_code"] is None
-    assert wire["boundary_ms_utc"] == session_open_ms_utc(LIVE_SESSION)
-    assert wire["spans"][0] == {
-        "source": "lake",
-        "reason": "completed_sessions",
-        "from_session_open_ms_utc": session_open_ms_utc(REGULAR_BEFORE),
-        "to_session_open_ms_utc": session_open_ms_utc(HALF_DAY),
-        "session_count": 2,
-        "bar_count": len(_expected_minutes([REGULAR_BEFORE, HALF_DAY])),
-    }
-    # Every temporal value on the wire is an int64 ms UTC anchor, never a date.
-    for span in wire["spans"]:
-        assert isinstance(span["from_session_open_ms_utc"], int)
-        assert isinstance(span["to_session_open_ms_utc"], int)
 
 
 # ──────────────────────────────────────────────

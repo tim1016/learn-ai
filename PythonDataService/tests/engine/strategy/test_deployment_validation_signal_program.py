@@ -23,6 +23,8 @@ from __future__ import annotations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from app.engine.data.trade_bar import TradeBar
 from app.engine.strategy.algorithms.deployment_validation import (
     DeploymentValidationConsecutiveGreen,
@@ -236,26 +238,15 @@ def test_rollback_blocked_entry_undoes_the_full_committed_entry_state() -> None:
     assert strategy._pending_signal_time_ms is None
 
 
-def test_rollback_blocked_exit_restores_in_position_and_retriggers_next_bar() -> None:
-    program, strategy, context = _prepared_program()
-    _enter_in_position(program, strategy, context, bars_until_exit=1)
-    stage = _advance(program, context, _minute_bar(10, 0, "green"))
-    assert stage.trace.staged_candidate == "EXIT"
-    program.session.settle(Settlement.COMMIT)
-    assert strategy._in_position is False
-    assert strategy._bars_until_exit_signal == 0
-
-    strategy.rollback_blocked_exit()
-
-    assert strategy._in_position is True
-    assert strategy._bars_until_exit_signal == 1
-
-    retrigger = _advance(program, context, _minute_bar(10, 1, "green"))
-    assert retrigger.trace.staged_candidate == "EXIT"
-
-
-def test_rollback_blocked_exit_is_idempotent_for_one_refused_exit() -> None:
-    """A second rollback for the same refused EXIT must not delay the retry.
+@pytest.mark.parametrize(
+    "rollbacks",
+    [
+        pytest.param(1, id="rollback_blocked_exit_restores_in_position_and_retriggers_next_bar"),
+        pytest.param(2, id="rollback_blocked_exit_is_idempotent_for_one_refused_exit_1736"),
+    ],
+)
+def test_rollback_blocked_exit_restores_in_position_and_retriggers_next_bar(rollbacks: int) -> None:
+    """The ``2`` row: a second rollback for the same refused EXIT must not delay the retry.
 
     Issue #1736. The restore used to increment, which reached the right
     number only because ``commit_signal_decision`` had just zeroed the
@@ -269,9 +260,11 @@ def test_rollback_blocked_exit_is_idempotent_for_one_refused_exit() -> None:
     stage = _advance(program, context, _minute_bar(10, 0, "green"))
     assert stage.trace.staged_candidate == "EXIT"
     program.session.settle(Settlement.COMMIT)
+    assert strategy._in_position is False
+    assert strategy._bars_until_exit_signal == 0
 
-    strategy.rollback_blocked_exit()
-    strategy.rollback_blocked_exit()
+    for _ in range(rollbacks):
+        strategy.rollback_blocked_exit()
 
     assert strategy._in_position is True
     assert strategy._bars_until_exit_signal == 1

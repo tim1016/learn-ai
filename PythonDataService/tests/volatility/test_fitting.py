@@ -92,15 +92,18 @@ class TestSabrVol:
 
 
 class TestVarianceInterp:
-    def test_exact_recovery_at_input_strikes(self, flat_smile: SmileSlice) -> None:
-        """Interpolation should exactly recover input vols at known strikes."""
+    def test_exact_recovery_at_input_strikes_and_no_negative_variance(self, flat_smile: SmileSlice) -> None:
+        """Interpolation should exactly recover input vols at known strikes, and never produce negative variance."""
         fit = fit_variance_interp(flat_smile)
-        assert fit.success
-        assert fit.method == FitMethod.VARIANCE
+        assert fit.success, "variance interpolation fit succeeds"
+        assert fit.method == FitMethod.VARIANCE, "fit method is variance interpolation"
 
         for k, iv in zip(flat_smile.strikes, flat_smile.ivs, strict=False):
             recovered = fit.volatility(float(k))
-            assert abs(recovered - iv) < 1e-10
+            assert abs(recovered - iv) < 1e-10, f"strike {k}: input vol is exactly recovered"
+        for k in np.linspace(80, 120, 100):
+            v = fit.volatility(float(k))
+            assert v > 0, f"strike {k}: variance interpolation never produces negative variance"
 
     def test_interpolation_between_strikes(self, skewed_smile: SmileSlice) -> None:
         """Interpolated vol should be between neighboring vols."""
@@ -112,13 +115,6 @@ class TestVarianceInterp:
         assert v > 0
         assert math.isfinite(v)
 
-    def test_no_negative_variance(self, flat_smile: SmileSlice) -> None:
-        """Variance interp should never produce negative variance."""
-        fit = fit_variance_interp(flat_smile)
-        for k in np.linspace(80, 120, 100):
-            v = fit.volatility(float(k))
-            assert v > 0
-
 
 class TestSABR:
     def test_fits_flat_smile(self, flat_smile: SmileSlice) -> None:
@@ -129,26 +125,19 @@ class TestSABR:
         assert fit.residual_rmse < 0.01
 
     def test_fits_skewed_smile(self, skewed_smile: SmileSlice) -> None:
-        """SABR should fit a skewed smile reasonably."""
+        """SABR should fit a skewed smile reasonably, with params in valid ranges and finite vols across the strike
+        range."""
         fit = fit_sabr(skewed_smile)
-        assert fit.success
-        assert fit.residual_rmse < 0.02  # SABR may not perfectly fit SVI-like smiles
-
-    def test_params_are_sensible(self, skewed_smile: SmileSlice) -> None:
-        """Fitted params should be in valid ranges."""
-        fit = fit_sabr(skewed_smile)
-        assert fit.params["alpha"] > 0
-        assert fit.params["nu"] > 0
-        assert -1 < fit.params["rho"] < 1
-        assert fit.params["beta"] == 0.5
-
-    def test_returns_finite_vols(self, skewed_smile: SmileSlice) -> None:
-        """Fitted SABR should return finite vols across strike range."""
-        fit = fit_sabr(skewed_smile)
+        assert fit.success, "SABR fit of a skewed smile succeeds"
+        assert fit.residual_rmse < 0.02, "SABR fits a skewed smile reasonably"  # SABR may not perfectly fit SVI-like smiles
+        assert fit.params["alpha"] > 0, "fitted alpha is positive"
+        assert fit.params["nu"] > 0, "fitted nu is positive"
+        assert -1 < fit.params["rho"] < 1, "fitted rho is in (-1, 1)"
+        assert fit.params["beta"] == 0.5, "beta stays at 0.5"
         for k in np.linspace(80, 120, 50):
             v = fit.volatility(float(k))
-            assert math.isfinite(v)
-            assert v > 0
+            assert math.isfinite(v), f"strike {k}: fitted SABR vol is finite"
+            assert v > 0, f"strike {k}: fitted SABR vol is positive"
 
 
 class TestSVI:
@@ -160,32 +149,28 @@ class TestSVI:
         assert fit.residual_rmse < 0.001
 
     def test_fits_skewed_smile(self, skewed_smile: SmileSlice) -> None:
-        """SVI should fit a skewed smile well (SVI is designed for this)."""
+        """SVI should fit a skewed smile well (SVI is designed for this), with params satisfying no-arbitrage
+        constraints and finite vols across the strike range."""
         fit = fit_svi(skewed_smile)
-        assert fit.success
-        assert fit.residual_rmse < 0.005  # SVI should fit its own shape very well
-
-    def test_params_are_sensible(self, skewed_smile: SmileSlice) -> None:
-        """SVI params should satisfy no-arbitrage constraints."""
-        fit = fit_svi(skewed_smile)
-        assert fit.params["b"] > 0
-        assert fit.params["sigma"] > 0
-        assert -1 < fit.params["rho"] < 1
-
-    def test_butterfly_constraint(self, skewed_smile: SmileSlice) -> None:
-        """SVI should satisfy butterfly no-arb: a + b*sigma*sqrt(1-rho^2) >= 0."""
-        fit = fit_svi(skewed_smile)
+        assert fit.success, "SVI fit of a skewed smile succeeds"
+        assert fit.residual_rmse < 0.005, "SVI fits a skewed smile well"  # SVI should fit its own shape very well
         p = fit.params
+        assert p["b"] > 0, "fitted b is positive"
+        assert p["sigma"] > 0, "fitted sigma is positive"
+        assert -1 < p["rho"] < 1, "fitted rho is in (-1, 1)"
+        # SVI should satisfy butterfly no-arb: a + b*sigma*sqrt(1-rho^2) >= 0
         constraint = p["a"] + p["b"] * p["sigma"] * math.sqrt(1 - p["rho"] ** 2)
-        assert constraint >= -1e-6
-
-    def test_returns_finite_vols(self, skewed_smile: SmileSlice) -> None:
-        """Fitted SVI should return finite vols across strike range."""
-        fit = fit_svi(skewed_smile)
+        assert constraint >= -1e-6, "butterfly constraint a + b*sigma*sqrt(1-rho^2) >= 0 holds"
         for k in np.linspace(80, 120, 50):
             v = fit.volatility(float(k))
-            assert math.isfinite(v)
-            assert v > 0
+            assert math.isfinite(v), f"strike {k}: fitted SVI vol is finite"
+            assert v > 0, f"strike {k}: fitted SVI vol is positive"
+
+
+def _vol_fn_failing_at_the_money(strike: float) -> float:
+    if strike == 100.0:
+        raise ValueError("no vol at the money")
+    return 0.25
 
 
 class TestArbitrageCheck:
@@ -197,22 +182,11 @@ class TestArbitrageCheck:
         assert report.butterfly_violations == 0
         assert report.negative_variance == 0
 
-    def test_detects_known_violation(self) -> None:
-        """A deliberately pathological smile should trigger violations."""
-        strikes = np.array([90.0, 95.0, 100.0, 105.0, 110.0])
-        # W-shaped smile: concavity at center → butterfly violation
-        ivs = np.array([0.30, 0.20, 0.35, 0.20, 0.30])
-        smile = SmileSlice(strikes=strikes, ivs=ivs, ttm=0.25, forward=100.0)
-
-        fit = fit_variance_interp(smile)
-        report = check_smile_arbitrage(fit, strikes, 100.0)
-        assert report.butterfly_violations > 0
-        assert not report.passed
-
-    def test_shuffled_strikes_report_the_same_violations_as_sorted(self) -> None:
-        """Convexity is a statement about ascending log-moneyness, so the
-        checker sorts: the order the caller happened to collect strikes in
-        must not hide a butterfly violation."""
+    def test_w_shaped_smile_violates_butterfly_however_the_strikes_arrive(self) -> None:
+        """A deliberately pathological W-shaped smile (concavity at center) triggers a butterfly violation. Convexity
+        is a statement about ascending log-moneyness, so the checker sorts: the order the caller happened to collect
+        strikes in must not hide the violation. A chain carries one record per call and put, so each strike arrives
+        twice; the repeats collapse and must not skip every triple."""
         ordered = np.array([90.0, 95.0, 100.0, 105.0, 110.0])
         shuffled = np.array([100.0, 90.0, 110.0, 95.0, 105.0])
         ivs = np.array([0.30, 0.20, 0.35, 0.20, 0.30])  # W-shaped smile
@@ -220,75 +194,62 @@ class TestArbitrageCheck:
 
         sorted_report = check_smile_arbitrage(fit, ordered, 100.0)
         shuffled_report = check_smile_arbitrage(fit, shuffled, 100.0)
+        doubled_report = check_smile_arbitrage(fit, np.repeat(ordered, 2), 100.0)
 
-        assert sorted_report.butterfly_violations == 1
-        assert shuffled_report.butterfly_violations == sorted_report.butterfly_violations
-        assert not shuffled_report.passed
+        assert sorted_report.butterfly_violations > 0, "a W-shaped smile triggers butterfly violations"
+        assert not sorted_report.passed, "a W-shaped smile does not pass"
+        assert sorted_report.butterfly_violations == 1, "sorted strikes report exactly one butterfly violation"
+        assert shuffled_report.butterfly_violations == sorted_report.butterfly_violations, (
+            "shuffled strikes report the same violations as sorted"
+        )
+        assert not shuffled_report.passed, "shuffled strikes do not hide the violation"
+        assert not doubled_report.passed, "a call and a put at every strike do not pass"
+        assert doubled_report.butterfly_violations == 1, "a call and a put at every strike report the one violation"
+        assert doubled_report.total_checks == len(ordered), "a call and a put at every strike are checked once each"
 
     @pytest.mark.parametrize(
-        "vol_fn",
-        [None, lambda strike: float("nan")],
-        ids=["no_vol_function", "nan_vol_function"],
+        ("vol_fn", "unevaluable"),
+        [
+            pytest.param(None, 5, id="no_vol_function"),
+            pytest.param(lambda strike: float("nan"), 5, id="nan_vol_function"),
+            pytest.param(_vol_fn_failing_at_the_money, 1, id="single_unevaluable_strike"),
+        ],
     )
-    def test_fit_that_evaluates_nowhere_does_not_pass(self, vol_fn) -> None:
-        """No evaluable vol means nothing was checked, which is not 'passed'."""
+    def test_fit_that_cannot_price_strikes_does_not_pass(self, vol_fn, unevaluable: int) -> None:
+        """No evaluable vol means nothing was checked, which is not 'passed'. A convex smile with one strike the fit
+        cannot price leaves that strike's triples unchecked, so the report fails closed."""
         strikes = np.array([90.0, 95.0, 100.0, 105.0, 110.0])
         fit = FitResult(method=FitMethod.SABR, ttm=0.25, _vol_fn=vol_fn)
 
         report = check_smile_arbitrage(fit, strikes, 100.0)
 
-        assert report.unevaluable == len(strikes)
-        assert report.total_checks == len(strikes)
-        assert not report.passed
-
-    def test_a_single_unevaluable_strike_does_not_pass(self) -> None:
-        """A convex smile with one strike the fit cannot price leaves that
-        strike's triples unchecked, so the report fails closed."""
-        strikes = np.array([90.0, 95.0, 100.0, 105.0, 110.0])
-
-        def vol_fn(strike: float) -> float:
-            if strike == 100.0:
-                raise ValueError("no vol at the money")
-            return 0.25
-
-        report = check_smile_arbitrage(FitResult(method=FitMethod.SABR, ttm=0.25, _vol_fn=vol_fn), strikes, 100.0)
-
-        assert report.unevaluable == 1
-        assert report.butterfly_violations == 0
-        assert not report.passed
-
-    def test_empty_strike_list_does_not_pass(self, flat_smile: SmileSlice) -> None:
-        report = check_smile_arbitrage(fit_variance_interp(flat_smile), np.array([]), flat_smile.forward)
-
-        assert report.total_checks == 0
-        assert not report.passed
-
-    def test_a_call_and_a_put_at_every_strike_are_checked_once_each(self) -> None:
-        """A chain carries one record per call and put, so each strike arrives
-        twice. The repeats collapse; they must not skip every triple."""
-        ordered = np.array([90.0, 95.0, 100.0, 105.0, 110.0])
-        ivs = np.array([0.30, 0.20, 0.35, 0.20, 0.30])  # W-shaped smile
-        fit = fit_variance_interp(SmileSlice(strikes=ordered, ivs=ivs, ttm=0.25, forward=100.0))
-
-        report = check_smile_arbitrage(fit, np.repeat(ordered, 2), 100.0)
-
-        assert not report.passed
-        assert report.butterfly_violations == 1
-        assert report.total_checks == len(ordered)
+        assert report.unevaluable == unevaluable, "every strike the fit cannot price is counted as unevaluable"
+        assert report.total_checks == len(strikes), "every strike is counted as a check"
+        assert report.butterfly_violations == 0, "no violation is claimed on strikes that could not be priced"
+        assert not report.passed, "the report fails closed"
 
     @pytest.mark.parametrize(
-        "strikes",
-        [[100.0], [95.0, 105.0], [100.0, 100.0], [95.0, 95.0, 105.0, 105.0]],
-        ids=["one_strike", "two_strikes", "one_strike_twice", "two_strikes_twice"],
+        ("strikes", "total_checks"),
+        [
+            ((), 0),
+            ((100.0,), 1),
+            ((95.0, 105.0), 2),
+            ((100.0, 100.0), 1),
+            ((95.0, 95.0, 105.0, 105.0), 2),
+        ],
+        ids=["empty_strike_list", "one_strike", "two_strikes", "one_strike_twice", "two_strikes_twice"],
     )
-    def test_fewer_than_three_distinct_strikes_cannot_pass(self, strikes: list[float], flat_smile: SmileSlice) -> None:
+    def test_fewer_than_three_distinct_strikes_cannot_pass(
+        self, strikes: tuple[float, ...], total_checks: int, flat_smile: SmileSlice
+    ) -> None:
         """No butterfly triple exists, so nothing was tested: not 'passed'."""
         report = check_smile_arbitrage(fit_variance_interp(flat_smile), np.array(strikes), flat_smile.forward)
 
-        assert not report.passed
-        assert report.unevaluable == 0
-        assert report.butterfly_triples_tested == 0
-        assert any("no butterfly triple" in detail for detail in report.details)
+        assert report.total_checks == total_checks, "total checks is the number of distinct strikes"
+        assert not report.passed, "no butterfly triple was tested, so the report is not 'passed'"
+        assert report.unevaluable == 0, "no strike is unevaluable"
+        assert report.butterfly_triples_tested == 0, "no butterfly triple was tested"
+        assert any("no butterfly triple" in detail for detail in report.details), "the details say why"
 
     def test_a_report_that_checked_nothing_does_not_read_passed(self) -> None:
         assert not ArbitrageReport().passed

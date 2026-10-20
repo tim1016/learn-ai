@@ -46,14 +46,10 @@ def test_stable_desired_state_path_rejects_symlink_escape(tmp_path: Path) -> Non
         stable_desired_state_path(artifacts_root, "x")
 
 
-def test_read_returns_none_when_absent(tmp_path: Path) -> None:
+def test_read_when_absent(tmp_path: Path) -> None:
     repo = DesiredStateRepo(tmp_path / "live_state" / "x" / "desired_state.json")
-    assert repo.read() is None
-
-
-def test_read_state_defaults_to_running_when_absent(tmp_path: Path) -> None:
-    repo = DesiredStateRepo(tmp_path / "live_state" / "x" / "desired_state.json")
-    assert repo.read_state() is DesiredState.RUNNING
+    assert repo.read() is None, "read returns None when the file is absent"
+    assert repo.read_state() is DesiredState.RUNNING, "read_state defaults to RUNNING when the file is absent"
 
 
 def test_write_then_read_round_trip(tmp_path: Path) -> None:
@@ -105,28 +101,24 @@ def test_set_bumps_version_and_overwrites_fields(tmp_path: Path) -> None:
     assert repo.read_state() is DesiredState.RUNNING
 
 
-def test_corrupt_file_raises_typed_error(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "content",
+    [
+        "{not valid json",
+        # Valid JSON, invalid enum value for desired_state.
+        '{"desired_state": "FROLICKING", "updated_at_ms": 1, "updated_by": "op"}',
+    ],
+    ids=["corrupt-file", "schema-violation"],
+)
+def test_unreadable_file_raises_typed_error(tmp_path: Path, content: str) -> None:
     path = stable_desired_state_path(tmp_path, "x")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("{not valid json", encoding="utf-8")
+    path.write_text(content, encoding="utf-8")
 
     repo = DesiredStateRepo(path)
     with pytest.raises(DesiredStateCorruptError) as excinfo:
         repo.read()
-    assert excinfo.value.path == path
-
-
-def test_schema_violation_raises_typed_error(tmp_path: Path) -> None:
-    path = stable_desired_state_path(tmp_path, "x")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # Valid JSON, invalid enum value for desired_state.
-    path.write_text(
-        '{"desired_state": "FROLICKING", "updated_at_ms": 1, "updated_by": "op"}',
-        encoding="utf-8",
-    )
-    repo = DesiredStateRepo(path)
-    with pytest.raises(DesiredStateCorruptError):
-        repo.read()
+    assert excinfo.value.path == path, "the error names the unreadable file's path"
 
 
 def test_write_leaves_no_tmp_artifact(tmp_path: Path) -> None:

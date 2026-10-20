@@ -35,16 +35,27 @@ def _trade(
     return t
 
 
-def test_identical_trade_lists_have_no_divergences() -> None:
+@pytest.mark.parametrize(
+    "trades",
+    [
+        pytest.param(
+            (
+                (1, 1_700_000_000_000, 1_700_000_300_000, Decimal("100.0"), Decimal("101.0")),
+                (2, 1_700_000_600_000, 1_700_000_900_000, Decimal("101.0"), Decimal("102.0")),
+            ),
+            id="identical_trade_lists_have_no_divergences",
+        ),
+        pytest.param((), id="empty_lists_no_divergences"),
+    ],
+)
+def test_matching_trade_lists_have_no_divergences(trades: tuple[tuple[int, int, int, Decimal, Decimal], ...]) -> None:
     from app.services.lean_sidecar_compare_service import reconcile_trade_lists
 
-    trades = [
-        _trade(1, 1_700_000_000_000, 1_700_000_300_000, Decimal("100.0"), Decimal("101.0")),
-        _trade(2, 1_700_000_600_000, 1_700_000_900_000, Decimal("101.0"), Decimal("102.0")),
-    ]
-    result = reconcile_trade_lists(left_trades=trades, right_trades=trades)
-    assert result.divergences == []
-    assert result.first_divergence_ms_utc is None
+    left = [_trade(*args) for args in trades]
+    right = [_trade(*args) for args in trades]
+    result = reconcile_trade_lists(left_trades=left, right_trades=right)
+    assert result.divergences == [], "no divergences"
+    assert result.first_divergence_ms_utc is None, "no first divergence"
 
 
 def test_decision_mismatch_when_one_side_has_extra_trade() -> None:
@@ -61,37 +72,70 @@ def test_decision_mismatch_when_one_side_has_extra_trade() -> None:
     assert result.first_divergence_ms_utc is not None
 
 
-@pytest.mark.parametrize("field", ("entry_ms_utc", "exit_ms_utc"))
-def test_one_millisecond_timestamp_shift_is_a_decision_mismatch(field: str) -> None:
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("entry_ms_utc", 1_700_000_000_001, id="one_millisecond_timestamp_shift_entry_ms_utc"),
+        pytest.param("exit_ms_utc", 1_700_000_300_001, id="one_millisecond_timestamp_shift_exit_ms_utc"),
+        pytest.param("is_synthetic_exit", True, id="synthetic_exit_difference"),
+    ],
+)
+def test_a_changed_decision_field_is_a_decision_mismatch(field: str, value: object) -> None:
     from app.services.lean_sidecar_compare_service import reconcile_trade_lists
 
     left = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, Decimal("100.0"), Decimal("101.0"))]
-    right = [dict(left[0])]
-    right[0][field] += 1
+    right = [dict(left[0], **{field: value})]
 
     result = reconcile_trade_lists(left_trades=left, right_trades=right)
 
     assert [divergence.category for divergence in result.divergences] == ["DECISION_MISMATCH"]
 
 
-def test_synthetic_exit_difference_is_a_decision_mismatch() -> None:
+@pytest.mark.parametrize(
+    ("left", "right", "reconcile_kwargs", "category", "absent_categories"),
+    [
+        pytest.param(
+            (Decimal("100.0"), Decimal("101.0"), Decimal("10")),
+            (Decimal("100.10"), Decimal("101.00"), Decimal("10")),
+            (("fill_price_atol", Decimal("0.01")),),
+            "FILL_PRICE_DRIFT",
+            (),
+            id="fill_price_drift_classified",
+        ),
+        pytest.param(
+            (Decimal("100.0"), Decimal("101.0"), Decimal("10")),
+            (Decimal("100.0"), Decimal("101.0"), Decimal("20")),
+            (),
+            "QUANTITY_MISMATCH",
+            (),
+            id="quantity_mismatch_classified",
+        ),
+        # Signed quantities with opposite sign on same trade number → DIRECTION_MISMATCH.
+        # Should NOT also emit QUANTITY_MISMATCH for the same pair since abs magnitudes match.
+        pytest.param(
+            (Decimal("100.0"), Decimal("101.0"), Decimal("10")),
+            (Decimal("100.0"), Decimal("101.0"), Decimal("-10")),
+            (),
+            "DIRECTION_MISMATCH",
+            ("QUANTITY_MISMATCH",),
+            id="direction_mismatch_classified",
+        ),
+    ],
+)
+def test_a_differing_fill_is_classified_by_what_differs(
+    left: tuple[Decimal, Decimal, Decimal],
+    right: tuple[Decimal, Decimal, Decimal],
+    reconcile_kwargs: tuple[tuple[str, Decimal], ...],
+    category: str,
+    absent_categories: tuple[str, ...],
+) -> None:
     from app.services.lean_sidecar_compare_service import reconcile_trade_lists
 
-    left = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, Decimal("100.0"), Decimal("101.0"))]
-    right = [dict(left[0], is_synthetic_exit=True)]
-
-    result = reconcile_trade_lists(left_trades=left, right_trades=right)
-
-    assert [divergence.category for divergence in result.divergences] == ["DECISION_MISMATCH"]
-
-
-def test_fill_price_drift_classified() -> None:
-    from app.services.lean_sidecar_compare_service import reconcile_trade_lists
-
-    left = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, Decimal("100.0"), Decimal("101.0"))]
-    right = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, Decimal("100.10"), Decimal("101.00"))]
-    result = reconcile_trade_lists(left_trades=left, right_trades=right, fill_price_atol=Decimal("0.01"))
-    assert any(d.category == "FILL_PRICE_DRIFT" for d in result.divergences)
+    left_trades = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, left[0], left[1], qty=left[2])]
+    right_trades = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, right[0], right[1], qty=right[2])]
+    result = reconcile_trade_lists(left_trades=left_trades, right_trades=right_trades, **dict(reconcile_kwargs))
+    assert any(d.category == category for d in result.divergences), f"{category} is emitted"
+    assert not any(d.category in absent_categories for d in result.divergences), "categories that must not be emitted"
 
 
 def test_first_divergence_ms_is_earliest() -> None:
@@ -109,23 +153,6 @@ def test_first_divergence_ms_is_earliest() -> None:
     assert result.first_divergence_ms_utc == 1_700_000_000_000
 
 
-def test_quantity_mismatch_classified() -> None:
-    from app.services.lean_sidecar_compare_service import reconcile_trade_lists
-
-    left = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, Decimal("100.0"), Decimal("101.0"), qty=Decimal("10"))]
-    right = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, Decimal("100.0"), Decimal("101.0"), qty=Decimal("20"))]
-    result = reconcile_trade_lists(left_trades=left, right_trades=right)
-    assert any(d.category == "QUANTITY_MISMATCH" for d in result.divergences)
-
-
-def test_empty_lists_no_divergences() -> None:
-    from app.services.lean_sidecar_compare_service import reconcile_trade_lists
-
-    result = reconcile_trade_lists(left_trades=[], right_trades=[])
-    assert result.divergences == []
-    assert result.first_divergence_ms_utc is None
-
-
 def test_one_empty_side_yields_decision_mismatches() -> None:
     from app.services.lean_sidecar_compare_service import reconcile_trade_lists
 
@@ -139,60 +166,48 @@ def test_one_empty_side_yields_decision_mismatches() -> None:
     assert all(d.category == "DECISION_MISMATCH" for d in result.divergences)
 
 
-def test_direction_mismatch_classified() -> None:
-    """Signed quantities with opposite sign on same trade number → DIRECTION_MISMATCH."""
+@pytest.mark.parametrize(
+    ("left_fee", "right_fee", "reconcile_kwargs", "emitted"),
+    [
+        # Fee difference > commission_atol and assert_fees=True → COMMISSION_DRIFT.
+        pytest.param(
+            Decimal("1.00"),
+            Decimal("1.05"),
+            (("commission_atol", Decimal("0.001")), ("assert_fees", True)),
+            True,
+            id="commission_drift_emitted_when_assert_fees_true",
+        ),
+        # Fee difference is ignored when assert_fees=False (Branch B fixture).
+        pytest.param(
+            Decimal("1.00"),
+            Decimal("5.00"),
+            (("assert_fees", False),),
+            False,
+            id="commission_drift_suppressed_when_assert_fees_false",
+        ),
+        # If either side lacks a fee field, COMMISSION_DRIFT is skipped even with assert_fees=True.
+        # No fee key in either trade.
+        pytest.param(
+            None,
+            None,
+            (("assert_fees", True),),
+            False,
+            id="commission_drift_suppressed_when_fee_field_absent",
+        ),
+    ],
+)
+def test_commission_drift_follows_assert_fees_and_the_fee_field(
+    left_fee: Decimal | None,
+    right_fee: Decimal | None,
+    reconcile_kwargs: tuple[tuple[str, Decimal | bool], ...],
+    emitted: bool,
+) -> None:
     from app.services.lean_sidecar_compare_service import reconcile_trade_lists
 
-    left = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, Decimal("100.0"), Decimal("101.0"), qty=Decimal("10"))]
-    right = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, Decimal("100.0"), Decimal("101.0"), qty=Decimal("-10"))]
-    result = reconcile_trade_lists(left_trades=left, right_trades=right)
-    assert any(d.category == "DIRECTION_MISMATCH" for d in result.divergences)
-    # Should NOT also emit QUANTITY_MISMATCH for the same pair since abs magnitudes match
-    assert not any(d.category == "QUANTITY_MISMATCH" for d in result.divergences)
-
-
-def test_commission_drift_emitted_when_assert_fees_true() -> None:
-    """Fee difference > commission_atol and assert_fees=True → COMMISSION_DRIFT."""
-    from app.services.lean_sidecar_compare_service import reconcile_trade_lists
-
-    left = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, Decimal("100.0"), Decimal("101.0"), fee=Decimal("1.00"))]
-    right = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, Decimal("100.0"), Decimal("101.0"), fee=Decimal("1.05"))]
-    result = reconcile_trade_lists(
-        left_trades=left,
-        right_trades=right,
-        commission_atol=Decimal("0.001"),
-        assert_fees=True,
-    )
-    assert any(d.category == "COMMISSION_DRIFT" for d in result.divergences)
-
-
-def test_commission_drift_suppressed_when_assert_fees_false() -> None:
-    """Fee difference is ignored when assert_fees=False (Branch B fixture)."""
-    from app.services.lean_sidecar_compare_service import reconcile_trade_lists
-
-    left = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, Decimal("100.0"), Decimal("101.0"), fee=Decimal("1.00"))]
-    right = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, Decimal("100.0"), Decimal("101.0"), fee=Decimal("5.00"))]
-    result = reconcile_trade_lists(
-        left_trades=left,
-        right_trades=right,
-        assert_fees=False,
-    )
-    assert not any(d.category == "COMMISSION_DRIFT" for d in result.divergences)
-
-
-def test_commission_drift_suppressed_when_fee_field_absent() -> None:
-    """If either side lacks a fee field, COMMISSION_DRIFT is skipped even with assert_fees=True."""
-    from app.services.lean_sidecar_compare_service import reconcile_trade_lists
-
-    # No fee key in either trade
-    left = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, Decimal("100.0"), Decimal("101.0"))]
-    right = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, Decimal("100.0"), Decimal("101.0"))]
-    result = reconcile_trade_lists(
-        left_trades=left,
-        right_trades=right,
-        assert_fees=True,
-    )
-    assert not any(d.category == "COMMISSION_DRIFT" for d in result.divergences)
+    left = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, Decimal("100.0"), Decimal("101.0"), fee=left_fee)]
+    right = [_trade(1, 1_700_000_000_000, 1_700_000_300_000, Decimal("100.0"), Decimal("101.0"), fee=right_fee)]
+    result = reconcile_trade_lists(left_trades=left, right_trades=right, **dict(reconcile_kwargs))
+    assert any(d.category == "COMMISSION_DRIFT" for d in result.divergences) is emitted
 
 
 def test_pnl_drift_classified() -> None:

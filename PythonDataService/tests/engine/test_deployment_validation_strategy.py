@@ -5,6 +5,8 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import BacktestEngine
 from app.engine.execution.fill_model import FillModel
@@ -145,17 +147,35 @@ def _run_signal_only(bars: list[TradeBar]) -> list[str]:
     return decisions
 
 
-def test_red_bar_resets_green_detection() -> None:
-    bars = [
-        _bar(9, 44, "100", "101"),
-        _bar(9, 45, "101", "100"),  # red resets
-        _bar(9, 46, "100", "101"),
-        _bar(9, 47, "101", "100"),  # red resets again
-        _bar(9, 48, "100", "101"),
-        _bar(9, 49, "101", "100"),
-    ]
-
-    _strategy, events = _run(bars)
+@pytest.mark.parametrize(
+    "bar_specs",
+    [
+        pytest.param(
+            (
+                (9, 44, "100", "101"),
+                (9, 45, "101", "100"),  # red resets
+                (9, 46, "100", "101"),
+                (9, 47, "101", "100"),  # red resets again
+                (9, 48, "100", "101"),
+                (9, 49, "101", "100"),
+            ),
+            id="red_bar_resets_green_detection",
+        ),
+        pytest.param(
+            (
+                (15, 44, "100", "101"),  # ends at 15:45, barrier fires before detection
+                (15, 45, "101", "102"),
+                (15, 46, "102", "103"),
+                (15, 47, "103", "104"),
+            ),
+            id="stops_detecting_and_flattens_at_1545",
+        ),
+    ],
+)
+def test_bars_that_never_qualify_for_an_entry_produce_no_order_events(
+    bar_specs: tuple[tuple[int, int, str, str], ...],
+) -> None:
+    _strategy, events = _run([_bar(*spec) for spec in bar_specs])
 
     assert events == []
 
@@ -181,19 +201,6 @@ def test_detector_resets_after_exit_and_allows_many_trades_per_day() -> None:
 
     assert [e.direction for e in events] == [Direction.LONG, Direction.SHORT, Direction.LONG, Direction.SHORT]
     assert len(strategy.trade_log) == 2
-
-
-def test_stops_detecting_and_flattens_at_1545() -> None:
-    bars = [
-        _bar(15, 44, "100", "101"),  # ends at 15:45, barrier fires before detection
-        _bar(15, 45, "101", "102"),
-        _bar(15, 46, "102", "103"),
-        _bar(15, 47, "103", "104"),
-    ]
-
-    _strategy, events = _run(bars)
-
-    assert events == []
 
 
 def test_on_minute_bar_suppresses_entries_at_half_day_barrier() -> None:

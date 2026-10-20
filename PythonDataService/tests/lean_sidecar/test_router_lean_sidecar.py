@@ -242,59 +242,65 @@ class TestCalendarNextTradingDayOpenEndpoint:
     submission doesn't reproduce NYSE-calendar logic in TypeScript.
     """
 
-    async def test_skips_weekend(self, client: AsyncClient) -> None:
-        # Fri 2025-01-17 → Mon 2025-01-20 is MLK Day (closed), so the
-        # next session is Tue 2025-01-21.
-        # 09:30 ET on 2025-01-21 (EST = UTC-5) = 14:30 UTC.
+    @pytest.mark.parametrize(
+        ("query_date", "next_trading_date", "expected_open_utc"),
+        [
+            # Fri 2025-01-17 → Mon 2025-01-20 is MLK Day (closed), so the
+            # next session is Tue 2025-01-21.
+            # 09:30 ET on 2025-01-21 (EST = UTC-5) = 14:30 UTC.
+            pytest.param("2025-01-17", "2025-01-21", (2025, 1, 21, 14, 30), id="skips_weekend"),
+            # Mon 2025-01-13 → Tue 2025-01-14, both normal sessions.
+            pytest.param("2025-01-13", "2025-01-14", (2025, 1, 14, 14, 30), id="after_regular_trading_day"),
+            # Summer date — 09:30 EDT = 13:30 UTC, not 14:30. Mon 2025-07-14
+            # → Tue 2025-07-15 (both normal sessions).
+            pytest.param("2025-07-14", "2025-07-15", (2025, 7, 15, 13, 30), id="dst_awareness"),
+        ],
+    )
+    async def test_next_trading_day_open(
+        self,
+        client: AsyncClient,
+        query_date: str,
+        next_trading_date: str,
+        expected_open_utc: tuple[int, int, int, int, int],
+    ) -> None:
         r = await client.get(
             "/api/lean-sidecar/calendar/next-trading-day-open",
-            params={"date": "2025-01-17"},
+            params={"date": query_date},
         )
-        assert r.status_code == 200
+        assert r.status_code == 200, "endpoint answers 200"
         body = r.json()
-        assert body["next_trading_date"] == "2025-01-21"
+        assert body["next_trading_date"] == next_trading_date, "next trading date skips closed days"
         from datetime import UTC, datetime
 
-        expected_ms = int(datetime(2025, 1, 21, 14, 30, tzinfo=UTC).timestamp() * 1000)
-        assert body["session_open_ms_utc"] == expected_ms
-
-    async def test_after_regular_trading_day(self, client: AsyncClient) -> None:
-        # Mon 2025-01-13 → Tue 2025-01-14, both normal sessions.
-        r = await client.get(
-            "/api/lean-sidecar/calendar/next-trading-day-open",
-            params={"date": "2025-01-13"},
-        )
-        assert r.status_code == 200
-        body = r.json()
-        assert body["next_trading_date"] == "2025-01-14"
-        from datetime import UTC, datetime
-
-        expected_ms = int(datetime(2025, 1, 14, 14, 30, tzinfo=UTC).timestamp() * 1000)
-        assert body["session_open_ms_utc"] == expected_ms
-
-    async def test_dst_awareness(self, client: AsyncClient) -> None:
-        # Summer date — 09:30 EDT = 13:30 UTC, not 14:30. Mon 2025-07-14
-        # → Tue 2025-07-15 (both normal sessions).
-        r = await client.get(
-            "/api/lean-sidecar/calendar/next-trading-day-open",
-            params={"date": "2025-07-14"},
-        )
-        assert r.status_code == 200
-        body = r.json()
-        assert body["next_trading_date"] == "2025-07-15"
-        from datetime import UTC, datetime
-
-        expected_ms = int(datetime(2025, 7, 15, 13, 30, tzinfo=UTC).timestamp() * 1000)
-        assert body["session_open_ms_utc"] == expected_ms
+        expected_ms = int(datetime(*expected_open_utc, tzinfo=UTC).timestamp() * 1000)
+        assert body["session_open_ms_utc"] == expected_ms, "session open is 09:30 ET resolved through the NY zone"
 
 
 class TestPostTrustedRunValidation:
     @pytest.mark.parametrize(
         "bad_field,bad_value",
         [
-            ("run_id", "../escape"),  # bad slug
-            ("starting_cash", 0),  # below cap
-            ("starting_cash", 50_000_000),  # above cap
+            pytest.param("run_id", "../escape", id="bad_run_id_slug"),
+            pytest.param("starting_cash", 0, id="starting_cash_below_cap"),
+            pytest.param("starting_cash", 50_000_000, id="starting_cash_above_cap"),
+            # ``extra="forbid"`` still rejects keys the schema doesn't know
+            # about. ``algorithm_source`` IS in the schema as of Phase 4c (see
+            # separate tests), so a different bogus field proves the
+            # forbid-unknown contract still holds — important because a future
+            # field could be smuggled if forbid silently became allow.
+            pytest.param("unknown_field", "anything", id="forbids_unknown_extra_fields"),
+            # Path-traversal characters in ``symbol`` must be rejected at the
+            # API boundary — before they reach the staging writers that join
+            # the symbol into a filesystem path.
+            pytest.param("symbol", "../../etc/passwd", id="symbol_path_traversal_etc_passwd"),
+            pytest.param("symbol", "SPY/extra", id="symbol_forward_slash"),
+            pytest.param("symbol", "SPY\\windows", id="symbol_backslash"),
+            pytest.param("symbol", "..", id="symbol_double_dot"),
+            pytest.param("symbol", "", id="symbol_empty"),
+            pytest.param("symbol", "TOO_LONG_TICKER_OVER_LIMIT_X", id="symbol_too_long"),
+            # A typo or unknown template must 422 — silently falling through
+            # to the default would mask brokerage intent.
+            pytest.param("template", "not_a_real_template", id="template_rejects_unknown_value"),
         ],
     )
     async def test_pydantic_rejects_bad_inputs(
@@ -310,7 +316,7 @@ class TestPostTrustedRunValidation:
         # Pydantic field/model_validator violation, not a downstream
         # service error. Locking to 422 catches regressions where a
         # request-shape error accidentally becomes a 400.
-        assert r.status_code == 422
+        assert r.status_code == 422, f"{bad_field}={bad_value!r} should have been rejected at the boundary"
 
     async def test_reversed_window_rejected(self, client: AsyncClient) -> None:
         payload = _good_payload()
@@ -340,18 +346,6 @@ class TestPostTrustedRunValidation:
         r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
         assert r.status_code == 422
         assert "trading days" in r.text
-
-    async def test_forbids_unknown_extra_fields(self, client: AsyncClient) -> None:
-        """``extra="forbid"`` still rejects keys the schema doesn't
-        know about. ``algorithm_source`` IS in the schema as of
-        Phase 4c (see separate tests), so this test uses a different
-        bogus field that proves the forbid-unknown contract still
-        holds — important because a future field could be smuggled
-        if forbid silently became allow."""
-        payload = _good_payload()
-        payload["unknown_field"] = "anything"
-        r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
-        assert r.status_code == 422
 
     async def test_algorithm_source_optional(self) -> None:
         """Phase 4c: omitting ``algorithm_source`` is valid — the
@@ -396,23 +390,24 @@ class TestPostTrustedRunValidation:
         assert model.algorithm_source is not None
         assert len(model.algorithm_source.encode("utf-8")) == 200 * 1024 + 2
 
-    async def test_rejects_start_ms_not_session_open(self, client: AsyncClient) -> None:
-        """P2.5 — start_ms_utc must be exactly 09:30 ET of a trading
-        day. Midnight-UTC payloads (the pre-P2.5 contract) are
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            # 2025-01-06 00:00 UTC = the OLD-contract midnight-UTC value.
+            pytest.param("start_ms_utc", 1_736_121_600_000, id="rejects_start_ms_not_session_open"),
+            # midnight UTC of 2025-01-10
+            pytest.param("end_ms_utc", 1_736_467_200_000, id="rejects_end_ms_not_session_open"),
+        ],
+    )
+    async def test_rejects_ms_not_session_open(self, client: AsyncClient, field: str, value: int) -> None:
+        """P2.5 — start_ms_utc / end_ms_utc must be exactly 09:30 ET of a
+        trading day. Midnight-UTC payloads (the pre-P2.5 contract) are
         rejected with a clear error pointing at the new contract."""
         payload = _good_payload()
-        # 2025-01-06 00:00 UTC = the OLD-contract midnight-UTC value.
-        payload["start_ms_utc"] = 1_736_121_600_000
+        payload[field] = value
         r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
-        assert r.status_code == 422
-        assert "09:30" in r.text or "session" in r.text.lower()
-
-    async def test_rejects_end_ms_not_session_open(self, client: AsyncClient) -> None:
-        payload = _good_payload()
-        payload["end_ms_utc"] = 1_736_467_200_000  # midnight UTC of 2025-01-10
-        r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
-        assert r.status_code == 422
-        assert "09:30" in r.text or "session" in r.text.lower()
+        assert r.status_code == 422, f"{field} midnight-UTC value is rejected"
+        assert "09:30" in r.text or "session" in r.text.lower(), "error points at the 09:30 ET session-open contract"
 
     async def test_rejects_window_starting_on_weekend(self, client: AsyncClient) -> None:
         """P2.5 — start_date must be a trading day. Saturday/Sunday
@@ -428,36 +423,38 @@ class TestPostTrustedRunValidation:
         assert r.status_code == 422
         assert "2025-01-11" in r.text
 
-    async def test_accepts_holiday_in_middle_of_window(self) -> None:
-        """P2.5 — weekends and federal holidays IN BETWEEN trading-day
-        endpoints are allowed; staging skips them. Schema-only — no
-        podman/LEAN dependency."""
+    @pytest.mark.parametrize(
+        ("start_date", "end_date"),
+        [
+            # MLK Day 2025 = Mon 2025-01-20. Range Fri 01-17 → Wed 01-22
+            # (exclusive end) has MLK Monday in the middle as a holiday:
+            # weekends and federal holidays IN BETWEEN trading-day endpoints
+            # are allowed; staging skips them.
+            pytest.param(date(2025, 1, 17), date(2025, 1, 22), id="accepts_holiday_in_middle_of_window"),
+            # Regression: comparison windows routinely cross NYSE early
+            # closes. Half-days are sessions, not blockers. Wed 2025-11-26 →
+            # next_trading_day after Fri 2025-11-28: 2025-11-27 is
+            # Thanksgiving (full holiday) AND 2025-11-28 is the Black-Friday
+            # early close; end = next_trading_day(11-28).
+            pytest.param(date(2025, 11, 26), date(2025, 12, 1), id="regression_accepts_window_touching_half_day"),
+            # P2.5 — a window that straddles a DST boundary must validate
+            # cleanly when both endpoints resolve through the NY zone. DST
+            # starts 2025-03-09 EST→EDT: Fri 2025-03-07 (EST) → Tue
+            # 2025-03-11 (EDT); end = next_trading_day(03-11).
+            pytest.param(date(2025, 3, 7), date(2025, 3, 12), id="accepts_dst_straddling_window"),
+        ],
+    )
+    async def test_accepts_windows_crossing_calendar_events(self, start_date: date, end_date: date) -> None:
+        """Schema-only — no podman/LEAN dependency."""
         from app.lean_sidecar.trading_calendar import session_open_ms_utc
         from app.routers.lean_sidecar import TrustedRunRequestModel
 
         payload = _good_payload()
-        # MLK Day 2025 = Mon 2025-01-20. Range Fri 01-17 → Wed 01-22
-        # (exclusive end) has MLK Monday in the middle as a holiday.
-        payload["start_ms_utc"] = session_open_ms_utc(date(2025, 1, 17))
-        payload["end_ms_utc"] = session_open_ms_utc(date(2025, 1, 22))
+        payload["start_ms_utc"] = session_open_ms_utc(start_date)
+        payload["end_ms_utc"] = session_open_ms_utc(end_date)
         model = TrustedRunRequestModel.model_validate(payload)
-        assert model.start_ms_utc == payload["start_ms_utc"]
-
-    async def test_accepts_window_touching_half_day(self) -> None:
-        """Regression: comparison windows routinely cross NYSE early
-        closes. Half-days are sessions, not blockers."""
-        from app.lean_sidecar.trading_calendar import session_open_ms_utc
-        from app.routers.lean_sidecar import TrustedRunRequestModel
-
-        payload = _good_payload()
-        # Wed 2025-11-26 → next_trading_day after Fri 2025-11-28.
-        # 2025-11-27 is Thanksgiving (full holiday) AND 2025-11-28
-        # is the Black-Friday early close.
-        payload["start_ms_utc"] = session_open_ms_utc(date(2025, 11, 26))
-        payload["end_ms_utc"] = session_open_ms_utc(date(2025, 12, 1))  # next_trading_day(11-28)
-        model = TrustedRunRequestModel.model_validate(payload)
-        assert model.start_ms_utc == payload["start_ms_utc"]
-        assert model.end_ms_utc == payload["end_ms_utc"]
+        assert model.start_ms_utc == payload["start_ms_utc"], "start_ms_utc survives validation"
+        assert model.end_ms_utc == payload["end_ms_utc"], "end_ms_utc survives validation"
 
     async def test_accepts_user_two_year_window_crossing_2024_black_friday(self) -> None:
         """Regression for the LEAN Lab payload that previously failed
@@ -471,42 +468,6 @@ class TestPostTrustedRunValidation:
         model = TrustedRunRequestModel.model_validate(payload)
         assert model.start_ms_utc == 1_722_519_000_000
         assert model.end_ms_utc == 1_779_111_000_000
-
-    async def test_accepts_dst_straddling_window(self) -> None:
-        """P2.5 — a window that straddles a DST boundary must validate
-        cleanly when both endpoints resolve through the NY zone. DST
-        starts 2025-03-09 EST→EDT."""
-        from app.lean_sidecar.trading_calendar import session_open_ms_utc
-        from app.routers.lean_sidecar import TrustedRunRequestModel
-
-        payload = _good_payload()
-        # Fri 2025-03-07 (EST) → Tue 2025-03-11 (EDT).
-        payload["start_ms_utc"] = session_open_ms_utc(date(2025, 3, 7))
-        payload["end_ms_utc"] = session_open_ms_utc(date(2025, 3, 12))  # next_trading_day(03-11)
-        # Schema-only — no podman/LEAN dependency.
-        model = TrustedRunRequestModel.model_validate(payload)
-        assert model.start_ms_utc == payload["start_ms_utc"]
-        assert model.end_ms_utc == payload["end_ms_utc"]
-
-    @pytest.mark.parametrize(
-        "bad_symbol",
-        [
-            "../../etc/passwd",
-            "SPY/extra",
-            "SPY\\windows",
-            "..",
-            "",
-            "TOO_LONG_TICKER_OVER_LIMIT_X",
-        ],
-    )
-    async def test_pydantic_rejects_path_traversal_symbols(self, client: AsyncClient, bad_symbol: str) -> None:
-        """Path-traversal characters in ``symbol`` must be rejected at
-        the API boundary — before they reach the staging writers that
-        join the symbol into a filesystem path."""
-        payload = _good_payload()
-        payload["symbol"] = bad_symbol
-        r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
-        assert r.status_code == 422, f"symbol {bad_symbol!r} should have been rejected at the boundary"
 
 
 class TestPostTrustedRunHappyPath:
@@ -734,131 +695,87 @@ class TestTemplateSelection:
             "rsi_max": 70.0,
         }
 
-    async def test_two_bps_template_accepts_valid_strategy_parameters(self) -> None:
-        from app.routers.lean_sidecar import TrustedRunRequestModel
-
-        payload = _good_payload()
-        payload["template"] = "ema_crossover_2_bps"
-        payload["strategy_parameters"] = {
-            "gap_bps": 4,
-            "rsi_min": 52,
-            "rsi_max": 68,
-        }
-
-        model = TrustedRunRequestModel.model_validate(payload)
-
-        assert model.strategy_parameters is not None
-        assert model.strategy_parameters.gap_bps == 4
-
     @pytest.mark.parametrize(
-        "strategy_parameters",
+        ("template", "strategy_parameters", "expected_gap_bps", "expected_rsi_min"),
         [
-            {"gap_bps": -1, "rsi_min": 50, "rsi_max": 70},
-            {"gap_bps": 2, "rsi_min": 70, "rsi_max": 50},
-            {"gap_bps": 2, "rsi_min": 50, "rsi_max": 70, "unknown": 1},
+            pytest.param(
+                "ema_crossover_2_bps",
+                {"gap_bps": 4, "rsi_min": 52, "rsi_max": 68},
+                4,
+                52,
+                id="two_bps_template_accepts_valid_strategy_parameters",
+            ),
+            pytest.param(
+                "ema_crossover_signal",
+                {},
+                0.0,
+                50.0,
+                id="signal_template_empty_parameters_use_signal_defaults",
+            ),
+            pytest.param(
+                "ema_crossover_signal",
+                {"rsi_min": 45},
+                0.0,
+                45.0,
+                id="signal_template_partial_parameters_use_signal_defaults",
+            ),
         ],
     )
-    async def test_two_bps_template_rejects_invalid_strategy_parameters(
+    async def test_strategy_parameters_parse_with_template_defaults(
         self,
+        template: str,
         strategy_parameters: dict[str, float],
-    ) -> None:
-        from pydantic import ValidationError
-
-        from app.routers.lean_sidecar import TrustedRunRequestModel
-
-        payload = _good_payload()
-        payload["template"] = "ema_crossover_2_bps"
-        payload["strategy_parameters"] = strategy_parameters
-
-        with pytest.raises(ValidationError):
-            TrustedRunRequestModel.model_validate(payload)
-
-    async def test_signal_template_accepts_all_resolved_strategy_parameters(self) -> None:
-        from app.routers.lean_sidecar import TrustedRunRequestModel
-
-        payload = _good_payload()
-        payload["template"] = "ema_crossover_signal"
-        payload["strategy_parameters"] = {
-            "gap": 0.35,
-            "gap_bps": 2.5,
-            "rsi_min": 42,
-            "rsi_max": 68,
-        }
-
-        model = TrustedRunRequestModel.model_validate(payload)
-
-        assert model.strategy_parameters is not None
-        assert model.strategy_parameters.model_dump() == payload["strategy_parameters"]
-
-    @pytest.mark.parametrize(
-        ("strategy_parameters", "expected_rsi_min"),
-        [({}, 50.0), ({"rsi_min": 45}, 45.0)],
-    )
-    async def test_signal_template_partial_parameters_use_signal_defaults(
-        self,
-        strategy_parameters: dict[str, float],
+        expected_gap_bps: float,
         expected_rsi_min: float,
     ) -> None:
         from app.routers.lean_sidecar import TrustedRunRequestModel
 
         payload = _good_payload()
-        payload["template"] = "ema_crossover_signal"
-        payload["strategy_parameters"] = strategy_parameters
+        payload["template"] = template
+        payload["strategy_parameters"] = dict(strategy_parameters)
 
         model = TrustedRunRequestModel.model_validate(payload)
 
-        assert model.strategy_parameters is not None
-        assert model.strategy_parameters.gap_bps == 0.0
-        assert model.strategy_parameters.rsi_min == expected_rsi_min
-
-    async def test_previous_crossover_template_accepts_all_eight_settings(self) -> None:
-        from app.routers.lean_sidecar import TrustedRunRequestModel
-
-        payload = _good_payload()
-        payload["template"] = "ema_previous_crossover"
-        payload["strategy_parameters"] = {
-            "gap": 0.35,
-            "gap_bps": 2.5,
-            "rsi_min": 42,
-            "rsi_max": 68,
-            "fast_period": 7,
-            "slow_period": 20,
-            "hold_bars": 6,
-            "cross_max_age_bars": 2,
-        }
-
-        model = TrustedRunRequestModel.model_validate(payload)
-
-        assert model.strategy_parameters is not None
-        assert model.strategy_parameters.model_dump() == payload["strategy_parameters"]
+        assert model.strategy_parameters is not None, "strategy_parameters is populated"
+        assert model.strategy_parameters.gap_bps == expected_gap_bps, "gap_bps is the supplied or template-default value"
+        assert model.strategy_parameters.rsi_min == expected_rsi_min, "rsi_min is the supplied or template-default value"
 
     @pytest.mark.parametrize(
-        "strategy_parameters",
+        ("template", "strategy_parameters"),
         [
-            {"fast_period": 1},
-            {"slow_period": 41},
-            {"hold_bars": 27},
-            {"hold_bars": True},
-            {"cross_max_age_bars": -1},
-            {"cross_max_age_bars": 9},
-            {"fast_period": 10, "slow_period": 10},
-            {"rsi_min": 70, "rsi_max": 70},
-            {"gap": -0.01},
-        ],
-        ids=[
-            "fast-too-short",
-            "slow-too-long",
-            "hold-too-long",
-            "boolean-hold",
-            "negative-cross-age",
-            "cross-age-too-long",
-            "fast-not-below-slow",
-            "empty-rsi-band",
-            "negative-gap",
+            pytest.param(
+                "ema_crossover_2_bps",
+                {"gap_bps": -1, "rsi_min": 50, "rsi_max": 70},
+                id="two-bps-negative-gap",
+            ),
+            pytest.param(
+                "ema_crossover_2_bps",
+                {"gap_bps": 2, "rsi_min": 70, "rsi_max": 50},
+                id="two-bps-inverted-rsi-band",
+            ),
+            pytest.param(
+                "ema_crossover_2_bps",
+                {"gap_bps": 2, "rsi_min": 50, "rsi_max": 70, "unknown": 1},
+                id="two-bps-unknown-key",
+            ),
+            pytest.param("ema_previous_crossover", {"fast_period": 1}, id="previous-fast-too-short"),
+            pytest.param("ema_previous_crossover", {"slow_period": 41}, id="previous-slow-too-long"),
+            pytest.param("ema_previous_crossover", {"hold_bars": 27}, id="previous-hold-too-long"),
+            pytest.param("ema_previous_crossover", {"hold_bars": True}, id="previous-boolean-hold"),
+            pytest.param("ema_previous_crossover", {"cross_max_age_bars": -1}, id="previous-negative-cross-age"),
+            pytest.param("ema_previous_crossover", {"cross_max_age_bars": 9}, id="previous-cross-age-too-long"),
+            pytest.param(
+                "ema_previous_crossover",
+                {"fast_period": 10, "slow_period": 10},
+                id="previous-fast-not-below-slow",
+            ),
+            pytest.param("ema_previous_crossover", {"rsi_min": 70, "rsi_max": 70}, id="previous-empty-rsi-band"),
+            pytest.param("ema_previous_crossover", {"gap": -0.01}, id="previous-negative-gap"),
         ],
     )
-    async def test_previous_crossover_template_rejects_settings_its_strategy_refuses(
+    async def test_strategy_parameters_rejected_by_parameterized_templates(
         self,
+        template: str,
         strategy_parameters: dict[str, float],
     ) -> None:
         from pydantic import ValidationError
@@ -866,11 +783,56 @@ class TestTemplateSelection:
         from app.routers.lean_sidecar import TrustedRunRequestModel
 
         payload = _good_payload()
-        payload["template"] = "ema_previous_crossover"
-        payload["strategy_parameters"] = strategy_parameters
+        payload["template"] = template
+        payload["strategy_parameters"] = dict(strategy_parameters)
 
         with pytest.raises(ValidationError):
             TrustedRunRequestModel.model_validate(payload)
+
+    @pytest.mark.parametrize(
+        ("template", "strategy_parameters"),
+        [
+            pytest.param(
+                "ema_crossover_signal",
+                {
+                    "gap": 0.35,
+                    "gap_bps": 2.5,
+                    "rsi_min": 42,
+                    "rsi_max": 68,
+                },
+                id="signal_template_accepts_all_resolved_strategy_parameters",
+            ),
+            pytest.param(
+                "ema_previous_crossover",
+                {
+                    "gap": 0.35,
+                    "gap_bps": 2.5,
+                    "rsi_min": 42,
+                    "rsi_max": 68,
+                    "fast_period": 7,
+                    "slow_period": 20,
+                    "hold_bars": 6,
+                    "cross_max_age_bars": 2,
+                },
+                id="previous_crossover_template_accepts_all_eight_settings",
+            ),
+        ],
+    )
+    async def test_template_accepts_all_resolved_strategy_parameters(
+        self,
+        template: str,
+        strategy_parameters: dict[str, float],
+    ) -> None:
+        from app.routers.lean_sidecar import TrustedRunRequestModel
+
+        payload = _good_payload()
+        payload["template"] = template
+        payload["strategy_parameters"] = dict(strategy_parameters)
+
+        model = TrustedRunRequestModel.model_validate(payload)
+
+        assert model.strategy_parameters is not None, "strategy_parameters is populated"
+        assert model.strategy_parameters.model_dump() == strategy_parameters, "every supplied setting round-trips"
 
     async def test_non_parameterized_template_rejects_strategy_parameters(self) -> None:
         from pydantic import ValidationError
@@ -888,18 +850,43 @@ class TestTemplateSelection:
         with pytest.raises(ValidationError, match="does not accept strategy_parameters"):
             TrustedRunRequestModel.model_validate(payload)
 
-    async def test_template_rejects_unknown_value(self, client: AsyncClient) -> None:
-        """A typo or unknown template must 422 — silently falling
-        through to the default would mask brokerage intent."""
-        payload = _good_payload()
-        payload["template"] = "not_a_real_template"
-        r = await client.post("/api/lean-sidecar/trusted-runs", json=payload)
-        assert r.status_code == 422
 
-
-def test_trusted_run_request_model_accepts_legacy_top_level_shape() -> None:
-    """PR B Task 1.6: legacy payload (symbol/data_source/bar_minutes/...) is
-    accepted for one deprecation cycle and synthesizes a DataPolicy block."""
+@pytest.mark.parametrize(
+    ("legacy_fields", "expected_source"),
+    [
+        # PR B Task 1.6: legacy payload (symbol/data_source/bar_minutes/...) is
+        # accepted for one deprecation cycle and synthesizes a DataPolicy block.
+        pytest.param(
+            {"data_source": "polygon", "bar_minutes": 15, "session": "regular", "adjustment": "raw"},
+            "polygon",
+            id="accepts_legacy_top_level_shape",
+        ),
+        # Omitting ``adjustment`` on a LEGACY-shape payload synthesizes
+        # ``adjusted=False`` (the pre-PR-B wire vocabulary's implicit value
+        # was ``"raw"``). Silently switching legacy callers to
+        # ``adjusted=True`` would break the one-deprecation-cycle compat
+        # promise. New-shape callers carrying a ``data_policy`` block still
+        # default to ``adjusted=True`` via the field default on
+        # ``_DataPolicyModel``.
+        pytest.param(
+            {"data_source": "polygon", "bar_minutes": 15, "session": "regular"},
+            "polygon",
+            id="legacy_shape_defaults_adjustment_to_raw",
+        ),
+        # PR B Task 1.6 (P1 review): the existing Lean Lab UI posts only
+        # ``run_id``/``symbol``/window/cash/template — no ``data_source``,
+        # ``bar_minutes``, ``session``, or ``adjustment``. The one-cycle
+        # compat guarantee requires accepting this minimal shape and
+        # defaulting the missing legacy fields to PR A's defaults, NOT
+        # 422-ing. Without this defaulting, the deployed UI would 422 on
+        # every submit until shipped to the new shape.
+        pytest.param({}, "synthetic", id="accepts_minimal_legacy_payload"),
+    ],
+)
+def test_trusted_run_request_model_accepts_legacy_shapes(
+    legacy_fields: dict[str, object],
+    expected_source: str,
+) -> None:
     from app.routers.lean_sidecar import TrustedRunRequestModel
 
     payload = {
@@ -909,21 +896,41 @@ def test_trusted_run_request_model_accepts_legacy_top_level_shape() -> None:
         "end_ms_utc": _GOOD_END_MS,
         "starting_cash": 100_000.0,
         "template": "ema_crossover",
-        "data_source": "polygon",
-        "bar_minutes": 15,
-        "session": "regular",
-        "adjustment": "raw",
+        **legacy_fields,
     }
     model = TrustedRunRequestModel(**payload)
-    assert model.data_policy is not None
-    assert model.data_policy.symbol == "SPY"
-    assert model.data_policy.session == "regular"
-    assert model.data_policy.adjusted is False  # adjustment="raw" -> adjusted=False
-    assert model.data_policy.strategy_bars.multiplier == 15
+    assert model.data_policy is not None, "legacy payload synthesizes a data_policy block"
+    assert model.data_policy.symbol == "SPY", "symbol carries over"
+    assert model.data_policy.source == expected_source, "data_source carries over or takes the legacy default"
+    assert model.data_policy.session == "regular", "session carries over or takes the legacy default"
+    assert model.data_policy.strategy_bars.multiplier == 15, "bar_minutes carries over or takes the legacy default"
+    assert model.data_policy.adjusted is False, 'legacy adjustment "raw" or omitted -> adjusted=False'
 
 
-def test_trusted_run_request_model_accepts_new_data_policy_shape() -> None:
-    """PR B Task 1.6: the canonical post-PR-B shape carries a ``data_policy`` block."""
+@pytest.mark.parametrize(
+    "policy_overrides",
+    [
+        # PR B Task 1.6: the canonical post-PR-B shape carries a ``data_policy`` block.
+        pytest.param(
+            {
+                "adjusted": True,
+                "timestamp_policy": "bar_close_ms_utc",
+                "timezone": "America/New_York",
+                "provider_kind": "live",
+                "fixture_id": None,
+                "fixture_sha256": None,
+            },
+            id="accepts_new_data_policy_shape",
+        ),
+        # PR B: NEW-shape callers (carrying a ``data_policy`` block) that omit
+        # ``adjusted`` get the field default ``True`` — the pre-adjusted-staging
+        # default for the post-PR-B contract. This is distinct from the
+        # legacy-shape default, which preserves PR A's implicit ``raw``
+        # behavior for one cycle. No "adjusted" key — exercise the field default.
+        pytest.param({}, id="new_shape_defaults_adjusted_to_true"),
+    ],
+)
+def test_trusted_run_request_model_new_shape_is_adjusted(policy_overrides: dict[str, object]) -> None:
     from app.routers.lean_sidecar import TrustedRunRequestModel
 
     payload = {
@@ -935,20 +942,15 @@ def test_trusted_run_request_model_accepts_new_data_policy_shape() -> None:
         "data_policy": {
             "source": "polygon",
             "symbol": "SPY",
-            "adjusted": True,
             "session": "regular",
             "input_bars": {"timespan": "minute", "multiplier": 1},
             "strategy_bars": {"timespan": "minute", "multiplier": 15},
-            "timestamp_policy": "bar_close_ms_utc",
-            "timezone": "America/New_York",
-            "provider_kind": "live",
-            "fixture_id": None,
-            "fixture_sha256": None,
+            **policy_overrides,
         },
     }
     model = TrustedRunRequestModel(**payload)
-    assert model.data_policy.symbol == "SPY"
-    assert model.data_policy.adjusted is True
+    assert model.data_policy.symbol == "SPY", "data_policy symbol carries over"
+    assert model.data_policy.adjusted is True, "new-shape data_policy is adjusted"
 
 
 def test_trusted_run_request_model_rejects_mixed_shape() -> None:
@@ -979,90 +981,6 @@ def test_trusted_run_request_model_rejects_mixed_shape() -> None:
                 "fixture_sha256": None,
             },
         )
-
-
-def test_trusted_run_request_model_legacy_shape_defaults_adjustment_to_raw() -> None:
-    """PR B Task 1.6: omitting ``adjustment`` on a LEGACY-shape payload
-    synthesizes ``adjusted=False`` (the pre-PR-B wire vocabulary's
-    implicit value was ``"raw"``). Silently switching legacy callers
-    to ``adjusted=True`` would break the one-deprecation-cycle compat
-    promise. New-shape callers carrying a ``data_policy`` block still
-    default to ``adjusted=True`` via the field default on
-    ``_DataPolicyModel``.
-    """
-    from app.routers.lean_sidecar import TrustedRunRequestModel
-
-    payload = {
-        "run_id": "test-default-adj",
-        "symbol": "SPY",
-        "start_ms_utc": _GOOD_START_MS,
-        "end_ms_utc": _GOOD_END_MS,
-        "starting_cash": 100_000.0,
-        "template": "ema_crossover",
-        "data_source": "polygon",
-        "bar_minutes": 15,
-        "session": "regular",
-        # no "adjustment" key
-    }
-    model = TrustedRunRequestModel(**payload)
-    assert model.data_policy.adjusted is False
-
-
-def test_trusted_run_request_model_new_shape_defaults_adjusted_to_true() -> None:
-    """PR B: NEW-shape callers (carrying a ``data_policy`` block)
-    that omit ``adjusted`` get the field default ``True`` — the
-    pre-adjusted-staging default for the post-PR-B contract. This is
-    distinct from the legacy-shape default, which preserves PR A's
-    implicit ``raw`` behavior for one cycle.
-    """
-    from app.routers.lean_sidecar import TrustedRunRequestModel
-
-    payload = {
-        "run_id": "test-new-shape-default-adj",
-        "start_ms_utc": _GOOD_START_MS,
-        "end_ms_utc": _GOOD_END_MS,
-        "starting_cash": 100_000.0,
-        "template": "ema_crossover",
-        "data_policy": {
-            "source": "polygon",
-            "symbol": "SPY",
-            # no "adjusted" key — exercise the field default
-            "session": "regular",
-            "input_bars": {"timespan": "minute", "multiplier": 1},
-            "strategy_bars": {"timespan": "minute", "multiplier": 15},
-        },
-    }
-    model = TrustedRunRequestModel(**payload)
-    assert model.data_policy.adjusted is True
-
-
-def test_trusted_run_request_model_accepts_minimal_legacy_payload() -> None:
-    """PR B Task 1.6 (P1 review): the existing Lean Lab UI posts only
-    ``run_id``/``symbol``/window/cash/template — no ``data_source``,
-    ``bar_minutes``, ``session``, or ``adjustment``. The one-cycle
-    compat guarantee requires accepting this minimal shape and
-    defaulting the missing legacy fields to PR A's defaults, NOT
-    422-ing. Without this defaulting, the deployed UI would 422 on
-    every submit until shipped to the new shape.
-    """
-    from app.routers.lean_sidecar import TrustedRunRequestModel
-
-    payload = {
-        "run_id": "test-minimal-legacy",
-        "symbol": "SPY",
-        "start_ms_utc": _GOOD_START_MS,
-        "end_ms_utc": _GOOD_END_MS,
-        "starting_cash": 100_000.0,
-        "template": "ema_crossover",
-        # NOTHING else — no data_source, bar_minutes, session, adjustment, data_policy
-    }
-    model = TrustedRunRequestModel(**payload)
-    assert model.data_policy is not None
-    assert model.data_policy.symbol == "SPY"
-    assert model.data_policy.source == "synthetic"  # legacy default
-    assert model.data_policy.session == "regular"  # legacy default
-    assert model.data_policy.strategy_bars.multiplier == 15  # legacy default
-    assert model.data_policy.adjusted is False  # legacy "raw" -> False
 
 
 def test_trusted_run_request_model_rejects_minimal_legacy_payload_without_symbol() -> None:

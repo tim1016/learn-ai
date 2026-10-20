@@ -138,24 +138,23 @@ def _environment_node_tag(name: str, service: str) -> str:
     return _mapping_entry(service_node, "environment", where=f"{name}:{service}").tag
 
 
-def test_a_declared_worker_service_always_names_its_own_service_key() -> None:
-    """Wherever the key appears, its value is the service it sits under. This
-    is the rename tripwire, and it holds for any future worker too."""
-    for name, service, _spec, environment in _declaring_workers():
+def test_a_declared_worker_service_names_its_own_service_key_and_the_compose_context_its_file_states() -> None:
+    workers = list(_declaring_workers())
+
+    # Wherever the key appears, its value is the service it sits under. This
+    # is the rename tripwire, and it holds for any future worker too.
+    for name, service, _spec, environment in workers:
         assert environment[DECLARATION_KEY] == service, (
             f"{name}:{service} declares {DECLARATION_KEY}="
             f"{environment[DECLARATION_KEY]!r}, not its own service name"
         )
 
-
-def test_a_declared_compose_file_list_resolves_the_declaring_file() -> None:
-    """Each named file is one this repo commits at its root, and the list names
-    the file the declaration itself lives in — the one file that must be on the
-    command line for the service to exist at all.
-    """
+    # Each named file is one this repo commits at its root, and the list names
+    # the file the declaration itself lives in — the one file that must be on the
+    # command line for the service to exist at all.
     tracked = set(tracked_compose_files())
     covered: set[tuple[str, str]] = set()
-    for name, service, _spec, environment in _declaring_workers():
+    for name, service, _spec, environment in workers:
         declared = _declared_compose_files(environment)
         if not declared:
             continue
@@ -170,16 +169,13 @@ def test_a_declared_compose_file_list_resolves_the_declaring_file() -> None:
             f"{name}:{service} declares {COMPOSE_FILES_KEY}={declared!r}, which does not "
             f"include {name} — the file that defines this very service"
         )
-    assert covered >= CONTEXT_DECLARING_LANES
+    assert covered >= CONTEXT_DECLARING_LANES, "every context-declaring lane declares a compose file list"
 
-
-def test_a_declared_compose_project_is_the_declaring_files_own_project() -> None:
-    """A file with a top-level `name:` runs its services in that project and
-    nowhere else, so that is the only project the command may name. A file
-    without one takes the project from the host's working directory — naming a
-    guess there would pin the command to a directory this repo cannot see.
-    """
-    for name, service, _spec, environment in _declaring_workers():
+    # A file with a top-level `name:` runs its services in that project and
+    # nowhere else, so that is the only project the command may name. A file
+    # without one takes the project from the host's working directory — naming a
+    # guess there would pin the command to a directory this repo cannot see.
+    for name, service, _spec, environment in workers:
         project = _document(name).get("name")
         if project is None:
             assert COMPOSE_PROJECT_KEY not in environment, (
@@ -192,13 +188,10 @@ def test_a_declared_compose_project_is_the_declaring_files_own_project() -> None
             f"{environment.get(COMPOSE_PROJECT_KEY)!r}, not {name}'s own project {project!r}"
         )
 
-
-def test_a_declared_compose_profile_is_one_the_service_runs_under() -> None:
-    """A service behind a profile is not started — and not restarted — unless
-    that profile is named, and a service behind none must name none or Compose
-    filters every other service out of the invocation.
-    """
-    for name, service, spec, environment in _declaring_workers():
+    # A service behind a profile is not started — and not restarted — unless
+    # that profile is named, and a service behind none must name none or Compose
+    # filters every other service out of the invocation.
+    for name, service, spec, environment in workers:
         profiles = tuple(spec.get("profiles") or ())
         if not profiles:
             assert COMPOSE_PROFILE_KEY not in environment, (
@@ -213,9 +206,9 @@ def test_a_declared_compose_profile_is_one_the_service_runs_under() -> None:
         )
 
 
-def test_every_clerk_agent_declares_a_worker_service() -> None:
-    """A lane whose deployment says nothing renders no restart command at all,
-    which leaves the operator with a recorded Apply and no way to finish."""
+def test_the_worker_service_declaration_belongs_to_workers_never_a_coordinator_and_is_never_a_secret_or_an_endpoint() -> None:
+    # A lane whose deployment says nothing renders no restart command at all,
+    # which leaves the operator with a recorded Apply and no way to finish.
     covered: set[tuple[str, str]] = set()
     for name in tracked_compose_files():
         for service, environment in _services(name).items():
@@ -231,25 +224,22 @@ def test_every_clerk_agent_declares_a_worker_service() -> None:
         ("compose.fleet.yaml", "alpaca-live-clerk"),
         ("compose.fleet.dev.yaml", "alpaca-paper-clerk"),
         ("compose.fleet.dev.yaml", "alpaca-live-clerk"),
-    } <= covered
+    } <= covered, "every fleet clerk lane is covered by the clerk-agent sweep"
 
+    # `compose.yaml` runs the worker as `python-service`; the operator's
+    # restart command there is correct precisely because the two coincide.
+    combined_file, combined_service = COMBINED_WORKER
+    assert _services(combined_file)[combined_service].get(DECLARATION_KEY) == combined_service, (
+        "the combined posture worker declares itself"
+    )
 
-def test_the_combined_posture_worker_declares_itself() -> None:
-    """`compose.yaml` runs the worker as `python-service`; the operator's
-    restart command there is correct precisely because the two coincide."""
-    name, service = COMBINED_WORKER
-    assert _services(name)[service].get(DECLARATION_KEY) == service
-
-
-def test_no_coordinator_names_a_worker_service() -> None:
-    """A coordinator has no staged profile to apply. Declaring a service name
-    here is how `podman compose restart python-service` became the desk's
-    advice in the first place.
-
-    Absent and explicitly empty are the same fact — an overlay that inherits a
-    base file's worker name neutralizes it with `""`, the same fence
-    `ALPACA_CLERK_DIR` already uses on this role.
-    """
+    # A coordinator has no staged profile to apply. Declaring a service name
+    # here is how `podman compose restart python-service` became the desk's
+    # advice in the first place.
+    #
+    # Absent and explicitly empty are the same fact — an overlay that inherits a
+    # base file's worker name neutralizes it with `""`, the same fence
+    # `ALPACA_CLERK_DIR` already uses on this role.
     for name in tracked_compose_files():
         for service, environment in _services(name).items():
             if environment.get("FLEET_ROLE") != "fleet_coordinator":
@@ -258,14 +248,29 @@ def test_no_coordinator_names_a_worker_service() -> None:
                 f"{name}:{service} is a coordinator and must name no {DECLARATION_KEY}"
             )
 
+    # `compose.fleet.dev.yaml` layers the coordinator role onto
+    # `compose.yaml`'s combined worker, and Compose merges `environment:`
+    # key-for-key — so without an explicit fence the coordinator would inherit
+    # `python-service` and hand an operator the exact wrong restart command.
+    assert _services("compose.fleet.dev.yaml")["python-service"][DECLARATION_KEY] == "", (
+        "compose.fleet.dev.yaml does not fence off the base file's worker name on the coordinator"
+    )
 
-def test_the_fleet_coordinator_fences_off_the_base_files_worker_name() -> None:
-    """`compose.fleet.dev.yaml` layers the coordinator role onto
-    `compose.yaml`'s combined worker, and Compose merges `environment:`
-    key-for-key — so without an explicit fence the coordinator would inherit
-    `python-service` and hand an operator the exact wrong restart command.
-    """
-    assert _services("compose.fleet.dev.yaml")["python-service"][DECLARATION_KEY] == ""
+    # The value is a bare compose service name — never a URL, a host:port, or
+    # anything carrying a credential. It ships in a committed file and is
+    # rendered into the browser.
+    for name in tracked_compose_files():
+        for service, environment in _services(name).items():
+            declared = environment.get(DECLARATION_KEY)
+            if declared is None:
+                continue
+            assert declared.isascii() and declared == declared.lower(), (
+                f"{name}:{service} declares {DECLARATION_KEY}={declared!r}, which is not lowercase ASCII"
+            )
+            assert not any(character in declared for character in ":/@ $"), (
+                f"{name}:{service} declares {DECLARATION_KEY}={declared!r}, "
+                "which is not a bare service name"
+            )
 
 
 def test_the_qualification_overlay_leaves_each_lanes_declaration_alone() -> None:
@@ -287,19 +292,3 @@ def test_the_qualification_overlay_leaves_each_lanes_declaration_alone() -> None
             "replaces the base map instead of merging it and the lane loses its "
             f"inherited {DECLARATION_KEY}"
         )
-
-
-def test_the_declaration_is_never_a_secret_or_an_endpoint() -> None:
-    """The value is a bare compose service name — never a URL, a host:port, or
-    anything carrying a credential. It ships in a committed file and is
-    rendered into the browser."""
-    for name in tracked_compose_files():
-        for service, environment in _services(name).items():
-            declared = environment.get(DECLARATION_KEY)
-            if declared is None:
-                continue
-            assert declared.isascii() and declared == declared.lower(), f"{name}:{service}"
-            assert not any(character in declared for character in ":/@ $"), (
-                f"{name}:{service} declares {DECLARATION_KEY}={declared!r}, "
-                "which is not a bare service name"
-            )

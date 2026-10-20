@@ -50,36 +50,33 @@ def _minute_bar(ts: datetime, price: str, volume: int = 1) -> TradeBar:
     return _bar(ts, timedelta(minutes=1), price, price, price, price, volume)
 
 
-def test_floor_to_period_aligns_to_wall_clock_grid():
-    dt = datetime(2024, 1, 1, 9, 37, tzinfo=UTC)
-
-    assert _floor_to_period_ms(to_ms_utc(dt), timedelta(minutes=15)) == to_ms_utc(datetime(2024, 1, 1, 9, 30, tzinfo=UTC))
-    assert _floor_to_period_ms(to_ms_utc(dt), timedelta(minutes=5)) == to_ms_utc(datetime(2024, 1, 1, 9, 35, tzinfo=UTC))
-    assert _floor_to_period_ms(to_ms_utc(dt), timedelta(hours=1)) == to_ms_utc(datetime(2024, 1, 1, 9, 0, tzinfo=UTC))
-
-
-def test_floor_to_period_ms_daily_period_aligns_to_et_midnight_not_utc_midnight():
-    """Regression: a bar at 2024-01-05 03:00 UTC is 2024-01-04 22:00 ET —
-    still the 2024-01-04 ET trading date. Flooring the raw UTC ms (the
-    pre-fix behavior) lands on 2024-01-05 00:00 UTC instead, mislabeling the
-    bar with the *next* ET trading date."""
-    ts = datetime(2024, 1, 5, 3, 0, tzinfo=UTC)
-
-    floored = _floor_to_period_ms(to_ms_utc(ts), timedelta(days=1))
-
-    assert floored == to_ms_utc(datetime(2024, 1, 4, tzinfo=_EASTERN))
-
-
-def test_floor_to_period_ms_daily_period_across_dst_spring_forward():
-    """2024-03-10 is the US spring-forward transition (ET goes from UTC-5 to
-    UTC-4 at 02:00 local). A bar timestamped after the transition must still
-    floor to that ET calendar day's midnight, not drift by the hour DST
-    changed mid-day."""
-    ts = datetime(2024, 3, 10, 8, 30, tzinfo=UTC)  # after the 07:00 UTC transition instant
-
-    floored = _floor_to_period_ms(to_ms_utc(ts), timedelta(days=1))
-
-    assert floored == to_ms_utc(datetime(2024, 3, 10, tzinfo=_EASTERN))
+@pytest.mark.parametrize(
+    ("ts", "period", "expected_floor"),
+    [
+        (datetime(2024, 1, 1, 9, 37, tzinfo=UTC), timedelta(minutes=15), datetime(2024, 1, 1, 9, 30, tzinfo=UTC)),
+        (datetime(2024, 1, 1, 9, 37, tzinfo=UTC), timedelta(minutes=5), datetime(2024, 1, 1, 9, 35, tzinfo=UTC)),
+        (datetime(2024, 1, 1, 9, 37, tzinfo=UTC), timedelta(hours=1), datetime(2024, 1, 1, 9, 0, tzinfo=UTC)),
+        # Regression: a bar at 2024-01-05 03:00 UTC is 2024-01-04 22:00 ET —
+        # still the 2024-01-04 ET trading date. Flooring the raw UTC ms (the
+        # pre-fix behavior) lands on 2024-01-05 00:00 UTC instead, mislabeling the
+        # bar with the *next* ET trading date.
+        (datetime(2024, 1, 5, 3, 0, tzinfo=UTC), timedelta(days=1), datetime(2024, 1, 4, tzinfo=_EASTERN)),
+        # 2024-03-10 is the US spring-forward transition (ET goes from UTC-5 to
+        # UTC-4 at 02:00 local). A bar timestamped after the transition (08:30 is
+        # after the 07:00 UTC transition instant) must still floor to that ET
+        # calendar day's midnight, not drift by the hour DST changed mid-day.
+        (datetime(2024, 3, 10, 8, 30, tzinfo=UTC), timedelta(days=1), datetime(2024, 3, 10, tzinfo=_EASTERN)),
+    ],
+    ids=[
+        "aligns-to-the-15-minute-wall-clock-grid",
+        "aligns-to-the-5-minute-wall-clock-grid",
+        "aligns-to-the-1-hour-wall-clock-grid",
+        "daily-period-aligns-to-et-midnight-not-utc-midnight-regression",
+        "daily-period-across-dst-spring-forward",
+    ],
+)
+def test_floor_to_period_ms_aligns_to_the_wall_clock_grid(ts: datetime, period: timedelta, expected_floor: datetime):
+    assert _floor_to_period_ms(to_ms_utc(ts), period) == to_ms_utc(expected_floor)
 
 
 def test_consolidator_rejects_non_positive_period():

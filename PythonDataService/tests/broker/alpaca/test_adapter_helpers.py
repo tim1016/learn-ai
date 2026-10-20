@@ -26,27 +26,24 @@ from app.broker.alpaca.adapter import (
 )
 
 
-def test_rfc3339_epoch_and_z_suffix() -> None:
-    assert rfc3339_to_ms("1970-01-01T00:00:00+00:00") == 0
-    assert rfc3339_to_ms("1970-01-01T00:00:01Z") == 1000
-
-
-def test_rfc3339_honors_offset() -> None:
-    # Midnight at -05:00 is 05:00 UTC → 5h = 18_000_000 ms after epoch.
-    assert rfc3339_to_ms("1970-01-01T00:00:00-05:00") == 18_000_000
+@pytest.mark.parametrize(
+    ("text", "expected_ms"),
+    [
+        pytest.param("1970-01-01T00:00:00+00:00", 0, id="epoch"),
+        pytest.param("1970-01-01T00:00:01Z", 1000, id="z-suffix"),
+        # Midnight at -05:00 is 05:00 UTC → 5h = 18_000_000 ms after epoch.
+        pytest.param("1970-01-01T00:00:00-05:00", 18_000_000, id="honors-offset"),
+        pytest.param("1970-01-01T00:00:00.123456789Z", 123, id="trims-overlong-fraction"),
+        pytest.param("1970-01-01T00:00:00.123600Z", 124, id="rounds-fractional-milliseconds-to-nearest-ms"),
+    ],
+)
+def test_rfc3339_to_ms_reads_the_instant(text: str, expected_ms: int) -> None:
+    assert rfc3339_to_ms(text) == expected_ms
 
 
 def test_rfc3339_rejects_naive_timestamp() -> None:
     with pytest.raises(ValueError, match="not timezone-aware"):
         rfc3339_to_ms("2021-03-16T18:38:01")
-
-
-def test_rfc3339_trims_overlong_fraction() -> None:
-    assert rfc3339_to_ms("1970-01-01T00:00:00.123456789Z") == 123
-
-
-def test_rfc3339_rounds_fractional_milliseconds_to_nearest_ms() -> None:
-    assert rfc3339_to_ms("1970-01-01T00:00:00.123600Z") == 124
 
 
 @pytest.mark.parametrize("parser", [opt_float, opt_rfc3339_to_ms])

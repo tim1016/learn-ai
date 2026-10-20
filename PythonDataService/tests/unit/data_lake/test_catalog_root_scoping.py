@@ -113,19 +113,59 @@ def _metadata_identity(root_id: UUID) -> ArtifactIdentity:
     )
 
 
-class TestMinuteBarRootScoping:
-    async def test_claim_records_the_identitys_root(self, clean_artifacts, pool):
-        artifact_id = await catalog_client.claim_minute_bar(
-            identity=_minute_bar_identity(_ROOT_A),
+class TestClaimRecordsRootAcrossArtifactKinds:
+    # All four claim_* functions share the same call shape (identity,
+    # worker_id, lease_ttl_ms, data_contract_hash, file_path), so the property
+    # is exercised once per artifact kind via parametrize.
+    @pytest.mark.parametrize(
+        "claim_fn,identity_fn,data_contract_hash,file_path",
+        [
+            pytest.param(
+                catalog_client.claim_minute_bar,
+                _minute_bar_identity,
+                "a" * 64,
+                "equity/usa/minute/spy/20240520_trade.zip",
+                id="minute_bar",
+            ),
+            pytest.param(
+                catalog_client.claim_aggregated_bar_artifact,
+                _aggregated_bar_identity,
+                "b" * 64,
+                "equity/usa/daily/spy.zip",
+                id="aggregated_bar",
+            ),
+            pytest.param(
+                catalog_client.claim_corp_action_artifact,
+                _corp_action_identity,
+                "c" * 64,
+                "equity/usa/factor_files/spy.csv",
+                id="corp_action",
+            ),
+            pytest.param(
+                catalog_client.claim_metadata_artifact,
+                _metadata_identity,
+                "d" * 64,
+                "market-hours-database.json",
+                id="metadata",
+            ),
+        ],
+    )
+    async def test_claim_records_the_identitys_root(
+        self, clean_artifacts, pool, claim_fn, identity_fn, data_contract_hash, file_path
+    ):
+        artifact_id = await claim_fn(
+            identity=identity_fn(_ROOT_A),
             worker_id="w-1",
             lease_ttl_ms=300_000,
-            data_contract_hash="a" * 64,
-            file_path="equity/usa/minute/spy/20240520_trade.zip",
+            data_contract_hash=data_contract_hash,
+            file_path=file_path,
         )
         detail = await catalog_client.select_artifact_by_id(artifact_id)
-        assert detail is not None
-        assert detail.data_root_id == _ROOT_A
+        assert detail is not None, "the claimed artifact is found by id"
+        assert detail.data_root_id == _ROOT_A, "the claim records the identity's root on the row"
 
+
+class TestMinuteBarRootScoping:
     async def test_coverage_read_is_invisible_from_a_different_root(self, clean_artifacts, pool):
         await catalog_client.claim_minute_bar(
             identity=_minute_bar_identity(_ROOT_A),
@@ -166,7 +206,7 @@ class TestMinuteBarRootScoping:
         assert len(seen_by_a) == 1
         assert seen_by_b == []
 
-    async def test_claim_state_lookup_is_root_scoped(self, clean_artifacts, pool):
+    async def test_claim_state_and_lease_status_lookups_are_root_scoped(self, clean_artifacts, pool):
         await catalog_client.claim_minute_bar(
             identity=_minute_bar_identity(_ROOT_A),
             worker_id="w-1",
@@ -175,35 +215,21 @@ class TestMinuteBarRootScoping:
             file_path="x.zip",
         )
 
-        assert await catalog_client.select_minute_bar_claim_state(_minute_bar_identity(_ROOT_A)) is not None
-        assert await catalog_client.select_minute_bar_claim_state(_minute_bar_identity(_ROOT_B)) is None
-
-    async def test_lease_status_lookup_is_root_scoped(self, clean_artifacts, pool):
-        await catalog_client.claim_minute_bar(
-            identity=_minute_bar_identity(_ROOT_A),
-            worker_id="w-1",
-            lease_ttl_ms=300_000,
-            data_contract_hash="a" * 64,
-            file_path="x.zip",
-        )
-
-        assert await catalog_client.select_minute_bar_lease_status(_minute_bar_identity(_ROOT_A)) is not None
-        assert await catalog_client.select_minute_bar_lease_status(_minute_bar_identity(_ROOT_B)) is None
+        assert (
+            await catalog_client.select_minute_bar_claim_state(_minute_bar_identity(_ROOT_A)) is not None
+        ), "claim-state lookup finds the claim in its own root"
+        assert (
+            await catalog_client.select_minute_bar_claim_state(_minute_bar_identity(_ROOT_B)) is None
+        ), "claim-state lookup is root scoped"
+        assert (
+            await catalog_client.select_minute_bar_lease_status(_minute_bar_identity(_ROOT_A)) is not None
+        ), "lease-status lookup finds the claim in its own root"
+        assert (
+            await catalog_client.select_minute_bar_lease_status(_minute_bar_identity(_ROOT_B)) is None
+        ), "lease-status lookup is root scoped"
 
 
 class TestAggregatedBarRootScoping:
-    async def test_claim_records_the_identitys_root(self, clean_artifacts, pool):
-        artifact_id = await catalog_client.claim_aggregated_bar_artifact(
-            identity=_aggregated_bar_identity(_ROOT_A),
-            worker_id="w-1",
-            lease_ttl_ms=300_000,
-            data_contract_hash="b" * 64,
-            file_path="equity/usa/daily/spy.zip",
-        )
-        detail = await catalog_client.select_artifact_by_id(artifact_id)
-        assert detail is not None
-        assert detail.data_root_id == _ROOT_A
-
     async def test_complete_lookup_is_invisible_from_a_different_root(self, clean_artifacts, pool):
         artifact_id = await catalog_client.claim_aggregated_bar_artifact(
             identity=_aggregated_bar_identity(_ROOT_A),
@@ -227,18 +253,6 @@ class TestAggregatedBarRootScoping:
 
 
 class TestCorpActionRootScoping:
-    async def test_claim_records_the_identitys_root(self, clean_artifacts, pool):
-        artifact_id = await catalog_client.claim_corp_action_artifact(
-            identity=_corp_action_identity(_ROOT_A),
-            worker_id="w-1",
-            lease_ttl_ms=300_000,
-            data_contract_hash="c" * 64,
-            file_path="equity/usa/factor_files/spy.csv",
-        )
-        detail = await catalog_client.select_artifact_by_id(artifact_id)
-        assert detail is not None
-        assert detail.data_root_id == _ROOT_A
-
     async def test_complete_lookup_is_invisible_from_a_different_root(self, clean_artifacts, pool):
         artifact_id = await catalog_client.claim_corp_action_artifact(
             identity=_corp_action_identity(_ROOT_A),
@@ -262,18 +276,6 @@ class TestCorpActionRootScoping:
 
 
 class TestMetadataRootScoping:
-    async def test_claim_records_the_identitys_root(self, clean_artifacts, pool):
-        artifact_id = await catalog_client.claim_metadata_artifact(
-            identity=_metadata_identity(_ROOT_A),
-            worker_id="w-1",
-            lease_ttl_ms=300_000,
-            data_contract_hash="d" * 64,
-            file_path="market-hours-database.json",
-        )
-        detail = await catalog_client.select_artifact_by_id(artifact_id)
-        assert detail is not None
-        assert detail.data_root_id == _ROOT_A
-
     async def test_complete_lookup_is_invisible_from_a_different_root(self, clean_artifacts, pool):
         artifact_id = await catalog_client.claim_metadata_artifact(
             identity=_metadata_identity(_ROOT_A),

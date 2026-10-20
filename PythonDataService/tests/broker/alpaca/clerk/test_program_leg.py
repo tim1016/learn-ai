@@ -92,17 +92,41 @@ def test_a_regular_hours_leg_is_always_a_market_day_leg(
     )
 
 
-def test_extended_binding_inside_the_regular_session_is_a_market_day_leg() -> None:
-    shape = shape_program_leg(
-        side=OrderSide.BUY,
-        purpose=EffectPurpose.ENTER,
+@pytest.mark.parametrize(
+    ("side", "purpose", "policy", "decision_bar", "pricing_bar"),
+    [
+        pytest.param(
+            OrderSide.BUY, EffectPurpose.ENTER, _POLICY, _bar(10, 0), _bar(10, 0),
+            id="extended-binding-inside-the-regular-session",
+        ),
+        pytest.param(
+            OrderSide.BUY, EffectPurpose.ENTER, ProgramLegPolicy(window=_WINDOW, allowances=None), _bar(11, 0), _bar(11, 0),
+            id="allowance-unset-inside-the-regular-session",
+        ),
+        # Inside the regular session a leg is a market order, so the decision's time is all it needs.
+        pytest.param(
+            OrderSide.SELL, EffectPurpose.EXIT, _POLICY, _bar(10, 0), None,
+            id="a-market-leg-needs-no-bar-of-the-traded-asset",
+        ),
+    ],
+)
+def test_extended_binding_inside_the_regular_session_is_a_market_day_leg(
+    side: OrderSide,
+    purpose: EffectPurpose,
+    policy: ProgramLegPolicy,
+    decision_bar: RetainedSourceBar,
+    pricing_bar: RetainedSourceBar | None,
+) -> None:
+    program_leg = shape_program_leg(
+        side=side,
+        purpose=purpose,
         use_rth=False,
-        decision_bar=_bar(10, 0),
-        pricing_bar=_bar(10, 0),
-        policy=_POLICY,
+        decision_bar=decision_bar,
+        pricing_bar=pricing_bar,
+        policy=policy,
     )
 
-    assert shape == ProgramLeg(regular_session_shape(OrderSide.BUY))
+    assert program_leg == ProgramLeg(regular_session_shape(side))
 
 
 @pytest.mark.parametrize(
@@ -174,68 +198,72 @@ def test_an_extended_leg_decided_at_a_half_days_close_is_bounded_by_its_after_ho
     assert inside == ProgramLeg(regular_session_shape(OrderSide.SELL))
 
 
-def test_an_extended_leg_decided_after_a_half_days_after_hours_close_is_refused() -> None:
-    """17:30 on 2026-11-27 is inside the declared 04:00-20:00 window but past the calendar's
-    after-hours close: no session accepts a leg, so nothing is priced for one (#2440 review)."""
-    with pytest.raises(ProgramLegRefused) as refused:
-        shape_program_leg(
-            side=OrderSide.SELL,
-            purpose=EffectPurpose.EXIT,
-            use_rth=False,
-            decision_bar=_bar(17, 30, day=date(2026, 11, 27)),
-            pricing_bar=_bar(17, 30, day=date(2026, 11, 27)),
-            policy=_POLICY,
-        )
-    assert refused.value.reason_code == "SESSION_CLOSED_AT_DECISION"
-
-
 @pytest.mark.parametrize(
-    ("policy", "bar", "reason_code"),
+    ("side", "purpose", "policy", "bar", "reason_code"),
     [
-        (
-            ProgramLegPolicy(window=None, allowances=_ALLOWANCES),
-            _bar(18, 0),
+        pytest.param(
+            OrderSide.BUY, EffectPurpose.ENTER, ProgramLegPolicy(window=None, allowances=_ALLOWANCES), _bar(18, 0),
             "EXTENDED_HOURS_UNSUPPORTED",
+            id="no-declared-window-is-extended-hours-unsupported",
         ),
-        (_POLICY, None, "EXTENDED_ANCHOR_UNAVAILABLE"),
-        (_POLICY, _bar(20, 0), "SESSION_CLOSED_AT_DECISION"),
-        (_POLICY, _bar(3, 30), "SESSION_CLOSED_AT_DECISION"),
-        (
-            ProgramLegPolicy(window=_WINDOW, allowances=None),
-            _bar(18, 0),
+        pytest.param(
+            OrderSide.BUY, EffectPurpose.ENTER, _POLICY, None,
+            "EXTENDED_ANCHOR_UNAVAILABLE",
+            id="no-bar-is-extended-anchor-unavailable",
+        ),
+        pytest.param(
+            OrderSide.BUY, EffectPurpose.ENTER, _POLICY, _bar(20, 0),
+            "SESSION_CLOSED_AT_DECISION",
+            id="bar-at-the-window-close-is-session-closed",
+        ),
+        pytest.param(
+            OrderSide.BUY, EffectPurpose.ENTER, _POLICY, _bar(3, 30),
+            "SESSION_CLOSED_AT_DECISION",
+            id="bar-before-the-window-open-is-session-closed",
+        ),
+        pytest.param(
+            OrderSide.BUY, EffectPurpose.ENTER, ProgramLegPolicy(window=_WINDOW, allowances=None), _bar(18, 0),
             "EXTENDED_HOURS_ALLOWANCE_UNSET",
+            id="allowances-unset-is-extended-hours-allowance-unset",
+        ),
+        # 17:30 on 2026-11-27 is inside the declared 04:00-20:00 window but past the calendar's
+        # after-hours close: no session accepts a leg, so nothing is priced for one.
+        pytest.param(
+            OrderSide.SELL, EffectPurpose.EXIT, _POLICY, _bar(17, 30, day=date(2026, 11, 27)),
+            "SESSION_CLOSED_AT_DECISION",
+            id="after-a-half-days-after-hours-close-is-session-closed-2440-review",
+        ),
+        # A quantised anchor at or below zero must reach the Clerk as a refusal: LegShape.apply
+        # would otherwise raise pydantic's ValidationError (limit_price gt=0) from *outside* the
+        # ``except ProgramLegRefused`` in ``runtime._execute_effect``, killing the shielded effect
+        # task instead of writing a rejected receipt.
+        pytest.param(
+            OrderSide.SELL, EffectPurpose.EXIT,
+            ProgramLegPolicy(
+                window=_WINDOW,
+                allowances=ExtendedHoursAllowances(entry_bps=Decimal("10"), exit_bps=Decimal("9999.99")),
+            ),
+            _bar(18, 0, close="0.0100"),
+            "EXTENDED_ANCHOR_UNPRICEABLE",
+            id="unpriceable-anchor-is-a-typed-refusal-not-a-validation-error",
         ),
     ],
 )
-def test_refusals(policy: ProgramLegPolicy, bar: RetainedSourceBar | None, reason_code: str) -> None:
+def test_refusals(
+    side: OrderSide, purpose: EffectPurpose, policy: ProgramLegPolicy, bar: RetainedSourceBar | None, reason_code: str
+) -> None:
     with pytest.raises(ProgramLegRefused) as caught:
         shape_program_leg(
-            side=OrderSide.BUY,
-            purpose=EffectPurpose.ENTER,
+            side=side,
+            purpose=purpose,
             use_rth=False,
             decision_bar=bar,
             pricing_bar=bar,
             policy=policy,
         )
 
-    assert caught.value.reason_code == reason_code
-    assert caught.value.next_step
-
-
-def test_allowance_unset_inside_the_regular_session_still_shapes_a_market_leg() -> None:
-    policy = ProgramLegPolicy(window=_WINDOW, allowances=None)
-
-    assert (
-        shape_program_leg(
-            side=OrderSide.BUY,
-            purpose=EffectPurpose.ENTER,
-            use_rth=False,
-            decision_bar=_bar(11, 0),
-            pricing_bar=_bar(11, 0),
-            policy=policy,
-        )
-        == ProgramLeg(regular_session_shape(OrderSide.BUY))
-    )
+    assert caught.value.reason_code == reason_code, "the refusal carries its typed reason code"
+    assert caught.value.next_step, "the refusal says what to do next"
 
 
 def test_apply_uses_the_side_the_shape_was_priced_for() -> None:
@@ -255,33 +283,6 @@ def test_apply_uses_the_side_the_shape_was_priced_for() -> None:
     )
 
     assert shape.shape.apply(symbol="SPY", quantity=1.0).side is OrderSide.SELL
-
-
-def test_an_unpriceable_anchor_is_a_typed_refusal_not_a_validation_error() -> None:
-    """A quantised anchor at or below zero must reach the Clerk as a refusal.
-
-    ``LegShape.apply`` would otherwise raise pydantic's ``ValidationError``
-    (``limit_price gt=0``) from *outside* the ``except ProgramLegRefused`` in
-    ``runtime._execute_effect``, killing the shielded effect task instead of
-    writing a rejected receipt.
-    """
-    policy = ProgramLegPolicy(
-        window=_WINDOW,
-        allowances=ExtendedHoursAllowances(entry_bps=Decimal("10"), exit_bps=Decimal("9999.99")),
-    )
-
-    with pytest.raises(ProgramLegRefused) as caught:
-        shape_program_leg(
-            side=OrderSide.SELL,
-            purpose=EffectPurpose.EXIT,
-            use_rth=False,
-            decision_bar=_bar(18, 0, close="0.0100"),
-            pricing_bar=_bar(18, 0, close="0.0100"),
-            policy=policy,
-        )
-
-    assert caught.value.reason_code == "EXTENDED_ANCHOR_UNPRICEABLE"
-    assert caught.value.next_step
 
 
 @pytest.mark.parametrize(
@@ -353,17 +354,3 @@ def test_an_extended_leg_with_no_bar_of_the_traded_asset_is_refused_never_priced
         )
 
     assert refused.value.reason_code == "PRICING_BAR_UNAVAILABLE"
-
-
-def test_a_market_leg_needs_no_bar_of_the_traded_asset() -> None:
-    """Inside the regular session a leg is a market order, so the decision's time is all it needs."""
-    program_leg = shape_program_leg(
-        side=OrderSide.SELL,
-        purpose=EffectPurpose.EXIT,
-        use_rth=False,
-        decision_bar=_bar(10, 0),
-        pricing_bar=None,
-        policy=_POLICY,
-    )
-
-    assert program_leg == ProgramLeg(regular_session_shape(OrderSide.SELL))

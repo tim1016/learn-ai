@@ -254,41 +254,53 @@ def test_an_uncleanly_stopped_postgres_refuses(tmp_path: Path) -> None:
     assert not bundle.exists()
 
 
-def test_the_manifest_records_the_postgres_major_version(tmp_path: Path) -> None:
-    installation = build_installation(tmp_path)
-
-    _export(installation, tmp_path / "bundle.tar")
-
-    assert read_manifest(tmp_path / "bundle.tar").postgres.pg_version == "16"
-
-
-def test_export_writes_exactly_the_listed_contents_plus_the_manifest(tmp_path: Path) -> None:
+def test_export_writes_exactly_the_listed_contents_and_the_manifest_records_them(tmp_path: Path) -> None:
     installation = build_installation(tmp_path)
     bundle = tmp_path / "out" / "bundle.tar"
 
     steps = _export(installation, bundle)
 
-    assert steps[-1]["step"] == "complete"
+    assert steps[-1]["step"] == "complete", "the export completes"
     with tarfile.open(bundle) as archive:
         names = archive.getnames()
-    assert names[0] == MANIFEST_MEMBER
+    assert names[0] == MANIFEST_MEMBER, "the manifest leads the bundle"
     assert sorted(names[1:]) == sorted(
         [volume.member for volume in BUNDLED_VOLUMES]
         + [folder.member for folder in BUNDLED_FOLDERS]
-    )
+    ), "the bundle carries exactly the listed volumes and folders"
     manifest = read_manifest(bundle)
-    assert manifest.source_commit == SOURCE_COMMIT
-    assert isinstance(manifest.created_at_ms, int)
-    assert {entry.name for entry in manifest.volumes} == {v.name for v in BUNDLED_VOLUMES}
+    assert manifest.source_commit == SOURCE_COMMIT, "the manifest records the source commit"
+    assert isinstance(manifest.created_at_ms, int), "the manifest records its creation instant as int ms"
+    assert {entry.name for entry in manifest.volumes} == {v.name for v in BUNDLED_VOLUMES}, (
+        "the manifest lists every bundled volume"
+    )
     # No lane was drained and no assignment changed state.
-    assert {clerk.lifecycle_state for clerk in manifest.registry.clerks} == {"provisioned"}
-    assert {row.state for row in manifest.registry.assignments} == {"effective"}
+    assert {clerk.lifecycle_state for clerk in manifest.registry.clerks} == {"provisioned"}, (
+        "no lane was drained"
+    )
+    assert {row.state for row in manifest.registry.assignments} == {"effective"}, (
+        "no assignment changed state"
+    )
     assert [lane.stop_receipt_id for lane in manifest.lanes] == [
         f"rcpt-{installation.live_clerk_id}",
         f"rcpt-{installation.paper_clerk_id}",
-    ]
+    ], "the manifest records each lane's stop receipt"
     # The staging area is gone; only the bundle remains.
-    assert sorted(path.name for path in bundle.parent.iterdir()) == ["bundle.tar"]
+    assert sorted(path.name for path in bundle.parent.iterdir()) == ["bundle.tar"], (
+        "the staging area is gone and only the bundle remains"
+    )
+    assert manifest.postgres.pg_version == "16", "the manifest records the postgres major version"
+    live = next(v for v in manifest.clerk_volumes if v.volume == LIVE_VOLUME)
+    assert live.marker.clerk_id == installation.live_clerk_id, "the manifest records the live volume marker"
+    assert [account.account_id for account in live.accounts] == [LIVE_ACCOUNT], (
+        "the manifest records the live volume's account"
+    )
+    assert live.accounts[0].authority_generation >= 1, "the manifest records the authority generation"
+    assignment = next(
+        row for row in manifest.registry.assignments if row.clerk_id == installation.live_clerk_id
+    )
+    assert assignment.assignment_generation >= 1, "the manifest records the assignment generation"
+    assert assignment.confirmed_binding_generation == 1, "the manifest records the confirmed binding generation"
 
 
 def test_export_stops_bots_before_it_stops_containers_clerks_first_postgres_last(
@@ -302,24 +314,6 @@ def test_export_stops_bots_before_it_stops_containers_clerks_first_postgres_last
     assert stopped[-1] == "my-postgres"
     assert stopped.index("alpaca-live-clerk") < stopped.index("polygon-data-service")
     assert stopped.index("alpaca-paper-clerk") < stopped.index("polygon-data-service")
-
-
-def test_the_manifest_records_markers_and_authority_generations(tmp_path: Path) -> None:
-    installation = build_installation(tmp_path)
-    bundle = tmp_path / "bundle.tar"
-
-    _export(installation, bundle)
-
-    manifest = read_manifest(bundle)
-    live = next(v for v in manifest.clerk_volumes if v.volume == LIVE_VOLUME)
-    assert live.marker.clerk_id == installation.live_clerk_id
-    assert [account.account_id for account in live.accounts] == [LIVE_ACCOUNT]
-    assert live.accounts[0].authority_generation >= 1
-    assignment = next(
-        row for row in manifest.registry.assignments if row.clerk_id == installation.live_clerk_id
-    )
-    assert assignment.assignment_generation >= 1
-    assert assignment.confirmed_binding_generation == 1
 
 
 def test_the_bundle_carries_no_secret_file(tmp_path: Path) -> None:

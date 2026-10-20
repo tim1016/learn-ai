@@ -51,33 +51,33 @@ def test_the_floor_scales_with_each_years_scheduled_sessions(start: date, end: d
     assert (result["trading_sessions"], result["minimum_trades"]) == (sessions, minimum)
 
 
-def test_a_cross_year_window_sums_the_yearly_fractions_and_rounds_once() -> None:
+def test_a_window_counts_scheduled_sessions_across_years_holidays_and_early_closes() -> None:
     # Dec 30-31 of 2025 (250 sessions) and Jan 2 and 5 of 2026 (251): 50 x (2/250 + 2/251) = 0.798, so 1, not 1 + 1.
-    result = window_activity(50, *_window(date(2025, 12, 30), date(2026, 1, 6)))
-    assert result["years"] == [
+    cross_year = window_activity(50, *_window(date(2025, 12, 30), date(2026, 1, 6)))
+    assert cross_year["years"] == [
         {"year": 2025, "selected_sessions": 2, "year_sessions": 250},
         {"year": 2026, "selected_sessions": 2, "year_sessions": 251},
-    ]
-    assert result["minimum_trades"] == 1
-
-
-def test_holidays_are_excluded_early_closes_count_once_and_the_end_is_excluded() -> None:
+    ], "a cross-year window sums the yearly fractions"
+    assert cross_year["minimum_trades"] == 1, "a cross-year window rounds once"
     # Thanksgiving 2024 is closed; Black Friday's early close is one session; Dec 3 is the excluded end.
-    result = window_activity(50, *_window(date(2024, 11, 28), date(2024, 12, 3)))
-    assert result["trading_sessions"] == 2
-    assert window_activity(50, *_window(date(2024, 11, 30), date(2024, 12, 2)))["trading_sessions"] == 0
+    holidays = window_activity(50, *_window(date(2024, 11, 28), date(2024, 12, 3)))
+    assert holidays["trading_sessions"] == 2, "holidays are excluded, early closes count once and the end is excluded"
+    assert window_activity(50, *_window(date(2024, 11, 30), date(2024, 12, 2)))["trading_sessions"] == 0, "a weekend window holds no session"
 
 
-@pytest.mark.parametrize("rate", [0, -1, 0.5, True])
-def test_a_rate_that_is_not_a_positive_whole_number_is_refused(rate: int) -> None:
-    with pytest.raises(ValueError, match="positive whole number"):
-        window_activity(rate, *_window(date(2026, 1, 1), date(2026, 2, 1)))
-
-
-def test_a_window_that_does_not_move_forward_is_refused() -> None:
-    start, _ = _window(date(2026, 1, 1), date(2026, 2, 1))
-    with pytest.raises(ValueError, match="end after it starts"):
-        window_activity(50, start, start)
+@pytest.mark.parametrize(
+    ("rate", "start", "end", "match"),
+    [
+        pytest.param(0, date(2026, 1, 1), date(2026, 2, 1), "positive whole number", id="rate-0-is-refused"),
+        pytest.param(-1, date(2026, 1, 1), date(2026, 2, 1), "positive whole number", id="rate-minus-1-is-refused"),
+        pytest.param(0.5, date(2026, 1, 1), date(2026, 2, 1), "positive whole number", id="rate-half-is-refused"),
+        pytest.param(True, date(2026, 1, 1), date(2026, 2, 1), "positive whole number", id="rate-true-is-refused"),
+        pytest.param(50, date(2026, 1, 1), date(2026, 1, 1), "end after it starts", id="window-that-does-not-move-forward-is-refused"),
+    ],
+)
+def test_a_rate_or_window_that_cannot_scale_a_floor_is_refused(rate: int, start: date, end: date, match: str) -> None:
+    with pytest.raises(ValueError, match=match):
+        window_activity(rate, *_window(start, end))
 
 
 def test_a_plan_has_a_frequency_or_fixed_floors_never_both() -> None:

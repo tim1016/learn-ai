@@ -19,6 +19,8 @@ from collections.abc import Iterator
 from datetime import date, timedelta
 from decimal import Decimal
 
+import pytest
+
 from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import BacktestEngine, BacktestResult, QuarantinedDecisionBar
 from app.engine.execution.fill_model import FillModel
@@ -111,28 +113,34 @@ def _run(strategy: Strategy, bars: list[TradeBar]) -> BacktestResult:
     return BacktestEngine(data_source=_Stream(bars), fill_model=FillModel(mode=FillMode.SIGNAL_BAR_CLOSE)).run(strategy)
 
 
-def test_a_bucket_whose_last_minute_has_no_bar_is_decided_as_lean_decides_it() -> None:
-    """LEAN evaluates the short bucket, priced at the last minute that
-    arrived; so does this engine now (#2909)."""
+@pytest.mark.parametrize(
+    "missing_minutes_into_bucket",
+    [
+        # LEAN evaluates the short bucket, priced at the last minute that
+        # arrived; so does this engine now (#2909). The 10:00-10:15 bucket:
+        # complete when every minute trades, one minute short once the 10:14
+        # minute is gone.
+        (14,),
+        (),
+    ],
+    ids=["a_bucket_whose_last_minute_has_no_bar_is_decided_as_lean_decides_it", "a_complete_session_records_no_refused_decision_bar"],
+)
+def test_a_bucket_is_decided_and_no_decision_bar_is_refused(missing_minutes_into_bucket: tuple[int, ...]) -> None:
     window = trading_calendar.session_window_for_date(REGULAR_DAY)
-    # The 10:00-10:15 bucket: complete when every minute trades, one minute
-    # short once the 10:14 minute is gone.
     bucket_start_ms = window.open_ms_utc + 30 * _MINUTE_MS
     bucket_close_ms = bucket_start_ms + _BUCKET_MS
-    bars = [
-        bar for bar in _session_minutes(REGULAR_DAY, Decimal("100"))
-        if bar.start_ms != bucket_close_ms - _MINUTE_MS
-    ]
+    missing_starts = {bucket_start_ms + minute * _MINUTE_MS for minute in missing_minutes_into_bucket}
+    bars = [bar for bar in _session_minutes(REGULAR_DAY, Decimal("100")) if bar.start_ms not in missing_starts]
     strategy = _ScriptedSignalProgram(
         first_day=REGULAR_DAY, last_day=REGULAR_DAY, enter_at_ms=bucket_close_ms
     )
 
     result = _run(strategy, bars)
 
-    assert result.quarantined_decision_bars == []
-    assert [line for line in result.log_lines if line.startswith("[QUARANTINE]")] == []
-    # The ENTER decided on the short bucket reaches execution.
-    assert result.order_events != []
+    assert result.quarantined_decision_bars == [], "no decision bar is refused"
+    assert [line for line in result.log_lines if line.startswith("[QUARANTINE]")] == [], "the run logs no refusal"
+    # The ENTER decided on the (possibly short) bucket reaches execution.
+    assert result.order_events != [], "the ENTER decided on the bucket reaches execution"
 
 
 def test_a_mis_shaped_decision_clock_is_reported_as_refused() -> None:
@@ -159,16 +167,3 @@ def test_a_mis_shaped_decision_clock_is_reported_as_refused() -> None:
         line.startswith("[QUARANTINE] TIMEFRAME_MISMATCH") and line.endswith(f"{ny_datetime(bucket_close_ms)}; the run made no decision on it (#2909)")
         for line in result.log_lines
     )
-
-
-def test_a_complete_session_records_no_refused_decision_bar() -> None:
-    window = trading_calendar.session_window_for_date(REGULAR_DAY)
-    bucket_start_ms = window.open_ms_utc + 30 * _MINUTE_MS
-    strategy = _ScriptedSignalProgram(
-        first_day=REGULAR_DAY, last_day=REGULAR_DAY, enter_at_ms=bucket_start_ms + _BUCKET_MS
-    )
-
-    result = _run(strategy, _session_minutes(REGULAR_DAY, Decimal("100")))
-
-    assert result.quarantined_decision_bars == []
-    assert result.order_events != []

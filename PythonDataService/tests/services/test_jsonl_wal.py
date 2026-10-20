@@ -125,34 +125,33 @@ def test_several_records_appended_after_a_torn_line_replace_it(tmp_path: Path) -
     assert [record.value for record in wal.read_all()] == ["a", "b", "c"]
 
 
-def test_a_rewrite_leaves_exactly_the_records_given_under_the_sequences_they_had(tmp_path: Path) -> None:
-    path = tmp_path / "wal.jsonl"
-    wal = _wal(path, tmp_path)
-    wal.append_many([_Record(seq=seq, value=str(seq)) for seq in range(1, 7)])
-
-    wal.replace_all([_Record(seq=2, value="2"), _Record(seq=6, value="6")])
-
-    assert [record.seq for record in wal.read_all()] == [2, 6]
-    # The sequence runs on from the last one kept: it never reuses one.
-    assert wal.allocate_seq() == 7
-    wal.append(_Record(seq=7, value="7"))
-    assert [record.seq for record in _wal(path, tmp_path).read_all()] == [2, 6, 7]
-    assert [entry.name for entry in tmp_path.iterdir() if entry.name.endswith(".tmp")] == []
-
-
-def test_after_a_rewrite_that_drops_the_tail_the_next_sequence_is_the_one_a_fresh_reader_of_the_file_gives(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("kept", "next_seq"),
+    [
+        pytest.param((2, 6), 7, id="a_rewrite_leaves_exactly_the_records_given_under_the_sequences_they_had"),
+        pytest.param(
+            (1, 2),
+            3,
+            id="after_a_rewrite_that_drops_the_tail_the_next_sequence_is_the_one_a_fresh_reader_of_the_file_gives",
+        ),
+    ],
+)
+def test_a_rewrite_keeps_the_given_sequences_and_the_next_one_runs_on_from_the_last(
+    tmp_path: Path, kept: tuple[int, ...], next_seq: int
 ) -> None:
     path = tmp_path / "wal.jsonl"
     wal = _wal(path, tmp_path)
     wal.append_many([_Record(seq=seq, value=str(seq)) for seq in range(1, 7)])
 
-    wal.replace_all([_Record(seq=1, value="1"), _Record(seq=2, value="2")])
+    wal.replace_all([_Record(seq=seq, value=str(seq)) for seq in kept])
 
-    # The writer that rewrote and a process started afterwards must agree, or one of them refuses the other's append.
-    assert wal.allocate_seq() == _wal(path, tmp_path).allocate_seq() == 3
-    wal.append(_Record(seq=3, value="3"))
-    assert [record.seq for record in _wal(path, tmp_path).read_all()] == [1, 2, 3]
+    assert [record.seq for record in wal.read_all()] == list(kept), "the rewrite leaves exactly the records given"
+    # The sequence runs on from the last one kept: it never reuses one. The writer that rewrote and a
+    # process started afterwards must agree, or one of them refuses the other's append.
+    assert wal.allocate_seq() == _wal(path, tmp_path).allocate_seq() == next_seq, "next sequence, writer and fresh reader"
+    wal.append(_Record(seq=next_seq, value=str(next_seq)))
+    assert [record.seq for record in _wal(path, tmp_path).read_all()] == [*kept, next_seq], "a fresh reader reads the kept records and the append"
+    assert [entry.name for entry in tmp_path.iterdir() if entry.name.endswith(".tmp")] == [], "no temp file is left behind"
 
 
 def test_a_rewrite_refuses_sequences_that_do_not_rise_and_leaves_the_file_as_it_was(tmp_path: Path) -> None:

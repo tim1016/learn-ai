@@ -45,25 +45,27 @@ def _list_strategies():
     return [s.model_dump() for s in list_engine_strategies()]
 
 
-def test_deployment_validation_is_registered_with_fixed_rule_metadata():
+def test_deployment_validation_catalog_entry():
     strategies = _list_strategies()
     names = {s["name"] for s in strategies}
-    assert "deployment_validation" in names
+    assert "deployment_validation" in names, "deployment_validation is registered"
 
     strategy = next(s for s in strategies if s["name"] == "deployment_validation")
-    assert strategy["display_name"] == "Deployment Validation"
-    assert "minute" in strategy["supported_resolutions"]
-    assert strategy["lean_twin"] == "deployment_validation"
+    assert strategy["display_name"] == "Deployment Validation", "fixed-rule display name"
+    assert "minute" in strategy["supported_resolutions"], "fixed-rule supports the minute resolution"
+    assert strategy["lean_twin"] == "deployment_validation", "fixed-rule LEAN twin"
     props = strategy["params_schema"]["properties"]
-    assert set(props) == {"symbol"}
+    assert set(props) == {"symbol"}, "fixed-rule exposes only the symbol parameter"
 
+    # Owner decision 7 (#2607): the note comes from DV's registry entry, never its sealed sources.
+    notices = {s["name"]: s["experimental_notice"] for s in strategies}
 
-def test_list_engine_strategies_names_deployment_validation_experimental_only():
-    """Owner decision 7 (#2607): the note comes from DV's registry entry, never its sealed sources."""
-    notices = {s["name"]: s["experimental_notice"] for s in _list_strategies()}
-
-    assert notices["deployment_validation"] == "Experimental validation only — not a trading strategy"
-    assert {name for name, notice in notices.items() if notice is not None} == {"deployment_validation"}
+    assert notices["deployment_validation"] == "Experimental validation only — not a trading strategy", (
+        "#2607: DV carries the experimental notice from its registry entry"
+    )
+    assert {name for name, notice in notices.items() if notice is not None} == {"deployment_validation"}, (
+        "#2607: DV is the only strategy that carries an experimental notice"
+    )
 
 
 def test_every_operational_harness_carries_an_experimental_notice():
@@ -109,10 +111,11 @@ def test_expected_strategies_are_registered():
     )
 
 
-def test_ema_signal_advertises_its_matching_lean_validation_template():
-    strategy = next(strategy for strategy in _list_strategies() if strategy["name"] == "ema_crossover_signal")
+@pytest.mark.parametrize("name", ["ema_crossover_signal", "rsi_mean_reversion"], ids=["ema_signal", "rsi_mean_reversion"])
+def test_strategy_advertises_its_matching_lean_validation_template(name):
+    strategy = next(strategy for strategy in _list_strategies() if strategy["name"] == name)
 
-    assert strategy["lean_twin"] == "ema_crossover_signal"
+    assert strategy["lean_twin"] == name
 
 
 def test_ema_signal_exposes_the_normalized_gap_floor_as_a_parameter() -> None:
@@ -185,12 +188,6 @@ def test_registry_exposes_strategy_bar_cadence_without_frontend_name_heuristics(
         "multiplier": 15,
         "parameter": "resolution_minutes",
     }
-
-
-def test_rsi_mean_reversion_advertises_its_matching_lean_validation_template():
-    strategy = next(strategy for strategy in _list_strategies() if strategy["name"] == "rsi_mean_reversion")
-
-    assert strategy["lean_twin"] == "rsi_mean_reversion"
 
 
 def test_catalog_names_the_settings_each_lean_twin_reads() -> None:

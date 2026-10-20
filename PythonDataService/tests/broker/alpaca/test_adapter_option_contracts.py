@@ -43,34 +43,33 @@ class _ContractClient:
         return self.payload
 
 
-def test_the_documented_listing_maps_every_field() -> None:
+def test_the_documented_listing_maps_every_field_and_is_one_a_bot_may_trade() -> None:
     listing = from_alpaca_option_contract(_example(), observed_at_ms=_OBSERVED)
 
-    assert listing.broker == "alpaca"
-    assert listing.contract_id == "98359ef7-5124-49f3-85ea-5cf02df6defa"
-    assert listing.symbol == "AAPL250620C00100000"
-    assert listing.name == "AAPL Jun 20 2025 100 Call"
-    assert listing.status == "active"
-    assert listing.tradable is True
+    assert listing.broker == "alpaca", "the documented listing maps broker"
+    assert listing.contract_id == "98359ef7-5124-49f3-85ea-5cf02df6defa", "the documented listing maps contract_id"
+    assert listing.symbol == "AAPL250620C00100000", "the documented listing maps symbol"
+    assert listing.name == "AAPL Jun 20 2025 100 Call", "the documented listing maps name"
+    assert listing.status == "active", "the documented listing maps status"
+    assert listing.tradable is True, "the documented listing maps tradable"
     # A date becomes its 16:00 New York anchor, once, here.
-    assert listing.expiry_ms == option_expiry_anchor_ms(date(2025, 6, 20))
-    assert listing.root_symbol == "AAPL"
-    assert listing.underlying_symbol == "AAPL"
-    assert listing.underlying_asset_id == "b0b6dd9d-8b9b-48a9-ba46-b9d54906e415"
-    assert listing.right == "call"
-    assert listing.style == "american"
-    assert listing.strike_price == Decimal("100")
-    assert listing.multiplier == Decimal("100")
-    assert listing.shares_per_contract == Decimal("100")
-    assert listing.penny_program is True
-    assert listing.deliverables is None
-    assert listing.observed_at_ms == _OBSERVED
-
-
-def test_the_documented_contract_is_one_a_bot_may_trade() -> None:
-    listing = from_alpaca_option_contract(_example(), observed_at_ms=_OBSERVED)
-
-    assert option_contract_refusal(_AAPL_JUN_100_CALL, listing) is None
+    assert listing.expiry_ms == option_expiry_anchor_ms(date(2025, 6, 20)), "the documented listing maps expiry_ms"
+    assert listing.root_symbol == "AAPL", "the documented listing maps root_symbol"
+    assert listing.underlying_symbol == "AAPL", "the documented listing maps underlying_symbol"
+    assert listing.underlying_asset_id == "b0b6dd9d-8b9b-48a9-ba46-b9d54906e415", (
+        "the documented listing maps underlying_asset_id"
+    )
+    assert listing.right == "call", "the documented listing maps right"
+    assert listing.style == "american", "the documented listing maps style"
+    assert listing.strike_price == Decimal("100"), "the documented listing maps strike_price"
+    assert listing.multiplier == Decimal("100"), "the documented listing maps multiplier"
+    assert listing.shares_per_contract == Decimal("100"), "the documented listing maps shares_per_contract"
+    assert listing.penny_program is True, "the documented listing maps penny_program"
+    assert listing.deliverables is None, "the documented listing maps deliverables"
+    assert listing.observed_at_ms == _OBSERVED, "the documented listing maps observed_at_ms"
+    assert option_contract_refusal(_AAPL_JUN_100_CALL, listing) is None, (
+        "the documented contract is one a bot may trade"
+    )
 
 
 def test_a_strike_with_cents_is_read_exactly() -> None:

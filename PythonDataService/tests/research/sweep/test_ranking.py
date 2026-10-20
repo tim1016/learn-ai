@@ -58,14 +58,11 @@ def test_zero_trade_failed_and_non_finite_cells_never_lead() -> None:
     assert [cell.params_hash for cell in rank(cells, "sharpe_ratio", min_trades=1)] == ["ok"]
 
 
-def test_a_search_with_no_eligible_cell_reports_no_leader() -> None:
-    assert leader([_Cell("a", total_trades=2)], "sharpe_ratio", min_trades=5) is None
-
-
 def test_the_minimum_trade_count_gates_eligibility() -> None:
     cells = [_Cell("thin", total_trades=4, sharpe_ratio=9.0), _Cell("thick", total_trades=5, sharpe_ratio=1.0)]
 
-    assert leader(cells, "sharpe_ratio", min_trades=5).params_hash == "thick"
+    assert leader(cells, "sharpe_ratio", min_trades=5).params_hash == "thick", "the minimum trade count gates eligibility"
+    assert leader([_Cell("a", total_trades=2)], "sharpe_ratio", min_trades=5) is None, "a search with no eligible cell reports no leader"
 
 
 def test_the_measure_vocabulary_is_closed() -> None:

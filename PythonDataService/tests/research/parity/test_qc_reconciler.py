@@ -98,7 +98,9 @@ def reader(price_csv: Path) -> FixtureDataReader:
 # ---------- _parse_qc_orders ----------------------------------------------
 
 
-def test_parse_qc_orders_extracts_one_fill_per_event(tmp_path: Path) -> None:
+def test_parse_qc_orders_extracts_fills_skipping_zero_quantity_events_and_tolerating_a_missing_fee(
+    tmp_path: Path,
+) -> None:
     payload = {
         "orders": [
             {
@@ -140,17 +142,15 @@ def test_parse_qc_orders_extracts_one_fill_per_event(tmp_path: Path) -> None:
 
     fills = _parse_qc_orders(p)
 
-    assert len(fills) == 2
-    assert fills[0].symbol == "AAPL"  # security-id suffix stripped
-    assert fills[0].side == "buy"
-    assert fills[0].fill_qty == 526
-    assert fills[0].fill_price == Decimal("190.00")
-    assert fills[0].fee == Decimal("2.63")
-    assert fills[1].side == "sell"
-    assert fills[1].fill_qty == -526
+    assert len(fills) == 2, "extracts one fill per event: two fills"
+    assert fills[0].symbol == "AAPL", "extracts one fill per event: security-id suffix stripped"
+    assert fills[0].side == "buy", "extracts one fill per event: first side"
+    assert fills[0].fill_qty == 526, "extracts one fill per event: first quantity"
+    assert fills[0].fill_price == Decimal("190.00"), "extracts one fill per event: first price"
+    assert fills[0].fee == Decimal("2.63"), "extracts one fill per event: first fee"
+    assert fills[1].side == "sell", "extracts one fill per event: second side"
+    assert fills[1].fill_qty == -526, "extracts one fill per event: second quantity"
 
-
-def test_parse_qc_orders_skips_zero_quantity_events(tmp_path: Path) -> None:
     payload = {
         "orders": [
             {
@@ -175,15 +175,12 @@ def test_parse_qc_orders_skips_zero_quantity_events(tmp_path: Path) -> None:
             }
         ]
     }
-    p = tmp_path / "qc_orders.json"
     p.write_text(json.dumps(payload))
 
     fills = _parse_qc_orders(p)
-    assert len(fills) == 1
-    assert fills[0].fill_qty == 100
+    assert len(fills) == 1, "skips zero-quantity events: only the filled event remains"
+    assert fills[0].fill_qty == 100, "skips zero-quantity events: the remaining fill quantity"
 
-
-def test_parse_qc_orders_handles_missing_fee_field(tmp_path: Path) -> None:
     payload = {
         "orders": [
             {
@@ -202,39 +199,32 @@ def test_parse_qc_orders_handles_missing_fee_field(tmp_path: Path) -> None:
             }
         ]
     }
-    p = tmp_path / "qc_orders.json"
     p.write_text(json.dumps(payload))
 
     fills = _parse_qc_orders(p)
-    assert fills[0].fee is None  # Branch-B fixture: fee absent / explicitly missing
+    assert fills[0].fee is None, "handles a missing fee field: Branch-B fixture, fee absent / explicitly missing"
 
 
 # ---------- _audit_fixture -------------------------------------------------
 
 
-def test_audit_fixture_passes_when_fill_explained_by_bar_open(
+def test_audit_fixture_passes_a_fill_explained_by_the_bar_open_and_flags_a_wrong_price_or_a_missing_bar(
     reader: FixtureDataReader,
 ) -> None:
     qc = [_qc_fill("buy", 526, "190.00", "2026-02-11")]
     audits = _audit_fixture(qc, reader, Tolerances.phase3_default())
-    assert audits == []
+    assert audits == [], "passes when the fill is explained by the bar open"
 
-
-def test_audit_fixture_flags_price_not_within_tolerance(
-    reader: FixtureDataReader,
-) -> None:
     qc = [_qc_fill("buy", 526, "195.55", "2026-02-11")]  # bar open is 190.00
     audits = _audit_fixture(qc, reader, Tolerances.phase3_default())
-    assert len(audits) == 1
-    assert audits[0].expected_open == Decimal("190.00")
-    assert "not explained" in audits[0].reason
+    assert len(audits) == 1, "flags a price not within tolerance: one audit"
+    assert audits[0].expected_open == Decimal("190.00"), "flags a price not within tolerance: the bar open expected"
+    assert "not explained" in audits[0].reason, "flags a price not within tolerance: reason says not explained"
 
-
-def test_audit_fixture_flags_missing_bar(reader: FixtureDataReader) -> None:
     qc = [_qc_fill("buy", 526, "200.00", "2026-03-15")]  # no bar for that date
     audits = _audit_fixture(qc, reader, Tolerances.phase3_default())
-    assert len(audits) == 1
-    assert "no bar in fixture" in audits[0].reason
+    assert len(audits) == 1, "flags a missing bar: one audit"
+    assert "no bar in fixture" in audits[0].reason, "flags a missing bar: reason says no bar in fixture"
 
 
 # ---------- _audit_fixture (minute resolution) ---------------------------
@@ -274,40 +264,32 @@ def _qc_fill_at(side: str, qty: int, price: str, iso: str, *, order_id: int = 1,
     )
 
 
-def test_minute_audit_passes_when_fill_within_bar_range(
+def test_minute_audit_passes_a_fill_within_the_bar_range_and_flags_one_outside_it_or_with_no_minute_bar(
     minute_reader: FixtureDataReader,
 ) -> None:
     # Fill at 2026-02-10 14:31:00Z (= 9:31 ET) at $273.238 — within
     # 9:31 bar's [273.048, 275.106] range.
     qc = [_qc_fill_at("buy", 365, "273.238170408", "2026-02-10T14:31:00Z")]
     audits = _audit_fixture(qc, minute_reader, Tolerances.phase3_default())
-    assert audits == []
+    assert audits == [], "passes when the fill is within the bar range"
 
-
-def test_minute_audit_flags_fill_outside_bar_range(
-    minute_reader: FixtureDataReader,
-) -> None:
     # Fill at $300 on the 9:31 bar — well outside [273.048, 275.106].
     qc = [_qc_fill_at("buy", 100, "300.00", "2026-02-10T14:31:00Z")]
     audits = _audit_fixture(qc, minute_reader, Tolerances.phase3_default())
-    assert len(audits) == 1
-    assert "outside minute-bar range" in audits[0].reason
+    assert len(audits) == 1, "flags a fill outside the bar range: one audit"
+    assert "outside minute-bar range" in audits[0].reason, "flags a fill outside the bar range: reason says outside minute-bar range"
 
-
-def test_minute_audit_flags_no_minute_bar_for_time(
-    minute_reader: FixtureDataReader,
-) -> None:
     # Fill at 9:45 ET — no bar in the fixture for that minute.
     qc = [_qc_fill_at("buy", 100, "274.00", "2026-02-10T14:45:00Z")]
     audits = _audit_fixture(qc, minute_reader, Tolerances.phase3_default())
-    assert len(audits) == 1
-    assert "no minute bar" in audits[0].reason
+    assert len(audits) == 1, "flags no minute bar for the time: one audit"
+    assert "no minute bar" in audits[0].reason, "flags no minute bar for the time: reason says no minute bar"
 
 
 # ---------- _align_fills ---------------------------------------------------
 
 
-def test_align_fills_pairs_by_date_and_side() -> None:
+def test_align_fills_pairs_by_date_and_side_and_emits_a_half_pair_when_one_side_is_missing() -> None:
     qc = [
         _qc_fill("buy", 526, "190.00", "2026-02-11"),
         _qc_fill("sell", -526, "195.20", "2026-02-25"),
@@ -317,69 +299,57 @@ def test_align_fills_pairs_by_date_and_side() -> None:
         _our_fill("sell", -526, "195.19", "2026-02-25"),
     ]
     pairs = _align_fills(qc, ours)
-    assert len(pairs) == 2
-    assert all(p.qc is not None and p.ours is not None for p in pairs)
-    assert pairs[0].trading_date.isoformat() == "2026-02-11"
+    assert len(pairs) == 2, "pairs by date and side: two pairs"
+    assert all(p.qc is not None and p.ours is not None for p in pairs), "pairs by date and side: both sides present"
+    assert pairs[0].trading_date.isoformat() == "2026-02-11", "pairs by date and side: first trading date"
 
-
-def test_align_fills_emits_half_pair_when_one_side_missing() -> None:
     qc = [_qc_fill("buy", 526, "190.00", "2026-02-11")]
-    ours: list[OurFill] = []
+    ours = []
     pairs = _align_fills(qc, ours)
-    assert len(pairs) == 1
-    assert pairs[0].qc is not None
-    assert pairs[0].ours is None
+    assert len(pairs) == 1, "emits a half pair when one side is missing: one pair"
+    assert pairs[0].qc is not None, "emits a half pair when one side is missing: QC side present"
+    assert pairs[0].ours is None, "emits a half pair when one side is missing: our side absent"
 
 
 # ---------- _classify_divergences ------------------------------------------
 
 
-def test_classify_decision_mismatch_on_missing_side() -> None:
+def test_classify_divergences_names_each_category_its_fills_disagree_on() -> None:
     qc = [_qc_fill("buy", 526, "190.00", "2026-02-11")]
     pairs = _align_fills(qc, [])
     divs = _classify_divergences(pairs, Tolerances.phase3_default(), assert_fees=False)
-    assert {d.category for d in divs} == {DivergenceCategory.DECISION_MISMATCH}
+    assert {d.category for d in divs} == {DivergenceCategory.DECISION_MISMATCH}, "a missing side is a decision mismatch"
 
-
-def test_classify_fill_price_drift_above_tolerance() -> None:
     qc = [_qc_fill("buy", 526, "190.00", "2026-02-11")]
     ours = [_our_fill("buy", 526, "190.50", "2026-02-11")]
     pairs = _align_fills(qc, ours)
     divs = _classify_divergences(pairs, Tolerances.phase3_default(), assert_fees=False)
-    assert DivergenceCategory.FILL_PRICE_DRIFT in {d.category for d in divs}
+    assert DivergenceCategory.FILL_PRICE_DRIFT in {d.category for d in divs}, "a fill price above tolerance is drift"
 
-
-def test_classify_fill_price_within_tolerance_emits_no_drift() -> None:
     qc = [_qc_fill("buy", 526, "190.00", "2026-02-11")]
     ours = [_our_fill("buy", 526, "190.01", "2026-02-11")]
     pairs = _align_fills(qc, ours)
     divs = _classify_divergences(pairs, Tolerances.phase3_default(), assert_fees=False)
-    assert DivergenceCategory.FILL_PRICE_DRIFT not in {d.category for d in divs}
+    assert DivergenceCategory.FILL_PRICE_DRIFT not in {d.category for d in divs}, "a fill price within tolerance emits no drift"
 
-
-def test_classify_quantity_mismatch() -> None:
     qc = [_qc_fill("buy", 526, "190.00", "2026-02-11")]
     ours = [_our_fill("buy", 500, "190.00", "2026-02-11")]
     pairs = _align_fills(qc, ours)
     divs = _classify_divergences(pairs, Tolerances.phase3_default(), assert_fees=False)
-    assert DivergenceCategory.QUANTITY_MISMATCH in {d.category for d in divs}
+    assert DivergenceCategory.QUANTITY_MISMATCH in {d.category for d in divs}, "different quantities are a quantity mismatch"
 
-
-def test_classify_order_type_mismatch_flags_non_market() -> None:
     qc = [_qc_fill("buy", 100, "190.00", "2026-02-11", order_type_code=2)]  # non-market
     ours = [_our_fill("buy", 100, "190.00", "2026-02-11")]
     pairs = _align_fills(qc, ours)
     divs = _classify_divergences(pairs, Tolerances.phase3_default(), assert_fees=False)
-    assert DivergenceCategory.ORDER_TYPE_MISMATCH in {d.category for d in divs}
+    assert DivergenceCategory.ORDER_TYPE_MISMATCH in {d.category for d in divs}, "a non-market order type is flagged"
 
-
-def test_classify_commission_drift_only_when_assert_fees_true() -> None:
     qc = [_qc_fill("buy", 100, "190.00", "2026-02-11", fee="9.99")]
     ours = [_our_fill("buy", 100, "190.00", "2026-02-11")]
     pairs = _align_fills(qc, ours)
     # With assert_fees=False, COMMISSION_DRIFT is suppressed:
     divs = _classify_divergences(pairs, Tolerances.phase3_default(), assert_fees=False)
-    assert DivergenceCategory.COMMISSION_DRIFT not in {d.category for d in divs}
+    assert DivergenceCategory.COMMISSION_DRIFT not in {d.category for d in divs}, "commission drift is suppressed when assert_fees is false"
     # With assert_fees=True, supplying a mismatched expected value emits it:
     divs = _classify_divergences(
         pairs,
@@ -387,7 +357,7 @@ def test_classify_commission_drift_only_when_assert_fees_true() -> None:
         assert_fees=True,
         computed_ibkr_fees={1: Decimal("1.00")},
     )
-    assert DivergenceCategory.COMMISSION_DRIFT in {d.category for d in divs}
+    assert DivergenceCategory.COMMISSION_DRIFT in {d.category for d in divs}, "commission drift is emitted when assert_fees is true"
 
 
 # ---------- reconcile_qc_aapl_phase3 (public entry point) -----------------
@@ -397,7 +367,9 @@ def _write_orders_json(path: Path, orders: list[dict]) -> None:
     path.write_text(json.dumps({"orders": orders}))
 
 
-def test_reconcile_passes_when_fills_match_within_tolerance(tmp_path: Path) -> None:
+def test_reconcile_passes_within_tolerance_fails_on_price_drift_and_halts_on_an_insufficient_fixture(
+    tmp_path: Path,
+) -> None:
     orders_path = tmp_path / "qc_orders.json"
     prices_path = tmp_path / "qc_prices.csv"
     prices_path.write_text(_CSV_TWO_BARS)
@@ -443,17 +415,12 @@ def test_reconcile_passes_when_fills_match_within_tolerance(tmp_path: Path) -> N
         qc_price_history_path=prices_path,
         our_fills=our_fills,
     )
-    assert report.status == "passed"
-    assert report.summary.n_qc_fills == 2
-    assert report.summary.n_our_fills == 2
+    assert report.status == "passed", "passes when fills match within tolerance: status"
+    assert report.summary.n_qc_fills == 2, "passes when fills match within tolerance: QC fill count"
+    assert report.summary.n_our_fills == 2, "passes when fills match within tolerance: our fill count"
     # Propagated PnL atol = (526 + 526) * $0.01 + 2 * $0.01 = $10.52 + $0.02 = $10.54
-    assert report.diagnostics.propagated_pnl_atol == Decimal("10.54")
+    assert report.diagnostics.propagated_pnl_atol == Decimal("10.54"), "passes when fills match within tolerance: propagated PnL atol"
 
-
-def test_reconcile_fails_on_price_drift(tmp_path: Path) -> None:
-    orders_path = tmp_path / "qc_orders.json"
-    prices_path = tmp_path / "qc_prices.csv"
-    prices_path.write_text(_CSV_TWO_BARS)
     _write_orders_json(
         orders_path,
         [
@@ -479,14 +446,9 @@ def test_reconcile_fails_on_price_drift(tmp_path: Path) -> None:
         qc_price_history_path=prices_path,
         our_fills=our_fills,
     )
-    assert report.status == "failed"
-    assert any(d.category == DivergenceCategory.FILL_PRICE_DRIFT for d in report.divergences)
+    assert report.status == "failed", "fails on price drift: status"
+    assert any(d.category == DivergenceCategory.FILL_PRICE_DRIFT for d in report.divergences), "fails on price drift: a fill price drift is reported"
 
-
-def test_reconcile_halts_on_fixture_insufficient(tmp_path: Path) -> None:
-    orders_path = tmp_path / "qc_orders.json"
-    prices_path = tmp_path / "qc_prices.csv"
-    prices_path.write_text(_CSV_TWO_BARS)
     _write_orders_json(
         orders_path,
         [
@@ -511,63 +473,84 @@ def test_reconcile_halts_on_fixture_insufficient(tmp_path: Path) -> None:
         qc_price_history_path=prices_path,
         our_fills=[],
     )
-    assert report.status == "failed"
+    assert report.status == "failed", "halts on fixture insufficient: status"
     cats = {d.category for d in report.divergences}
     # FIXTURE_INSUFFICIENT short-circuits classification, so DECISION_MISMATCH
     # (from our missing side) is NOT emitted in the same run.
-    assert cats == {DivergenceCategory.FIXTURE_INSUFFICIENT}
-    assert len(report.fixture_audit) == 1
+    assert cats == {DivergenceCategory.FIXTURE_INSUFFICIENT}, "halts on fixture insufficient: only FIXTURE_INSUFFICIENT is emitted"
+    assert len(report.fixture_audit) == 1, "halts on fixture insufficient: one audit entry"
 
 
 # ---------- P1 #2: parser strictness (canonical schema) --------------------
 
 
-def test_parse_qc_orders_rejects_missing_orders_key(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("payload", "match"),
+    [
+        pytest.param(
+            json.dumps([{"id": 1, "symbol": "AAPL", "events": []}]),  # top-level list
+            "missing top-level 'orders' key",
+            id="rejects-missing-orders-key",
+        ),
+        pytest.param(
+            json.dumps(
+                {
+                    "orders": [
+                        {
+                            "id": 1,
+                            "symbol": {"value": "AAPL"},  # not normalized to plain string
+                            "type": 0,
+                            "events": [{"time": "2026-02-11T13:30:00Z", "fillQuantity": 100, "fillPrice": 190.0}],
+                        }
+                    ]
+                }
+            ),
+            "'symbol' must be a string",
+            id="rejects-nested-symbol-object",
+        ),
+        pytest.param(
+            json.dumps(
+                {
+                    "orders": [
+                        {
+                            "id": 1,
+                            "symbol": "AAPL",
+                            "type": 0,
+                            "orderEvents": [  # raw QC shape — runbook must normalize to 'events'
+                                {"time": "2026-02-11T13:30:00Z", "fillQuantity": 100, "fillPrice": 190.0}
+                            ],
+                        }
+                    ]
+                }
+            ),
+            "missing 'events' key",
+            id="rejects-orderEvents-camelCase",
+        ),
+        pytest.param(
+            json.dumps(
+                {
+                    "orders": [
+                        {
+                            "id": 1,
+                            "symbol": "AAPL",
+                            "type": 0,
+                            "events": [
+                                {"time": 500_000_000_000, "fillQuantity": 100, "fillPrice": 190.0}
+                                # 5e11 — between epoch-seconds and epoch-ms; refuse
+                            ],
+                        }
+                    ]
+                }
+            ),
+            "ambiguous",
+            id="rejects-ambiguous-numeric-time",
+        ),
+    ],
+)
+def test_parse_qc_orders_rejects_a_non_canonical_schema(tmp_path: Path, payload: str, match: str) -> None:
     p = tmp_path / "qc_orders.json"
-    p.write_text(json.dumps([{"id": 1, "symbol": "AAPL", "events": []}]))  # top-level list
-    with pytest.raises(FixtureSchemaError, match="missing top-level 'orders' key"):
-        _parse_qc_orders(p)
-
-
-def test_parse_qc_orders_rejects_nested_symbol_object(tmp_path: Path) -> None:
-    p = tmp_path / "qc_orders.json"
-    p.write_text(
-        json.dumps(
-            {
-                "orders": [
-                    {
-                        "id": 1,
-                        "symbol": {"value": "AAPL"},  # not normalized to plain string
-                        "type": 0,
-                        "events": [{"time": "2026-02-11T13:30:00Z", "fillQuantity": 100, "fillPrice": 190.0}],
-                    }
-                ]
-            }
-        )
-    )
-    with pytest.raises(FixtureSchemaError, match="'symbol' must be a string"):
-        _parse_qc_orders(p)
-
-
-def test_parse_qc_orders_rejects_orderEvents_camelCase(tmp_path: Path) -> None:
-    p = tmp_path / "qc_orders.json"
-    p.write_text(
-        json.dumps(
-            {
-                "orders": [
-                    {
-                        "id": 1,
-                        "symbol": "AAPL",
-                        "type": 0,
-                        "orderEvents": [  # raw QC shape — runbook must normalize to 'events'
-                            {"time": "2026-02-11T13:30:00Z", "fillQuantity": 100, "fillPrice": 190.0}
-                        ],
-                    }
-                ]
-            }
-        )
-    )
-    with pytest.raises(FixtureSchemaError, match="missing 'events' key"):
+    p.write_text(payload)
+    with pytest.raises(FixtureSchemaError, match=match):
         _parse_qc_orders(p)
 
 
@@ -598,29 +581,6 @@ def test_parse_qc_orders_accepts_numeric_ms_time(tmp_path: Path) -> None:
     fills = _parse_qc_orders(p)
     assert len(fills) == 1
     assert fills[0].fill_time_ms == 1770773400000
-
-
-def test_parse_qc_orders_rejects_ambiguous_numeric_time(tmp_path: Path) -> None:
-    p = tmp_path / "qc_orders.json"
-    p.write_text(
-        json.dumps(
-            {
-                "orders": [
-                    {
-                        "id": 1,
-                        "symbol": "AAPL",
-                        "type": 0,
-                        "events": [
-                            {"time": 500_000_000_000, "fillQuantity": 100, "fillPrice": 190.0}
-                            # 5e11 — between epoch-seconds and epoch-ms; refuse
-                        ],
-                    }
-                ]
-            }
-        )
-    )
-    with pytest.raises(FixtureSchemaError, match="ambiguous"):
-        _parse_qc_orders(p)
 
 
 # ---------- P1 #3: duplicate same-day same-side fills ----------------------
@@ -662,22 +622,28 @@ def test_pair_round_trips_computes_realized_pnl() -> None:
     assert rt.propagated_atol == Decimal("2.02")
 
 
-def test_pair_round_trips_rejects_two_consecutive_buys() -> None:
-    fills = [
-        _qc_fill("buy", 100, "190.00", "2026-02-11"),
-        _qc_fill("buy", 100, "191.00", "2026-02-12"),  # no sell in between
-    ]
-    with pytest.raises(RoundTripPairingError, match="consecutive buys"):
-        _pair_round_trips(fills, Tolerances.phase3_default())
+@pytest.mark.parametrize(
+    ("fills", "match"),
+    [
+        pytest.param(
+            (
+                ("buy", 100, "190.00", "2026-02-11"),
+                ("buy", 100, "191.00", "2026-02-12"),  # no sell in between
+            ),
+            "consecutive buys",
+            id="rejects-two-consecutive-buys",
+        ),
+        pytest.param((("sell", -100, "190.00", "2026-02-11"),), "no open position", id="rejects-sell-without-open-position"),
+    ],
+)
+def test_pair_round_trips_rejects_an_unpairable_sequence(fills: tuple[tuple[str, int, str, str], ...], match: str) -> None:
+    with pytest.raises(RoundTripPairingError, match=match):
+        _pair_round_trips([_qc_fill(*fill) for fill in fills], Tolerances.phase3_default())
 
 
-def test_pair_round_trips_rejects_sell_without_open_position() -> None:
-    fills = [_qc_fill("sell", -100, "190.00", "2026-02-11")]
-    with pytest.raises(RoundTripPairingError, match="no open position"):
-        _pair_round_trips(fills, Tolerances.phase3_default())
-
-
-def test_reconcile_emits_no_pnl_drift_on_clean_round_trip(tmp_path: Path) -> None:
+def test_reconcile_emits_no_pnl_drift_on_a_clean_round_trip_and_pnl_drift_when_realized_pnl_disagrees(
+    tmp_path: Path,
+) -> None:
     orders_path = tmp_path / "qc_orders.json"
     prices_path = tmp_path / "qc_prices.csv"
     prices_path.write_text(_CSV_TWO_BARS)
@@ -709,43 +675,17 @@ def test_reconcile_emits_no_pnl_drift_on_clean_round_trip(tmp_path: Path) -> Non
         qc_price_history_path=prices_path,
         our_fills=our_fills,
     )
-    assert report.status == "passed"
+    assert report.status == "passed", "a clean round trip emits no PNL drift: status"
     cats = {d.category for d in report.divergences}
-    assert DivergenceCategory.PNL_DRIFT not in cats
+    assert DivergenceCategory.PNL_DRIFT not in cats, "a clean round trip emits no PNL drift: no PNL_DRIFT"
     # Round trips computed on both sides for diagnostics
-    assert len(report.diagnostics.qc_round_trips) == 1
-    assert len(report.diagnostics.our_round_trips) == 1
-    assert report.diagnostics.qc_round_trips[0].realized_pnl == Decimal("480.00")
+    assert len(report.diagnostics.qc_round_trips) == 1, "a clean round trip emits no PNL drift: one QC round trip"
+    assert len(report.diagnostics.our_round_trips) == 1, "a clean round trip emits no PNL drift: one of our round trips"
+    assert report.diagnostics.qc_round_trips[0].realized_pnl == Decimal("480.00"), "a clean round trip emits no PNL drift: QC realized PnL"
 
-
-def test_reconcile_emits_pnl_drift_when_realized_pnl_disagrees(
-    tmp_path: Path,
-) -> None:
     # Inject an our_fill with wrong exit price big enough to bust BOTH
     # FILL_PRICE_DRIFT and the propagated P&L atol (so PNL_DRIFT fires
     # as a real assertion, not just an algebraic implication).
-    orders_path = tmp_path / "qc_orders.json"
-    prices_path = tmp_path / "qc_prices.csv"
-    prices_path.write_text(_CSV_TWO_BARS)
-    _write_orders_json(
-        orders_path,
-        [
-            {
-                "id": 1,
-                "symbol": "AAPL",
-                "type": 0,
-                "quantity": 100,
-                "events": [{"time": "2026-02-11T13:30:00Z", "fillQuantity": 100, "fillPrice": 190.00, "direction": 0}],
-            },
-            {
-                "id": 2,
-                "symbol": "AAPL",
-                "type": 0,
-                "quantity": -100,
-                "events": [{"time": "2026-02-25T13:30:00Z", "fillQuantity": -100, "fillPrice": 194.80, "direction": 1}],
-            },
-        ],
-    )
     our_fills = [
         _our_fill("buy", 100, "190.00", "2026-02-11"),
         _our_fill("sell", -100, "200.00", "2026-02-25"),  # $5.20 too high
@@ -758,6 +698,6 @@ def test_reconcile_emits_pnl_drift_when_realized_pnl_disagrees(
     cats = {d.category for d in report.divergences}
     # Both fire — fill drift is the upstream cause; PNL_DRIFT is the
     # downstream concrete assertion that the P&L claim is honest.
-    assert DivergenceCategory.FILL_PRICE_DRIFT in cats
-    assert DivergenceCategory.PNL_DRIFT in cats
-    assert report.status == "failed"
+    assert DivergenceCategory.FILL_PRICE_DRIFT in cats, "PNL drift when realized PnL disagrees: fill price drift fires"
+    assert DivergenceCategory.PNL_DRIFT in cats, "PNL drift when realized PnL disagrees: PNL_DRIFT fires"
+    assert report.status == "failed", "PNL drift when realized PnL disagrees: status"

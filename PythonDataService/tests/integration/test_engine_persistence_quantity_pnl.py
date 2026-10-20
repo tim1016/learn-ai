@@ -95,15 +95,19 @@ def test_engine_run_payload_includes_quantity_and_dollar_pnl() -> None:
     assert record.source == "engine" and record.trades[0].pnl == pytest.approx(201.0, abs=1e-9)
 
 
-def test_engine_run_payload_with_zero_commission() -> None:
+def test_engine_run_payload_with_zero_commission_and_no_analytics() -> None:
     """A zero commission produces a clean gross-PnL row — useful for synthetic
     tests where commissions would muddy the equality check.
+
+    No analytics on the response → honest null column, not a crash.
     """
     payload = _payload(_response_with_trade(quantity=10, pnl_pts=2.0), commission_per_order=0.0)
 
     trade = payload["trades"][0]
-    assert trade["quantity"] == 10
-    assert trade["pnl"] == pytest.approx(20.0, abs=1e-9)
+    assert trade["quantity"] == 10, "the persisted trade carries the resolved fill quantity"
+    assert trade["pnl"] == pytest.approx(20.0, abs=1e-9), "zero commission persists the gross PnL"
+    assert payload["validation_analytics_json"] is None, "no analytics on the response persists a null column"
+    assert record_from_payload(payload).validation_analytics_json is None, "the record builder keeps the null column"
 
 
 def test_engine_run_payload_uses_executed_ibkr_fees_for_compatibility_runs() -> None:
@@ -297,11 +301,3 @@ def test_engine_run_payload_includes_validation_analytics_envelope() -> None:
         "rolling_trade_stability",
         "sharpe_pnl_divergence",
     }
-
-
-def test_engine_run_payload_analytics_null_when_absent() -> None:
-    """No analytics on the response → honest null column, not a crash."""
-    payload = _payload(_response_with_trade(quantity=10, pnl_pts=2.0), commission_per_order=0.0)
-
-    assert payload["validation_analytics_json"] is None
-    assert record_from_payload(payload).validation_analytics_json is None

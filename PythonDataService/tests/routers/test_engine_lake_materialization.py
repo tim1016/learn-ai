@@ -144,7 +144,9 @@ def seeded_roots(monkeypatch, tmp_path: Path) -> dict[str, Path]:
     return lake_dir
 
 
-def test_flag_on_run_materializes_through_the_lake(seeded_roots, monkeypatch):
+def test_flag_on_run_materializes_through_the_lake_and_records_its_manifest(seeded_roots, monkeypatch):
+    """The response carries the content-derived fingerprint, not a placeholder."""
+    records = _lake_artifacts(seeded_roots)
     calls: list[dict] = []
 
     def _fake_materialize(**kwargs):
@@ -155,7 +157,7 @@ def test_flag_on_run_materializes_through_the_lake(seeded_roots, monkeypatch):
 
     response = _run()
 
-    assert response.success, response.error
+    assert response.success, f"materializes through the lake: {response.error}"
     assert calls == [
         {
             "symbol": "SPY",
@@ -170,26 +172,18 @@ def test_flag_on_run_materializes_through_the_lake(seeded_roots, monkeypatch):
             "price_adjustment_mode": "raw",
             "requester": "sma_crossover",
         }
-    ]
+    ], "materializes through the lake: one materialize call carrying the requested symbol, window, resolution, mode and requester"
 
-
-def test_flag_on_run_records_the_manifest_of_what_it_materialized(seeded_roots, monkeypatch):
-    """The response carries the content-derived fingerprint, not a placeholder."""
-    records = _lake_artifacts(seeded_roots)
-    monkeypatch.setattr(
-        run_materialization,
-        "materialize_engine_run",
-        lambda **kwargs: _materialization(seeded_roots),
+    assert response.success, f"records the manifest: {response.error}"
+    assert response.lake_data_availability_hash == _compute_data_availability_hash(records), (
+        "records the manifest of what it materialized"
     )
-
-    response = _run()
-
-    assert response.success, response.error
-    assert response.lake_data_availability_hash == _compute_data_availability_hash(records)
     # And it really is derived from the artifact content: change one byte hash
     # and the fingerprint the run would have carried is a different one.
     mutated = [records[0].model_copy(update={"file_sha256": "0" * 64}), *records[1:]]
-    assert response.lake_data_availability_hash != _compute_data_availability_hash(mutated)
+    assert response.lake_data_availability_hash != _compute_data_availability_hash(mutated), (
+        "records the manifest: the fingerprint is derived from the artifact content"
+    )
 
 
 def test_flag_on_run_surfaces_incomplete_coverage_to_the_operator(seeded_roots, monkeypatch):
@@ -203,19 +197,26 @@ def test_flag_on_run_surfaces_incomplete_coverage_to_the_operator(seeded_roots, 
     assert any("incomplete" in line and "metadata/io_error" in line for line in log), log
 
 
-def test_a_lake_refusal_reaches_the_operator_log(seeded_roots, monkeypatch):
-    """The reason the lake refused must not be buried in the service log."""
-
+@pytest.mark.parametrize(
+    "reason",
+    [
+        # The reason the lake refused must not be buried in the service log.
+        pytest.param("incomplete minute coverage for SPY", id="refusal_reaches_the_operator_log"),
+        pytest.param("provider_no_data", id="cannot_materialize_fails_the_run_loudly"),
+    ],
+)
+def test_a_lake_refusal_fails_the_run_and_reaches_the_operator_log(seeded_roots, monkeypatch, reason):
     def _refuse(**kwargs):
-        raise run_materialization.LakeMaterializationError("incomplete minute coverage for SPY")
+        raise run_materialization.LakeMaterializationError(reason)
 
     monkeypatch.setattr(run_materialization, "materialize_engine_run", _refuse)
     log: list[str] = []
 
     response = execute_engine_backtest(request=_request(), on_phase=_noop, on_log=log.append)
 
-    assert response.success is False
-    assert any("Lake refused this run" in line and "incomplete minute coverage" in line for line in log), log
+    assert response.success is False, "the run fails"
+    assert any("Lake refused this run" in line and reason in line for line in log), log
+    assert reason in (response.error or ""), f"the error carries the lake's reason: {response.error!r}"
 
 
 def test_flag_on_run_reads_the_lake_tree_and_nothing_else(seeded_roots, monkeypatch):
@@ -288,19 +289,6 @@ def test_run_with_evaluated_bars_and_no_trades_remains_successful(seeded_roots) 
     assert response.error is None
     assert response.total_trades == 0
     assert response.equity_curve
-
-
-def test_a_lake_that_cannot_materialize_fails_the_run_loudly(seeded_roots, monkeypatch):
-
-    def _explode(**kwargs):
-        raise run_materialization.LakeMaterializationError("provider_no_data")
-
-    monkeypatch.setattr(run_materialization, "materialize_engine_run", _explode)
-
-    response = _run()
-
-    assert response.success is False
-    assert "provider_no_data" in (response.error or "")
 
 
 def test_flag_on_run_materializes_the_legacy_adjusted_default_into_its_own_root(

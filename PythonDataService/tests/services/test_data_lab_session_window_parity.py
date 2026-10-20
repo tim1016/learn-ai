@@ -122,26 +122,42 @@ def api() -> FastAPI:
 
 
 @pytest.mark.asyncio
-async def test_plan_receipt_lists_exactly_the_picked_sessions(api: FastAPI) -> None:
-    """The plan receipt the UI renders names the same sessions the chart shows.
-
-    Fri 2026-06-12 → Tue 2026-06-16 picked: the committed start (UTC midnight
-    of 06-12) is 20:00 ET of Thursday 06-11 — a trading day the old ET-date
-    flooring pulled into the receipt as a fourth session.
-    """
+@pytest.mark.parametrize(
+    ("end_ms_utc", "exchange_sessions"),
+    [
+        # Fri 2026-06-12 → Tue 2026-06-16 picked: the committed start (UTC midnight
+        # of 06-12) is 20:00 ET of Thursday 06-11 — a trading day the old ET-date
+        # flooring pulled into the receipt as a fourth session.
+        pytest.param(
+            _utc_day_end_ms("2026-06-16"), ("2026-06-12", "2026-06-15", "2026-06-16"), id="lists-exactly-the-picked-sessions"
+        ),
+        # An exclusive end exactly at a session's open leaves that session zero
+        # overlap: the receipt must not list or count it (#2524 review).
+        pytest.param(
+            session_open_ms_utc(date(2026, 6, 16)),
+            ("2026-06-12", "2026-06-15"),
+            id="excludes-a-zero-overlap-trailing-session-2524",
+        ),
+    ],
+)
+async def test_plan_receipt_lists_exactly_the_sessions_the_window_overlaps(
+    api: FastAPI, end_ms_utc: int, exchange_sessions: tuple[str, ...]
+) -> None:
+    """The plan receipt the UI renders names the same sessions the chart shows."""
     payload: dict[str, Any] = {
         "ticker": "SPY",
         "from_date": "2026-06-12",
         "to_date": "2026-06-16",
         "start_ms_utc": _utc_midnight_ms("2026-06-12"),
-        "end_ms_utc": _utc_day_end_ms("2026-06-16"),
+        "end_ms_utc": end_ms_utc,
     }
     async with httpx.AsyncClient(transport=ASGITransport(app=api), base_url="http://test") as client:
         response = await client.post("/api/dataset/plan", json=payload)
 
-    assert response.status_code == 200
+    assert response.status_code == 200, "the plan endpoint answers"
     body = response.json()
-    assert body["exchange_sessions"] == ["2026-06-12", "2026-06-15", "2026-06-16"]
+    assert body["exchange_sessions"] == list(exchange_sessions), "the receipt lists the sessions the window overlaps"
+    assert body["session_count"] == len(exchange_sessions), "the receipt counts the sessions it lists"
 
 
 # ── Export trims to the requested start ─────────────────────────
@@ -168,44 +184,55 @@ def _rth_minute_bars(day: str, count: int) -> list[dict[str, Any]]:
     return bars
 
 
-def test_export_rows_trim_to_the_requested_start(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A mid-session numeric start drops the bars before it (#2457 trim rule)."""
+_PICK_OPEN_MS = session_open_ms_utc(date.fromisoformat(_PICK))
+
+
+@pytest.mark.parametrize(
+    ("start_ms_utc", "end_ms_utc", "row_count", "first_minute", "last_minute"),
+    [
+        # A mid-session numeric start (10 minutes into the session) drops the bars
+        # before it (#2457 trim rule): bars at open+10 … open+30 inclusive.
+        pytest.param(
+            _PICK_OPEN_MS + 10 * 60_000,
+            _utc_day_end_ms(_PICK),
+            21,
+            10,
+            30,
+            id="mid-session-start-drops-the-bars-before-it-2457",
+        ),
+        # The numeric end is exclusive by contract: a mid-session end (20 minutes
+        # in) must not ship the rest of that session just because the day-granular
+        # fetch cannot split it (#2524 review): bars at open+1 … open+19.
+        pytest.param(
+            _utc_midnight_ms(_PICK),
+            _PICK_OPEN_MS + 20 * 60_000,
+            19,
+            1,
+            19,
+            id="mid-session-end-is-exclusive-2524",
+        ),
+    ],
+)
+def test_export_rows_trim_to_the_requested_window(
+    monkeypatch: pytest.MonkeyPatch, start_ms_utc: int, end_ms_utc: int, row_count: int, first_minute: int, last_minute: int
+) -> None:
     bars = _rth_minute_bars(_PICK, 30)
     open_ms = bars[0]["timestamp"] - 60_000
-    start_ms_utc = open_ms + 10 * 60_000  # 10 minutes into the session
 
-    monkeypatch.setattr(
-        dataset_router, "fetch_bars_chunked", lambda *a, **k: list(bars), raising=True
-    )
-    request = _generation_request(_PICK, start_ms_utc, _utc_day_end_ms(_PICK))
+    monkeypatch.setattr(dataset_router, "fetch_bars_chunked", lambda *a, **k: list(bars), raising=True)
+    request = _generation_request(_PICK, start_ms_utc, end_ms_utc)
     request = prepare_generation_request(request)
 
     df, _column_meta, _raw_count = dataset_router._fetch_and_process(request)
 
-    assert len(df) == 21  # bars at open+10 … open+30 inclusive
-    assert int(df["timestamp"].min()) == start_ms_utc
-    assert int(df["timestamp"].max()) == open_ms + 30 * 60_000
+    assert open_ms == _PICK_OPEN_MS, "the bars start one minute after the session open"
+    assert len(df) == row_count, "the export keeps the bars inside the requested window"
+    assert int(df["timestamp"].min()) == open_ms + first_minute * 60_000, "the first row is the first bar at or after the start"
+    assert int(df["timestamp"].max()) == open_ms + last_minute * 60_000, "the last row is the last bar before the end"
+    assert int(df["timestamp"].max()) < end_ms_utc, "the numeric end is exclusive"
 
 
 # ── #2524 review follow-ups ───────────────────────────────────────
-
-
-def test_export_rows_stop_at_the_exclusive_end(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The numeric end is exclusive by contract: a mid-session end must not
-    ship the rest of that session just because the day-granular fetch
-    cannot split it (#2524 review)."""
-    bars = _rth_minute_bars(_PICK, 30)
-    open_ms = bars[0]["timestamp"] - 60_000
-    end_ms_utc = open_ms + 20 * 60_000  # mid-session, exclusive
-
-    monkeypatch.setattr(dataset_router, "fetch_bars_chunked", lambda *a, **k: list(bars), raising=True)
-    request = _generation_request(_PICK, _utc_midnight_ms(_PICK), end_ms_utc)
-    request = prepare_generation_request(request)
-
-    df, _column_meta, _raw_count = dataset_router._fetch_and_process(request)
-
-    assert int(df["timestamp"].max()) < end_ms_utc
-    assert len(df) == 19  # bars at open+1 … open+19
 
 
 def test_the_picked_sessions_postmarket_tail_of_the_prior_day_is_trimmed(
@@ -258,24 +285,3 @@ def test_a_gap_inside_the_trimmed_lead_in_does_not_fail_the_export(
     df, _column_meta, _raw_count = dataset_router._fetch_and_process(request)
 
     assert len(df) == 11  # open+20 … open+30, the gap long gone
-
-@pytest.mark.asyncio
-async def test_the_plan_receipt_excludes_a_zero_overlap_trailing_session(api: FastAPI) -> None:
-    """An exclusive end exactly at a session's open leaves that session zero
-    overlap: the receipt must not list or count it (#2524 review)."""
-    pick_from, pick_to = "2026-06-12", "2026-06-16"
-    end_at_tuesdays_open = session_open_ms_utc(date(2026, 6, 16))
-    payload: dict[str, Any] = {
-        "ticker": "SPY",
-        "from_date": pick_from,
-        "to_date": pick_to,
-        "start_ms_utc": _utc_midnight_ms(pick_from),
-        "end_ms_utc": end_at_tuesdays_open,
-    }
-    async with httpx.AsyncClient(transport=ASGITransport(app=api), base_url="http://test") as client:
-        response = await client.post("/api/dataset/plan", json=payload)
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["exchange_sessions"] == ["2026-06-12", "2026-06-15"]
-    assert body["session_count"] == 2

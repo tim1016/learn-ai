@@ -277,23 +277,35 @@ def test_connected_nonadvancing_feed_during_rth_is_stale_and_blocks_start(
 # ── the other admission-fact states ─────────────────────────────────────
 
 
-def test_market_data_admission_fact_unavailable_when_disconnected(
+@pytest.mark.parametrize(
+    ("connected", "last_bar_ms", "reason", "active_subscription_count", "expected_state"),
+    [
+        pytest.param(False, None, "IBKR connection lost", 0, "UNAVAILABLE", id="unavailable-when-disconnected"),
+        pytest.param(True, _NOW - 5_000, "", 1, "AVAILABLE", id="available-when-advancing"),
+    ],
+)
+def test_market_data_admission_fact_state_follows_the_feed_health(
     monkeypatch: pytest.MonkeyPatch,
+    connected: bool,
+    last_bar_ms: int | None,
+    reason: str,
+    active_subscription_count: int,
+    expected_state: str,
 ) -> None:
     _session(monkeypatch, "RTH")
     health = FeedHealth(
-        connected=False,
+        connected=connected,
         stale=False,
-        last_bar_ms=None,
-        reason="IBKR connection lost",
-        active_subscription_count=0,
+        last_bar_ms=last_bar_ms,
+        reason=reason,
+        active_subscription_count=active_subscription_count,
         observed_at_ms=_NOW - 1_000,
     )
     feed = _Feed(health)
 
     fact = market_data_admission_fact(feed, _NOW - 1_000, use_rth=True)
 
-    assert fact.state == "UNAVAILABLE"
+    assert fact.state == expected_state
 
 
 def test_market_data_admission_fact_unknown_when_health_probe_raises(
@@ -315,25 +327,6 @@ def test_market_data_admission_fact_unknown_when_health_probe_raises(
     assert decision.reason_code == "MARKET_DATA_UNKNOWN"
 
 
-def test_market_data_admission_fact_available_when_advancing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _session(monkeypatch, "RTH")
-    health = FeedHealth(
-        connected=True,
-        stale=False,
-        last_bar_ms=_NOW - 5_000,
-        reason="",
-        active_subscription_count=1,
-        observed_at_ms=_NOW - 1_000,
-    )
-    feed = _Feed(health)
-
-    fact = market_data_admission_fact(feed, _NOW - 1_000, use_rth=True)
-
-    assert fact.state == "AVAILABLE"
-
-
 _EIGHTEEN_ET_ON_A_TRADING_DAY = to_ms_utc(
     datetime(2026, 9, 2, 18, 0, tzinfo=ZoneInfo("America/New_York"))
 )
@@ -343,50 +336,37 @@ _SIX_ET_ON_A_TRADING_DAY = to_ms_utc(
 _DECLARED_WINDOW = ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60)
 
 
-def test_market_data_admission_resolves_pre_from_a_declared_window() -> None:
+@pytest.mark.parametrize(
+    ("observed_at_ms", "symbol", "expected_phase"),
+    [
+        pytest.param(_SIX_ET_ON_A_TRADING_DAY, "SPY", "PRE", id="pre-from-a-declared-window"),
+        pytest.param(_EIGHTEEN_ET_ON_A_TRADING_DAY, None, "POST", id="post-from-a-declared-window"),
+    ],
+)
+def test_market_data_admission_resolves_the_phase_from_a_declared_window(
+    observed_at_ms: int, symbol: str | None, expected_phase: str,
+) -> None:
     health = FeedHealth(
         connected=True,
         stale=False,
-        last_bar_ms=_SIX_ET_ON_A_TRADING_DAY - 5_000,
+        last_bar_ms=observed_at_ms - 5_000,
         reason="",
         active_subscription_count=1,
-        observed_at_ms=_SIX_ET_ON_A_TRADING_DAY,
+        observed_at_ms=observed_at_ms,
     )
 
     fact = market_data_admission_fact(
         _Feed(health),
-        _SIX_ET_ON_A_TRADING_DAY,
-        symbol="SPY",
+        observed_at_ms,
+        symbol=symbol,
         use_rth=False,
         extended_window=_DECLARED_WINDOW,
     )
 
-    assert fact.scheduled_phase == "PRE"
-    assert fact.session_authority_source == "broker_declared_window"
-    assert fact.extended_phase_proven is True
-
-
-def test_market_data_admission_resolves_post_from_a_declared_window() -> None:
-    health = FeedHealth(
-        connected=True,
-        stale=False,
-        last_bar_ms=_EIGHTEEN_ET_ON_A_TRADING_DAY - 5_000,
-        reason="",
-        active_subscription_count=1,
-        observed_at_ms=_EIGHTEEN_ET_ON_A_TRADING_DAY,
-    )
-
-    fact = market_data_admission_fact(
-        _Feed(health),
-        _EIGHTEEN_ET_ON_A_TRADING_DAY,
-        use_rth=False,
-        extended_window=_DECLARED_WINDOW,
-    )
-
-    assert fact.scheduled_phase == "POST"
-    assert fact.session_authority_source == "broker_declared_window"
-    assert fact.extended_phase_proven is True
-    assert fact.state == "AVAILABLE"
+    assert fact.scheduled_phase == expected_phase, "the scheduled phase comes from the declared window"
+    assert fact.session_authority_source == "broker_declared_window", "the broker's declared window is the authority"
+    assert fact.extended_phase_proven is True, "the extended phase is proven"
+    assert fact.state == "AVAILABLE", "an advancing feed in a proven extended phase is available"
 
 
 def test_market_data_admission_without_a_declared_window_cannot_prove_the_same_instant() -> None:
@@ -759,50 +739,55 @@ async def _runtime_fact_with_unresolved_intent(
     )
 
 
-async def test_unresolved_intent_inside_evaluation_window_reports_sweep_evaluating() -> None:
+@pytest.mark.parametrize(
+    ("observed_at_ms", "last_pass_completed_at_ms"),
+    [
+        pytest.param(_ANCHOR_MS + 5_000, None, id="inside-the-evaluation-window"),
+        pytest.param(_ANCHOR_MS + 60_000, _ANCHOR_MS + 55_000, id="live-sweep-mid-window-waits"),
+    ],
+)
+async def test_unresolved_intent_while_the_sweep_is_evaluating_reports_sweep_evaluating(
+    observed_at_ms: int, last_pass_completed_at_ms: int | None,
+) -> None:
     fact = await _runtime_fact_with_unresolved_intent(
-        observed_at_ms=_ANCHOR_MS + 5_000,
-        recovery_evaluation=_evaluation(),
+        observed_at_ms=observed_at_ms,
+        recovery_evaluation=_evaluation(last_pass_completed_at_ms=last_pass_completed_at_ms),
     )
 
-    assert fact.state == "RECOVERY_SWEEP_EVALUATING"
-    assert "still evaluating" in fact.explanation
-    assert "1 order intent(s)" in fact.explanation
-    assert fact.next_step is not None and "Wait" in fact.next_step
+    assert fact.state == "RECOVERY_SWEEP_EVALUATING", "the state is the wait-state"
+    assert "still evaluating" in fact.explanation, "the explanation says the sweep is still evaluating"
+    assert "1 order intent(s)" in fact.explanation, "the explanation counts the unresolved intent"
+    assert fact.next_step is not None and "Wait" in fact.next_step, "the remedy is to wait"
 
 
-async def test_unresolved_intent_after_evaluation_window_reports_recovery_uncertain() -> None:
-    fact = await _runtime_fact_with_unresolved_intent(
-        observed_at_ms=_ANCHOR_MS + RECOVERY_EVALUATION_WINDOW_MS + 1,
-        recovery_evaluation=_evaluation(
-            last_pass_completed_at_ms=_ANCHOR_MS + RECOVERY_EVALUATION_WINDOW_MS,
+@pytest.mark.parametrize(
+    ("observed_at_ms", "last_pass_completed_at_ms"),
+    [
+        pytest.param(
+            _ANCHOR_MS + RECOVERY_EVALUATION_WINDOW_MS + 1,
+            _ANCHOR_MS + RECOVERY_EVALUATION_WINDOW_MS,
+            id="after-the-evaluation-window",
         ),
-    )
-
-    assert fact.state == "RECOVERY_UNCERTAIN"
-    assert "Resolve recovery intents" in (fact.next_step or "")
-
-
-async def test_unresolved_intent_with_dead_sweep_reports_recovery_uncertain() -> None:
-    """The wait-state must not outlive the sweep that produced it: a pass
-    completed long ago proves the sweep is no longer evaluating, however
-    young the evaluation window still is."""
+        # The wait-state must not outlive the sweep that produced it: a pass
+        # completed long ago proves the sweep is no longer evaluating, however
+        # young the evaluation window still is.
+        pytest.param(
+            _ANCHOR_MS + RECOVERY_SWEEP_LIVENESS_BOUND_MS + 10_000,
+            _ANCHOR_MS,
+            id="dead-sweep-inside-the-evaluation-window",
+        ),
+    ],
+)
+async def test_unresolved_intent_past_the_sweep_reports_recovery_uncertain(
+    observed_at_ms: int, last_pass_completed_at_ms: int,
+) -> None:
     fact = await _runtime_fact_with_unresolved_intent(
-        observed_at_ms=_ANCHOR_MS + RECOVERY_SWEEP_LIVENESS_BOUND_MS + 10_000,
-        recovery_evaluation=_evaluation(last_pass_completed_at_ms=_ANCHOR_MS),
+        observed_at_ms=observed_at_ms,
+        recovery_evaluation=_evaluation(last_pass_completed_at_ms=last_pass_completed_at_ms),
     )
 
-    assert fact.state == "RECOVERY_UNCERTAIN"
-
-
-async def test_unresolved_intent_with_live_sweep_mid_window_waits() -> None:
-    observed = _ANCHOR_MS + 60_000
-    fact = await _runtime_fact_with_unresolved_intent(
-        observed_at_ms=observed,
-        recovery_evaluation=_evaluation(last_pass_completed_at_ms=observed - 5_000),
-    )
-
-    assert fact.state == "RECOVERY_SWEEP_EVALUATING"
+    assert fact.state == "RECOVERY_UNCERTAIN", "the state is recovery uncertain"
+    assert "Resolve recovery intents" in (fact.next_step or ""), "the remedy is to resolve the recovery intents"
 
 
 async def test_unresolved_intent_without_observation_keeps_recovery_uncertain() -> None:
@@ -882,51 +867,41 @@ async def test_degraded_boot_report_replaces_the_wait_remedy() -> None:
     assert "Wait" not in fact.next_step
 
 
-async def test_a_degraded_boot_report_while_the_account_reconnects_says_wait_not_restart() -> None:
-    """#2582: the Clerk-less sweep a reconnecting boot ran is degraded only until
-    Alpaca answers -- the reconnect reruns it -- so Start must not send the
-    owner to restart a service that is already recovering on its own."""
+@pytest.mark.parametrize(
+    "unprojected_instance",
+    [
+        # #2582: the Clerk-less sweep a reconnecting boot ran is degraded only until
+        # Alpaca answers -- the reconnect reruns it -- so Start must not send the
+        # owner to restart a service that is already recovering on its own.
+        pytest.param("alpaca-drill-bot", id="2582-degraded-report-says-wait-not-restart"),
+        # #2620: before the Clerk-less first sweep has produced its report, a
+        # reconnecting lane used to say "wait for the boot recovery sweep" -- as if
+        # a sweep were still coming on its own, contradicting the reconnect copy
+        # that says no restart is needed.
+        pytest.param(None, id="2620-no-report-still-says-the-reconnect-story"),
+    ],
+)
+async def test_a_boot_report_that_is_degraded_or_missing_while_the_account_reconnects_says_the_reconnect_story(
+    unprojected_instance: str | None,
+) -> None:
     fact = await resolve_start_runtime_fact(
         strategy_instance_id=_SID,
         observed_at_ms=_ANCHOR_MS,
         boot_recovery_required=True,
-        boot_recovery_report=_boot_report("alpaca-drill-bot"),
+        boot_recovery_report=None if unprojected_instance is None else _boot_report(unprojected_instance),
         unresolved_intents_probe=None,
         account_reconnecting=True,
     )
 
-    assert fact.state == "BOOT_RECOVERY_INCOMPLETE"
+    assert fact.state == "BOOT_RECOVERY_INCOMPLETE", "the boot recovery gate is incomplete"
     assert fact.explanation == (
         "This account's Clerk could not reach Alpaca when it started, so it has "
         "not checked this bot's last run yet."
-    )
-    assert fact.next_step is not None
-    assert "No restart is needed." in fact.next_step
-    assert "restart the service" not in fact.next_step
-
-
-async def test_no_boot_report_while_the_account_reconnects_still_says_the_reconnect_story() -> None:
-    """#2620: before the Clerk-less first sweep has produced its report, a
-    reconnecting lane used to say "wait for the boot recovery sweep" — as if
-    a sweep were still coming on its own, contradicting the reconnect copy
-    that says no restart is needed."""
-    fact = await resolve_start_runtime_fact(
-        strategy_instance_id=_SID,
-        observed_at_ms=_ANCHOR_MS,
-        boot_recovery_required=True,
-        boot_recovery_report=None,
-        unresolved_intents_probe=None,
-        account_reconnecting=True,
-    )
-
-    assert fact.state == "BOOT_RECOVERY_INCOMPLETE"
-    assert fact.explanation == (
-        "This account's Clerk could not reach Alpaca when it started, so it has "
-        "not checked this bot's last run yet."
-    )
-    assert fact.next_step is not None
-    assert "No restart is needed." in fact.next_step
-    assert "boot recovery sweep" not in fact.next_step
+    ), "the explanation tells the reconnect story"
+    assert fact.next_step is not None, "the gate carries a next step"
+    assert "No restart is needed." in fact.next_step, "the next step says no restart is needed"
+    assert "restart the service" not in fact.next_step, "the next step does not send the owner to restart the service"
+    assert "boot recovery sweep" not in fact.next_step, "the next step does not wait on a boot recovery sweep"
 
 
 @pytest.mark.parametrize("account_reconnecting", [False, True])

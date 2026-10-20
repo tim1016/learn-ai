@@ -110,48 +110,49 @@ async def client():
 
 
 class TestVixStyleRoute:
-    async def test_recovers_constant_vol_from_synthetic_chain(self, client, mock_snapshot):
+    async def test_recovers_constant_vol_from_synthetic_chain_and_serves_debug_payload(self, client, mock_snapshot):
         resp = await client.post(
             "/api/edge/iv30/vix-style", json={"symbol": "SPY", "target_calendar_days": 30}
         )
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["method"] == "vix_style"
-        assert body["symbol"] == "SPY"
-        assert body["target_calendar_days"] == 30
-
-        # Recovery within 100 bps for the mocked σ=0.20 chain.
-        assert abs(body["iv30_act365"] - mock_snapshot["sigma"]) < 0.01
-
-        # Provenance: all-opra-mid (no synthesis).
-        prov = body["iv_provenance"]
-        assert prov["iv_source"] == "internal_solver"
-        assert prov["variance_contribution_synthetic"] == pytest.approx(0.0, abs=1e-12)
-        assert prov["price_source_mix"].get("opra_mid") == pytest.approx(1.0)
-        assert 0.0 <= prov["strike_coverage_score"] <= 1.0
-        # max_single_strike_share must reach the wire —
-        # FastAPI response_model would silently drop it if not declared on
-        # IvProvenancePayload.
-        assert "max_single_strike_share" in prov
-        assert 0.0 <= prov["max_single_strike_share"] <= 1.0
-
-        # Rate / dividend / spot present.
-        assert body["spot"] == pytest.approx(mock_snapshot["spot"])
-        assert body["rate"] == pytest.approx(mock_snapshot["rate"])
-        assert body["rate_source"] == "FRED"
-        assert body["expiries_used_calendar_days"] == [28, 35]
-
-    async def test_debug_payload_when_requested(self, client, mock_snapshot):
-        resp = await client.post(
+        debug_resp = await client.post(
             "/api/edge/iv30/vix-style",
             json={"symbol": "SPY", "target_calendar_days": 30, "debug": True},
         )
-        assert resp.status_code == 200, resp.text
-        prov = resp.json()["iv_provenance"]
-        assert prov["per_strike_contributions"] is not None
-        assert len(prov["per_strike_contributions"]) > 0
-        for entry in prov["per_strike_contributions"]:
-            assert {"strike", "kind", "c_i", "active_leg_sources"}.issubset(entry.keys())
+        assert resp.status_code == 200, f"recovery: {resp.text}"
+        body = resp.json()
+        assert body["method"] == "vix_style", "recovery: method is vix_style"
+        assert body["symbol"] == "SPY", "recovery: symbol is echoed"
+        assert body["target_calendar_days"] == 30, "recovery: target_calendar_days is echoed"
+
+        # Recovery within 100 bps for the mocked σ=0.20 chain.
+        assert abs(body["iv30_act365"] - mock_snapshot["sigma"]) < 0.01, "recovery: iv30 within 100 bps of the mocked sigma"
+
+        # Provenance: all-opra-mid (no synthesis).
+        prov = body["iv_provenance"]
+        assert prov["iv_source"] == "internal_solver", "recovery: iv_source is internal_solver"
+        assert prov["variance_contribution_synthetic"] == pytest.approx(0.0, abs=1e-12), "recovery: no synthetic variance contribution"
+        assert prov["price_source_mix"].get("opra_mid") == pytest.approx(1.0), "recovery: every price is an opra mid"
+        assert 0.0 <= prov["strike_coverage_score"] <= 1.0, "recovery: strike coverage score is in [0, 1]"
+        # max_single_strike_share must reach the wire —
+        # FastAPI response_model would silently drop it if not declared on
+        # IvProvenancePayload.
+        assert "max_single_strike_share" in prov, "recovery: max_single_strike_share reaches the wire"
+        assert 0.0 <= prov["max_single_strike_share"] <= 1.0, "recovery: max_single_strike_share is in [0, 1]"
+
+        # Rate / dividend / spot present.
+        assert body["spot"] == pytest.approx(mock_snapshot["spot"]), "recovery: spot is present"
+        assert body["rate"] == pytest.approx(mock_snapshot["rate"]), "recovery: rate is present"
+        assert body["rate_source"] == "FRED", "recovery: rate_source is FRED"
+        assert body["expiries_used_calendar_days"] == [28, 35], "recovery: the 28 and 35 day expiries straddle the target"
+
+        assert debug_resp.status_code == 200, f"debug payload: {debug_resp.text}"
+        debug_prov = debug_resp.json()["iv_provenance"]
+        assert debug_prov["per_strike_contributions"] is not None, "debug payload: per_strike_contributions is present when requested"
+        assert len(debug_prov["per_strike_contributions"]) > 0, "debug payload: per_strike_contributions is not empty"
+        for entry in debug_prov["per_strike_contributions"]:
+            assert {"strike", "kind", "c_i", "active_leg_sources"}.issubset(entry.keys()), (
+                f"debug payload: contribution entry {entry!r} carries strike, kind, c_i and active_leg_sources"
+            )
 
     async def test_no_straddle_returns_400(self, client):
         """If the snapshot has no expiries above the target, we return 400."""
@@ -225,18 +226,27 @@ class TestPolygonFailureModes:
         assert resp.status_code == 200, resp.text
         assert resp.json()["expiries_used_calendar_days"] == [28, 35]
 
-    async def test_no_spot_returns_502(self, client):
+    async def test_no_spot_or_no_contracts_returns_502(self, client):
         from app.routers import iv30 as iv30_router_module
 
         with patch.object(
             iv30_router_module.polygon_client, "list_snapshot_options_chain",
             return_value={"underlying": {"ticker": "SPY", "price": 0.0}, "contracts": []},
         ):
-            resp = await client.post(
+            no_spot = await client.post(
                 "/api/edge/iv30/vix-style", json={"symbol": "SPY"}
             )
-            assert resp.status_code == 502
-            assert "spot" in resp.text.lower()
+        with patch.object(
+            iv30_router_module.polygon_client, "list_snapshot_options_chain",
+            return_value={"underlying": {"ticker": "SPY", "price": 591.0}, "contracts": []},
+        ):
+            no_contracts = await client.post(
+                "/api/edge/iv30/vix-style", json={"symbol": "SPY"}
+            )
+
+        assert no_spot.status_code == 502, "no spot: the route answers 502"
+        assert "spot" in no_spot.text.lower(), "no spot: the error names the spot"
+        assert no_contracts.status_code == 502, "no contracts: the route answers 502"
 
     async def test_failed_dividend_lookup_returns_502(self, client, mock_snapshot):
         from app.services.rate_dividend_service import RateAndDividend
@@ -248,18 +258,6 @@ class TestPolygonFailureModes:
             resp = await client.post("/api/edge/iv30/vix-style", json={"symbol": "SPY"})
         assert resp.status_code == 502
         assert "dividend" in resp.text.lower()
-
-    async def test_no_contracts_returns_502(self, client):
-        from app.routers import iv30 as iv30_router_module
-
-        with patch.object(
-            iv30_router_module.polygon_client, "list_snapshot_options_chain",
-            return_value={"underlying": {"ticker": "SPY", "price": 591.0}, "contracts": []},
-        ):
-            resp = await client.post(
-                "/api/edge/iv30/vix-style", json={"symbol": "SPY"}
-            )
-            assert resp.status_code == 502
 
 
 @pytest.fixture
@@ -293,27 +291,23 @@ def vendor_chain(monkeypatch):
 class TestLiveRoutesAgainstAVendorThatFiltersExpiries:
     """The routes used to ask for today's expiry only, which the pairing drops: 502 "got 0"."""
 
-    async def test_vix_style_finds_the_straddle_around_30_days(self, client, vendor_chain):
-        resp = await client.post("/api/edge/iv30/vix-style", json={"symbol": "SPY", "target_calendar_days": 30})
+    async def test_routes_find_the_straddle_around_30_days_and_normalize_the_symbol(self, client, vendor_chain):
+        vix_style = await client.post("/api/edge/iv30/vix-style", json={"symbol": "SPY", "target_calendar_days": 30})
+        parametric = await client.post("/api/edge/iv30/parametric", json={"symbol": "SPY", "target_calendar_days": 30})
+        lower_case = await client.post("/api/edge/iv30/vix-style", json={"symbol": " spy ", "target_calendar_days": 30})
 
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["expiries_used_calendar_days"] == [28, 35]
-        assert abs(body["iv30_act365"] - vendor_chain["sigma"]) < 0.01
+        assert vix_style.status_code == 200, f"vix-style: {vix_style.text}"
+        vix_style_body = vix_style.json()
+        assert vix_style_body["expiries_used_calendar_days"] == [28, 35], "vix-style: finds the straddle around 30 days"
+        assert abs(vix_style_body["iv30_act365"] - vendor_chain["sigma"]) < 0.01, "vix-style: iv30 recovers the chain's sigma"
 
-    async def test_parametric_finds_the_straddle_around_30_days(self, client, vendor_chain):
-        resp = await client.post("/api/edge/iv30/parametric", json={"symbol": "SPY", "target_calendar_days": 30})
+        assert parametric.status_code == 200, f"parametric: {parametric.text}"
+        parametric_body = parametric.json()
+        assert {28, 35} <= set(parametric_body["expiries_used_calendar_days"]), "parametric: finds the straddle around 30 days"
+        assert abs(parametric_body["iv30_act365"] - vendor_chain["sigma"]) < 0.01, "parametric: iv30 recovers the chain's sigma"
 
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert {28, 35} <= set(body["expiries_used_calendar_days"])
-        assert abs(body["iv30_act365"] - vendor_chain["sigma"]) < 0.01
-
-    async def test_a_lower_case_symbol_is_the_upper_case_ticker(self, client, vendor_chain):
-        resp = await client.post("/api/edge/iv30/vix-style", json={"symbol": " spy ", "target_calendar_days": 30})
-
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["symbol"] == "SPY"
+        assert lower_case.status_code == 200, f"lower-case symbol: {lower_case.text}"
+        assert lower_case.json()["symbol"] == "SPY", "lower-case symbol: a lower-case symbol is the upper-case ticker"
 
     @pytest.mark.parametrize("symbol", ["", "../SPY", "SPY/QQQ", "A" * 13])
     async def test_a_symbol_that_is_not_a_ticker_is_a_422(self, client, symbol):

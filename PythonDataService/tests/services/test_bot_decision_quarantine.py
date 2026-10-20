@@ -62,39 +62,49 @@ def _record(journal: QuarantineJournal, quarantine: StageQuarantine) -> None:
     )
 
 
-def test_a_refused_decision_bar_becomes_a_durable_receipt() -> None:
+@pytest.mark.parametrize(
+    ("reason", "expects_clock_pair"),
+    [
+        pytest.param("TIMEFRAME_MISMATCH", True, id="timeframe-mismatch"),
+        # The other two refuse a bucket of exactly the right width.
+        pytest.param("NON_MONOTONIC_DECISION_CLOCK", False, id="non-monotonic-decision-clock"),
+        pytest.param("UNSETTLED_STAGE", False, id="unsettled-stage"),
+    ],
+)
+def test_a_refused_decision_bar_becomes_a_durable_receipt(reason: str, expects_clock_pair: bool) -> None:
     receipts = _RecordingReceipts()
 
-    _record(QuarantineJournal(receipts), _quarantine("TIMEFRAME_MISMATCH"))
+    _record(QuarantineJournal(receipts), _quarantine(reason))
 
-    assert len(receipts.appended) == 1
+    assert len(receipts.appended) == 1, "a refused decision bar writes one receipt"
     row = receipts.appended[0]
-    assert row["outcome"] == QUARANTINE_OUTCOME
+    assert row["outcome"] == QUARANTINE_OUTCOME, "the receipt carries the quarantine outcome"
     facts = row["facts"]
-    assert facts["reason_code"] == "TIMEFRAME_MISMATCH"
-    assert facts["run_id"] == "run-1"
-    assert facts["bar_start_ms"] == _BUCKET_START_MS
-    assert facts["bar_end_ms"] == _BUCKET_END_MS
+    assert facts["reason_code"] == reason, "the receipt names the refusal reason"
+    assert facts["run_id"] == "run-1", "the receipt names the run"
+    assert facts["bar_start_ms"] == _BUCKET_START_MS, "the receipt names where the refused bucket starts"
+    assert facts["bar_end_ms"] == _BUCKET_END_MS, "the receipt names where the refused bucket ends"
     # Protected: this row is the explanation for a run that decided nothing,
     # so tail compaction must not be able to drop it.
-    assert str(facts["retention_class"]).startswith("protected_")
-
-
-def test_the_receipt_carries_no_evaluation_identity() -> None:
-    """A quarantined bucket never became an evaluation, so it has none to claim.
-
-    Inventing one would make the row look like a decision to every consumer
-    keyed on ``evaluation_id``, which would then hunt for a bucket that cannot
-    exist.
-    """
-    receipts = _RecordingReceipts()
-
-    _record(QuarantineJournal(receipts), _quarantine("UNSETTLED_STAGE"))
-
-    facts = receipts.appended[0]["facts"]
-    assert "evaluation_id" not in facts
-    assert "decision_id" not in facts
-    assert receipts.appended[0].get("intent_id") is None
+    assert str(facts["retention_class"]).startswith("protected_"), "the receipt is protected from tail compaction"
+    # A quarantined bucket never became an evaluation, so it has none to claim.
+    # Inventing one would make the row look like a decision to every consumer
+    # keyed on ``evaluation_id``, which would then hunt for a bucket that cannot
+    # exist.
+    assert "evaluation_id" not in facts, "the receipt carries no evaluation identity"
+    assert "decision_id" not in facts, "the receipt carries no decision identity"
+    assert row.get("intent_id") is None, "the receipt carries no intent identity"
+    assert ("expected_timeframe_ms" in facts) is expects_clock_pair, (
+        "only a width refusal reports the expected timeframe"
+    )
+    assert ("observed_timeframe_ms" in facts) is expects_clock_pair, (
+        "only a width refusal reports the observed timeframe"
+    )
+    if expects_clock_pair:
+        assert facts["expected_timeframe_ms"] == _EXPECTED_TIMEFRAME_MS, "the expected timeframe is the decision clock's"
+        assert facts["observed_timeframe_ms"] == _BUCKET_END_MS - _BUCKET_START_MS, (
+            "the observed timeframe is the refused bucket's width"
+        )
 
 
 def test_a_systematically_refused_feed_writes_one_receipt_not_one_per_bar() -> None:
@@ -127,30 +137,6 @@ def test_each_distinct_reason_earns_its_own_receipt() -> None:
         "TIMEFRAME_MISMATCH",
         "NON_MONOTONIC_DECISION_CLOCK",
     ]
-
-
-@pytest.mark.parametrize(
-    ("reason", "expects_clock_pair"),
-    [
-        ("TIMEFRAME_MISMATCH", True),
-        ("NON_MONOTONIC_DECISION_CLOCK", False),
-        ("UNSETTLED_STAGE", False),
-    ],
-)
-def test_only_a_width_refusal_reports_the_decision_clock_pair(
-    reason: str, expects_clock_pair: bool
-) -> None:
-    """The other two refuse a bucket of exactly the right width."""
-    receipts = _RecordingReceipts()
-
-    _record(QuarantineJournal(receipts), _quarantine(reason))
-
-    facts = receipts.appended[0]["facts"]
-    assert ("expected_timeframe_ms" in facts) is expects_clock_pair
-    assert ("observed_timeframe_ms" in facts) is expects_clock_pair
-    if expects_clock_pair:
-        assert facts["expected_timeframe_ms"] == _EXPECTED_TIMEFRAME_MS
-        assert facts["observed_timeframe_ms"] == _BUCKET_END_MS - _BUCKET_START_MS
 
 
 def test_the_bar_ref_names_the_refused_bucket() -> None:

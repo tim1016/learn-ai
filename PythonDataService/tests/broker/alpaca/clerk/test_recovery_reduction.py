@@ -110,75 +110,77 @@ def test_after_hours_buy_to_cover_suggests_the_ask_plus_the_allowance() -> None:
 
 
 @pytest.mark.parametrize(
-    ("now_ms", "opens_at_ms"),
+    ("policy", "now_ms", "reason_code", "opens_at_ms"),
     [
         # 21:00 Wednesday: the next session is Thursday's pre-market.
-        (_at(21), _at(4, day=date(2026, 9, 3))),
+        pytest.param(
+            _POLICY, _at(21), "NO_SESSION_OPEN", _at(4, day=date(2026, 9, 3)),
+            id="no-open-session-21-00-wednesday-names-thursdays-pre-market",
+        ),
         # 02:00 Thursday: that same morning's pre-market.
-        (_at(2, day=date(2026, 9, 3)), _at(4, day=date(2026, 9, 3))),
+        pytest.param(
+            _POLICY, _at(2, day=date(2026, 9, 3)), "NO_SESSION_OPEN", _at(4, day=date(2026, 9, 3)),
+            id="no-open-session-02-00-thursday-names-that-same-mornings-pre-market",
+        ),
         # Saturday: Monday's pre-market (2026-09-07 is Labor Day, so Tuesday).
-        (_at(12, day=date(2026, 9, 5)), _at(4, day=date(2026, 9, 8))),
-    ],
-)
-def test_no_open_session_refuses_and_names_the_next_open(now_ms: int, opens_at_ms: int) -> None:
-    with pytest.raises(ProgramLegRefused) as excinfo:
-        price_recovery_reduction(side=OrderSide.SELL, now_ms=now_ms, policy=_POLICY, quote=None)
-
-    assert _refusal(excinfo) == "NO_SESSION_OPEN"
-    assert excinfo.value.refusal.available_at_ms == opens_at_ms
-
-
-@pytest.mark.parametrize(
-    ("now_ms", "reason_code", "opens_at_ms"),
-    [
+        pytest.param(
+            _POLICY, _at(12, day=date(2026, 9, 5)), "NO_SESSION_OPEN", _at(4, day=date(2026, 9, 8)),
+            id="no-open-session-saturday-names-tuesdays-pre-market-after-labor-day",
+        ),
         # 07:00 and 16:01: the calendar's pre-market / after-hours is open, so
         # "no session is open" would be false (#2440 review) — what is
         # missing is a window to price an extended-hours limit in.
-        (_at(7), "EXTENDED_HOURS_PRICING_UNAVAILABLE", _at(9, 30)),
-        (_at(16, 1), "EXTENDED_HOURS_PRICING_UNAVAILABLE", _at(9, 30, day=date(2026, 9, 3))),
+        pytest.param(
+            ProgramLegPolicy.regular_only(), _at(7), "EXTENDED_HOURS_PRICING_UNAVAILABLE", _at(9, 30),
+            id="no-extended-window-07-00-waits-for-the-regular-open-2440-review",
+        ),
+        pytest.param(
+            ProgramLegPolicy.regular_only(), _at(16, 1), "EXTENDED_HOURS_PRICING_UNAVAILABLE",
+            _at(9, 30, day=date(2026, 9, 3)),
+            id="no-extended-window-16-01-waits-for-the-regular-open-2440-review",
+        ),
         # 21:00: nothing is scheduled, so no session is open.
-        (_at(21), "NO_SESSION_OPEN", _at(9, 30, day=date(2026, 9, 3))),
+        pytest.param(
+            ProgramLegPolicy.regular_only(), _at(21), "NO_SESSION_OPEN", _at(9, 30, day=date(2026, 9, 3)),
+            id="no-extended-window-21-00-nothing-scheduled-no-session-open",
+        ),
     ],
 )
-def test_an_authority_with_no_extended_window_waits_for_the_regular_open(
-    now_ms: int, reason_code: str, opens_at_ms: int
+def test_a_recovery_price_with_no_open_session_or_no_extended_window_refuses_and_names_the_next_open(
+    policy: ProgramLegPolicy, now_ms: int, reason_code: str, opens_at_ms: int
 ) -> None:
     with pytest.raises(ProgramLegRefused) as excinfo:
-        price_recovery_reduction(side=OrderSide.SELL, now_ms=now_ms, policy=ProgramLegPolicy.regular_only(), quote=None)
+        price_recovery_reduction(side=OrderSide.SELL, now_ms=now_ms, policy=policy, quote=None)
 
-    assert _refusal(excinfo) == reason_code
-    assert excinfo.value.refusal.available_at_ms == opens_at_ms
+    assert _refusal(excinfo) == reason_code, "the refusal names why no price is made"
+    assert excinfo.value.refusal.available_at_ms == opens_at_ms, "the refusal names when the next session opens"
 
 
-def test_extended_session_without_a_live_quote_refuses_rather_than_guessing() -> None:
+@pytest.mark.parametrize(
+    ("policy", "quote", "reason_code"),
+    [
+        pytest.param(
+            _POLICY, None, "RECOVERY_QUOTE_UNAVAILABLE",
+            id="extended-session-without-a-live-quote-refuses-rather-than-guessing",
+        ),
+        pytest.param(
+            ProgramLegPolicy(window=_WINDOW, allowances=None), _quote(observed_at_ms=_at(7)),
+            "EXTENDED_HOURS_ALLOWANCE_UNSET",
+            id="extended-session-without-allowances-refuses",
+        ),
+        pytest.param(
+            _POLICY, _quote(bid=0.0001, ask=0.0002, observed_at_ms=_at(7)), "RECOVERY_QUOTE_UNPRICEABLE",
+            id="a-sub-penny-bid-that-prices-to-zero",
+        ),
+    ],
+)
+def test_an_extended_session_price_that_cannot_be_made_is_a_typed_refusal(
+    policy: ProgramLegPolicy, quote: TopOfBookQuote | None, reason_code: str
+) -> None:
     with pytest.raises(ProgramLegRefused) as excinfo:
-        price_recovery_reduction(side=OrderSide.SELL, now_ms=_at(7), policy=_POLICY, quote=None)
+        price_recovery_reduction(side=OrderSide.SELL, now_ms=_at(7), policy=policy, quote=quote)
 
-    assert _refusal(excinfo) == "RECOVERY_QUOTE_UNAVAILABLE"
-
-
-def test_extended_session_without_allowances_refuses() -> None:
-    now = _at(7)
-    policy = ProgramLegPolicy(window=_WINDOW, allowances=None)
-
-    with pytest.raises(ProgramLegRefused) as excinfo:
-        price_recovery_reduction(side=OrderSide.SELL, now_ms=now, policy=policy, quote=_quote(observed_at_ms=now))
-
-    assert _refusal(excinfo) == "EXTENDED_HOURS_ALLOWANCE_UNSET"
-
-
-def test_a_sub_penny_bid_that_prices_to_zero_is_a_typed_refusal() -> None:
-    now = _at(7)
-
-    with pytest.raises(ProgramLegRefused) as excinfo:
-        price_recovery_reduction(
-            side=OrderSide.SELL,
-            now_ms=now,
-            policy=_POLICY,
-            quote=_quote(bid=0.0001, ask=0.0002, observed_at_ms=now),
-        )
-
-    assert _refusal(excinfo) == "RECOVERY_QUOTE_UNPRICEABLE"
+    assert _refusal(excinfo) == reason_code, "the refusal names why no extended-hours price is made"
 
 
 # --- execution: what the operator's confirmation turns into -----------------
@@ -247,64 +249,77 @@ def test_an_after_hours_limit_is_valid_until_the_declared_close() -> None:
     assert confirmed is not None and confirmed.valid_until_ms == _at(20)
 
 
-@pytest.mark.parametrize("age_ms", [RECOVERY_QUOTE_MAX_AGE_MS + 1, -1])
-def test_a_confirmation_against_a_stale_or_future_quote_asks_for_a_refresh(age_ms: int) -> None:
-    now = _at(7)
+@pytest.mark.parametrize(
+    ("now_ms", "confirmed", "shape_kwargs", "reason_code"),
+    [
+        pytest.param(
+            _at(7), _limit("99.95", observed_at_ms=_at(7) - (RECOVERY_QUOTE_MAX_AGE_MS + 1)), (),
+            "RECOVERY_QUOTE_STALE",
+            id="a-confirmation-against-a-stale-quote-asks-for-a-refresh",
+        ),
+        pytest.param(
+            _at(7), _limit("99.95", observed_at_ms=_at(7) + 1), (),
+            "RECOVERY_QUOTE_STALE",
+            id="a-confirmation-against-a-future-quote-asks-for-a-refresh",
+        ),
+        # The client cannot vouch for freshness the server cannot see.
+        pytest.param(
+            _at(7), _limit("99.95", observed_at_ms=_at(7) - 1_000), (("quote", _quote(observed_at_ms=_at(7) - 2_000)),),
+            "RECOVERY_QUOTE_STALE",
+            id="a-confirmed-quote-newer-than-any-the-clerk-holds-is-refused",
+        ),
+        pytest.param(
+            _at(7), _limit("99.95", observed_at_ms=_at(7)), (("no_live_quote", True),),
+            "RECOVERY_QUOTE_UNAVAILABLE",
+            id="sending-needs-a-live-quote-now",
+        ),
+        pytest.param(
+            _at(7), None, (),
+            "RECOVERY_LIMIT_REQUIRED",
+            id="extended-session-without-a-confirmed-limit-refuses",
+        ),
+        pytest.param(
+            _at(7), _limit("99.95", observed_at_ms=_at(7)), (("policy", ProgramLegPolicy(window=_WINDOW, allowances=None)),),
+            "EXTENDED_HOURS_ALLOWANCE_UNSET",
+            id="extended-session-without-allowances-cannot-bound-a-confirmed-limit",
+        ),
+        pytest.param(
+            _at(9, 30), _limit("99.95", observed_at_ms=_at(9, 30) - 1_000), (),
+            "RECOVERY_SESSION_CHANGED",
+            id="a-limit-confirmed-before-the-open-is-refused-once-the-regular-session-starts",
+        ),
+        pytest.param(
+            _at(7), _limit("99.955", observed_at_ms=_at(7)), (),
+            "RECOVERY_LIMIT_PRICE_INVALID",
+            id="a-price-alpaca-would-reject-is-refused-before-the-exit-is-accepted-sub-tick",
+        ),
+        pytest.param(
+            _at(7), _limit("0", observed_at_ms=_at(7)), (),
+            "RECOVERY_LIMIT_PRICE_INVALID",
+            id="a-price-alpaca-would-reject-is-refused-before-the-exit-is-accepted-zero",
+        ),
+        pytest.param(
+            _at(7), _limit("0.01", observed_at_ms=_at(7)), (),
+            "RECOVERY_LIMIT_OUTSIDE_BAND",
+            id="a-fat-fingered-sell-cannot-sweep-the-book",
+        ),
+    ],
+)
+def test_a_confirmed_recovery_limit_is_refused_with_a_typed_reason(
+    now_ms: int,
+    confirmed: ConfirmedRecoveryLimit | None,
+    shape_kwargs: tuple[tuple[str, object], ...],
+    reason_code: str,
+) -> None:
+    refused = _refused(now_ms, confirmed, **dict(shape_kwargs))
 
-    refused = _refused(now, _limit("99.95", observed_at_ms=now - age_ms))
-
-    assert refused.reason_code == "RECOVERY_QUOTE_STALE"
-
-
-def test_a_confirmed_quote_newer_than_any_the_clerk_holds_is_refused() -> None:
-    """The client cannot vouch for freshness the server cannot see."""
-    now = _at(7)
-
-    refused = _refused(
-        now,
-        _limit("99.95", observed_at_ms=now - 1_000),
-        quote=_quote(observed_at_ms=now - 2_000),
-    )
-
-    assert refused.reason_code == "RECOVERY_QUOTE_STALE"
+    assert refused.reason_code == reason_code, "the confirmation is refused with its typed reason"
 
 
 def test_a_quote_exactly_at_the_bound_is_still_confirmable() -> None:
     now = _at(7)
 
     assert _shape(now, _limit("99.95", observed_at_ms=now - RECOVERY_QUOTE_MAX_AGE_MS)) is not None
-
-
-def test_sending_needs_a_live_quote_now() -> None:
-    now = _at(7)
-
-    refused = _refused(now, _limit("99.95", observed_at_ms=now), no_live_quote=True)
-
-    assert refused.reason_code == "RECOVERY_QUOTE_UNAVAILABLE"
-
-
-def test_extended_session_without_a_confirmed_limit_refuses() -> None:
-    assert _refused(_at(7), None).reason_code == "RECOVERY_LIMIT_REQUIRED"
-
-
-def test_extended_session_without_allowances_cannot_bound_a_confirmed_limit() -> None:
-    now = _at(7)
-
-    refused = _refused(
-        now,
-        _limit("99.95", observed_at_ms=now),
-        policy=ProgramLegPolicy(window=_WINDOW, allowances=None),
-    )
-
-    assert refused.reason_code == "EXTENDED_HOURS_ALLOWANCE_UNSET"
-
-
-def test_a_limit_confirmed_before_the_open_is_refused_once_the_regular_session_starts() -> None:
-    now = _at(9, 30)
-
-    refused = _refused(now, _limit("99.95", observed_at_ms=now - 1_000))
-
-    assert refused.reason_code == "RECOVERY_SESSION_CHANGED"
 
 
 def test_confirming_while_no_session_is_open_refuses_with_the_next_open() -> None:
@@ -316,39 +331,27 @@ def test_confirming_while_no_session_is_open_refuses_with_the_next_open() -> Non
     assert refused.refusal.available_at_ms == _at(4, day=date(2026, 9, 3))
 
 
-@pytest.mark.parametrize("price", ["99.955", "0"])
-def test_a_price_alpaca_would_reject_is_refused_before_the_exit_is_accepted(price: str) -> None:
-    now = _at(7)
-
-    refused = _refused(now, _limit(price, observed_at_ms=now))
-
-    assert refused.reason_code == "RECOVERY_LIMIT_PRICE_INVALID"
-
-
 # --- the band: how far through the book a confirmed limit may go -----------
 
 
-def test_a_sell_limit_at_the_band_is_accepted_and_one_tick_past_it_refused() -> None:
-    """Band = 2 × 20 bps below the 100.00 bid = 99.60 (owner decision 2026-09-19)."""
+@pytest.mark.parametrize(
+    ("side", "accepted_price", "refused_price"),
+    [
+        # Band = 2 × 20 bps below the 100.00 bid = 99.60 (owner decision 2026-09-19).
+        pytest.param(OrderSide.SELL, "99.60", "99.59", id="a-sell-limit-at-the-band-is-accepted-and-one-tick-past-it-refused"),
+        # Band = 2 × 20 bps above the 100.05 ask = ceil_tick(100.4502) = 100.46.
+        pytest.param(OrderSide.BUY, "100.46", "100.47", id="a-cover-above-the-band-over-the-ask-is-refused"),
+    ],
+)
+def test_a_limit_at_the_band_is_accepted_and_one_tick_past_it_refused(
+    side: OrderSide, accepted_price: str, refused_price: str
+) -> None:
     now = _at(7)
 
-    assert _shape(now, _limit("99.60", observed_at_ms=now)) is not None
-    assert _refused(now, _limit("99.59", observed_at_ms=now)).reason_code == "RECOVERY_LIMIT_OUTSIDE_BAND"
-
-
-def test_a_fat_fingered_sell_cannot_sweep_the_book() -> None:
-    now = _at(7)
-
-    assert _refused(now, _limit("0.01", observed_at_ms=now)).reason_code == "RECOVERY_LIMIT_OUTSIDE_BAND"
-
-
-def test_a_cover_above_the_band_over_the_ask_is_refused() -> None:
-    """Band = 2 × 20 bps above the 100.05 ask = ceil_tick(100.4502) = 100.46."""
-    now = _at(7)
-
-    assert _shape(now, _limit("100.46", observed_at_ms=now), side=OrderSide.BUY) is not None
-    refused = _refused(now, _limit("100.47", observed_at_ms=now), side=OrderSide.BUY)
-    assert refused.reason_code == "RECOVERY_LIMIT_OUTSIDE_BAND"
+    assert _shape(now, _limit(accepted_price, observed_at_ms=now), side=side) is not None, "a limit at the band is accepted"
+    assert (
+        _refused(now, _limit(refused_price, observed_at_ms=now), side=side).reason_code == "RECOVERY_LIMIT_OUTSIDE_BAND"
+    ), "a limit one tick past the band is refused as outside the band"
 
 
 def test_a_sell_limit_above_the_bid_is_not_a_slippage_risk_and_is_accepted() -> None:
@@ -361,26 +364,22 @@ def test_a_sell_limit_above_the_bid_is_not_a_slippage_risk_and_is_accepted() -> 
 
 
 @pytest.mark.parametrize(
-    ("now_ms", "verdict"),
-    [(_at(10), "send"), (_at(7), "wait"), (_at(17), "wait"), (_at(21), "wait")],
-)
-def test_a_market_recovery_leg_goes_out_only_inside_the_regular_session(now_ms: int, verdict: str) -> None:
-    assert reducing_leg_verdict(extended_hours=False, valid_until_ms=None, now_ms=now_ms) == verdict
-
-
-@pytest.mark.parametrize(
-    ("now_ms", "valid_until_ms", "verdict"),
+    ("extended_hours", "valid_until_ms", "now_ms", "verdict"),
     [
-        (_at(9, 29), _at(9, 30), "send"),
-        (_at(9, 30), _at(9, 30), "expired"),
-        (_at(21), _at(20), "expired"),
-        (_at(7), None, "expired"),
+        pytest.param(False, None, _at(10), "send", id="a-market-leg-goes-out-inside-the-regular-session"),
+        pytest.param(False, None, _at(7), "wait", id="a-market-leg-waits-in-the-pre-market"),
+        pytest.param(False, None, _at(17), "wait", id="a-market-leg-waits-after-hours"),
+        pytest.param(False, None, _at(21), "wait", id="a-market-leg-waits-when-no-session-is-open"),
+        pytest.param(True, _at(9, 30), _at(9, 29), "send", id="a-confirmed-limit-is-sent-before-its-session-ends"),
+        pytest.param(True, _at(9, 30), _at(9, 30), "expired", id="a-confirmed-limit-expires-at-the-end-of-its-session"),
+        pytest.param(True, _at(20), _at(21), "expired", id="a-confirmed-limit-expires-after-the-end-of-its-session"),
+        pytest.param(True, None, _at(7), "expired", id="a-confirmed-limit-without-a-bound-is-expired"),
     ],
 )
-def test_a_confirmed_limit_is_never_sent_past_the_session_it_was_priced_in(
-    now_ms: int, valid_until_ms: int | None, verdict: str
+def test_a_recovery_leg_goes_out_only_inside_the_session_it_was_priced_in(
+    extended_hours: bool, valid_until_ms: int | None, now_ms: int, verdict: str
 ) -> None:
-    assert reducing_leg_verdict(extended_hours=True, valid_until_ms=valid_until_ms, now_ms=now_ms) == verdict
+    assert reducing_leg_verdict(extended_hours=extended_hours, valid_until_ms=valid_until_ms, now_ms=now_ms) == verdict
 
 
 _HALF_DAY = date(2026, 11, 27)  # the day after Thanksgiving: the regular close is 13:00

@@ -31,27 +31,21 @@ def _seed(root: Path, days: list[date]) -> None:
         seed_store_day(root, "SPY", day)
 
 
-def test_a_fully_backfilled_window_with_closures_is_complete(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "absent",
+    [(), (date(2025, 3, 3),)],
+    ids=["fully_backfilled_window_with_closures_is_complete", "genuinely_missing_session_is_named_and_a_closure_is_not"],
+)
+def test_a_window_names_only_its_genuinely_missing_sessions(tmp_path: Path, absent: tuple[date, ...]) -> None:
     sessions = expected_sessions(*WINDOW)
-    assert all(closure not in sessions for closure in CLOSURES)
-    _seed(tmp_path, sessions)
+    assert all(closure not in sessions for closure in CLOSURES), "exchange closures are not sessions"
+    _seed(tmp_path, [day for day in sessions if day not in absent])
 
     report = check_availability([tmp_path], "SPY", *WINDOW)
 
-    assert report.is_complete
-    assert report.expected_days == len(sessions)
-    assert report.missing_days == []
-
-
-def test_a_genuinely_missing_session_is_named_and_a_closure_is_not(tmp_path: Path) -> None:
-    sessions = expected_sessions(*WINDOW)
-    absent = date(2025, 3, 3)
-    _seed(tmp_path, [day for day in sessions if day != absent])
-
-    report = check_availability([tmp_path], "SPY", *WINDOW)
-
-    assert not report.is_complete
-    assert report.missing_days == [absent]
+    assert report.is_complete == (not absent), "complete exactly when no session is absent"
+    assert report.expected_days == len(sessions), "closures are not expected sessions"
+    assert report.missing_days == list(absent), "only the genuinely absent sessions are named"
 
 
 def test_an_early_close_is_an_expected_session(tmp_path: Path) -> None:
@@ -336,22 +330,37 @@ def test_gaps_past_the_shown_limit_are_counted_not_listed(tmp_path: Path) -> Non
     assert report.missing_spans[10][0].isoformat() not in message
 
 
-def test_the_unbroken_run_starts_after_the_last_hole_not_at_the_first_held_day() -> None:
-    # Held in two stretches, as a symbol backfilled twice is: a few sessions long ago, then a run to the present.
-    stray = expected_sessions(date(2021, 10, 5), date(2021, 10, 15))
-    recent = expected_sessions(date(2024, 9, 4), date(2025, 1, 31))
+@pytest.mark.parametrize(
+    ("held_ranges", "end", "expected"),
+    [
+        pytest.param(
+            # Held in two stretches, as a symbol backfilled twice is: a few sessions long ago, then a run to the present.
+            ((date(2021, 10, 5), date(2021, 10, 15)), (date(2024, 9, 4), date(2025, 1, 31))),
+            date(2025, 1, 31),
+            # Weekends and closures (Thanksgiving, Christmas, New Year's Day, MLK Day) lie inside the run without breaking it.
+            date(2024, 9, 4),
+            id="starts_after_the_last_hole_not_at_the_first_held_day",
+        ),
+        pytest.param(
+            ((date(2025, 1, 2), date(2025, 1, 30)),),
+            # 2025-02-01 is a Saturday: the last session on or before it is Friday 01-31, which is not held.
+            date(2025, 2, 1),
+            None,
+            id="none_when_the_last_session_is_not_held",
+        ),
+        pytest.param((), date(2025, 2, 1), None, id="none_when_nothing_is_held"),
+        pytest.param(
+            ((date(2025, 1, 2), date(2025, 1, 30)),),
+            # An end before anything is held reaches no held session either.
+            date(2024, 12, 31),
+            None,
+            id="none_when_the_end_is_before_anything_held",
+        ),
+    ],
+)
+def test_the_unbroken_run_start(
+    held_ranges: tuple[tuple[date, date], ...], end: date, expected: date | None
+) -> None:
+    held = {day for first, last in held_ranges for day in expected_sessions(first, last)}
 
-    start = unbroken_run_start({*stray, *recent}, date(2025, 1, 31))
-
-    # Weekends and closures (Thanksgiving, Christmas, New Year's Day, MLK Day) lie inside the run without breaking it.
-    assert start == date(2024, 9, 4)
-
-
-def test_the_unbroken_run_is_none_when_the_last_session_is_not_held() -> None:
-    held = expected_sessions(date(2025, 1, 2), date(2025, 1, 30))
-
-    # 2025-02-01 is a Saturday: the last session on or before it is Friday 01-31, which is not held.
-    assert unbroken_run_start(set(held), date(2025, 2, 1)) is None
-    assert unbroken_run_start(set(), date(2025, 2, 1)) is None
-    # An end before anything is held reaches no held session either.
-    assert unbroken_run_start(set(held), date(2024, 12, 31)) is None
+    assert unbroken_run_start(held, end) == expected

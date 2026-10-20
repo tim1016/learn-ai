@@ -52,14 +52,19 @@ class TestBarRange:
         r = _BarRange(from_date="2025-01-15", to_date="2025-01-15")
         assert r.from_date == r.to_date
 
-    def test_rejects_zero_multiplier(self) -> None:
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            pytest.param("multiplier", 0, id="zero_multiplier"),
+            pytest.param("timespan", "weekly", id="unknown_timespan_weekly"),
+            pytest.param("timespan", "month", id="unknown_timespan_month"),
+            pytest.param("timespan", "minute_5", id="unknown_timespan_minute_5"),
+            pytest.param("timespan", "", id="unknown_timespan_empty"),
+        ],
+    )
+    def test_rejects_zero_multiplier_and_unknown_timespan(self, field: str, value: object) -> None:
         with pytest.raises(ValidationError):
-            _BarRange(from_date="2025-01-01", to_date="2025-01-31", multiplier=0)
-
-    @pytest.mark.parametrize("ts", ["weekly", "month", "minute_5", ""])
-    def test_rejects_unknown_timespan(self, ts: str) -> None:
-        with pytest.raises(ValidationError):
-            _BarRange(from_date="2025-01-01", to_date="2025-01-31", timespan=ts)  # type: ignore[arg-type]
+            _BarRange(from_date="2025-01-01", to_date="2025-01-31", **{field: value})  # type: ignore[arg-type]
 
     def test_extra_field_is_forbidden(self) -> None:
         with pytest.raises(ValidationError) as exc:
@@ -74,43 +79,28 @@ class TestBarRange:
 
 
 class TestTickerRequest:
-    def test_rejects_empty_symbol(self) -> None:
+    @pytest.mark.parametrize("symbol", ["", "X" * 21], ids=["empty_symbol", "oversized_symbol"])
+    def test_rejects_empty_or_oversized_symbol(self, symbol: str) -> None:
         with pytest.raises(ValidationError):
-            TickerRequest(symbol="", from_date="2025-01-01", to_date="2025-01-31")
-
-    def test_rejects_oversized_symbol(self) -> None:
-        with pytest.raises(ValidationError):
-            TickerRequest(
-                symbol="X" * 21,
-                from_date="2025-01-01",
-                to_date="2025-01-31",
-            )
+            TickerRequest(symbol=symbol, from_date="2025-01-01", to_date="2025-01-31")
 
 
 class TestMultiTickerRequest:
-    def test_rejects_empty_symbols_list(self) -> None:
-        with pytest.raises(ValidationError):
-            MultiTickerRequest(
-                symbols=[],
-                from_date="2025-01-01",
-                to_date="2025-01-31",
-            )
-
-    def test_rejects_empty_string_symbol_in_list(self) -> None:
-        # Per-element min_length=1 must reject [""] — without the
-        # constraint the empty string would slip through to the runners.
+    @pytest.mark.parametrize(
+        "symbols",
+        [
+            pytest.param((), id="empty_symbols_list"),
+            # Per-element min_length=1 must reject [""] — without the
+            # constraint the empty string would slip through to the runners.
+            pytest.param(("SPY", ""), id="empty_string_symbol_in_list"),
+            pytest.param(("SPY", "X" * 21), id="oversized_symbol_in_list"),
+        ],
+    )
+    def test_rejects_a_symbols_list_that_breaks_the_constraints(self, symbols: tuple[str, ...]) -> None:
         with pytest.raises(ValidationError) as exc:
             MultiTickerRequest(
-                symbols=["SPY", ""],
+                symbols=list(symbols),
                 from_date="2025-01-01",
                 to_date="2025-01-31",
             )
-        assert "symbols" in str(exc.value).lower()
-
-    def test_rejects_oversized_symbol_in_list(self) -> None:
-        with pytest.raises(ValidationError):
-            MultiTickerRequest(
-                symbols=["SPY", "X" * 21],
-                from_date="2025-01-01",
-                to_date="2025-01-31",
-            )
+        assert "symbols" in str(exc.value).lower(), "the error names the symbols field"

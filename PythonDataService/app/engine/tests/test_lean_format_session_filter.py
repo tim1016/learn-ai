@@ -18,6 +18,8 @@ from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from app.engine.data.lean_format import LeanMinuteDataReader, write_lean_day_zip
 from app.engine.data.trade_bar import TradeBar
 from app.utils.timestamps import datetime_at_ms
@@ -52,18 +54,30 @@ def _seed_day(root: Path, symbol: str, trading_day: date) -> None:
     write_lean_day_zip(root, symbol, trading_day, bars)
 
 
-def test_reader_default_session_drops_extended_hours(tmp_path: Path) -> None:
-    _seed_day(tmp_path, "SPY", date(2025, 1, 6))  # Monday — full session
+@pytest.mark.parametrize(
+    ("day", "bar_count", "first_hm", "last_hm"),
+    [
+        # Monday — full session. 09:30-16:00 ET, one bar per minute, half-open on the close side ⇒ 6h30m = 390 bars
+        pytest.param(date(2025, 1, 6), 390, (9, 30), (15, 59), id="default_session_drops_extended_hours"),
+        # 2024-11-29 (Black Friday) is a known half-day: NYSE closes at 13:00 ET (780 minutes), so 09:30-13:00 ET,
+        # half-open ⇒ 3h30m = 210 bars. Confirms the filter uses ``session_close_minute_et`` from the
+        # trading-calendar helper, not a hard-coded 16:00 ET.
+        pytest.param(date(2024, 11, 29), 210, (9, 30), (12, 59), id="half_day_respects_early_close"),
+    ],
+)
+def test_reader_default_session_keeps_only_the_regular_session(
+    tmp_path: Path, day: date, bar_count: int, first_hm: tuple[int, int], last_hm: tuple[int, int]
+) -> None:
+    _seed_day(tmp_path, "SPY", day)
 
     reader = LeanMinuteDataReader(tmp_path)
-    bars = reader.read_day("SPY", date(2025, 1, 6))
+    bars = reader.read_day("SPY", day)
 
-    # 09:30-16:00 ET, one bar per minute, half-open on the close side ⇒ 6h30m = 390 bars
-    assert len(bars) == 390
+    assert len(bars) == bar_count, f"regular session keeps {bar_count} minute bars"
     first = datetime_at_ms(bars[0].start_ms, tz=_ET)
     last = datetime_at_ms(bars[-1].start_ms, tz=_ET)
-    assert (first.hour, first.minute) == (9, 30), f"first bar at {first}"
-    assert (last.hour, last.minute) == (15, 59), f"last bar at {last}"
+    assert (first.hour, first.minute) == first_hm, f"first bar at {first}"
+    assert (last.hour, last.minute) == last_hm, f"last bar at {last}"
 
 
 def test_reader_extended_session_keeps_premarket_and_after_hours(tmp_path: Path) -> None:
@@ -78,22 +92,3 @@ def test_reader_extended_session_keeps_premarket_and_after_hours(tmp_path: Path)
     last = datetime_at_ms(bars[-1].start_ms, tz=_ET)
     assert (first.hour, first.minute) == (4, 0)
     assert (last.hour, last.minute) == (19, 59)
-
-
-def test_reader_half_day_respects_early_close(tmp_path: Path) -> None:
-    """Black-Friday-style early close: NYSE closes at 13:00 ET (780 minutes).
-
-    Confirms the filter uses ``session_close_minute_et`` from the
-    trading-calendar helper, not a hard-coded 16:00 ET.
-    """
-    # 2024-11-29 (Black Friday) is a known half-day close at 13:00 ET.
-    half_day = date(2024, 11, 29)
-    _seed_day(tmp_path, "SPY", half_day)
-
-    reader = LeanMinuteDataReader(tmp_path)
-    bars = reader.read_day("SPY", half_day)
-
-    # 09:30-13:00 ET, half-open ⇒ 3h30m = 210 bars
-    assert len(bars) == 210
-    last = datetime_at_ms(bars[-1].start_ms, tz=_ET)
-    assert (last.hour, last.minute) == (12, 59), f"last bar at {last}"

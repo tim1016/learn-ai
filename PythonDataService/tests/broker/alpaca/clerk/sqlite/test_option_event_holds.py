@@ -10,6 +10,7 @@ Alpaca.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -102,29 +103,27 @@ def _may_reduce(repo: ClerkSqliteRepository, bot: str, symbol: str, quantity: fl
 # ── a hold is the bot's own ──────────────────────────────────────────────────
 
 
-async def test_a_hold_stops_that_bots_entries_and_no_other_bots_and_leaves_its_reductions_open(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("symbol", "held_for", "other_bots_entry_refused"),
+    [
+        pytest.param(CALL, "bot-a", None, id="a hold stops that bots entries and no other bots"),
+        pytest.param(
+            "MSFT230721C00300000", None, "OPTION_EVENT_UNREADABLE", id="a row that names no bots contract holds the account"
+        ),
+    ],
+)
+async def test_a_hold_is_the_bots_own_or_the_accounts_and_leaves_its_reductions_open(
+    tmp_path: Path, symbol: str, held_for: str | None, other_bots_entry_refused: str | None
+) -> None:
     repo = _one_bot(tmp_path)
     account = _FakeReadPort()
     try:
-        await _read(repo, account, _expiry(qty="-0.5"))
+        await _read(repo, account, _expiry(symbol=symbol, qty="-0.5"))
 
-        assert option_holds(repo).keys() == {("bot-a", "OPTION_EVENT_UNREADABLE")}
-        assert _entry_refused_for(repo, "bot-a") == "OPTION_EVENT_UNREADABLE"
-        assert _entry_refused_for(repo, "bot-b") is None
-        assert _may_reduce(repo, "bot-a", CALL, 1)
-    finally:
-        repo.close()
-
-
-async def test_a_row_that_names_no_bots_contract_holds_the_account(tmp_path: Path) -> None:
-    repo = _one_bot(tmp_path)
-    account = _FakeReadPort()
-    try:
-        await _read(repo, account, _expiry(symbol="MSFT230721C00300000", qty="-0.5"))
-
-        assert option_holds(repo).keys() == {(None, "OPTION_EVENT_UNREADABLE")}
-        assert _entry_refused_for(repo, "bot-a") == _entry_refused_for(repo, "bot-b") == "OPTION_EVENT_UNREADABLE"
-        assert _may_reduce(repo, "bot-a", CALL, 1)
+        assert option_holds(repo).keys() == {(held_for, "OPTION_EVENT_UNREADABLE")}, "the hold is the bot's own or the account's"
+        assert _entry_refused_for(repo, "bot-a") == "OPTION_EVENT_UNREADABLE", "the bot holding the contract takes no entry"
+        assert _entry_refused_for(repo, "bot-b") == other_bots_entry_refused, "the other bot is refused only by the account's hold"
+        assert _may_reduce(repo, "bot-a", CALL, 1), "its reductions stay open"
     finally:
         repo.close()
 
@@ -145,27 +144,42 @@ async def test_a_row_that_cannot_be_read_is_held_for_and_nothing_of_it_is_booked
         repo.close()
 
 
-async def test_an_option_corporate_action_is_listed_and_held_for(tmp_path: Path) -> None:
-    """Corporate actions and cash deliverables are not read. Each is named, never skipped."""
+@pytest.mark.parametrize(
+    ("rows", "reason_code"),
+    [
+        # Corporate actions and cash deliverables are not read. Each is named, never skipped.
+        pytest.param(
+            lambda: [_expiry(activity_type="OPCA", id="ca-1")], "OPTION_EVENT_UNREADABLE",
+            id="an option corporate action is listed",
+        ),
+        pytest.param(
+            lambda: [_expiry(status="canceled")], "OPTION_EVENT_NOT_EXECUTED",
+            id="a row not reported as executed is matched to nothing",
+        ),
+        pytest.param(
+            lambda: [_assignment(date="2023-07-21")], "OPTION_EVENT_WRONG_SIDE",
+            id="an assignment of a contract held only bought is the wrong side",
+        ),
+        pytest.param(
+            lambda: [_expiry(qty="-2")], "OPTION_EVENT_MORE_CONTRACTS_THAN_HELD",
+            id="an event for more contracts than are held takes none",
+        ),
+        pytest.param(
+            lambda: [_share_trade(100)], "OPTION_SHARE_TRADE_UNPAIRED",
+            id="a share trade that belongs to no event read",
+        ),
+    ],
+)
+async def test_a_row_the_books_cannot_book_is_held_for_and_the_bots_position_stands(
+    tmp_path: Path, rows: Callable[[], list[dict[str, Any]]], reason_code: str
+) -> None:
     repo = _one_bot(tmp_path)
     account = _FakeReadPort()
     try:
-        await _read(repo, account, _expiry(activity_type="OPCA", id="ca-1"))
+        await _read(repo, account, *rows())
 
-        assert option_holds(repo).keys() == {("bot-a", "OPTION_EVENT_UNREADABLE")}
-        assert held(repo, "bot-a") == {CALL: 1.0}
-    finally:
-        repo.close()
-
-
-async def test_a_row_not_reported_as_executed_is_held_for_and_matched_to_nothing(tmp_path: Path) -> None:
-    repo = _one_bot(tmp_path)
-    account = _FakeReadPort()
-    try:
-        await _read(repo, account, _expiry(status="canceled"))
-
-        assert option_holds(repo).keys() == {("bot-a", "OPTION_EVENT_NOT_EXECUTED")}
-        assert bookings(repo) == [] and held(repo, "bot-a") == {CALL: 1.0}
+        assert option_holds(repo).keys() == {("bot-a", reason_code)}, "the bot is held under the row's own code"
+        assert bookings(repo) == [] and held(repo, "bot-a") == {CALL: 1.0}, "nothing is booked and the position stands"
     finally:
         repo.close()
 
@@ -263,18 +277,6 @@ async def test_an_event_for_more_than_a_hand_bought_holding_the_books_saw_part_o
         repo.close()
 
 
-async def test_an_assignment_of_a_contract_held_only_bought_is_held_as_the_wrong_side(tmp_path: Path) -> None:
-    repo = _one_bot(tmp_path)
-    account = _FakeReadPort()
-    try:
-        await _read(repo, account, _assignment(date="2023-07-21"))
-
-        assert option_holds(repo).keys() == {("bot-a", "OPTION_EVENT_WRONG_SIDE")}
-        assert bookings(repo) == [] and held(repo, "bot-a") == {CALL: 1.0}
-    finally:
-        repo.close()
-
-
 async def test_an_expiry_of_a_contract_one_bot_bought_and_another_sold_holds_both(tmp_path: Path) -> None:
     repo = _one_bot(tmp_path)
     holds_option(repo, "bot-b", CALL, contracts=-1)
@@ -286,18 +288,6 @@ async def test_an_expiry_of_a_contract_one_bot_bought_and_another_sold_holds_bot
             ("bot-a", "OPTION_EVENT_HELD_ON_BOTH_SIDES"), ("bot-b", "OPTION_EVENT_HELD_ON_BOTH_SIDES"),
         }
         assert bookings(repo) == []
-    finally:
-        repo.close()
-
-
-async def test_an_event_for_more_contracts_than_are_held_takes_none(tmp_path: Path) -> None:
-    repo = _one_bot(tmp_path)
-    account = _FakeReadPort()
-    try:
-        await _read(repo, account, _expiry(qty="-2"))
-
-        assert option_holds(repo).keys() == {("bot-a", "OPTION_EVENT_MORE_CONTRACTS_THAN_HELD")}
-        assert bookings(repo) == [] and held(repo, "bot-a") == {CALL: 1.0}
     finally:
         repo.close()
 
@@ -330,18 +320,6 @@ async def test_an_exercise_whose_share_trade_was_not_reported_is_booked_and_held
 
         assert ("bot-a", "OPTION_SHARE_TRADE_MISSING") not in option_holds(repo)
         assert len(bookings(repo)) == 1
-    finally:
-        repo.close()
-
-
-async def test_a_share_trade_that_belongs_to_no_event_read_is_held_for(tmp_path: Path) -> None:
-    repo = _one_bot(tmp_path)
-    account = _FakeReadPort()
-    try:
-        await _read(repo, account, _share_trade(100))
-
-        assert option_holds(repo).keys() == {("bot-a", "OPTION_SHARE_TRADE_UNPAIRED")}
-        assert held(repo, "bot-a") == {CALL: 1.0}
     finally:
         repo.close()
 
@@ -725,21 +703,30 @@ async def test_a_hold_that_ends_another_way_is_not_acknowledged_away_and_the_own
         repo.close()
 
 
-async def test_an_acknowledgement_of_a_notice_that_is_not_open_is_refused(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("asked_for_bot", "operator", "refusal_code"),
+    [
+        pytest.param("bot-b", "owner", "OPTION_EVENT_HOLD_NOT_OPEN", id="a notice that is not open"),
+        pytest.param("bot-a", "  ", "OPTION_EVENT_HOLD_NO_OPERATOR", id="an acknowledgement that names nobody"),
+    ],
+)
+async def test_an_acknowledgement_of_a_notice_that_is_not_open_or_that_names_nobody_is_refused(
+    tmp_path: Path, asked_for_bot: str, operator: str, refusal_code: str
+) -> None:
     repo = _one_bot(tmp_path)
     account = _FakeReadPort()
     try:
         await _read(repo, account, _expiry(qty="-0.5"))
-        for_another_bot = replace(as_read(repo, "bot-a", "OPTION_EVENT_UNREADABLE"), strategy_instance_id="bot-b")
+        request = replace(as_read(repo, "bot-a", "OPTION_EVENT_UNREADABLE"), strategy_instance_id=asked_for_bot)
 
         with pytest.raises(OptionEventHoldNotAcknowledged) as refused:
             acknowledge_option_event_hold(
-                repo, request=for_another_bot, operator="owner",
+                repo, request=request, operator=operator,
                 compared=Compared(through_sequence=repo.last_custody_sequence()),
             )
 
-        assert refused.value.refusal_code == "OPTION_EVENT_HOLD_NOT_OPEN"
-        assert ("bot-a", "OPTION_EVENT_UNREADABLE") in option_holds(repo)
+        assert refused.value.refusal_code == refusal_code, "the refusal names why"
+        assert ("bot-a", "OPTION_EVENT_UNREADABLE") in option_holds(repo), "the notice is still held"
     finally:
         repo.close()
 
@@ -874,24 +861,6 @@ async def test_a_bots_shares_are_compared_under_the_symbol_it_trades_whatever_th
         repo.close()
 
 
-async def test_an_acknowledgement_that_names_nobody_is_refused(tmp_path: Path) -> None:
-    repo = _one_bot(tmp_path)
-    account = _FakeReadPort()
-    try:
-        await _read(repo, account, _expiry(qty="-0.5"))
-
-        with pytest.raises(OptionEventHoldNotAcknowledged) as refused:
-            acknowledge_option_event_hold(
-                repo, request=as_read(repo, "bot-a", "OPTION_EVENT_UNREADABLE"), operator="  ",
-                compared=Compared(through_sequence=repo.last_custody_sequence()),
-            )
-
-        assert refused.value.refusal_code == "OPTION_EVENT_HOLD_NO_OPERATOR"
-        assert ("bot-a", "OPTION_EVENT_UNREADABLE") in option_holds(repo)
-    finally:
-        repo.close()
-
-
 # ── what a hold is not raised for, and what a read asks for ─────────────────
 
 
@@ -1009,16 +978,29 @@ async def test_an_exercise_read_after_its_position_was_written_off_is_not_booked
         repo.close()
 
 
-async def test_a_write_off_of_one_contract_does_not_explain_an_expiry_of_two(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "rows",
+    [
+        pytest.param(lambda: [_expiry(qty="-2")], id="a write-off of one contract does not explain an expiry of two"),
+        # An assignment ends a sold position. The bot wrote off a bought one, so the row is still nobody's.
+        pytest.param(
+            lambda: [_assignment(date="2023-07-21"), _share_trade(-100)],
+            id="a write-off of a bought contract does not explain an assignment of it",
+        ),
+    ],
+)
+async def test_a_write_off_does_not_explain_a_row_for_more_than_it_took_or_of_the_other_side(
+    tmp_path: Path, rows: Callable[[], list[dict[str, Any]]]
+) -> None:
     repo = _one_bot(tmp_path)
     _the_owner_writes_off(repo, "bot-a", CALL, 1.0)
     holds_option(repo, "bot-b", OTHER_CALL, contracts=1)
     account = _FakeReadPort()
     try:
-        await _read(repo, account, _expiry(qty="-2"))
+        await _read(repo, account, *rows())
 
-        assert bookings(repo) == []
-        assert (None, "OPTION_EVENT_CONTRACT_NOT_HELD") in option_holds(repo)
+        assert bookings(repo) == [], "the row books nothing"
+        assert (None, "OPTION_EVENT_CONTRACT_NOT_HELD") in option_holds(repo), "the row is nobody's and holds the account"
     finally:
         repo.close()
 
@@ -1033,21 +1015,6 @@ async def test_a_write_off_of_another_contract_does_not_explain_an_expiry_of_thi
     account = _FakeReadPort()
     try:
         await _read(repo, account, _expiry())
-
-        assert bookings(repo) == []
-        assert (None, "OPTION_EVENT_CONTRACT_NOT_HELD") in option_holds(repo)
-    finally:
-        repo.close()
-
-
-async def test_a_write_off_of_a_bought_contract_does_not_explain_an_assignment_of_it(tmp_path: Path) -> None:
-    """An assignment ends a sold position. The bot wrote off a bought one, so the row is still nobody's."""
-    repo = _one_bot(tmp_path)
-    _the_owner_writes_off(repo, "bot-a", CALL, 1.0)
-    holds_option(repo, "bot-b", OTHER_CALL, contracts=1)
-    account = _FakeReadPort()
-    try:
-        await _read(repo, account, _assignment(date="2023-07-21"), _share_trade(-100))
 
         assert bookings(repo) == []
         assert (None, "OPTION_EVENT_CONTRACT_NOT_HELD") in option_holds(repo)

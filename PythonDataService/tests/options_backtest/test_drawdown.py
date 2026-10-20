@@ -95,18 +95,44 @@ def test_equity_path_keeps_the_start_and_each_session_end_used_by_drawdown() -> 
     assert summary.drawdown_by_dollars.trough_equity_usd == path[2].equity_usd
 
 
-def test_the_worst_fall_in_dollars_and_the_worst_as_a_fraction_can_be_different_falls() -> None:
-    # Equity from 100: 50 (s1), 2,000 (s2), 1,400 (s3). s1 fell 50 of 100: half, and 50 dollars. s3 fell 600 of 2,000:
-    # 30%, and 600 dollars. By fraction the first is worse; by dollars the second.
-    # The sessions are Thu 2026-10-01 (open 1,790,861,400,000 ms UTC), Fri 2026-10-02 (1,790,947,800,000) and
-    # Mon 2026-10-05 (1,791,207,000,000).
-    sessions, start = _curve(100, [-50, 1950, -600])
+@pytest.mark.parametrize(
+    ("profits", "by_fraction", "by_dollars"),
+    [
+        # Equity from 100: 50 (s1), 2,000 (s2), 1,400 (s3). s1 fell 50 of 100: half, and 50 dollars. s3 fell 600 of
+        # 2,000: 30%, and 600 dollars. By fraction the first is worse; by dollars the second.
+        # The sessions are Thu 2026-10-01 (open 1,790,861,400,000 ms UTC), Fri 2026-10-02 (1,790,947,800,000) and
+        # Mon 2026-10-05 (1,791,207,000,000).
+        pytest.param(
+            (-50, 1950, -600),
+            (100, 50, 50, None, OPEN_MS[OCT_1]),  # from the starting cash
+            (2000, 1400, 600, OPEN_MS[OCT_2], OPEN_MS[OCT_5]),
+            id="the worst fall in dollars and the worst as a fraction can be different falls",
+        ),
+        # Equity from 100: 50 (s1: half of 100), 200 (s2), 100 (s3: half of 200). The same fraction twice, the first
+        # wins. In dollars the second (100) is worse than the first (50), so it is the one reported there.
+        # The sessions are Thu 2026-10-01, Fri 2026-10-02 and Mon 2026-10-05, opening as in the row above.
+        pytest.param(
+            (-50, 150, -100),
+            (100, 50, 50, None, OPEN_MS[OCT_1]),
+            (200, 100, 100, OPEN_MS[OCT_2], OPEN_MS[OCT_5]),
+            id="when two falls are equally bad the earlier one is reported",
+        ),
+    ],
+)
+def test_the_worst_fall_by_fraction_and_the_worst_by_dollars(
+    profits: tuple[int, ...],
+    by_fraction: tuple[int, int, int, int | None, int],
+    by_dollars: tuple[int, int, int, int | None, int],
+) -> None:
+    sessions, start = _curve(100, list(profits))
 
     summary = summarize_run(sessions, starting_cash_usd=start)
 
-    assert _fall(summary.drawdown_by_fraction) == (100, 50, 50, None, OPEN_MS[OCT_1])  # from the starting cash
-    assert _fall(summary.drawdown_by_dollars) == (2000, 1400, 600, OPEN_MS[OCT_2], OPEN_MS[OCT_5])
-    assert [OPEN_MS[OCT_1], OPEN_MS[OCT_2], OPEN_MS[OCT_5]] == [session.session_open_ms for session in sessions]
+    assert _fall(summary.drawdown_by_fraction) == by_fraction, "the worst fall by fraction"
+    assert _fall(summary.drawdown_by_dollars) == by_dollars, "the worst fall by dollars"
+    assert [OPEN_MS[OCT_1], OPEN_MS[OCT_2], OPEN_MS[OCT_5]] == [session.session_open_ms for session in sessions], (
+        "these are the opens of the sessions the scene built, and no other"
+    )
 
 
 def test_a_loss_on_the_first_session_is_a_fall_from_the_starting_cash_which_names_no_session() -> None:
@@ -119,19 +145,6 @@ def test_a_loss_on_the_first_session_is_a_fall_from_the_starting_cash_which_name
     # The trough is Thu 2026-10-01, whose 09:30 New York open is 1,790,861,400,000 ms UTC.
     assert drawdown.trough_session_open_ms == OPEN_MS[OCT_1] == sessions[0].session_open_ms
     assert drawdown.fall_ratio.exact() == D("0.1")
-
-
-def test_when_two_falls_are_equally_bad_the_earlier_one_is_reported() -> None:
-    # Equity from 100: 50 (s1: half of 100), 200 (s2), 100 (s3: half of 200). The same fraction twice, the first wins.
-    # In dollars the second (100) is worse than the first (50), so it is the one reported there.
-    # The sessions are Thu 2026-10-01, Fri 2026-10-02 and Mon 2026-10-05, opening as in the test above.
-    sessions, start = _curve(100, [-50, 150, -100])
-
-    summary = summarize_run(sessions, starting_cash_usd=start)
-
-    assert _fall(summary.drawdown_by_fraction) == (100, 50, 50, None, OPEN_MS[OCT_1])
-    assert _fall(summary.drawdown_by_dollars) == (200, 100, 100, OPEN_MS[OCT_2], OPEN_MS[OCT_5])
-    assert [OPEN_MS[OCT_1], OPEN_MS[OCT_2], OPEN_MS[OCT_5]] == [session.session_open_ms for session in sessions]
 
 
 def test_when_equity_comes_back_to_a_peak_without_passing_it_the_peak_is_still_the_first_time_it_was_reached() -> None:

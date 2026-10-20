@@ -66,47 +66,41 @@ def test_apply_fill_opens_long_position():
     assert portfolio.total_fees == Decimal("1.00")
 
 
-def test_apply_fill_adds_to_long_position_with_weighted_average():
+@pytest.mark.parametrize(
+    ("fills", "expected_quantity", "expected_average"),
+    [
+        # Weighted avg: (100*100 + 100*110) / 200 = 105
+        pytest.param(
+            ((100, "100.00"), (100, "110.00")), 200, Decimal("105"),
+            id="adds_to_long_position_with_weighted_average",
+        ),
+        # Partial exits preserve the entry average price — the code path only
+        # resets avg on flip-through-zero.
+        pytest.param(
+            ((100, "100.00"), (-40, "105.00")), 60, Decimal("100.00"),
+            id="reduces_long_position_without_flipping",
+        ),
+        # The second fill flips long→short.
+        pytest.param(
+            ((100, "100.00"), (-150, "110.00")), -50, Decimal("110.00"),
+            id="flips_position_through_zero_resets_average",
+        ),
+        pytest.param(
+            ((100, "100.00"), (-100, "110.00")), 0, Decimal("0"),
+            id="closing_to_zero_resets_average",
+        ),
+    ],
+)
+def test_apply_fill_updates_the_position_quantity_and_average(
+    fills: tuple[tuple[int, str], ...], expected_quantity: int, expected_average: Decimal
+) -> None:
     portfolio = Portfolio(initial_cash=Decimal("10000"))
-    portfolio.apply_fill(_fill(100, "100.00"))
-    portfolio.apply_fill(_fill(100, "110.00"))
+    for quantity, price in fills:
+        portfolio.apply_fill(_fill(quantity, price))
 
     pos = portfolio.get_position("SPY")
-    assert pos.quantity == 200
-    # Weighted avg: (100*100 + 100*110) / 200 = 105
-    assert pos.average_price == Decimal("105")
-
-
-def test_apply_fill_reduces_long_position_without_flipping():
-    portfolio = Portfolio(initial_cash=Decimal("10000"))
-    portfolio.apply_fill(_fill(100, "100.00"))
-    portfolio.apply_fill(_fill(-40, "105.00"))
-
-    pos = portfolio.get_position("SPY")
-    assert pos.quantity == 60
-    # Partial exits preserve the entry average price — the code path only
-    # resets avg on flip-through-zero.
-    assert pos.average_price == Decimal("100.00")
-
-
-def test_apply_fill_flips_position_through_zero_resets_average():
-    portfolio = Portfolio(initial_cash=Decimal("10000"))
-    portfolio.apply_fill(_fill(100, "100.00"))
-    portfolio.apply_fill(_fill(-150, "110.00"))  # flips long→short
-
-    pos = portfolio.get_position("SPY")
-    assert pos.quantity == -50
-    assert pos.average_price == Decimal("110.00")
-
-
-def test_apply_fill_closing_to_zero_resets_average():
-    portfolio = Portfolio(initial_cash=Decimal("10000"))
-    portfolio.apply_fill(_fill(100, "100.00"))
-    portfolio.apply_fill(_fill(-100, "110.00"))
-
-    pos = portfolio.get_position("SPY")
-    assert pos.quantity == 0
-    assert pos.average_price == Decimal("0")
+    assert pos.quantity == expected_quantity, "the position quantity follows the fills"
+    assert pos.average_price == expected_average, "the average price follows the fills"
 
 
 def test_total_value_includes_marked_to_market_positions():

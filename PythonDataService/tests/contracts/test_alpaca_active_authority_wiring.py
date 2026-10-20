@@ -60,7 +60,7 @@ def test_generated_contract_preserves_sqlite_custody_routes() -> None:
         assert method in paths[path], (method, path)
 
 
-def test_every_reconciliation_sweep_publishes_its_verdict() -> None:
+def test_every_reconciliation_sweep_publishes_its_verdict_and_retires_runs_whose_runner_is_gone() -> None:
     """A sweep that does not publish makes pure panel reads permanently stale.
 
     ``ReconciliationSweep`` is the sole automatic reconciler, and it calls
@@ -71,6 +71,11 @@ def test_every_reconciliation_sweep_publishes_its_verdict() -> None:
 
     Structural because the failure is silent: every unit test still passes and
     the degradation only shows in production.
+
+    A sweep without the facade's run-ownership book never retires a dead run.
+    ``reconcile_account`` skips the #2369 step when it is handed no book, so a
+    construction site that omits ``run_ownership`` would leave a runner-less
+    run ACTIVE -- and its ENTER working -- with every unit test still green.
     """
     source = _authority_selector_source()
 
@@ -116,22 +121,11 @@ def test_every_reconciliation_sweep_publishes_its_verdict() -> None:
         "publisher; a wrapped sweep must publish before its listener observes"
     )
 
+    ownership_wired = source.count("run_ownership=facade.run_ownership")
 
-def test_every_reconciliation_sweep_retires_runs_whose_runner_is_gone() -> None:
-    """A sweep without the facade's run-ownership book never retires a dead run.
-
-    ``reconcile_account`` skips the #2369 step when it is handed no book, so a
-    construction site that omits ``run_ownership`` would leave a runner-less
-    run ACTIVE -- and its ENTER working -- with every unit test still green.
-    """
-    source = _authority_selector_source()
-
-    constructions = source.count("ReconciliationSweep(")
-    wired = source.count("run_ownership=facade.run_ownership")
-
-    assert constructions > 0, "no sweep construction found; update this guard"
-    assert wired == constructions, (
-        f"{constructions} ReconciliationSweep construction(s) but {wired} pass "
+    assert constructions > 0, "run ownership: no sweep construction found; update this guard"
+    assert ownership_wired == constructions, (
+        f"{constructions} ReconciliationSweep construction(s) but {ownership_wired} pass "
         "the facade's `run_ownership`; that sweep never retires a dead runner's run"
     )
 

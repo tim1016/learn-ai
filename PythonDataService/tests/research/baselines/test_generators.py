@@ -48,31 +48,25 @@ class TestBuyAndHold:
         assert spec.symbols == ["QQQ"]
         assert spec.resolution.period_minutes == 30
 
-    def test_entry_uses_tautological_bar_property(self):
+    def test_spec_enters_on_a_tautology_never_exits_and_declares_no_indicators(self):
         spec = buy_and_hold_spec(_make_parent())
-        # The condition list has exactly one BarProperty entry that's
+        # Entry: the condition list has exactly one BarProperty entry that's
         # tautologically true (range >= 0; OHLC invariant guarantees
         # high >= low so the bar's range is always non-negative).
-        assert len(spec.entry.conditions) == 1
+        assert len(spec.entry.conditions) == 1, "entry has exactly one condition"
         cond = spec.entry.conditions[0]
-        assert cond.kind == "BarProperty"  # type: ignore[union-attr]
-        assert cond.property == "range"  # type: ignore[union-attr]
-        assert cond.op == ">="  # type: ignore[union-attr]
-        assert cond.value == 0.0  # type: ignore[union-attr]
-
-    def test_exit_never_fires_during_run(self):
-        spec = buy_and_hold_spec(_make_parent())
-        # ``BarsSinceEntry >= 999_999`` is unreachable for any
+        assert cond.kind == "BarProperty", "entry condition is a BarProperty"  # type: ignore[union-attr]
+        assert cond.property == "range", "entry condition tests the bar's range"  # type: ignore[union-attr]
+        assert cond.op == ">=", "entry condition compares with >="  # type: ignore[union-attr]
+        assert cond.value == 0.0, "entry condition compares against 0.0"  # type: ignore[union-attr]
+        # Exit: ``BarsSinceEntry >= 999_999`` is unreachable for any
         # realistic backtest; engine flushes via on_end_of_algorithm.
-        assert len(spec.exit.conditions) == 1
-        cond = spec.exit.conditions[0]
-        assert cond.kind == "BarsSinceEntry"  # type: ignore[union-attr]
-        assert cond.value == 999_999  # type: ignore[union-attr]
-
-    def test_no_indicators_declared(self):
+        assert len(spec.exit.conditions) == 1, "exit has exactly one condition"
+        exit_cond = spec.exit.conditions[0]
+        assert exit_cond.kind == "BarsSinceEntry", "exit condition is a BarsSinceEntry"  # type: ignore[union-attr]
+        assert exit_cond.value == 999_999, "exit condition never fires during a run"  # type: ignore[union-attr]
         # B&H needs no indicator state — keeps the spec minimal.
-        spec = buy_and_hold_spec(_make_parent())
-        assert spec.indicators == []
+        assert spec.indicators == [], "no indicators declared"
 
 
 # ---------------------------------------------------------------------------
@@ -109,41 +103,23 @@ class TestRandomEmaWindows:
         assert spec.symbols == ["IWM"]
         assert spec.resolution.period_minutes == 60
 
-    def test_zero_count_raises(self):
-        with pytest.raises(ValueError, match="count must be positive"):
-            random_ema_window_specs(
-                _make_parent(), count=0, rng=np.random.default_rng(0)
-            )
-
-    def test_invalid_period_lower_bound_raises(self):
-        with pytest.raises(ValueError, match="EMA periods must be"):
-            random_ema_window_specs(
-                _make_parent(),
-                count=5,
-                fast_range=(1, 10),  # 1 < schema's minimum of 2
-                rng=np.random.default_rng(0),
-            )
-
-    def test_inverted_range_raises(self):
-        with pytest.raises(ValueError, match="range upper bounds"):
-            random_ema_window_specs(
-                _make_parent(),
-                count=5,
-                fast_range=(10, 5),  # hi < lo
-                rng=np.random.default_rng(0),
-            )
-
-    def test_unsatisfiable_constraints_raise(self):
-        # ``slow_hi <= fast_lo`` means no valid (fast, slow) pair
-        # exists — fail fast rather than loop forever.
-        with pytest.raises(ValueError, match="admits no valid"):
-            random_ema_window_specs(
-                _make_parent(),
-                count=5,
-                fast_range=(20, 30),
-                slow_range=(10, 15),
-                rng=np.random.default_rng(0),
-            )
+    @pytest.mark.parametrize(
+        ("kwargs", "match"),
+        [
+            ({"count": 0}, "count must be positive"),
+            # fast_range lower bound 1 < schema's minimum of 2
+            ({"count": 5, "fast_range": (1, 10)}, "EMA periods must be"),
+            # fast_range hi < lo
+            ({"count": 5, "fast_range": (10, 5)}, "range upper bounds"),
+            # ``slow_hi <= fast_lo`` means no valid (fast, slow) pair
+            # exists — fail fast rather than loop forever.
+            ({"count": 5, "fast_range": (20, 30), "slow_range": (10, 15)}, "admits no valid"),
+        ],
+        ids=["zero-count", "invalid-period-lower-bound", "inverted-range", "unsatisfiable-constraints"],
+    )
+    def test_invalid_arguments_raise(self, kwargs: dict, match: str):
+        with pytest.raises(ValueError, match=match):
+            random_ema_window_specs(_make_parent(), rng=np.random.default_rng(0), **kwargs)
 
     def test_uses_canonical_spy_ema_shape(self):
         """Generated specs use FreshCross + 0.20 gap + RSI(50,70) +

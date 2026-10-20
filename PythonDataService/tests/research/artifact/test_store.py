@@ -217,31 +217,20 @@ def test_load_missing_raises_descriptor_not_found(tmp_path: Path):
         )
 
 
-def test_load_corrupt_config_raises_descriptor_corrupt(tmp_path: Path):
+@pytest.mark.parametrize(
+    "filename",
+    ["config.json", "result.json"],
+    ids=["corrupt-config", "corrupt-result"],
+)
+def test_load_corrupt_file_raises_descriptor_corrupt(tmp_path: Path, filename: str):
     store = ArtifactStore(_descriptor(), root=tmp_path)
     config = _make_config()
     result = _make_result()
     store.save(config, result)
-    (tmp_path / "phase-x" / config.artifact_id / "config.json").write_text(
+    (tmp_path / "phase-x" / config.artifact_id / filename).write_text(
         "{not valid json"
     )
-    with pytest.raises(_PhaseCorrupt, match=r"config\.json"):
-        store.load(
-            config.artifact_id,
-            config_type=_FixtureConfig,
-            result_type=_FixtureResult,
-        )
-
-
-def test_load_corrupt_result_raises_descriptor_corrupt(tmp_path: Path):
-    store = ArtifactStore(_descriptor(), root=tmp_path)
-    config = _make_config()
-    result = _make_result()
-    store.save(config, result)
-    (tmp_path / "phase-x" / config.artifact_id / "result.json").write_text(
-        "{not valid json"
-    )
-    with pytest.raises(_PhaseCorrupt, match=r"result\.json"):
+    with pytest.raises(_PhaseCorrupt, match=re.escape(filename)):
         store.load(
             config.artifact_id,
             config_type=_FixtureConfig,
@@ -257,7 +246,7 @@ def test_list_ids_empty_returns_empty(tmp_path: Path):
     assert store.list_ids() == []
 
 
-def test_list_ids_orders_newest_first(tmp_path: Path):
+def test_list_ids_orders_newest_first_and_filters_by_since_ms(tmp_path: Path):
     store = ArtifactStore(_descriptor(), root=tmp_path)
     older_id = "a" * 32
     newer_id = "b" * 32
@@ -270,7 +259,9 @@ def test_list_ids_orders_newest_first(tmp_path: Path):
         _make_result(artifact_id=newer_id, created_at_ms=2_000),
     )
 
-    assert store.list_ids() == [newer_id, older_id]
+    assert store.list_ids() == [newer_id, older_id], "orders newest first"
+    assert store.list_ids(since_ms=1_500) == [newer_id], "since_ms=1_500 keeps only the newer artifact"
+    assert store.list_ids(since_ms=0) == [newer_id, older_id], "since_ms=0 keeps both, newest first"
 
 
 def test_list_ids_filter_by_parent_run_id(tmp_path: Path):
@@ -289,23 +280,6 @@ def test_list_ids_filter_by_parent_run_id(tmp_path: Path):
     assert store.list_ids(parent_run_id="parent-1") == [a_id]
     assert store.list_ids(parent_run_id="parent-2") == [b_id]
     assert store.list_ids(parent_run_id="nope") == []
-
-
-def test_list_ids_filter_by_since_ms(tmp_path: Path):
-    store = ArtifactStore(_descriptor(), root=tmp_path)
-    older_id = "a" * 32
-    newer_id = "b" * 32
-    store.save(
-        _make_config(artifact_id=older_id, created_at_ms=1_000),
-        _make_result(artifact_id=older_id, created_at_ms=1_000),
-    )
-    store.save(
-        _make_config(artifact_id=newer_id, created_at_ms=2_000),
-        _make_result(artifact_id=newer_id, created_at_ms=2_000),
-    )
-
-    assert store.list_ids(since_ms=1_500) == [newer_id]
-    assert store.list_ids(since_ms=0) == [newer_id, older_id]
 
 
 def test_list_ids_limit_caps_after_sort(tmp_path: Path):
@@ -387,20 +361,17 @@ def test_list_ids_skips_dir_whose_name_fails_id_pattern(tmp_path: Path, caplog):
 # ---------------------------------------------------------------------------
 # hash_payload hook.
 # ---------------------------------------------------------------------------
-def test_hash_callback_invoked_when_present(tmp_path: Path):
-    store = ArtifactStore(_descriptor(with_hash=True), root=tmp_path)
+@pytest.mark.parametrize(
+    ("with_hash", "hash_calls"),
+    [(True, 1), (False, 0)],
+    ids=["invoked-when-present", "not-invoked-when-absent"],
+)
+def test_hash_callback_invoked_only_when_present(tmp_path: Path, with_hash: bool, hash_calls: int):
+    store = ArtifactStore(_descriptor(with_hash=with_hash), root=tmp_path)
     config = _make_config()
     result = _make_result()
     store.save(config, result)
-    assert list(_HASH_TRACK) == [config.artifact_id]
-
-
-def test_hash_callback_not_invoked_when_absent(tmp_path: Path):
-    store = ArtifactStore(_descriptor(with_hash=False), root=tmp_path)
-    config = _make_config()
-    result = _make_result()
-    store.save(config, result)
-    assert _HASH_TRACK == []
+    assert list(_HASH_TRACK) == [config.artifact_id] * hash_calls
 
 
 # ---------------------------------------------------------------------------

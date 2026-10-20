@@ -9,6 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pandas_ta as ta
+import pytest
 
 from app.services.dataset_service import calculate_dynamic_indicators
 
@@ -43,41 +44,29 @@ def _make_realistic_bars(count: int = 500, seed: int = 42) -> pd.DataFrame:
     )
 
 
-def test_ema_parity():
-    """EMA(20) via calculate_dynamic_indicators matches pandas_ta.ema directly."""
+@pytest.mark.parametrize(
+    ("name", "length", "ta_indicator"),
+    [
+        # EMA(20) via calculate_dynamic_indicators matches pandas_ta.ema directly.
+        pytest.param("ema", 20, ta.ema, id="ema_parity"),
+        # RSI(14) via calculate_dynamic_indicators matches pandas_ta.rsi directly.
+        pytest.param("rsi", 14, ta.rsi, id="rsi_parity"),
+    ],
+)
+def test_single_column_indicator_parity(name, length, ta_indicator):
     df = _make_realistic_bars()
-    entries = [{"name": "ema", "params": {"length": 20}}]
+    entries = [{"name": name, "params": {"length": length}}]
 
     result_df, col_meta = calculate_dynamic_indicators(df.copy(), entries)
 
-    # Find the EMA column produced
-    ema_cols = [m["column"] for m in col_meta if m["indicator"] == "ema"]
-    assert len(ema_cols) == 1, f"Expected 1 EMA column, got {ema_cols}"
-    ema_col = ema_cols[0]
+    # Find the column produced
+    cols = [m["column"] for m in col_meta if m["indicator"] == name]
+    assert len(cols) == 1, f"Expected 1 {name.upper()} column, got {cols}"
+    col = cols[0]
 
-    expected = ta.ema(df["close"], length=20)
+    expected = ta_indicator(df["close"], length=length)
     pd.testing.assert_series_equal(
-        result_df[ema_col].dropna().reset_index(drop=True),
-        expected.dropna().reset_index(drop=True),
-        rtol=1e-6,
-        check_names=False,
-    )
-
-
-def test_rsi_parity():
-    """RSI(14) via calculate_dynamic_indicators matches pandas_ta.rsi directly."""
-    df = _make_realistic_bars()
-    entries = [{"name": "rsi", "params": {"length": 14}}]
-
-    result_df, col_meta = calculate_dynamic_indicators(df.copy(), entries)
-
-    rsi_cols = [m["column"] for m in col_meta if m["indicator"] == "rsi"]
-    assert len(rsi_cols) == 1, f"Expected 1 RSI column, got {rsi_cols}"
-    rsi_col = rsi_cols[0]
-
-    expected = ta.rsi(df["close"], length=14)
-    pd.testing.assert_series_equal(
-        result_df[rsi_col].dropna().reset_index(drop=True),
+        result_df[col].dropna().reset_index(drop=True),
         expected.dropna().reset_index(drop=True),
         rtol=1e-6,
         check_names=False,

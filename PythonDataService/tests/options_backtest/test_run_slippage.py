@@ -9,6 +9,7 @@ it. Every figure is worked by hand and written as a literal.
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Any
 
 import pytest
 
@@ -46,7 +47,7 @@ def _two_days_at_one_percent() -> tuple[OptionsBacktestSetup, FakeRunData]:
     return setup(leg(stop=STOP_25), slippage="1"), fake_data({WED: _profit_day(), THU: _stop_day()})
 
 
-def test_the_run_is_replayed_again_at_each_slippage_and_a_stop_that_slippage_turns_is_in_the_answer() -> None:
+def test_the_ladder_replays_the_two_days_at_each_slippage_and_its_points_are_worked_by_hand() -> None:
     written, data = _two_days_at_one_percent()
 
     result = run_sessions(written, [WED, THU], data, slippage_ladder=LADDER)
@@ -71,13 +72,10 @@ def test_the_run_is_replayed_again_at_each_slippage_and_a_stop_that_slippage_tur
         (D("5"), D("-31.00"), 2, 2, 1),
         (D("10"), D("-71.00"), 2, 2, 0),
         (D("20"), D("-152.00"), 2, 2, 0),
-    ]
-    assert [p.is_setups_own for p in result.slippage] == [False, True, False, False, False]
-
-
-def test_re_pricing_the_fills_of_one_replay_would_give_another_answer_where_a_stop_turns() -> None:
-    written, data = _two_days_at_one_percent()
-    result = run_sessions(written, [WED, THU], data, slippage_ladder=LADDER)
+    ], "the run is replayed again at each slippage and a stop that slippage turns is in the answer"
+    assert [p.is_setups_own for p in result.slippage] == [False, True, False, False, False], (
+        "only the point at the setup's own 1% is the setup's own"
+    )
 
     # The run's own fills, seen at 2.00 -> 2.40 and 2.00 -> 1.90, re-priced at 5% without a new replay:
     #   Wednesday: bought 2.10, sold 2.28: +18.00.  Thursday: bought 2.10, sold 1.90 x 0.95 = 1.805 down to 1.80: -30.00.
@@ -85,36 +83,30 @@ def test_re_pricing_the_fills_of_one_replay_would_give_another_answer_where_a_st
     for session in result.sessions:
         for trade in session.outcome.trades:
             bought = fills.buy_fill_price(trade.entry.seen, slippage_percent=D("5"), price_step_usd=D("0.01"))
-            assert isinstance(trade.exit, Fill)
+            assert isinstance(trade.exit, Fill), "every trade of the run was sold, none left marked"
             sold = fills.sell_fill_price(trade.exit.seen, slippage_percent=D("5"), price_step_usd=D("0.01"))
             repriced += (sold - bought) * 100
     five_percent = next(point for point in result.slippage if point.slippage_percent == D("5"))
 
-    assert repriced == D("-12.00")
+    assert repriced == D("-12.00"), "re-pricing the fills of one replay gives another answer where a stop turns"
     # The replay at 5% stopped Thursday's leg out at minute 6 and lost 49.00 there: -31.00, not -12.00.
-    assert five_percent.net_profit_usd == D("-31.00")
-
-
-def test_the_setups_own_point_is_the_runs_own_result() -> None:
-    written, data = _two_days_at_one_percent()
-
-    result = run_sessions(written, [WED, THU], data, slippage_ladder=LADDER)
+    assert five_percent.net_profit_usd == D("-31.00"), "the replay at 5% stopped Thursday's leg out and lost 49.00"
 
     # At 1% the run's own sessions made +35.00 and -14.00.
-    assert [session.pnl_usd for session in result.sessions] == [D("35.00"), D("-14.00")]
+    assert [session.pnl_usd for session in result.sessions] == [D("35.00"), D("-14.00")], (
+        "at 1% the run's own sessions made +35.00 and -14.00"
+    )
     own = next(point for point in result.slippage if point.is_setups_own)
-    assert own.net_profit_usd == sum((session.pnl_usd for session in result.sessions), start=D("0")) == D("21.00")
-
-
-def test_the_figure_is_the_highest_ladder_value_that_still_profits_and_the_next_one_that_does_not() -> None:
-    written, data = _two_days_at_one_percent()
-
-    result = run_sessions(written, [WED, THU], data, slippage_ladder=LADDER)
+    assert own.net_profit_usd == sum((session.pnl_usd for session in result.sessions), start=D("0")) == D("21.00"), (
+        "the setup's own point is the run's own result"
+    )
 
     # 30.00 at 0, 21.00 at 1, then -31.00 at 5: it survives 1 and not 5.
     assert result.slippage_tolerance == SlippageTolerance(
         highest_profitable_percent=D("1"), first_unprofitable_percent=D("5")
-    )
+    ), "the figure is the highest ladder value that still profits and the next one that does not"
+    # Underlying, listing and the call, for two days.
+    assert len(data.asked) == len(set(data.asked)) == 6, "the ladder replays read each day's data once"
 
 
 def test_a_cash_refusal_that_slippage_causes_is_replayed_and_not_assumed_away() -> None:
@@ -171,40 +163,34 @@ def test_a_point_counts_the_trades_and_not_the_sessions_that_traded_when_a_stop_
     assert [trade.entry_number for trade in result.sessions[0].outcome.trades] == [0, 1]
 
 
-def test_the_ladder_replays_read_each_days_data_once() -> None:
-    written, data = _two_days_at_one_percent()
-
-    run_sessions(written, [WED, THU], data, slippage_ladder=LADDER)
-
-    assert len(data.asked) == len(set(data.asked)) == 6  # underlying, listing and the call, for two days
-
-
-def test_the_default_ladder_and_the_setups_own_value_when_it_is_not_on_it() -> None:
+def test_the_default_ladder_the_setups_own_value_off_it_and_a_ladder_sorted_with_each_value_once() -> None:
     assert (
         tuple(D(value) for value in ("0", "0.1", "0.2", "0.3", "0.5", "0.75", "1", "1.5", "2", "3", "5"))
         == DEFAULT_SLIPPAGE_LADDER
-    )
+    ), "the default ladder"
     # A session whose underlying did not trade at the entry time: skipped, so cheap, and every point is nothing.
     skipped = Day(underlying=steady("500.00", 6, 390))
     data = fake_data({WED: skipped})
 
     own_on_the_ladder = run_sessions(changed(setup(leg()), slippage_percent="0.30"), [WED], data)
     own_off_the_ladder = run_sessions(changed(setup(leg()), slippage_percent="0.4"), [WED], data)
+    unsorted = run_sessions(setup(leg()), [WED], data, slippage_ladder=(D("5"), D("1"), D("1.0"), D("0")))
 
-    assert [p.slippage_percent for p in own_on_the_ladder.slippage] == list(DEFAULT_SLIPPAGE_LADDER)
-    assert [p.slippage_percent for p in own_on_the_ladder.slippage if p.is_setups_own] == [D("0.3")]
+    assert [p.slippage_percent for p in own_on_the_ladder.slippage] == list(DEFAULT_SLIPPAGE_LADDER), (
+        "a setup's own value on the ladder leaves the default ladder as it is"
+    )
+    assert [p.slippage_percent for p in own_on_the_ladder.slippage if p.is_setups_own] == [D("0.3")], (
+        "the setup's own value on the ladder is the one point that is its own"
+    )
     assert [p.slippage_percent for p in own_off_the_ladder.slippage] == [
         D(value) for value in ("0", "0.1", "0.2", "0.3", "0.4", "0.5", "0.75", "1", "1.5", "2", "3", "5")
-    ]
-    assert [p.slippage_percent for p in own_off_the_ladder.slippage if p.is_setups_own] == [D("0.4")]
-
-
-def test_a_ladder_is_sorted_and_has_each_value_once_whatever_order_and_spelling_it_arrives_in() -> None:
-    data = fake_data({WED: Day(underlying=steady("500.00", 6, 390))})
-
-    result = run_sessions(setup(leg()), [WED], data, slippage_ladder=(D("5"), D("1"), D("1.0"), D("0")))
-
-    assert [p.slippage_percent for p in result.slippage] == [D("0"), D("1"), D("5")]
+    ], "a setup's own value off the ladder is added to it in its place"
+    assert [p.slippage_percent for p in own_off_the_ladder.slippage if p.is_setups_own] == [D("0.4")], (
+        "the setup's own value off the ladder is the one point that is its own"
+    )
+    assert [p.slippage_percent for p in unsorted.slippage] == [D("0"), D("1"), D("5")], (
+        "a ladder is sorted and has each value once whatever order and spelling it arrives in"
+    )
 
 
 @pytest.mark.parametrize("bad", [D("100"), D("-1"), D("0.00001")])
@@ -221,42 +207,71 @@ def _point(percent: str, profit: str, trades: int = 1) -> SlippagePoint:
     return SlippagePoint(D(percent), False, D(profit), trades, min(trades, 1), 1)
 
 
-def test_the_figure_stops_at_the_first_value_that_does_not_profit_even_when_a_higher_one_does() -> None:
-    points = [_point("0", "10"), _point("1", "5"), _point("2", "-1"), _point("3", "8")]
+@pytest.mark.parametrize(
+    ("points", "highest_profitable", "first_unprofitable", "nothing_traded"),
+    [
+        pytest.param(
+            (("0", "10"), ("1", "5"), ("2", "-1"), ("3", "8")),
+            D("1"),
+            D("2"),
+            False,
+            id="stops-at-the-first-value-that-does-not-profit-even-when-a-higher-one-does",
+        ),
+        pytest.param(
+            (("0", "10"), ("1", "0")), D("0"), D("1"), False, id="a-profit-of-exactly-nothing-is-not-a-profit"
+        ),
+        pytest.param(
+            (("0", "-0.01"), ("1", "50")), None, D("0"), False, id="a-run-that-loses-at-the-lowest-value-survives-none"
+        ),
+        pytest.param(
+            (("0", "3"), ("5", "1")),
+            D("5"),
+            None,
+            False,
+            id="a-run-that-profits-at-every-value-survives-the-whole-ladder-and-not-beyond-it",
+        ),
+        pytest.param(
+            (("0", "0", 0), ("1", "0", 0), ("5", "0", 0)),
+            None,
+            None,
+            True,
+            id="a-run-that-made-no-trade-at-any-value-says-so-and-is-not-a-loss-from-the-lowest-value",
+        ),
+        # Traded, and made exactly nothing at the lowest value: not a profit, and a trade was made.
+        pytest.param(
+            (("0", "0"), ("1", "-5")), None, D("0"), False, id="traded-and-made-nothing-at-the-lowest-value-is-a-trade"
+        ),
+        # Traded at one value only (the higher ones cost the trade its cash): the run did trade.
+        pytest.param((("0", "-2"), ("1", "0", 0)), None, D("0"), False, id="traded-at-one-value-only-is-a-trade"),
+        # Traded at every value and made exactly nothing at each: profit alone cannot tell it from a run with no trade.
+        pytest.param(
+            (("0", "0"), ("1", "0"), ("5", "0")),
+            None,
+            D("0"),
+            False,
+            id="traded-at-every-value-and-made-nothing-at-each-is-a-trade",
+        ),
+        pytest.param(
+            (("2", "-1"), ("0", "10"), ("1", "5")),
+            D("1"),
+            D("2"),
+            False,
+            id="points-are-read-from-the-lowest-value-up-whatever-order-they-arrive-in",
+        ),
+    ],
+)
+def test_the_figure_is_read_from_the_points_of_the_ladder(
+    points: tuple[tuple[Any, ...], ...],
+    highest_profitable: Decimal | None,
+    first_unprofitable: Decimal | None,
+    nothing_traded: bool,
+) -> None:
+    tolerance = slippage_tolerance([_point(*each) for each in points])
 
-    assert slippage_tolerance(points) == SlippageTolerance(D("1"), D("2"))
-
-
-def test_a_profit_of_exactly_nothing_is_not_a_profit() -> None:
-    assert slippage_tolerance([_point("0", "10"), _point("1", "0")]) == SlippageTolerance(D("0"), D("1"))
-
-
-def test_a_run_that_loses_at_the_lowest_value_survives_none() -> None:
-    assert slippage_tolerance([_point("0", "-0.01"), _point("1", "50")]) == SlippageTolerance(None, D("0"))
-
-
-def test_a_run_that_profits_at_every_value_survives_the_whole_ladder_and_not_beyond_it() -> None:
-    assert slippage_tolerance([_point("0", "3"), _point("5", "1")]) == SlippageTolerance(D("5"), None)
-
-
-def test_a_run_that_made_no_trade_at_any_value_says_so_and_does_not_read_as_a_loss_from_the_lowest_value() -> None:
-    nothing = [_point("0", "0", trades=0), _point("1", "0", trades=0), _point("5", "0", trades=0)]
-
-    assert slippage_tolerance(nothing) == SlippageTolerance(None, None, nothing_traded=True)
-
-
-def test_a_run_that_traded_and_broke_even_or_lost_everywhere_is_not_a_run_that_made_no_trade() -> None:
-    # Traded, and made exactly nothing at the lowest value: not a profit, and a trade was made.
-    broke_even = slippage_tolerance([_point("0", "0"), _point("1", "-5")])
-    # Traded at one value only (the higher ones cost the trade its cash): the run did trade.
-    traded_once = slippage_tolerance([_point("0", "-2"), _point("1", "0", trades=0)])
-
-    # Traded at every value and made exactly nothing at each: profit alone cannot tell this from a run with no trade.
-    flat_everywhere = slippage_tolerance([_point("0", "0"), _point("1", "0"), _point("5", "0")])
-
-    assert broke_even == SlippageTolerance(None, D("0")) and not broke_even.nothing_traded
-    assert traded_once == SlippageTolerance(None, D("0")) and not traded_once.nothing_traded
-    assert flat_everywhere == SlippageTolerance(None, D("0")) and not flat_everywhere.nothing_traded
+    assert tolerance == SlippageTolerance(highest_profitable, first_unprofitable, nothing_traded=nothing_traded), (
+        "the figure is the highest value that profits and the first that does not, or says nothing was traded"
+    )
+    assert tolerance.nothing_traded is nothing_traded, "only a run that made no trade at any value says so"
 
 
 def test_a_whole_run_that_never_traded_has_no_tolerance_to_report_and_one_that_lost_everywhere_has_a_value() -> None:
@@ -273,9 +288,3 @@ def test_a_whole_run_that_never_traded_has_no_tolerance_to_report_and_one_that_l
     # (1.90 - 2.00) x 100 = -10.00 at 0%, and a larger loss at 1%.
     assert lost.slippage_tolerance == SlippageTolerance(None, D("0"))
     assert [p.trades for p in lost.slippage] == [1, 1]
-
-
-def test_the_points_are_read_from_the_lowest_value_up_whatever_order_they_arrive_in() -> None:
-    assert slippage_tolerance([_point("2", "-1"), _point("0", "10"), _point("1", "5")]) == SlippageTolerance(
-        D("1"), D("2")
-    )

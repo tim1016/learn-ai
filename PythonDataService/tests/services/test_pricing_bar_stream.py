@@ -207,9 +207,18 @@ async def test_a_stream_that_failed_says_what_failed_until_a_bar_arrives_again(l
     assert isinstance(merely_late, PricingRefusal) and merely_late.reason_code == "PRICING_BAR_LATE"
 
 
-async def test_a_feed_that_says_it_is_disconnected_is_a_broken_feed_not_a_late_bar(ledger: SourceBarLedger) -> None:
+@pytest.mark.parametrize(
+    ("health_flag", "health_value"),
+    [
+        pytest.param("connected", False, id="a_feed_that_says_it_is_disconnected"),
+        pytest.param("stale", True, id="a_line_that_stalled_without_failing"),
+    ],
+)
+async def test_an_unhealthy_feed_is_a_broken_feed_not_a_late_bar(
+    ledger: SourceBarLedger, health_flag: str, health_value: bool
+) -> None:
     feed = _Subscriptions([])
-    feed.connected = False
+    setattr(feed, health_flag, health_value)
     async with PricingBarStream(feed, ledger, symbol="QQQ", run_id="run-1", wait_ms=20) as stream:
         refused = await stream.bar_for_entry(_T0, time_left_ms=20_000)
 
@@ -220,15 +229,6 @@ async def test_a_plan_spelt_in_lower_case_still_finds_its_bars(ledger: SourceBar
     """The feed stamps bars with the upper-cased symbol; a plan's own spelling is not normalized."""
     async with PricingBarStream(_Subscriptions([_qqq(_T0)]), ledger, symbol="qqq", run_id="run-1", wait_ms=2_000) as stream:
         assert isinstance(await stream.bar_for_entry(_T0, time_left_ms=20_000), RetainedSourceBar)
-
-
-async def test_a_line_that_stalled_without_failing_is_a_broken_feed_not_a_late_bar(ledger: SourceBarLedger) -> None:
-    feed = _Subscriptions([])
-    feed.stale = True
-    async with PricingBarStream(feed, ledger, symbol="QQQ", run_id="run-1", wait_ms=20) as stream:
-        refused = await stream.bar_for_entry(_T0, time_left_ms=20_000)
-
-    assert isinstance(refused, PricingRefusal) and refused.reason_code == "PRICING_FEED_UNHEALTHY"
 
 
 async def test_a_minute_with_no_trade_is_not_a_price_for_a_sell_either(ledger: SourceBarLedger) -> None:

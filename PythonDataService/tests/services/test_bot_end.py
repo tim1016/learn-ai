@@ -53,20 +53,17 @@ def _scheduled(end_at_ms: int, action: str = "SELL") -> RecordedEnd:
 # ── the default ──────────────────────────────────────────────────────────────
 
 
-def test_default_bot_end_is_one_minute_before_todays_close() -> None:
-    assert default_bot_end(_at(_WEDNESDAY, 10)) == BotEnd(end_at_ms=_at(_WEDNESDAY, 15, 59), end_action="SELL")
-
-
-def test_default_bot_end_on_a_half_day_is_one_minute_before_the_early_close() -> None:
-    assert default_bot_end(_at(_HALF_DAY, 10)).end_at_ms == _at(_HALF_DAY, 12, 59)
-
-
-def test_default_bot_end_after_todays_last_minute_is_the_next_sessions() -> None:
-    assert default_bot_end(_at(_WEDNESDAY, 15, 59, 30)).end_at_ms == _at(_THURSDAY, 15, 59)
-
-
-def test_default_bot_end_on_a_weekend_is_the_next_sessions() -> None:
-    assert default_bot_end(_at(_SATURDAY, 10)).end_at_ms == _at(_MONDAY, 15, 59)
+@pytest.mark.parametrize(
+    ("now_ms", "expected_end_at_ms"),
+    [
+        pytest.param(_at(_WEDNESDAY, 10), _at(_WEDNESDAY, 15, 59), id="one-minute-before-todays-close"),
+        pytest.param(_at(_HALF_DAY, 10), _at(_HALF_DAY, 12, 59), id="on-a-half-day-one-minute-before-the-early-close"),
+        pytest.param(_at(_WEDNESDAY, 15, 59, 30), _at(_THURSDAY, 15, 59), id="after-todays-last-minute-is-the-next-sessions"),
+        pytest.param(_at(_SATURDAY, 10), _at(_MONDAY, 15, 59), id="on-a-weekend-is-the-next-sessions"),
+    ],
+)
+def test_default_bot_end_is_one_minute_before_the_close(now_ms: int, expected_end_at_ms: int) -> None:
+    assert default_bot_end(now_ms) == BotEnd(end_at_ms=expected_end_at_ms, end_action="SELL")
 
 
 def test_resolve_bot_end_with_no_choice_is_the_default() -> None:
@@ -79,8 +76,9 @@ def test_resolve_bot_end_with_no_choice_is_the_default() -> None:
 # ── what is accepted ─────────────────────────────────────────────────────────
 
 
-def test_resolve_bot_end_accepts_no_end() -> None:
-    resolved = _resolve(_choose(None), now_ms=_at(_WEDNESDAY, 10))
+@pytest.mark.parametrize("use_rth", [True, False], ids=["regular-hours-bot", "bot-outside-regular-hours"])
+def test_resolve_bot_end_accepts_no_end(use_rth: bool) -> None:
+    resolved = _resolve(_choose(None), now_ms=_at(_WEDNESDAY, 10), use_rth=use_rth)
 
     assert resolved.end is None
 
@@ -121,72 +119,89 @@ def _refusal(
     return refused.value
 
 
-def test_resolve_bot_end_refuses_an_end_after_the_close() -> None:
-    refused = _refusal(_choose(_at(_WEDNESDAY, 16, 30)), now_ms=_at(_WEDNESDAY, 10))
+@pytest.mark.parametrize(
+    ("end_at_ms", "now_ms", "detail", "next_action"),
+    [
+        pytest.param(
+            _at(_WEDNESDAY, 16, 30), _at(_WEDNESDAY, 10),
+            "On Wed Sep 30 the market is open from 09:30 to 16:00 ET, so the latest end is 15:59 ET.",
+            "Choose a time from 09:30 to 15:59 ET.",
+            id="an-end-after-the-close",
+        ),
+        pytest.param(
+            _at(_WEDNESDAY, 15, 59) + 1, _at(_WEDNESDAY, 10),
+            "On Wed Sep 30 the market is open from 09:30 to 16:00 ET, so the latest end is 15:59 ET.",
+            "Choose a time from 09:30 to 15:59 ET.",
+            id="the-close-itself",
+        ),
+        pytest.param(
+            _at(_THURSDAY, 8), _at(_WEDNESDAY, 10),
+            "On Thu Oct 1 the market is open from 09:30 to 16:00 ET, so the latest end is 15:59 ET.",
+            "Choose a time from 09:30 to 15:59 ET.",
+            id="an-end-before-the-open",
+        ),
+        pytest.param(
+            _at(_HALF_DAY, 17), _at(_HALF_DAY, 9),
+            "On Fri Nov 27 the market is open from 09:30 to 13:00 ET, so the latest end is 12:59 ET.",
+            "Choose a time from 09:30 to 12:59 ET.",
+            id="an-end-after-an-early-close-that-no-full-session-would-allow",
+        ),
+    ],
+)
+def test_resolve_bot_end_refuses_an_end_outside_regular_hours(
+    end_at_ms: int, now_ms: int, detail: str, next_action: str,
+) -> None:
+    refused = _refusal(_choose(end_at_ms), now_ms=now_ms)
 
-    assert str(refused) == "The end must fall within regular hours."
-    assert refused.detail == (
-        "On Wed Sep 30 the market is open from 09:30 to 16:00 ET, so the latest end is 15:59 ET."
-    )
-    assert refused.next_action == "Choose a time from 09:30 to 15:59 ET."
-
-
-def test_resolve_bot_end_refuses_the_close_itself() -> None:
-    refused = _refusal(_choose(_at(_WEDNESDAY, 15, 59) + 1), now_ms=_at(_WEDNESDAY, 10))
-
-    assert str(refused) == "The end must fall within regular hours."
-
-
-def test_resolve_bot_end_refuses_an_end_before_the_open() -> None:
-    refused = _refusal(_choose(_at(_THURSDAY, 8)), now_ms=_at(_WEDNESDAY, 10))
-
-    assert str(refused) == "The end must fall within regular hours."
-    assert refused.detail.startswith("On Thu Oct 1 the market is open from 09:30 to 16:00 ET")
-
-
-def test_resolve_bot_end_refuses_an_end_after_an_early_close_that_no_full_session_would_allow() -> None:
-    refused = _refusal(_choose(_at(_HALF_DAY, 17)), now_ms=_at(_HALF_DAY, 9))
-
-    assert str(refused) == "The end must fall within regular hours."
-    assert refused.detail == (
-        "On Fri Nov 27 the market is open from 09:30 to 13:00 ET, so the latest end is 12:59 ET."
-    )
-
-
-def test_resolve_bot_end_refuses_a_day_the_market_is_closed() -> None:
-    refused = _refusal(_choose(_at(_SATURDAY, 12)), now_ms=_at(_WEDNESDAY, 10))
-
-    assert str(refused) == "The market is closed on Sat Oct 3."
-    assert refused.next_action == "Choose a trading day."
-
-
-def test_resolve_bot_end_refuses_an_end_already_passed() -> None:
-    refused = _refusal(_choose(_at(_WEDNESDAY, 11)), now_ms=_at(_WEDNESDAY, 12))
-
-    assert str(refused) == "That end time has already passed."
-    assert refused.next_action == "Choose a time later than now."
-
-
-def test_resolve_bot_end_refuses_a_clamped_end_already_passed() -> None:
-    refused = _refusal(_choose(_at(_HALF_DAY, 15, 59)), now_ms=_at(_HALF_DAY, 13, 30))
-
-    assert str(refused) == "That end time has already passed."
+    assert str(refused) == "The end must fall within regular hours.", "the refusal names the regular-hours rule"
+    assert refused.detail == detail, "the detail gives the session's hours and the latest end"
+    assert refused.next_action == next_action, "the next action names the times to choose from"
 
 
 @pytest.mark.parametrize(
-    "end_at_ms",
+    ("end_at_ms", "now_ms", "message", "next_action"),
     [
-        pytest.param(to_ms_utc(datetime(2263, 6, 17, 15, 0, tzinfo=_ET)), id="year-2263-past-the-calendar"),
-        pytest.param(MAX_TIMESTAMP_MS, id="the-last-admissible-instant"),
+        pytest.param(
+            _at(_SATURDAY, 12), _at(_WEDNESDAY, 10),
+            "The market is closed on Sat Oct 3.", "Choose a trading day.",
+            id="a-day-the-market-is-closed",
+        ),
+        pytest.param(
+            _at(date(2027, 1, 1), 12), _at(_WEDNESDAY, 10),
+            "The market is closed on Fri Jan 1 2027.", "Choose a trading day.",
+            id="a-day-in-another-year-names-its-year-2607-review",
+        ),
+        pytest.param(
+            _at(_WEDNESDAY, 11), _at(_WEDNESDAY, 12),
+            "That end time has already passed.", "Choose a time later than now.",
+            id="an-end-already-passed",
+        ),
+        pytest.param(
+            _at(_HALF_DAY, 15, 59), _at(_HALF_DAY, 13, 30),
+            "That end time has already passed.", "Choose a time later than now.",
+            id="a-clamped-end-already-passed",
+        ),
+        pytest.param(
+            to_ms_utc(datetime(2263, 6, 17, 15, 0, tzinfo=_ET)), _at(_WEDNESDAY, 10),
+            "The market calendar doesn't cover that date.", "Choose a date the market calendar covers.",
+            id="year-2263-past-the-calendar-never-a-500-2607-review",
+        ),
+        pytest.param(
+            MAX_TIMESTAMP_MS, _at(_WEDNESDAY, 10),
+            "The market calendar doesn't cover that date.", "Choose a date the market calendar covers.",
+            id="the-last-admissible-instant-never-a-500-2607-review",
+        ),
     ],
 )
-def test_resolve_bot_end_refuses_a_date_the_calendar_does_not_cover(end_at_ms: int) -> None:
-    """An in-contract instant past the calendar's range is refused in words, never a 500 (#2607 review)."""
-    refused = _refusal(_choose(end_at_ms), now_ms=_at(_WEDNESDAY, 10))
+def test_resolve_bot_end_refuses_a_date_or_time_the_market_cannot_take(
+    end_at_ms: int, now_ms: int, message: str, next_action: str,
+) -> None:
+    """Refused in words, never a 500: an in-contract instant past the calendar's range included (#2607 review)."""
+    refused = _refusal(_choose(end_at_ms), now_ms=now_ms)
 
-    assert str(refused) == "The market calendar doesn't cover that date."
-    assert refused.next_action == "Choose a date the market calendar covers."
-    assert refused.http_status == 400
+    assert str(refused) == message, "the refusal says what is wrong in plain words"
+    assert refused.next_action == next_action, "the next action says what to choose instead"
+    assert refused.http_status == 400, "the end is refused as a bad request"
 
 
 def test_resolve_bot_end_reports_a_bug_as_a_bug_not_as_a_date_the_calendar_does_not_cover(
@@ -205,41 +220,54 @@ def test_resolve_bot_end_reports_a_bug_as_a_bug_not_as_a_date_the_calendar_does_
     assert not isinstance(raised.value, BotEndRefused)
 
 
-def test_resolve_bot_end_names_the_year_of_a_day_in_another_year() -> None:
-    """#2607 review: a refusal about next year names its year, as ``et_when_words`` does."""
-    refused = _refusal(_choose(_at(date(2027, 1, 1), 12)), now_ms=_at(_WEDNESDAY, 10))
-
-    assert str(refused) == "The market is closed on Fri Jan 1 2027."
-
-
-@pytest.mark.parametrize("dry_run", [False, True], ids=["paper", "dry-run"])
-def test_resolve_bot_end_refuses_keep_with_no_end_in_every_mode(dry_run: bool) -> None:
-    """A bot with no end has no shares to keep at it: one answer for every mode (#2607 review)."""
-    refused = _refusal(_choose(None, "KEEP"), now_ms=_at(_WEDNESDAY, 10), dry_run=dry_run)
-
-    assert str(refused) == "A bot with no end has no shares to keep at it."
-    assert refused.next_action == "Choose an end time, or choose no end with Sell."
-
-
-def test_resolve_bot_end_refuses_keep_on_a_dry_run() -> None:
-    """A Dry Run never ends holding (owner decision 2026-09-29, #2641): KEEP is refused, never ignored."""
-    refused = _refusal(_choose(_at(_WEDNESDAY, 15, 59), "KEEP"), now_ms=_at(_WEDNESDAY, 10), dry_run=True)
-
-    assert str(refused) == "A Dry Run can't keep its shares at its end."
-    assert refused.detail == "A Dry Run never ends holding; it always sells at the last price it saw."
-    assert refused.next_action == "Choose Sell for this Dry Run."
-
-
-def test_resolve_bot_end_refuses_keep_for_an_options_bot() -> None:
-    """An Options bot's end closes its positions, so a KEEP would make its End say the opposite of what happens."""
+@pytest.mark.parametrize(
+    ("end_at_ms", "dry_run", "bot_kind", "message", "detail", "next_action"),
+    [
+        # A bot with no end has no shares to keep at it: one answer for every mode (#2607 review).
+        pytest.param(
+            None, False, "signal",
+            "A bot with no end has no shares to keep at it.",
+            "Keep says what happens to the shares at the end time, and no end time was chosen.",
+            "Choose an end time, or choose no end with Sell.",
+            id="no-end-on-a-paper-bot",
+        ),
+        pytest.param(
+            None, True, "signal",
+            "A bot with no end has no shares to keep at it.",
+            "Keep says what happens to the shares at the end time, and no end time was chosen.",
+            "Choose an end time, or choose no end with Sell.",
+            id="no-end-on-a-dry-run",
+        ),
+        # A Dry Run never ends holding (owner decision 2026-09-29, #2641): KEEP is refused, never ignored.
+        pytest.param(
+            _at(_WEDNESDAY, 15, 59), True, "signal",
+            "A Dry Run can't keep its shares at its end.",
+            "A Dry Run never ends holding; it always sells at the last price it saw.",
+            "Choose Sell for this Dry Run.",
+            id="a-dry-run-never-ends-holding-2641",
+        ),
+        # An Options bot's end closes its positions, so a KEEP would make its End say the opposite of what happens.
+        pytest.param(
+            _at(_WEDNESDAY, 15, 15), False, "options",
+            "An Options bot can't keep its positions at its end.",
+            "An Options bot's end closes every option position it holds.",
+            "Choose Sell for this Options bot.",
+            id="an-options-bot-closes-its-positions-at-its-end",
+        ),
+    ],
+)
+def test_resolve_bot_end_refuses_keep_where_there_is_nothing_to_keep(
+    end_at_ms: int | None, dry_run: bool, bot_kind: str, message: str, detail: str, next_action: str,
+) -> None:
     with pytest.raises(BotEndRefused) as refused:
         resolve_bot_end(
-            _choose(_at(_WEDNESDAY, 15, 15), "KEEP"), now_ms=_at(_WEDNESDAY, 10), dry_run=False, use_rth=True,
-            bot_kind="options",
+            _choose(end_at_ms, "KEEP"), now_ms=_at(_WEDNESDAY, 10), dry_run=dry_run, use_rth=True,
+            bot_kind=bot_kind,
         )
 
-    assert str(refused.value) == "An Options bot can't keep its positions at its end."
-    assert refused.value.next_action == "Choose Sell for this Options bot."
+    assert str(refused.value) == message, "the refusal says why KEEP cannot be taken"
+    assert refused.value.detail == detail, "the detail says what the end really does"
+    assert refused.value.next_action == next_action, "the next action says what to choose instead"
 
 
 def test_resolve_bot_end_sells_on_a_dry_run() -> None:
@@ -257,10 +285,6 @@ def test_resolve_bot_end_refuses_an_end_for_a_bot_that_trades_outside_regular_ho
 
     assert str(refused) == "This bot can't have an end."
     assert refused.next_action == "Remove the end, or deploy the bot for regular hours only."
-
-
-def test_resolve_bot_end_lets_a_bot_outside_regular_hours_have_no_end() -> None:
-    assert _resolve(_choose(None), now_ms=_at(_WEDNESDAY, 10), use_rth=False).end is None
 
 
 # ── the choice as sent ───────────────────────────────────────────────────────
@@ -332,10 +356,14 @@ def test_bot_end_view_of_a_scheduled_sale() -> None:
     assert view.editable is True
 
 
-def test_an_options_bots_end_headline_says_it_closes_and_its_operator_notice_keeps_that_shape() -> None:
+def test_bot_end_view_of_an_options_bot_closes_its_option_positions_not_shares() -> None:
     """A sold leg is bought to close, so an Options end's headline never says it sells."""
     view = bot_end_view(
         _scheduled(_at(_WEDNESDAY, 15, 15)), now_ms=_at(_WEDNESDAY, 10), dry_run=False, running=True,
+        use_rth=True, bot_kind="options",
+    )
+    dry_run_view = bot_end_view(
+        _scheduled(_at(_WEDNESDAY, 15, 15)), now_ms=_at(_WEDNESDAY, 10), dry_run=True, running=True,
         use_rth=True, bot_kind="options",
     )
     reached = bot_end_view(
@@ -343,25 +371,20 @@ def test_an_options_bots_end_headline_says_it_closes_and_its_operator_notice_kee
         use_rth=True, bot_kind="options",
     )
 
-    assert view.headline == "Ends Wed Sep 30, 15:15 ET · closes"
-    assert bot_end_view_waiting_for_operator(reached, why="not sent").headline.endswith(" · no order sent")
-    assert "closes" not in bot_end_view_waiting_for_operator(reached, why="not sent").headline
-
-
-def test_bot_end_view_of_an_options_bot_closes_its_option_positions_not_shares() -> None:
-    def explanation(*, dry_run: bool) -> str:
-        return bot_end_view(
-            _scheduled(_at(_WEDNESDAY, 15, 15)), now_ms=_at(_WEDNESDAY, 10), dry_run=dry_run, running=True,
-            use_rth=True, bot_kind="options",
-        ).explanation
-
-    assert explanation(dry_run=False) == (
+    assert view.headline == "Ends Wed Sep 30, 15:15 ET · closes", "an Options end's headline says it closes"
+    assert bot_end_view_waiting_for_operator(reached, why="not sent").headline.endswith(" · no order sent"), (
+        "its operator notice keeps that shape"
+    )
+    assert "closes" not in bot_end_view_waiting_for_operator(reached, why="not sent").headline, (
+        "the operator notice never says it closes when no order was sent"
+    )
+    assert view.explanation == (
         "At Wed Sep 30, 15:15 ET the Clerk stops the bot, cancels its working orders and closes its "
         "option positions at market."
-    )
-    assert explanation(dry_run=True) == (
+    ), "a live Options end closes its option positions, not shares"
+    assert dry_run_view.explanation == (
         "At Wed Sep 30, 15:15 ET the bot stops, and its simulation closes what it holds at the last price it saw."
-    )
+    ), "a Dry Run Options end closes what it holds at the last price it saw"
 
 
 def test_bot_end_view_of_a_dry_run_names_the_last_price() -> None:
@@ -384,25 +407,29 @@ def test_bot_end_view_of_a_bot_that_died_before_its_end_says_the_end_still_stand
     assert view.explanation.startswith("The bot is not running, but its end still stands. At Wed Sep 30, 15:59 ET")
 
 
-def test_bot_end_view_of_no_end() -> None:
-    view = bot_end_view(None, now_ms=_at(_WEDNESDAY, 10), dry_run=False, running=True, use_rth=True)
+@pytest.mark.parametrize(
+    ("running", "headline", "explanation", "editable"),
+    [
+        pytest.param(
+            True, "No end · runs until you stop it", "This bot has no end time. It runs until you stop it.", True,
+            id="running-bot",
+        ),
+        # The owner's Stop cancels a pending end: it keeps the shares and nothing is sold at the end time.
+        pytest.param(
+            False, "No end scheduled",
+            "This bot is stopped, so it has no end: a Stop cancels any end, and nothing is sold at it.", False,
+            id="stopped-bot-says-its-stop-cancelled-any-end",
+        ),
+    ],
+)
+def test_bot_end_view_of_no_end(running: bool, headline: str, explanation: str, editable: bool) -> None:
+    view = bot_end_view(None, now_ms=_at(_WEDNESDAY, 10), dry_run=False, running=running, use_rth=True)
 
-    assert view.status == "no_end"
-    assert view.end_at_ms is None
-    assert view.headline == "No end · runs until you stop it"
-    assert view.explanation == "This bot has no end time. It runs until you stop it."
-
-
-def test_bot_end_view_of_a_stopped_bot_says_its_stop_cancelled_any_end() -> None:
-    """The owner's Stop cancels a pending end: it keeps the shares and nothing is sold at the end time."""
-    view = bot_end_view(None, now_ms=_at(_WEDNESDAY, 10), dry_run=False, running=False, use_rth=True)
-
-    assert view.status == "no_end"
-    assert view.headline == "No end scheduled"
-    assert view.explanation == (
-        "This bot is stopped, so it has no end: a Stop cancels any end, and nothing is sold at it."
-    )
-    assert view.editable is False
+    assert view.status == "no_end", "the status is no_end"
+    assert view.end_at_ms is None, "no end time"
+    assert view.headline == headline, "the headline says whether the bot runs until stopped"
+    assert view.explanation == explanation, "the explanation says why there is no end"
+    assert view.editable is editable, "a running bot's end may be added; a stopped bot's may not"
 
 
 def test_bot_end_view_once_the_end_has_come_says_what_is_pending_not_now() -> None:

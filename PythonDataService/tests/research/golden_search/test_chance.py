@@ -73,27 +73,25 @@ def test_session_series_returns_are_the_engines_daily_returns() -> None:
     assert np.allclose(series.returns, statistics._daily_returns(equity, initial_cash=CAPITAL), atol=1e-15, rtol=0.0)
 
 
-def test_path_sharpe_is_the_engines_sharpe() -> None:
+def test_path_sharpe_is_the_engines_sharpe_and_undefined_when_every_return_is_equal() -> None:
     returns = np.array(statistics._daily_returns(_equity(60, seed=2), initial_cash=CAPITAL))
     engine = statistics._sharpe(list(returns), statistics.TRADING_DAYS_PER_YEAR)
-    assert engine is not None
+    assert engine is not None, "the engine reports a Sharpe for the series"
     # numpy sums pairwise and the engine sums in order; the two differ in the last bits only.
-    assert np.isclose(path_sharpe(returns[None, :])[0], engine, atol=1e-12, rtol=0.0)
+    assert np.isclose(path_sharpe(returns[None, :])[0], engine, atol=1e-12, rtol=0.0), "the path Sharpe is the engine's Sharpe"
+    assert np.isnan(path_sharpe(np.zeros((1, 30)))[0]), "the Sharpe is undefined when every return is zero"
+    assert np.isnan(path_sharpe(np.full((1, 30), 0.001))[0]), "the Sharpe is undefined when every return is the same gain"
+    assert np.isnan(path_sharpe(np.array([[0.01]]))[0]), "the Sharpe is undefined for a single return"
 
 
-def test_path_sharpe_is_undefined_when_every_return_is_equal() -> None:
-    assert np.isnan(path_sharpe(np.zeros((1, 30)))[0])
-    assert np.isnan(path_sharpe(np.full((1, 30), 0.001))[0])
-    assert np.isnan(path_sharpe(np.array([[0.01]]))[0])
-
-
-def test_path_worst_fall_is_the_engines_drawdown_of_the_session_closes() -> None:
+def test_path_worst_fall_is_the_engines_drawdown_of_the_session_closes_and_counts_the_starting_capital() -> None:
     equity = _equity(60, seed=7)
     series = session_series(_detail(equity))
-    assert not isinstance(series, str)
+    assert not isinstance(series, str), "the run reads as a session series"
     engine = statistics._max_drawdown([CAPITAL, *equity])
     # Ours compounds the returns back into a curve; the engine reads the curve itself.
-    assert np.isclose(path_worst_fall(series.returns[None, :])[0], engine, atol=1e-12, rtol=0.0)
+    assert np.isclose(path_worst_fall(series.returns[None, :])[0], engine, atol=1e-12, rtol=0.0), "the worst fall is the engine's drawdown of the session closes"
+    assert np.isclose(path_worst_fall(np.array([[-0.10, 0.05]]))[0], 0.10, atol=1e-12, rtol=0.0), "a fall from the starting capital counts"
 
 
 def test_a_runs_own_sessions_in_order_give_back_its_net_result() -> None:
@@ -111,10 +109,6 @@ def test_path_statistics_on_a_hand_computed_path() -> None:
     assert np.isclose(path_worst_fall(path)[0], 0.2, atol=1e-12, rtol=0.0)
     assert np.isclose(path_objective(path, "total_return_pct", CAPITAL)[0], -0.076, atol=1e-12, rtol=0.0)
     assert np.isclose(path_objective(path, "net_profit", CAPITAL)[0], -7_600.0, atol=1e-7, rtol=0.0)
-
-
-def test_path_worst_fall_counts_a_fall_from_the_starting_capital() -> None:
-    assert np.isclose(path_worst_fall(np.array([[-0.10, 0.05]]))[0], 0.10, atol=1e-12, rtol=0.0)
 
 
 @pytest.mark.parametrize("objective", ["sharpe_ratio", "total_return_pct", "net_profit"])
@@ -154,12 +148,15 @@ def test_session_series_cannot_be_altered_once_read() -> None:
         series.exits[3] += 1
 
 
-def test_session_series_needs_a_trade_list_and_enough_sessions() -> None:
+def test_session_series_needs_a_trade_list_enough_sessions_and_every_exit_inside_its_sessions() -> None:
     # Every run keeps a daily curve, but only a detail payload says when each trade exited.
-    assert session_series(None) == NO_TRADE_LIST
+    assert session_series(None) == NO_TRADE_LIST, "a run without a detail payload has no trade list"
     short = session_series(_detail(_equity(MIN_SESSIONS - 1, seed=4)))
-    assert isinstance(short, str) and str(MIN_SESSIONS - 1) in short and str(MIN_SESSIONS) in short
-    assert not isinstance(session_series(_detail(_equity(MIN_SESSIONS, seed=4))), str)
+    assert isinstance(short, str) and str(MIN_SESSIONS - 1) in short and str(MIN_SESSIONS) in short, "a run one session short says how many it has and needs"
+    assert not isinstance(session_series(_detail(_equity(MIN_SESSIONS, seed=4))), str), "a run with exactly the minimum sessions is readable"
+    unplaced = _detail(_equity(30, seed=10))
+    unplaced["trades"] = [{"exit_ms": _closes(31)[30]}]
+    assert session_series(unplaced) == UNPLACED_EXIT, "a trade that exited outside its sessions is refused"
 
 
 @pytest.mark.parametrize("capital", [0.0, -1.0, math.nan, math.inf])
@@ -177,12 +174,6 @@ def test_session_series_refuses_equity_it_cannot_take_returns_of(position: int, 
 @pytest.mark.parametrize(("first", "second"), [(5, 6), (5, 9), (9, 5)])
 def test_session_series_refuses_sessions_repeated_or_out_of_order(first: int, second: int) -> None:
     assert session_series(_reordered(first, second)) == OUT_OF_ORDER
-
-
-def test_session_series_refuses_a_trade_that_exited_outside_its_sessions() -> None:
-    detail = _detail(_equity(30, seed=10))
-    detail["trades"] = [{"exit_ms": _closes(31)[30]}]
-    assert session_series(detail) == UNPLACED_EXIT
 
 
 def test_seed_for_is_the_first_eight_bytes_of_the_canonical_hash() -> None:

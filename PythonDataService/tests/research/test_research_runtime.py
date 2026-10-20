@@ -534,20 +534,6 @@ def test_the_envelope_caps_the_writer_loop_and_refuses_an_oversized_configuratio
 GRID_PAYLOAD = {"job_id": "job-grid-1", "strategy_key": "sma_crossover", "symbol": "SPY", "start_ms": 1, "end_ms": 2}
 
 
-async def test_a_forwarded_grid_acceptance_passes_through(research_mode, monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.services.research_runtime_client import forward_grid_search_job
-
-    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "sec")
-    with respx.mock(base_url="http://127.0.0.1:8000") as mock:
-        route = mock.post("/api/jobs-internal/grid-search").mock(
-            return_value=httpx.Response(202, json={"job_id": "job-grid-1", "search_id": "search-runtime", "status": "queued"})
-        )
-        answer = await forward_grid_search_job(dict(GRID_PAYLOAD))
-    assert answer == {"job_id": "job-grid-1", "search_id": "search-runtime", "status": "queued"}
-    sent = route.calls.last.request
-    assert sent.headers["X-Data-Plane-Control-Secret"] == "sec"
-
-
 async def test_a_grid_timeout_after_acceptance_joins_the_original_dispatch(
     research_mode, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -564,25 +550,6 @@ async def test_a_grid_timeout_after_acceptance_joins_the_original_dispatch(
         mock.post("/api/jobs-internal/grid-search").mock(side_effect=httpx.ConnectTimeout("boom"))
         answer = await forward_grid_search_job(dict(GRID_PAYLOAD))
     assert answer == {"job_id": GRID_PAYLOAD["job_id"], "search_id": "search-1", "status": "queued"}
-
-
-async def test_a_grid_timeout_without_a_live_binding_is_a_refusal_not_silence(
-    research_mode, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from fastapi import HTTPException
-
-    from app.services.research_runtime_client import forward_grid_search_job
-
-    async def _unbound(job_id):
-        return None
-
-    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "sec")
-    monkeypatch.setattr(client, "_grid_job_binding", _unbound)
-    with respx.mock(base_url="http://127.0.0.1:8000") as mock:
-        mock.post("/api/jobs-internal/grid-search").mock(side_effect=httpx.ConnectTimeout("boom"))
-        with pytest.raises(HTTPException) as thrown:
-            await forward_grid_search_job(dict(GRID_PAYLOAD))
-    assert thrown.value.status_code == 502 and "did not accept" in str(thrown.value.detail)
 
 
 async def test_grid_forwarding_mode_never_prepares_or_runs_a_local_thread(
@@ -642,19 +609,6 @@ WF_PAYLOAD = {
 }
 
 
-async def test_a_forwarded_walk_forward_acceptance_passes_through(research_mode, monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.services.research_runtime_client import forward_walk_forward_study_job
-
-    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "sec")
-    with respx.mock(base_url="http://127.0.0.1:8000") as mock:
-        route = mock.post("/api/jobs-internal/walk-forward-study").mock(
-            return_value=httpx.Response(202, json={"job_id": "job-wf-1", "study_id": "study-runtime", "status": "queued"})
-        )
-        answer = await forward_walk_forward_study_job(dict(WF_PAYLOAD))
-    assert answer == {"job_id": "job-wf-1", "study_id": "study-runtime", "status": "queued"}
-    assert route.calls.last.request.headers["X-Data-Plane-Control-Secret"] == "sec"
-
-
 async def test_a_walk_forward_timeout_after_acceptance_joins_the_original_dispatch(
     research_mode, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -671,25 +625,6 @@ async def test_a_walk_forward_timeout_after_acceptance_joins_the_original_dispat
         mock.post("/api/jobs-internal/walk-forward-study").mock(side_effect=httpx.ConnectTimeout("boom"))
         answer = await forward_walk_forward_study_job(dict(WF_PAYLOAD))
     assert answer == {"job_id": WF_PAYLOAD["job_id"], "study_id": "study-1", "status": "queued"}
-
-
-async def test_a_walk_forward_timeout_without_a_live_binding_is_a_refusal(
-    research_mode, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from fastapi import HTTPException
-
-    from app.services.research_runtime_client import forward_walk_forward_study_job
-
-    async def _unbound(job_id):
-        return None
-
-    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "sec")
-    monkeypatch.setattr(client, "_walk_forward_job_binding", _unbound)
-    with respx.mock(base_url="http://127.0.0.1:8000") as mock:
-        mock.post("/api/jobs-internal/walk-forward-study").mock(side_effect=httpx.ConnectTimeout("boom"))
-        with pytest.raises(HTTPException) as thrown:
-            await forward_walk_forward_study_job(dict(WF_PAYLOAD))
-    assert thrown.value.status_code == 502 and "did not accept" in str(thrown.value.detail)
 
 
 async def test_walk_forward_forwarding_mode_never_prepares_or_runs_a_local_thread(
@@ -720,13 +655,6 @@ async def test_walk_forward_forwarding_mode_never_prepares_or_runs_a_local_threa
     assert response.status_code == 202 and response.json()["study_id"] == "study-runtime"
 
 
-def test_the_runtime_mounts_the_walk_forward_dispatch_surface() -> None:
-    from app.research_runtime import app as runtime_app
-
-    paths = {getattr(route, "path", None) for route in runtime_app.routes}
-    assert "/api/jobs-internal/walk-forward-study" in paths
-
-
 # ── The recency dispatch joins the boundary (#3051) ───────────────────────
 
 
@@ -737,19 +665,6 @@ RECENCY_PAYLOAD = {
     "window_start_ms": 1735689600000,
     "window_end_ms": 1738368000000,
 }
-
-
-async def test_a_forwarded_recency_acceptance_passes_through(research_mode, monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.services.research_runtime_client import forward_recency_chart_job
-
-    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "sec")
-    with respx.mock(base_url="http://127.0.0.1:8000") as mock:
-        route = mock.post("/api/jobs-internal/recency-chart").mock(
-            return_value=httpx.Response(202, json={"job_id": "job-recency-1", "launch_id": "launch-runtime", "status": "queued"})
-        )
-        answer = await forward_recency_chart_job(dict(RECENCY_PAYLOAD))
-    assert answer == {"job_id": "job-recency-1", "launch_id": "launch-runtime", "status": "queued"}
-    assert route.calls.last.request.headers["X-Data-Plane-Control-Secret"] == "sec"
 
 
 async def test_a_recency_timeout_after_acceptance_joins_the_original_dispatch(
@@ -768,23 +683,6 @@ async def test_a_recency_timeout_after_acceptance_joins_the_original_dispatch(
         mock.post("/api/jobs-internal/recency-chart").mock(side_effect=httpx.ConnectTimeout("boom"))
         answer = await forward_recency_chart_job(dict(RECENCY_PAYLOAD))
     assert answer == {"job_id": RECENCY_PAYLOAD["job_id"], "launch_id": "launch-1", "status": "queued"}
-
-
-async def test_a_recency_timeout_without_a_live_binding_is_a_refusal(research_mode, monkeypatch: pytest.MonkeyPatch) -> None:
-    from fastapi import HTTPException
-
-    from app.services.research_runtime_client import forward_recency_chart_job
-
-    async def _unbound(payload):
-        return None
-
-    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "sec")
-    monkeypatch.setattr(client, "_recency_job_binding", _unbound)
-    with respx.mock(base_url="http://127.0.0.1:8000") as mock:
-        mock.post("/api/jobs-internal/recency-chart").mock(side_effect=httpx.ConnectTimeout("boom"))
-        with pytest.raises(HTTPException) as thrown:
-            await forward_recency_chart_job(dict(RECENCY_PAYLOAD))
-    assert thrown.value.status_code == 502 and "did not accept" in str(thrown.value.detail)
 
 
 async def test_recency_forwarding_mode_never_creates_or_runs_a_local_thread(
@@ -814,8 +712,100 @@ async def test_recency_forwarding_mode_never_creates_or_runs_a_local_thread(
     assert response.status_code == 202 and response.json()["launch_id"] == "launch-runtime"
 
 
-def test_the_runtime_mounts_the_recency_dispatch_surface() -> None:
+# ── The grid, walk-forward and recency forwarding answers (#3049, #3050, #3051) ──
+
+
+@pytest.mark.parametrize(
+    ("forward_name", "route_path", "payload", "accepted"),
+    [
+        pytest.param(
+            "forward_grid_search_job",
+            "/api/jobs-internal/grid-search",
+            GRID_PAYLOAD,
+            {"job_id": "job-grid-1", "search_id": "search-runtime", "status": "queued"},
+            id="forwarded_grid_acceptance_passes_through",
+        ),
+        pytest.param(
+            "forward_walk_forward_study_job",
+            "/api/jobs-internal/walk-forward-study",
+            WF_PAYLOAD,
+            {"job_id": "job-wf-1", "study_id": "study-runtime", "status": "queued"},
+            id="forwarded_walk_forward_acceptance_passes_through",
+        ),
+        pytest.param(
+            "forward_recency_chart_job",
+            "/api/jobs-internal/recency-chart",
+            RECENCY_PAYLOAD,
+            {"job_id": "job-recency-1", "launch_id": "launch-runtime", "status": "queued"},
+            id="forwarded_recency_acceptance_passes_through",
+        ),
+    ],
+)
+async def test_a_forwarded_acceptance_passes_through_for_each_job_kind(
+    research_mode, monkeypatch: pytest.MonkeyPatch, forward_name, route_path, payload, accepted
+) -> None:
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "sec")
+    with respx.mock(base_url="http://127.0.0.1:8000") as mock:
+        route = mock.post(route_path).mock(return_value=httpx.Response(202, json=accepted))
+        answer = await getattr(client, forward_name)(dict(payload))
+    assert answer == accepted, "the runtime's acceptance passes through unchanged"
+    sent = route.calls.last.request
+    assert sent.headers["X-Data-Plane-Control-Secret"] == "sec", "the authenticated internal boundary"
+
+
+@pytest.mark.parametrize(
+    ("forward_name", "binding_name", "route_path", "payload"),
+    [
+        pytest.param(
+            "forward_grid_search_job",
+            "_grid_job_binding",
+            "/api/jobs-internal/grid-search",
+            GRID_PAYLOAD,
+            id="grid_timeout_without_a_live_binding_is_a_refusal_not_silence",
+        ),
+        pytest.param(
+            "forward_walk_forward_study_job",
+            "_walk_forward_job_binding",
+            "/api/jobs-internal/walk-forward-study",
+            WF_PAYLOAD,
+            id="walk_forward_timeout_without_a_live_binding_is_a_refusal",
+        ),
+        pytest.param(
+            "forward_recency_chart_job",
+            "_recency_job_binding",
+            "/api/jobs-internal/recency-chart",
+            RECENCY_PAYLOAD,
+            id="recency_timeout_without_a_live_binding_is_a_refusal",
+        ),
+    ],
+)
+async def test_a_timeout_without_a_live_binding_is_a_refusal_for_each_job_kind(
+    research_mode, monkeypatch: pytest.MonkeyPatch, forward_name, binding_name, route_path, payload
+) -> None:
+    from fastapi import HTTPException
+
+    async def _unbound(key):
+        return None
+
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "sec")
+    monkeypatch.setattr(client, binding_name, _unbound)
+    with respx.mock(base_url="http://127.0.0.1:8000") as mock:
+        mock.post(route_path).mock(side_effect=httpx.ConnectTimeout("boom"))
+        with pytest.raises(HTTPException) as thrown:
+            await getattr(client, forward_name)(dict(payload))
+    assert thrown.value.status_code == 502 and "did not accept" in str(thrown.value.detail), (
+        "a transport timeout with no live binding is refused, never read as acceptance"
+    )
+
+
+@pytest.mark.parametrize(
+    "route_path",
+    ["/api/jobs-internal/walk-forward-study", "/api/jobs-internal/recency-chart"],
+    ids=["walk_forward_dispatch_surface", "recency_dispatch_surface"],
+)
+def test_the_runtime_mounts_the_dispatch_surface(route_path: str) -> None:
+    """The runtime's boundary carries the walk-forward (#3050) and recency (#3051) dispatch routes."""
     from app.research_runtime import app as runtime_app
 
     paths = {getattr(route, "path", None) for route in runtime_app.routes}
-    assert "/api/jobs-internal/recency-chart" in paths
+    assert route_path in paths, "the runtime mounts the dispatch route"

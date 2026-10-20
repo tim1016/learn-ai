@@ -162,46 +162,54 @@ def _run(
 # ---------------------------------------------------------------------------
 # Core acceptance gate.
 # ---------------------------------------------------------------------------
-def test_changing_data_root_revision_changes_data_snapshot_id(fake_data_factory):
-    spec = _build_test_spec()
-    ledger_a, _ = _run(spec, fake_data_factory, data_root_revision="rev-1")
-    ledger_b, _ = _run(spec, fake_data_factory, data_root_revision="rev-2")
+def test_data_snapshot_id_changes_with_the_data_root_revision_and_not_with_the_fill_mode(fake_data_factory):
+    """The data root revision moves the data snapshot id; the fill mode does not.
 
-    assert ledger_a.strategy_spec_hash == ledger_b.strategy_spec_hash
-    assert ledger_a.data_snapshot_id != ledger_b.data_snapshot_id
-
-
-def test_changing_fill_mode_changes_ledger_but_data_snapshot_stable(fake_data_factory):
-    """Fill mode is part of run identity but not data identity.
-
+    Fill mode is part of run identity but not data identity.
     Two runs with the same spec and same data window but different fill
     modes have different ``result_hash`` (different fill timing → different
     trade prices) but identical ``data_snapshot_id`` (same input bars).
     """
     spec = _build_test_spec()
+    ledger_a, _ = _run(spec, fake_data_factory, data_root_revision="rev-1")
+    ledger_b, _ = _run(spec, fake_data_factory, data_root_revision="rev-2")
+
+    assert ledger_a.strategy_spec_hash == ledger_b.strategy_spec_hash, "data root revision: spec hash is unchanged"
+    assert ledger_a.data_snapshot_id != ledger_b.data_snapshot_id, (
+        "changing the data root revision changes the data snapshot id"
+    )
+
     ledger_a, _ = _run(spec, fake_data_factory, fill_mode="signal_bar_close")
     ledger_b, _ = _run(spec, fake_data_factory, fill_mode="next_bar_open")
 
-    assert ledger_a.strategy_spec_hash == ledger_b.strategy_spec_hash
-    assert ledger_a.data_snapshot_id == ledger_b.data_snapshot_id
-    assert ledger_a.fill_mode != ledger_b.fill_mode
+    assert ledger_a.strategy_spec_hash == ledger_b.strategy_spec_hash, "fill mode: spec hash is unchanged"
+    assert ledger_a.data_snapshot_id == ledger_b.data_snapshot_id, "fill mode: data snapshot id is stable"
+    assert ledger_a.fill_mode != ledger_b.fill_mode, "fill mode: the ledger records the changed fill mode"
 
 
-def test_fill_mode_normalization_accepts_hyphen_and_case_variants(fake_data_factory):
+@pytest.mark.parametrize(
+    ("canonical_mode", "spelling"),
+    [
+        pytest.param("signal_bar_close", "SIGNAL-BAR-CLOSE", id="signal-bar-close-hyphen-upper"),
+        pytest.param("signal_bar_close", "Signal_Bar_Close", id="signal-bar-close-underscore-mixed-case"),
+        pytest.param("next_session_open", "NEXT-SESSION-OPEN", id="next-session-open-hyphen-upper"),
+    ],
+)
+def test_fill_mode_spellings_normalize_to_one_ledger_identity(fake_data_factory, canonical_mode: str, spelling: str):
     """The router admits ``"SIGNAL-BAR-CLOSE"``; the runner stores the
     normalized form and treats every variant as the same run identity.
     """
     spec = _build_test_spec()
-    canonical, _ = _run(spec, fake_data_factory, fill_mode="signal_bar_close")
-    hyphen, _ = _run(spec, fake_data_factory, fill_mode="SIGNAL-BAR-CLOSE")
-    upper_underscore, _ = _run(spec, fake_data_factory, fill_mode="Signal_Bar_Close")
+    canonical, _ = _run(spec, fake_data_factory, fill_mode=canonical_mode)
+    variant, _ = _run(spec, fake_data_factory, fill_mode=spelling)
 
-    # All three normalize to the same canonical fill_mode in the ledger.
-    assert canonical.fill_mode == "signal_bar_close"
-    assert hyphen.fill_mode == "signal_bar_close"
-    assert upper_underscore.fill_mode == "signal_bar_close"
+    assert canonical.status == "completed", "the canonical spelling completes"
+    # Every spelling must produce the same canonical form so the runs
+    # ledger-identify identically (R5 hash-identity invariant).
+    assert canonical.fill_mode == canonical_mode, "the canonical spelling is stored as is"
+    assert variant.fill_mode == canonical_mode, "the variant normalizes to the canonical fill_mode in the ledger"
     # And produce identical content hashes.
-    assert canonical.result_hash == hyphen.result_hash == upper_underscore.result_hash
+    assert canonical.result_hash == variant.result_hash, "the variant produces the canonical content hash"
 
 
 def test_slippage_per_share_actually_changes_fills(fake_data_factory):
@@ -245,25 +253,49 @@ def test_slippage_per_share_actually_changes_fills(fake_data_factory):
 # ---------------------------------------------------------------------------
 # Result shape.
 # ---------------------------------------------------------------------------
-def test_result_has_equity_curve_and_drawdown(fake_data_factory):
+def test_a_normal_run_reports_its_curves_metrics_and_bars_consumed(fake_data_factory):
     spec = _build_test_spec()
     ledger, result = _run(spec, fake_data_factory)
 
-    assert ledger.status == "completed"
-    assert len(result.equity_curve) > 0
-    assert len(result.drawdown_curve) == len(result.equity_curve)
+    assert ledger.status == "completed", "equity curve: the run completes"
+    assert len(result.equity_curve) > 0, "equity curve is not empty"
+    assert len(result.drawdown_curve) == len(result.equity_curve), "drawdown curve is as long as the equity curve"
 
     # Equity curve timestamps are monotonically increasing int64 ms UTC.
     timestamps = [p.timestamp_ms for p in result.equity_curve]
-    assert timestamps == sorted(timestamps)
-    assert all(isinstance(t, int) for t in timestamps)
+    assert timestamps == sorted(timestamps), "equity curve timestamps are increasing"
+    assert all(isinstance(t, int) for t in timestamps), "equity curve timestamps are ints"
 
     # Drawdown is in [0, 1].
     for d in result.drawdown_curve:
-        assert 0.0 <= d.drawdown_pct <= 1.0
+        assert 0.0 <= d.drawdown_pct <= 1.0, "drawdown is in [0, 1]"
 
     # Initial equity matches the request.
-    assert result.initial_cash == 100_000.0
+    assert result.initial_cash == 100_000.0, "initial equity matches the request"
+
+    metrics = result.metrics
+
+    # Counts agree with the trade list.
+    assert metrics.total_trades == len(result.trades), "metrics total trades agree with the trade list"
+    assert metrics.winning_trades == sum(1 for t in result.trades if t.result == "WIN"), (
+        "metrics winning trades agree with the trade list"
+    )
+    assert metrics.losing_trades == sum(1 for t in result.trades if t.result == "LOSS"), (
+        "metrics losing trades agree with the trade list"
+    )
+
+    # win_rate is consistent with counts when there are trades.
+    if metrics.total_trades > 0:
+        expected = metrics.winning_trades / metrics.total_trades
+        assert metrics.win_rate is not None, "metrics win_rate is set when there are trades"
+        assert abs(metrics.win_rate - expected) < 1e-12, "metrics win_rate is consistent with the counts"
+
+    # The synthetic fixture builds 2,000 bars; the runner filters by the
+    # spec's date window but the FakeDataReader yields everything inside
+    # [2024-01-02, 2024-12-31] (which covers the whole list).
+    assert result.bars_consumed > 0, "the result reports the engine-input bars it consumed"
+    assert isinstance(result.bars_consumed, int), "bars_consumed is an int"
+    assert ledger.status == "completed", "a run that consumed bars completes"
 
 
 def test_result_trades_have_bars_held(fake_data_factory):
@@ -283,23 +315,6 @@ def test_result_trades_have_bars_held(fake_data_factory):
     for trade in result.trades:
         assert trade.bars_held > 0
         assert isinstance(trade.bars_held, int)
-
-
-def test_metrics_match_summarize_output(fake_data_factory):
-    spec = _build_test_spec()
-    _, result = _run(spec, fake_data_factory)
-    metrics = result.metrics
-
-    # Counts agree with the trade list.
-    assert metrics.total_trades == len(result.trades)
-    assert metrics.winning_trades == sum(1 for t in result.trades if t.result == "WIN")
-    assert metrics.losing_trades == sum(1 for t in result.trades if t.result == "LOSS")
-
-    # win_rate is consistent with counts when there are trades.
-    if metrics.total_trades > 0:
-        expected = metrics.winning_trades / metrics.total_trades
-        assert metrics.win_rate is not None
-        assert abs(metrics.win_rate - expected) < 1e-12
 
 
 def test_exposure_uses_consolidated_bar_resolution():
@@ -335,16 +350,15 @@ def test_exposure_uses_consolidated_bar_resolution():
 # ---------------------------------------------------------------------------
 # Failure path.
 # ---------------------------------------------------------------------------
-def test_failed_data_source_produces_failed_ledger():
-    """When the data factory raises, the ledger is recorded as failed
-    and result-hash columns are still populated (so storage can be
-    persisted uniformly without a special "no result" branch).
-    """
+def test_a_data_source_that_raises_or_yields_no_bars_fails_the_ledger():
+    spec = _build_test_spec()
 
+    # When the data factory raises, the ledger is recorded as failed and
+    # result-hash columns are still populated (so storage can be persisted
+    # uniformly without a special "no result" branch).
     def broken_factory(symbol, start, end):
         raise RuntimeError("synthetic failure")
 
-    spec = _build_test_spec()
     ledger, result = run_strategy_spec(
         RunRequest(
             spec=spec,
@@ -355,15 +369,39 @@ def test_failed_data_source_produces_failed_ledger():
         data_root_revision="test",
     )
 
-    assert ledger.status == "failed"
-    assert ledger.failure_reason is not None
-    assert "synthetic failure" in ledger.failure_reason
-    assert ledger.result_hash is not None
-    assert ledger.trade_log_hash is not None
-    assert ledger.metrics_hash is not None
-    assert result.trades == []
-    assert result.metrics.total_trades == 0
-    assert result.warnings == [ledger.failure_reason]
+    assert ledger.status == "failed", "a raising data source: ledger status is failed"
+    assert ledger.failure_reason is not None, "a raising data source: failure reason is recorded"
+    assert "synthetic failure" in ledger.failure_reason, "a raising data source: reason carries the error"
+    assert ledger.result_hash is not None, "a raising data source: result hash is still populated"
+    assert ledger.trade_log_hash is not None, "a raising data source: trade log hash is still populated"
+    assert ledger.metrics_hash is not None, "a raising data source: metrics hash is still populated"
+    assert result.trades == [], "a raising data source: no trades"
+    assert result.metrics.total_trades == 0, "a raising data source: zero total trades"
+    assert result.warnings == [ledger.failure_reason], "a raising data source: the warning is the failure reason"
+
+    # An empty data reader fails the run instead of completing it with
+    # zero trades and the starting cash — a result indistinguishable from a
+    # strategy that simply did not fire (#2445). The reason is the one Spec
+    # and Strategy Lab give for the same run.
+    def empty_factory(symbol: str, start: date, end: date):
+        return FakeDataReader(bars=[])
+
+    ledger, result = run_strategy_spec(
+        RunRequest(
+            spec=spec,
+            start_ms=run_date_to_ms(date(2024, 1, 2)),
+            end_ms=run_date_to_ms(date(2024, 12, 31)),
+        ),
+        data_source_factory=empty_factory,
+        data_root_revision="test-revision-1",
+    )
+
+    assert ledger.status == "failed", "#2445 an empty data source: ledger status is failed"
+    assert ledger.failure_reason == "missing data: backtest evaluated zero bars for the requested window", (
+        "#2445 an empty data source: reason says zero bars were evaluated"
+    )
+    assert result.bars_consumed == 0, "#2445 an empty data source: no bars consumed"
+    assert result.trades == [], "#2445 an empty data source: no trades"
 
 
 @pytest.mark.usefixtures("seeded_lake_catalog")
@@ -452,18 +490,6 @@ def test_parent_run_id_round_trips(fake_data_factory):
 # ---------------------------------------------------------------------------
 # The fill modes beyond the two the router first offered.
 # ---------------------------------------------------------------------------
-def test_next_session_open_spellings_share_one_ledger_identity(fake_data_factory) -> None:
-    # Every spelling must produce the same canonical form so the runs
-    # ledger-identify identically (R5 hash-identity invariant).
-    spec = _build_test_spec()
-    canonical, _ = _run(spec, fake_data_factory, fill_mode="next_session_open")
-    hyphen, _ = _run(spec, fake_data_factory, fill_mode="NEXT-SESSION-OPEN")
-
-    assert canonical.status == "completed"
-    assert canonical.fill_mode == hyphen.fill_mode == "next_session_open"
-    assert canonical.result_hash == hyphen.result_hash
-
-
 def test_decision_minute_open_fills_at_the_open_of_the_minute_the_bucket_is_emitted_on(fake_data_factory) -> None:
     """The runner runs the mode and records it (#2599)."""
     spec = _build_test_spec()
@@ -493,49 +519,6 @@ def test_an_unknown_fill_mode_is_refused_naming_every_mode_the_runner_runs(fake_
 # ---------------------------------------------------------------------------
 # bars_consumed surfacing (silent-failure signal).
 # ---------------------------------------------------------------------------
-def test_result_reports_bars_consumed_on_normal_run(fake_data_factory):
-    """The runner must populate ``bars_consumed`` with the engine-input
-    bar count so callers can distinguish "no data in window" from
-    "strategy didn't fire on the data we saw".
-    """
-    spec = _build_test_spec()
-    ledger, result = _run(spec, fake_data_factory)
-
-    # The synthetic fixture builds 2,000 bars; the runner filters by the
-    # spec's date window but the FakeDataReader yields everything inside
-    # [2024-01-02, 2024-12-31] (which covers the whole list).
-    assert result.bars_consumed > 0
-    assert isinstance(result.bars_consumed, int)
-    assert ledger.status == "completed"
-
-
-def test_a_run_that_consumed_no_bars_fails_its_ledger():
-    """An empty data reader fails the run instead of completing it with
-    zero trades and the starting cash — a result indistinguishable from a
-    strategy that simply did not fire (#2445). The reason is the one Spec
-    and Strategy Lab give for the same run.
-    """
-    spec = _build_test_spec()
-
-    def empty_factory(symbol: str, start: date, end: date):
-        return FakeDataReader(bars=[])
-
-    ledger, result = run_strategy_spec(
-        RunRequest(
-            spec=spec,
-            start_ms=run_date_to_ms(date(2024, 1, 2)),
-            end_ms=run_date_to_ms(date(2024, 12, 31)),
-        ),
-        data_source_factory=empty_factory,
-        data_root_revision="test-revision-1",
-    )
-
-    assert ledger.status == "failed"
-    assert ledger.failure_reason == "missing data: backtest evaluated zero bars for the requested window"
-    assert result.bars_consumed == 0
-    assert result.trades == []
-
-
 def test_warmup_prerolls_fresh_cross_without_permitting_pre_window_entries():
     """Fold warmup must continue indicator/cross state into TEST.
 

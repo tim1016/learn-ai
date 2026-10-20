@@ -44,29 +44,26 @@ def _session_row(profit: str) -> dict[str, Any]:
     # Whole thousands and tens of thousands are the numbers asyncpg gives in exponent form (1000 as 1E+3, 10000 as 1E+4,
     # 1200000 as 1.2E+6). The text of the number read is the text written, in plain digits.
     ["1000", "10000", "20000", "100000", "1200000", "99990000", "-10000", "5000.50", "0.10", "0"],
+    ids=lambda profit: f"profit-{profit}",
 )
-def test_a_sessions_stored_profit_is_read_in_plain_digits(profit: str) -> None:
+def test_a_sessions_stored_profit_and_the_line_it_gives_a_comparison_are_read_in_plain_digits(profit: str) -> None:
     row = _session_row(profit)
     assert profit in ("0", "5000.50", "0.10") or str(row["profit_usd"]) != profit, "the row must hold the awkward form"
-
-    stored = saved_runs._stored_session(row, ())
-
-    assert str(stored.profit_usd) == profit
-
-
-@pytest.mark.parametrize("profit", ["1000", "10000", "20000", "100000", "1200000", "99990000", "-10000", "5000.50"])
-def test_the_line_a_session_gives_a_comparison_has_its_profit_in_plain_digits(profit: str) -> None:
-    row = {
+    line_row = {
         "session_open_ms": 1_791_379_800_000,
         "status": "traded",
         "profit_usd": _as_asyncpg_returns_it(D(profit)),
         "trades": 3,
     }
 
-    line = saved_runs._session_line(row)
+    stored = saved_runs._stored_session(row, ())
+    line = saved_runs._session_line(line_row)
 
-    assert (line.session_open_ms, line.status, line.trades) == (1_791_379_800_000, SessionStatus.TRADED, 3)
-    assert str(line.profit_usd) == profit
+    assert str(stored.profit_usd) == profit, "a session's stored profit is read in plain digits"
+    assert (line.session_open_ms, line.status, line.trades) == (1_791_379_800_000, SessionStatus.TRADED, 3), (
+        "the line a session gives a comparison keeps its open, its status and its trades"
+    )
+    assert str(line.profit_usd) == profit, "the line a session gives a comparison has its profit in plain digits"
 
 
 def test_a_selling_runs_trades_keep_the_side_of_every_fill_and_a_mark_has_none_and_read_back_equal() -> None:

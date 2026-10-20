@@ -29,30 +29,27 @@ def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class TestEnsureLauncherToken:
-    def test_generates_a_new_token_when_env_and_file_both_absent(
+    def test_ensure_launcher_token_when_env_and_file_both_absent(
         self,
         tmp_path: Path,
         _clear_env: None,
     ) -> None:
-        token = ensure_launcher_token(tmp_path)
-        assert len(token) >= 30, "URL-safe 32-byte token should produce ≥30 chars"
+        first = ensure_launcher_token(tmp_path)
+        assert len(first) >= 30, "URL-safe 32-byte token should produce ≥30 chars"
         # File must persist for the data plane to read.
-        assert (tmp_path / LAUNCHER_TOKEN_FILENAME).exists()
+        assert (tmp_path / LAUNCHER_TOKEN_FILENAME).exists(), "token is persisted to file"
         assert (tmp_path / LAUNCHER_TOKEN_FILENAME).read_text(
             encoding="utf-8"
-        ).strip() == token
-
-    def test_returns_existing_file_token_on_second_call(
-        self,
-        tmp_path: Path,
-        _clear_env: None,
-    ) -> None:
-        """Idempotent — repeated calls don't rotate the token. A
-        launcher restart should pick up the persisted token rather
-        than invalidating in-flight data-plane clients."""
-        first = ensure_launcher_token(tmp_path)
+        ).strip() == first, "persisted file holds the generated token"
+        leftover = list(tmp_path.glob(".launcher-token-*"))
+        assert leftover == [], (
+            f"atomic write left tempfile turds: {leftover}"
+        )
+        # Idempotent — repeated calls don't rotate the token. A
+        # launcher restart should pick up the persisted token rather
+        # than invalidating in-flight data-plane clients.
         second = ensure_launcher_token(tmp_path)
-        assert first == second
+        assert first == second, "second call returns the persisted token, not a new one"
 
     def test_env_override_wins_over_file(
         self,
@@ -72,17 +69,6 @@ class TestEnsureLauncherToken:
         assert (tmp_path / LAUNCHER_TOKEN_FILENAME).read_text(
             encoding="utf-8"
         ) == "from-file"
-
-    def test_atomic_write_does_not_leave_tempfile_on_success(
-        self,
-        tmp_path: Path,
-        _clear_env: None,
-    ) -> None:
-        ensure_launcher_token(tmp_path)
-        leftover = list(tmp_path.glob(".launcher-token-*"))
-        assert leftover == [], (
-            f"atomic write left tempfile turds: {leftover}"
-        )
 
     def test_token_file_has_restricted_mode_on_posix(
         self,
@@ -106,15 +92,26 @@ class TestReadLauncherToken:
     ) -> None:
         assert read_launcher_token(tmp_path) is None
 
-    def test_reads_file_when_env_absent(
+    @pytest.mark.parametrize(
+        ("file_text", "expected"),
+        [
+            pytest.param("the-secret\n", "the-secret", id="reads_file_when_env_absent"),
+            # An empty/whitespace token file is not a usable token. The
+            # data plane treats it as "no token", sends no header, and gets
+            # a 401 from the launcher — operator visibility into a corrupt
+            # token file rather than silently passing an empty secret.
+            pytest.param("   \n", None, id="empty_file_treated_as_no_token"),
+        ],
+    )
+    def test_read_launcher_token_from_file_when_env_absent(
         self,
         tmp_path: Path,
         _clear_env: None,
+        file_text: str,
+        expected: str | None,
     ) -> None:
-        (tmp_path / LAUNCHER_TOKEN_FILENAME).write_text(
-            "the-secret\n", encoding="utf-8"
-        )
-        assert read_launcher_token(tmp_path) == "the-secret"
+        (tmp_path / LAUNCHER_TOKEN_FILENAME).write_text(file_text, encoding="utf-8")
+        assert read_launcher_token(tmp_path) == expected
 
     def test_env_wins_over_file(
         self,
@@ -126,18 +123,6 @@ class TestReadLauncherToken:
         )
         monkeypatch.setenv("LEAN_LAUNCHER_TOKEN", "env-value")
         assert read_launcher_token(tmp_path) == "env-value"
-
-    def test_empty_file_treated_as_no_token(
-        self,
-        tmp_path: Path,
-        _clear_env: None,
-    ) -> None:
-        """An empty/whitespace token file is not a usable token. The
-        data plane treats it as "no token", sends no header, and gets
-        a 401 from the launcher — operator visibility into a corrupt
-        token file rather than silently passing an empty secret."""
-        (tmp_path / LAUNCHER_TOKEN_FILENAME).write_text("   \n", encoding="utf-8")
-        assert read_launcher_token(tmp_path) is None
 
 
 def test_default_token_file_path_tracks_configured_artifacts_root(

@@ -96,45 +96,44 @@ def test_build_threads_configured_gates_into_algorithm() -> None:
     assert algorithm._rsi_gate_bounds() == (Decimal(55), Decimal(65))
 
 
-def test_entry_check_honors_a_configured_gap_the_default_would_reject() -> None:
-    """A gap below the hardcoded 0.20 default must still enter when the
-    strategy is configured with a looser threshold — proves the entry
-    check reads self._gap_checks(), not a literal ``0.20``."""
-    intents = _entry_check(
-        gap=Decimal("0.01"),
-        rsi_min=Decimal(50),
-        rsi_max=Decimal(70),
-        ema_gap=Decimal("0.05"),
-        rsi=Decimal(60),
-    )
-    assert [i.kind for i in intents] == [SignalIntentKind.ENTER]
-
-
-def test_entry_check_honors_a_configured_gap_tighter_than_the_default() -> None:
-    """A gap that clears the hardcoded 0.20 default must NOT enter when the
-    strategy is configured with a tighter threshold."""
-    intents = _entry_check(
-        gap=Decimal("0.50"),
-        rsi_min=Decimal(50),
-        rsi_max=Decimal(70),
-        ema_gap=Decimal("0.30"),
-        rsi=Decimal(60),
-    )
-    assert intents == []
-
-
-def test_entry_check_honors_a_configured_rsi_band_the_default_would_reject() -> None:
-    """An RSI outside the hardcoded 50-70 default must still enter when the
-    strategy is configured with a wider band — proves the entry check reads
-    self._rsi_gate_bounds(), not literal ``50``/``70``."""
-    intents = _entry_check(
-        gap=Decimal("0.20"),
-        rsi_min=Decimal(30),
-        rsi_max=Decimal(90),
-        ema_gap=Decimal("0.30"),
-        rsi=Decimal(80),
-    )
-    assert [i.kind for i in intents] == [SignalIntentKind.ENTER]
+@pytest.mark.parametrize(
+    "gap,rsi_min,rsi_max,ema_gap,rsi,expected_kinds",
+    [
+        # A gap below the hardcoded 0.20 default must still enter when the
+        # strategy is configured with a looser threshold — proves the entry
+        # check reads self._gap_checks(), not a literal ``0.20``.
+        pytest.param(
+            Decimal("0.01"), Decimal(50), Decimal(70), Decimal("0.05"), Decimal(60),
+            (SignalIntentKind.ENTER,),
+            id="a_configured_gap_the_default_would_reject",
+        ),
+        # A gap that clears the hardcoded 0.20 default must NOT enter when the
+        # strategy is configured with a tighter threshold.
+        pytest.param(
+            Decimal("0.50"), Decimal(50), Decimal(70), Decimal("0.30"), Decimal(60),
+            (),
+            id="a_configured_gap_tighter_than_the_default",
+        ),
+        # An RSI outside the hardcoded 50-70 default must still enter when the
+        # strategy is configured with a wider band — proves the entry check reads
+        # self._rsi_gate_bounds(), not literal ``50``/``70``.
+        pytest.param(
+            Decimal("0.20"), Decimal(30), Decimal(90), Decimal("0.30"), Decimal(80),
+            (SignalIntentKind.ENTER,),
+            id="a_configured_rsi_band_the_default_would_reject",
+        ),
+    ],
+)
+def test_entry_check_honors_a_configured_threshold(
+    gap: Decimal,
+    rsi_min: Decimal,
+    rsi_max: Decimal,
+    ema_gap: Decimal,
+    rsi: Decimal,
+    expected_kinds: tuple[SignalIntentKind, ...],
+) -> None:
+    intents = _entry_check(gap=gap, rsi_min=rsi_min, rsi_max=rsi_max, ema_gap=ema_gap, rsi=rsi)
+    assert [i.kind for i in intents] == list(expected_kinds)
 
 
 @pytest.mark.parametrize("tunable", ["gap", "gap_bps", "rsi_min", "rsi_max"])

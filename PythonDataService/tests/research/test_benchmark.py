@@ -91,14 +91,24 @@ def _smoke_baseline(lake: Path, **overrides: Any) -> BaselineReport:
     )
 
 
-def test_the_full_corpus_freezes_exactly_1000_distinct_identities_with_the_200_800_split() -> None:
+def test_the_corpus_freezes_its_identities_groups_and_data_policy() -> None:
     corpus = build_corpus(symbol=SYMBOL, development=DEVELOPMENT, data_snapshot_digest="d" * 64)
 
-    assert len(corpus.identities) == 1000
-    assert len({item.evaluation_key for item in corpus.identities}) == 1000
-    assert sum(1 for item in corpus.identities if item.window_kind == "full-development") == 200
-    assert sum(1 for item in corpus.identities if item.window_kind == "fold") == 800
-    assert len(corpus.fold_windows) == CORPUS_FOLD_COUNT
+    assert len(corpus.identities) == 1000, "the full corpus freezes exactly 1000 identities"
+    assert len({item.evaluation_key for item in corpus.identities}) == 1000, "the 1000 identities are distinct"
+    assert sum(1 for item in corpus.identities if item.window_kind == "full-development") == 200, "200 full-development windows"
+    assert sum(1 for item in corpus.identities if item.window_kind == "fold") == 800, "800 fold windows"
+    assert len(corpus.fold_windows) == CORPUS_FOLD_COUNT, "the corpus carries every fold window"
+    groups = {item.group for item in corpus.identities}
+    assert groups == {group.label for group in PARAMETER_GROUPS}, "the corpus spans the declared groups"
+    expectations = {item.expectation for item in corpus.identities}
+    assert expectations == {"trade-heavy", "no-trade"}, "the corpus carries both trade expectations"
+    # A raw run's keys must claim raw bytes: the policy is part of the context digest.
+    raw = build_corpus(symbol=SYMBOL, development=DEVELOPMENT, data_snapshot_digest="d" * 64, data_policy=RAW_DATA_POLICY)
+    assert corpus.context_digest != raw.context_digest, "the data policy is part of the context digest"
+    assert {item.evaluation_key for item in corpus.identities}.isdisjoint(
+        {item.evaluation_key for item in raw.identities}
+    ), "a raw run's evaluation keys never collide with the adjusted corpus's"
 
 
 def test_the_same_seeds_regenerate_the_same_manifest(tmp_path: Path, seeded_lake_catalog) -> None:
@@ -108,24 +118,6 @@ def test_the_same_seeds_regenerate_the_same_manifest(tmp_path: Path, seeded_lake
 
     assert first.digest == second.digest
     assert json.loads(json.dumps(first.as_dict())) == json.loads(json.dumps(second.as_dict()))
-
-
-def test_the_corpus_spans_declared_groups_with_both_trade_expectations() -> None:
-    corpus = build_corpus(symbol=SYMBOL, development=DEVELOPMENT, data_snapshot_digest="d" * 64)
-
-    groups = {item.group for item in corpus.identities}
-    assert groups == {group.label for group in PARAMETER_GROUPS}
-    expectations = {item.expectation for item in corpus.identities}
-    assert expectations == {"trade-heavy", "no-trade"}
-
-
-def test_the_corpus_identity_is_built_from_the_data_policy_the_runs_actually_use() -> None:
-    """A raw run's keys must claim raw bytes: the policy is part of the context digest."""
-    adjusted = build_corpus(symbol=SYMBOL, development=DEVELOPMENT, data_snapshot_digest="d" * 64)
-    raw = build_corpus(symbol=SYMBOL, development=DEVELOPMENT, data_snapshot_digest="d" * 64, data_policy=RAW_DATA_POLICY)
-
-    assert adjusted.context_digest != raw.context_digest
-    assert {item.evaluation_key for item in adjusted.identities}.isdisjoint({item.evaluation_key for item in raw.identities})
 
 
 def test_the_default_decoded_cache_bound_leaves_room_inside_the_container() -> None:

@@ -28,22 +28,17 @@ def _ny_ms(year: int, month: int, day: int, hour: int, minute: int) -> int:
         _ny_ms(2026, 6, 23, 12, 0),
         _ny_ms(2026, 6, 23, 15, 59),
     ],
+    ids=["at-the-open", "midday", "last-rth-minute"],
 )
-def test_session_state_rth_parity_with_nyse_calendar(now_ms: int) -> None:
-    state = session_state_at_ms(now_ms=now_ms)
-
-    assert calendar_session_state_at_ms(now_ms) == "RTH_OPEN"
-    assert state.phase == "RTH"
-
-
-def test_session_state_reads_the_nyse_calendar_without_a_declared_window() -> None:
+def test_session_state_in_rth_reads_the_nyse_calendar_without_a_declared_window(now_ms: int) -> None:
     window = session_window_for_date(date(2026, 6, 23))
 
-    state = session_state_at_ms(now_ms=window.open_ms_utc)
+    state = session_state_at_ms(now_ms=now_ms)
 
-    assert state.source == "nyse_calendar"
-    assert state.phase == "RTH"
-    assert state.next_transition_ms == window.close_ms_utc
+    assert calendar_session_state_at_ms(now_ms) == "RTH_OPEN", "RTH parity: the NYSE calendar reads the instant as RTH open"
+    assert state.phase == "RTH", "RTH parity: the session state is RTH"
+    assert state.source == "nyse_calendar", "no declared window: the state is read from the NYSE calendar"
+    assert state.next_transition_ms == window.close_ms_utc, "no declared window: the next transition is the session close"
 
 
 def test_calendar_fallback_honors_early_close_and_next_rth_open() -> None:
@@ -78,31 +73,47 @@ def test_session_state_permits_strategy_activity_from_allowed_sessions() -> None
     assert state.permits_strategy_activity is True
 
 
-def test_scheduled_extended_session_bounds_regular_day() -> None:
-    bounds = scheduled_extended_session_bounds(date(2026, 9, 22))
+@pytest.mark.parametrize(
+    ("day", "open_et", "rth_open_et", "rth_close_et", "close_et"),
+    [
+        pytest.param(date(2026, 9, 22), (4, 0), (9, 30), (16, 0), (20, 0), id="regular-day"),
+        # Black Friday 2026: regular close 13:00 ET, after-hours close 17:00 ET.
+        pytest.param(date(2026, 11, 27), (4, 0), (9, 30), (13, 0), (17, 0), id="early-close-moves-after-hours"),
+    ],
+)
+def test_scheduled_extended_session_bounds_wall_clock(
+    day: date,
+    open_et: tuple[int, int],
+    rth_open_et: tuple[int, int],
+    rth_close_et: tuple[int, int],
+    close_et: tuple[int, int],
+) -> None:
+    bounds = scheduled_extended_session_bounds(day)
 
-    assert bounds is not None
-    assert (bounds.open_ms, bounds.rth_open_ms, bounds.rth_close_ms, bounds.close_ms) == (
-        _ny_ms(2026, 9, 22, 4, 0),
-        _ny_ms(2026, 9, 22, 9, 30),
-        _ny_ms(2026, 9, 22, 16, 0),
-        _ny_ms(2026, 9, 22, 20, 0),
-    )
+    assert bounds is not None, "a trading day has scheduled bounds"
+    assert bounds.open_ms == _ny_ms(day.year, day.month, day.day, *open_et), "pre-market open"
+    assert bounds.rth_open_ms == _ny_ms(day.year, day.month, day.day, *rth_open_et), "regular session open"
+    assert bounds.rth_close_ms == _ny_ms(day.year, day.month, day.day, *rth_close_et), "regular session close"
+    assert bounds.close_ms == _ny_ms(day.year, day.month, day.day, *close_et), "after-hours close"
 
 
-def test_scheduled_extended_session_bounds_early_close_moves_after_hours() -> None:
-    # Black Friday 2026: regular close 13:00 ET, after-hours close 17:00 ET.
-    bounds = scheduled_extended_session_bounds(date(2026, 11, 27))
-
-    assert bounds is not None
-    assert bounds.rth_close_ms == _ny_ms(2026, 11, 27, 13, 0)
-    assert bounds.close_ms == _ny_ms(2026, 11, 27, 17, 0)
-
-
-@pytest.mark.parametrize("day", [date(2026, 1, 10), date(2026, 1, 19)], ids=["weekend", "holiday"])
+@pytest.mark.parametrize(
+    "day",
+    [
+        pytest.param(date(2026, 1, 10), id="weekend"),
+        pytest.param(date(2026, 1, 19), id="holiday"),
+        pytest.param(date(2026, 3, 8), id="spring-forward-sunday"),
+        pytest.param(date(2026, 11, 1), id="fall-back-sunday"),
+        pytest.param(date(2026, 11, 26), id="holiday-thanksgiving"),
+    ],
+)
 def test_scheduled_extended_session_bounds_none_off_session(day: date) -> None:
-    assert scheduled_extended_session_bounds(day) is None
-    assert scheduled_exchange_phase_at_ms(_ny_ms(day.year, day.month, day.day, 8, 0)) == "CLOSED"
+    """No bounds exactly where ``app/lean_sidecar/trading_calendar.py`` has no session."""
+    assert is_trading_day(day) is False, "the canonical calendar has no session on this day"
+    assert scheduled_extended_session_bounds(day) is None, "no scheduled bounds off session"
+    assert scheduled_exchange_phase_at_ms(_ny_ms(day.year, day.month, day.day, 8, 0)) == "CLOSED", (
+        "the scheduled phase off session is CLOSED"
+    )
 
 
 def test_scheduled_exchange_phase_grants_no_strategy_permission() -> None:
@@ -139,20 +150,6 @@ def test_scheduled_extended_session_bounds_regular_session_parity_with_trading_c
     assert bounds is not None
     assert (bounds.rth_open_ms, bounds.rth_close_ms) == (canonical.open_ms_utc, canonical.close_ms_utc)
     assert bounds.open_ms < bounds.rth_open_ms < bounds.rth_close_ms < bounds.close_ms
-
-
-@pytest.mark.parametrize(
-    "day",
-    [
-        pytest.param(date(2026, 3, 8), id="spring-forward-sunday"),
-        pytest.param(date(2026, 11, 1), id="fall-back-sunday"),
-        pytest.param(date(2026, 11, 26), id="holiday-thanksgiving"),
-    ],
-)
-def test_scheduled_extended_session_bounds_off_session_parity_with_trading_calendar(day: date) -> None:
-    """No bounds exactly where ``app/lean_sidecar/trading_calendar.py`` has no session."""
-    assert is_trading_day(day) is False
-    assert scheduled_extended_session_bounds(day) is None
 
 
 _ALPACA_WINDOW = ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60)

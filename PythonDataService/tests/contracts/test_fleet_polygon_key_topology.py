@@ -141,15 +141,18 @@ def _assert_role_split_honors_the_credential_boundary(services: dict[str, dict[s
     assert {"clerk_agent", "fleet_coordinator"} <= roles_seen
 
 
-def test_dev_topology_role_split_honors_the_credential_boundary() -> None:
+@pytest.mark.parametrize(
+    ("compose_files", "profiles"),
+    [
+        pytest.param(("compose.yaml", "compose.fleet.dev.yaml"), (), id="dev-topology"),
+        pytest.param(("compose.yaml", "compose.fleet.yaml"), ("fleet",), id="production-topology"),
+    ],
+)
+def test_topology_role_split_honors_the_credential_boundary(
+    compose_files: tuple[str, ...], profiles: tuple[str, ...]
+) -> None:
     engine = _require_compose_engine()
-    services = _render(engine, ("compose.yaml", "compose.fleet.dev.yaml"))
-    _assert_role_split_honors_the_credential_boundary(services)
-
-
-def test_production_topology_role_split_honors_the_credential_boundary() -> None:
-    engine = _require_compose_engine()
-    services = _render(engine, ("compose.yaml", "compose.fleet.yaml"), profiles=("fleet",))
+    services = _render(engine, compose_files, profiles=profiles)
     _assert_role_split_honors_the_credential_boundary(services)
 
 

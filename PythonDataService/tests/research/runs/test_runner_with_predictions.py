@@ -217,57 +217,53 @@ def test_runner_threads_prediction_set_hash_into_ledger(fake_data_factory, artif
 # ---------------------------------------------------------------------------
 # Failure paths — each must produce a ``failed`` ledger, not a thrown exception.
 # ---------------------------------------------------------------------------
-def test_runner_fails_when_artifact_directory_is_missing(fake_data_factory, artifacts_root: Path) -> None:
-    spec = _build_spec_with_prediction("pred_missing_v001")
-    ledger, result = run_strategy_spec(
-        RunRequest(
-            spec=spec,
-            start_ms=run_date_to_ms(Date(2024, 1, 2)),
-            end_ms=run_date_to_ms(Date(2024, 12, 31)),
-        ),
-        data_source_factory=fake_data_factory,
-        data_root_revision="test-revision-1",
-    )
-
-    assert ledger.status == "failed"
-    assert ledger.failure_reason is not None
-    assert "pred_missing_v001" in ledger.failure_reason
-    assert "failed to load" in ledger.failure_reason
-    assert ledger.prediction_set_hash is None
-    # _failed must still populate the result hashes.
-    assert ledger.result_hash is not None
-    assert result.warnings == [ledger.failure_reason]
-
-
-def test_runner_fails_when_prediction_set_does_not_pair_with_spec(fake_data_factory, artifacts_root: Path) -> None:
-    """Symbol mismatch — spec wants TEST but artifact says SPY."""
+def test_runner_fails_the_ledger_when_the_prediction_set_is_missing_unpaired_or_gappy(
+    fake_data_factory, artifacts_root: Path
+) -> None:
     start = Date(2024, 1, 2)
     end = Date(2024, 12, 31)
     expected_ts_ms = _harvest_consolidated_end_times_ms(fake_data_factory, "TEST", start, end, resolution_minutes=15)
 
-    set_id = "pred_wrong_symbol_v001"
-    _make_artifact(artifacts_root, set_id, expected_ts_ms, symbol="SPY")
-
-    spec = _build_spec_with_prediction(set_id)
-    ledger, _ = run_strategy_spec(
+    # Artifact directory is missing.
+    spec = _build_spec_with_prediction("pred_missing_v001")
+    missing_ledger, missing_result = run_strategy_spec(
         RunRequest(spec=spec, start_ms=run_date_to_ms(start), end_ms=run_date_to_ms(end)),
         data_source_factory=fake_data_factory,
         data_root_revision="test-revision-1",
     )
 
-    assert ledger.status == "failed"
-    assert ledger.failure_reason is not None
-    assert "does not pair with spec" in ledger.failure_reason
-    assert "symbol mismatch" in ledger.failure_reason
-    assert ledger.prediction_set_hash is None
+    assert missing_ledger.status == "failed", "missing artifact directory: ledger status is failed"
+    assert missing_ledger.failure_reason is not None, "missing artifact directory: failure reason is recorded"
+    assert "pred_missing_v001" in missing_ledger.failure_reason, "missing artifact directory: reason names the set"
+    assert "failed to load" in missing_ledger.failure_reason, "missing artifact directory: reason says it failed to load"
+    assert missing_ledger.prediction_set_hash is None, "missing artifact directory: no prediction set hash"
+    # _failed must still populate the result hashes.
+    assert missing_ledger.result_hash is not None, "missing artifact directory: failed ledger still has result hash"
+    assert missing_result.warnings == [missing_ledger.failure_reason], "missing artifact directory: warning is the reason"
 
+    # Symbol mismatch — spec wants TEST but artifact says SPY.
+    set_id = "pred_wrong_symbol_v001"
+    _make_artifact(artifacts_root, set_id, expected_ts_ms, symbol="SPY")
 
-def test_runner_fails_when_artifact_has_gaps_in_bar_clock_coverage(fake_data_factory, artifacts_root: Path) -> None:
-    """Drop a few bar end_times from the artifact -> coverage must fail."""
-    start = Date(2024, 1, 2)
-    end = Date(2024, 12, 31)
-    expected_ts_ms = _harvest_consolidated_end_times_ms(fake_data_factory, "TEST", start, end, resolution_minutes=15)
-    assert len(expected_ts_ms) > 5
+    spec = _build_spec_with_prediction(set_id)
+    unpaired_ledger, _ = run_strategy_spec(
+        RunRequest(spec=spec, start_ms=run_date_to_ms(start), end_ms=run_date_to_ms(end)),
+        data_source_factory=fake_data_factory,
+        data_root_revision="test-revision-1",
+    )
+
+    assert unpaired_ledger.status == "failed", "prediction set that does not pair with spec: ledger status is failed"
+    assert unpaired_ledger.failure_reason is not None, "prediction set that does not pair with spec: reason is recorded"
+    assert "does not pair with spec" in unpaired_ledger.failure_reason, (
+        "prediction set that does not pair with spec: reason says it does not pair"
+    )
+    assert "symbol mismatch" in unpaired_ledger.failure_reason, (
+        "prediction set that does not pair with spec: reason names the symbol mismatch"
+    )
+    assert unpaired_ledger.prediction_set_hash is None, "prediction set that does not pair with spec: no hash"
+
+    # Drop a few bar end_times from the artifact -> coverage must fail.
+    assert len(expected_ts_ms) > 5, "bar-clock coverage gap: synthetic data fires enough consolidated bars"
 
     # Drop the last 3 timestamps so coverage check finds a gap.
     short_ts_ms = expected_ts_ms[:-3]
@@ -275,13 +271,15 @@ def test_runner_fails_when_artifact_has_gaps_in_bar_clock_coverage(fake_data_fac
     _make_artifact(artifacts_root, set_id, short_ts_ms)
 
     spec = _build_spec_with_prediction(set_id)
-    ledger, _ = run_strategy_spec(
+    gap_ledger, _ = run_strategy_spec(
         RunRequest(spec=spec, start_ms=run_date_to_ms(start), end_ms=run_date_to_ms(end)),
         data_source_factory=fake_data_factory,
         data_root_revision="test-revision-1",
     )
 
-    assert ledger.status == "failed"
-    assert ledger.failure_reason is not None
-    assert "bar-clock coverage failed" in ledger.failure_reason
-    assert ledger.prediction_set_hash is None
+    assert gap_ledger.status == "failed", "bar-clock coverage gap: ledger status is failed"
+    assert gap_ledger.failure_reason is not None, "bar-clock coverage gap: failure reason is recorded"
+    assert "bar-clock coverage failed" in gap_ledger.failure_reason, (
+        "bar-clock coverage gap: reason says coverage failed"
+    )
+    assert gap_ledger.prediction_set_hash is None, "bar-clock coverage gap: no prediction set hash"

@@ -33,20 +33,29 @@ def _numbers(view: dict[str, Any]) -> tuple[Any, ...]:
     return tuple(view[key] for key in keys)
 
 
-def test_a_completed_fold_keeps_half_its_training_sharpe_and_beats_the_incumbent_by_two_points() -> None:
-    view = fold_view(_fold("completed", train=metrics(2.0), test=metrics(1.0, trades=12, total_return=0.03), incumbent=metrics(0.4, trades=9, total_return=0.01)))
-    assert _numbers(view) == pytest.approx((2.0, 1.0, 0.5, 0.03, 0.01, 0.02, 12, 9), abs=1e-9, rel=0)
-
-
-def test_a_non_positive_training_sharpe_leaves_retention_undefined() -> None:
-    view = fold_view(_fold("completed", train=metrics(-0.5), test=metrics(0.3), incumbent=metrics(0.1)))
-    assert view["retention"] is None and view["test_sharpe"] == pytest.approx(0.3, abs=1e-9, rel=0)
-
-
-def test_a_failed_test_run_keeps_the_winners_training_sharpe_and_nothing_else() -> None:
-    failed = metrics(None, net=None, total_return=None, status="failed")
-    view = fold_view(_fold("failed", train=metrics(1.5), test=failed, incumbent=metrics(0.2, total_return=0.004)))
-    assert _numbers(view) == pytest.approx((1.5, None, None, None, 0.004, None, None, 50), abs=1e-9, rel=0)
+@pytest.mark.parametrize(
+    ("status", "train", "test", "incumbent", "numbers"),
+    [
+        pytest.param(
+            "completed", metrics(2.0), metrics(1.0, trades=12, total_return=0.03), metrics(0.4, trades=9, total_return=0.01),
+            (2.0, 1.0, 0.5, 0.03, 0.01, 0.02, 12, 9),
+            id="a-completed-fold-keeps-half-its-training-sharpe-and-beats-the-incumbent-by-two-points",
+        ),
+        pytest.param(
+            "completed", metrics(-0.5), metrics(0.3), metrics(0.1),
+            (-0.5, 0.3, None, 0.01, 0.01, 0.0, 50, 50),
+            id="a-non-positive-training-sharpe-leaves-retention-undefined",
+        ),
+        pytest.param(
+            "failed", metrics(1.5), metrics(None, net=None, total_return=None, status="failed"), metrics(0.2, total_return=0.004),
+            (1.5, None, None, None, 0.004, None, None, 50),
+            id="a-failed-test-run-keeps-the-winners-training-sharpe-and-nothing-else",
+        ),
+    ],
+)
+def test_a_fold_view_carries_the_numbers_its_runs_gave(status: str, train: Any, test: Any, incumbent: Any, numbers: tuple[Any, ...]) -> None:
+    view = fold_view(_fold(status, train=train, test=test, incumbent=incumbent))
+    assert _numbers(view) == pytest.approx(numbers, abs=1e-9, rel=0), "the fold's training and test sharpe, retention, returns, difference and trade counts"
 
 
 def test_an_incumbent_run_that_failed_says_why_and_one_never_run_says_nothing() -> None:

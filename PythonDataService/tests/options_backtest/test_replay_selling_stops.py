@@ -79,19 +79,31 @@ def _events(outcome: Any, kind: EventKind) -> list[tuple[int, str]]:
 # ---- A stop on the sold leg alone ---------------------------------------------------
 
 
-def test_a_stop_on_the_sold_leg_alone_buys_it_back_and_the_bought_leg_stays_to_the_exit_time() -> None:
+@pytest.mark.parametrize(
+    "stop",
+    [
+        pytest.param(STOP_25, id="a_stop_on_the_sold_leg_alone_buys_it_back_and_the_bought_leg_stays_to_the_exit_time"),
+        pytest.param(
+            ("points", "0.50"),
+            id="a_points_stop_on_a_sold_leg_sits_that_many_points_above_the_sale_and_is_hit_by_a_close_on_it",
+        ),
+    ],
+)
+def test_a_stop_on_the_sold_leg_alone_buys_it_back_and_the_bought_leg_stays_to_the_exit_time(
+    stop: tuple[str, str],
+) -> None:
     market = TableMarket(
         underlying=steady("500"),
         picks=picked(("long", "500", PUT_495), ("short", "500", PUT_500)),
         options={
             PUT_495: flat("1.00", 5, 61),
-            # Sold at 2.00 at minute 6: the stop sits at 2.00 x 1.25 = 2.50. Minute 9 closes under it, and minute 10
-            # closes on it, which is a hit. The buy-back fills at the open of minute 11.
+            # Sold at 2.00 at minute 6: the stop sits at 2.00 x 1.25 = 2.50, or 0.50 points above the sale. Minute 9
+            # closes under it, and minute 10 closes on it, which is a hit. The buy-back fills at the open of minute 11.
             PUT_500: {**flat("2.00", 5, 8), 9: ("2.00", "2.49"), 10: ("2.49", "2.50"), **flat("2.60", 11, 61)},
         },
     )
 
-    outcome = replay(setup(*_put_spread(short={"stop": STOP_25})), market)
+    outcome = replay(setup(*_put_spread(short={"stop": stop})), market)
 
     assert [row(trade) for trade in outcome.trades] == [
         ("long", 0, 6, D("1.00"), D("1.00"), "exit_time", 61, D("1.00"), D("1.00")),
@@ -132,23 +144,6 @@ def test_a_percent_stop_above_a_hundred_on_a_sold_leg_lets_the_premium_double_be
     assert (minute_of(short.exit.bar_close_ms), short.exit_price) == (12, D("5.20"))
     # (2.00 - 5.20) x 100 = -320.00
     assert short.pnl_usd == D("-320.00")
-
-
-def test_a_points_stop_on_a_sold_leg_sits_that_many_points_above_the_sale_and_is_hit_by_a_close_on_it() -> None:
-    market = TableMarket(
-        underlying=steady("500"),
-        picks=picked(("long", "500", PUT_495), ("short", "500", PUT_500)),
-        options={
-            PUT_495: flat("1.00", 5, 61),
-            # Sold at 2.00 with a stop of 0.50 points: the level is 2.50.
-            PUT_500: {**flat("2.00", 5, 8), 9: ("2.00", "2.49"), 10: ("2.49", "2.50"), **flat("2.60", 11, 61)},
-        },
-    )
-
-    outcome = replay(setup(*_put_spread(short={"stop": ("points", "0.50")})), market)
-
-    short = outcome.trades[1]
-    assert (short.stop_level, short.exit_decided_at_ms) == (D("2.50"), at(10))
 
 
 def test_a_high_above_a_sold_legs_stop_with_a_close_under_it_does_not_buy_it_back() -> None:

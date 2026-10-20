@@ -399,18 +399,29 @@ def test_a_native_metric_mismatch_freezes_diverged() -> None:
     assert status == "diverged" and verdict["reason"] == "lean_native_metric_mismatch"
 
 
-def test_a_missing_metric_receipt_is_unavailable_instead_of_a_false_agreement() -> None:
-    status, verdict = _verdict(lean_statistics_json="{}")
+@pytest.mark.parametrize(
+    ("lean_statistics_json", "receipt_reason"),
+    [
+        ("{}", "lean_native_metric_receipt_missing"),
+        ('{"namespaces":{"status":"match"}}', "lean_native_metric_receipt_incomplete"),
+        (None, "lean_statistics_missing"),
+        ("{not json", "lean_statistics_unreadable"),
+    ],
+    ids=[
+        "missing-metric-receipt-not-a-false-agreement",
+        "nominal-native-match-without-receipts",
+        "statistics-missing",
+        "statistics-unreadable",
+    ],
+)
+def test_an_unusable_native_metric_receipt_is_unavailable_and_named(
+    lean_statistics_json: str | None, receipt_reason: str
+) -> None:
+    status, verdict = _verdict(lean_statistics_json=lean_statistics_json)
 
-    assert status == "unavailable" and verdict["reason"] == "lean_native_metric_parity_unavailable"
-    assert verdict["native_metric_parity"]["reason"] == "lean_native_metric_receipt_missing"
-
-
-def test_a_nominal_native_match_without_receipts_is_unavailable() -> None:
-    status, verdict = _verdict(lean_statistics_json='{"namespaces":{"status":"match"}}')
-
-    assert status == "unavailable"
-    assert verdict["native_metric_parity"]["reason"] == "lean_native_metric_receipt_incomplete"
+    assert status == "unavailable", "the pair is not comparable instead of falsely agreeing"
+    assert verdict["reason"] == "lean_native_metric_parity_unavailable", "the verdict names the unavailable native metric parity"
+    assert verdict["native_metric_parity"]["reason"] == receipt_reason, "the receipt names why the native metrics are unusable"
 
 
 def test_one_sided_readiness_signature_is_unavailable() -> None:
@@ -428,13 +439,6 @@ def test_empty_readiness_documents_are_unavailable() -> None:
 
     assert verdict["status"] == "unavailable"
     assert verdict["readiness_parity"]["reason"] == "readiness_fields_missing"
-
-
-def test_missing_and_unreadable_native_statistics_are_named() -> None:
-    assert _verdict(lean_statistics_json=None)[1]["native_metric_parity"]["reason"] == "lean_statistics_missing"
-    assert (
-        _verdict(lean_statistics_json="{not json")[1]["native_metric_parity"]["reason"] == "lean_statistics_unreadable"
-    )
 
 
 def test_a_shared_fixture_mismatch_is_not_a_comparable_pair_and_names_the_fixture() -> None:

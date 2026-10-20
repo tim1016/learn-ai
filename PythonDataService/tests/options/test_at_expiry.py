@@ -38,18 +38,25 @@ def _between(low: str, high: str | None) -> PriceRange:
     return PriceRange(Decimal(low), None if high is None else Decimal(high))
 
 
-def test_a_call_spread_bought_for_1_94_loses_up_to_194_and_gains_up_to_306() -> None:
+def test_a_call_spread_bought_for_1_94_loses_up_to_194_gains_up_to_306_and_draws_its_line_through_each_strike() -> None:
     """The 585 call bought and the 590 sold. Worth nothing at 585 or below and $5.00 at 590 or above, so it
-    loses the $1.94 paid below 585, gains $5.00 - $1.94 = $3.06 above 590, and is even at 585 + 1.94."""
+    loses the $1.94 paid below 585, gains $5.00 - $1.94 = $3.06 above 590, and is even at 585 + 1.94.
+
+    Its line runs from below its strikes to above them through each: the strikes and the break-even span 585
+    to 590, a quarter of which is $1.25, so the line starts $1.25 below 585 rounded down to 583, and ends
+    above 590 at 592. It is level at -$194.00 up to 585, rises to +$306.00 at 590, and is level again."""
     spread = _of(_leg("bought", "long", "call", 585), _leg("sold", "short", "call", 590))
 
     money = entry_money(spread, _ONE, net_price=Decimal("1.94"), fee_provision_cents=0)
     figures = at_expiry(spread, _ONE, net_price=Decimal("1.94"))
 
-    assert (money.loss_at_expiry_cents, figures.gain_cents) == (19_400, 30_600)
-    assert figures.loss_holds == (_between("0", "585"),)
-    assert figures.gain_holds == (_between("590", None),)
-    assert figures.break_evens == (Fraction("586.94"),)
+    assert (money.loss_at_expiry_cents, figures.gain_cents) == (19_400, 30_600), "loses up to 194 and gains up to 306"
+    assert figures.loss_holds == (_between("0", "585"),), "the loss holds from zero to 585"
+    assert figures.gain_holds == (_between("590", None),), "the gain holds from 590 up"
+    assert figures.break_evens == (Fraction("586.94"),), "it is even at 585 + 1.94"
+    assert figures.sketch == _line(("583", -19_400), ("585", -19_400), ("590", 30_600), ("592", 30_600)), (
+        "the line runs from below its strikes to above them through each"
+    )
 
 
 def test_a_call_spread_sold_for_3_07_gains_what_it_received_and_loses_the_width_less_that() -> None:
@@ -90,9 +97,12 @@ def test_a_straddle_is_at_its_lowest_at_one_price_and_breaks_even_either_side_of
     assert figures.break_evens == (Fraction(577), Fraction(593))
 
 
-def test_an_iron_condor_keeps_what_it_received_between_its_sold_strikes_and_loses_most_outside_its_wings() -> None:
+def test_an_iron_condor_keeps_what_it_received_between_its_sold_strikes_and_turns_its_line_at_each_of_its_four_strikes() -> None:
     """Puts 570 bought and 575 sold, calls 595 sold and 600 bought, $1.50 received. It owes nothing from 575
-    to 595, and $5.00 at 570 or below and at 600 or above. Even where it owes $1.50: 573.50 and 596.50."""
+    to 595, and $5.00 at 570 or below and at 600 or above. Even where it owes $1.50: 573.50 and 596.50.
+
+    Its line: it keeps the $150.00 between 575 and 595 and loses $5.00 - $1.50 at or beyond a wing. The window:
+    30 wide, a quarter is $7.50, so from 562 to 608."""
     condor = _of(
         _leg("long_put", "long", "put", 570),
         _leg("short_put", "short", "put", 575),
@@ -103,10 +113,14 @@ def test_an_iron_condor_keeps_what_it_received_between_its_sold_strikes_and_lose
     money = entry_money(condor, _ONE, net_price=Decimal("-1.50"), fee_provision_cents=0)
     figures = at_expiry(condor, _ONE, net_price=Decimal("-1.50"))
 
-    assert (money.loss_at_expiry_cents, figures.gain_cents) == (35_000, 15_000)
-    assert figures.gain_holds == (_between("575", "595"),)
-    assert figures.loss_holds == (_between("0", "570"), _between("600", None))
-    assert figures.break_evens == (Fraction("573.50"), Fraction("596.50"))
+    assert (money.loss_at_expiry_cents, figures.gain_cents) == (35_000, 15_000), "loses most outside its wings"
+    assert figures.gain_holds == (_between("575", "595"),), "it keeps what it received between its sold strikes"
+    assert figures.loss_holds == (_between("0", "570"), _between("600", None)), "the loss holds at or beyond a wing"
+    assert figures.break_evens == (Fraction("573.50"), Fraction("596.50")), "it is even where it owes $1.50"
+    assert figures.break_evens == (Fraction("573.5"), Fraction("596.5")), "the line's break-evens are 573.5 and 596.5"
+    assert figures.sketch == _line(
+        ("562", -35_000), ("570", -35_000), ("575", 15_000), ("595", 15_000), ("600", -35_000), ("608", -35_000)
+    ), "the line turns at each of its four strikes"
 
 
 def test_a_butterfly_gains_most_at_its_body_and_loses_what_it_cost_outside_its_wings() -> None:
@@ -174,22 +188,27 @@ def test_a_put_structure_can_be_at_its_lowest_only_with_the_stock_at_zero() -> N
     assert figures.break_evens == (Fraction(431), Fraction(449))
 
 
-def test_a_spread_bought_for_more_than_it_can_be_worth_gains_nothing_and_never_breaks_even() -> None:
+@pytest.mark.parametrize(
+    ("net_price", "break_evens"),
+    [
+        pytest.param(Decimal("6.00"), (), id="bought for more than it can be worth: gains nothing and never breaks even"),
+        pytest.param(
+            Decimal("5.00"),
+            (Fraction(590),),
+            id="bought for its whole width: breaks even at its upper strike and nowhere else",
+        ),
+    ],
+)
+def test_a_spread_bought_for_all_it_can_be_worth_or_more_gains_nothing(
+    net_price: Decimal, break_evens: tuple[Fraction, ...]
+) -> None:
+    """The 585 call bought and the 590 sold. For its whole width, $5.00, it is worth $5.00 only from 590 up,
+    where it is level: it first gets even exactly at 590, a turning point."""
     spread = _of(_leg("bought", "long", "call", 585), _leg("sold", "short", "call", 590))
 
-    figures = at_expiry(spread, _ONE, net_price=Decimal("6.00"))
+    figures = at_expiry(spread, _ONE, net_price=net_price)
 
-    assert (figures.gain_cents, figures.break_evens) == (0, ())
-
-
-def test_a_spread_bought_for_its_whole_width_breaks_even_at_its_upper_strike_and_nowhere_else() -> None:
-    """The 585 call bought and the 590 sold for $5.00. It is worth $5.00 only from 590 up, where it is level:
-    it first gets even exactly at 590, a turning point."""
-    spread = _of(_leg("bought", "long", "call", 585), _leg("sold", "short", "call", 590))
-
-    figures = at_expiry(spread, _ONE, net_price=Decimal("5.00"))
-
-    assert (figures.gain_cents, figures.break_evens) == (0, (Fraction(590),))
+    assert (figures.gain_cents, figures.break_evens) == (0, break_evens)
 
 
 def test_every_structure_of_an_entry_gains_its_own_share() -> None:
@@ -232,17 +251,6 @@ def _line(*points: tuple[str, int]) -> tuple[ResultAt, ...]:
     return tuple(ResultAt(Decimal(price), cents) for price, cents in points)
 
 
-def test_a_bought_call_spreads_line_runs_from_below_its_strikes_to_above_them_through_each() -> None:
-    """585 bought and 590 sold for $1.94, even at 586.94. The strikes and the break-even span 585 to 590, a
-    quarter of which is $1.25, so the line starts $1.25 below 585 rounded down to 583, and ends above 590 at
-    592. It is level at -$194.00 up to 585, rises to +$306.00 at 590, and is level again."""
-    spread = _of(_leg("bought", "long", "call", 585), _leg("sold", "short", "call", 590))
-
-    figures = at_expiry(spread, _ONE, net_price=Decimal("1.94"))
-
-    assert figures.sketch == _line(("583", -19_400), ("585", -19_400), ("590", 30_600), ("592", 30_600))
-
-
 def test_one_bought_calls_line_reaches_past_its_break_even_and_keeps_rising() -> None:
     """A 585 call bought for $4.12 is even at 589.12. From 585 to 589.12 is $4.12, a quarter of it $1.03: the
     line starts at 583 and ends at 589.12 + 1.03 = 590.15, rounded up to 591, where the call is worth $6.00
@@ -252,25 +260,6 @@ def test_one_bought_calls_line_reaches_past_its_break_even_and_keeps_rising() ->
     figures = at_expiry(call, EntrySize(multiplier=100, units=3), net_price=Decimal("4.12"))
 
     assert figures.sketch == _line(("583", -123_600), ("585", -123_600), ("591", 56_400))
-
-
-def test_an_iron_condors_line_turns_at_each_of_its_four_strikes() -> None:
-    """Puts at 570 and 575 and calls at 595 and 600, sold for $1.50. It keeps the $150.00 between 575 and 595
-    and loses $5.00 - $1.50 at or beyond a wing. Even at 573.50 and 596.50. The window: 30 wide, a quarter is
-    $7.50, so from 562 to 608."""
-    condor = _of(
-        _leg("long_put", "long", "put", 570),
-        _leg("short_put", "short", "put", 575),
-        _leg("short_call", "short", "call", 595),
-        _leg("long_call", "long", "call", 600),
-    )
-
-    figures = at_expiry(condor, _ONE, net_price=Decimal("-1.50"))
-
-    assert figures.break_evens == (Fraction("573.5"), Fraction("596.5"))
-    assert figures.sketch == _line(
-        ("562", -35_000), ("570", -35_000), ("575", 15_000), ("595", 15_000), ("600", -35_000), ("608", -35_000)
-    )
 
 
 def test_a_line_never_starts_below_a_price_of_zero() -> None:

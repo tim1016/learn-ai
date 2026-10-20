@@ -25,19 +25,33 @@ from tests.research.options_golden_search._evidence import session_evidence
 D = Decimal
 
 
-def test_drawdown_uses_whole_minute_path_and_fixed_capital_not_daily_profit_or_peak() -> None:
+def test_drawdown_uses_whole_minute_path_and_fixed_capital_and_recovery_counts_sessions_underwater() -> None:
     first = session_evidence(WED, exit_price="3", trough="0.5")
     second = session_evidence(THU, cash="10200", exit_price="2", trough="0.2")
     result = summarize_evidence((first, second), starting_capital_usd=D("10000"), annualization_sessions=251)
     # Day 1: capital 10000 -> 9950 -> 10200. Day 2: 10200 -> 10120 -> 10300.
-    assert result.net_profit_usd == D("300")
-    assert result.max_drawdown_usd == D("80")
-    assert result.max_drawdown_fraction == D("0.008")
-    assert float(result.peak_relative_drawdown_fraction) == pytest.approx(80 / 10200, abs=1e-12, rel=0)
-    assert result.session_end_drawdown_usd == 0
-    assert not result.technical_failures
-    assert [spell.below_peak_sessions for spell in result.recoveries] == [1, 1]
-    assert all(spell.recovered_at_ms is not None for spell in result.recoveries)
+    assert result.net_profit_usd == D("300"), "drawdown uses the whole minute path and fixed capital: net profit"
+    assert result.max_drawdown_usd == D("80"), "drawdown uses the whole minute path and fixed capital: max drawdown usd"
+    assert result.max_drawdown_fraction == D("0.008"), "drawdown uses the whole minute path and fixed capital: max drawdown fraction"
+    assert float(result.peak_relative_drawdown_fraction) == pytest.approx(80 / 10200, abs=1e-12, rel=0), (
+        "drawdown uses the whole minute path and fixed capital: peak-relative drawdown fraction"
+    )
+    assert result.session_end_drawdown_usd == 0, "drawdown is not the daily profit or peak: session-end drawdown"
+    assert not result.technical_failures, "drawdown uses the whole minute path and fixed capital: no technical failures"
+    assert [spell.below_peak_sessions for spell in result.recoveries] == [1, 1], "drawdown spells: sessions below peak"
+    assert all(spell.recovered_at_ms is not None for spell in result.recoveries), "drawdown spells: both recovered"
+
+    evidence = (
+        session_evidence(WED, exit_price="0.5"),
+        session_evidence(THU, cash="9950", exit_price="1", no_trade=True),
+        session_evidence(FRI, cash="9950", exit_price="1.2"),
+    )
+    result = summarize_evidence(evidence, starting_capital_usd=D("10000"), annualization_sessions=251)
+    assert result.ongoing_recovery, "recovery keeps an ongoing lower bound: the recovery is ongoing"
+    assert result.max_recovery_sessions == 3, "recovery counts canonical sessions underwater: max recovery sessions"
+    assert result.recoveries[-1].recovered_at_ms is None, "recovery keeps an ongoing lower bound: last spell not recovered"
+    assert result.recoveries[-1].below_peak_sessions == 3, "recovery counts canonical sessions underwater: last spell sessions below peak"
+    assert result.net_profit_usd == -30, "recovery keeps an ongoing lower bound: net profit"
 
 
 def test_sharpe_daily_sample_includes_no_trade_and_streaks_count_completed_traded_sessions() -> None:
@@ -75,42 +89,28 @@ def test_constant_and_insufficient_returns_are_unavailable_and_zero_drawdown_is_
     assert two.expectancy_usd is None
 
 
-def test_recovery_counts_canonical_sessions_underwater_and_keeps_ongoing_lower_bound() -> None:
-    evidence = (
-        session_evidence(WED, exit_price="0.5"),
-        session_evidence(THU, cash="9950", exit_price="1", no_trade=True),
-        session_evidence(FRI, cash="9950", exit_price="1.2"),
-    )
-    result = summarize_evidence(evidence, starting_capital_usd=D("10000"), annualization_sessions=251)
-    assert result.ongoing_recovery
-    assert result.max_recovery_sessions == 3
-    assert result.recoveries[-1].recovered_at_ms is None
-    assert result.recoveries[-1].below_peak_sessions == 3
-    assert result.net_profit_usd == -30
-
-
-def test_skip_counted_session_is_daily_zero_but_not_traded_and_evidence_roundtrip_is_exact() -> None:
+def test_evidence_roundtrip_is_exact_for_a_skip_counted_session_and_for_a_traded_one() -> None:
     session = session_evidence(WED, no_trade=True)
     session = replace(session, outcome=SessionOutcome(SessionStatus.SKIPPED, SkipReason.WINDOW_DOES_NOT_FIT, (), (), D(0)))
     restored = evidence_from_json(evidence_to_json(session))
-    assert restored == session
-    assert restored.observations[0].cash_usd == D("10000")
+    assert restored == session, "skip-counted session: the evidence roundtrip is exact"
+    assert restored.observations[0].cash_usd == D("10000"), "skip-counted session: the restored first observation keeps its cash"
     result = summarize_evidence((restored,), starting_capital_usd=D("10000"), annualization_sessions=251)
-    assert result.daily_observation_count == result.skipped_sessions == 1
-    assert result.completed_traded_sessions == 0
-    assert not result.technical_failures
+    assert result.daily_observation_count == result.skipped_sessions == 1, "skip-counted session is a daily zero observation"
+    assert result.completed_traded_sessions == 0, "skip-counted session is not a traded session"
+    assert not result.technical_failures, "skip-counted session: no technical failures"
 
-
-def test_traded_evidence_roundtrip_preserves_fills_fees_marks_and_capital_money_steps() -> None:
     session = session_evidence(WED)
     payload = evidence_to_json(session)
-    assert isinstance(payload["cash_before_usd"], str)
-    assert isinstance(payload["outcome"]["trades"][0]["entry"]["filled"], str)
+    assert isinstance(payload["cash_before_usd"], str), "traded evidence roundtrip: capital is serialised as a string"
+    assert isinstance(payload["outcome"]["trades"][0]["entry"]["filled"], str), "traded evidence roundtrip: fills are serialised as strings"
     restored = evidence_from_json(payload)
-    assert restored == session
-    assert restored.outcome.money_steps == session.outcome.money_steps
+    assert restored == session, "traded evidence roundtrip preserves fills, fees and marks"
+    assert restored.outcome.money_steps == session.outcome.money_steps, "traded evidence roundtrip preserves capital money steps"
     original = summarize_evidence((session,), starting_capital_usd=D("10000"), annualization_sessions=251)
-    assert summarize_evidence((restored,), starting_capital_usd=D("10000"), annualization_sessions=251) == original
+    assert summarize_evidence((restored,), starting_capital_usd=D("10000"), annualization_sessions=251) == original, (
+        "traded evidence roundtrip: the restored session summarises identically"
+    )
 
 
 def test_missing_trace_and_missing_marks_never_disappear_behind_profitable_final_equity() -> None:

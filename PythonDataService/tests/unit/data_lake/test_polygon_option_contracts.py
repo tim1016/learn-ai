@@ -95,22 +95,8 @@ async def test_the_query_is_as_of_the_date_with_no_expired_flag() -> None:
 
 
 @respx.mock
-async def test_a_later_page_keeps_the_vendors_cursor() -> None:
+async def test_a_later_page_keeps_the_vendors_cursor_and_the_key_rides_in_a_header_on_every_page_and_in_no_url() -> None:
     """httpx replaces a URL's query when ``params`` is passed; a fetcher that did so would read page one again."""
-    respx.get(CONTRACTS_URL, params={"underlying_ticker": "SPY"}).mock(
-        return_value=_page([_row("O:SPY250613C00375000", 375)], next_url=SECOND_PAGE)
-    )
-    second = respx.get(CONTRACTS_URL, params={"cursor": "page2"}).mock(return_value=_page([_row("O:SPY250613C00376000", 376)]))
-
-    await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY)
-
-    asked = second.calls[0].request.url.params
-    assert asked["cursor"] == "page2"
-    assert "underlying_ticker" not in asked
-
-
-@respx.mock
-async def test_the_key_rides_in_a_header_on_every_page_and_in_no_url() -> None:
     first = respx.get(CONTRACTS_URL, params={"underlying_ticker": "SPY"}).mock(
         return_value=_page([_row("O:SPY250613C00375000", 375)], next_url=SECOND_PAGE)
     )
@@ -118,11 +104,16 @@ async def test_the_key_rides_in_a_header_on_every_page_and_in_no_url() -> None:
 
     await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY)
 
-    for route in (first, second):
+    asked = second.calls[0].request.url.params
+    assert asked["cursor"] == "page2", "a later page keeps the vendor's cursor"
+    assert "underlying_ticker" not in asked, "a later page does not re-send the first page's query"
+    for page, route in (("first", first), ("second", second)):
         request = route.calls[0].request
-        assert request.headers["Authorization"] == f"Bearer {SENTINEL_KEY}"
-        assert SENTINEL_KEY not in str(request.url)
-        assert "apikey" not in str(request.url).lower()
+        assert request.headers["Authorization"] == f"Bearer {SENTINEL_KEY}", (
+            f"the key rides in an Authorization header on the {page} page"
+        )
+        assert SENTINEL_KEY not in str(request.url), f"the key is in no URL on the {page} page"
+        assert "apikey" not in str(request.url).lower(), f"no apikey parameter is in the URL on the {page} page"
 
 
 @respx.mock
@@ -179,66 +170,70 @@ async def test_additional_underlyings_are_noticed_and_a_missing_field_is_left_un
 
 
 @respx.mock
-async def test_a_page_that_fails_part_way_is_an_error_never_a_shorter_listing() -> None:
+@pytest.mark.parametrize(
+    ("make_failure", "error", "match", "status_code"),
+    [
+        (lambda: httpx.Response(502, text="bad gateway"), PolygonFetchError, None, 502),
+        (lambda: httpx.Response(429), PolygonRateLimitedError, None, 429),
+        (lambda: httpx.ConnectTimeout("slow"), PolygonFetchError, "timed out", None),
+    ],
+    ids=[
+        "a_page_that_fails_part_way_is_an_error_never_a_shorter_listing",
+        "a_rate_limit_on_a_later_page_keeps_its_own_type",
+        "a_timeout_on_a_later_page_is_an_error",
+    ],
+)
+async def test_a_failure_on_a_later_page_is_a_typed_error(
+    make_failure: Any, error: type[PolygonFetchError], match: str | None, status_code: int | None
+) -> None:
     respx.get(CONTRACTS_URL, params={"underlying_ticker": "SPY"}).mock(
         return_value=_page([_row("O:SPY250613C00375000", 375)], next_url=SECOND_PAGE)
     )
-    respx.get(CONTRACTS_URL, params={"cursor": "page2"}).mock(return_value=httpx.Response(502, text="bad gateway"))
+    respx.get(CONTRACTS_URL, params={"cursor": "page2"}).mock(side_effect=make_failure())
 
-    with pytest.raises(PolygonFetchError) as raised:
+    with pytest.raises(error, match=match) as raised:
         await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY)
 
-    assert raised.value.status_code == 502
+    assert raised.value.status_code == status_code, "the error carries the status the vendor answered with (none for a timeout)"
 
 
 @respx.mock
-async def test_a_rate_limit_on_a_later_page_keeps_its_own_type() -> None:
-    respx.get(CONTRACTS_URL, params={"underlying_ticker": "SPY"}).mock(
-        return_value=_page([_row("O:SPY250613C00375000", 375)], next_url=SECOND_PAGE)
-    )
-    respx.get(CONTRACTS_URL, params={"cursor": "page2"}).mock(return_value=httpx.Response(429))
+@pytest.mark.parametrize(
+    ("make_answer", "error", "match"),
+    [
+        (lambda: httpx.Response(401, text="no"), PolygonAuthError, None),
+        (lambda: httpx.Response(403, text="not entitled"), PolygonEntitlementError, None),
+        (
+            lambda: httpx.Response(200, json={"status": "ERROR", "error": "something broke", "results": []}),
+            PolygonFetchError,
+            "status=ERROR",
+        ),
+        (lambda: httpx.Response(200, json={"results": []}), PolygonFetchError, "did not confirm"),
+        (lambda: httpx.Response(200, text="<html>maintenance</html>"), PolygonFetchError, "not JSON"),
+        (
+            lambda: httpx.Response(
+                403,
+                json={"status": "NOT_AUTHORIZED", "request_id": "r", "message": "Your plan doesn't include this data timeframe. Please upgrade your plan at https://polygon.io/pricing"},
+            ),
+            PolygonOutsidePlanError,
+            "timeframe",
+        ),
+    ],
+    ids=[
+        "the_keys_own_failure_401_keeps_its_type",
+        "the_keys_own_failure_403_keeps_its_type",
+        "a_page_that_does_not_confirm_ok_is_an_error",
+        "a_page_with_no_status_at_all_is_not_taken_as_a_complete_answer",
+        "a_page_that_is_not_json_is_an_error",
+        "a_403_that_says_the_plan_lacks_the_data_timeframe_is_the_outside_plan_error",
+    ],
+)
+async def test_a_page_that_is_no_confirmed_answer_is_a_typed_error(
+    make_answer: Any, error: type[PolygonFetchError], match: str | None
+) -> None:
+    respx.get(CONTRACTS_URL).mock(return_value=make_answer())
 
-    with pytest.raises(PolygonRateLimitedError):
-        await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY)
-
-
-@respx.mock
-async def test_a_timeout_on_a_later_page_is_an_error() -> None:
-    respx.get(CONTRACTS_URL, params={"underlying_ticker": "SPY"}).mock(
-        return_value=_page([_row("O:SPY250613C00375000", 375)], next_url=SECOND_PAGE)
-    )
-    respx.get(CONTRACTS_URL, params={"cursor": "page2"}).mock(side_effect=httpx.ConnectTimeout("slow"))
-
-    with pytest.raises(PolygonFetchError, match="timed out"):
-        await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY)
-
-
-@respx.mock
-async def test_the_keys_own_failures_keep_their_types() -> None:
-    respx.get(CONTRACTS_URL).mock(return_value=httpx.Response(401, text="no"))
-    with pytest.raises(PolygonAuthError):
-        await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY)
-
-    respx.get(CONTRACTS_URL).mock(return_value=httpx.Response(403, text="not entitled"))
-    with pytest.raises(PolygonEntitlementError):
-        await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY)
-
-
-@respx.mock
-async def test_a_page_that_does_not_confirm_ok_is_an_error() -> None:
-    respx.get(CONTRACTS_URL).mock(
-        return_value=httpx.Response(200, json={"status": "ERROR", "error": "something broke", "results": []})
-    )
-
-    with pytest.raises(PolygonFetchError, match="status=ERROR"):
-        await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY)
-
-
-@respx.mock
-async def test_a_page_with_no_status_at_all_is_not_taken_as_a_complete_answer() -> None:
-    respx.get(CONTRACTS_URL).mock(return_value=httpx.Response(200, json={"results": []}))
-
-    with pytest.raises(PolygonFetchError, match="did not confirm"):
+    with pytest.raises(error, match=match):
         await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY)
 
 
@@ -287,19 +282,6 @@ async def test_a_redirect_to_another_host_is_an_error_and_the_key_is_not_forward
         await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY)
 
     assert elsewhere.call_count == 0
-
-
-@respx.mock
-async def test_a_403_that_says_the_plan_lacks_the_data_timeframe_is_the_outside_plan_error() -> None:
-    respx.get(CONTRACTS_URL).mock(
-        return_value=httpx.Response(
-            403,
-            json={"status": "NOT_AUTHORIZED", "request_id": "r", "message": "Your plan doesn't include this data timeframe. Please upgrade your plan at https://polygon.io/pricing"},
-        )
-    )
-
-    with pytest.raises(PolygonOutsidePlanError, match="timeframe"):
-        await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY)
 
 
 @respx.mock
@@ -508,14 +490,6 @@ async def test_an_empty_last_page_after_real_ones_ends_the_listing_with_the_page
     contracts = await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY)
 
     assert [c.ticker for c in contracts] == ["O:SPY250613C00375000"]
-
-
-@respx.mock
-async def test_a_page_that_is_not_json_is_an_error() -> None:
-    respx.get(CONTRACTS_URL).mock(return_value=httpx.Response(200, text="<html>maintenance</html>"))
-
-    with pytest.raises(PolygonFetchError, match="not JSON"):
-        await fetch_option_contracts("SPY", AS_OF, SENTINEL_KEY)
 
 
 # ── The end of a listing is a next_url that is absent or null, and nothing else ──

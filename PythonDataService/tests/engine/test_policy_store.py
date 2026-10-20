@@ -15,25 +15,15 @@ from app.engine.data.policy_store import (
 from app.lean_sidecar.workspace import SymbolValidationError
 
 
-def test_resolve_data_roots_returns_the_lake_root_alone(monkeypatch, tmp_path: Path):
+def test_resolve_data_roots_returns_the_lake_root_alone_for_each_adjustment_mode(monkeypatch, tmp_path: Path):
     """The lake is the only reader root (#1893).
 
     The pre-lake arrangement stacked a read-only reference mount in front of a
     policy-keyed cache subtree, selected by DATA_LAKE_ENABLED. Both are gone:
     a run must be able to say which bytes it consumed, and a fixture silently
     outranking the lake would make that answer a lie.
-    """
-    monkeypatch.setenv("LEAN_DATA_WRITE_ROOT", str(tmp_path))
 
-    roots = resolve_data_roots(source="polygon", adjusted=False)
-
-    assert roots == [path_policy.resolve_lake_root("raw")]
-    assert roots[0].exists(), "the lake root is created if missing"
-
-
-def test_resolve_data_roots_serves_each_adjustment_mode_from_its_own_root(monkeypatch, tmp_path: Path):
-    """``adjusted`` selects a different physical root, and is never refused.
-
+    ``adjusted`` selects a different physical root, and is never refused.
     Since #1866 the mode is a segment of the root, so raw and split-adjusted
     requests cannot name the same directory -- which is what makes returning
     the requested mode's bytes, rather than raising, the honest answer.
@@ -41,11 +31,17 @@ def test_resolve_data_roots_serves_each_adjustment_mode_from_its_own_root(monkey
     monkeypatch.setenv("LEAN_DATA_WRITE_ROOT", str(tmp_path))
 
     raw = resolve_data_roots(source="polygon", adjusted=False)
+
+    assert raw == [path_policy.resolve_lake_root("raw")], "the lake is the only reader root (#1893)"
+    assert raw[0].exists(), "the lake root is created if missing"
+
     adjusted = resolve_data_roots(source="polygon", adjusted=True)
 
-    assert raw == [path_policy.resolve_lake_root("raw")]
-    assert adjusted == [path_policy.resolve_lake_root("polygon_split_adjusted")]
-    assert raw != adjusted
+    assert raw == [path_policy.resolve_lake_root("raw")], "asking for the adjusted root leaves the raw root as it was"
+    assert adjusted == [path_policy.resolve_lake_root("polygon_split_adjusted")], (
+        "adjusted selects the split-adjusted root and is never refused (#1866)"
+    )
+    assert raw != adjusted, "raw and split-adjusted requests never name the same directory"
 
 
 def test_snapshot_minute_trade_zips_is_path_independent_and_reference_first(tmp_path: Path):

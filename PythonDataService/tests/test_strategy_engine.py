@@ -67,44 +67,34 @@ def long_straddle() -> list[StrategyLeg]:
 
 
 class TestPayoffAtExpiry:
-    def test_single_long_call(self):
-        legs = [_leg(100, "call", "long", 5.0)]
-        assert compute_payoff_at_expiry(legs, 110) == pytest.approx(5.0)
-        assert compute_payoff_at_expiry(legs, 100) == pytest.approx(-5.0)
-        assert compute_payoff_at_expiry(legs, 90) == pytest.approx(-5.0)
+    @pytest.mark.parametrize(
+        ("legs_factory", "price", "expected"),
+        [
+            pytest.param(bull_call_spread, 90, -3.0, id="bull_call_spread_below_lower"),
+            pytest.param(bull_call_spread, 103, 0.0, id="bull_call_spread_at_breakeven"),
+            pytest.param(bull_call_spread, 102, -1.0, id="bull_call_spread_between_strikes"),
+            pytest.param(bull_call_spread, 120, 2.0, id="bull_call_spread_above_upper"),
+            pytest.param(long_straddle, 100, -9.0, id="long_straddle_at_strike"),
+            pytest.param(long_straddle, 115, 6.0, id="long_straddle_profitable_up"),
+            pytest.param(long_straddle, 85, 6.0, id="long_straddle_profitable_down"),
+        ],
+    )
+    def test_spread_and_straddle_payoff(self, legs_factory, price, expected):
+        assert compute_payoff_at_expiry(legs_factory(), price) == pytest.approx(expected)
 
-    def test_single_short_put(self):
-        legs = [_leg(95, "put", "short", 3.0)]
-        assert compute_payoff_at_expiry(legs, 100) == pytest.approx(3.0)
-        assert compute_payoff_at_expiry(legs, 90) == pytest.approx(-2.0)
-
-    def test_bull_call_spread_below_lower(self):
-        legs = bull_call_spread()
-        assert compute_payoff_at_expiry(legs, 90) == pytest.approx(-3.0)
-
-    def test_bull_call_spread_at_breakeven(self):
-        legs = bull_call_spread()
-        assert compute_payoff_at_expiry(legs, 103) == pytest.approx(0.0)
-
-    def test_bull_call_spread_between_strikes(self):
-        legs = bull_call_spread()
-        assert compute_payoff_at_expiry(legs, 102) == pytest.approx(-1.0)
-
-    def test_bull_call_spread_above_upper(self):
-        legs = bull_call_spread()
-        assert compute_payoff_at_expiry(legs, 120) == pytest.approx(2.0)
-
-    def test_long_straddle_at_strike(self):
-        legs = long_straddle()
-        assert compute_payoff_at_expiry(legs, 100) == pytest.approx(-9.0)
-
-    def test_long_straddle_profitable_up(self):
-        legs = long_straddle()
-        assert compute_payoff_at_expiry(legs, 115) == pytest.approx(6.0)
-
-    def test_long_straddle_profitable_down(self):
-        legs = long_straddle()
-        assert compute_payoff_at_expiry(legs, 85) == pytest.approx(6.0)
+    @pytest.mark.parametrize(
+        ("strike", "opt_type", "pos", "premium", "price", "expected"),
+        [
+            pytest.param(100, "call", "long", 5.0, 110, 5.0, id="single_long_call_above_strike"),
+            pytest.param(100, "call", "long", 5.0, 100, -5.0, id="single_long_call_at_strike"),
+            pytest.param(100, "call", "long", 5.0, 90, -5.0, id="single_long_call_below_strike"),
+            pytest.param(95, "put", "short", 3.0, 100, 3.0, id="single_short_put_above_strike"),
+            pytest.param(95, "put", "short", 3.0, 90, -2.0, id="single_short_put_below_strike"),
+        ],
+    )
+    def test_single_leg_payoff(self, strike, opt_type, pos, premium, price, expected):
+        legs = [_leg(strike, opt_type, pos, premium)]
+        assert compute_payoff_at_expiry(legs, price) == pytest.approx(expected)
 
 
 # ---------------------------------------------------------------------------
@@ -113,11 +103,15 @@ class TestPayoffAtExpiry:
 
 
 class TestStrategyCost:
-    def test_bull_call_spread_debit(self):
-        assert compute_strategy_cost(bull_call_spread()) == pytest.approx(3.0)
-
-    def test_long_straddle_debit(self):
-        assert compute_strategy_cost(long_straddle()) == pytest.approx(9.0)
+    @pytest.mark.parametrize(
+        ("legs_factory", "expected"),
+        [
+            pytest.param(bull_call_spread, 3.0, id="bull_call_spread_debit"),
+            pytest.param(long_straddle, 9.0, id="long_straddle_debit"),
+        ],
+    )
+    def test_strategy_cost_debit(self, legs_factory, expected):
+        assert compute_strategy_cost(legs_factory()) == pytest.approx(expected)
 
 
 # ---------------------------------------------------------------------------
@@ -126,15 +120,17 @@ class TestStrategyCost:
 
 
 class TestBreakevens:
-    def test_bull_call_spread_single_breakeven(self):
-        bes = find_breakevens(bull_call_spread())
-        assert len(bes) == 1
-        assert bes[0] == pytest.approx(103.0, abs=0.1)
-
-    def test_bear_put_spread_single_breakeven(self):
-        bes = find_breakevens(bear_put_spread())
-        assert len(bes) == 1
-        assert bes[0] == pytest.approx(102.5, abs=0.1)
+    @pytest.mark.parametrize(
+        ("legs_factory", "expected"),
+        [
+            pytest.param(bull_call_spread, 103.0, id="bull_call_spread_single_breakeven"),
+            pytest.param(bear_put_spread, 102.5, id="bear_put_spread_single_breakeven"),
+        ],
+    )
+    def test_single_breakeven(self, legs_factory, expected):
+        bes = find_breakevens(legs_factory())
+        assert len(bes) == 1, "exactly one breakeven"
+        assert bes[0] == pytest.approx(expected, abs=0.1), "breakeven location"
 
 
 # ---------------------------------------------------------------------------
@@ -249,28 +245,20 @@ class TestExtremesAndBreakevensFromTheWholePayoff:
 
 
 class TestWeightedIV:
-    def test_equal_premiums(self):
+    @pytest.mark.parametrize(
+        ("long_premium", "long_iv", "short_premium", "short_iv", "expected"),
+        [
+            pytest.param(5.0, 0.20, 5.0, 0.30, 0.25, id="equal_premiums"),
+            pytest.param(10.0, 0.20, 2.0, 0.30, (10.0 * 0.20 + 2.0 * 0.30) / 12.0, id="unequal_premiums"),
+            pytest.param(5.0, 0.0, 3.0, 0.25, 0.25, id="zero_iv_skipped"),
+        ],
+    )
+    def test_weighted_iv(self, long_premium, long_iv, short_premium, short_iv, expected):
         legs = [
-            _leg(100, "call", "long", 5.0, iv=0.20),
-            _leg(105, "call", "short", 5.0, iv=0.30),
+            _leg(100, "call", "long", long_premium, iv=long_iv),
+            _leg(105, "call", "short", short_premium, iv=short_iv),
         ]
-        assert weighted_iv(legs) == pytest.approx(0.25, abs=0.001)
-
-    def test_unequal_premiums(self):
-        legs = [
-            _leg(100, "call", "long", 10.0, iv=0.20),
-            _leg(105, "call", "short", 2.0, iv=0.30),
-        ]
-        result = weighted_iv(legs)
-        expected = (10.0 * 0.20 + 2.0 * 0.30) / 12.0
-        assert result == pytest.approx(expected, abs=0.001)
-
-    def test_zero_iv_skipped(self):
-        legs = [
-            _leg(100, "call", "long", 5.0, iv=0.0),
-            _leg(105, "call", "short", 3.0, iv=0.25),
-        ]
-        assert weighted_iv(legs) == pytest.approx(0.25, abs=0.001)
+        assert weighted_iv(legs) == pytest.approx(expected, abs=0.001)
 
 
 # ---------------------------------------------------------------------------
@@ -284,11 +272,15 @@ class TestD2:
         expected = (math.log(1.0) + (0.05 - 0.02) * 1.0) / 0.20
         assert d2 == pytest.approx(expected, abs=0.0001)
 
-    def test_zero_sigma_returns_zero(self):
-        assert compute_d2(100, 100, 0.05, 0.0, 1.0) == 0.0
-
-    def test_zero_time_returns_zero(self):
-        assert compute_d2(100, 100, 0.05, 0.20, 0.0) == 0.0
+    @pytest.mark.parametrize(
+        ("sigma", "t"),
+        [
+            pytest.param(0.0, 1.0, id="zero_sigma_returns_zero"),
+            pytest.param(0.20, 0.0, id="zero_time_returns_zero"),
+        ],
+    )
+    def test_degenerate_sigma_or_time_returns_zero(self, sigma, t):
+        assert compute_d2(100, 100, 0.05, sigma, t) == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -315,27 +307,27 @@ class TestPOP:
         assert compute_pop(legs, 100, 0.0, 30 / 365.0) == pytest.approx(0.1979902692, abs=1e-6, rel=0)
         assert compute_pop(legs, 100, 0.0, 0.0) == 0.0
 
-    def test_returns_between_0_and_1(self):
-        pop = compute_pop(bull_call_spread(), 102, 0.043, 30 / 365.0)
-        assert 0.0 <= pop <= 1.0
+    def test_pop_by_moneyness(self):
+        legs = bull_call_spread()
+        pop = compute_pop(legs, 102, 0.043, 30 / 365.0)
+        assert 0.0 <= pop <= 1.0, "returns between 0 and 1"
+        # If spot is well above both strikes, POP should be high.
+        pop = compute_pop(legs, 150, 0.043, 30 / 365.0)
+        assert pop > 0.8, "deep ITM has a high POP"
+        # If spot is well below lower strike, POP should be low.
+        pop = compute_pop(legs, 80, 0.043, 30 / 365.0)
+        assert pop < 0.2, "deep OTM has a low POP"
 
-    def test_deep_itm_high_pop(self):
-        """If spot is well above both strikes, POP should be high."""
-        pop = compute_pop(bull_call_spread(), 150, 0.043, 30 / 365.0)
-        assert pop > 0.8
-
-    def test_deep_otm_low_pop(self):
-        """If spot is well below lower strike, POP should be low."""
-        pop = compute_pop(bull_call_spread(), 80, 0.043, 30 / 365.0)
-        assert pop < 0.2
-
-    def test_at_expiry_profitable(self):
-        pop = compute_pop(bull_call_spread(), 105, 0.043, 0.0)
-        assert pop == 1.0
-
-    def test_at_expiry_unprofitable(self):
-        pop = compute_pop(bull_call_spread(), 95, 0.043, 0.0)
-        assert pop == 0.0
+    @pytest.mark.parametrize(
+        ("spot", "expected"),
+        [
+            pytest.param(105, 1.0, id="at_expiry_profitable"),
+            pytest.param(95, 0.0, id="at_expiry_unprofitable"),
+        ],
+    )
+    def test_at_expiry_pop(self, spot, expected):
+        pop = compute_pop(bull_call_spread(), spot, 0.043, 0.0)
+        assert pop == expected
 
 
 # ---------------------------------------------------------------------------
@@ -462,39 +454,27 @@ class TestTimeToExpiry:
 
 
 class TestInterpolateIV:
-    def test_at_strike_returns_that_iv(self):
+    @pytest.mark.parametrize(
+        ("price", "expected"),
+        [
+            pytest.param(100, 0.20, id="at_strike_returns_that_iv_lower"),
+            pytest.param(110, 0.30, id="at_strike_returns_that_iv_upper"),
+            # Midpoint should be average
+            pytest.param(105, 0.25, id="between_strikes_midpoint"),
+            # 75% of the way
+            pytest.param(107.5, 0.275, id="between_strikes_75_percent"),
+            # Below lowest strike → use lowest IV
+            pytest.param(80, 0.20, id="below_all_strikes"),
+            # Above highest strike → use highest IV
+            pytest.param(130, 0.30, id="above_all_strikes"),
+        ],
+    )
+    def test_interpolates_between_two_strikes(self, price, expected):
         legs = [
             _leg(100, "call", "long", 5.0, iv=0.20),
             _leg(110, "call", "short", 2.0, iv=0.30),
         ]
-        assert interpolate_iv_at_price(legs, 100) == pytest.approx(0.20, abs=0.001)
-        assert interpolate_iv_at_price(legs, 110) == pytest.approx(0.30, abs=0.001)
-
-    def test_between_strikes(self):
-        legs = [
-            _leg(100, "call", "long", 5.0, iv=0.20),
-            _leg(110, "call", "short", 2.0, iv=0.30),
-        ]
-        # Midpoint should be average
-        assert interpolate_iv_at_price(legs, 105) == pytest.approx(0.25, abs=0.001)
-        # 75% of the way
-        assert interpolate_iv_at_price(legs, 107.5) == pytest.approx(0.275, abs=0.001)
-
-    def test_below_all_strikes(self):
-        legs = [
-            _leg(100, "call", "long", 5.0, iv=0.20),
-            _leg(110, "call", "short", 2.0, iv=0.30),
-        ]
-        # Below lowest strike → use lowest IV
-        assert interpolate_iv_at_price(legs, 80) == pytest.approx(0.20, abs=0.001)
-
-    def test_above_all_strikes(self):
-        legs = [
-            _leg(100, "call", "long", 5.0, iv=0.20),
-            _leg(110, "call", "short", 2.0, iv=0.30),
-        ]
-        # Above highest strike → use highest IV
-        assert interpolate_iv_at_price(legs, 130) == pytest.approx(0.30, abs=0.001)
+        assert interpolate_iv_at_price(legs, price) == pytest.approx(expected, abs=0.001)
 
     def test_zero_iv_legs_skipped(self):
         legs = [
@@ -548,25 +528,21 @@ def naked_put() -> list[StrategyLeg]:
 
 
 class TestIronCondorPayoff:
-    def test_max_profit_in_middle(self):
-        """Between the short strikes (95-105), full credit is kept."""
+    @pytest.mark.parametrize(
+        ("price", "expected"),
+        [
+            # Between the short strikes (95-105), full credit is kept.
+            pytest.param(100, 2.0 + 2.0 - 0.50 - 0.50, id="max_profit_in_middle"),  # = 3.0
+            # Below 90 (long put strike), max loss is capped: net credit 3 - spread width 5 = -2
+            pytest.param(80, -2.0, id="max_loss_below_lower_wing"),
+            # Above 110 (long call strike), max loss is capped.
+            pytest.param(120, -2.0, id="max_loss_above_upper_wing"),
+        ],
+    )
+    def test_payoff_at_expiry(self, price, expected):
         legs = iron_condor()
-        pnl = compute_payoff_at_expiry(legs, 100)
-        expected_credit = 2.0 + 2.0 - 0.50 - 0.50  # = 3.0
-        assert pnl == pytest.approx(expected_credit)
-
-    def test_max_loss_below_lower_wing(self):
-        """Below 90 (long put strike), max loss is capped."""
-        legs = iron_condor()
-        pnl = compute_payoff_at_expiry(legs, 80)
-        # Net credit 3 - spread width 5 = -2
-        assert pnl == pytest.approx(-2.0)
-
-    def test_max_loss_above_upper_wing(self):
-        """Above 110 (long call strike), max loss is capped."""
-        legs = iron_condor()
-        pnl = compute_payoff_at_expiry(legs, 120)
-        assert pnl == pytest.approx(-2.0)
+        pnl = compute_payoff_at_expiry(legs, price)
+        assert pnl == pytest.approx(expected)
 
     def test_breakevens(self):
         """Iron condor has two breakevens."""
@@ -601,20 +577,14 @@ class TestIronCondorFull:
 
 
 class TestNakedPut:
-    def test_profit_above_strike(self):
+    def test_payoff_at_expiry(self):
         legs = naked_put()
-        assert compute_payoff_at_expiry(legs, 100) == pytest.approx(2.0)
-
-    def test_loss_below_strike(self):
-        legs = naked_put()
+        assert compute_payoff_at_expiry(legs, 100) == pytest.approx(2.0), "profit above strike"
         # At 90: put intrinsic = 5, short position: 2 - 5 = -3
-        assert compute_payoff_at_expiry(legs, 90) == pytest.approx(-3.0)
-
-    def test_unlimited_risk(self):
-        """Naked put has theoretically large (if not unlimited) downside."""
-        legs = naked_put()
+        assert compute_payoff_at_expiry(legs, 90) == pytest.approx(-3.0), "loss below strike"
+        # Naked put has theoretically large (if not unlimited) downside.
         pnl_at_50 = compute_payoff_at_expiry(legs, 50)
-        assert pnl_at_50 < -40  # large loss
+        assert pnl_at_50 < -40, "unlimited risk: large loss"
 
     def test_single_breakeven(self):
         bes = find_breakevens(naked_put())
@@ -626,24 +596,22 @@ class TestNakedPut:
 
 
 class TestCoveredCall:
-    def test_profit_capped_at_upper_strike(self):
+    @pytest.mark.parametrize(
+        ("price", "expected"),
+        [
+            # Above 110: long 100C earns 10+, short 110C costs the excess
+            # Long 100C: 20 - 0 = 20, short 110C: 3 - 10 = -7 → net 13
+            pytest.param(120, 13.0, id="profit_capped_at_upper_strike"),
+            # At 100: both OTM, just net credit from short call (only short call premium)
+            pytest.param(100, 3.0, id="at_lower_strike"),
+            # Below 100: both OTM, still just keep the credit
+            pytest.param(90, 3.0, id="below_lower_strike"),
+        ],
+    )
+    def test_payoff_at_expiry(self, price, expected):
         legs = covered_call()
-        # Above 110: long 100C earns 10+, short 110C costs the excess
-        pnl_120 = compute_payoff_at_expiry(legs, 120)
-        # Long 100C: 20 - 0 = 20, short 110C: 3 - 10 = -7 → net 13
-        assert pnl_120 == pytest.approx(13.0)
-
-    def test_at_lower_strike(self):
-        legs = covered_call()
-        # At 100: both OTM, just net credit from short call
-        pnl = compute_payoff_at_expiry(legs, 100)
-        assert pnl == pytest.approx(3.0)  # only short call premium
-
-    def test_below_lower_strike(self):
-        legs = covered_call()
-        # Below 100: both OTM, still just keep the credit
-        pnl = compute_payoff_at_expiry(legs, 90)
-        assert pnl == pytest.approx(3.0)
+        pnl = compute_payoff_at_expiry(legs, price)
+        assert pnl == pytest.approx(expected)
 
 
 class TestBearPutSpread:
@@ -668,41 +636,29 @@ class TestBearPutSpread:
 
 
 class TestGreeks:
-    def test_long_call_positive_delta(self):
+    @pytest.mark.parametrize(
+        ("pos", "sign"),
+        [
+            pytest.param("long", 1, id="long_call_positive_delta"),
+            pytest.param("short", -1, id="short_call_negative_delta"),
+        ],
+    )
+    def test_call_delta_sign(self, pos, sign):
         from app.services.strategy_engine import compute_strategy_greeks
 
-        legs = [_leg(100, "call", "long", 5.0, iv=0.25)]
+        legs = [_leg(100, "call", pos, 5.0, iv=0.25)]
         greeks = compute_strategy_greeks(legs, spot=100, r=0.043, ttm_years=30 / 365.0)
-        assert greeks.delta > 0
+        assert greeks.delta * sign > 0
 
-    def test_short_call_negative_delta(self):
-        from app.services.strategy_engine import compute_strategy_greeks
-
-        legs = [_leg(100, "call", "short", 5.0, iv=0.25)]
-        greeks = compute_strategy_greeks(legs, spot=100, r=0.043, ttm_years=30 / 365.0)
-        assert greeks.delta < 0
-
-    def test_straddle_near_zero_delta(self):
+    def test_long_straddle_greeks(self):
         from app.services.strategy_engine import compute_strategy_greeks
 
         legs = long_straddle()
         greeks = compute_strategy_greeks(legs, spot=100, r=0.043, ttm_years=30 / 365.0)
         # ATM straddle is roughly delta neutral
-        assert abs(greeks.delta) < 0.15
-
-    def test_straddle_positive_gamma(self):
-        from app.services.strategy_engine import compute_strategy_greeks
-
-        legs = long_straddle()
-        greeks = compute_strategy_greeks(legs, spot=100, r=0.043, ttm_years=30 / 365.0)
-        assert greeks.gamma > 0  # long options = long gamma
-
-    def test_straddle_negative_theta(self):
-        from app.services.strategy_engine import compute_strategy_greeks
-
-        legs = long_straddle()
-        greeks = compute_strategy_greeks(legs, spot=100, r=0.043, ttm_years=30 / 365.0)
-        assert greeks.theta < 0  # long options = time decay
+        assert abs(greeks.delta) < 0.15, "straddle has near-zero delta"
+        assert greeks.gamma > 0, "straddle has positive gamma (long options = long gamma)"
+        assert greeks.theta < 0, "straddle has negative theta (long options = time decay)"
 
     def test_quantity_multiplier(self):
         from app.services.strategy_engine import compute_strategy_greeks
@@ -714,16 +670,10 @@ class TestGreeks:
         assert g2.delta == pytest.approx(g1.delta * 2, abs=0.001)
         assert g2.gamma == pytest.approx(g1.gamma * 2, abs=0.001)
 
-    def test_at_expiry_call_itm_delta_one(self):
+    def test_at_expiry_call_greeks(self):
         from app.services.strategy_engine import compute_strategy_greeks
 
         legs = [_leg(100, "call", "long", 5.0, iv=0.25)]
         greeks = compute_strategy_greeks(legs, spot=110, r=0.043, ttm_years=0.0)
-        assert greeks.delta == pytest.approx(1.0, abs=0.001)
-
-    def test_at_expiry_zero_gamma(self):
-        from app.services.strategy_engine import compute_strategy_greeks
-
-        legs = [_leg(100, "call", "long", 5.0, iv=0.25)]
-        greeks = compute_strategy_greeks(legs, spot=110, r=0.043, ttm_years=0.0)
-        assert greeks.gamma == 0.0
+        assert greeks.delta == pytest.approx(1.0, abs=0.001), "ITM call at expiry has delta one"
+        assert greeks.gamma == 0.0, "at expiry gamma is zero"

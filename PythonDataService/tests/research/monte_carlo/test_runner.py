@@ -107,7 +107,7 @@ def parent_run(tmp_path: Path):
 # ---------------------------------------------------------------------------
 # Happy paths.
 # ---------------------------------------------------------------------------
-def test_reshuffle_returns_completed_status(tmp_path: Path, parent_run):
+def test_reshuffle_and_resample_runs_complete(tmp_path: Path, parent_run):
     ledger, result = parent_run
     if not result.trades:
         pytest.skip("synthetic series produced zero trades on parent run")
@@ -121,19 +121,13 @@ def test_reshuffle_returns_completed_status(tmp_path: Path, parent_run):
         ),
         artifacts_root=tmp_path,
     )
-    assert mc.status == "completed"
-    assert config.method == "reshuffle"
-    assert mc.simulation_count == 100
-    assert mc.realised_trade_count == len(result.trades)
+    assert mc.status == "completed", "reshuffle returns completed status"
+    assert config.method == "reshuffle", "reshuffle config records the method"
+    assert mc.simulation_count == 100, "reshuffle keeps the requested simulation count"
+    assert mc.realised_trade_count == len(result.trades), "reshuffle realises the parent trade count"
     # Equity bands have len(trades) + 1 points (one before any trade,
     # one after each).
-    assert len(mc.equity_bands) == len(result.trades) + 1
-
-
-def test_resample_returns_completed_status(tmp_path: Path, parent_run):
-    ledger, result = parent_run
-    if not result.trades:
-        pytest.skip("synthetic series produced zero trades on parent run")
+    assert len(mc.equity_bands) == len(result.trades) + 1, "reshuffle equity bands have len(trades) + 1 points"
 
     _, mc = run_monte_carlo(
         MonteCarloRequest(
@@ -144,13 +138,7 @@ def test_resample_returns_completed_status(tmp_path: Path, parent_run):
         ),
         artifacts_root=tmp_path,
     )
-    assert mc.status == "completed"
-
-
-def test_resample_with_projection_extends_path_length(tmp_path: Path, parent_run):
-    ledger, result = parent_run
-    if not result.trades:
-        pytest.skip("synthetic series produced zero trades on parent run")
+    assert mc.status == "completed", "resample returns completed status"
 
     target = len(result.trades) * 3  # 3× historical
     _, mc = run_monte_carlo(
@@ -163,8 +151,8 @@ def test_resample_with_projection_extends_path_length(tmp_path: Path, parent_run
         ),
         artifacts_root=tmp_path,
     )
-    assert mc.realised_trade_count == target
-    assert len(mc.equity_bands) == target + 1
+    assert mc.realised_trade_count == target, "resample with projection extends realised trade count"
+    assert len(mc.equity_bands) == target + 1, "resample with projection extends equity bands to target + 1 points"
 
 
 # ---------------------------------------------------------------------------
@@ -186,24 +174,6 @@ def test_equity_bands_satisfy_p5_le_p50_le_p95(tmp_path: Path, parent_run):
     )
     for point in mc.equity_bands:
         assert point.p5 <= point.p50 <= point.p95
-
-
-def test_drawdown_quantiles_satisfy_p5_le_p50_le_p95(tmp_path: Path, parent_run):
-    ledger, result = parent_run
-    if not result.trades:
-        pytest.skip("zero trades on parent run")
-
-    _, mc = run_monte_carlo(
-        MonteCarloRequest(
-            parent_run_id=ledger.run_id,
-            method="resample",
-            simulation_count=200,
-            random_seed=0,
-        ),
-        artifacts_root=tmp_path,
-    )
-    q = mc.drawdown_quantiles
-    assert q["p5"] <= q["p50"] <= q["p95"]
 
 
 def test_breach_probabilities_in_unit_interval(tmp_path: Path, parent_run):
@@ -295,9 +265,10 @@ def test_different_seeds_produce_different_results(tmp_path: Path, parent_run):
 
 
 # ---------------------------------------------------------------------------
-# Streak quantiles are integers, never floored from interpolation.
+# Drawdown quantiles are ordered; streak quantiles are integers, never
+# floored from interpolation.
 # ---------------------------------------------------------------------------
-def test_streak_quantiles_are_observed_integer_streaks(tmp_path: Path, parent_run):
+def test_drawdown_and_streak_quantiles(tmp_path: Path, parent_run):
     """Streak quantiles must come from actual streak observations
     (``np.percentile(method='nearest')``), not linear-interpolated
     fractions floored to int. Regression for PR #112 Codex P2 — a
@@ -317,18 +288,21 @@ def test_streak_quantiles_are_observed_integer_streaks(tmp_path: Path, parent_ru
         artifacts_root=tmp_path,
     )
 
+    q = mc.drawdown_quantiles
+    assert q["p5"] <= q["p50"] <= q["p95"], "drawdown quantiles satisfy p5 <= p50 <= p95"
+
     # All streak quantiles are ints.
     for key in ("p5", "p50", "p95"):
-        assert isinstance(mc.max_losing_streak_quantiles[key], int)
-        assert mc.max_losing_streak_quantiles[key] >= 0
+        assert isinstance(mc.max_losing_streak_quantiles[key], int), f"{key} streak quantile is an integer (PR #112 Codex P2)"
+        assert mc.max_losing_streak_quantiles[key] >= 0, f"{key} streak quantile is non-negative (PR #112 Codex P2)"
 
     # Each quantile is one of the streaks actually observed in the
     # simulation batch. We don't have direct access to the streak
     # array, but we can re-derive it: a streak quantile is bounded
     # above by the max possible streak, which is the path length.
     max_possible = mc.realised_trade_count
-    for v in mc.max_losing_streak_quantiles.values():
-        assert v <= max_possible
+    for key, v in mc.max_losing_streak_quantiles.items():
+        assert v <= max_possible, f"{key} streak quantile is bounded by the path length (PR #112 Codex P2)"
 
 
 # ---------------------------------------------------------------------------
@@ -360,30 +334,24 @@ def test_reshuffle_terminal_equity_is_constant_across_sims(tmp_path: Path, paren
 # ---------------------------------------------------------------------------
 # Failure paths.
 # ---------------------------------------------------------------------------
-def test_missing_parent_run_returns_failed(tmp_path: Path):
+@pytest.mark.parametrize(
+    ("parent_run_id", "reason"),
+    [
+        pytest.param("deadbeefdeadbeefdeadbeefdeadbeef", "parent run not found", id="missing_parent_run"),
+        pytest.param("../etc/passwd", "parent_run_id rejected", id="malformed_parent_run_id"),
+    ],
+)
+def test_unusable_parent_run_id_returns_failed(tmp_path: Path, parent_run_id: str, reason: str):
     _, mc = run_monte_carlo(
         MonteCarloRequest(
-            parent_run_id="deadbeefdeadbeefdeadbeefdeadbeef",
+            parent_run_id=parent_run_id,
             method="reshuffle",
             simulation_count=10,
         ),
         artifacts_root=tmp_path,
     )
-    assert mc.status == "failed"
-    assert "parent run not found" in (mc.failure_reason or "")
-
-
-def test_malformed_parent_run_id_returns_failed(tmp_path: Path):
-    _, mc = run_monte_carlo(
-        MonteCarloRequest(
-            parent_run_id="../etc/passwd",
-            method="reshuffle",
-            simulation_count=10,
-        ),
-        artifacts_root=tmp_path,
-    )
-    assert mc.status == "failed"
-    assert "parent_run_id rejected" in (mc.failure_reason or "")
+    assert mc.status == "failed", "unusable parent run id returns failed status"
+    assert reason in (mc.failure_reason or ""), "failure reason names the unusable parent run id"
 
 
 def test_reshuffle_with_mismatched_projection_returns_failed(tmp_path: Path, parent_run):
@@ -404,7 +372,7 @@ def test_reshuffle_with_mismatched_projection_returns_failed(tmp_path: Path, par
     assert "reshuffle requires" in (mc.failure_reason or "")
 
 
-def test_negative_random_seed_returns_failed(tmp_path: Path, parent_run):
+def test_invalid_seed_and_breach_threshold_return_failed(tmp_path: Path, parent_run):
     """``numpy.random.default_rng(seed)`` raises for negative seeds —
     the runner must catch this and produce a failed-status MC, not
     let the exception escape. Regression for PR #112 Codex P1.
@@ -419,12 +387,9 @@ def test_negative_random_seed_returns_failed(tmp_path: Path, parent_run):
         ),
         artifacts_root=tmp_path,
     )
-    assert mc.status == "failed"
-    assert "random_seed" in (mc.failure_reason or "")
+    assert mc.status == "failed", "negative random seed returns failed (PR #112 Codex P1)"
+    assert "random_seed" in (mc.failure_reason or ""), "negative random seed failure reason names random_seed (PR #112 Codex P1)"
 
-
-def test_invalid_breach_threshold_returns_failed(tmp_path: Path, parent_run):
-    ledger, _ = parent_run
     _, mc = run_monte_carlo(
         MonteCarloRequest(
             parent_run_id=ledger.run_id,
@@ -434,8 +399,8 @@ def test_invalid_breach_threshold_returns_failed(tmp_path: Path, parent_run):
         ),
         artifacts_root=tmp_path,
     )
-    assert mc.status == "failed"
-    assert "breach_thresholds" in (mc.failure_reason or "")
+    assert mc.status == "failed", "invalid breach threshold returns failed"
+    assert "breach_thresholds" in (mc.failure_reason or ""), "invalid breach threshold failure reason names breach_thresholds"
 
 
 # ---------------------------------------------------------------------------

@@ -166,17 +166,30 @@ def test_a_fractional_cent_of_unreserved_cash_rounds_down_because_it_is_a_limit(
 
 
 def test_alpacas_buying_power_can_bind_and_never_changes_what_is_admitted() -> None:
-    """$1,000 typed, $5,000 unreserved; Alpaca's option buying power $500 against an $800 entry."""
+    """$1,000 typed, $5,000 unreserved; Alpaca's option buying power $500 against an $800 entry.
+
+    Our own limits pass, so ``admits`` is true; Alpaca's figure is the least room and falls $300 short. That is
+    the case the Deploy stops on (the buying-power blocker is this verdict), and it has no action of ours."""
     answer = _answer(_account(cash=5000), amount=100_000, need=_need(80_000), broker=_broker(50_000))
 
-    assert (answer.admits, answer.binding, answer.shortfall_cents, answer.fits) == (True, "broker_buying_power", 30_000, 0)
+    assert (answer.admits, answer.binding, answer.shortfall_cents, answer.fits) == (True, "broker_buying_power", 30_000, 0), (
+        "buying power binds, $300 short, and the entry fits none, yet the entry is admitted"
+    )
     assert answer.sentence == (
         "This budget is $1,000.00 and the account has $5,000.00 unreserved, "
         "enough for the entry's $800.00 including its fee provision. "
         "Alpaca's option buying power is only $500.00, so Alpaca would likely refuse the order. Shortfall: $300.00. "
         f"{_PASS_NOTE}"
+    ), "the sentence says Alpaca would likely refuse and that passing our limits promises nothing"
+    assert answer.fits_sentence is not None and "Alpaca's option buying power" in answer.fits_sentence, (
+        "the fit count names Alpaca's option buying power"
     )
-    assert answer.fits_sentence is not None and "Alpaca's option buying power" in answer.fits_sentence
+    assert (answer.admits, answer.binding, answer.shortfall_cents, answer.action) == (
+        True, "broker_buying_power", 30_000, None,
+    ), "where buying power is short and nothing else is, the answer admits, buying power binds, and we have no action"
+    assert answer.fits_sentence is not None and "the limit with the least room" in answer.fits_sentence, (
+        "the fit count says buying power is the limit with the least room"
+    )
 
 
 def test_one_cent_of_buying_power_under_the_entry_binds_and_the_entry_fits_none() -> None:
@@ -242,31 +255,31 @@ def test_a_budget_that_refuses_is_bound_by_the_budget_though_buying_power_is_sma
     assert answer.action == "Choose a budget of at least $800.00."
 
 
-def test_where_buying_power_is_short_and_nothing_else_is_the_answer_still_admits_and_buying_power_binds() -> None:
-    """Our own limits pass, so ``admits`` is true; Alpaca's figure is the least room and falls $300 short. That is
-    the case the Deploy stops on (the buying-power blocker is this verdict), and it has no action of ours."""
-    answer = _answer(_account(cash=5000), amount=100_000, need=_need(80_000), broker=_broker(50_000))
+@pytest.mark.parametrize(
+    ("cash", "broker_cents", "binding", "shortfall", "action"),
+    [
+        # $500 budget, $800 entry, $100 unreserved: the budget is $300 short and the account $700 short.
+        pytest.param(
+            100, 1_000_000, "account_headroom", 70_000,
+            "Choose a smaller budget, free another bot's budget, or add cash to the account.",
+            id="both-refuse-the-one-short-by-more-is-named",
+        ),
+        # $500 budget, $800 entry, $500 unreserved: $300 short each. The budget is named first, as it always was.
+        pytest.param(
+            500, 10_000, "bot_budget", 30_000, "Choose a budget of at least $800.00.",
+            id="short-by-the-same-the-budget-is-named",
+        ),
+    ],
+)
+def test_where_the_budget_and_the_account_both_refuse_the_one_short_by_more_is_named(
+    cash: int, broker_cents: int, binding: str, shortfall: int, action: str,
+) -> None:
+    answer = _answer(_account(cash=cash), amount=50_000, need=_need(80_000), broker=_broker(broker_cents))
 
-    assert (answer.admits, answer.binding, answer.shortfall_cents, answer.action) == (
-        True, "broker_buying_power", 30_000, None,
+    assert (answer.admits, answer.binding, answer.shortfall_cents) == (False, binding, shortfall), (
+        "the refusal is bound by the limit that is short by more, a tie going to the budget"
     )
-    assert answer.fits_sentence is not None and "the limit with the least room" in answer.fits_sentence
-
-
-def test_where_the_budget_and_the_account_both_refuse_the_one_short_by_more_is_named() -> None:
-    """$500 budget, $800 entry, $100 unreserved: the budget is $300 short and the account $700 short."""
-    answer = _answer(_account(cash=100), amount=50_000, need=_need(80_000), broker=_broker(1_000_000))
-
-    assert (answer.admits, answer.binding, answer.shortfall_cents) == (False, "account_headroom", 70_000)
-    assert answer.action == "Choose a smaller budget, free another bot's budget, or add cash to the account."
-
-
-def test_where_the_budget_and_the_account_are_short_by_the_same_the_budget_is_named() -> None:
-    """$500 budget, $800 entry, $500 unreserved: $300 short each. The budget is named first, as it always was."""
-    answer = _answer(_account(cash=500), amount=50_000, need=_need(80_000), broker=_broker(10_000))
-
-    assert (answer.admits, answer.binding, answer.shortfall_cents) == (False, "bot_budget", 30_000)
-    assert answer.action == "Choose a budget of at least $800.00."
+    assert answer.action == action, "the action is the remedy of the limit that binds"
 
 
 def test_a_budget_over_the_account_is_still_bound_by_the_account_when_the_account_is_not_the_smallest_figure() -> None:
@@ -443,33 +456,39 @@ def test_a_limit_that_leaves_less_than_nothing_says_so_in_a_negative_figure() ->
 # ---- a Dry Run ---------------------------------------------------------------------------------------------
 
 
-def test_a_dry_run_has_no_account_limit_and_its_cash_is_the_amount_typed() -> None:
+def test_a_dry_run_has_no_account_limit_its_cash_is_the_amount_typed_and_nothing_is_said_of_an_account() -> None:
     passes = _answer(None, amount=100_000, need=_need(82_409), simulated=True)
     short = _answer(None, amount=82_408, need=_need(82_409), simulated=True)
 
-    assert passes.account_headroom.amount_cents == 100_000
-    assert "simulated cash" in passes.account_headroom.source
-    assert (passes.admits, passes.binding, passes.fits) == (True, "bot_budget", 1)
+    assert passes.account_headroom.amount_cents == 100_000, "a dry run's account headroom is the amount typed"
+    assert "simulated cash" in passes.account_headroom.source, "the headroom says it is simulated cash"
+    assert (passes.admits, passes.binding, passes.fits) == (True, "bot_budget", 1), (
+        "a budget that covers one entry is admitted and the budget binds"
+    )
     assert passes.sentence == (
         f"This budget is $1,000.00, enough for the entry's $824.09 including its fee provision. {_PASS_NOTE}"
+    ), "the passing sentence names the budget alone"
+    assert (short.admits, short.binding, short.shortfall_cents) == (False, "bot_budget", 1), (
+        "a budget one cent under the entry is refused by the budget"
     )
-    assert (short.admits, short.binding, short.shortfall_cents) == (False, "bot_budget", 1)
     assert short.sentence == (
         "This budget is only $824.08. The entry needs $824.09 including its fee provision. Shortfall: $0.01."
+    ), "the refusing sentence names the budget alone"
+    assert "account" not in short.sentence, "the refusing sentence says nothing of an account"
+    # A dry run's cash is its own, so nothing is said of an account or of other bots.
+    assert passes.simulated is True and _answer(_account(cash=5000), amount=100_000).simulated is False, (
+        "only a dry run is flagged simulated"
     )
-    assert "account" not in short.sentence
-
-
-def test_a_dry_runs_cash_is_its_own_so_nothing_is_said_of_an_account_or_of_other_bots() -> None:
-    answer = _answer(None, amount=100_000, need=_need(82_409), simulated=True)
-
-    assert answer.simulated is True and _answer(_account(cash=5000), amount=100_000).simulated is False
-    assert answer.fits_sentence == "One whole entry fits right now with this budget as its starting cash."
-    assert "compete" not in (answer.fits_sentence or "") and "account" not in (answer.fits_sentence or "")
-    assert answer.headroom_left is not None
-    assert [(term.label, term.amount_cents) for term in answer.headroom_left.terms] == [
+    assert passes.fits_sentence == "One whole entry fits right now with this budget as its starting cash.", (
+        "the fit count is said with the budget as starting cash"
+    )
+    assert "compete" not in (passes.fits_sentence or "") and "account" not in (passes.fits_sentence or ""), (
+        "the fit count says nothing of other bots or an account"
+    )
+    assert passes.headroom_left is not None, "a dry run states what its cash leaves after one entry"
+    assert [(term.label, term.amount_cents) for term in passes.headroom_left.terms] == [
         ("Simulated starting cash", 100_000), ("One entry", -82_409),
-    ]
+    ], "what is left is the simulated starting cash less one entry"
 
 
 # ---- what one more entry does to the account's requirement -----------------------------------------------------

@@ -43,11 +43,7 @@ def _differences(a: dict[str, Any], b: dict[str, Any]) -> list[tuple[Setting, st
 # ── Settings that are the same, however they are written ─────────────────
 
 
-def test_two_runs_of_one_setup_differ_in_nothing() -> None:
-    assert setting_differences(setup(), setup()) == ()
-
-
-def test_a_number_is_the_same_number_however_many_zeros_it_is_written_with() -> None:
+def test_setups_that_are_the_same_however_they_are_written_differ_in_nothing() -> None:
     # 0.3 and 0.3000 are one slippage; 10000 and 10000.00 one amount of cash; and so on down every figure of a setup.
     plain = {
         "slippage_percent": "0.3",
@@ -73,15 +69,14 @@ def test_a_number_is_the_same_number_however_many_zeros_it_is_written_with() -> 
             )
         ],
     }
-
-    assert _differences(plain, padded) == []
-    assert _differences(padded, plain) == []
-
-
-def test_the_same_legs_in_another_order_are_the_same_setup_because_legs_are_matched_by_their_id() -> None:
     call, put = leg(leg_id="call"), leg(leg_id="put", right="put")
 
-    assert _differences({"legs": [call, put]}, {"legs": [put, call]}) == []
+    assert setting_differences(setup(), setup()) == (), "two runs of one setup differ in nothing"
+    assert _differences(plain, padded) == [], "a number is the same number however many zeros it is written with"
+    assert _differences(padded, plain) == [], "a number is the same number however many zeros, the other way round"
+    assert _differences({"legs": [call, put]}, {"legs": [put, call]}) == [], (
+        "the same legs in another order are the same setup because legs are matched by their id"
+    )
 
 
 # ── Each kind of setting, on its own ─────────────────────────────────────
@@ -128,6 +123,12 @@ BASE_ENTRY = {"anchor": "open", "offset_ms": 5 * MS_PER_MINUTE}
         (
             {"price_step_usd": "0.05"},
             (Setting.PRICE_STEP, None, "price step", "$0.01", "$0.05"),
+        ),
+        # 0.0125 is a quarter of a cent more than 0.01. Rounded to cents both would read $0.01, a difference that looks
+        # like none; every digit is kept: $0.01 and $0.0125.
+        (
+            {"price_step_usd": "0.0125"},
+            (Setting.PRICE_STEP, None, "price step", "$0.01", "$0.0125"),
         ),
         (
             {"fees": {"kind": "per_contract", "per_contract_usd": "0.65"}},
@@ -205,6 +206,27 @@ BASE_ENTRY = {"anchor": "open", "offset_ms": 5 * MS_PER_MINUTE}
             ),
         ),
     ],
+    ids=[
+        "entry time",
+        "exit time",
+        "no re-entry after the close",
+        "no re-entry after 90 minutes after the open",
+        "square off",
+        "slippage",
+        "price step",
+        "a price step is said with every digit it has so two steps never read alike",
+        "fees per contract",
+        "fees estimated",
+        "starting cash",
+        "leg right",
+        "leg contracts",
+        "leg expiry same day",
+        "leg expiry min days",
+        "leg strike above the money",
+        "leg strike below the money",
+        "leg stop loss",
+        "leg momentum",
+    ],
 )
 def test_each_setting_that_differs_is_one_difference_named_as_an_owner_would_with_both_values_in_words(
     changes: dict[str, Any], expected: tuple[Setting, str | None, str, str, str]
@@ -252,14 +274,6 @@ def test_a_re_entry_rule_is_a_difference_in_the_leg_that_gains_it_and_in_how_man
     assert [(d.setting, d.a, d.b) for d in setting_differences(setup(**once), setup(legs=[on_momentum]))] == [
         (Setting.LEG_MOMENTUM, NOT_SET, "at least 10% above where its premium stood at the entry time"),
         (Setting.LEG_REENTRY, at_once, again),
-    ]
-
-
-def test_a_price_step_is_said_with_every_digit_it_has_so_two_steps_never_read_alike() -> None:
-    # 0.0125 is a quarter of a cent more than 0.01. Rounded to cents both would read $0.01, a difference that looks like
-    # none; every digit is kept: $0.01 and $0.0125.
-    assert _differences({}, {"price_step_usd": "0.0125"}) == [
-        (Setting.PRICE_STEP, None, "price step", "$0.01", "$0.0125")
     ]
 
 
@@ -346,20 +360,19 @@ SOLD_PAIR = {"legs": [COVER, leg(leg_id="short_call", side="sell")]}
 
 
 def test_two_setups_that_differ_only_in_one_legs_side_differ_in_that_setting_and_in_nothing_else() -> None:
-    assert _differences(BOUGHT_PAIR, SOLD_PAIR) == [
-        (Setting.LEG_SIDE, "short_call", "leg short_call: bought or sold", "bought", "sold")
-    ]
-    assert _differences(SOLD_PAIR, BOUGHT_PAIR) == [
-        (Setting.LEG_SIDE, "short_call", "leg short_call: bought or sold", "sold", "bought")
-    ]
-
-
-def test_a_stop_that_is_the_same_rule_on_a_leg_whose_side_changed_is_one_difference_the_side() -> None:
     stop = {"stop_loss": {"kind": "percent", "value": "40"}}
     a = {"legs": [COVER, leg(leg_id="short_call", **stop)]}
     b = {"legs": [COVER, leg(leg_id="short_call", side="sell", **stop)]}
 
-    assert [(setting, leg_id) for setting, leg_id, _, _, _ in _differences(a, b)] == [(Setting.LEG_SIDE, "short_call")]
+    assert _differences(BOUGHT_PAIR, SOLD_PAIR) == [
+        (Setting.LEG_SIDE, "short_call", "leg short_call: bought or sold", "bought", "sold")
+    ], "a leg bought in one run and sold in the other is one difference, bought to sold"
+    assert _differences(SOLD_PAIR, BOUGHT_PAIR) == [
+        (Setting.LEG_SIDE, "short_call", "leg short_call: bought or sold", "sold", "bought")
+    ], "a leg bought in one run and sold in the other is one difference, sold to bought"
+    assert [(setting, leg_id) for setting, leg_id, _, _, _ in _differences(a, b)] == [
+        (Setting.LEG_SIDE, "short_call")
+    ], "a stop that is the same rule on a leg whose side changed is one difference, the side"
 
 
 def test_a_stop_that_differs_between_a_bought_and_a_sold_leg_is_said_as_a_fall_and_as_a_rise() -> None:
@@ -465,36 +478,61 @@ def test_the_sessions_both_runs_tested_are_shared_each_runs_extras_are_counted_a
     ]
 
 
-def test_a_session_that_broke_even_is_not_a_winning_session_and_a_profit_of_a_cent_is() -> None:
+def test_the_totals_of_the_shared_sessions_count_a_cent_as_a_win_and_are_exact_whatever_their_length() -> None:
     a = [_line(1, T, "0.00", 1), _line(2, T, "0.01", 1), _line(3, T, "-0.01", 1)]
-
-    found = overlap(a, a)
-
-    assert (found.a.winning_sessions, found.b.winning_sessions) == (1, 1)
-    assert found.a.net_profit_usd == D("0.00")
-
-
-def test_totals_are_exact_whatever_their_length() -> None:
     # 30 digits do not fit the default 28-digit context, which would round this sum. The exact sum is
     # 1234567890123456789012345678.90 + 0.01 + 0.10 = 1234567890123456789012345679.01.
-    a = [
+    very_long = [
         _line(1, T, "1234567890123456789012345678.90", 1),
         _line(2, T, "0.01", 1),
         _line(3, T, "0.10", 1),
     ]
 
     found = overlap(a, a)
+    exact = overlap(very_long, very_long)
 
-    assert found.a.net_profit_usd == D("1234567890123456789012345679.01")
-    assert type(found.a.net_profit_usd) is Decimal
+    assert (found.a.winning_sessions, found.b.winning_sessions) == (1, 1), (
+        "a break-even session does not win, a cent does"
+    )
+    assert found.a.net_profit_usd == D("0.00"), "the net profit of a break-even, a cent and minus a cent is nothing"
+    assert exact.a.net_profit_usd == D("1234567890123456789012345679.01"), "totals are exact whatever their length"
+    assert type(exact.a.net_profit_usd) is Decimal, "an exact total is still a Decimal"
 
 
 def test_runs_with_no_session_in_common_share_nothing_and_total_nothing() -> None:
-    found = overlap([_line(1, T, "9.99", 1)], [_line(2, T, "8.88", 1)])
+    nothing_shared = overlap([_line(1, T, "9.99", 1)], [_line(2, T, "8.88", 1)])
+    # Only session 3 is in both. Run a has 1 and 2 besides: two. Run b has 4 besides: one.
+    different_lengths = overlap(
+        [_line(1, T, "1.00", 1), _line(2, T, "2.00", 1), _line(3, T, "3.00", 1)],
+        [_line(3, T, "4.00", 1), _line(4, T, "5.00", 1)],
+    )
 
-    assert (found.shared, found.only_in_a, found.only_in_b) == ((), 1, 1)
-    assert (found.a.net_profit_usd, found.a.trades, found.a.winning_sessions) == (D("0"), 0, 0)
-    assert (found.b.net_profit_usd, found.b.trades, found.b.winning_sessions) == (D("0"), 0, 0)
+    assert (nothing_shared.shared, nothing_shared.only_in_a, nothing_shared.only_in_b) == (
+        (),
+        1,
+        1,
+    ), "runs with no session in common share nothing and each has one extra"
+    assert (nothing_shared.a.net_profit_usd, nothing_shared.a.trades, nothing_shared.a.winning_sessions) == (
+        D("0"),
+        0,
+        0,
+    ), "run a totals nothing when nothing is shared"
+    assert (nothing_shared.b.net_profit_usd, nothing_shared.b.trades, nothing_shared.b.winning_sessions) == (
+        D("0"),
+        0,
+        0,
+    ), "run b totals nothing when nothing is shared"
+    assert [shared.session_open_ms for shared in different_lengths.shared] == [3], (
+        "only the session in both runs is shared when the runs are of different lengths"
+    )
+    assert (different_lengths.only_in_a, different_lengths.only_in_b) == (
+        2,
+        1,
+    ), "each run's extra sessions are counted for that run"
+    assert (different_lengths.a.net_profit_usd, different_lengths.b.net_profit_usd) == (
+        D("3.00"),
+        D("4.00"),
+    ), "the totals are over the shared session only"
 
 
 # ── The whole comparison ─────────────────────────────────────────────────
@@ -511,18 +549,6 @@ def test_a_comparison_carries_the_underlying_the_differences_and_whether_the_ran
     assert not same_range.ranges_differ
     assert other_range.settings == () and other_range.ranges_differ
     assert (other_range.range_a.sessions_requested, other_range.range_b.last_session_open_ms) == (3, 20)
-
-
-def test_each_runs_extra_sessions_are_counted_for_that_run_when_the_two_runs_are_of_different_lengths() -> None:
-    a = [_line(1, T, "1.00", 1), _line(2, T, "2.00", 1), _line(3, T, "3.00", 1)]
-    b = [_line(3, T, "4.00", 1), _line(4, T, "5.00", 1)]
-
-    found = overlap(a, b)
-
-    # Only session 3 is in both. Run a has 1 and 2 besides: two. Run b has 4 besides: one.
-    assert [shared.session_open_ms for shared in found.shared] == [3]
-    assert (found.only_in_a, found.only_in_b) == (2, 1)
-    assert (found.a.net_profit_usd, found.b.net_profit_usd) == (D("3.00"), D("4.00"))
 
 
 def test_a_run_whose_stored_setup_can_no_longer_be_read_cannot_have_its_settings_compared() -> None:

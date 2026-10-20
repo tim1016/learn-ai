@@ -66,36 +66,33 @@ def fake_redis(monkeypatch: pytest.MonkeyPatch) -> FakeRedis:
 
 
 class TestParamsHash:
-    def test_same_params_same_hash(self) -> None:
+    def test_params_hash_ignores_key_order_and_ticker_case_but_not_job_type(self) -> None:
         a = cache.params_hash("feature_research", {"ticker": "AAPL", "from": "2024-01-01"})
         b = cache.params_hash("feature_research", {"from": "2024-01-01", "ticker": "AAPL"})
-        assert a == b  # Order-insensitive
+        assert a == b, "same params give the same hash (order-insensitive)"
 
-    def test_ticker_case_normalizes(self) -> None:
         a = cache.params_hash("cross_sectional", {"tickers": ["spy", "QQQ"]})
         b = cache.params_hash("cross_sectional", {"tickers": ["SPY", "qqq"]})
-        assert a == b
+        assert a == b, "ticker case normalizes"
 
-    def test_different_job_type_different_hash(self) -> None:
         a = cache.params_hash("feature_research", {"ticker": "AAPL"})
         b = cache.params_hash("signal_engine", {"ticker": "AAPL"})
-        assert a != b
+        assert a != b, "a different job type gives a different hash"
 
 
 class TestCacheRoundTrip:
-    def test_miss_returns_none(self) -> None:
-        assert cache.lookup("feature_research", {"ticker": "AAPL"}) is None
+    def test_a_miss_returns_none_then_a_stored_result_is_found(self) -> None:
+        assert cache.lookup("feature_research", {"ticker": "AAPL"}) is None, "a miss on an empty cache returns None"
 
-    def test_store_then_lookup_hits(self) -> None:
         params = {"ticker": "AAPL", "from": "2024-01-01"}
         cache.store("feature_research", params, {"verdict": "stage 2"})
 
         hit = cache.lookup("feature_research", params)
-        assert hit is not None
+        assert hit is not None, "a stored result is a hit"
         h, payload = hit
-        assert payload["result"] == {"verdict": "stage 2"}
-        assert "cached_at" in payload
-        assert isinstance(h, str) and len(h) == 40  # sha1 hex
+        assert payload["result"] == {"verdict": "stage 2"}, "the hit carries the stored result"
+        assert "cached_at" in payload, "the hit is stamped with cached_at"
+        assert isinstance(h, str) and len(h) == 40, "the hit carries the sha1 hex hash"
 
 
 class TestServeCachedResult:

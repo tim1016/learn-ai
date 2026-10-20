@@ -297,16 +297,17 @@ def _ctx_with_predictions(preds: dict[str, Decimal]) -> EvalContext:
     )
 
 
-def test_prediction_comparison_fires_when_above_threshold() -> None:
+@pytest.mark.parametrize(
+    ("prediction", "fires"),
+    [
+        pytest.param(Decimal("0.5"), True, id="fires_when_above_threshold"),
+        pytest.param(Decimal("0.05"), False, id="does_not_fire_when_below_threshold"),
+    ],
+)
+def test_prediction_comparison_against_threshold(prediction: Decimal, fires: bool) -> None:
     node = S.PredictionComparison(kind="PredictionComparison", prediction="rsi_pred", op=">", value=0.1)
     p = PredictionComparisonPrimitive(node)
-    assert p.evaluate(_ctx_with_predictions({"rsi_pred": Decimal("0.5")})) is True
-
-
-def test_prediction_comparison_does_not_fire_when_below_threshold() -> None:
-    node = S.PredictionComparison(kind="PredictionComparison", prediction="rsi_pred", op=">", value=0.1)
-    p = PredictionComparisonPrimitive(node)
-    assert p.evaluate(_ctx_with_predictions({"rsi_pred": Decimal("0.05")})) is False
+    assert p.evaluate(_ctx_with_predictions({"rsi_pred": prediction})) is fires
 
 
 def test_prediction_comparison_keyerror_when_id_missing() -> None:

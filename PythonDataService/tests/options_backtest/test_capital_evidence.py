@@ -91,44 +91,45 @@ def test_a_run_whose_every_close_is_funded_is_funded_through_all_its_sessions_an
 
     evidence = capital_evidence(sessions, starting_cash=D("10000.00"))
 
-    assert (evidence.sessions_tested, evidence.sessions_funded_continuously) == (2, 2)
-    assert evidence.ended_by is None
-    assert evidence.most_collateral_held_usd == D("500.00")
-    assert evidence.least_free_cash_usd == D("9620.00")
-    assert evidence.largest_assignment_obligation_usd == D("50000")
-    assert evidence.closes_relied_on_own_relief == 0
-    assert evidence.cash_needed_is_incomplete is False
-
-
-def test_the_cash_this_path_needed_is_the_largest_collateral_less_the_cash_flow_over_the_stretch() -> None:
-    sessions = [_spread_closed_whole(OPEN_1, "10000.00"), _spread_closed_whole(OPEN_2, "10030.00")]
-
-    evidence = capital_evidence(sessions, starting_cash=D("10000.00"))
-
+    assert (evidence.sessions_tested, evidence.sessions_funded_continuously) == (2, 2), (
+        "funded through all its sessions"
+    )
+    assert evidence.ended_by is None, "no event"
+    assert evidence.most_collateral_held_usd == D("500.00"), "most collateral held"
+    assert evidence.least_free_cash_usd == D("9620.00"), "least free cash"
+    assert evidence.largest_assignment_obligation_usd == D("50000"), "largest assignment obligation"
+    assert evidence.closes_relied_on_own_relief == 0, "no close relied on its own relief"
+    assert evidence.cash_needed_is_incomplete is False, "the cash needed is complete"
     # Collateral after each step less the cash flow by then (cash after less 10,000.00):
     #   session 1 opening: 500.00 - 120.00 = 380.00;   session 1 closing: 0 - 30.00 = -30.00;
     #   session 2 opening: 500.00 - 150.00 = 350.00;   session 2 closing: 0 - 60.00 = -60.00.
     # The most is 380.00: with 380.00 of starting cash free cash is exactly nothing at the first opening.
-    assert evidence.cash_needed_usd == D("380.00")
+    assert evidence.cash_needed_usd == D("380.00"), (
+        "the cash this path needed is the largest collateral less the cash flow over the stretch"
+    )
 
 
 def test_a_run_that_made_no_trade_needs_nothing_holds_nothing_and_saw_its_starting_cash() -> None:
     sessions = [_session(OPEN_1, status=SessionStatus.NO_TRADE), _session(OPEN_2, status=SessionStatus.SKIPPED)]
 
     evidence = capital_evidence(sessions, starting_cash=D("10000.00"))
+    no_sessions = capital_evidence([], starting_cash=D("10000.00"))
 
-    assert (evidence.sessions_tested, evidence.sessions_funded_continuously, evidence.ended_by) == (2, 2, None)
-    assert evidence.cash_needed_usd == D("0")
-    assert evidence.most_collateral_held_usd == D("0")
-    assert evidence.largest_assignment_obligation_usd == D("0")
-    assert evidence.least_free_cash_usd == D("10000.00")
-    assert evidence.cash_needed_is_incomplete is False
-
-
-def test_a_run_of_no_sessions_is_funded_through_none_of_none() -> None:
-    evidence = capital_evidence([], starting_cash=D("10000.00"))
-
-    assert (evidence.sessions_tested, evidence.sessions_funded_continuously, evidence.ended_by) == (0, 0, None)
+    assert (evidence.sessions_tested, evidence.sessions_funded_continuously, evidence.ended_by) == (
+        2,
+        2,
+        None,
+    ), "a run that made no trade is funded through both its sessions with no event"
+    assert evidence.cash_needed_usd == D("0"), "a run that made no trade needs nothing"
+    assert evidence.most_collateral_held_usd == D("0"), "a run that made no trade holds no collateral"
+    assert evidence.largest_assignment_obligation_usd == D("0"), "a run that made no trade owes no assignment"
+    assert evidence.least_free_cash_usd == D("10000.00"), "a run that made no trade saw its starting cash"
+    assert evidence.cash_needed_is_incomplete is False, "a run that made no trade has a complete cash need"
+    assert (no_sessions.sessions_tested, no_sessions.sessions_funded_continuously, no_sessions.ended_by) == (
+        0,
+        0,
+        None,
+    ), "a run of no sessions is funded through none of none"
 
 
 # ── A bought option: no collateral, and the cash needed is what it paid ──
@@ -182,50 +183,52 @@ def test_an_unfunded_close_is_named_with_its_session_and_minute_and_the_evidence
 
     assert evidence.ended_by == CapitalInvalidEvent(
         CapitalInvalidKind.UNFUNDED_CLOSE, OPEN_2, _UNFUNDED_AT, D("-150.00")
-    )
+    ), "the unfunded close is named with its session and minute"
     # Session 1 ended before the event; session 2 holds it; session 3 is later and still ran.
-    assert (evidence.sessions_tested, evidence.sessions_funded_continuously) == (3, 1)
-
-
-def test_the_cash_needed_is_worked_over_the_stretch_alone_and_the_unfunded_step_is_not_in_it() -> None:
-    evidence = capital_evidence(_a_run_with_an_unfunded_close(), starting_cash=D("600.00"))
-
+    assert (evidence.sessions_tested, evidence.sessions_funded_continuously) == (
+        3,
+        1,
+    ), "the evidence ends at the unfunded close: funded through session 1 of 3"
     # Session 1 opening: 500.00 - 120.00 = 380.00; its closing: 0 - 30.00 = -30.00.
     # Session 2 opening, which came before the event: 500.00 - 150.00 = 350.00.
     # The unfunded close (0 - (-150.00 - 600.00) = 750.00) is the event, and not funded: it is not in the stretch.
-    assert evidence.cash_needed_usd == D("380.00")
-
-
-def test_the_other_four_figures_are_the_whole_runs_and_the_least_free_cash_goes_below_zero() -> None:
-    evidence = capital_evidence(_a_run_with_an_unfunded_close(), starting_cash=D("600.00"))
-
+    assert evidence.cash_needed_usd == D("380.00"), (
+        "the cash needed is worked over the stretch alone and the unfunded step is not in it"
+    )
     # Free cash seen: 600.00 at the start, 220.00 (720.00 - 500.00), 130.00 and 630.00 in session 1, 250.00 after
     # session 2's opening, and -150.00 after the close.
-    assert evidence.least_free_cash_usd == D("-150.00")
-    assert evidence.most_collateral_held_usd == D("500.00")
-    assert evidence.largest_assignment_obligation_usd == D("50000")
+    assert evidence.least_free_cash_usd == D("-150.00"), "the least free cash is the whole run's and goes below zero"
+    assert evidence.most_collateral_held_usd == D("500.00"), "the most collateral held is the whole run's"
+    assert evidence.largest_assignment_obligation_usd == D("50000"), (
+        "the largest assignment obligation is the whole run's"
+    )
     # The close cost 900.00 against 250.00 of free cash before it, with its cover held: it relied on its own relief too.
-    assert evidence.closes_relied_on_own_relief == 1
+    assert evidence.closes_relied_on_own_relief == 1, "the unfunded close relied on its own relief too"
 
 
 def test_an_unfunded_close_in_the_first_session_is_funded_through_none() -> None:
-    sessions = [
-        _session(
-            OPEN_1,
-            (
-                _opening(OPEN_1 + 6 * MINUTE, "500.00", "620.00"),
-                _closing(OPEN_1 + 61 * MINUTE, "620.00", "-180.00", "500.00", "0", under_cover=True),
-            ),
-            status=SessionStatus.INCOMPLETE,
+    first = _session(
+        OPEN_1,
+        (
+            _opening(OPEN_1 + 6 * MINUTE, "500.00", "620.00"),
+            _closing(OPEN_1 + 61 * MINUTE, "620.00", "-180.00", "500.00", "0", under_cover=True),
         ),
-        _session(OPEN_2),
-    ]
+        status=SessionStatus.INCOMPLETE,
+    )
 
-    evidence = capital_evidence(sessions, starting_cash=D("500.00"))
+    evidence = capital_evidence([first, _session(OPEN_2)], starting_cash=D("500.00"))
+    alone = capital_evidence([first], starting_cash=D("500.00"))
 
-    assert (evidence.sessions_tested, evidence.sessions_funded_continuously) == (2, 0)
+    assert (evidence.sessions_tested, evidence.sessions_funded_continuously) == (
+        2,
+        0,
+    ), "an unfunded close in the first session is funded through none"
     assert evidence.ended_by == CapitalInvalidEvent(
         CapitalInvalidKind.UNFUNDED_CLOSE, OPEN_1, OPEN_1 + 61 * MINUTE, D("-180.00")
+    ), "the unfunded close of the first session is named with its minute"
+    # The session also ends with its position marked: the unfunded close came before that, so it is the event.
+    assert alone.ended_by is not None and alone.ended_by.kind is CapitalInvalidKind.UNFUNDED_CLOSE, (
+        "an unfunded close before the end of a marked session is the event and not the mark"
     )
 
 
@@ -284,24 +287,24 @@ def _a_buy_back_alone(cash_before: str, cash_after: str) -> CapitalSession:
     )
 
 
-def test_a_buy_back_alone_that_cost_more_than_the_free_cash_before_it_and_left_free_cash_at_or_above_zero_relied() -> (
-    None
-):
-    # Cost 220.00 against 120.00 of free cash before it; free cash after is 400.00.
-    evidence = capital_evidence([_a_buy_back_alone("620.00", "400.00")], starting_cash=D("500.00"))
+@pytest.mark.parametrize(
+    ("cash_after", "relied"),
+    [
+        # Cost 220.00 against 120.00 of free cash before it; free cash after is 400.00.
+        pytest.param("400.00", 1, id="cost more than the free cash before it and left free cash at or above zero"),
+        # Cost 120.00 against 120.00 of free cash: exactly the free cash, which is not more than it.
+        pytest.param("500.00", 0, id="cost exactly the free cash before it"),
+        pytest.param("499.99", 1, id="cost one cent more than the free cash before it"),
+    ],
+)
+def test_a_buy_back_alone_relied_on_its_own_relief_only_when_it_cost_more_than_the_free_cash_before_it(
+    cash_after: str, relied: int
+) -> None:
+    evidence = capital_evidence([_a_buy_back_alone("620.00", cash_after)], starting_cash=D("500.00"))
 
-    assert evidence.closes_relied_on_own_relief == 1
-    assert evidence.ended_by is None
-    assert evidence.sessions_funded_continuously == 1
-
-
-def test_a_buy_back_that_cost_no_more_than_the_free_cash_before_it_did_not_rely_on_relief() -> None:
-    # Cost 120.00 against 120.00 of free cash: exactly the free cash, which is not more than it.
-    exactly = capital_evidence([_a_buy_back_alone("620.00", "500.00")], starting_cash=D("500.00"))
-    one_cent_more = capital_evidence([_a_buy_back_alone("620.00", "499.99")], starting_cash=D("500.00"))
-
-    assert exactly.closes_relied_on_own_relief == 0
-    assert one_cent_more.closes_relied_on_own_relief == 1
+    assert evidence.closes_relied_on_own_relief == relied, "whether the close relied on its own relief"
+    assert evidence.ended_by is None, "a close that relied on its own relief does not end the evidence"
+    assert evidence.sessions_funded_continuously == 1, "the session is funded through"
 
 
 @pytest.mark.parametrize(("cover_stayed_held", "relied"), [(False, 0), (True, 1)])
@@ -388,21 +391,6 @@ def test_the_first_event_of_the_run_is_the_one_named_even_when_a_later_session_h
 
     assert evidence.ended_by is not None and evidence.ended_by.kind is CapitalInvalidKind.POSITION_MARKED
     assert evidence.sessions_funded_continuously == 0
-
-
-def test_an_unfunded_close_before_the_end_of_a_marked_session_is_the_event_and_not_the_mark() -> None:
-    both = _session(
-        OPEN_1,
-        (
-            _opening(OPEN_1 + 6 * MINUTE, "500.00", "620.00"),
-            _closing(OPEN_1 + 61 * MINUTE, "620.00", "-180.00", "500.00", "0", under_cover=True),
-        ),
-        status=SessionStatus.INCOMPLETE,
-    )
-
-    evidence = capital_evidence([both], starting_cash=D("500.00"))
-
-    assert evidence.ended_by is not None and evidence.ended_by.kind is CapitalInvalidKind.UNFUNDED_CLOSE
 
 
 # ── An entry refused for cash makes the cash needed incomplete ───────────

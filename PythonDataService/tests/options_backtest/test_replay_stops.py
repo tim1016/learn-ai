@@ -172,33 +172,33 @@ def _three_legs(square_off: str):
     )
 
 
-def test_under_complete_one_legs_stop_closes_the_other_and_cancels_a_leg_still_waiting() -> None:
-    outcome = replay(_three_legs("complete"), _call_put_and_a_waiting_call())
+def test_one_legs_stop_closes_the_other_and_cancels_a_waiting_leg_under_complete_and_leaves_both_to_carry_on_under_partial() -> (
+    None
+):
+    complete = replay(_three_legs("complete"), _call_put_and_a_waiting_call())
+    partial = replay(_three_legs("partial"), _call_put_and_a_waiting_call())
 
-    assert [row(trade) for trade in outcome.trades] == [
+    assert [row(trade) for trade in complete.trades] == [
         ("a", 0, 6, D("2.00"), D("2.00"), "stop", 11, D("1.40"), D("1.40")),
         ("b", 0, 6, D("3.00"), D("3.00"), "square_off", 11, D("3.10"), D("3.10")),
-    ]
+    ], "under complete one leg's stop closes the other and C never trades"
     # One group, decided at minute 10. C never traded though its level was reached at minute 12.
-    assert {trade.exit_group for trade in outcome.trades} == {1}
-    assert {trade.exit_decided_at_ms for trade in outcome.trades} == {at(10)}
-    assert outcome.exit_counts == {ExitReason.STOP: 1, ExitReason.SQUARE_OFF: 1}
-    assert minutes(outcome, EventKind.LEG_CANCELLED, "c") == [10]
-    assert minutes(outcome, EventKind.MOMENTUM_HIT) == []
+    assert {trade.exit_group for trade in complete.trades} == {1}, "under complete the two closes are one exit group"
+    assert {trade.exit_decided_at_ms for trade in complete.trades} == {at(10)}, "under complete both are decided at 10"
+    assert complete.exit_counts == {ExitReason.STOP: 1, ExitReason.SQUARE_OFF: 1}, "under complete one stop, one square-off"
+    assert minutes(complete, EventKind.LEG_CANCELLED, "c") == [10], "under complete C is cancelled at minute 10"
+    assert minutes(complete, EventKind.MOMENTUM_HIT) == [], "under complete C's level is never hit"
     # C is said to be cancelled by the square-off, not by the exit time, and it is its first entry that never came.
-    cancelled = [e for e in outcome.events if e.kind is EventKind.LEG_CANCELLED]
-    assert [(e.leg_id, e.reason, e.entry_number) for e in cancelled] == [("c", "square_off", 0)]
-
-
-def test_under_partial_one_legs_stop_leaves_the_other_leg_and_the_waiting_leg_to_carry_on() -> None:
-    outcome = replay(_three_legs("partial"), _call_put_and_a_waiting_call())
-
-    assert [row(trade) for trade in outcome.trades] == [
+    cancelled = [e for e in complete.events if e.kind is EventKind.LEG_CANCELLED]
+    assert [(e.leg_id, e.reason, e.entry_number) for e in cancelled] == [
+        ("c", "square_off", 0)
+    ], "under complete C is cancelled by the square-off, as its first entry"
+    assert [row(trade) for trade in partial.trades] == [
         ("a", 0, 6, D("2.00"), D("2.00"), "stop", 11, D("1.40"), D("1.40")),
         ("b", 0, 6, D("3.00"), D("3.00"), "exit_time", 61, D("3.10"), D("3.10")),
         ("c", 0, 13, D("1.30"), D("1.30"), "exit_time", 61, D("1.30"), D("1.30")),
-    ]
-    assert minutes(outcome, EventKind.MOMENTUM_HIT) == [12]
+    ], "under partial one leg's stop leaves the other leg and the waiting leg to carry on"
+    assert minutes(partial, EventKind.MOMENTUM_HIT) == [12], "under partial C's level is hit at minute 12"
 
 
 @pytest.mark.parametrize("square_off", ["partial", "complete"])
@@ -319,33 +319,30 @@ def test_a_close_with_no_trade_in_the_next_minute_is_tried_again_and_fills_at_a_
     assert minutes(outcome, EventKind.CLOSE_FILLED) == [13]
 
 
-def test_a_close_at_the_exit_time_is_tried_again_after_the_exit_time() -> None:
+@pytest.mark.parametrize(
+    "first_bar_minute",
+    [
+        # nothing traded in minutes 61 and 62
+        pytest.param(63, id="a_close_at_the_exit_time_is_tried_again_after_the_exit_time"),
+        # nothing traded from minute 61 to 389
+        pytest.param(390, id="a_sale_that_first_finds_a_trade_in_the_sessions_last_minute_is_filled_not_marked"),
+    ],
+)
+def test_a_close_at_the_exit_time_is_tried_again_until_a_bar_is_found_and_is_filled_there(
+    first_bar_minute: int,
+) -> None:
     market = TableMarket(
         underlying=steady("500"),
         picks=picked(("call", "500", CALL)),
-        options={CALL: {**flat("2.00", 5, 60), 63: ("1.90", "1.90")}},  # nothing traded in minutes 61 and 62
+        options={CALL: {**flat("2.00", 5, 60), first_bar_minute: ("1.90", "1.90")}},
     )
 
     outcome = replay(setup(leg()), market)
 
+    assert outcome.status is SessionStatus.TRADED, "the sale was filled, not marked"
     assert [row(trade) for trade in outcome.trades] == [
-        ("call", 0, 6, D("2.00"), D("2.00"), "exit_time", 63, D("1.90"), D("1.90"))
-    ]
-
-
-def test_a_sale_that_first_finds_a_trade_in_the_sessions_last_minute_is_filled_not_marked() -> None:
-    market = TableMarket(
-        underlying=steady("500"),
-        picks=picked(("call", "500", CALL)),
-        options={CALL: {**flat("2.00", 5, 60), 390: ("1.90", "1.90")}},  # nothing traded from minute 61 to 389
-    )
-
-    outcome = replay(setup(leg()), market)
-
-    assert outcome.status is SessionStatus.TRADED
-    assert [row(trade) for trade in outcome.trades] == [
-        ("call", 0, 6, D("2.00"), D("2.00"), "exit_time", 390, D("1.90"), D("1.90"))
-    ]
+        ("call", 0, 6, D("2.00"), D("2.00"), "exit_time", first_bar_minute, D("1.90"), D("1.90"))
+    ], "the close fills at the first bar after the exit time"
 
 
 def test_a_leg_never_sold_by_the_close_is_marked_at_its_last_seen_close_and_the_session_is_incomplete() -> None:

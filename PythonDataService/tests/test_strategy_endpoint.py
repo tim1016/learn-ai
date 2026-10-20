@@ -72,78 +72,32 @@ class TestStrategyEndpoint:
 
 class TestStrategyEndpointValidation:
     @pytest.mark.asyncio
-    async def test_missing_legs_returns_422(self, client: AsyncClient):
-        payload = {
-            "symbol": "AAPL",
-            "legs": [],
-            "expiration_ms": 1798750800000,
-            "spot_price": 100,
-        }
-        response = await client.post("/api/strategy/analyze", json=payload)
-        assert response.status_code == 422
-
-    @pytest.mark.asyncio
-    async def test_invalid_option_type_returns_422(self, client: AsyncClient):
-        payload = {
-            "symbol": "AAPL",
-            "legs": [
-                {
-                    "strike": 100,
-                    "option_type": "butterfly",
-                    "position": "long",
-                    "premium": 5.0,
-                    "iv": 0.25,
-                    "quantity": 1,
-                },
-            ],
-            "expiration_ms": 1798750800000,
-            "spot_price": 100,
-        }
-        response = await client.post("/api/strategy/analyze", json=payload)
-        assert response.status_code == 422
-
-    @pytest.mark.asyncio
-    async def test_invalid_position_returns_422(self, client: AsyncClient):
+    @pytest.mark.parametrize(
+        ("legs", "spot_price"),
+        [
+            pytest.param((), 100, id="missing_legs_returns_422"),
+            pytest.param(((100, "butterfly", "long"),), 100, id="invalid_option_type_returns_422"),
+            pytest.param(((100, "call", "neutral"),), 100, id="invalid_position_returns_422"),
+            pytest.param(((-10, "call", "long"),), 100, id="negative_strike_returns_422"),
+            pytest.param(((100, "call", "long"),), 0, id="zero_spot_price_returns_422"),
+        ],
+    )
+    async def test_invalid_payload_returns_422(self, client: AsyncClient, legs, spot_price):
         payload = {
             "symbol": "AAPL",
             "legs": [
                 {
-                    "strike": 100,
-                    "option_type": "call",
-                    "position": "neutral",
+                    "strike": strike,
+                    "option_type": option_type,
+                    "position": position,
                     "premium": 5.0,
                     "iv": 0.25,
                     "quantity": 1,
-                },
+                }
+                for strike, option_type, position in legs
             ],
             "expiration_ms": 1798750800000,
-            "spot_price": 100,
-        }
-        response = await client.post("/api/strategy/analyze", json=payload)
-        assert response.status_code == 422
-
-    @pytest.mark.asyncio
-    async def test_negative_strike_returns_422(self, client: AsyncClient):
-        payload = {
-            "symbol": "AAPL",
-            "legs": [
-                {"strike": -10, "option_type": "call", "position": "long", "premium": 5.0, "iv": 0.25, "quantity": 1},
-            ],
-            "expiration_ms": 1798750800000,
-            "spot_price": 100,
-        }
-        response = await client.post("/api/strategy/analyze", json=payload)
-        assert response.status_code == 422
-
-    @pytest.mark.asyncio
-    async def test_zero_spot_price_returns_422(self, client: AsyncClient):
-        payload = {
-            "symbol": "AAPL",
-            "legs": [
-                {"strike": 100, "option_type": "call", "position": "long", "premium": 5.0, "iv": 0.25, "quantity": 1},
-            ],
-            "expiration_ms": 1798750800000,
-            "spot_price": 0,
+            "spot_price": spot_price,
         }
         response = await client.post("/api/strategy/analyze", json=payload)
         assert response.status_code == 422

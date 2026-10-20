@@ -123,39 +123,31 @@ class TestDailyRvSq:
 
 
 class TestHfRealizedVolTrd252:
-    def test_recovers_known_sigma_within_5pct(self):
+    def test_recovers_known_sigma_within_5pct_and_rth_and_eth_recover_similar_sigma(self):
         # ETH, 21-day window, 100 days of GBM at sigma=0.20.
         bars = _make_bars(n_days=100, sigma_annual=0.20, bars_per_day=64)
         rv = hf_realized_vol_trd252(bars, window_trading_days=21, session="ETH")
         valid = rv.dropna()
-        assert len(valid) > 0
+        assert len(valid) > 0, "ETH recovers sigma: some windows are valid"
         mean_rv = valid.mean()
         # 5% relative tolerance — sample-size variance on 21-day windows is non-trivial.
-        assert 0.19 <= mean_rv <= 0.21, f"expected ~0.20, got {mean_rv:.4f}"
-
-    def test_warmup_region_is_nan(self):
-        bars = _make_bars(n_days=30, sigma_annual=0.20, bars_per_day=64)
-        rv = hf_realized_vol_trd252(bars, window_trading_days=21, session="ETH")
-        # Bars in the first 20 trading days have no full 21-day window → NaN.
-        first_day_bars = rv.iloc[:64]
-        assert first_day_bars.isna().all()
-
-    def test_rth_and_eth_recover_similar_sigma(self):
-        bars = _make_bars(n_days=100, sigma_annual=0.20, bars_per_day=64)
-        rv_eth = hf_realized_vol_trd252(bars, window_trading_days=21, session="ETH").dropna().mean()
+        assert 0.19 <= mean_rv <= 0.21, f"ETH recovers known sigma within 5%: expected ~0.20, got {mean_rv:.4f}"
         # Note: RTH on the same data will see only ~26 of the 64 ETH bars per day, plus
         # the same overnight return. The annualization factor is identical (252/W) so the
         # estimator should recover sigma similarly within Monte-Carlo error.
         rv_rth = hf_realized_vol_trd252(bars, window_trading_days=21, session="RTH").dropna().mean()
         # Both should land within 15% of the true sigma (small sample, RTH has fewer bars).
-        assert 0.17 <= rv_eth <= 0.23
-        assert 0.17 <= rv_rth <= 0.23
+        assert 0.17 <= mean_rv <= 0.23, "RTH and ETH recover similar sigma: ETH within 15% of the true sigma"
+        assert 0.17 <= rv_rth <= 0.23, "RTH and ETH recover similar sigma: RTH within 15% of the true sigma"
 
-    def test_indexed_to_bars(self):
+    def test_warmup_region_is_nan_and_result_is_indexed_to_bars(self):
         bars = _make_bars(n_days=30, sigma_annual=0.20, bars_per_day=64)
         rv = hf_realized_vol_trd252(bars, window_trading_days=21, session="ETH")
-        assert rv.index.equals(bars.index)
-        assert rv.dtype == float
+        # Bars in the first 20 trading days have no full 21-day window → NaN.
+        first_day_bars = rv.iloc[:64]
+        assert first_day_bars.isna().all(), "the warmup region is NaN"
+        assert rv.index.equals(bars.index), "the result is indexed to the bars"
+        assert rv.dtype == float, "the result dtype is float"
 
     def test_invalid_window_raises(self):
         bars = _make_bars(n_days=30, sigma_annual=0.20, bars_per_day=64)

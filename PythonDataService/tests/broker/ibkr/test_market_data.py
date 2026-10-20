@@ -7,6 +7,8 @@ import math
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
+
 from app.broker.ibkr.market_data import _resolve_market_price, _ticker_to_quote
 
 
@@ -90,47 +92,36 @@ def test_negative_iv_in_model_greeks_falls_through_to_bid_greeks() -> None:
     assert q.iv == 0.205
 
 
-def test_nan_quote_fields_become_none() -> None:
+@pytest.mark.parametrize(
+    ("price", "size"),
+    [
+        pytest.param(math.nan, math.nan, id="nan_quote_fields_become_none"),
+        # Regression: IBKR sends ``-1.0`` as the "no L1 quote" sentinel for
+        # bid/ask/last. Pre-fix the values leaked through ``_coerce_optional_float``
+        # and rendered as ``-$1.00`` in the options-chain table; mid-price math
+        # produced bogus engine reprice triggers. Now stripped at ingestion via
+        # ``_coerce_quote``.
+        pytest.param(-1.0, None, id="negative_one_bid_ask_become_none_regression"),
+    ],
+)
+def test_sentinel_quote_fields_become_none(price: float, size: float | None) -> None:
     ticker = SimpleNamespace(
-        bid=math.nan,
-        ask=math.nan,
-        last=math.nan,
-        bidSize=math.nan,
-        askSize=math.nan,
+        bid=price,
+        ask=price,
+        last=price,
+        bidSize=size,
+        askSize=size,
         modelGreeks=None,
         bidGreeks=None,
         askGreeks=None,
         lastGreeks=None,
     )
     q = _ticker_to_quote(ticker, "SPY", 1_800_000_000_000, 420.0, "C")
-    assert q.bid is None
-    assert q.ask is None
-    assert q.last is None
-    assert q.bid_size is None
-    assert q.ask_size is None
-
-
-def test_negative_one_bid_ask_become_none() -> None:
-    """Regression: IBKR sends ``-1.0`` as the "no L1 quote" sentinel for
-    bid/ask/last. Pre-fix the values leaked through ``_coerce_optional_float``
-    and rendered as ``-$1.00`` in the options-chain table; mid-price math
-    produced bogus engine reprice triggers. Now stripped at ingestion via
-    ``_coerce_quote``."""
-    ticker = SimpleNamespace(
-        bid=-1.0,
-        ask=-1.0,
-        last=-1.0,
-        bidSize=None,
-        askSize=None,
-        modelGreeks=None,
-        bidGreeks=None,
-        askGreeks=None,
-        lastGreeks=None,
-    )
-    q = _ticker_to_quote(ticker, "SPY", 1_800_000_000_000, 420.0, "C")
-    assert q.bid is None
-    assert q.ask is None
-    assert q.last is None
+    assert q.bid is None, "bid becomes none"
+    assert q.ask is None, "ask becomes none"
+    assert q.last is None, "last becomes none"
+    assert q.bid_size is None, "bid size becomes none"
+    assert q.ask_size is None, "ask size becomes none"
 
 
 def test_zero_bid_is_preserved() -> None:
@@ -172,34 +163,22 @@ def test_negative_one_delta_is_preserved() -> None:
     assert q.delta == -1.0  # NOT stripped — legitimate Greek value
 
 
-def test_resolve_market_price_handles_method_returning_float() -> None:
-    # Regression: ib_async Ticker.marketPrice is a method, not an attribute.
-    # Passing the bound method to _coerce_optional_float raised TypeError.
-    ticker = SimpleNamespace(marketPrice=lambda: 580.42)
-    assert _resolve_market_price(ticker) == 580.42
-
-
-def test_resolve_market_price_handles_method_returning_nan() -> None:
-    ticker = SimpleNamespace(marketPrice=lambda: math.nan)
-    assert _resolve_market_price(ticker) is None
-
-
-def test_resolve_market_price_handles_plain_attribute() -> None:
-    ticker = SimpleNamespace(marketPrice=580.42)
-    assert _resolve_market_price(ticker) == 580.42
-
-
-def test_resolve_market_price_handles_method_raising() -> None:
+def test_resolve_market_price_handles_method_nan_plain_attribute_raising_and_missing() -> None:
     def raise_runtime_error() -> float:
         raise RuntimeError("boom")
 
+    # Regression: ib_async Ticker.marketPrice is a method, not an attribute.
+    # Passing the bound method to _coerce_optional_float raised TypeError.
+    ticker = SimpleNamespace(marketPrice=lambda: 580.42)
+    assert _resolve_market_price(ticker) == 580.42, "regression: a marketPrice method returning a float is called"
+    ticker = SimpleNamespace(marketPrice=lambda: math.nan)
+    assert _resolve_market_price(ticker) is None, "a marketPrice method returning nan resolves to none"
+    ticker = SimpleNamespace(marketPrice=580.42)
+    assert _resolve_market_price(ticker) == 580.42, "a plain marketPrice attribute is read as is"
     ticker = SimpleNamespace(marketPrice=raise_runtime_error)
-    assert _resolve_market_price(ticker) is None
-
-
-def test_resolve_market_price_handles_missing_attribute() -> None:
+    assert _resolve_market_price(ticker) is None, "a marketPrice method that raises resolves to none"
     ticker = SimpleNamespace()
-    assert _resolve_market_price(ticker) is None
+    assert _resolve_market_price(ticker) is None, "a ticker with no marketPrice resolves to none"
 
 
 # ── B-10: naive Ticker.time must not be trusted ────────────────────────
