@@ -192,71 +192,52 @@ def _write_full_result_fixture(output_dir: Path) -> None:
 
 
 class TestParseWorkspace:
-    def test_full_round_trip_against_real_lean_output(self, tmp_path: Path) -> None:
+    def test_parse_workspace_of_real_lean_output(self, tmp_path: Path) -> None:
         ws = resolve_workspace("parser_unit_full", tmp_path)
         ws.ensure_layout()
         _populate_workspace_with_fixtures(ws.root)
 
         result = parse_workspace(ws)
 
-        assert isinstance(result, NormalizedResult)
-        assert result.parser_version == NORMALIZED_PARSER_VERSION
-        assert result.algorithm_id == "MyAlgorithm"
+        assert isinstance(result, NormalizedResult), "full round trip returns a NormalizedResult"
+        assert result.parser_version == NORMALIZED_PARSER_VERSION, "parser version is stamped"
+        assert result.algorithm_id == "MyAlgorithm", "algorithm id comes from the summary"
         # The fixture run produced 1 trade -> 2 order events
         # (submitted + filled).
-        assert result.total_order_events == 2
-        assert len(result.order_events) == 2
+        assert result.total_order_events == 2, "1 trade -> 2 order events (submitted + filled)"
+        assert len(result.order_events) == 2, "both order events are listed"
         # Equity curve has 30 sampled points across the 5-day window.
-        assert result.total_equity_points > 0
-        assert result.first_equity_ms_utc is not None
-        assert result.last_equity_ms_utc is not None
+        assert result.total_equity_points > 0, "equity curve has sampled points"
+        assert result.first_equity_ms_utc is not None, "first equity timestamp is set"
+        assert result.last_equity_ms_utc is not None, "last equity timestamp is set"
         # Timestamps in int64 ms UTC (not seconds) — the fixture's
         # first equity sample is around 2025-01-06.
-        assert 1_736_000_000_000 < result.first_equity_ms_utc < 1_737_000_000_000
-
-    def test_statistics_preserved_as_strings(self, tmp_path: Path) -> None:
-        ws = resolve_workspace("parser_unit_stats", tmp_path)
-        ws.ensure_layout()
-        _populate_workspace_with_fixtures(ws.root)
-
-        result = parse_workspace(ws)
+        assert 1_736_000_000_000 < result.first_equity_ms_utc < 1_737_000_000_000, (
+            "first equity timestamp is int64 ms UTC, not seconds"
+        )
 
         # LEAN's stats are kept as strings — version-dependent formatting
         # is the responsibility of the consumer, not the parser.
-        assert isinstance(result.statistics["Sharpe Ratio"], str)
-        assert "Total Orders" in result.statistics
-        assert result.statistics["Total Orders"] == "1"
-
-    def test_order_event_ms_utc_replaces_unix_seconds(self, tmp_path: Path) -> None:
-        ws = resolve_workspace("parser_unit_ts", tmp_path)
-        ws.ensure_layout()
-        _populate_workspace_with_fixtures(ws.root)
-
-        result = parse_workspace(ws)
+        assert isinstance(result.statistics["Sharpe Ratio"], str), "statistics are preserved as strings"
+        assert "Total Orders" in result.statistics, "Total Orders statistic is present"
+        assert result.statistics["Total Orders"] == "1", "Total Orders statistic stays the string '1'"
 
         event = result.order_events[0]
         # 1736173860 unix seconds = 1736173860000 ms — the parser
         # multiplied by 1000. The "time" key from LEAN is dropped in
         # favor of "ms_utc".
-        assert event.ms_utc == 1736173860000
+        assert event.ms_utc == 1736173860000, "order event ms_utc replaces unix seconds"
         # Ensure the parser truly dropped the raw `time` field —
         # otherwise downstream consumers might branch on it.
         event_dump = event.model_dump(mode="json")
-        assert "time" not in event_dump
-
-    def test_equity_point_decoded_open_high_low_close(self, tmp_path: Path) -> None:
-        ws = resolve_workspace("parser_unit_eq", tmp_path)
-        ws.ensure_layout()
-        _populate_workspace_with_fixtures(ws.root)
-
-        result = parse_workspace(ws)
+        assert "time" not in event_dump, "the raw time field is dropped from the order event"
 
         # First point: starting equity, OHLC all 100000.
         first = result.equity_curve[0]
-        assert first.value == 100_000.0
-        assert first.open == 100_000.0
-        assert first.high == 100_000.0
-        assert first.low == 100_000.0
+        assert first.value == 100_000.0, "first equity point value is the starting equity"
+        assert first.open == 100_000.0, "first equity point open is decoded"
+        assert first.high == 100_000.0, "first equity point high is decoded"
+        assert first.low == 100_000.0, "first equity point low is decoded"
 
     def test_missing_summary_raises_typed_error(self, tmp_path: Path) -> None:
         ws = resolve_workspace("parser_unit_nosummary", tmp_path)
@@ -283,20 +264,19 @@ class TestParseWorkspace:
         assert result.total_order_events == 0
         assert result.order_events == []
 
-    def test_malformed_summary_raises(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        ("summary_text", "match"),
+        [
+            pytest.param("not json {", "could not read", id="malformed_summary_raises"),
+            pytest.param("[1, 2, 3]", "not a JSON object", id="array_summary_rejected"),
+        ],
+    )
+    def test_unusable_summary_raises_typed_error(self, tmp_path: Path, summary_text: str, match: str) -> None:
         ws = resolve_workspace("parser_unit_badsummary", tmp_path)
         ws.ensure_layout()
         (ws.output_dir / "MyAlgorithm.json").write_text("{}", encoding="utf-8")
-        (ws.output_dir / "MyAlgorithm-summary.json").write_text("not json {", encoding="utf-8")
-        with pytest.raises(NormalizedParserError, match="could not read"):
-            parse_workspace(ws)
-
-    def test_array_summary_rejected(self, tmp_path: Path) -> None:
-        ws = resolve_workspace("parser_unit_arrsumm", tmp_path)
-        ws.ensure_layout()
-        (ws.output_dir / "MyAlgorithm.json").write_text("{}", encoding="utf-8")
-        (ws.output_dir / "MyAlgorithm-summary.json").write_text("[1, 2, 3]", encoding="utf-8")
-        with pytest.raises(NormalizedParserError, match="not a JSON object"):
+        (ws.output_dir / "MyAlgorithm-summary.json").write_text(summary_text, encoding="utf-8")
+        with pytest.raises(NormalizedParserError, match=match):
             parse_workspace(ws)
 
     def test_order_events_bound_to_summary_algo_id(self, tmp_path: Path) -> None:
@@ -378,80 +358,72 @@ class TestParseWorkspace:
         with pytest.raises(NormalizedParserError, match="full result"):
             parse_workspace(ws)
 
-    def test_full_result_is_native_source_and_summary_is_separate(self, tmp_path: Path) -> None:
+    def test_native_full_result_sources_statistics_and_counts(self, tmp_path: Path) -> None:
         ws = resolve_workspace("parser_unit_full_native", tmp_path)
         ws.ensure_layout()
         _write_full_result_fixture(ws.output_dir)
 
         result = parse_workspace(ws)
 
-        assert result.statistics["Sharpe Ratio"] == "-1.012"
-        assert result.total_equity_points == 2
-        assert result.total_summary_equity_points == 1
-        assert result.equity_curve[-1].value == 100_120.0
-        assert result.summary_equity_curve[-1].value == 100_000.0
-        assert result.last_equity_ms_utc == 1_700_086_400_000
-        assert result.last_summary_equity_ms_utc == 1_700_000_000_000
-
-    def test_preserves_full_native_statistics_orders_rolling_and_analysis(self, tmp_path: Path) -> None:
-        ws = resolve_workspace("parser_unit_lossless", tmp_path)
-        ws.ensure_layout()
-        _write_full_result_fixture(ws.output_dir)
-
-        result = parse_workspace(ws)
+        assert result.statistics["Sharpe Ratio"] == "-1.012", "statistics come from the full result, not the summary"
+        assert result.total_equity_points == 2, "equity curve comes from the full result"
+        assert result.total_summary_equity_points == 1, "summary equity curve is kept separate"
+        assert result.equity_curve[-1].value == 100_120.0, "full-result equity ends at its last point"
+        assert result.summary_equity_curve[-1].value == 100_000.0, "summary equity ends at its own last point"
+        assert result.last_equity_ms_utc == 1_700_086_400_000, "full-result last equity timestamp"
+        assert result.last_summary_equity_ms_utc == 1_700_000_000_000, "summary last equity timestamp"
 
         portfolio = result.total_performance["portfolioStatistics"]
         trade = result.total_performance["tradeStatistics"]
-        assert portfolio["sharpeRatio"] == "-1.0125"
-        assert trade["profitFactor"] == "1.9827"
-        assert trade["sharpeRatio"] == "0.2259"
-        assert trade["sortinoRatio"] == "0.3992"
-        assert result.total_closed_trades == 1
-        assert result.total_orders == 2
-        assert result.total_rolling_windows == 1
-        assert result.total_analyses == 2
-        assert len(result.orders) == 2
-        assert len(result.analysis) == 2
-        assert set(result.full_charts) == {"Strategy Equity", "Drawdown"}
+        assert portfolio["sharpeRatio"] == "-1.0125", "portfolio sharpeRatio is preserved"
+        assert trade["profitFactor"] == "1.9827", "trade profitFactor is preserved"
+        assert trade["sharpeRatio"] == "0.2259", "trade sharpeRatio is preserved"
+        assert trade["sortinoRatio"] == "0.3992", "trade sortinoRatio is preserved"
+        assert result.total_closed_trades == 1, "closed trades are counted"
+        assert result.total_orders == 2, "native orders are counted"
+        assert result.total_rolling_windows == 1, "rolling windows are counted"
+        assert result.total_analyses == 2, "analyses are counted"
+        assert len(result.orders) == 2, "native orders are preserved"
+        assert len(result.analysis) == 2, "analyses are preserved"
+        assert set(result.full_charts) == {"Strategy Equity", "Drawdown"}, "full charts are preserved"
 
-    def test_normalizes_every_known_native_timestamp_to_ms_utc(self, tmp_path: Path) -> None:
+    def test_native_timestamps_numeric_lexemes_and_artifact_receipts(self, tmp_path: Path) -> None:
         ws = resolve_workspace("parser_unit_native_timestamps", tmp_path)
         ws.ensure_layout()
         _write_full_result_fixture(ws.output_dir)
 
         result = parse_workspace(ws)
 
-        assert result.algorithm_start_ms_utc == 1_699_920_000_000
-        assert result.algorithm_end_ms_utc == 1_700_092_799_000
-        assert result.state["StartTime"] == 1_786_233_258_000
-        assert result.orders["1"]["time"] == 1_699_974_000_000
-        assert result.total_performance["closedTrades"][0]["entryTime"] == 1_699_974_000_000
-        assert result.total_performance["tradeStatistics"]["endDateTime"] == 1_700_060_400_000
+        assert result.algorithm_start_ms_utc == 1_699_920_000_000, "algorithm start is ms UTC"
+        assert result.algorithm_end_ms_utc == 1_700_092_799_000, "algorithm end is ms UTC"
+        assert result.state["StartTime"] == 1_786_233_258_000, "state StartTime is ms UTC"
+        assert result.orders["1"]["time"] == 1_699_974_000_000, "order time is ms UTC"
+        assert result.total_performance["closedTrades"][0]["entryTime"] == 1_699_974_000_000, (
+            "closed trade entryTime is ms UTC"
+        )
+        assert result.total_performance["tradeStatistics"]["endDateTime"] == 1_700_060_400_000, (
+            "trade statistics endDateTime is ms UTC"
+        )
         sample = result.analysis[0].sample
-        assert isinstance(sample, list)
-        assert sample[0]["start"] == 1_699_934_400_000
+        assert isinstance(sample, list), "analysis sample is a list"
+        assert sample[0]["start"] == 1_699_934_400_000, "analysis sample start is ms UTC"
         # LEAN omits the timezone suffix on some analysis timestamps. The
         # parser's versioned LEAN-analysis rule treats those values as UTC.
-        assert sample[0]["end"] == 1_700_020_800_000
-        assert result.profit_loss[0].ms_utc == 1_700_060_400_000
-
-    def test_preserves_numeric_lexemes_and_artifact_receipts(self, tmp_path: Path) -> None:
-        ws = resolve_workspace("parser_unit_receipts", tmp_path)
-        ws.ensure_layout()
-        _write_full_result_fixture(ws.output_dir)
-
-        result = parse_workspace(ws)
+        assert sample[0]["end"] == 1_700_020_800_000, "tz-less analysis sample end is treated as UTC"
+        assert result.profit_loss[0].ms_utc == 1_700_060_400_000, "profit_loss timestamp is ms UTC"
 
         # JSON floating-point lexemes stay strings on the lossless native
         # surface. Typed display projections may convert them separately.
-        assert result.orders["1"]["price"] == "100.125"
-        assert result.analysis[1].sample["pValue"] == "0.0684907141208504"
-        assert result.data_monitor["succeeded-data-requests-count"] == 4
-        assert result.data_monitor["failed-data-requests-count"] == 0
-        assert set(result.artifacts) >= {"full_result", "summary_result", "data_monitor"}
-        for receipt in result.artifacts.values():
-            assert len(receipt.sha256) == 64
-            assert receipt.size_bytes > 0
+        assert result.orders["1"]["price"] == "100.125", "order price stays a numeric lexeme string"
+        assert result.analysis[1].sample["pValue"] == "0.0684907141208504", "pValue stays a numeric lexeme string"
+        assert result.data_monitor["succeeded-data-requests-count"] == 4, "data monitor succeeded count"
+        assert result.data_monitor["failed-data-requests-count"] == 0, "data monitor failed count"
+        assert set(result.artifacts) >= {"full_result", "summary_result", "data_monitor"}, (
+            "artifact receipts cover the full result, summary and data monitor"
+        )
+        for name, receipt in result.artifacts.items():
+            assert len(receipt.sha256) == 64, f"{name} receipt sha256 is a 64-char digest"
+            assert receipt.size_bytes > 0, f"{name} receipt records a non-empty size"
 
 
 class TestWriteNormalizedResult:

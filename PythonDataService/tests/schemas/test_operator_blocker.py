@@ -186,24 +186,20 @@ def test_same_condition_can_project_to_different_host_dispositions() -> None:
 @pytest.mark.parametrize(
     ("kind", "subject_key", "error"),
     [
-        ("holdings_row", None, "requires a subject_key"),
-        ("event", "", "requires a subject_key"),
-        ("verdict", "DU123", "must not carry a subject_key"),
-        ("surface", "account:DU123", "must not carry a subject_key"),
+        pytest.param("holdings_row", None, "requires a subject_key", id="holdings_row_without_a_subject_key"),
+        pytest.param("event", "", "requires a subject_key", id="event_with_an_empty_subject_key"),
+        pytest.param("verdict", "DU123", "must not carry a subject_key", id="verdict_with_a_subject_key"),
+        pytest.param("surface", "account:DU123", "must not carry a subject_key", id="surface_with_a_subject_key"),
+        pytest.param("unknown", None, None, id="unknown_kind"),
     ],
 )
 def test_anchor_rejects_invalid_kind_and_subject_key_pairing(
     kind: str,
     subject_key: str | None,
-    error: str,
+    error: str | None,
 ) -> None:
     with pytest.raises(ValidationError, match=error):
         OperatorBlockerAnchor(kind=kind, subject_key=subject_key)
-
-
-def test_anchor_rejects_unknown_kind() -> None:
-    with pytest.raises(ValidationError):
-        OperatorBlockerAnchor(kind="unknown", subject_key=None)
 
 
 def test_anchor_requires_subject_key_field() -> None:

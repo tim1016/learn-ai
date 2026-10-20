@@ -9,6 +9,7 @@ expire under this code, so nothing here shows what Alpaca's API sends.
 from __future__ import annotations
 
 import copy
+from collections.abc import Callable
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -311,12 +312,6 @@ _UNREADABLE_EVENTS: dict[str, dict[str, Any]] = {
 }
 
 
-@pytest.mark.parametrize("damage", sorted(_UNREADABLE_EVENTS))
-def test_an_event_that_cannot_be_read_whole_is_refused_whole(damage: str) -> None:
-    with pytest.raises((TypeError, ValueError)):
-        from_alpaca_option_activity(_exercise(**_UNREADABLE_EVENTS[damage]), observed_at_ms=_OBSERVED)
-
-
 def test_an_assignment_that_removes_contracts_is_refused() -> None:
     """An assignment adds back to a sold position; one signed the other way is not an assignment the pages show."""
     with pytest.raises(ValueError, match="an assignment takes from a sold position"):
@@ -363,10 +358,19 @@ _UNREADABLE_SHARE_TRADES: dict[str, dict[str, Any]] = {
 }
 
 
-@pytest.mark.parametrize("damage", sorted(_UNREADABLE_SHARE_TRADES))
-def test_a_share_trade_that_cannot_be_read_whole_is_refused_whole(damage: str) -> None:
+@pytest.mark.parametrize(
+    ("make_row", "damage"),
+    [pytest.param(_exercise, changes, id=f"event/{name}") for name, changes in sorted(_UNREADABLE_EVENTS.items())]
+    + [
+        pytest.param(_share_trade, changes, id=f"share-trade/{name}")
+        for name, changes in sorted(_UNREADABLE_SHARE_TRADES.items())
+    ],
+)
+def test_an_activity_that_cannot_be_read_whole_is_refused_whole(
+    make_row: Callable[..., dict[str, Any]], damage: dict[str, Any]
+) -> None:
     with pytest.raises((TypeError, ValueError)):
-        from_alpaca_option_activity(_share_trade(**_UNREADABLE_SHARE_TRADES[damage]), observed_at_ms=_OBSERVED)
+        from_alpaca_option_activity(make_row(**damage), observed_at_ms=_OBSERVED)
 
 
 @pytest.mark.parametrize("payload", [None, "OPEXC", ["OPEXC"], {}, {"activity_type": None}, {"activity_type": 7}])
@@ -541,24 +545,29 @@ async def test_option_events_and_their_share_trades_are_picked_out_from_the_othe
     assert evidence.read_whole is True
 
 
-async def test_an_activity_dated_before_the_window_is_left_out() -> None:
+@pytest.mark.parametrize(
+    "window_start_after_midnight_ms",
+    [0, (15 * 60 + 59) * 60_000],
+    ids=[
+        "an activity dated before the window is left out",
+        "an activity dated on the day the window starts is kept whatever the hour",
+    ],
+)
+async def test_the_window_leaves_out_the_activities_dated_before_it_and_keeps_those_of_its_first_day(
+    window_start_after_midnight_ms: int,
+) -> None:
+    """A row has a date and no time, so it cannot be said to fall before 15:59 on its own day."""
     broker, _client = _broker({None: _QS_ROWS})
 
-    evidence = await broker.read_option_event_activities(after_ms=_FRIDAY)
+    evidence = await broker.read_option_event_activities(after_ms=_FRIDAY + window_start_after_midnight_ms)
 
     # The exercise and its share trade are dated 2024-02-27.
-    assert [event.activity_date_ms for event in evidence.events] == [_FRIDAY, _FRIDAY]
-    assert [trade.activity_date_ms for trade in evidence.share_trades] == [_FRIDAY]
-
-
-async def test_an_activity_dated_on_the_day_the_window_starts_is_kept_whatever_the_hour() -> None:
-    """A row has a date and no time, so it cannot be said to fall before 15:59 on its own day."""
-    one_minute_before_the_close = _FRIDAY + (15 * 60 + 59) * 60_000
-    broker, _client = _broker({None: _QS_ROWS})
-
-    evidence = await broker.read_option_event_activities(after_ms=one_minute_before_the_close)
-
-    assert [event.activity_date_ms for event in evidence.events] == [_FRIDAY, _FRIDAY]
+    assert [event.activity_date_ms for event in evidence.events] == [_FRIDAY, _FRIDAY], (
+        "the events dated on the window's first day are kept and the earlier one is left out"
+    )
+    assert [trade.activity_date_ms for trade in evidence.share_trades] == [_FRIDAY], (
+        "the share trade dated on the window's first day is kept and the earlier one is left out"
+    )
 
 
 async def test_a_row_that_cannot_be_read_whole_is_listed_as_unreadable_and_the_rest_are_still_read() -> None:
@@ -615,15 +624,28 @@ async def test_whatever_is_wrong_with_an_option_rows_figures_makes_that_row_unre
     assert reason in unreadable.reason
 
 
-async def test_a_figure_that_will_not_parse_on_some_other_activity_does_not_refuse_the_read() -> None:
-    """A fee row is only walked past. Its amount is not this read's to parse."""
-    odd_fee = {**_fee("2024-03-01", 7), "net_amount": "n/a", "qty": "?"}
-    broker, _client = _broker({None: [odd_fee, _QS_ROWS[2]]})
+@pytest.mark.parametrize(
+    ("serial", "odd_fields", "fee_position"),
+    [
+        pytest.param(7, (("net_amount", "n/a"), ("qty", "?")), 0, id="a figure that will not parse"),
+        pytest.param(3, (("transaction_time", "2024-02-01T15:00:00Z"),), 1, id="an instant weeks before the window"),
+    ],
+)
+async def test_what_is_odd_on_some_other_activity_does_not_refuse_the_read(
+    serial: int, odd_fields: tuple[tuple[str, str], ...], fee_position: int
+) -> None:
+    """A fee row is only walked past: its amount is not this read's to parse, and an instant weeks before the window refuses nothing."""
+    odd_fee = {**_fee("2024-03-01", serial), **dict(odd_fields)}
+    rows: list[Any] = [_QS_ROWS[2]]
+    rows.insert(fee_position, odd_fee)
+    broker, _client = _broker({None: rows})
 
     evidence = await broker.read_option_event_activities(after_ms=_FRIDAY)
 
-    assert [event.activity_id for event in evidence.events] == [_QS_ROWS[2]["id"]]
-    assert evidence.read_whole is True
+    assert [event.activity_id for event in evidence.events] == [_QS_ROWS[2]["id"]], (
+        "the option event is still read beside the odd fee row"
+    )
+    assert evidence.read_whole is True, "the odd fee row does not make the read less than whole"
 
 
 async def test_a_sign_the_kind_cannot_have_is_explained_in_plain_words() -> None:
@@ -682,26 +704,25 @@ async def test_an_option_row_that_states_a_time_is_unreadable_and_is_not_placed_
     assert evidence.read_whole is False
 
 
-async def test_an_option_row_that_states_a_time_and_no_date_cannot_be_placed_outside_the_window() -> None:
-    timed = _row("broker_api", "put_expiration", date=..., transaction_time="2024-01-05T15:00:00Z")
-    broker, _client = _broker({None: [timed]})
+@pytest.mark.parametrize(
+    "transaction_time",
+    [..., "2024-01-05T15:00:00Z"],
+    ids=[
+        "an unreadable row with no date is kept because it cannot be placed outside the window",
+        "an option row that states a time and no date cannot be placed outside the window",
+    ],
+)
+async def test_an_option_row_with_no_date_cannot_be_placed_outside_the_window(transaction_time: Any) -> None:
+    undated = _row("broker_api", "put_expiration", date=..., transaction_time=transaction_time)
+    broker, _client = _broker({None: [undated]})
 
     evidence = await broker.read_option_event_activities(after_ms=_FRIDAY)
 
     (unreadable,) = evidence.unreadable
-    assert (unreadable.activity_id, unreadable.activity_date_ms) == (timed["id"], None)
-    assert evidence.read_whole is False
-
-
-async def test_a_time_on_some_other_activity_still_places_it_as_it_always_did() -> None:
-    """A fee row with an instant weeks before the window is walked past, and refuses nothing."""
-    timed_fee = {**_fee("2024-03-01", 3), "transaction_time": "2024-02-01T15:00:00Z"}
-    broker, _client = _broker({None: [_QS_ROWS[2], timed_fee]})
-
-    evidence = await broker.read_option_event_activities(after_ms=_FRIDAY)
-
-    assert [event.activity_id for event in evidence.events] == [_QS_ROWS[2]["id"]]
-    assert evidence.read_whole is True
+    assert (unreadable.activity_id, unreadable.activity_date_ms) == (undated["id"], None), (
+        "the row with no date is listed as unreadable and kept, with no date"
+    )
+    assert evidence.read_whole is False, "a row that could not be placed makes the read not whole"
 
 
 @pytest.mark.parametrize("status", ["correct", "canceled"])
@@ -754,17 +775,6 @@ async def test_an_option_activity_of_a_kind_this_app_does_not_read_is_listed_and
     assert unreadable.symbol == "FIZZ"
     assert unreadable.reason == f"Alpaca activity type '{code}' is an option activity this app does not read"
     assert evidence.read_whole is False
-
-
-async def test_an_unreadable_row_with_no_date_is_kept_because_it_cannot_be_placed_outside_the_window() -> None:
-    undated = _row("broker_api", "put_expiration", date=...)
-    broker, _client = _broker({None: [undated]})
-
-    evidence = await broker.read_option_event_activities(after_ms=_FRIDAY)
-
-    (unreadable,) = evidence.unreadable
-    assert unreadable.activity_id == undated["id"]
-    assert unreadable.activity_date_ms is None
 
 
 @pytest.mark.parametrize(

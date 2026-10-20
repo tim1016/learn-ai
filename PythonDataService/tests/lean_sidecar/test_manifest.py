@@ -106,28 +106,26 @@ class TestWindowMs:
 
 
 class TestWriteManifest:
-    def test_roundtrip_is_sorted_pretty_json(self, tmp_path: Path) -> None:
+    def test_write_manifest_is_sorted_pretty_json_and_atomic(self, tmp_path: Path) -> None:
         path = tmp_path / "manifest.json"
         write_manifest(_sample_manifest(), path)
         raw = path.read_text(encoding="utf-8")
         parsed = json.loads(raw)
-        # Sorted keys: the top-level keys are alphabetical.
-        assert list(parsed.keys()) == sorted(parsed.keys())
-        # Pretty: there is at least one newline + indent.
-        assert "\n  " in raw
-        # Schema version round-trips.
-        assert parsed["schema_version"] == MANIFEST_SCHEMA_VERSION
-        # Windows are dicts of int64 ms.
-        assert isinstance(parsed["requested_window_ms"]["start_ms"], int)
-        # data_policy shape is present and correct.
-        assert parsed["data_policy"]["source"] == "synthetic"
-        assert parsed["data_policy"]["input_bars"]["multiplier"] == 1
-        assert parsed["data_policy"]["strategy_bars"]["multiplier"] == 1
-        assert parsed["lean_runtime_provenance"]["lean_version"] == "17748"
+        assert list(parsed.keys()) == sorted(parsed.keys()), "top-level keys are alphabetical (sorted)"
+        assert "\n  " in raw, "pretty: there is at least one newline + indent"
+        assert parsed["schema_version"] == MANIFEST_SCHEMA_VERSION, "schema version round-trips"
+        assert isinstance(parsed["requested_window_ms"]["start_ms"], int), "windows are dicts of int64 ms"
+        assert parsed["data_policy"]["source"] == "synthetic", "data_policy source is present"
+        assert parsed["data_policy"]["input_bars"]["multiplier"] == 1, "data_policy input_bars multiplier"
+        assert parsed["data_policy"]["strategy_bars"]["multiplier"] == 1, "data_policy strategy_bars multiplier"
+        assert parsed["lean_runtime_provenance"]["lean_version"] == "17748", "runtime provenance lean_version"
         assert parsed["lean_runtime_provenance"]["source_commit"] == (
             "261366a7e26ae942df858ab20df4fef8fa07de67"
-        )
-        assert len(parsed["input_snapshot_sha256"]) == 64
+        ), "runtime provenance source_commit"
+        assert len(parsed["input_snapshot_sha256"]) == 64, "input snapshot hash is a sha256 hex digest"
+        # A successful write leaves no .tmp behind.
+        assert path.exists(), "the manifest file is written"
+        assert not (tmp_path / "manifest.json.tmp").exists(), "atomic write leaves no .tmp behind"
 
     def test_refuses_datetime_objects(self, tmp_path: Path) -> None:
         manifest = _sample_manifest()
@@ -137,12 +135,6 @@ class TestWriteManifest:
         manifest = replace(manifest, parameters=bad)
         with pytest.raises(TypeError):
             write_manifest(manifest, tmp_path / "manifest.json")
-
-    def test_atomic_write(self, tmp_path: Path) -> None:
-        """A successful write leaves no .tmp behind."""
-        write_manifest(_sample_manifest(), tmp_path / "manifest.json")
-        assert (tmp_path / "manifest.json").exists()
-        assert not (tmp_path / "manifest.json.tmp").exists()
 
 
 class TestNowMsUtc:

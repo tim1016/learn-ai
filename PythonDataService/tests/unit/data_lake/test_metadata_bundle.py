@@ -130,35 +130,41 @@ class TestReadReceipt:
     def test_returns_none_when_no_receipt_file_exists(self, tmp_path: Path):
         assert read_receipt(tmp_path) is None
 
-    def test_raises_on_malformed_json(self, tmp_path: Path):
-        receipt_path(tmp_path).write_text("{not json")
-        with pytest.raises(MetadataBundleError, match="malformed"):
-            read_receipt(tmp_path)
-
-    def test_raises_on_invalid_utf8_bytes(self, tmp_path: Path):
-        """Codex P2, PR #1884. Path.read_text() can raise UnicodeDecodeError
-        (a ValueError subclass, not OSError) for a partially-overwritten or
-        corrupted receipt file -- that must read as "malformed receipt,
-        needs repair" like every other corruption case here, not propagate
-        unhandled."""
-        receipt_path(tmp_path).write_bytes(b"\xff\xfe\x00\x01not valid utf-8")
-        with pytest.raises(MetadataBundleError, match="malformed"):
-            read_receipt(tmp_path)
-
-    def test_raises_on_wrong_schema_version(self, tmp_path: Path):
-        payload = {
-            "schema_version": 2,
-            "data_root_id": str(_ROOT_A),
-            "price_adjustment_mode": "raw",
-            "lean_image_digest": "sha256:abc",
-            "files": {
-                "market_hours": {"file_path": "market-hours/market-hours-database.json", "sha256": "a" * 64},
-                "symbol_properties": {"file_path": "symbol-properties/symbol-properties-database.csv", "sha256": "b" * 64},
-                "interest_rate": None,
-            },
-        }
-        receipt_path(tmp_path).write_text(json.dumps(payload))
-        with pytest.raises(MetadataBundleError, match="schema_version"):
+    @pytest.mark.parametrize(
+        ("content", "match"),
+        [
+            pytest.param(b"{not json", "malformed", id="malformed_json"),
+            # Codex P2, PR #1884. Path.read_text() can raise UnicodeDecodeError
+            # (a ValueError subclass, not OSError) for a partially-overwritten or
+            # corrupted receipt file -- that must read as "malformed receipt,
+            # needs repair" like every other corruption case here, not propagate
+            # unhandled.
+            pytest.param(b"\xff\xfe\x00\x01not valid utf-8", "malformed", id="invalid_utf8_bytes_pr_1884"),
+            pytest.param(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "data_root_id": str(_ROOT_A),
+                        "price_adjustment_mode": "raw",
+                        "lean_image_digest": "sha256:abc",
+                        "files": {
+                            "market_hours": {"file_path": "market-hours/market-hours-database.json", "sha256": "a" * 64},
+                            "symbol_properties": {
+                                "file_path": "symbol-properties/symbol-properties-database.csv",
+                                "sha256": "b" * 64,
+                            },
+                            "interest_rate": None,
+                        },
+                    }
+                ).encode(),
+                "schema_version",
+                id="wrong_schema_version",
+            ),
+        ],
+    )
+    def test_raises_on_a_corrupt_receipt(self, tmp_path: Path, content: bytes, match: str):
+        receipt_path(tmp_path).write_bytes(content)
+        with pytest.raises(MetadataBundleError, match=match):
             read_receipt(tmp_path)
 
     def test_parses_a_well_formed_receipt(self, tmp_path: Path):
@@ -197,25 +203,29 @@ class TestVerifyReceiptIdentity:
             self._receipt(), expected_root_id=_ROOT_A, expected_mode="raw", expected_digest="sha256:abc"
         )
 
-    def test_rejects_a_receipt_from_another_root(self):
-        with pytest.raises(MetadataBundleError, match="data_root_id"):
-            verify_receipt_identity(
-                self._receipt(), expected_root_id=_ROOT_B, expected_mode="raw", expected_digest="sha256:abc"
-            )
-
-    def test_rejects_a_receipt_from_another_mode(self):
-        with pytest.raises(MetadataBundleError, match="price_adjustment_mode"):
+    @pytest.mark.parametrize(
+        ("expected_root_id", "expected_mode", "expected_digest", "match"),
+        [
+            pytest.param(_ROOT_B, "raw", "sha256:abc", "data_root_id", id="rejects_a_receipt_from_another_root"),
+            pytest.param(
+                _ROOT_A,
+                "polygon_split_adjusted",
+                "sha256:abc",
+                "price_adjustment_mode",
+                id="rejects_a_receipt_from_another_mode",
+            ),
+            pytest.param(
+                _ROOT_A, "raw", "sha256:def", "lean_image_digest", id="rejects_a_receipt_with_a_different_digest"
+            ),
+        ],
+    )
+    def test_rejects_a_receipt_whose_identity_differs(self, expected_root_id, expected_mode, expected_digest, match):
+        with pytest.raises(MetadataBundleError, match=match):
             verify_receipt_identity(
                 self._receipt(),
-                expected_root_id=_ROOT_A,
-                expected_mode="polygon_split_adjusted",
-                expected_digest="sha256:abc",
-            )
-
-    def test_rejects_a_receipt_with_a_different_digest(self):
-        with pytest.raises(MetadataBundleError, match="lean_image_digest"):
-            verify_receipt_identity(
-                self._receipt(), expected_root_id=_ROOT_A, expected_mode="raw", expected_digest="sha256:def"
+                expected_root_id=expected_root_id,
+                expected_mode=expected_mode,
+                expected_digest=expected_digest,
             )
 
 
@@ -230,13 +240,40 @@ class TestVerifyFilesOnDisk:
         with pytest.raises(MetadataBundleError, match="absent"):
             verify_files_on_disk(tmp_path, receipt)
 
-    def test_raises_when_a_file_has_been_tampered_with(self, tmp_path: Path):
-        """Acceptance criterion: tampering with a metadata file is detected."""
+    # Acceptance criterion: tampering with a metadata file is detected -- the
+    # interest-rate file too, when the receipt names one.
+    @pytest.mark.parametrize(
+        ("include_interest_rate", "file_parts", "tampered"),
+        [
+            pytest.param(
+                False,
+                ("symbol-properties", "symbol-properties-database.csv"),
+                b"tampered,bytes\n",
+                id="raises_when_a_file_has_been_tampered_with",
+            ),
+            pytest.param(
+                True,
+                ("alternative", "interest-rate", "usa", "interest-rate.csv"),
+                b"tampered\n",
+                id="interest_rate_present_is_also_verified",
+            ),
+        ],
+    )
+    def test_raises_when_a_file_has_been_tampered_with(
+        self, tmp_path: Path, include_interest_rate: bool, file_parts: tuple[str, ...], tampered: bytes
+    ):
         seed_lean_metadata_receipt(
-            tmp_path, data_root_id=_ROOT_A, price_adjustment_mode="raw", lean_image_digest="sha256:abc"
+            tmp_path,
+            data_root_id=_ROOT_A,
+            price_adjustment_mode="raw",
+            lean_image_digest="sha256:abc",
+            include_interest_rate=include_interest_rate,
         )
         receipt = read_receipt(tmp_path)
-        (tmp_path / "symbol-properties" / "symbol-properties-database.csv").write_bytes(b"tampered,bytes\n")
+        assert (receipt.files.interest_rate is not None) is include_interest_rate, (
+            "the receipt names an interest-rate file exactly when one was seeded"
+        )
+        tmp_path.joinpath(*file_parts).write_bytes(tampered)
 
         with pytest.raises(MetadataBundleError, match="tampering or corruption"):
             verify_files_on_disk(tmp_path, receipt)
@@ -248,21 +285,6 @@ class TestVerifyFilesOnDisk:
         receipt = read_receipt(tmp_path)
         assert receipt.files.interest_rate is None
         verify_files_on_disk(tmp_path, receipt)  # must not raise
-
-    def test_interest_rate_present_is_also_verified(self, tmp_path: Path):
-        seed_lean_metadata_receipt(
-            tmp_path,
-            data_root_id=_ROOT_A,
-            price_adjustment_mode="raw",
-            lean_image_digest="sha256:abc",
-            include_interest_rate=True,
-        )
-        receipt = read_receipt(tmp_path)
-        assert receipt.files.interest_rate is not None
-        (tmp_path / "alternative" / "interest-rate" / "usa" / "interest-rate.csv").write_bytes(b"tampered\n")
-
-        with pytest.raises(MetadataBundleError, match="tampering or corruption"):
-            verify_files_on_disk(tmp_path, receipt)
 
 
 class TestVerifyBundle:
@@ -279,17 +301,19 @@ class TestVerifyBundle:
 
 
 class TestMetadataDataContractHash:
-    def test_varies_with_digest(self):
-        a = metadata_data_contract_hash("sha256:aaa", "market-hours-database.json", "raw")
-        b = metadata_data_contract_hash("sha256:bbb", "market-hours-database.json", "raw")
-        assert a != b
-
-    def test_varies_with_mode(self):
-        """The mode is folded into the hash so each mode's physical copy
-        gets its own catalog row -- see the function's own docstring."""
-        raw = metadata_data_contract_hash("sha256:aaa", "market-hours-database.json", "raw")
-        adjusted = metadata_data_contract_hash("sha256:aaa", "market-hours-database.json", "polygon_split_adjusted")
-        assert raw != adjusted
+    @pytest.mark.parametrize(
+        ("digest_a", "mode_a", "digest_b", "mode_b"),
+        [
+            pytest.param("sha256:aaa", "raw", "sha256:bbb", "raw", id="varies_with_digest"),
+            # The mode is folded into the hash so each mode's physical copy
+            # gets its own catalog row -- see the function's own docstring.
+            pytest.param("sha256:aaa", "raw", "sha256:aaa", "polygon_split_adjusted", id="varies_with_mode"),
+        ],
+    )
+    def test_varies_with_digest_and_mode(self, digest_a, mode_a, digest_b, mode_b):
+        a = metadata_data_contract_hash(digest_a, "market-hours-database.json", mode_a)
+        b = metadata_data_contract_hash(digest_b, "market-hours-database.json", mode_b)
+        assert a != b, "the hash differs between the two inputs"
 
 
 class TestClaimAndCompleteMetadataRowReclaimRace:

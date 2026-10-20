@@ -217,86 +217,87 @@ class TestPostLoopRollup:
     """#1869: the follow-up full-range call that produces factor/map files
     and the daily-trade artifact once the per-day loop completes."""
 
-    async def test_skipped_when_no_day_produced_a_bar(self) -> None:
-        """An all-failed range has no minute-trade coverage for the rollup
-        to derive anything from — it must not fire at all."""
-        calls: list[DataRunSpec] = []
-
-        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
-            calls.append(day_spec)
-            return _failure_result(day_spec, reason="unknown_symbol")
-
-        spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 22))
-        await run_backfill(spec, ensure_fn=fake_ensure)
-
-        assert len(calls) == 3  # exactly the 3 day sub-calls, no rollup
-
-    async def test_rollup_range_excludes_both_the_unattempted_tail_and_the_fatal_day(self) -> None:
-        """A fatal provider error stops the day loop early (days_unattempted
-        > 0) — the rollup must cover only sessions that actually reached
-        'complete'. Re-including the unattempted tail would just repeat the
-        same doomed provider call for days never even tried; re-including the
-        fatal day itself would retry the exact same auth/rate-limit failure
-        the early abort exists to avoid repeating (#1873 review fix)."""
+    @pytest.mark.parametrize(
+        ("failure_reason", "expected_calls", "expected_unattempted"),
+        [
+            # An all-failed range has no minute-trade coverage for the rollup
+            # to derive anything from — it must not fire at all.
+            # (3 sessions: exactly the 3 day sub-calls, no rollup.)
+            pytest.param("unknown_symbol", 3, 0, id="skipped_when_no_day_produced_a_bar"),
+            # The fatal day hits on the very first session — nothing else was
+            # even attempted, so excluding the fatal day leaves no sessions for
+            # the rollup to cover. It must not fire with an empty/inverted
+            # range. (Just the one day sub-call, no rollup.)
+            pytest.param(
+                "provider_auth_error", 1, 2, id="rollup_skipped_when_the_only_attempted_day_is_the_fatal_one"
+            ),
+        ],
+    )
+    async def test_rollup_does_not_fire_when_no_attempted_day_completed(
+        self, failure_reason: str, expected_calls: int, expected_unattempted: int
+    ) -> None:
         seen_specs: list[DataRunSpec] = []
 
         async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
             seen_specs.append(day_spec)
-            if day_spec.start_trading_date == date(2024, 5, 20):
-                return _ok_result(day_spec)
-            return _failure_result(day_spec, reason="provider_auth_error")
-
-        spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 24))
-        result = await run_backfill(spec, ensure_fn=fake_ensure)
-
-        # 5 sessions total (20-24); the fatal error on 05-21 (2nd session)
-        # aborts the remaining 3 (22, 23, 24) as unattempted.
-        assert result.days_unattempted == 3
-        rollup_spec = seen_specs[-1]
-        assert rollup_spec.start_trading_date == date(2024, 5, 20)
-        assert rollup_spec.end_trading_date == date(2024, 5, 20)  # the fatal day (05-21) is excluded too
-
-    async def test_rollup_skipped_when_the_only_attempted_day_is_the_fatal_one(self) -> None:
-        """The fatal day hits on the very first session — nothing else was
-        even attempted, so excluding the fatal day leaves no sessions for the
-        rollup to cover. It must not fire with an empty/inverted range."""
-        seen_specs: list[DataRunSpec] = []
-
-        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
-            seen_specs.append(day_spec)
-            return _failure_result(day_spec, reason="provider_auth_error")
+            return _failure_result(day_spec, reason=failure_reason)
 
         spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 22))
         result = await run_backfill(spec, ensure_fn=fake_ensure)
 
-        assert result.days_unattempted == 2
-        assert len(seen_specs) == 1  # just the one day sub-call, no rollup
+        assert result.days_unattempted == expected_unattempted, "days left unattempted"
+        assert len(seen_specs) == expected_calls, "only the day sub-calls ran, the rollup never fired"
 
-    async def test_rollup_range_also_truncates_at_a_non_fatal_interior_failure(self) -> None:
-        """A non-fatal per-day failure (e.g. provider_no_data) does not stop
-        the loop — later days still get attempted, and days_unattempted stays
-        0 — but the rollup is a single contiguous window (_rollup_spec takes
-        only a start/end) and cannot skip that one failed day in the middle.
-        It must truncate before it rather than re-request a day already
-        known to have failed this run (CodeRabbit review finding on #1873:
-        the fatal-day-only exclusion missed this non-fatal case)."""
+    @pytest.mark.parametrize(
+        ("failure_reason", "expected_unattempted"),
+        [
+            # A fatal provider error stops the day loop early (days_unattempted
+            # > 0) — the rollup must cover only sessions that actually reached
+            # 'complete'. Re-including the unattempted tail would just repeat the
+            # same doomed provider call for days never even tried; re-including the
+            # fatal day itself would retry the exact same auth/rate-limit failure
+            # the early abort exists to avoid repeating (#1873 review fix).
+            # 5 sessions total (20-24); the fatal error on 05-21 (2nd session)
+            # aborts the remaining 3 (22, 23, 24) as unattempted.
+            pytest.param(
+                "provider_auth_error",
+                3,
+                id="rollup_range_excludes_both_the_unattempted_tail_and_the_fatal_day_1873",
+            ),
+            # A non-fatal per-day failure (e.g. provider_no_data) does not stop
+            # the loop — later days still get attempted, and days_unattempted stays
+            # 0 — but the rollup is a single contiguous window (_rollup_spec takes
+            # only a start/end) and cannot skip that one failed day in the middle.
+            # It must truncate before it rather than re-request a day already
+            # known to have failed this run (CodeRabbit review finding on #1873:
+            # the fatal-day-only exclusion missed this non-fatal case).
+            pytest.param(
+                "provider_no_data",
+                0,
+                id="rollup_range_also_truncates_at_a_non_fatal_interior_failure_1873",
+            ),
+        ],
+    )
+    async def test_rollup_range_stops_before_the_first_failed_day(
+        self, failure_reason: str, expected_unattempted: int
+    ) -> None:
         seen_specs: list[DataRunSpec] = []
 
         async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
             seen_specs.append(day_spec)
             if day_spec.start_trading_date == date(2024, 5, 21):
-                return _failure_result(day_spec, reason="provider_no_data")
+                return _failure_result(day_spec, reason=failure_reason)
             return _ok_result(day_spec)
 
         spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 24))
         result = await run_backfill(spec, ensure_fn=fake_ensure)
 
-        # All 5 days attempted (non-fatal — no short circuit).
-        assert result.days_unattempted == 0
-        assert result.days_with_failures == 1
+        assert result.days_unattempted == expected_unattempted, "days left unattempted"
+        assert result.days_with_failures == 1, "only 05-21 failed"
         rollup_spec = seen_specs[-1]
-        assert rollup_spec.start_trading_date == date(2024, 5, 20)
-        assert rollup_spec.end_trading_date == date(2024, 5, 20)  # truncated before 05-21, not through 05-24
+        assert rollup_spec.start_trading_date == date(2024, 5, 20), "the rollup starts at the first session"
+        # truncated before 05-21 (the failed day), not through 05-24
+        assert rollup_spec.end_trading_date == date(2024, 5, 20), "the rollup ends before the failed day"
 
     async def test_metadata_bootstrap_failure_does_not_truncate_the_rollup_window(self) -> None:
         """Confirmed root cause of the rollup gap discovered while backfilling
@@ -627,22 +628,19 @@ class TestGloballyFatalShortCircuit:
         assert aborted.trading_date is None
         assert str(result.days_unattempted) in (aborted.detail or "")
 
-    async def test_entitlement_error_also_short_circuits(self) -> None:
+    @pytest.mark.parametrize(
+        "reason",
+        [
+            pytest.param("provider_entitlement_error", id="entitlement_error_also_short_circuits"),
+            # provider_rate_limited stops rather than backing off and
+            # retrying — a documented choice (see backfill._GLOBALLY_FATAL_REASONS),
+            # not a bounded-retry policy, which is Task 7's territory.
+            pytest.param("provider_rate_limited", id="rate_limited_also_short_circuits_as_a_documented_stop"),
+        ],
+    )
+    async def test_other_fatal_reasons_also_short_circuit(self, reason: str) -> None:
         async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
-            return _failure_result(day_spec, reason="provider_entitlement_error")
-
-        spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 24))
-        result = await run_backfill(spec, ensure_fn=fake_ensure)
-
-        assert result.days_unattempted == result.total_sessions - 1
-
-    async def test_rate_limited_also_short_circuits_as_a_documented_stop(self) -> None:
-        """provider_rate_limited stops rather than backing off and
-        retrying — a documented choice (see backfill._GLOBALLY_FATAL_REASONS),
-        not a bounded-retry policy, which is Task 7's territory."""
-
-        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
-            return _failure_result(day_spec, reason="provider_rate_limited")
+            return _failure_result(day_spec, reason=reason)
 
         spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 24))
         result = await run_backfill(spec, ensure_fn=fake_ensure)
@@ -679,34 +677,45 @@ class TestGloballyFatalShortCircuit:
 class TestSkippedNonSessionsFromRequestedRange:
     """P2-6 regression (review round 3)."""
 
-    async def test_weekend_and_holiday_days_are_listed_from_the_requested_range(self) -> None:
-        """2024-05-25/26 is a weekend and 2024-05-27 is Memorial Day.
-        Per-session sub-results never carry these (each sub-spec's range
-        IS a single canonical session, so ensure_data's own one-day
-        calendar check trivially finds no gaps) — they must come from the
-        requested range directly."""
-
+    @pytest.mark.parametrize(
+        ("start", "end", "expected_skipped"),
+        [
+            # 2024-05-25/26 is a weekend and 2024-05-27 is Memorial Day.
+            # Per-session sub-results never carry these (each sub-spec's range
+            # IS a single canonical session, so ensure_data's own one-day
+            # calendar check trivially finds no gaps) — they must come from the
+            # requested range directly.
+            pytest.param(
+                date(2024, 5, 24),
+                date(2024, 5, 28),
+                (
+                    (date(2024, 5, 25), "weekend"),
+                    (date(2024, 5, 26), "weekend"),
+                    (date(2024, 5, 27), "market_holiday"),
+                ),
+                id="weekend_and_holiday_days_are_listed_from_the_requested_range",
+            ),
+            # Mon-Fri, no holiday
+            pytest.param(
+                date(2024, 5, 20),
+                date(2024, 5, 24),
+                (),
+                id="no_skipped_non_sessions_when_the_range_is_all_trading_days",
+            ),
+        ],
+    )
+    async def test_skipped_non_sessions_come_from_the_requested_range(
+        self, start: date, end: date, expected_skipped: tuple[tuple[date, str], ...]
+    ) -> None:
         async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
             return _ok_result(day_spec)
 
-        spec = _spec(start=date(2024, 5, 24), end=date(2024, 5, 28))
+        spec = _spec(start=start, end=end)
         result = await run_backfill(spec, ensure_fn=fake_ensure)
 
         skipped_by_date = {r.trading_date: r.reason for r in result.skipped_non_sessions}
-        assert skipped_by_date == {
-            date(2024, 5, 25): "weekend",
-            date(2024, 5, 26): "weekend",
-            date(2024, 5, 27): "market_holiday",
-        }
-
-    async def test_no_skipped_non_sessions_when_the_range_is_all_trading_days(self) -> None:
-        async def fake_ensure(day_spec: DataRunSpec) -> DataAvailabilityResult:
-            return _ok_result(day_spec)
-
-        spec = _spec(start=date(2024, 5, 20), end=date(2024, 5, 24))  # Mon-Fri, no holiday
-        result = await run_backfill(spec, ensure_fn=fake_ensure)
-
-        assert result.skipped_non_sessions == []
+        assert skipped_by_date == dict(expected_skipped), "skipped days and reasons come from the requested range"
+        assert len(result.skipped_non_sessions) == len(expected_skipped), "no duplicate skipped entries"
 
 
 class _FakeLeaseCatalog:

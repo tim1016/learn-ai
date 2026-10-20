@@ -200,18 +200,35 @@ _AT_THE_MONEY = {"selector": "atm"}
 
 
 @pytest.mark.parametrize(
-    ("strike", "picks"),
+    ("strike", "money", "picks"),
     [
-        pytest.param(_AT_THE_MONEY, 585, id="at the money"),
-        pytest.param({"selector": "atm_offset", "offset": 2}, 587, id="two strikes above the money"),
-        pytest.param({"selector": "atm_offset", "offset": -3}, 582, id="three strikes below the money"),
-        pytest.param({"selector": "absolute", "strike": 590.0}, 590, id="one named strike"),
-        pytest.param({"selector": "percent", "percent": 2.0}, 597, id="2% above the price, which is 596.70"),
-        pytest.param({"selector": "percent", "percent": -1.5}, 576, id="1.5% below the price, which is 576.225"),
+        pytest.param(_AT_THE_MONEY, "585.00", 585, id="at the money"),
+        pytest.param({"selector": "atm_offset", "offset": 2}, "585.00", 587, id="two strikes above the money"),
+        pytest.param({"selector": "atm_offset", "offset": -3}, "585.00", 582, id="three strikes below the money"),
+        pytest.param({"selector": "absolute", "strike": 590.0}, "585.00", 590, id="one named strike"),
+        pytest.param({"selector": "percent", "percent": 2.0}, "585.00", 597, id="2% above the price, which is 596.70"),
+        pytest.param({"selector": "percent", "percent": -1.5}, "585.00", 576, id="1.5% below the price, which is 576.225"),
+        pytest.param(_AT_THE_MONEY, "585.50", 585, id="the money between two strikes is the lower"),
+        # The bar closed at 585.45, nearer 585. The quote is at 585.56 by the selection, nearer 586.
+        pytest.param(_AT_THE_MONEY, "585.45", 585, id="the money is the decision bar's close, not where the quote has moved since"),
+        pytest.param(
+            {"selector": "percent", "percent": 0.0}, "585.45", 585, id="a percent of nothing is the decision bar's close too"
+        ),
+        # A quarter of a percent under 600 is 598.50: 598 and 599 are as near it, and 599 is nearer the money.
+        pytest.param(
+            {"selector": "percent", "percent": -0.25},
+            "600.00",
+            599,
+            id="a percent rule between two strikes takes the one nearer the money",
+        ),
+        # At the price itself, with the price at 587.50, 587 and 588 are as near both: the lower.
+        pytest.param(
+            {"selector": "percent", "percent": 0.0}, "587.50", 587, id="a percent rule as near two strikes as the money takes the lower"
+        ),
     ],
 )
-def test_a_strike_rule_picks_the_listed_strike_it_means(strike: dict, picks: int) -> None:
-    resolution = _scene().resolve(_one("call", strike))
+def test_a_strike_rule_picks_the_listed_strike_it_means(strike: dict, money: str, picks: int) -> None:
+    resolution = _scene(money=money).resolve(_one("call", strike))
 
     assert resolution.picked == {"only": _contract("call", picks)}
 
@@ -335,23 +352,25 @@ def test_an_expiry_rule_picks_the_listed_expiry_it_means(expiry: dict, picks: da
     assert resolution.evidence.legs[0].expiry_ms == option_expiry_anchor_ms(picks)
 
 
-def test_the_nearest_weekly_on_a_friday_is_the_following_weeks() -> None:
-    resolution = _scene(day=_FRIDAY, expiries=(_FRIDAY, _NEXT_FRIDAY)).resolve(
-        _one("call", _AT_THE_MONEY, expiry={"selector": "nearest_weekly"})
-    )
+@pytest.mark.parametrize(
+    ("day", "expiries", "picks"),
+    [
+        pytest.param(_FRIDAY, (_FRIDAY, _NEXT_FRIDAY), _NEXT_FRIDAY, id="on a Friday it is the following week's"),
+        # Good Friday 2026 is April 3rd, so that week's last session is Thursday the 2nd.
+        pytest.param(
+            date(2026, 3, 30),
+            (date(2026, 4, 1), date(2026, 4, 2), date(2026, 4, 10)),
+            date(2026, 4, 2),
+            id="a week that ends on a Thursday has its weekly on the Thursday",
+        ),
+    ],
+)
+def test_the_nearest_weekly_is_the_last_session_of_the_week_the_calendar_gives(
+    day: date, expiries: tuple[date, ...], picks: date
+) -> None:
+    resolution = _scene(day=day, expiries=expiries).resolve(_one("call", _AT_THE_MONEY, expiry={"selector": "nearest_weekly"}))
 
-    assert resolution.picked["only"].expiry_date == _NEXT_FRIDAY
-
-
-def test_a_week_that_ends_on_a_thursday_has_its_weekly_on_the_thursday() -> None:
-    """Good Friday 2026 is April 3rd, so that week's last session is Thursday the 2nd."""
-    monday, wednesday, thursday, next_friday = date(2026, 3, 30), date(2026, 4, 1), date(2026, 4, 2), date(2026, 4, 10)
-
-    resolution = _scene(day=monday, expiries=(wednesday, thursday, next_friday)).resolve(
-        _one("call", _AT_THE_MONEY, expiry={"selector": "nearest_weekly"})
-    )
-
-    assert resolution.picked["only"].expiry_date == thursday
+    assert resolution.picked["only"].expiry_date == picks
 
 
 @pytest.mark.parametrize(
@@ -429,28 +448,6 @@ def test_time_to_expiry_ends_at_the_expiry_days_own_close() -> None:
 
 
 # ---- Ties -----------------------------------------------------------------
-
-
-def test_the_money_between_two_strikes_is_the_lower() -> None:
-    assert _scene(money="585.50").resolve(_one("call", _AT_THE_MONEY)).picked["only"] == _contract("call", 585)
-
-
-def test_the_money_is_the_decision_bars_close_not_where_the_quote_has_moved_since() -> None:
-    """The bar closed at 585.45, nearer 585. The quote is at 585.56 by the selection, nearer 586."""
-    scene = _scene(money="585.45")
-
-    assert scene.resolve(_one("call", _AT_THE_MONEY)).picked["only"] == _contract("call", 585)
-    assert scene.resolve(_one("call", {"selector": "percent", "percent": 0.0})).picked["only"] == _contract("call", 585)
-
-
-def test_a_percent_rule_between_two_strikes_takes_the_one_nearer_the_money_then_the_lower() -> None:
-    """A quarter of a percent under 600 is 598.50: 598 and 599 are as near it, and 599 is nearer the money.
-    At the price itself, with the price at 587.50, 587 and 588 are as near both: the lower."""
-    below = _scene(money="600.00").resolve(_one("call", {"selector": "percent", "percent": -0.25}))
-    at_the_price = _scene(money="587.50").resolve(_one("call", {"selector": "percent", "percent": 0.0}))
-
-    assert below.picked["only"] == _contract("call", 599)
-    assert at_the_price.picked["only"] == _contract("call", 587)
 
 
 def test_a_percent_is_the_decimal_it_was_written_as() -> None:
@@ -749,47 +746,62 @@ def test_contracts_on_another_root_are_not_the_plans() -> None:
 
 
 @pytest.mark.parametrize(
-    ("right", "strike", "unsearched"),
+    ("right", "strike", "money", "unsearched"),
     [
-        pytest.param("call", {"selector": "percent", "percent": 3.0}, 603, id="3% above is 602.55, past the 600 the window ends at"),
-        pytest.param("call", {"selector": "absolute", "strike": 605.0}, 605, id="a listed strike outside the window"),
-        pytest.param("call", {"selector": "atm_offset", "offset": 16}, 601, id="sixteen strikes up, one past the window"),
         pytest.param(
-            "call", {"selector": "delta", "target": 0.02, "tolerance_delta": 0.2}, 601, id="a call delta past the window's top"
+            "call", {"selector": "percent", "percent": 3.0}, "585.00", 603, id="3% above is 602.55, past the 600 the window ends at"
+        ),
+        pytest.param("call", {"selector": "absolute", "strike": 605.0}, "585.00", 605, id="a listed strike outside the window"),
+        pytest.param("call", {"selector": "atm_offset", "offset": 16}, "585.00", 601, id="sixteen strikes up, one past the window"),
+        pytest.param(
+            "call",
+            {"selector": "delta", "target": 0.02, "tolerance_delta": 0.2},
+            "585.00",
+            601,
+            id="a call delta past the window's top",
         ),
         pytest.param(
-            "put", {"selector": "delta", "target": 0.02, "tolerance_delta": 0.2}, 569, id="a put delta past the window's bottom"
+            "put",
+            {"selector": "delta", "target": 0.02, "tolerance_delta": 0.2},
+            "585.00",
+            569,
+            id="a put delta past the window's bottom",
         ),
         pytest.param(
-            "put", {"selector": "delta", "target": 0.98, "tolerance_delta": 0.2}, 601, id="a deep put delta past the window's top"
+            "put",
+            {"selector": "delta", "target": 0.98, "tolerance_delta": 0.2},
+            "585.00",
+            601,
+            id="a deep put delta past the window's top",
         ),
         pytest.param(
             "call",
             {"selector": "delta", "target": 0.02, "tolerance_delta": 0.001},
+            "585.00",
             601,
             id="a call delta past the window's top, with nothing in the window within its tolerance",
         ),
         pytest.param(
             "put",
             {"selector": "delta", "target": 0.02, "tolerance_delta": 0.001},
+            "585.00",
             569,
             id="a put delta past the window's bottom, with nothing in the window within its tolerance",
         ),
+        # The bar closed at 605, a listed strike nobody is watching. The money is not the nearest watched strike.
+        pytest.param(
+            "call", _AT_THE_MONEY, "605.00", 605, id="the money outside the watched window: the bar closed at an unwatched strike"
+        ),
     ],
 )
-def test_a_target_outside_the_watched_window_is_search_incomplete(right: str, strike: dict, unsearched: int) -> None:
-    refused = _scene().refusal(_one(right, strike))
+def test_a_target_outside_the_watched_window_is_search_incomplete(
+    right: str, strike: dict, money: str, unsearched: int
+) -> None:
+    refused = _scene(money=money).refusal(_one(right, strike))
 
     assert (refused.reason, refused.leg_ids) == (ResolverRefusal.SEARCH_INCOMPLETE, ("only",))
     assert refused.contract == _contract(right, unsearched)
     assert _contract(right, unsearched).occ_symbol in str(refused)
-
-
-def test_the_money_outside_the_watched_window_is_search_incomplete() -> None:
-    """The bar closed at 605, a listed strike nobody is watching. The money is not the nearest watched strike."""
-    refused = _scene(money="605.00").refusal(_one("call", _AT_THE_MONEY))
-
-    assert (refused.reason, refused.contract) == (ResolverRefusal.SEARCH_INCOMPLETE, _contract("call", 605))
 
 
 def test_a_delta_past_the_last_listed_strike_is_nothing_close_enough(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -802,20 +814,29 @@ def test_a_delta_past_the_last_listed_strike_is_nothing_close_enough(monkeypatch
     assert (refused.reason, refused.fault, refused.contract) == (ResolverRefusal.NOTHING_CLOSE_ENOUGH, None, None)
 
 
-def test_a_delta_rule_with_no_quote_arrived_for_any_contract_is_search_incomplete() -> None:
-    """Nothing is known of any call: that is a window not yet filled, not a chain of faulty quotes."""
-    refused = _scene(watched=range(0)).refusal(_one("call", {"selector": "delta", "target": 0.3}))
+@pytest.mark.parametrize(
+    ("strike", "reason"),
+    [
+        # Nothing is known of any call: that is a window not yet filled, not a chain of faulty quotes.
+        pytest.param(
+            {"selector": "delta", "target": 0.3},
+            ResolverRefusal.SEARCH_INCOMPLETE,
+            id="a delta rule with no quote arrived for any contract",
+        ),
+        # 9% above the price is 637.65, and the chain's last strike is 610. No quote could change that.
+        pytest.param(
+            {"selector": "percent", "percent": 9.0},
+            ResolverRefusal.NOTHING_CLOSE_ENOUGH,
+            id="a strike rule with nothing listed near its target, whatever is watched",
+        ),
+    ],
+)
+def test_with_nothing_watched_a_rule_is_refused_as_a_window_not_filled_or_nothing_close_enough(
+    strike: dict, reason: ResolverRefusal
+) -> None:
+    refused = _scene(watched=range(0)).refusal(_one("call", strike))
 
-    assert (refused.reason, refused.fault) == (ResolverRefusal.SEARCH_INCOMPLETE, None)
-
-
-def test_a_strike_rule_with_nothing_listed_near_its_target_is_nothing_close_enough_whatever_is_watched() -> None:
-    """9% above the price is 637.65, and the chain's last strike is 610. No quote could change that."""
-    nothing_watched = _scene(watched=range(0))
-
-    refused = nothing_watched.refusal(_one("call", {"selector": "percent", "percent": 9.0}))
-
-    assert refused.reason is ResolverRefusal.NOTHING_CLOSE_ENOUGH
+    assert (refused.reason, refused.fault) == (reason, None)
 
 
 @pytest.mark.parametrize(
@@ -1111,13 +1132,14 @@ def test_quotes_received_too_far_apart_are_refused_though_each_is_fresh() -> Non
     assert scene.holding(sold, received(2_400)).resolve(spread).picked["short_call"] == sold
 
 
-def test_one_side_of_one_quote_received_long_before_the_rest_is_enough_to_refuse() -> None:
+@pytest.mark.parametrize("side", ["bid", "ask"], ids=["a bid", "an ask"])
+def test_one_side_of_one_quote_received_long_before_the_rest_is_enough_to_refuse(side: str) -> None:
     scene = _scene()
     contract = _contract("call", 585)
     quote = scene.quote_of(contract)
-    old_bid = replace(quote, bid=QuoteSide(quote.bid.price, scene.selection_ms - 3_000))
+    old_side = replace(quote, **{side: QuoteSide(getattr(quote, side).price, scene.selection_ms - 3_000)})
 
-    refused = scene.holding(contract, old_bid).refusal(_one("call", _AT_THE_MONEY))
+    refused = scene.holding(contract, old_side).refusal(_one("call", _AT_THE_MONEY))
 
     assert refused.reason is ResolverRefusal.OBSERVATIONS_APART
 
@@ -1138,17 +1160,6 @@ def test_two_legs_too_far_apart_are_refused_though_each_is_within_the_window_of_
 
     assert (refused.reason, refused.leg_ids) == (ResolverRefusal.OBSERVATIONS_APART, ("long_call", "short_call"))
     assert with_legs_received(1_000, 1_000).resolve(_spread()).picked["short_call"] == sold
-
-
-def test_an_ask_received_long_before_the_rest_is_enough_to_refuse() -> None:
-    scene = _scene()
-    contract = _contract("call", 585)
-    quote = scene.quote_of(contract)
-    old_ask = replace(quote, ask=QuoteSide(quote.ask.price, scene.selection_ms - 3_000))
-
-    refused = scene.holding(contract, old_ask).refusal(_one("call", _AT_THE_MONEY))
-
-    assert refused.reason is ResolverRefusal.OBSERVATIONS_APART
 
 
 @pytest.mark.parametrize("close", ["NaN", "0", "-585.00", "Infinity"])

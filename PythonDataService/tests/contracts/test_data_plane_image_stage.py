@@ -101,12 +101,6 @@ def _dockerfile_stages() -> dict[str, list[str]]:
     return stages
 
 
-def test_every_service_built_from_the_data_plane_context_names_its_stage() -> None:
-    """No `target:` is the trap itself: Docker builds the last Dockerfile
-    stage, whatever stage that is."""
-    assert _wrong_stages(_data_plane_builds(_load_documents())) == {}
-
-
 def test_an_overlay_cannot_retarget_a_data_plane_service_without_a_context() -> None:
     """A base file names the stage; an overlay `build: {target: ...}` with no
     context of its own would silently override it."""
@@ -121,24 +115,30 @@ def test_an_overlay_cannot_retarget_a_data_plane_service_without_a_context() -> 
     assert _wrong_stages(builds) == {"overlay.yaml:svc": "target='qualification', wants 'runtime'"}
 
 
-def test_the_always_on_services_are_all_covered() -> None:
-    assert set(_data_plane_builds(_load_documents())) >= ALWAYS_ON_SERVICES
+def test_every_data_plane_build_names_its_stage_covers_the_always_on_services_and_shares_no_image_tag() -> None:
+    """No `target:` is the trap itself: Docker builds the last Dockerfile
+    stage, whatever stage that is.
 
-
-def test_two_stages_never_build_into_one_image_tag() -> None:
-    """A shared tag lets whichever build ran last overwrite the other, so an
+    A shared image tag lets whichever build ran last overwrite the other, so an
     always-on service could restart onto another stage's image without any
     compose file changing. Services that name no `image:` get a per-service
     default name and cannot collide."""
+    builds = _data_plane_builds(_load_documents())
+
+    assert _wrong_stages(builds) == {}, "every service built from the data-plane context names the runtime stage"
+    assert set(builds) >= ALWAYS_ON_SERVICES, "every always-on service is covered by the sweep"
     targets_by_image: dict[str, set[str | None]] = defaultdict(set)
-    for build in _data_plane_builds(_load_documents()).values():
+    for build in builds.values():
         if build.image:
             targets_by_image[build.image].add(build.target)
     for image, targets in targets_by_image.items():
         assert len(targets) == 1, f"image tag {image!r} is built from more than one stage: {sorted(map(str, targets))}"
 
 
-def test_the_runtime_stage_ships_no_developer_tooling() -> None:
+def test_the_builder_and_runtime_stages_ship_no_developer_tooling_and_the_builder_pins_its_installer_exactly() -> None:
+    """An unpinned `pip install --upgrade pip` moves the installed pip on every
+    cache-skipping rebuild, which moves the sweep environment digest and
+    refuses Finish on every interrupted study (#2604)."""
     stages = _dockerfile_stages()
     for stage in ("builder", "runtime"):
         for line in stages[stage]:
@@ -146,13 +146,7 @@ def test_the_runtime_stage_ships_no_developer_tooling() -> None:
             assert "pytest" not in line, f"the {stage} stage ships pytest configuration: {line!r}"
             assert "ruff.toml" not in line, f"the {stage} stage ships ruff configuration: {line!r}"
 
-
-def test_the_builder_pins_its_installer_exactly() -> None:
-    """An unpinned `pip install --upgrade pip` moves the installed pip on every
-    cache-skipping rebuild, which moves the sweep environment digest and
-    refuses Finish on every interrupted study (#2604)."""
-    stages = _dockerfile_stages()
     upgrade = next(line for line in stages["builder"] if "pip install" in line and ("--upgrade" in line or "==" in line))
 
-    assert "pip==" in upgrade, f"pip is not pinned to an exact version: {upgrade!r}"
-    assert "setuptools==" in upgrade, f"setuptools is not pinned to an exact version: {upgrade!r}"
+    assert "pip==" in upgrade, f"pip is not pinned to an exact version (#2604): {upgrade!r}"
+    assert "setuptools==" in upgrade, f"setuptools is not pinned to an exact version (#2604): {upgrade!r}"

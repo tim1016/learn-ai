@@ -19,31 +19,28 @@ from tests.volatility.conftest import bs_price
 class TestImpliedVolatility:
     """Tests for the single-contract IV solver."""
 
-    def test_atm_call_recovers_vol(self, spot: float, rate: float) -> None:
-        """ATM call priced at 25% vol should recover ~25% IV."""
+    @pytest.mark.parametrize(
+        "is_call",
+        [True, False],
+        ids=["atm_call_recovers_vol", "atm_put_recovers_vol"],
+    )
+    def test_atm_recovers_vol(self, spot: float, rate: float, is_call: bool) -> None:
+        """ATM call or put priced at 25% vol should recover ~25% IV."""
         vol = 0.25
         ttm = 0.5
         strike = spot
-        price = bs_price(spot, strike, ttm, rate, vol, is_call=True)
+        price = bs_price(spot, strike, ttm, rate, vol, is_call=is_call)
 
-        result = implied_volatility(price, spot, strike, ttm, rate)
+        result = implied_volatility(price, spot, strike, ttm, rate, is_call=is_call)
 
-        assert result.status in (SolveStatus.NEWTON_OK, SolveStatus.QUANTLIB_OK, SolveStatus.BRENT_FALLBACK)
-        assert result.iv is not None
+        assert result.status in (
+            SolveStatus.NEWTON_OK,
+            SolveStatus.QUANTLIB_OK,
+            SolveStatus.BRENT_FALLBACK,
+        ), "the solve succeeds"
+        assert result.iv is not None, "an IV is returned"
         # QuantLib accuracy is on price, not vol; ~0.1% vol tolerance is realistic
-        assert abs(result.iv - vol) < 0.005
-
-    def test_atm_put_recovers_vol(self, spot: float, rate: float) -> None:
-        """ATM put priced at 25% vol should recover ~25% IV."""
-        vol = 0.25
-        ttm = 0.5
-        strike = spot
-        price = bs_price(spot, strike, ttm, rate, vol, is_call=False)
-
-        result = implied_volatility(price, spot, strike, ttm, rate, is_call=False)
-
-        assert result.iv is not None
-        assert abs(result.iv - vol) < 0.005
+        assert abs(result.iv - vol) < 0.005, "IV recovers the input vol"
 
     @pytest.mark.parametrize("vol", [0.05, 0.15, 0.30, 0.60, 1.0, 2.0])
     def test_range_of_vols(self, spot: float, rate: float, vol: float) -> None:
@@ -76,22 +73,26 @@ class TestImpliedVolatility:
         assert result.iv is not None
         assert abs(result.iv - vol) < 1e-3
 
-    def test_expired_option_returns_expired(self, spot: float) -> None:
-        """TTM below MIN_TIME_TO_EXPIRY (1 minute) should return EXPIRED.
-
-        The solver's floor was lowered from 1 calendar day to 1 minute so
-        the data-lab options companion can solve 0DTE intraday IVs (see
-        ``MIN_TIME_TO_EXPIRY`` rationale). This test pins the new floor.
-        """
-        sub_minute_ttm = 1e-7  # ~3 seconds, well below 1/(365*24*60)
-        result = implied_volatility(5.0, spot, spot, ttm=sub_minute_ttm, rate=0.05)
-        assert result.status == SolveStatus.EXPIRED
-        assert result.iv is None
-
-    def test_zero_price_returns_price_too_low(self, spot: float) -> None:
-        """Zero price should return PRICE_TOO_LOW."""
-        result = implied_volatility(0.0, spot, spot, ttm=0.5, rate=0.05)
-        assert result.status == SolveStatus.PRICE_TOO_LOW
+    @pytest.mark.parametrize(
+        ("option_price", "ttm", "expected_status"),
+        [
+            # TTM below MIN_TIME_TO_EXPIRY (1 minute) should return EXPIRED.
+            #
+            # The solver's floor was lowered from 1 calendar day to 1 minute so
+            # the data-lab options companion can solve 0DTE intraday IVs (see
+            # ``MIN_TIME_TO_EXPIRY`` rationale). This test pins the new floor.
+            # ~3 seconds, well below 1/(365*24*60)
+            pytest.param(5.0, 1e-7, SolveStatus.EXPIRED, id="expired_option_returns_expired"),
+            # Zero price should return PRICE_TOO_LOW.
+            pytest.param(0.0, 0.5, SolveStatus.PRICE_TOO_LOW, id="zero_price_returns_price_too_low"),
+        ],
+    )
+    def test_unsolvable_option_returns_status(
+        self, spot: float, option_price: float, ttm: float, expected_status: SolveStatus
+    ) -> None:
+        result = implied_volatility(option_price, spot, spot, ttm=ttm, rate=0.05)
+        assert result.status == expected_status, "the status names why the option cannot be solved"
+        assert result.iv is None, "no IV is returned"
 
     def test_negative_spot_returns_input_error(self) -> None:
         """Negative spot should return INPUT_ERROR."""
@@ -166,25 +167,26 @@ class TestNewtonSolverPath:
     options companion relies on are real.
     """
 
-    def test_newton_succeeds_for_atm_well_conditioned(self, spot: float, rate: float) -> None:
-        vol = 0.25
-        ttm = 0.5
+    @pytest.mark.parametrize(
+        ("vol", "ttm", "vol_guess", "abs_tol"),
+        [
+            pytest.param(0.25, 0.5, 0.20, 1e-6, id="newton_succeeds_for_atm_well_conditioned"),
+            # 30-min TTM with ATM call — Newton handles this directly. (We use
+            # ATM rather than ITM so vega is large and the recovered IV is
+            # well-determined; mildly ITM at sub-day TTM has near-zero vega
+            # which inflates per-call IV uncertainty even on a clean root.)
+            pytest.param(
+                0.30, 30.0 / (365.0 * 24.0 * 60.0), 0.25, 1e-4, id="newton_succeeds_for_sub_day_ttm"
+            ),
+        ],
+    )
+    def test_newton_succeeds(
+        self, spot: float, rate: float, vol: float, ttm: float, vol_guess: float, abs_tol: float
+    ) -> None:
         price = bs_price(spot, spot, ttm, rate, vol, is_call=True)
-        result = implied_volatility(price, spot, spot, ttm, rate, vol_guess=0.20)
-        assert result.status == SolveStatus.NEWTON_OK
-        assert result.iv == pytest.approx(vol, abs=1e-6)
-
-    def test_newton_succeeds_for_sub_day_ttm(self, spot: float, rate: float) -> None:
-        # 30-min TTM with ATM call — Newton handles this directly. (We use
-        # ATM rather than ITM so vega is large and the recovered IV is
-        # well-determined; mildly ITM at sub-day TTM has near-zero vega
-        # which inflates per-call IV uncertainty even on a clean root.)
-        vol = 0.30
-        ttm = 30.0 / (365.0 * 24.0 * 60.0)
-        price = bs_price(spot, spot, ttm, rate, vol, is_call=True)
-        result = implied_volatility(price, spot, spot, ttm, rate, vol_guess=0.25)
-        assert result.status == SolveStatus.NEWTON_OK
-        assert result.iv == pytest.approx(vol, abs=1e-4)
+        result = implied_volatility(price, spot, spot, ttm, rate, vol_guess=vol_guess)
+        assert result.status == SolveStatus.NEWTON_OK, "Newton solves it directly"
+        assert result.iv == pytest.approx(vol, abs=abs_tol), "IV recovers the input vol"
 
 
 class TestBrentFallbackPath:
@@ -192,38 +194,37 @@ class TestBrentFallbackPath:
     price is essentially insensitive to vol), the solver must hand off
     to Brent without surfacing a convergence_failure to the caller."""
 
-    def test_brent_handles_deep_otm_sub_day(self, spot: float, rate: float) -> None:
-        # 1-hour TTM, mildly OTM call. We pin the strike close enough to
-        # spot that the BS premium stays comfortably above MIN_OPTION_PRICE
-        # so the solver path is actually exercised — a wider OTM strike
-        # collapses the premium into the PRICE_TOO_LOW short-circuit and
-        # the test would silently skip the path it claims to cover.
-        vol = 0.30
-        ttm = 1.0 / (365.0 * 24.0)
-        strike = spot * 1.005
+    @pytest.mark.parametrize(
+        ("vol", "ttm", "strike_multiple"),
+        [
+            # 1-hour TTM, mildly OTM call. We pin the strike close enough to
+            # spot that the BS premium stays comfortably above MIN_OPTION_PRICE
+            # so the solver path is actually exercised — a wider OTM strike
+            # collapses the premium into the PRICE_TOO_LOW short-circuit and
+            # the test would silently skip the path it claims to cover.
+            pytest.param(0.30, 1.0 / (365.0 * 24.0), 1.005, id="brent_handles_deep_otm_sub_day"),
+            # QuantLib's day-resolution arithmetic rounds sub-day TTMs to a
+            # full day, so the solver must skip QL entirely below 1/365 yr.
+            # Pin: any sub-day solve must return NEWTON_OK or BRENT_FALLBACK,
+            # never QUANTLIB_OK.
+            pytest.param(0.20, 12.0 / (365.0 * 24.0), 1.0, id="quantlib_skipped_for_sub_day_ttm"),  # 12 hours
+        ],
+    )
+    def test_sub_day_ttm_solves_without_quantlib(
+        self, spot: float, rate: float, vol: float, ttm: float, strike_multiple: float
+    ) -> None:
+        strike = spot * strike_multiple
         price = bs_price(spot, strike, ttm, rate, vol, is_call=True)
         assert price >= 0.001, (
             f"test setup must keep premium above MIN_OPTION_PRICE "
             f"(got {price:.6f})"
         )
         result = implied_volatility(price, spot, strike, ttm, rate, is_call=True)
-        assert result.status != SolveStatus.CONVERGENCE_FAILURE
-        assert result.iv is not None
-        assert result.iv == pytest.approx(vol, abs=1e-3)
-
-    def test_quantlib_skipped_for_sub_day_ttm(self, spot: float, rate: float) -> None:
-        """QuantLib's day-resolution arithmetic rounds sub-day TTMs to a
-        full day, so the solver must skip QL entirely below 1/365 yr.
-        Pin: any sub-day solve must return NEWTON_OK or BRENT_FALLBACK,
-        never QUANTLIB_OK.
-        """
-        vol = 0.20
-        ttm = 12.0 / (365.0 * 24.0)  # 12 hours
-        price = bs_price(spot, spot, ttm, rate, vol, is_call=True)
-        result = implied_volatility(price, spot, spot, ttm, rate, is_call=True)
-        assert result.status in (SolveStatus.NEWTON_OK, SolveStatus.BRENT_FALLBACK)
-        assert result.status != SolveStatus.QUANTLIB_OK
-        assert result.iv == pytest.approx(vol, abs=1e-3)
+        assert result.status != SolveStatus.CONVERGENCE_FAILURE, "no convergence_failure is surfaced to the caller"
+        assert result.iv is not None, "an IV is returned"
+        assert result.iv == pytest.approx(vol, abs=1e-3), "IV recovers the input vol"
+        assert result.status in (SolveStatus.NEWTON_OK, SolveStatus.BRENT_FALLBACK), "a sub-day solve is Newton or Brent"
+        assert result.status != SolveStatus.QUANTLIB_OK, "QuantLib is skipped for a sub-day TTM"
 
     def test_warm_start_returns_same_iv_as_cold_start(self, spot: float, rate: float) -> None:
         """Warm-starting Newton with the prior bar's IV must converge to

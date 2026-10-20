@@ -163,39 +163,20 @@ async def test_post_then_get_round_trips(client, parent_run_id):
 # ---------------------------------------------------------------------------
 # Validation errors.
 # ---------------------------------------------------------------------------
-async def test_post_unknown_method_returns_422(client, parent_run_id):
+@pytest.mark.parametrize(
+    "invalid_fields",
+    [
+        {"method": "not_a_method", "sample_count": 1},
+        {"method": "buy_and_hold", "sample_count": 1, "random_seed": -1},
+        {"method": "buy_and_hold", "sample_count": 1000},
+        {"method": "buy_and_hold", "sample_count": 0},
+    ],
+    ids=["unknown-method", "negative-seed", "sample-count-above-cap", "zero-sample-count"],
+)
+async def test_post_invalid_request_returns_422(client, parent_run_id, invalid_fields: dict):
     response = await client.post(
         "/api/research/strategy-runs/baselines",
-        json={
-            "parent_run_id": parent_run_id,
-            "method": "not_a_method",
-            "sample_count": 1,
-        },
-    )
-    assert response.status_code == 422
-
-
-async def test_post_negative_seed_returns_422(client, parent_run_id):
-    response = await client.post(
-        "/api/research/strategy-runs/baselines",
-        json={
-            "parent_run_id": parent_run_id,
-            "method": "buy_and_hold",
-            "sample_count": 1,
-            "random_seed": -1,
-        },
-    )
-    assert response.status_code == 422
-
-
-async def test_post_sample_count_above_cap_returns_422(client, parent_run_id):
-    response = await client.post(
-        "/api/research/strategy-runs/baselines",
-        json={
-            "parent_run_id": parent_run_id,
-            "method": "buy_and_hold",
-            "sample_count": 1000,
-        },
+        json={"parent_run_id": parent_run_id, **invalid_fields},
     )
     assert response.status_code == 422
 
@@ -236,18 +217,6 @@ async def test_post_omitted_sample_count_defaults_per_method(client, parent_run_
     assert rema_body["config"]["sample_count"] == 30
 
 
-async def test_post_zero_sample_count_returns_422(client, parent_run_id):
-    response = await client.post(
-        "/api/research/strategy-runs/baselines",
-        json={
-            "parent_run_id": parent_run_id,
-            "method": "buy_and_hold",
-            "sample_count": 0,
-        },
-    )
-    assert response.status_code == 422
-
-
 async def test_post_missing_parent_run_persists_failed_baseline(client, tmp_path: Path):
     """Same first-class-failure pattern as Phase A/C/D."""
     response = await client.post(
@@ -269,14 +238,17 @@ async def test_post_missing_parent_run_persists_failed_baseline(client, tmp_path
 # ---------------------------------------------------------------------------
 # GET single + 404.
 # ---------------------------------------------------------------------------
-async def test_get_missing_returns_404(client):
-    response = await client.get("/api/research/strategy-runs/baselines/" + "f" * 32)
-    assert response.status_code == 404
-
-
-async def test_get_path_traversal_id_returns_400(client):
-    response = await client.get("/api/research/strategy-runs/baselines/..%2Fetc%2Fpasswd")
-    assert response.status_code in {400, 404}
+@pytest.mark.parametrize(
+    ("baseline_id", "expected_statuses"),
+    [
+        ("f" * 32, (404,)),
+        ("..%2Fetc%2Fpasswd", (400, 404)),
+    ],
+    ids=["missing-returns-404", "path-traversal-id-returns-400"],
+)
+async def test_get_unusable_id_is_rejected(client, baseline_id: str, expected_statuses: tuple[int, ...]):
+    response = await client.get("/api/research/strategy-runs/baselines/" + baseline_id)
+    assert response.status_code in expected_statuses
 
 
 # ---------------------------------------------------------------------------

@@ -162,28 +162,35 @@ def test_the_setups_leg_order_is_a_tuple_whatever_it_was_built_from() -> None:
     assert hash(from_a_list) == hash(from_tuples)
 
 
-def test_a_contract_cannot_be_held_on_both_sides() -> None:
-    with pytest.raises(ValueError, match="held on both sides"):
-        book("AB", bought("A", "call", "680"), sold("B", "call", "680"))
-
-
-def test_a_leg_holds_one_contract_and_must_be_one_the_setup_lists() -> None:
-    with pytest.raises(ValueError, match="holds one contract"):
-        book("AB", bought("A", "call", "680"), bought("A", "call", "685"))
-    with pytest.raises(ValueError, match="not among the setup's legs"):
-        book("AB", bought("Z", "call", "680"))
-    with pytest.raises(ValueError, match="lists each leg once"):
-        Held.empty(["A", "A"])
-
-
-def test_a_leg_that_holds_nothing_cannot_leave() -> None:
-    with pytest.raises(ValueError, match="hold nothing"):
-        book("AB", bought("A", "call", "680")).without(["B"])
-
-
 @pytest.mark.parametrize(
     ("make", "reason"),
     [
+        pytest.param(
+            lambda: book("AB", bought("A", "call", "680"), sold("B", "call", "680")),
+            "held on both sides",
+            id="a contract cannot be held on both sides",
+        ),
+        pytest.param(
+            lambda: book("AB", bought("A", "call", "680"), bought("A", "call", "685")),
+            "holds one contract",
+            id="a leg holds one contract",
+        ),
+        pytest.param(
+            lambda: book("AB", bought("Z", "call", "680")),
+            "not among the setup's legs",
+            id="a leg must be one the setup lists",
+        ),
+        pytest.param(lambda: Held.empty(["A", "A"]), "lists each leg once", id="a setup lists each leg once"),
+        pytest.param(
+            lambda: book("AB", bought("A", "call", "680")).without(["B"]),
+            "hold nothing",
+            id="a leg that holds nothing cannot leave",
+        ),
+        pytest.param(
+            lambda: admit_opening(Held.empty("A"), [], cash=10.5, closing=[]),  # type: ignore[arg-type]
+            "exact decimal",
+            id="cash must be an exact decimal",
+        ),
         pytest.param(lambda: Holding("A", option("call", "680"), "buy", 1, 10), "standard 100-share", id="multiplier"),
         pytest.param(lambda: Holding("A", option("call", "680"), "buy", 0, 100), "whole number", id="no contracts"),
         pytest.param(lambda: Holding("A", option("call", "680"), "long", 1, 100), "'buy' or 'sell'", id="side"),  # type: ignore[arg-type]
@@ -198,7 +205,7 @@ def test_a_leg_that_holds_nothing_cannot_leave() -> None:
         ),
     ],
 )
-def test_a_position_that_is_not_one_the_book_can_judge_is_refused(make: Callable[[], object], reason: str) -> None:
+def test_a_book_or_position_the_book_cannot_judge_is_refused(make: Callable[[], object], reason: str) -> None:
     with pytest.raises(ValueError, match=reason):
         make()
 
@@ -206,67 +213,69 @@ def test_a_position_that_is_not_one_the_book_can_judge_is_refused(make: Callable
 # ---- Collateral ---------------------------------------------------------------
 
 
-def test_an_iron_condors_collateral_is_its_wider_side_and_not_the_sum() -> None:
-    # Puts 660/665 are $5 wide and calls 685/695 are $10 wide. The sums of both sides' worst cases never meet
-    # at one price: the lowest summed payoff is -10 a share, so $1,000.00 and not $1,500.00.
-    held = book(
-        "ABCD",
-        bought("A", "put", "660"),
-        sold("B", "put", "665"),
-        sold("C", "call", "685"),
-        bought("D", "call", "695"),
-    )
-
-    assert collateral(held) == D("1000.00")
-
-
-def test_an_iron_condor_with_equal_wings_pledges_one_wing() -> None:
-    held = book(
-        "ABCD",
-        bought("A", "put", "660"),
-        sold("B", "put", "665"),
-        sold("C", "call", "685"),
-        bought("D", "call", "690"),
-    )
-
-    assert collateral(held) == D("500.00")
-
-
-def test_a_call_butterfly_pledges_nothing() -> None:
-    # +675C -2x680C +685C is worth zero or more at every price: its loss is its debit, which is not collateral.
-    held = book("ABC", bought("A", "call", "675"), sold("B", "call", "680", 2), bought("C", "call", "685"))
-
-    assert collateral(held) == D("0.00")
-
-
-def test_an_iron_butterfly_pledges_its_wing() -> None:
-    held = book(
-        "ABCD",
-        bought("A", "put", "675"),
-        sold("B", "put", "680"),
-        sold("C", "call", "680"),
-        bought("D", "call", "685"),
-    )
-
-    assert collateral(held) == D("500.00")
-
-
-def test_a_sold_put_with_its_bought_put_pledges_the_width() -> None:
-    held = book("AB", bought("A", "put", "660"), sold("B", "put", "665"))
-
-    assert collateral(held) == D("500.00")
-
-
-def test_bought_legs_pledge_nothing_even_across_expiries() -> None:
-    held = book("AB", bought("A", "call", "680"), bought("B", "put", "660", expiry=LATER))
-
-    assert collateral(held) == D("0.00")
-
-
-def test_two_contracts_of_one_spread_pledge_twice_the_width() -> None:
-    held = book("AB", bought("A", "call", "680", 2), sold("B", "call", "675", 2))
-
-    assert collateral(held) == D("1000.00")
+@pytest.mark.parametrize(
+    ("held", "pledged"),
+    [
+        # Puts 660/665 are $5 wide and calls 685/695 are $10 wide. The sums of both sides' worst cases never meet
+        # at one price: the lowest summed payoff is -10 a share, so $1,000.00 and not $1,500.00.
+        pytest.param(
+            book(
+                "ABCD",
+                bought("A", "put", "660"),
+                sold("B", "put", "665"),
+                sold("C", "call", "685"),
+                bought("D", "call", "695"),
+            ),
+            D("1000.00"),
+            id="an iron condor's collateral is its wider side and not the sum",
+        ),
+        pytest.param(
+            book(
+                "ABCD",
+                bought("A", "put", "660"),
+                sold("B", "put", "665"),
+                sold("C", "call", "685"),
+                bought("D", "call", "690"),
+            ),
+            D("500.00"),
+            id="an iron condor with equal wings pledges one wing",
+        ),
+        # +675C -2x680C +685C is worth zero or more at every price: its loss is its debit, which is not collateral.
+        pytest.param(
+            book("ABC", bought("A", "call", "675"), sold("B", "call", "680", 2), bought("C", "call", "685")),
+            D("0.00"),
+            id="a call butterfly pledges nothing",
+        ),
+        pytest.param(
+            book(
+                "ABCD",
+                bought("A", "put", "675"),
+                sold("B", "put", "680"),
+                sold("C", "call", "680"),
+                bought("D", "call", "685"),
+            ),
+            D("500.00"),
+            id="an iron butterfly pledges its wing",
+        ),
+        pytest.param(
+            book("AB", bought("A", "put", "660"), sold("B", "put", "665")),
+            D("500.00"),
+            id="a sold put with its bought put pledges the width",
+        ),
+        pytest.param(
+            book("AB", bought("A", "call", "680"), bought("B", "put", "660", expiry=LATER)),
+            D("0.00"),
+            id="bought legs pledge nothing even across expiries",
+        ),
+        pytest.param(
+            book("AB", bought("A", "call", "680", 2), sold("B", "call", "675", 2)),
+            D("1000.00"),
+            id="two contracts of one spread pledge twice the width",
+        ),
+    ],
+)
+def test_the_collateral_a_book_pledges(held: Held, pledged: Decimal) -> None:
+    assert collateral(held) == pledged
 
 
 def test_collateral_is_in_whole_cents_as_a_decimal() -> None:
@@ -348,230 +357,256 @@ def test_what_is_held_is_covered_when_each_kind_has_a_bought_contract_for_each_s
     assert is_covered(held) is answer
 
 
-# ---- Cover, as the opening group meets it -------------------------------------
-
-
-def test_a_sold_put_is_covered_by_a_bought_put_of_the_same_expiry() -> None:
-    held = Held.empty("AB")
-
-    assert admission(held, sell("B", "put", "665"), buy("A", "put", "660")) == {"A": None, "B": None}
-
-
-def test_cover_does_not_depend_on_the_strike() -> None:
-    held = Held.empty("AB")
-
-    assert admission(held, buy("A", "put", "400"), sell("B", "put", "665")) == {"A": None, "B": None}
+# ---- Cover, as the opening group meets it, and the other refusals -------------
 
 
 @pytest.mark.parametrize(
-    "cover",
+    ("held", "candidates", "answer"),
     [
-        pytest.param(bought("A", "put", "660", expiry=LATER), id="a bought put of another expiry"),
-        pytest.param(bought("A", "call", "660"), id="a bought call"),
+        pytest.param(
+            Held.empty("AB"),
+            (sell("B", "put", "665"), buy("A", "put", "660")),
+            {"A": None, "B": None},
+            id="a sold put is covered by a bought put of the same expiry",
+        ),
+        pytest.param(
+            Held.empty("AB"),
+            (buy("A", "put", "400"), sell("B", "put", "665")),
+            {"A": None, "B": None},
+            id="cover does not depend on the strike",
+        ),
+        pytest.param(
+            Held.empty("AB"),
+            (buy("A", "call", "680"), sell("B", "call", "675", 2)),
+            {"A": None, "B": OpeningRefusal.NO_COVER},
+            id="one bought contract does not cover two sold in one leg",
+        ),
+        pytest.param(
+            Held.empty("ABC"),
+            (buy("A", "call", "680"), sell("B", "call", "675"), sell("C", "call", "670")),
+            {"A": None, "B": None, "C": OpeningRefusal.NO_COVER},
+            id="one bought contract does not cover two sold in two legs and the first listed is taken",
+        ),
+        pytest.param(
+            Held.empty("ABC"),
+            (sell("C", "call", "670"), sell("B", "call", "675"), buy("A", "call", "680")),
+            {"A": None, "B": None, "C": OpeningRefusal.NO_COVER},
+            id="candidates are judged in the setup's order whatever order they arrive in",
+        ),
+        # One bought contract: B wants two and is refused without taking it, so C takes it.
+        pytest.param(
+            Held.empty("ABC"),
+            (buy("A", "call", "680"), sell("B", "call", "675", 2), sell("C", "call", "670")),
+            {"A": None, "B": OpeningRefusal.NO_COVER, "C": None},
+            id="a sold candidate takes cover whole or not at all so a later one may use what is left",
+        ),
+        pytest.param(
+            Held.empty("AB"),
+            (buy("A", "call", "680", 2), sell("B", "call", "675", 2)),
+            {"A": None, "B": None},
+            id="two bought contracts in one leg cover two sold in one leg",
+        ),
+        pytest.param(
+            Held.empty("AB"),
+            (sell("A", "call", "675"), buy("B", "call", "680")),
+            {"A": None, "B": None},
+            id="bought legs listed after the sold leg still cover it in the same minute",
+        ),
+        pytest.param(
+            book("AB", bought("A", "call", "680")),
+            (sell("B", "call", "675"),),
+            {"B": None},
+            id="a held bought contract covers a new sale",
+        ),
+        pytest.param(
+            book("ABC", bought("A", "call", "680"), sold("B", "call", "675")),
+            (sell("C", "call", "670"),),
+            {"C": OpeningRefusal.NO_COVER},
+            id="a held bought contract does not cover a new sale once a held sale has used it",
+        ),
+        pytest.param(
+            Held.empty("AB"),
+            (buy("A", "call", "680", root="QQQ"), sell("B", "call", "675")),
+            {"A": None, "B": OpeningRefusal.NO_COVER},
+            id="a bought call on another underlying is not cover for a sold call",
+        ),
+        # Leg X holds a sold 700 call, covered by Y. Candidate V buys that same contract, which X holds on the other
+        # side, so V is refused; W's sale then has only Y's contract, and that is already X's cover.
+        pytest.param(
+            book("XYVW", sold("X", "call", "700"), bought("Y", "call", "710")),
+            (buy("V", "call", "700"), sell("W", "call", "695")),
+            {"V": OpeningRefusal.OTHER_SIDE, "W": OpeningRefusal.NO_COVER},
+            id="a bought candidate that was refused is not cover",
+        ),
+        pytest.param(
+            book("AB", bought("A", "call", "680")),
+            (sell("B", "call", "680"),),
+            {"B": OpeningRefusal.OTHER_SIDE},
+            id="a candidate in a contract another leg holds on the other side is refused",
+        ),
+        pytest.param(
+            Held.empty("ABC"),
+            (buy("A", "call", "680"), buy("B", "call", "680")),
+            {"A": None, "B": None},
+            id="two legs in one group on one contract add when alike",
+        ),
+        pytest.param(
+            Held.empty("ABC"),
+            (buy("A", "call", "680"), sell("B", "call", "680")),
+            {"A": None, "B": OpeningRefusal.OTHER_SIDE},
+            id="two legs in one group on one contract, the later is refused when opposed",
+        ),
+        pytest.param(
+            book("AB", bought("A", "call", "680")),
+            (sell("B", "call", "675", expiry=LATER),),
+            {"B": OpeningRefusal.SECOND_EXPIRY},
+            id="a sold candidate at another expiry than what is held is refused",
+        ),
+        pytest.param(
+            book("ABC", bought("A", "call", "680"), sold("B", "call", "675")),
+            (buy("C", "call", "700", expiry=LATER),),
+            {"C": OpeningRefusal.SECOND_EXPIRY},
+            id="a bought candidate at another expiry is refused while a sold contract is held",
+        ),
+        pytest.param(
+            Held.empty("ABC"),
+            (buy("A", "call", "680"), sell("B", "call", "675"), buy("C", "call", "700", expiry=LATER)),
+            {"A": None, "B": None, "C": OpeningRefusal.SECOND_EXPIRY},
+            id="a bought candidate at another expiry is refused beside a sold candidate listed first",
+        ),
+        pytest.param(
+            book("AB", bought("A", "call", "680")),
+            (buy("B", "put", "660", expiry=LATER),),
+            {"B": None},
+            id="bought-only holdings may span expiries",
+        ),
     ],
 )
-def test_a_sold_put_is_not_covered_by_another_expiry_or_the_other_kind(cover: Holding) -> None:
-    # Isolated from the expiry step: what is held has the sold put and this cover, and nothing leaves.
-    held = book("AB", cover, sold("B", "put", "665"))
-
-    assert leaving_plan(held, []) == ("B",)
-
-
-def test_one_bought_contract_does_not_cover_two_sold_in_one_leg() -> None:
-    held = Held.empty("AB")
-
-    assert admission(held, buy("A", "call", "680"), sell("B", "call", "675", 2)) == {
-        "A": None,
-        "B": OpeningRefusal.NO_COVER,
-    }
-
-
-def test_one_bought_contract_does_not_cover_two_sold_in_two_legs_and_the_first_listed_is_taken() -> None:
-    held = Held.empty("ABC")
-
-    assert admission(held, buy("A", "call", "680"), sell("B", "call", "675"), sell("C", "call", "670")) == {
-        "A": None,
-        "B": None,
-        "C": OpeningRefusal.NO_COVER,
-    }
-
-
-def test_candidates_are_judged_in_the_setups_order_whatever_order_they_arrive_in() -> None:
-    held = Held.empty("ABC")
-
-    assert admission(held, sell("C", "call", "670"), sell("B", "call", "675"), buy("A", "call", "680")) == {
-        "A": None,
-        "B": None,
-        "C": OpeningRefusal.NO_COVER,
-    }
-
-
-def test_a_sold_candidate_takes_cover_whole_or_not_at_all_so_a_later_one_may_use_what_is_left() -> None:
-    held = Held.empty("ABC")
-
-    # One bought contract: B wants two and is refused without taking it, so C takes it.
-    assert admission(held, buy("A", "call", "680"), sell("B", "call", "675", 2), sell("C", "call", "670")) == {
-        "A": None,
-        "B": OpeningRefusal.NO_COVER,
-        "C": None,
-    }
-
-
-def test_two_bought_contracts_in_one_leg_cover_two_sold_in_one_leg() -> None:
-    held = Held.empty("AB")
-
-    assert admission(held, buy("A", "call", "680", 2), sell("B", "call", "675", 2)) == {"A": None, "B": None}
-
-
-def test_bought_legs_listed_after_the_sold_leg_still_cover_it_in_the_same_minute() -> None:
-    held = Held.empty("AB")
-
-    assert admission(held, sell("A", "call", "675"), buy("B", "call", "680")) == {"A": None, "B": None}
-
-
-def test_a_held_bought_contract_covers_a_new_sale_until_a_held_sale_has_used_it() -> None:
-    covered_once = book("AB", bought("A", "call", "680"))
-    covered_and_used = book("ABC", bought("A", "call", "680"), sold("B", "call", "675"))
-
-    assert admission(covered_once, sell("B", "call", "675")) == {"B": None}
-    assert admission(covered_and_used, sell("C", "call", "670")) == {"C": OpeningRefusal.NO_COVER}
-
-
-def test_a_bought_contract_whose_close_is_pending_is_not_cover_for_a_new_sale() -> None:
-    held = book("AB", bought("A", "call", "680", 1))
-
-    assert admission(held, sell("B", "call", "675"), closing=[]) == {"B": None}
-    assert admission(held, sell("B", "call", "675"), closing=["A"]) == {"B": OpeningRefusal.NO_COVER}
-
-
-def test_a_bought_call_on_another_underlying_is_not_cover_for_a_sold_call() -> None:
-    held = Held.empty("AB")
-
-    assert admission(held, buy("A", "call", "680", root="QQQ"), sell("B", "call", "675")) == {
-        "A": None,
-        "B": OpeningRefusal.NO_COVER,
-    }
-
-
-def test_a_sold_leg_whose_buy_back_is_pending_still_uses_its_cover() -> None:
-    # B is covered by A and is being bought back, but the buy-back fills after the opening group. Until it does,
-    # B still sits on A's contract, so a new sale has none to take.
-    held = book("ABC", bought("A", "call", "680"), sold("B", "call", "675"))
-
-    assert admission(held, sell("C", "call", "670"), closing=["B"]) == {"C": OpeningRefusal.NO_COVER}
-
-
-def test_a_bought_candidate_that_was_refused_is_not_cover() -> None:
-    # Leg X holds a sold 700 call, covered by Y. Candidate V buys that same contract, which X holds on the other
-    # side, so V is refused; W's sale then has only Y's contract, and that is already X's cover.
-    held = book("XYVW", sold("X", "call", "700"), bought("Y", "call", "710"))
-
-    assert admission(held, buy("V", "call", "700"), sell("W", "call", "695")) == {
-        "V": OpeningRefusal.OTHER_SIDE,
-        "W": OpeningRefusal.NO_COVER,
-    }
-
-
-# ---- The other refusals, each by a case built for it --------------------------
-
-
-def test_a_candidate_in_a_contract_another_leg_holds_on_the_other_side_is_refused() -> None:
-    held = book("AB", bought("A", "call", "680"))
-
-    assert admission(held, sell("B", "call", "680")) == {"B": OpeningRefusal.OTHER_SIDE}
-
-
-def test_two_legs_in_one_group_on_one_contract_add_when_alike_and_the_later_is_refused_when_opposed() -> None:
-    held = Held.empty("ABC")
-
-    assert admission(held, buy("A", "call", "680"), buy("B", "call", "680")) == {"A": None, "B": None}
-    assert admission(held, buy("A", "call", "680"), sell("B", "call", "680")) == {
-        "A": None,
-        "B": OpeningRefusal.OTHER_SIDE,
-    }
-
-
-def test_a_sold_candidate_at_another_expiry_than_what_is_held_is_refused() -> None:
-    held = book("AB", bought("A", "call", "680"))
-
-    assert admission(held, sell("B", "call", "675", expiry=LATER)) == {"B": OpeningRefusal.SECOND_EXPIRY}
-
-
-def test_a_bought_candidate_at_another_expiry_is_refused_while_a_sold_contract_is_held() -> None:
-    held = book("ABC", bought("A", "call", "680"), sold("B", "call", "675"))
-
-    assert admission(held, buy("C", "call", "700", expiry=LATER)) == {"C": OpeningRefusal.SECOND_EXPIRY}
-
-
-def test_a_bought_candidate_at_another_expiry_is_refused_beside_a_sold_candidate_listed_first() -> None:
-    held = Held.empty("ABC")
-
-    assert admission(
-        held, buy("A", "call", "680"), sell("B", "call", "675"), buy("C", "call", "700", expiry=LATER)
-    ) == {
-        "A": None,
-        "B": None,
-        "C": OpeningRefusal.SECOND_EXPIRY,
-    }
-
-
-def test_bought_only_holdings_may_span_expiries() -> None:
-    held = book("AB", bought("A", "call", "680"))
-
-    assert admission(held, buy("B", "put", "660", expiry=LATER)) == {"B": None}
-
-
-def test_a_group_that_would_pledge_more_than_the_cash_is_refused_whole() -> None:
-    # Sell 675C at 6.50 and buy 680C at 3.10, a dollar of fees on each: +649.00 and -311.00, net +338.00.
-    # The spread is $5 wide, so $500.00 is pledged and the cash before must be at least 162.00.
-    held = Held.empty("AB")
-    group = (sell("A", "call", "675", cash="649.00"), buy("B", "call", "680", cash="-311.00"))
-
-    assert admission(held, *group, cash=D("162.00")) == {"A": None, "B": None}
-    assert admission(held, *group, cash=D("161.99")) == {"A": OpeningRefusal.CASH_SHORT, "B": OpeningRefusal.CASH_SHORT}
-
-
-def test_for_bought_legs_only_the_rule_is_that_the_cost_is_not_more_than_the_cash() -> None:
-    held = Held.empty("AB")
-    group = (buy("A", "call", "680", cash="-300.00"), buy("B", "put", "660", cash="-250.00"))
-
-    assert admission(held, *group, cash=D("550.00")) == {"A": None, "B": None}
-    assert admission(held, *group, cash=D("549.99")) == {"A": OpeningRefusal.CASH_SHORT, "B": OpeningRefusal.CASH_SHORT}
-
-
-def test_collateral_already_held_is_not_cash_a_new_bought_leg_may_spend() -> None:
-    # A $5 spread is held and pledges $500.00. With $400.00 of cash, a $50.00 purchase would leave $350.00.
-    held = book("ABC", bought("A", "call", "680"), sold("B", "call", "675"))
-
-    assert admission(held, buy("C", "put", "660", cash="-50.00"), cash=D("400.00")) == {"C": OpeningRefusal.CASH_SHORT}
-    assert admission(held, buy("C", "put", "660", cash="-50.00"), cash=D("550.00")) == {"C": None}
-
-
-def test_a_bought_leg_that_does_not_change_the_collateral_is_judged_against_the_collateral_held() -> None:
-    # Holdings pledge $500.00 and the cash is $499.00: even a free purchase leaves the cash under the pledge.
-    held = book("ABC", bought("A", "call", "680"), sold("B", "call", "675"))
-
-    assert admission(held, buy("C", "put", "660", cash="0"), cash=D("499.00")) == {"C": OpeningRefusal.CASH_SHORT}
-
-
-def test_a_pending_close_is_still_held_and_still_pledged_for_the_cash_step() -> None:
-    held = book("ABC", bought("A", "call", "680"), sold("B", "call", "675"))
-
-    assert admission(held, buy("C", "put", "660", cash="-50.00"), cash=D("400.00"), closing=["A", "B"]) == {
-        "C": OpeningRefusal.CASH_SHORT
-    }
-
-
-def test_the_cash_step_sees_only_the_candidates_still_standing() -> None:
-    # B is refused for cover. A's cost alone is then judged against the cash, and fails on its own.
-    held = Held.empty("AB")
-
-    assert admission(
-        held, buy("A", "put", "660", cash="-300.00"), sell("B", "call", "675", cash="649.00"), cash=D("100")
-    ) == {
-        "A": OpeningRefusal.CASH_SHORT,
-        "B": OpeningRefusal.NO_COVER,
-    }
+def test_an_opening_group_meets_its_cover_and_its_other_refusals(
+    held: Held, candidates: tuple[Candidate, ...], answer: dict[str, OpeningRefusal | None]
+) -> None:
+    assert admission(held, *candidates) == answer
+
+
+# ---- Pending closes and the cash step -----------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("held", "candidates", "cash", "closing", "answer"),
+    [
+        pytest.param(
+            book("AB", bought("A", "call", "680", 1)),
+            (sell("B", "call", "675"),),
+            PLENTY,
+            (),
+            {"B": None},
+            id="a bought contract with no close pending is cover for a new sale",
+        ),
+        pytest.param(
+            book("AB", bought("A", "call", "680", 1)),
+            (sell("B", "call", "675"),),
+            PLENTY,
+            ("A",),
+            {"B": OpeningRefusal.NO_COVER},
+            id="a bought contract whose close is pending is not cover for a new sale",
+        ),
+        # B is covered by A and is being bought back, but the buy-back fills after the opening group. Until it does,
+        # B still sits on A's contract, so a new sale has none to take.
+        pytest.param(
+            book("ABC", bought("A", "call", "680"), sold("B", "call", "675")),
+            (sell("C", "call", "670"),),
+            PLENTY,
+            ("B",),
+            {"C": OpeningRefusal.NO_COVER},
+            id="a sold leg whose buy-back is pending still uses its cover",
+        ),
+        # Sell 675C at 6.50 and buy 680C at 3.10, a dollar of fees on each: +649.00 and -311.00, net +338.00.
+        # The spread is $5 wide, so $500.00 is pledged and the cash before must be at least 162.00.
+        pytest.param(
+            Held.empty("AB"),
+            (sell("A", "call", "675", cash="649.00"), buy("B", "call", "680", cash="-311.00")),
+            D("162.00"),
+            (),
+            {"A": None, "B": None},
+            id="a group that would pledge no more than the cash is taken",
+        ),
+        pytest.param(
+            Held.empty("AB"),
+            (sell("A", "call", "675", cash="649.00"), buy("B", "call", "680", cash="-311.00")),
+            D("161.99"),
+            (),
+            {"A": OpeningRefusal.CASH_SHORT, "B": OpeningRefusal.CASH_SHORT},
+            id="a group that would pledge more than the cash is refused whole",
+        ),
+        pytest.param(
+            Held.empty("AB"),
+            (buy("A", "call", "680", cash="-300.00"), buy("B", "put", "660", cash="-250.00")),
+            D("550.00"),
+            (),
+            {"A": None, "B": None},
+            id="for bought legs only the cost not more than the cash is taken",
+        ),
+        pytest.param(
+            Held.empty("AB"),
+            (buy("A", "call", "680", cash="-300.00"), buy("B", "put", "660", cash="-250.00")),
+            D("549.99"),
+            (),
+            {"A": OpeningRefusal.CASH_SHORT, "B": OpeningRefusal.CASH_SHORT},
+            id="for bought legs only a cost more than the cash is refused",
+        ),
+        # A $5 spread is held and pledges $500.00. With $400.00 of cash, a $50.00 purchase would leave $350.00.
+        pytest.param(
+            book("ABC", bought("A", "call", "680"), sold("B", "call", "675")),
+            (buy("C", "put", "660", cash="-50.00"),),
+            D("400.00"),
+            (),
+            {"C": OpeningRefusal.CASH_SHORT},
+            id="collateral already held is not cash a new bought leg may spend",
+        ),
+        pytest.param(
+            book("ABC", bought("A", "call", "680"), sold("B", "call", "675")),
+            (buy("C", "put", "660", cash="-50.00"),),
+            D("550.00"),
+            (),
+            {"C": None},
+            id="a new bought leg may spend the cash above the collateral already held",
+        ),
+        # Holdings pledge $500.00 and the cash is $499.00: even a free purchase leaves the cash under the pledge.
+        pytest.param(
+            book("ABC", bought("A", "call", "680"), sold("B", "call", "675")),
+            (buy("C", "put", "660", cash="0"),),
+            D("499.00"),
+            (),
+            {"C": OpeningRefusal.CASH_SHORT},
+            id="a bought leg that does not change the collateral is judged against the collateral held",
+        ),
+        pytest.param(
+            book("ABC", bought("A", "call", "680"), sold("B", "call", "675")),
+            (buy("C", "put", "660", cash="-50.00"),),
+            D("400.00"),
+            ("A", "B"),
+            {"C": OpeningRefusal.CASH_SHORT},
+            id="a pending close is still held and still pledged for the cash step",
+        ),
+        # B is refused for cover. A's cost alone is then judged against the cash, and fails on its own.
+        pytest.param(
+            Held.empty("AB"),
+            (buy("A", "put", "660", cash="-300.00"), sell("B", "call", "675", cash="649.00")),
+            D("100"),
+            (),
+            {"A": OpeningRefusal.CASH_SHORT, "B": OpeningRefusal.NO_COVER},
+            id="the cash step sees only the candidates still standing",
+        ),
+    ],
+)
+def test_pending_closes_and_cash_decide_what_an_opening_group_takes(
+    held: Held,
+    candidates: tuple[Candidate, ...],
+    cash: Decimal,
+    closing: tuple[str, ...],
+    answer: dict[str, OpeningRefusal | None],
+) -> None:
+    assert admission(held, *candidates, cash=cash, closing=closing) == answer
 
 
 def test_an_empty_group_is_taken_whole_and_asks_nothing_of_the_cash() -> None:
@@ -620,10 +655,37 @@ def test_cover_is_judged_before_cash() -> None:
 # ---- Which bought legs may leave ----------------------------------------------
 
 
-def test_a_bought_leg_may_not_leave_when_it_alone_covers_a_sold_leg() -> None:
-    held = book("AB", bought("A", "call", "680"), sold("B", "call", "675"))
-
-    assert may_leave(held, "A") is False
+@pytest.mark.parametrize(
+    ("held", "leg", "answer"),
+    [
+        pytest.param(
+            book("AB", bought("A", "call", "680"), sold("B", "call", "675")),
+            "A",
+            False,
+            id="a bought leg may not leave when it alone covers a sold leg",
+        ),
+        pytest.param(
+            book("ABC", bought("A", "call", "680"), sold("B", "call", "675"), bought("C", "put", "660")),
+            "C",
+            True,
+            id="a bought leg that protects nothing sold may leave",
+        ),
+        pytest.param(
+            book("AB", bought("A", "call", "680"), bought("B", "put", "660")),
+            "A",
+            True,
+            id="with nothing sold the call may leave",
+        ),
+        pytest.param(
+            book("AB", bought("A", "call", "680"), bought("B", "put", "660")),
+            "B",
+            True,
+            id="with nothing sold the put may leave",
+        ),
+    ],
+)
+def test_whether_a_bought_leg_may_leave(held: Held, leg: str, answer: bool) -> None:
+    assert may_leave(held, leg) is answer
 
 
 def test_a_bought_leg_may_not_leave_when_every_sold_contract_stays_covered_but_the_collateral_rises() -> None:
@@ -633,19 +695,6 @@ def test_a_bought_leg_may_not_leave_when_every_sold_contract_stays_covered_but_t
 
     assert collateral(held) == D("500.00")
     assert may_leave(held, "A") is False
-    assert may_leave(held, "B") is True
-
-
-def test_a_bought_leg_that_protects_nothing_sold_may_leave() -> None:
-    held = book("ABC", bought("A", "call", "680"), sold("B", "call", "675"), bought("C", "put", "660"))
-
-    assert may_leave(held, "C") is True
-
-
-def test_with_nothing_sold_every_bought_leg_may_leave() -> None:
-    held = book("AB", bought("A", "call", "680"), bought("B", "put", "660"))
-
-    assert may_leave(held, "A") is True
     assert may_leave(held, "B") is True
 
 
@@ -661,84 +710,126 @@ def test_may_leave_is_asked_of_bought_legs_that_are_held() -> None:
 # ---- Which sold legs go with a leaving bought leg -----------------------------
 
 
-def test_two_sold_legs_that_depend_on_one_leaving_leg_go_last_listed_first() -> None:
-    # A is two 680 calls; B sells the 685 and C the 690. Without A both are bare, so both go, C first.
-    held = book("ABC", bought("A", "call", "680", 2), sold("B", "call", "685"), sold("C", "call", "690"))
+@pytest.mark.parametrize(
+    ("held", "leaving", "plan"),
+    [
+        # A is two 680 calls; B sells the 685 and C the 690. Without A both are bare, so both go, C first.
+        pytest.param(
+            book("ABC", bought("A", "call", "680", 2), sold("B", "call", "685"), sold("C", "call", "690")),
+            ("A",),
+            ("C", "B"),
+            id="two sold legs that depend on one leaving leg go last listed first",
+        ),
+        # The same four legs listed A, D, C, B: the B sale is now last listed and goes first. C against D is then a
+        # 15-wide spread of $1,500.00, which is more than before, so C goes too. Closing C alone would have sufficed.
+        pytest.param(
+            book(
+                "ADCB",
+                bought("A", "call", "680"),
+                bought("D", "call", "690"),
+                sold("C", "call", "675"),
+                sold("B", "call", "685"),
+            ),
+            ("A",),
+            ("B", "C"),
+            id="the plan is a policy by listed order and not the fewest legs",
+        ),
+        pytest.param(
+            book("ABC", bought("A", "call", "680"), sold("B", "call", "675"), bought("C", "put", "660")),
+            ("C",),
+            (),
+            id="a bought leg that protects nothing leaves alone",
+        ),
+        pytest.param(
+            book("AB", bought("A", "put", "660"), sold("B", "put", "665")),
+            (),
+            (),
+            id="nothing leaving from covered holdings closes nothing",
+        ),
+        pytest.param(
+            book("AB", bought("A", "call", "660"), sold("B", "put", "665")),
+            (),
+            ("B",),
+            id="nothing leaving from uncovered holdings closes the bare leg",
+        ),
+        pytest.param(
+            book(
+                "ABCD",
+                bought("A", "call", "680"),
+                sold("B", "call", "675"),
+                bought("C", "put", "660"),
+                sold("D", "put", "665"),
+            ),
+            ("A", "C"),
+            ("D", "B"),
+            id="several legs may leave at once",
+        ),
+        pytest.param(
+            book("AB", bought("A", "call", "680"), bought("B", "put", "660")),
+            ("A", "B"),
+            (),
+            id="holdings with no sold leg need no plan whatever leaves",
+        ),
+        # Isolated from the expiry step: what is held has the sold put and this cover, and nothing leaves.
+        pytest.param(
+            book("AB", bought("A", "put", "660", expiry=LATER), sold("B", "put", "665")),
+            (),
+            ("B",),
+            id="a sold put is not covered by a bought put of another expiry",
+        ),
+        pytest.param(
+            book("AB", bought("A", "call", "660"), sold("B", "put", "665")),
+            (),
+            ("B",),
+            id="a sold put is not covered by a bought call",
+        ),
+    ],
+)
+def test_the_sold_legs_that_go_with_the_leaving_bought_legs(
+    held: Held, leaving: tuple[str, ...], plan: tuple[str, ...]
+) -> None:
+    assert leaving_plan(held, leaving) == plan
 
-    assert leaving_plan(held, ["A"]) == ("C", "B")
 
-
-def test_the_plan_stops_as_soon_as_what_remains_is_covered_with_no_more_collateral() -> None:
-    # Listed A, D, B, C. Before: A 680 and D 690 bought, B 685 and C 675 sold: $1,000.00. Without A the C sale goes
-    # first (last listed) and B stays against D, a 5-wide spread of $500.00, which is not more.
-    held = book(
-        "ADBC",
-        bought("A", "call", "680"),
-        bought("D", "call", "690"),
-        sold("B", "call", "685"),
-        sold("C", "call", "675"),
-    )
-
-    assert collateral(held) == D("1000.00")
-    assert leaving_plan(held, ["A"]) == ("C",)
-
-
-def test_the_plan_is_a_policy_by_listed_order_and_not_the_fewest_legs() -> None:
-    # The same four legs listed A, D, C, B: the B sale is now last listed and goes first. C against D is then a
-    # 15-wide spread of $1,500.00, which is more than before, so C goes too. Closing C alone would have sufficed.
-    held = book(
-        "ADCB",
-        bought("A", "call", "680"),
-        bought("D", "call", "690"),
-        sold("C", "call", "675"),
-        sold("B", "call", "685"),
-    )
-
-    assert leaving_plan(held, ["A"]) == ("B", "C")
-
-
-def test_sold_legs_of_the_leaving_legs_kind_go_before_any_other_whatever_the_listing() -> None:
-    # A is two 680 calls leaving, B sells the 685 call, P1 is two 690 puts and P2 sells the 700 put.
-    # Nothing is pledged now. Without A the 685 call is bare; closed, the puts alone pledge $1,000.00, which is
-    # more, so the put goes as well. Last listed first alone would have said P2 then B.
-    held = book(
-        "ABPQ",
-        bought("A", "call", "680", 2),
-        sold("B", "call", "685"),
-        bought("P", "put", "690", 2),
-        sold("Q", "put", "700"),
-    )
-
-    assert collateral(held) == D("0.00")
-    assert leaving_plan(held, ["A"]) == ("B", "Q")
-
-
-def test_a_bought_leg_that_protects_nothing_leaves_alone() -> None:
-    held = book("ABC", bought("A", "call", "680"), sold("B", "call", "675"), bought("C", "put", "660"))
-
-    assert leaving_plan(held, ["C"]) == ()
-
-
-def test_nothing_leaving_from_covered_holdings_closes_nothing_and_from_uncovered_closes_the_bare_leg() -> None:
-    covered = book("AB", bought("A", "put", "660"), sold("B", "put", "665"))
-    bare = book("AB", bought("A", "call", "660"), sold("B", "put", "665"))
-
-    assert leaving_plan(covered, []) == ()
-    assert leaving_plan(bare, []) == ("B",)
-
-
-def test_several_legs_may_leave_at_once() -> None:
-    held = book(
-        "ABCD", bought("A", "call", "680"), sold("B", "call", "675"), bought("C", "put", "660"), sold("D", "put", "665")
-    )
-
-    assert leaving_plan(held, ["A", "C"]) == ("D", "B")
-
-
-def test_holdings_with_no_sold_leg_need_no_plan_whatever_leaves() -> None:
-    held = book("AB", bought("A", "call", "680"), bought("B", "put", "660"))
-
-    assert leaving_plan(held, ["A", "B"]) == ()
+@pytest.mark.parametrize(
+    ("held", "pledged_now", "plan"),
+    [
+        # Listed A, D, B, C. Before: A 680 and D 690 bought, B 685 and C 675 sold: $1,000.00. Without A the C sale goes
+        # first (last listed) and B stays against D, a 5-wide spread of $500.00, which is not more.
+        pytest.param(
+            book(
+                "ADBC",
+                bought("A", "call", "680"),
+                bought("D", "call", "690"),
+                sold("B", "call", "685"),
+                sold("C", "call", "675"),
+            ),
+            D("1000.00"),
+            ("C",),
+            id="the plan stops as soon as what remains is covered with no more collateral",
+        ),
+        # A is two 680 calls leaving, B sells the 685 call, P1 is two 690 puts and P2 sells the 700 put.
+        # Nothing is pledged now. Without A the 685 call is bare; closed, the puts alone pledge $1,000.00, which is
+        # more, so the put goes as well. Last listed first alone would have said P2 then B.
+        pytest.param(
+            book(
+                "ABPQ",
+                bought("A", "call", "680", 2),
+                sold("B", "call", "685"),
+                bought("P", "put", "690", 2),
+                sold("Q", "put", "700"),
+            ),
+            D("0.00"),
+            ("B", "Q"),
+            id="sold legs of the leaving legs' kind go before any other whatever the listing",
+        ),
+    ],
+)
+def test_the_plan_is_judged_against_the_collateral_held_before(
+    held: Held, pledged_now: Decimal, plan: tuple[str, ...]
+) -> None:
+    assert collateral(held) == pledged_now, "the collateral pledged now"
+    assert leaving_plan(held, ["A"]) == plan, "the sold legs that close with A"
 
 
 def test_a_leaving_leg_must_be_a_bought_leg_that_is_held() -> None:
@@ -788,8 +879,3 @@ def test_a_group_that_is_not_a_question_the_book_can_answer_is_refused_loudly(
 ) -> None:
     with pytest.raises(ValueError, match=reason):
         admit_opening(held, candidates, cash=PLENTY, closing=closing)
-
-
-def test_cash_must_be_an_exact_decimal() -> None:
-    with pytest.raises(ValueError, match="exact decimal"):
-        admit_opening(Held.empty("A"), [], cash=10.5, closing=[])  # type: ignore[arg-type]

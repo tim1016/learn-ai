@@ -483,13 +483,35 @@ def _walk_app_import_graph(seeds: Iterable[str]) -> tuple[set[str], list[tuple[s
     return visited, banned_edges
 
 
-def test_retained_feed_modules_transitive_import_graph_has_no_unlisted_account_order_session_import() -> None:
+def test_retained_feed_modules_transitive_import_graph_has_no_unlisted_import_and_no_stale_allowed_exception() -> None:
+    """Two guards over one walk of the retained feed modules' import graph.
+
+    The first: no retained module reaches the account/order/session bucket
+    without a tracked exception. The second: every entry in
+    _ALLOWED_EXCEPTIONS must reflect a real, current, reachable import.
+
+    The second prevents the exception list from silently outliving the code it
+    was written for — if Slice 3 or 4 removes the import another way, or the
+    importing module itself falls out of the retained-feed walk, this
+    fails loudly instead of leaving a permissive dead entry.
+
+    **The second half is vacuously green today and that is deliberate.**
+    ``_ALLOWED_EXCEPTIONS`` has been empty since PR-B of #1813, so the loop
+    below has nothing to iterate; it asserts nothing until someone adds an
+    exception, which is precisely when it starts earning its keep. PR-C
+    considered the alternatives and rejected both: deleting it would remove
+    the guard that keeps a future exception from going stale, and re-adding
+    an exception just to give it something to iterate would reopen a boundary
+    the decommission closed in order to make a test look busy. Read the empty
+    ``_ALLOWED_EXCEPTIONS`` as the real assertion — the boundary currently
+    carries no exceptions at all.
+    """
     for dotted_module in RETAINED_FEED_MODULES:
         assert _module_path(dotted_module).exists(), (
             f"{dotted_module} does not resolve to {_module_path(dotted_module)}"
         )
 
-    _visited, banned_edges = _walk_app_import_graph(RETAINED_FEED_MODULES)
+    visited, banned_edges = _walk_app_import_graph(RETAINED_FEED_MODULES)
     violations = [
         (importing_module, imported_module)
         for importing_module, imported_module in banned_edges
@@ -501,27 +523,6 @@ def test_retained_feed_modules_transitive_import_graph_has_no_unlisted_account_o
         "— see _ALLOWED_EXCEPTIONS in this test."
     )
 
-
-def test_no_stale_allowed_exceptions() -> None:
-    """Every entry in _ALLOWED_EXCEPTIONS must reflect a real, current, reachable import.
-
-    Prevents the exception list from silently outliving the code it was
-    written for — if Slice 3 or 4 removes the import another way, or the
-    importing module itself falls out of the retained-feed walk, this
-    fails loudly instead of leaving a permissive dead entry.
-
-    **This test is vacuously green today and that is deliberate.**
-    ``_ALLOWED_EXCEPTIONS`` has been empty since PR-B of #1813, so the loop
-    below has nothing to iterate; it asserts nothing until someone adds an
-    exception, which is precisely when it starts earning its keep. PR-C
-    considered the alternatives and rejected both: deleting it would remove
-    the guard that keeps a future exception from going stale, and re-adding
-    an exception just to give it something to iterate would reopen a boundary
-    the decommission closed in order to make a test look busy. Read the empty
-    ``_ALLOWED_EXCEPTIONS`` as the real assertion — the boundary currently
-    carries no exceptions at all.
-    """
-    visited, banned_edges = _walk_app_import_graph(RETAINED_FEED_MODULES)
     banned_edge_set = set(banned_edges)
     for dotted_module, banned_import in _ALLOWED_EXCEPTIONS:
         assert dotted_module in visited, (

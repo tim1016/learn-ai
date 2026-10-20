@@ -356,34 +356,33 @@ def test_a_stored_text_that_is_not_a_setup_says_so_in_whole_words(stored: str, w
 
 
 @pytest.mark.parametrize(
-    ("letters", "kept"),
+    ("name", "expected"),
     [
-        pytest.param(231, "legs.0." + "x" * 231 + ":", id="the space is the 240th character"),
-        pytest.param(232, "legs.0." + "x" * 232 + ":", id="the space is the 241st, one past the line"),
-        pytest.param(233, "legs.0." + "x" * 233, id="no space in the line: cut at its end"),
-        pytest.param(5000, "legs.0." + "x" * 233, id="a name of any size"),
+        pytest.param("x" * 231, "legs.0." + "x" * 231 + ": …", id="the space is the 240th character"),
+        pytest.param("x" * 232, "legs.0." + "x" * 232 + ": …", id="the space is the 241st, one past the line"),
+        pytest.param("x" * 233, "legs.0." + "x" * 233 + " …", id="no space in the line: cut at its end"),
+        pytest.param("x" * 5000, "legs.0." + "x" * 233 + " …", id="a name of any size"),
+        pytest.param(
+            "x" * 201,
+            "legs.0." + "x" * 201 + ": Extra inputs are not permitted",
+            id="a problem of exactly a line's length is whole",
+        ),
+        pytest.param(
+            "x" * 202,
+            "legs.0." + "x" * 202 + ": Extra inputs are not …",
+            id="one character more than a line's length is cut at a word",
+        ),
+        pytest.param(
+            "a" * 10 + " " + "b" * 222 + " " + "c" * 100,
+            "legs.0." + "a" * 10 + " " + "b" * 222 + " …",
+            id="a space just past the end of a line is a word boundary",
+        ),
     ],
 )
-def test_an_extra_field_with_a_name_of_any_size_is_cut_at_a_word_and_marked(letters: int, kept: str) -> None:
-    reason = _reason_of(json.dumps(setup_body(legs=[leg(**{"x" * letters: 1})])))
-
-    assert reason == kept + " …"
-
-
-def test_a_problem_of_exactly_a_lines_length_is_whole_and_one_character_more_is_cut_at_a_word() -> None:
-    whole = _reason_of(json.dumps(setup_body(legs=[leg(**{"x" * 201: 1})])))
-    one_more = _reason_of(json.dumps(setup_body(legs=[leg(**{"x" * 202: 1})])))
-
-    assert whole == "legs.0." + "x" * 201 + ": Extra inputs are not permitted"
-    assert one_more == "legs.0." + "x" * 202 + ": Extra inputs are not …"
-
-
-def test_a_space_just_past_the_end_of_a_line_is_a_word_boundary() -> None:
-    name = "a" * 10 + " " + "b" * 222 + " " + "c" * 100
-
+def test_an_extra_field_with_a_name_of_any_size_is_cut_at_a_word_and_marked(name: str, expected: str) -> None:
     reason = _reason_of(json.dumps(setup_body(legs=[leg(**{name: 1})])))
 
-    assert reason == "legs.0." + "a" * 10 + " " + "b" * 222 + " …"
+    assert reason == expected
 
 
 def test_an_unknown_rule_kind_of_any_size_is_cut_at_a_word_and_marked_and_says_where() -> None:

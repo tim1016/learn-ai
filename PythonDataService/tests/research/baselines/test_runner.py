@@ -98,7 +98,7 @@ def parent_run(tmp_path: Path):
 # ---------------------------------------------------------------------------
 # Buy-and-hold method.
 # ---------------------------------------------------------------------------
-def test_buy_and_hold_runs_completed_with_equity_metrics(tmp_path: Path, parent_run):
+def test_buy_and_hold_baseline_outcome(tmp_path: Path, parent_run):
     """B&H spec must complete and produce a real equity-curve-derived
     metric. ``total_return_pct`` and ``max_drawdown_pct`` are computed
     from the equity curve (which tracks the held position correctly),
@@ -106,29 +106,6 @@ def test_buy_and_hold_runs_completed_with_equity_metrics(tmp_path: Path, parent_
     limitation in ``buy_and_hold_spec``: trade_log is empty for B&H,
     but the metrics that matter for null comparison are valid.
     """
-    ledger, _, factory = parent_run
-    _config, result = run_baselines(
-        BaselineRequest(
-            parent_run_id=ledger.run_id,
-            method="buy_and_hold",
-            sample_count=1,
-        ),
-        data_source_factory=factory,
-        artifacts_root=tmp_path,
-        data_root_revision="test-revision-1",
-    )
-    assert result.status == "completed"
-    assert len(result.baselines) == 1
-    bl = result.baselines[0]
-    assert bl.status == "completed", bl.failure_reason
-    # Real equity-curve-derived metrics. total_return_pct should be
-    # non-zero on synthetic data with intra-day movement, and Sharpe
-    # is finite because the equity curve has variance.
-    assert bl.test_metrics.total_return_pct != 0.0
-    assert bl.test_metrics.sharpe_ratio is not None
-
-
-def test_buy_and_hold_persists_child_run(tmp_path: Path, parent_run):
     ledger, _, factory = parent_run
     config, result = run_baselines(
         BaselineRequest(
@@ -140,12 +117,26 @@ def test_buy_and_hold_persists_child_run(tmp_path: Path, parent_run):
         artifacts_root=tmp_path,
         data_root_revision="test-revision-1",
     )
+    assert result.status == "completed", "B&H run completes"
+    assert len(result.baselines) == 1, "B&H run has one baseline"
     bl = result.baselines[0]
+    assert bl.status == "completed", f"the B&H baseline completes (failure_reason={bl.failure_reason!r})"
+    # Real equity-curve-derived metrics. total_return_pct should be
+    # non-zero on synthetic data with intra-day movement, and Sharpe
+    # is finite because the equity curve has variance.
+    assert bl.test_metrics.total_return_pct != 0.0, "total_return_pct is derived from the equity curve"
+    assert bl.test_metrics.sharpe_ratio is not None, "sharpe_ratio is finite on the equity curve"
     # Child run on disk.
-    assert (tmp_path / bl.baseline_run_id / "ledger.json").is_file()
+    assert (tmp_path / bl.baseline_run_id / "ledger.json").is_file(), "child run ledger persisted on disk"
     # Discoverable via list_runs filter.
     listed = list_runs(root=tmp_path, parent_run_id=config.baseline_id)
-    assert [lg.run_id for lg in listed] == [bl.baseline_run_id]
+    assert [lg.run_id for lg in listed] == [bl.baseline_run_id], "child run discoverable via the list_runs parent filter"
+    # Default coverage from _DEFAULT_TARGET_METRICS.
+    metric_names = {dist.metric_name for dist in result.null_distributions}
+    assert "sharpe_ratio" in metric_names, "null distributions cover sharpe_ratio"
+    assert "total_return_pct" in metric_names, "null distributions cover total_return_pct"
+    assert "max_drawdown_pct" in metric_names, "null distributions cover max_drawdown_pct"
+    assert "profit_factor" in metric_names, "null distributions cover profit_factor"
 
 
 # ---------------------------------------------------------------------------
@@ -201,26 +192,6 @@ def test_random_ema_windows_same_seed_produces_identical_parameters(tmp_path: Pa
 # ---------------------------------------------------------------------------
 # Null distributions + empirical p-values.
 # ---------------------------------------------------------------------------
-def test_null_distributions_cover_default_target_metrics(tmp_path: Path, parent_run):
-    ledger, _, factory = parent_run
-    _, result = run_baselines(
-        BaselineRequest(
-            parent_run_id=ledger.run_id,
-            method="buy_and_hold",
-            sample_count=1,
-        ),
-        data_source_factory=factory,
-        artifacts_root=tmp_path,
-        data_root_revision="test-revision-1",
-    )
-    metric_names = {dist.metric_name for dist in result.null_distributions}
-    # Default coverage from _DEFAULT_TARGET_METRICS.
-    assert "sharpe_ratio" in metric_names
-    assert "total_return_pct" in metric_names
-    assert "max_drawdown_pct" in metric_names
-    assert "profit_factor" in metric_names
-
-
 def test_empirical_percentile_in_unit_interval(tmp_path: Path, parent_run):
     ledger, _, factory = parent_run
     _, result = run_baselines(
@@ -283,13 +254,21 @@ def test_p_value_for_extreme_parent_is_smallest_possible(tmp_path: Path, parent_
 # ---------------------------------------------------------------------------
 # Failure paths.
 # ---------------------------------------------------------------------------
-def test_missing_parent_run_returns_failed(tmp_path: Path):
+@pytest.mark.parametrize(
+    ("bad_parent_run_id", "reason_fragment"),
+    [
+        ("deadbeefdeadbeefdeadbeefdeadbeef", "parent run not found"),
+        ("../etc/passwd", "parent_run_id rejected"),
+    ],
+    ids=["missing-parent-run", "malformed-parent-run-id"],
+)
+def test_unusable_parent_run_id_returns_failed(tmp_path: Path, bad_parent_run_id: str, reason_fragment: str):
     def factory(symbol: str, start: date, end: date):
         return FakeDataReader(bars=[])
 
     _, result = run_baselines(
         BaselineRequest(
-            parent_run_id="deadbeefdeadbeefdeadbeefdeadbeef",
+            parent_run_id=bad_parent_run_id,
             method="buy_and_hold",
             sample_count=1,
         ),
@@ -297,43 +276,28 @@ def test_missing_parent_run_returns_failed(tmp_path: Path):
         artifacts_root=tmp_path,
         data_root_revision="test-revision-1",
     )
-    assert result.status == "failed"
-    assert "parent run not found" in (result.failure_reason or "")
+    assert result.status == "failed", "a failed-status record, not an exception"
+    assert reason_fragment in (result.failure_reason or ""), "the failure reason names the cause"
 
 
-def test_malformed_parent_run_id_returns_failed(tmp_path: Path):
-    def factory(symbol: str, start: date, end: date):
-        return FakeDataReader(bars=[])
-
-    _, result = run_baselines(
-        BaselineRequest(
-            parent_run_id="../etc/passwd",
-            method="buy_and_hold",
-            sample_count=1,
-        ),
-        data_source_factory=factory,
-        artifacts_root=tmp_path,
-        data_root_revision="test-revision-1",
-    )
-    assert result.status == "failed"
-    assert "parent_run_id rejected" in (result.failure_reason or "")
-
-
-def test_negative_random_seed_returns_failed(tmp_path: Path, parent_run):
+@pytest.mark.parametrize(
+    ("request_fields", "reason_fragment"),
+    [
+        ({"method": "random_ema_windows", "sample_count": 3, "random_seed": -1}, "random_seed"),
+        ({"method": "buy_and_hold", "sample_count": 0}, "sample_count"),
+    ],
+    ids=["negative-random-seed", "zero-sample-count"],
+)
+def test_invalid_request_returns_failed(tmp_path: Path, parent_run, request_fields: dict, reason_fragment: str):
     ledger, _, factory = parent_run
     _, result = run_baselines(
-        BaselineRequest(
-            parent_run_id=ledger.run_id,
-            method="random_ema_windows",
-            sample_count=3,
-            random_seed=-1,
-        ),
+        BaselineRequest(parent_run_id=ledger.run_id, **request_fields),
         data_source_factory=factory,
         artifacts_root=tmp_path,
         data_root_revision="test-revision-1",
     )
-    assert result.status == "failed"
-    assert "random_seed" in (result.failure_reason or "")
+    assert result.status == "failed", "a failed-status record, not an exception"
+    assert reason_fragment in (result.failure_reason or ""), "the failure reason names the cause"
 
 
 def test_failed_parent_run_returns_failed(tmp_path: Path, parent_run):
@@ -397,22 +361,6 @@ def test_child_run_window_matches_parent_exactly(tmp_path: Path, parent_run):
     child_ledger = listed[0]
     assert child_ledger.start_ms == parent_ledger.start_ms
     assert child_ledger.end_ms == parent_ledger.end_ms
-
-
-def test_zero_sample_count_returns_failed(tmp_path: Path, parent_run):
-    ledger, _, factory = parent_run
-    _, result = run_baselines(
-        BaselineRequest(
-            parent_run_id=ledger.run_id,
-            method="buy_and_hold",
-            sample_count=0,
-        ),
-        data_source_factory=factory,
-        artifacts_root=tmp_path,
-        data_root_revision="test-revision-1",
-    )
-    assert result.status == "failed"
-    assert "sample_count" in (result.failure_reason or "")
 
 
 # ---------------------------------------------------------------------------

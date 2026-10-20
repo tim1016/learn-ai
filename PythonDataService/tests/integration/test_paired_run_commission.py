@@ -105,39 +105,34 @@ def _response_with_trade(*, fees: float) -> EngineBacktestResponse:
     )
 
 
-def test_a_persisted_paired_run_records_commission_as_not_applicable() -> None:
-    """The row never stores a flat commission the paired run did not apply."""
+@pytest.mark.parametrize(
+    ("fees", "commission_per_order", "compatibility_profile", "requested_engine", "expected_commission"),
+    [
+        # The row never stores a flat commission the paired run did not apply.
+        pytest.param(2.0, None, "us-equity-raw-ibkr-v1", "both", None, id="paired_run_records_commission_as_not_applicable"),
+        pytest.param(5.0, 2.5, None, "python", 2.5, id="python_run_keeps_its_flat_commission"),
+    ],
+)
+def test_a_persisted_run_records_the_commission_it_applied(
+    fees: float,
+    commission_per_order: float | None,
+    compatibility_profile: str | None,
+    requested_engine: str,
+    expected_commission: float | None,
+) -> None:
     payload = build_engine_run_payload(
-        response=_response_with_trade(fees=2.0),
+        response=_response_with_trade(fees=fees),
         symbol="SPY",
         start_date="2025-01-13",
         end_date="2025-01-17",
         resolution="minute",
         parameters={"symbol": "SPY"},
         duration_ms=1_000,
-        commission_per_order=None,
-        compatibility_profile="us-equity-raw-ibkr-v1",
-        requested_engine="both",
+        commission_per_order=commission_per_order,
+        compatibility_profile=compatibility_profile,
+        requested_engine=requested_engine,
     )
 
-    assert payload["commission_per_order"] is None
+    assert payload["commission_per_order"] == expected_commission, "payload carries the applied commission"
     record = record_from_payload(payload)
-    assert record.commission_per_order is None
-
-
-def test_a_persisted_python_run_keeps_its_flat_commission() -> None:
-    payload = build_engine_run_payload(
-        response=_response_with_trade(fees=5.0),
-        symbol="SPY",
-        start_date="2025-01-13",
-        end_date="2025-01-17",
-        resolution="minute",
-        parameters={"symbol": "SPY"},
-        duration_ms=1_000,
-        commission_per_order=2.5,
-        compatibility_profile=None,
-        requested_engine="python",
-    )
-
-    record = record_from_payload(payload)
-    assert record.commission_per_order == 2.5
+    assert record.commission_per_order == expected_commission, "record carries the applied commission"

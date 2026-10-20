@@ -179,7 +179,16 @@ def _run_capturing(
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required to run restart.sh")
-def test_a_stuck_clerk_is_restarted_and_never_destroyed(tmp_path: Path) -> None:
+def test_a_stuck_clerk_is_restarted_never_destroyed_and_every_compose_call_gets_the_fleet_overlay(
+    tmp_path: Path,
+) -> None:
+    """A committed overlay that restart.sh does not pass is a topology that
+    does not run. Compose auto-loads compose.override.yaml only, so the
+    committed compose.fleet.dev.yaml (the fenced role split) must be named
+    explicitly on every single compose invocation, not just some of them —
+    a missed spot silently reverts that one operation to the unfenced
+    `combined` posture.
+    """
     calls = _run(tmp_path, _PROJECT)
 
     assert "alpaca-live-clerk" not in calls.get("rm", []), (
@@ -192,6 +201,14 @@ def test_a_stuck_clerk_is_restarted_and_never_destroyed(tmp_path: Path) -> None:
     assert calls.get("rm", []) == ["sleep-probe-9"], (
         f"Only the genuinely orphaned probe may be destroyed; got {calls.get('rm')}"
     )
+
+    compose_calls = calls.get("compose", [])
+    assert compose_calls, "restart.sh made no compose call"
+    for call in compose_calls:
+        assert call.count("--file") >= 2, f"a compose call names fewer than two --file arguments: {call}"
+        assert any(arg.endswith("compose.fleet.dev.yaml") for arg in call), (
+            f"a compose call does not name the committed fleet overlay: {call}"
+        )
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required to run restart.sh")
@@ -216,43 +233,23 @@ def test_a_wrong_project_name_can_never_destroy_compose_containers(tmp_path: Pat
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required to run restart.sh")
-def test_restart_passes_the_committed_fleet_overlay_to_every_compose_call(tmp_path: Path) -> None:
-    """A committed overlay that restart.sh does not pass is a topology that
-    does not run. Compose auto-loads compose.override.yaml only, so the
-    committed compose.fleet.dev.yaml (the fenced role split) must be named
-    explicitly on every single compose invocation, not just some of them —
-    a missed spot silently reverts that one operation to the unfenced
-    `combined` posture.
-    """
-    calls = _run(tmp_path, _PROJECT)
+@pytest.mark.parametrize(
+    "flag",
+    [
+        # The incident this guards against: `./restart.sh --help`, before `--help`
+        # was a recognised flag, fell straight through to the teardown path. Only an
+        # unrelated SIGPIPE from a piped consumer aborted it before `podman compose
+        # down` ran against two live broker clerks — that was luck, not a guarantee.
+        pytest.param("--help", id="help-flag"),
+        pytest.param("-h", id="short-help-flag"),
+    ],
+)
+def test_a_help_flag_exits_zero_and_touches_no_compose_call(tmp_path: Path, flag: str) -> None:
+    completed, calls = _run_capturing(tmp_path, argv=[flag])
 
-    compose_calls = calls.get("compose", [])
-    assert compose_calls, "restart.sh made no compose call"
-    for call in compose_calls:
-        assert call.count("--file") >= 2, call
-        assert any(arg.endswith("compose.fleet.dev.yaml") for arg in call), call
-
-
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required to run restart.sh")
-def test_help_flag_exits_zero_and_touches_no_compose_call(tmp_path: Path) -> None:
-    """The incident this guards against: `./restart.sh --help`, before `--help`
-    was a recognised flag, fell straight through to the teardown path. Only an
-    unrelated SIGPIPE from a piped consumer aborted it before `podman compose
-    down` ran against two live broker clerks — that was luck, not a guarantee.
-    """
-    completed, calls = _run_capturing(tmp_path, argv=["--help"])
-
-    assert completed.returncode == 0
-    assert not calls.get("compose"), f"--help must touch no compose command; got {calls.get('compose')}"
-    assert "Usage" in completed.stdout
-
-
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required to run restart.sh")
-def test_short_help_flag_also_exits_zero_and_touches_no_compose_call(tmp_path: Path) -> None:
-    completed, calls = _run_capturing(tmp_path, argv=["-h"])
-
-    assert completed.returncode == 0
-    assert not calls.get("compose")
+    assert completed.returncode == 0, f"{flag} must exit zero; stderr: {completed.stderr}"
+    assert not calls.get("compose"), f"{flag} must touch no compose command; got {calls.get('compose')}"
+    assert "Usage" in completed.stdout, f"{flag} must print the usage text"
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required to run restart.sh")

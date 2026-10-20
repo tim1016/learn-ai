@@ -31,18 +31,20 @@ def _c(ticker: str, strike: float) -> dict:
 
 
 class TestSlotLabel:
-    def test_atm_zero_offset(self):
-        assert _slot_label(0) == "atm"
-
-    def test_negative_offsets_zero_padded(self):
-        assert _slot_label(-1) == "atm-01"
-        assert _slot_label(-3) == "atm-03"
-        assert _slot_label(-12) == "atm-12"
-
-    def test_positive_offsets_carry_explicit_plus(self):
-        assert _slot_label(1) == "atm+01"
-        assert _slot_label(3) == "atm+03"
-        assert _slot_label(12) == "atm+12"
+    @pytest.mark.parametrize(
+        ("offset", "label"),
+        [
+            pytest.param(0, "atm", id="atm_zero_offset"),
+            pytest.param(-1, "atm-01", id="negative_offsets_zero_padded_1"),
+            pytest.param(-3, "atm-03", id="negative_offsets_zero_padded_3"),
+            pytest.param(-12, "atm-12", id="negative_offsets_zero_padded_12"),
+            pytest.param(1, "atm+01", id="positive_offsets_carry_explicit_plus_1"),
+            pytest.param(3, "atm+03", id="positive_offsets_carry_explicit_plus_3"),
+            pytest.param(12, "atm+12", id="positive_offsets_carry_explicit_plus_12"),
+        ],
+    )
+    def test_slot_label(self, offset, label):
+        assert _slot_label(offset) == label
 
 
 class TestSelectStrikesWithSlots:
@@ -56,20 +58,20 @@ class TestSelectStrikesWithSlots:
         # ATM=110 → offsets map to 107..113
         assert strikes == [107.0, 108.0, 109.0, 110.0, 111.0, 112.0, 113.0]
 
-    def test_clipped_at_low_edge_omits_negative_offsets(self):
-        # ATM at index 0 — no strikes below
+    @pytest.mark.parametrize(
+        ("prior_close", "expected_offsets"),
+        [
+            # ATM at index 0 — no strikes below; only offsets 0..+3 fit
+            pytest.param(100.0, [0, 1, 2, 3], id="clipped_at_low_edge_omits_negative_offsets"),
+            # ATM at idx 9 (last) — only -3..0 fit
+            pytest.param(109.0, [-3, -2, -1, 0], id="clipped_at_high_edge_omits_positive_offsets"),
+        ],
+    )
+    def test_clipped_at_an_edge_omits_the_offsets_that_do_not_fit(self, prior_close, expected_offsets):
         contracts = [_c(f"O:T{i}", 100.0 + i) for i in range(10)]
-        slotted = _select_strikes_with_slots(contracts, prior_close=100.0, strikes_each_side=3)
+        slotted = _select_strikes_with_slots(contracts, prior_close=prior_close, strikes_each_side=3)
         offsets = [s for s, _ in slotted]
-        # Only offsets 0..+3 fit
-        assert offsets == [0, 1, 2, 3]
-
-    def test_clipped_at_high_edge_omits_positive_offsets(self):
-        contracts = [_c(f"O:T{i}", 100.0 + i) for i in range(10)]
-        slotted = _select_strikes_with_slots(contracts, prior_close=109.0, strikes_each_side=3)
-        offsets = [s for s, _ in slotted]
-        # ATM at idx 9 (last) — only -3..0 fit
-        assert offsets == [-3, -2, -1, 0]
+        assert offsets == expected_offsets
 
     def test_empty_contracts_returns_empty(self):
         assert _select_strikes_with_slots([], prior_close=100.0, strikes_each_side=3) == []
@@ -170,30 +172,18 @@ class TestColumnsFor:
 
 
 class TestMarkDiscontinuity:
-    def test_first_row_is_one(self):
-        rows = [{"unix_ts": 1, "contract_ticker": "O:A"}]
+    @pytest.mark.parametrize(
+        ("tickers", "expected"),
+        [
+            pytest.param(["O:A"], [1], id="first_row_is_one"),
+            pytest.param(["O:A", "O:A", "O:A"], [1, 0, 0], id="subsequent_same_ticker_is_zero"),
+            pytest.param(["O:A", "O:A", "O:B", "O:B", "O:C"], [1, 0, 1, 0, 1], id="change_of_ticker_marks_one"),
+        ],
+    )
+    def test_discontinuity_marks_the_first_row_and_each_change_of_ticker(self, tickers, expected):
+        rows = [{"unix_ts": ts, "contract_ticker": ticker} for ts, ticker in enumerate(tickers, start=1)]
         _mark_discontinuity(rows)
-        assert rows[0]["discontinuity"] == 1
-
-    def test_subsequent_same_ticker_is_zero(self):
-        rows = [
-            {"unix_ts": 1, "contract_ticker": "O:A"},
-            {"unix_ts": 2, "contract_ticker": "O:A"},
-            {"unix_ts": 3, "contract_ticker": "O:A"},
-        ]
-        _mark_discontinuity(rows)
-        assert [r["discontinuity"] for r in rows] == [1, 0, 0]
-
-    def test_change_of_ticker_marks_one(self):
-        rows = [
-            {"unix_ts": 1, "contract_ticker": "O:A"},
-            {"unix_ts": 2, "contract_ticker": "O:A"},
-            {"unix_ts": 3, "contract_ticker": "O:B"},
-            {"unix_ts": 4, "contract_ticker": "O:B"},
-            {"unix_ts": 5, "contract_ticker": "O:C"},
-        ]
-        _mark_discontinuity(rows)
-        assert [r["discontinuity"] for r in rows] == [1, 0, 1, 0, 1]
+        assert [r["discontinuity"] for r in rows] == expected
 
     def test_empty_rows_is_noop(self):
         rows: list[dict] = []
@@ -222,31 +212,31 @@ class TestPriorDayCloseMap:
 
 
 class TestBarGridFloor:
-    def test_minute_grid_floors_to_minute_start(self):
-        ts = 1749547837500
-        floored = _bar_grid_floor_ms(ts, "minute", 1)
-        assert floored % 60_000 == 0
-        assert floored <= ts < floored + 60_000
+    @pytest.mark.parametrize(
+        ("ts", "multiplier", "period_ms"),
+        [
+            pytest.param(1749547837500, 1, 60_000, id="minute_grid_floors_to_minute_start"),
+            pytest.param(1_749_547_920_000, 5, 300_000, id="5minute_grid_lands_on_5minute_boundary"),
+        ],
+    )
+    def test_minute_grid_floors_to_the_start_of_its_bar(self, ts, multiplier, period_ms):
+        floored = _bar_grid_floor_ms(ts, "minute", multiplier)
+        assert floored % period_ms == 0, "the floor lands on a bar boundary"
+        assert floored <= ts < floored + period_ms, "the timestamp lies inside the bar the floor starts"
 
-    def test_5minute_grid_lands_on_5minute_boundary(self):
-        ts = 1_749_547_920_000
-        floored = _bar_grid_floor_ms(ts, "minute", 5)
-        assert floored % 300_000 == 0
-        assert floored <= ts < floored + 300_000
-
-    def test_hour_grid_floors_to_hour_start(self):
-        aligned = 1_735_693_200_000
-        mid_hour = aligned + 1_800_000
-        floored = _bar_grid_floor_ms(mid_hour, "hour", 1)
-        assert floored == aligned
-        assert floored % 3_600_000 == 0
-
-    def test_day_grid_floors_to_utc_midnight(self):
-        midnight_utc = 1_735_689_600_000
-        mid_day = midnight_utc + 12 * 3_600_000
-        floored = _bar_grid_floor_ms(mid_day, "day", 1)
-        assert floored == midnight_utc
-        assert floored % 86_400_000 == 0
+    @pytest.mark.parametrize(
+        ("aligned", "into_the_bar_ms", "timespan", "period_ms"),
+        [
+            pytest.param(1_735_693_200_000, 1_800_000, "hour", 3_600_000, id="hour_grid_floors_to_hour_start"),
+            pytest.param(
+                1_735_689_600_000, 12 * 3_600_000, "day", 86_400_000, id="day_grid_floors_to_utc_midnight"
+            ),
+        ],
+    )
+    def test_hour_and_day_grids_floor_to_their_aligned_start(self, aligned, into_the_bar_ms, timespan, period_ms):
+        floored = _bar_grid_floor_ms(aligned + into_the_bar_ms, timespan, 1)
+        assert floored == aligned, "a time inside the bar floors to the bar's aligned start"
+        assert floored % period_ms == 0, "the floor lands on a bar boundary"
 
 
 class TestUnderlyingCloseMapAlignment:
@@ -275,7 +265,14 @@ class TestUnderlyingCloseMapAlignment:
 class TestResolveTargetExpiry:
     """Strict-DTE policy: only an exact-match listed expiry is accepted."""
 
-    def test_returns_target_when_listed(self):
+    @pytest.mark.parametrize(
+        ("dte_distance", "expected"),
+        [
+            pytest.param(7, date(2025, 6, 17), id="returns_target_when_listed"),
+            pytest.param(0, date(2025, 6, 10), id="zero_dte_uses_trading_day_directly"),
+        ],
+    )
+    def test_returns_the_listed_target_expiry(self, dte_distance, expected):
         from datetime import date
 
         from app.services.options_companion_service import _resolve_target_expiry
@@ -285,9 +282,9 @@ class TestResolveTargetExpiry:
                 # Echo back the requested anchor as if it's listed
                 return [kwargs["expiration_ms_gte"]]
 
-        cfg = OptionsCompanionConfig(enabled=True, dte_distance=7)
+        cfg = OptionsCompanionConfig(enabled=True, dte_distance=dte_distance)
         result = _resolve_target_expiry(_FakePolygon(), "SPY", date(2025, 6, 10), cfg)
-        assert result == date(2025, 6, 17)
+        assert result == expected
 
     def test_returns_none_when_no_listed_expiry_at_target_date(self):
         from datetime import date
@@ -300,19 +297,6 @@ class TestResolveTargetExpiry:
 
         cfg = OptionsCompanionConfig(enabled=True, dte_distance=7)
         assert _resolve_target_expiry(_FakePolygon(), "SPY", date(2025, 6, 10), cfg) is None
-
-    def test_zero_dte_uses_trading_day_directly(self):
-        from datetime import date
-
-        from app.services.options_companion_service import _resolve_target_expiry
-
-        class _FakePolygon:
-            def list_options_expirations(self, **kwargs):
-                return [kwargs["expiration_ms_gte"]]
-
-        cfg = OptionsCompanionConfig(enabled=True, dte_distance=0)
-        result = _resolve_target_expiry(_FakePolygon(), "SPY", date(2025, 6, 10), cfg)
-        assert result == date(2025, 6, 10)
 
     def test_lookup_failure_propagates_instead_of_reading_as_no_chain(self):
         from datetime import date

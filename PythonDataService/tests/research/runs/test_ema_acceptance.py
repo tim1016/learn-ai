@@ -203,9 +203,11 @@ async def test_repeat_runs_produce_identical_content_hashes(client):
 
 
 # ---------------------------------------------------------------------------
-# Gate 2 — spec-parameter change propagates.
+# Gates 2 and 3 — spec-parameter and data-window changes propagate.
 # ---------------------------------------------------------------------------
-async def test_changing_ema5_period_changes_spec_and_result_hash(client):
+async def test_changing_ema5_period_changes_spec_and_result_hash_and_shifting_start_date_changes_data_snapshot_id(
+    client,
+):
     base = (
         await client.post("/api/research/strategy-runs", json=_canonical_request_body())
     ).json()["ledger"]
@@ -221,18 +223,13 @@ async def test_changing_ema5_period_changes_spec_and_result_hash(client):
         await client.post("/api/research/strategy-runs", json=_mutated_body(mutate))
     ).json()["ledger"]
 
-    assert base["strategy_spec_hash"] != mutated["strategy_spec_hash"]
-    assert base["data_snapshot_id"] == mutated["data_snapshot_id"]
-    assert base["result_hash"] != mutated["result_hash"]
+    assert base["strategy_spec_hash"] != mutated["strategy_spec_hash"], "ema5 period change: spec hash changes"
+    assert base["data_snapshot_id"] == mutated["data_snapshot_id"], (
+        "ema5 period change: data snapshot id is unchanged"
+    )
+    assert base["result_hash"] != mutated["result_hash"], "ema5 period change: result hash changes"
 
-
-# ---------------------------------------------------------------------------
-# Gate 3 — data window change propagates.
-# ---------------------------------------------------------------------------
-async def test_shifting_start_date_changes_data_snapshot_id(client):
-    base = (
-        await client.post("/api/research/strategy-runs", json=_canonical_request_body())
-    ).json()["ledger"]
+    # Gate 3 — data window change propagates.
     shifted = (
         await client.post(
             "/api/research/strategy-runs",
@@ -240,8 +237,8 @@ async def test_shifting_start_date_changes_data_snapshot_id(client):
         )
     ).json()["ledger"]
 
-    assert base["strategy_spec_hash"] == shifted["strategy_spec_hash"]
-    assert base["data_snapshot_id"] != shifted["data_snapshot_id"]
+    assert base["strategy_spec_hash"] == shifted["strategy_spec_hash"], "start date shift: spec hash is unchanged"
+    assert base["data_snapshot_id"] != shifted["data_snapshot_id"], "start date shift: data snapshot id changes"
 
 
 # ---------------------------------------------------------------------------

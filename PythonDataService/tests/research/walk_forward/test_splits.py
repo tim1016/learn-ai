@@ -159,34 +159,25 @@ class TestAnchoredSplit:
 # FoldWindow invariants.
 # ---------------------------------------------------------------------------
 class TestFoldWindowInvariants:
-    def test_train_must_precede_test(self):
-        with pytest.raises(ValueError, match="test cannot start before train ends"):
+    @pytest.mark.parametrize(
+        ("train_end_offset", "test_start_offset", "test_end_offset", "match"),
+        [
+            # test_start (50) is before train_end (100)
+            pytest.param(100, 50, 200, "test cannot start before train ends", id="train_must_precede_test"),
+            pytest.param(0, 1, 2, "train_start_ms must be", id="degenerate_train"),
+            pytest.param(100, 100, 100, "test_start_ms must be", id="degenerate_test"),
+        ],
+    )
+    def test_invalid_fold_window_raises(
+        self, train_end_offset: int, test_start_offset: int, test_end_offset: int, match: str
+    ):
+        with pytest.raises(ValueError, match=match):
             FoldWindow(
                 fold_index=0,
                 train_start_ms=START_MS,
-                train_end_ms=START_MS + 100,
-                test_start_ms=START_MS + 50,  # before train_end
-                test_end_ms=START_MS + 200,
-            )
-
-    def test_degenerate_train_raises(self):
-        with pytest.raises(ValueError, match="train_start_ms must be"):
-            FoldWindow(
-                fold_index=0,
-                train_start_ms=START_MS,
-                train_end_ms=START_MS,
-                test_start_ms=START_MS + 1,
-                test_end_ms=START_MS + 2,
-            )
-
-    def test_degenerate_test_raises(self):
-        with pytest.raises(ValueError, match="test_start_ms must be"):
-            FoldWindow(
-                fold_index=0,
-                train_start_ms=START_MS,
-                train_end_ms=START_MS + 100,
-                test_start_ms=START_MS + 100,
-                test_end_ms=START_MS + 100,
+                train_end_ms=START_MS + train_end_offset,
+                test_start_ms=START_MS + test_start_offset,
+                test_end_ms=START_MS + test_end_offset,
             )
 
 
@@ -194,9 +185,17 @@ class TestFoldWindowInvariants:
 # Factory.
 # ---------------------------------------------------------------------------
 class TestBuildSplitPolicy:
-    def test_chronological_requires_train_pct(self) -> None:
-        with pytest.raises(ValueError, match="train_pct"):
-            build_split_policy({"kind": "chronological"})
+    @pytest.mark.parametrize(
+        ("spec_items", "match"),
+        [
+            pytest.param((("kind", "chronological"),), "train_pct", id="chronological_requires_train_pct"),
+            pytest.param((("kind", "some_made_up_thing"),), None, id="unknown_kind_raises"),
+            pytest.param((), None, id="missing_kind_raises"),
+        ],
+    )
+    def test_invalid_spec_raises(self, spec_items: tuple, match: str | None) -> None:
+        with pytest.raises(ValueError, match=match):
+            build_split_policy(dict(spec_items))
 
     def test_chronological_custom_pct(self) -> None:
         policy = build_split_policy({"kind": "chronological", "train_pct": 0.6})
@@ -219,11 +218,3 @@ class TestBuildSplitPolicy:
         )
         assert isinstance(policy, AnchoredSplitPolicy)
         assert policy.initial_train_days == 120
-
-    def test_unknown_kind_raises(self) -> None:
-        with pytest.raises(ValueError):
-            build_split_policy({"kind": "some_made_up_thing"})
-
-    def test_missing_kind_raises(self) -> None:
-        with pytest.raises(ValueError):
-            build_split_policy({})

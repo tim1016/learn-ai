@@ -62,45 +62,44 @@ class TestReadMarker:
         assert marker.data_root_id == _ROOT_A
         assert marker.schema_version == 1
 
-    def test_raises_on_malformed_json(self, tmp_path: Path):
+    @pytest.mark.parametrize(
+        ("marker_text", "match"),
+        [
+            ("{not json", "malformed"),
+            (json.dumps({"schema_version": 2, "data_root_id": str(_ROOT_A)}), "schema_version"),
+            (json.dumps({"schema_version": 1, "data_root_id": "not-a-uuid"}), None),
+            # No timestamps, no host-specific paths — the marker carries exactly
+            # schema_version and data_root_id, nothing else (issue #1876).
+            (json.dumps({"schema_version": 1, "data_root_id": str(_ROOT_A), "created_at": "2026-01-01"}), None),
+        ],
+        ids=[
+            "raises_on_malformed_json",
+            "raises_on_wrong_schema_version",
+            "raises_on_invalid_uuid",
+            "raises_on_extra_fields_issue_1876",
+        ],
+    )
+    def test_raises_on_a_marker_that_is_not_valid(self, tmp_path: Path, marker_text: str, match: str | None):
         path = marker_path(tmp_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("{not json")
+        path.write_text(marker_text)
 
-        with pytest.raises(LakeRootIdentityError, match="malformed"):
-            read_marker(tmp_path)
-
-    def test_raises_on_wrong_schema_version(self, tmp_path: Path):
-        _write_marker(tmp_path, schema_version=2, data_root_id=str(_ROOT_A))
-
-        with pytest.raises(LakeRootIdentityError, match="schema_version"):
-            read_marker(tmp_path)
-
-    def test_raises_on_invalid_uuid(self, tmp_path: Path):
-        _write_marker(tmp_path, data_root_id="not-a-uuid")
-
-        with pytest.raises(LakeRootIdentityError):
-            read_marker(tmp_path)
-
-    def test_raises_on_extra_fields(self, tmp_path: Path):
-        """No timestamps, no host-specific paths — the marker carries exactly
-        schema_version and data_root_id, nothing else (issue #1876)."""
-        path = marker_path(tmp_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps({"schema_version": 1, "data_root_id": str(_ROOT_A), "created_at": "2026-01-01"})
-        )
-
-        with pytest.raises(LakeRootIdentityError):
+        with pytest.raises(LakeRootIdentityError, match=match):
             read_marker(tmp_path)
 
 
 class TestResolveRootContext:
-    def test_missing_marker_raises_before_anything_is_mutated(self, tmp_path: Path):
+    def test_missing_marker_raises_before_anything_is_mutated_and_never_silently_creates_one(self, tmp_path: Path):
+        """Normal application startup validates, never creates (issue #1876)."""
         with pytest.raises(LakeRootIdentityError, match="missing"):
             resolve_root_context(_ROOT_A, base_root=tmp_path)
 
-        assert not marker_path(tmp_path).exists()
+        assert not marker_path(tmp_path).exists(), "the missing-marker error comes before anything is mutated"
+
+        with pytest.raises(LakeRootIdentityError):
+            resolve_root_context(_ROOT_A, base_root=tmp_path)
+
+        assert read_marker(tmp_path) is None, "normal startup never silently creates a marker (issue #1876)"
 
     def test_mismatched_marker_raises(self, tmp_path: Path):
         _write_marker(tmp_path, data_root_id=str(_ROOT_A))
@@ -117,34 +116,32 @@ class TestResolveRootContext:
         assert ctx.root_id == _ROOT_A
         assert ctx.base_root == tmp_path
 
-    def test_never_silently_creates_a_marker(self, tmp_path: Path):
-        """Normal application startup validates, never creates (issue #1876)."""
-        with pytest.raises(LakeRootIdentityError):
-            resolve_root_context(_ROOT_A, base_root=tmp_path)
-
-        assert read_marker(tmp_path) is None
-
 
 class TestRootContextPathResolution:
 
-    def test_lake_root_matches_path_policy(self, tmp_path: Path):
+    def test_lake_and_staging_roots_match_path_policy(self, tmp_path: Path):
         ctx = RootContext(root_id=_ROOT_A, base_root=tmp_path)
-        assert ctx.lake_root("raw") == lake_root_within(tmp_path, "raw")
-        assert ctx.lake_root("polygon_split_adjusted") == lake_root_within(tmp_path, "polygon_split_adjusted")
-
-    def test_staging_root_matches_path_policy(self, tmp_path: Path):
-        ctx = RootContext(root_id=_ROOT_A, base_root=tmp_path)
-        assert ctx.staging_root("raw") == staging_root_within(tmp_path, "raw")
+        assert ctx.lake_root("raw") == lake_root_within(tmp_path, "raw"), "lake root matches path policy (raw)"
+        assert ctx.lake_root("polygon_split_adjusted") == lake_root_within(
+            tmp_path, "polygon_split_adjusted"
+        ), "lake root matches path policy (polygon_split_adjusted)"
+        assert ctx.staging_root("raw") == staging_root_within(tmp_path, "raw"), "staging root matches path policy"
 
 
 class TestInitEmptyRoot:
-    def test_creates_marker_at_the_expected_path(self, tmp_path: Path):
+    def test_creates_marker_at_the_expected_path_and_creation_is_atomic(self, tmp_path: Path):
+        """The marker file, once present, is always fully-formed valid JSON —
+        never a truncated partial write an interrupted process could leave."""
         ctx = init_empty_root(tmp_path, _ROOT_A)
 
-        assert ctx.root_id == _ROOT_A
+        assert ctx.root_id == _ROOT_A, "creating the marker returns the root context"
         marker = read_marker(tmp_path)
-        assert marker is not None
-        assert marker.data_root_id == _ROOT_A
+        assert marker is not None, "the marker is created at the expected path"
+        assert marker.data_root_id == _ROOT_A, "the marker carries the given root id"
+        raw = marker_path(tmp_path).read_text()
+        parsed = json.loads(raw)  # would raise on a torn/partial write
+        assert parsed == {"schema_version": 1, "data_root_id": str(_ROOT_A)}, "no partial marker is left on disk"
+        assert ctx.root_id == _ROOT_A, "the context still names the root after the atomic write"
 
     def test_refuses_when_a_marker_already_exists(self, tmp_path: Path):
         _write_marker(tmp_path, data_root_id=str(_ROOT_A))
@@ -163,15 +160,6 @@ class TestInitEmptyRoot:
             init_empty_root(tmp_path, _ROOT_A)
 
         assert read_marker(tmp_path) is None
-
-    def test_creation_is_atomic_no_partial_marker_left_on_disk(self, tmp_path: Path):
-        """The marker file, once present, is always fully-formed valid JSON —
-        never a truncated partial write an interrupted process could leave."""
-        ctx = init_empty_root(tmp_path, _ROOT_A)
-        raw = marker_path(tmp_path).read_text()
-        parsed = json.loads(raw)  # would raise on a torn/partial write
-        assert parsed == {"schema_version": 1, "data_root_id": str(_ROOT_A)}
-        assert ctx.root_id == _ROOT_A
 
 
 class TestAtomicWriteMarkerConcurrency:
@@ -209,15 +197,28 @@ class TestAtomicWriteMarkerConcurrency:
 
 
 class TestStampExistingRoot:
-    def test_requires_the_explicit_force_flag(self, tmp_path: Path):
+    @pytest.mark.parametrize(
+        ("force", "match"),
+        [
+            (False, "force"),
+            # Stamping a populated root with an arbitrary UUID would silently
+            # orphan the catalog rows the migration backfilled to LEGACY_ROOT_ID
+            # (issue #1876 review fix 4).
+            (True, "populated"),
+        ],
+        ids=["requires_the_explicit_force_flag", "refuses_a_populated_root_with_a_non_legacy_root_id_issue_1876"],
+    )
+    def test_refuses_to_stamp_a_populated_root_with_a_non_legacy_root_id(
+        self, tmp_path: Path, force: bool, match: str
+    ):
         container = lake_container_within(tmp_path)
         container.mkdir(parents=True)
         (container / "raw").mkdir()
 
-        with pytest.raises(LakeRootIdentityError, match="force"):
-            stamp_existing_root(tmp_path, _ROOT_A, force=False)
+        with pytest.raises(LakeRootIdentityError, match=match):
+            stamp_existing_root(tmp_path, _ROOT_A, force=force)
 
-        assert read_marker(tmp_path) is None
+        assert read_marker(tmp_path) is None, "a refused stamp leaves no marker"
 
     def test_stamps_a_populated_root_with_the_legacy_root_id_when_forced(self, tmp_path: Path):
         """The legitimate rollout path: the EF migration backfilled every
@@ -233,19 +234,6 @@ class TestStampExistingRoot:
         marker = read_marker(tmp_path)
         assert marker is not None
         assert marker.data_root_id == LEGACY_ROOT_ID
-
-    def test_refuses_a_populated_root_with_a_non_legacy_root_id(self, tmp_path: Path):
-        """Stamping a populated root with an arbitrary UUID would silently
-        orphan the catalog rows the migration backfilled to LEGACY_ROOT_ID
-        (issue #1876 review fix 4)."""
-        container = lake_container_within(tmp_path)
-        container.mkdir(parents=True)
-        (container / "raw").mkdir()
-
-        with pytest.raises(LakeRootIdentityError, match="populated"):
-            stamp_existing_root(tmp_path, _ROOT_A, force=True)
-
-        assert read_marker(tmp_path) is None
 
     def test_stamps_an_empty_root_with_a_non_legacy_root_id_when_forced(self, tmp_path: Path):
         """An empty root has no existing catalog rows to orphan, so the
@@ -287,13 +275,14 @@ class TestInspectRoot:
 
 
 class TestActiveRootId:
-    def test_falls_back_to_the_legacy_root_id_when_unconfigured(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(settings, "DATA_LAKE_ROOT_ID", "")
-        assert active_root_id() == LEGACY_ROOT_ID
-
-    def test_reads_the_configured_root_id(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(settings, "DATA_LAKE_ROOT_ID", str(_ROOT_A))
-        assert active_root_id() == _ROOT_A
+    @pytest.mark.parametrize(
+        ("configured", "expected"),
+        [("", LEGACY_ROOT_ID), (str(_ROOT_A), _ROOT_A)],
+        ids=["falls_back_to_the_legacy_root_id_when_unconfigured", "reads_the_configured_root_id"],
+    )
+    def test_active_root_id(self, monkeypatch: pytest.MonkeyPatch, configured: str, expected: UUID):
+        monkeypatch.setattr(settings, "DATA_LAKE_ROOT_ID", configured)
+        assert active_root_id() == expected
 
 
 class TestLegacyRootId:

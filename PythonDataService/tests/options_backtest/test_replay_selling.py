@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
@@ -105,30 +105,20 @@ def test_a_put_spread_sold_at_the_entry_time_is_bought_back_and_sold_at_the_exit
     assert [row(trade) for trade in outcome.trades] == [
         ("long", 0, 6, D("1.00"), D("1.00"), "exit_time", 61, D("0.60"), D("0.60")),
         ("short", 0, 6, D("2.20"), D("2.20"), "exit_time", 61, D("1.50"), D("1.50")),
-    ]
-    assert [(trade.entry.side, trade.exit.side) for trade in outcome.trades] == [("buy", "sell"), ("sell", "buy")]
+    ], "the spread is opened at minute 6 and closed at minute 61 at the exit time"
+    assert [(trade.entry.side, trade.exit.side) for trade in outcome.trades] == [
+        ("buy", "sell"),
+        ("sell", "buy"),
+    ], "the cover is bought and sold, the short leg is sold and bought back"
     # Long: (0.60 - 1.00) x 200 - 2.60 = -82.60. Short: sold 2.20, bought back 1.50: (2.20 - 1.50) x 200 - 2.60 = 137.40.
-    assert [trade.pnl_usd for trade in outcome.trades] == [D("-82.60"), D("137.40")]
-    assert [(trade.entry_fee_usd, trade.exit_fee_usd) for trade in outcome.trades] == [(D("1.30"), D("1.30"))] * 2
+    assert [trade.pnl_usd for trade in outcome.trades] == [D("-82.60"), D("137.40")], "each leg's profit"
+    assert [(trade.entry_fee_usd, trade.exit_fee_usd) for trade in outcome.trades] == [
+        (D("1.30"), D("1.30"))
+    ] * 2, "each fill pays 0.65 x 2 contracts"
     # Cash: -201.30 + 438.70 = +237.40, then -301.30 + 118.70 = -182.60. Net +54.80, which is the profit.
-    assert outcome.cash_change_usd == D("54.80")
-    assert (outcome.pnl_usd, outcome.marked_value_usd) == (D("54.80"), D("0"))
-    assert outcome.status is SessionStatus.TRADED
-
-
-def test_a_closing_group_buys_back_first_and_sells_the_cover_after_it_though_the_cover_is_listed_first() -> None:
-    outcome = replay(setup(*_spread_of_two()), _credit_put_spread())  # type: ignore[arg-type]
-
-    closes = [
-        (event.leg_id, minute_of(event.at_ms)) for event in outcome.events if event.kind is EventKind.CLOSE_FILLED
-    ]
-
-    assert closes == [("short", 61), ("long", 61)]
-
-
-def test_one_opening_group_and_one_closing_group_leave_one_money_step_each_with_the_figures_worked_by_hand() -> None:
-    outcome = replay(setup(*_spread_of_two()), _credit_put_spread(), fee_for=fee_per_contract("0.65"))
-
+    assert outcome.cash_change_usd == D("54.80"), "the cash that moved"
+    assert (outcome.pnl_usd, outcome.marked_value_usd) == (D("54.80"), D("0")), "the profit is the cash, nothing marked"
+    assert outcome.status is SessionStatus.TRADED, "the session traded"
     assert outcome.money_steps == (
         MoneyStep(
             at_ms=at(6),
@@ -153,7 +143,17 @@ def test_one_opening_group_and_one_closing_group_leave_one_money_step_each_with_
             # The cover was sold in the same group, so none stayed held.
             bought_back_with_cover_held=False,
         ),
-    )
+    ), "one opening group and one closing group leave one money step each with the figures worked by hand"
+
+
+def test_a_closing_group_buys_back_first_and_sells_the_cover_after_it_though_the_cover_is_listed_first() -> None:
+    outcome = replay(setup(*_spread_of_two()), _credit_put_spread())  # type: ignore[arg-type]
+
+    closes = [
+        (event.leg_id, minute_of(event.at_ms)) for event in outcome.events if event.kind is EventKind.CLOSE_FILLED
+    ]
+
+    assert closes == [("short", 61), ("long", 61)]
 
 
 def test_a_setup_that_buys_only_records_the_money_it_moved_and_pledges_nothing() -> None:
@@ -387,36 +387,42 @@ def test_two_legs_on_one_contract_on_the_same_side_add_up_and_together_cover_wha
     assert outcome.money_steps[0].obligation_after_usd == D("100000")  # 2 sold x 500 x 100
 
 
-def test_a_leg_that_would_sell_the_contract_another_leg_buys_is_refused_for_the_other_side_when_it_is_later() -> None:
+@pytest.mark.parametrize(
+    ("listed", "refused", "taken"),
+    [
+        pytest.param(
+            (("a", "buy"), ("b", "sell")),
+            ((6, "b", EventKind.ENTRY_REFUSED_FOR_OTHER_SIDE, "other_side", D("2.00")),),
+            (("a", "buy"),),
+            id="a_leg_that_would_sell_the_contract_another_leg_buys_is_refused_for_the_other_side_when_it_is_later",
+        ),
+        pytest.param(
+            (("b", "sell"), ("a", "buy")),
+            # a is the later leg on the contract and is refused for the other side. That leaves b with no cover to stand on.
+            (
+                (6, "b", EventKind.ENTRY_REFUSED_FOR_COVER, "cover_not_yet_held", D("2.00")),
+                (6, "a", EventKind.ENTRY_REFUSED_FOR_OTHER_SIDE, "other_side", D("2.00")),
+            ),
+            (),
+            id="when_the_selling_leg_is_listed_first_the_buying_leg_is_the_later_one_refused_and_the_sale_loses_its_cover",
+        ),
+    ],
+)
+def test_the_later_leg_on_a_contract_is_refused_for_the_other_side_and_the_leg_before_it_stands_on(
+    listed: tuple[tuple[str, Literal["buy", "sell"]], ...],
+    refused: tuple[tuple[int, str, EventKind, str | None, Decimal | None], ...],
+    taken: tuple[tuple[str, str], ...],
+) -> None:
     market = TableMarket(
         underlying=steady("500"),
         picks=picked(("a", "500", CALL_500), ("b", "500", CALL_500)),
         options={CALL_500: flat("2.00", 5, 61)},
     )
 
-    outcome = replay(setup(leg("a", "call"), leg("b", "call", side="sell")), market)
+    outcome = replay(setup(*(leg(leg_id, "call", side=side) for leg_id, side in listed)), market)
 
-    assert _refusals(outcome) == [(6, "b", EventKind.ENTRY_REFUSED_FOR_OTHER_SIDE, "other_side", D("2.00"))]
-    assert [(trade.leg_id, trade.entry.side) for trade in outcome.trades] == [("a", "buy")]
-
-
-def test_when_the_selling_leg_is_listed_first_the_buying_leg_is_the_later_one_refused_and_the_sale_loses_its_cover() -> (
-    None
-):
-    market = TableMarket(
-        underlying=steady("500"),
-        picks=picked(("b", "500", CALL_500), ("a", "500", CALL_500)),
-        options={CALL_500: flat("2.00", 5, 61)},
-    )
-
-    outcome = replay(setup(leg("b", "call", side="sell"), leg("a", "call")), market)
-
-    # a is the later leg on the contract and is refused for the other side. That leaves b with no cover to stand on.
-    assert _refusals(outcome) == [
-        (6, "b", EventKind.ENTRY_REFUSED_FOR_COVER, "cover_not_yet_held", D("2.00")),
-        (6, "a", EventKind.ENTRY_REFUSED_FOR_OTHER_SIDE, "other_side", D("2.00")),
-    ]
-    assert outcome.trades == ()
+    assert tuple(_refusals(outcome)) == refused, "the entries refused, with the word each is refused in"
+    assert tuple((trade.leg_id, trade.entry.side) for trade in outcome.trades) == taken, "the legs that were taken"
 
 
 # ---- Cash short of the collateral ----------------------------------------------------
@@ -431,26 +437,44 @@ def _wide_put_spread() -> TableMarket:
     )
 
 
-def test_cash_short_of_the_collateral_refuses_every_entry_of_the_group_the_cheap_cover_included() -> None:
-    # 929.99 - 50.00 + 120.00 = 999.99 is under the 1000.00 the group would pledge. The cover alone would cost 50.00.
-    outcome = replay(setup(leg("long", "put"), leg("short", "put", side="sell")), _wide_put_spread(), cash="929.99")
+@pytest.mark.parametrize(
+    ("cash", "taken", "refused", "opening"),
+    [
+        pytest.param(
+            "929.99",
+            (),
+            (
+                (6, "long", EventKind.ENTRY_REFUSED_FOR_CASH, "cash_short", D("0.50")),
+                (6, "short", EventKind.ENTRY_REFUSED_FOR_CASH, "cash_short", D("1.20")),
+            ),
+            (),
+            # 929.99 - 50.00 + 120.00 = 999.99 is under the 1000.00 the group would pledge. The cover alone would cost 50.00.
+            id="cash_short_of_the_collateral_refuses_every_entry_of_the_group_the_cheap_cover_included",
+        ),
+        pytest.param(
+            "930",
+            ("long", "short"),
+            (),
+            ((D("1000.00"), D("1000.00")),),
+            # 930.00 - 50.00 + 120.00 = 1000.00, which is the collateral to the cent.
+            id="cash_exactly_equal_to_the_collateral_after_the_group_is_enough",
+        ),
+    ],
+)
+def test_the_cash_left_after_a_group_must_carry_its_collateral_to_the_cent(
+    cash: str,
+    taken: tuple[str, ...],
+    refused: tuple[tuple[int, str, EventKind, str | None, Decimal | None], ...],
+    opening: tuple[tuple[Decimal, Decimal], ...],
+) -> None:
+    outcome = replay(setup(leg("long", "put"), leg("short", "put", side="sell")), _wide_put_spread(), cash=cash)
 
-    assert outcome.trades == ()
-    assert _refusals(outcome) == [
-        (6, "long", EventKind.ENTRY_REFUSED_FOR_CASH, "cash_short", D("0.50")),
-        (6, "short", EventKind.ENTRY_REFUSED_FOR_CASH, "cash_short", D("1.20")),
-    ]
-    assert outcome.cash_change_usd == D("0")
-    assert outcome.money_steps == ()
-
-
-def test_cash_exactly_equal_to_the_collateral_after_the_group_is_enough() -> None:
-    # 930.00 - 50.00 + 120.00 = 1000.00, which is the collateral to the cent.
-    outcome = replay(setup(leg("long", "put"), leg("short", "put", side="sell")), _wide_put_spread(), cash="930")
-
-    assert [trade.leg_id for trade in outcome.trades] == ["long", "short"]
-    assert outcome.money_steps[0].cash_after_usd == D("1000.00")
-    assert outcome.money_steps[0].collateral_after_usd == D("1000.00")
+    assert tuple(trade.leg_id for trade in outcome.trades) == taken, "the legs that were taken"
+    assert tuple(_refusals(outcome)) == refused, "the entries refused for cash, with the price each would have filled at"
+    assert outcome.cash_change_usd == D("0"), "the flat prices leave the cash where it began"
+    assert tuple(
+        (step.cash_after_usd, step.collateral_after_usd) for step in outcome.money_steps[:1]
+    ) == opening, "the cash and the collateral after the opening group, and no step when nothing was taken"
 
 
 # ---- An iron condor ------------------------------------------------------------------

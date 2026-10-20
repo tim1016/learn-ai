@@ -21,20 +21,20 @@ from scripts.regenerate_cross_engine_study import (
 )
 
 
-def test_parse_args_all() -> None:
+def test_parse_args_all_takes_the_pinned_digest_and_accepts_the_retained_historical_fixture_digest() -> None:
     ns = _parse_args(["--all"])
-    assert ns.all is True
-    assert ns.cell is None
-    assert ns.ticker is None
-    assert ns.image_digest == PINNED_LEAN_IMAGE_DIGEST
+    assert ns.all is True, "--all sets all"
+    assert ns.cell is None, "--all leaves cell unset"
+    assert ns.ticker is None, "--all leaves ticker unset"
+    assert ns.image_digest == PINNED_LEAN_IMAGE_DIGEST, "--all alone takes the pinned image digest"
 
+    assert HISTORICAL_LEAN_IMAGE_DIGEST_ARM64 is not None, "the retained historical fixture digest exists"
 
-def test_parse_args_accepts_retained_historical_fixture_digest() -> None:
-    assert HISTORICAL_LEAN_IMAGE_DIGEST_ARM64 is not None
+    historical = _parse_args(["--all", "--image-digest", HISTORICAL_LEAN_IMAGE_DIGEST_ARM64])
 
-    ns = _parse_args(["--all", "--image-digest", HISTORICAL_LEAN_IMAGE_DIGEST_ARM64])
-
-    assert ns.image_digest == HISTORICAL_LEAN_IMAGE_DIGEST_ARM64
+    assert historical.image_digest == HISTORICAL_LEAN_IMAGE_DIGEST_ARM64, (
+        "the retained historical fixture digest is accepted"
+    )
 
 
 def test_parse_args_rejects_unapproved_fixture_digest() -> None:
@@ -42,27 +42,28 @@ def test_parse_args_rejects_unapproved_fixture_digest() -> None:
         _parse_args(["--all", "--image-digest", "sha256:" + "f" * 64])
 
 
-def test_resolve_target_cells_all() -> None:
-    cells = _resolve_target_cells(argparse.Namespace(all=True, cell=None, ticker=None))
-    assert len(cells) == 16
+def test_resolve_target_cells_all_ticker_single_and_unknown_ticker() -> None:
+    every = _resolve_target_cells(argparse.Namespace(all=True, cell=None, ticker=None))
+    assert len(every) == 16, "all selects every cell"
 
+    by_ticker = _resolve_target_cells(argparse.Namespace(all=False, cell=None, ticker="SPY"))
+    assert len(by_ticker) == 4, "a ticker selects its four cells"
+    assert all(c.ticker == "SPY" for c in by_ticker), "a ticker selects only its own cells"
 
-def test_resolve_target_cells_ticker() -> None:
-    cells = _resolve_target_cells(argparse.Namespace(all=False, cell=None, ticker="SPY"))
-    assert len(cells) == 4
-    assert all(c.ticker == "SPY" for c in cells)
-
-
-def test_resolve_target_cells_single() -> None:
-    cells = _resolve_target_cells(
+    single = _resolve_target_cells(
         argparse.Namespace(
             all=False,
             cell="SPY_W6mo_2025-11-03_to_2026-04-30",
             ticker=None,
         )
     )
-    assert len(cells) == 1
-    assert cells[0].cell_id == "SPY_W6mo_2025-11-03_to_2026-04-30"
+    assert len(single) == 1, "a cell id selects one cell"
+    assert single[0].cell_id == "SPY_W6mo_2025-11-03_to_2026-04-30", "a cell id selects that cell"
+
+    unknown = _resolve_target_cells(argparse.Namespace(all=False, cell=None, ticker="BOGUS"))
+    # Unknown ticker returns an empty list — main() decides whether
+    # that's an error. Keep the resolver pure.
+    assert unknown == [], "an unknown ticker selects nothing"
 
 
 def test_resolve_target_cells_unknown_cell_id_raises() -> None:
@@ -74,10 +75,3 @@ def test_resolve_target_cells_unknown_cell_id_raises() -> None:
                 ticker=None,
             )
         )
-
-
-def test_resolve_target_cells_unknown_ticker_returns_empty() -> None:
-    cells = _resolve_target_cells(argparse.Namespace(all=False, cell=None, ticker="BOGUS"))
-    # Unknown ticker returns an empty list — main() decides whether
-    # that's an error. Keep the resolver pure.
-    assert cells == []

@@ -156,18 +156,15 @@ def test_load_fails_on_row_outside_chunk_window(tmp_path: Path) -> None:
         PredictionSet.load(set_dir)
 
 
-def test_load_fails_on_duplicate_timestamp_within_chunk(tmp_path: Path) -> None:
-    chunks = [(0, [_row(1000, 0.0), _row(1000, 0.5)])]
-    set_dir = _write_artifact(tmp_path, chunks=chunks)
-    with pytest.raises(ValueError, match="duplicate timestamp"):
-        PredictionSet.load(set_dir)
-
-
-def test_load_fails_on_duplicate_timestamp_across_chunks(tmp_path: Path) -> None:
-    chunks = [
-        (0, [_row(1000, 0.0)]),
-        (500, [_row(1000, 0.5)]),
-    ]
+@pytest.mark.parametrize(
+    "chunk_rows",
+    [
+        pytest.param(((0, ((1000, 0.0), (1000, 0.5))),), id="within_chunk"),
+        pytest.param(((0, ((1000, 0.0),)), (500, ((1000, 0.5),))), id="across_chunks"),
+    ],
+)
+def test_load_fails_on_duplicate_timestamp(tmp_path: Path, chunk_rows: tuple) -> None:
+    chunks = [(trained_through_ms, [_row(ts, p) for ts, p in rows]) for trained_through_ms, rows in chunk_rows]
     set_dir = _write_artifact(tmp_path, chunks=chunks)
     with pytest.raises(ValueError, match="duplicate timestamp"):
         PredictionSet.load(set_dir)
@@ -192,18 +189,18 @@ def test_assert_pairs_with_spec_succeeds_on_match(tmp_path: Path) -> None:
     pset.assert_pairs_with(_spec_for("SPY", 1))
 
 
-def test_assert_pairs_with_spec_fails_on_symbol_mismatch(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("symbol", "period_minutes", "match"),
+    [
+        pytest.param("QQQ", 1, "symbol mismatch", id="symbol_mismatch"),
+        pytest.param("SPY", 5, "resolution mismatch", id="resolution_mismatch"),
+    ],
+)
+def test_assert_pairs_with_spec_fails_on_mismatch(tmp_path: Path, symbol: str, period_minutes: int, match: str) -> None:
     set_dir = _write_artifact(tmp_path)
     pset = PredictionSet.load(set_dir)
-    with pytest.raises(ValueError, match="symbol mismatch"):
-        pset.assert_pairs_with(_spec_for("QQQ", 1))
-
-
-def test_assert_pairs_with_spec_fails_on_resolution_mismatch(tmp_path: Path) -> None:
-    set_dir = _write_artifact(tmp_path)
-    pset = PredictionSet.load(set_dir)
-    with pytest.raises(ValueError, match="resolution mismatch"):
-        pset.assert_pairs_with(_spec_for("SPY", 5))
+    with pytest.raises(ValueError, match=match):
+        pset.assert_pairs_with(_spec_for(symbol, period_minutes))
 
 
 # ----- next_after + PredictionLookupError ----------------------------
@@ -231,27 +228,26 @@ def _pset_with_keys(keys_ms: list[int]) -> PredictionSet:
     return PredictionSet(manifest=manifest, index=index)
 
 
-def test_next_after_returns_smallest_strictly_greater_key() -> None:
-    """The defining invariant: strict `>`, not `>=`. A query at a key that
-    exists returns the NEXT row, not the queried one."""
-    pset = _pset_with_keys([100, 200, 300, 400])
-    assert pset.next_after(100) == {"prediction": 200.0}
-    assert pset.next_after(150) == {"prediction": 200.0}
-    assert pset.next_after(199) == {"prediction": 200.0}
-    assert pset.next_after(200) == {"prediction": 300.0}  # strict — skips 200 itself
-
-
-def test_next_after_returns_none_when_no_later_key_exists() -> None:
-    pset = _pset_with_keys([100, 200, 300])
-    assert pset.next_after(300) is None
-    assert pset.next_after(999) is None
-
-
-def test_next_after_handles_unsorted_input_keys() -> None:
-    """Index dict insertion order may be unsorted; the sorted-key cache
-    must produce correct ordering regardless of dict iteration order."""
-    pset = _pset_with_keys([300, 100, 400, 200])
-    # Same expectations as the sorted-input case.
-    assert pset.next_after(100) == {"prediction": 200.0}
-    assert pset.next_after(250) == {"prediction": 300.0}
-    assert pset.next_after(400) is None
+# The defining invariant: strict `>`, not `>=`. A query at a key that exists
+# returns the NEXT row, not the queried one. Index dict insertion order may be
+# unsorted; the sorted-key cache must produce correct ordering regardless of
+# dict iteration order. ``expected`` is the next row's prediction, None when no
+# later key exists.
+@pytest.mark.parametrize(
+    ("keys_ms", "query_ms", "expected"),
+    [
+        pytest.param((100, 200, 300, 400), 100, 200.0, id="returns_smallest_strictly_greater_key_at_key_100"),
+        pytest.param((100, 200, 300, 400), 150, 200.0, id="returns_smallest_strictly_greater_key_between_keys_150"),
+        pytest.param((100, 200, 300, 400), 199, 200.0, id="returns_smallest_strictly_greater_key_just_below_199"),
+        pytest.param((100, 200, 300, 400), 200, 300.0, id="strict_skips_queried_key_200_itself"),
+        pytest.param((100, 200, 300), 300, None, id="returns_none_at_last_key"),
+        pytest.param((100, 200, 300), 999, None, id="returns_none_past_last_key"),
+        pytest.param((300, 100, 400, 200), 100, 200.0, id="unsorted_input_keys_at_key_100"),
+        pytest.param((300, 100, 400, 200), 250, 300.0, id="unsorted_input_keys_between_keys_250"),
+        pytest.param((300, 100, 400, 200), 400, None, id="unsorted_input_keys_returns_none_at_last_key"),
+    ],
+)
+def test_next_after(keys_ms: tuple[int, ...], query_ms: int, expected: float | None) -> None:
+    pset = _pset_with_keys(list(keys_ms))
+    expected_row = None if expected is None else {"prediction": expected}
+    assert pset.next_after(query_ms) == expected_row

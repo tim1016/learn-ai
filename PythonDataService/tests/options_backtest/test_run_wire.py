@@ -269,9 +269,10 @@ def test_the_figures_are_exact_strings_and_rates_come_in_three_parts_with_one_ro
     assert figures.equity_curve[-1].equity_usd == figures.ending_cash_usd
 
 
-def test_the_counts_and_the_by_reason_lists_list_every_member_in_the_enums_order(result: RunResult) -> None:
-    figures = wire.OptionsBacktestRunDetailResponse.from_stored(_stored(result)).figures
-    assert figures is not None
+def test_the_counts_the_day_and_month_tables_and_the_slippage_ladder_of_a_complete_run(result: RunResult) -> None:
+    detail = wire.OptionsBacktestRunDetailResponse.from_stored(_stored(result))
+    figures = detail.figures
+    assert figures is not None, "a complete run is sent with its figures"
 
     assert [(each.reason, each.count) for each in figures.exits_by_reason] == [
         ("stop", 0),
@@ -280,18 +281,19 @@ def test_the_counts_and_the_by_reason_lists_list_every_member_in_the_enums_order
         ("exit_time", 2),
         ("marked_not_sold", 1),
         ("marked_not_bought_back", 0),
-    ]
+    ], "the exits are counted by reason, every member in the enum's order"
     assert [(each.reason, each.count) for each in figures.skipped_by_reason] == [
         ("window_does_not_fit", 0),
         ("underlying_did_not_trade", 0),
-    ]
-    assert [each.reason for each in figures.picks_refused_by_reason] == [member.value for member in PickRefusal]
-    assert (figures.entries_dropped, figures.sessions_incomplete, figures.sessions_no_trade) == (1, 1, 1)
-
-
-def test_the_day_and_month_tables_have_a_row_for_each_session_and_the_month(result: RunResult) -> None:
-    figures = wire.OptionsBacktestRunDetailResponse.from_stored(_stored(result)).figures
-    assert figures is not None
+    ], "the skips are counted by reason, every member in the enum's order"
+    assert [each.reason for each in figures.picks_refused_by_reason] == [
+        member.value for member in PickRefusal
+    ], "the refused picks list every member in the enum's order"
+    assert (figures.entries_dropped, figures.sessions_incomplete, figures.sessions_no_trade) == (
+        1,
+        1,
+        1,
+    ), "the dropped entries, incomplete sessions and no-trade sessions are counted"
 
     assert [(row.session_open_ms, row.status, row.net_profit_usd) for row in figures.by_day] == [
         (session_window_for_date(day).open_ms_utc, status, profit)
@@ -301,7 +303,7 @@ def test_the_day_and_month_tables_have_a_row_for_each_session_and_the_month(resu
             (THU, "traded", "-53.30"),
             (date(2026, 10, 9), "no_trade", "0"),
         )
-    ]
+    ], "the day table has a row for each session"
     [october] = figures.by_month
     assert (october.year, october.month, october.sessions, october.sessions_traded, october.trades) == (
         2026,
@@ -309,70 +311,109 @@ def test_the_day_and_month_tables_have_a_row_for_each_session_and_the_month(resu
         4,
         3,
         3,
-    )
-    assert october.net_profit_usd == "-69.25"
+    ), "the month table has a row for the month, with its sessions, sessions traded and trades"
+    assert october.net_profit_usd == "-69.25", "the month's net profit"
     assert [(each.status, each.count) for each in october.sessions_by_status] == [
         ("traded", 2),
         ("no_trade", 1),
         ("skipped", 0),
         ("incomplete", 1),
-    ]
+    ], "the month's sessions are counted by status"
 
-
-def test_the_ladder_goes_lowest_first_and_the_tolerance_says_a_loss_at_no_slippage_survives_none(
-    result: RunResult,
-) -> None:
-    detail = wire.OptionsBacktestRunDetailResponse.from_stored(_stored(result))
-
-    assert detail.slippage[0].slippage_percent == "0" and detail.slippage[0].net_profit_usd == "-63.25"
+    assert detail.slippage[0].slippage_percent == "0", "the ladder starts at no slippage"
+    assert detail.slippage[0].net_profit_usd == "-63.25", "the run loses 63.25 at no slippage"
     assert [point.slippage_percent for point in detail.slippage] == sorted(
         (point.slippage_percent for point in detail.slippage), key=float
-    )
-    assert [point.slippage_percent for point in detail.slippage if point.is_setups_own] == ["0.3"]
+    ), "the ladder goes lowest first"
+    assert [point.slippage_percent for point in detail.slippage if point.is_setups_own] == [
+        "0.3"
+    ], "the setup's own slippage is marked on the ladder"
     tolerance = detail.slippage_tolerance
-    assert tolerance is not None
+    assert tolerance is not None, "a complete run is sent with its slippage tolerance"
     assert (tolerance.highest_profitable_percent, tolerance.first_unprofitable_percent, tolerance.nothing_traded) == (
         None,
         "0",
         False,
+    ), "a loss at no slippage survives none"
+
+
+def test_a_selling_runs_capital_evidence_exits_and_refused_entries_are_sent_each_with_its_own_count() -> None:
+    selling = a_selling_run()
+    recorded = _stored(selling)
+    old = StoredRun(
+        record=recorded.record,
+        setup=recorded.setup,
+        figures=RunFigures(
+            replace(selling.summary, entries_refused_by_reason=None), selling.slippage, selling.slippage_tolerance
+        ),
     )
 
+    figures = wire.OptionsBacktestRunDetailResponse.from_stored(recorded).figures
+    then = wire.OptionsBacktestRunDetailResponse.from_stored(old).figures
 
-def test_capital_evidence_the_cash_ladder_and_the_stamps_are_sent_as_exact_strings_apart_from_every_total() -> None:
-    selling = a_selling_run()
-
-    figures = wire.OptionsBacktestRunDetailResponse.from_stored(_stored(selling)).figures
-
-    assert figures is not None
+    assert figures is not None, "a selling run is sent with its figures"
+    assert then is not None, "a selling run stored before the refusals were counted is sent with its figures"
     capital = figures.capital_evidence
-    assert capital is not None
+    assert capital is not None, "a selling run is sent with its capital evidence"
     # The spread of the selling run: Wednesday closes, Thursday ends with both legs marked.
-    assert (capital.sessions_tested, capital.sessions_funded_continuously) == (2, 1)
+    assert (capital.sessions_tested, capital.sessions_funded_continuously) == (
+        2,
+        1,
+    ), "capital evidence: the sessions tested and the sessions funded continuously"
     assert capital.ended_by == wire.OptionsBacktestCapitalInvalidEventResponse(
         kind="position_marked", session_open_ms=selling.sessions[1].session_open_ms
-    )
+    ), "capital evidence: what ended the funding"
     assert (capital.most_collateral_held_usd, capital.cash_needed_usd, capital.least_free_cash_usd) == (
         "500.00",
         "380.00",
         "9620.00",
-    )
-    assert Decimal(capital.largest_assignment_obligation_usd) == D("50000")
-    assert (capital.cash_needed_is_incomplete, capital.closes_relied_on_own_relief) == (False, 0)
+    ), "capital evidence: the collateral, the cash needed and the least free cash are exact strings"
+    assert Decimal(capital.largest_assignment_obligation_usd) == D(
+        "50000"
+    ), "capital evidence: the largest assignment obligation"
+    assert (capital.cash_needed_is_incomplete, capital.closes_relied_on_own_relief) == (
+        False,
+        0,
+    ), "capital evidence: the cash needed is complete and no close relied on its own relief"
     ladder = figures.cash_ladder
-    assert ladder is not None
+    assert ladder is not None, "a selling run is sent with its cash ladder"
     assert [(level.multiple, Decimal(level.starting_cash_usd), level.is_setups_own) for level in ladder] == [
         ("0.5", D("5000"), False),
         ("1", D("10000"), True),
         ("2", D("20000"), False),
         ("4", D("40000"), False),
-    ]
-    assert ladder[1].capital_evidence == capital
+    ], "the cash ladder: the multiples, their starting cash and the setup's own"
+    assert ladder[1].capital_evidence == capital, "the setup's own rung carries the run's capital evidence"
     assert figures.stamps == wire.OptionsBacktestRunStampsResponse(
         replay_rules_version=2,
         requirement_rule="alpaca_covered_positions",
         requirement_rule_read_at_ms=1_791_777_600_000,
-    )
-    assert figures.net_profit_usd == "10.00"
+    ), "the stamps are sent as they were made"
+    assert figures.net_profit_usd == "10.00", "the net profit is an exact string"
+
+    # Wednesday's two legs left at the exit time; Thursday's were marked, one not sold and one not bought back.
+    assert [(each.reason, each.count) for each in figures.exits_by_reason] == [
+        ("stop", 0),
+        ("square_off", 0),
+        ("closed_with_its_protection", 0),
+        ("exit_time", 2),
+        ("marked_not_sold", 1),
+        ("marked_not_bought_back", 1),
+    ], "the exits of a selling run are counted by their own names among the six reasons"
+
+    assert [(each.reason, each.count) for each in figures.entries_refused_by_reason or []] == [
+        ("other_side", 0),
+        ("second_expiry", 0),
+        ("cover_did_not_trade", 0),
+        ("cover_not_yet_held", 0),
+        ("sale_at_zero", 0),
+    ], "the refusals of a sale are sent each with its own count"
+    # Not recorded is not zero: a run stored before they were counted has no list at all, and every other figure is as
+    # it was.
+    assert then.entries_refused_by_reason is None, "a run stored before the refusals were counted has no list"
+    assert then.model_dump(exclude={"entries_refused_by_reason"}) == figures.model_dump(
+        exclude={"entries_refused_by_reason"}
+    ), "every other figure of a run stored before the refusals were counted is as it was"
 
 
 def test_a_run_stored_before_capital_evidence_is_sent_with_each_of_the_three_as_not_recorded_and_its_figures_as_they_were(
@@ -400,87 +441,49 @@ def test_a_run_stored_before_capital_evidence_is_sent_with_each_of_the_three_as_
     )
 
 
-def test_the_banner_states_the_facts_the_result_must_not_hide(result: RunResult) -> None:
-    banner = wire.OptionsBacktestRunDetailResponse.from_stored(_stored(result)).banner
-
-    assert banner.fills_are_simulated_from_trade_prices is True
-    assert banner.bid_and_ask_are_available is False
-    assert (banner.slippage_percent, banner.price_step_usd) == ("0.3", "0.01")
-    assert (banner.fee_policy_kind, banner.fee_per_contract_usd) == ("per_contract", "0.65")
-    assert banner.fee_policy == "Fees are $0.65 per contract traded."
-
-
-def test_a_result_of_a_setup_that_sells_carries_the_three_statements_and_one_that_only_buys_carries_none(
-    result: RunResult,
-) -> None:
+def test_the_banner_the_statements_and_the_setup_a_run_is_sent_with(result: RunResult) -> None:
+    detail = wire.OptionsBacktestRunDetailResponse.from_stored(_stored(result))
+    banner = detail.banner
     sells = wire.OptionsBacktestRunDetailResponse.from_stored(_stored(a_selling_run())).banner
-    buys = wire.OptionsBacktestRunDetailResponse.from_stored(_stored(result)).banner
 
-    assert sells is not None and buys is not None
-    assert buys.statements == []
+    assert sells is not None, "a run of a setup that sells has a banner"
+    assert banner is not None, "a run of a setup that only buys has a banner"
+    assert banner.fills_are_simulated_from_trade_prices is True, "the banner says fills are simulated from trade prices"
+    assert banner.bid_and_ask_are_available is False, "the banner says bid and ask are not available"
+    assert (banner.slippage_percent, banner.price_step_usd) == (
+        "0.3",
+        "0.01",
+    ), "the banner states the slippage and the price step"
+    assert (banner.fee_policy_kind, banner.fee_per_contract_usd) == (
+        "per_contract",
+        "0.65",
+    ), "the banner states the fee policy kind and the fee per contract"
+    assert banner.fee_policy == "Fees are $0.65 per contract traded.", "the banner states the fee policy in words"
+
+    assert banner.statements == [], "a setup that only buys carries no statements"
     # Legs opened in one minute as one group, the requirement as the published rule of today worked out here, and no
     # claim that a broker would have taken the orders.
-    assert len(sells.statements) == 3
+    assert len(sells.statements) == 3, "a setup that sells carries the three statements"
     first, second, third = sells.statements
-    assert "same minute" in first and "one group" in first and "printed first" in first
-    assert "published rule for covered positions" in second and "worked out by this system" in second
-    assert "claims nothing about whether a broker would have accepted" in third
+    assert (
+        "same minute" in first and "one group" in first and "printed first" in first
+    ), "the first statement says the legs open in one minute as one group"
+    assert (
+        "published rule for covered positions" in second and "worked out by this system" in second
+    ), "the second statement says the requirement is the published rule, worked out by this system"
+    assert (
+        "claims nothing about whether a broker would have accepted" in third
+    ), "the third statement claims nothing about a broker accepting the orders"
 
-
-def test_the_refusals_of_a_sale_are_sent_each_with_its_own_count_and_not_recorded_on_a_run_stored_before_them() -> None:
-    selling = a_selling_run()
-    recorded = _stored(selling)
-    old = StoredRun(
-        record=recorded.record,
-        setup=recorded.setup,
-        figures=RunFigures(
-            replace(selling.summary, entries_refused_by_reason=None), selling.slippage, selling.slippage_tolerance
-        ),
-    )
-
-    now = wire.OptionsBacktestRunDetailResponse.from_stored(recorded).figures
-    then = wire.OptionsBacktestRunDetailResponse.from_stored(old).figures
-
-    assert now is not None and then is not None
-    assert [(each.reason, each.count) for each in now.entries_refused_by_reason or []] == [
-        ("other_side", 0),
-        ("second_expiry", 0),
-        ("cover_did_not_trade", 0),
-        ("cover_not_yet_held", 0),
-        ("sale_at_zero", 0),
-    ]
-    # Not recorded is not zero: a run stored before they were counted has no list at all, and every other figure is as
-    # it was.
-    assert then.entries_refused_by_reason is None
-    assert then.model_dump(exclude={"entries_refused_by_reason"}) == now.model_dump(
-        exclude={"entries_refused_by_reason"}
-    )
-
-
-def test_the_exits_of_a_selling_run_are_counted_by_their_own_names_among_the_six_reasons() -> None:
-    figures = wire.OptionsBacktestRunDetailResponse.from_stored(_stored(a_selling_run())).figures
-
-    assert figures is not None
-    # Wednesday's two legs left at the exit time; Thursday's were marked, one not sold and one not bought back.
-    assert [(each.reason, each.count) for each in figures.exits_by_reason] == [
-        ("stop", 0),
-        ("square_off", 0),
-        ("closed_with_its_protection", 0),
-        ("exit_time", 2),
-        ("marked_not_sold", 1),
-        ("marked_not_bought_back", 1),
-    ]
-
-
-def test_the_run_carries_its_setup_whole_and_no_trades(result: RunResult) -> None:
-    detail = wire.OptionsBacktestRunDetailResponse.from_stored(_stored(result))
-
-    assert detail.setup == result.setup
+    assert detail.setup == result.setup, "the run carries its setup whole"
     assert "trades" not in detail.model_dump(), "another route serves a run's trades"
 
 
-def test_everything_the_page_is_sent_is_an_integer_a_string_a_bool_or_a_list_and_no_float(result: RunResult) -> None:
-    sent = json.loads(wire.OptionsBacktestRunDetailResponse.from_stored(_stored(result)).model_dump_json())
+def test_everything_the_page_is_sent_is_an_integer_a_string_a_bool_or_a_list_and_no_float_and_no_date(
+    result: RunResult,
+) -> None:
+    sent_text = wire.OptionsBacktestRunDetailResponse.from_stored(_stored(result)).model_dump_json()
+    sent = json.loads(sent_text)
 
     def walk(value: object, path: str) -> None:
         assert not isinstance(value, float), f"{path} is a float"
@@ -492,6 +495,11 @@ def test_everything_the_page_is_sent_is_an_integer_a_string_a_bool_or_a_list_and
                 walk(each, f"{path}[{at}]")
 
     walk(sent, "run")
+
+    assert not re.search(r"\d{4}-\d{2}-\d{2}", sent_text), "a run is sent with no date in it, only session opens"
+    assert "trading_date" not in sent_text, "a run is sent with no trading date field"
+    assert "peak_date" not in sent_text, "a run is sent with no peak date field"
+    assert "trough_date" not in sent_text, "a run is sent with no trough date field"
 
 
 # ── A run that is not complete ───────────────────────────────────────────
@@ -548,10 +556,3 @@ def test_a_rate_whose_quotient_ends_is_still_given_to_six_places_in_both_kinds_o
     assert (
         wire.OptionsBacktestDollarRateResponse.from_ratio(Ratio(D("1.00"), D("2.00"))).rounded_to_6_places == "0.500000"
     )
-
-
-def test_a_run_is_sent_with_no_date_in_it_its_sessions_are_their_opens(result: RunResult) -> None:
-    sent = wire.OptionsBacktestRunDetailResponse.from_stored(_stored(result)).model_dump_json()
-
-    assert not re.search(r"\d{4}-\d{2}-\d{2}", sent)
-    assert "trading_date" not in sent and "peak_date" not in sent and "trough_date" not in sent

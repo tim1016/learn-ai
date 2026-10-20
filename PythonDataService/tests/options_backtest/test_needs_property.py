@@ -9,7 +9,7 @@ Each session is then replayed again on the market a run builds (``DayMarket``) h
 must give an equal outcome: a contract it was not handed would raise.
 
 The sessions are generated to reach the cases that make a set too small, not only to be many: legs that stop out and
-re-enter at fresh strikes as the underlying walks across the ladder. The last test makes sure they did.
+re-enter at fresh strikes as the underlying walks across the ladder. Each test also makes sure they did.
 """
 
 from __future__ import annotations
@@ -327,47 +327,56 @@ def _selling_sessions(seeds: tuple[int, ...]) -> _Seen:
     return seen
 
 
-def test_no_replay_over_many_random_sessions_reads_a_contract_that_was_not_needed() -> None:
-    assert _all_seeds().sessions == len(SEEDS)
-
-
-def test_the_random_sessions_reach_the_cases_that_make_a_set_too_small() -> None:
-    # The generator is held to its purpose: if a change to it stopped producing re-entries at fresh strikes, or
-    # skipped sessions, the test above would still pass and prove less.
+def test_no_replay_over_many_random_sessions_reads_a_contract_that_was_not_needed_and_they_reach_the_cases_that_make_a_set_too_small() -> (
+    None
+):
     seen = _all_seeds()
-    assert seen.skipped >= 30
-    assert seen.traded >= 130
-    assert seen.re_entries >= 45
-    assert seen.marked >= 25
-    assert seen.refused_for_cash >= 70
-    assert seen.a_re_entry_picked_a_fresh_contract >= 50
+
+    assert seen.sessions == len(SEEDS), "no replay over many random sessions reads a contract that was not needed"
+    # The generator is held to its purpose: if a change to it stopped producing re-entries at fresh strikes, or
+    # skipped sessions, the proof above would still pass and prove less.
+    assert seen.skipped >= 30, "the random sessions reach enough skipped sessions"
+    assert seen.traded >= 130, "the random sessions reach enough traded sessions"
+    assert seen.re_entries >= 45, "the random sessions reach enough re-entries"
+    assert seen.marked >= 25, "the random sessions reach enough marked sessions"
+    assert seen.refused_for_cash >= 70, "the random sessions reach enough entries refused for cash"
+    assert seen.a_re_entry_picked_a_fresh_contract >= 50, (
+        "the random sessions reach enough re-entries at a fresh strike"
+    )
 
 
-def test_no_replay_of_a_sample_of_setups_that_sell_reads_a_contract_that_was_not_needed() -> None:
+def test_no_replay_of_a_sample_of_setups_that_sell_reads_a_contract_that_was_not_needed_and_they_reach_the_closes_and_re_entries() -> (
+    None
+):
     # The same proof for setups with sold legs (#3107): a sold leg that re-enters, or is closed with its protection and
     # then re-enters, picks afresh at a later minute, and what it picks must be in what the session needs.
-    assert _selling_sessions(SELLING_SAMPLE).sessions == len(SELLING_SAMPLE)
-
-
-def test_the_sample_of_sessions_that_sell_reaches_the_closes_and_the_re_entries_that_make_a_set_too_small() -> None:
     seen = _selling_sessions(SELLING_SAMPLE)
-    assert seen.traded >= 10
-    assert seen.re_entries >= 5
-    assert seen.a_re_entry_picked_a_fresh_contract >= 8
-    assert seen.closed_with_its_protection >= 2
-    assert seen.a_sold_leg_came_back_by_its_protection_alone >= 1
+
+    assert seen.sessions == len(SELLING_SAMPLE), "no replay of a sample of setups that sell reads a contract not needed"
+    assert seen.traded >= 10, "the sample of sessions that sell reaches enough traded sessions"
+    assert seen.re_entries >= 5, "the sample of sessions that sell reaches enough re-entries"
+    assert seen.a_re_entry_picked_a_fresh_contract >= 8, "the sample reaches enough re-entries at a fresh strike"
+    assert seen.closed_with_its_protection >= 2, "the sample reaches enough sold legs closed with their protection"
+    assert seen.a_sold_leg_came_back_by_its_protection_alone >= 1, (
+        "the sample reaches a sold leg back by its protection"
+    )
 
 
 @pytest.mark.slow  # all 200 seeds: this runs in the daily run, and every pull request runs the sample above
-def test_no_replay_over_many_random_setups_that_sell_reads_a_contract_that_was_not_needed() -> None:
-    assert _selling_sessions(tuple(SELLING_SEEDS)).sessions == len(SELLING_SEEDS)
-
-
-@pytest.mark.slow  # all 200 seeds: runs in the daily run
-def test_the_random_setups_that_sell_reach_the_closes_and_the_re_entries_that_make_a_set_too_small() -> None:
+def test_no_replay_over_many_random_setups_that_sell_reads_a_contract_that_was_not_needed_and_they_reach_the_closes_and_re_entries() -> (
+    None
+):
     seen = _selling_sessions(tuple(SELLING_SEEDS))
-    assert seen.traded >= 120
-    assert seen.re_entries >= 60
-    assert seen.a_re_entry_picked_a_fresh_contract >= 60
-    assert seen.closed_with_its_protection >= 20
-    assert seen.a_sold_leg_came_back_by_its_protection_alone >= 3
+
+    assert seen.sessions == len(SELLING_SEEDS), (
+        "no replay over many random setups that sell reads a contract not needed"
+    )
+    assert seen.traded >= 120, "the random setups that sell reach enough traded sessions"
+    assert seen.re_entries >= 60, "the random setups that sell reach enough re-entries"
+    assert seen.a_re_entry_picked_a_fresh_contract >= 60, (
+        "the random setups that sell reach enough fresh-strike re-entries"
+    )
+    assert seen.closed_with_its_protection >= 20, "the random setups that sell reach enough protection closes"
+    assert seen.a_sold_leg_came_back_by_its_protection_alone >= 3, (
+        "the setups that sell reach sold legs back by protection"
+    )

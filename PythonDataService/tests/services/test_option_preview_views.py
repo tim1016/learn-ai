@@ -173,18 +173,17 @@ def test_a_cost_well_clear_of_the_limit_is_printed_as_the_percent_it_is() -> Non
     assert "skipped" not in seen.cost_sentence
 
 
-def test_each_named_structure_takes_the_article_its_name_calls_for() -> None:
+def test_each_named_structure_takes_its_article_and_one_with_no_name_is_custom_in_a_list_and_in_a_sentence() -> None:
     with_an = {name for name in NamedStructure if with_its_article(name).startswith("an ")}
 
-    assert with_an == {NamedStructure.IRON_CONDOR, NamedStructure.IRON_BUTTERFLY}
-    assert all(with_its_article(name).endswith(name.in_words) for name in NamedStructure)
-    assert all(with_its_article(name).startswith("a ") for name in set(NamedStructure) - with_an)
-
-
-def test_a_structure_with_no_name_is_custom_in_a_list_and_in_a_sentence() -> None:
-    assert (label(None), label(NamedStructure.IRON_CONDOR)) == ("Custom", "Iron condor")
-    assert in_a_sentence(NamedStructure.IRON_CONDOR) == "an iron condor on"
-    assert in_a_sentence(None).endswith(" on") and "custom" in in_a_sentence(None)
+    assert with_an == {NamedStructure.IRON_CONDOR, NamedStructure.IRON_BUTTERFLY}, "only the iron structures take an"
+    assert all(with_its_article(name).endswith(name.in_words) for name in NamedStructure), "each ends in its name in words"
+    assert all(
+        with_its_article(name).startswith("a ") for name in set(NamedStructure) - with_an
+    ), "every other structure takes a"
+    assert (label(None), label(NamedStructure.IRON_CONDOR)) == ("Custom", "Iron condor"), "a list labels no name Custom"
+    assert in_a_sentence(NamedStructure.IRON_CONDOR) == "an iron condor on", "a sentence names a structure with its article"
+    assert in_a_sentence(None).endswith(" on") and "custom" in in_a_sentence(None), "a sentence calls no name custom"
 
 
 # ---- A leg's gap beside the owner's limit ---------------------------------------------------------

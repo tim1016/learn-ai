@@ -293,40 +293,6 @@ async def test_a_bull_call_spread_previews_with_its_contracts_its_money_and_what
     assert (seen.pricing_inputs.rate, seen.pricing_inputs.dividends_known, seen.pricing_inputs.dividends) == (0.045, True, [])
 
 
-async def test_a_spread_that_pays_shows_the_requirement_and_what_is_set_aside_as_two_figures(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The 585 call sold at its bid of 5.00 and the 590 bought at its ask of 1.93: $3.07 received on a spread
-    $5 wide. Alpaca's requirement is the $500.00; what is set aside is $500.00 - $307.00, and the fees."""
-    desk = Desk(monkeypatch)
-    received = _asking(
-        _leg("short_call", "short", "call", _AT_THE_MONEY),
-        _leg("long_call", "long", "call", _from("short_call", 5.0)),
-        structure="bear_call_spread",
-    )
-
-    seen = await desk.quoted(received, c585=("5.00", "5.04"), c590=("1.89", "1.93"))
-
-    money = seen.money
-    assert (money.net_price, money.premium_is, money.net_entry_premium_cents) == (Decimal("-3.07"), "received", -30_700)
-    # The SEC fee on the $500.00 sold is 1.03 cents, which rounds up to 2: eleven cents of fees.
-    assert (money.broker_requirement_cents, money.fee_estimate_cents, money.entry_commitment_cents) == (50_000, 11, 19_311)
-    assert (seen.at_expiry.loss_cents, seen.at_expiry.gain_cents) == (19_300, 30_700)
-    assert seen.at_expiry.break_even_prices == [Decimal("588.07")]
-    # The other way round from a spread that is bought: it keeps what it received at 585 or below.
-    assert usd(19_300) in seen.at_expiry.loss_sentence and "590" in seen.at_expiry.loss_sentence
-    assert "above" in seen.at_expiry.loss_sentence and "below" not in seen.at_expiry.loss_sentence
-    assert usd(30_700) in seen.at_expiry.gain_sentence and "585" in seen.at_expiry.gain_sentence
-    assert "below" in seen.at_expiry.gain_sentence and "above" not in seen.at_expiry.gain_sentence
-    # What is set aside is the $193.11, and the sentence says the cost as a part of that.
-    assert usd(19_311) in money.cost_sentence and usd(30_700) not in money.cost_sentence
-    assert (seen.verdict.resolves_as_built, seen.verdict.red) == (True, False)
-    # It sells the call nearer the money, so it gains as SPY falls.
-    assert (seen.lean.direction, seen.lean.gains_when_underlying_falls) == ("down", True)
-    assert "down" in seen.lean.sentence.split(".")[0] and "short" in seen.lean.sentence
-    assert f"{-seen.lean.shares:,.0f} SPY shares" in seen.lean.sentence
-
-
 async def test_the_fee_estimate_is_worked_out_on_the_price_each_leg_is_entered_at(monkeypatch: pytest.MonkeyPatch) -> None:
     """The 585 call is sold at its bid of 4.85. The SEC fee on $485.00 is 0.9991 of a cent, which rounds up to
     1; on its ask of 4.89 it would be 1.0073, and round up to 2. With CAT 1, ORF 3 and OCC 5: ten cents."""
@@ -341,22 +307,6 @@ async def test_the_fee_estimate_is_worked_out_on_the_price_each_leg_is_entered_a
 
     assert (seen.money.net_price, seen.money.fee_estimate_cents) == (Decimal("-2.92"), 10)
     assert seen.money.entry_commitment_cents == 50_000 - 29_200 + 10
-
-
-async def test_more_than_one_structure_multiplies_the_money_and_the_lean(monkeypatch: pytest.MonkeyPatch) -> None:
-    desk = Desk(monkeypatch)
-
-    seen = await desk.quoted(
-        _BULL_CALL_SPREAD.model_copy(update={"structures": 3}), c585=("4.08", "4.12"), c590=("2.18", "2.22")
-    )
-
-    assert (seen.money.structures, seen.money.net_entry_premium_cents) == (3, 58_200)
-    assert seen.money.net_entry_premium_per_structure_cents == 19_400
-    # Six contracts: the SEC fee on the $654.00 sold is 1.35 cents, 2 rounded up; CAT on 600 shares is 0.18
-    # of a cent, 1; ORF is 6 x 1.5 = 9; OCC is 6 x 2.5 = 15. Twenty-seven cents.
-    assert (seen.money.fee_estimate_cents, seen.money.entry_commitment_cents) == (27, 58_227)
-    assert (seen.money.round_trip_cost_cents, seen.at_expiry.loss_cents, seen.at_expiry.gain_cents) == (2_400, 58_200, 91_800)
-    _close(seen.lean.shares, 3 * seen.lean.shares_per_structure)
 
 
 async def test_a_structure_that_costs_most_of_itself_to_trade_is_shown_with_its_figures_and_said_to_be_over_the_limit(
@@ -464,7 +414,9 @@ async def test_a_rule_that_points_past_the_watched_strikes_is_an_incomplete_sear
     assert _shows_no_figure(seen)
 
 
-async def test_legs_that_do_not_share_an_expiry_have_nothing_estimated_at_expiry(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_legs_that_do_not_share_an_expiry_have_nothing_estimated_at_expiry_no_line_to_draw_and_no_amounts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     desk = Desk(monkeypatch)
     next_friday = {"selector": "absolute", "expiration_ms": option_expiry_anchor_ms(scenes._NEXT_FRIDAY)}
     two_expiries = _asking(
@@ -473,10 +425,16 @@ async def test_legs_that_do_not_share_an_expiry_have_nothing_estimated_at_expiry
 
     seen = await desk.quoted(two_expiries)
 
-    assert (seen.state, seen.money.broker_requirement_cents) == ("resolved", 0)
-    assert (seen.at_expiry.estimated, seen.at_expiry.loss_cents, seen.at_expiry.gain_cents) == (False, None, None)
-    assert (seen.at_expiry.loss_holds, seen.at_expiry.break_even_prices) == ([], [])
-    assert len(seen.watched.ranges) == 2
+    assert (seen.state, seen.money.broker_requirement_cents) == ("resolved", 0), "it resolves, with no broker requirement"
+    assert (seen.at_expiry.estimated, seen.at_expiry.loss_cents, seen.at_expiry.gain_cents) == (
+        False, None, None,
+    ), "nothing is estimated at expiry: no loss and no gain"
+    assert (seen.at_expiry.loss_holds, seen.at_expiry.break_even_prices) == ([], []), "no holds and no break-even prices"
+    assert len(seen.watched.ranges) == 2, "each expiry has its own watched range"
+    assert (seen.at_expiry.estimated, seen.at_expiry.sketch) == (False, []), "there is no line to draw"
+    assert (seen.at_expiry.loss_usd, seen.at_expiry.gain_usd) == (None, None), "there are no amounts at expiry in dollars"
+    # Each leg still has a day's decay of its own: nothing about that needs one expiry.
+    assert seen.decay.estimated, "a day's decay is still estimated: it does not need one expiry"
 
 
 # ---- The entry's own limits, judged as an entry judges them -------------------------
@@ -590,31 +548,6 @@ async def test_an_entry_that_nothing_here_would_refuse_is_said_apart_from_one_th
     assert "budget" in fine.entry_sentence
 
 
-async def test_picks_that_are_not_the_structure_built_are_an_entrys_refusal_too_under_the_verdicts_own_code(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    desk = Desk(monkeypatch)
-    upside_down = _asking(
-        _leg("long_call", "long", "call", _AT_THE_MONEY),
-        _leg("short_call", "short", "call", _from("long_call", -5.0)),
-        structure="bull_call_spread",
-    )
-
-    seen = await desk.quoted(upside_down)
-
-    assert seen.verdict.red and seen.entry_refusals[0].reason_code == seen.verdict.resolves_reason_code
-    assert sorted(seen.entry_refusals[0].leg_ids) == ["long_call", "short_call"]
-
-
-async def test_an_answer_with_no_figures_names_no_entry_refusal_and_says_nothing_of_an_entry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    seen = await Desk(monkeypatch).preview(_BULL_CALL_SPREAD)
-
-    assert seen.state != "resolved"
-    assert (seen.entry_refusals, seen.entry_sentence, seen.decay) == ([], None, None)
-
-
 # ---- What a day takes ---------------------------------------------------------------
 
 
@@ -638,7 +571,7 @@ def _to_the_cent(dollars: float) -> int:
     return int((Decimal(dollars) * 100).quantize(Decimal(1), rounding="ROUND_HALF_EVEN"))
 
 
-async def test_a_bought_spread_shows_what_24_hours_take_from_it_bought_leg_less_sold_for_every_structure(
+async def test_more_than_one_structure_multiplies_the_money_the_lean_and_what_24_hours_take_from_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     desk = Desk(monkeypatch)
@@ -646,24 +579,51 @@ async def test_a_bought_spread_shows_what_24_hours_take_from_it_bought_leg_less_
 
     seen = await desk.quoted(three, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
 
+    assert (seen.money.structures, seen.money.net_entry_premium_cents) == (
+        3, 58_200,
+    ), "three structures multiply the net entry premium"
+    assert seen.money.net_entry_premium_per_structure_cents == 19_400, "the premium per structure is what one costs"
+    # Six contracts: the SEC fee on the $654.00 sold is 1.35 cents, 2 rounded up; CAT on 600 shares is 0.18
+    # of a cent, 1; ORF is 6 x 1.5 = 9; OCC is 6 x 2.5 = 15. Twenty-seven cents.
+    assert (seen.money.fee_estimate_cents, seen.money.entry_commitment_cents) == (
+        27, 58_227,
+    ), "the fees of six contracts and the entry commitment"
+    assert (seen.money.round_trip_cost_cents, seen.at_expiry.loss_cents, seen.at_expiry.gain_cents) == (
+        2_400, 58_200, 91_800,
+    ), "the round-trip cost, the loss and the gain at expiry are those of three structures"
+    # The lean in shares is three times the lean of one structure.
+    _close(seen.lean.shares, 3 * seen.lean.shares_per_structure)
+
     # Each contract's own decay, worked out apart from the volatility its leg serves: both calls lose value
     # with a day, the one nearer the money more.
     bought, sold = (_decay_apart(leg, at_ms=NOW + 400) for leg in seen.legs)
-    assert bought < sold < 0
+    assert bought < sold < 0, "both calls lose value with a day, the one nearer the money more"
     # Bought one and sold the other, a hundred shares, three structures.
     cents = _to_the_cent(3 * 100 * (bought - sold))
     decay = seen.decay
-    assert (decay.estimated, decay.reason_code, decay.leg_ids) == (True, None, [])
-    assert (decay.per_24h_cents, decay.direction, decay.per_24h_usd) == (cents, "loses", usd(-cents))
-    assert cents < 0 and usd(-cents) in decay.sentence and "3 structures" in decay.sentence
+    assert (decay.estimated, decay.reason_code, decay.leg_ids) == (True, None, []), "the decay is estimated, with no leg missing"
+    assert (decay.per_24h_cents, decay.direction, decay.per_24h_usd) == (
+        cents, "loses", usd(-cents),
+    ), "24 hours take the bought leg less the sold one, for every structure"
+    assert (
+        cents < 0 and usd(-cents) in decay.sentence and "3 structures" in decay.sentence
+    ), "the decay sentence says the loss in dollars and for 3 structures"
     # It is per 24 hours by the clock, and a weekend is three of them. Both are said.
-    assert "24 hours" in decay.sentence and "24 hours" in decay.assumptions_sentence
-    assert "weekend" in decay.assumptions_sentence and "three" in decay.assumptions_sentence
-    assert (decay.warning_sentence, decay.near_ex_date_sentence) == (None, None)
+    assert (
+        "24 hours" in decay.sentence and "24 hours" in decay.assumptions_sentence
+    ), "the decay is said to be per 24 hours, in the sentence and in its assumptions"
+    assert (
+        "weekend" in decay.assumptions_sentence and "three" in decay.assumptions_sentence
+    ), "the assumptions say a weekend is three of them"
+    assert (decay.warning_sentence, decay.near_ex_date_sentence) == (None, None), "no dividend warning, no near-ex-date note"
 
 
-async def test_a_spread_that_was_sold_gains_with_a_day_and_is_said_to(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The 585 call sold and the 590 bought: the sold call, nearer the money, loses more in a day than the bought."""
+async def test_a_spread_that_pays_shows_the_requirement_and_what_is_set_aside_as_two_figures_and_gains_with_a_day(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The 585 call sold at its bid of 5.00 and the 590 bought at its ask of 1.93: $3.07 received on a spread
+    $5 wide. Alpaca's requirement is the $500.00; what is set aside is $500.00 - $307.00, and the fees. The sold
+    call, nearer the money, loses more in a day than the bought."""
     desk = Desk(monkeypatch)
     received = _asking(
         _leg("short_call", "short", "call", _AT_THE_MONEY),
@@ -673,35 +633,54 @@ async def test_a_spread_that_was_sold_gains_with_a_day_and_is_said_to(monkeypatc
 
     seen = await desk.quoted(received, c585=("5.00", "5.04"), c590=("1.89", "1.93"))
 
+    money = seen.money
+    assert (money.net_price, money.premium_is, money.net_entry_premium_cents) == (
+        Decimal("-3.07"), "received", -30_700,
+    ), "$3.07 is received on the spread"
+    # The SEC fee on the $500.00 sold is 1.03 cents, which rounds up to 2: eleven cents of fees.
+    assert (money.broker_requirement_cents, money.fee_estimate_cents, money.entry_commitment_cents) == (
+        50_000, 11, 19_311,
+    ), "the requirement is the $500.00, the fees eleven cents, and what is set aside $193.11"
+    assert (seen.at_expiry.loss_cents, seen.at_expiry.gain_cents) == (19_300, 30_700), "the loss and the gain at expiry"
+    assert seen.at_expiry.break_even_prices == [Decimal("588.07")], "the break-even price"
+    # The other way round from a spread that is bought: it keeps what it received at 585 or below.
+    assert (
+        usd(19_300) in seen.at_expiry.loss_sentence and "590" in seen.at_expiry.loss_sentence
+    ), "the loss sentence states its figure and the 590 strike"
+    assert (
+        "above" in seen.at_expiry.loss_sentence and "below" not in seen.at_expiry.loss_sentence
+    ), "the loss holds above its strike, not below"
+    assert (
+        usd(30_700) in seen.at_expiry.gain_sentence and "585" in seen.at_expiry.gain_sentence
+    ), "the gain sentence states its figure and the 585 strike"
+    assert (
+        "below" in seen.at_expiry.gain_sentence and "above" not in seen.at_expiry.gain_sentence
+    ), "the gain holds below its strike, not above"
+    # What is set aside is the $193.11, and the sentence says the cost as a part of that.
+    assert (
+        usd(19_311) in money.cost_sentence and usd(30_700) not in money.cost_sentence
+    ), "the cost is said as a part of what is set aside, not of the premium"
+    assert (seen.verdict.resolves_as_built, seen.verdict.red) == (True, False), "the verdict resolves as built and is not red"
+    # It sells the call nearer the money, so it gains as SPY falls.
+    assert (seen.lean.direction, seen.lean.gains_when_underlying_falls) == (
+        "down", True,
+    ), "it sells the call nearer the money, so it gains as SPY falls"
+    assert (
+        "down" in seen.lean.sentence.split(".")[0] and "short" in seen.lean.sentence
+    ), "the lean sentence says down and short"
+    assert (
+        f"{-seen.lean.shares:,.0f} SPY shares" in seen.lean.sentence
+    ), "the lean sentence says the shares it is short"
+
     sold, bought = (_decay_apart(leg, at_ms=NOW + 400) for leg in seen.legs)
     cents = _to_the_cent(100 * (bought - sold))
-    assert cents > 0
-    assert (seen.decay.per_24h_cents, seen.decay.direction, seen.decay.per_24h_usd) == (cents, "gains", usd(cents))
-    assert usd(cents) in seen.decay.sentence and "-" not in seen.decay.per_24h_usd
-
-
-async def test_with_dividends_unknown_no_decay_is_estimated_for_the_structure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    desk = Desk(monkeypatch)
-    desk.inputs = _UNKNOWN
-
-    seen = await desk.quoted(_BULL_CALL_SPREAD, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
-
-    decay = seen.decay
-    assert (seen.state, decay.estimated, decay.reason_code) == ("resolved", False, DecayNotEstimated.INPUTS_NOT_KNOWN)
-    assert (decay.per_24h_cents, decay.per_24h_usd, decay.direction) == (None, None, None)
-    assert decay.leg_ids == ["long_call", "short_call"]
-    assert "SPY" in decay.sentence
-
-
-async def test_no_leg_serves_a_decay_of_its_own(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A contract's own decay is a share's worth and is not signed by the leg's side: beside a sold leg it reads
-    as a loss where the position gains. Only the structure's decay is served, in cents and in dollars."""
-    seen = await Desk(monkeypatch).quoted(_BULL_CALL_SPREAD, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
-
-    served = seen.model_dump(mode="json")
-    assert seen.decay.estimated and all("decay" not in name for leg in served["legs"] for name in leg)
+    assert cents > 0, "a spread that was sold gains with a day"
+    assert (seen.decay.per_24h_cents, seen.decay.direction, seen.decay.per_24h_usd) == (
+        cents, "gains", usd(cents),
+    ), "24 hours give the sold leg less the bought one, as a gain"
+    assert (
+        usd(cents) in seen.decay.sentence and "-" not in seen.decay.per_24h_usd
+    ), "the decay is said to gain, written without a sign"
 
 
 async def test_one_leg_the_model_has_no_volatility_for_leaves_the_whole_decay_not_estimated_and_is_named_by_its_place(
@@ -717,19 +696,6 @@ async def test_one_leg_the_model_has_no_volatility_for_leaves_the_whole_decay_no
     assert decay.per_24h_cents is None
     assert "leg 2" in decay.sentence and "short_call" not in decay.sentence
     assert seen.legs[1].delta_status_sentence != seen.legs[0].delta_status_sentence
-
-
-async def test_the_leg_a_decay_is_missing_for_is_named_by_its_place_and_not_by_the_order_of_its_id(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The first leg is "zulu" and the second "alpha". Sorted by name the one with no volatility would be leg 1."""
-    desk = Desk(monkeypatch)
-    spread = _asking(_leg("zulu", "long", "call", _AT_THE_MONEY), _leg("alpha", "short", "call", _from("zulu", 5.0)))
-
-    seen = await desk.quoted(spread, c585=("4.08", "4.12"), c590=("400.00", "400.04"))
-
-    assert (seen.decay.estimated, seen.decay.leg_ids) == (False, ["alpha"])
-    assert "leg 2" in seen.decay.sentence and "leg 1" not in seen.decay.sentence
 
 
 _GOING_EX_TOMORROW = DividendOn(ex_ms=session_open_ms_utc(date(2026, 10, 7)), cash=1.75)
@@ -800,7 +766,7 @@ async def test_a_dividend_more_than_three_days_off_brings_neither_note(monkeypat
 # ---- Money a screen shows as it is, and the line to draw ---------------------------------
 
 
-async def test_every_amount_of_cents_comes_with_the_same_amount_written_out_in_dollars(
+async def test_every_amount_of_cents_is_written_out_in_dollars_and_no_leg_serves_a_decay_of_its_own(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     desk = Desk(monkeypatch)
@@ -808,16 +774,33 @@ async def test_every_amount_of_cents_comes_with_the_same_amount_written_out_in_d
     seen = await desk.quoted(_BULL_CALL_SPREAD, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
 
     money = seen.money
-    assert (money.net_price_usd, money.premium_usd, money.premium_per_structure_usd) == ("$1.94", "$194.00", "$194.00")
-    assert (money.premium_is, money.premium_is_label) == ("paid", "paid")
-    assert money.premium_usd in money.premium_sentence and money.net_price_usd in money.premium_sentence
-    assert (money.broker_requirement_usd, money.fee_estimate_usd) == (usd(0), usd(money.fee_estimate_cents))
-    assert (money.entry_commitment_usd, money.round_trip_cost_usd) == (usd(19_410), usd(800))
-    assert (seen.at_expiry.loss_usd, seen.at_expiry.gain_usd) == (usd(19_400), usd(30_600))
+    assert (money.net_price_usd, money.premium_usd, money.premium_per_structure_usd) == (
+        "$1.94", "$194.00", "$194.00",
+    ), "the net price and the premium are written out in dollars"
+    assert (money.premium_is, money.premium_is_label) == ("paid", "paid"), "a premium paid is labelled paid"
+    assert (
+        money.premium_usd in money.premium_sentence and money.net_price_usd in money.premium_sentence
+    ), "the premium sentence carries the premium and the net price in dollars"
+    assert (money.broker_requirement_usd, money.fee_estimate_usd) == (
+        usd(0), usd(money.fee_estimate_cents),
+    ), "the broker requirement and the fee estimate are written out in dollars"
+    assert (money.entry_commitment_usd, money.round_trip_cost_usd) == (
+        usd(19_410), usd(800),
+    ), "the entry commitment and the round-trip cost are written out in dollars"
+    assert (seen.at_expiry.loss_usd, seen.at_expiry.gain_usd) == (
+        usd(19_400), usd(30_600),
+    ), "the loss and the gain at expiry are written out in dollars"
     # Level at the $194.00 lost up to 585, up to the $306.00 gained at 590, and level again: drawn from 583 to 592.
     assert [(point.price, point.result_cents) for point in seen.at_expiry.sketch] == [
         (Decimal(583), -19_400), (Decimal(585), -19_400), (Decimal(590), 30_600), (Decimal(592), 30_600),
-    ]
+    ], "the line to draw runs level at the loss, up to the gain, and level again, from 583 to 592"
+
+    # A contract's own decay is a share's worth and is not signed by the leg's side: beside a sold leg it reads
+    # as a loss where the position gains. Only the structure's decay is served, in cents and in dollars.
+    served = seen.model_dump(mode="json")
+    assert seen.decay.estimated and all(
+        "decay" not in name for leg in served["legs"] for name in leg
+    ), "no leg serves a decay of its own: only the structure's decay is served"
 
 
 async def test_a_premium_received_is_written_without_a_sign_and_said_to_be_received(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -836,21 +819,6 @@ async def test_a_premium_received_is_written_without_a_sign_and_said_to_be_recei
     assert "received" in money.premium_sentence and "paid" not in money.premium_sentence
     assert all(said in money.premium_sentence for said in ("$614.00", "$307.00", "$3.07", "2 structures"))
     assert money.broker_requirement_usd == "$1,000.00"
-
-
-async def test_legs_with_two_expiries_have_no_line_to_draw_and_no_amounts_at_expiry(monkeypatch: pytest.MonkeyPatch) -> None:
-    desk = Desk(monkeypatch)
-    next_friday = {"selector": "absolute", "expiration_ms": option_expiry_anchor_ms(scenes._NEXT_FRIDAY)}
-    two_expiries = _asking(
-        _leg("near", "long", "call", _AT_THE_MONEY), _leg("far", "long", "call", _AT_THE_MONEY, next_friday)
-    )
-
-    seen = await desk.quoted(two_expiries)
-
-    assert (seen.at_expiry.estimated, seen.at_expiry.sketch) == (False, [])
-    assert (seen.at_expiry.loss_usd, seen.at_expiry.gain_usd) == (None, None)
-    # Each leg still has a day's decay of its own: nothing about that needs one expiry.
-    assert seen.decay.estimated
 
 
 # ---- What was asked, said back; and how long the figures stand -----------------------------
@@ -887,7 +855,7 @@ async def test_a_structure_is_named_as_a_list_writes_it_and_as_a_sentence_takes_
     assert with_an.structure_in_a_sentence == "an iron condor on"
 
 
-async def test_figures_are_good_for_as_long_as_a_pages_request_for_quotes_stands_and_only_figures_carry_that(
+async def test_figures_stand_as_long_as_a_pages_request_does_and_are_read_together_while_a_waiting_answer_has_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     desk = Desk(monkeypatch)
@@ -895,11 +863,34 @@ async def test_figures_are_good_for_as_long_as_a_pages_request_for_quotes_stands
     waiting = await desk.preview(_BULL_CALL_SPREAD)
     seen = await desk.quoted(_BULL_CALL_SPREAD, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
 
-    assert FIGURES_GOOD_FOR_MS == PREVIEW_LEASE_MS == 60_000
-    assert (seen.figures_good_for_ms, seen.figures_good_until_ms) == (60_000, seen.quotes_read_ms + 60_000)
-    assert seen.figures_stale_sentence and seen.quotes_read_sentence
-    assert (waiting.figures_good_for_ms, waiting.figures_good_until_ms, waiting.figures_stale_sentence) == (None, None, None)
-    assert waiting.quotes_read_sentence is None
+    assert FIGURES_GOOD_FOR_MS == PREVIEW_LEASE_MS == 60_000, "figures are good for as long as a page's request for quotes stands"
+    assert (seen.figures_good_for_ms, seen.figures_good_until_ms) == (
+        60_000, seen.quotes_read_ms + 60_000,
+    ), "figures carry how long they are good for, counted from the read of the quotes"
+    assert seen.figures_stale_sentence and seen.quotes_read_sentence, "figures say when they go stale and when the quotes were read"
+    assert (waiting.figures_good_for_ms, waiting.figures_good_until_ms, waiting.figures_stale_sentence) == (
+        None, None, None,
+    ), "only figures carry how long they are good for: a waiting answer carries none"
+    assert waiting.quotes_read_sentence is None, "a waiting answer says nothing of a read of the quotes"
+    assert waiting.state != "resolved", "a waiting answer is not resolved"
+    assert (waiting.entry_refusals, waiting.entry_sentence, waiting.decay) == (
+        [], None, None,
+    ), "an answer with no figures names no entry refusal and says nothing of an entry"
+
+    # The feed's generation, the underlying's quote, the money and how far the search reached come from one
+    # reading of the supervisor. A page that keys on one of them finds them all.
+    assert (waiting.feed_generation, waiting.underlying_quote, waiting.the_money, waiting.watched) == (
+        None, None, None, None,
+    ), "what is read together is served together: a waiting answer has none of them"
+    assert None not in (
+        seen.feed_generation, seen.underlying_quote, seen.the_money, seen.watched
+    ), "what is read together is served together: a figured answer has all of them"
+    assert seen.watched.sentence and all(
+        reached.sentence for reached in seen.watched.ranges
+    ), "how far the search reached is said overall and for each range"
+    assert (
+        "583" in seen.watched.ranges[0].sentence and "592" in seen.watched.ranges[0].sentence
+    ), "the range sentence names its lowest and highest strike"
 
 
 async def test_the_figures_minute_is_counted_from_the_read_of_the_quotes_and_not_from_the_ask(
@@ -923,20 +914,6 @@ async def test_the_figures_minute_is_counted_from_the_read_of_the_quotes_and_not
     assert seen.figures_good_until_ms == asked_at + 3_000 + FIGURES_GOOD_FOR_MS
     # Every age in the answer is counted at that read too.
     assert seen.oldest_quote_age_ms == 3_400
-
-
-async def test_what_is_read_together_is_served_together_or_not_at_all(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The feed's generation, the underlying's quote, the money and how far the search reached come from one
-    reading of the supervisor. A page that keys on one of them finds them all."""
-    desk = Desk(monkeypatch)
-
-    before = await desk.preview(_BULL_CALL_SPREAD)
-    after = await desk.quoted(_BULL_CALL_SPREAD, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
-
-    assert (before.feed_generation, before.underlying_quote, before.the_money, before.watched) == (None, None, None, None)
-    assert None not in (after.feed_generation, after.underlying_quote, after.the_money, after.watched)
-    assert after.watched.sentence and all(reached.sentence for reached in after.watched.ranges)
-    assert "583" in after.watched.ranges[0].sentence and "592" in after.watched.ranges[0].sentence
 
 
 # ---- The owner's own order terms ------------------------------------------------------------
@@ -1300,14 +1277,23 @@ async def test_a_shape_that_is_not_the_one_named_names_its_legs_by_their_places(
     assert _names_no_leg_by_its_id(reversed_, _FIRST, _SECOND) and _names_no_leg_by_its_id(same, _FIRST, _SECOND)
 
 
-async def test_a_leg_with_no_delta_is_named_by_its_place_where_the_lean_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_leg_with_no_delta_is_named_by_its_place_where_the_lean_and_the_decay_are_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The first leg is "zulu" and the second "alpha". Sorted by name the one with no volatility would be leg 1."""
     desk = Desk(monkeypatch)
     spread = _asking(_leg(_FIRST, "long", "call", _AT_THE_MONEY), _leg(_SECOND, "short", "call", _from(_FIRST, 5.0)))
 
     seen = await desk.quoted(spread, c585=("4.08", "4.12"), c590=("400.00", "400.04"))
 
-    assert seen.lean is None and "leg 2" in seen.lean_unknown_sentence
-    assert _names_no_leg_by_its_id(seen, _FIRST, _SECOND)
+    assert seen.lean is None and "leg 2" in seen.lean_unknown_sentence, "the lean is missing, and its sentence names leg 2"
+    assert _names_no_leg_by_its_id(seen, _FIRST, _SECOND), "no sentence names a leg by its id"
+    assert (seen.decay.estimated, seen.decay.leg_ids) == (
+        False, ["alpha"],
+    ), "the decay is missing for the leg with no volatility"
+    assert (
+        "leg 2" in seen.decay.sentence and "leg 1" not in seen.decay.sentence
+    ), "the decay sentence names the leg by its place, not by the order of its id"
 
 
 @pytest.mark.parametrize("name", list(NamedStructure), ids=lambda name: name.value)
@@ -1451,10 +1437,11 @@ async def test_a_plan_that_stops_being_deployable_gives_up_the_lines_it_held(mon
     assert desk.ibkr.open_option_lines() == set()
 
 
-async def test_rules_that_land_on_another_shape_than_the_one_named_are_a_red_verdict_that_names_the_legs(
+async def test_rules_that_land_on_another_shape_than_the_one_named_are_a_red_verdict_and_an_entrys_refusal_that_name_the_legs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A bull call spread sells the higher call. With the sold leg $5 below the bought one it is another structure."""
+    """A bull call spread sells the higher call. With the sold leg $5 below the bought one it is another structure.
+    The picks that are not the structure built are an entry's refusal too, under the verdict's own code."""
     desk = Desk(monkeypatch)
     upside_down = _asking(
         _leg("long_call", "long", "call", _AT_THE_MONEY),
@@ -1464,12 +1451,18 @@ async def test_rules_that_land_on_another_shape_than_the_one_named_are_a_red_ver
 
     seen = await desk.quoted(upside_down)
 
-    assert seen.state == "resolved"
-    assert (seen.verdict.can_be_deployed, seen.verdict.resolves_as_built, seen.verdict.red) == (True, False, True)
-    assert seen.verdict.resolves_reason_code == "OPTION_STRUCTURE_STRIKES_NOT_AS_NAMED"
-    assert sorted(seen.verdict.leg_ids) == ["long_call", "short_call"]
+    assert seen.state == "resolved", "the picks resolve"
+    assert (seen.verdict.can_be_deployed, seen.verdict.resolves_as_built, seen.verdict.red) == (
+        True, False, True,
+    ), "the verdict is red: it can be deployed but does not resolve as built"
+    assert seen.verdict.resolves_reason_code == "OPTION_STRUCTURE_STRIKES_NOT_AS_NAMED", "the verdict's code says the strikes are not as named"
+    assert sorted(seen.verdict.leg_ids) == ["long_call", "short_call"], "the verdict names both legs"
     # What it came to is still shown, so the owner can see why.
-    assert [leg.contract.strike for leg in seen.legs] == [Decimal(585), Decimal(580)]
+    assert [leg.contract.strike for leg in seen.legs] == [Decimal(585), Decimal(580)], "the picks are still shown"
+    assert (
+        seen.verdict.red and seen.entry_refusals[0].reason_code == seen.verdict.resolves_reason_code
+    ), "picks that are not the structure built are an entry's refusal too, under the verdict's own code"
+    assert sorted(seen.entry_refusals[0].leg_ids) == ["long_call", "short_call"], "the entry's refusal names both legs"
 
 
 async def test_two_legs_that_land_on_one_contract_are_shown_and_have_no_money(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1692,7 +1685,7 @@ async def test_with_dividends_unknown_a_rule_by_delta_picks_nothing(monkeypatch:
     assert _UNKNOWN.dividends_source in seen.notice
 
 
-async def test_with_dividends_unknown_other_rules_still_pick_and_no_delta_or_lean_is_shown(
+async def test_with_dividends_unknown_other_rules_still_pick_and_no_delta_lean_or_decay_is_shown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     desk = Desk(monkeypatch)
@@ -1700,10 +1693,22 @@ async def test_with_dividends_unknown_other_rules_still_pick_and_no_delta_or_lea
 
     seen = await desk.quoted(_BULL_CALL_SPREAD, c585=("4.08", "4.12"), c590=("2.18", "2.22"))
 
-    assert (seen.state, seen.money.net_entry_premium_cents, seen.at_expiry.gain_cents) == ("resolved", 19_400, 30_600)
-    assert [(leg.delta, leg.implied_volatility, leg.delta_status) for leg in seen.legs] == [(None, None, "inputs_not_known")] * 2
-    assert seen.lean is None and seen.lean_unknown_sentence
-    assert seen.pricing_inputs.dividends_known is False
+    assert (seen.state, seen.money.net_entry_premium_cents, seen.at_expiry.gain_cents) == (
+        "resolved", 19_400, 30_600,
+    ), "other rules still pick, and the money and the amounts at expiry are shown"
+    assert [(leg.delta, leg.implied_volatility, leg.delta_status) for leg in seen.legs] == [
+        (None, None, "inputs_not_known")
+    ] * 2, "no delta or volatility is shown for either leg"
+    assert seen.lean is None and seen.lean_unknown_sentence, "no lean is shown, and it is said why"
+    assert seen.pricing_inputs.dividends_known is False, "the dividends are not known"
+
+    decay = seen.decay
+    assert (seen.state, decay.estimated, decay.reason_code) == (
+        "resolved", False, DecayNotEstimated.INPUTS_NOT_KNOWN,
+    ), "no decay is estimated for the structure: its inputs are not known"
+    assert (decay.per_24h_cents, decay.per_24h_usd, decay.direction) == (None, None, None), "no decay figure is shown"
+    assert decay.leg_ids == ["long_call", "short_call"], "every leg is named as lacking its inputs"
+    assert "SPY" in decay.sentence, "the decay sentence names SPY"
 
 
 async def test_on_a_fleet_clerk_a_rule_by_delta_is_previewed_with_the_dividends_the_coordinator_serves(

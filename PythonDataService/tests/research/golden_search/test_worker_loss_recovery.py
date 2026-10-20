@@ -174,40 +174,33 @@ def test_consecutive_replacements_without_progress_stop_the_batch(monkeypatch: p
     assert bridge.rows[_key_of(evaluator, _point(0.1))]["status"] == "pending"
 
 
-def test_an_uncertain_completion_that_later_commits_is_never_re_run_or_double_counted(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("fate", "task_gen"),
+    [
+        # The commit-succeeded-ack-lost boundary: the caller stopped waiting, the write landed anyway.
+        pytest.param("commit", 1, id="commit_succeeded_ack_lost_never_re_run_or_double_counted_3045"),
+        # The delivered-before-persistence boundary with an unknown write outcome.
+        pytest.param("rollback", 2, id="rolled_back_lands_under_a_new_generation_3045"),
+    ],
+)
+def test_an_uncertain_completion_is_never_re_run_or_double_counted(
+    monkeypatch: pytest.MonkeyPatch, fate: str, task_gen: int
 ) -> None:
-    """The commit-succeeded-ack-lost boundary: the caller stopped waiting, the write landed anyway (#3045)."""
+    """An uncertain completion write lands once, whichever way it resolves, and costs nothing more (#3045)."""
     engine, bridge = _EngineSpy(), _ReservationBridge(limit=10)
     evaluator = _seamed_evaluator(monkeypatch, engine, bridge)
     stalled = _key_of(evaluator, _point(0.2))
-    bridge.uncertain[(stalled, 1)] = "commit"
+    bridge.uncertain[(stalled, 1)] = fate
 
     metrics = evaluator.evaluate([_point(0.1), _point(0.2), _point(0.3)], window=JAN, stage="search")
 
-    assert [m.net_profit for m in metrics] == [0.1, 0.2, 0.3]
-    assert engine.ran == [0.1, 0.2, 0.3], "the committed result was reused, never recomputed"
-    assert bridge.completed.count(stalled) == 1, "no duplicate completion followed the delayed commit"
+    assert [m.net_profit for m in metrics] == [0.1, 0.2, 0.3], "the batch completes with every result"
+    assert engine.ran == [0.1, 0.2, 0.3], "a committed result is reused and one still in hand is kept: the engine never re-ran"
+    assert bridge.completed.count(stalled) == 1, "no duplicate completion followed the delayed write"
     assert bridge.consumed == 3 and bridge.rows[stalled]["retries"] == 0, "no release, no retry, no budget increment"
-    assert bridge.released == []
-
-
-def test_an_uncertain_completion_that_rolled_back_lands_under_a_new_generation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The delivered-before-persistence boundary with an unknown write outcome (#3045)."""
-    engine, bridge = _EngineSpy(), _ReservationBridge(limit=10)
-    evaluator = _seamed_evaluator(monkeypatch, engine, bridge)
-    stalled = _key_of(evaluator, _point(0.2))
-    bridge.uncertain[(stalled, 1)] = "rollback"
-
-    metrics = evaluator.evaluate([_point(0.1), _point(0.2), _point(0.3)], window=JAN, stage="search")
-
-    assert [m.net_profit for m in metrics] == [0.1, 0.2, 0.3]
-    assert engine.ran == [0.1, 0.2, 0.3], "the result was still in hand: the engine never re-ran"
+    assert bridge.released == [], "nothing was released"
     row = bridge.rows[stalled]
-    assert row["status"] == "completed" and row["task_gen"] == 2, "the same result persisted under the swapped generation"
-    assert row["retries"] == 0 and bridge.consumed == 3
+    assert row["status"] == "completed" and row["task_gen"] == task_gen, "the same result persisted under the generation the write's fate leaves"
 
 
 def test_a_stale_delivery_from_a_replaced_dispatch_is_discarded_and_the_owed_outcome_lands(
@@ -632,30 +625,27 @@ async def test_a_real_sigkill_mid_stage_is_replaced_and_its_durable_evaluations_
         assert (after["completed_at_ms"], after["retries"], after["status"]) == (record["completed_at_ms"], record["retries"], "completed")
 
 
-def test_an_uncertain_reservation_that_committed_charges_one_unit_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The before-reservation boundary's write fate: the insert landed after the caller stopped waiting (#3045)."""
+@pytest.mark.parametrize(
+    "fate",
+    [
+        # The insert landed after the caller stopped waiting.
+        pytest.param("commit", id="committed_charges_one_unit_once_3045"),
+        pytest.param("rollback", id="rolled_back_inserts_exactly_once"),
+    ],
+)
+def test_an_uncertain_reservation_charges_one_unit_once(monkeypatch: pytest.MonkeyPatch, fate: str) -> None:
+    """The before-reservation boundary's write fate: the insert landed or not after the caller stopped waiting (#3045)."""
     engine, bridge = _EngineSpy(), _ReservationBridge(limit=10)
     evaluator = _seamed_evaluator(monkeypatch, engine, bridge)
     stalled = _key_of(evaluator, _point(0.1))
-    bridge.uncertain_reserve[stalled] = "commit"
+    bridge.uncertain_reserve[stalled] = fate
 
     metrics = evaluator.evaluate([_point(0.1), _point(0.2)], window=JAN, stage="search")
 
-    assert [m.net_profit for m in metrics] == [0.1, 0.2]
-    assert bridge.consumed == 2, "the committed reservation's unit is the only one charged for the stalled row"
+    assert [m.net_profit for m in metrics] == [0.1, 0.2], "the batch completes with every result"
+    assert bridge.consumed == 2, "the reservation's unit is the only one charged for the stalled row"
     assert engine.ran == [0.1, 0.2], "each evaluation ran once"
     assert bridge.rows[stalled]["retries"] == 0, "the re-reserve read its own row back: a free re-admission, never a retry"
-
-
-def test_an_uncertain_reservation_that_rolled_back_inserts_exactly_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    engine, bridge = _EngineSpy(), _ReservationBridge(limit=10)
-    evaluator = _seamed_evaluator(monkeypatch, engine, bridge)
-    bridge.uncertain_reserve[_key_of(evaluator, _point(0.1))] = "rollback"
-
-    metrics = evaluator.evaluate([_point(0.1), _point(0.2)], window=JAN, stage="search")
-
-    assert [m.net_profit for m in metrics] == [0.1, 0.2]
-    assert bridge.consumed == 2 and bridge.rows[_key_of(evaluator, _point(0.1))]["retries"] == 0
 
 
 def test_a_second_reservation_stall_propagates(monkeypatch: pytest.MonkeyPatch) -> None:

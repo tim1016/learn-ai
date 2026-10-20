@@ -195,8 +195,25 @@ def test_warm_daily_reader_avoids_decoding_after_reverification(lake, seeded_lak
     assert decodes == 1, "a reverified repeat read must not decode the zip again"
 
 
-def test_warm_daily_reader_fails_closed_when_the_catalog_goes_offline(lake, seeded_lake_catalog, monkeypatch):
-    reader = LeanDailyDataReader(lake)
+def _warm_daily_reader(lake):
+    return LeanDailyDataReader(lake)
+
+
+def _warm_bound_daily_reader(lake):
+    return ManifestBoundDailyReader(lake, _snapshot(lake, "daily").artifacts)
+
+
+@pytest.mark.parametrize(
+    "make_reader",
+    [
+        pytest.param(_warm_daily_reader, id="warm_daily_reader"),
+        pytest.param(_warm_bound_daily_reader, id="warm_bound_daily_reader"),
+    ],
+)
+def test_warm_daily_reader_fails_closed_when_the_catalog_goes_offline(
+    lake, seeded_lake_catalog, monkeypatch, make_reader
+):
+    reader = make_reader(lake)
     assert list(reader.iter_bars("SPY", DAY, DAY))
 
     async def unavailable(*args):
@@ -207,8 +224,15 @@ def test_warm_daily_reader_fails_closed_when_the_catalog_goes_offline(lake, seed
         list(reader.iter_bars("SPY", DAY, DAY))
 
 
-def test_warm_daily_reader_refuses_a_root_that_lost_its_identity(lake, seeded_lake_catalog):
-    reader = LeanDailyDataReader(lake)
+@pytest.mark.parametrize(
+    "make_reader",
+    [
+        pytest.param(_warm_daily_reader, id="warm_daily_reader"),
+        pytest.param(_warm_bound_daily_reader, id="warm_bound_daily_reader"),
+    ],
+)
+def test_warm_daily_reader_refuses_a_root_that_lost_its_identity(lake, seeded_lake_catalog, make_reader):
+    reader = make_reader(lake)
     assert list(reader.iter_bars("SPY", DAY, DAY))
     marker_path(lake.parent.parent).unlink()
     with pytest.raises(LakeAdmissionError, match="root identity"):
@@ -246,28 +270,6 @@ def test_warm_daily_reader_refuses_a_companion_deleted_after_the_first_read(tmp_
     assert list(reader.iter_bars("SPY", DAY, DAY))
     companion_path(root / "equity" / "usa" / "daily" / "spy.zip").unlink()
     with pytest.raises(AdjustmentVersionError, match="no valid corporate-action version"):
-        list(reader.iter_bars("SPY", DAY, DAY))
-
-
-def test_warm_bound_daily_reader_refuses_a_root_that_lost_its_identity(lake, seeded_lake_catalog):
-    snapshot = _snapshot(lake, "daily")
-    reader = ManifestBoundDailyReader(lake, snapshot.artifacts)
-    assert list(reader.iter_bars("SPY", DAY, DAY))
-    marker_path(lake.parent.parent).unlink()
-    with pytest.raises(LakeAdmissionError, match="root identity"):
-        list(reader.iter_bars("SPY", DAY, DAY))
-
-
-def test_warm_bound_daily_reader_fails_closed_when_the_catalog_goes_offline(lake, seeded_lake_catalog, monkeypatch):
-    snapshot = _snapshot(lake, "daily")
-    reader = ManifestBoundDailyReader(lake, snapshot.artifacts)
-    assert list(reader.iter_bars("SPY", DAY, DAY))
-
-    async def unavailable(*args):
-        raise catalog_client.CatalogUnavailableError("offline")
-
-    monkeypatch.setattr(catalog_client, "has_committed_file_receipt", unavailable)
-    with pytest.raises(catalog_client.CatalogUnavailableError, match="cannot verify committed"):
         list(reader.iter_bars("SPY", DAY, DAY))
 
 

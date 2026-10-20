@@ -62,15 +62,24 @@ def test_the_trade_floor_outranks_strong_retention_and_counts_winner_cells_only(
     assert verdict.oos_trade_count == 4
 
 
-def test_a_non_positive_median_test_sharpe_outranks_the_threshold_comparison() -> None:
-    verdict = compute_verdict(_study([1, 1, 1], [-0.2, 0.1, -0.3]), min_trades=1)
-
-    assert verdict.label == "stopped working"
-
-
-@pytest.mark.parametrize(("retention", "label"), [(0.5, "still worked"), (0.49, "got worse")])
-def test_both_sides_of_the_threshold_including_exactly_half(retention: float, label: str) -> None:
-    verdict = compute_verdict(_study([1, 1], [retention, retention]), min_trades=1)
+@pytest.mark.parametrize(
+    ("train", "test", "label"),
+    [
+        pytest.param((1, 1), (0.5, 0.5), "still worked", id="exactly_half_still_worked"),
+        pytest.param((1, 1), (0.49, 0.49), "got worse", id="just_below_half_got_worse"),
+        pytest.param(
+            (1, 1, 1),
+            (-0.2, 0.1, -0.3),
+            "stopped working",
+            id="a_non_positive_median_test_sharpe_outranks_the_threshold_comparison",
+        ),
+        pytest.param((), (), "could not be judged", id="no_folds_is_could_not_be_judged"),
+    ],
+)
+def test_the_label_at_the_threshold_and_where_a_rule_outranks_it(
+    train: tuple[float, ...], test: tuple[float, ...], label: str
+) -> None:
+    verdict = compute_verdict(_study(list(train), list(test)), min_trades=1)
 
     assert verdict.label == label
 
@@ -84,10 +93,6 @@ def test_no_defined_test_sharpe_after_coverage_is_could_not_be_judged() -> None:
 
     assert verdict.label == "could not be judged"
     assert verdict.defined_folds == 0
-
-
-def test_no_folds_is_could_not_be_judged() -> None:
-    assert compute_verdict([], min_trades=1).label == "could not be judged"
 
 
 def test_rates_not_totals_a_longer_training_window_is_not_flattered() -> None:

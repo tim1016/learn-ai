@@ -81,25 +81,14 @@ def test_each_sealed_signal_program_identity_is_unique_to_its_registry_key() -> 
         seen_identity_owner[identity] = key
 
 
-def test_signal_program_contract_and_factory_are_set_or_cleared_together() -> None:
+def test_every_registration_owns_a_signal_program_whose_contract_and_factory_are_set_together() -> None:
     """``StrategyRegistration.signal_program_contract``'s own docstring states the
     invariant: "A factory without a contract is an unqualified program and cannot
     be sealed for Start/Resume." Defect 1 was the inverse failure mode — both were
     present, but neither belonged to the registration carrying them. Catching drift
     in either direction keeps that pairing honest.
-    """
-    for key, reg in _STRATEGY_REGISTRY.items():
-        has_contract = reg.signal_program_contract is not None
-        has_factory = reg.signal_program_factory is not None
-        assert has_contract == has_factory, (
-            f"'{key}' has signal_program_contract={'set' if has_contract else 'None'} but "
-            f"signal_program_factory={'set' if has_factory else 'None'} — a registered "
-            "Signal Program must set both or neither."
-        )
 
-
-def test_every_registered_strategy_decouples_signal_from_traded_asset() -> None:
-    """Every registration owns a Signal Program. No exceptions, by design.
+    Every registration owns a Signal Program. No exceptions, by design.
 
     The platform rule is that a strategy separates *when* to act (the signal)
     from *what* is traded (the asset the execution boundary selects) -- see
@@ -113,11 +102,20 @@ def test_every_registered_strategy_decouples_signal_from_traded_asset() -> None:
     the honest assertion is that the set is empty -- an allowlist here would
     only be a place for the next one to hide.
     """
+    for key, reg in _STRATEGY_REGISTRY.items():
+        has_contract = reg.signal_program_contract is not None
+        has_factory = reg.signal_program_factory is not None
+        assert has_contract == has_factory, (
+            f"'{key}' has signal_program_contract={'set' if has_contract else 'None'} but "
+            f"signal_program_factory={'set' if has_factory else 'None'} — a registered "
+            "Signal Program must set both or neither."
+        )
+
     coupled = sorted(
         key for key, reg in _STRATEGY_REGISTRY.items() if reg.signal_program_factory is None
     )
 
-    assert coupled == []
+    assert coupled == [], "every registration has a signal_program_factory: signal decoupled from traded asset"
 
 
 def test_every_factory_built_program_carries_its_registration_identity() -> None:
@@ -271,27 +269,15 @@ def test_resolved_series_are_exactly_the_indicators_these_parameters_build(
         assert series[name].warmup_bars == _bars_until_ready(indicator), name
 
 
-def test_static_series_and_exit_rule_describe_each_program_s_default_point() -> None:
+def test_static_contract_values_are_what_each_program_s_default_and_validated_points_resolve() -> None:
     """A contract's static ``signals``/``exit_eligibility``/``numerical_provenance`` are its default point.
 
     A program whose periods or hold are parameters resolves them per seal
     (#2696, #2796); its static values must still be what the default
     parameters resolve to, so a seal at the default point is byte-identical
     to one made before they were resolved.
-    """
-    for key, registration in _STRATEGY_REGISTRY.items():
-        contract = registration.signal_program_contract
-        if contract is None:
-            continue
-        defaults = registration.param_schema()
 
-        assert contract.resolved_signals(defaults) == contract.signals, key
-        assert contract.resolved_exit_eligibility(defaults) == contract.exit_eligibility, key
-        assert contract.resolved_numerical_provenance(defaults) == contract.numerical_provenance, key
-
-
-def test_static_warmup_lookback_is_what_each_program_s_default_and_validated_points_resolve() -> None:
-    """A seal's warmup lookback follows its own periods (#2841); at the default
+    A seal's warmup lookback follows its own periods (#2841); at the default
     and validated points it must stay the static value. A longer one there
     would move every seal at those points, the running bots' included.
     """
@@ -302,8 +288,21 @@ def test_static_warmup_lookback_is_what_each_program_s_default_and_validated_poi
         defaults = registration.param_schema()
         validated = registration.param_schema(**contract.validated_settings)
 
-        assert contract.resolved_warmup_lookback_days(defaults) == contract.warmup_lookback_days, key
-        assert contract.resolved_warmup_lookback_days(validated) == contract.warmup_lookback_days, key
+        assert contract.resolved_signals(defaults) == contract.signals, (
+            f"{key}: static signals are the default point's resolved signals (#2696, #2796)"
+        )
+        assert contract.resolved_exit_eligibility(defaults) == contract.exit_eligibility, (
+            f"{key}: static exit_eligibility is the default point's resolved exit rule (#2696, #2796)"
+        )
+        assert contract.resolved_numerical_provenance(defaults) == contract.numerical_provenance, (
+            f"{key}: static numerical_provenance is the default point's resolved provenance (#2696, #2796)"
+        )
+        assert contract.resolved_warmup_lookback_days(defaults) == contract.warmup_lookback_days, (
+            f"{key}: warmup lookback at the default point stays the static value (#2841)"
+        )
+        assert contract.resolved_warmup_lookback_days(validated) == contract.warmup_lookback_days, (
+            f"{key}: warmup lookback at the validated point stays the static value (#2841)"
+        )
 
 
 def test_validated_settings_a_dump_omits_are_their_schema_defaults() -> None:

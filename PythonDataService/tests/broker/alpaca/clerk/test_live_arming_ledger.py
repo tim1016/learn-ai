@@ -167,29 +167,29 @@ def test_a_symlinked_ledger_is_refused_on_both_read_and_append(tmp_path: Path) -
         ledger.records()
 
 
-def test_a_tampered_row_is_refused_rather_than_read(tmp_path: Path) -> None:
-    ledger = LiveArmingLedger(tmp_path, live_account_id=ACCOUNT)
-    ledger.append(_armed())
-    ledger.path.write_text(
-        ledger.path.read_text(encoding="utf-8").replace(
-            f'"armed_at_ms":{FRIDAY_MS}', f'"armed_at_ms":{FRIDAY_MS + 1}'
+@pytest.mark.parametrize(
+    ("was", "became", "match"),
+    [
+        pytest.param(
+            f'"armed_at_ms":{FRIDAY_MS}',
+            f'"armed_at_ms":{FRIDAY_MS + 1}',
+            "digest does not verify",
+            id="a tampered row",
         ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(LiveArmingInvalid, match="digest does not verify"):
-        ledger.records()
-
-
-def test_a_row_with_no_recognised_kind_is_refused(tmp_path: Path) -> None:
+        pytest.param('"kind":"armed"', '"kind":"maybe"', "unrecognised kind", id="a row with no recognised kind"),
+    ],
+)
+def test_a_row_that_cannot_be_trusted_is_refused_rather_than_read(
+    tmp_path: Path, was: str, became: str, match: str
+) -> None:
     ledger = LiveArmingLedger(tmp_path, live_account_id=ACCOUNT)
     ledger.append(_armed())
     ledger.path.write_text(
-        ledger.path.read_text(encoding="utf-8").replace('"kind":"armed"', '"kind":"maybe"'),
+        ledger.path.read_text(encoding="utf-8").replace(was, became),
         encoding="utf-8",
     )
 
-    with pytest.raises(LiveArmingInvalid, match="unrecognised kind"):
+    with pytest.raises(LiveArmingInvalid, match=match):
         ledger.records()
 
 

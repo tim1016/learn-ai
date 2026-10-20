@@ -107,21 +107,18 @@ def _make_analysis(
 class TestComputeForwardReturn:
     """Tests for compute_forward_return function."""
 
-    def test_basic_forward_return(self):
+    @pytest.mark.parametrize(
+        "horizon",
+        [1, 5, 10, 15, 30],
+        ids=["horizon_1", "horizon_5", "horizon_10", "horizon_15", "horizon_30"],
+    )
+    def test_forward_return_over_variable_horizons(self, horizon):
         df = _create_test_df(100)
-        fwd = compute_forward_return(df, horizon=5)
+        fwd = compute_forward_return(df, horizon=horizon)
 
-        assert len(fwd) == len(df)
-        assert fwd.iloc[-5:].isna().all()
-        assert fwd.iloc[:-10].notna().sum() > 0
-
-    def test_variable_horizons(self):
-        df = _create_test_df(100)
-
-        for horizon in [1, 5, 10, 15, 30]:
-            fwd = compute_forward_return(df, horizon=horizon)
-            assert len(fwd) == len(df)
-            assert fwd.iloc[-horizon:].isna().all()
+        assert len(fwd) == len(df), "one forward return per bar"
+        assert fwd.iloc[-horizon:].isna().all(), "the last `horizon` bars have no forward return"
+        assert fwd.iloc[:-10].notna().sum() > 0, "the leading bars carry valid forward returns"
 
     def test_cross_day_masking(self):
         df = _create_test_df(500)
@@ -219,31 +216,43 @@ class TestComputeIndicatorReliabilityWithOos:
 class TestFindBestHorizon:
     """Tests for find_best_horizon function (OOS-priority selection)."""
 
-    def test_picks_oos_significant(self):
-        results = [
-            _make_analysis(horizon=1, is_mean_ic=0.01, fdr_p=0.32),
-            _make_analysis(
-                horizon=10,
-                is_mean_ic=0.04,
-                fdr_p=0.001,
-                oos_mean_ic=0.03,
-                oos_p_value=0.02,
-                oos_retention=0.75,
+    @pytest.mark.parametrize(
+        ("analyses", "expected"),
+        [
+            pytest.param(
+                [
+                    {"horizon": 1, "is_mean_ic": 0.01, "fdr_p": 0.32},
+                    {
+                        "horizon": 10,
+                        "is_mean_ic": 0.04,
+                        "fdr_p": 0.001,
+                        "oos_mean_ic": 0.03,
+                        "oos_p_value": 0.02,
+                        "oos_retention": 0.75,
+                    },
+                    {"horizon": 30, "is_mean_ic": 0.02, "fdr_p": 0.14},
+                ],
+                10,
+                id="picks_oos_significant",
             ),
-            _make_analysis(horizon=30, is_mean_ic=0.02, fdr_p=0.14),
-        ]
-        assert find_best_horizon(results) == 10
-
-    def test_falls_back_to_fdr_when_no_oos(self):
-        results = [
-            _make_analysis(horizon=5, is_mean_ic=0.04, fdr_p=0.02),
-            _make_analysis(horizon=15, is_mean_ic=0.01, fdr_p=0.50),
-        ]
-        assert find_best_horizon(results) == 5
-
-    def test_returns_none_if_nothing_significant(self):
-        results = [_make_analysis(horizon=5, is_mean_ic=0.005, fdr_p=0.69)]
-        assert find_best_horizon(results) is None
+            pytest.param(
+                [
+                    {"horizon": 5, "is_mean_ic": 0.04, "fdr_p": 0.02},
+                    {"horizon": 15, "is_mean_ic": 0.01, "fdr_p": 0.50},
+                ],
+                5,
+                id="falls_back_to_fdr_when_no_oos",
+            ),
+            pytest.param(
+                [{"horizon": 5, "is_mean_ic": 0.005, "fdr_p": 0.69}],
+                None,
+                id="returns_none_if_nothing_significant",
+            ),
+        ],
+    )
+    def test_find_best_horizon(self, analyses, expected):
+        results = [_make_analysis(**kwargs) for kwargs in analyses]
+        assert find_best_horizon(results) == expected, "the selected horizon"
 
 
 class TestMultipleTestingCorrection:
@@ -259,97 +268,97 @@ class TestMultipleTestingCorrection:
 
 
 class TestVerdictLabels:
-    def test_strength_buckets(self):
-        assert compute_strength_label(0.005) == "Noise"
-        assert compute_strength_label(0.04) == "Weak"
-        assert compute_strength_label(0.10) == "Moderate"
-        assert compute_strength_label(0.20) == "Strong"
+    def test_label_buckets(self):
+        assert compute_strength_label(0.005) == "Noise", "strength 0.005 is Noise"
+        assert compute_strength_label(0.04) == "Weak", "strength 0.04 is Weak"
+        assert compute_strength_label(0.10) == "Moderate", "strength 0.10 is Moderate"
+        assert compute_strength_label(0.20) == "Strong", "strength 0.20 is Strong"
+        assert compute_stability_label(0.50) == "Low", "stability 0.50 is Low"
+        assert compute_stability_label(0.55) == "Moderate", "stability 0.55 is Moderate"
+        assert compute_stability_label(0.60) == "High", "stability 0.60 is High"
+        assert compute_direction_label(-0.05) == "Mean-Reversion", "negative signed IC is Mean-Reversion"
+        assert compute_direction_label(0.05) == "Momentum", "positive signed IC is Momentum"
+        assert compute_direction_label(0.01) == "None", "small signed IC has no direction"
 
-    def test_stability_buckets(self):
-        assert compute_stability_label(0.50) == "Low"
-        assert compute_stability_label(0.55) == "Moderate"
-        assert compute_stability_label(0.60) == "High"
-
-    def test_direction_from_signed_ic(self):
-        assert compute_direction_label(-0.05) == "Mean-Reversion"
-        assert compute_direction_label(0.05) == "Momentum"
-        assert compute_direction_label(0.01) == "None"
-
-    def test_retention_delta_none_when_oos_missing(self):
-        assert compute_retention_delta_pct(0.10, None) is None
-
-    def test_retention_delta_is_percent_change(self):
-        assert compute_retention_delta_pct(0.10, 0.15) == pytest.approx(50.0)
-        assert compute_retention_delta_pct(0.10, 0.06) == pytest.approx(-40.0)
+    def test_retention_delta_pct(self):
+        assert compute_retention_delta_pct(0.10, None) is None, "retention delta is None when OOS is missing"
+        assert compute_retention_delta_pct(0.10, 0.15) == pytest.approx(50.0), "0.10 -> 0.15 is +50 percent"
+        assert compute_retention_delta_pct(0.10, 0.06) == pytest.approx(-40.0), "0.10 -> 0.06 is -40 percent"
 
 
 class TestSlopeDecisions:
-    def test_slope_with_oos_validated(self):
-        raw = _make_analysis(is_mean_ic=0.05, fdr_p=0.05)
-        slope = _make_analysis(
-            is_mean_ic=0.09,
-            fdr_p=0.01,
-            oos_mean_ic=0.08,
-            oos_p_value=0.02,
-            oos_retention=0.8,
-        )
+    @pytest.mark.parametrize(
+        ("raw_kwargs", "slope_kwargs", "expected_adds", "expected_recommended"),
+        [
+            pytest.param(
+                {"is_mean_ic": 0.05, "fdr_p": 0.05},
+                {
+                    "is_mean_ic": 0.09,
+                    "fdr_p": 0.01,
+                    "oos_mean_ic": 0.08,
+                    "oos_p_value": 0.02,
+                    "oos_retention": 0.8,
+                },
+                True,
+                True,
+                id="slope_with_oos_validated",
+            ),
+            pytest.param(
+                {"is_mean_ic": 0.10, "fdr_p": 0.02},
+                {
+                    "is_mean_ic": 0.03,
+                    "fdr_p": 0.30,
+                    "oos_mean_ic": 0.02,
+                    "oos_p_value": 0.40,
+                    "oos_retention": 0.5,
+                },
+                False,
+                False,
+                id="slope_weaker_than_raw",
+            ),
+            pytest.param(
+                {"is_mean_ic": 0.05, "fdr_p": 0.05},
+                {"is_mean_ic": 0.10, "fdr_p": 0.02},
+                True,
+                None,
+                id="recommended_none_without_oos",
+            ),
+        ],
+    )
+    def test_slope_decisions(self, raw_kwargs, slope_kwargs, expected_adds, expected_recommended):
+        raw = _make_analysis(**raw_kwargs)
+        slope = _make_analysis(**slope_kwargs)
         adds, recommended = compute_slope_decisions(raw, slope)
-        assert adds is True
-        assert recommended is True
-
-    def test_slope_weaker_than_raw(self):
-        raw = _make_analysis(is_mean_ic=0.10, fdr_p=0.02)
-        slope = _make_analysis(
-            is_mean_ic=0.03,
-            fdr_p=0.30,
-            oos_mean_ic=0.02,
-            oos_p_value=0.40,
-            oos_retention=0.5,
-        )
-        adds, recommended = compute_slope_decisions(raw, slope)
-        assert adds is False
-        assert recommended is False
-
-    def test_recommended_none_without_oos(self):
-        raw = _make_analysis(is_mean_ic=0.05, fdr_p=0.05)
-        slope = _make_analysis(is_mean_ic=0.10, fdr_p=0.02)
-        adds, recommended = compute_slope_decisions(raw, slope)
-        assert adds is True
-        assert recommended is None
+        assert adds is expected_adds, "slope adds value"
+        assert recommended is expected_recommended, "slope is recommended"
 
 
 class TestICDecayCurve:
-    def test_returns_one_point_per_horizon(self):
+    def test_decay_curve_points_and_max_horizon_clamp(self):
         df = _create_test_df(500)
         curve = compute_ic_decay_curve(df, "rsi_14", max_horizon=15)
-        assert len(curve) == 15
-        assert [p.horizon for p in curve] == list(range(1, 16))
+        assert len(curve) == 15, "one point per horizon"
+        assert [p.horizon for p in curve] == list(range(1, 16)), "points run over horizons 1..15"
         for p in curve:
-            assert -1 <= p.ic <= 1
-            assert 0 <= p.p_value <= 1
-            assert p.ic_stderr >= 0
+            assert -1 <= p.ic <= 1, f"horizon {p.horizon}: IC is a correlation"
+            assert 0 <= p.p_value <= 1, f"horizon {p.horizon}: p-value is a probability"
+            assert p.ic_stderr >= 0, f"horizon {p.horizon}: IC standard error is non-negative"
 
-    def test_clamps_to_max(self):
-        df = _create_test_df(500)
-        curve = compute_ic_decay_curve(df, "rsi_14", max_horizon=9999)
-        assert len(curve) == MAX_DECAY_HORIZON
+        clamped = compute_ic_decay_curve(df, "rsi_14", max_horizon=9999)
+        assert len(clamped) == MAX_DECAY_HORIZON, "max horizon clamps to MAX_DECAY_HORIZON"
 
 
 class TestVolatilityRegimeSplit:
-    def test_masks_are_disjoint_and_exclude_warmup(self):
+    def test_masks_are_disjoint_exclude_warmup_and_balanced(self):
         df = _create_test_df(500)
         high, low = split_by_volatility_regime(df, window=20)
-        assert len(high) == len(df)
-        assert not (high & low).any()
+        assert len(high) == len(df), "mask is aligned to the frame"
+        assert not (high & low).any(), "high and low masks are disjoint"
         # First `window` bars have NaN rolling vol and must be excluded.
-        assert not high.iloc[:20].any()
-        assert not low.iloc[:20].any()
-
-    def test_balanced_split(self):
-        df = _create_test_df(500)
-        high, low = split_by_volatility_regime(df, window=20)
+        assert not high.iloc[:20].any(), "high mask excludes the warmup bars"
+        assert not low.iloc[:20].any(), "low mask excludes the warmup bars"
         # Roughly balanced: neither bucket should be grossly dominant
-        assert 0.3 < high.sum() / (high.sum() + low.sum()) < 0.7
+        assert 0.3 < high.sum() / (high.sum() + low.sum()) < 0.7, "the split is roughly balanced"
 
 
 class TestRegimeIC:
@@ -377,58 +386,55 @@ class TestRegimeIC:
 
 
 class TestBarsPerYear:
-    def test_minute(self):
-        # 252 * 390 / 1 ≈ 98,280
-        assert bars_per_year("minute", 1) == pytest.approx(252 * 390)
-
-    def test_multiplier_scales_inversely(self):
-        # 5-minute bars: 1/5 as many bars per day
-        assert bars_per_year("minute", 5) == pytest.approx(252 * 390 / 5)
-
-    def test_day(self):
-        assert bars_per_year("day", 1) == pytest.approx(252)
+    @pytest.mark.parametrize(
+        ("timespan", "multiplier", "expected"),
+        [
+            # 252 * 390 / 1 ≈ 98,280
+            pytest.param("minute", 1, 252 * 390, id="minute"),
+            # 5-minute bars: 1/5 as many bars per day
+            pytest.param("minute", 5, 252 * 390 / 5, id="multiplier_scales_inversely"),
+            pytest.param("day", 1, 252, id="day"),
+        ],
+    )
+    def test_bars_per_year(self, timespan, multiplier, expected):
+        assert bars_per_year(timespan, multiplier) == pytest.approx(expected), "bars per year for the timespan and multiplier"
 
 
 class TestIRProxy:
-    def test_zero_ic_yields_zero_ir(self):
+    def test_ir_proxy_sign_and_breadth(self):
         ir, sharpe, breadth = compute_ir_proxy(0.0, 10, 252 * 390)
-        assert ir == 0.0
-        assert sharpe == 0.0
-        assert breadth > 0
+        assert ir == 0.0, "zero IC yields zero IR"
+        assert sharpe == 0.0, "zero IC yields zero Sharpe estimate"
+        assert breadth > 0, "breadth is positive for zero IC"
 
-    def test_positive_ic_yields_positive_ir(self):
         ir, sharpe, _ = compute_ir_proxy(0.05, 30, 252 * 390)
-        assert ir > 0
-        assert sharpe == ir
+        assert ir > 0, "positive IC yields positive IR"
+        assert sharpe == ir, "Sharpe estimate equals IR for positive IC"
 
-    def test_negative_ic_yields_negative_ir(self):
         ir, sharpe, _ = compute_ir_proxy(-0.05, 30, 252 * 390)
-        assert ir < 0
-        assert sharpe == ir
+        assert ir < 0, "negative IC yields negative IR"
+        assert sharpe == ir, "Sharpe estimate equals IR for negative IC"
 
-    def test_longer_horizon_reduces_breadth(self):
         _, _, breadth_short = compute_ir_proxy(0.05, 5, 252 * 390)
         _, _, breadth_long = compute_ir_proxy(0.05, 50, 252 * 390)
-        assert breadth_short > breadth_long
+        assert breadth_short > breadth_long, "a longer horizon reduces breadth"
 
 
 class TestTradeability:
-    def test_strong_and_stable_is_tradeable(self):
-        assert compute_tradeability(1.5, "High") == "Likely tradeable"
-
-    def test_strong_but_unstable_is_marginal(self):
-        # |sharpe| >= 1 but stability Low → bumped down to Marginal
-        assert compute_tradeability(1.5, "Low") == "Marginal"
-
-    def test_mid_range_is_marginal(self):
-        assert compute_tradeability(0.7, "High") == "Marginal"
-
-    def test_low_is_unlikely(self):
-        assert compute_tradeability(0.2, "High") == "Unlikely"
-
-    def test_uses_absolute_value(self):
-        # Negative IC → short the signal → still tradeable
-        assert compute_tradeability(-1.5, "High") == "Likely tradeable"
+    @pytest.mark.parametrize(
+        ("sharpe", "stability", "expected"),
+        [
+            pytest.param(1.5, "High", "Likely tradeable", id="strong_and_stable_is_tradeable"),
+            # |sharpe| >= 1 but stability Low → bumped down to Marginal
+            pytest.param(1.5, "Low", "Marginal", id="strong_but_unstable_is_marginal"),
+            pytest.param(0.7, "High", "Marginal", id="mid_range_is_marginal"),
+            pytest.param(0.2, "High", "Unlikely", id="low_is_unlikely"),
+            # Negative IC → short the signal → still tradeable
+            pytest.param(-1.5, "High", "Likely tradeable", id="uses_absolute_value"),
+        ],
+    )
+    def test_tradeability(self, sharpe, stability, expected):
+        assert compute_tradeability(sharpe, stability) == expected, "tradeability verdict for the Sharpe estimate and stability"
 
 
 class TestNextSteps:
@@ -490,56 +496,68 @@ class TestNextSteps:
 
 
 class TestInfoFootnotes:
-    def test_adds_overlap_caveat_for_multi_bar_horizons(self):
-        notes = generate_info_footnotes([1, 5, 10])
-        assert any("overlapping" in n.lower() for n in notes)
-
-    def test_no_overlap_caveat_for_horizon_one_only(self):
-        notes = generate_info_footnotes([1])
-        assert not any("overlapping" in n.lower() for n in notes)
+    @pytest.mark.parametrize(
+        ("horizons", "expects_overlap_caveat"),
+        [
+            pytest.param([1, 5, 10], True, id="adds_overlap_caveat_for_multi_bar_horizons"),
+            pytest.param([1], False, id="no_overlap_caveat_for_horizon_one_only"),
+        ],
+    )
+    def test_overlap_caveat(self, horizons, expects_overlap_caveat):
+        notes = generate_info_footnotes(horizons)
+        assert any("overlapping" in n.lower() for n in notes) is expects_overlap_caveat, "overlap caveat presence"
 
 
 class TestRandomBaselineReturnsDistribution:
-    def test_distribution_length_matches_n_simulations(self):
+    def test_distribution_length_and_rng_determinism(self):
         df = _create_test_df(500)
         mean, std, dist = compute_random_baseline_ic(df, horizon=10, n_simulations=25)
-        assert len(dist) == 25
-        assert std >= 0
+        assert len(dist) == 25, "distribution length matches n_simulations"
+        assert std >= 0, "std is non-negative"
         # Mean of the distribution should equal the returned mean
-        assert mean == pytest.approx(sum(dist) / len(dist), rel=1e-6)
+        assert mean == pytest.approx(sum(dist) / len(dist), rel=1e-6), "returned mean equals the distribution mean"
 
-    def test_block_shuffle_preserves_feature_marginal_distribution(self):
+        rng_a = np.random.default_rng(seed=123)
+        rng_b = np.random.default_rng(seed=123)
+
+        mean_a, std_a, dist_a = compute_random_baseline_ic(
+            df, horizon=10, feature_column="rsi_14", n_simulations=20, rng=rng_a
+        )
+        mean_b, std_b, dist_b = compute_random_baseline_ic(
+            df, horizon=10, feature_column="rsi_14", n_simulations=20, rng=rng_b
+        )
+
+        assert mean_a == pytest.approx(mean_b, abs=1e-12), "same rng seed gives the same mean"
+        assert std_a == pytest.approx(std_b, abs=1e-12), "same rng seed gives the same std"
+        assert dist_a == pytest.approx(dist_b, abs=1e-12), "same rng seed gives the same distribution"
+
+    @pytest.mark.parametrize(
+        "seed",
+        [42, 0],
+        ids=["seed_42_marginal_distribution", "seed_0_within_day_order"],
+    )
+    def test_block_shuffle_preserves_feature_marginal_distribution_and_within_day_order(self, seed):
         """The day-block circular shift must permute existing values, not
-        invent new ones. Set of (sorted) post-shuffle values must equal
-        the set of pre-shuffle values within each rotation."""
+        invent new ones, and within a session the feature values stay in
+        their original order — only the *day* assignment is rotated."""
         from app.research.indicator_reliability import _day_block_circular_shift
 
-        rng = np.random.default_rng(seed=42)
+        rng = np.random.default_rng(seed=seed)
         feature = np.array([1.0, 2.0, 3.0, 10.0, 20.0, 30.0, 100.0, 200.0, 300.0])
         sessions = np.array(["d1", "d1", "d1", "d2", "d2", "d2", "d3", "d3", "d3"])
 
         rotated = _day_block_circular_shift(feature, sessions, rng)
 
         # Same multiset of values (up to NaNs from variable-length sessions, none here).
-        assert sorted(rotated.tolist()) == sorted(feature.tolist())
-
-    def test_block_shuffle_preserves_within_day_order(self):
-        """Within a session, feature values stay in their original order
-        — only the *day* assignment is rotated."""
-        from app.research.indicator_reliability import _day_block_circular_shift
-
-        rng = np.random.default_rng(seed=0)
-        feature = np.array([1.0, 2.0, 3.0, 10.0, 20.0, 30.0, 100.0, 200.0, 300.0])
-        sessions = np.array(["d1", "d1", "d1", "d2", "d2", "d2", "d3", "d3", "d3"])
-
-        rotated = _day_block_circular_shift(feature, sessions, rng)
-
+        assert sorted(rotated.tolist()) == sorted(feature.tolist()), "feature marginal distribution is preserved"
         # Whatever donor day each target day reads from, the within-day
         # triple must come from one of the original triples (1,2,3) or
         # (10,20,30) or (100,200,300) in that exact order.
         for chunk_start in (0, 3, 6):
             chunk = tuple(rotated[chunk_start : chunk_start + 3].tolist())
-            assert chunk in {(1.0, 2.0, 3.0), (10.0, 20.0, 30.0), (100.0, 200.0, 300.0)}
+            assert chunk in {(1.0, 2.0, 3.0), (10.0, 20.0, 30.0), (100.0, 200.0, 300.0)}, (
+                f"within-day order is preserved in the session starting at row {chunk_start}"
+            )
 
     def test_block_shuffle_falls_back_to_iid_with_one_session(self):
         from app.research.indicator_reliability import _day_block_circular_shift
@@ -601,19 +619,3 @@ class TestRandomBaselineReturnsDistribution:
         assert std_legacy > 0
         # Sanity: distributions should differ; allow a tiny epsilon.
         assert abs(std_block - std_legacy) > 1e-9 or std_block != std_legacy
-
-    def test_baseline_rng_makes_results_deterministic(self):
-        df = _create_test_df(500)
-        rng_a = np.random.default_rng(seed=123)
-        rng_b = np.random.default_rng(seed=123)
-
-        mean_a, std_a, dist_a = compute_random_baseline_ic(
-            df, horizon=10, feature_column="rsi_14", n_simulations=20, rng=rng_a
-        )
-        mean_b, std_b, dist_b = compute_random_baseline_ic(
-            df, horizon=10, feature_column="rsi_14", n_simulations=20, rng=rng_b
-        )
-
-        assert mean_a == pytest.approx(mean_b, abs=1e-12)
-        assert std_a == pytest.approx(std_b, abs=1e-12)
-        assert dist_a == pytest.approx(dist_b, abs=1e-12)

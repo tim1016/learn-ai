@@ -127,22 +127,20 @@ def test_load_run_with_malformed_run_id_raises_value_error(tmp_path: Path):
             load_run(bad, root=tmp_path)
 
 
-def test_save_run_with_malformed_run_id_raises_value_error(tmp_path: Path, fake_data_factory):
-    """``save_run`` must reject malformed run_ids before any directory creation."""
+def test_save_run_refuses_a_malformed_run_id_and_a_run_id_mismatch(tmp_path: Path, fake_data_factory):
     spec = _build_test_spec()
     ledger, result = _make_run(spec, fake_data_factory)
+
+    # ``save_run`` must reject malformed run_ids before any directory creation.
     poisoned = ledger.model_copy(update={"run_id": "../escape"})
     poisoned_result = result.model_copy(update={"run_id": "../escape"})
 
     with pytest.raises(ValueError):
         save_run(poisoned, poisoned_result, root=tmp_path)
     # Nothing escaped above the root.
-    assert not (tmp_path.parent / "escape").exists()
+    assert not (tmp_path.parent / "escape").exists(), "malformed run_id: nothing escaped above the root"
 
-
-def test_save_rejects_run_id_mismatch(tmp_path: Path, fake_data_factory):
-    spec = _build_test_spec()
-    ledger, result = _make_run(spec, fake_data_factory)
+    # A result whose run_id disagrees with the ledger's is rejected too.
     mismatched_result = result.model_copy(update={"run_id": "definitely-different"})
 
     with pytest.raises(ValueError, match="run_id"):
@@ -219,24 +217,21 @@ def test_list_skips_corrupt_ledger(tmp_path: Path, fake_data_factory, caplog):
 # ---------------------------------------------------------------------------
 # Atomic-write guarantee.
 # ---------------------------------------------------------------------------
-def test_atomic_write_leaves_no_tmp_files_on_success(tmp_path: Path, fake_data_factory):
+def test_save_run_leaves_no_tmp_files_on_success_and_creates_directory_recursively(
+    tmp_path: Path, fake_data_factory
+):
     spec = _build_test_spec()
     ledger, result = _make_run(spec, fake_data_factory)
     run_dir = save_run(ledger, result, root=tmp_path)
 
     leftover_tmp = list(run_dir.glob("*.tmp"))
-    assert leftover_tmp == []
-
-
-def test_save_creates_directory_recursively(tmp_path: Path, fake_data_factory):
-    spec = _build_test_spec()
-    ledger, result = _make_run(spec, fake_data_factory)
+    assert leftover_tmp == [], "atomic write leaves no tmp files on success"
 
     deep_root = tmp_path / "deeply" / "nested" / "runs"
     save_run(ledger, result, root=deep_root)
 
     loaded_ledger, _ = load_run(ledger.run_id, root=deep_root)
-    assert loaded_ledger.run_id == ledger.run_id
+    assert loaded_ledger.run_id == ledger.run_id, "save creates the directory recursively"
 
 
 # ---------------------------------------------------------------------------

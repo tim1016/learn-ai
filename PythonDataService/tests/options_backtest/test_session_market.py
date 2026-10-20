@@ -56,12 +56,26 @@ def _market(
     )
 
 
-def test_the_underlying_close_is_the_close_of_the_bar_closing_then_and_none_where_it_did_not_trade() -> None:
+def test_a_full_days_market_gives_its_underlying_close_its_session_and_its_pick() -> None:
     market = _market()
 
-    assert market.underlying_close(close_ms(FRI, 5)) == D("500.40")
-    assert market.underlying_close(close_ms(FRI, 6)) is None
-    assert market.underlying_close(close_ms(FRI, 7)) == D("500.60")
+    assert market.underlying_close(close_ms(FRI, 5)) == D("500.40"), "the close of the bar closing at minute 5"
+    assert market.underlying_close(close_ms(FRI, 6)) is None, "none where the underlying did not trade"
+    assert market.underlying_close(close_ms(FRI, 7)) == D("500.60"), "the close of the bar closing at minute 7"
+
+    # 2026-10-09 is in daylight time (UTC-4): 09:30 is 13:30 UTC. The day is 20735 days after 1970-01-01, which is
+    # 20735 x 86400 = 1,791,504,000 s; plus 13.5 h = 48,600 s gives 1,791,552,600 s. The close is 390 minutes later.
+    assert market.session_open_ms == 1_791_552_600_000, "a full day opens at nine thirty New York time"
+    assert market.session_close_ms == 1_791_552_600_000 + 390 * 60_000 == 1_791_576_000_000, (
+        "a full day closes at four New York time"
+    )
+
+    # Strikes are listed 495, 500, 505, 510. 500.4 is nearest 500; 506.9 is nearest 505 (1.9 away; 510 is 3.1).
+    low = market.pick(_leg(), at_ms=close_ms(FRI, 5), underlying_price=D("500.4"))
+    high = market.pick(_leg(), at_ms=close_ms(FRI, 9), underlying_price=D("506.9"))
+
+    assert isinstance(low, Picked) and isinstance(high, Picked), "a pick on this date's listing is a pick"
+    assert (low.contract, high.contract) == (CALL_500, CALL_505), "a pick follows the underlying price"
 
 
 def test_the_underlying_price_is_the_bars_close_and_not_its_open_high_or_low() -> None:
@@ -107,15 +121,6 @@ def test_a_contract_whose_day_was_never_loaded_is_a_named_error_and_not_a_minute
     assert CALL_505.occ_symbol in str(raised.value)
 
 
-def test_a_full_day_opens_at_nine_thirty_and_closes_at_four_new_york_time() -> None:
-    # 2026-10-09 is in daylight time (UTC-4): 09:30 is 13:30 UTC. The day is 20735 days after 1970-01-01, which is
-    # 20735 x 86400 = 1,791,504,000 s; plus 13.5 h = 48,600 s gives 1,791,552,600 s. The close is 390 minutes later.
-    market = _market()
-
-    assert market.session_open_ms == 1_791_552_600_000
-    assert market.session_close_ms == 1_791_552_600_000 + 390 * 60_000 == 1_791_576_000_000
-
-
 def test_a_half_day_closes_at_one() -> None:
     # 2026-11-27 is in standard time (UTC-5): 09:30 is 14:30 UTC and 13:00 is 18:00 UTC. The day is 20784 days after
     # 1970-01-01 = 1,795,737,600 s; plus 52,200 s (14.5 h) opens at 1,795,789,800 s and plus 64,800 s (18 h) closes at
@@ -132,17 +137,6 @@ def test_a_day_that_is_not_a_session_has_no_market() -> None:
 
     with pytest.raises(LookupError):
         DayMarket(saturday, underlying=(), listing=listing_on(saturday), option_days={})
-
-
-def test_a_pick_follows_the_underlying_price_on_this_dates_listing() -> None:
-    market = _market()
-
-    # Strikes are listed 495, 500, 505, 510. 500.4 is nearest 500; 506.9 is nearest 505 (1.9 away; 510 is 3.1).
-    low = market.pick(_leg(), at_ms=close_ms(FRI, 5), underlying_price=D("500.4"))
-    high = market.pick(_leg(), at_ms=close_ms(FRI, 9), underlying_price=D("506.9"))
-
-    assert isinstance(low, Picked) and isinstance(high, Picked)
-    assert (low.contract, high.contract) == (CALL_500, CALL_505)
 
 
 def test_a_pick_the_listing_refuses_comes_back_as_the_refusal() -> None:
@@ -184,23 +178,16 @@ _BAD_BARS = {
 
 
 @pytest.mark.parametrize(("bars", "words"), _BAD_BARS.values(), ids=_BAD_BARS.keys())
-def test_bars_that_cannot_be_a_day_of_minute_bars_are_refused_for_the_underlying(
+def test_bars_that_cannot_be_a_day_of_minute_bars_are_refused_for_the_underlying_and_for_a_contract_and_name_it(
     bars: list[MinuteBar], words: str
 ) -> None:
-    with pytest.raises(MalformedBars, match=words) as raised:
+    with pytest.raises(MalformedBars, match=words) as for_the_underlying:
         _market(underlying=bars)
-
-    assert "the underlying" in str(raised.value)
-
-
-@pytest.mark.parametrize(("bars", "words"), _BAD_BARS.values(), ids=_BAD_BARS.keys())
-def test_bars_that_cannot_be_a_day_of_minute_bars_are_refused_for_a_contract_and_name_it(
-    bars: list[MinuteBar], words: str
-) -> None:
-    with pytest.raises(MalformedBars, match=words) as raised:
+    with pytest.raises(MalformedBars, match=words) as for_a_contract:
         _market(options={CALL_500: bars})
 
-    assert CALL_500.occ_symbol in str(raised.value)
+    assert "the underlying" in str(for_the_underlying.value), "refused for the underlying, and it names the underlying"
+    assert CALL_500.occ_symbol in str(for_a_contract.value), "refused for a contract, and it names the contract"
 
 
 _PRICE_COLUMNS = ("open", "high", "low", "close")

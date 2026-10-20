@@ -49,9 +49,9 @@ async def test_synthetic_authority_requires_explicit_durable_activation(tmp_path
         artifacts_root=tmp_path,
     )
 
-    assert unavailable.clerk is None
-    assert unavailable.startup_failure is not None
-    assert unavailable.startup_failure.reason_code == "SYNTHETIC_ACTIVATION_REQUIRED"
+    assert unavailable.clerk is None, "before activation no synthetic clerk is installed"
+    assert unavailable.startup_failure is not None, "before activation selection reports a startup failure"
+    assert unavailable.startup_failure.reason_code == "SYNTHETIC_ACTIVATION_REQUIRED", "before activation the failure is SYNTHETIC_ACTIVATION_REQUIRED"
 
     await activate_synthetic_clerk_authority(account_id=account_id, artifacts_root=tmp_path)
     runtime = await select_synthetic_clerk_runtime(
@@ -61,40 +61,16 @@ async def test_synthetic_authority_requires_explicit_durable_activation(tmp_path
         artifacts_root=tmp_path,
     )
     try:
-        assert runtime.authority_kind == "synthetic"
-        assert runtime.selected_account_authority_kind == "synthetic"
-        assert runtime.selected_account_id == account_id
-        assert runtime.sqlite_repository is not None
-    finally:
-        await runtime.close()
-
-
-async def test_synthetic_facades_leg_policy_is_built_from_the_read_ports_capabilities(
-    tmp_path: Path,
-) -> None:
-    """The `sim:` facade mirrors Alpaca's declared window (task-5 review finding 2).
-
-    ``select_synthetic_clerk_runtime`` builds ``program_leg_policy`` from
-    ``ports.read.capabilities()`` (ADR 0059 D5.3), not a hardcoded default —
-    intended by design, since the sim world rehearses the paper environment.
-    Pinned at the ``active_authority`` composition level, not one level down,
-    because the full construction is practical here: it is the same fixture
-    ``test_synthetic_authority_requires_explicit_durable_activation`` already
-    exercises above.
-    """
-    account_id = "sim:ema-3"
-    broker = SyntheticBroker(account_id=account_id)
-    await activate_synthetic_clerk_authority(account_id=account_id, artifacts_root=tmp_path)
-
-    runtime = await select_synthetic_clerk_runtime(
-        account_id=account_id,
-        read=broker,
-        trade=broker,
-        artifacts_root=tmp_path,
-    )
-    try:
-        assert runtime.clerk is not None
-        assert runtime.clerk.program_leg_policy.window == ALPACA_EXTENDED_HOURS_WINDOW
+        assert runtime.authority_kind == "synthetic", "after activation the authority kind is synthetic"
+        assert runtime.selected_account_authority_kind == "synthetic", "after activation the selected account is synthetic"
+        assert runtime.selected_account_id == account_id, "after activation the selected account id is the sim: account"
+        assert runtime.sqlite_repository is not None, "after activation the runtime holds its SQLite repository"
+        # The `sim:` facade mirrors Alpaca's declared window: ``program_leg_policy`` is built from
+        # ``ports.read.capabilities()`` (ADR 0059 D5.3), not a hardcoded default, since the sim world
+        # rehearses the paper environment. Pinned at the ``active_authority`` composition level because
+        # the full construction is practical here.
+        assert runtime.clerk is not None, "after activation the runtime holds a synthetic clerk"
+        assert runtime.clerk.program_leg_policy.window == ALPACA_EXTENDED_HOURS_WINDOW, "the sim facade's leg policy is built from the read port's capabilities"
     finally:
         await runtime.close()
 
@@ -192,24 +168,29 @@ def test_single_authority_aggregate_rejects_mixed_real_and_synthetic_rows() -> N
         )
 
 
+# The bare-prefix rows: the canonical require_* helpers refuse a prefix that names no account;
+# the wire boundary must agree, or malformed evidence passes as an authority.
 @pytest.mark.parametrize(
-    ("account_id", "authority_kind"),
+    ("account_id", "authority_kind", "match"),
     [
-        ("sim:ema-1", "real_paper"),
-        ("sim:ema-1", "real_live"),
-        ("sim:ema-1", "shadow"),
-        ("shadow:9LIVE0001", "real_paper"),
-        ("shadow:9LIVE0001", "real_live"),
-        ("shadow:9LIVE0001", "synthetic"),
-        ("PA-REAL", "synthetic"),
-        ("PA-REAL", "shadow"),
+        pytest.param("sim:ema-1", "real_paper", "require", id="sim_account_is_not_real_paper"),
+        pytest.param("sim:ema-1", "real_live", "require", id="sim_account_is_not_real_live"),
+        pytest.param("sim:ema-1", "shadow", "require", id="sim_account_is_not_shadow"),
+        pytest.param("shadow:9LIVE0001", "real_paper", "require", id="shadow_account_is_not_real_paper"),
+        pytest.param("shadow:9LIVE0001", "real_live", "require", id="shadow_account_is_not_real_live"),
+        pytest.param("shadow:9LIVE0001", "synthetic", "require", id="shadow_account_is_not_synthetic"),
+        pytest.param("PA-REAL", "synthetic", "require", id="real_account_is_not_synthetic"),
+        pytest.param("PA-REAL", "shadow", "require", id="real_account_is_not_shadow"),
+        pytest.param("sim:", "synthetic", "name one account", id="bare_sim_prefix_is_refused_at_the_wire"),
+        pytest.param("shadow:", "shadow", "name one account", id="bare_shadow_prefix_is_refused_at_the_wire"),
     ],
 )
 def test_authority_scoped_rows_enforce_account_namespace_at_model_boundary(
     account_id: str,
     authority_kind: str,
+    match: str,
 ) -> None:
-    with pytest.raises(ValidationError, match="require"):
+    with pytest.raises(ValidationError, match=match):
         AuthorityScopedRow(
             account_id=account_id,
             authority_kind=authority_kind,  # type: ignore[arg-type]
@@ -238,14 +219,3 @@ def test_single_authority_aggregate_enforces_selected_account_namespace_when_emp
             authority_kind="real_paper",
             rows=(),
         )
-
-
-@pytest.mark.parametrize(
-    ("account_id", "authority_kind"),
-    [("sim:", "synthetic"), ("shadow:", "shadow")],
-)
-def test_bare_reserved_prefixes_are_refused_at_the_wire(account_id: str, authority_kind: str) -> None:
-    # The canonical require_* helpers refuse a prefix that names no account;
-    # the wire boundary must agree, or malformed evidence passes as an authority.
-    with pytest.raises(ValidationError, match="name one account"):
-        AuthorityScopedRow(account_id=account_id, authority_kind=authority_kind)  # type: ignore[arg-type]

@@ -23,16 +23,18 @@ def test_a_contracts_minute_bars_live_under_its_underlying_and_its_own_symbol() 
     assert path == PurePosixPath("option/usa/minute/spy/spy250613c00600000/20250613_trade.zip")
 
 
-def test_a_listing_lives_under_its_underlying_and_its_date() -> None:
-    path = OptionListingPath(underlying="SPY", as_of=date(2025, 6, 13)).relative_path()
+@pytest.mark.parametrize(
+    ("underlying", "expected"),
+    [
+        ("SPY", "option/usa/listing/spy/20250613_contracts.zip"),
+        ("BRK.B", "option/usa/listing/brk.b/20250613_contracts.zip"),
+    ],
+    ids=["under its underlying and its date", "a dotted underlying keeps its dot"],
+)
+def test_a_listing_lives_under_its_underlying_and_its_date(underlying: str, expected: str) -> None:
+    path = OptionListingPath(underlying=underlying, as_of=date(2025, 6, 13)).relative_path()
 
-    assert path == PurePosixPath("option/usa/listing/spy/20250613_contracts.zip")
-
-
-def test_a_dotted_underlying_keeps_its_dot() -> None:
-    path = OptionListingPath(underlying="BRK.B", as_of=date(2025, 6, 13)).relative_path()
-
-    assert path == PurePosixPath("option/usa/listing/brk.b/20250613_contracts.zip")
+    assert path == PurePosixPath(expected)
 
 
 @pytest.mark.parametrize("hostile", ["", "..", "../etc", "spy/qqq", "SPY\\x", ".hidden", " SPY"])

@@ -18,7 +18,9 @@ from __future__ import annotations
 import hashlib
 import logging
 import zipfile
+from collections.abc import Callable
 from datetime import date
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -191,19 +193,26 @@ class TestBuildingWithoutALakeMount:
 class TestConfigPointsAtTheMountedLake:
     """AC: config rendering points LEAN at the mounted lake subtree."""
 
-    def test_lake_mode_config_data_folder_is_the_mount_target(self) -> None:
+    def test_lake_mode_config_data_folder_is_the_mount_target_outside_the_workspace_mount(self) -> None:
         payload = LeanConfig(data_folder=CONTAINER_LAKE_DATA_MOUNT).to_payload()
 
-        assert payload["data-folder"] == CONTAINER_LAKE_DATA_MOUNT
+        assert payload["data-folder"] == CONTAINER_LAKE_DATA_MOUNT, "the config data folder is the mount target"
         # Results and object store stay in the read-write workspace; only
         # the data folder moves to the read-only mount.
-        assert payload["results-destination-folder"].startswith(CONTAINER_WORKSPACE_MOUNT)
-        assert payload["object-store-root"].startswith(CONTAINER_WORKSPACE_MOUNT)
+        assert payload["results-destination-folder"].startswith(CONTAINER_WORKSPACE_MOUNT), (
+            "results stay in the read-write workspace"
+        )
+        assert payload["object-store-root"].startswith(CONTAINER_WORKSPACE_MOUNT), (
+            "the object store stays in the read-write workspace"
+        )
 
-    def test_lake_mount_target_is_outside_the_workspace_mount(self) -> None:
-        """Nesting under the workspace mount would shadow ``workspace/data``."""
-        assert not CONTAINER_LAKE_DATA_MOUNT.startswith(f"{CONTAINER_WORKSPACE_MOUNT}/")
-        assert CONTAINER_LAKE_DATA_MOUNT != CONTAINER_WORKSPACE_MOUNT
+        # Nesting under the workspace mount would shadow ``workspace/data``.
+        assert not CONTAINER_LAKE_DATA_MOUNT.startswith(f"{CONTAINER_WORKSPACE_MOUNT}/"), (
+            "the lake mount target is not nested under the workspace mount"
+        )
+        assert CONTAINER_LAKE_DATA_MOUNT != CONTAINER_WORKSPACE_MOUNT, (
+            "the lake mount target is not the workspace mount itself"
+        )
 
 
 class TestLauncherResolvesTheHostPath:
@@ -401,7 +410,9 @@ class TestSameBytesAsThePythonReaders:
         assert lake_csv == staged_csv + b"\n"
         assert lake_csv.rstrip(b"\n").split(b"\n") == staged_csv.split(b"\n")
 
-    def test_exposed_files_are_the_lake_files_themselves(self, fixture_lake: Path) -> None:
+    def test_exposed_files_are_the_lake_files_themselves_and_quote_artifacts_are_reported(
+        self, fixture_lake: Path
+    ) -> None:
         """No copy, no re-encode: the sidecar exposes the lake's inodes."""
         artifacts = resolve_lake_artifacts(
             lake_root=fixture_lake,
@@ -413,9 +424,9 @@ class TestSameBytesAsThePythonReaders:
         assert [p.name for p in artifacts.trade_zip_paths] == [
             "20260105_trade.zip",
             "20260106_trade.zip",
-        ]
+        ], "the trade zips are the window's two sessions"
         for path in artifacts.trade_zip_paths:
-            assert path.is_relative_to(fixture_lake)
+            assert path.is_relative_to(fixture_lake), f"{path.name} is a file inside the lake itself"
             # The bytes on disk are exactly what the lake writer produced.
             trading_date = date(int(path.name[:4]), int(path.name[4:6]), int(path.name[6:8]))
             expected = build_minute_trade_zip_bytes(
@@ -423,26 +434,21 @@ class TestSameBytesAsThePythonReaders:
                 trading_date.strftime("%Y%m%d"),
                 to_lake_bars(make_minute_bars("SPY", trading_date)),
             )
-            assert path.read_bytes() == expected
+            assert path.read_bytes() == expected, f"{path.name} holds exactly the bytes the lake writer produced"
 
-    def test_quote_artifacts_are_reported_when_the_lake_has_them(self, fixture_lake: Path) -> None:
-        artifacts = resolve_lake_artifacts(
-            lake_root=fixture_lake,
-            symbol="SPY",
-            start=DAY_ONE,
-            end=DAY_TWO,
-        )
-
+        # Quote artifacts are reported when the lake has them.
         assert [p.name for p in artifacts.quote_zip_paths] == [
             "20260105_quote.zip",
             "20260106_quote.zip",
-        ]
-        expected = build_minute_quote_zip_bytes(
+        ], "the quote zips are reported for the window's two sessions"
+        expected_quote = build_minute_quote_zip_bytes(
             "SPY",
             DAY_ONE.strftime("%Y%m%d"),
             to_lake_bars(make_minute_bars("SPY", DAY_ONE)),
         )
-        assert _sha256(artifacts.quote_zip_paths[0]) == hashlib.sha256(expected).hexdigest()
+        assert _sha256(artifacts.quote_zip_paths[0]) == hashlib.sha256(expected_quote).hexdigest(), (
+            "the first quote zip holds exactly the bytes the lake's quote writer produced"
+        )
 
     def test_trade_only_lake_is_refused(self, tmp_path: Path) -> None:
         """A trade-only lake would launch LEAN into failed_data_requests.
@@ -584,12 +590,24 @@ class TestRequiredLakeMetadata:
         assert market_hours.is_relative_to(fixture_lake)
         assert symbol_properties.is_relative_to(fixture_lake)
 
-    def test_absent_required_metadata_raises(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        "entry_point",
+        [
+            require_lake_metadata,
+            # The check lives on the pre-launch path, not in the manifest.
+            partial(resolve_lake_artifacts, symbol="SPY", start=DAY_ONE, end=DAY_TWO),
+        ],
+        ids=[
+            "absent-required-metadata-raises",
+            "resolution-fails-before-launch-not-at-manifest-time",
+        ],
+    )
+    def test_absent_required_metadata_raises(self, tmp_path: Path, entry_point: Callable[..., object]) -> None:
         lake_root = tmp_path / lake_subpath("raw")
         seed_lake_window(lake_root, "SPY", WINDOW, with_metadata=False)
 
         with pytest.raises(LakeMountError, match="lake_missing_required_metadata"):
-            require_lake_metadata(lake_root)
+            entry_point(lake_root=lake_root)
 
     def test_partially_absent_metadata_names_only_the_missing_kind(self, tmp_path: Path) -> None:
         lake_root = tmp_path / lake_subpath("raw")
@@ -600,20 +618,6 @@ class TestRequiredLakeMetadata:
         with pytest.raises(LakeMountError, match=r"\['market_hours'\]"):
             require_lake_metadata(lake_root)
 
-    def test_resolution_fails_before_launch_not_at_manifest_time(self, tmp_path: Path) -> None:
-        """The check lives on the pre-launch path, not in the manifest."""
-        lake_root = tmp_path / lake_subpath("raw")
-        seed_lake_window(lake_root, "SPY", WINDOW, with_metadata=False)
-
-        with pytest.raises(LakeMountError, match="lake_missing_required_metadata"):
-            resolve_lake_artifacts(
-                lake_root=lake_root,
-                symbol="SPY",
-                start=DAY_ONE,
-                end=DAY_TWO,
-            )
-
-
 class TestLakeModeGivesLeanTheSameShapeStagingWould:
     """Carry-forward A3: what the lake lacks that a staged data folder has.
 
@@ -623,7 +627,9 @@ class TestLakeModeGivesLeanTheSameShapeStagingWould:
     to declare.
     """
 
-    def test_a_written_lake_carries_the_corporate_action_directories(self, tmp_path: Path) -> None:
+    def test_a_written_lake_carries_the_corporate_action_directories_and_rebootstrapping_is_harmless(
+        self, tmp_path: Path
+    ) -> None:
         """A3(b). LEAN's ``LocalDiskMapFileProvider`` warns without them.
 
         The staging path creates them empty on every run so a clean window is
@@ -636,18 +642,16 @@ class TestLakeModeGivesLeanTheSameShapeStagingWould:
 
         ensure_lean_readable_layout(lake_root)
 
-        assert (lake_root / "equity" / "usa" / "factor_files").is_dir()
-        assert (lake_root / "equity" / "usa" / "map_files").is_dir()
+        assert (lake_root / "equity" / "usa" / "factor_files").is_dir(), "the factor_files directory is created"
+        assert (lake_root / "equity" / "usa" / "map_files").is_dir(), "the map_files directory is created"
 
-    def test_bootstrapping_the_layout_twice_is_harmless(self, tmp_path: Path) -> None:
-        lake_root = tmp_path / lake_subpath("raw")
-        lake_root.mkdir(parents=True)
-        ensure_lean_readable_layout(lake_root)
         (lake_root / "equity" / "usa" / "factor_files" / "spy.csv").write_text("kept\n")
 
         ensure_lean_readable_layout(lake_root)
 
-        assert (lake_root / "equity" / "usa" / "factor_files" / "spy.csv").read_text() == "kept\n"
+        assert (lake_root / "equity" / "usa" / "factor_files" / "spy.csv").read_text() == "kept\n", (
+            "bootstrapping the layout twice keeps what is already there"
+        )
 
     def test_the_missing_interest_rate_subtree_is_warned_about_not_refused(
         self, fixture_lake: Path, caplog: pytest.LogCaptureFixture

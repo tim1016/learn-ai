@@ -17,10 +17,53 @@ from app.data_lake.types import NonSessionRecord
 from app.lean_sidecar.trading_calendar import expected_sessions
 
 
-def test_weekday_non_holiday_is_a_session():
-    sessions, non_sessions = trading_sessions_for("usa", date(2024, 5, 20), date(2024, 5, 20))
-    assert sessions == [date(2024, 5, 20)]  # Mon
-    assert non_sessions == []
+@pytest.mark.parametrize(
+    ("start", "end", "expected_sessions", "expected_non_sessions"),
+    [
+        pytest.param(
+            date(2024, 5, 20),
+            date(2024, 5, 20),
+            (date(2024, 5, 20),),  # Mon
+            (),
+            id="weekday_non_holiday_is_a_session",
+        ),
+        pytest.param(
+            date(2024, 5, 27),
+            date(2024, 5, 27),
+            (),
+            ((date(2024, 5, 27), "market_holiday"),),  # Memorial Day; market is closed.
+            id="memorial_day_2024_is_a_market_holiday",
+        ),
+        # Fri 5/24 trading, Sat 5/25 weekend, Sun 5/26 weekend,
+        # Mon 5/27 Memorial Day, Tue 5/28 trading, ..., Fri 5/31 trading.
+        pytest.param(
+            date(2024, 5, 24),
+            date(2024, 5, 31),
+            (date(2024, 5, 24), date(2024, 5, 28), date(2024, 5, 29), date(2024, 5, 30), date(2024, 5, 31)),
+            ((date(2024, 5, 25), "weekend"), (date(2024, 5, 26), "weekend"), (date(2024, 5, 27), "market_holiday")),
+            id="week_spanning_a_holiday",
+        ),
+        # The regression the consolidation closes, pinned to a date. The hand-maintained
+        # holiday list this module used to carry covered only 2024-2026, so every market
+        # holiday before 2024 read as a trading session: the lake required artifacts for
+        # Christmas Day and recorded phantom sessions in its catalog. Any backfill reaching
+        # back a few years -- well inside the coverage endpoint's five-year cap -- hit it.
+        pytest.param(
+            date(2020, 12, 25),
+            date(2020, 12, 25),
+            (),
+            ((date(2020, 12, 25), "market_holiday"),),
+            id="a_pre_2024_holiday_is_no_longer_treated_as_a_session",
+        ),
+    ],
+)
+def test_a_window_splits_into_sessions_and_reasoned_non_sessions(start, end, expected_sessions, expected_non_sessions):
+    sessions, non_sessions = trading_sessions_for("usa", start, end)
+
+    assert sessions == list(expected_sessions), "the sessions are exactly the trading days in the window"
+    assert non_sessions == [
+        NonSessionRecord(market="usa", trading_date=day, reason=reason) for day, reason in expected_non_sessions
+    ], "every other day is a non-session carrying its reason"
 
 
 def test_weekend_is_excluded():
@@ -29,29 +72,6 @@ def test_weekend_is_excluded():
     assert sessions == []
     assert NonSessionRecord(market="usa", trading_date=date(2024, 5, 25), reason="weekend") in non_sessions
     assert NonSessionRecord(market="usa", trading_date=date(2024, 5, 26), reason="weekend") in non_sessions
-
-
-def test_memorial_day_2024_is_a_market_holiday():
-    # 2024-05-27 is Memorial Day; market is closed.
-    sessions, non_sessions = trading_sessions_for("usa", date(2024, 5, 27), date(2024, 5, 27))
-    assert sessions == []
-    assert NonSessionRecord(market="usa", trading_date=date(2024, 5, 27), reason="market_holiday") in non_sessions
-
-
-def test_week_spanning_a_holiday():
-    sessions, non_sessions = trading_sessions_for("usa", date(2024, 5, 24), date(2024, 5, 31))
-    # Fri 5/24 trading, Sat 5/25 weekend, Sun 5/26 weekend,
-    # Mon 5/27 Memorial Day, Tue 5/28 trading, ..., Fri 5/31 trading.
-    expected_sessions = [
-        date(2024, 5, 24),
-        date(2024, 5, 28),
-        date(2024, 5, 29),
-        date(2024, 5, 30),
-        date(2024, 5, 31),
-    ]
-    assert sessions == expected_sessions
-    holiday_dates = [n.trading_date for n in non_sessions if n.reason == "market_holiday"]
-    assert date(2024, 5, 27) in holiday_dates
 
 
 @pytest.mark.parametrize(
@@ -83,21 +103,6 @@ def test_every_day_in_the_window_is_either_a_session_or_a_reasoned_non_session()
     accounted = [*sessions, *(n.trading_date for n in non_sessions)]
     assert sorted(accounted) == sorted(set(accounted))
     assert len(accounted) == (end - start).days + 1
-
-
-def test_a_pre_2024_holiday_is_no_longer_treated_as_a_session() -> None:
-    """The regression the consolidation closes, pinned to a date.
-
-    The hand-maintained holiday list this module used to carry covered only
-    2024-2026, so every market holiday before 2024 read as a trading session:
-    the lake required artifacts for Christmas Day and recorded phantom
-    sessions in its catalog. Any backfill reaching back a few years -- well
-    inside the coverage endpoint's five-year cap -- hit it.
-    """
-    sessions, non_sessions = trading_sessions_for("usa", date(2020, 12, 25), date(2020, 12, 25))
-
-    assert sessions == []
-    assert NonSessionRecord(market="usa", trading_date=date(2020, 12, 25), reason="market_holiday") in non_sessions
 
 
 def test_a_market_this_calendar_does_not_cover_is_refused() -> None:

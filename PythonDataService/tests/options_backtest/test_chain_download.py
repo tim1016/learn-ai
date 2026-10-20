@@ -312,36 +312,29 @@ async def test_the_underlying_is_fetched_from_the_millisecond_the_lake_takes_the
     assert len(materializer.calls) == (1 if fetched else 0)
 
 
-@pytest.mark.parametrize("no_session", [date(2025, 6, 14), date(2025, 6, 19)], ids=["a Saturday", "Juneteenth"])
+@pytest.mark.parametrize(
+    ("day", "reason"),
+    [
+        pytest.param(date(2025, 6, 14), "not_a_session", id="a Saturday"),
+        pytest.param(date(2025, 6, 19), "not_a_session", id="Juneteenth"),
+        # No clock is passed, so the lake's is used: the tests' fixed one, 2026-10-12 at 14:00 New York, with the session
+        # of that Monday still to close at 16:00 and its date to end at midnight.
+        pytest.param(date(2026, 10, 12), "session_not_over", id="today's session before New York midnight"),
+    ],
+)
 @respx.mock
-async def test_a_date_that_is_not_a_session_asks_the_stock_engine_for_nothing_and_fails_the_underlying_like_the_listing(
-    no_session: date, fake_catalog: FakeCatalog, tmp_lake: Path, stock_fetch_that_must_not_run: StockFetchDouble
+async def test_a_date_the_lake_will_not_take_asks_the_stock_engine_for_nothing_and_fails_the_underlying_like_the_listing(
+    day: date, reason: str, fake_catalog: FakeCatalog, tmp_lake: Path, stock_fetch_that_must_not_run: StockFetchDouble
 ) -> None:
-    items = await ensure_chain_data("SPY", no_session, expiry=None, contracts=[])
+    items = await ensure_chain_data("SPY", day, expiry=None, contracts=[])
 
     assert _summary(items) == [
-        ("listing", "SPY", "failed", "not_a_session"),
-        ("underlying", "SPY", "failed", "not_a_session"),
-    ]
-    assert (
-        stock_fetch_that_must_not_run.calls == []
-    )  # and an un-mocked request to the vendor would have failed the test
-    assert items[1].detail and items[1].detail == items[0].detail
-
-
-@respx.mock
-async def test_todays_session_before_new_york_midnight_is_not_fetched_on_the_lakes_own_clock(
-    fake_catalog: FakeCatalog, tmp_lake: Path, stock_fetch_that_must_not_run: StockFetchDouble
-) -> None:
-    # No clock is passed, so the lake's is used: the tests' fixed one, 2026-10-12 at 14:00 New York, with the session of
-    # that Monday still to close at 16:00 and its date to end at midnight.
-    items = await ensure_chain_data("SPY", date(2026, 10, 12), expiry=None, contracts=[])
-
-    assert _summary(items) == [
-        ("listing", "SPY", "failed", "session_not_over"),
-        ("underlying", "SPY", "failed", "session_not_over"),
-    ]
-    assert stock_fetch_that_must_not_run.calls == []
+        ("listing", "SPY", "failed", reason),
+        ("underlying", "SPY", "failed", reason),
+    ], "the listing and the underlying both fail with the lake's reason"
+    # An un-mocked request to the vendor would have failed the test.
+    assert stock_fetch_that_must_not_run.calls == [], "the stock engine is asked for nothing"
+    assert items[1].detail and items[1].detail == items[0].detail, "the underlying fails in the listing's words"
 
 
 @respx.mock
@@ -358,24 +351,37 @@ async def test_an_underlying_already_held_is_reported_stored_even_while_its_sess
     assert stock_fetch_that_must_not_run.calls == []
 
 
+@pytest.mark.parametrize(
+    ("day", "now_ms"),
+    [
+        # Before 2024-10-14, which the plan reaches from 2026-10-12.
+        pytest.param(date(2024, 6, 14), None, id="a date before the plan's reach"),
+        # Two years after the fixed clock (2026-10-12 14:00 New York = 1 791 828 000 000 ms): 365 days to 2027-10-12 and
+        # 366 to 2028-10-12 (it holds 29 February 2028), 731 * 86 400 000 = 63 158 400 000 ms, so 1 854 986 400 000. The
+        # plan then reaches back to 2026-10-14, and 2025-06-13 is before it; at the fixed clock it is well inside.
+        pytest.param(FRIDAY, 1_854_986_400_000, id="the clock the caller gives, two years on"),
+    ],
+)
 @respx.mock
-async def test_a_date_before_the_plans_reach_fails_each_contract_as_outside_the_plan_without_asking_the_vendor(
-    fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble
+async def test_a_contract_outside_the_data_plan_fails_as_outside_the_plan_without_asking_the_vendor(
+    day: date, now_ms: int | None, fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble
 ) -> None:
-    old_friday = date(2024, 6, 14)  # before 2024-10-14, which the plan reaches from 2026-10-12
-    contract = _call(600, old_friday)
+    contract = _call(600, day)
     vendor_lists(contract)
     bars_route = vendor_bars(lambda symbol: no_trades(symbol))
 
-    items = await ensure_chain_data("SPY", old_friday, expiry=None, contracts=[contract])
+    items = await ensure_chain_data("SPY", day, expiry=None, contracts=[contract], now_ms=now_ms)
 
-    assert (items[0].kind, items[0].outcome) == (ItemKind.LISTING, Outcome.FETCHED)  # a listing has no plan floor
+    assert (items[0].kind, items[0].outcome) == (
+        ItemKind.LISTING,
+        Outcome.FETCHED,
+    ), "a listing has no plan floor"
     assert (items[2].kind, items[2].outcome, items[2].reason) == (
         ItemKind.CONTRACT,
         Outcome.FAILED,
         "outside_data_plan",
-    )
-    assert bars_route.call_count == 0
+    ), "the contract fails as outside the data plan"
+    assert bars_route.call_count == 0, "the vendor is not asked"
 
 
 # ── The underlying ────────────────────────────────────────────────────────
@@ -395,49 +401,46 @@ async def test_an_underlying_already_held_is_not_fetched_again(
     assert items[1].outcome is Outcome.ALREADY_STORED and materializer.calls == []
 
 
+@pytest.mark.parametrize(
+    ("stock_fetch", "words"),
+    [
+        pytest.param(
+            lambda: {"error": LakeMaterializationError("the lake could not materialize SPY")},
+            "could not materialize",
+            id="the stock function cannot fetch",
+        ),
+        # A file the stock function wrote and the lake's coverage rule does not hold: its only bar is before the open.
+        pytest.param(
+            lambda: {"bars": [stock_bar(FRIDAY_OPEN_MS - 60 * MINUTE_MS, "600.00", "600.50", "599.75", "600.25")]},
+            "still not in the lake",
+            id="the stock function stored no bar in the regular session",
+        ),
+    ],
+)
 @respx.mock
-async def test_an_underlying_the_stock_function_cannot_fetch_is_a_failed_item_with_the_reason_and_the_rest_goes_on(
-    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
+async def test_an_underlying_the_stock_function_does_not_deliver_is_a_failed_item_with_the_reason_and_the_rest_goes_on(
+    stock_fetch: Callable[[], dict[str, Any]],
+    words: str,
+    fake_catalog: FakeCatalog,
+    tmp_lake: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    failing = StockFetchDouble(
-        fake_catalog, tmp_lake, error=LakeMaterializationError("the lake could not materialize SPY")
-    )
-    monkeypatch.setattr(chain_download, "materialize_engine_run", failing)
-    vendor_lists(CALL_600)
-    vendor_bars(lambda symbol: no_trades(symbol))
-
-    items = await ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=[CALL_600])
-
-    assert _summary(items) == [
-        ("listing", "SPY", "fetched", None),
-        ("underlying", "SPY", "failed", "underlying_not_fetched"),
-        ("contract", SYMBOL_600, "fetched", None),
-    ]
-    assert "could not materialize" in (items[1].detail or "")
-
-
-@respx.mock
-async def test_an_underlying_the_stock_function_stored_with_no_bar_in_the_regular_session_is_a_failed_item(
-    fake_catalog: FakeCatalog, tmp_lake: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # A file the stock function wrote and the lake's coverage rule does not hold: its only bar is before the open.
-    premarket = stock_bar(FRIDAY_OPEN_MS - 60 * MINUTE_MS, "600.00", "600.50", "599.75", "600.25")
-    double = StockFetchDouble(fake_catalog, tmp_lake, bars=[premarket])
+    double = StockFetchDouble(fake_catalog, tmp_lake, **stock_fetch())
     monkeypatch.setattr(chain_download, "materialize_engine_run", double)
     vendor_lists(CALL_600)
     vendor_bars(lambda symbol: no_trades(symbol))
 
     items = await ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=[CALL_600])
 
-    assert len(double.calls) == 1
+    assert len(double.calls) == 1, "the stock function is asked once"
     assert _summary(items) == [
         ("listing", "SPY", "fetched", None),
         ("underlying", "SPY", "failed", "underlying_not_fetched"),
         ("contract", SYMBOL_600, "fetched", None),
-    ]
-    assert "still not in the lake" in (items[1].detail or "")
+    ], "the underlying fails and the rest goes on"
+    assert words in (items[1].detail or ""), "the underlying's item says why"
     # The chain reads the same file as not stored, so the item and the chain now say one thing.
-    assert (await asyncio.to_thread(LakeRunData("SPY").underlying_day, FRIDAY)) is None
+    assert (await asyncio.to_thread(LakeRunData("SPY").underlying_day, FRIDAY)) is None, "nothing is stored"
 
 
 @pytest.mark.parametrize(
@@ -805,21 +808,23 @@ async def test_a_cancel_scope_that_cancels_again_at_every_checkpoint_does_not_ma
 TAKEN_FROM_MS = 1749873600000
 
 
-def test_a_session_is_refused_until_the_millisecond_the_lake_takes_it_and_not_after() -> None:
+def test_a_session_is_refused_until_the_millisecond_the_lake_takes_it_and_a_non_session_whatever_the_clock_says() -> (
+    None
+):
     before = fetch_refusal("SPY", FRIDAY, now_ms=TAKEN_FROM_MS - 1)
     at_it = fetch_refusal("SPY", FRIDAY, now_ms=TAKEN_FROM_MS)
-
-    assert before is not None and before.reason == "session_not_over"
-    assert before.words == lake_reason_words("session_not_over")
-    assert at_it is None
-
-
-def test_a_date_that_is_not_a_session_is_refused_as_that_whatever_the_clock_says() -> None:
     # 2025-06-14 is a Saturday.
-    refusal = fetch_refusal("SPY", date(2025, 6, 14), now_ms=TAKEN_FROM_MS * 2)
+    saturday = fetch_refusal("SPY", date(2025, 6, 14), now_ms=TAKEN_FROM_MS * 2)
 
-    assert refusal is not None and refusal.reason == "not_a_session"
-    assert refusal.words == lake_reason_words("not_a_session")
+    assert before is not None and before.reason == "session_not_over", (
+        "a session is refused one millisecond before the lake takes it"
+    )
+    assert before.words == lake_reason_words("session_not_over"), "the refusal says it in the lake's words"
+    assert at_it is None, "a session is not refused from the millisecond the lake takes it"
+    assert saturday is not None and saturday.reason == "not_a_session", (
+        "a date that is not a session is refused as that whatever the clock says"
+    )
+    assert saturday.words == lake_reason_words("not_a_session"), "and in the lake's words"
 
 
 def test_the_lakes_clock_is_the_one_asked_when_none_is_given(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1048,24 +1053,6 @@ async def test_the_listings_capture_waits_for_a_free_place_among_the_requests_in
 
     assert waited == (False, 0)
     assert (item.outcome, listing_route.call_count, listing is not None) == (Outcome.FETCHED, 1, True)
-
-
-@respx.mock
-async def test_the_clock_the_caller_gives_is_the_one_the_contract_capture_uses_for_the_data_plan(
-    fake_catalog: FakeCatalog, tmp_lake: Path, materializer: StockFetchDouble
-) -> None:
-    vendor_lists(CALL_600)
-    bars_route = vendor_bars(lambda symbol: no_trades(symbol))
-    # Two years after the fixed clock (2026-10-12 14:00 New York = 1 791 828 000 000 ms): 365 days to 2027-10-12 and 366
-    # to 2028-10-12 (it holds 29 February 2028), 731 * 86 400 000 = 63 158 400 000 ms, so 1 854 986 400 000. The plan
-    # then reaches back to 2026-10-14, and 2025-06-13 is before it; at the fixed clock it is well inside.
-    two_years_on = 1_854_986_400_000
-
-    items = await ensure_chain_data("SPY", FRIDAY, expiry=None, contracts=[CALL_600], now_ms=two_years_on)
-
-    assert (items[0].kind, items[0].outcome) == (ItemKind.LISTING, Outcome.FETCHED)  # a listing has no plan floor
-    assert (items[2].outcome, items[2].reason) == (Outcome.FAILED, "outside_data_plan")
-    assert bars_route.call_count == 0
 
 
 @respx.mock

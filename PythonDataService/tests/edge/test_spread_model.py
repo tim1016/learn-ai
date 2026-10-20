@@ -15,19 +15,28 @@ from app.engine.edge.spread_model import (
 )
 
 
-def test_option_spread_atm_30d_matches_hand_calc():
+def test_option_spread_atm_30d_matches_hand_calc_and_wing_penalty_increases_with_distance_from_atm():
     # S=400, K=400 (delta=0.5), T=30/365, IV=0.20, defaults
     s, k_strike, t, iv = 400.0, 400.0, 30.0 / 365.0, 0.20
-    expected = DEFAULT_K * iv * np.sqrt(t) * (1.0 + DEFAULT_ALPHA * 0.0) * s
-    got = option_spread(
+    base_args = dict(
         underlying_price=s,
         strike=k_strike,
         time_to_expiry_years=t,
         iv=iv,
-        delta=0.50,
     )
-    np.testing.assert_allclose(got, expected, atol=1e-12)
-    assert got > OPTION_SPREAD_FLOOR
+    expected = DEFAULT_K * iv * np.sqrt(t) * (1.0 + DEFAULT_ALPHA * 0.0) * s
+    atm = option_spread(delta=0.50, **base_args)
+    np.testing.assert_allclose(atm, expected, atol=1e-12, err_msg="ATM 30d spread matches the hand calc")
+    assert atm > OPTION_SPREAD_FLOOR, "ATM 30d spread is above the floor"
+    wing_25 = option_spread(delta=0.25, **base_args)
+    wing_75 = option_spread(delta=0.75, **base_args)
+    assert wing_25 > atm, "25-delta wing spread exceeds ATM"
+    assert wing_75 > atm, "75-delta wing spread exceeds ATM"
+    np.testing.assert_allclose(wing_25, wing_75, atol=1e-12, err_msg="the 25- and 75-delta wings are symmetric")
+    expected_ratio = 1.0 + DEFAULT_ALPHA * 0.25
+    np.testing.assert_allclose(
+        wing_25 / atm, expected_ratio, atol=1e-12, err_msg="the wing-to-ATM ratio is 1 + alpha * 0.25"
+    )
 
 
 def test_option_spread_floor_engages_for_low_iv():
@@ -39,23 +48,6 @@ def test_option_spread_floor_engages_for_low_iv():
         delta=0.50,
     )
     assert got == OPTION_SPREAD_FLOOR
-
-
-def test_option_spread_wing_penalty_increases_with_distance_from_atm():
-    base_args = dict(
-        underlying_price=400.0,
-        strike=400.0,
-        time_to_expiry_years=30.0 / 365.0,
-        iv=0.20,
-    )
-    atm = option_spread(delta=0.50, **base_args)
-    wing_25 = option_spread(delta=0.25, **base_args)
-    wing_75 = option_spread(delta=0.75, **base_args)
-    assert wing_25 > atm
-    assert wing_75 > atm
-    np.testing.assert_allclose(wing_25, wing_75, atol=1e-12)
-    expected_ratio = 1.0 + DEFAULT_ALPHA * 0.25
-    np.testing.assert_allclose(wing_25 / atm, expected_ratio, atol=1e-12)
 
 
 def test_option_spread_sqrt_t_scaling():
@@ -106,21 +98,22 @@ def test_stock_spread_rejects_non_positive_price():
         stock_spread(0.0)
 
 
-def test_is_tradable_passes_all_floors():
-    assert is_tradable(spread=0.05, mid=4.0, quoted_volume=200, open_interest=500)
-
-
-def test_is_tradable_fails_on_wide_spread():
-    assert not is_tradable(spread=2.0, mid=4.0, quoted_volume=200, open_interest=500)
-
-
-def test_is_tradable_fails_on_low_volume():
-    assert not is_tradable(spread=0.05, mid=4.0, quoted_volume=10, open_interest=500)
-
-
-def test_is_tradable_fails_on_low_open_interest():
-    assert not is_tradable(spread=0.05, mid=4.0, quoted_volume=200, open_interest=10)
-
-
-def test_is_tradable_fails_on_zero_mid():
-    assert not is_tradable(spread=0.01, mid=0.0, quoted_volume=200, open_interest=500)
+@pytest.mark.parametrize(
+    ("spread", "mid", "quoted_volume", "open_interest", "tradable"),
+    [
+        (0.05, 4.0, 200, 500, True),
+        (2.0, 4.0, 200, 500, False),
+        (0.05, 4.0, 10, 500, False),
+        (0.05, 4.0, 200, 10, False),
+        (0.01, 0.0, 200, 500, False),
+    ],
+    ids=[
+        "passes-all-floors",
+        "fails-on-wide-spread",
+        "fails-on-low-volume",
+        "fails-on-low-open-interest",
+        "fails-on-zero-mid",
+    ],
+)
+def test_is_tradable_applies_every_floor(spread, mid, quoted_volume, open_interest, tradable):
+    assert bool(is_tradable(spread=spread, mid=mid, quoted_volume=quoted_volume, open_interest=open_interest)) is tradable

@@ -59,11 +59,11 @@ def _context(**overrides: object) -> dict:
     return {**base, **overrides}
 
 
-def test_evaluation_key_changes_with_every_part_of_its_identity() -> None:
+def test_evaluation_key_changes_with_every_part_of_its_identity_and_the_context_digest_ignores_provenance_but_not_the_code_it_runs() -> None:
     digest = context_digest(_context())
     key = evaluation_key(digest, "p" * 64, JAN, "base", False)
 
-    assert key == evaluation_key(digest, "p" * 64, JAN, "base", False)
+    assert key == evaluation_key(digest, "p" * 64, JAN, "base", False), "the same identity gives the same evaluation key"
     variants = {
         evaluation_key(context_digest(_context(data_snapshot_digest="x" * 64)), "p" * 64, JAN, "base", False),
         evaluation_key(digest, "q" * 64, JAN, "base", False),
@@ -71,16 +71,14 @@ def test_evaluation_key_changes_with_every_part_of_its_identity() -> None:
         evaluation_key(digest, "p" * 64, JAN, "slippage_1c", False),
         evaluation_key(digest, "p" * 64, JAN, "base", True),
     }
-    assert key not in variants and len(variants) == 5
+    assert key not in variants and len(variants) == 5, "every part of the identity changes the evaluation key"
 
-
-def test_the_context_digest_ignores_provenance_but_not_the_code_it_runs() -> None:
     base = _context()
     moved_commit = {**base, "code_identity": {**base["code_identity"], "git_revision": "def", "tree_state": "dirty"}}
     changed_code = {**base, "code_identity": {**base["code_identity"], "source_digest": "t" * 64}}
 
-    assert context_digest(moved_commit) == context_digest(base)
-    assert context_digest(changed_code) != context_digest(base)
+    assert context_digest(moved_commit) == context_digest(base), "the context digest ignores the commit and tree state"
+    assert context_digest(changed_code) != context_digest(base), "the context digest follows the code it runs"
 
 
 def test_the_capability_admits_a_window_inside_an_interval_and_refuses_one_that_reaches_past_it() -> None:
@@ -117,31 +115,29 @@ def _request(**overrides: object) -> EvaluationRequest:
     return EvaluationRequest(**{**base, **overrides})  # type: ignore[arg-type]
 
 
-def test_the_engine_request_scores_the_window_after_the_common_run_up() -> None:
+def test_the_engine_request_scores_the_window_after_the_common_run_up_and_a_stress_scenario_adds_its_costs() -> None:
     execution = ExecutionAssumptions(fill_mode="next_bar_open", commission_per_order=1.0, slippage_per_share=0.01, initial_cash=50_000.0)
 
     request = engine_request(_request(), strategy_key="ema_crossover_signal", execution=execution)
 
-    assert (request.from_date, request.to_date, request.warmup_from_date) == ("2025-01-06", "2025-01-07", "2025-01-03")
-    assert request.params == POINT and request.strategy_name == "ema_crossover_signal"
+    assert (request.from_date, request.to_date, request.warmup_from_date) == ("2025-01-06", "2025-01-07", "2025-01-03"), "the request scores the window after the common run-up"
+    assert request.params == POINT and request.strategy_name == "ema_crossover_signal", "the request carries the point and the strategy"
     assert (request.fill_mode, request.commission_per_order, request.slippage_per_share, request.initial_cash) == (
         "next_bar_open",
         1.0,
         0.01,
         50_000.0,
-    )
-    assert request.summary_only and not request.save_study and not request.auto_fetch and request.resolution == "minute"
+    ), "the request carries the execution assumptions"
+    assert request.summary_only and not request.save_study and not request.auto_fetch and request.resolution == "minute", "a summary request saves nothing and fetches nothing"
 
-
-def test_a_stress_scenario_adds_its_costs_and_a_detail_run_keeps_the_per_bar_artifacts() -> None:
-    execution = ExecutionAssumptions(commission_per_order=1.0, slippage_per_share=0.01)
+    stress_execution = ExecutionAssumptions(commission_per_order=1.0, slippage_per_share=0.01)
     scenario = StressScenario("harsh", "Harsh", slippage_add=0.02, commission_add=0.5, fill_mode="signal_bar_close")
 
-    request = engine_request(_request(scenario=scenario, detail=True), strategy_key="ema_crossover_signal", execution=execution)
+    stressed = engine_request(_request(scenario=scenario, detail=True), strategy_key="ema_crossover_signal", execution=stress_execution)
 
-    assert request.commission_per_order == pytest.approx(1.5, abs=1e-12)
-    assert request.slippage_per_share == pytest.approx(0.03, abs=1e-12)
-    assert request.fill_mode == "signal_bar_close" and not request.summary_only
+    assert stressed.commission_per_order == pytest.approx(1.5, abs=1e-12), "a stress scenario adds its commission"
+    assert stressed.slippage_per_share == pytest.approx(0.03, abs=1e-12), "a stress scenario adds its slippage"
+    assert stressed.fill_mode == "signal_bar_close" and not stressed.summary_only, "a stress scenario sets its fill mode and a detail run keeps the per-bar artifacts"
 
 
 def _response(**overrides: object) -> EngineBacktestResponse:
@@ -168,61 +164,58 @@ def _response(**overrides: object) -> EngineBacktestResponse:
     return EngineBacktestResponse(**{**base, **overrides})  # type: ignore[arg-type]
 
 
-def test_the_projection_keeps_the_sweep_statistics_and_bounded_daily_detail() -> None:
+def test_the_projection_keeps_the_sweep_statistics_daily_detail_and_the_curve_and_a_failed_run_is_a_failed_evaluation() -> None:
     result = project_response(_request(detail=True), _response(), strategy_key="ema_crossover_signal", initial_cash=100_000.0)
 
     metrics = result.metrics
-    assert (metrics.status, metrics.total_trades, metrics.net_profit, metrics.total_return_pct) == ("completed", 2, 750.0, 0.0075)
-    assert (metrics.sharpe_ratio, metrics.max_drawdown_pct, metrics.win_rate) == (1.25, 0.004, 0.5)
-    assert result.detail is not None
+    assert (metrics.status, metrics.total_trades, metrics.net_profit, metrics.total_return_pct) == ("completed", 2, 750.0, 0.0075), "the projection keeps the sweep statistics"
+    assert (metrics.sharpe_ratio, metrics.max_drawdown_pct, metrics.win_rate) == (1.25, 0.004, 0.5), "the projection keeps the risk statistics"
+    assert result.detail is not None, "a detail request projects a detail payload"
     assert result.detail["daily_equity"] == [
         [session_close_ms_utc(date(2025, 1, 6)), 100_500.0],
         [session_close_ms_utc(date(2025, 1, 7)), 100_750.0],
-    ]
+    ], "the detail keeps bounded daily equity"
     first, second = result.detail["trades"]
-    assert math.isclose(first["pnl"], 500.0, abs_tol=1e-9, rel_tol=0) and first["exit_reason"] is None
-    assert math.isclose(second["pnl"], -100.0, abs_tol=1e-9, rel_tol=0) and second["exit_reason"] == EXIT_AT_WINDOW_END
+    assert math.isclose(first["pnl"], 500.0, abs_tol=1e-9, rel_tol=0) and first["exit_reason"] is None, "the detail keeps the first trade's profit and no exit reason"
+    assert math.isclose(second["pnl"], -100.0, abs_tol=1e-9, rel_tol=0) and second["exit_reason"] == EXIT_AT_WINDOW_END, "the detail marks the synthetic exit at the window end"
 
-
-def test_a_summary_run_has_no_detail_and_an_undefined_statistic_reads_none() -> None:
-    result = project_response(
+    undefined = project_response(
         _request(),
         _response(statistics={"net_profit": 750.0, "net_profit_pct": 0.0075, "sharpe_ratio": float("nan"), "max_drawdown_pct": 0.004, "win_rate": 0.5}),
         strategy_key="ema_crossover_signal",
         initial_cash=100_000.0,
     )
-    assert result.detail is None and result.metrics.sharpe_ratio is None
+    assert undefined.detail is None and undefined.metrics.sharpe_ratio is None, "a summary run has no detail and an undefined statistic reads None"
 
-
-def test_a_summary_run_keeps_the_daily_curve_a_detail_run_of_the_same_point_holds() -> None:
     summary = project_response(_request(), _response(equity_curve=[]), strategy_key="ema_crossover_signal", initial_cash=100_000.0)
     detail = project_response(_request(detail=True), _response(), strategy_key="ema_crossover_signal", initial_cash=100_000.0)
 
-    assert summary.detail is None and detail.detail is not None
-    assert summary.curve == detail.curve == [tuple(point) for point in detail.detail["daily_equity"]]
+    assert summary.detail is None and detail.detail is not None, "a summary run has no detail while a detail run of the same point holds it"
+    assert summary.curve == detail.curve == [tuple(point) for point in detail.detail["daily_equity"]], "a summary run keeps the daily curve a detail run of the same point holds"
+
+    failed = project_response(_request(detail=True), _response(success=False, error="no bars"), strategy_key="ema_crossover_signal", initial_cash=1.0)
+    assert (failed.metrics.status, failed.metrics.error, failed.detail, failed.curve) == ("failed", "no bars", None, None), "a failed engine run is a failed evaluation with its reason"
 
 
-def test_a_day_end_the_calendar_refuses_costs_the_run_its_curve_and_never_its_result() -> None:
-    saturday = et_midnight_ms(date(2025, 1, 11)) + 12 * 60 * 60 * 1000
+@pytest.mark.parametrize(
+    "day_ends",
+    [
+        # A Saturday sample: a day end the calendar refuses.
+        pytest.param(((et_midnight_ms(date(2025, 1, 11)) + 12 * 60 * 60 * 1000, 100_000.0),), id="a_day_end_the_calendar_refuses"),
+        # No curve, not an empty one: the run counts among those with no curve recorded.
+        pytest.param((), id="a_run_the_engine_kept_no_day_ends_for"),
+    ],
+)
+def test_a_run_without_a_usable_day_end_has_no_curve_and_keeps_its_result(day_ends: tuple[tuple[int, float], ...]) -> None:
     result = project_response(
-        _request(), _response(equity_curve=[], equity_day_ends=[{"timestamp": saturday, "equity": 100_000.0}]), strategy_key="ema_crossover_signal", initial_cash=100_000.0
+        _request(),
+        _response(equity_curve=[], equity_day_ends=[{"timestamp": timestamp, "equity": equity} for timestamp, equity in day_ends]),
+        strategy_key="ema_crossover_signal",
+        initial_cash=100_000.0,
     )
 
-    assert result.curve is None
-    assert (result.metrics.status, result.metrics.net_profit) == ("completed", 750.0)
-
-
-def test_a_run_the_engine_kept_no_day_ends_for_has_no_curve_and_keeps_its_result() -> None:
-    result = project_response(_request(), _response(equity_curve=[], equity_day_ends=[]), strategy_key="ema_crossover_signal", initial_cash=100_000.0)
-
-    # No curve, not an empty one: the run counts among those with no curve recorded.
-    assert result.curve is None
-    assert (result.metrics.status, result.metrics.net_profit) == ("completed", 750.0)
-
-
-def test_a_failed_engine_run_is_a_failed_evaluation_with_its_reason() -> None:
-    result = project_response(_request(detail=True), _response(success=False, error="no bars"), strategy_key="ema_crossover_signal", initial_cash=1.0)
-    assert (result.metrics.status, result.metrics.error, result.detail, result.curve) == ("failed", "no bars", None, None)
+    assert result.curve is None, "a run without a usable day end has no curve"
+    assert (result.metrics.status, result.metrics.net_profit) == ("completed", 750.0), "a run without a usable day end keeps its result"
 
 
 def test_a_projected_engine_run_is_admitted_and_resamples_to_the_sharpe_and_return_the_engine_reported() -> None:

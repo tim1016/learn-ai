@@ -58,28 +58,24 @@ def test_a_spread_out_result_meets_the_rule() -> None:
     assert removed["net_profit"] == pytest.approx(2_000.0, abs=1e-9, rel=0) and removed["entry_ms"] == _trades(2_000.0)[0]["entry_ms"]
 
 
-def test_a_result_resting_on_one_trade_is_a_concern() -> None:
-    measure = _measure((4_000.0, 300.0, -200.0, -300.0, -300.0), 3_500.0)
-    assert measure["status"] == "concern"
-    assert measure["without_best_trades"] == pytest.approx(-500.0, abs=1e-9, rel=0)
-    assert measure["without_best_month"] == pytest.approx(500.0, abs=1e-9, rel=0)
+def test_a_result_resting_on_one_trade_or_one_month_or_losing_throughout_is_a_concern() -> None:
+    one_trade = _measure((4_000.0, 300.0, -200.0, -300.0, -300.0), 3_500.0)
+    assert one_trade["status"] == "concern", "a result resting on one trade is a concern"
+    assert one_trade["without_best_trades"] == pytest.approx(-500.0, abs=1e-9, rel=0), "a result resting on one trade loses money without it"
+    assert one_trade["without_best_month"] == pytest.approx(500.0, abs=1e-9, rel=0), "a result resting on one trade keeps $500 without its best month"
 
-
-def test_nothing_left_without_the_best_month_is_a_concern() -> None:
     # One month earns everything: without it the result is exactly $0, which the rule counts.
-    measure = _measure((600.0, 400.0), 1_000.0, ((date(2024, 1, 31), 101_000.0),))
-    assert (measure["status"], measure["without_best_month"]) == ("concern", 0.0)
+    one_month = _measure((600.0, 400.0), 1_000.0, ((date(2024, 1, 31), 101_000.0),))
+    assert (one_month["status"], one_month["without_best_month"]) == ("concern", 0.0), "nothing left without the best month is a concern"
 
-
-def test_a_losing_result_whose_best_month_still_loses_is_a_concern() -> None:
     # January -1,000 and February -500: the best month is February's loss, and removing it leaves -1,000.
     months = ((date(2024, 1, 31), 99_000.0), (date(2024, 2, 29), 98_500.0))
-    measure = _measure((-700.0, -800.0), -1_500.0, months)
-    assert measure["status"] == "concern"
-    assert measure["best_month"]["month_start_ms"] == et_midnight_ms(date(2024, 2, 1))
-    assert measure["without_best_month"] == pytest.approx(-1_000.0, abs=1e-9, rel=0)
+    losing = _measure((-700.0, -800.0), -1_500.0, months)
+    assert losing["status"] == "concern", "a losing result whose best month still loses is a concern"
+    assert losing["best_month"]["month_start_ms"] == et_midnight_ms(date(2024, 2, 1)), "the best month of a losing result is the smaller loss"
+    assert losing["without_best_month"] == pytest.approx(-1_000.0, abs=1e-9, rel=0), "removing the best month of a losing result leaves its other loss"
     # The best trade is the smaller loss: -1,500 - (-700).
-    assert measure["without_best_trades"] == pytest.approx(-800.0, abs=1e-9, rel=0)
+    assert losing["without_best_trades"] == pytest.approx(-800.0, abs=1e-9, rel=0), "removing the best trade of a losing result leaves its other loss"
 
 
 def test_ties_take_the_earliest_month_and_the_earlier_trade() -> None:
@@ -117,21 +113,18 @@ def test_trades_that_do_not_add_up_to_the_run_leave_it_unmeasured() -> None:
     assert (curve["points"], curve["reason"]) == ([], measure["reason"])
 
 
-def test_the_curve_climbs_through_the_winners_and_ends_at_the_whole_result() -> None:
+def test_the_curve_climbs_through_the_winners_and_ends_at_the_whole_result_and_is_not_drawn_without_a_profit() -> None:
     nets = (-300.0, 2_000.0, 500.0, -200.0, 1_500.0)
     curve = concentration_curve(metrics(1.0, net=3_500.0), _detail(_trades(*nets)), commission_per_order=COMMISSION)
-    assert (curve["best_count"], curve["reason"]) == (1, None)
+    assert (curve["best_count"], curve["reason"]) == (1, None), "the curve names its best count and has no reason"
     points = curve["points"]
-    assert [point["trades"] for point in points] == [0, 1, 2, 3, 4, 5]
-    assert [point["share_of_trades"] for point in points] == pytest.approx([0.0, 0.2, 0.4, 0.6, 0.8, 1.0], abs=1e-9, rel=0)
+    assert [point["trades"] for point in points] == [0, 1, 2, 3, 4, 5], "the curve takes one more trade at each point"
+    assert [point["share_of_trades"] for point in points] == pytest.approx([0.0, 0.2, 0.4, 0.6, 0.8, 1.0], abs=1e-9, rel=0), "the curve's trade share climbs to the whole"
     # Best first: 2,000, 3,500, 4,000, 3,800, 3,500 of 3,500.
-    assert [point["net_profit"] for point in points] == pytest.approx([0.0, 2_000.0, 3_500.0, 4_000.0, 3_800.0, 3_500.0], abs=1e-9, rel=0)
-    assert [point["share_of_profit"] for point in points] == pytest.approx([0.0, 4 / 7, 1.0, 8 / 7, 38 / 35, 1.0], abs=1e-9, rel=0)
-
-
-def test_no_curve_is_drawn_for_a_result_that_did_not_make_money() -> None:
-    curve = concentration_curve(metrics(1.0, net=-1_500.0), _detail(_trades(-700.0, -800.0)), commission_per_order=COMMISSION)
-    assert curve == {"points": [], "best_count": None, "reason": NO_PROFIT_TO_SHARE}
+    assert [point["net_profit"] for point in points] == pytest.approx([0.0, 2_000.0, 3_500.0, 4_000.0, 3_800.0, 3_500.0], abs=1e-9, rel=0), "the curve climbs through the winners and ends at the whole result"
+    assert [point["share_of_profit"] for point in points] == pytest.approx([0.0, 4 / 7, 1.0, 8 / 7, 38 / 35, 1.0], abs=1e-9, rel=0), "the curve's profit share ends at one"
+    losing = concentration_curve(metrics(1.0, net=-1_500.0), _detail(_trades(-700.0, -800.0)), commission_per_order=COMMISSION)
+    assert losing == {"points": [], "best_count": None, "reason": NO_PROFIT_TO_SHARE}, "no curve is drawn for a result that did not make money"
 
 
 def test_a_result_that_is_exactly_zero_without_its_best_is_a_concern_whatever_the_float_noise() -> None:

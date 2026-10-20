@@ -64,28 +64,33 @@ def _costs(**changes: Any) -> str:
     return " ".join(describe_setup(_setup(**changes), full_session=_CLOCK).costs)
 
 
-def test_the_window_gives_each_time_as_a_distance_and_as_the_clock_on_a_full_day() -> None:
+def test_the_window_says_when_a_rule_is_read_what_fills_and_what_an_early_close_does() -> None:
     window = _window()
 
-    assert "SPY" in window
-    assert re.search(r"entry is read 5 minutes after the open", window) and _after_open(5) in window
-    assert re.search(r"exit is read 46 minutes before the close", window) and _before_close(46) in window
-
-
-def test_the_window_says_the_times_are_when_a_rule_is_read_and_an_order_fills_a_minute_on() -> None:
-    window = _window()
-
-    assert "next minute's opening trade" in window
+    assert "SPY" in window, "the window names the underlying"
+    assert re.search(r"entry is read 5 minutes after the open", window) and _after_open(5) in window, (
+        "the entry time is given as a distance and as the clock on a full day"
+    )
+    assert re.search(r"exit is read 46 minutes before the close", window) and _before_close(46) in window, (
+        "the exit time is given as a distance and as the clock on a full day"
+    )
+    assert "next minute's opening trade" in window, "the times are when a rule is read and an order fills a minute on"
     # The times are not the fills: the window never says the setup "starts" or "buys" at them.
-    assert not re.search(r"\b(starts|buys)\b", window, re.IGNORECASE)
-    assert re.search(r"at the exit.*sold.*cancelled.*nothing more is bought", window, re.IGNORECASE)
-
-
-def test_the_window_says_a_buy_is_dropped_and_a_sale_is_tried_again_when_the_contract_does_not_trade() -> None:
-    window = _window()
-
-    assert re.search(r"a buy is dropped if its contract does not trade", window, re.IGNORECASE)
-    assert re.search(r"a sale is tried each minute until it does", window, re.IGNORECASE)
+    assert not re.search(r"\b(starts|buys)\b", window, re.IGNORECASE), "the window never says the setup starts or buys"
+    assert re.search(r"at the exit.*sold.*cancelled.*nothing more is bought", window, re.IGNORECASE), (
+        "at the exit what is open is sold, what waits is cancelled and nothing more is bought"
+    )
+    assert re.search(r"a buy is dropped if its contract does not trade", window, re.IGNORECASE), (
+        "a buy is dropped when its contract does not trade"
+    )
+    assert re.search(r"a sale is tried each minute until it does", window, re.IGNORECASE), (
+        "a sale is tried again each minute until it trades"
+    )
+    assert re.search(r"closes early", window), "the window says what an early close is"
+    assert re.search(r"keep their distance from the open and the close", window), (
+        "on an early close the times keep their distance from the open and the close"
+    )
+    assert re.search(r"no longer fit is skipped", window), "a window that no longer fits is skipped"
 
 
 def test_a_re_entry_cutoff_at_the_open_is_said_as_the_open() -> None:
@@ -98,14 +103,6 @@ def test_a_re_entry_cutoff_at_the_open_is_said_as_the_open() -> None:
 def test_a_re_entry_cutoff_says_it_leaves_first_entries_alone_and_no_cutoff_says_nothing_of_it() -> None:
     assert "First entries are not affected" in _window(no_reentry_after=_after_open_time(30))
     assert "First entries" not in _window()
-
-
-def test_the_window_says_what_an_early_close_does_to_it() -> None:
-    window = _window()
-
-    assert re.search(r"closes early", window)
-    assert re.search(r"keep their distance from the open and the close", window)
-    assert re.search(r"no longer fit is skipped", window)
 
 
 def test_a_re_entry_on_momentum_says_it_takes_a_new_starting_premium() -> None:
@@ -169,28 +166,21 @@ def _named_troubles(notices: tuple[str, ...]) -> set[str]:
 
 
 @pytest.mark.parametrize(("entry", "exit_", "troubles"), _WINDOWS)
-def test_a_window_a_full_day_cannot_trade_is_flagged_with_the_part_that_is_the_trouble(
-    entry: dict[str, Any], exit_: dict[str, Any], troubles: set[str]
-) -> None:
-    notices = describe_setup(_setup(entry=entry, exit=exit_), full_session=_CLOCK).notices
-
-    assert _named_troubles(notices) == troubles
-    if troubles:
-        assert re.search(r"would not trade", notices[0])
-    else:
-        assert notices == ()
-
-
-@pytest.mark.parametrize(("entry", "exit_", "troubles"), _WINDOWS)
-def test_the_summary_warns_exactly_when_the_replay_would_skip_the_day(
+def test_a_window_a_full_day_cannot_trade_is_flagged_with_the_part_that_is_the_trouble_and_the_replay_skips_it(
     entry: dict[str, Any], exit_: dict[str, Any], troubles: set[str]
 ) -> None:
     setup = _setup(entry=entry, exit=exit_)
+    notices = describe_setup(setup, full_session=_CLOCK).notices
     fits = setup.window_fits(
         session_open_ms=_CLOCK.open_minute_et * MS_PER_MINUTE, session_close_ms=_CLOCK.close_minute_et * MS_PER_MINUTE
     )
 
-    assert (describe_setup(setup, full_session=_CLOCK).notices == ()) is fits
+    assert _named_troubles(notices) == troubles, "the notices name the part that is the trouble"
+    if troubles:
+        assert re.search(r"would not trade", notices[0]), "the first notice says the window would not trade"
+    else:
+        assert notices == (), "a window that fits has no notices"
+    assert (notices == ()) is fits, "the summary warns exactly when the replay would skip the day"
 
 
 def test_a_cutoff_for_re_entry_is_said_with_its_distance_and_clock_and_a_missing_one_is_not_mentioned() -> None:
@@ -212,29 +202,20 @@ def test_every_leg_gets_one_sentence_that_names_it() -> None:
 
 
 @pytest.mark.parametrize(
-    ("strike", "said"),
+    ("field", "rule", "said"),
     [
-        ({"kind": "atm"}, "at-the-money"),
-        ({"kind": "atm_offset", "steps": 2}, "2 strikes above the money"),
-        ({"kind": "atm_offset", "steps": -1}, "1 strike below the money"),
+        pytest.param("strike", {"kind": "atm"}, "at-the-money", id="strike at the money"),
+        pytest.param("strike", {"kind": "atm_offset", "steps": 2}, "2 strikes above the money", id="strike above"),
+        pytest.param("strike", {"kind": "atm_offset", "steps": -1}, "1 strike below the money", id="strike below"),
+        pytest.param("expiry", {"kind": "same_day"}, "on the trading date itself", id="expiry same day"),
+        pytest.param("expiry", {"kind": "this_week"}, "last trading day of its week", id="expiry this week"),
+        pytest.param("expiry", {"kind": "min_days", "days": 3}, "at least 3 calendar days", id="expiry min 3 days"),
+        pytest.param("expiry", {"kind": "min_days", "days": 1}, "at least 1 calendar day ", id="expiry min 1 day"),
+        pytest.param("expiry", {"kind": "min_days", "days": 0}, "today included", id="expiry min 0 days"),
     ],
 )
-def test_a_strike_rule_says_where_the_strike_sits(strike: dict[str, Any], said: str) -> None:
-    assert said in _leg_text(strike=strike)
-
-
-@pytest.mark.parametrize(
-    ("expiry", "said"),
-    [
-        ({"kind": "same_day"}, "on the trading date itself"),
-        ({"kind": "this_week"}, "last trading day of its week"),
-        ({"kind": "min_days", "days": 3}, "at least 3 calendar days"),
-        ({"kind": "min_days", "days": 1}, "at least 1 calendar day "),
-        ({"kind": "min_days", "days": 0}, "today included"),
-    ],
-)
-def test_an_expiry_rule_says_which_expiry_is_wanted(expiry: dict[str, Any], said: str) -> None:
-    assert said in _leg_text(expiry=expiry)
+def test_a_strike_or_expiry_rule_says_what_it_asks_for(field: str, rule: dict[str, Any], said: str) -> None:
+    assert said in _leg_text(**{field: rule})
 
 
 def test_the_this_week_rule_is_said_as_it_works_not_as_an_expiry_in_this_week() -> None:
@@ -262,13 +243,6 @@ def test_momentum_says_which_way_how_far_and_from_where(momentum: dict[str, Any]
     assert "entry time" in text
 
 
-def test_a_leg_without_momentum_buys_when_the_entry_is_read() -> None:
-    text = _leg_text()
-
-    assert "as soon as the entry is read" in text
-    assert "closes" not in text
-
-
 @pytest.mark.parametrize(
     ("stop_loss", "pattern"),
     [
@@ -282,14 +256,16 @@ def test_a_stop_loss_says_a_minute_must_close_that_far_below_what_was_paid(
     assert re.search(pattern, _leg_text(stop_loss=stop_loss))
 
 
-def test_a_leg_with_no_rules_of_its_own_mentions_none() -> None:
+def test_a_leg_with_no_rules_of_its_own_buys_when_the_entry_is_read_and_mentions_none() -> None:
     text = _leg_text()
 
-    assert "%" not in text
-    assert "points" not in text
-    assert "below what was paid" not in text
-    assert "above" not in text
-    assert "again" not in text
+    assert "as soon as the entry is read" in text, "a leg without momentum buys when the entry is read"
+    assert "closes" not in text, "a leg without momentum says nothing of a minute closing"
+    assert "%" not in text, "a leg with no rules of its own mentions no percent"
+    assert "points" not in text, "a leg with no rules of its own mentions no points"
+    assert "below what was paid" not in text, "a leg with no rules of its own mentions no stop"
+    assert "above" not in text, "a leg with no rules of its own mentions nothing above"
+    assert "again" not in text, "a leg with no rules of its own mentions no re-entry"
 
 
 @pytest.mark.parametrize(
@@ -404,27 +380,50 @@ def _every_sentence(setup: Any) -> list[str]:
     ]
 
 
-def test_each_block_is_a_list_of_whole_sentences_one_to_an_item() -> None:
-    busy = _setup(
-        no_reentry_after=_before_close_time(60),
-        fees={"kind": "estimated"},
-        legs=[
-            _leg(
-                momentum={"kind": "percent_up", "value": "25"},
-                stop_loss={"kind": "percent", "value": "25"},
-                reentry_on_stop={"kind": "on_momentum", "count": 2},
-            )
-        ],
-    )
-    unsound = _setup(entry=_after_open_time(_SESSION_MINUTES + 1))
+@pytest.mark.parametrize(
+    "written",
+    [
+        pytest.param(
+            _setup(
+                no_reentry_after=_before_close_time(60),
+                fees={"kind": "estimated"},
+                legs=[
+                    _leg(
+                        momentum={"kind": "percent_up", "value": "25"},
+                        stop_loss={"kind": "percent", "value": "25"},
+                        reentry_on_stop={"kind": "on_momentum", "count": 2},
+                    )
+                ],
+            ),
+            id="a busy setup that buys",
+        ),
+        pytest.param(_setup(entry=_after_open_time(_SESSION_MINUTES + 1)), id="an unsound setup"),
+        pytest.param(
+            _setup(
+                no_reentry_after=_before_close_time(60),
+                legs=[
+                    _leg(leg_id="long_call", stop_loss={"kind": "percent", "value": "25"}),
+                    _leg(
+                        leg_id="short_call",
+                        side="sell",
+                        momentum={"kind": "percent_up", "value": "25"},
+                        stop_loss={"kind": "percent", "value": "150"},
+                        reentry_on_stop={"kind": "on_momentum", "count": 2},
+                    ),
+                ],
+            ),
+            id="a setup that sells",
+        ),
+    ],
+)
+def test_each_block_is_a_list_of_whole_sentences_one_to_an_item(written: Any) -> None:
+    sentences = _every_sentence(written)
 
-    for written in (busy, unsound):
-        sentences = _every_sentence(written)
-        assert sentences
-        for sentence in sentences:
-            assert sentence.endswith(".") and sentence == sentence.strip(), sentence
-            # A full stop followed by a space would be a second sentence in the item.
-            assert ". " not in sentence, sentence
+    assert sentences, "the setup is described in at least one sentence"
+    for sentence in sentences:
+        assert sentence.endswith(".") and sentence == sentence.strip(), sentence
+        # A full stop followed by a space would be a second sentence in the item.
+        assert ". " not in sentence, sentence
 
 
 def test_the_blocks_have_the_sentences_the_setup_gives_rise_to_and_no_more() -> None:
@@ -564,29 +563,6 @@ def test_a_setup_that_sells_says_which_orders_open_and_which_close_and_a_setup_t
     assert re.search(r"a bought leg still open is sold, a sold leg still open is bought back", " ".join(sells))
     assert not any("A buy is dropped" in sentence or "whatever is open is sold" in sentence for sentence in sells)
     assert sells[:5] == buys[:5]
-
-
-def test_the_sentences_of_a_setup_that_sells_are_whole_sentences_one_to_an_item() -> None:
-    selling = _setup(
-        no_reentry_after=_before_close_time(60),
-        legs=[
-            _leg(leg_id="long_call", stop_loss={"kind": "percent", "value": "25"}),
-            _leg(
-                leg_id="short_call",
-                side="sell",
-                momentum={"kind": "percent_up", "value": "25"},
-                stop_loss={"kind": "percent", "value": "150"},
-                reentry_on_stop={"kind": "on_momentum", "count": 2},
-            ),
-        ],
-    )
-
-    sentences = _every_sentence(selling)
-
-    assert sentences
-    for sentence in sentences:
-        assert sentence.endswith(".") and sentence == sentence.strip(), sentence
-        assert ". " not in sentence, sentence
 
 
 def test_a_partial_square_off_of_a_setup_that_sells_says_a_stopped_bought_leg_takes_the_sold_legs_it_protects() -> None:

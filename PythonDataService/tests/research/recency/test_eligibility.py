@@ -5,14 +5,30 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Literal
 
+import pytest
+
 from app.engine.strategy.params import StrategyParamsBase
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.research.recency.eligibility import is_recency_supported
 
 
-def test_numeric_only_production_strategies_are_supported() -> None:
-    for key in ("ema_crossover_signal", "sma_crossover", "rsi_mean_reversion"):
-        assert is_recency_supported(_STRATEGY_REGISTRY[key]) is True, key
+@pytest.mark.parametrize(
+    ("key", "supported"),
+    [
+        ("ema_crossover_signal", True),
+        ("sma_crossover", True),
+        ("rsi_mean_reversion", True),
+        ("deployment_validation", False),
+    ],
+    ids=[
+        "numeric_only_ema_crossover_signal_is_supported",
+        "numeric_only_sma_crossover_is_supported",
+        "numeric_only_rsi_mean_reversion_is_supported",
+        "deployment_validation_is_excluded_by_category",
+    ],
+)
+def test_production_strategies_eligibility(key: str, supported: bool) -> None:
+    assert is_recency_supported(_STRATEGY_REGISTRY[key]) is supported
 
 
 def test_a_categorical_public_parameter_excludes_a_strategy() -> None:
@@ -32,10 +48,6 @@ def test_a_categorical_public_parameter_excludes_a_strategy() -> None:
 
     registration = replace(_STRATEGY_REGISTRY["sma_crossover"], param_schema=_MostlyNumericParams)
     assert is_recency_supported(registration) is False
-
-
-def test_deployment_validation_is_excluded_by_category() -> None:
-    assert is_recency_supported(_STRATEGY_REGISTRY["deployment_validation"]) is False
 
 
 def test_symbol_field_is_ignored_for_the_check() -> None:

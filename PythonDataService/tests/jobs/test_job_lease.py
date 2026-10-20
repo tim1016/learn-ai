@@ -28,25 +28,23 @@ from tests.jobs.conftest import _FakeRedis
 LEASE = "job:lease-1:lease"
 
 
-def test_a_running_job_with_a_held_lease_is_live(fake: _FakeRedis) -> None:
-    fake.job("lease-1", "running")
-    fake.lease("lease-1")
+@pytest.mark.parametrize(
+    ("status", "lease_held", "live"),
+    [
+        pytest.param("running", True, True, id="a_running_job_with_a_held_lease_is_live"),
+        # The dead-worker case the status fields could not see: the record still says running.
+        pytest.param("running", False, False, id="a_running_job_without_a_lease_is_not_live"),
+        pytest.param("completed", True, False, id="a_terminal_job_is_not_live_even_while_its_lease_lingers"),
+    ],
+)
+def test_a_job_is_live_only_while_it_is_running_and_its_lease_is_held(
+    fake: _FakeRedis, status: str, lease_held: bool, live: bool
+) -> None:
+    fake.job("lease-1", status)
+    if lease_held:
+        fake.lease("lease-1")
 
-    assert lifecycle.job_is_live("lease-1") is True
-
-
-def test_a_running_job_without_a_lease_is_not_live(fake: _FakeRedis) -> None:
-    """The dead-worker case the status fields could not see: the record still says running."""
-    fake.job("lease-1", "running")
-
-    assert lifecycle.job_is_live("lease-1") is False
-
-
-def test_a_terminal_job_is_not_live_even_while_its_lease_lingers(fake: _FakeRedis) -> None:
-    fake.job("lease-1", "completed")
-    fake.lease("lease-1")
-
-    assert lifecycle.job_is_live("lease-1") is False
+    assert lifecycle.job_is_live("lease-1") is live
 
 
 def test_an_expired_lease_stays_expired_when_the_worker_emits_again(fake: _FakeRedis) -> None:
@@ -80,24 +78,17 @@ def test_acquire_and_release_the_lease(fake: _FakeRedis) -> None:
     assert not fake.exists(LEASE)
 
 
-def test_every_emit_renews_the_lease_and_the_stream_ttl(fake: _FakeRedis) -> None:
+def test_every_emit_renews_the_lease_the_stream_ttl_and_the_state_hash_ttl(fake: _FakeRedis) -> None:
     fake.job("lease-1", "running")
     acquire_lease("lease-1")
 
     ProgressEmitter("lease-1").phase("run")
 
-    assert (LEASE, JOB_LEASE_TTL_SECONDS) in fake.expires
-    assert ("job:lease-1:events", JOB_TTL_SECONDS) in fake.expires
-
-
-def test_state_patches_refresh_the_state_hash_ttl(fake: _FakeRedis) -> None:
-    """Hazard (c): EXPIRE was set only at create, so a late patch after expiry
-    recreated a partial record with no TTL at all."""
-    fake.job("lease-1", "running")
-
-    ProgressEmitter("lease-1").phase("run")
-
-    assert ("job:lease-1:state", JOB_TTL_SECONDS) in fake.expires
+    assert (LEASE, JOB_LEASE_TTL_SECONDS) in fake.expires, "every emit renews the lease"
+    assert ("job:lease-1:events", JOB_TTL_SECONDS) in fake.expires, "every emit renews the stream TTL"
+    # Hazard (c): EXPIRE was set only at create, so a late patch after expiry
+    # recreated a partial record with no TTL at all.
+    assert ("job:lease-1:state", JOB_TTL_SECONDS) in fake.expires, "state patches refresh the state hash TTL (hazard c)"
 
 
 def test_the_cancellation_check_renews_the_lease(fake: _FakeRedis) -> None:

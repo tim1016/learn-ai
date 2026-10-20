@@ -43,27 +43,23 @@ def test_a_strike_a_listing_reports_as_a_float_names_the_same_contract_as_its_de
 
 
 @pytest.mark.parametrize(
-    "strike",
+    ("strike", "reason"),
     [
-        pytest.param(Decimal("452.5005"), id="finer than a thousandth"),
-        pytest.param(0.1 + 0.2, id="float arithmetic residue"),
-        pytest.param(Decimal("450.5000000000000000000000000000001"), id="too fine for the decimal context to see"),
-        pytest.param(float("nan"), id="not a number"),
-        pytest.param(float("inf"), id="infinite"),
-        pytest.param("four fifty", id="not numeric"),
-        pytest.param(True, id="a boolean"),
+        pytest.param(Decimal("452.5005"), "strike", id="finer than a thousandth"),
+        pytest.param(0.1 + 0.2, "strike", id="float arithmetic residue"),
+        pytest.param(Decimal("450.5000000000000000000000000000001"), "strike", id="too fine for the decimal context to see"),
+        pytest.param(float("nan"), "strike", id="not a number"),
+        pytest.param(float("inf"), "strike", id="infinite"),
+        pytest.param("four fifty", "strike", id="not numeric"),
+        pytest.param(True, "strike", id="a boolean"),
+        pytest.param("1e10000000", "everyday number", id="a number too large to be a strike, refused before it is written out"),
+        pytest.param("1e-10000000", "everyday number", id="a number too fine to be a strike, refused before it is written out"),
     ],
 )
-def test_a_strike_that_is_not_a_whole_number_of_thousandths_is_refused(strike: object) -> None:
-    with pytest.raises(ValueError, match="strike"):
+def test_a_strike_that_is_not_a_whole_number_of_thousandths_is_refused(strike: object, reason: str) -> None:
+    """The last two would otherwise be expanded digit by digit, for seconds, before being refused or accepted."""
+    with pytest.raises(ValueError, match=reason):
         strike_thousandths(strike)  # type: ignore[arg-type]
-
-
-@pytest.mark.parametrize("strike", ["1e10000000", "1e-10000000"])
-def test_a_number_too_large_or_too_fine_to_be_a_strike_is_refused_before_it_is_written_out(strike: str) -> None:
-    """Either would otherwise be expanded digit by digit, for seconds, before being refused or accepted."""
-    with pytest.raises(ValueError, match="everyday number"):
-        strike_thousandths(strike)
 
 
 @pytest.mark.parametrize(

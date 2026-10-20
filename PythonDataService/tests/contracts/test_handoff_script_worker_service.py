@@ -61,14 +61,25 @@ def _script() -> str:
     return HANDOFF_SCRIPT.read_text(encoding="utf-8")
 
 
-def test_no_compose_verb_hardcodes_python_service() -> None:
+def test_no_compose_verb_hardcodes_python_service_and_the_fleet_posture_is_derived_not_guessed() -> None:
     """Every ``podman compose <verb>`` call site targets the derived variable,
     and the script contains no functional fallback to the coordinator's own
-    service name — the exact bug #2147 exists to fix."""
+    service name — the exact bug #2147 exists to fix.
+
+    No call site outside ``config_route`` builds an /api/brokers URL by hand
+    — the posture choice (#2158) exists in exactly one place, so a future
+    edit cannot reintroduce a fleet-posture-deaf direct URL.
+
+    The production posture publishes the coordinator's in-container 8000
+    as 127.0.0.1:${FLEET_COORDINATOR_PORT:-8100} (compose.fleet.yaml), so a
+    fleet-posture run must read the published port from the deployment via
+    `compose port` rather than reuse the combined posture's
+    127.0.0.1:8000 — which targets a closed port and aborts the ceremony
+    before Apply."""
     script = _script()
     for verb in ("stop", "start", "restart", "run --rm --no-deps", "exec -T"):
         assert f"{verb} python-service" not in script, (
-            f"'podman compose {verb} python-service' is hardcoded; it must use "
+            f"#2147: 'podman compose {verb} python-service' is hardcoded; it must use "
             '"$worker_service" (or "${compose_words[@]}"), derived from '
             "FLEET_WORKER_SERVICE, the same way the desk authors its own "
             "restart command."
@@ -81,9 +92,28 @@ def test_no_compose_verb_hardcodes_python_service() -> None:
         line for line in non_comment_lines if "python-service" in line
     ]
     assert functional_references == [], (
-        f"unexpected non-comment reference(s) to python-service: {functional_references}; "
+        f"#2147: unexpected non-comment reference(s) to python-service: {functional_references}; "
         "the script must require FLEET_WORKER_SERVICE rather than default to the "
         "coordinator's own service name."
+    )
+
+    lines = script.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith("config_route() {"))
+    end = next(i for i in range(start + 1, len(lines)) if lines[i] == "}")
+    outside = [
+        line
+        for i, line in enumerate(lines)
+        if not start <= i <= end
+        and not line.strip().startswith("#")
+        and "/api/brokers" in line
+    ]
+    assert outside == [], f"#2158: a call site outside config_route builds an /api/brokers URL by hand: {outside}"
+
+    assert '"${compose_words[@]}" port "$coordinator_service" 8000' in script, (
+        "the fleet path no longer reads the coordinator's published port via `compose port`"
+    )
+    assert 'data_plane_url="http://$(published_host_address "$published_port_line")"' in script, (
+        "the fleet path no longer builds data_plane_url from the published port line"
     )
 
 
@@ -342,23 +372,6 @@ def test_the_control_secret_is_read_from_the_lane_declared_coordinator(
         assert f"printenv {variable} 2>/dev/null || true" in script
 
 
-def test_the_posture_choice_lives_in_config_route_alone() -> None:
-    """No call site outside ``config_route`` builds an /api/brokers URL by
-    hand — the posture choice (#2158) exists in exactly one place, so a
-    future edit cannot reintroduce a fleet-posture-deaf direct URL."""
-    lines = _script().splitlines()
-    start = next(i for i, line in enumerate(lines) if line.startswith("config_route() {"))
-    end = next(i for i in range(start + 1, len(lines)) if lines[i] == "}")
-    outside = [
-        line
-        for i, line in enumerate(lines)
-        if not start <= i <= end
-        and not line.strip().startswith("#")
-        and "/api/brokers" in line
-    ]
-    assert outside == []
-
-
 @pytest.mark.parametrize(
     ("published", "expected"),
     [
@@ -380,18 +393,6 @@ def test_published_host_address_normalizes_a_wildcard_binding(
     )
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout == expected
-
-
-def test_the_fleet_path_derives_the_coordinators_published_port() -> None:
-    """The production posture publishes the coordinator's in-container 8000
-    as 127.0.0.1:${FLEET_COORDINATOR_PORT:-8100} (compose.fleet.yaml), so a
-    fleet-posture run must read the published port from the deployment via
-    `compose port` rather than reuse the combined posture's
-    127.0.0.1:8000 — which targets a closed port and aborts the ceremony
-    before Apply."""
-    script = _script()
-    assert '"${compose_words[@]}" port "$coordinator_service" 8000' in script
-    assert 'data_plane_url="http://$(published_host_address "$published_port_line")"' in script
 
 
 def _directory(*lanes: tuple[str, str]) -> str:
@@ -421,61 +422,67 @@ def _settings_page(*, fleet_clerk_id: str, directory: str | None) -> subprocess.
     return subprocess.run(["bash", "-c", probe], capture_output=True, text=True, timeout=10)
 
 
-def test_a_fleet_lane_opens_its_own_settings_page() -> None:
-    completed = _settings_page(fleet_clerk_id="clrk_paper", directory=None)
-
-    assert completed.returncode == 0, completed.stderr
-    assert completed.stdout == "http://localhost:4200/brokers/alpaca/clerks/clrk_paper/settings"
-
-
-def test_the_combined_posture_opens_the_directorys_one_alpaca_lane() -> None:
-    """#2567 (CodeRabbit on #2568): a combined worker names no FLEET_CLERK_ID,
-    and the ceremony used to open the broker-wide /brokers/alpaca/settings —
-    a page that could never stage or Apply. It now opens the one Alpaca
-    lane the same data plane's account directory lists; another broker's
-    lanes never count."""
-    completed = _settings_page(
-        fleet_clerk_id="", directory=_directory(("alpaca", "clrk_combined"), ("ibkr", "clrk_other")),
-    )
-
-    assert completed.returncode == 0, completed.stderr
-    assert completed.stdout == "http://localhost:4200/brokers/alpaca/clerks/clrk_combined/settings"
-
-
 @pytest.mark.parametrize(
-    "directory",
+    ("fleet_clerk_id", "directory", "expected_url"),
     [
-        _directory(("alpaca", "clrk_a"), ("alpaca", "clrk_b")),
-        _directory(),
-        None,
+        pytest.param(
+            "clrk_paper",
+            None,
+            "http://localhost:4200/brokers/alpaca/clerks/clrk_paper/settings",
+            id="fleet-lane-opens-its-own-settings-page",
+        ),
+        # #2567 (CodeRabbit on #2568): a combined worker names no FLEET_CLERK_ID,
+        # and the ceremony used to open the broker-wide /brokers/alpaca/settings —
+        # a page that could never stage or Apply. It now opens the one Alpaca
+        # lane the same data plane's account directory lists; another broker's
+        # lanes never count.
+        pytest.param(
+            "",
+            _directory(("alpaca", "clrk_combined"), ("ibkr", "clrk_other")),
+            "http://localhost:4200/brokers/alpaca/clerks/clrk_combined/settings",
+            id="combined-posture-opens-the-directorys-one-alpaca-lane-2567",
+        ),
     ],
-    ids=["two-alpaca-lanes", "no-alpaca-lane", "directory-unreadable"],
 )
-def test_the_combined_posture_refuses_rather_than_guess_a_lane(directory: str | None) -> None:
-    """With several Alpaca lanes, none, or no readable directory, no single
-    lane can be named: ``settings_page_url`` fails (the ceremony then prints
-    the by-hand procedure and exits 1) and never prints a URL."""
-    completed = _settings_page(fleet_clerk_id="", directory=directory)
+def test_a_lane_opens_its_own_settings_page(
+    fleet_clerk_id: str, directory: str | None, expected_url: str
+) -> None:
+    completed = _settings_page(fleet_clerk_id=fleet_clerk_id, directory=directory)
 
-    assert completed.returncode != 0
-    assert completed.stdout == ""
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout == expected_url, "settings_page_url prints the lane's own settings page"
 
 
 @pytest.mark.parametrize(
     ("directory", "reason"),
     [
-        (None, "The account directory (http://127.0.0.1:8000/api/broker-clerks) could not be read: "
-               "curl: (7) Failed to connect to 127.0.0.1 port 8000"),
-        (_directory(("alpaca", "clrk_a"), ("alpaca", "clrk_b")), "does not list exactly one Alpaca lane"),
-        ("<html>proxy error</html>", "is not the lane list this script reads"),
+        pytest.param(
+            _directory(("alpaca", "clrk_a"), ("alpaca", "clrk_b")),
+            "does not list exactly one Alpaca lane",
+            id="two-alpaca-lanes",
+        ),
+        pytest.param(_directory(), "does not list exactly one Alpaca lane", id="no-alpaca-lane"),
+        pytest.param(
+            None,
+            "The account directory (http://127.0.0.1:8000/api/broker-clerks) could not be read: "
+            "curl: (7) Failed to connect to 127.0.0.1 port 8000",
+            id="directory-unreadable",
+        ),
+        pytest.param("<html>proxy error</html>", "is not the lane list this script reads", id="not-a-lane-list"),
     ],
-    ids=["directory-unreadable", "two-alpaca-lanes", "not-a-lane-list"],
 )
-def test_the_refusal_says_why_no_lane_was_named(directory: str | None, reason: str) -> None:
-    """Review A (minor): an unreachable directory was reported as "does not
+def test_the_combined_posture_refuses_rather_than_guess_a_lane_and_says_why(
+    directory: str | None, reason: str
+) -> None:
+    """With several Alpaca lanes, none, or no readable directory, no single
+    lane can be named: ``settings_page_url`` fails (the ceremony then prints
+    the by-hand procedure and exits 1) and never prints a URL.
+
+    Review A (minor): an unreachable directory was reported as "does not
     list exactly one Alpaca lane", because curl's own error was discarded.
     Each failure now names itself, with curl's error when it has one."""
     completed = _settings_page(fleet_clerk_id="", directory=directory)
 
-    assert completed.returncode != 0
-    assert reason in completed.stderr
+    assert completed.returncode != 0, "settings_page_url must fail when no single lane can be named"
+    assert completed.stdout == "", "settings_page_url must print no URL when no single lane can be named"
+    assert reason in completed.stderr, "the refusal names why no lane was named"

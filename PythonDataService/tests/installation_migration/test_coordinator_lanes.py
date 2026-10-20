@@ -123,37 +123,6 @@ def test_a_200_body_that_is_not_the_route_s_model_is_a_refusal_naming_the_lane()
     assert refused.value.details["clerk_id"] == "clrk_live"
 
 
-def test_an_incomplete_stop_refuses_naming_the_lane() -> None:
-    lanes, _seen = _lanes(
-        lambda _request: httpx.Response(
-            409,
-            json={"detail": {"reason": "lane_stop_all_incomplete", "message": "ema-1 did not stop"}},
-        )
-    )
-
-    with pytest.raises(MigrationRefused) as refused:
-        lanes.stop_all_bots(_LANE, operator="inkant", change_ref="migrate")
-
-    assert refused.value.reason == "lane_stop_all_refused"
-    assert refused.value.details["clerk_id"] == "clrk_live"
-    assert "lane_stop_all_incomplete" in refused.value.message
-
-
-def test_an_unobservable_account_refuses_naming_the_lane() -> None:
-    lanes, _seen = _lanes(
-        lambda _request: httpx.Response(
-            503,
-            json={"detail": {"reason": "lane_account_quiet_unobservable", "message": "no broker"}},
-        )
-    )
-
-    with pytest.raises(MigrationRefused) as refused:
-        lanes.account_quiet(_LANE)
-
-    assert refused.value.reason == "lane_account_quiet_unanswered"
-    assert "clrk_live" in refused.value.message
-
-
 def test_an_unreachable_coordinator_refuses() -> None:
     def fail(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("refused", request=request)
@@ -185,21 +154,6 @@ def test_ibkr_bar_check_reads_the_clerk_scoped_route() -> None:
     assert seen[0].url.path == "/api/brokers/alpaca/clerks/clrk_live/lane/ibkr-bar-check"
 
 
-def test_a_lane_whose_gateway_returns_no_bars_refuses_naming_the_lane_and_why() -> None:
-    lanes, _seen = _lanes(
-        lambda _request: httpx.Response(
-            503, json={"detail": {"reason": "ibkr_no_bars", "message": "no bars came back"}}
-        )
-    )
-
-    with pytest.raises(MigrationRefused) as refused:
-        lanes.ibkr_bar_check(_LANE)
-
-    assert refused.value.reason == "lane_ibkr_bar_check_failed"
-    assert "ibkr_no_bars" in refused.value.message
-    assert refused.value.details["clerk_id"] == "clrk_live"
-
-
 def test_release_posts_the_envelope_and_the_confirmation_words() -> None:
     receipt = {
         "receipt_id": "rel-1",
@@ -225,21 +179,60 @@ def test_release_posts_the_envelope_and_the_confirmation_words() -> None:
     assert (body["operator"], body["change_ref"]) == ("inkant", "go-live")
 
 
-def test_a_refused_release_names_the_lane() -> None:
+@pytest.mark.parametrize(
+    ("status", "detail_reason", "detail_message", "operation", "reason"),
+    [
+        pytest.param(
+            409,
+            "lane_stop_all_incomplete",
+            "ema-1 did not stop",
+            lambda lanes: lanes.stop_all_bots(_LANE, operator="inkant", change_ref="migrate"),
+            "lane_stop_all_refused",
+            id="an_incomplete_stop",
+        ),
+        pytest.param(
+            503,
+            "lane_account_quiet_unobservable",
+            "no broker",
+            lambda lanes: lanes.account_quiet(_LANE),
+            "lane_account_quiet_unanswered",
+            id="an_unobservable_account",
+        ),
+        pytest.param(
+            503,
+            "ibkr_no_bars",
+            "no bars came back",
+            lambda lanes: lanes.ibkr_bar_check(_LANE),
+            "lane_ibkr_bar_check_failed",
+            id="a_lane_whose_gateway_returns_no_bars",
+        ),
+        pytest.param(
+            409,
+            "lane_go_live_bar_check_required",
+            "no fresh bar check",
+            lambda lanes: lanes.release_go_live(_LANE, operator="inkant", change_ref="go-live"),
+            "lane_go_live_release_refused",
+            id="a_refused_release",
+        ),
+    ],
+)
+def test_a_non_200_answer_is_a_refusal_naming_the_lane_and_why(
+    status: int,
+    detail_reason: str,
+    detail_message: str,
+    operation: Callable[[CoordinatorLanes], object],
+    reason: str,
+) -> None:
     lanes, _seen = _lanes(
         lambda _request: httpx.Response(
-            409,
-            json={
-                "detail": {
-                    "reason": "lane_go_live_bar_check_required",
-                    "message": "no fresh bar check",
-                }
-            },
+            status, json={"detail": {"reason": detail_reason, "message": detail_message}}
         )
     )
 
     with pytest.raises(MigrationRefused) as refused:
-        lanes.release_go_live(_LANE, operator="inkant", change_ref="go-live")
+        operation(lanes)
 
-    assert refused.value.reason == "lane_go_live_release_refused"
-    assert "lane_go_live_bar_check_required" in refused.value.message
+    assert refused.value.reason == reason, "the refusal carries the operation's own reason"
+    assert refused.value.details["clerk_id"] == "clrk_live", "the refusal names the lane in its details"
+    assert "clrk_live" in refused.value.message, "the refusal names the lane in its message"
+    assert detail_reason in refused.value.message, "the refusal says why the coordinator refused"

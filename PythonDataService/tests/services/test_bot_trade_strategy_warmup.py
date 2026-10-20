@@ -19,6 +19,7 @@ floors an unregistered ``strategy_key``.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -121,17 +122,17 @@ def _context() -> StrategyContext:
     [
         pytest.param("sma_crossover", 7, id="sma_crossover-contract-declares-7"),
         pytest.param("spy_strategy_a", 9, id="spy_strategy_a-contract-declares-9"),
+        pytest.param(
+            "not-a-registered-strategy", _WARMUP_LOOKBACK_DAYS, id="unregistered-strategy-key-floors-at-the-constant"
+        ),
     ],
 )
-def test_warmup_lookback_days_for_prefers_the_registered_contracts_own_window(
+def test_warmup_lookback_days_for_prefers_the_contract_window_and_floors_an_unregistered_key(
     strategy_key: str, expected_days: int
 ) -> None:
-    assert _warmup_lookback_days_for(_binding(strategy_key=strategy_key)) == expected_days
-
-
-def test_warmup_lookback_days_for_floors_an_unregistered_strategy_key_at_the_constant() -> None:
-    binding = _binding(strategy_key="not-a-registered-strategy")
-    assert _warmup_lookback_days_for(binding) == _WARMUP_LOOKBACK_DAYS
+    assert _warmup_lookback_days_for(_binding(strategy_key=strategy_key)) == expected_days, (
+        "lookback days: the registered contract's own window, else the constant floor"
+    )
 
 
 @pytest.mark.asyncio
@@ -262,79 +263,105 @@ def _assert_refused(bars: list[MarketDataBar], *, lookback_days: int, now_ms: in
     assert refused.value.reason == WARMUP_HISTORY_UNAVAILABLE
 
 
-def test_warmup_coverage_accepts_one_regular_hours_bar_in_each_owed_session() -> None:
-    """Session-level, not minute-level: a symbol that skips minutes (here all
-    but one per session) is ordinary history and must not refuse a start."""
-    require_warmup_coverage(_one_bar_per_owed_session(), lookback_days=7, now_ms=_NOW_MS)
-
-
-@pytest.mark.parametrize(
-    "missing",
-    [pytest.param(index, id=f"owed-session-{index}") for index in range(1, 4)],
-)
-def test_warmup_coverage_refuses_a_response_missing_a_later_owed_session(missing: int) -> None:
-    """Review 4090020257: history reaching the window's earliest session was
-    accepted even with whole sessions after it absent -- a truncated response
-    passed as complete. Every owed session must be covered."""
-    _assert_refused(_one_bar_per_owed_session(skip=missing), lookback_days=7, now_ms=_NOW_MS)
-
-
-def test_warmup_coverage_refuses_a_response_missing_today_once_it_is_owed() -> None:
-    """The newest boundary counts too: at 15:00 most of today's session has
-    elapsed, so history ending yesterday is short."""
-    bars = [_bar_at(close_ms - _MINUTE_MS) for _open_ms, close_ms in _OWED_SESSIONS_MS[:-1]]
-
-    _assert_refused(bars, lookback_days=7, now_ms=_NOW_MS)
-
-
-def test_warmup_coverage_does_not_count_extended_hours_bars() -> None:
-    """Review 4090020268: the run fetches with ``use_rth=False`` and a
-    regular-hours run then drops every PRE/POST bar. A response holding only
-    extended-hours bars in each owed session would pass the check and replay
-    as an empty warmup."""
-    bars = [_bar_at(open_ms - _MINUTE_MS, session_phase="PRE") for open_ms, _close in _OWED_SESSIONS_MS]
-
-    _assert_refused(bars, lookback_days=7, now_ms=_NOW_MS)
-
-
 # 2026-09-23 08:30 EDT, before today's open.
 _BEFORE_OPEN_MS = _TODAY_OPEN_MS - 3_600_000
 _YESTERDAY_OPEN_MS, _YESTERDAY_CLOSE_MS = _OWED_SESSIONS_MS[3]
 
 
-def test_warmup_coverage_owes_the_session_on_the_window_s_first_date() -> None:
-    """Review 4090020265: a one-day warmup at 08:30 starts 08:30 yesterday, so
-    all of yesterday's session is inside it. Excluding the window's first ET
-    date outright owed nothing, and an empty response started the run cold."""
-    _assert_refused([], lookback_days=1, now_ms=_BEFORE_OPEN_MS)
-
-    require_warmup_coverage(
-        [_bar_at(_YESTERDAY_CLOSE_MS - _MINUTE_MS)], lookback_days=1, now_ms=_BEFORE_OPEN_MS
-    )
-
-
-def test_warmup_coverage_owes_nothing_when_the_window_holds_no_session() -> None:
-    """A one-day lookback at 08:30 on Monday spans Sunday: empty is not a refusal."""
-    monday_before_open_ms = _OWED_SESSIONS_MS[2][0] - 3_600_000
-
-    require_warmup_coverage([], lookback_days=1, now_ms=monday_before_open_ms)
+@pytest.mark.parametrize(
+    ("make_bars", "lookback_days", "now_ms"),
+    [
+        # Review 4090020257: history reaching the window's earliest session was
+        # accepted even with whole sessions after it absent -- a truncated response
+        # passed as complete. Every owed session must be covered.
+        pytest.param(
+            lambda: _one_bar_per_owed_session(skip=1), 7, _NOW_MS, id="review-4090020257-missing-a-later-owed-session-1"
+        ),
+        pytest.param(
+            lambda: _one_bar_per_owed_session(skip=2), 7, _NOW_MS, id="review-4090020257-missing-a-later-owed-session-2"
+        ),
+        pytest.param(
+            lambda: _one_bar_per_owed_session(skip=3), 7, _NOW_MS, id="review-4090020257-missing-a-later-owed-session-3"
+        ),
+        # The newest boundary counts too: at 15:00 most of today's session has
+        # elapsed, so history ending yesterday is short.
+        pytest.param(
+            lambda: [_bar_at(close_ms - _MINUTE_MS) for _open_ms, close_ms in _OWED_SESSIONS_MS[:-1]],
+            7,
+            _NOW_MS,
+            id="missing-today-once-it-is-owed",
+        ),
+        # Review 4090020268: the run fetches with ``use_rth=False`` and a
+        # regular-hours run then drops every PRE/POST bar. A response holding only
+        # extended-hours bars in each owed session would pass the check and replay
+        # as an empty warmup.
+        pytest.param(
+            lambda: [_bar_at(open_ms - _MINUTE_MS, session_phase="PRE") for open_ms, _close in _OWED_SESSIONS_MS],
+            7,
+            _NOW_MS,
+            id="review-4090020268-extended-hours-bars-are-not-counted",
+        ),
+        # Review 4090020265: a one-day warmup at 08:30 starts 08:30 yesterday, so
+        # all of yesterday's session is inside it. Excluding the window's first ET
+        # date outright owed nothing, and an empty response started the run cold.
+        pytest.param(
+            lambda: [],
+            1,
+            _BEFORE_OPEN_MS,
+            id="review-4090020265-owes-the-session-on-the-window-s-first-date-empty-response",
+        ),
+    ],
+)
+def test_warmup_coverage_refuses_a_response_short_of_an_owed_session(
+    make_bars: Callable[[], list[MarketDataBar]], lookback_days: int, now_ms: int
+) -> None:
+    _assert_refused(make_bars(), lookback_days=lookback_days, now_ms=now_ms)
 
 
 @pytest.mark.parametrize(
-    ("now_ms", "covered"),
+    ("make_bars", "lookback_days", "now_ms"),
     [
+        # Session-level, not minute-level: a symbol that skips minutes (here all
+        # but one per session) is ordinary history and must not refuse a start.
+        pytest.param(
+            _one_bar_per_owed_session, 7, _NOW_MS, id="one-regular-hours-bar-in-each-owed-session"
+        ),
+        # The same first-date window as above: yesterday's closing bar covers it.
+        pytest.param(
+            lambda: [_bar_at(_YESTERDAY_CLOSE_MS - _MINUTE_MS)],
+            1,
+            _BEFORE_OPEN_MS,
+            id="review-4090020265-owes-the-session-on-the-window-s-first-date-covered-response",
+        ),
+        # A one-day lookback at 08:30 on Monday spans Sunday: empty is not a refusal.
+        pytest.param(
+            lambda: [],
+            1,
+            _OWED_SESSIONS_MS[2][0] - 3_600_000,
+            id="owes-nothing-when-the-window-holds-no-session",
+        ),
+        # A few edge minutes can legitimately hold no print; they are not owed.
+        # The session the one-day window mostly spans is, and is covered here.
         # 15:58: the window holds yesterday's last 2 minutes -- a sliver, not owed.
-        pytest.param(_YESTERDAY_CLOSE_MS + 24 * 3_600_000 - 2 * _MINUTE_MS, "today", id="window-starts-2min-before-close"),
+        pytest.param(
+            lambda: [_bar_at(_TODAY_OPEN_MS)],
+            1,
+            _YESTERDAY_CLOSE_MS + 24 * 3_600_000 - 2 * _MINUTE_MS,
+            id="does-not-owe-a-sliver-window-starts-2min-before-close",
+        ),
         # 09:32: today has 2 minutes elapsed -- a sliver, not owed.
-        pytest.param(_TODAY_OPEN_MS + 2 * _MINUTE_MS, "yesterday", id="session-opened-2min-ago"),
+        pytest.param(
+            lambda: [_bar_at(_YESTERDAY_CLOSE_MS - _MINUTE_MS)],
+            1,
+            _TODAY_OPEN_MS + 2 * _MINUTE_MS,
+            id="does-not-owe-a-sliver-session-opened-2min-ago",
+        ),
     ],
 )
-def test_warmup_coverage_does_not_owe_a_sliver_at_the_window_s_edges(now_ms: int, covered: str) -> None:
-    """A few edge minutes can legitimately hold no print; they are not owed.
-    The session the one-day window mostly spans is, and is covered here."""
-    covering_ms = _TODAY_OPEN_MS if covered == "today" else _YESTERDAY_CLOSE_MS - _MINUTE_MS
-
-    require_warmup_coverage([_bar_at(covering_ms)], lookback_days=1, now_ms=now_ms)
+def test_warmup_coverage_accepts_a_response_that_covers_what_is_owed(
+    make_bars: Callable[[], list[MarketDataBar]], lookback_days: int, now_ms: int
+) -> None:
+    require_warmup_coverage(make_bars(), lookback_days=lookback_days, now_ms=now_ms)
 
 
 def test_warmup_lookback_days_for_reads_the_seal_over_the_live_registry() -> None:

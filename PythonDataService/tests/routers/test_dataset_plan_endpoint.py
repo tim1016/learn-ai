@@ -26,6 +26,7 @@ from app.services.dataset_service import (
     calculate_dynamic_indicators,
     project_output_columns,
 )
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 _ET = ZoneInfo("America/New_York")
 
@@ -62,43 +63,32 @@ async def _post_plan(api: FastAPI, payload: dict[str, Any]) -> httpx.Response:
 
 
 @pytest.mark.asyncio
-async def test_plan_empty_ticker_is_422(api: FastAPI) -> None:
-    response = await _post_plan(api, {**_RECIPE, "ticker": ""})
-    assert response.status_code == 422
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "from_date,to_date",
-    [("2025-12-01", "2025-12-01"), ("2025-12-02", "2025-12-01")],
+    "overrides",
+    [
+        pytest.param({"ticker": ""}, id="empty_ticker"),
+        pytest.param({"from_date": "2025-12-01", "to_date": "2025-12-01"}, id="empty_date_window"),
+        pytest.param({"from_date": "2025-12-02", "to_date": "2025-12-01"}, id="inverted_date_window"),
+        pytest.param({"from_date": "Nov 26 2025"}, id="malformed_date_string"),
+        pytest.param(
+            {"start_ms_utc": 1_764_000_000_000, "end_ms_utc": 1_763_000_000_000},
+            id="inverted_numeric_window",
+        ),
+        # Values beyond MAX_TIMESTAMP_MS must fail validation (422), not 500.
+        pytest.param({"start_ms_utc": MAX_TIMESTAMP_MS + 1}, id="out_of_range_start_ms_utc"),
+        pytest.param({"end_ms_utc": MAX_TIMESTAMP_MS + 1}, id="out_of_range_end_ms_utc"),
+    ],
 )
-async def test_plan_inverted_or_empty_date_window_is_422(
-    api: FastAPI, from_date: str, to_date: str
-) -> None:
-    response = await _post_plan(api, {**_RECIPE, "from_date": from_date, "to_date": to_date})
-    assert response.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_plan_malformed_date_string_is_422(api: FastAPI) -> None:
-    response = await _post_plan(api, {**_RECIPE, "from_date": "Nov 26 2025"})
-    assert response.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_plan_inverted_numeric_window_is_422(api: FastAPI) -> None:
-    response = await _post_plan(
-        api,
-        {**_RECIPE, "start_ms_utc": 1_764_000_000_000, "end_ms_utc": 1_763_000_000_000},
-    )
-    assert response.status_code == 422
+async def test_plan_invalid_request_is_422(api: FastAPI, overrides: dict[str, Any]) -> None:
+    response = await _post_plan(api, {**_RECIPE, **overrides})
+    assert response.status_code == 422, response.text
 
 
 # ── Session window resolution ───────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_plan_window_spans_thanksgiving_weekend_and_holiday(api: FastAPI) -> None:
+async def test_plan_receipt_for_the_representative_recipe(api: FastAPI) -> None:
     """2025-11-27 is Thanksgiving (NYSE closed), 11-29/30 a weekend.
 
     Sessions inside [11-26, 12-01]: 11-26, 11-28, 12-01 → 3. The
@@ -106,17 +96,48 @@ async def test_plan_window_spans_thanksgiving_weekend_and_holiday(api: FastAPI) 
     open AFTER the last requested date), never T23:59:59.
     """
     response = await _post_plan(api, _RECIPE)
-    assert response.status_code == 200
     body = response.json()
 
-    assert body["window_start_ms_utc"] == _open_ms(2025, 11, 26, 9, 30)
-    assert body["window_end_ms_utc"] == _open_ms(2025, 12, 2, 9, 30)
-    assert body["window_end_ms_utc"] > body["window_start_ms_utc"]
-    assert body["exchange_sessions"] == ["2025-11-26", "2025-11-28", "2025-12-01"]
-    assert body["session_count"] == 3
-    assert body["exchange"] == "NYSE"
-    assert body["calendar_timezone"] == "America/New_York"
-    assert body["calendar_version"]
+    # The window spans the Thanksgiving weekend and the holiday.
+    assert response.status_code == 200, "window: the plan is accepted"
+    assert body["window_start_ms_utc"] == _open_ms(2025, 11, 26, 9, 30), "window: starts at the 11-26 09:30 ET open"
+    assert body["window_end_ms_utc"] == _open_ms(2025, 12, 2, 9, 30), "window: ends at the 12-02 09:30 ET open"
+    assert body["window_end_ms_utc"] > body["window_start_ms_utc"], "window: end is after start"
+    assert body["exchange_sessions"] == ["2025-11-26", "2025-11-28", "2025-12-01"], "window: the holiday and weekend are not sessions"
+    assert body["session_count"] == 3, "window: three sessions"
+    assert body["exchange"] == "NYSE", "window: exchange is NYSE"
+    assert body["calendar_timezone"] == "America/New_York", "window: calendar timezone is America/New_York"
+    assert body["calendar_version"], "window: the calendar version is stamped"
+
+    # The estimate is typed, with assumptions and provenance.
+    assert response.status_code == 200, "estimate: the plan is accepted"
+    assert body["estimated_bars"] >= 0, "estimate: bar count is not negative"
+    assert isinstance(body["estimate_assumptions"], list), "estimate: assumptions are a list"
+    assert body["estimate_assumptions"], "estimate must ship non-empty assumptions"
+    assert all(isinstance(a, str) and a for a in body["estimate_assumptions"]), "estimate: every assumption is a non-empty string"
+    assert "pandas_market_calendars" in body["estimate_provenance"], "estimate: provenance names pandas_market_calendars"
+    assert "no network calls" in body["estimate_provenance"], "estimate: provenance states no network calls"
+    # Scheduled RTH minutes of 1-minute bars: 11-26 is a full 390-minute
+    # session, 11-28 is the post-Thanksgiving half day (13:00 ET close →
+    # 210 minutes), 12-01 is full again. The estimate uses each session's
+    # real scheduled span — never a hard-coded 390.
+    assert body["estimated_bars"] == 390 + 210 + 390, "estimate: each session's real scheduled span, never a hard-coded 390"
+
+    # Timeframe advice is present.
+    assert response.status_code == 200, "timeframe advice: the plan is accepted"
+    assert body["allowed_timeframes"], "timeframe advice: allowed timeframes are present"
+    assert body["recommended_timeframes"], "timeframe advice: recommended timeframes are present"
+    assert set(body["recommended_timeframes"]) <= set(body["allowed_timeframes"]), "timeframe advice: recommended is a subset of allowed"
+
+    # Sessions expose their ms open anchors.
+    anchors = body["exchange_session_opens_ms_utc"]
+    assert response.status_code == 200, "session anchors: the plan is accepted"
+    assert anchors == [
+        _open_ms(2025, 11, 26, 9, 30),
+        _open_ms(2025, 11, 28, 9, 30),
+        _open_ms(2025, 12, 1, 9, 30),
+    ], "session anchors: one 09:30 ET open per session, in ms UTC"
+    assert len(anchors) == body["session_count"] == len(body["exchange_sessions"]), "session anchors: one per session"
 
 
 @pytest.mark.asyncio
@@ -201,32 +222,20 @@ def test_plan_columns_equal_shared_projection_for_representative_recipe() -> Non
 
 
 @pytest.mark.asyncio
-async def test_plan_estimate_is_typed_with_assumptions_and_provenance(api: FastAPI) -> None:
-    response = await _post_plan(api, _RECIPE)
-    assert response.status_code == 200
+async def test_plan_daily_timespan_receipt(api: FastAPI) -> None:
+    """Polygon grouped-daily aggregates return o/h/l/c/v/vw/n for every
+    timespan — the synthetic preview frame must carry vwap/transactions
+    for hour/day/week/… recipes too, or the receipt would claim columns
+    the ZIP path actually emits are absent."""
+    response = await _post_plan(api, {**_RECIPE, "timespan": "day", "indicator_entries": []})
     body = response.json()
 
-    assert body["estimated_bars"] >= 0
-    assert isinstance(body["estimate_assumptions"], list)
-    assert body["estimate_assumptions"], "estimate must ship non-empty assumptions"
-    assert all(isinstance(a, str) and a for a in body["estimate_assumptions"])
-    assert "pandas_market_calendars" in body["estimate_provenance"]
-    assert "no network calls" in body["estimate_provenance"]
-    # Scheduled RTH minutes of 1-minute bars: 11-26 is a full 390-minute
-    # session, 11-28 is the post-Thanksgiving half day (13:00 ET close →
-    # 210 minutes), 12-01 is full again. The estimate uses each session's
-    # real scheduled span — never a hard-coded 390.
-    assert body["estimated_bars"] == 390 + 210 + 390
+    assert response.status_code == 200, "daily estimate: the plan is accepted"
+    assert body["estimated_bars"] == body["session_count"] == 3, "daily estimate: one bar per session"
 
-
-@pytest.mark.asyncio
-async def test_plan_daily_timespan_estimate_counts_sessions(api: FastAPI) -> None:
-    response = await _post_plan(
-        api, {**_RECIPE, "timespan": "day", "indicator_entries": []}
-    )
-    assert response.status_code == 200
-    body = response.json()
-    assert body["estimated_bars"] == body["session_count"] == 3
+    assert response.status_code == 200, "daily columns: the plan is accepted (review follow-up, PR #2043)"
+    for col in ("open", "high", "low", "close", "volume", "vwap", "transactions", "session"):
+        assert col in body["output_columns"], f"{col} missing from daily plan columns"
 
 
 @pytest.mark.asyncio
@@ -246,30 +255,7 @@ async def test_plan_companions_and_warnings_surface(api: FastAPI) -> None:
     assert any("options_companion" in w for w in body["warnings"])
 
 
-@pytest.mark.asyncio
-async def test_plan_timeframe_advice_present(api: FastAPI) -> None:
-    response = await _post_plan(api, _RECIPE)
-    assert response.status_code == 200
-    body = response.json()
-    assert body["allowed_timeframes"]
-    assert body["recommended_timeframes"]
-    assert set(body["recommended_timeframes"]) <= set(body["allowed_timeframes"])
-
-
 # ── Review follow-ups (PR #2043) ─────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_plan_daily_columns_include_vwap_and_transactions(api: FastAPI) -> None:
-    """Polygon grouped-daily aggregates return o/h/l/c/v/vw/n for every
-    timespan — the synthetic preview frame must carry vwap/transactions
-    for hour/day/week/… recipes too, or the receipt would claim columns
-    the ZIP path actually emits are absent."""
-    response = await _post_plan(api, {**_RECIPE, "timespan": "day", "indicator_entries": []})
-    assert response.status_code == 200
-    body = response.json()
-    for col in ("open", "high", "low", "close", "volume", "vwap", "transactions", "session"):
-        assert col in body["output_columns"], f"{col} missing from daily plan columns"
 
 
 @pytest.mark.asyncio
@@ -294,17 +280,7 @@ async def test_plan_timeframe_advice_uses_resolved_numeric_window(api: FastAPI) 
     assert body["recommended_timeframes"] == [expected_recommended]
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("field", ["start_ms_utc", "end_ms_utc"])
-async def test_plan_out_of_range_ms_window_is_422(api: FastAPI, field: str) -> None:
-    """Values beyond MAX_TIMESTAMP_MS must fail validation (422), not 500."""
-    from app.utils.session_anchors import MAX_TIMESTAMP_MS
-
-    response = await _post_plan(api, {**_RECIPE, field: MAX_TIMESTAMP_MS + 1})
-    assert response.status_code == 422
-
-
-def test_generation_numeric_window_overrides_fetch_dates() -> None:
+def test_generation_numeric_window_resolves_fetch_dates() -> None:
     """Numeric bounds take per-field precedence and resolve through the one
     shared Data Lab resolver (#2457): each ms value floors to its UTC
     calendar date — the exact inverse of the frontend's ``utcMsToIsoDate``
@@ -322,24 +298,18 @@ def test_generation_numeric_window_overrides_fetch_dates() -> None:
         end_ms_utc=_open_ms(2025, 12, 2, 9, 30),
     )
     resolved = resolve_generation_window(request)
-    assert resolved.from_date == "2025-11-26"
-    assert resolved.to_date == "2025-12-02"  # inclusive UTC-date floor, as the chart reads it
+    assert resolved.from_date == "2025-11-26", "both numeric bounds (#2457): from_date is the UTC-date floor of the start"
+    assert resolved.to_date == "2025-12-02", "both numeric bounds (#2457): to_date is the inclusive UTC-date floor, as the chart reads it"
 
-
-def test_generation_numeric_window_partial_override_and_passthrough() -> None:
-    from app.models.requests import DatasetGenerationRequest
-    from app.services.dataset_plan_service import resolve_generation_window
-
-    base = {**_RECIPE, "indicator_entries": []}
     # Start-only override wins per-field; to_date is untouched.
-    request = DatasetGenerationRequest(**base, start_ms_utc=_open_ms(2025, 11, 26, 10, 0))
-    resolved = resolve_generation_window(request)
-    assert resolved.from_date == "2025-11-26"
-    assert resolved.to_date == "2025-12-01"
+    partial = DatasetGenerationRequest(**base, start_ms_utc=_open_ms(2025, 11, 26, 10, 0))
+    resolved_partial = resolve_generation_window(partial)
+    assert resolved_partial.from_date == "2025-11-26", "start-only override: from_date follows the numeric start"
+    assert resolved_partial.to_date == "2025-12-01", "start-only override: to_date is untouched"
 
     # No numeric bounds → request returned unchanged (dates preserved).
     passthrough = DatasetGenerationRequest(**base)
-    assert resolve_generation_window(passthrough) is passthrough
+    assert resolve_generation_window(passthrough) is passthrough, "no numeric bounds: the request is returned unchanged"
 
 
 @pytest.mark.asyncio
@@ -353,20 +323,6 @@ async def test_plan_include_quality_report_adds_warning_not_bars(api: FastAPI) -
     assert b["estimated_bars"] == a["estimated_bars"]
     assert not any("quality" in w for w in a["warnings"])
     assert any("quality_report.md" in w for w in b["warnings"])
-
-
-@pytest.mark.asyncio
-async def test_plan_sessions_expose_ms_open_anchors(api: FastAPI) -> None:
-    response = await _post_plan(api, _RECIPE)
-    assert response.status_code == 200
-    body = response.json()
-    anchors = body["exchange_session_opens_ms_utc"]
-    assert anchors == [
-        _open_ms(2025, 11, 26, 9, 30),
-        _open_ms(2025, 11, 28, 9, 30),
-        _open_ms(2025, 12, 1, 9, 30),
-    ]
-    assert len(anchors) == body["session_count"] == len(body["exchange_sessions"])
 
 
 def test_empty_column_meta_preserves_base_metadata_columns() -> None:

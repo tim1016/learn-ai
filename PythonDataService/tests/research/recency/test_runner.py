@@ -67,32 +67,33 @@ def _one_trade_result(pnl_pts: float = 2.0) -> _FakeBacktestResult:
 
 
 class TestRunRecencySuccessPath:
-    def test_persists_one_snapshot_per_run_spec(self) -> None:
+    def test_two_symbols_persist_one_snapshot_each_and_report_phases_and_progress(self) -> None:
         persisted = []
+        phases: list[str] = []
+        progress_calls: list[tuple[int, int]] = []
         summary = run_recency(
             _config(),
             execute_backtest_fn=lambda run_spec, config: _one_trade_result(),
             persist_fn=persisted.append,
             strategy_code_version_fn=lambda strategy_key: "v1",
+            on_phase=phases.append,
+            on_progress=lambda done, total: progress_calls.append((done, total)),
         )
-        assert summary.expected_runs == 2  # 2 symbols x 1 combo
-        assert summary.succeeded_runs == 2
-        assert summary.failed_runs == 0
-        assert len(persisted) == 2
-        assert {snap.symbol for snap in persisted} == {"SPY", "AAPL"}
+        assert summary.expected_runs == 2, "persists one snapshot per run spec: 2 symbols x 1 combo"
+        assert summary.succeeded_runs == 2, "persists one snapshot per run spec: both succeeded"
+        assert summary.failed_runs == 0, "persists one snapshot per run spec: none failed"
+        assert len(persisted) == 2, "persists one snapshot per run spec"
+        assert {snap.symbol for snap in persisted} == {"SPY", "AAPL"}, "persists one snapshot per run spec: both symbols"
+        assert all(snap.launch_id == "launch-1" for snap in persisted), "snapshot carries launch id"
+        assert all(
+            isinstance(snap.params_hash, str) and snap.params_hash for snap in persisted
+        ), "snapshot carries params hash"
+        assert "expand" in phases, "progress phases are emitted: expand"
+        assert "run" in phases, "progress phases are emitted: run"
+        assert "completed" in phases, "progress phases are emitted: completed"
+        assert progress_calls[-1] == (2, 2), "progress counts reach the expected total"
 
-    def test_snapshot_carries_launch_id_and_params_hash(self) -> None:
-        persisted = []
-        run_recency(
-            _config(),
-            execute_backtest_fn=lambda run_spec, config: _one_trade_result(),
-            persist_fn=persisted.append,
-            strategy_code_version_fn=lambda strategy_key: "v1",
-        )
-        assert all(snap.launch_id == "launch-1" for snap in persisted)
-        assert all(isinstance(snap.params_hash, str) and snap.params_hash for snap in persisted)
-
-    def test_snapshot_trades_carry_a_fingerprint_and_computed_stats(self) -> None:
+    def test_a_default_one_trade_snapshot_carries_stats_no_study_id_and_a_plain_trade(self) -> None:
         persisted = []
         run_recency(
             _config(symbols=["SPY"]),
@@ -100,38 +101,17 @@ class TestRunRecencySuccessPath:
             persist_fn=persisted.append,
             strategy_code_version_fn=lambda strategy_key: "v1",
         )
-        assert len(persisted) == 1
+        assert len(persisted) == 1, "one snapshot persisted"
         snap = persisted[0]
-        assert snap.total_pnl == 20.0  # pnl_pts(2.0) * quantity(10)
-        assert len(snap.trades) == 1
+        assert snap.total_pnl == 20.0, "snapshot total pnl is pnl_pts(2.0) * quantity(10)"
+        assert len(snap.trades) == 1, "snapshot carries its one trade"
         trade = snap.trades[0]
-        assert trade.fingerprint
-        assert trade.pnl == 20.0
-        assert trade.holding_sessions >= 1
-
-    def test_progress_phases_are_emitted(self) -> None:
-        phases: list[str] = []
-        run_recency(
-            _config(),
-            execute_backtest_fn=lambda run_spec, config: _one_trade_result(),
-            persist_fn=lambda snap: None,
-            strategy_code_version_fn=lambda strategy_key: "v1",
-            on_phase=phases.append,
-        )
-        assert "expand" in phases
-        assert "run" in phases
-        assert "completed" in phases
-
-    def test_progress_counts_reach_the_expected_total(self) -> None:
-        progress_calls: list[tuple[int, int]] = []
-        run_recency(
-            _config(),
-            execute_backtest_fn=lambda run_spec, config: _one_trade_result(),
-            persist_fn=lambda snap: None,
-            strategy_code_version_fn=lambda strategy_key: "v1",
-            on_progress=lambda done, total: progress_calls.append((done, total)),
-        )
-        assert progress_calls[-1] == (2, 2)
+        assert trade.fingerprint, "snapshot trades carry a fingerprint"
+        assert trade.pnl == 20.0, "snapshot trade carries its computed pnl"
+        assert trade.holding_sessions >= 1, "snapshot trade carries computed holding sessions"
+        assert snap.study_id is None, "snapshot study id is none when autosave did not happen"
+        assert trade.is_synthetic_exit is False, "ordinary trades default to not synthetic"
+        assert trade.signal_reason == "", "ordinary trades default to an empty signal reason"
 
     def test_snapshot_carries_study_id_from_the_backtest_result(self) -> None:
         persisted = []
@@ -145,16 +125,6 @@ class TestRunRecencySuccessPath:
             strategy_code_version_fn=lambda strategy_key: "v1",
         )
         assert persisted[0].study_id == 42
-
-    def test_snapshot_study_id_is_none_when_autosave_did_not_happen(self) -> None:
-        persisted = []
-        run_recency(
-            _config(symbols=["SPY"]),
-            execute_backtest_fn=lambda run_spec, config: _one_trade_result(),
-            persist_fn=persisted.append,
-            strategy_code_version_fn=lambda strategy_key: "v1",
-        )
-        assert persisted[0].study_id is None
 
     def test_snapshot_trades_carry_synthetic_exit_and_signal_reason(self) -> None:
         persisted = []
@@ -179,18 +149,6 @@ class TestRunRecencySuccessPath:
         trade = persisted[0].trades[0]
         assert trade.is_synthetic_exit is True
         assert trade.signal_reason == "window_close"
-
-    def test_ordinary_trades_default_to_not_synthetic(self) -> None:
-        persisted = []
-        run_recency(
-            _config(symbols=["SPY"]),
-            execute_backtest_fn=lambda run_spec, config: _one_trade_result(),
-            persist_fn=persisted.append,
-            strategy_code_version_fn=lambda strategy_key: "v1",
-        )
-        trade = persisted[0].trades[0]
-        assert trade.is_synthetic_exit is False
-        assert trade.signal_reason == ""
 
     def test_total_pnl_and_trade_pnl_are_net_of_configured_commission(self) -> None:
         persisted = []
@@ -225,15 +183,12 @@ class TestRunRecencyDataPolicyFingerprint:
         )
         return persisted[0].trades[0].fingerprint
 
-    def test_differing_resolved_policies_produce_differing_fingerprints(self) -> None:
-        a = self._fingerprint_for_resolved_policy("polygon-adjusted-regular-minute")
-        b = self._fingerprint_for_resolved_policy("ibkr-raw-regular-minute")
-        assert a != b
-
-    def test_same_resolved_policy_is_deterministic(self) -> None:
-        a = self._fingerprint_for_resolved_policy("polygon-adjusted-regular-minute")
-        b = self._fingerprint_for_resolved_policy("polygon-adjusted-regular-minute")
-        assert a == b
+    def test_the_fingerprint_follows_the_resolved_policy(self) -> None:
+        adjusted = self._fingerprint_for_resolved_policy("polygon-adjusted-regular-minute")
+        adjusted_again = self._fingerprint_for_resolved_policy("polygon-adjusted-regular-minute")
+        raw = self._fingerprint_for_resolved_policy("ibkr-raw-regular-minute")
+        assert adjusted != raw, "differing resolved policies produce differing fingerprints"
+        assert adjusted == adjusted_again, "same resolved policy is deterministic"
 
 
 class TestRunRecencyFailureIsolation:
@@ -393,11 +348,11 @@ class TestRunRecencySkipIdentities:
         spec = next(iter(expand_grid(_config().strategies, _config().symbols)))
         return (spec.symbol, spec.strategy_key, spec.params_hash)
 
-    def test_a_recorded_cell_is_skipped_not_executed_or_persisted(self) -> None:
+    def test_a_recorded_cell_is_skipped_and_counts_toward_progress_only(self) -> None:
         executed: list[str] = []
         persisted = []
 
-        run_recency(
+        summary = run_recency(
             _config(),
             execute_backtest_fn=lambda run_spec, config: executed.append(run_spec.symbol) or _one_trade_result(),
             persist_fn=persisted.append,
@@ -405,19 +360,14 @@ class TestRunRecencySkipIdentities:
             skip_identities=frozenset({self._identity_of_first_spec()}),
         )
 
-        assert sorted(executed) == ["AAPL"]  # the recorded cell is never re-run
-        assert [snap.symbol for snap in persisted] == ["AAPL"]
-
-    def test_a_skipped_cell_counts_toward_progress_but_toward_neither_succeeded_nor_failed(self) -> None:
-        summary = run_recency(
-            _config(),
-            execute_backtest_fn=lambda run_spec, config: _one_trade_result(),
-            persist_fn=lambda snap: None,
-            strategy_code_version_fn=lambda strategy_key: "v1",
-            skip_identities=frozenset({self._identity_of_first_spec()}),
-        )
-
-        assert (summary.expected_runs, summary.succeeded_runs, summary.failed_runs, summary.skipped_runs) == (2, 1, 0, 1)
+        assert sorted(executed) == ["AAPL"], "a recorded cell is never re-run"
+        assert [snap.symbol for snap in persisted] == ["AAPL"], "a recorded cell is never persisted"
+        assert (
+            summary.expected_runs,
+            summary.succeeded_runs,
+            summary.failed_runs,
+            summary.skipped_runs,
+        ) == (2, 1, 0, 1), "a skipped cell counts toward progress but toward neither succeeded nor failed"
 
     def test_the_skip_identity_is_the_persisted_record_s_identity_triple(self) -> None:
         """A params_hash that differs (a different combo of the same symbol/strategy) is a cell of its own."""

@@ -253,6 +253,22 @@ def test_an_entry_from_the_open_and_an_exit_from_the_close_are_left_to_each_sess
         (("open", 5), ("open", 389), _CLOSE_MS, True, "an exit a minute before the close, counted from the open"),
         (("open", 5), ("open", 400), _CLOSE_MS, False, "an exit after the close"),
         (("close", 400), ("close", 46), _CLOSE_MS, False, "an entry before the open"),
+        # Counted that way round the entry is the earlier of the two only when they add up to more than the
+        # session, so a large sum is what lets one fit. The add-up-to-a-day rule below is not about this pair.
+        (
+            ("close", 300),
+            ("open", 300),
+            _CLOSE_MS,
+            True,
+            "an entry from the close and an exit from the open fit a full day, whatever they add up to",
+        ),
+        (
+            ("close", 300),
+            ("open", 300),
+            _HALF_DAY_CLOSE_MS,
+            False,
+            "an entry from the close and an exit from the open are left to each session: not a half day",
+        ),
     ],
 )
 def test_a_session_fits_a_window_that_leaves_a_minute_to_read_and_a_minute_to_fill(
@@ -312,20 +328,6 @@ def test_an_entry_from_the_open_and_an_exit_from_the_close_that_add_up_to_a_day_
     else:
         with pytest.raises(ValidationError, match="add up to a day"):
             OptionsBacktestSetup.model_validate(written)
-
-
-def test_an_entry_from_the_close_and_an_exit_from_the_open_are_left_to_each_session_whatever_they_add_up_to() -> None:
-    # Counted that way round the entry is the earlier of the two only when they add up to more than the session, so a
-    # large sum is what lets one fit. The rule above is not about this pair.
-    setup = OptionsBacktestSetup.model_validate(
-        _setup(
-            entry={"anchor": "close", "offset_ms": 300 * MS_PER_MINUTE},
-            exit={"anchor": "open", "offset_ms": 300 * MS_PER_MINUTE},
-        )
-    )
-
-    assert setup.window_fits(session_open_ms=_OPEN_MS, session_close_ms=_CLOSE_MS) is True
-    assert setup.window_fits(session_open_ms=_OPEN_MS, session_close_ms=_HALF_DAY_CLOSE_MS) is False
 
 
 # ── A re-entry rule a stop can reach ─────────────────────────────────────

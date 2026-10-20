@@ -33,20 +33,23 @@ def _progress_events(redis: _FakeRedis) -> list[dict]:
     return [event for event in _events(redis) if event["type"] == "job.progress"]
 
 
-def test_zero_interval_keeps_the_legacy_every_tick_contract(fake: _FakeRedis) -> None:
-    emit = ProgressEmitter("job-c", progress_min_interval_s=0.0)
-    for tick in range(5):
-        emit.progress(tick, 5, unit="cells")
-    assert [event["current"] for event in _progress_events(fake)] == [0, 1, 2, 3, 4]
-
-
-def test_one_interval_coalesces_a_burst_into_a_single_event(fake: _FakeRedis) -> None:
-    emit = ProgressEmitter("job-c", progress_min_interval_s=60.0)
-    for tick in range(1, 9):  # eight workers' checkpoint traffic, one logical tick each
-        emit.progress(tick, 8, unit="cells")
+@pytest.mark.parametrize(
+    ("interval_s", "ticks", "total", "expected_currents"),
+    [
+        pytest.param(0.0, range(5), 5, [0, 1, 2, 3, 4], id="zero_interval_keeps_the_legacy_every_tick_contract"),
+        # eight workers' checkpoint traffic, one logical tick each
+        pytest.param(60.0, range(1, 9), 8, [1], id="one_interval_coalesces_a_burst_into_a_single_event"),
+    ],
+)
+def test_the_interval_decides_which_ticks_land_as_progress_events(
+    fake: _FakeRedis, interval_s: float, ticks: range, total: int, expected_currents: list[int]
+) -> None:
+    emit = ProgressEmitter("job-c", progress_min_interval_s=interval_s)
+    for tick in ticks:
+        emit.progress(tick, total, unit="cells")
     landed = _progress_events(fake)
-    assert len(landed) == 1, "a burst inside one interval is one event"
-    assert landed[0]["current"] == 1, "the interval's first tick lands immediately"
+    assert len(landed) == len(expected_currents), "a burst inside one interval is one event; a zero interval lands every tick"
+    assert [event["current"] for event in landed] == expected_currents, "the ticks that land are the expected ones (the interval's first lands immediately)"
 
 
 def test_a_pending_update_lands_before_the_terminal_event_never_after(fake: _FakeRedis) -> None:

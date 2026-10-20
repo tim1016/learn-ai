@@ -11,6 +11,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import shutil
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
@@ -146,14 +147,18 @@ def test_blob_store_refuses_an_address_that_is_not_a_sha256(blobs: BlobStore, ad
 # ---------------------------------------------------------------------------
 # Window
 # ---------------------------------------------------------------------------
-def test_proof_window_refuses_an_anchor_that_is_not_an_et_midnight() -> None:
-    with pytest.raises(ValueError, match="ET-midnight"):
-        ProofWindow(start_ms=WINDOW.start_ms + 1, end_ms=WINDOW.end_ms, warmup_from_ms=WINDOW.warmup_from_ms)
-
-
-def test_proof_window_refuses_a_warmup_after_the_window_start() -> None:
-    with pytest.raises(ValueError, match="warmup_from_ms <= start_ms < end_ms"):
-        ProofWindow(start_ms=WINDOW.start_ms, end_ms=WINDOW.end_ms, warmup_from_ms=WINDOW.end_ms)
+@pytest.mark.parametrize(
+    ("start_ms", "warmup_from_ms", "message"),
+    [
+        pytest.param(WINDOW.start_ms + 1, WINDOW.warmup_from_ms, "ET-midnight", id="an-anchor-that-is-not-an-et-midnight"),
+        pytest.param(WINDOW.start_ms, WINDOW.end_ms, "warmup_from_ms <= start_ms < end_ms", id="a-warmup-after-the-window-start"),
+    ],
+)
+def test_proof_window_refuses_an_anchor_that_is_not_an_et_midnight_and_a_warmup_after_the_window_start(
+    start_ms: int, warmup_from_ms: int, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        ProofWindow(start_ms=start_ms, end_ms=WINDOW.end_ms, warmup_from_ms=warmup_from_ms)
 
 
 # ---------------------------------------------------------------------------
@@ -288,23 +293,18 @@ def test_materialize_refuses_a_destination_inside_a_managed_lake(
 # ---------------------------------------------------------------------------
 # Decision trace
 # ---------------------------------------------------------------------------
-def test_decision_trace_on_a_seeded_lake_is_deterministic(snapshot: DataSnapshot, lake: Path) -> None:
+def test_decision_trace_on_a_seeded_lake_is_deterministic_and_its_root_binds_the_parameters(snapshot: DataSnapshot, lake: Path) -> None:
     first = decision_trace(PROGRAM, SYMBOL, VALIDATED, WINDOW, roots=[lake], manifest=snapshot.artifacts)
     second = decision_trace(PROGRAM, SYMBOL, VALIDATED, WINDOW, roots=[lake], manifest=snapshot.artifacts)
-
-    # Four regular sessions of 26 fifteen-minute decision bars each.
-    assert first.trace_count == 4 * 26
-    assert first == second
-
-
-def test_decision_trace_root_binds_the_parameters(snapshot: DataSnapshot, lake: Path) -> None:
-    validated = decision_trace(PROGRAM, SYMBOL, VALIDATED, WINDOW, roots=[lake], manifest=snapshot.artifacts)
     widened = decision_trace(
         PROGRAM, SYMBOL, {**VALIDATED, "rsi_min": 30.0}, WINDOW, roots=[lake], manifest=snapshot.artifacts
     )
 
-    assert widened.trace_count == validated.trace_count
-    assert widened.trace_root != validated.trace_root
+    # Four regular sessions of 26 fifteen-minute decision bars each.
+    assert first.trace_count == 4 * 26, "four regular sessions of 26 fifteen-minute decision bars each"
+    assert first == second, "the same replay on a seeded lake is deterministic"
+    assert widened.trace_count == first.trace_count, "other parameters decide on the same bars"
+    assert widened.trace_root != first.trace_root, "the trace root binds the parameters"
 
 
 def test_decision_trace_refuses_a_cold_start_at_the_window(snapshot: DataSnapshot, lake: Path) -> None:
@@ -349,33 +349,28 @@ def test_decision_trace_refuses_parameters_for_another_symbol(snapshot: DataSnap
 # ---------------------------------------------------------------------------
 # Proof and re-proof
 # ---------------------------------------------------------------------------
-def test_build_proof_restored_replay_equals_lake_replay(snapshot: DataSnapshot, lake: Path, blobs: BlobStore) -> None:
-    record = _build(snapshot, lake, blobs)
-
-    lake_only = decision_trace(PROGRAM, SYMBOL, VALIDATED, WINDOW, roots=[lake], manifest=record.manifest)
-    assert record.lake_trace_root == record.restored_trace_root == lake_only.trace_root
-    assert record.trace_count == lake_only.trace_count
-    assert record.program_version == CONTRACT.program_version
-    # The canonical point is the schema's own dump, symbol included (it omits
-    # identity-neutral defaults, #2696), not the caller's mapping.
-    canonical = _STRATEGY_REGISTRY[PROGRAM].param_schema.model_validate({**VALIDATED, "symbol": "SPY"})
-    assert record.params == canonical.model_dump(mode="json")
-    assert record.params["symbol"] == "SPY"
-    assert record.manifest == stage_proof_inputs(snapshot, roots=[lake], window=WINDOW, blob_store=blobs).artifacts
-    assert (record.artifact_digest, record.wiring_digest) == (ARTIFACT_DIGEST, WIRING_DIGEST)
-
-
-def test_proof_record_round_trips_and_hashes_its_canonical_json(
+def test_build_proof_restored_replay_equals_lake_replay_and_the_record_round_trips_and_hashes_its_canonical_json(
     snapshot: DataSnapshot, lake: Path, blobs: BlobStore
 ) -> None:
     record = _build(snapshot, lake, blobs)
     payload = record.as_dict()
 
-    assert ProofRecord.from_dict(payload) == record
-    assert record.sha256() == semantic_payload_hash(payload)
-    assert payload["window"] == {"start_ms": WINDOW.start_ms, "end_ms": WINDOW.end_ms}
-    assert payload["warmup_from_ms"] == WINDOW.warmup_from_ms
-    assert payload["schema_version"] == 1
+    lake_only = decision_trace(PROGRAM, SYMBOL, VALIDATED, WINDOW, roots=[lake], manifest=record.manifest)
+    assert record.lake_trace_root == record.restored_trace_root == lake_only.trace_root, "the restored replay equals the lake replay"
+    assert record.trace_count == lake_only.trace_count, "the record counts the lake replay's traces"
+    assert record.program_version == CONTRACT.program_version, "the record names the contract's program version"
+    # The canonical point is the schema's own dump, symbol included (it omits
+    # identity-neutral defaults, #2696), not the caller's mapping.
+    canonical = _STRATEGY_REGISTRY[PROGRAM].param_schema.model_validate({**VALIDATED, "symbol": "SPY"})
+    assert record.params == canonical.model_dump(mode="json"), "the record keeps the schema's canonical point"
+    assert record.params["symbol"] == "SPY", "the canonical point includes the symbol"
+    assert record.manifest == stage_proof_inputs(snapshot, roots=[lake], window=WINDOW, blob_store=blobs).artifacts, "the manifest is the staged inputs"
+    assert (record.artifact_digest, record.wiring_digest) == (ARTIFACT_DIGEST, WIRING_DIGEST), "the record keeps the digests it was built under"
+    assert ProofRecord.from_dict(payload) == record, "the record round-trips through its dict"
+    assert record.sha256() == semantic_payload_hash(payload), "the record hashes its canonical json"
+    assert payload["window"] == {"start_ms": WINDOW.start_ms, "end_ms": WINDOW.end_ms}, "the payload carries the window"
+    assert payload["warmup_from_ms"] == WINDOW.warmup_from_ms, "the payload carries the warmup start"
+    assert payload["schema_version"] == 1, "the payload carries the schema version"
 
 
 def test_proof_record_from_dict_refuses_a_malformed_payload(
@@ -464,34 +459,32 @@ def test_reprove_refuses_a_tampered_blob(snapshot: DataSnapshot, lake: Path, blo
     assert excinfo.value.code == "BLOB_CORRUPT"
 
 
-def test_reprove_refuses_a_replay_that_no_longer_reproduces_the_root(
-    snapshot: DataSnapshot, lake: Path, blobs: BlobStore
+@pytest.mark.parametrize(
+    ("change", "code"),
+    [
+        pytest.param(
+            lambda record: dataclasses.replace(record, restored_trace_root="0" * 64),
+            "TRACE_MISMATCH",
+            id="a-replay-that-no-longer-reproduces-the-root",
+        ),
+        pytest.param(
+            lambda record: dataclasses.replace(record, program_version="ema-crossover-signal/v0"),
+            "PROGRAM_CHANGED",
+            id="a-changed-program-version",
+        ),
+        pytest.param(
+            lambda record: dataclasses.replace(record, params={**record.params, "retired_knob": 1}),
+            "PARAMETERS_CHANGED",
+            id="parameters-the-schema-no-longer-accepts",
+        ),
+    ],
+)
+def test_reprove_refuses_a_record_whose_replay_program_or_parameters_no_longer_hold(
+    snapshot: DataSnapshot, lake: Path, blobs: BlobStore, change: Callable[[ProofRecord], ProofRecord], code: str
 ) -> None:
-    record = _build(snapshot, lake, blobs)
-    drifted = dataclasses.replace(record, restored_trace_root="0" * 64)
+    changed = change(_build(snapshot, lake, blobs))
 
     with pytest.raises(ProofMismatchError) as excinfo:
-        reprove(drifted, blobs, artifact_digest=ARTIFACT_DIGEST, wiring_digest=WIRING_DIGEST)
+        reprove(changed, blobs, artifact_digest=ARTIFACT_DIGEST, wiring_digest=WIRING_DIGEST)
 
-    assert excinfo.value.code == "TRACE_MISMATCH"
-
-
-def test_reprove_refuses_a_changed_program_version(snapshot: DataSnapshot, lake: Path, blobs: BlobStore) -> None:
-    record = dataclasses.replace(_build(snapshot, lake, blobs), program_version="ema-crossover-signal/v0")
-
-    with pytest.raises(ProofMismatchError) as excinfo:
-        reprove(record, blobs, artifact_digest=ARTIFACT_DIGEST, wiring_digest=WIRING_DIGEST)
-
-    assert excinfo.value.code == "PROGRAM_CHANGED"
-
-
-def test_reprove_refuses_parameters_the_schema_no_longer_accepts(
-    snapshot: DataSnapshot, lake: Path, blobs: BlobStore
-) -> None:
-    record = _build(snapshot, lake, blobs)
-    retired = dataclasses.replace(record, params={**record.params, "retired_knob": 1})
-
-    with pytest.raises(ProofMismatchError) as excinfo:
-        reprove(retired, blobs, artifact_digest=ARTIFACT_DIGEST, wiring_digest=WIRING_DIGEST)
-
-    assert excinfo.value.code == "PARAMETERS_CHANGED"
+    assert excinfo.value.code == code, "the refusal names why the record no longer holds"

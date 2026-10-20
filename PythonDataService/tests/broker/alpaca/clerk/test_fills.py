@@ -166,20 +166,20 @@ def test_partial_fill_event_included() -> None:
     assert len(fills) == 1
 
 
-def test_unowned_order_event_excluded() -> None:
-    """owned=False entries must not be attributed."""
+@pytest.mark.parametrize(
+    "update",
+    [
+        # owned=False entries must not be attributed.
+        pytest.param((("owned", False), ("order_ref", ""), ("intent_id", "")), id="unowned-order-event"),
+        # A fill event with no event_key cannot be safely deduped — must be excluded.
+        pytest.param((("event_key", None),), id="fill-without-event-key"),
+    ],
+)
+def test_an_entry_that_cannot_be_safely_attributed_is_excluded(update: tuple[tuple[str, object], ...]) -> None:
     entry = _fill_entry(sid=_SID, intent="i1")
-    unowned = entry.model_copy(update={"owned": False, "order_ref": "", "intent_id": ""})
-    fills = project_instance_fills(_SID, [unowned])
-    assert len(fills) == 0
-
-
-def test_fill_without_event_key_excluded() -> None:
-    """A fill event with no event_key cannot be safely deduped — must be excluded."""
-    entry = _fill_entry(sid=_SID, intent="i1")
-    no_key = entry.model_copy(update={"event_key": None})
-    fills = project_instance_fills(_SID, [no_key])
-    assert len(fills) == 0
+    excluded = entry.model_copy(update=dict(update))
+    fills = project_instance_fills(_SID, [excluded])
+    assert len(fills) == 0, "the entry must not be attributed"
 
 
 def test_multiple_accounts_same_sid_isolated() -> None:

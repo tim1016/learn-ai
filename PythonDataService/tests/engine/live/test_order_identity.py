@@ -9,6 +9,7 @@ length guard; the ownership ladder and order_id-never-owns.
 from __future__ import annotations
 
 import base64
+from collections.abc import Callable
 
 import pytest
 
@@ -43,12 +44,21 @@ def test_mint_intent_id_unique() -> None:
     assert len({mint_intent_id() for _ in range(1000)}) == 1000
 
 
-def test_build_parse_round_trip() -> None:
-    ns = build_bot_order_namespace("spy_rsi")
-    assert ns == "learn-ai/spy_rsi/v1"
+@pytest.mark.parametrize(
+    "build_namespace,instance_id,expected_namespace",
+    [
+        pytest.param(build_bot_order_namespace, "spy_rsi", "learn-ai/spy_rsi/v1", id="bot_namespace"),
+        pytest.param(build_manual_order_namespace, "operator", "manual/operator/v1", id="manual_namespace"),
+    ],
+)
+def test_build_parse_round_trip(
+    build_namespace: Callable[[str], str], instance_id: str, expected_namespace: str
+) -> None:
+    ns = build_namespace(instance_id)
+    assert ns == expected_namespace, "the namespace builder mints the expected namespace"
     iid = mint_intent_id()
     ref = build_order_ref(ns, iid)
-    assert parse_order_ref(ref) == (ns, iid)
+    assert parse_order_ref(ref) == (ns, iid), "mint -> build -> parse returns the namespace and intent id"
 
 
 def test_parse_splits_on_final_colon_with_base64url_dashes() -> None:
@@ -61,25 +71,30 @@ def test_parse_splits_on_final_colon_with_base64url_dashes() -> None:
     assert parse_order_ref(ref) == (ns, iid)
 
 
-def test_exact_namespace_match_rejects_version_prefix_collision() -> None:
+def test_order_ref_namespace_matches() -> None:
     allowed = {"learn-ai/foo/v1"}
-    assert order_ref_namespace_matches("learn-ai/foo/v1:" + mint_intent_id(), allowed)
+    assert order_ref_namespace_matches(
+        "learn-ai/foo/v1:" + mint_intent_id(), allowed
+    ), "exact namespace match: the v1 ref is owned"
     # startswith would WRONGLY match this; exact equality must not.
-    assert not order_ref_namespace_matches("learn-ai/foo/v10:" + mint_intent_id(), allowed)
+    assert not order_ref_namespace_matches(
+        "learn-ai/foo/v10:" + mint_intent_id(), allowed
+    ), "exact namespace match: the /v10 ref is not owned by /v1 (version prefix collision)"
 
+    dual_read = {"learn-ai/foo/v1", "learn-ai/foo/v2"}
+    assert order_ref_namespace_matches(
+        "learn-ai/foo/v1:" + mint_intent_id(), dual_read
+    ), "dual read: the allowed set owns v1"
+    assert order_ref_namespace_matches(
+        "learn-ai/foo/v2:" + mint_intent_id(), dual_read
+    ), "dual read: the allowed set owns v2"
+    assert not order_ref_namespace_matches(
+        "learn-ai/foo/v3:" + mint_intent_id(), dual_read
+    ), "dual read: v3 is not in the allowed set"
 
-def test_dual_read_allowed_set_owns_both_versions() -> None:
-    allowed = {"learn-ai/foo/v1", "learn-ai/foo/v2"}
-    assert order_ref_namespace_matches("learn-ai/foo/v1:" + mint_intent_id(), allowed)
-    assert order_ref_namespace_matches("learn-ai/foo/v2:" + mint_intent_id(), allowed)
-    assert not order_ref_namespace_matches("learn-ai/foo/v3:" + mint_intent_id(), allowed)
-
-
-def test_namespace_match_none_and_unparseable_not_owned() -> None:
-    allowed = {"learn-ai/foo/v1"}
-    assert not order_ref_namespace_matches(None, allowed)
-    assert not order_ref_namespace_matches("no-colon-here", allowed)
-    assert not order_ref_namespace_matches(":empty-ns", allowed)
+    assert not order_ref_namespace_matches(None, allowed), "a None order_ref is not owned"
+    assert not order_ref_namespace_matches("no-colon-here", allowed), "an unparseable ref with no colon is not owned"
+    assert not order_ref_namespace_matches(":empty-ns", allowed), "an unparseable ref with an empty namespace is not owned"
 
 
 def test_parse_rejects_malformed() -> None:
@@ -110,15 +125,6 @@ def test_order_ref_at_max_len_sid_builds_to_exactly_cap() -> None:
     ns = build_bot_order_namespace(sid)
     ref = build_order_ref(ns, mint_intent_id(), max_length=60)
     assert len(ref) == 60
-
-
-def test_manual_order_namespace_round_trips_with_order_ref() -> None:
-    ns = build_manual_order_namespace("operator")
-    intent_id = mint_intent_id()
-    ref = build_order_ref(ns, intent_id)
-
-    assert ns == "manual/operator/v1"
-    assert parse_order_ref(ref) == (ns, intent_id)
 
 
 def test_classify_ownership_ladder() -> None:

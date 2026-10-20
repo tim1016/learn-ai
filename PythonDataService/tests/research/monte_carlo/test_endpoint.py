@@ -184,56 +184,28 @@ async def test_post_then_get_round_trips(client, parent_run_id):
 # ---------------------------------------------------------------------------
 # Validation errors.
 # ---------------------------------------------------------------------------
-async def test_post_unknown_method_returns_422(client, parent_run_id):
-    response = await client.post(
-        "/api/research/strategy-runs/monte-carlo",
-        json={
-            "parent_run_id": parent_run_id,
-            "method": "not_a_method",
-            "simulation_count": 100,
-        },
-    )
-    assert response.status_code == 422
-
-
-async def test_post_zero_simulation_count_returns_422(client, parent_run_id):
-    response = await client.post(
-        "/api/research/strategy-runs/monte-carlo",
-        json={
-            "parent_run_id": parent_run_id,
-            "method": "reshuffle",
-            "simulation_count": 0,
-        },
-    )
-    assert response.status_code == 422
-
-
-async def test_post_negative_random_seed_returns_422(client, parent_run_id):
-    """Pydantic ``Field(ge=0)`` rejects negative seeds at the wire
-    boundary before they reach ``numpy.random.default_rng`` (which
-    would raise ``ValueError`` and surface as 500). Regression for
-    PR #112 Codex P1.
-    """
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param((("method", "not_a_method"),), id="unknown_method"),
+        pytest.param((("simulation_count", 0),), id="zero_simulation_count"),
+        # Pydantic ``Field(ge=0)`` rejects negative seeds at the wire
+        # boundary before they reach ``numpy.random.default_rng`` (which
+        # would raise ``ValueError`` and surface as 500). Regression for
+        # PR #112 Codex P1.
+        pytest.param((("random_seed", -1),), id="negative_random_seed_pr112_codex_p1"),
+        pytest.param((("simulation_count", 100_000),), id="simulation_count_above_10k_cap"),
+    ],
+)
+async def test_post_invalid_request_returns_422(client, parent_run_id, overrides):
     response = await client.post(
         "/api/research/strategy-runs/monte-carlo",
         json={
             "parent_run_id": parent_run_id,
             "method": "reshuffle",
             "simulation_count": 100,
-            "random_seed": -1,
-        },
-    )
-    assert response.status_code == 422
-
-
-async def test_post_simulation_count_above_cap_returns_422(client, parent_run_id):
-    response = await client.post(
-        "/api/research/strategy-runs/monte-carlo",
-        json={
-            "parent_run_id": parent_run_id,
-            "method": "reshuffle",
-            "simulation_count": 100_000,  # above the 10k cap
-        },
+        }
+        | dict(overrides),
     )
     assert response.status_code == 422
 
@@ -265,14 +237,12 @@ async def test_post_missing_parent_run_persists_failed_mc(client, configured_app
 # ---------------------------------------------------------------------------
 # GET single + 404.
 # ---------------------------------------------------------------------------
-async def test_get_missing_returns_404(client):
-    response = await client.get("/api/research/strategy-runs/monte-carlo/" + "f" * 32)
-    assert response.status_code == 404
+async def test_get_unusable_id_is_rejected(client):
+    missing = await client.get("/api/research/strategy-runs/monte-carlo/" + "f" * 32)
+    assert missing.status_code == 404, "missing id returns 404"
 
-
-async def test_get_path_traversal_id_returns_400(client):
-    response = await client.get("/api/research/strategy-runs/monte-carlo/..%2Fetc%2Fpasswd")
-    assert response.status_code in {400, 404}, response.text
+    traversal = await client.get("/api/research/strategy-runs/monte-carlo/..%2Fetc%2Fpasswd")
+    assert traversal.status_code in {400, 404}, f"path-traversal id returns 400 or 404: {traversal.text}"
 
 
 # ---------------------------------------------------------------------------

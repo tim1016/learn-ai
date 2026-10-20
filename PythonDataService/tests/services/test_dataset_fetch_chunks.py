@@ -7,72 +7,50 @@ import pytest
 from app.services.dataset_service import CanonicalBarsError, fetch_bars_chunked, fetch_bars_chunks_raw
 
 
-def test_single_day_range_fetches_that_inclusive_day() -> None:
+@pytest.mark.parametrize(
+    ("ticker", "from_date", "to_date", "timestamps"),
+    [
+        pytest.param("TSLA", "2025-07-28", "2025-07-28", (1,), id="single-day-range-fetches-that-inclusive-day"),
+        pytest.param("SPY", "2025-07-28", "2025-07-30", (), id="multi-day-range-includes-the-requested-end-date"),
+    ],
+)
+def test_a_raw_fetch_asks_for_the_requested_inclusive_range(
+    ticker: str, from_date: str, to_date: str, timestamps: tuple[int, ...]
+) -> None:
     polygon = Mock()
-    polygon.fetch_aggregates.return_value = [{"timestamp": 1}]
+    polygon.fetch_aggregates.return_value = [{"timestamp": t} for t in timestamps]
 
     bars = fetch_bars_chunks_raw(
         polygon,
-        "TSLA",
-        "2025-07-28",
-        "2025-07-28",
+        ticker,
+        from_date,
+        to_date,
     )
 
-    assert bars == [{"timestamp": 1}]
+    assert bars == [{"timestamp": t} for t in timestamps], "the bars come back as the provider served them"
     polygon.fetch_aggregates.assert_called_once()
     kwargs = polygon.fetch_aggregates.call_args.kwargs
-    assert kwargs["from_date"] == "2025-07-28"
-    assert kwargs["to_date"] == "2025-07-28"
+    assert kwargs["from_date"] == from_date, "the fetch starts on the requested first day"
+    assert kwargs["to_date"] == to_date, "the fetch includes the requested end date"
 
 
-def test_multi_day_range_includes_the_requested_end_date() -> None:
+@pytest.mark.parametrize(
+    ("timestamps", "match"),
+    [
+        pytest.param((1_700_000_000_000, 1_700_000_000_000), "duplicate timestamp", id="duplicate-timestamps"),
+        pytest.param((1_700_000_060_000, 1_700_000_000_000), "non-monotonic timestamp", id="non-monotonic-timestamps"),
+        pytest.param((None,), "int64-ms timestamp", id="int64-ms-none"),
+        pytest.param(("1700000000000",), "int64-ms timestamp", id="int64-ms-numeric-string"),
+        pytest.param((1.5,), "int64-ms timestamp", id="int64-ms-float"),
+        pytest.param((True,), "int64-ms timestamp", id="int64-ms-bool"),
+        pytest.param((2**63,), "exceeds int64", id="timestamp-outside-int64"),
+    ],
+)
+def test_chunked_fetch_rejects_a_timestamp_series_that_is_not_canonical(
+    timestamps: tuple[object, ...], match: str
+) -> None:
     polygon = Mock()
-    polygon.fetch_aggregates.return_value = []
+    polygon.fetch_aggregates.return_value = [{"timestamp": t} for t in timestamps]
 
-    fetch_bars_chunks_raw(
-        polygon,
-        "SPY",
-        "2025-07-28",
-        "2025-07-30",
-    )
-
-    assert polygon.fetch_aggregates.call_args.kwargs["to_date"] == "2025-07-30"
-
-
-def test_chunked_fetch_rejects_duplicate_timestamps() -> None:
-    polygon = Mock()
-    polygon.fetch_aggregates.return_value = [
-        {"timestamp": 1_700_000_000_000},
-        {"timestamp": 1_700_000_000_000},
-    ]
-
-    with pytest.raises(CanonicalBarsError, match="duplicate timestamp"):
-        fetch_bars_chunked(polygon, "SPY", "2025-07-28", "2025-07-28")
-
-
-def test_chunked_fetch_rejects_non_monotonic_timestamps() -> None:
-    polygon = Mock()
-    polygon.fetch_aggregates.return_value = [
-        {"timestamp": 1_700_000_060_000},
-        {"timestamp": 1_700_000_000_000},
-    ]
-
-    with pytest.raises(CanonicalBarsError, match="non-monotonic timestamp"):
-        fetch_bars_chunked(polygon, "SPY", "2025-07-28", "2025-07-28")
-
-
-@pytest.mark.parametrize("bad_timestamp", [None, "1700000000000", 1.5, True])
-def test_chunked_fetch_requires_int64_ms_timestamps(bad_timestamp: object) -> None:
-    polygon = Mock()
-    polygon.fetch_aggregates.return_value = [{"timestamp": bad_timestamp}]
-
-    with pytest.raises(CanonicalBarsError, match="int64-ms timestamp"):
-        fetch_bars_chunked(polygon, "SPY", "2025-07-28", "2025-07-28")
-
-
-def test_chunked_fetch_rejects_timestamp_outside_int64() -> None:
-    polygon = Mock()
-    polygon.fetch_aggregates.return_value = [{"timestamp": 2**63}]
-
-    with pytest.raises(CanonicalBarsError, match="exceeds int64"):
+    with pytest.raises(CanonicalBarsError, match=match):
         fetch_bars_chunked(polygon, "SPY", "2025-07-28", "2025-07-28")

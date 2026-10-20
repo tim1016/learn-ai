@@ -131,21 +131,18 @@ def test_params_sha256_binds_the_symbol() -> None:
         params_sha256({"gap": 0.2})
 
 
-def test_registry_point_matches_only_the_validated_point_on_a_validated_symbol() -> None:
-    assert registry_point_matches(CONTRACT, REGISTRY_POINT)
-    assert registry_point_matches(CONTRACT, {**REGISTRY_POINT, "symbol": "spy"})
-    assert not registry_point_matches(CONTRACT, TUNED)
-    assert not registry_point_matches(CONTRACT, {**REGISTRY_POINT, "symbol": "MSFT"})
-
-
-def test_registry_point_matches_reads_a_setting_the_dump_omits_as_its_validated_value() -> None:
+def test_registry_point_matches_only_the_validated_point_and_reads_a_setting_the_dump_omits_as_its_validated_value() -> None:
+    assert registry_point_matches(CONTRACT, REGISTRY_POINT), "the validated point on a validated symbol matches"
+    assert registry_point_matches(CONTRACT, {**REGISTRY_POINT, "symbol": "spy"}), "the symbol matches in any case"
+    assert not registry_point_matches(CONTRACT, TUNED), "a tuned point is not the registry point"
+    assert not registry_point_matches(CONTRACT, {**REGISTRY_POINT, "symbol": "MSFT"}), "another symbol is not validated"
     # A canonical dump leaves an identity-neutral default out (#2696); that
     # absence is the validated value, not a mismatch. A present value must equal it.
     omitted = next(iter(CONTRACT.validated_settings))
     dump = {name: value for name, value in REGISTRY_POINT.items() if name != omitted}
 
-    assert registry_point_matches(CONTRACT, dump)
-    assert not registry_point_matches(CONTRACT, {**dump, omitted: None})
+    assert registry_point_matches(CONTRACT, dump), "a setting the dump omits reads as its validated value"
+    assert not registry_point_matches(CONTRACT, {**dump, omitted: None}), "a present value must equal the validated one"
 
 
 # ---------------------------------------------------------------------------
@@ -202,10 +199,10 @@ async def test_resolve_coverage_covers_the_registry_point_without_a_read() -> No
     )
 
 
-async def test_resolve_coverage_asks_for_the_exact_tuple() -> None:
+async def test_resolve_coverage_asks_for_the_exact_tuple_and_without_any_qualification_is_uncovered() -> None:
     lookup = _Lookup()
 
-    await _resolve(TUNED, lookup)
+    coverage = await _resolve(TUNED, lookup)
 
     assert lookup.subjects == [
         QualificationSubject(
@@ -214,7 +211,12 @@ async def test_resolve_coverage_asks_for_the_exact_tuple() -> None:
             symbol="SPY",
             params_sha256=params_sha256(TUNED),
         )
-    ]
+    ], "the lookup is asked for the exact tuple"
+    assert (coverage.state, coverage.qualification_id, coverage.explanation) == (
+        "UNCOVERED",
+        None,
+        QUALIFICATION_ABSENT,
+    ), "without any qualification the tuple is uncovered"
 
 
 async def test_resolve_coverage_covers_with_the_newest_ready_qualification() -> None:
@@ -253,16 +255,6 @@ async def test_resolve_coverage_prefers_the_actionable_stale_explanation_over_re
     coverage = await _resolve(TUNED, _Lookup([revoked, stale]))
 
     assert (coverage.state, coverage.explanation) == ("UNCOVERED", QUALIFICATION_STALE)
-
-
-async def test_resolve_coverage_without_any_qualification_is_uncovered() -> None:
-    coverage = await _resolve(TUNED, _Lookup())
-
-    assert (coverage.state, coverage.qualification_id, coverage.explanation) == (
-        "UNCOVERED",
-        None,
-        QUALIFICATION_ABSENT,
-    )
 
 
 @pytest.mark.parametrize(

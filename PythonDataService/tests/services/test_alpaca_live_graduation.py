@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -256,32 +257,29 @@ def test_status_resolves_the_served_account_from_the_canonical_route(
     assert result.account_id == LETTERED_ACCOUNT
 
 
-@pytest.mark.parametrize("kind", ["shadow", "real_live"])
-def test_status_still_refuses_a_foreign_route_account(
+@pytest.mark.parametrize(
+    ("active_runtime", "route_account"),
+    [
+        pytest.param(lambda: _runtime("shadow"), "9other0001", id="shadow-foreign-route-account"),
+        pytest.param(lambda: _runtime("real_live"), "9other0001", id="real_live-foreign-route-account"),
+        pytest.param(
+            lambda: ActiveClerkRuntime(authority_kind="shadow", account_authority_kind="shadow"),
+            CANONICAL_ROUTE_ACCOUNT,
+            id="shadow-authority-selects-no-account",
+        ),
+    ],
+)
+def test_status_refuses_an_account_the_served_authority_does_not_hold(
     monkeypatch: pytest.MonkeyPatch,
-    kind: str,
+    active_runtime: Callable[[], ActiveClerkRuntime],
+    route_account: str,
 ) -> None:
-    monkeypatch.setattr(graduation, "get_active_clerk_runtime", lambda: _runtime(kind))
+    monkeypatch.setattr(graduation, "get_active_clerk_runtime", active_runtime)
 
     with pytest.raises(graduation.LiveGraduationRefused) as refused:
-        graduation.AlpacaLiveGraduationService().status("9other0001")
+        graduation.AlpacaLiveGraduationService().status(route_account)
 
-    assert refused.value.reason == "graduation_account_mismatch"
-
-
-def test_status_refuses_when_the_shadow_authority_selects_no_account(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        graduation,
-        "get_active_clerk_runtime",
-        lambda: ActiveClerkRuntime(authority_kind="shadow", account_authority_kind="shadow"),
-    )
-
-    with pytest.raises(graduation.LiveGraduationRefused) as refused:
-        graduation.AlpacaLiveGraduationService().status(CANONICAL_ROUTE_ACCOUNT)
-
-    assert refused.value.reason == "graduation_account_mismatch"
+    assert refused.value.reason == "graduation_account_mismatch", "the refusal names the account mismatch"
 
 
 def _lettered_plan(evidence: BrokerCutoverEvidence, account_id: str = LETTERED_ACCOUNT) -> SimpleNamespace:

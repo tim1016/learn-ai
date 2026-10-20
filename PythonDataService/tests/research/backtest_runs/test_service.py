@@ -115,10 +115,21 @@ def test_a_write_that_timed_out_on_the_database_is_still_reported_as_a_failure(
     assert "outcome unknown" not in caplog.text
 
 
+_NO_RESULT_DETAIL = "No normalized/result.json — LEAN run did not produce output"
+
+
+@pytest.mark.parametrize(
+    ("parity_group_id", "failure_fields", "failure_detail"),
+    [
+        # #1977: the payload's failure detail is validated onto the record, then routed.
+        ("pg-1", {"parity_failure_detail": _NO_RESULT_DETAIL}, _NO_RESULT_DETAIL),
+        ("pg-2", {}, None),
+    ],
+    ids=["failure-detail-reaches-the-settle-1977", "real-result-carries-no-failure-detail"],
+)
 def test_the_companions_failure_detail_reaches_the_settle_from_the_record(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, parity_group_id: str, failure_fields: dict, failure_detail: str | None
 ) -> None:
-    """#1977: the payload's failure detail is validated onto the record, then routed."""
     settled: list[dict] = []
 
     async def stub_insert(fn, /, *args, **kwargs):
@@ -133,41 +144,11 @@ def test_the_companions_failure_detail_reaches_the_settle_from_the_record(
     monkeypatch.setattr(service, "run_sync", asyncio.run)
 
     run_id = service.persist_run_payload_sync(
-        lean_payload(
-            "companion-pg-1",
-            parity_group_id="pg-1",
-            requested_engine="both",
-            parity_failure_detail="No normalized/result.json — LEAN run did not produce output",
-        )
+        lean_payload(f"companion-{parity_group_id}", parity_group_id=parity_group_id, requested_engine="both", **failure_fields)
     )
 
     assert run_id == SaveOutcome(status="saved", run_id=5)
-    assert settled == [
-        {
-            "right_run_id": 5,
-            "parity_group_id": "pg-1",
-            "failure_detail": "No normalized/result.json — LEAN run did not produce output",
-        }
-    ]
-
-
-def test_a_companion_with_a_real_result_carries_no_failure_detail(monkeypatch: pytest.MonkeyPatch) -> None:
-    settled: list[dict] = []
-
-    async def stub_insert(fn, /, *args, **kwargs):
-        return repo.InsertOutcome(run_id=5, created=True)
-
-    async def stub_settle(**kwargs):
-        settled.append(kwargs)
-        return True
-
-    monkeypatch.setattr(service, "with_connection", stub_insert)
-    monkeypatch.setattr(service, "settle_parity_for_lean_run", stub_settle)
-    monkeypatch.setattr(service, "run_sync", asyncio.run)
-
-    service.persist_run_payload_sync(lean_payload("companion-pg-2", parity_group_id="pg-2", requested_engine="both"))
-
-    assert settled == [{"right_run_id": 5, "parity_group_id": "pg-2", "failure_detail": None}]
+    assert settled == [{"right_run_id": 5, "parity_group_id": parity_group_id, "failure_detail": failure_detail}]
 
 
 def test_a_failure_detail_without_a_group_is_refused_by_the_converter() -> None:

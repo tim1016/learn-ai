@@ -360,13 +360,21 @@ def test_two_spreads_on_two_expiries_are_two_rows_and_an_account_figure_equal_to
     assert concentration.expiry_note == EXPIRY_NOTE
 
 
-def test_independent_underlyings_add_into_the_account_figure() -> None:
+def test_independent_underlyings_add_into_the_account_figure_and_the_obligation_is_gross_by_underlying() -> None:
+    """The $5-wide spread loses at most $500.00 and holds $500.00 of collateral, yet the sold 505 put can oblige the
+    account to buy 100 shares at 505: $50,500.00. The bought 500 put offsets none of it here."""
     picture = _picture(_budget("10000", []), holdings={"a": SPREAD, "b": QQQ_SPREAD})
 
     account = picture.concentration.account_collateral
-    assert account.amount_cents == 80_000
-    assert [(t.label, t.amount_cents) for t in account.terms] == [("QQQ", 30_000), ("SPY", 50_000)]
-    assert [(g.underlying, g.collateral_cents) for g in picture.concentration.groups] == [("QQQ", 30_000), ("SPY", 50_000)]
+    assert account.amount_cents == 80_000, "independent underlyings add into the account figure"
+    assert [(t.label, t.amount_cents) for t in account.terms] == [("QQQ", 30_000), ("SPY", 50_000)], "the account figure opens by underlying"
+    assert [(g.underlying, g.collateral_cents) for g in picture.concentration.groups] == [("QQQ", 30_000), ("SPY", 50_000)], "the groups are one per underlying"
+    assignment = picture.obligations.assignment
+    assert (assignment.state, assignment.amount_cents) == ("known", 9_450_000), "the obligation is known and gross by underlying"
+    assert [(t.label, t.amount_cents) for t in assignment.terms] == [("QQQ", 4_400_000), ("SPY", 5_050_000)], "the obligation opens by underlying"
+    assert picture.concentration.account_collateral.amount_cents == 80_000, "the obligation is apart from the loss it can make: the collateral stays $800.00"
+    assert picture.obligations.assignment_note == OBLIGATION_NOTE, "the obligation carries its note"
+    assert "a bounded loss is not a bounded obligation" in OBLIGATION_NOTE, "the note says a bounded loss is not a bounded obligation"
 
 
 def test_holdings_are_netted_across_bots_before_they_are_valued() -> None:
@@ -461,19 +469,6 @@ def test_a_sold_put_at_665_shows_66500_dollars_beside_its_own_loss_bound_of_500(
     assert picture.obligations.assignment_note == OBLIGATION_NOTE
 
 
-def test_the_obligation_is_gross_by_underlying_and_apart_from_the_loss_it_can_make() -> None:
-    """The $5-wide spread loses at most $500.00 and holds $500.00 of collateral, yet the sold 505 put can oblige the
-    account to buy 100 shares at 505: $50,500.00. The bought 500 put offsets none of it here."""
-    picture = _picture(_budget("10000", []), holdings={"a": SPREAD, "b": QQQ_SPREAD})
-
-    assignment = picture.obligations.assignment
-    assert (assignment.state, assignment.amount_cents) == ("known", 9_450_000)
-    assert [(t.label, t.amount_cents) for t in assignment.terms] == [("QQQ", 4_400_000), ("SPY", 5_050_000)]
-    assert picture.concentration.account_collateral.amount_cents == 80_000
-    assert picture.obligations.assignment_note == OBLIGATION_NOTE
-    assert "a bounded loss is not a bounded obligation" in OBLIGATION_NOTE
-
-
 def test_obligation_counts_contracts_and_each_contracts_own_multiplier() -> None:
     held: dict[ContractAtMultiplier, int] = {
         ("SPY261016P00665000", 100): -3, ("SPY261016C00700000", 100): -2, ("SPY261016P00012500", 10): -2,
@@ -490,18 +485,21 @@ def test_an_obligation_is_zero_and_known_when_nothing_is_sold() -> None:
     assert assignment_obligation({}) == {}
 
 
-def test_an_obligation_that_is_not_whole_cents_is_refused_never_rounded() -> None:
-    with pytest.raises(ValueError, match="whole cents"):
-        assignment_obligation({("SPY261016P00100005", 1): -1})
-
-
 @pytest.mark.parametrize(
-    "held",
-    [{(P505, 100): True}, {(P505, 100): 1.5}, {(P505, 0): -1}, {("not-a-contract", 100): -1}],
+    ("contract", "count", "match"),
+    [
+        pytest.param(("SPY261016P00100005", 1), -1, "whole cents", id="obligation_not_whole_cents_is_refused_never_rounded"),
+        pytest.param((P505, 100), True, None, id="holdings_a_bool_is_not_whole_contracts"),
+        pytest.param((P505, 100), 1.5, None, id="holdings_a_fractional_count_is_not_whole_contracts"),
+        pytest.param((P505, 0), -1, None, id="holdings_a_zero_multiplier_is_refused"),
+        pytest.param(("not-a-contract", 100), -1, None, id="holdings_a_symbol_that_is_not_a_contract_is_refused"),
+    ],
 )
-def test_holdings_that_are_not_whole_contracts_at_a_multiplier_are_refused(held: dict) -> None:
-    with pytest.raises(ValueError):
-        assignment_obligation(held)
+def test_holdings_that_are_not_whole_contracts_at_a_multiplier_or_not_whole_cents_are_refused(
+    contract: tuple[str, int], count: float, match: str | None,
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        assignment_obligation({contract: count})  # type: ignore[arg-type]
 
 
 # ---- the cost to close everything -------------------------------------------------------------------------

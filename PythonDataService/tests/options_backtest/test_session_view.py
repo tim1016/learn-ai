@@ -35,18 +35,39 @@ async def test_the_busy_day_is_put_together_from_the_stored_rows_and_the_lake_fr
 ) -> None:
     result = await run_the_scene()
     record = a_session_record(result, 0)
+    setup_lost = a_session_record(result, 0, readable=False)
+    assert setup_lost.header.setup is None and setup_lost.header.setup_cannot_open_reason == THE_REASON, (
+        "the record of a run whose setup was lost has no setup and says why"
+    )
 
     view = await session_view_of(record)
+    view_without_setup = await session_view_of(setup_lost)
 
-    assert view.record is record
-    assert (len(view.record.session.result.outcome.trades), len(view.record.session.result.outcome.events)) == (3, 20)
-    assert (len(view.levels), len(view.fills), len(view.marks)) == (8, 6, 0)
-    assert (view.series.underlying.reason, len(view.series.underlying.points)) == (None, 390)
+    assert view.record is record, "the view carries the record it was made from"
+    assert (len(view.record.session.result.outcome.trades), len(view.record.session.result.outcome.events)) == (
+        3,
+        20,
+    ), "the busy day has 3 trades and 20 events"
+    assert (len(view.levels), len(view.fills), len(view.marks)) == (8, 6, 0), "the busy day: 8 lines, 6 fills, no mark"
+    assert (view.series.underlying.reason, len(view.series.underlying.points)) == (None, 390), (
+        "the underlying is read from the lake with 390 points"
+    )
     assert [(each.symbol, each.reason, len(each.points)) for each in view.series.contracts] == [
         (CALL_500, None, 55),
         (PUT_495, None, 56),
         (PUT_500, None, 57),
-    ]
+    ], "the three contracts are read from the lake with 55, 56 and 57 points"
+
+    # The underlying comes from the run's stored record, so its series is read and shown without the setup. The lines are
+    # Wednesday's eight less the lag leg's momentum (its level comes from the rule): seven. Fills and marks need no setup.
+    assert (view_without_setup.series.underlying.reason, len(view_without_setup.series.underlying.points)) == (
+        None,
+        390,
+    ), "a run whose setup was lost still shows the underlying's series"
+    assert len(view_without_setup.levels) == 7 and (
+        len(view_without_setup.fills),
+        len(view_without_setup.marks),
+    ) == (6, 0), "a run whose setup was lost is drawn with every line but an unfilled momentum"
 
 
 @respx.mock
@@ -63,22 +84,6 @@ async def test_what_is_stored_is_drawn_whatever_the_lake_holds_and_each_series_s
     assert (len(view.levels), len(view.fills), len(view.marks)) == (8, 6, 0)
     assert view.series.underlying.reason is SeriesReason.GONE
     assert {each.reason for each in view.series.contracts} == {SeriesReason.GONE}
-
-
-@respx.mock
-async def test_a_run_whose_setup_was_lost_is_drawn_from_its_record_with_every_line_but_an_unfilled_momentum(
-    fake_catalog: FakeCatalog, tmp_lake: Path
-) -> None:
-    result = await run_the_scene()
-    record = a_session_record(result, 0, readable=False)
-    assert record.header.setup is None and record.header.setup_cannot_open_reason == THE_REASON
-
-    view = await session_view_of(record)
-
-    # The underlying comes from the run's stored record, so its series is read and shown without the setup. The lines are
-    # Wednesday's eight less the lag leg's momentum (its level comes from the rule): seven. Fills and marks need no setup.
-    assert (view.series.underlying.reason, len(view.series.underlying.points)) == (None, 390)
-    assert len(view.levels) == 7 and (len(view.fills), len(view.marks)) == (6, 0)
 
 
 @respx.mock

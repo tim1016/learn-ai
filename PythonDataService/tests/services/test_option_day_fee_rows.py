@@ -88,18 +88,24 @@ def test_before_any_fee_row_each_fill_is_charged_its_own_models_estimate() -> No
     """
     estimate = _the_day(BOT_S + BOT_A)
 
-    assert estimate.known
+    assert estimate.known, "the day is known"
     assert _charged(estimate, "estimated") == {
         (f"model:{DAY_TEXT}:sec", "bot:s"): D("0.11"), (f"model:{DAY_TEXT}:taf", "bot:s"): D("0.02"),
         (f"model:{DAY_TEXT}:cat", "bot:s"): D("0.01"),
         (f"model:{DAY_TEXT}:option:sec", "bot:a"): D("0.05"), (f"model:{DAY_TEXT}:option:taf", "bot:a"): D("0.04"),
         (f"model:{DAY_TEXT}:option:cat", "bot:a"): D("0.01"), (f"model:{DAY_TEXT}:option:orf", "bot:a"): D("0.30"),
         (f"model:{DAY_TEXT}:option:occ", "bot:a"): D("0.50"),
-    }
-    assert {share.state for share in estimate.shares} == {"estimated"}
-    assert (estimate.predicted_total, estimate.observed_total) == (D("1.04"), None)
+    }, "each model rounds each of its fee types up to the cent, the stock fills and the option fills apart"
+    assert {share.state for share in estimate.shares} == {"estimated"}, "every share is an estimate"
+    assert (estimate.predicted_total, estimate.observed_total) == (D("1.04"), None), "predicted $1.04, nothing observed"
     # The shares beside the contracts are charged what they are charged alone.
-    assert [share for share in estimate.shares if share.subject_id == "bot:s"] == list(_the_day(BOT_S).shares)
+    assert (
+        [share for share in estimate.shares if share.subject_id == "bot:s"] == list(_the_day(BOT_S).shares)
+    ), "the shares beside the contracts are charged what they are charged alone"
+    # Nothing bounds it: $0.14 of bot S's and $0.90 of bot A's, however late cash is read.
+    assert (
+        estimate.unobserved_cash_claim(cash_seen_before_ms=10**15) == D("1.04")
+    ), "an estimate whose rows never come is held back from cash for a stock fill and an option fill alike"
 
 
 def test_a_row_that_names_no_fee_type_is_shared_among_every_fill_by_all_of_its_models_types_together() -> None:
@@ -195,11 +201,6 @@ def test_a_day_of_option_fills_alone_shares_its_row_by_the_option_models_weights
     assert _total(shared) == shared.observed_total == D("0.46")
 
 
-def test_an_option_fill_alone_is_no_reason_for_the_fees_to_read_unresolved() -> None:
-    for rows in ([], [_row("fee-of-the-day", "0.06")]):
-        assert _the_day(BOT_B, rows).unresolved == ()
-
-
 def test_a_row_that_names_an_option_order_is_that_orders_bots_whole() -> None:
     """A row of $0.41 that names bot A's buying order is A's, whatever the models weigh.
 
@@ -215,27 +216,31 @@ def test_a_row_that_names_an_option_order_is_that_orders_bots_whole() -> None:
     assert [share for share in shared.shares if share.subject_id == "bot:s"] == list(_the_day(BOT_S).shares)
 
 
-def test_an_option_fills_estimate_stops_claiming_cash_once_cash_is_read_after_its_days_row() -> None:
+def test_a_lone_option_fill_reads_resolved_and_stops_claiming_cash_once_cash_is_read_after_its_days_row() -> None:
     """Bot B's one contract: CAT, ORF and OCC, each rounded up, 1 + 2 + 3 cents.
 
     Before a row is seen the six cents are an estimate and are held back from cash however
     late cash is read. Once the day's row is seen they are that row's, held back only until
-    cash is read after it, as a stock fill's are.
+    cash is read after it, as a stock fill's are. An option fill alone is no reason for the
+    fees to read unresolved, with the day's row or without it.
     """
     estimate = _the_day(BOT_B)
     charged = _the_day(BOT_B, [_row("fee-of-the-day", "0.06")])
 
-    assert estimate.unobserved_cash_claim(cash_seen_before_ms=READ + 1) == D("0.06")
-    assert estimate.unobserved_cash_claim(cash_seen_before_ms=10**15) == D("0.06")
-    assert charged.unobserved_cash_claim(cash_seen_before_ms=READ) == D("0.06")
-    assert charged.unobserved_cash_claim(cash_seen_before_ms=READ + 1) == 0
-
-
-def test_an_estimate_whose_rows_never_come_is_held_back_from_cash_for_a_stock_fill_and_an_option_fill_alike() -> None:
-    never_charged = _the_day(BOT_S + BOT_A)
-
-    # Nothing bounds it: $0.14 of bot S's and $0.90 of bot A's, however late cash is read.
-    assert never_charged.unobserved_cash_claim(cash_seen_before_ms=10**15) == D("1.04")
+    assert estimate.unresolved == (), "an option fill alone does not read unresolved, before any row"
+    assert charged.unresolved == (), "an option fill alone does not read unresolved, with its day's row"
+    assert (
+        estimate.unobserved_cash_claim(cash_seen_before_ms=READ + 1) == D("0.06")
+    ), "an estimate is held back from cash read after the read"
+    assert (
+        estimate.unobserved_cash_claim(cash_seen_before_ms=10**15) == D("0.06")
+    ), "an estimate is held back from cash however late cash is read"
+    assert (
+        charged.unobserved_cash_claim(cash_seen_before_ms=READ) == D("0.06")
+    ), "a charged row is held back until cash is read after it"
+    assert (
+        charged.unobserved_cash_claim(cash_seen_before_ms=READ + 1) == 0
+    ), "a charged row is released once cash is read after it"
 
 
 def test_a_day_whose_fills_are_not_all_known_shares_no_row_and_reads_unresolved() -> None:

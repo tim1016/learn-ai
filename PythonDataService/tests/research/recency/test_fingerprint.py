@@ -9,6 +9,8 @@ that params-only dedup destroys scientific provenance.
 
 from __future__ import annotations
 
+import pytest
+
 from app.research.recency.fingerprint import RunFingerprintBase, trade_fingerprint
 
 
@@ -26,37 +28,30 @@ def _base(**overrides: object) -> RunFingerprintBase:
     return RunFingerprintBase(**defaults)  # type: ignore[arg-type]
 
 
-def test_identical_evidence_produces_identical_fingerprint() -> None:
+def test_the_fingerprint_follows_the_trade_window() -> None:
     a = trade_fingerprint(_base(), entry_ms=1000, exit_ms=2000)
     b = trade_fingerprint(_base(), entry_ms=1000, exit_ms=2000)
-    assert a == b
+    c = trade_fingerprint(_base(), entry_ms=1500, exit_ms=2000)
+    assert a == b, "identical evidence produces identical fingerprint"
+    assert a != c, "different entry time changes the fingerprint"
 
 
-def test_different_entry_time_changes_the_fingerprint() -> None:
-    a = trade_fingerprint(_base(), entry_ms=1000, exit_ms=2000)
-    b = trade_fingerprint(_base(), entry_ms=1500, exit_ms=2000)
-    assert a != b
-
-
-def test_different_strategy_code_version_changes_the_fingerprint() -> None:
-    a = trade_fingerprint(_base(strategy_code_version="abc123"), entry_ms=1000, exit_ms=2000)
-    b = trade_fingerprint(_base(strategy_code_version="def456"), entry_ms=1000, exit_ms=2000)
-    assert a != b
-
-
-def test_different_data_policy_changes_the_fingerprint() -> None:
-    a = trade_fingerprint(_base(data_policy="polygon-adjusted-regular-minute"), entry_ms=1000, exit_ms=2000)
-    b = trade_fingerprint(_base(data_policy="polygon-unadjusted-regular-minute"), entry_ms=1000, exit_ms=2000)
-    assert a != b
-
-
-def test_different_commission_changes_the_fingerprint() -> None:
-    a = trade_fingerprint(_base(commission_per_order=0.0), entry_ms=1000, exit_ms=2000)
-    b = trade_fingerprint(_base(commission_per_order=1.0), entry_ms=1000, exit_ms=2000)
-    assert a != b
-
-
-def test_same_params_but_different_symbol_does_not_collapse() -> None:
-    a = trade_fingerprint(_base(symbol="SPY"), entry_ms=1000, exit_ms=2000)
-    b = trade_fingerprint(_base(symbol="QQQ"), entry_ms=1000, exit_ms=2000)
+@pytest.mark.parametrize(
+    ("field", "value_a", "value_b"),
+    [
+        ("strategy_code_version", "abc123", "def456"),
+        ("data_policy", "polygon-adjusted-regular-minute", "polygon-unadjusted-regular-minute"),
+        ("commission_per_order", 0.0, 1.0),
+        ("symbol", "SPY", "QQQ"),
+    ],
+    ids=[
+        "different_strategy_code_version_changes_the_fingerprint",
+        "different_data_policy_changes_the_fingerprint",
+        "different_commission_changes_the_fingerprint",
+        "same_params_but_different_symbol_does_not_collapse",
+    ],
+)
+def test_a_differing_base_field_changes_the_fingerprint(field: str, value_a: object, value_b: object) -> None:
+    a = trade_fingerprint(_base(**{field: value_a}), entry_ms=1000, exit_ms=2000)
+    b = trade_fingerprint(_base(**{field: value_b}), entry_ms=1000, exit_ms=2000)
     assert a != b

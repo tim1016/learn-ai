@@ -210,29 +210,28 @@ def test_import_moves_existing_data_aside_and_deletes_nothing(tmp_path: Path, ex
     assert steps[-1]["step"] == "complete"
 
 
-def test_import_refuses_without_the_fleet_env_files(tmp_path: Path, exported) -> None:
+@pytest.mark.parametrize(
+    ("head", "known", "reason"),
+    [
+        pytest.param(
+            "b" * 40, (SOURCE_COMMIT, "b" * 40), "destination_code_older", id="older_destination_code"
+        ),
+        pytest.param(
+            "d" * 40, ("d" * 40,), "source_commit_unknown", id="a_checkout_that_does_not_know_the_source_commit"
+        ),
+    ],
+)
+def test_import_refuses_a_destination_checkout_that_is_not_the_source_commit_or_newer(
+    tmp_path: Path, exported, head: str, known: tuple[str, ...], reason: str
+) -> None:
     _source, bundle = exported
     repo_root, podman = build_empty_destination(tmp_path)
-    (repo_root / "deploy" / "fleet" / "env" / "live.env").unlink()
 
     with pytest.raises(MigrationRefused) as refused:
-        _import(repo_root, podman, bundle)
+        _import(repo_root, podman, bundle, git=FakeGit(head=head, known=set(known)))
 
-    assert refused.value.reason == "env_files_missing"
-    assert [Path(p).name for p in refused.value.details["paths"]] == ["live.env"]
-    assert podman.volumes == {}
-
-
-def test_import_refuses_older_destination_code(tmp_path: Path, exported) -> None:
-    _source, bundle = exported
-    repo_root, podman = build_empty_destination(tmp_path)
-    older = FakeGit(head="b" * 40, known={SOURCE_COMMIT, "b" * 40})
-
-    with pytest.raises(MigrationRefused) as refused:
-        _import(repo_root, podman, bundle, git=older)
-
-    assert refused.value.reason == "destination_code_older"
-    assert podman.volumes == {}
+    assert refused.value.reason == reason, "the checkout is refused with its own reason"
+    assert podman.volumes == {}, "nothing was imported"
 
 
 def test_import_accepts_newer_destination_code(tmp_path: Path, exported) -> None:
@@ -245,18 +244,6 @@ def test_import_accepts_newer_destination_code(tmp_path: Path, exported) -> None
     steps = _import(repo_root, podman, bundle, git=newer)
 
     assert steps[-1]["step"] == "complete"
-
-
-def test_import_refuses_a_checkout_that_does_not_know_the_source_commit(
-    tmp_path: Path, exported
-) -> None:
-    _source, bundle = exported
-    repo_root, podman = build_empty_destination(tmp_path)
-
-    with pytest.raises(MigrationRefused) as refused:
-        _import(repo_root, podman, bundle, git=FakeGit(head="d" * 40, known={"d" * 40}))
-
-    assert refused.value.reason == "source_commit_unknown"
 
 
 def test_import_refuses_while_a_container_holds_a_bundled_volume(
@@ -275,64 +262,72 @@ def test_import_refuses_while_a_container_holds_a_bundled_volume(
     assert podman.removed == []
 
 
-def test_import_fails_loudly_on_a_tampered_member(tmp_path: Path, exported) -> None:
-    _source, bundle = exported
-    repo_root, podman = build_empty_destination(tmp_path)
-    tampered = tmp_path / "tampered.tar"
-
-    def flip_one_byte(name: str, data: bytes) -> bytes:
-        if name != f"volumes/{PG_VOLUME}.tar":
-            return data
-        index = len(data) // 3
-        return data[:index] + bytes([data[index] ^ 0xFF]) + data[index + 1 :]
-
-    _rewrite_bundle(bundle, tampered, edit_member=flip_one_byte)
-
-    with pytest.raises(MigrationRefused) as refused:
-        _import(repo_root, podman, tampered)
-
-    assert refused.value.reason == "bundle_member_hash_mismatch"
-    assert refused.value.details["member"] == f"volumes/{PG_VOLUME}.tar"
-    assert podman.volumes == {}
+def _flip_one_byte_of_the_postgres_member(name: str, data: bytes) -> bytes:
+    if name != f"volumes/{PG_VOLUME}.tar":
+        return data
+    index = len(data) // 3
+    return data[:index] + bytes([data[index] ^ 0xFF]) + data[index + 1 :]
 
 
-def test_import_fails_loudly_on_a_volume_id_mismatch(tmp_path: Path, exported) -> None:
-    _source, bundle = exported
-    repo_root, podman = build_empty_destination(tmp_path)
-    altered = tmp_path / "altered.tar"
-
-    def claim_another_volume_id(manifest: dict) -> None:
-        for entry in manifest["clerk_volumes"]:
-            if entry["volume"] == LIVE_VOLUME:
-                entry["marker"]["volume_id"] = "vol_someone_else"
-
-    _rewrite_bundle(bundle, altered, edit_manifest=claim_another_volume_id)
-
-    with pytest.raises(MigrationRefused) as refused:
-        _import(repo_root, podman, altered)
-
-    assert refused.value.reason == "volume_identity_mismatch"
-    assert refused.value.details["volume"] == LIVE_VOLUME
-    assert podman.volumes == {}
+def _claim_another_volume_id(manifest: dict) -> None:
+    for entry in manifest["clerk_volumes"]:
+        if entry["volume"] == LIVE_VOLUME:
+            entry["marker"]["volume_id"] = "vol_someone_else"
 
 
-def test_import_fails_loudly_on_a_registry_generation_mismatch(
-    tmp_path: Path, exported
+def _bump_generation(manifest: dict) -> None:
+    manifest["registry"]["assignments"][0]["assignment_generation"] += 1
+
+
+@pytest.mark.parametrize(
+    ("edit_member", "edit_manifest", "reason", "detail", "detail_value"),
+    [
+        pytest.param(
+            _flip_one_byte_of_the_postgres_member,
+            None,
+            "bundle_member_hash_mismatch",
+            "member",
+            f"volumes/{PG_VOLUME}.tar",
+            id="a_tampered_member",
+        ),
+        pytest.param(
+            None,
+            _claim_another_volume_id,
+            "volume_identity_mismatch",
+            "volume",
+            LIVE_VOLUME,
+            id="a_volume_id_mismatch",
+        ),
+        pytest.param(
+            None,
+            _bump_generation,
+            "registry_identity_mismatch",
+            "fields",
+            ["assignments"],
+            id="a_registry_generation_mismatch",
+        ),
+    ],
+)
+def test_import_fails_loudly_on_a_doctored_bundle(
+    tmp_path: Path,
+    exported,
+    edit_member: Callable[[str, bytes], bytes] | None,
+    edit_manifest: Callable[[dict], object] | None,
+    reason: str,
+    detail: str,
+    detail_value: object,
 ) -> None:
     _source, bundle = exported
     repo_root, podman = build_empty_destination(tmp_path)
-    altered = tmp_path / "altered.tar"
-
-    def bump_generation(manifest: dict) -> None:
-        manifest["registry"]["assignments"][0]["assignment_generation"] += 1
-
-    _rewrite_bundle(bundle, altered, edit_manifest=bump_generation)
+    doctored = tmp_path / "doctored.tar"
+    _rewrite_bundle(bundle, doctored, edit_member=edit_member, edit_manifest=edit_manifest)
 
     with pytest.raises(MigrationRefused) as refused:
-        _import(repo_root, podman, altered)
+        _import(repo_root, podman, doctored)
 
-    assert refused.value.reason == "registry_identity_mismatch"
-    assert refused.value.details["fields"] == ["assignments"]
+    assert refused.value.reason == reason, "the doctored bundle is refused with its own reason"
+    assert refused.value.details[detail] == detail_value, "the refusal names what was doctored"
+    assert podman.volumes == {}, "nothing was imported"
 
 
 def test_import_refuses_a_member_the_manifest_does_not_declare(
@@ -353,27 +348,6 @@ def test_import_refuses_a_member_the_manifest_does_not_declare(
 
     assert refused.value.reason == "bundle_member_unexpected"
     assert podman.volumes == {}
-
-
-def test_a_faithful_round_trip_needs_no_reapproval_even_where_the_registry_never_matched(
-    tmp_path: Path, exported
-) -> None:
-    """#2269: the Paper scratch clerk's ``volume_root`` is a tmp path no
-    service mounts — like the owner's ``/paper-volume`` — and the Live one's
-    is its real mount path. Moved to an identical host, neither changed, so
-    neither is reported."""
-    source, bundle = exported
-    repo_root, podman = build_empty_destination(tmp_path)
-
-    steps = _import(repo_root, podman, bundle)
-
-    resolution = next(step for step in steps if step["step"] == "host-resolution")
-    assert resolution["reapproval_required"] == []
-    assert {entry["clerk_id"] for entry in resolution["clerks"]} == {
-        source.live_clerk_id,
-        source.paper_clerk_id,
-    }
-    assert steps[-1]["reapproval_required"] == []
 
 
 def test_a_lane_mounted_differently_on_the_new_host_is_reported_for_reapproval(
@@ -398,30 +372,56 @@ def test_a_lane_mounted_differently_on_the_new_host_is_reported_for_reapproval(
     assert "approve-endpoint" in steps[-1]["next"]
 
 
-def test_import_holds_every_clerk_volume_for_go_live(tmp_path: Path, exported) -> None:
-    """#2269: every restored lane starts no bot until go-live releases it."""
-    _source, bundle = exported
+def test_a_faithful_import_needs_no_reapproval_and_holds_every_clerk_volume_for_go_live(
+    tmp_path: Path, exported
+) -> None:
+    """#2269: the Paper scratch clerk's ``volume_root`` is a tmp path no
+    service mounts — like the owner's ``/paper-volume`` — and the Live one's
+    is its real mount path. Moved to an identical host, neither changed, so
+    neither is reported. And every restored lane starts no bot until go-live
+    releases it."""
+    source, bundle = exported
     repo_root, podman = build_empty_destination(tmp_path)
     manifest = read_manifest(bundle)
 
     steps = _import(repo_root, podman, bundle)
 
+    resolution = next(step for step in steps if step["step"] == "host-resolution")
+    assert resolution["reapproval_required"] == [], (
+        "#2269: a faithful round trip needs no reapproval at host resolution, "
+        "even where the registry never matched"
+    )
+    assert {entry["clerk_id"] for entry in resolution["clerks"]} == {
+        source.live_clerk_id,
+        source.paper_clerk_id,
+    }, "#2269: host resolution names both lanes"
+    assert steps[-1]["reapproval_required"] == [], "#2269: a faithful round trip needs no reapproval at the end"
     for volume in (LIVE_VOLUME, PAPER_VOLUME):
         hold = read_go_live_hold(podman.volume_dir(volume))
-        assert hold.held is True
-        assert hold.problem is None
-        assert hold.marker is not None
-        assert hold.marker.volume == volume
-        assert hold.marker.source_commit == manifest.source_commit
-        assert hold.marker.registry_id == manifest.registry.registry_id
+        assert hold.held is True, f"#2269: {volume} is held for go-live"
+        assert hold.problem is None, f"#2269: the hold on {volume} has no problem"
+        assert hold.marker is not None, f"#2269: the hold on {volume} carries a marker"
+        assert hold.marker.volume == volume, f"#2269: the marker on {volume} names its volume"
+        assert hold.marker.source_commit == manifest.source_commit, (
+            f"#2269: the marker on {volume} carries the manifest's source commit"
+        )
+        assert hold.marker.registry_id == manifest.registry.registry_id, (
+            f"#2269: the marker on {volume} carries the manifest's registry id"
+        )
     for volume in (CONTROL_VOLUME, PG_VOLUME):
-        assert not (podman.volume_dir(volume) / GO_LIVE_HOLD_MARKER).exists()
+        assert not (podman.volume_dir(volume) / GO_LIVE_HOLD_MARKER).exists(), (
+            f"#2269: {volume} is not a lane volume and carries no hold"
+        )
     restored = next(step for step in steps if step["step"] == "restored")
-    assert restored["go_live_holds"] == sorted([LIVE_VOLUME, PAPER_VOLUME])
+    assert restored["go_live_holds"] == sorted([LIVE_VOLUME, PAPER_VOLUME]), (
+        "#2269: the restored step lists the held lane volumes"
+    )
     receipt_path = Path(steps[-1]["receipt"])
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-    assert receipt["go_live_holds"] == sorted([LIVE_VOLUME, PAPER_VOLUME])
-    assert "go-live" in steps[-1]["next"]
+    assert receipt["go_live_holds"] == sorted([LIVE_VOLUME, PAPER_VOLUME]), (
+        "#2269: the import receipt lists the held lane volumes"
+    )
+    assert "go-live" in steps[-1]["next"], "#2269: the next step points at go-live"
 
 
 def test_a_hold_that_did_not_land_fails_verification_loudly(
@@ -723,9 +723,11 @@ def test_insufficient_disk_refuses_before_anything_is_staged_or_moved(
 
 
 @pytest.mark.parametrize(
-    "missing", [Path(".env"), Path("PythonDataService") / ".env"], ids=["root", "data_plane"]
+    "missing",
+    [Path(".env"), Path("PythonDataService") / ".env", Path("deploy") / "fleet" / "env" / "live.env"],
+    ids=["root", "data_plane", "fleet_live_env"],
 )
-def test_import_refuses_without_the_host_env_files(
+def test_import_refuses_without_the_env_files(
     tmp_path: Path, exported, missing: Path
 ) -> None:
     _source, bundle = exported
@@ -735,10 +737,12 @@ def test_import_refuses_without_the_host_env_files(
     with pytest.raises(MigrationRefused) as refused:
         _import(repo_root, podman, bundle)
 
-    assert refused.value.reason == "env_files_missing"
-    assert refused.value.details["paths"] == [str(repo_root / missing)]
-    assert "secret" not in refused.value.message.lower().replace("never carries a secret", "")
-    assert podman.volumes == {}
+    assert refused.value.reason == "env_files_missing", "the missing env file is refused by reason"
+    assert refused.value.details["paths"] == [str(repo_root / missing)], "the refusal names the missing file"
+    assert "secret" not in refused.value.message.lower().replace("never carries a secret", ""), (
+        "the refusal message carries no secret"
+    )
+    assert podman.volumes == {}, "nothing was imported"
 
 
 def test_a_bundle_from_a_dirty_tree_needs_an_explicit_acknowledgement(tmp_path: Path) -> None:

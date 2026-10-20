@@ -23,6 +23,7 @@ import hashlib
 import json
 import os
 import zipfile
+from collections.abc import Callable
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -233,69 +234,64 @@ def test_unrecognized_to_failures_produces_reason_and_no_trading_date():
 # ---------------------------------------------------------------------------
 
 
-def test_price_adjustment_mode_for_true_is_polygon_split_adjusted(tmp_path: Path):
-    _write_provenance(tmp_path, "SPY", adjusted=True)
+@pytest.mark.parametrize(
+    ("adjusted", "expected_mode"),
+    [
+        pytest.param(True, "polygon_split_adjusted", id="true_is_polygon_split_adjusted"),
+        pytest.param(False, "raw", id="false_is_raw"),
+    ],
+)
+def test_price_adjustment_mode_for(tmp_path: Path, adjusted: bool, expected_mode: str):
+    _write_provenance(tmp_path, "SPY", adjusted=adjusted)
     provenance = load_symbol_provenance(tmp_path, "SPY")
-    assert price_adjustment_mode_for(provenance) == "polygon_split_adjusted"
+    assert price_adjustment_mode_for(provenance) == expected_mode
 
 
-def test_price_adjustment_mode_for_false_is_raw(tmp_path: Path):
-    _write_provenance(tmp_path, "SPY", adjusted=False)
-    provenance = load_symbol_provenance(tmp_path, "SPY")
-    assert price_adjustment_mode_for(provenance) == "raw"
-
-
-def test_load_symbol_provenance_missing_file_raises(tmp_path: Path):
-    with pytest.raises(MissingProvenanceError):
-        load_symbol_provenance(tmp_path, "SPY")
-
-
-def test_load_symbol_provenance_missing_policy_adjusted_raises(tmp_path: Path):
-    prov_dir = tmp_path / "provenance"
+def _write_raw_provenance(cache_root: Path, text: str) -> None:
+    prov_dir = cache_root / "provenance"
     prov_dir.mkdir(parents=True)
-    (prov_dir / "spy.json").write_text(json.dumps({"schema_version": 1, "symbol": "SPY"}))
-    with pytest.raises(MissingProvenanceError):
-        load_symbol_provenance(tmp_path, "SPY")
+    (prov_dir / "spy.json").write_text(text)
 
 
-def test_load_symbol_provenance_invalid_json_raises(tmp_path: Path):
-    prov_dir = tmp_path / "provenance"
-    prov_dir.mkdir(parents=True)
-    (prov_dir / "spy.json").write_text("{not json")
-    with pytest.raises(MissingProvenanceError):
-        load_symbol_provenance(tmp_path, "SPY")
-
-
-def test_load_symbol_provenance_not_a_json_object_raises(tmp_path: Path):
-    prov_dir = tmp_path / "provenance"
-    prov_dir.mkdir(parents=True)
-    (prov_dir / "spy.json").write_text(json.dumps(["not", "an", "object"]))
-    with pytest.raises(MissingProvenanceError):
-        load_symbol_provenance(tmp_path, "SPY")
-
-
-def test_load_symbol_provenance_wrong_schema_version_raises(tmp_path: Path):
-    _write_provenance(tmp_path, "SPY", adjusted=False, doc_overrides={"schema_version": 2})
-    with pytest.raises(MissingProvenanceError):
-        load_symbol_provenance(tmp_path, "SPY")
-
-
-def test_load_symbol_provenance_symbol_mismatch_raises(tmp_path: Path):
-    # File lives under provenance/spy.json (the directory-derived symbol is
-    # "SPY") but the document itself claims a different symbol.
-    _write_provenance(tmp_path, "SPY", adjusted=False, doc_overrides={"symbol": "QQQ"})
-    with pytest.raises(MissingProvenanceError):
-        load_symbol_provenance(tmp_path, "SPY")
-
-
-def test_load_symbol_provenance_non_polygon_source_raises(tmp_path: Path):
-    _write_provenance(tmp_path, "SPY", adjusted=False, doc_overrides={"policy": {"source": "ibkr", "adjusted": False}})
-    with pytest.raises(MissingProvenanceError):
-        load_symbol_provenance(tmp_path, "SPY")
-
-
-def test_load_symbol_provenance_missing_fetches_list_raises(tmp_path: Path):
-    _write_provenance(tmp_path, "SPY", adjusted=False, doc_overrides={"fetches": "not-a-list"})
+@pytest.mark.parametrize(
+    "write_provenance",
+    [
+        pytest.param(lambda root: None, id="missing_file"),
+        pytest.param(
+            lambda root: _write_raw_provenance(root, json.dumps({"schema_version": 1, "symbol": "SPY"})),
+            id="missing_policy_adjusted",
+        ),
+        pytest.param(lambda root: _write_raw_provenance(root, "{not json"), id="invalid_json"),
+        pytest.param(
+            lambda root: _write_raw_provenance(root, json.dumps(["not", "an", "object"])),
+            id="not_a_json_object",
+        ),
+        pytest.param(
+            lambda root: _write_provenance(root, "SPY", adjusted=False, doc_overrides={"schema_version": 2}),
+            id="wrong_schema_version",
+        ),
+        # File lives under provenance/spy.json (the directory-derived symbol is
+        # "SPY") but the document itself claims a different symbol.
+        pytest.param(
+            lambda root: _write_provenance(root, "SPY", adjusted=False, doc_overrides={"symbol": "QQQ"}),
+            id="symbol_mismatch",
+        ),
+        pytest.param(
+            lambda root: _write_provenance(
+                root, "SPY", adjusted=False, doc_overrides={"policy": {"source": "ibkr", "adjusted": False}}
+            ),
+            id="non_polygon_source",
+        ),
+        pytest.param(
+            lambda root: _write_provenance(root, "SPY", adjusted=False, doc_overrides={"fetches": "not-a-list"}),
+            id="missing_fetches_list",
+        ),
+    ],
+)
+def test_load_symbol_provenance_rejects_invalid_provenance(
+    tmp_path: Path, write_provenance: Callable[[Path], object]
+):
+    write_provenance(tmp_path)
     with pytest.raises(MissingProvenanceError):
         load_symbol_provenance(tmp_path, "SPY")
 
@@ -314,28 +310,22 @@ def _provenance(fetches: list[dict]) -> dict:
     }
 
 
-def test_provenance_covers_date_true_when_within_a_minute_fetch_range():
+@pytest.mark.parametrize(
+    ("resolution", "query_date", "expected"),
+    [
+        pytest.param("minute", date(2024, 5, 10), True, id="true_when_within_a_minute_fetch_range"),
+        # Inclusive on both ends.
+        pytest.param("minute", date(2024, 5, 1), True, id="true_on_the_inclusive_start"),
+        pytest.param("minute", date(2024, 5, 20), True, id="true_on_the_inclusive_end"),
+        pytest.param("minute", date(2024, 6, 1), False, id="false_when_outside_every_range"),
+        pytest.param("daily", date(2024, 5, 10), False, id="ignores_non_minute_resolution"),
+    ],
+)
+def test_provenance_covers_date(resolution: str, query_date: date, expected: bool):
     provenance = _provenance(
-        [{"resolution": "minute", "from_date": "2024-05-01", "to_date": "2024-05-20", "fetched_at_ms": 1}]
+        [{"resolution": resolution, "from_date": "2024-05-01", "to_date": "2024-05-20", "fetched_at_ms": 1}]
     )
-    assert provenance_covers_date(provenance, date(2024, 5, 10)) is True
-    # Inclusive on both ends.
-    assert provenance_covers_date(provenance, date(2024, 5, 1)) is True
-    assert provenance_covers_date(provenance, date(2024, 5, 20)) is True
-
-
-def test_provenance_covers_date_false_when_outside_every_range():
-    provenance = _provenance(
-        [{"resolution": "minute", "from_date": "2024-05-01", "to_date": "2024-05-20", "fetched_at_ms": 1}]
-    )
-    assert provenance_covers_date(provenance, date(2024, 6, 1)) is False
-
-
-def test_provenance_covers_date_ignores_non_minute_resolution():
-    provenance = _provenance(
-        [{"resolution": "daily", "from_date": "2024-05-01", "to_date": "2024-05-20", "fetched_at_ms": 1}]
-    )
-    assert provenance_covers_date(provenance, date(2024, 5, 10)) is False
+    assert provenance_covers_date(provenance, query_date) is expected
 
 
 def test_provenance_covers_date_skips_malformed_entries_without_raising():
@@ -354,13 +344,7 @@ def test_provenance_covers_date_skips_malformed_entries_without_raising():
 # ---------------------------------------------------------------------------
 
 
-def test_import_minute_trade_dch_differs_by_adjustment_mode():
-    from app.data_lake.cache_import import import_minute_trade_dch
-
-    assert import_minute_trade_dch(adjusted=False) != import_minute_trade_dch(adjusted=True)
-
-
-def test_import_minute_trade_dch_raw_differs_from_ensure_data_fetch_dch():
+def test_import_minute_trade_dch_differs():
     """An imported 'raw' artifact and a live Polygon fetch produce the same
     kind of bytes, but must carry a *different* data_contract_hash -- the
     DCH is part of the provenance trail, so "this was imported, not fetched"
@@ -370,7 +354,12 @@ def test_import_minute_trade_dch_raw_differs_from_ensure_data_fetch_dch():
     from app.data_lake.cache_import import import_minute_trade_dch
     from app.data_lake.ensure_data import _minute_trade_dch
 
-    assert import_minute_trade_dch(adjusted=False) != _minute_trade_dch("raw", trading_date=date(2024, 5, 20))
+    assert import_minute_trade_dch(adjusted=False) != import_minute_trade_dch(adjusted=True), (
+        "the import DCH differs by adjustment mode"
+    )
+    assert import_minute_trade_dch(adjusted=False) != _minute_trade_dch("raw", trading_date=date(2024, 5, 20)), (
+        "the imported raw DCH differs from the ensure_data live-fetch DCH"
+    )
 
 
 @respx.mock
@@ -593,97 +582,49 @@ def test_verify_and_read_zip_missing_file_raises(tmp_path: Path):
         verify_and_read_zip(tmp_path / "does_not_exist.zip", "SPY", date(2024, 5, 20))
 
 
-def test_verify_and_read_zip_wrong_member_name_raises(tmp_path: Path):
-    trading_date = date(2024, 5, 20)
-    day_dir = tmp_path / "equity" / "usa" / "minute" / "spy"
-    day_dir.mkdir(parents=True)
-    zip_path = day_dir / "20240520_trade.zip"
-    with zipfile.ZipFile(zip_path, "w") as zf:
-        zf.writestr("wrong_name.csv", "34200000,5000000,5000000,5000000,5000000,100\n")
-
-    with pytest.raises(CorruptCacheZipError):
-        verify_and_read_zip(zip_path, "SPY", trading_date)
-
-
-def test_verify_and_read_zip_malformed_row_raises(tmp_path: Path):
-    trading_date = date(2024, 5, 20)
-    day_dir = tmp_path / "equity" / "usa" / "minute" / "spy"
-    day_dir.mkdir(parents=True)
-    zip_path = day_dir / "20240520_trade.zip"
-    with zipfile.ZipFile(zip_path, "w") as zf:
+@pytest.mark.parametrize(
+    ("member_name", "csv_text"),
+    [
+        pytest.param("wrong_name.csv", "34200000,5000000,5000000,5000000,5000000,100\n", id="wrong_member_name"),
         # Missing a field (only 5 columns instead of 6).
-        zf.writestr("20240520_spy_minute_trade.csv", "34200000,5000000,5000000,5000000,5000000\n")
-
-    with pytest.raises(CorruptCacheZipError):
-        verify_and_read_zip(zip_path, "SPY", trading_date)
-
-
-def test_verify_and_read_zip_non_integer_field_raises(tmp_path: Path):
-    trading_date = date(2024, 5, 20)
-    day_dir = tmp_path / "equity" / "usa" / "minute" / "spy"
-    day_dir.mkdir(parents=True)
-    zip_path = day_dir / "20240520_trade.zip"
-    with zipfile.ZipFile(zip_path, "w") as zf:
-        zf.writestr("20240520_spy_minute_trade.csv", "34200000,NOT_A_PRICE,5000000,5000000,5000000,100\n")
-
-    with pytest.raises(CorruptCacheZipError):
-        verify_and_read_zip(zip_path, "SPY", trading_date)
-
-
-def test_verify_and_read_zip_negative_price_raises(tmp_path: Path):
-    """finding 10: a negative price field is upstream corruption, refused
-    the same way app.data_lake.lean_writer.to_deci_cent refuses it."""
-    trading_date = date(2024, 5, 20)
-    day_dir = tmp_path / "equity" / "usa" / "minute" / "spy"
-    day_dir.mkdir(parents=True)
-    zip_path = day_dir / "20240520_trade.zip"
-    with zipfile.ZipFile(zip_path, "w") as zf:
-        zf.writestr("20240520_spy_minute_trade.csv", "34200000,-5000000,5000000,5000000,5000000,100\n")
-
-    with pytest.raises(CorruptCacheZipError):
-        verify_and_read_zip(zip_path, "SPY", trading_date)
-
-
-def test_verify_and_read_zip_duplicate_timestamp_raises(tmp_path: Path):
-    """finding 1: finite ingestion is fail-fast -- a duplicate
-    ms_since_midnight is refused, never silently deduplicated."""
-    trading_date = date(2024, 5, 20)
-    day_dir = tmp_path / "equity" / "usa" / "minute" / "spy"
-    day_dir.mkdir(parents=True)
-    zip_path = day_dir / "20240520_trade.zip"
-    with zipfile.ZipFile(zip_path, "w") as zf:
-        zf.writestr(
+        pytest.param(
+            "20240520_spy_minute_trade.csv", "34200000,5000000,5000000,5000000,5000000\n", id="malformed_row"
+        ),
+        pytest.param(
+            "20240520_spy_minute_trade.csv",
+            "34200000,NOT_A_PRICE,5000000,5000000,5000000,100\n",
+            id="non_integer_field",
+        ),
+        # finding 10: a negative price field is upstream corruption, refused
+        # the same way app.data_lake.lean_writer.to_deci_cent refuses it.
+        pytest.param(
+            "20240520_spy_minute_trade.csv",
+            "34200000,-5000000,5000000,5000000,5000000,100\n",
+            id="negative_price",
+        ),
+        # finding 1: finite ingestion is fail-fast -- a duplicate
+        # ms_since_midnight is refused, never silently deduplicated.
+        pytest.param(
             "20240520_spy_minute_trade.csv",
             "34200000,5000000,5000000,5000000,5000000,100\n34200000,5001000,5001000,5001000,5001000,50\n",
-        )
-
-    with pytest.raises(CorruptCacheZipError):
-        verify_and_read_zip(zip_path, "SPY", trading_date)
-
-
-def test_verify_and_read_zip_out_of_order_timestamp_raises(tmp_path: Path):
-    """finding 1: an out-of-order row is refused, never silently reordered."""
-    trading_date = date(2024, 5, 20)
-    day_dir = tmp_path / "equity" / "usa" / "minute" / "spy"
-    day_dir.mkdir(parents=True)
-    zip_path = day_dir / "20240520_trade.zip"
-    with zipfile.ZipFile(zip_path, "w") as zf:
-        zf.writestr(
+            id="duplicate_timestamp",
+        ),
+        # finding 1: an out-of-order row is refused, never silently reordered.
+        pytest.param(
             "20240520_spy_minute_trade.csv",
             "34260000,5000000,5000000,5000000,5000000,100\n34200000,5001000,5001000,5001000,5001000,50\n",
-        )
-
-    with pytest.raises(CorruptCacheZipError):
-        verify_and_read_zip(zip_path, "SPY", trading_date)
-
-
-def test_verify_and_read_zip_zero_rows_raises(tmp_path: Path):
+            id="out_of_order_timestamp",
+        ),
+        pytest.param("20240520_spy_minute_trade.csv", "", id="zero_rows"),
+    ],
+)
+def test_verify_and_read_zip_corrupt_content_raises(tmp_path: Path, member_name: str, csv_text: str):
     trading_date = date(2024, 5, 20)
     day_dir = tmp_path / "equity" / "usa" / "minute" / "spy"
     day_dir.mkdir(parents=True)
     zip_path = day_dir / "20240520_trade.zip"
     with zipfile.ZipFile(zip_path, "w") as zf:
-        zf.writestr("20240520_spy_minute_trade.csv", "")
+        zf.writestr(member_name, csv_text)
 
     with pytest.raises(CorruptCacheZipError):
         verify_and_read_zip(zip_path, "SPY", trading_date)
@@ -714,26 +655,20 @@ def _record(file_sha256: str) -> ArtifactRecord:
     )
 
 
-def test_decide_claim_outcome_proceeds_on_fresh_claim():
-    decision = decide_claim_outcome(claim_result=42, existing=None, content_hash="deadbeef")
-    assert decision == ClaimDecision(action="proceed")
+def test_decide_claim_outcome_decisions():
+    fresh = decide_claim_outcome(claim_result=42, existing=None, content_hash="deadbeef")
+    assert fresh == ClaimDecision(action="proceed"), "proceeds on fresh claim"
 
+    duplicate = decide_claim_outcome(claim_result=None, existing=_record("deadbeef"), content_hash="deadbeef")
+    assert duplicate.action == "skip_duplicate", "skips duplicate when hash matches"
 
-def test_decide_claim_outcome_skips_duplicate_when_hash_matches():
-    decision = decide_claim_outcome(claim_result=None, existing=_record("deadbeef"), content_hash="deadbeef")
-    assert decision.action == "skip_duplicate"
+    conflict = decide_claim_outcome(claim_result=None, existing=_record("aaaa"), content_hash="bbbb")
+    assert conflict.action == "conflict", "refuses conflict on hash mismatch"
+    assert "aaaa" in conflict.detail, "conflict detail names the existing hash"
+    assert "bbbb" in conflict.detail, "conflict detail names the new hash"
 
-
-def test_decide_claim_outcome_refuses_conflict_on_hash_mismatch():
-    decision = decide_claim_outcome(claim_result=None, existing=_record("aaaa"), content_hash="bbbb")
-    assert decision.action == "conflict"
-    assert "aaaa" in decision.detail
-    assert "bbbb" in decision.detail
-
-
-def test_decide_claim_outcome_flags_in_flight_when_no_existing_complete_row():
-    decision = decide_claim_outcome(claim_result=None, existing=None, content_hash="deadbeef")
-    assert decision.action == "in_flight_or_incomplete"
+    in_flight = decide_claim_outcome(claim_result=None, existing=None, content_hash="deadbeef")
+    assert in_flight.action == "in_flight_or_incomplete", "flags in-flight when no existing complete row"
 
 
 # ---------------------------------------------------------------------------
@@ -743,21 +678,17 @@ def test_decide_claim_outcome_flags_in_flight_when_no_existing_complete_row():
 # ---------------------------------------------------------------------------
 
 
-def test_decide_destination_outcome_writes_when_nothing_at_destination():
-    decision = decide_destination_outcome(existing_dest_hash=None, content_hash="deadbeef")
-    assert decision == DestinationDecision(action="write")
+def test_decide_destination_outcome_decisions():
+    empty = decide_destination_outcome(existing_dest_hash=None, content_hash="deadbeef")
+    assert empty == DestinationDecision(action="write"), "writes when nothing at destination"
 
+    same = decide_destination_outcome(existing_dest_hash="deadbeef", content_hash="deadbeef")
+    assert same.action == "already_present", "already present when hash matches"
 
-def test_decide_destination_outcome_already_present_when_hash_matches():
-    decision = decide_destination_outcome(existing_dest_hash="deadbeef", content_hash="deadbeef")
-    assert decision.action == "already_present"
-
-
-def test_decide_destination_outcome_conflict_when_hash_differs():
-    decision = decide_destination_outcome(existing_dest_hash="aaaa", content_hash="bbbb")
-    assert decision.action == "conflict"
-    assert "aaaa" in decision.detail
-    assert "bbbb" in decision.detail
+    differs = decide_destination_outcome(existing_dest_hash="aaaa", content_hash="bbbb")
+    assert differs.action == "conflict", "conflict when hash differs"
+    assert "aaaa" in differs.detail, "conflict detail names the existing hash"
+    assert "bbbb" in differs.detail, "conflict detail names the new hash"
 
 
 # ---------------------------------------------------------------------------

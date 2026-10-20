@@ -158,17 +158,24 @@ def test_a_trading_date_is_the_new_york_date_the_instant_falls_on(instant_ms: in
     assert chain_session(instant_ms).trading_date == expected
 
 
-def test_the_session_is_answered_with_its_own_open_and_close() -> None:
-    session = chain_session(FRI_NEW_YORK_MIDNIGHT_MS)
+@pytest.mark.parametrize(
+    ("instant_ms", "expected"),
+    [
+        pytest.param(
+            FRI_NEW_YORK_MIDNIGHT_MS, (FRI, FRI_OPEN_MS, FRI_CLOSE_MS), id="a session has its own open and close"
+        ),
+        pytest.param(
+            # 2025-11-28 closes at 13:00 New York (EST, five hours behind UTC) = 18:00 UTC.
+            1764306000000,  # 05:00 UTC = New York midnight of the 28th
+            (HALF_DAY, 1764340200000, 1764352800000),
+            id="a half day has its own early close",
+        ),
+    ],
+)
+def test_the_session_is_answered_with_its_own_open_and_close(instant_ms: int, expected: tuple[date, int, int]) -> None:
+    session = chain_session(instant_ms)
 
-    assert (session.trading_date, session.open_ms, session.close_ms) == (FRI, FRI_OPEN_MS, FRI_CLOSE_MS)
-
-
-def test_a_half_day_is_answered_with_its_own_early_close() -> None:
-    # 2025-11-28 closes at 13:00 New York (EST, five hours behind UTC) = 18:00 UTC.
-    session = chain_session(1764306000000)  # 05:00 UTC = New York midnight of the 28th
-
-    assert (session.trading_date, session.open_ms, session.close_ms) == (HALF_DAY, 1764340200000, 1764352800000)
+    assert (session.trading_date, session.open_ms, session.close_ms) == expected
 
 
 @pytest.mark.parametrize(
@@ -283,51 +290,60 @@ def _the_days_listing() -> StoredListing:
     return _listing(*contracts, day=MON, left_out=3)
 
 
-def test_the_day_lists_every_expiry_with_its_series_counts_and_days_to_go() -> None:
+def test_the_day_lists_every_expiry_with_its_series_counts_days_to_go_and_the_rows_it_left_out() -> None:
     day = describe_day(FakeChainData(listing=_the_days_listing()), underlying="SPY", session=_session(MON))
 
-    assert day.listing is ListingState.STORED and day.listing_problem is None
+    assert day.listing is ListingState.STORED and day.listing_problem is None, "the listing is stored, no problem"
     summary = {s.expiry: s for s in day.expiries}
     # Ascending by date; the Saturday is a listed date that is no session; the expired one is not here.
-    assert [s.expiry for s in day.expiries] == [MON, WED, THIRD_FRIDAY, SAT_AFTER, NEXT_FRIDAY, YEAR_END]
+    assert [s.expiry for s in day.expiries] == [MON, WED, THIRD_FRIDAY, SAT_AFTER, NEXT_FRIDAY, YEAR_END], (
+        "the expiries ascend by date, the Saturday is listed and the expired one is not"
+    )
     # Monday the 13th: not the third Friday, not a quarter end, not the last session of its week: a daily.
     assert (summary[MON].tag.series, summary[MON].tag.days_to_expiry, summary[MON].tag.expires_today) == (
         ExpirySeries.DAILY,
         0,
         True,
+    ), "Monday the 13th is a daily that expires today"
+    assert (summary[WED].tag.series, summary[WED].tag.days_to_expiry) == (ExpirySeries.DAILY, 2), (
+        "Wednesday is a daily two days out"
     )
-    assert (summary[WED].tag.series, summary[WED].tag.days_to_expiry) == (ExpirySeries.DAILY, 2)
     # Friday the 17th is the third Friday of October 2025: a monthly (and not merely the last session of its week).
-    assert (summary[THIRD_FRIDAY].tag.series, summary[THIRD_FRIDAY].tag.days_to_expiry) == (ExpirySeries.MONTHLY, 4)
-    assert (summary[NEXT_FRIDAY].tag.series, summary[NEXT_FRIDAY].tag.days_to_expiry) == (ExpirySeries.WEEKLY, 11)
+    assert (summary[THIRD_FRIDAY].tag.series, summary[THIRD_FRIDAY].tag.days_to_expiry) == (
+        ExpirySeries.MONTHLY,
+        4,
+    ), "the third Friday is a monthly four days out"
+    assert (summary[NEXT_FRIDAY].tag.series, summary[NEXT_FRIDAY].tag.days_to_expiry) == (ExpirySeries.WEEKLY, 11), (
+        "the next Friday is a weekly eleven days out"
+    )
     # Wednesday 31 December is the last session of the fourth quarter. 13 Oct to 31 Oct is 18 days, November has 30
     # and December's 31 make 79.
-    assert (summary[YEAR_END].tag.series, summary[YEAR_END].tag.days_to_expiry) == (ExpirySeries.QUARTERLY, 79)
-    assert (summary[SAT_AFTER].tag.series, summary[SAT_AFTER].tag.days_to_expiry) == (ExpirySeries.UNKNOWN, 5)
-    assert all(s.tag.version == CLASSIFICATION_VERSION and s.tag.evidence for s in day.expiries)
-    assert [s.expiry_ms for s in day.expiries] == [option_expiry_anchor_ms(s.expiry) for s in day.expiries]
-
-
-def test_the_day_counts_the_calls_and_puts_of_each_expiry_and_how_many_are_standard() -> None:
-    day = describe_day(FakeChainData(listing=_the_days_listing()), underlying="SPY", session=_session(MON))
-
+    assert (summary[YEAR_END].tag.series, summary[YEAR_END].tag.days_to_expiry) == (ExpirySeries.QUARTERLY, 79), (
+        "the last session of the fourth quarter is a quarterly 79 days out"
+    )
+    assert (summary[SAT_AFTER].tag.series, summary[SAT_AFTER].tag.days_to_expiry) == (ExpirySeries.UNKNOWN, 5), (
+        "a Saturday expiry is of unknown series"
+    )
+    assert all(s.tag.version == CLASSIFICATION_VERSION and s.tag.evidence for s in day.expiries), (
+        "every tag carries the classification version and its evidence"
+    )
+    assert [s.expiry_ms for s in day.expiries] == [option_expiry_anchor_ms(s.expiry) for s in day.expiries], (
+        "every expiry is its sixteen hundred anchor"
+    )
     today = day.expiries[0]
     # Monday's: calls 600, 601, 602 and the non-standard 603 are four calls of which three are standard; two puts.
-    assert (today.calls, today.puts, today.standard_calls, today.standard_puts) == (4, 2, 3, 2)
+    assert (today.calls, today.puts, today.standard_calls, today.standard_puts) == (4, 2, 3, 2), (
+        "the day counts the calls and puts of its first expiry and how many are standard"
+    )
     third_friday = day.expiries[2]
     assert (third_friday.calls, third_friday.puts, third_friday.standard_calls, third_friday.standard_puts) == (
         2,
         0,
         2,
         0,
-    )
-
-
-def test_rows_the_picker_cannot_use_and_contracts_that_expired_are_counted_apart_and_not_crashed_on() -> None:
-    day = describe_day(FakeChainData(listing=_the_days_listing()), underlying="SPY", session=_session(MON))
-
-    assert day.rows_left_out_unusable == 3  # the three stored rows the lake could not turn into contracts
-    assert day.rows_left_out_expired == 1  # the Friday before the trading date
+    ), "the day counts the calls and puts of the third Friday and how many are standard"
+    assert day.rows_left_out_unusable == 3, "the three stored rows the lake could not turn into contracts are counted"
+    assert day.rows_left_out_expired == 1, "the Friday before the trading date is counted as expired, not crashed on"
 
 
 def test_a_listing_that_left_nothing_out_says_none_were_left_out() -> None:
@@ -338,28 +354,38 @@ def test_a_listing_that_left_nothing_out_says_none_were_left_out() -> None:
     assert day.rows_left_out_unusable == 0 and day.rows_left_out_expired == 0
 
 
-def test_a_monthly_on_its_last_day_is_a_monthly_that_expires_today_and_not_a_daily() -> None:
+@pytest.mark.parametrize(
+    ("trading_day", "expiry", "series", "expires_today", "days_to_expiry"),
+    [
+        pytest.param(
+            THIRD_FRIDAY,
+            THIRD_FRIDAY,
+            ExpirySeries.MONTHLY,
+            True,
+            0,
+            id="a monthly on its last day is a monthly that expires today and not a daily",
+        ),
+        pytest.param(
+            _on(2024, 9, 16, "Mon"),  # the tags start at 2024-10-01
+            _on(2024, 9, 20, "Fri"),
+            ExpirySeries.UNKNOWN,
+            False,
+            4,
+            id="before the first tagged date every expiry is unknown",
+        ),
+    ],
+)
+def test_the_one_expiry_a_day_lists_is_tagged_with_its_series_and_days_to_go(
+    trading_day: date, expiry: date, series: ExpirySeries, expires_today: bool, days_to_expiry: int
+) -> None:
     day = describe_day(
-        FakeChainData(listing=_listing(*_expiry_of(THIRD_FRIDAY, [600]), day=THIRD_FRIDAY)),
+        FakeChainData(listing=_listing(*_expiry_of(expiry, [600]), day=trading_day)),
         underlying="SPY",
-        session=_session(THIRD_FRIDAY),
+        session=_session(trading_day),
     )
 
     [only] = day.expiries
-    assert (only.tag.series, only.tag.expires_today, only.tag.days_to_expiry) == (ExpirySeries.MONTHLY, True, 0)
-
-
-def test_before_the_first_tagged_date_every_expiry_is_unknown() -> None:
-    before_the_floor = _on(2024, 9, 16, "Mon")  # the tags start at 2024-10-01
-    third_friday = _on(2024, 9, 20, "Fri")
-    day = describe_day(
-        FakeChainData(listing=_listing(*_expiry_of(third_friday, [600]), day=before_the_floor)),
-        underlying="SPY",
-        session=_session(before_the_floor),
-    )
-
-    [only] = day.expiries
-    assert only.tag.series is ExpirySeries.UNKNOWN and only.tag.days_to_expiry == 4
+    assert (only.tag.series, only.tag.expires_today, only.tag.days_to_expiry) == (series, expires_today, days_to_expiry)
 
 
 def test_a_date_with_no_stored_listing_says_so_and_lists_nothing() -> None:
@@ -433,20 +459,35 @@ def _by_strike(side) -> dict[int, object]:
     return {c.contract.strike_thousandths: c for c in side.contracts}
 
 
-def test_the_underlying_price_is_the_close_of_its_last_bar_at_or_before_the_instant_with_that_bars_time() -> None:
+def test_the_underlying_price_is_the_close_of_its_last_bar_at_or_before_the_instant_and_none_before_its_first_bar() -> (
+    None
+):
     at_minute_10 = _expiry(_friday(), at=close_ms(FRI, 10)).underlying_quote
     at_minute_9 = _expiry(_friday(), at=close_ms(FRI, 9)).underlying_quote
     at_the_close = _expiry(_friday(), at=None).underlying_quote
+    before_the_first_bar = _expiry(_friday(), at=FRI_OPEN_MS, n=2)
 
     # A bar closing exactly at the instant counts: it holds the trades before it.
     assert (at_minute_10.state, at_minute_10.price, at_minute_10.price_time_ms) == (
         UnderlyingState.PRICED,
         D("602.40"),
         close_ms(FRI, 10),
-    )
+    ), "a bar closing exactly at the instant counts, with that bar's time"
     # One minute earlier the last bar is minute 1's, and the price is not carried from minute 10.
-    assert (at_minute_9.price, at_minute_9.price_time_ms) == (D("600.20"), close_ms(FRI, 1))
-    assert (at_the_close.price, at_the_close.price_time_ms) == (D("602.60"), FRI_CLOSE_MS)
+    assert (at_minute_9.price, at_minute_9.price_time_ms) == (D("600.20"), close_ms(FRI, 1)), (
+        "one minute earlier the last bar is minute 1's and the price is not carried from minute 10"
+    )
+    assert (at_the_close.price, at_the_close.price_time_ms) == (D("602.60"), FRI_CLOSE_MS), (
+        "the price at the close is the close bar's"
+    )
+    assert (
+        before_the_first_bar.underlying_quote.state is UnderlyingState.NO_BAR_YET
+        and before_the_first_bar.underlying_quote.price is None
+    ), "before the underlying's first bar there is no price yet"
+    assert (
+        before_the_first_bar.calls.at_the_money_strike_thousandths is None
+        and before_the_first_bar.calls.contracts == ()
+    ), "before the underlying's first bar the calls have no money and no contracts"
 
 
 def test_the_price_is_the_close_of_the_bar_and_not_its_open_high_or_low() -> None:
@@ -476,14 +517,6 @@ def test_a_price_before_the_open_still_counts_as_the_last_trade_by_the_instant_a
     put = _by_strike(chain.puts)[603000]
     assert (put.state, put.price, put.price_time_ms) == (PriceState.TRADED, D("6.00"), close_ms(FRI, -3))
     assert put.price_time_ms < FRI_OPEN_MS
-
-
-def test_the_money_is_the_nearest_strike_of_each_right_and_the_two_rights_can_differ() -> None:
-    chain = _expiry(_friday(), at=close_ms(FRI, 10))
-
-    # 602.40: calls have 602 (0.40 away). Puts have no 602; 603 is 0.60 away and 601 is 1.40 away.
-    assert chain.calls.at_the_money_strike_thousandths == 602000
-    assert chain.puts.at_the_money_strike_thousandths == 603000
 
 
 def test_the_money_is_the_pickers_own_for_calls_and_puts_at_every_instant() -> None:
@@ -526,9 +559,14 @@ def test_a_price_exactly_between_two_strikes_takes_the_lower_as_the_picker_does(
     assert chain.puts.at_the_money_strike_thousandths == 600000
 
 
-def test_the_window_is_the_strikes_of_the_standard_ladder_each_side_of_the_money_for_each_right() -> None:
+def test_the_money_and_the_window_of_strikes_and_steps_are_each_rights_own_on_the_standard_ladder() -> None:
     chain = _expiry(_friday(), at=close_ms(FRI, 10), n=2)
 
+    # 602.40: calls have 602 (0.40 away). Puts have no 602; 603 is 0.60 away and 601 is 1.40 away.
+    assert chain.calls.at_the_money_strike_thousandths == 602000, "the calls' money is the nearest strike, 602"
+    assert chain.puts.at_the_money_strike_thousandths == 603000, (
+        "the puts' money is the nearest strike, 603: the rights differ"
+    )
     # Calls, money 602, two each side: 600 601 602 603 604, and the non-standard 602.5 listed inside the range.
     assert [c.contract.strike_thousandths for c in chain.calls.contracts] == [
         600000,
@@ -537,14 +575,11 @@ def test_the_window_is_the_strikes_of_the_standard_ladder_each_side_of_the_money
         602500,
         603000,
         604000,
-    ]
+    ], "the calls are two standard strikes each side of the money, with the non-standard 602.5 inside the range"
     # Puts, money 603 on the ladder 599 600 601 603 604: two below are 601 and 600, and only 604 is above.
-    assert [c.contract.strike_thousandths for c in chain.puts.contracts] == [600000, 601000, 603000, 604000]
-
-
-def test_steps_from_the_money_are_counted_on_the_standard_ladder_and_a_non_standard_contract_has_none() -> None:
-    chain = _expiry(_friday(), at=close_ms(FRI, 10), n=2)
-
+    assert [c.contract.strike_thousandths for c in chain.puts.contracts] == [600000, 601000, 603000, 604000], (
+        "the puts are the standard strikes each side of the money, and only 604 is above"
+    )
     assert {c.contract.strike_thousandths: c.steps_from_the_money for c in chain.calls.contracts} == {
         600000: -2,
         601000: -1,
@@ -552,16 +587,18 @@ def test_steps_from_the_money_are_counted_on_the_standard_ladder_and_a_non_stand
         602500: None,
         603000: 1,
         604000: 2,
-    }
+    }, "steps from the money are counted on the standard ladder and a non-standard call has none"
     # The 602.5 call is not on the ladder, so it does not move 603 to two steps.
     assert {c.contract.strike_thousandths: c.steps_from_the_money for c in chain.puts.contracts} == {
         600000: -2,
         601000: -1,
         603000: 0,
         604000: 1,
-    }
-    assert {c.contract.strike_thousandths: c.standard for c in chain.calls.contracts}[602500] is False
-    assert all(c.standard for c in chain.puts.contracts)
+    }, "the 602.5 call is not on the ladder, so it does not move the puts' steps"
+    assert {c.contract.strike_thousandths: c.standard for c in chain.calls.contracts}[602500] is False, (
+        "the 602.5 call is not standard"
+    )
+    assert all(c.standard for c in chain.puts.contracts), "every put in the window is standard"
 
 
 def test_a_window_that_runs_off_the_end_of_the_ladder_is_shorter_not_padded() -> None:
@@ -574,11 +611,22 @@ def test_a_window_that_runs_off_the_end_of_the_ladder_is_shorter_not_padded() ->
     assert high.calls.at_the_money_strike_thousandths == 606000 and low.calls.at_the_money_strike_thousandths == 598000
 
 
-def test_no_strikes_each_side_is_the_money_alone() -> None:
-    chain = _expiry(_friday(), at=close_ms(FRI, 10), n=0)
+def test_no_strikes_each_side_is_the_money_alone_in_dollars_and_thousandths_and_no_other_contract_is_read() -> None:
+    data = _friday()
 
-    assert [c.contract.strike_thousandths for c in chain.calls.contracts] == [602000]
-    assert [c.contract.strike_thousandths for c in chain.puts.contracts] == [603000]
+    chain = _expiry(data, at=close_ms(FRI, 10), n=0)
+
+    assert [c.contract.strike_thousandths for c in chain.calls.contracts] == [602000], "no strikes each side: the calls"
+    assert [c.contract.strike_thousandths for c in chain.puts.contracts] == [603000], "no strikes each side: the puts"
+    # 603 for the puts, and the calls' 602 (602000 thousandths).
+    assert (chain.puts.at_the_money_strike, chain.puts.at_the_money_strike_thousandths) == (D(603), 603000), (
+        "the puts' money strike is in dollars as the contract says it and in thousandths"
+    )
+    assert (chain.calls.at_the_money_strike, chain.calls.at_the_money_strike_thousandths) == (D(602), 602000), (
+        "the calls' money strike is in dollars as the contract says it and in thousandths"
+    )
+    asked = [contract.strike_thousandths for kind, contract in data.asked if kind == "option"]
+    assert sorted(asked) == [602000, 603000], "nothing is read for a contract outside the window"
 
 
 def test_the_default_window_is_ten_each_side_and_the_widest_is_fourteen_which_a_download_holds() -> None:
@@ -602,73 +650,71 @@ def test_a_window_outside_zero_to_fourteen_is_refused(n: int) -> None:
         _expiry(_friday(), n=n)
 
 
-def test_each_listed_contract_carries_its_price_and_the_time_of_the_bar_it_is_the_close_of() -> None:
-    chain = _expiry(_friday(), at=close_ms(FRI, 10), n=2)
+def test_each_listed_contract_has_the_state_price_and_time_of_the_last_bar_at_or_before_the_instant() -> None:
+    early = _expiry(_friday(), at=close_ms(FRI, 10), n=2)
+    close = _expiry(_friday(), at=None, n=4)
 
-    calls = _by_strike(chain.calls)
+    calls = _by_strike(early.calls)
     # 600 traded at minute 5 and its price at minute 10 is that bar's close, with that bar's time.
     assert (calls[600000].state, calls[600000].price, calls[600000].price_time_ms) == (
         PriceState.TRADED,
         D("3.10"),
         close_ms(FRI, 5),
-    )
+    ), "a contract carries its price and the time of the bar it is the close of"
     # 602.5 traded at minute 7.
     assert (calls[602500].state, calls[602500].price, calls[602500].price_time_ms) == (
         PriceState.TRADED,
         D("2.00"),
         close_ms(FRI, 7),
-    )
-    puts = _by_strike(chain.puts)
+    ), "the non-standard 602.5 call carries its price and the time of its bar"
+    puts = _by_strike(early.puts)
     # The put 603 closed a bar at minute 10 exactly: the instant itself.
     assert (puts[603000].state, puts[603000].price, puts[603000].price_time_ms) == (
         PriceState.TRADED,
         D("4.40"),
         close_ms(FRI, 10),
-    )
-
-
-def test_a_contract_that_traded_only_later_did_not_trade_by_the_earlier_instant_and_has_a_price_at_the_later_one() -> (
-    None
-):
-    early = _expiry(_friday(), at=close_ms(FRI, 10), n=2)
-    close = _expiry(_friday(), at=None, n=4)
-
+    ), "a put whose bar closes at the instant carries that bar's price and time"
     # Call 601 first traded at minute 200. Put 604 traded at minute 11, one minute after the earlier instant.
-    assert _by_strike(early.calls)[601000].state is PriceState.DID_NOT_TRADE
-    assert _by_strike(early.calls)[601000].price is None and _by_strike(early.calls)[601000].price_time_ms is None
-    assert _by_strike(early.puts)[604000].state is PriceState.DID_NOT_TRADE
+    assert calls[601000].state is PriceState.DID_NOT_TRADE, "a contract that traded only later did not trade by then"
+    assert calls[601000].price is None and calls[601000].price_time_ms is None, (
+        "a contract that did not trade by then has no price and no time"
+    )
+    assert puts[604000].state is PriceState.DID_NOT_TRADE, (
+        "a put that traded one minute after the instant did not trade"
+    )
     assert (_by_strike(close.calls)[601000].state, _by_strike(close.calls)[601000].price) == (
         PriceState.TRADED,
         D("1.50"),
+    ), "a contract that traded only later has a price at the later instant"
+    assert _by_strike(close.calls)[601000].price_time_ms == close_ms(FRI, 200), (
+        "its price at the later instant has the time of the bar at minute 200"
     )
-    assert _by_strike(close.calls)[601000].price_time_ms == close_ms(FRI, 200)
     assert (_by_strike(close.puts)[604000].price, _by_strike(close.puts)[604000].price_time_ms) == (
         D("5.00"),
         close_ms(FRI, 11),
-    )
-
-
-def test_the_price_at_the_close_is_the_last_trade_by_then_and_never_one_from_the_last_quarter_hour() -> None:
-    chain = _expiry(_friday(), at=None, n=4)
-
+    ), "the put that traded at minute 11 has a price at the close"
     # Call 600 traded at minute 5 and 100, and at 16:01 (minute 391), which is after the close.
-    call = _by_strike(chain.calls)[600000]
-    assert (call.price, call.price_time_ms) == (D("2.90"), close_ms(FRI, 100))
-
-
-def test_a_listed_contract_whose_bars_were_never_captured_is_not_stored_and_is_not_given_a_price() -> None:
-    chain = _expiry(_friday(), at=close_ms(FRI, 10), n=2)
-
-    never_captured = _by_strike(chain.calls)[602000]
-    assert never_captured.state is PriceState.NOT_STORED
-    assert (never_captured.price, never_captured.price_time_ms, never_captured.problem) == (None, None, None)
-
-
-def test_a_contract_captured_with_no_trade_did_not_trade_and_is_told_apart_from_one_not_stored() -> None:
-    chain = _expiry(_friday(), at=None, n=4)
-
-    assert _by_strike(chain.calls)[603000].state is PriceState.DID_NOT_TRADE
-    assert _by_strike(chain.calls)[602000].state is PriceState.NOT_STORED
+    call = _by_strike(close.calls)[600000]
+    assert (call.price, call.price_time_ms) == (D("2.90"), close_ms(FRI, 100)), (
+        "the price at the close is the last trade by then and never one from the last quarter hour"
+    )
+    never_captured = calls[602000]
+    assert never_captured.state is PriceState.NOT_STORED, (
+        "a listed contract whose bars were never captured is not stored"
+    )
+    assert (never_captured.price, never_captured.price_time_ms, never_captured.problem) == (None, None, None), (
+        "a contract that is not stored is not given a price"
+    )
+    assert _by_strike(close.calls)[603000].state is PriceState.DID_NOT_TRADE, (
+        "a contract captured with no trade did not trade"
+    )
+    assert _by_strike(close.calls)[602000].state is PriceState.NOT_STORED, (
+        "a contract captured with no trade is told apart from one not stored"
+    )
+    states = {c.contract.strike_thousandths: c.state for c in early.calls.contracts}
+    assert states[604000] is PriceState.UNREADABLE and states[600000] is PriceState.TRADED, (
+        "one unreadable contract does not stop the others being read"
+    )
 
 
 @pytest.mark.parametrize("error", [OptionBarsFileError("damaged"), LakeAdmissionError("no receipt")])
@@ -678,13 +724,6 @@ def test_a_contract_the_lake_cannot_read_is_unreadable_with_the_lakes_words(erro
     unreadable = _by_strike(chain.calls)[604000]
     assert unreadable.state is PriceState.UNREADABLE and unreadable.price is None
     assert unreadable.problem is not None and type(error).__name__ in unreadable.problem
-
-
-def test_one_unreadable_contract_does_not_stop_the_others_being_read() -> None:
-    chain = _expiry(_friday(), at=close_ms(FRI, 10), n=2)
-
-    states = {c.contract.strike_thousandths: c.state for c in chain.calls.contracts}
-    assert states[604000] is PriceState.UNREADABLE and states[600000] is PriceState.TRADED
 
 
 def test_an_unreachable_catalog_while_reading_a_price_is_not_turned_into_a_state() -> None:
@@ -711,13 +750,6 @@ def test_without_an_underlying_price_there_is_no_money_and_the_sides_hold_no_con
         assert side.at_the_money_strike_thousandths is None and side.contracts == ()
     assert (chain.calls.listed, chain.calls.standard_listed) == (10, 9)
     assert (chain.puts.listed, chain.puts.standard_listed) == (5, 5)
-
-
-def test_before_the_underlyings_first_bar_there_is_no_price_yet() -> None:
-    chain = _expiry(_friday(), at=FRI_OPEN_MS, n=2)
-
-    assert chain.underlying_quote.state is UnderlyingState.NO_BAR_YET and chain.underlying_quote.price is None
-    assert chain.calls.at_the_money_strike_thousandths is None and chain.calls.contracts == ()
 
 
 def test_an_expiry_the_listing_does_not_hold_is_not_listed_and_has_no_tag_or_contracts() -> None:
@@ -802,9 +834,10 @@ def test_an_instant_outside_the_session_is_refused(at: int) -> None:
     assert caught.value.code == "OPTIONS_BACKTEST_INSTANT_OUTSIDE_SESSION"
 
 
-def test_the_open_and_the_close_themselves_are_inside_the_session() -> None:
-    assert _expiry(_friday(), at=FRI_OPEN_MS).at_ms == FRI_OPEN_MS
-    assert _expiry(_friday(), at=FRI_CLOSE_MS).at_ms == FRI_CLOSE_MS
+def test_the_open_and_the_close_themselves_and_a_whole_minute_are_inside_the_session() -> None:
+    assert _expiry(_friday(), at=FRI_OPEN_MS).at_ms == FRI_OPEN_MS, "the open itself is inside the session"
+    assert _expiry(_friday(), at=FRI_CLOSE_MS).at_ms == FRI_CLOSE_MS, "the close itself is inside the session"
+    assert _expiry(_friday(), at=FRI_OPEN_MS + 60_000).at_ms == FRI_OPEN_MS + 60_000, "a whole minute is not refused"
 
 
 def test_a_half_days_default_instant_is_its_own_early_close() -> None:
@@ -814,15 +847,6 @@ def test_a_half_days_default_instant_is_its_own_early_close() -> None:
     chain = describe_expiry(data, underlying="SPY", session=half, expiry=HALF_DAY)
 
     assert chain.at_ms == 1764352800000
-
-
-def test_nothing_is_read_for_a_contract_outside_the_window() -> None:
-    data = _friday()
-
-    _expiry(data, at=close_ms(FRI, 10), n=0)
-
-    asked = [contract.strike_thousandths for kind, contract in data.asked if kind == "option"]
-    assert sorted(asked) == [602000, 603000]
 
 
 def test_a_standard_contract_of_another_root_is_not_on_the_ladder_and_does_not_move_the_money_or_the_steps() -> None:
@@ -840,14 +864,6 @@ def test_a_standard_contract_of_another_root_is_not_on_the_ladder_and_does_not_m
         "SPYW261009C00602000": None,
         "SPY261009C00604000": 0,
     }
-
-
-def test_the_money_strike_is_in_dollars_as_the_contract_says_it_and_in_thousandths() -> None:
-    chain = _expiry(_friday(), at=close_ms(FRI, 10), n=0)
-
-    # 603 for the puts, and the calls' 602 (602000 thousandths).
-    assert (chain.puts.at_the_money_strike, chain.puts.at_the_money_strike_thousandths) == (D(603), 603000)
-    assert (chain.calls.at_the_money_strike, chain.calls.at_the_money_strike_thousandths) == (D(602), 602000)
 
 
 # ── The window never holds more than a download takes ─────────────────────
@@ -968,16 +984,17 @@ def test_the_lakes_own_words_for_what_cannot_be_read_go_to_the_log_where_the_pat
 # ── An instant is the close of a minute ───────────────────────────────────
 
 
-def test_an_instant_off_a_whole_minute_is_refused_with_its_own_code_and_a_whole_minute_is_not() -> None:
-    # 09:30:30 is the open + 30 000 ms: inside the session and half way through the minute whose bar closes at 09:31:00.
+@pytest.mark.parametrize(
+    "at",
+    [
+        # 09:30:30 is the open + 30 000 ms: inside the session and half way through the minute whose bar closes at 09:31:00.
+        pytest.param(FRI_OPEN_MS + 30_000, id="half way through a minute"),
+        pytest.param(close_ms(FRI, 10) + 1, id="a millisecond off the minute inside the session"),
+    ],
+)
+def test_an_instant_off_a_whole_minute_is_refused_with_its_own_code(at: int) -> None:
     with pytest.raises(InstantNotOnAMinute) as caught:
-        _expiry(_friday(), at=FRI_OPEN_MS + 30_000)
+        _expiry(_friday(), at=at)
 
-    assert caught.value.code == "OPTIONS_BACKTEST_INSTANT_NOT_ON_A_MINUTE"
-    assert str(FRI_OPEN_MS + 30_000) in str(caught.value)
-    assert _expiry(_friday(), at=FRI_OPEN_MS + 60_000).at_ms == FRI_OPEN_MS + 60_000
-
-
-def test_a_millisecond_off_the_minute_inside_the_session_is_refused_as_off_a_minute() -> None:
-    with pytest.raises(InstantNotOnAMinute):
-        _expiry(_friday(), at=close_ms(FRI, 10) + 1)
+    assert caught.value.code == "OPTIONS_BACKTEST_INSTANT_NOT_ON_A_MINUTE", "the refusal has its own code"
+    assert str(at) in str(caught.value), "the refusal names the instant"

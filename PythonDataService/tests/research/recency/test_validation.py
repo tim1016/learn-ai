@@ -27,73 +27,56 @@ class TestValidateRecencyRequest:
             data_policy=_DATA_POLICY,
         )
 
-    def test_rejects_unknown_strategy_key(self) -> None:
-        strategy = StrategyGridConfig(strategy_key="not_a_real_strategy", param_ranges={})
-        with pytest.raises(RecencyRequestInvalidError, match="unknown strategy_key"):
+    @pytest.mark.parametrize(
+        ("strategy_key", "param_ranges", "match"),
+        [
+            ("not_a_real_strategy", (), "unknown strategy_key"),
+            ("deployment_validation", (), "not recency-supported"),
+            ("ema_crossover_signal", (("not_a_real_param", ValueListRange((1.0,))),), "parameters invalid"),
+            # gap_bps is constrained to [0, 100]; 150 violates le=100.
+            ("ema_crossover_signal", (("gap_bps", LowHighStepRange(low=2.0, high=150.0, step=10.0)),), "parameters invalid"),
+        ],
+        ids=[
+            "rejects_unknown_strategy_key",
+            "rejects_a_strategy_that_is_not_recency_supported",
+            "rejects_an_unknown_parameter_name",
+            "rejects_an_out_of_bounds_parameter_value",
+        ],
+    )
+    def test_rejects_an_invalid_strategy(
+        self, strategy_key: str, param_ranges: tuple[tuple[str, object], ...], match: str
+    ) -> None:
+        strategy = StrategyGridConfig(strategy_key=strategy_key, param_ranges=dict(param_ranges))
+        with pytest.raises(RecencyRequestInvalidError, match=match):
             validate_recency_request(
                 strategies=[strategy], symbols=["SPY"], window_start_ms=0, window_end_ms=1000, data_policy=_DATA_POLICY
             )
 
-    def test_rejects_a_strategy_that_is_not_recency_supported(self) -> None:
-        strategy = StrategyGridConfig(strategy_key="deployment_validation", param_ranges={})
-        with pytest.raises(RecencyRequestInvalidError, match="not recency-supported"):
-            validate_recency_request(
-                strategies=[strategy], symbols=["SPY"], window_start_ms=0, window_end_ms=1000, data_policy=_DATA_POLICY
-            )
-
-    def test_rejects_an_unknown_parameter_name(self) -> None:
-        strategy = _strategy(not_a_real_param=ValueListRange((1.0,)))
-        with pytest.raises(RecencyRequestInvalidError, match="parameters invalid"):
-            validate_recency_request(
-                strategies=[strategy], symbols=["SPY"], window_start_ms=0, window_end_ms=1000, data_policy=_DATA_POLICY
-            )
-
-    def test_rejects_an_out_of_bounds_parameter_value(self) -> None:
-        # gap_bps is constrained to [0, 100]; 150 violates le=100.
-        strategy = _strategy(gap_bps=LowHighStepRange(low=2.0, high=150.0, step=10.0))
-        with pytest.raises(RecencyRequestInvalidError, match="parameters invalid"):
-            validate_recency_request(
-                strategies=[strategy], symbols=["SPY"], window_start_ms=0, window_end_ms=1000, data_policy=_DATA_POLICY
-            )
-
-    def test_rejects_empty_symbols(self) -> None:
-        with pytest.raises(RecencyRequestInvalidError, match="symbols"):
+    @pytest.mark.parametrize(
+        ("symbols", "window_start_ms", "window_end_ms", "data_policy", "match"),
+        [
+            ((), 0, 1000, _DATA_POLICY, "symbols"),
+            (("SPY", "  "), 0, 1000, _DATA_POLICY, "symbols"),
+            (("SPY",), 1000, 1000, _DATA_POLICY, "window_start_ms"),
+            (("SPY",), 0, 1000, "ibkr-raw-regular-minute", "data_policy"),
+        ],
+        ids=[
+            "rejects_empty_symbols",
+            "rejects_a_blank_symbol",
+            "rejects_a_window_start_not_before_window_end",
+            "rejects_an_unsupported_data_policy_label",
+        ],
+    )
+    def test_rejects_an_invalid_request_envelope(
+        self, symbols: tuple[str, ...], window_start_ms: int, window_end_ms: int, data_policy: str, match: str
+    ) -> None:
+        with pytest.raises(RecencyRequestInvalidError, match=match):
             validate_recency_request(
                 strategies=[_strategy(gap_bps=ValueListRange((2.0,)))],
-                symbols=[],
-                window_start_ms=0,
-                window_end_ms=1000,
-                data_policy=_DATA_POLICY,
-            )
-
-    def test_rejects_a_blank_symbol(self) -> None:
-        with pytest.raises(RecencyRequestInvalidError, match="symbols"):
-            validate_recency_request(
-                strategies=[_strategy(gap_bps=ValueListRange((2.0,)))],
-                symbols=["SPY", "  "],
-                window_start_ms=0,
-                window_end_ms=1000,
-                data_policy=_DATA_POLICY,
-            )
-
-    def test_rejects_a_window_start_not_before_window_end(self) -> None:
-        with pytest.raises(RecencyRequestInvalidError, match="window_start_ms"):
-            validate_recency_request(
-                strategies=[_strategy(gap_bps=ValueListRange((2.0,)))],
-                symbols=["SPY"],
-                window_start_ms=1000,
-                window_end_ms=1000,
-                data_policy=_DATA_POLICY,
-            )
-
-    def test_rejects_an_unsupported_data_policy_label(self) -> None:
-        with pytest.raises(RecencyRequestInvalidError, match="data_policy"):
-            validate_recency_request(
-                strategies=[_strategy(gap_bps=ValueListRange((2.0,)))],
-                symbols=["SPY"],
-                window_start_ms=0,
-                window_end_ms=1000,
-                data_policy="ibkr-raw-regular-minute",
+                symbols=list(symbols),
+                window_start_ms=window_start_ms,
+                window_end_ms=window_end_ms,
+                data_policy=data_policy,
             )
 
 

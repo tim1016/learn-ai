@@ -42,7 +42,7 @@ from app.data_lake.types import (
     DataAvailabilityResult,
     DataRunSpec,
 )
-from app.utils.background_loop import background_loop
+from app.utils.background_loop import CallerStoppedWaitingError, background_loop
 from tests._helpers.fake_lake_catalog import (
     FakeCatalog,
     install_fake_catalog,
@@ -184,16 +184,21 @@ def _wide_spec() -> DataRunSpec:
 # ---------------------------------------------------------------------------
 
 
-def test_build_engine_run_spec_asks_only_for_trade_bars():
+def test_build_engine_run_spec_for_a_python_run():
+    from app.lean_sidecar.config import PINNED_LEAN_IMAGE_DIGEST
+
     spec = _spec()
 
-    assert spec.run_type == "python_lab"
-    assert spec.symbols == ["SPY"]
-    assert spec.data_types == ["trade"]
+    assert spec.run_type == "python_lab", "the spec is a python_lab run"
+    assert spec.symbols == ["SPY"], "the spec asks for the one symbol"
+    assert spec.data_types == ["trade"], "the spec asks only for trade bars"
     # The Python engine never opens a factor file or a map file; asking for
     # them buys provider round-trips for nothing.
-    assert spec.include_factor_files is False
-    assert spec.include_map_files is False
+    assert spec.include_factor_files is False, "the spec asks for no factor file"
+    assert spec.include_map_files is False, "the spec asks for no map file"
+    assert spec.lean_image_digest == PINNED_LEAN_IMAGE_DIGEST, "the spec pins the lean image the calendar comes from"
+    # Staging paths are keyed by request_id; two runs must not share one.
+    assert spec.request_id != _spec().request_id, "two specs for the same window get distinct request ids"
 
 
 def test_build_engine_run_spec_uppercases_the_symbol():
@@ -202,22 +207,11 @@ def test_build_engine_run_spec_uppercases_the_symbol():
     assert spec.symbols == ["SPY"]
 
 
-def test_build_engine_run_spec_pins_the_lean_image_the_calendar_comes_from():
-    from app.lean_sidecar.config import PINNED_LEAN_IMAGE_DIGEST
-
-    assert _spec().lean_image_digest == PINNED_LEAN_IMAGE_DIGEST
-
-
 def test_build_engine_run_spec_refuses_an_unpinned_lean_image(monkeypatch):
     monkeypatch.setattr("app.lean_sidecar.config.PINNED_LEAN_IMAGE_DIGEST", None)
 
     with pytest.raises(LakeMaterializationError, match="pinned LEAN image digest"):
         _spec()
-
-
-def test_two_specs_for_the_same_window_get_distinct_request_ids():
-    """Staging paths are keyed by request_id; two runs must not share one."""
-    assert _spec().request_id != _spec().request_id
 
 
 # ---------------------------------------------------------------------------
@@ -233,24 +227,14 @@ async def test_materialize_run_data_fetches_the_missing_day(fake_catalog, tmp_la
 
     result = await _materialize_run_data(_spec(), resolution="minute")
 
-    assert result.overall_status == "complete", result.failures
-    assert polygon.call_count == 1
-    assert result.data_availability_hash
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_materialize_run_data_writes_lean_bytes_into_the_lake(fake_catalog, tmp_lake):
-    mock_launcher()
-    _mock_polygon()
-
-    result = await _materialize_run_data(_spec(), resolution="minute")
-
+    assert result.overall_status == "complete", f"the missing day is fetched to completion: {result.failures}"
+    assert polygon.call_count == 1, "the missing day costs one provider call"
+    assert result.data_availability_hash, "the result carries a data availability hash"
     minute = [a for a in result.artifacts if a.resolution == "minute"]
-    assert len(minute) == 1
+    assert len(minute) == 1, "one minute artifact is recorded"
     on_disk = tmp_lake / lake_subpath("raw") / minute[0].file_path
-    assert on_disk.is_file()
-    assert result.lean_data_root_path == str(tmp_lake / lake_subpath("raw"))
+    assert on_disk.is_file(), "the lean bytes are written into the lake"
+    assert result.lean_data_root_path == str(tmp_lake / lake_subpath("raw")), "the lean data root is the lake's raw root"
 
 
 @respx.mock
@@ -982,9 +966,23 @@ def test_materialize_engine_run_ignores_a_stale_daily_for_a_minute_run(monkeypat
     assert result.incomplete_summary == "time_series_bars/data_contract_mismatch"
 
 
-def test_materialize_engine_run_refuses_a_missing_session_for_a_minute_run(monkeypatch):
-    """A day the provider could not supply is a hole in the backtest, not a note."""
-
+@pytest.mark.parametrize(
+    ("resolution", "match"),
+    [
+        # A day the provider could not supply is a hole in the backtest, not a note.
+        pytest.param("minute", "incomplete minute coverage", id="minute_run"),
+        # The derived daily zip IS every source session, aggregated. ``ensure_data``
+        # builds the daily artifact from whatever minute artifacts materialized, so a
+        # source session Polygon could not supply is silently absent from an otherwise
+        # "complete" daily zip — nothing about the aggregate's own data contract ever
+        # flags it, because the contract is keyed by the sessions that DID materialize,
+        # and that set is stable if the missing day never gets fetched. Refuse on the
+        # underlying per-day failure directly, the same way a minute run would, rather
+        # than trusting the aggregate to notice on its own.
+        pytest.param("daily", "incomplete daily coverage", id="daily_run"),
+    ],
+)
+def test_materialize_engine_run_refuses_a_missing_session(monkeypatch, resolution, match):
     def _missing_day(spec: DataRunSpec, **_kwargs) -> DataAvailabilityResult:
         return _partial(
             spec,
@@ -999,43 +997,12 @@ def test_materialize_engine_run_refuses_a_missing_session_for_a_minute_run(monke
 
     monkeypatch.setattr(run_materialization, "_materialize_run_data_sync", _missing_day)
 
-    with pytest.raises(LakeMaterializationError, match="incomplete minute coverage"):
-        materialize_engine_run(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, resolution="minute")
-
-
-def test_materialize_engine_run_refuses_a_missing_session_for_a_daily_run(monkeypatch):
-    """The derived daily zip IS every source session, aggregated.
-
-    ``ensure_data`` builds the daily artifact from whatever minute artifacts
-    materialized, so a source session Polygon could not supply is silently
-    absent from an otherwise "complete" daily zip — nothing about the
-    aggregate's own data contract ever flags it, because the contract is
-    keyed by the sessions that DID materialize, and that set is stable if
-    the missing day never gets fetched. Refuse on the underlying per-day
-    failure directly, the same way a minute run would, rather than trusting
-    the aggregate to notice on its own.
-    """
-
-    def _missing_day(spec: DataRunSpec, **_kwargs) -> DataAvailabilityResult:
-        return _partial(
-            spec,
-            ArtifactFailure(
-                artifact_kind="time_series_bars",
-                symbol="SPY",
-                trading_date=TRADING_DAY,
-                data_type="trade",
-                reason="provider_no_data",
-            ),
-        )
-
-    monkeypatch.setattr(run_materialization, "_materialize_run_data_sync", _missing_day)
-
-    with pytest.raises(LakeMaterializationError, match="incomplete daily coverage") as exc_info:
-        materialize_engine_run(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, resolution="daily")
+    with pytest.raises(LakeMaterializationError, match=match) as exc_info:
+        materialize_engine_run(symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, resolution=resolution)
 
     # The refusal names which session is missing, not just that the window is
     # short one — critical once a window can span more than a single day.
-    assert str(TRADING_DAY) in str(exc_info.value)
+    assert str(TRADING_DAY) in str(exc_info.value), "the refusal names the missing session"
 
 
 def test_materialize_engine_run_lets_a_metadata_note_through(monkeypatch):
@@ -1336,20 +1303,17 @@ def test_chart_spec_is_trade_only_minute_with_no_rollups_or_corp_actions():
     assert spec.fetch_timeout_seconds == 120
 
 
-def test_materialize_chart_range_skips_symbols_the_writer_refuses():
-    result = run_materialization.materialize_chart_range(
-        symbol="BRK-B", start=TRADING_DAY, end=WIDER_WINDOW_END
-    )
-    assert result.status == "skipped"
-    assert "not lake-addressable" in (result.detail or "")
-
-
-def test_materialize_chart_range_skips_inverted_windows():
-    result = run_materialization.materialize_chart_range(
-        symbol="SPY", start=WIDER_WINDOW_END, end=TRADING_DAY
-    )
-    assert result.status == "skipped"
-    assert "inverted" in (result.detail or "")
+@pytest.mark.parametrize(
+    ("symbol", "start", "end", "reason"),
+    [
+        pytest.param("BRK-B", TRADING_DAY, WIDER_WINDOW_END, "not lake-addressable", id="symbols_the_writer_refuses"),
+        pytest.param("SPY", WIDER_WINDOW_END, TRADING_DAY, "inverted", id="inverted_windows"),
+    ],
+)
+def test_materialize_chart_range_skips_what_it_cannot_capture(symbol, start, end, reason):
+    result = run_materialization.materialize_chart_range(symbol=symbol, start=start, end=end)
+    assert result.status == "skipped", "the chart range is skipped"
+    assert reason in (result.detail or ""), f"the detail says why: {reason}"
 
 
 def test_materialize_chart_range_skips_without_a_pinned_digest(monkeypatch):
@@ -1438,33 +1402,30 @@ def test_materialize_chart_range_partial_when_a_session_is_withheld(monkeypatch)
     assert result.fetched_artifact_count == 3
 
 
-def test_materialize_chart_range_partial_on_ingest_timeout(monkeypatch):
+@pytest.mark.parametrize(
+    ("raised", "args"),
+    [
+        pytest.param(TimeoutError, (), id="ingest_timeout"),
+        # The sync bridge raises CallerStoppedWaitingError — not TimeoutError —
+        # when its wait bound expires while the ingest keeps running on the shared
+        # loop (#1977); the chart must degrade, not 500.
+        pytest.param(
+            CallerStoppedWaitingError,
+            ("still running on the background-loop after 120s",),
+            id="caller_stops_waiting_1977",
+        ),
+    ],
+)
+def test_materialize_chart_range_partial_when_the_ingest_does_not_finish(monkeypatch, raised, args):
     def _fake(spec, *, resolution):
-        raise TimeoutError
+        raise raised(*args)
 
     monkeypatch.setattr(run_materialization, "_materialize_run_data_sync", _fake)
     result = run_materialization.materialize_chart_range(
         symbol="SPY", start=TRADING_DAY, end=WIDER_WINDOW_END, fetch_timeout_seconds=120
     )
-    assert result.status == "partial"
-    assert "120s" in (result.detail or "")
-
-
-def test_materialize_chart_range_partial_when_the_caller_stops_waiting(monkeypatch):
-    """The sync bridge raises CallerStoppedWaitingError — not TimeoutError —
-    when its wait bound expires while the ingest keeps running on the shared
-    loop (#1977); the chart must degrade, not 500."""
-    from app.utils.background_loop import CallerStoppedWaitingError
-
-    def _fake(spec, *, resolution):
-        raise CallerStoppedWaitingError("still running on the background-loop after 120s")
-
-    monkeypatch.setattr(run_materialization, "_materialize_run_data_sync", _fake)
-    result = run_materialization.materialize_chart_range(
-        symbol="SPY", start=TRADING_DAY, end=WIDER_WINDOW_END, fetch_timeout_seconds=120
-    )
-    assert result.status == "partial"
-    assert "120s" in (result.detail or "")
+    assert result.status == "partial", "the chart degrades to partial"
+    assert "120s" in (result.detail or ""), "the detail names the 120s wait bound"
 
 
 def test_materialize_chart_range_skips_when_catalog_unavailable(monkeypatch):
@@ -1545,14 +1506,39 @@ def _bar_lease_contention() -> ArtifactFailure:
     )
 
 
+def _factor_file_lease_contention() -> ArtifactFailure:
+    return ArtifactFailure(
+        artifact_kind="factor_file",
+        symbol="SPY",
+        trading_date=None,
+        data_type=None,
+        reason="lease_timeout",
+        detail="another worker holds the lease",
+        attempt_count=1,
+    )
+
+
+@pytest.mark.parametrize(
+    ("contention", "fetched", "reused"),
+    [
+        # The seam must wait for a concurrent fetch that owns the claim, not
+        # return its lease_timeout as a final answer — the coalescing a bare
+        # ensure_data call does not give a research consumer.
+        pytest.param(_bar_lease_contention, 42, 7, id="a_bar_a_concurrent_fetch_owns"),
+        # #2452 review: a second study of a symbol whose factor file another
+        # capture is still publishing waits for it, instead of returning the
+        # lease and refusing a window the other capture is about to cover.
+        pytest.param(_factor_file_lease_contention, 0, 3, id="a_factor_file_being_built_elsewhere_2452"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_materialize_symbol_history_waits_out_sibling_contention(monkeypatch):
-    """The seam must wait for a concurrent fetch that owns the claim, not
-    return its lease_timeout as a final answer — the coalescing a bare
-    ensure_data call does not give a research consumer."""
-    contended = _history_result("partial", failures=[_bar_lease_contention()])
-    complete = _history_result("complete", fetched=42, reused=7)
-    results = iter([contended, complete])
+async def test_materialize_symbol_history_waits_out_sibling_contention(monkeypatch, contention, fetched, reused):
+    results = iter(
+        [
+            _history_result("partial", failures=[contention()]),
+            _history_result("complete", fetched=fetched, reused=reused),
+        ]
+    )
     calls: list[DataRunSpec] = []
 
     async def _ensure(spec: DataRunSpec) -> DataAvailabilityResult:
@@ -1565,40 +1551,10 @@ async def test_materialize_symbol_history_waits_out_sibling_contention(monkeypat
     )
 
     assert len(calls) == 2, "the seam must poll, not give up on the first lease_timeout"
-    assert receipt.status == "complete"
-    assert receipt.fetched_artifact_count == 42
-    assert receipt.reused_artifact_count == 7
-    assert receipt.detail is None
-
-
-@pytest.mark.asyncio
-async def test_materialize_symbol_history_waits_out_a_factor_file_being_built_elsewhere(monkeypatch):
-    """#2452 review: a second study of a symbol whose factor file another
-    capture is still publishing waits for it, instead of returning the
-    lease and refusing a window the other capture is about to cover."""
-    factor_contention = ArtifactFailure(
-        artifact_kind="factor_file",
-        symbol="SPY",
-        trading_date=None,
-        data_type=None,
-        reason="lease_timeout",
-        detail="another worker holds the lease",
-        attempt_count=1,
-    )
-    results = iter([_history_result("partial", failures=[factor_contention]), _history_result("complete", reused=3)])
-    calls: list[DataRunSpec] = []
-
-    async def _ensure(spec: DataRunSpec) -> DataAvailabilityResult:
-        calls.append(spec)
-        return next(results)
-
-    monkeypatch.setattr(run_materialization, "ensure_data", _ensure)
-    receipt = await run_materialization.materialize_symbol_history(
-        symbol="SPY", start=TRADING_DAY, end=TRADING_DAY, requester="study-test"
-    )
-
-    assert len(calls) == 2, "factor-file contention must be waited out like a bar's"
-    assert receipt.status == "complete"
+    assert receipt.status == "complete", "the receipt reports the complete pass the wait reached"
+    assert receipt.fetched_artifact_count == fetched, "the receipt carries the complete pass's fetched count"
+    assert receipt.reused_artifact_count == reused, "the receipt carries the complete pass's reused count"
+    assert receipt.detail is None, "a waited-out contention leaves no detail"
 
 
 @pytest.mark.asyncio

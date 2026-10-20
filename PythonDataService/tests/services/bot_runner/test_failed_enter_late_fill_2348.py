@@ -345,43 +345,41 @@ async def _run_late_fill_case(
         repo.close()
 
 
+@pytest.mark.parametrize(
+    ("first_error_type", "first_error_message", "land", "stream"),
+    [
+        pytest.param(
+            BrokerUnavailable, "SDK call exceeded fail_after(15 s)", "after_exit", True,
+            id="late_fill_after_exit_answered_flat_raises_episode_via_trade_updates",
+        ),
+        pytest.param(
+            BrokerUnavailable, "SDK call exceeded fail_after(15 s)", "after_exit", False,
+            id="late_fill_after_exit_answered_flat_raises_episode_via_rest_sweep",
+        ),
+        pytest.param(
+            BrokerRequestInvalid, "client_order_id must be unique (422 after SDK 504 retry)", "before_exit", True,
+            id="fill_on_rejected_duplicate_id_enter_raises_episode",
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_late_fill_after_exit_answered_flat_raises_episode_via_trade_updates(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+async def test_a_late_fill_on_a_failed_enter_raises_the_episode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    first_error_type: type[Exception],
+    first_error_message: str,
+    land: str,
+    stream: bool,
 ) -> None:
-    """Path C (#2342): voided ENTER lands and fills after the EXIT was answered flat."""
+    """Path C (#2342): voided ENTER lands and fills after the EXIT was answered flat.
+
+    Path D: as C, but the trade_updates frames are missed; only the sweep sees it.
+    Path E (#2304): a duplicate-id reply folds the ENTER failed; the order fills.
+    """
     await _run_late_fill_case(
         tmp_path,
         monkeypatch,
-        first_error=BrokerUnavailable("SDK call exceeded fail_after(15 s)"),
-        land="after_exit",
-        stream=True,
-    )
-
-
-@pytest.mark.asyncio
-async def test_late_fill_after_exit_answered_flat_raises_episode_via_rest_sweep(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Path D: as C, but the trade_updates frames are missed; only the sweep sees it."""
-    await _run_late_fill_case(
-        tmp_path,
-        monkeypatch,
-        first_error=BrokerUnavailable("SDK call exceeded fail_after(15 s)"),
-        land="after_exit",
-        stream=False,
-    )
-
-
-@pytest.mark.asyncio
-async def test_fill_on_rejected_duplicate_id_enter_raises_episode(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Path E (#2304): a duplicate-id reply folds the ENTER failed; the order fills."""
-    await _run_late_fill_case(
-        tmp_path,
-        monkeypatch,
-        first_error=BrokerRequestInvalid("client_order_id must be unique (422 after SDK 504 retry)"),
-        land="before_exit",
-        stream=True,
+        first_error=first_error_type(first_error_message),
+        land=land,
+        stream=stream,
     )

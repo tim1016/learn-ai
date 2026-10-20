@@ -71,39 +71,30 @@ def _run_smoke(flags: Iterator[str]) -> subprocess.CompletedProcess:
 
 
 class TestHardeningFlagMatrix:
-    def test_cap_drop_all(self) -> None:
-        result = _run_smoke(iter(["--cap-drop=ALL"]))
-        assert result.returncode == 0, f"--cap-drop=ALL rejected by image; stderr=\n{result.stderr}"
-
-    def test_read_only_root(self) -> None:
-        result = _run_smoke(iter(["--read-only"]))
-        assert result.returncode == 0, f"--read-only rejected by image; stderr=\n{result.stderr}"
-
-    def test_tmpfs_tmp(self) -> None:
-        result = _run_smoke(iter(["--tmpfs", "/tmp:rw,noexec,nosuid,size=64m"]))
-        assert result.returncode == 0, f"--tmpfs /tmp rejected by image; stderr=\n{result.stderr}"
-
-    def test_pids_limit(self) -> None:
-        result = _run_smoke(iter(["--pids-limit=64"]))
-        assert result.returncode == 0, f"--pids-limit rejected by image; stderr=\n{result.stderr}"
-
-    def test_combined_required_shape(self) -> None:
-        """All survivors together. The ADR records this exact set.
-
-        Hard-asserts rather than xfails: if the combined shape ever
-        regresses, the launcher's mandatory flag set is no longer
-        viable on the pinned image and that is a gating PR-blocker,
-        not a flaky-test note.
-        """
-        result = _run_smoke(
-            iter(
-                [
+    # The combined row is every survivor together; the ADR records this exact
+    # set. It hard-asserts rather than xfails: if the combined shape ever
+    # regresses, the launcher's mandatory flag set is no longer viable on the
+    # pinned image and that is a gating PR-blocker, not a flaky-test note.
+    @pytest.mark.parametrize(
+        ("flags", "label"),
+        [
+            pytest.param(("--cap-drop=ALL",), "--cap-drop=ALL", id="cap_drop_all"),
+            pytest.param(("--read-only",), "--read-only", id="read_only_root"),
+            pytest.param(("--tmpfs", "/tmp:rw,noexec,nosuid,size=64m"), "--tmpfs /tmp", id="tmpfs_tmp"),
+            pytest.param(("--pids-limit=64",), "--pids-limit", id="pids_limit"),
+            pytest.param(
+                (
                     "--cap-drop=ALL",
                     "--read-only",
                     "--tmpfs",
                     "/tmp:rw,noexec,nosuid,size=64m",
                     "--pids-limit=64",
-                ]
-            )
-        )
-        assert result.returncode == 0, f"combined hardening shape rejected by image; stderr=\n{result.stderr}"
+                ),
+                "combined hardening shape",
+                id="combined_required_shape",
+            ),
+        ],
+    )
+    def test_hardening_flags_accepted_by_image(self, flags: tuple[str, ...], label: str) -> None:
+        result = _run_smoke(iter(flags))
+        assert result.returncode == 0, f"{label} rejected by image; stderr=\n{result.stderr}"

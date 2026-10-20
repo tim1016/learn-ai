@@ -149,11 +149,20 @@ def test_an_assignment_smaller_than_the_oldest_lot_leaves_the_newer_lot_alone() 
     assert allocation.lots[0].remaining_quantity == -1
 
 
-def test_an_assignment_passes_over_a_bought_lot_however_old() -> None:
-    bought_first = _lot("bot-a", 5, opened=_at(date(2023, 7, 3)), sequence=1)
-    sold_later = _lot("bot-b", -1, opened=_at(date(2023, 7, 12)), sequence=2)
+@pytest.mark.parametrize(
+    ("kind", "change", "older_held", "newer_held"),
+    [
+        pytest.param(OptionEventKind.ASSIGNED, 1, 5, -1, id="an assignment passes over a bought lot however old"),
+        pytest.param(OptionEventKind.EXERCISED, -1, -4, 1, id="an exercise passes over a sold lot however old"),
+    ],
+)
+def test_an_event_passes_over_a_lot_on_the_side_its_kind_cannot_end_however_old(
+    kind: OptionEventKind, change: int, older_held: int, newer_held: int
+) -> None:
+    older = _lot("bot-a", older_held, opened=_at(date(2023, 7, 3)), sequence=1)
+    newer = _lot("bot-b", newer_held, opened=_at(date(2023, 7, 12)), sequence=2)
 
-    allocation = _allocate(OptionEventKind.ASSIGNED, 1, [bought_first, sold_later])
+    allocation = _allocate(kind, change, [older, newer])
 
     assert _taken(allocation) == [("bot-b", 2, 1)]
 
@@ -178,33 +187,27 @@ def test_an_exercised_put_sells_the_shares_and_receives_the_strike() -> None:
     assert (lot.share_quantity_change, lot.cash_change_cents) == (-100, 1_500_000)
 
 
-def test_an_exercise_passes_over_a_sold_lot_however_old() -> None:
-    sold_first = _lot("bot-a", -4, opened=_at(date(2023, 7, 3)), sequence=1)
-    bought_later = _lot("bot-b", 1, opened=_at(date(2023, 7, 12)), sequence=2)
-
-    allocation = _allocate(OptionEventKind.EXERCISED, -1, [sold_first, bought_later])
-
-    assert _taken(allocation) == [("bot-b", 2, 1)]
-
-
 # ── An expiry ───────────────────────────────────────────────────────────────
 
 
-def test_an_expired_bought_lot_is_removed_and_moves_no_shares_and_no_cash() -> None:
-    allocation = _allocate(OptionEventKind.EXPIRED, -2, [_lot("bot-a", 2)])
+@pytest.mark.parametrize(
+    ("held", "change", "contracts", "option_change"),
+    [
+        pytest.param(2, -2, 2, -2, id="an expired bought lot"),
+        pytest.param(-3, 3, 3, 3, id="an expired sold lot"),
+    ],
+)
+def test_an_expired_lot_is_removed_and_moves_no_shares_and_no_cash(
+    held: int, change: int, contracts: int, option_change: int
+) -> None:
+    allocation = _allocate(OptionEventKind.EXPIRED, change, [_lot("bot-a", held)])
 
     (lot,) = allocation.lots
-    assert (lot.contracts, lot.remaining_quantity, lot.option_quantity_change) == (2, 0, -2)
-    assert (lot.share_quantity_change, lot.cash_change_cents) == (0, 0)
-    assert allocation.share_price is None
-
-
-def test_an_expired_sold_lot_is_removed_and_moves_no_shares_and_no_cash() -> None:
-    allocation = _allocate(OptionEventKind.EXPIRED, 3, [_lot("bot-a", -3)])
-
-    (lot,) = allocation.lots
-    assert (lot.contracts, lot.remaining_quantity, lot.option_quantity_change) == (3, 0, 3)
-    assert (lot.share_quantity_change, lot.cash_change_cents) == (0, 0)
+    assert (lot.contracts, lot.remaining_quantity, lot.option_quantity_change) == (contracts, 0, option_change), (
+        "the lot is removed whole"
+    )
+    assert (lot.share_quantity_change, lot.cash_change_cents) == (0, 0), "no shares and no cash move"
+    assert allocation.share_price is None, "an expiry has no share price"
 
 
 @pytest.mark.parametrize("change", [-1, 1, -3, 3], ids=["the net", "the net, signed as sold", "bought gross", "the gross"])
@@ -277,17 +280,6 @@ def test_lots_alike_in_time_and_sequence_are_taken_in_one_order_however_they_are
     assert _taken(_allocate(OptionEventKind.ASSIGNED, 1, [b, a])) == [("bot-a", 7, 1)]
     assert _taken(_allocate(OptionEventKind.EXPIRED, 1, [a, b])) == [("bot-b", 7, 1)]
     assert _taken(_allocate(OptionEventKind.EXPIRED, 1, [b, a])) == [("bot-b", 7, 1)]
-
-
-def test_expiring_lots_opened_in_the_same_millisecond_are_taken_last_in_the_books_order_first() -> None:
-    same_instant = _at(date(2023, 7, 10))
-    lots = [
-        _lot("bot-b", 1, opened=same_instant, sequence=9),
-        _lot("bot-a", 1, opened=same_instant, sequence=12),
-        _lot("bot-c", 1, opened=same_instant, sequence=3),
-    ]
-
-    assert _taken(_allocate(OptionEventKind.EXPIRED, -2, lots)) == [("bot-a", 12, 1), ("bot-b", 9, 1)]
 
 
 def test_a_lot_opened_on_the_day_it_expires_is_taken() -> None:
@@ -405,20 +397,25 @@ def test_an_event_for_more_contracts_than_are_held_is_refused_whole() -> None:
     assert refused.value.unmatched_contracts == 2
 
 
-def test_an_assignment_of_a_contract_held_only_as_bought_is_refused_as_the_wrong_side() -> None:
-    with pytest.raises(OptionEventRefused, match="every lot of it on the books is bought") as refused:
-        _allocate(OptionEventKind.ASSIGNED, 1, [_lot("bot-a", 4)])
+@pytest.mark.parametrize(
+    ("kind", "change", "held", "side", "unmatched"),
+    [
+        pytest.param(
+            OptionEventKind.ASSIGNED, 1, 4, "bought", 1, id="an assignment of a contract held only as bought"
+        ),
+        pytest.param(
+            OptionEventKind.EXERCISED, -2, -4, "sold", 2, id="an exercise of a contract held only as sold"
+        ),
+    ],
+)
+def test_an_event_of_a_contract_held_only_on_the_side_its_kind_cannot_end_is_refused_as_the_wrong_side(
+    kind: OptionEventKind, change: int, held: int, side: str, unmatched: int
+) -> None:
+    with pytest.raises(OptionEventRefused, match=f"every lot of it on the books is {side}") as refused:
+        _allocate(kind, change, [_lot("bot-a", held)])
 
-    assert refused.value.reason is OptionEventRefusal.WRONG_SIDE
-    assert refused.value.unmatched_contracts == 1
-
-
-def test_an_exercise_of_a_contract_held_only_as_sold_is_refused_as_the_wrong_side() -> None:
-    with pytest.raises(OptionEventRefused, match="every lot of it on the books is sold") as refused:
-        _allocate(OptionEventKind.EXERCISED, -2, [_lot("bot-a", -4)])
-
-    assert refused.value.reason is OptionEventRefusal.WRONG_SIDE
-    assert refused.value.unmatched_contracts == 2
+    assert refused.value.reason is OptionEventRefusal.WRONG_SIDE, "it is refused as the wrong side"
+    assert refused.value.unmatched_contracts == unmatched, "nothing of the event was matched"
 
 
 @pytest.mark.parametrize("kind", list(OptionEventKind))
@@ -475,15 +472,36 @@ def test_a_lots_opening_date_is_its_new_york_date() -> None:
 # ── The order of lots ───────────────────────────────────────────────────────
 
 
-def test_lots_opened_in_the_same_millisecond_are_taken_in_the_books_own_order() -> None:
+@pytest.mark.parametrize(
+    ("kind", "held", "change", "taken"),
+    [
+        pytest.param(
+            OptionEventKind.ASSIGNED,
+            -1,
+            2,
+            (("bot-c", 3, 1), ("bot-b", 9, 1)),
+            id="lots opened in the same millisecond are taken in the books own order",
+        ),
+        pytest.param(
+            OptionEventKind.EXPIRED,
+            1,
+            -2,
+            (("bot-a", 12, 1), ("bot-b", 9, 1)),
+            id="expiring lots opened in the same millisecond are taken last in the books order first",
+        ),
+    ],
+)
+def test_lots_opened_in_the_same_millisecond_are_taken_in_the_books_order(
+    kind: OptionEventKind, held: int, change: int, taken: tuple[tuple[str, int, int], ...]
+) -> None:
     same_instant = _at(date(2023, 7, 10))
     lots = [
-        _lot("bot-b", -1, opened=same_instant, sequence=9),
-        _lot("bot-a", -1, opened=same_instant, sequence=12),
-        _lot("bot-c", -1, opened=same_instant, sequence=3),
+        _lot("bot-b", held, opened=same_instant, sequence=9),
+        _lot("bot-a", held, opened=same_instant, sequence=12),
+        _lot("bot-c", held, opened=same_instant, sequence=3),
     ]
 
-    assert _taken(_allocate(OptionEventKind.ASSIGNED, 2, lots)) == [("bot-c", 3, 1), ("bot-b", 9, 1)]
+    assert _taken(_allocate(kind, change, lots)) == list(taken)
 
 
 def test_the_opening_time_decides_before_the_sequence_does() -> None:
@@ -503,14 +521,24 @@ def test_two_lots_of_one_bot_are_each_named_in_the_allocation() -> None:
 # ── What the caller must not hand in ────────────────────────────────────────
 
 
-def test_a_lot_of_another_contract_is_never_taken() -> None:
-    with pytest.raises(ValueError, match="AAPL230721P00150000"):
-        _allocate(OptionEventKind.EXPIRED, -1, [_lot("bot-a", 1), _lot("bot-b", 1, contract=_PUT)])
-
-
-def test_one_lot_offered_twice_is_refused() -> None:
-    with pytest.raises(ValueError, match="offered twice"):
-        _allocate(OptionEventKind.EXPIRED, -1, [_lot("bot-a", 1, sequence=4), _lot("bot-a", 2, sequence=4)])
+@pytest.mark.parametrize(
+    ("lots", "match"),
+    [
+        pytest.param(
+            (_lot("bot-a", 1), _lot("bot-b", 1, contract=_PUT)),
+            "AAPL230721P00150000",
+            id="a lot of another contract is never taken",
+        ),
+        pytest.param(
+            (_lot("bot-a", 1, sequence=4), _lot("bot-a", 2, sequence=4)),
+            "offered twice",
+            id="one lot offered twice is refused",
+        ),
+    ],
+)
+def test_lots_the_caller_must_not_hand_in_are_refused(lots: tuple[HeldOptionLot, ...], match: str) -> None:
+    with pytest.raises(ValueError, match=match):
+        _allocate(OptionEventKind.EXPIRED, -1, list(lots))
 
 
 @pytest.mark.parametrize("change", [0, True, False, 1.0, -1.5, "1", None])

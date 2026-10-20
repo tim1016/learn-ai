@@ -131,53 +131,54 @@ def test_evaluate_graduation_high_drawdown_fails_second_criterion():
     assert result.overall_passed is False
 
 
-def test_evaluate_graduation_insufficient_oos_bars_labels_exploratory():
+@pytest.mark.parametrize(
+    ("has_walk_forward", "effective_oos_bars"),
+    [
+        pytest.param(True, 500, id="insufficient_oos_bars"),
+        pytest.param(False, 2000, id="missing_walk_forward"),
+    ],
+)
+def test_evaluate_graduation_labels_exploratory(has_walk_forward, effective_oos_bars):
     grid = [_bt(threshold=1.0, net_sharpe=1.2, max_drawdown=0.08)]
     regime_coverage = {f"R{i}": 50 for i in range(6)}
-    walk = _wf(pct_windows_positive_sharpe=0.80)
+    walk = _wf(pct_windows_positive_sharpe=0.80) if has_walk_forward else None
 
     result = evaluate_graduation(
         walk_forward=walk,
         backtest_grid=grid,
         regime_coverage=regime_coverage,
         signal_diagnostics=SignalDiagnostics(),
-        data_sufficiency=_suff(effective_oos_bars=500),
+        data_sufficiency=_suff(effective_oos_bars=effective_oos_bars),
     )
 
     assert result.status_label == "Exploratory"
 
 
-def test_evaluate_graduation_missing_walk_forward_labels_exploratory():
-    grid = [_bt(threshold=1.0, net_sharpe=1.2, max_drawdown=0.08)]
-    regime_coverage = {f"R{i}": 50 for i in range(6)}
-
-    result = evaluate_graduation(
-        walk_forward=None,
-        backtest_grid=grid,
-        regime_coverage=regime_coverage,
-        signal_diagnostics=SignalDiagnostics(),
-        data_sufficiency=_suff(),
-    )
-
-    assert result.status_label == "Exploratory"
-
-
-def test_evaluate_graduation_negative_slope_labels_degrading_when_test_valid_and_significant():
-    """Degrading status fires only when the alpha-decay test is statistically valid.
-
-    The test was previously triggered by any negative slope, including the
-    underpowered N=3 case. With the alpha-decay power guard, ``Degrading``
-    requires both ``is_test_valid`` (≥ 5 folds) and ``is_significant``
-    (p < 0.05).
-    """
+@pytest.mark.parametrize(
+    ("p_value", "n_folds_used", "is_test_valid", "is_significant", "labelled_degrading"),
+    [
+        # Degrading status fires only when the alpha-decay test is statistically valid.
+        #
+        # The test was previously triggered by any negative slope, including the
+        # underpowered N=3 case. With the alpha-decay power guard, ``Degrading``
+        # requires both ``is_test_valid`` (>= 5 folds) and ``is_significant``
+        # (p < 0.05).
+        pytest.param(0.01, 6, True, True, True, id="negative_slope_labels_degrading_when_test_valid_and_significant"),
+        # An underpowered alpha-decay regression must not drive the legacy label (< 5 folds).
+        pytest.param(0.33, 3, False, False, False, id="negative_slope_does_not_label_degrading_when_underpowered"),
+    ],
+)
+def test_evaluate_graduation_negative_slope_degrading_label(
+    p_value, n_folds_used, is_test_valid, is_significant, labelled_degrading
+):
     grid = [_bt(threshold=1.0, net_sharpe=1.2, max_drawdown=0.08)]
     regime_coverage = {f"R{i}": 50 for i in range(6)}
     decay = AlphaDecayStats(
         slope=-0.5,
-        p_value=0.01,
-        n_folds_used=6,
-        is_test_valid=True,
-        is_significant=True,
+        p_value=p_value,
+        n_folds_used=n_folds_used,
+        is_test_valid=is_test_valid,
+        is_significant=is_significant,
     )
     walk = _wf(pct_windows_positive_sharpe=0.80, alpha_decay=decay)
 
@@ -189,31 +190,7 @@ def test_evaluate_graduation_negative_slope_labels_degrading_when_test_valid_and
         data_sufficiency=_suff(),
     )
 
-    assert result.status_label == "Degrading"
-
-
-def test_evaluate_graduation_negative_slope_does_not_label_degrading_when_underpowered():
-    """An underpowered alpha-decay regression must not drive the legacy label."""
-    grid = [_bt(threshold=1.0, net_sharpe=1.2, max_drawdown=0.08)]
-    regime_coverage = {f"R{i}": 50 for i in range(6)}
-    decay = AlphaDecayStats(
-        slope=-0.5,
-        p_value=0.33,
-        n_folds_used=3,
-        is_test_valid=False,  # < 5 folds
-        is_significant=False,
-    )
-    walk = _wf(pct_windows_positive_sharpe=0.80, alpha_decay=decay)
-
-    result = evaluate_graduation(
-        walk_forward=walk,
-        backtest_grid=grid,
-        regime_coverage=regime_coverage,
-        signal_diagnostics=SignalDiagnostics(),
-        data_sufficiency=_suff(),
-    )
-
-    assert result.status_label != "Degrading"
+    assert (result.status_label == "Degrading") is labelled_degrading
 
 
 def test_evaluate_graduation_parameter_stability_single_grid_point_is_stable():
@@ -382,10 +359,18 @@ def test_stage0_rejects_on_too_few_positive_folds():
     assert result.stage_info.stage == 0
 
 
-def test_stage0_rejects_on_high_turnover_with_weak_sharpe():
-    """Turnover > 200x AND IS Sharpe < 0.5 fails the economic-realism gate."""
+@pytest.mark.parametrize(
+    ("net_sharpe", "annualized_turnover", "flagged"),
+    [
+        # Turnover > 200x AND IS Sharpe < 0.5 fails the economic-realism gate.
+        pytest.param(0.40, 350.0, True, id="rejects_on_high_turnover_with_weak_sharpe"),
+        # High turnover alone is fine; the gate fires only with weak Sharpe.
+        pytest.param(1.20, 500.0, False, id="does_not_reject_high_turnover_with_strong_sharpe"),
+    ],
+)
+def test_stage0_turnover_vs_edge_gate(net_sharpe, annualized_turnover, flagged):
     grid = [
-        _bt(threshold=1.0, net_sharpe=0.40, max_drawdown=0.08, annualized_turnover=350.0),
+        _bt(threshold=1.0, net_sharpe=net_sharpe, max_drawdown=0.08, annualized_turnover=annualized_turnover),
     ]
     regime_coverage = {f"R{i}": 50 for i in range(6)}
 
@@ -398,26 +383,7 @@ def test_stage0_rejects_on_high_turnover_with_weak_sharpe():
     )
 
     failed_names = {f.criterion_name for f in result.stage0_rejection.failed_criteria}
-    assert "Turnover vs Edge" in failed_names
-
-
-def test_stage0_does_not_reject_high_turnover_with_strong_sharpe():
-    """High turnover alone is fine; the gate fires only with weak Sharpe."""
-    grid = [
-        _bt(threshold=1.0, net_sharpe=1.20, max_drawdown=0.08, annualized_turnover=500.0),
-    ]
-    regime_coverage = {f"R{i}": 50 for i in range(6)}
-
-    result = evaluate_graduation(
-        walk_forward=_strong_walk_forward(),
-        backtest_grid=grid,
-        regime_coverage=regime_coverage,
-        signal_diagnostics=SignalDiagnostics(),
-        data_sufficiency=_suff(),
-    )
-
-    failed_names = {f.criterion_name for f in result.stage0_rejection.failed_criteria}
-    assert "Turnover vs Edge" not in failed_names
+    assert ("Turnover vs Edge" in failed_names) is flagged
 
 
 # ─── Stage ladder ────────────────────────────────────────────────────────
@@ -456,20 +422,60 @@ def test_stage1_when_survives_stage0_but_below_stage2_thresholds():
     assert names == {"Mean OOS Sharpe", "Parameter Stability", "Walk-Forward Folds"}
 
 
-def test_stage2_when_meets_research_candidate_thresholds():
+@pytest.mark.parametrize(
+    (
+        "net_sharpes",
+        "pct_windows_positive_sharpe",
+        "oos_sharpe",
+        "window_sharpes",
+        "expected_stage",
+        "expected_label",
+        "expected_next_stage_label",
+    ),
+    [
+        pytest.param(
+            (0.40, 0.42, 0.41, 0.40),
+            0.55,
+            0.40,
+            (0.4, 0.45, 0.5, 0.3, 0.35),
+            2,
+            "Research Candidate",
+            "Promotion Candidate",
+            id="stage2_when_meets_research_candidate_thresholds",
+        ),
+        # Tight grid -> very high stability; strong, consistent OOS performance.
+        pytest.param(
+            (0.78, 0.80, 0.79, 0.81),
+            0.80,
+            0.70,
+            (0.6, 0.7, 0.8, 0.65, 0.75),
+            3,
+            "Promotion Candidate",
+            "",
+            id="stage3_when_meets_all_promotion_thresholds",
+        ),
+    ],
+)
+def test_stage_ladder_top_stages(
+    net_sharpes,
+    pct_windows_positive_sharpe,
+    oos_sharpe,
+    window_sharpes,
+    expected_stage,
+    expected_label,
+    expected_next_stage_label,
+):
     grid = [
-        _bt(threshold=0.5, net_sharpe=0.40, max_drawdown=0.08, annualized_turnover=50.0),
-        _bt(threshold=1.0, net_sharpe=0.42, max_drawdown=0.08, annualized_turnover=50.0),
-        _bt(threshold=1.5, net_sharpe=0.41, max_drawdown=0.08, annualized_turnover=50.0),
-        _bt(threshold=2.0, net_sharpe=0.40, max_drawdown=0.08, annualized_turnover=50.0),
+        _bt(threshold=threshold, net_sharpe=net_sharpe, max_drawdown=0.08, annualized_turnover=50.0)
+        for threshold, net_sharpe in zip((0.5, 1.0, 1.5, 2.0), net_sharpes, strict=True)
     ]
     regime_coverage = {f"R{i}": 50 for i in range(6)}
     walk = _wf(
-        pct_windows_positive_sharpe=0.55,
-        median_oos_sharpe=0.40,
-        mean_oos_sharpe=0.40,
+        pct_windows_positive_sharpe=pct_windows_positive_sharpe,
+        median_oos_sharpe=oos_sharpe,
+        mean_oos_sharpe=oos_sharpe,
         n_windows=5,
-        window_sharpes=[0.4, 0.45, 0.5, 0.3, 0.35],
+        window_sharpes=list(window_sharpes),
     )
 
     result = evaluate_graduation(
@@ -480,36 +486,6 @@ def test_stage2_when_meets_research_candidate_thresholds():
         data_sufficiency=_suff(),
     )
 
-    assert result.stage_info.stage == 2
-    assert result.stage_info.label == "Research Candidate"
-    assert result.stage_info.next_stage_label == "Promotion Candidate"
-
-
-def test_stage3_when_meets_all_promotion_thresholds():
-    # Tight grid → very high stability; strong, consistent OOS performance.
-    grid = [
-        _bt(threshold=0.5, net_sharpe=0.78, max_drawdown=0.08, annualized_turnover=50.0),
-        _bt(threshold=1.0, net_sharpe=0.80, max_drawdown=0.08, annualized_turnover=50.0),
-        _bt(threshold=1.5, net_sharpe=0.79, max_drawdown=0.08, annualized_turnover=50.0),
-        _bt(threshold=2.0, net_sharpe=0.81, max_drawdown=0.08, annualized_turnover=50.0),
-    ]
-    regime_coverage = {f"R{i}": 50 for i in range(6)}
-    walk = _wf(
-        pct_windows_positive_sharpe=0.80,
-        median_oos_sharpe=0.70,
-        mean_oos_sharpe=0.70,
-        n_windows=5,
-        window_sharpes=[0.6, 0.7, 0.8, 0.65, 0.75],
-    )
-
-    result = evaluate_graduation(
-        walk_forward=walk,
-        backtest_grid=grid,
-        regime_coverage=regime_coverage,
-        signal_diagnostics=SignalDiagnostics(),
-        data_sufficiency=_suff(),
-    )
-
-    assert result.stage_info.stage == 3
-    assert result.stage_info.label == "Promotion Candidate"
-    assert result.stage_info.next_stage_label == ""
+    assert result.stage_info.stage == expected_stage, "stage"
+    assert result.stage_info.label == expected_label, "stage label"
+    assert result.stage_info.next_stage_label == expected_next_stage_label, "next stage label"

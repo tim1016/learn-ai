@@ -55,47 +55,54 @@ async def test_a_gate_saved_on_a_strategy_is_listed_replaced_and_deleted(client:
 
 @pytest.mark.parametrize(
     ("expression", "reason"),
-    [("EMA5 * EMA10", "cannot multiply"), ("FOO - 1", "not a value"), ("close > 0", "Leave the comparison out")],
+    [
+        pytest.param("EMA5 * EMA10", "cannot multiply", id="an_invalid_gate_is_never_saved-EMA5_times_EMA10"),
+        pytest.param("FOO - 1", "not a value", id="an_invalid_gate_is_never_saved-FOO_unknown_name"),
+        pytest.param("close > 0", "Leave the comparison out", id="an_invalid_gate_is_never_saved-close_gt_0_comparison"),
+        pytest.param(
+            "1" + "0" * 330 + " * EMA5",
+            "too large to judge",
+            id="a_number_too_large_to_judge_is_refused_and_leaves_the_store_readable",
+        ),
+        pytest.param(
+            "AROON25 - 50",
+            "draws more than one line",
+            id="a_multi_line_indicator_is_refused_when_saved_and_when_judged-AROON25",
+        ),
+        pytest.param(
+            "STOCHRSI14 - 50",
+            "draws more than one line",
+            id="a_multi_line_indicator_is_refused_when_saved_and_when_judged-STOCHRSI14",
+        ),
+        pytest.param(
+            "FISHER9",
+            "draws more than one line",
+            id="a_multi_line_indicator_is_refused_when_saved_and_when_judged-FISHER9",
+        ),
+    ],
 )
-async def test_an_invalid_gate_is_never_saved(client: httpx.AsyncClient, expression: str, reason: str) -> None:
-    async with client:
-        refused = await client.post(_EMA, json={"label": "bad", "expression": expression, "sign": "gt"})
-        assert (await client.get(_EMA)).json()["gates"] == []
-
-    assert refused.status_code == 422
-    detail = refused.json()["detail"]
-    assert detail["code"] == "GATE_EXPRESSION_REFUSED"
-    assert reason in detail["message"]
-
-
-async def test_a_number_too_large_to_judge_is_refused_and_leaves_the_store_readable(client: httpx.AsyncClient) -> None:
-    async with client:
-        refused = await client.post(
-            _EMA, json={"label": "huge", "expression": "1" + "0" * 330 + " * EMA5", "sign": "gt"}
-        )
-        listed = await client.get("/api/strategy-gates/sma_crossover")
-
-    assert (refused.status_code, refused.json()["detail"]["code"]) == (422, "GATE_EXPRESSION_REFUSED")
-    assert (listed.status_code, listed.json()["gates"]) == (200, [])
-
-
-@pytest.mark.parametrize("expression", ["AROON25 - 50", "STOCHRSI14 - 50", "FISHER9"])
-async def test_a_multi_line_indicator_is_refused_when_saved_and_when_judged(
-    client: httpx.AsyncClient, expression: str
+async def test_a_gate_expression_that_cannot_be_judged_is_refused_and_never_saved(
+    client: httpx.AsyncClient, expression: str, reason: str
 ) -> None:
     async with client:
-        saved = await client.post(_EMA, json={"label": "multi", "expression": expression, "sign": "gt"})
+        saved = await client.post(_EMA, json={"label": "bad", "expression": expression, "sign": "gt"})
         judged = await client.post(
             f"{_EMA}/evaluate",
             json={
                 "symbol": "SPY",
                 "candles": [_candle(1_790_700_000_000, 100.0, 50.0)],
-                "draft": {"label": "multi", "expression": expression, "sign": "gt"},
+                "draft": {"label": "bad", "expression": expression, "sign": "gt"},
             },
         )
+        listed = await client.get(_EMA)
+        other = await client.get("/api/strategy-gates/sma_crossover")
 
-    assert (saved.status_code, saved.json()["detail"]["code"]) == (422, "GATE_EXPRESSION_REFUSED")
-    assert (judged.status_code, judged.json()["detail"]["code"]) == (422, "GATE_EXPRESSION_REFUSED")
+    refusal = (422, "GATE_EXPRESSION_REFUSED")
+    assert (saved.status_code, saved.json()["detail"]["code"]) == refusal, "saving the expression is refused"
+    assert reason in saved.json()["detail"]["message"], "the save refusal says why"
+    assert (judged.status_code, judged.json()["detail"]["code"]) == refusal, "judging it as a draft is refused too"
+    assert listed.json()["gates"] == [], "a refused expression is never saved"
+    assert (other.status_code, other.json()["gates"]) == (200, []), "the store stays readable after the refusal"
 
 
 async def test_an_unreadable_gate_store_is_a_503_naming_the_store(client: httpx.AsyncClient, tmp_path: Path) -> None:

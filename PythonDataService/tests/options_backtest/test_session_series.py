@@ -106,26 +106,31 @@ def _closes_at(series: Series, open_ms: int, turns: dict[int, str]) -> None:
 
 
 @respx.mock
-async def test_the_busy_days_series_are_the_closes_the_lake_holds_with_a_gap_where_nothing_traded(
+async def test_the_scenes_series_are_the_closes_the_lake_holds_with_a_gap_where_nothing_traded(
     fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
     result = await run_the_scene()
+    wednesday = result.sessions[0]
+    thursday = result.sessions[1]
+    friday = result.sessions[2]
 
-    series = await _series_of(result.sessions[0])
+    series = await _series_of(wednesday)
+    friday_series = await _series_of(friday)
+    thursday_series = await _series_of(thursday)
 
     underlying = series.underlying
-    assert underlying.shown and underlying.contract is None and underlying.symbol == "SPY"
-    assert len(underlying.points) == 390
-    assert _minutes(underlying, WED_OPEN_MS) == list(range(1, 391))
-    assert {point.close for point in underlying.points} == {D("500.20")}
-    assert underlying.points[-1].at_ms == result.sessions[0].session_close_ms
+    assert underlying.shown and underlying.contract is None and underlying.symbol == "SPY", "Wednesday's SPY is shown"
+    assert len(underlying.points) == 390, "Wednesday's underlying has a point in every minute of the session"
+    assert _minutes(underlying, WED_OPEN_MS) == list(range(1, 391)), "the underlying's points run from m1 to m390"
+    assert {point.close for point in underlying.points} == {D("500.20")}, "the underlying closed at 500.20 throughout"
+    assert underlying.points[-1].at_ms == wednesday.session_close_ms, "the last underlying point is the close"
 
-    assert [each.symbol for each in series.contracts] == [CALL_500, PUT_495, PUT_500]
+    assert [each.symbol for each in series.contracts] == [CALL_500, PUT_495, PUT_500], "Wednesday's three contracts"
     contracts = _by_symbol(series)
     call = contracts[CALL_500]
-    assert call.shown and call.contract is not None and call.contract.occ_symbol == CALL_500
+    assert call.shown and call.contract is not None and call.contract.occ_symbol == CALL_500, "the call is shown"
     # Nothing traded in m40 and m41, and nothing is filled in or carried across them.
-    assert _minutes(call, WED_OPEN_MS) == [m for m in range(5, 62) if m not in (40, 41)]
+    assert _minutes(call, WED_OPEN_MS) == [m for m in range(5, 62) if m not in (40, 41)], "a gap where nothing traded"
     _closes_at(
         call,
         WED_OPEN_MS,
@@ -133,56 +138,33 @@ async def test_the_busy_days_series_are_the_closes_the_lake_holds_with_a_gap_whe
          31: "4.70", 39: "4.60", 42: "4.60", 60: "4.60", 61: "4.50"},
     )  # fmt: skip
     put = contracts[PUT_500]
-    assert _minutes(put, WED_OPEN_MS) == list(range(5, 62))
+    assert _minutes(put, WED_OPEN_MS) == list(range(5, 62)), "the put 500 has a point from m5 to m61"
     _closes_at(put, WED_OPEN_MS, {5: "2.00", 6: "2.02", 7: "2.02", 60: "2.02", 61: "2.12"})
-    assert [point.at_ms for point in call.points][:2] == [minute(WED_OPEN_MS, 5), minute(WED_OPEN_MS, 6)]
-
-
-@respx.mock
-async def test_a_bar_closing_at_the_open_or_after_the_close_is_in_the_lake_and_is_not_drawn(
-    fake_catalog: FakeCatalog, tmp_lake: Path
-) -> None:
-    result = await run_the_scene()
-
-    series = await _series_of(result.sessions[0])
+    assert [point.at_ms for point in call.points][:2] == [minute(WED_OPEN_MS, 5), minute(WED_OPEN_MS, 6)], (
+        "a point is dated by the minute its bar closed"
+    )
 
     # The 495 put's file holds bars closing at m0 (the open itself), m391 and m392 as well as m5 to m60.
-    lag = _by_symbol(series)[PUT_495]
-    assert _minutes(lag, WED_OPEN_MS) == list(range(5, 61))
-    assert {point.close for point in lag.points} == {D("1.00")}
-
-
-@respx.mock
-async def test_a_contract_that_only_took_a_starting_price_has_a_series_and_one_that_was_only_picked_has_none(
-    fake_catalog: FakeCatalog, tmp_lake: Path
-) -> None:
-    result = await run_the_scene()
-    friday = result.sessions[2]
-
-    series = await _series_of(friday)
+    lag = contracts[PUT_495]
+    assert _minutes(lag, WED_OPEN_MS) == list(range(5, 61)), "a bar closing at the open or after the close is not drawn"
+    assert {point.close for point in lag.points} == {D("1.00")}, "the 495 put closed at 1.00 throughout"
 
     # Friday's put 500 was picked and its buy dropped; the call and the 495 put took a starting price. No trade at all.
-    assert friday.outcome.trades == ()
-    assert [each.symbol for each in series.contracts] == [FRI_CALL_500, FRI_PUT_495]
-    call, lag = series.contracts
-    assert _minutes(call, friday.session_open_ms) == list(range(5, 61)) and _minutes(
-        lag, friday.session_open_ms
-    ) == list(range(5, 61))
-    _closes_at(call, friday.session_open_ms, {5: "4.00", 6: "4.10", 60: "4.10"})
+    assert friday.outcome.trades == (), "Friday made no trade"
+    assert [each.symbol for each in friday_series.contracts] == [FRI_CALL_500, FRI_PUT_495], (
+        "a contract that only took a starting price has a series and one that was only picked has none"
+    )
+    friday_call, friday_lag = friday_series.contracts
+    assert _minutes(friday_call, friday.session_open_ms) == list(range(5, 61)) and _minutes(
+        friday_lag, friday.session_open_ms
+    ) == list(range(5, 61)), "Friday's call and 495 put have a point from m5 to m60"
+    _closes_at(friday_call, friday.session_open_ms, {5: "4.00", 6: "4.10", 60: "4.10"})
 
-
-@respx.mock
-async def test_a_session_skipped_for_want_of_an_underlying_price_still_has_the_underlyings_series_and_no_contract(
-    fake_catalog: FakeCatalog, tmp_lake: Path
-) -> None:
-    result = await run_the_scene()
-    thursday = result.sessions[1]
-
-    series = await _series_of(thursday)
-
-    assert series.contracts == ()
-    assert series.underlying.shown
-    assert _minutes(series.underlying, THU_OPEN_MS) == [m for m in range(1, 391) if m != 5]
+    assert thursday_series.contracts == (), "a session skipped for want of an underlying price has no contract"
+    assert thursday_series.underlying.shown, "a skipped session still has the underlying's series"
+    assert _minutes(thursday_series.underlying, THU_OPEN_MS) == [m for m in range(1, 391) if m != 5], (
+        "Thursday's underlying has no point at m5, where it did not trade"
+    )
 
 
 def test_the_contracts_to_chart_are_those_traded_or_given_a_starting_price_by_their_symbols() -> None:
@@ -227,26 +209,44 @@ async def test_a_contract_file_replaced_by_other_bytes_is_not_served_and_the_res
     assert len(_by_symbol(series)[CALL_500].points) == 55
 
 
+@pytest.mark.parametrize(
+    ("payload", "admit", "second", "reason"),
+    [
+        # Nobody saw these files change: the catalog holds no receipt for the bytes in them, so they cannot be checked
+        # against what the run read. That is not "changed".
+        pytest.param(
+            b"changed after its receipt",
+            False,
+            CALL_500,
+            SeriesReason.NOT_CONFIRMED,
+            id="bytes_the_catalog_does_not_admit_cannot_be_confirmed_for_the_underlying_or_for_a_contract",
+        ),
+        pytest.param(
+            b"admitted, but not a zip",
+            True,
+            PUT_500,
+            SeriesReason.UNREADABLE,
+            id="a_damaged_file_that_the_catalog_admits_is_unreadable",
+        ),
+    ],
+)
 @respx.mock
-async def test_bytes_the_catalog_does_not_admit_cannot_be_confirmed_for_the_underlying_or_for_a_contract(
-    fake_catalog: FakeCatalog, tmp_lake: Path
+async def test_bytes_that_cannot_be_confirmed_or_read_withhold_the_underlying_and_a_contract_and_no_other(
+    payload: bytes, admit: bool, second: str, reason: SeriesReason, fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
     result = await run_the_scene()
-    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), STOCK_FILE, b"changed after its receipt", admit=False)
-    replace_the_stored_file(
-        fake_catalog, raw_root(tmp_lake), _bars_file(CALL_500), b"changed after its receipt", admit=False
-    )
+    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), STOCK_FILE, payload, admit=admit)
+    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), _bars_file(second), payload, admit=admit)
 
     series = await _series_of(result.sessions[0])
 
-    # Nobody saw these files change: the catalog holds no receipt for the bytes in them, so they cannot be checked against
-    # what the run read. That is not "changed".
     assert _reasons(series) == {
-        "SPY": SeriesReason.NOT_CONFIRMED,
-        CALL_500: SeriesReason.NOT_CONFIRMED,
+        "SPY": reason,
+        CALL_500: None,
         PUT_495: None,
         PUT_500: None,
-    }
+        second: reason,
+    }, "the underlying and the second file's series say the reason and the other two are served"
 
 
 @respx.mock
@@ -266,24 +266,6 @@ async def test_a_file_that_is_gone_is_not_served_whichever_series_it_is(
         PUT_500: None,
     }
     assert series.underlying.points == () and _by_symbol(series)[PUT_495].points == ()
-
-
-@respx.mock
-async def test_a_damaged_file_that_the_catalog_admits_is_unreadable(fake_catalog: FakeCatalog, tmp_lake: Path) -> None:
-    result = await run_the_scene()
-    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), STOCK_FILE, b"admitted, but not a zip", admit=True)
-    replace_the_stored_file(
-        fake_catalog, raw_root(tmp_lake), _bars_file(PUT_500), b"admitted, but not a zip", admit=True
-    )
-
-    series = await _series_of(result.sessions[0])
-
-    assert _reasons(series) == {
-        "SPY": SeriesReason.UNREADABLE,
-        CALL_500: None,
-        PUT_495: None,
-        PUT_500: SeriesReason.UNREADABLE,
-    }
 
 
 @respx.mock
@@ -462,7 +444,7 @@ async def test_a_series_with_no_pin_keeps_its_own_reason_when_the_catalog_is_out
 
 
 @respx.mock
-async def test_a_pin_that_is_not_the_files_hash_is_a_changed_file_though_nothing_in_the_lake_moved(
+async def test_a_pin_that_is_not_the_files_hash_or_that_the_run_never_kept_is_not_served_unchecked(
     fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
     result = await run_the_scene()
@@ -480,24 +462,6 @@ async def test_a_pin_that_is_not_the_files_hash_is_a_changed_file_though_nothing
             ),
         ),
     )
-
-    series = await _series_of(tampered)
-
-    assert _reasons(series) == {
-        "SPY": SeriesReason.CHANGED,
-        CALL_500: SeriesReason.CHANGED,
-        PUT_495: None,
-        PUT_500: None,
-    }
-
-
-@respx.mock
-async def test_a_series_the_run_kept_no_pin_for_is_not_served_unchecked(
-    fake_catalog: FakeCatalog, tmp_lake: Path
-) -> None:
-    result = await run_the_scene()
-    session = result.sessions[0]
-    pins = session.pins
     # A session skipped on its window pinned nothing at all; a contract the pins do not name has no pin either.
     nothing = replace(session, pins=SessionPins(None, pins.listing_sha256, ()))
     one_missing = replace(
@@ -509,20 +473,31 @@ async def test_a_series_the_run_kept_no_pin_for_is_not_served_unchecked(
         ),
     )
 
+    tampered_series = await _series_of(tampered)
     nothing_series = await _series_of(nothing)
     one_series = await _series_of(one_missing)
 
-    assert set(_reasons(nothing_series).values()) == {SeriesReason.NO_PIN}
-    assert _reasons(one_series) == {"SPY": None, CALL_500: None, PUT_495: None, PUT_500: SeriesReason.NO_PIN}
-
-
-def test_every_reason_has_words_and_none_of_them_names_a_date_a_path_or_a_file() -> None:
-    assert set(SERIES_WORDS) == set(SeriesReason)
-    for words in SERIES_WORDS.values():
-        assert words and "20" not in words and "/" not in words and ".zip" not in words
+    assert _reasons(tampered_series) == {
+        "SPY": SeriesReason.CHANGED,
+        CALL_500: SeriesReason.CHANGED,
+        PUT_495: None,
+        PUT_500: None,
+    }, "a pin that is not the file's hash is a changed file though nothing in the lake moved"
+    assert set(_reasons(nothing_series).values()) == {SeriesReason.NO_PIN}, "a session with no pins serves nothing"
+    assert _reasons(one_series) == {
+        "SPY": None,
+        CALL_500: None,
+        PUT_495: None,
+        PUT_500: SeriesReason.NO_PIN,
+    }, "a contract the pins do not name is not served unchecked"
 
 
 def test_each_reason_has_its_own_words_which_say_only_what_is_true_of_it() -> None:
+    assert set(SERIES_WORDS) == set(SeriesReason), "every reason has words"
+    for reason, words in SERIES_WORDS.items():
+        assert words and "20" not in words and "/" not in words and ".zip" not in words, (
+            f"{reason.value}: its words are not empty and name no date, a path or a file"
+        )
     # Each text is written out against its reason, so two texts swapped, or one reason given another's, fail here.
     assert {reason.value: words for reason, words in SERIES_WORDS.items()} == {
         "session_skipped": "This session was skipped, so no bars were read for it.",
@@ -532,7 +507,7 @@ def test_each_reason_has_its_own_words_which_say_only_what_is_true_of_it() -> No
         "not_confirmed": "The stored bars cannot be confirmed against what this run read.",
         "unreadable": "The stored bars cannot be read now.",
         "lake_unavailable": "The lake could not be reached, so the bars cannot be checked against this run now.",
-    }
+    }, "each reason has its own words, which say only what is true of it"
     assert len(set(SERIES_WORDS.values())) == len(SeriesReason), "two reasons share their words"
 
 
@@ -555,33 +530,44 @@ def _the_file_is_refused(path: Path) -> None:
         path.read_bytes()
 
 
+@pytest.mark.parametrize(
+    ("refused", "probe", "symbol"),
+    [
+        pytest.param(
+            _bars_file(PUT_500),
+            _bars_file(PUT_500),
+            PUT_500,
+            id="a_contract_file_the_operating_system_refuses",
+        ),
+        pytest.param(
+            str(Path(_bars_file(PUT_500)).parent),
+            _bars_file(PUT_500),
+            PUT_500,
+            id="a_contract_folder_the_operating_system_refuses",
+        ),
+        pytest.param(STOCK_FILE, STOCK_FILE, "SPY", id="the_underlying_file_the_operating_system_refuses"),
+    ],
+)
 @respx.mock
-async def test_a_contract_file_the_operating_system_refuses_is_unreadable_and_the_rest_still_is(
-    fake_catalog: FakeCatalog, tmp_lake: Path
+async def test_a_file_or_folder_the_operating_system_refuses_is_an_unreadable_series_and_the_rest_still_are(
+    refused: str, probe: str, symbol: str, fake_catalog: FakeCatalog, tmp_lake: Path
 ) -> None:
     result = await run_the_scene()
-    file = raw_root(tmp_lake) / _bars_file(PUT_500)
+    root = raw_root(tmp_lake)
 
-    with _refused(file):
-        _the_file_is_refused(file)  # the permission took: this run is not one that bypasses it
+    with _refused(root / refused):
+        _the_file_is_refused(root / probe)  # the permission took: this run is not one that bypasses it
         series = await _series_of(result.sessions[0])
 
-    assert _reasons(series) == {"SPY": None, CALL_500: None, PUT_495: None, PUT_500: SeriesReason.UNREADABLE}
-    assert _by_symbol(series)[PUT_500].points == ()
-
-
-@respx.mock
-async def test_a_contract_folder_the_operating_system_refuses_is_unreadable_and_the_rest_still_is(
-    fake_catalog: FakeCatalog, tmp_lake: Path
-) -> None:
-    result = await run_the_scene()
-    folder = (raw_root(tmp_lake) / _bars_file(PUT_500)).parent
-
-    with _refused(folder):
-        _the_file_is_refused(folder / "20261007_trade.zip")
-        series = await _series_of(result.sessions[0])
-
-    assert _reasons(series) == {"SPY": None, CALL_500: None, PUT_495: None, PUT_500: SeriesReason.UNREADABLE}
+    assert _reasons(series) == {
+        "SPY": None,
+        CALL_500: None,
+        PUT_495: None,
+        PUT_500: None,
+        symbol: SeriesReason.UNREADABLE,
+    }, "the refused series is unreadable and the rest still are"
+    withheld = series.underlying if symbol == "SPY" else _by_symbol(series)[symbol]
+    assert withheld.points == (), "the refused series has no points"
 
 
 @respx.mock
@@ -603,20 +589,6 @@ async def test_a_contract_read_that_raises_an_operating_system_error_is_unreadab
     assert _reasons(series) == {"SPY": None, CALL_500: SeriesReason.UNREADABLE, PUT_495: None, PUT_500: None}
     # What reaches the page is the reason's fixed words: the error text, with its path, goes nowhere.
     assert "/a/server/path" not in SERIES_WORDS[SeriesReason.UNREADABLE]
-
-
-@respx.mock
-async def test_the_underlying_file_the_operating_system_refuses_is_unreadable_too(
-    fake_catalog: FakeCatalog, tmp_lake: Path
-) -> None:
-    result = await run_the_scene()
-    file = raw_root(tmp_lake) / STOCK_FILE
-
-    with _refused(file):
-        _the_file_is_refused(file)
-        series = await _series_of(result.sessions[0])
-
-    assert _reasons(series) == {"SPY": SeriesReason.UNREADABLE, CALL_500: None, PUT_495: None, PUT_500: None}
 
 
 @pytest.mark.parametrize("day", REFUSED_DAYS)

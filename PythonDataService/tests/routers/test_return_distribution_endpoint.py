@@ -242,10 +242,20 @@ async def test_return_distribution_happy_path(api: FastAPI, seeded_lake: Path) -
 
 
 @pytest.mark.asyncio
-async def test_return_distribution_inverted_window_rejected(api: FastAPI) -> None:
-    response = await _post(api, _request_body(to_ms_utc=FROM_MS - 1))
-    assert response.status_code == 422
-    assert "to_ms_utc" in response.text
+async def test_return_distribution_rejects_an_inverted_window_an_excessive_bin_count_and_unknown_fields(
+    api: FastAPI,
+) -> None:
+    inverted = await _post(api, _request_body(to_ms_utc=FROM_MS - 1))
+    # A valid-but-absurd bin width must be a validation error, not an
+    # attempted allocation of billions of edges.
+    too_many_bins = await _post(api, _request_body(bin_width_pct=0.01, span_pct=5.0))
+    unknown_field = await _post(api, _request_body(ticker="SPY"))
+
+    assert inverted.status_code == 422, "an inverted window is a validation error"
+    assert "to_ms_utc" in inverted.text, "the inverted-window error names to_ms_utc"
+    assert too_many_bins.status_code == 422, "an excessive bin count is a validation error"
+    assert "exceeds the maximum" in too_many_bins.text, "the bin-count error says it exceeds the maximum"
+    assert unknown_field.status_code == 422, "an unknown request field is a validation error"
 
 
 @pytest.mark.asyncio
@@ -329,55 +339,40 @@ async def test_return_distribution_probe_captures_the_lead_in_before_the_window(
 
 
 @pytest.mark.asyncio
-async def test_return_distribution_unknown_symbol_is_typed_not_found(api: FastAPI) -> None:
-    response = await _post(api, _request_body(symbol="MSFT"))
-    assert response.status_code == 404
-    detail = response.json()["detail"]
-    assert detail["error_code"] == "NOT_CAPTURED"
-    assert SYMBOL in detail["captured_symbols"]
+async def test_return_distribution_unknown_and_path_unsafe_symbols_are_typed_not_found(api: FastAPI) -> None:
+    unknown = await _post(api, _request_body(symbol="MSFT"))
+    path_unsafe = await _post(api, _request_body(symbol="../../etc/passwd"))
+
+    assert unknown.status_code == 404, "an unknown symbol is a 404"
+    unknown_detail = unknown.json()["detail"]
+    assert unknown_detail["error_code"] == "NOT_CAPTURED", "an unknown symbol is typed NOT_CAPTURED"
+    assert SYMBOL in unknown_detail["captured_symbols"], "an unknown symbol's error lists the captured symbols"
     # The symbol IS lake-addressable and capture ran — the message must say
     # the capture could not fill it, not claim it can never be held.
-    assert "could not populate" in detail["message"]
-    assert "lake-addressable" not in detail["message"]
+    assert "could not populate" in unknown_detail["message"], "an unknown symbol's message says capture could not fill it"
+    assert "lake-addressable" not in unknown_detail["message"], "an unknown symbol is not called unaddressable"
+    assert path_unsafe.status_code == 404, "a path-unsafe symbol is a 404"
+    path_unsafe_detail = path_unsafe.json()["detail"]
+    assert path_unsafe_detail["error_code"] == "NOT_CAPTURED", "a path-unsafe symbol is typed NOT_CAPTURED"
+    assert "lake-addressable" in path_unsafe_detail["message"], "a path-unsafe symbol's message says it is not lake-addressable"
 
 
 @pytest.mark.asyncio
-async def test_return_distribution_path_unsafe_symbol_is_typed_not_found(api: FastAPI) -> None:
-    response = await _post(api, _request_body(symbol="../../etc/passwd"))
-    assert response.status_code == 404
-    detail = response.json()["detail"]
-    assert detail["error_code"] == "NOT_CAPTURED"
-    assert "lake-addressable" in detail["message"]
-
-
-@pytest.mark.asyncio
-async def test_return_distribution_thin_window_is_typed_bad_request(api: FastAPI) -> None:
-    response = await _post(
+async def test_return_distribution_thin_window_and_bad_geometry_are_typed_bad_requests(api: FastAPI) -> None:
+    thin = await _post(
         api, _request_body(to_ms_utc=_utc_day_end_ms(date(2024, 7, 5)))
     )
-    assert response.status_code == 400
-    detail = response.json()["detail"]
-    assert detail["error_code"] == "INSUFFICIENT_COVERAGE"
+    bad_geometry = await _post(api, _request_body(span_pct=5.2))
+
+    assert thin.status_code == 400, "a thin window is a bad request"
+    detail = thin.json()["detail"]
+    assert detail["error_code"] == "INSUFFICIENT_COVERAGE", "a thin window is typed INSUFFICIENT_COVERAGE"
     # All four scheduled sessions are captured — the window is simply too
     # thin for statistics, which is a different failure from missing data.
-    assert detail["available_sessions"] == 4
-    assert detail["available_sessions"] < return_distribution_service.MIN_SESSIONS
-
-
-@pytest.mark.asyncio
-async def test_return_distribution_bad_geometry_is_bad_request(api: FastAPI) -> None:
-    response = await _post(api, _request_body(span_pct=5.2))
-    assert response.status_code == 400
-    assert "integer multiple" in response.json()["detail"]
-
-
-@pytest.mark.asyncio
-async def test_return_distribution_rejects_excessive_bin_count(api: FastAPI) -> None:
-    """A valid-but-absurd bin width must be a validation error, not an
-    attempted allocation of billions of edges."""
-    response = await _post(api, _request_body(bin_width_pct=0.01, span_pct=5.0))
-    assert response.status_code == 422
-    assert "exceeds the maximum" in response.text
+    assert detail["available_sessions"] == 4, "a thin window counts its four captured sessions"
+    assert detail["available_sessions"] < return_distribution_service.MIN_SESSIONS, "four sessions is below the floor"
+    assert bad_geometry.status_code == 400, "a bin span that is not a multiple of the width is a bad request"
+    assert "integer multiple" in bad_geometry.json()["detail"], "the geometry error says integer multiple"
 
 
 @pytest.mark.asyncio
@@ -420,12 +415,6 @@ async def test_return_distribution_coverage_floor_counts_usable_days(
     detail = response.json()["detail"]
     assert detail["error_code"] == "INSUFFICIENT_COVERAGE"
     assert detail["available_sessions"] == N_SESSIONS - 12
-
-
-@pytest.mark.asyncio
-async def test_return_distribution_rejects_unknown_fields(api: FastAPI) -> None:
-    response = await _post(api, _request_body(ticker="SPY"))
-    assert response.status_code == 422
 
 
 def _covered_window_body(sessions: list[date]) -> dict[str, object]:
@@ -635,32 +624,26 @@ async def test_day_candles_do_not_depend_on_the_factor_file(
 
 
 @pytest.mark.asyncio
-async def test_day_candles_unknown_day_is_typed_not_found(
+async def test_day_candles_unknown_day_and_unaddressable_symbol_are_typed_not_found(
     seeded_lake: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app = _app_with(seeded_lake, monkeypatch)
-    response = await _post_day_candles(
+    unknown_day = await _post_day_candles(
         app, {"symbol": SYMBOL, "session_open_ms_utc": _session_open_ms(date(2025, 1, 2))}
     )
-    # 2025-01-02 is a scheduled NYSE session far beyond the 40 seeded ones.
-    assert response.status_code == 404
-    detail = response.json()["detail"]
-    assert detail["error_code"] == "DAY_NOT_CAPTURED"
-    assert detail["trading_date"] == "2025-01-02"
-
-
-@pytest.mark.asyncio
-async def test_day_candles_unaddressable_symbol_is_typed_not_found(
-    seeded_lake: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    app = _app_with(seeded_lake, monkeypatch)
-    response = await _post_day_candles(
+    unaddressable = await _post_day_candles(
         app, {"symbol": "../../etc/passwd", "session_open_ms_utc": _session_open_ms(date(2024, 7, 2))}
     )
-    assert response.status_code == 404
-    detail = response.json()["detail"]
-    assert detail["error_code"] == "NOT_CAPTURED"
-    assert "lake-addressable" in detail["message"]
+
+    # 2025-01-02 is a scheduled NYSE session far beyond the 40 seeded ones.
+    assert unknown_day.status_code == 404, "an unknown day is a 404"
+    unknown_day_detail = unknown_day.json()["detail"]
+    assert unknown_day_detail["error_code"] == "DAY_NOT_CAPTURED", "an unknown day is typed DAY_NOT_CAPTURED"
+    assert unknown_day_detail["trading_date"] == "2025-01-02", "an unknown day's error names its trading date"
+    assert unaddressable.status_code == 404, "an unaddressable symbol is a 404"
+    unaddressable_detail = unaddressable.json()["detail"]
+    assert unaddressable_detail["error_code"] == "NOT_CAPTURED", "an unaddressable symbol is typed NOT_CAPTURED"
+    assert "lake-addressable" in unaddressable_detail["message"], "an unaddressable symbol's message says it is not lake-addressable"
 
 
 @pytest.mark.parametrize("endpoint", ["return-distribution", "return-distribution/day-candles"])

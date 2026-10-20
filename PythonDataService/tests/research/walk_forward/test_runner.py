@@ -188,7 +188,9 @@ def test_chronological_split_records_correct_split_policy(tmp_path: Path, fake_f
 # ---------------------------------------------------------------------------
 # Rolling split — multi-fold, exercises aggregation.
 # ---------------------------------------------------------------------------
-def test_rolling_split_emits_multiple_folds(tmp_path: Path, fake_factory_long):
+def test_rolling_split_emits_multiple_folds_and_aggregates_only_count_completed_folds(
+    tmp_path: Path, fake_factory_long
+):
     request = WalkForwardRequest(
         spec=_build_test_spec(),
         start_ms=date_str_to_ms("2024-01-02"),
@@ -202,37 +204,22 @@ def test_rolling_split_emits_multiple_folds(tmp_path: Path, fake_factory_long):
         data_root_revision="test-rev",
     )
 
-    assert result.status == "completed"
+    assert result.status == "completed", "rolling split completes"
     # 50 days / step 5 with 15-day fold span: ~7-8 folds.
-    assert len(result.folds) >= 5
+    assert len(result.folds) >= 5, "rolling split emits multiple folds"
 
     # Fold indices are sequential, starting at 0.
-    assert [f.fold_index for f in result.folds] == list(range(len(result.folds)))
+    assert [f.fold_index for f in result.folds] == list(range(len(result.folds))), "fold indices are sequential from 0"
 
     # Each fold has a unique run_id.
     run_ids = [f.test_run_id for f in result.folds]
-    assert len(set(run_ids)) == len(run_ids)
-
-
-def test_rolling_aggregates_only_count_completed_folds(tmp_path: Path, fake_factory_long):
-    request = WalkForwardRequest(
-        spec=_build_test_spec(),
-        start_ms=date_str_to_ms("2024-01-02"),
-        end_ms=date_str_to_ms("2024-02-22"),
-        split_policy=RollingSplitPolicy(train_days=10, test_days=5, step_days=5),
-    )
-    _, result = run_walk_forward(
-        request,
-        data_source_factory=fake_factory_long,
-        artifacts_root=tmp_path,
-        data_root_revision="test-rev",
-    )
+    assert len(set(run_ids)) == len(run_ids), "each fold has a unique run_id"
 
     # ``pct_profitable_folds`` is a fraction in [0, 1] when at least one
     # fold ran (regardless of trade count). ``mean_oos_sharpe`` may be
     # None on synthetic data with too few trades.
-    assert result.pct_profitable_folds is not None
-    assert 0.0 <= result.pct_profitable_folds <= 1.0
+    assert result.pct_profitable_folds is not None, "aggregates count completed folds: pct_profitable_folds is set"
+    assert 0.0 <= result.pct_profitable_folds <= 1.0, "aggregates count completed folds: pct_profitable_folds is in [0, 1]"
 
 
 def test_parameter_search_persists_train_receipts_and_freezes_winner_for_test(

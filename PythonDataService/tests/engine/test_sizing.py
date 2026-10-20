@@ -65,31 +65,47 @@ def test_simple_floor_overbuys_vs_lean_on_the_fixture() -> None:
     assert strictly_more > 0
 
 
-def test_lean_sizing_buffer_and_fee_reduce_quantity() -> None:
-    """A worked example: $100,000 at $665.67 — naive floor is 150, LEAN 149."""
+def test_lean_sizing_buffer_and_fee_reduce_quantity_and_fee_aware_matches_fixed_fee_at_the_floor() -> None:
+    """A worked example: $100,000 at $665.67 — naive floor is 150, LEAN 149.
+
+    When the IBKR floor binds, fee_model path matches the fixed $1 path
+    bit-for-bit. SPY at $665.67, $100k portfolio: 100 shares * $0.005 = $0.50,
+    floored to $1.00 — same as the legacy fixed-fee parameter."""
     pv, price = Decimal("100000"), Decimal("665.67")
-    assert (
-        SimpleFloorSizing().target_quantity(
-            portfolio_value=pv, price=price, target_fraction=Decimal(1), order_fee=Decimal("1")
-        )
-        == 150
+    naive = SimpleFloorSizing().target_quantity(
+        portfolio_value=pv, price=price, target_fraction=Decimal(1), order_fee=Decimal("1")
     )
-    assert (
-        LeanSetHoldingsSizing().target_quantity(
-            portfolio_value=pv, price=price, target_fraction=Decimal(1), order_fee=Decimal("1")
-        )
-        == 149
+    legacy = LeanSetHoldingsSizing().target_quantity(
+        portfolio_value=pv, price=price, target_fraction=Decimal(1), order_fee=Decimal("1")
     )
+    fee_aware = LeanSetHoldingsSizing(fee_model=IbkrEquityCommissionModel()).target_quantity(
+        portfolio_value=pv, price=price, target_fraction=Decimal(1), order_fee=Decimal("0")
+    )
+    assert naive == 150, "the naive floor buys 150"
+    assert legacy == 149, "LEAN sizing with the buffer and the fixed fee buys 149"
+    assert legacy == fee_aware == 149, "the fee_model path matches the fixed $1 path bit-for-bit"
 
 
-def test_partial_target_fraction_is_uncapped_by_the_buffer() -> None:
-    """For a target well under 100%, the free-portfolio buffer never binds —
-    the model sizes against target_fraction directly."""
-    pv, price = Decimal("100000"), Decimal("100")
+@pytest.mark.parametrize(
+    ("portfolio_value", "price", "target_fraction", "order_fee", "expected_quantity"),
+    [
+        # For a target well under 100%, the free-portfolio buffer never binds —
+        # the model sizes against target_fraction directly: floor(100000 * 0.5 / 100).
+        ("100000", "100", "0.5", "0", 500),
+        ("50", "665.67", "1", "1", 0),
+    ],
+    ids=["partial-target-fraction-is-uncapped-by-the-buffer", "budget-below-one-share-returns-zero"],
+)
+def test_lean_sizing_target_quantity(
+    portfolio_value: str, price: str, target_fraction: str, order_fee: str, expected_quantity: int
+) -> None:
     qty = LeanSetHoldingsSizing().target_quantity(
-        portfolio_value=pv, price=price, target_fraction=Decimal("0.5"), order_fee=Decimal(0)
+        portfolio_value=Decimal(portfolio_value),
+        price=Decimal(price),
+        target_fraction=Decimal(target_fraction),
+        order_fee=Decimal(order_fee),
     )
-    assert qty == 500  # floor(100000 * 0.5 / 100)
+    assert qty == expected_quantity
 
 
 @pytest.mark.parametrize("model", [SimpleFloorSizing(), LeanSetHoldingsSizing()])
@@ -103,40 +119,26 @@ def test_non_positive_price_raises(model) -> None:
         )
 
 
-def test_lean_sizing_returns_zero_when_budget_below_one_share() -> None:
-    qty = LeanSetHoldingsSizing().target_quantity(
-        portfolio_value=Decimal("50"),
-        price=Decimal("665.67"),
-        target_fraction=Decimal(1),
-        order_fee=Decimal("1"),
-    )
-    assert qty == 0
-
-
-def test_fee_aware_sizing_matches_fixed_fee_when_model_floors_to_one_dollar() -> None:
-    """When the IBKR floor binds, fee_model path matches the fixed $1 path
-    bit-for-bit. SPY at $665.67, $100k portfolio: 100 shares * $0.005 = $0.50,
-    floored to $1.00 — same as the legacy fixed-fee parameter."""
-    pv, price = Decimal("100000"), Decimal("665.67")
-    legacy = LeanSetHoldingsSizing().target_quantity(
-        portfolio_value=pv, price=price, target_fraction=Decimal(1), order_fee=Decimal("1")
-    )
-    fee_aware = LeanSetHoldingsSizing(fee_model=IbkrEquityCommissionModel()).target_quantity(
-        portfolio_value=pv, price=price, target_fraction=Decimal(1), order_fee=Decimal("0")
-    )
-    assert legacy == fee_aware == 149
-
-
-def test_fee_aware_sizing_handles_per_share_rate_for_aapl_target_one() -> None:
-    """AAPL at $270 with $100k portfolio: naive floor = 369; the IBKR
-    per-share fee on 369 shares is $1.85 (raw $1.845, ROUND_HALF_UP to
-    $1.85). buying_power = $99,750. 369 * 270 + 1.85 = $99,631.85 <= $99,750,
-    so the monotonic solve accepts qty=369."""
-    pv, price = Decimal("100000"), Decimal("270.00")
+@pytest.mark.parametrize(
+    ("portfolio_value", "price", "expected_quantity"),
+    [
+        # AAPL at $270 with $100k portfolio: naive floor = 369; the IBKR
+        # per-share fee on 369 shares is $1.85 (raw $1.845, ROUND_HALF_UP to
+        # $1.85). buying_power = $99,750. 369 * 270 + 1.85 = $99,631.85 <= $99,750,
+        # so the monotonic solve accepts qty=369.
+        ("100000", "270.00", 369),
+        ("50", "665.67", 0),
+    ],
+    ids=["per-share-rate-for-aapl-target-one", "returns-zero-when-budget-too-small-for-any-share"],
+)
+def test_fee_aware_sizing_target_quantity(portfolio_value: str, price: str, expected_quantity: int) -> None:
     qty = LeanSetHoldingsSizing(fee_model=IbkrEquityCommissionModel()).target_quantity(
-        portfolio_value=pv, price=price, target_fraction=Decimal(1), order_fee=Decimal("0")
+        portfolio_value=Decimal(portfolio_value),
+        price=Decimal(price),
+        target_fraction=Decimal(1),
+        order_fee=Decimal("0"),
     )
-    assert qty == 369
+    assert qty == expected_quantity
 
 
 def test_fee_aware_sizing_never_overbuys_vs_no_fee_path() -> None:
@@ -161,13 +163,3 @@ def test_fee_aware_sizing_never_overbuys_vs_no_fee_path() -> None:
             f"fee-aware path must never overbuy vs no-fee path: "
             f"pv={pv} price={price} fee_aware={qty_fee_aware} no_fee={qty_no_fee}"
         )
-
-
-def test_fee_aware_sizing_returns_zero_when_budget_too_small_for_any_share() -> None:
-    qty = LeanSetHoldingsSizing(fee_model=IbkrEquityCommissionModel()).target_quantity(
-        portfolio_value=Decimal("50"),
-        price=Decimal("665.67"),
-        target_fraction=Decimal(1),
-        order_fee=Decimal("0"),
-    )
-    assert qty == 0

@@ -102,12 +102,6 @@ def _ranked(request: dict[str, object], scores: dict[str, int | None]) -> dict[s
     return {**request, "knobs": knobs}
 
 
-def test_a_new_plan_starts_every_knob_at_the_middle_importance_in_the_declared_order() -> None:
-    plan = default_protocol(EMA, "SPY", registry_incumbent(EMA, "SPY"), now_ms=OCTOBER_15, earliest_session=None)
-    assert [knob.importance for knob in plan.knobs] == [5] * len(_ema().knobs)
-    assert [knob.name for knob in plan.knobs] == [knob.name for knob in _ema().knobs]
-
-
 def test_importance_orders_the_frozen_search_highest_first_with_ties_in_the_declared_order() -> None:
     request = plan_request("SPY")
     shuffled = {**request, "knobs": list(reversed(request["knobs"]))}
@@ -472,20 +466,23 @@ def test_a_lake_a_few_sessions_behind_ends_the_final_test_after_its_last_session
     assert _intervals(earliest_session=None, latest_session=date(2026, 9, 25))[:2] == _intervals(earliest_session=None)[:2]
 
 
-def test_a_lake_further_behind_keeps_the_whole_months_for_the_availability_check_to_refuse() -> None:
-    # 2026-09-22 leaves six sessions (23rd–30th) unread: a backfill to name, not a shorter final test.
-    assert default_final_interval(OCTOBER_15, 3, date(2026, 9, 22)) == FinalInterval(date(2026, 7, 1), date(2026, 10, 1), 0)
-    assert default_final_interval(OCTOBER_15, 3, date(2026, 7, 1)).end == date(2026, 10, 1)
-    # A lake stopping before the final months start, or reaching the boundary, keeps them too.
-    assert default_final_interval(OCTOBER_15, 3, date(2026, 6, 30)).end == date(2026, 10, 1)
-    assert default_final_interval(OCTOBER_15, 3, date(2026, 10, 2)) == FinalInterval(date(2026, 7, 1), date(2026, 10, 1), 0)
-
-
-def test_a_month_ending_on_a_weekend_or_holiday_is_whole_when_the_lake_holds_its_last_session() -> None:
-    # October 2026 ends on a Saturday; its last session is Friday the 30th.
-    assert default_final_interval(et_midnight_ms(date(2026, 11, 15)), 3, date(2026, 10, 30)) == FinalInterval(date(2026, 8, 1), date(2026, 11, 1), 0)
-    # 2027-05-31 is Memorial Day; May's last session is Friday the 28th.
-    assert default_final_interval(et_midnight_ms(date(2027, 6, 10)), 3, date(2027, 5, 28)) == FinalInterval(date(2027, 3, 1), date(2027, 6, 1), 0)
+@pytest.mark.parametrize(
+    ("now_ms", "latest_session", "interval"),
+    [
+        # 2026-09-22 leaves six sessions (23rd–30th) unread: a backfill to name, not a shorter final test.
+        pytest.param(OCTOBER_15, date(2026, 9, 22), FinalInterval(date(2026, 7, 1), date(2026, 10, 1), 0), id="a-lake-six-sessions-behind-keeps-the-whole-months"),
+        # A lake stopping before the final months start, or reaching the boundary, keeps them too.
+        pytest.param(OCTOBER_15, date(2026, 7, 1), FinalInterval(date(2026, 7, 1), date(2026, 10, 1), 0), id="a-lake-stopping-on-the-first-day-of-the-final-months-keeps-them"),
+        pytest.param(OCTOBER_15, date(2026, 6, 30), FinalInterval(date(2026, 7, 1), date(2026, 10, 1), 0), id="a-lake-stopping-before-the-final-months-start-keeps-them"),
+        pytest.param(OCTOBER_15, date(2026, 10, 2), FinalInterval(date(2026, 7, 1), date(2026, 10, 1), 0), id="a-lake-reaching-the-boundary-keeps-the-whole-months"),
+        # October 2026 ends on a Saturday; its last session is Friday the 30th.
+        pytest.param(et_midnight_ms(date(2026, 11, 15)), date(2026, 10, 30), FinalInterval(date(2026, 8, 1), date(2026, 11, 1), 0), id="a-month-ending-on-a-weekend-is-whole-when-the-lake-holds-its-last-session"),
+        # 2027-05-31 is Memorial Day; May's last session is Friday the 28th.
+        pytest.param(et_midnight_ms(date(2027, 6, 10)), date(2027, 5, 28), FinalInterval(date(2027, 3, 1), date(2027, 6, 1), 0), id="a-month-ending-on-a-holiday-is-whole-when-the-lake-holds-its-last-session"),
+    ],
+)
+def test_the_final_interval_keeps_its_whole_months_for_a_lake_far_behind_or_past_it_and_for_a_month_ending_off_session(now_ms: int, latest_session: date, interval: FinalInterval) -> None:
+    assert default_final_interval(now_ms, 3, latest_session) == interval, "the final test keeps its whole months and cuts no session"
 
 
 def test_unknown_lake_history_proposes_a_two_year_development_interval() -> None:
@@ -654,14 +651,16 @@ def test_a_picked_range_is_laid_out_whole_whatever_the_run_cap_admits() -> None:
     assert estimate(protocol, folds=len(review(protocol, _ema()).folds)).total_max > protocol.budget_cap
 
 
-def test_the_default_plan_searches_the_declared_ranges_from_the_incumbent() -> None:
+def test_the_default_plan_starts_every_knob_at_the_middle_importance_and_searches_the_declared_ranges_from_the_incumbent() -> None:
     incumbent = registry_incumbent(EMA, "SPY")
     protocol = default_protocol(EMA, "SPY", incumbent, now_ms=OCTOBER_15, earliest_session=None)
 
-    assert protocol.seed == incumbent.params == {"symbol": "SPY", "gap": 0.2, "gap_bps": 0.0, "rsi_min": 50.0, "rsi_max": 70.0}
-    assert [plan.name for plan in protocol.search_knobs] == ["gap", "rsi_min", "rsi_max", "fast_period", "slow_period", "hold_bars"]
-    assert protocol.pair_audits == (("fast_period", "slow_period"), ("rsi_min", "rsi_max"))
-    assert review(protocol, _ema()).lockable
+    assert [knob.importance for knob in protocol.knobs] == [5] * len(_ema().knobs), "every knob starts at the middle importance"
+    assert [knob.name for knob in protocol.knobs] == [knob.name for knob in _ema().knobs], "the knobs keep the declared order"
+    assert protocol.seed == incumbent.params == {"symbol": "SPY", "gap": 0.2, "gap_bps": 0.0, "rsi_min": 50.0, "rsi_max": 70.0}, "the seed is the incumbent's canonical point"
+    assert [plan.name for plan in protocol.search_knobs] == ["gap", "rsi_min", "rsi_max", "fast_period", "slow_period", "hold_bars"], "the declared ranges are searched"
+    assert protocol.pair_audits == (("fast_period", "slow_period"), ("rsi_min", "rsi_max")), "the declared pairs are audited"
+    assert review(protocol, _ema()).lockable, "the default plan is lockable"
 
 
 def test_a_qualified_incumbent_off_the_registry_on_a_fixed_knob_still_yields_a_lockable_default_plan() -> None:
@@ -675,31 +674,28 @@ def test_a_qualified_incumbent_off_the_registry_on_a_fixed_knob_still_yields_a_l
     assert review(protocol, _ema()).lockable
 
 
-def test_a_default_range_widens_to_hold_the_seed_and_the_incumbent() -> None:
+def test_a_default_range_widens_to_hold_the_seed_and_the_incumbent_and_stays_inside_the_domain_on_the_quantum() -> None:
     registry = registry_incumbent(EMA, "SPY")
     # The declared fast range is 3–12 and slow 8–30; this qualified incumbent sits outside both.
     qualified = IncumbentRef(source="qualification", qualification_id="gq-2", params={**registry.params, "fast_period": 2, "slow_period": 34})
     protocol = default_protocol(EMA, "SPY", qualified, now_ms=OCTOBER_15, earliest_session=None)
     ranges = {plan.name: (plan.low, plan.high) for plan in protocol.knobs}
 
-    assert ranges["fast_period"] == (2.0, 12.0) and ranges["slow_period"] == (8.0, 34.0)
+    assert ranges["fast_period"] == (2.0, 12.0) and ranges["slow_period"] == (8.0, 34.0), "the searched ranges widen to hold the incumbent"
     # Knobs whose start and benchmark already sit inside keep their declared range.
-    assert ranges["gap"] == (0.0, 0.6) and ranges["hold_bars"] == (2.0, 12.0)
-    assert review(protocol, _ema()).lockable
+    assert ranges["gap"] == (0.0, 0.6) and ranges["hold_bars"] == (2.0, 12.0), "knobs already holding the start and the benchmark keep their declared range"
+    assert review(protocol, _ema()).lockable, "the widened plan is lockable"
 
-
-def test_a_widened_range_stays_inside_the_domain_on_the_quantum() -> None:
     # A qualification minted under an older declaration can sit off today's quantum or outside its domain.
-    registry = registry_incumbent(EMA, "SPY")
     stale = IncumbentRef(
         source="qualification", qualification_id="gq-3", params={**registry.params, "gap": 2.5, "rsi_min": 29.6, "rsi_max": 90.4}
     )
-    protocol = default_protocol(EMA, "SPY", stale, now_ms=OCTOBER_15, earliest_session=None)
-    ranges = {plan.name: (plan.low, plan.high) for plan in protocol.knobs}
+    stale_protocol = default_protocol(EMA, "SPY", stale, now_ms=OCTOBER_15, earliest_session=None)
+    stale_ranges = {plan.name: (plan.low, plan.high) for plan in stale_protocol.knobs}
 
-    assert ranges["gap"] == (0.0, 2.0)
+    assert stale_ranges["gap"] == (0.0, 2.0), "a widened range stays inside the knob's domain"
     # Each end rounds outward, so the range still holds the benchmark: half-even would give 30 and 90.
-    assert ranges["rsi_min"] == (29.0, 60.0) and ranges["rsi_max"] == (60.0, 91.0)
+    assert stale_ranges["rsi_min"] == (29.0, 60.0) and stale_ranges["rsi_max"] == (60.0, 91.0), "each end rounds outward onto the quantum so the range still holds the benchmark"
 
 
 def test_the_preflight_counts_each_knobs_settings_exactly() -> None:

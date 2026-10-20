@@ -9,9 +9,11 @@ session open (04:00 ET).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date
 
 import pandas as pd
+import pytest
 
 from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.services.chart_service import _resample_bars
@@ -58,16 +60,74 @@ def _labels_ms(bars: pd.DataFrame) -> list[int]:
     return bars["timestamp"].tolist()
 
 
-def test_four_hour_regular_session_bars_start_at_the_session_open() -> None:
-    """A regular session splits 09:30–13:30 / 13:30–16:00 — 240 then 150 minutes.
+@pytest.mark.parametrize(
+    ("frame_for", "sessions", "timeframe", "session", "label_times", "volumes"),
+    [
+        # A regular session splits 09:30–13:30 / 13:30–16:00 — 240 then 150 minutes.
+        # On master the midnight-anchored grid labels the bins 08:30 and 12:30,
+        # splitting the session 180/210 instead.
+        pytest.param(
+            _session_minute_frame,
+            (date(2024, 7, 10),),
+            "4h",
+            "rth",
+            ((date(2024, 7, 10), 9, 30), (date(2024, 7, 10), 13, 30)),
+            (240, 150),
+            id="four_hour_regular_session_bars_start_at_the_session_open",
+        ),
+        # 1-hour bins keep the session-open anchor they already had.
+        pytest.param(
+            _session_minute_frame,
+            (date(2024, 7, 10),),
+            "1h",
+            "rth",
+            tuple((date(2024, 7, 10), 9 + i, 30) for i in range(7)),
+            (60,) * 6 + (30,),
+            id="one_hour_bars_are_unchanged",
+        ),
+        # ETH bins start at 04:00 ET: four equal 4-hour bins across 04:00–20:00.
+        pytest.param(
+            _extended_minute_frame,
+            (date(2024, 7, 10),),
+            "4h",
+            "eth",
+            tuple((date(2024, 7, 10), 4 + 4 * i, 0) for i in range(4)),
+            (240,) * 4,
+            id="extended_hours_four_hour_bars_anchor_to_the_extended_open",
+        ),
+        # Sessions either side of the 2024-11-03 fall-back keep 09:30/13:30 ET labels.
+        # A midnight-anchored absolute grid lands an hour off in wall-clock on
+        # the far side of a DST change; the per-session calendar anchor cannot.
+        pytest.param(
+            _session_minute_frame,
+            (date(2024, 11, 1), date(2024, 11, 4)),
+            "4h",
+            "rth",
+            (
+                (date(2024, 11, 1), 9, 30),
+                (date(2024, 11, 1), 13, 30),
+                (date(2024, 11, 4), 9, 30),
+                (date(2024, 11, 4), 13, 30),
+            ),
+            (240, 150, 240, 150),
+            id="four_hour_labels_survive_a_dst_boundary_in_wall_clock",
+        ),
+    ],
+)
+def test_resampled_bar_labels_anchor_to_the_session_open(
+    frame_for: Callable[[date], pd.DataFrame],
+    sessions: tuple[date, ...],
+    timeframe: str,
+    session: str,
+    label_times: tuple[tuple[date, int, int], ...],
+    volumes: tuple[int, ...],
+) -> None:
+    frame = pd.concat([frame_for(day) for day in sessions], ignore_index=True)
 
-    On master the midnight-anchored grid labels the bins 08:30 and 12:30,
-    splitting the session 180/210 instead.
-    """
-    bars = _resample_bars(_session_minute_frame(date(2024, 7, 10)), "4h", "rth")
+    bars = _resample_bars(frame, timeframe, session)
 
-    assert _labels_ms(bars) == [_et_ms(date(2024, 7, 10), 9, 30), _et_ms(date(2024, 7, 10), 13, 30)]
-    assert bars["volume"].tolist() == [240, 150]
+    assert _labels_ms(bars) == [_et_ms(day, hour, minute) for day, hour, minute in label_times], "bin labels"
+    assert bars["volume"].tolist() == list(volumes), "bin volumes"
 
 
 def test_four_hour_early_close_comes_from_the_calendar() -> None:
@@ -86,38 +146,4 @@ def test_four_hour_early_close_comes_from_the_calendar() -> None:
     assert bars["volume"].tolist() == [210]
 
 
-def test_one_hour_bars_are_unchanged() -> None:
-    """1-hour bins keep the session-open anchor they already had."""
-    bars = _resample_bars(_session_minute_frame(date(2024, 7, 10)), "1h", "rth")
 
-    assert _labels_ms(bars) == [_et_ms(date(2024, 7, 10), 9 + i, 30) for i in range(7)]
-    assert bars["volume"].tolist() == [60] * 6 + [30]
-
-
-def test_extended_hours_four_hour_bars_anchor_to_the_extended_open() -> None:
-    """ETH bins start at 04:00 ET: four equal 4-hour bins across 04:00–20:00."""
-    bars = _resample_bars(_extended_minute_frame(date(2024, 7, 10)), "4h", "eth")
-
-    assert _labels_ms(bars) == [_et_ms(date(2024, 7, 10), 4 + 4 * i, 0) for i in range(4)]
-    assert bars["volume"].tolist() == [240] * 4
-
-
-def test_four_hour_labels_survive_a_dst_boundary_in_wall_clock() -> None:
-    """Sessions either side of the 2024-11-03 fall-back keep 09:30/13:30 ET labels.
-
-    A midnight-anchored absolute grid lands an hour off in wall-clock on
-    the far side of a DST change; the per-session calendar anchor cannot.
-    """
-    frame = pd.concat(
-        [_session_minute_frame(date(2024, 11, 1)), _session_minute_frame(date(2024, 11, 4))],
-        ignore_index=True,
-    )
-
-    bars = _resample_bars(frame, "4h", "rth")
-
-    assert _labels_ms(bars) == [
-        _et_ms(date(2024, 11, 1), 9, 30),
-        _et_ms(date(2024, 11, 1), 13, 30),
-        _et_ms(date(2024, 11, 4), 9, 30),
-        _et_ms(date(2024, 11, 4), 13, 30),
-    ]

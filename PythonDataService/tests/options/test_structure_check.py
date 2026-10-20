@@ -262,16 +262,6 @@ def test_a_named_structure_has_one_expiry() -> None:
     assert refused.value.reason is StructureRefusal.MORE_THAN_ONE_EXPIRY
 
 
-def test_a_covering_leg_that_expires_first_does_not_cover() -> None:
-    picks = _picked(long_call="C585") | {"short_call": _contract("C590", expiry=_A_MONTH_LATER)}
-
-    with pytest.raises(StructureRefused) as refused:
-        resolved_structure(starting_plan(NamedStructure.BULL_CALL_SPREAD, "SPY"), picks)
-
-    assert refused.value.reason is StructureRefusal.SOLD_LEG_NOT_COVERED
-    assert refused.value.leg_ids == ("short_call",)
-
-
 def _custom_calls(**legs: tuple[str, int]) -> ActionPlan:
     """A plan with no name, of call legs: each leg id with its side and ratio."""
     return ActionPlan.model_validate(
@@ -344,26 +334,48 @@ def test_one_bought_leg_of_two_contracts_covers_two_sold_legs() -> None:
 
 
 @pytest.mark.parametrize(
-    ("picks", "names_legs"),
+    ("picks", "refusal", "names_legs"),
     [
-        pytest.param({"long_call": _contract("C585")}, ("short_call",), id="a leg nothing was picked for"),
         pytest.param(
-            _picked(long_call="C585", short_call="C590", stray="C600"), ("stray",), id="a contract for a leg the plan does not have"
+            {"long_call": _contract("C585")},
+            StructureRefusal.NOT_THE_PLANS_LEGS,
+            ("short_call",),
+            id="a leg nothing was picked for",
         ),
-        pytest.param(_picked(long_call="P585", short_call="C590"), ("long_call",), id="a put picked for a call leg"),
+        pytest.param(
+            _picked(long_call="C585", short_call="C590", stray="C600"),
+            StructureRefusal.NOT_THE_PLANS_LEGS,
+            ("stray",),
+            id="a contract for a leg the plan does not have",
+        ),
+        pytest.param(
+            _picked(long_call="P585", short_call="C590"),
+            StructureRefusal.NOT_THE_PLANS_LEGS,
+            ("long_call",),
+            id="a put picked for a call leg",
+        ),
         pytest.param(
             _picked(long_call="C585") | {"short_call": _contract("C590", root="QQQ")},
+            StructureRefusal.NOT_THE_PLANS_LEGS,
             ("short_call",),
             id="a contract on another underlying",
         ),
+        pytest.param(
+            _picked(long_call="C585") | {"short_call": _contract("C590", expiry=_A_MONTH_LATER)},
+            StructureRefusal.SOLD_LEG_NOT_COVERED,
+            ("short_call",),
+            id="a covering leg that expires first does not cover",
+        ),
     ],
 )
-def test_picks_that_are_not_the_plans_legs_are_refused(picks: dict[str, OptionContract], names_legs: tuple[str, ...]) -> None:
+def test_picks_that_are_not_the_plans_legs_or_do_not_cover_them_are_refused_by_rule_and_leg(
+    picks: dict[str, OptionContract], refusal: StructureRefusal, names_legs: tuple[str, ...]
+) -> None:
     with pytest.raises(StructureRefused) as refused:
         resolved_structure(starting_plan(NamedStructure.BULL_CALL_SPREAD, "spy"), picks)
 
-    assert refused.value.reason is StructureRefusal.NOT_THE_PLANS_LEGS
-    assert refused.value.leg_ids == names_legs
+    assert refused.value.reason is refusal, "the rule the picks are refused by"
+    assert refused.value.leg_ids == names_legs, "the legs the refusal names"
 
 
 def test_a_structure_is_not_checked_against_the_name_of_another_plan() -> None:

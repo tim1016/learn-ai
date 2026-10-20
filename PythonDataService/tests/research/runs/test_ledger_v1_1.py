@@ -27,30 +27,26 @@ def _base_ledger_kwargs() -> dict:
     )
 
 
-def test_ledger_writes_schema_1_3_by_default() -> None:
-    ledger = RunLedger(**_base_ledger_kwargs())
-    assert ledger.schema_version == "1.3"
-    assert ledger.warmup_start_ms is None
+def test_ledger_schema_versions_write_1_3_by_default_and_load_legacy_1_0_and_1_1() -> None:
+    default = RunLedger(**_base_ledger_kwargs())
+    assert default.schema_version == "1.3", "writes schema 1.3 by default"
+    assert default.warmup_start_ms is None, "default ledger has no warmup start"
 
+    legacy_raw = _base_ledger_kwargs() | {"schema_version": "1.0"}
+    legacy = RunLedger.model_validate(legacy_raw)
+    assert legacy.schema_version == "1.0", "legacy 1.0 dict keeps its schema version"
+    assert legacy.prediction_set_hash is None, "legacy 1.0 has no prediction set hash"
+    assert legacy.window_summary is None, "legacy 1.0 has no window summary"
+    assert "warmup_start_ms" not in legacy.model_dump(mode="json"), "legacy 1.0 dump omits warmup_start_ms"
 
-def test_ledger_loads_legacy_1_0_dict() -> None:
-    raw = _base_ledger_kwargs() | {"schema_version": "1.0"}
-    ledger = RunLedger.model_validate(raw)
-    assert ledger.schema_version == "1.0"
-    assert ledger.prediction_set_hash is None
-    assert ledger.window_summary is None
-    assert "warmup_start_ms" not in ledger.model_dump(mode="json")
-
-
-def test_ledger_loads_1_1_with_prediction_set_hash() -> None:
-    raw = _base_ledger_kwargs() | {
+    v1_1_raw = _base_ledger_kwargs() | {
         "schema_version": "1.1",
         "prediction_set_hash": "f" * 64,
     }
-    ledger = RunLedger.model_validate(raw)
-    assert ledger.prediction_set_hash == "f" * 64
+    v1_1 = RunLedger.model_validate(v1_1_raw)
+    assert v1_1.prediction_set_hash == "f" * 64, "1.1 ledger carries its prediction set hash"
     # v1.1 ledgers predate window_summary — must still load as None.
-    assert ledger.window_summary is None
+    assert v1_1.window_summary is None, "1.1 ledger predates window_summary and loads it as None"
 
 
 def test_ledger_rejects_unknown_schema_version() -> None:

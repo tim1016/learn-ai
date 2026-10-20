@@ -65,32 +65,38 @@ def _build_minute_bars(trading_date: date, symbol: str = "SPY") -> list[TradeBar
 
 
 class TestResolveStrategyClass:
-    def test_resolves_buy_and_hold_strategy(self) -> None:
+    def test_resolves_buy_and_hold_and_sma_crossover_strategies(self) -> None:
         cls = resolve_strategy_class("BuyAndHoldStrategy")
-        assert cls is BuyAndHoldStrategy
-        assert issubclass(cls, Strategy)
+        assert cls is BuyAndHoldStrategy, "BuyAndHoldStrategy resolves to its own class"
+        assert issubclass(cls, Strategy), "BuyAndHoldStrategy resolves to a Strategy subclass"
 
-    def test_resolves_sma_crossover_algorithm(self) -> None:
-        """A second well-known class so the resolver is exercised across
-        more than one algorithm module."""
+        # A second well-known class so the resolver is exercised across
+        # more than one algorithm module.
         cls = resolve_strategy_class("SmaCrossoverAlgorithm")
-        assert issubclass(cls, Strategy)
+        assert issubclass(cls, Strategy), "SmaCrossoverAlgorithm resolves to a Strategy subclass"
 
-    def test_unknown_name_raises_strategy_not_found_with_known_list(self) -> None:
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "DefinitelyNotAStrategy",
+            # The abstract base class lives in ``strategy.base``, not
+            # ``strategy.algorithms`` — but defense-in-depth: even if a
+            # future refactor relocated something, ``Strategy`` itself must
+            # never be a resolvable target.
+            "Strategy",
+        ],
+        ids=[
+            "unknown-name-raises-strategy-not-found-with-known-list",
+            "resolver-does-not-match-strategy-base-class",
+        ],
+    )
+    def test_a_name_that_is_not_a_strategy_raises_strategy_not_found(self, name: str) -> None:
         with pytest.raises(StrategyNotFoundError) as exc:
-            resolve_strategy_class("DefinitelyNotAStrategy")
+            resolve_strategy_class(name)
         # The message should list known names — operator-facing.
         msg = str(exc.value)
-        assert "BuyAndHoldStrategy" in msg
-        assert "DefinitelyNotAStrategy" in msg
-
-    def test_resolver_does_not_match_strategy_base_class(self) -> None:
-        """The abstract base class lives in ``strategy.base``, not
-        ``strategy.algorithms`` — but defense-in-depth: even if a
-        future refactor relocated something, ``Strategy`` itself must
-        never be a resolvable target."""
-        with pytest.raises(StrategyNotFoundError):
-            resolve_strategy_class("Strategy")
+        assert "BuyAndHoldStrategy" in msg, "the message lists the known strategy names"
+        assert name in msg, "the message names the rejected strategy"
 
 
 class TestRunEngineLabOnWorkspace:
@@ -98,9 +104,29 @@ class TestRunEngineLabOnWorkspace:
     confirm the engine reads the staged zips and emits a fill normalized
     to the cross-run wire shape."""
 
+    @pytest.mark.parametrize(
+        "initial_cash",
+        [
+            "100000",
+            # BuyAndHoldStrategy hardcodes Jan-6→Jan-10 in initialize(). The
+            # cross-runner overrides that with the LEAN-Lab dates so the
+            # engine iterates exactly the LEAN-Lab window. Verified by
+            # running on a single-day window (Jan 6) and confirming no
+            # bars/fills from Jan 7+ are processed (we'd see >1 Buy if the
+            # strategy's wider default window had bled through). The
+            # initial_cash override (explicitly NOT the default $100k)
+            # round-trips into the result metadata.
+            "50000",
+        ],
+        ids=[
+            "buy-and-hold-emits-one-buy-event",
+            "pinned-dates-override-strategy-defaults",
+        ],
+    )
     def test_buy_and_hold_emits_one_buy_event_against_staged_workspace(
         self,
         tmp_path: Path,
+        initial_cash: str,
     ) -> None:
         artifacts_root = tmp_path / "artifacts"
         artifacts_root.mkdir()
@@ -121,64 +147,41 @@ class TestRunEngineLabOnWorkspace:
             symbol="SPY",
             start_date=trading_date,
             end_date=trading_date,
-            initial_cash=Decimal("100000"),
+            initial_cash=Decimal(initial_cash),
         )
 
-        assert result.strategy_class_name == "BuyAndHoldStrategy"
-        assert result.symbol == "SPY"
-        assert result.start_date == trading_date
-        assert result.end_date == trading_date
-        assert result.initial_cash == Decimal("100000")
+        assert result.strategy_class_name == "BuyAndHoldStrategy", "the result names the strategy class"
+        assert result.symbol == "SPY", "the result carries the symbol"
+        assert result.start_date == trading_date, "the result carries the pinned start date"
+        assert result.end_date == trading_date, "the result carries the pinned end date"
+        assert result.initial_cash == Decimal(initial_cash), "the initial_cash override round-trips into the result"
         assert result.total_order_events >= 1, "buy-and-hold should fill at least once"
 
         first_event = result.order_events[0]
-        assert isinstance(first_event, CrossRunOrderEvent)
-        assert first_event.symbol == "SPY"
-        assert first_event.direction == "Buy"
+        assert isinstance(first_event, CrossRunOrderEvent), "events are normalized to the cross-run wire shape"
+        assert first_event.symbol == "SPY", "the first event is for the symbol"
+        assert first_event.direction == "Buy", "the first event is a Buy"
         # ms_utc must be an int.
-        assert isinstance(first_event.ms_utc, int)
+        assert isinstance(first_event.ms_utc, int), "ms_utc is an int"
         # The fill happens on a trading-date bar; ms_utc must fall on
         # 2025-01-06 (UTC offset may push by minutes but not days).
         fill_utc = datetime.fromtimestamp(first_event.ms_utc / 1000, tz=ZoneInfo("UTC"))
-        assert fill_utc.date() == trading_date or fill_utc.date() == date(2025, 1, 7)
+        assert fill_utc.date() == trading_date or fill_utc.date() == date(2025, 1, 7), (
+            "the fill lands on the trading date (UTC may push it by minutes, not days)"
+        )
         # Quantity is the unsigned magnitude; sign info lives in
         # ``direction``.
-        assert first_event.fill_quantity > 0
+        assert first_event.fill_quantity > 0, "the fill quantity is the unsigned magnitude"
         # Fill price + fee preserved as Decimal.
-        assert isinstance(first_event.fill_price, Decimal)
-        assert isinstance(first_event.fee, Decimal)
+        assert isinstance(first_event.fill_price, Decimal), "the fill price is a Decimal"
+        assert isinstance(first_event.fee, Decimal), "the fee is a Decimal"
 
-    def test_subsequent_events_are_not_extra_buys(
-        self,
-        tmp_path: Path,
-    ) -> None:
-        """Buy-and-hold should NOT re-buy on every bar after the first
-        — that's the invariant. The engine's force-flat may produce a
-        Sell at end-of-window; that's allowed (and Phase 5g.3's
-        reconciler will see it on the LEAN side too if LEAN's force-
-        flat matches), but extra unsolicited Buys would mean the
-        ``_invested`` latch is broken."""
-        artifacts_root = tmp_path / "artifacts"
-        artifacts_root.mkdir()
-        ws = resolve_workspace("cross_runner_one_buy", artifacts_root)
-        ws.ensure_layout()
-
-        trading_date = date(2025, 1, 6)
-        stage_minute_bars(
-            ws,
-            symbol="SPY",
-            bars_by_date=[(trading_date, _build_minute_bars(trading_date))],
-        )
-
-        result = run_engine_lab_on_workspace(
-            ws.workspace_dir,
-            "BuyAndHoldStrategy",
-            symbol="SPY",
-            start_date=trading_date,
-            end_date=trading_date,
-            initial_cash=Decimal("100000"),
-        )
-
+        # Buy-and-hold should NOT re-buy on every bar after the first
+        # — that's the invariant. The engine's force-flat may produce a
+        # Sell at end-of-window; that's allowed (and Phase 5g.3's
+        # reconciler will see it on the LEAN side too if LEAN's force-
+        # flat matches), but extra unsolicited Buys would mean the
+        # ``_invested`` latch is broken.
         buys = [e for e in result.order_events if e.direction == "Buy"]
         assert len(buys) == 1, (
             f"buy-and-hold must emit exactly one Buy; got {len(buys)} ({[(e.ms_utc, e.fill_quantity) for e in buys]})"
@@ -221,37 +224,6 @@ class TestRunEngineLabOnWorkspace:
                 end_date=date(2025, 1, 6),
                 initial_cash=Decimal("100000"),
             )
-
-    def test_pinned_dates_override_strategy_defaults(self, tmp_path: Path) -> None:
-        """BuyAndHoldStrategy hardcodes Jan-6→Jan-10 in initialize(). The
-        cross-runner overrides that with the LEAN-Lab dates so the
-        engine iterates exactly the LEAN-Lab window. Verified by
-        running on a single-day window (Jan 6) and confirming no
-        bars/fills from Jan 7+ are processed (we'd see >1 Buy if the
-        strategy's wider default window had bled through)."""
-        artifacts_root = tmp_path / "artifacts"
-        artifacts_root.mkdir()
-        ws = resolve_workspace("cross_runner_pin", artifacts_root)
-        ws.ensure_layout()
-
-        trading_date = date(2025, 1, 6)
-        stage_minute_bars(
-            ws,
-            symbol="SPY",
-            bars_by_date=[(trading_date, _build_minute_bars(trading_date))],
-        )
-
-        result = run_engine_lab_on_workspace(
-            ws.workspace_dir,
-            "BuyAndHoldStrategy",
-            symbol="SPY",
-            start_date=trading_date,
-            end_date=trading_date,
-            initial_cash=Decimal("50000"),  # explicitly NOT the default $100k
-        )
-
-        # initial_cash override round-trips into the result metadata.
-        assert result.initial_cash == Decimal("50000")
 
     def test_output_dir_threads_to_strategy_constructor(self, tmp_path: Path) -> None:
         """output_dir kwarg is passed to the strategy constructor so

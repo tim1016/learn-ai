@@ -113,45 +113,40 @@ async def _assert_corrupt_capture_failed(
 # ── Capture-level regressions (each published on master) ─────────────
 
 
+@pytest.mark.parametrize(
+    ("extra_bar_index", "extra_bar_overrides", "detail_fragments"),
+    [
+        # duplicate of bar[3]'s t
+        pytest.param(3, (), ("duplicate timestamp", "corrupt vendor minute bars"), id="duplicate_timestamp_fails_the_capture"),
+        # 2024-05-21 ET
+        pytest.param(
+            5,
+            (("t", BAR_START_MS + NEXT_DAY_MS_DELTA),),
+            ("outside requested session 2024-05-20", "2024-05-21"),
+            id="wrong_day_bar_fails_the_capture",
+        ),
+        # high < low/open/close
+        pytest.param(
+            5,
+            (("o", 500.0), ("h", 499.0), ("l", 499.5), ("c", 499.8)),
+            ("high 499.0 < open 500.0", "high 499.0 < close 499.8"),
+            id="high_below_low_fails_the_capture",
+        ),
+        pytest.param(5, (("v", -1),), ("volume=-1 is negative",), id="negative_volume_fails_the_capture"),
+    ],
+)
 @respx.mock
 @pytest.mark.asyncio
-async def test_duplicate_timestamp_fails_the_capture(fake_catalog: FakeCatalog, tmp_lake) -> None:
+async def test_a_corrupt_vendor_bar_fails_the_capture(
+    fake_catalog: FakeCatalog,
+    tmp_lake,
+    extra_bar_index: int,
+    extra_bar_overrides: tuple[tuple[str, float], ...],
+    detail_fragments: tuple[str, ...],
+) -> None:
     bars = [_bar(i) for i in range(5)]
-    bars.append(_bar(3))  # duplicate of bar[3]'s t
-    await _assert_corrupt_capture_failed(
-        _payload(bars), fake_catalog, tmp_lake, "duplicate timestamp", "corrupt vendor minute bars"
-    )
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_wrong_day_bar_fails_the_capture(fake_catalog: FakeCatalog, tmp_lake) -> None:
-    bars = [_bar(i) for i in range(5)]
-    bars.append(_bar(5, t=BAR_START_MS + NEXT_DAY_MS_DELTA))  # 2024-05-21 ET
-    await _assert_corrupt_capture_failed(
-        _payload(bars), fake_catalog, tmp_lake,
-        "outside requested session 2024-05-20", "2024-05-21",
-    )
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_high_below_low_fails_the_capture(fake_catalog: FakeCatalog, tmp_lake) -> None:
-    bars = [_bar(i) for i in range(5)]
-    bars.append(_bar(5, o=500.0, h=499.0, l=499.5, c=499.8))  # high < low/open/close
-    await _assert_corrupt_capture_failed(
-        _payload(bars), fake_catalog, tmp_lake, "high 499.0 < open 500.0", "high 499.0 < close 499.8"
-    )
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_negative_volume_fails_the_capture(fake_catalog: FakeCatalog, tmp_lake) -> None:
-    bars = [_bar(i) for i in range(5)]
-    bars.append(_bar(5, v=-1))
-    await _assert_corrupt_capture_failed(
-        _payload(bars), fake_catalog, tmp_lake, "volume=-1 is negative"
-    )
+    bars.append(_bar(extra_bar_index, **dict(extra_bar_overrides)))
+    await _assert_corrupt_capture_failed(_payload(bars), fake_catalog, tmp_lake, *detail_fragments)
 
 
 @respx.mock

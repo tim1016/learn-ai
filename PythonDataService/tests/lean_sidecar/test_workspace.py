@@ -100,23 +100,20 @@ class TestValidateSymbol:
     @pytest.mark.parametrize(
         "bad",
         [
-            "",
-            "../etc/passwd",
-            "SPY/extra",
-            "SPY\\windows",
-            "SPY ",
-            "..",
-            ".",
-            "a" * 17,  # over 16 chars
-            "SPY\x00null",
-            "SPY;rm -rf",
-            "SPY$(whoami)",
+            pytest.param("", id="empty"),
+            pytest.param("../etc/passwd", id="relative_path_traversal"),
+            pytest.param("SPY/extra", id="forward_slash"),
+            pytest.param("SPY\\windows", id="backslash"),
+            pytest.param("SPY ", id="trailing_space"),
+            pytest.param("..", id="double_dot"),
+            pytest.param(".", id="single_dot"),
+            pytest.param("a" * 17, id="over_16_chars"),
+            pytest.param("SPY\x00null", id="null_byte"),
+            pytest.param("SPY;rm -rf", id="shell_semicolon"),
+            pytest.param("SPY$(whoami)", id="command_substitution"),
+            pytest.param(123, id="non_string"),
         ],
     )
-    def test_rejects_path_traversal_and_injection(self, bad: str) -> None:
+    def test_rejects_path_traversal_and_injection(self, bad: object) -> None:
         with pytest.raises(SymbolValidationError):
-            validate_symbol(bad)
-
-    def test_rejects_non_string(self) -> None:
-        with pytest.raises(SymbolValidationError):
-            validate_symbol(123)  # type: ignore[arg-type]
+            validate_symbol(bad)  # type: ignore[arg-type]

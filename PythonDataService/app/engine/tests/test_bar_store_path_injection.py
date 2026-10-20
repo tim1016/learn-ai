@@ -11,6 +11,7 @@ caller-supplied ``symbol``. These tests pin two layers of defense:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
@@ -33,52 +34,61 @@ def test_ensure_within_root_returns_contained_path(tmp_path: Path):
     assert str(resolved).startswith(str(tmp_path.resolve()))
 
 
-def test_ensure_within_root_rejects_parent_traversal(tmp_path: Path):
-    root = tmp_path / "root"
-    root.mkdir()
-    with pytest.raises(ValueError, match="escapes root"):
-        ensure_within_root(root, root / ".." / "escape.zip")
-
-
-def test_ensure_within_root_rejects_symlink_escape(tmp_path: Path):
+@pytest.mark.parametrize(
+    "escape_parts",
+    [
+        pytest.param(("..", "escape.zip"), id="parent_traversal"),
+        pytest.param(("link", "escape.zip"), id="symlink_escape"),
+    ],
+)
+def test_ensure_within_root_rejects_escape(tmp_path: Path, escape_parts: tuple[str, ...]):
     outside = tmp_path / "outside"
     outside.mkdir()
     root = tmp_path / "root"
     root.mkdir()
     (root / "link").symlink_to(outside, target_is_directory=True)
     with pytest.raises(ValueError, match="escapes root"):
-        ensure_within_root(root, root / "link" / "escape.zip")
+        ensure_within_root(root, root.joinpath(*escape_parts))
 
 
-@pytest.mark.parametrize("bad_symbol", PATH_UNSAFE_SYMBOLS)
-def test_minute_writer_rejects_path_unsafe_symbol(tmp_path: Path, bad_symbol: str):
+@pytest.mark.parametrize(
+    "bad_symbol",
+    PATH_UNSAFE_SYMBOLS,
+    ids=["parent_traversal", "slash", "backslash", "dotdot", "embedded_traversal", "nul"],
+)
+@pytest.mark.parametrize(
+    "write",
+    [
+        pytest.param(lambda root, symbol: write_lean_day_zip(root, symbol, TRADING_DATE, []), id="minute_writer"),
+        pytest.param(lambda root, symbol: write_lean_quote_day_zip(root, symbol, TRADING_DATE, []), id="quote_writer"),
+        pytest.param(lambda root, symbol: write_lean_daily_zip(root, symbol, []), id="daily_writer"),
+    ],
+)
+def test_writers_reject_path_unsafe_symbol(tmp_path: Path, write: Callable[[Path, str], object], bad_symbol: str):
     with pytest.raises(SymbolValidationError):
-        write_lean_day_zip(tmp_path, bad_symbol, TRADING_DATE, [])
+        write(tmp_path, bad_symbol)
 
 
-@pytest.mark.parametrize("bad_symbol", PATH_UNSAFE_SYMBOLS)
-def test_quote_writer_rejects_path_unsafe_symbol(tmp_path: Path, bad_symbol: str):
-    with pytest.raises(SymbolValidationError):
-        write_lean_quote_day_zip(tmp_path, bad_symbol, TRADING_DATE, [])
+@pytest.mark.parametrize(
+    ("write", "expected_parts"),
+    [
+        pytest.param(
+            lambda root: write_lean_day_zip(root, "SPY", TRADING_DATE, []),
+            ("equity", "usa", "minute", "spy", "20250106_trade.zip"),
+            id="minute_writer",
+        ),
+        pytest.param(
+            lambda root: write_lean_daily_zip(root, "SPY", []),
+            ("equity", "usa", "daily", "spy.zip"),
+            id="daily_writer",
+        ),
+    ],
+)
+def test_writer_accepts_valid_symbol_and_stays_within_root(
+    tmp_path: Path, write: Callable[[Path], Path], expected_parts: tuple[str, ...]
+):
+    zip_path = write(tmp_path)
 
-
-@pytest.mark.parametrize("bad_symbol", PATH_UNSAFE_SYMBOLS)
-def test_daily_writer_rejects_path_unsafe_symbol(tmp_path: Path, bad_symbol: str):
-    with pytest.raises(SymbolValidationError):
-        write_lean_daily_zip(tmp_path, bad_symbol, [])
-
-
-def test_minute_writer_accepts_valid_symbol_and_stays_within_root(tmp_path: Path):
-    zip_path = write_lean_day_zip(tmp_path, "SPY", TRADING_DATE, [])
-
-    assert zip_path.exists()
-    assert str(zip_path.resolve()).startswith(str(tmp_path.resolve()))
-    assert zip_path == tmp_path / "equity" / "usa" / "minute" / "spy" / "20250106_trade.zip"
-
-
-def test_daily_writer_accepts_valid_symbol_and_stays_within_root(tmp_path: Path):
-    zip_path = write_lean_daily_zip(tmp_path, "SPY", [])
-
-    assert zip_path.exists()
-    assert str(zip_path.resolve()).startswith(str(tmp_path.resolve()))
-    assert zip_path == tmp_path / "equity" / "usa" / "daily" / "spy.zip"
+    assert zip_path.exists(), "the writer creates the zip"
+    assert str(zip_path.resolve()).startswith(str(tmp_path.resolve())), "the zip stays within the root"
+    assert zip_path == tmp_path.joinpath(*expected_parts), "the zip lands at the LEAN layout path"

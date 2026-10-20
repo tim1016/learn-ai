@@ -81,28 +81,13 @@ async def test_claim_minute_bar_inserts_row_and_returns_id(clean_artifacts, pool
     assert isinstance(artifact_id, int)
 
 
-async def test_claim_minute_bar_returns_none_on_conflict(clean_artifacts, pool):
-    identity = _minute_identity()
-    a = await catalog_client.claim_minute_bar(
-        identity=identity,
-        worker_id="w-1",
-        lease_ttl_ms=300_000,
-        data_contract_hash="a" * 64,
-        file_path="x.zip",
-    )
-    b = await catalog_client.claim_minute_bar(
-        identity=identity,
-        worker_id="w-2",
-        lease_ttl_ms=300_000,
-        data_contract_hash="a" * 64,
-        file_path="x.zip",
-    )
-    assert a is not None
-    assert b is None  # second claim loses
-
-
-async def test_select_minute_bar_claim_state_returns_none_for_no_row(clean_artifacts, pool):
-    assert await catalog_client.select_minute_bar_claim_state(_minute_identity()) is None
+async def test_select_claim_state_returns_none_for_no_row(clean_artifacts, pool):
+    assert (
+        await catalog_client.select_minute_bar_claim_state(_minute_identity()) is None
+    ), "minute-bar claim state is None for no row"
+    assert (
+        await catalog_client.select_metadata_claim_state("d" * 64) is None
+    ), "metadata claim state is None for no row"
 
 
 async def test_select_minute_bar_claim_state_finds_a_failed_row(clean_artifacts, pool):
@@ -543,50 +528,60 @@ def _aggregated_bar_identity() -> ArtifactIdentity:
     )
 
 
-async def test_claim_corp_action_artifact_inserts_and_conflicts(clean_artifacts, pool):
-    identity = _corp_action_identity("factor_file")
-    a = await catalog_client.claim_corp_action_artifact(
+@pytest.mark.parametrize(
+    "claim_fn,identity_fn,data_contract_hash,file_path",
+    [
+        pytest.param(
+            catalog_client.claim_minute_bar,
+            _minute_identity,
+            "a" * 64,
+            "x.zip",
+            id="claim_minute_bar_returns_none_on_conflict",
+        ),
+        pytest.param(
+            catalog_client.claim_corp_action_artifact,
+            _corp_action_identity,
+            "c" * 64,
+            "equity/usa/factor_files/spy.csv",
+            id="claim_corp_action_artifact_inserts_and_conflicts",
+        ),
+        pytest.param(
+            catalog_client.claim_metadata_artifact,
+            _metadata_identity,
+            "d" * 64,
+            "market-hours-database.json",
+            id="claim_metadata_artifact_inserts_and_conflicts",
+        ),
+        pytest.param(
+            catalog_client.claim_aggregated_bar_artifact,
+            _aggregated_bar_identity,
+            "e" * 64,
+            "equity/usa/daily/spy.zip",
+            id="claim_aggregated_bar_artifact_inserts_and_conflicts",
+        ),
+    ],
+)
+async def test_a_claim_inserts_a_row_and_a_second_claim_for_the_same_identity_loses(
+    clean_artifacts, pool, claim_fn, identity_fn, data_contract_hash, file_path
+):
+    identity = identity_fn()
+    a = await claim_fn(
         identity=identity,
         worker_id="w-1",
         lease_ttl_ms=300_000,
-        data_contract_hash="c" * 64,
-        file_path="equity/usa/factor_files/spy.csv",
+        data_contract_hash=data_contract_hash,
+        file_path=file_path,
     )
-    assert isinstance(a, int)
+    assert isinstance(a, int), "the first claim inserts a row and returns its id"
 
-    b = await catalog_client.claim_corp_action_artifact(
+    b = await claim_fn(
         identity=identity,
         worker_id="w-2",
         lease_ttl_ms=300_000,
-        data_contract_hash="c" * 64,
-        file_path="equity/usa/factor_files/spy.csv",
+        data_contract_hash=data_contract_hash,
+        file_path=file_path,
     )
-    assert b is None  # second claim loses
-
-
-async def test_claim_metadata_artifact_inserts_and_conflicts(clean_artifacts, pool):
-    identity = _metadata_identity()
-    a = await catalog_client.claim_metadata_artifact(
-        identity=identity,
-        worker_id="w-1",
-        lease_ttl_ms=300_000,
-        data_contract_hash="d" * 64,
-        file_path="market-hours-database.json",
-    )
-    assert isinstance(a, int)
-
-    b = await catalog_client.claim_metadata_artifact(
-        identity=identity,
-        worker_id="w-2",
-        lease_ttl_ms=300_000,
-        data_contract_hash="d" * 64,
-        file_path="market-hours-database.json",
-    )
-    assert b is None  # second claim loses
-
-
-async def test_select_metadata_claim_state_returns_none_for_no_row(clean_artifacts, pool):
-    assert await catalog_client.select_metadata_claim_state("d" * 64) is None
+    assert b is None, "second claim loses"
 
 
 async def test_select_metadata_claim_state_finds_a_failed_row_reclaimable_by_steal_or_retry(clean_artifacts, pool):
@@ -628,45 +623,31 @@ async def test_select_metadata_claim_state_finds_a_failed_row_reclaimable_by_ste
     assert reclaimed_generation == catalog_client.INITIAL_LEASE_GENERATION + 1
 
 
-async def test_claim_aggregated_bar_artifact_inserts_and_conflicts(clean_artifacts, pool):
-    identity = _aggregated_bar_identity()
-    a = await catalog_client.claim_aggregated_bar_artifact(
-        identity=identity,
-        worker_id="w-1",
-        lease_ttl_ms=300_000,
-        data_contract_hash="e" * 64,
-        file_path="equity/usa/daily/spy.zip",
-    )
-    assert isinstance(a, int)
-
-    b = await catalog_client.claim_aggregated_bar_artifact(
-        identity=identity,
-        worker_id="w-2",
-        lease_ttl_ms=300_000,
-        data_contract_hash="e" * 64,
-        file_path="equity/usa/daily/spy.zip",
-    )
-    assert b is None  # second claim loses
-
-
 # ---------------------------------------------------------------------------
 # #1879 (PR C of #1861): metadata rows carry a real PriceAdjustmentMode,
 # and mark_metadata_artifacts_stale_for_path scopes staleness by it.
 # ---------------------------------------------------------------------------
 
 
-async def test_claim_metadata_artifact_records_the_price_adjustment_mode(clean_artifacts, pool):
+@pytest.mark.parametrize(
+    "mode",
+    ["raw", None],
+    ids=["records_the_price_adjustment_mode_1879", "still_writes_null_when_identity_carries_none_1879"],
+)
+async def test_claim_metadata_artifact_writes_the_identitys_price_adjustment_mode(clean_artifacts, pool, mode):
     """Pre-#1879, PriceAdjustmentMode was hardcoded NULL for every metadata
     row regardless of ``identity.price_adjustment_mode``. Populating it is
     what lets mark_metadata_artifacts_stale_for_path scope by mode instead
     of staling a sibling mode's still-valid row (FilePath alone is identical
-    across modes -- see that function's own docstring)."""
+    across modes -- see that function's own docstring). Existing callers
+    (pre-#1879) construct their identity with ``price_adjustment_mode=None``
+    and must keep writing NULL, unchanged."""
     identity = ArtifactIdentity(
         artifact_kind="metadata",
         market=None,
         symbol=None,
         provider="lean_image_extract",
-        price_adjustment_mode="raw",
+        price_adjustment_mode=mode,
     )
     artifact_id = await catalog_client.claim_metadata_artifact(
         identity=identity,
@@ -677,22 +658,7 @@ async def test_claim_metadata_artifact_records_the_price_adjustment_mode(clean_a
     )
     async with catalog_client.connection() as conn:
         row = await conn.fetchrow('SELECT "PriceAdjustmentMode" FROM "DataLakeArtifacts" WHERE "Id" = $1', artifact_id)
-    assert row["PriceAdjustmentMode"] == "raw"
-
-
-async def test_claim_metadata_artifact_still_writes_null_when_identity_carries_none(clean_artifacts, pool):
-    """Existing callers (pre-#1879) construct their identity with
-    ``price_adjustment_mode=None`` and must keep writing NULL, unchanged."""
-    artifact_id = await catalog_client.claim_metadata_artifact(
-        identity=_metadata_identity(),
-        worker_id="w-1",
-        lease_ttl_ms=300_000,
-        data_contract_hash="f" * 64,
-        file_path="market-hours/market-hours-database.json",
-    )
-    async with catalog_client.connection() as conn:
-        row = await conn.fetchrow('SELECT "PriceAdjustmentMode" FROM "DataLakeArtifacts" WHERE "Id" = $1', artifact_id)
-    assert row["PriceAdjustmentMode"] is None
+    assert row["PriceAdjustmentMode"] == mode
 
 
 def _metadata_identity_with_mode(mode: str) -> ArtifactIdentity:

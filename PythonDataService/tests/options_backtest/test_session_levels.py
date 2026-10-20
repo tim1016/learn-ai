@@ -82,12 +82,11 @@ def _lines(levels: tuple[Level, ...], open_ms: int) -> list[tuple[LevelKind, str
 # ── The busy Wednesday: a momentum entry, a stop, a re-entry and the exit time ──
 
 
-def test_the_busy_day_draws_each_legs_starting_price_momentum_and_stop_between_the_minutes_they_applied(
-    scene: RunResult,
-) -> None:
+def test_the_busy_day_draws_its_lines_and_marks_its_fills(scene: RunResult) -> None:
     wednesday = scene.sessions[0]
 
     levels = levels_of(scene.setup, wednesday.outcome)
+    fills = fills_of(wednesday.outcome.trades)
 
     # Worked from the scene: call 500 took 4.00 at m5 (level 4.00 x 1.25 = 5.00) and its buy was decided at m10; it filled
     # at m11 at 5.10, so its stop is 5.10 x 0.8 = 4.08 until the stop was hit at m20. Its re-entry took 3.80 at m21
@@ -103,41 +102,14 @@ def test_the_busy_day_draws_each_legs_starting_price_momentum_and_stop_between_t
         (SP, "call", 1, CALL_500, D("3.80"), 21, 30),
         (MOM, "call", 1, CALL_500, D("4.75"), 21, 30),
         (STOP, "call", 1, CALL_500, D("3.88"), 31, 60),
-    ]
-
-
-def test_a_leg_that_never_filled_has_its_momentum_level_worked_out_from_its_rule_and_its_starting_price(
-    scene: RunResult,
-) -> None:
-    friday = scene.sessions[2]
-    assert friday.outcome.trades == (), "Friday traded nothing: there is no trade to carry a level"
-
-    levels = levels_of(scene.setup, friday.outcome)
-
-    # The call took 4.00 at m5 and the momentum rule is 25 percent up: 4.00 x 1.25 = 5.00. The lag leg took 1.00 and
-    # waits for a 10 percent fall: 1.00 x 0.9 = 0.90. Both legs waited until the exit time and were cancelled at m60.
-    assert _lines(levels, FRI_OPEN_MS) == [
-        (SP, "call", 0, FRI_CALL_500, D("4.00"), 5, 60),
-        (MOM, "call", 0, FRI_CALL_500, D("5.00"), 5, 60),
-        (SP, "lag", 0, FRI_PUT_495, D("1.00"), 5, 60),
-        (MOM, "lag", 0, FRI_PUT_495, D("0.90"), 5, 60),
-    ]
-
-
-def test_a_session_skipped_for_want_of_an_underlying_price_has_no_line_no_fill_and_no_mark(scene: RunResult) -> None:
-    thursday = scene.sessions[1]
-
-    assert levels_of(scene.setup, thursday.outcome) == ()
-    assert fills_of(thursday.outcome.trades) == ()
-    assert marks_of(thursday.outcome.trades) == ()
-
-
-def test_the_busy_day_marks_every_entry_and_sale_on_the_bar_it_filled_in_with_the_price_seen_and_the_price_filled(
-    scene: RunResult,
-) -> None:
-    wednesday = scene.sessions[0]
-
-    fills = fills_of(wednesday.outcome.trades)
+    ], "the busy day draws each leg's starting price, momentum and stop between the minutes they applied"
+    # Where event and trade agree on the contract and the price, the call leg's first attempt has its starting price and
+    # the level 4.00 x 1.25 = 5.00 from m5 to m10, and the stop 5.10 x 0.8 = 4.08 from m11 to m20.
+    assert [line for line in _lines(levels, WED_OPEN_MS) if line[1:3] == ("call", 0)] == [
+        (SP, "call", 0, CALL_500, D("4.00"), 5, 10),
+        (MOM, "call", 0, CALL_500, D("5.00"), 5, 10),
+        (STOP, "call", 0, CALL_500, D("4.08"), 11, 20),
+    ], "a starting price and a trade on the same contract are drawn as ever"
 
     # In order of the bar: the put bought at m6 (2.00); call 0 bought at m11 (5.10) and sold at m21 (3.90, a stop);
     # call 1 bought at m31 (4.85); then at m61 the put (2.10) and call 1 (4.55) sold at the exit time. At m61 the put's
@@ -162,10 +134,32 @@ def test_the_busy_day_marks_every_entry_and_sale_on_the_bar_it_filled_in_with_th
         ("entry", "call", 1, CALL_500, 1, 31, D("4.85"), D("4.85"), None),
         ("exit", "put", 0, PUT_500, 1, 61, D("2.10"), D("2.10"), ExitReason.EXIT_TIME),
         ("exit", "call", 1, CALL_500, 1, 61, D("4.55"), D("4.55"), ExitReason.EXIT_TIME),
-    ]
-    assert marks_of(wednesday.outcome.trades) == ()
+    ], "the busy day marks every entry and sale on the bar it filled in with the price seen and the price filled"
+    assert marks_of(wednesday.outcome.trades) == (), "the busy day marks nothing"
     # Every fill is dated by its bar: the instant of the minute it closed.
-    assert fills[0].bar_close_ms == minute(WED_OPEN_MS, 6)
+    assert fills[0].bar_close_ms == minute(WED_OPEN_MS, 6), "a fill is dated by the minute its bar closed"
+
+
+def test_the_quiet_days_draw_what_waited_and_nothing_where_nothing_traded(scene: RunResult) -> None:
+    friday = scene.sessions[2]
+    thursday = scene.sessions[1]
+    assert friday.outcome.trades == (), "Friday traded nothing: there is no trade to carry a level"
+
+    levels = levels_of(scene.setup, friday.outcome)
+
+    # The call took 4.00 at m5 and the momentum rule is 25 percent up: 4.00 x 1.25 = 5.00. The lag leg took 1.00 and
+    # waits for a 10 percent fall: 1.00 x 0.9 = 0.90. Both legs waited until the exit time and were cancelled at m60.
+    assert _lines(levels, FRI_OPEN_MS) == [
+        (SP, "call", 0, FRI_CALL_500, D("4.00"), 5, 60),
+        (MOM, "call", 0, FRI_CALL_500, D("5.00"), 5, 60),
+        (SP, "lag", 0, FRI_PUT_495, D("1.00"), 5, 60),
+        (MOM, "lag", 0, FRI_PUT_495, D("0.90"), 5, 60),
+    ], "a leg that never filled has its momentum level worked out from its rule and its starting price"
+
+    # Thursday was skipped for want of an underlying price.
+    assert levels_of(scene.setup, thursday.outcome) == (), "a skipped session has no line"
+    assert fills_of(thursday.outcome.trades) == (), "a skipped session has no fill"
+    assert marks_of(thursday.outcome.trades) == (), "a skipped session has no mark"
 
 
 # ── Small scenes, each one thing ─────────────────────────────────────────
@@ -349,23 +343,7 @@ def test_a_leg_with_no_momentum_rule_whose_buy_is_refused_for_want_of_cash_waite
     assert fills_of(outcome.trades) == () and marks_of(outcome.trades) == ()
 
 
-def test_an_attempt_refused_for_cash_whose_momentum_was_never_reached_cannot_be_drawn() -> None:
-    written = setup(leg("call", momentum=("percent_up", "10")))
-    market = TableMarket(
-        underlying=steady("500.00"),
-        picks=_picks(("call", CALL)),
-        options={CALL: {5: ("2.00", "2.00"), **flat("2.00", 6, 7), 8: ("2.30", "2.30"), 9: ("2.30", "2.30")}},
-    )
-    outcome = replay(written, market, cash="100")
-    without_the_decision = replace(
-        outcome, events=tuple(e for e in outcome.events if e.kind is not EventKind.MOMENTUM_HIT)
-    )
-
-    with pytest.raises(SessionRecordInconsistent, match="momentum was never reached"):
-        levels_of(written, without_the_decision)
-
-
-def test_an_attempt_whose_buy_was_decided_and_that_nothing_ended_was_ended_zero_times_and_cannot_be_drawn() -> None:
+def test_an_attempt_refused_for_cash_whose_momentum_was_never_reached_or_that_nothing_ended_cannot_be_drawn() -> None:
     written = setup(leg("call", momentum=("percent_up", "10")))
     market = TableMarket(
         underlying=steady("500.00"),
@@ -375,9 +353,15 @@ def test_an_attempt_whose_buy_was_decided_and_that_nothing_ended_was_ended_zero_
         options={CALL: {5: ("2.00", "2.00"), **flat("2.00", 6, 7), 8: ("2.30", "2.30"), 9: ("2.30", "2.30")}},
     )
     outcome = replay(written, market, cash="100")
+    without_the_decision = replace(
+        outcome, events=tuple(e for e in outcome.events if e.kind is not EventKind.MOMENTUM_HIT)
+    )
     without_the_refusal = replace(
         outcome, events=tuple(e for e in outcome.events if e.kind is not EventKind.ENTRY_REFUSED_FOR_CASH)
     )
+
+    with pytest.raises(SessionRecordInconsistent, match="momentum was never reached"):
+        levels_of(written, without_the_decision)
 
     # What is left of the waiting: a starting price at m5 and the decision at m8, with no cancel and no refusal. An attempt
     # that waited for its level ends exactly once, so this one ended 0 times and the reader must not take the decision
@@ -391,7 +375,7 @@ def test_an_attempt_whose_buy_was_decided_and_that_nothing_ended_was_ended_zero_
     assert [(e.kind, minute_of(e.at_ms)) for e in without_the_refusal.events if e.kind in waiting] == [
         (EventKind.STARTING_PRICE_TAKEN, 5),
         (EventKind.MOMENTUM_HIT, 8),
-    ]
+    ], "without the refusal what is left of the waiting is a starting price at m5 and the decision at m8"
     with pytest.raises(SessionRecordInconsistent, match="ended 0 times"):
         levels_of(written, without_the_refusal)
 
@@ -435,36 +419,42 @@ def _without(outcome: SessionOutcome, *, kind: EventKind, leg_id: str, entry_num
     return replace(outcome, events=kept)
 
 
-def test_a_trade_with_a_starting_price_that_no_event_took_cannot_be_drawn(scene: RunResult) -> None:
-    broken = _without(scene.sessions[0].outcome, kind=EventKind.STARTING_PRICE_TAKEN, leg_id="call", entry_number=0)
-
-    with pytest.raises(SessionRecordInconsistent, match="call"):
-        levels_of(scene.setup, broken)
-
-
-def test_an_attempt_that_waited_and_was_neither_cancelled_nor_refused_cannot_be_drawn(scene: RunResult) -> None:
-    broken = _without(scene.sessions[2].outcome, kind=EventKind.LEG_CANCELLED, leg_id="lag", entry_number=0)
-
-    with pytest.raises(SessionRecordInconsistent, match="lag"):
-        levels_of(scene.setup, broken)
-
-
-def test_a_starting_price_taken_twice_or_that_differs_from_the_trades_cannot_be_drawn(scene: RunResult) -> None:
+def test_a_trade_with_a_starting_price_that_no_event_took_or_that_was_taken_twice_or_differs_cannot_be_drawn(
+    scene: RunResult,
+) -> None:
     outcome = scene.sessions[0].outcome
     first = next(
         e
         for e in outcome.events
         if e.kind is EventKind.STARTING_PRICE_TAKEN and e.leg_id == "call" and e.entry_number == 0
     )
-    twice = replace(outcome, events=(*outcome.events, first))
-    other_price = replace(
+    no_event_took_it = _without(outcome, kind=EventKind.STARTING_PRICE_TAKEN, leg_id="call", entry_number=0)
+    taken_twice = replace(outcome, events=(*outcome.events, first))
+    differs_from_the_trades = replace(
         outcome,
         events=tuple(replace(e, price=D("4.10")) if e is first else e for e in outcome.events),
     )
 
-    for broken in (twice, other_price):
-        with pytest.raises(SessionRecordInconsistent):
-            levels_of(scene.setup, broken)
+    with pytest.raises(SessionRecordInconsistent, match="call"):
+        levels_of(scene.setup, no_event_took_it)
+    with pytest.raises(SessionRecordInconsistent):
+        levels_of(scene.setup, taken_twice)
+    with pytest.raises(SessionRecordInconsistent):
+        levels_of(scene.setup, differs_from_the_trades)
+
+
+def test_an_attempt_that_waited_and_was_neither_cancelled_nor_refused_or_was_ended_twice_cannot_be_drawn(
+    scene: RunResult,
+) -> None:
+    outcome = scene.sessions[2].outcome
+    never_ended = _without(outcome, kind=EventKind.LEG_CANCELLED, leg_id="lag", entry_number=0)
+    cancelled = next(e for e in outcome.events if e.kind is EventKind.LEG_CANCELLED and e.leg_id == "lag")
+    ended_twice = replace(outcome, events=(*outcome.events, replace(cancelled, at_ms=cancelled.at_ms + 60_000)))
+
+    with pytest.raises(SessionRecordInconsistent, match="lag"):
+        levels_of(scene.setup, never_ended)
+    with pytest.raises(SessionRecordInconsistent, match="lag"):
+        levels_of(scene.setup, ended_twice)
 
 
 @pytest.mark.parametrize(
@@ -502,19 +492,9 @@ def test_a_starting_price_taken_on_another_contract_than_the_trade_is_on_cannot_
         levels_of(scene.setup, on_another)
 
 
-def test_a_starting_price_and_a_trade_on_the_same_contract_are_drawn_as_ever(scene: RunResult) -> None:
-    # Where event and trade agree on the contract and the price, the call leg's first attempt has its starting price and
-    # the level 4.00 x 1.25 = 5.00 from m5 to m10, and the stop 5.10 x 0.8 = 4.08 from m11 to m20.
-    drawn = _lines(levels_of(scene.setup, scene.sessions[0].outcome), WED_OPEN_MS)
-
-    assert [line for line in drawn if line[1:3] == ("call", 0)] == [
-        (SP, "call", 0, CALL_500, D("4.00"), 5, 10),
-        (MOM, "call", 0, CALL_500, D("5.00"), 5, 10),
-        (STOP, "call", 0, CALL_500, D("4.08"), 11, 20),
-    ]
-
-
-def test_a_starting_price_on_a_leg_whose_setup_has_no_momentum_rule_cannot_be_drawn(scene: RunResult) -> None:
+def test_a_setup_edited_so_that_a_leg_that_waited_has_no_rule_or_is_no_longer_in_it_cannot_be_drawn(
+    scene: RunResult,
+) -> None:
     friday = scene.sessions[2].outcome
     without_momentum = scene.setup.model_copy(
         update={
@@ -524,13 +504,6 @@ def test_a_starting_price_on_a_leg_whose_setup_has_no_momentum_rule_cannot_be_dr
             )
         }
     )
-
-    with pytest.raises(SessionRecordInconsistent, match="momentum rule"):
-        levels_of(without_momentum, friday)
-
-
-def test_a_setup_edited_so_that_a_leg_that_waited_is_no_longer_in_it_cannot_be_drawn(scene: RunResult) -> None:
-    friday = scene.sessions[2].outcome
     # Friday's lag leg took a starting price (1.00 at m5) and was cancelled at m60 without trading, so its momentum line
     # is the leg's own rule applied to 1.00. With the leg called "lag2" in the setup, no leg is called "lag": there is no
     # rule to apply, and nothing to draw it from without a guess. The setup is still a valid setup.
@@ -542,8 +515,10 @@ def test_a_setup_edited_so_that_a_leg_that_waited_is_no_longer_in_it_cannot_be_d
             )
         }
     )
-    assert [each.leg_id for each in renamed.legs] == ["call", "put", "lag2"]
+    assert [each.leg_id for each in renamed.legs] == ["call", "put", "lag2"], "the renamed setup is still a valid setup"
 
+    with pytest.raises(SessionRecordInconsistent, match="momentum rule"):
+        levels_of(without_momentum, friday)
     with pytest.raises(SessionRecordInconsistent, match=r"leg 'lag', entry 0: .*setup"):
         levels_of(renamed, friday)
 
@@ -564,15 +539,6 @@ def test_a_fill_shows_the_price_seen_and_the_different_price_it_filled_at_after_
         ("entry", at(6), D("2.00"), D("2.02"), None),
         ("exit", at(61), D("2.50"), D("2.47"), ExitReason.EXIT_TIME),
     ]
-
-
-def test_an_attempt_that_never_filled_and_was_ended_twice_cannot_be_drawn(scene: RunResult) -> None:
-    outcome = scene.sessions[2].outcome
-    cancelled = next(e for e in outcome.events if e.kind is EventKind.LEG_CANCELLED and e.leg_id == "lag")
-    twice = replace(outcome, events=(*outcome.events, replace(cancelled, at_ms=cancelled.at_ms + 60_000)))
-
-    with pytest.raises(SessionRecordInconsistent, match="lag"):
-        levels_of(scene.setup, twice)
 
 
 # ── A run whose stored setup can no longer be read ───────────────────────
@@ -857,27 +823,32 @@ def test_a_close_that_filled_on_a_trade_that_was_marked_cannot_be_drawn() -> Non
         levels_of(None, replace(thursday, events=(*thursday.events, event)))
 
 
-def test_a_mark_owed_by_a_leg_that_opened_by_a_purchase_cannot_be_drawn() -> None:
+@pytest.mark.parametrize(
+    ("stored", "relabelled", "match"),
+    [
+        # The bought leg's stored mark is relabelled as an amount owed: its event now says it was never bought back.
+        pytest.param(
+            EventKind.MARKED_NOT_SOLD,
+            EventKind.MARKED_NOT_BOUGHT_BACK,
+            r"leg 'long', entry 0: .*marked_not_bought_back.*buy side",
+            id="3086_a_mark_owed_by_a_leg_that_opened_by_a_purchase",
+        ),
+        pytest.param(
+            EventKind.MARKED_NOT_BOUGHT_BACK,
+            EventKind.MARKED_NOT_SOLD,
+            r"leg 'short', entry 0: .*marked_not_sold.*sell side",
+            id="3086_a_mark_held_by_a_leg_that_opened_by_a_sale",
+        ),
+    ],
+)
+def test_a_mark_on_the_wrong_side_for_its_leg_cannot_be_drawn(
+    stored: EventKind, relabelled: EventKind, match: str
+) -> None:
     thursday = a_selling_run().sessions[1].outcome
-    # The bought leg's stored mark is relabelled as an amount owed: its event now says it was never bought back.
-    owed = tuple(
-        replace(e, kind=EventKind.MARKED_NOT_BOUGHT_BACK) if e.kind is EventKind.MARKED_NOT_SOLD else e
-        for e in thursday.events
-    )
+    events = tuple(replace(e, kind=relabelled) if e.kind is stored else e for e in thursday.events)
 
-    with pytest.raises(SessionRecordInconsistent, match=r"leg 'long', entry 0: .*marked_not_bought_back.*buy side"):
-        levels_of(None, replace(thursday, events=owed))
-
-
-def test_a_mark_held_by_a_leg_that_opened_by_a_sale_cannot_be_drawn() -> None:
-    thursday = a_selling_run().sessions[1].outcome
-    held = tuple(
-        replace(e, kind=EventKind.MARKED_NOT_SOLD) if e.kind is EventKind.MARKED_NOT_BOUGHT_BACK else e
-        for e in thursday.events
-    )
-
-    with pytest.raises(SessionRecordInconsistent, match=r"leg 'short', entry 0: .*marked_not_sold.*sell side"):
-        levels_of(None, replace(thursday, events=held))
+    with pytest.raises(SessionRecordInconsistent, match=match):
+        levels_of(None, replace(thursday, events=events))
 
 
 def test_a_mark_event_on_a_trade_that_closed_by_a_fill_cannot_be_drawn() -> None:

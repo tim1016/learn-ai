@@ -22,33 +22,35 @@ def window():
                   annualization_sessions=252, activity_floor=25)
 
 
-def test_exact_drawdown_limit_and_technical_precedence_retain_all_outcomes():
-    assert classify(metrics(), Policy(), window(), "final").eligible
+def test_classify_retains_all_outcomes_and_never_passes_unknown_evidence_without_an_exact_exception():
+    assert classify(metrics(), Policy(), window(), "final").eligible, "exact drawdown limit: a result within every rule is eligible"
     fail = classify(metrics(max_drawdown_fraction=Decimal("0.20000000000000000001")), Policy(), window(), "final")
-    assert fail.status == "does_not_meet_rules"
+    assert fail.status == "does_not_meet_rules", "exact drawdown limit: a drawdown past the limit does not meet the rules"
     invalid = classify(metrics(net_profit_usd=Decimal("-1"), technical_failures=("held mark missing",)), Policy(), window(), "final")
-    assert invalid.status == "could_not_evaluate"
-    assert next(o for o in invalid.outcomes if o.rule == "positive_net").status == "does_not_meet_rules"
+    assert invalid.status == "could_not_evaluate", "technical precedence: a technical failure makes the verdict could_not_evaluate"
+    assert next(o for o in invalid.outcomes if o.rule == "positive_net").status == "does_not_meet_rules", (
+        "technical precedence: the failed positive_net rule is still retained among the outcomes"
+    )
+    # A technical verdict cannot be excepted away.
     with pytest.raises(ValueError, match="technical"):
         validate_exception((invalid,), ("final:technical_validity", "final:positive_net"), "Owner accepts")
 
-
-def test_sparse_and_ongoing_unknown_cannot_pass_and_need_exact_exception():
     policy = Policy(max_recovery_sessions=3)
     verdict = classify(metrics(ongoing_recovery=True), policy, window(), "final")
-    assert verdict.status == "not_enough_evidence"
+    assert verdict.status == "not_enough_evidence", "sparse and ongoing unknown cannot pass: an ongoing recovery is not enough evidence"
     validate_exception((verdict,), ("final:recovery",), "Accept censored recovery")
+    # The exception must enumerate its gates and carry a comment.
     with pytest.raises(ValueError, match="enumerate"):
         validate_exception((verdict,), (), "Accept")
     with pytest.raises(ValueError, match="comment"):
         validate_exception((verdict,), ("final:recovery",), " ")
     over = classify(metrics(max_recovery_sessions=4, ongoing_recovery=True), policy, window(), "final")
-    assert over.status == "does_not_meet_rules"
+    assert over.status == "does_not_meet_rules", "sparse and ongoing unknown cannot pass: an ongoing recovery past the limit does not meet the rules"
 
-
-def test_missing_fold_is_technical_even_if_other_observations_exceed_floor():
     verdict = classify(metrics(), Policy(), window(), "pooled_forward", complete=False)
-    assert verdict.status == "could_not_evaluate"
+    assert verdict.status == "could_not_evaluate", "a missing fold is technical even if other observations exceed the floor"
     unavailable = classify(metrics(sharpe=None, sharpe_unavailable_reason="constant series"), Policy(), window(), "training")
-    assert unavailable.status == "not_enough_evidence"
-    assert next(o for o in unavailable.outcomes if o.rule == "sharpe").reason == "constant series"
+    assert unavailable.status == "not_enough_evidence", "an unavailable sharpe is not enough evidence"
+    assert next(o for o in unavailable.outcomes if o.rule == "sharpe").reason == "constant series", (
+        "an unavailable sharpe keeps its reason on the sharpe outcome"
+    )

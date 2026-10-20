@@ -8,6 +8,7 @@ and no replay arithmetic decides it.
 from __future__ import annotations
 
 import inspect
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
@@ -191,12 +192,31 @@ def test_a_buy_back_is_sent_as_a_buy_back_with_the_side_of_each_fill() -> None:
     )
 
 
-def test_a_sold_leg_marked_and_not_bought_back_is_a_mark_whose_entry_says_it_is_owed() -> None:
-    sent = wire.OptionsBacktestTradeResponse.from_stored(StoredTrade(OPEN_MS, 0, _owed()))
+@pytest.mark.parametrize(
+    ("trade_of", "exit_reason", "entry_side", "mark_price", "pnl"),
+    [
+        # A sold leg marked and not bought back is a mark whose entry says it is owed.
+        pytest.param(_owed, "marked_not_bought_back", "sell", "3.00", "-50.00", id="sold-leg-marked-not-bought-back"),
+        # A leg marked and not sold is a mark with no sale and no exit fee.
+        pytest.param(_marked, "marked_not_sold", "buy", "1.75", "-25.65", id="bought-leg-marked-not-sold"),
+    ],
+)
+def test_a_leg_marked_and_not_closed_is_sent_as_a_mark_with_no_sale_and_no_exit_fee(
+    trade_of: Callable[[], LegTrade], exit_reason: str, entry_side: str, mark_price: str, pnl: str
+) -> None:
+    sent = wire.OptionsBacktestTradeResponse.from_stored(StoredTrade(OPEN_MS, 0, trade_of()))
 
-    assert (sent.exit_kind, sent.sale, sent.exit_reason) == ("mark", None, "marked_not_bought_back")
-    assert sent.entry.side == "sell"
-    assert sent.mark == wire.OptionsBacktestTradeMarkResponse(bar_close_ms=OPEN_MS + 6_000_000, price_usd="3.00")
+    assert (sent.exit_kind, sent.sale, sent.exit_reason) == ("mark", None, exit_reason), (
+        "a leg marked and not closed is sent as a mark with no sale"
+    )
+    assert sent.entry.side == entry_side, "the entry says whether the leg is owed (sold) or held (bought)"
+    assert sent.mark == wire.OptionsBacktestTradeMarkResponse(bar_close_ms=OPEN_MS + 6_000_000, price_usd=mark_price), (
+        "the mark is the last close, as text"
+    )
+    assert (sent.starting_price_usd, sent.momentum_level_usd, sent.stop_level_usd) == (None, None, None), (
+        "a leg with no stop sends no starting price, momentum level or stop level"
+    )
+    assert (sent.exit_fee_usd, sent.pnl_usd) == ("0", pnl), "a mark has no exit fee, and the profit is at the mark"
 
 
 def test_a_trade_whose_exit_kind_disagrees_with_the_side_of_its_fill_cannot_be_made() -> None:
@@ -204,15 +224,6 @@ def test_a_trade_whose_exit_kind_disagrees_with_the_side_of_its_fill_cannot_be_m
 
     with pytest.raises(ValidationError):
         wire.OptionsBacktestTradeResponse.model_validate(sent.model_dump() | {"exit_kind": "sale"})
-
-
-def test_a_leg_marked_and_not_sold_is_sent_as_a_mark_with_no_sale_and_no_exit_fee() -> None:
-    sent = wire.OptionsBacktestTradeResponse.from_stored(StoredTrade(OPEN_MS, 0, _marked()))
-
-    assert (sent.exit_kind, sent.sale, sent.exit_reason) == ("mark", None, "marked_not_sold")
-    assert sent.mark == wire.OptionsBacktestTradeMarkResponse(bar_close_ms=OPEN_MS + 6_000_000, price_usd="1.75")
-    assert (sent.starting_price_usd, sent.momentum_level_usd, sent.stop_level_usd) == (None, None, None)
-    assert (sent.exit_fee_usd, sent.pnl_usd) == ("0", "-25.65")
 
 
 def test_a_figure_is_written_in_plain_digits_whatever_form_the_decimal_holds_it_in() -> None:
@@ -275,29 +286,7 @@ def test_each_closed_set_on_the_wire_is_exactly_the_members_of_the_enum_it_comes
     assert list(get_args(words)) == members
 
 
-def test_an_event_names_its_contract_by_symbol_and_its_price_as_text() -> None:
-    event = Event(
-        kind=EventKind.PICK_REFUSED,
-        at_ms=OPEN_MS + 300_000,
-        leg_id="far",
-        entry_number=0,
-        reason=PickRefusal.STRIKE_NOT_LISTED.value,
-        detail="the strike rule comes off the end of the 4 call strikes listed for 2026-10-09 with the underlying at 499.07",
-    )
-    priced = Event(EventKind.ENTRY_FILLED, OPEN_MS + 360_000, "call", 1, CALL, D("5.10"))
-
-    sent, sent_priced = (
-        wire.OptionsBacktestEventResponse.from_event(event),
-        wire.OptionsBacktestEventResponse.from_event(priced),
-    )
-
-    assert (sent.reason, sent.contract, sent.price_usd) == ("strike_not_listed", None, None)
-    assert (sent_priced.contract, sent_priced.price_usd, sent_priced.detail) == ("SPY261007C00500500", "5.10", None)
-
-
-def test_an_events_words_are_served_exactly_as_the_backend_wrote_them_even_when_they_name_a_date() -> None:
-    # The words are the backend's own prose for the owner: stored as written and served as written. A refused pick
-    # names the day it looked for, so the date stays in it, character for character.
+def test_an_event_names_its_contract_by_symbol_its_price_as_text_and_its_words_as_the_backend_wrote_them() -> None:
     stored = (
         "the strike rule comes off the end of the 4 call strikes listed for 2026-10-09 with the underlying at 499.07"
     )
@@ -309,11 +298,23 @@ def test_an_events_words_are_served_exactly_as_the_backend_wrote_them_even_when_
         reason=PickRefusal.STRIKE_NOT_LISTED.value,
         detail=stored,
     )
+    priced = Event(EventKind.ENTRY_FILLED, OPEN_MS + 360_000, "call", 1, CALL, D("5.10"))
 
-    sent = wire.OptionsBacktestEventResponse.from_event(event)
+    sent, sent_priced = (
+        wire.OptionsBacktestEventResponse.from_event(event),
+        wire.OptionsBacktestEventResponse.from_event(priced),
+    )
 
-    assert sent.detail == stored
-    assert sent.detail is not None and "2026-10-09" in sent.detail
+    assert (sent.reason, sent.contract, sent.price_usd) == ("strike_not_listed", None, None), (
+        "an event with no contract and no price is sent with its reason and neither"
+    )
+    assert (sent_priced.contract, sent_priced.price_usd, sent_priced.detail) == ("SPY261007C00500500", "5.10", None), (
+        "an event names its contract by symbol and its price as text"
+    )
+    # The words are the backend's own prose for the owner: stored as written and served as written. A refused pick
+    # names the day it looked for, so the date stays in it, character for character.
+    assert sent.detail == stored, "an event's words are served exactly as the backend wrote them"
+    assert sent.detail is not None and "2026-10-09" in sent.detail, "an event's words keep the date they name"
 
 
 def test_a_series_is_shown_with_no_reason_or_not_shown_with_a_reason_a_message_and_no_points() -> None:
@@ -341,15 +342,14 @@ def _served_models() -> list[type[BaseModel]]:
     ]
 
 
-def test_every_model_this_module_serves_is_named_for_the_feature_so_none_collides_with_another() -> None:
+def test_every_served_model_is_named_for_the_feature_and_has_bounded_instants_text_prices_and_no_bare_dict() -> None:
     models = _served_models()
 
-    assert len(models) >= 10
-    assert [m.__name__ for m in models if not m.__name__.startswith("OptionsBacktest")] == []
-
-
-def test_every_instant_is_bounded_by_the_domains_ceiling_every_price_is_text_and_no_field_is_a_bare_dict() -> None:
-    for model in _served_models():
+    assert len(models) >= 10, "this module serves at least ten models"
+    assert [m.__name__ for m in models if not m.__name__.startswith("OptionsBacktest")] == [], (
+        "every model this module serves is named for the feature, so none collides with another"
+    )
+    for model in models:
         schema = model.model_json_schema()
         for name, prop in schema.get("properties", {}).items():
             where = f"{model.__name__}.{name}"

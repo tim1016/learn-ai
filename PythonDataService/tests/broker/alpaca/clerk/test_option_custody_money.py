@@ -55,17 +55,16 @@ def _stock(*, side: OrderSide, qty: float, price: float, ts_ms: int, symbol: str
 # ── Notional ──────────────────────────────────────────────────────────────────
 
 
-def test_two_contracts_at_a_dollar_fifty_move_three_hundred_dollars() -> None:
-    """2 contracts × $1.50 × 100 = $300.00; the same figures as shares are $3.00."""
-    assert notional(2, 1.50, multiplier=100) == Decimal(300)
-    assert notional(2, 1.50) == Decimal(3)
-    assert _fill(side=OrderSide.BUY, qty=2, price=1.50, ts_ms=1).exact_notional == Decimal(300)
-    assert _stock(side=OrderSide.BUY, qty=2, price=1.50, ts_ms=1).exact_notional == Decimal(3)
+def test_a_contracts_notional_is_contracts_times_premium_times_multiplier_exactly() -> None:
+    """2 contracts × $1.50 × 100 = $300.00; the same figures as shares are $3.00.
 
-
-def test_a_half_cent_premium_times_its_multiplier_is_exact() -> None:
-    """3 × $1.505 × 100 = $451.50, with no float residue."""
-    assert notional(3, 1.505, multiplier=100) == Decimal("451.5")
+    3 × $1.505 × 100 = $451.50, with no float residue.
+    """
+    assert notional(2, 1.50, multiplier=100) == Decimal(300), "2 contracts at $1.50 move $300.00"
+    assert notional(2, 1.50) == Decimal(3), "the same figures as shares are $3.00"
+    assert _fill(side=OrderSide.BUY, qty=2, price=1.50, ts_ms=1).exact_notional == Decimal(300), "an option fill's exact notional is $300.00"
+    assert _stock(side=OrderSide.BUY, qty=2, price=1.50, ts_ms=1).exact_notional == Decimal(3), "a stock fill's exact notional is $3.00"
+    assert notional(3, 1.505, multiplier=100) == Decimal("451.5"), "a half-cent premium times its multiplier is exact ($451.50)"
 
 
 @pytest.mark.parametrize("bad", [0, -100, True, 100.0, "100", Decimal(100)])
@@ -107,27 +106,26 @@ def test_the_same_fills_as_shares_gain_a_dollar_twenty_as_before() -> None:
     assert result.closed_lots[0].multiplier is None
 
 
-def test_a_sold_option_bought_back_for_less_keeps_the_difference() -> None:
-    """Sold 1 at $3.07, bought back at $1.20: (3.07 − 1.20) × 1 × 100 = $187.00."""
+@pytest.mark.parametrize(
+    ("quantity", "sold_price", "bought_back_price", "realized"),
+    [
+        # Sold 1 at $3.07, bought back at $1.20: (3.07 − 1.20) × 1 × 100 = $187.00.
+        pytest.param(1, 3.07, 1.20, Decimal(187), id="bought-back-for-less-keeps-the-difference"),
+        # Sold 2 at $0.80, bought back at $1.35: (0.80 − 1.35) × 2 × 100 = −$110.00.
+        pytest.param(2, 0.80, 1.35, Decimal(-110), id="bought-back-for-more-loses-the-difference"),
+    ],
+)
+def test_a_sold_option_bought_back_realizes_the_difference_times_the_multiplier(
+    quantity: int, sold_price: float, bought_back_price: float, realized: Decimal
+) -> None:
     result = compute_fifo_pnl(
         [
-            _fill(side=OrderSide.SELL, qty=1, price=3.07, ts_ms=1_000, symbol=_PUT),
-            _fill(side=OrderSide.BUY, qty=1, price=1.20, ts_ms=2_000, symbol=_PUT),
+            _fill(side=OrderSide.SELL, qty=quantity, price=sold_price, ts_ms=1_000, symbol=_PUT),
+            _fill(side=OrderSide.BUY, qty=quantity, price=bought_back_price, ts_ms=2_000, symbol=_PUT),
         ]
     )
-    assert result.exact_realized_pnl == Decimal(187)
-    assert result.open_lots == []
-
-
-def test_a_sold_option_bought_back_for_more_loses_the_difference() -> None:
-    """Sold 2 at $0.80, bought back at $1.35: (0.80 − 1.35) × 2 × 100 = −$110.00."""
-    result = compute_fifo_pnl(
-        [
-            _fill(side=OrderSide.SELL, qty=2, price=0.80, ts_ms=1_000, symbol=_PUT),
-            _fill(side=OrderSide.BUY, qty=2, price=1.35, ts_ms=2_000, symbol=_PUT),
-        ]
-    )
-    assert result.exact_realized_pnl == Decimal(-110)
+    assert result.exact_realized_pnl == realized, "realized P&L is (sold - bought back) x quantity x 100"
+    assert result.open_lots == [], "buying the position back leaves no open lots"
 
 
 def test_partial_closes_take_the_oldest_contracts_first() -> None:

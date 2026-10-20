@@ -61,23 +61,24 @@ class TestSpotCheckFromReconciliation:
 class TestPutCallParity:
     """Greek-level parity identities — independent of solver, exact for BS."""
 
-    def test_call_minus_put_delta_equals_exp_minus_qT(self):
-        S, K, T, vol, r, q = 100.0, 100.0, 0.25, 0.20, 0.05, 0.02
+    @pytest.mark.parametrize(
+        ("S", "K", "T", "vol", "r", "q"),
+        [
+            pytest.param(100.0, 100.0, 0.25, 0.20, 0.05, 0.02, id="atm_3mo_call_put_delta_gamma_vega_parity"),
+            # Nonzero dividend yield exercises the disc_q discount path: the same
+            # delta-parity as the q=0 case must hold for any q, and gamma and
+            # vega are call/put symmetric independent of q.
+            pytest.param(100.0, 100.0, 0.5, 0.25, 0.04, 0.03, id="put_call_parity_holds_with_nonzero_dividend"),
+        ],
+    )
+    def test_call_put_greek_parity(self, S: float, K: float, T: float, vol: float, r: float, q: float):
         call = black_scholes_greeks(S, K, T, vol, r, q, is_call=True)
         put = black_scholes_greeks(S, K, T, vol, r, q, is_call=False)
-        assert call.delta - put.delta == pytest.approx(math.exp(-q * T), abs=1e-12)
-
-    def test_gamma_call_equals_gamma_put(self):
-        S, K, T, vol, r, q = 100.0, 100.0, 0.25, 0.20, 0.05, 0.02
-        call = black_scholes_greeks(S, K, T, vol, r, q, is_call=True)
-        put = black_scholes_greeks(S, K, T, vol, r, q, is_call=False)
-        assert call.gamma == pytest.approx(put.gamma, abs=1e-12)
-
-    def test_vega_call_equals_vega_put(self):
-        S, K, T, vol, r, q = 100.0, 100.0, 0.25, 0.20, 0.05, 0.02
-        call = black_scholes_greeks(S, K, T, vol, r, q, is_call=True)
-        put = black_scholes_greeks(S, K, T, vol, r, q, is_call=False)
-        assert call.vega == pytest.approx(put.vega, abs=1e-12)
+        assert call.delta - put.delta == pytest.approx(math.exp(-q * T), abs=1e-12), (
+            "call minus put delta equals exp(-qT)"
+        )
+        assert call.gamma == pytest.approx(put.gamma, abs=1e-12), "gamma call equals gamma put"
+        assert call.vega == pytest.approx(put.vega, abs=1e-12), "vega call equals vega put"
 
 
 class TestSelfConsistency:
@@ -106,17 +107,15 @@ class TestSelfConsistency:
 class TestSubDayTtm:
     """The 0DTE bug: TTM well below 1 day must solve, not return EXPIRED."""
 
-    def test_two_hour_ttm_resolves(self):
+    @pytest.mark.parametrize(
+        "T",
+        [
+            pytest.param(2.0 / (365.0 * 24.0), id="two_hour_ttm_resolves"),
+            pytest.param(30.0 / (365.0 * 24.0 * 60.0), id="thirty_minute_ttm_resolves"),
+        ],
+    )
+    def test_sub_day_ttm_resolves(self, T: float):
         S, K, sigma, r = 710.0, 709.0, 0.18, 0.05
-        T = 2.0 / (365.0 * 24.0)
-        price = _bs_price(S, K, T, sigma, r, 0.0, is_call=True)
-        result = implied_volatility(option_price=price, spot=S, strike=K, ttm=T, rate=r, dividend=0.0, is_call=True)
-        assert result.iv is not None
-        assert result.iv == pytest.approx(sigma, abs=1e-4)
-
-    def test_thirty_minute_ttm_resolves(self):
-        S, K, sigma, r = 710.0, 709.0, 0.18, 0.05
-        T = 30.0 / (365.0 * 24.0 * 60.0)  # 30 min
         price = _bs_price(S, K, T, sigma, r, 0.0, is_call=True)
         result = implied_volatility(option_price=price, spot=S, strike=K, ttm=T, rate=r, dividend=0.0, is_call=True)
         # Old behaviour returned status="expired" with iv=None for any
@@ -124,7 +123,7 @@ class TestSubDayTtm:
         # (otherwise convergence_failure / input_error would silently slip
         # through a status-only check).
         assert result.iv is not None, f"solver returned status={result.status}"
-        assert result.iv == pytest.approx(sigma, abs=1e-4)
+        assert result.iv == pytest.approx(sigma, abs=1e-4), "recovered iv matches the input vol"
 
 
 class TestInputGuards:
@@ -174,16 +173,6 @@ class TestDividendYield:
         # not exact because d1 also shifts, but the inequality is strict.
         assert with_div.delta < no_div.delta
 
-    def test_put_call_parity_holds_with_nonzero_dividend(self):
-        S, K, T, vol, r, q = 100.0, 100.0, 0.5, 0.25, 0.04, 0.03
-        call = black_scholes_greeks(S, K, T, vol, r, q, is_call=True)
-        put = black_scholes_greeks(S, K, T, vol, r, q, is_call=False)
-        # Same delta-parity as the q=0 test — must hold for any q.
-        assert call.delta - put.delta == pytest.approx(math.exp(-q * T), abs=1e-12)
-        # Gamma and vega are call/put symmetric independent of q.
-        assert call.gamma == pytest.approx(put.gamma, abs=1e-12)
-        assert call.vega == pytest.approx(put.vega, abs=1e-12)
-
 
 # ---------------------------------------------------------------------------
 # bs_european_price — the canonical analytical BS price function.
@@ -211,11 +200,18 @@ class TestBsEuropeanPrice:
         price = bs_european_price(spot=50, strike=200, ttm_years=0.25, rate=0.05, volatility=0.20, is_call=True)
         assert price < 0.01
 
-    def test_zero_time_returns_zero(self):
-        assert bs_european_price(spot=100, strike=100, ttm_years=0, rate=0.05, volatility=0.20, is_call=True) == 0.0
-
-    def test_zero_vol_returns_zero(self):
-        assert bs_european_price(spot=100, strike=100, ttm_years=0.25, rate=0.05, volatility=0, is_call=True) == 0.0
+    @pytest.mark.parametrize(
+        ("ttm_years", "volatility"),
+        [
+            pytest.param(0, 0.20, id="zero_time_returns_zero"),
+            pytest.param(0.25, 0, id="zero_vol_returns_zero"),
+        ],
+    )
+    def test_degenerate_time_or_vol_returns_zero(self, ttm_years: float, volatility: float):
+        price = bs_european_price(
+            spot=100, strike=100, ttm_years=ttm_years, rate=0.05, volatility=volatility, is_call=True
+        )
+        assert price == 0.0, "a zero time or zero vol price is exactly zero"
 
     def test_known_textbook_value(self):
         # Hull textbook: S=100, K=100, T=1, r=0.05, sigma=0.20 -> call ≈ 10.4506
@@ -238,16 +234,13 @@ class TestBsEuropeanPrice:
 class TestBsEuropeanVega:
     """Raw vega (per 1.0 vol unit)."""
 
-    def test_atm_vega_positive(self):
-        v = bs_european_vega(spot=100, strike=100, ttm_years=0.25, rate=0.05, volatility=0.20)
-        assert v > 0
-
-    def test_vega_peaks_near_atm(self):
+    def test_atm_vega_is_positive_and_peaks_near_atm(self):
         v_atm = bs_european_vega(spot=100, strike=100, ttm_years=0.25, rate=0.05, volatility=0.20)
         v_itm = bs_european_vega(spot=100, strike=80, ttm_years=0.25, rate=0.05, volatility=0.20)
         v_otm = bs_european_vega(spot=100, strike=120, ttm_years=0.25, rate=0.05, volatility=0.20)
-        assert v_atm > v_itm
-        assert v_atm > v_otm
+        assert v_atm > 0, "ATM vega is positive"
+        assert v_atm > v_itm, "vega peaks near ATM: above the ITM strike"
+        assert v_atm > v_otm, "vega peaks near ATM: above the OTM strike"
 
     def test_zero_time_returns_zero(self):
         assert bs_european_vega(spot=100, strike=100, ttm_years=0, rate=0.05, volatility=0.20) == 0.0
@@ -266,20 +259,22 @@ class TestImpliedVolatilityRoundtripViaCanonicalSolver:
     re-pointed at the canonical ``volatility/solver.implied_volatility``
     via the now-canonical ``bs_european_price``."""
 
-    @pytest.mark.parametrize("is_call,sigma", [(True, 0.25), (False, 0.30), (True, 0.40), (False, 0.15)])
-    def test_atm_roundtrip(self, is_call: bool, sigma: float):
-        S, K, T, r = 100.0, 100.0, 0.5, 0.05
-        price = bs_european_price(S, K, T, r, sigma, is_call=is_call)
-        result = implied_volatility(option_price=price, spot=S, strike=K, ttm=T, rate=r, is_call=is_call)
-        assert result.iv is not None
-        assert result.iv == pytest.approx(sigma, abs=5e-3)
-
-    @pytest.mark.parametrize("moneyness", [0.90, 1.00, 1.10])
-    def test_otm_itm_roundtrip(self, moneyness: float):
-        S, sigma, T, r = 100.0, 0.30, 0.5, 0.05
+    @pytest.mark.parametrize(
+        ("moneyness", "is_call", "sigma"),
+        [
+            pytest.param(1.00, True, 0.25, id="atm_roundtrip-call-vol25"),
+            pytest.param(1.00, False, 0.30, id="atm_roundtrip-put-vol30"),
+            pytest.param(1.00, True, 0.40, id="atm_roundtrip-call-vol40"),
+            pytest.param(1.00, False, 0.15, id="atm_roundtrip-put-vol15"),
+            pytest.param(0.90, False, 0.30, id="otm_itm_roundtrip-moneyness-0.90"),
+            pytest.param(1.00, True, 0.30, id="otm_itm_roundtrip-moneyness-1.00"),
+            pytest.param(1.10, True, 0.30, id="otm_itm_roundtrip-moneyness-1.10"),
+        ],
+    )
+    def test_roundtrip(self, moneyness: float, is_call: bool, sigma: float):
+        S, T, r = 100.0, 0.5, 0.05
         K = S * moneyness
-        is_call = moneyness >= 1.0
         price = bs_european_price(S, K, T, r, sigma, is_call=is_call)
         result = implied_volatility(option_price=price, spot=S, strike=K, ttm=T, rate=r, is_call=is_call)
-        assert result.iv is not None
-        assert result.iv == pytest.approx(sigma, abs=5e-3)
+        assert result.iv is not None, f"solver returned status={result.status}"
+        assert result.iv == pytest.approx(sigma, abs=5e-3), "recovered iv matches the input vol"

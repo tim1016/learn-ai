@@ -62,11 +62,24 @@ def test_pair_empty_events_returns_empty_list() -> None:
     assert open_lot is None
 
 
-def test_failed_lean_payload_preserves_requested_engine_for_history(tmp_path: Path) -> None:
+def test_a_failed_lean_payload_keeps_its_engine_parameters_and_parity_group(tmp_path: Path) -> None:
+    """A failed LEAN payload keeps the requested engine, the strategy parameters and the parity group.
+
+    #1977: the group must reach ``run_failed``, not poll ``pending`` for ever.
+
+    A LEAN companion that exits 0 without a parseable result still persists a
+    row. Dropping ``parity_group_id`` from that row left the group with nothing
+    to settle it; carrying it *without* ``parity_failure_detail`` would compare
+    a zero-trade row against a real Python run and report a divergence that
+    never happened.
+    """
     from app.services.lean_sidecar_persistence import build_persist_payload
 
-    payload = build_persist_payload(
-        workspace_path=tmp_path,
+    ws = tmp_path / "companion_no_output"
+    ws.mkdir()  # no normalized/result.json
+
+    engine_payload = build_persist_payload(
+        workspace_path=ws,
         run_id="history-rehydrate",
         starting_cash=100_000,
         symbol="SPY",
@@ -77,15 +90,8 @@ def test_failed_lean_payload_preserves_requested_engine_for_history(tmp_path: Pa
         end_date_ms=1_700_000_600_000,
         requested_engine="both",
     )
-
-    assert payload["requested_engine"] == "both"
-
-
-def test_failed_lean_payload_preserves_strategy_parameters_for_history(tmp_path: Path) -> None:
-    from app.services.lean_sidecar_persistence import build_persist_payload
-
-    payload = build_persist_payload(
-        workspace_path=tmp_path,
+    parameters_payload = build_persist_payload(
+        workspace_path=ws,
         run_id="history-parameters",
         starting_cash=100_000,
         symbol="SPY",
@@ -96,13 +102,33 @@ def test_failed_lean_payload_preserves_strategy_parameters_for_history(tmp_path:
         end_date_ms=1_700_000_600_000,
         parameters={"gap_bps": 4.0, "rsi_min": 52.0, "rsi_max": 68.0},
     )
+    grouped_payload = build_persist_payload(
+        workspace_path=ws,
+        run_id="companion_no_output",
+        starting_cash=100_000.0,
+        symbol="SPY",
+        algorithm_name="ema_crossover",
+        start_date=date(2023, 11, 14),
+        start_date_ms=1_700_000_000_000,
+        end_date=date(2023, 11, 14),
+        end_date_ms=1_700_000_600_000,
+        parity_group_id="pg-abc",
+        requested_engine="both",
+    )
 
-    assert payload["parameters"] == {
+    assert (
+        engine_payload["requested_engine"] == "both"
+    ), "a failed LEAN payload preserves the requested engine for history"
+    assert parameters_payload["parameters"] == {
         "symbol": "SPY",
         "gap_bps": 4.0,
         "rsi_min": 52.0,
         "rsi_max": 68.0,
-    }
+    }, "a failed LEAN payload preserves the strategy parameters for history"
+    assert grouped_payload["parity_group_id"] == "pg-abc", "a failed run payload keeps its parity group (#1977)"
+    assert (
+        grouped_payload["parity_failure_detail"] == "No normalized/result.json — LEAN run did not produce output"
+    ), "a failed run payload names the failure so its parity group settles at run_failed (#1977)"
 
 
 def test_parity_payload_execution_receipt_matches_eligible_python_run(tmp_path: Path) -> None:
@@ -274,32 +300,36 @@ def test_finalize_open_lot_raises_on_empty_equity_curve() -> None:
         finalize_open_lot_as_synthetic(open_lot, [], 100_000.0, 1)
 
 
-def test_compute_aggregates_empty_trades() -> None:
-    agg = compute_aggregates(trades=[], starting_cash=100_000.0, total_fees=0.0)
-    assert agg.total_trades == 0
-    assert agg.winning_trades == 0
-    assert agg.losing_trades == 0
-    assert agg.total_pnl == pytest.approx(0.0)
-    assert agg.final_equity == pytest.approx(100_000.0)
-    assert agg.win_rate == pytest.approx(0.0)
-
-
-def test_compute_aggregates_mixed_trades() -> None:
-    # pnl values here already net out all entry/exit fees (matching pair_order_events
-    # semantics). final_equity = starting_cash + total_pnl — do NOT subtract total_fees
-    # again; that would double-count fees that are already embedded in each t.pnl.
+@pytest.mark.parametrize(
+    ("legs", "total_fees", "total_trades", "winning_trades", "losing_trades", "total_pnl", "win_rate"),
+    [
+        pytest.param((), 0.0, 0, 0, 0, 0.0, 0.0, id="empty_trades"),
+        # Each leg is (exit_price, pnl). pnl values here already net out all entry/exit fees (matching
+        # pair_order_events semantics). final_equity = starting_cash + total_pnl — do NOT subtract
+        # total_fees again; that would double-count fees that are already embedded in each t.pnl.
+        pytest.param(((101.0, 10.0), (99.0, -10.0), (102.0, 20.0)), 3.0, 3, 2, 1, 20.0, 2 / 3, id="mixed_trades"),
+    ],
+)
+def test_compute_aggregates(
+    legs: tuple[tuple[float, float], ...],
+    total_fees: float,
+    total_trades: int,
+    winning_trades: int,
+    losing_trades: int,
+    total_pnl: float,
+    win_rate: float,
+) -> None:
     trades = [
-        PairedTrade(1, 0, 0, 100.0, 101.0, 10, pnl=10.0, signal_reason="x", is_synthetic_exit=False),
-        PairedTrade(2, 0, 0, 100.0, 99.0, 10, pnl=-10.0, signal_reason="x", is_synthetic_exit=False),
-        PairedTrade(3, 0, 0, 100.0, 102.0, 10, pnl=20.0, signal_reason="x", is_synthetic_exit=False),
+        PairedTrade(number, 0, 0, 100.0, exit_price, 10, pnl=pnl, signal_reason="x", is_synthetic_exit=False)
+        for number, (exit_price, pnl) in enumerate(legs, start=1)
     ]
-    agg = compute_aggregates(trades=trades, starting_cash=100_000.0, total_fees=3.0)
-    assert agg.total_trades == 3
-    assert agg.winning_trades == 2
-    assert agg.losing_trades == 1
-    assert agg.total_pnl == pytest.approx(20.0)
-    assert agg.final_equity == pytest.approx(100_000.0 + 20.0)
-    assert agg.win_rate == pytest.approx(2 / 3)
+    agg = compute_aggregates(trades=trades, starting_cash=100_000.0, total_fees=total_fees)
+    assert agg.total_trades == total_trades, "total trades"
+    assert agg.winning_trades == winning_trades, "winning trades"
+    assert agg.losing_trades == losing_trades, "losing trades"
+    assert agg.total_pnl == pytest.approx(total_pnl), "total pnl"
+    assert agg.final_equity == pytest.approx(100_000.0 + total_pnl), "final equity is starting cash plus total pnl"
+    assert agg.win_rate == pytest.approx(win_rate), "win rate"
 
 
 # ---------------------------------------------------------------------------
@@ -307,24 +337,21 @@ def test_compute_aggregates_mixed_trades() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_algorithm_name_custom_source_overrides_template() -> None:
-    """When algorithm_source is set, label is always 'user_provided'."""
-    assert _algorithm_name_for_run("trusted_default", "print('hello')") == "user_provided"
-
-
-def test_algorithm_name_template_only_returns_template() -> None:
-    """No algorithm_source; use the template name verbatim."""
-    assert _algorithm_name_for_run("ema_crossover", None) == "ema_crossover"
-
-
-def test_algorithm_name_trusted_default_template_no_source() -> None:
-    """Trusted-default template without custom source keeps its name."""
-    assert _algorithm_name_for_run("trusted_default", None) == "trusted_default"
-
-
-def test_algorithm_name_both_none_returns_user_provided() -> None:
-    """Defensive: both None → fall back to 'user_provided'."""
-    assert _algorithm_name_for_run(None, None) == "user_provided"
+@pytest.mark.parametrize(
+    ("template", "algorithm_source", "expected"),
+    [
+        # When algorithm_source is set, label is always 'user_provided'.
+        pytest.param("trusted_default", "print('hello')", "user_provided", id="custom_source_overrides_template"),
+        # No algorithm_source; use the template name verbatim.
+        pytest.param("ema_crossover", None, "ema_crossover", id="template_only_returns_template"),
+        # Trusted-default template without custom source keeps its name.
+        pytest.param("trusted_default", None, "trusted_default", id="trusted_default_template_no_source"),
+        # Defensive: both None → fall back to 'user_provided'.
+        pytest.param(None, None, "user_provided", id="both_none_returns_user_provided"),
+    ],
+)
+def test_algorithm_name_for_run(template: str | None, algorithm_source: str | None, expected: str) -> None:
+    assert _algorithm_name_for_run(template, algorithm_source) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -875,6 +902,12 @@ def test_build_persist_payload_synthesizes_mtm_for_half_open(tmp_path: Path) -> 
 
 
 def test_build_persist_payload_missing_normalized_result(tmp_path: Path) -> None:
+    """A run with no normalized/result.json persists a canonical zero-trade failed row.
+
+    Smoke test for Bug B's failed-run regression: the failed payload's
+    ``lean_statistics`` must be parseable as ``LeanStatisticsResponse``
+    (canonical shape, all zeros) — not a flat ``{error, workspace_path}``.
+    """
     from app.services.lean_sidecar_persistence import build_persist_payload
 
     ws = tmp_path / "ui_run_crashed"
@@ -893,20 +926,52 @@ def test_build_persist_payload_missing_normalized_result(tmp_path: Path) -> None
         end_date_ms=1_700_000_600_000,
     )
 
-    assert payload["lean_run_id"] == "ui_run_crashed"
-    assert payload["total_trades"] == 0
-    assert payload["total_pnl"] == pytest.approx(0.0)
-    assert payload["final_equity"] == pytest.approx(100_000.0)
-    assert payload["trades"] == []
+    assert payload["lean_run_id"] == "ui_run_crashed", "the failed row carries the run id"
+    assert payload["total_trades"] == 0, "a crashed run has no trades"
+    assert payload["total_pnl"] == pytest.approx(0.0), "a crashed run has no pnl"
+    assert payload["final_equity"] == pytest.approx(100_000.0), "a crashed run ends on its starting cash"
+    assert payload["trades"] == [], "a crashed run has no trade rows"
     # Failed runs persist the canonical-shape-all-zeros dict, NOT the
     # legacy ``{"error": ..., "workspace_path": ...}``. The failure
     # signal lives in ``total_trades=0`` above; the diagnostic
     # ``error`` string lands in the PythonDataService log instead.
     stats = payload["lean_statistics"]
-    assert set(stats.keys()) == {"portfolio", "trade", "runtime"}
-    assert stats["portfolio"]["start_equity"] == 0.0
-    assert stats["trade"]["total_number_of_trades"] == 0
-    assert stats["runtime"]["total_orders"] == 0
+    assert set(stats.keys()) == {
+        "portfolio",
+        "trade",
+        "runtime",
+    }, "lean_statistics is the canonical shape, not the legacy error dict"
+    assert stats["portfolio"]["start_equity"] == 0.0, "lean_statistics portfolio start equity is zero"
+    assert stats["trade"]["total_number_of_trades"] == 0, "lean_statistics trade count is zero"
+    assert stats["runtime"]["total_orders"] == 0, "lean_statistics runtime orders are zero"
+    parsed = LeanStatisticsResponse.model_validate(stats)
+    assert parsed.portfolio.start_equity == 0.0, "parsed lean_statistics start equity is zero"
+    assert parsed.portfolio.end_equity == 0.0, "parsed lean_statistics end equity is zero"
+    assert parsed.trade.total_number_of_trades == 0, "parsed lean_statistics trade count is zero"
+    assert parsed.runtime.total_orders == 0, "parsed lean_statistics runtime orders are zero"
+    verdict = json.loads(payload["run_verdict_json"])
+    assert verdict["status"] == "failed", "the failed row's verdict status is failed"
+    assert verdict["grade"] is None, "the failed row's verdict has no grade"
+    assert verdict["signal"] is None, "the failed row's verdict has no signal"
+    assert verdict["evidence_action"] is None, "the failed row's verdict has no evidence action"
+    assert "lean_run_failed" in verdict["red_flags"], "the failed row's verdict is flagged lean_run_failed"
+    # A failed run's lean_statistics above is an all-zero placeholder, not a
+    # normalized result — recording sharpe.lean_native.v1 "recorded" provenance
+    # against it would claim LEAN computed a real Sharpe value. No context is
+    # recorded; the run record fills in the source's catalogue context instead.
+    assert json.loads(payload["metric_documentation_json"]) == [], "no metric documentation context is recorded"
+    equity = json.loads(payload["equity_curve_json"])
+    assert equity["schema_version"] == 2, "the equity envelope is schema version 2"
+    assert (
+        equity["mark_to_market"]["error"] == "No normalized/result.json — LEAN run did not produce output"
+    ), "the mark-to-market curve names the failure"
+    assert (
+        equity["realized"]["error"] == "No normalized/result.json — LEAN run did not produce output"
+    ), "the realized curve names the failure"
+    # Set as a pair: the detail routes a group's settle, so it is meaningless
+    # without one (#1977).
+    assert payload["parity_group_id"] is None, "a LEAN run without a parity group carries no group (#1977)"
+    assert payload["parity_failure_detail"] is None, "a LEAN run without a parity group has no failure detail (#1977)"
 
 
 def test_build_persist_payload_empty_order_events(tmp_path: Path) -> None:
@@ -1042,7 +1107,17 @@ def test_build_persist_payload_forwards_brokerage_and_data_policy_from_manifest_
     tmp_path: Path,
 ) -> None:
     """The persist payload must carry the manifest's brokerage_policy +
-    data_policy_json so the .NET row is the truthful record."""
+    data_policy_json so the .NET row is the truthful record.
+
+    Without a manifest the payload's brokerage_policy is None. The .NET service
+    preserves NULL on the row rather than fabricating ``algorithm_default``,
+    which would corrupt compare-view gating for Interactive Brokers
+    reconciliation runs.
+
+    Even when LEAN crashed before producing output, the manifest's
+    brokerage_policy must flow through so the row's compare-view gating
+    is accurate for the failed-run audit trail.
+    """
     from app.services.lean_sidecar_persistence import build_persist_payload
 
     ws = _write_fixture_workspace(
@@ -1057,6 +1132,9 @@ def test_build_persist_payload_forwards_brokerage_and_data_policy_from_manifest_
             {"ms_utc": 1_700_000_600_000, "value": 100_009.0},
         ],
     )
+    crashed_ws = tmp_path / "ui_run_crashed_with_manifest"
+    crashed_ws.mkdir()
+    # No normalized/result.json — simulate LEAN crash.
 
     payload = build_persist_payload(
         workspace_path=ws,
@@ -1070,9 +1148,32 @@ def test_build_persist_payload_forwards_brokerage_and_data_policy_from_manifest_
         end_date_ms=1_700_000_600_000,
         manifest=_stub_manifest_dict(brokerage_policy="interactive_brokers"),
     )
+    legacy_payload = build_persist_payload(
+        workspace_path=ws,
+        run_id="ui_run_legacy_no_manifest",
+        starting_cash=100_000.0,
+        symbol="SPY",
+        algorithm_name="ema_crossover",
+        start_date=date(2023, 11, 14),
+        start_date_ms=1_700_000_000_000,
+        end_date=date(2023, 11, 14),
+        end_date_ms=1_700_000_600_000,
+    )
+    failed_payload = build_persist_payload(
+        workspace_path=crashed_ws,
+        run_id="ui_run_crashed_with_manifest",
+        starting_cash=100_000.0,
+        symbol="SPY",
+        algorithm_name="ema_crossover",
+        start_date=date(2023, 11, 14),
+        start_date_ms=1_700_000_000_000,
+        end_date=date(2023, 11, 14),
+        end_date_ms=1_700_000_600_000,
+        manifest=_stub_manifest_dict(brokerage_policy="algorithm_default"),
+    )
 
-    assert payload["brokerage_policy"] == "interactive_brokers"
-    assert payload["commission_per_order"] == 0.0
+    assert payload["brokerage_policy"] == "interactive_brokers", "the manifest's brokerage_policy is forwarded"
+    assert payload["commission_per_order"] == 0.0, "a manifest run has no commission per order"
     assert json.loads(payload["metric_documentation_json"]) == [
         {
             "contract_id": "lean-statistics-oracle-v1",
@@ -1098,84 +1199,21 @@ def test_build_persist_payload_forwards_brokerage_and_data_policy_from_manifest_
             "producer": "lean_native",
             "variant_id": "lean_native.trade.profit_factor.v1",
         },
-    ]
-    assert payload["data_policy_json"] is not None
+    ], "the metric documentation names the four LEAN-native metrics"
+    assert payload["data_policy_json"] is not None, "the manifest's data policy is forwarded"
     parsed_dp = json.loads(payload["data_policy_json"])
-    assert parsed_dp["source"] == "polygon"
-    assert parsed_dp["symbol"] == "SPY"
-    assert parsed_dp["adjusted"] is True
-    assert parsed_dp["strategy_bars"]["multiplier"] == 15
-
-
-def test_build_persist_payload_without_manifest_emits_none_brokerage(
-    tmp_path: Path,
-) -> None:
-    """Without a manifest the payload's brokerage_policy is None.
-
-    The .NET service preserves NULL on the row rather than fabricating
-    ``algorithm_default``, which would corrupt compare-view gating for
-    Interactive Brokers reconciliation runs.
-    """
-    from app.services.lean_sidecar_persistence import build_persist_payload
-
-    ws = _write_fixture_workspace(
-        tmp_path,
-        "ui_run_legacy_no_manifest",
-        order_events=[
-            _filled_event(1, "buy", 1_700_000_060_000, 100.0, 10, fee=0.5),
-            _filled_event(2, "sell", 1_700_000_600_000, 101.0, 10, fee=0.5),
-        ],
-        equity_curve=[
-            {"ms_utc": 1_700_000_000_000, "value": 100_000.0},
-            {"ms_utc": 1_700_000_600_000, "value": 100_009.0},
-        ],
-    )
-
-    payload = build_persist_payload(
-        workspace_path=ws,
-        run_id="ui_run_legacy_no_manifest",
-        starting_cash=100_000.0,
-        symbol="SPY",
-        algorithm_name="ema_crossover",
-        start_date=date(2023, 11, 14),
-        start_date_ms=1_700_000_000_000,
-        end_date=date(2023, 11, 14),
-        end_date_ms=1_700_000_600_000,
-    )
-
-    assert payload["brokerage_policy"] is None
-    assert payload["data_policy_json"] is None
-    assert payload["commission_per_order"] == 0.0
-
-
-def test_build_persist_payload_failed_run_with_manifest_still_forwards_brokerage(
-    tmp_path: Path,
-) -> None:
-    """Even when LEAN crashed before producing output, the manifest's
-    brokerage_policy must flow through so the row's compare-view gating
-    is accurate for the failed-run audit trail."""
-    from app.services.lean_sidecar_persistence import build_persist_payload
-
-    ws = tmp_path / "ui_run_crashed_with_manifest"
-    ws.mkdir()
-    # No normalized/result.json — simulate LEAN crash.
-
-    payload = build_persist_payload(
-        workspace_path=ws,
-        run_id="ui_run_crashed_with_manifest",
-        starting_cash=100_000.0,
-        symbol="SPY",
-        algorithm_name="ema_crossover",
-        start_date=date(2023, 11, 14),
-        start_date_ms=1_700_000_000_000,
-        end_date=date(2023, 11, 14),
-        end_date_ms=1_700_000_600_000,
-        manifest=_stub_manifest_dict(brokerage_policy="algorithm_default"),
-    )
-
-    assert payload["total_trades"] == 0
-    assert payload["brokerage_policy"] == "algorithm_default"
-    assert payload["data_policy_json"] is not None
+    assert parsed_dp["source"] == "polygon", "the forwarded data policy keeps its source"
+    assert parsed_dp["symbol"] == "SPY", "the forwarded data policy keeps its symbol"
+    assert parsed_dp["adjusted"] is True, "the forwarded data policy keeps its adjusted flag"
+    assert parsed_dp["strategy_bars"]["multiplier"] == 15, "the forwarded data policy keeps its strategy bars"
+    assert legacy_payload["brokerage_policy"] is None, "without a manifest the payload's brokerage_policy is None"
+    assert legacy_payload["data_policy_json"] is None, "without a manifest the payload's data_policy_json is None"
+    assert legacy_payload["commission_per_order"] == 0.0, "without a manifest there is still no commission per order"
+    assert failed_payload["total_trades"] == 0, "the crashed run has no trades"
+    assert (
+        failed_payload["brokerage_policy"] == "algorithm_default"
+    ), "a failed run with a manifest still forwards its brokerage_policy"
+    assert failed_payload["data_policy_json"] is not None, "a failed run with a manifest still forwards its data policy"
 
 
 # ---------------------------------------------------------------------------
@@ -1493,82 +1531,6 @@ def test_normalized_to_lean_statistics_response_parses_engine_shape() -> None:
     assert reparsed.runtime.fees == pytest.approx(0.5)
 
 
-def test_failed_run_payload_emits_canonical_shape(tmp_path: Path) -> None:
-    """Smoke test for Bug B's failed-run regression: the failed payload's
-    ``lean_statistics`` must be parseable as ``LeanStatisticsResponse``
-    (canonical shape, all zeros) — not a flat ``{error, workspace_path}``."""
-    from app.services.lean_sidecar_persistence import build_persist_payload
-
-    ws = tmp_path / "ui_run_failed_shape_check"
-    ws.mkdir()  # no normalized/result.json
-
-    payload = build_persist_payload(
-        workspace_path=ws,
-        run_id="ui_run_failed_shape_check",
-        starting_cash=100_000.0,
-        symbol="SPY",
-        algorithm_name="ema_crossover",
-        start_date=date(2023, 11, 14),
-        start_date_ms=1_700_000_000_000,
-        end_date=date(2023, 11, 14),
-        end_date_ms=1_700_000_600_000,
-    )
-
-    stats = payload["lean_statistics"]
-    parsed = LeanStatisticsResponse.model_validate(stats)
-    assert parsed.portfolio.start_equity == 0.0
-    assert parsed.portfolio.end_equity == 0.0
-    assert parsed.trade.total_number_of_trades == 0
-    assert parsed.runtime.total_orders == 0
-    verdict = json.loads(payload["run_verdict_json"])
-    assert verdict["status"] == "failed"
-    assert verdict["grade"] is None
-    assert verdict["signal"] is None
-    assert verdict["evidence_action"] is None
-    assert "lean_run_failed" in verdict["red_flags"]
-    # A failed run's lean_statistics above is an all-zero placeholder, not a
-    # normalized result — recording sharpe.lean_native.v1 "recorded" provenance
-    # against it would claim LEAN computed a real Sharpe value. No context is
-    # recorded; the run record fills in the source's catalogue context instead.
-    assert json.loads(payload["metric_documentation_json"]) == []
-    equity = json.loads(payload["equity_curve_json"])
-    assert equity["schema_version"] == 2
-    assert equity["mark_to_market"]["error"] == "No normalized/result.json — LEAN run did not produce output"
-    assert equity["realized"]["error"] == "No normalized/result.json — LEAN run did not produce output"
-
-
-def test_a_failed_run_payload_keeps_its_parity_group_and_names_the_failure(tmp_path: Path) -> None:
-    """#1977: the group must reach ``run_failed``, not poll ``pending`` for ever.
-
-    A LEAN companion that exits 0 without a parseable result still persists a
-    row. Dropping ``parity_group_id`` from that row left the group with nothing
-    to settle it; carrying it *without* ``parity_failure_detail`` would compare
-    a zero-trade row against a real Python run and report a divergence that
-    never happened.
-    """
-    from app.services.lean_sidecar_persistence import build_persist_payload
-
-    ws = tmp_path / "companion_no_output"
-    ws.mkdir()  # no normalized/result.json
-
-    payload = build_persist_payload(
-        workspace_path=ws,
-        run_id="companion_no_output",
-        starting_cash=100_000.0,
-        symbol="SPY",
-        algorithm_name="ema_crossover",
-        start_date=date(2023, 11, 14),
-        start_date_ms=1_700_000_000_000,
-        end_date=date(2023, 11, 14),
-        end_date_ms=1_700_000_600_000,
-        parity_group_id="pg-abc",
-        requested_engine="both",
-    )
-
-    assert payload["parity_group_id"] == "pg-abc"
-    assert payload["parity_failure_detail"] == "No normalized/result.json — LEAN run did not produce output"
-
-
 def test_an_unparseable_result_keeps_its_parity_group_and_names_the_failure(tmp_path: Path) -> None:
     """The second failed-payload call site (#1977): normalization blew up."""
     from app.services.lean_sidecar_persistence import build_persist_payload
@@ -1593,27 +1555,3 @@ def test_an_unparseable_result_keeps_its_parity_group_and_names_the_failure(tmp_
 
     assert payload["parity_group_id"] == "pg-def"
     assert payload["parity_failure_detail"].startswith("normalization_error:")
-
-
-def test_a_lean_run_without_a_parity_group_carries_no_group_on_its_failed_row(tmp_path: Path) -> None:
-    from app.services.lean_sidecar_persistence import build_persist_payload
-
-    ws = tmp_path / "solo_run_no_output"
-    ws.mkdir()
-
-    payload = build_persist_payload(
-        workspace_path=ws,
-        run_id="solo_run_no_output",
-        starting_cash=100_000.0,
-        symbol="SPY",
-        algorithm_name="ema_crossover",
-        start_date=date(2023, 11, 14),
-        start_date_ms=1_700_000_000_000,
-        end_date=date(2023, 11, 14),
-        end_date_ms=1_700_000_600_000,
-    )
-
-    # Set as a pair: the detail routes a group's settle, so it is meaningless
-    # without one (#1977).
-    assert payload["parity_group_id"] is None
-    assert payload["parity_failure_detail"] is None
