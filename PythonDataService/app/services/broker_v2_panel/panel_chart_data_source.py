@@ -283,12 +283,12 @@ async def get_history_chart(
     batch_provider = build_history_batch_provider()
 
     async def chart_of(symbol: str) -> ChartHistoryResponse:
-        chart = await raw_chart_of(symbol)
-        return with_options_panes(chart, broker, sid, fills) if status.options_bot is not None else chart
+        chart, chart_fills = await raw_chart_of(symbol)
+        return with_options_panes(chart, broker, sid, chart_fills) if status.options_bot is not None else chart
 
-    async def raw_chart_of(symbol: str) -> ChartHistoryResponse:
+    async def raw_chart_of(symbol: str) -> tuple[ChartHistoryResponse, Sequence[FillRecord]]:
         if window is not None:
-            return await build_run_window_chart(
+            chart = await build_run_window_chart(
                 timeframe,
                 fills,
                 strategy_instance_id=sid,
@@ -297,6 +297,7 @@ async def get_history_chart(
                 window=(from_ms, to_ms),
                 now_ms=observed_at_ms,
             )
+            return chart, fills
         chart = await build_history_chart(
             timeframe,
             fills,
@@ -306,7 +307,7 @@ async def get_history_chart(
             now_ms=observed_at_ms,
         )
         if chart.from_ms >= from_ms:
-            return chart
+            return chart, fills
         # The candles start before the window the fills were read for: a sparse
         # symbol needs more sessions to fill its bars than the plan counted, and
         # a daily bar starts at midnight. Read the fills those candles stand on.
@@ -317,7 +318,7 @@ async def get_history_chart(
                     reached.fills.fills, from_ms=chart.from_ms, to_ms=chart.to_ms, charted_symbol=symbol
                 )
             }
-        )
+        ), reached.fills.fills
 
     if asset == "trades":
         return await chart_of(order_symbol(status.symbol, status.traded))
