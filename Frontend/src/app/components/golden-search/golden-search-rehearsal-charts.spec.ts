@@ -10,21 +10,25 @@ const ALL_PERIOD: CandidateRef = { key: 'all_period', label: 'All-period fit' };
 /** Falsifiability: drop the target line, relabel the drawdown rule without its session-close basis, draw a falling rung as rising, or turn the x axis into dates, and a spec here names it. */
 
 describe('the final-test rehearsal chart spec', () => {
-  it('draws the joint line with the owner-heuristic target marked on it', () => {
+  it('builds the chart spec of the all-period rehearsal: the joint line with its target, the y and x scales, and the session count and trade floor of each rung', () => {
     const spec = rehearsalSpec(ALL_PERIOD, chanceRehearsal(), 'all_period');
-    const option = spec.option(FAKE_CHART_THEME) as { series: { markLine?: { data: { yAxis: number }[] } }[] };
+    const option = spec.option(FAKE_CHART_THEME) as {
+      series: { markLine?: { data: { yAxis: number }[] } }[];
+      yAxis: { min: number; max: number };
+      xAxis: { type: string; data: string[] };
+    };
     const joint = option.series.find((series) => series.markLine !== undefined);
-    expect(joint).toBeDefined();
-    expect(joint?.markLine?.data).toContainEqual({ yAxis: 80 });
-  });
+    expect.soft(joint, 'draws the joint line').toBeDefined();
+    expect.soft(joint?.markLine?.data, 'marks the owner-heuristic target on the joint line').toContainEqual({ yAxis: 80 });
 
-  it('scales y from 0 to 100 percent for every fit and rung, and never invents dates on x', () => {
-    const spec = rehearsalSpec(ALL_PERIOD, chanceRehearsal(), 'all_period');
-    const option = spec.option(FAKE_CHART_THEME) as { yAxis: { min: number; max: number }; xAxis: { type: string; data: string[] } };
-    expect(option.yAxis.min).toBe(0);
-    expect(option.yAxis.max).toBe(100);
-    expect(option.xAxis.type).toBe('category');
-    expect(option.xAxis.data).toEqual(['21', '42', '63', '84']);
+    expect.soft(option.yAxis.min, 'scales y from 0 percent for every fit and rung').toBe(0);
+    expect.soft(option.yAxis.max, 'scales y to 100 percent for every fit and rung').toBe(100);
+    expect.soft(option.xAxis.type, 'never invents dates on x').toBe('category');
+    expect.soft(option.xAxis.data, "labels x by each rung's session count").toEqual(['21', '42', '63', '84']);
+
+    const rows = spec.table.rows.map((row) => row.cells.join(' '));
+    expect.soft(rows[0], "carries the first rung's session count and trade floor beside its share").toContain('1× 21 9 61.2%');
+    expect.soft(rows[3], "carries the last rung's session count and trade floor beside its share").toContain('4× 84 36 83.9%');
   });
 
   it('draws a falling rung at its actual value and keeps every rule the plan models', () => {
@@ -48,12 +52,5 @@ describe('the final-test rehearsal chart spec', () => {
     const series = rehearsalSeries(rehearsal);
     expect(series.map((item) => item.key)).toEqual(['joint', 'drawdown', 'exits', 'objective']);
     expect(JSON.stringify(rehearsalSpec(ALL_PERIOD, rehearsal, 'all_period').option(FAKE_CHART_THEME))).not.toContain('Positive net');
-  });
-
-  it("carries each rung's session count and trade floor beside every share", () => {
-    const spec = rehearsalSpec(ALL_PERIOD, chanceRehearsal(), 'all_period');
-    const rows = spec.table.rows.map((row) => row.cells.join(' '));
-    expect(rows[0]).toContain('1× 21 9 61.2%');
-    expect(rows[3]).toContain('4× 84 36 83.9%');
   });
 });

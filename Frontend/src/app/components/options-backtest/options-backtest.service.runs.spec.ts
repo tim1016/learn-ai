@@ -116,43 +116,33 @@ describe('starting a run', () => {
     expect(startJob).toHaveBeenCalledWith('options_backtest', request);
   });
 
-  it('reads a refusal the data plane sent straight, with the server’s message', async () => {
-    serviceWith(async () => {
-      throw new HttpErrorResponse({ status: 400, error: { detail: REFUSAL } });
-    });
-
-    const error = await service.startRun(request).catch((caught: unknown) => caught);
-
-    expect(error).toBeInstanceOf(RunRefusedError);
-    expect(error).toMatchObject({ code: REFUSAL.code, message: REFUSAL.message });
-  });
-
-  it('reads a refusal the jobs boundary forwarded as the text of a detail', async () => {
-    serviceWith(async () => {
-      throw new HttpErrorResponse({ status: 400, error: { detail: JSON.stringify({ detail: REFUSAL }) } });
-    });
-
-    const error = await service.startRun(request).catch((caught: unknown) => caught);
-
-    expect(error).toBeInstanceOf(RunRefusedError);
-    expect(error).toMatchObject({ code: REFUSAL.code, message: REFUSAL.message });
-  });
-
-  it('reads the 400 for a range that reaches before 1970, as the jobs boundary forwards it, with the server’s own code and message', async () => {
-    serviceWith(async () => {
-      throw new HttpErrorResponse({ status: 400, error: { detail: JSON.stringify({ detail: TOO_EARLY }) } });
-    });
-
-    const error = await service.startRun(request).catch((caught: unknown) => caught);
-
-    expect(error).toBeInstanceOf(RunRefusedError);
-    expect(error).toMatchObject({ ...TOO_EARLY, status: 400 });
-  });
-
   it.each([
-    ['as the text of a detail, which is how the jobs boundary forwards it', () => new HttpErrorResponse({ status: 409, error: { detail: JSON.stringify({ detail: { code: 'OPTIONS_BACKTEST_JOB_ALREADY_HAS_A_RUN', message: 'A run was already made for this job.' } }) } })],
-    ['as the body of the answer', () => new HttpErrorResponse({ status: 409, error: { detail: { code: 'OPTIONS_BACKTEST_JOB_ALREADY_HAS_A_RUN', message: 'A run was already made for this job.' } } })],
-  ])('reads a refusal that is not about the range, with its own status, code and message, %s', async (_how, error) => {
+    [
+      'the data plane sent straight',
+      () => new HttpErrorResponse({ status: 400, error: { detail: REFUSAL } }),
+      { code: REFUSAL.code, message: REFUSAL.message },
+    ],
+    [
+      'the jobs boundary forwarded as the text of a detail',
+      () => new HttpErrorResponse({ status: 400, error: { detail: JSON.stringify({ detail: REFUSAL }) } }),
+      { code: REFUSAL.code, message: REFUSAL.message },
+    ],
+    [
+      'for a range that reaches before 1970 (400), as the jobs boundary forwards it',
+      () => new HttpErrorResponse({ status: 400, error: { detail: JSON.stringify({ detail: TOO_EARLY }) } }),
+      { ...TOO_EARLY, status: 400 },
+    ],
+    [
+      'that is not about the range (409), as the text of a detail, which is how the jobs boundary forwards it',
+      () => new HttpErrorResponse({ status: 409, error: { detail: JSON.stringify({ detail: { code: 'OPTIONS_BACKTEST_JOB_ALREADY_HAS_A_RUN', message: 'A run was already made for this job.' } }) } }),
+      { code: 'OPTIONS_BACKTEST_JOB_ALREADY_HAS_A_RUN', message: 'A run was already made for this job.', status: 409 },
+    ],
+    [
+      'that is not about the range (409), as the body of the answer',
+      () => new HttpErrorResponse({ status: 409, error: { detail: { code: 'OPTIONS_BACKTEST_JOB_ALREADY_HAS_A_RUN', message: 'A run was already made for this job.' } } }),
+      { code: 'OPTIONS_BACKTEST_JOB_ALREADY_HAS_A_RUN', message: 'A run was already made for this job.', status: 409 },
+    ],
+  ])('reads a refusal %s, with the server’s own code and message', async (_how, error, refusal) => {
     serviceWith(async () => {
       throw error();
     });
@@ -160,7 +150,7 @@ describe('starting a run', () => {
     const refused = await service.startRun(request).catch((caught: unknown) => caught);
 
     expect(refused).toBeInstanceOf(RunRefusedError);
-    expect(refused).toMatchObject({ code: 'OPTIONS_BACKTEST_JOB_ALREADY_HAS_A_RUN', message: 'A run was already made for this job.', status: 409 });
+    expect(refused).toMatchObject(refusal);
   });
 
   it('leaves a 422 as it was, whose detail is a list of what is wrong and has no code of the server’s to show', async () => {

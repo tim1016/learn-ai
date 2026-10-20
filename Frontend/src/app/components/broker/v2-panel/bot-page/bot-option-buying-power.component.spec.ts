@@ -148,19 +148,27 @@ function figure(entry: HTMLElement, label: string): string {
 }
 
 describe('BotOptionBuyingPowerComponent (#3098)', () => {
-  it('says how many entries were compared, how many were not and why, above the entries', async () => {
+  it('says how many entries were compared, how many were not and why, above the entries, and no limit when every entry is listed', async () => {
     await renderCard(page());
 
     const card = await screen.findByRole('region', { name: 'Alpaca option buying power' });
-    expect(within(card).getByText('1 of 2 option entries were compared with Alpaca’s option buying power, 1 not.'))
-      .toBeTruthy();
+    expect.soft(screen.queryByText(/Showing the newest/), 'says nothing of a limit when every entry is listed').toBeNull();
+    expect.soft(
+      within(card).getByText('1 of 2 option entries were compared with Alpaca’s option buying power, 1 not.'),
+      'says how many entries were compared and how many were not',
+    ).toBeTruthy();
     const reasons = within(card).getByRole('list', { name: 'Why entries were not compared' });
-    expect(within(reasons).getAllByRole('listitem')).toHaveLength(1);
-    expect(within(reasons).getByText('The comparison for this entry has not been made yet.')).toBeTruthy();
+    expect.soft(within(reasons).getAllByRole('listitem'), 'lists one line per reason entries were not compared')
+      .toHaveLength(1);
+    expect.soft(
+      within(reasons).getByText('The comparison for this entry has not been made yet.'),
+      'says why entries were not compared',
+    ).toBeTruthy();
     // The counts come first, then the entries.
     const counts = within(card).getByText('1 of 2 option entries were compared with Alpaca’s option buying power, 1 not.');
     const entries = within(card).getByRole('list', { name: 'Option entries, newest first' });
-    expect(counts.compareDocumentPosition(entries) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect.soft(counts.compareDocumentPosition(entries) & Node.DOCUMENT_POSITION_FOLLOWING, 'puts the counts above the entries')
+      .toBeTruthy();
   });
 
   it('shows each entry’s result in the backend’s words, both readings, the fall, the commitment and the account’s requirement change', async () => {
@@ -209,13 +217,6 @@ describe('BotOptionBuyingPowerComponent (#3098)', () => {
 
     expect(await screen.findByText(/Showing the newest 2 of 37 entries\./)).toBeTruthy();
     expect(screen.getByText(/The counts above are over all of them\./)).toBeTruthy();
-  });
-
-  it('says nothing of a limit when every entry is listed', async () => {
-    await renderCard(page());
-
-    await screen.findByRole('region', { name: 'Alpaca option buying power' });
-    expect(screen.queryByText(/Showing the newest/)).toBeNull();
   });
 
   it('shows an entry nobody compared as that, with no readings and nothing about the account', async () => {

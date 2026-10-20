@@ -27,12 +27,11 @@ describe('computeAdvisories', () => {
     expect(advisories.some((a) => a.kind === 'bad')).toBe(true);
   });
 
-  it('emits no advisories in the happy path', () => {
-    expect(computeAdvisories({ symbol: 'SPY', from: '2026-04-01', to: '2026-04-23', resolution: 'daily', autoFetch: false })).toEqual([]);
-  });
-
-  it('emits none while a date field holds no usable date', () => {
-    expect(computeAdvisories({ symbol: 'SPY', from: '', to: '2026-04-01', resolution: 'minute' })).toEqual([]);
+  it.each<[string, TickerRange]>([
+    ['in the happy path', { symbol: 'SPY', from: '2026-04-01', to: '2026-04-23', resolution: 'daily', autoFetch: false }],
+    ['while a date field holds no usable date', { symbol: 'SPY', from: '', to: '2026-04-01', resolution: 'minute' }],
+  ])('emits no advisories %s', (_name, range) => {
+    expect(computeAdvisories(range)).toEqual([]);
   });
 });
 

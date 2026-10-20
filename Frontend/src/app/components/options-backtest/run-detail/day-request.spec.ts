@@ -4,7 +4,7 @@ import { etMidnightMs } from '../../../shared/date/et-midnight';
 import { dayRequestFrom, lookAtLabel, type DayRequest } from './day-request';
 
 describe('asking to look at a day', () => {
-  it('names the control that was pressed, so that closing the day can give the keyboard back to it', () => {
+  it('names the control that was pressed, no control for an event never delivered to one, and a new request for each press', () => {
     const button = document.createElement('button');
     const asked: DayRequest[] = [];
     // The event names its target only while it is being delivered, which is when a component handler asks.
@@ -13,19 +13,15 @@ describe('asking to look at a day', () => {
 
     button.click();
 
-    expect(asked).toEqual([{ openMs: 1234, origin: button }]);
-    expect(asked[0].origin).toBe(button);
+    expect.soft(asked, 'names the control that was pressed, so that closing the day can give the keyboard back to it (1 of 2)').toEqual([{ openMs: 1234, origin: button }]);
+    expect.soft(asked[0].origin, 'names the control that was pressed, so that closing the day can give the keyboard back to it (2 of 2)').toBe(button);
     button.remove();
-  });
 
-  it('names no control for an event that was never delivered to one', () => {
-    expect(dayRequestFrom(1234, new Event('click'))).toEqual({ openMs: 1234, origin: null });
-  });
+    expect.soft(dayRequestFrom(1234, new Event('click')), 'names no control for an event that was never delivered to one').toEqual({ openMs: 1234, origin: null });
 
-  it('is a new request for each press, even for the same day, so asking again is heard', () => {
     const event = new Event('click');
 
-    expect(dayRequestFrom(1234, event)).not.toBe(dayRequestFrom(1234, event));
+    expect.soft(dayRequestFrom(1234, event), 'is a new request for each press, even for the same day, so asking again is heard').not.toBe(dayRequestFrom(1234, event));
   });
 
   // 00:30 New York time on the 16th is still the 15th in Chicago and in Honolulu; 20:00 on the 15th is already the 16th in Tokyo.

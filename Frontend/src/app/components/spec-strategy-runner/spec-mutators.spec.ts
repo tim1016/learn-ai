@@ -33,47 +33,37 @@ const BASE: StrategySpec = {
 };
 
 describe('spec-mutators', () => {
-  it('addIndicator appends without mutating the original', () => {
-    const out = addIndicator(BASE, { id: 'sma_l', kind: 'SMA', period: 30 });
-    expect(out.indicators).toHaveLength(2);
-    expect(out.indicators[1].id).toBe('sma_l');
-    expect(BASE.indicators).toHaveLength(1); // original untouched
+  it('indicator mutators append, drop and patch without touching the original', () => {
+    const added = addIndicator(BASE, { id: 'sma_l', kind: 'SMA', period: 30 });
+    expect.soft(added.indicators, 'addIndicator appends without mutating the original: appended length').toHaveLength(2);
+    expect.soft(added.indicators[1].id, 'addIndicator appends without mutating the original: appended id').toBe('sma_l');
+    expect.soft(BASE.indicators, 'addIndicator appends without mutating the original: original untouched').toHaveLength(1);
+
+    const removed = removeIndicatorAt(BASE, 0);
+    expect.soft(removed.indicators, 'removeIndicatorAt drops by index').toHaveLength(0);
+
+    const updated = updateIndicatorAt(BASE, 0, { period: 20 });
+    expect.soft(updated.indicators[0].period, 'updateIndicatorAt patches in place: patched period').toBe(20);
+    expect.soft(updated.indicators[0].id, 'updateIndicatorAt patches in place: other fields preserved').toBe('sma_s');
   });
 
-  it('removeIndicatorAt drops by index', () => {
-    const out = removeIndicatorAt(BASE, 0);
-    expect(out.indicators).toHaveLength(0);
-  });
+  it('entry mutators append, drop and replace conditions and flip the logic', () => {
+    const added = addEntryCondition(BASE, { kind: 'BarsSinceEntry', op: '>=', value: 5 });
+    expect.soft(added.entry.conditions, 'addEntryCondition appends to entry.conditions').toHaveLength(2);
 
-  it('updateIndicatorAt patches in place', () => {
-    const out = updateIndicatorAt(BASE, 0, { period: 20 });
-    expect(out.indicators[0].period).toBe(20);
-    expect(out.indicators[0].id).toBe('sma_s'); // other fields preserved
-  });
+    const removed = removeEntryConditionAt(BASE, 0);
+    expect.soft(removed.entry.conditions, 'removeEntryConditionAt drops by index').toHaveLength(0);
 
-  it('addEntryCondition appends to entry.conditions', () => {
-    const out = addEntryCondition(BASE, { kind: 'BarsSinceEntry', op: '>=', value: 5 });
-    expect(out.entry.conditions).toHaveLength(2);
-  });
-
-  it('removeEntryConditionAt drops by index', () => {
-    const out = removeEntryConditionAt(BASE, 0);
-    expect(out.entry.conditions).toHaveLength(0);
-  });
-
-  it('updateEntryConditionAt replaces in place', () => {
-    const out = updateEntryConditionAt(BASE, 0, {
+    const replaced = updateEntryConditionAt(BASE, 0, {
       kind: 'FreshCross',
       left: 'sma_s',
       right: 'sma_l',
       direction: 'down',
     });
-    const cond = out.entry.conditions[0];
-    expect(cond).toMatchObject({ kind: 'FreshCross', direction: 'down' });
-  });
+    const cond = replaced.entry.conditions[0];
+    expect.soft(cond, 'updateEntryConditionAt replaces in place').toMatchObject({ kind: 'FreshCross', direction: 'down' });
 
-  it('setEntryLogic flips AND ↔ OR', () => {
-    expect(setEntryLogic(BASE, 'OR').entry.logic).toBe('OR');
+    expect.soft(setEntryLogic(BASE, 'OR').entry.logic, 'setEntryLogic flips AND ↔ OR').toBe('OR');
   });
 
   it('exit mutators mirror entry mutators', () => {

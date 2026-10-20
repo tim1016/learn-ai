@@ -192,25 +192,23 @@ function period(name: string): HTMLElement {
 }
 
 describe('AlpacaActivityPageComponent', () => {
-  it("renders Today's statement exactly as the data plane authored it, since the last close", async () => {
+  it("renders Today's statement as the data plane authored it, since the last close, headed as the bots and this app's orders only", async () => {
     const { broker } = await renderActivity();
 
     await screen.findByText('Net today', { selector: 'dt' });
-    expect(statementAmount('Realized gains and losses')).toBe('$12.34');
-    expect(statementAmount('Fees billed today')).toBe('$0.10');
-    expect(statementAmount('Change in open gains')).toBe('-$3.00');
-    expect(statementAmount('Net today')).toBe('$9.24');
-    expect(screen.getByText(/since the last close/)).toBeTruthy();
-    expect(broker.getTodayStatement).toHaveBeenCalledWith(TARGET);
+    expect.soft(broker.getTodayStatement, "reads Today's statement for the routed account").toHaveBeenCalledWith(TARGET);
     // Today shows the statement, never the curve.
-    expect(broker.getPortfolioHistoryProof).not.toHaveBeenCalled();
-  });
-
-  it("says in its heading that the statement covers the bots and this app's orders, not the account", async () => {
-    await renderActivity();
-
-    expect(await screen.findByRole('heading', { name: "Today · bots and this app's orders", level: 2 })).toBeTruthy();
-    expect(screen.getByText(/not the whole account's day/)).toBeTruthy();
+    expect.soft(broker.getPortfolioHistoryProof, 'Today shows the statement, never the curve').not.toHaveBeenCalled();
+    expect.soft(statementAmount('Realized gains and losses'), "Today's statement as authored: realized").toBe('$12.34');
+    expect.soft(statementAmount('Fees billed today'), "Today's statement as authored: fees").toBe('$0.10');
+    expect.soft(statementAmount('Change in open gains'), "Today's statement as authored: open change").toBe('-$3.00');
+    expect.soft(statementAmount('Net today'), "Today's statement as authored: net").toBe('$9.24');
+    expect.soft(screen.getByText(/since the last close/), "Today's statement runs since the last close").toBeTruthy();
+    expect.soft(
+      await screen.findByRole('heading', { name: "Today · bots and this app's orders", level: 2 }),
+      "says in its heading that the statement covers the bots and this app's orders",
+    ).toBeTruthy();
+    expect.soft(screen.getByText(/not the whole account's day/), "says the statement is not the whole account's day").toBeTruthy();
   });
 
   it('never shows a missing amount as $0.00', async () => {
@@ -348,27 +346,27 @@ describe('AlpacaActivityPageComponent', () => {
     expect(document.activeElement).toBe(period('Today'));
   });
 
-  it('gives every section on the page the same heading level', async () => {
+  it('shows the sync check at the top of the page and gives every section the same heading level', async () => {
     await renderActivity();
+
+    const sync = await screen.findByText('Order custody sync check');
+    expect.soft(sync.parentElement?.textContent, 'shows the sync check at the top of the page: its verdict').toContain('Clean');
+    expect.soft(sync.parentElement?.textContent, 'shows the sync check at the top of the page: when it was last checked').toContain('last checked');
+
     await screen.findByText('Net today', { selector: 'dt' });
     await screen.findByRole('heading', { name: 'Orders and cash moves' });
 
-    expect(screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent?.trim())).toEqual([
+    expect.soft(
+      screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent?.trim()),
+      'gives every section on the page the same heading level',
+    ).toEqual([
       'Activity',
       "Today · bots and this app's orders",
       'Fees',
       'Orders and cash moves',
       'Order records and recovery',
     ]);
-    expect(screen.queryAllByRole('heading', { level: 3 })).toEqual([]);
-  });
-
-  it('shows the sync check at the top of the page', async () => {
-    await renderActivity();
-
-    const sync = await screen.findByText('Order custody sync check');
-    expect(sync.parentElement?.textContent).toContain('Clean');
-    expect(sync.parentElement?.textContent).toContain('last checked');
+    expect.soft(screen.queryAllByRole('heading', { level: 3 }), 'gives no section a lower heading level').toEqual([]);
   });
 
   it('opens historical records from Home while keeping the position difference visible', async () => {

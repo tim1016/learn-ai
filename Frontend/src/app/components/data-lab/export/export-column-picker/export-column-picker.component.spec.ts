@@ -24,20 +24,23 @@ async function renderPicker(
 }
 
 describe('ExportColumnPickerComponent', () => {
-  it('always includes unix_ts and never lets it be unticked', async () => {
+  it('renders the default selection: unix_ts locked on and every column ticked until the owner edits', async () => {
     await renderPicker();
     const unixTs = screen.getByRole('checkbox', { name: /unix_ts/ }) as HTMLInputElement;
-    expect(unixTs.checked).toBe(true);
-    expect(unixTs.disabled).toBe(true);
-  });
-
-  it('ticks every column until the owner edits the selection', async () => {
-    await renderPicker(null);
+    expect.soft(unixTs.checked, 'always includes unix_ts').toBe(true);
+    expect.soft(unixTs.disabled, 'never lets unix_ts be unticked').toBe(true);
     for (const column of COLUMNS) {
-      expect((screen.getByRole('checkbox', { name: column }) as HTMLInputElement).checked).toBe(true);
+      expect
+        .soft(
+          (screen.getByRole('checkbox', { name: column }) as HTMLInputElement).checked,
+          `ticks every column until the owner edits the selection: ${column}`,
+        )
+        .toBe(true);
     }
-    expect(screen.getByText('6 of 6 included')).toBeTruthy();
-    expect(screen.getByText(/including ones from indicators you add later/)).toBeTruthy();
+    expect.soft(screen.getByText('6 of 6 included'), 'ticks every column until the owner edits: count').toBeTruthy();
+    expect
+      .soft(screen.getByText(/including ones from indicators you add later/), 'ticks every column until the owner edits: later-columns note')
+      .toBeTruthy();
   });
 
   it('unticking one column keeps the rest as an explicit selection', async () => {

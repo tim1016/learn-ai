@@ -26,25 +26,19 @@ beforeAll(() => {
 const download = (): FakeDownload => ({ save: vi.fn() });
 
 describe('the Duration card', () => {
-  it('takes its dates from the shared picker, and has no plain date input anywhere', async () => {
+  it('takes its dates from the shared picker with no plain date input anywhere, and offers quick ranges that reach no further back than the options plan', async () => {
     await renderPage(fakeService(vi));
 
     const card = screen.getByRole('region', { name: 'Duration' });
-
-    expect(within(card).getByRole('group', { name: 'Backtest dates' })).toBeTruthy();
-    expect(within(card).getByLabelText('Start date')).toBeTruthy();
-    expect(within(card).getByLabelText('End date')).toBeTruthy();
-    expect([...document.querySelectorAll('input')].filter((field) => field.type === 'date')).toEqual([]);
-  });
-
-  it('offers quick ranges, and none that reach further back than the options plan', async () => {
-    await renderPage(fakeService(vi));
-
     const ranges = within(screen.getByRole('group', { name: 'Quick ranges' }));
 
-    expect(ranges.getByRole('button', { name: /^1M/ })).toBeTruthy();
-    expect(ranges.queryByRole('button', { name: /^5Y/ })).toBeNull();
-    expect(ranges.queryByRole('button', { name: /^Max/ })).toBeNull();
+    expect.soft(within(card).getByRole('group', { name: 'Backtest dates' }), 'takes its dates from the shared picker').toBeTruthy();
+    expect.soft(within(card).getByLabelText('Start date'), 'has a Start date field').toBeTruthy();
+    expect.soft(within(card).getByLabelText('End date'), 'has an End date field').toBeTruthy();
+    expect.soft([...document.querySelectorAll('input')].filter((field) => field.type === 'date'), 'has no plain date input anywhere').toEqual([]);
+    expect.soft(ranges.getByRole('button', { name: /^1M/ }), 'offers the 1M quick range').toBeTruthy();
+    expect.soft(ranges.queryByRole('button', { name: /^5Y/ }), 'offers no 5Y quick range, further back than the options plan').toBeNull();
+    expect.soft(ranges.queryByRole('button', { name: /^Max/ }), 'offers no Max quick range, further back than the options plan').toBeNull();
   });
 });
 

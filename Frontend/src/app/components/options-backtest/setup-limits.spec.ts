@@ -35,8 +35,12 @@ describe('a setup name, judged by the rule the server serves', () => {
     expect(nameProblem(name, SERVED_LIMITS)).toBe(SENTENCE);
   });
 
-  it('says nothing about an empty name, which Save asks for in its own words', () => {
-    expect(nameProblem('', SERVED_LIMITS)).toBeNull();
+  it.each<[string, string, SetupLimits | null]>([
+    ['says nothing about an empty name, which Save asks for in its own words', '', SERVED_LIMITS],
+    ['leaves the judging to the server while the limits are not known', 'a/b', null],
+    ['leaves the judging to the server when this browser cannot read the pattern it was given', 'a/b', { ...SERVED_LIMITS, setup_name: { pattern: '(unclosed', sentence: 'x' } }],
+  ])('%s', (_why, name, limits) => {
+    expect(nameProblem(name, limits)).toBeNull();
   });
 
   it('follows the pattern and the sentence that are served, not a rule of its own', () => {
@@ -45,28 +49,15 @@ describe('a setup name, judged by the rule the server serves', () => {
     expect(nameProblem('Mine', lowerCaseOnly)).toBe('Lower-case letters only.');
     expect(nameProblem('mine', lowerCaseOnly)).toBeNull();
   });
-
-  it('leaves the judging to the server while the limits are not known', () => {
-    expect(nameProblem('a/b', null)).toBeNull();
-  });
-
-  it('leaves the judging to the server when this browser cannot read the pattern it was given', () => {
-    const unreadable: SetupLimits = { ...SERVED_LIMITS, setup_name: { pattern: '(unclosed', sentence: 'x' } };
-
-    expect(nameProblem('a/b', unreadable)).toBeNull();
-  });
 });
 
 describe('when the legs are full', () => {
-  it('is when the setup holds as many as the server allows', () => {
+  it('is when the setup holds as many as the server allows, and never while the limit is not known', () => {
     const limits: SetupLimits = { ...SERVED_LIMITS, max_legs: 3 };
 
-    expect(legsFull(2, limits)).toBe(false);
-    expect(legsFull(3, limits)).toBe(true);
-    expect(legsFull(4, limits)).toBe(true);
-  });
-
-  it('is never, while the limit is not known', () => {
-    expect(legsFull(500, null)).toBe(false);
+    expect.soft(legsFull(2, limits), 'is not full below the limit the server allows').toBe(false);
+    expect.soft(legsFull(3, limits), 'is full when the setup holds as many as the server allows').toBe(true);
+    expect.soft(legsFull(4, limits), 'is full above the limit the server allows').toBe(true);
+    expect.soft(legsFull(500, null), 'is never full while the limit is not known').toBe(false);
   });
 });

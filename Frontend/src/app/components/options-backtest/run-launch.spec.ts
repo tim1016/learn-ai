@@ -119,22 +119,17 @@ describe('starting a run', () => {
 });
 
 describe('when the server will not start the backtest, other than for its range', () => {
-  it('shows a refusal in the server’s own words and with its code, and does not say to try again, for a refusal trying again cannot cure', async () => {
-    const launch = failing(new RunRefusedError('OPTIONS_BACKTEST_JOB_ALREADY_HAS_A_RUN', 'A run was already made for this job.', 409));
+  it('shows a refusal in the server’s own words and with its code, and says to try again only for a refusal of the server being unable (a 5xx)', async () => {
+    const cannotCure = failing(new RunRefusedError('OPTIONS_BACKTEST_JOB_ALREADY_HAS_A_RUN', 'A run was already made for this job.', 409));
+    const unable = failing(new RunRefusedError('OPTIONS_BACKTEST_DATA_CATALOG_UNAVAILABLE', 'The data catalog cannot be asked right now.', 503));
 
-    await launch.start(REQUEST);
+    await cannotCure.start(REQUEST);
+    await unable.start(REQUEST);
 
-    expect(launch.problem()).toEqual({ kind: 'not_started', message: 'A run was already made for this job.', code: 'OPTIONS_BACKTEST_JOB_ALREADY_HAS_A_RUN' });
-    expect(launch.refusal()).toBeNull();
-    expect(launch.busy()).toBe(false);
-  });
-
-  it('says to try again, after the server’s own words, for a refusal of the server being unable (a 5xx)', async () => {
-    const launch = failing(new RunRefusedError('OPTIONS_BACKTEST_DATA_CATALOG_UNAVAILABLE', 'The data catalog cannot be asked right now.', 503));
-
-    await launch.start(REQUEST);
-
-    expect(launch.problem()).toEqual({ kind: 'not_started', message: 'The data catalog cannot be asked right now. Try again.', code: 'OPTIONS_BACKTEST_DATA_CATALOG_UNAVAILABLE' });
+    expect.soft(cannotCure.problem(), 'shows a refusal in the server’s own words and with its code, and does not say to try again, for a refusal trying again cannot cure').toEqual({ kind: 'not_started', message: 'A run was already made for this job.', code: 'OPTIONS_BACKTEST_JOB_ALREADY_HAS_A_RUN' });
+    expect.soft(cannotCure.refusal(), 'shows no range refusal for a refusal trying again cannot cure').toBeNull();
+    expect.soft(cannotCure.busy(), 'frees Start after a refusal trying again cannot cure').toBe(false);
+    expect.soft(unable.problem(), 'says to try again, after the server’s own words, for a refusal of the server being unable (a 5xx)').toEqual({ kind: 'not_started', message: 'The data catalog cannot be asked right now. Try again.', code: 'OPTIONS_BACKTEST_DATA_CATALOG_UNAVAILABLE' });
   });
 
   it.each([

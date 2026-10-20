@@ -80,16 +80,19 @@ describe("RecencyLaunchConfigComponent", () => {
     expect(screen.queryByText("EMA Options Spread")).toBeNull();
   });
 
-  it("prepopulates a ready-to-run timeline configuration", async () => {
+  it("prepopulates a ready-to-run timeline configuration with a range input per numeric param for the preselected strategy", async () => {
     const { view } = await renderConfig([makeStrategy()]);
     await view.fixture.whenStable();
 
-    expect(screen.getByText("SPY")).not.toBeNull();
-    expect((screen.getByRole("checkbox", { name: /ema crossover \(2 bps\)/i }) as HTMLInputElement).checked).toBe(true);
-    expect(screen.getByText("Crossover gap (bps)")).not.toBeNull();
-    expect(screen.getByText("RSI lower gate")).not.toBeNull();
-    expect((screen.getByRole("radio", { name: "6 months" }) as HTMLInputElement).checked).toBe(true);
-    expect(screen.getByText("1 run")).not.toBeNull();
+    expect.soft(screen.getByText("SPY"), "prepopulates the default symbol").not.toBeNull();
+    expect.soft((screen.getByRole("checkbox", { name: /ema crossover \(2 bps\)/i }) as HTMLInputElement).checked, "preselects the strategy").toBe(true);
+    expect.soft(screen.getByText("Crossover gap (bps)"), "prepopulates the crossover gap param").not.toBeNull();
+    expect.soft(screen.getByText("RSI lower gate"), "prepopulates the RSI gate param").not.toBeNull();
+    expect.soft((screen.getByRole("radio", { name: "6 months" }) as HTMLInputElement).checked, "preselects the 6 months window").toBe(true);
+    expect.soft(screen.getByText("1 run"), "counts one run").not.toBeNull();
+    expect.soft(screen.getByText("Crossover gap (bps)"), "shows a range input for the crossover gap param").not.toBeNull();
+    expect.soft(screen.getByText("RSI lower gate"), "shows a range input for the RSI gate param").not.toBeNull();
+    expect.soft(screen.queryByLabelText(/^symbol$/i), "shows no range input for the string symbol param").toBeNull();
   });
 
   it("keeps strategy selection interactive through its accessible checkbox", async () => {
@@ -160,14 +163,6 @@ describe("RecencyLaunchConfigComponent", () => {
     await view.fixture.whenStable();
 
     expect(screen.getByText(/whole number of months/i)).not.toBeNull();
-  });
-
-  it("shows a range input per numeric param for the preselected strategy", async () => {
-    await renderConfig([makeStrategy()]);
-
-    expect(screen.getByText("Crossover gap (bps)")).not.toBeNull();
-    expect(screen.getByText("RSI lower gate")).not.toBeNull();
-    expect(screen.queryByLabelText(/^symbol$/i)).toBeNull();
   });
 
   it("computes the pre-launch run count from symbols and selected strategy ranges", async () => {

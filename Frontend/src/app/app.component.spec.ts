@@ -85,15 +85,12 @@ describe('AppComponent', () => {
     fixture.detectChanges();
   });
 
-  it('should render the app menubar inside the top bar', () => {
+  it('renders the shell chrome and applies the fallback browser title on first paint', () => {
     const nav = fixture.nativeElement.querySelector('[data-shell-slot="nav"]');
-    expect(nav?.querySelector('app-menubar')).toBeTruthy();
-  });
-
-  it('renders the universal top bar and applies the fallback browser title', () => {
-    expect(fixture.nativeElement.querySelector('.shell > app-top-bar')).toBeTruthy();
-    expect(fixture.nativeElement.querySelector('app-page-body')).toBeTruthy();
-    expect(TestBed.inject(Title).getTitle()).toBe('Botasur');
+    expect.soft(nav?.querySelector('app-menubar'), 'renders the app menubar inside the top bar').toBeTruthy();
+    expect.soft(fixture.nativeElement.querySelector('.shell > app-top-bar'), 'renders the universal top bar').toBeTruthy();
+    expect.soft(fixture.nativeElement.querySelector('app-page-body'), 'renders the page body').toBeTruthy();
+    expect.soft(TestBed.inject(Title).getTitle(), 'applies the fallback browser title').toBe('Botasur');
   });
 
   it('tints the header paper only when every lane is paper, live otherwise', () => {
@@ -175,15 +172,6 @@ describe('AppComponent', () => {
     expect(fixture.nativeElement.querySelector('.top-bar')?.classList.contains('top-bar--paper')).toBe(false);
   });
 
-  it('sets the browser title from the current menu page title', async () => {
-    const router = TestBed.inject(Router);
-
-    await router.navigateByUrl('/options-lab');
-    fixture.detectChanges();
-
-    expect(TestBed.inject(Title).getTitle()).toBe('Options Lab');
-  });
-
   describe('the browser title inside an account workspace', () => {
     const LANE = `/brokers/alpaca/clerks/${TEST_CLERK_ID}`;
     const WORKSPACE = `${LANE}/accounts/${TEST_ACCOUNT_ID}`;
@@ -242,8 +230,11 @@ describe('AppComponent', () => {
       expect(await titleAt(WORKSPACE)).toBe('Home · Paper');
     });
 
-    it('leaves titles outside a workspace to the active menu node', async () => {
-      expect(await titleAt('/data-lab')).toBe('Stocks');
+    it.each([
+      ['/options-lab', 'Options Lab'],
+      ['/data-lab', 'Stocks'],
+    ])('sets the browser title outside a workspace from the active menu node: %s', async (url, expected) => {
+      expect(await titleAt(url)).toBe(expected);
     });
   });
 

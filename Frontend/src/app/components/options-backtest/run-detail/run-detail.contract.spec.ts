@@ -78,14 +78,12 @@ describe('the patterns that guard the rules still fire', () => {
 });
 
 describe('time in the closer look', () => {
-  it('is never formatted or parsed by a file of the folder: only the shared helpers do that', () => {
-    expect(filesWith(OWN_DATES)).toEqual([]);
-  });
+  it('is never formatted or parsed by a file of the folder, and is shown by a shared helper wherever a file shows one', () => {
+    expect.soft(filesWith(OWN_DATES), 'is never formatted or parsed by a file of the folder: only the shared helpers do that').toEqual([]);
 
-  it('is shown by a shared helper wherever a file shows one', () => {
     const showers = filesWith(/formatTimestampDisplay|app-timestamp-display|timestampDisplay|formatChartAxisTick/);
 
-    expect(showers).toEqual(
+    expect.soft(showers, 'is shown by a shared helper wherever a file shows one').toEqual(
       expect.arrayContaining([
         join('session', 'session-view.component.html'),
         join('session', 'timeline-chart.component.ts'),
@@ -96,35 +94,27 @@ describe('time in the closer look', () => {
 });
 
 describe('money in the closer look', () => {
-  it('becomes a number in the one geometry file and no other', () => {
-    expect(filesWith(NUMBER_COERCION)).toEqual([GEOMETRY]);
-  });
+  it('becomes a number in the one geometry file, is asked of it by the plan alone, and is explained at the top of that file', () => {
+    expect.soft(filesWith(NUMBER_COERCION), 'becomes a number in the one geometry file and no other').toEqual([GEOMETRY]);
 
-  it('is asked of the geometry file by the plan alone, and nothing a template can print comes from it', () => {
-    expect(filesWith(/series-geometry|axisPrice/).filter((name) => name !== GEOMETRY)).toEqual(['timeline-plan.ts']);
-    expect(filesWith(/axisPrice/, FILES.filter((file) => file.name.endsWith('.html')))).toEqual([]);
-  });
+    expect.soft(filesWith(/series-geometry|axisPrice/).filter((name) => name !== GEOMETRY), 'is asked of the geometry file by the plan alone, and nothing a template can print comes from it (1 of 2)').toEqual(['timeline-plan.ts']);
+    expect.soft(filesWith(/axisPrice/, FILES.filter((file) => file.name.endsWith('.html'))), 'is asked of the geometry file by the plan alone, and nothing a template can print comes from it (2 of 2)').toEqual([]);
 
-  it('says at its top why the geometry file exists and that nothing it makes is printed', () => {
     const header = (FILES.find((file) => file.name === GEOMETRY)?.text ?? '').split('*/')[0].replace(/\s*\n\s*\*\s*/g, ' ');
 
-    expect(header).toContain('display-only geometry');
-    expect(header).toContain('the money lint does not read');
-    expect(header).toContain('nothing this file makes is');
+    expect.soft(header, 'says at its top why the geometry file exists and that nothing it makes is printed (1 of 3)').toContain('display-only geometry');
+    expect.soft(header, 'says at its top why the geometry file exists and that nothing it makes is printed (2 of 3)').toContain('the money lint does not read');
+    expect.soft(header, 'says at its top why the geometry file exists and that nothing it makes is printed (3 of 3)').toContain('nothing this file makes is');
   });
 });
 
 describe('the chart in the closer look', () => {
-  it('is spoken to by the chart wrapper and by no other file', () => {
-    expect(filesWith(/from 'lightweight-charts'/)).toEqual([join('session', 'timeline-chart.component.ts')]);
-  });
+  it('is spoken to by the chart wrapper alone, made through the application’s own factory, and coloured by theme tokens only', () => {
+    expect.soft(filesWith(/from 'lightweight-charts'/), 'is spoken to by the chart wrapper and by no other file').toEqual([join('session', 'timeline-chart.component.ts')]);
 
-  it('is made through the application’s own factory and never directly', () => {
-    expect(filesWith(/import\s*{[^}]*\bcreateChart\b[^}]*}\s*from\s*'lightweight-charts'/)).toEqual([]);
-    expect(filesWith(/createAppChart/)).toEqual([join('session', 'timeline-chart.component.ts')]);
-  });
+    expect.soft(filesWith(/import\s*{[^}]*\bcreateChart\b[^}]*}\s*from\s*'lightweight-charts'/), 'is made through the application’s own factory and never directly (1 of 2)').toEqual([]);
+    expect.soft(filesWith(/createAppChart/), 'is made through the application’s own factory and never directly (2 of 2)').toEqual([join('session', 'timeline-chart.component.ts')]);
 
-  it('is coloured by theme tokens, with no literal colour anywhere in the folder', () => {
-    expect(filesWith(HEX_COLOUR)).toEqual([]);
+    expect.soft(filesWith(HEX_COLOUR), 'is coloured by theme tokens, with no literal colour anywhere in the folder').toEqual([]);
   });
 });

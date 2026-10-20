@@ -19,36 +19,36 @@ describe('EntryComponent', () => {
       providers: [provideRouter([{ path: 'data-lab', component: DataLabStubComponent }])],
     });
 
-  it("opens Data Lab when I'm In is pressed, with no sign-in in between", async () => {
+  it.each<[string, () => Promise<void>]>([
+    [
+      "I'm In is pressed, with no sign-in in between",
+      () => userEvent.click(screen.getByRole('button', { name: "I'm In" })),
+    ],
+    [
+      'the keyboard is used',
+      async () => {
+        await userEvent.tab();
+        await userEvent.keyboard('{Enter}');
+      },
+    ],
+  ])('opens Data Lab when %s', async (_name, act) => {
     await renderEntry();
     const router = TestBed.inject(Router);
 
-    await userEvent.click(screen.getByRole('button', { name: "I'm In" }));
+    await act();
 
     await vi.waitFor(() => expect(router.url).toBe('/data-lab'));
   });
 
-  it('opens Data Lab from the keyboard', async () => {
-    await renderEntry();
-    const router = TestBed.inject(Router);
-
-    await userEvent.tab();
-    await userEvent.keyboard('{Enter}');
-
-    await vi.waitFor(() => expect(router.url).toBe('/data-lab'));
-  });
-
-  it('describes the painting to people who cannot see it', async () => {
-    await renderEntry();
-
-    expect(screen.getByRole('img', { name: /buy fear, sell greed/i })).toBeTruthy();
-  });
-
-  it('has no detectable accessibility violations', async () => {
+  it('describes the painting to people who cannot see it, and has no detectable accessibility violations', async () => {
     const { container } = await renderEntry();
+
+    expect
+      .soft(screen.queryByRole('img', { name: /buy fear, sell greed/i }), 'describes the painting to people who cannot see it')
+      .toBeTruthy();
 
     const results = await axe.run(container);
 
-    expect(results.violations).toEqual([]);
+    expect.soft(results.violations, 'has no detectable accessibility violations').toEqual([]);
   });
 });

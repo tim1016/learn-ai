@@ -7,27 +7,14 @@ import { markdownSlug } from './markdown-slug';
 // ── markdownSlug unit tests ───────────────────────────────────────────────────
 
 describe('markdownSlug', () => {
-  it('lowercases text', () => {
-    expect(markdownSlug('Hello World')).toBe('hello-world');
-  });
-
-  it('replaces spaces with hyphens', () => {
-    expect(markdownSlug('foo bar baz')).toBe('foo-bar-baz');
-  });
-
-  it('strips non-word characters except hyphens', () => {
-    expect(markdownSlug('Station 1: SIGNAL')).toBe('station-1-signal');
-  });
-
-  it('preserves underscores (word chars)', () => {
-    expect(markdownSlug('SUBMIT_GATE')).toBe('submit_gate');
-  });
-
-  it('trims leading and trailing hyphens', () => {
-    expect(markdownSlug('  --hello--  ')).toBe('hello');
-  });
-
-  it('collapses multiple consecutive spaces into one hyphen', () => {
-    expect(markdownSlug('a  b   c')).toBe('a-b-c');
+  it.each([
+    ['lowercases text', 'Hello World', 'hello-world'],
+    ['replaces spaces with hyphens', 'foo bar baz', 'foo-bar-baz'],
+    ['strips non-word characters except hyphens', 'Station 1: SIGNAL', 'station-1-signal'],
+    ['preserves underscores (word chars)', 'SUBMIT_GATE', 'submit_gate'],
+    ['trims leading and trailing hyphens', '  --hello--  ', 'hello'],
+    ['collapses multiple consecutive spaces into one hyphen', 'a  b   c', 'a-b-c'],
+  ])('%s', (_name, text, expected) => {
+    expect(markdownSlug(text)).toBe(expected);
   });
 });

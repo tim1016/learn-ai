@@ -17,19 +17,19 @@ async function renderPanel(rehearsal: ChanceRehearsal, candidate: CandidateRef =
 }
 
 describe('GoldenSearchRehearsalPanelComponent', () => {
-  it('shows the stored guidance, the joint ladder with its target line and every active rule as its own series', async () => {
-    await renderPanel(chanceRehearsal());
-    expect(screen.getByText(/61% of resamples meet every modeled rule/i)).toBeTruthy();
-    expect(screen.getByText(/2× rung reaches the 80% target/i)).toBeTruthy();
-    expect(screen.getByRole('img', { name: /final-test rehearsal/i })).toBeTruthy();
-  });
+  it('renders a measured rehearsal: the stored guidance, the joint ladder with its target line, the hypothetical-length caveat, no claim the test is too short, and an accessibility audit', async () => {
+    const view = await renderPanel(chanceRehearsal());
+    expect.soft(screen.getByText(/61% of resamples meet every modeled rule/i), 'shows the stored guidance').toBeTruthy();
+    expect.soft(screen.getByText(/2× rung reaches the 80% target/i), 'shows the joint ladder with its target line').toBeTruthy();
+    expect.soft(screen.getByRole('img', { name: /final-test rehearsal/i }), 'draws every active rule as its own series').toBeTruthy();
 
-  it('never says the test is too short and keeps the hypothetical-length caveat visible', async () => {
-    await renderPanel(chanceRehearsal());
     const caption = screen.getByText(/not a validated date range: a revision that changes the interval starts a new study/i);
-    expect(caption).toBeTruthy();
-    expect(document.body.textContent).not.toContain('test is too short');
-    expect(document.body.textContent).not.toContain('too short');
+    expect.soft(caption, 'keeps the hypothetical-length caveat visible').toBeTruthy();
+    expect.soft(document.body.textContent, 'never says the test is too short').not.toContain('test is too short');
+    expect.soft(document.body.textContent, 'never says anything is too short').not.toContain('too short');
+
+    const results = await axe.run(view.fixture.nativeElement, { rules: { 'color-contrast': { enabled: false } } });
+    expect.soft(results.violations.map((v) => v.id), 'passes an accessibility audit in its measured state').toEqual([]);
   });
 
   it('reads the recorded reason when the rehearsal was never measured or is unavailable', async () => {
@@ -44,11 +44,5 @@ describe('GoldenSearchRehearsalPanelComponent', () => {
       sentence: 'The rehearsal reading could not be computed and nothing was stored: RuntimeError: rehearsal exploded.',
     });
     expect(screen.getByRole('alert').textContent).toContain('rehearsal exploded');
-  });
-
-  it('passes an accessibility audit in its measured state', async () => {
-    const view = await renderPanel(chanceRehearsal());
-    const results = await axe.run(view.fixture.nativeElement, { rules: { 'color-contrast': { enabled: false } } });
-    expect(results.violations.map((v) => v.id)).toEqual([]);
   });
 });

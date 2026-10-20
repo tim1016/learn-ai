@@ -311,17 +311,20 @@ describe('JobsService.onEvent', () => {
     expect(service.job('job-1')?.phase).toBe('running_indicators');
   });
 
-  it('delivers one frame to every registered handler on the same job', async () => {
+  it('routes a frame by job id: every handler on its job gets it, a handler on a different job id never does', async () => {
     const source = await startJobAndGrabSource();
     const a: unknown[] = [];
     const b: unknown[] = [];
+    const received: unknown[] = [];
 
     service.onEvent('job-1', (event) => a.push(event));
     service.onEvent('job-1', (event) => b.push(event));
+    service.onEvent('some-other-job', (event) => received.push(event));
     source.dispatch({ type: 'job.started' });
 
-    expect(a).toHaveLength(1);
-    expect(b).toHaveLength(1);
+    expect.soft(a, 'delivers one frame to every registered handler on the same job (first handler)').toHaveLength(1);
+    expect.soft(b, 'delivers one frame to every registered handler on the same job (second handler)').toHaveLength(1);
+    expect.soft(received, 'never delivers to a handler registered on a different job id').toHaveLength(0);
   });
 
   it('stops delivering once the returned unsubscribe function is called', async () => {
@@ -334,16 +337,6 @@ describe('JobsService.onEvent', () => {
     source.dispatch({ type: 'job.phase', phase: 'running_indicators' });
 
     expect(received).toHaveLength(1);
-  });
-
-  it('never delivers to a handler registered on a different job id', async () => {
-    const source = await startJobAndGrabSource();
-    const received: unknown[] = [];
-
-    service.onEvent('some-other-job', (event) => received.push(event));
-    source.dispatch({ type: 'job.started' });
-
-    expect(received).toHaveLength(0);
   });
 
   it('clears a listener that never unsubscribed once the job reaches a terminal event', async () => {

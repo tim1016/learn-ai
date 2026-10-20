@@ -110,71 +110,50 @@ describe('layoutTag', () => {
     tagHalfHeight: 10,
   };
 
-  it('pins x to the plot right edge and y to the mapped price mid-range', () => {
-    expect(layoutTag(50, scale)).toEqual({ x: 100, y: 50 });
-  });
-
-  it('clamps y at the top extreme so the tag never clips above the plot', () => {
-    expect(layoutTag(150, scale)).toEqual({ x: 100, y: 10 });
-  });
-
-  it('clamps y at the bottom extreme so the tag never clips below the plot', () => {
-    expect(layoutTag(-50, scale)).toEqual({ x: 100, y: 90 });
+  it.each<[string, number, { x: number; y: number }]>([
+    ['pins x to the plot right edge and y to the mapped price mid-range', 50, { x: 100, y: 50 }],
+    ['clamps y at the top extreme so the tag never clips above the plot', 150, { x: 100, y: 10 }],
+    ['clamps y at the bottom extreme so the tag never clips below the plot', -50, { x: 100, y: 90 }],
+  ])('places the last-price tag: %s', (_name, price, expected) => {
+    expect(layoutTag(price, scale)).toEqual(expected);
   });
 });
 
 describe('draw', () => {
-  it('does not throw for an empty bar array', () => {
+  const singleBar = [bar()];
+  const flatBars = Array.from({ length: 5 }, (_, i) =>
+    bar({
+      start_ms: 1_700_000_000_000 + i * 60_000,
+      end_ms: 1_700_000_000_000 + (i + 1) * 60_000,
+      open: '100.00',
+      high: '100.00',
+      low: '100.00',
+      close: '100.00',
+      volume: 0,
+    }),
+  );
+  const risingBars = Array.from({ length: 8 }, (_, i) =>
+    bar({
+      start_ms: 1_700_000_000_000 + i * 60_000,
+      end_ms: 1_700_000_000_000 + (i + 1) * 60_000,
+      open: String(100 + i),
+      high: String(101 + i),
+      low: String(99 + i),
+      close: String(100.5 + i),
+      volume: 100 * (i + 1),
+    }),
+  );
+
+  it.each<[string, ChartBar[], ChartFillMarker[]]>([
+    ['for an empty bar array', [], []],
+    ['for a single-bar array with a marker on it', singleBar, [marker({ filled_at_ms: singleBar[0].start_ms + 1 })]],
+    ['for an all-flat-price array', flatBars, []],
+    ['with buy and sell markers', risingBars, [
+      marker({ side: 'buy', filled_at_ms: risingBars[2].start_ms + 1 }),
+      marker({ side: 'sell', filled_at_ms: risingBars[5].start_ms + 1, order_ref: 'ord-2' }),
+    ]],
+  ])('does not throw %s', (_name, bars, markers) => {
     const ctx = createStubCtx();
-    const scale = computeScale([], CFG);
-
-    expect(() => draw(ctx, [], [], scale, CFG)).not.toThrow();
-  });
-
-  it('does not throw for a single-bar array with a marker on it', () => {
-    const ctx = createStubCtx();
-    const bars = [bar()];
-    const markers = [marker({ filled_at_ms: bars[0].start_ms + 1 })];
-    const scale = computeScale(bars, CFG);
-
-    expect(() => draw(ctx, bars, markers, scale, CFG)).not.toThrow();
-  });
-
-  it('does not throw for an all-flat-price array', () => {
-    const ctx = createStubCtx();
-    const bars = Array.from({ length: 5 }, (_, i) =>
-      bar({
-        start_ms: 1_700_000_000_000 + i * 60_000,
-        end_ms: 1_700_000_000_000 + (i + 1) * 60_000,
-        open: '100.00',
-        high: '100.00',
-        low: '100.00',
-        close: '100.00',
-        volume: 0,
-      }),
-    );
-    const scale = computeScale(bars, CFG);
-
-    expect(() => draw(ctx, bars, [], scale, CFG)).not.toThrow();
-  });
-
-  it('does not throw with buy and sell markers', () => {
-    const ctx = createStubCtx();
-    const bars = Array.from({ length: 8 }, (_, i) =>
-      bar({
-        start_ms: 1_700_000_000_000 + i * 60_000,
-        end_ms: 1_700_000_000_000 + (i + 1) * 60_000,
-        open: String(100 + i),
-        high: String(101 + i),
-        low: String(99 + i),
-        close: String(100.5 + i),
-        volume: 100 * (i + 1),
-      }),
-    );
-    const markers = [
-      marker({ side: 'buy', filled_at_ms: bars[2].start_ms + 1 }),
-      marker({ side: 'sell', filled_at_ms: bars[5].start_ms + 1, order_ref: 'ord-2' }),
-    ];
     const scale = computeScale(bars, CFG);
 
     expect(() => draw(ctx, bars, markers, scale, CFG)).not.toThrow();

@@ -17,13 +17,10 @@ describe('where a refusal of a read is said', () => {
     expect(readProblemOf(new PastChainRefusedError(code, 'the time is wrong', 400), 'unused')).toMatchObject({ control: 'time', message: 'the time is wrong', canRetry: false });
   });
 
-  it('is at the strikes box for a window that is too wide', () => {
-    expect(readProblemOf(new PastChainRefusedError('OPTIONS_BACKTEST_WINDOW_TOO_WIDE', 'ask for fewer strikes each side', 400), 'unused')).toMatchObject({ control: 'strikes' });
-  });
-
-  it('can be tried again when the catalog is out of reach (503) and not when the request itself is the problem (400)', () => {
-    expect(readProblemOf(new PastChainRefusedError('OPTIONS_BACKTEST_LAKE_CATALOG_UNAVAILABLE', 'cannot be reached', 503), 'unused').canRetry).toBe(true);
-    expect(readProblemOf(new PastChainRefusedError('OPTIONS_BACKTEST_NOT_AN_EXPIRY', 'not an anchor', 400), 'unused').canRetry).toBe(false);
+  it('is at the strikes box for a window that is too wide, and can be tried again when the catalog is out of reach (503) and not when the request itself is the problem (400)', () => {
+    expect.soft(readProblemOf(new PastChainRefusedError('OPTIONS_BACKTEST_WINDOW_TOO_WIDE', 'ask for fewer strikes each side', 400), 'unused'), 'is at the strikes box for a window that is too wide').toMatchObject({ control: 'strikes' });
+    expect.soft(readProblemOf(new PastChainRefusedError('OPTIONS_BACKTEST_LAKE_CATALOG_UNAVAILABLE', 'cannot be reached', 503), 'unused').canRetry, 'can be tried again when the catalog is out of reach (503)').toBe(true);
+    expect.soft(readProblemOf(new PastChainRefusedError('OPTIONS_BACKTEST_NOT_AN_EXPIRY', 'not an anchor', 400), 'unused').canRetry, 'cannot be tried again when the request itself is the problem (400)').toBe(false);
   });
 
   it.each([
@@ -33,6 +30,8 @@ describe('where a refusal of a read is said', () => {
     [['query', 'at_ms'], 'time'],
     [['query', 'expiry_ms'], 'area'],
     [[], 'area'],
+    // A parameter name that is also a property of every object is not taken for a control.
+    [['query', 'toString'], 'area'],
   ] as const)('puts a 422 about %j at %s', (loc, control) => {
     expect(readProblemOf(invalid([...loc]), 'unused').control).toBe(control);
   });
@@ -43,37 +42,29 @@ describe('where a refusal of a read is said', () => {
     expect(problem).toEqual({ message: 'wrong at query.strikes wrong at query.at_ms', code: null, control: 'strikes', canRetry: false });
   });
 
-  it('does not take a parameter name that is also a property of every object for a control', () => {
-    expect(readProblemOf(invalid(['query', 'toString']), 'unused').control).toBe('area');
-  });
-
-  it('says what the browser says when the call never reached the server, and allows another try', () => {
-    const problem = readProblemOf(new HttpErrorResponse({ status: 0, statusText: 'Unknown Error' }), 'The listing could not be read.');
-
-    expect(problem).toEqual({ message: 'The listing could not be read.', code: null, control: 'area', canRetry: true });
-  });
-
-  it('reads a sentence the server sent in a shape of its own', () => {
-    const problem = readProblemOf(new HttpErrorResponse({ status: 500, error: { detail: { message: 'the lake is on fire' } } }), 'fallback');
-
-    expect(problem.message).toBe('the lake is on fire');
+  it('says what the browser says when the call never reached the server and allows another try, and reads a sentence the server sent in a shape of its own', () => {
+    expect.soft(readProblemOf(new HttpErrorResponse({ status: 0, statusText: 'Unknown Error' }), 'The listing could not be read.'), 'says what the browser says when the call never reached the server, and allows another try').toEqual({
+      message: 'The listing could not be read.',
+      code: null,
+      control: 'area',
+      canRetry: true,
+    });
+    expect.soft(readProblemOf(new HttpErrorResponse({ status: 500, error: { detail: { message: 'the lake is on fire' } } }), 'fallback').message, 'reads a sentence the server sent in a shape of its own').toBe('the lake is on fire');
   });
 });
 
 describe('why a download did not happen', () => {
-  it('is that the page is not allowed, with the server own sentence when there is one', () => {
-    expect(downloadProblemOf(new DownloadNotAllowedError('The secret does not match.', 403))).toEqual({ kind: 'not_allowed', serverMessage: 'The secret does not match.' });
-    expect(downloadProblemOf(new DownloadNotAllowedError(null, 401))).toEqual({ kind: 'not_allowed', serverMessage: null });
-  });
-
-  it('is the server refusal with its code, and says nothing was downloaded only for a refusal of the request itself', () => {
-    expect(downloadProblemOf(new PastChainRefusedError('OPTIONS_BACKTEST_TOO_MANY_CONTRACTS', 'a download takes at most N contracts', 400))).toEqual({
+  it('is that the page is not allowed, or the server refusal with its code, or words of its own when nothing readable came back', () => {
+    expect.soft(downloadProblemOf(new DownloadNotAllowedError('The secret does not match.', 403)), 'is that the page is not allowed, with the server own sentence when there is one').toEqual({ kind: 'not_allowed', serverMessage: 'The secret does not match.' });
+    expect.soft(downloadProblemOf(new DownloadNotAllowedError(null, 401)), 'is that the page is not allowed, with no sentence when there is none').toEqual({ kind: 'not_allowed', serverMessage: null });
+    expect.soft(downloadProblemOf(new PastChainRefusedError('OPTIONS_BACKTEST_TOO_MANY_CONTRACTS', 'a download takes at most N contracts', 400)), 'is the server refusal with its code, and says nothing was downloaded for a refusal of the request itself').toEqual({
       kind: 'refused',
       message: 'a download takes at most N contracts',
       code: 'OPTIONS_BACKTEST_TOO_MANY_CONTRACTS',
       nothingDownloaded: true,
     });
-    expect(downloadProblemOf(new PastChainRefusedError('OPTIONS_BACKTEST_LAKE_CATALOG_UNAVAILABLE', 'out of reach', 503))).toMatchObject({ nothingDownloaded: false });
+    expect.soft(downloadProblemOf(new PastChainRefusedError('OPTIONS_BACKTEST_LAKE_CATALOG_UNAVAILABLE', 'out of reach', 503)), 'does not say nothing was downloaded for a refusal that is not of the request itself').toMatchObject({ nothingDownloaded: false });
+    expect.soft(downloadProblemOf(new HttpErrorResponse({ status: 0 })), 'has words of its own when nothing readable came back, and cannot say that nothing was downloaded').toEqual({ kind: 'refused', message: 'The download could not be started.', code: null, nothingDownloaded: false });
   });
 
   it.each([
@@ -86,9 +77,5 @@ describe('why a download did not happen', () => {
     ['something that is not an answer at all', new Error('network down'), false],
   ])('says nothing was downloaded only when the server refused before doing anything: %s is %s', (_name, error, nothing) => {
     expect(downloadProblemOf(error)).toMatchObject({ kind: 'refused', nothingDownloaded: nothing });
-  });
-
-  it('has words of its own when nothing readable came back, and cannot say that nothing was downloaded', () => {
-    expect(downloadProblemOf(new HttpErrorResponse({ status: 0 }))).toEqual({ kind: 'refused', message: 'The download could not be started.', code: null, nothingDownloaded: false });
   });
 });

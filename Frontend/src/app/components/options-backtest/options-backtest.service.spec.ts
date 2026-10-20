@@ -39,25 +39,20 @@ describe('OptionsBacktestService', () => {
     await expect(pending).resolves.toMatchObject({ window: ['w window.'], setup: exampleBody() });
   });
 
-  it('turns a 422 into the server reasons, with where each one is', async () => {
-    const pending = service.describe({});
-    http.expectOne(`${BASE}/setups/describe`).flush(
+  it.each([
+    [
+      'turned into the server reasons, with where each one is',
       { detail: [{ loc: ['body', 'legs', 0, 'contracts'], msg: 'Input should be at most 1000', type: 'x' }, { nonsense: true }] },
-      { status: 422, statusText: 'Unprocessable Entity' },
-    );
-
-    const error = await pending.catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(SetupInvalidError);
-    expect(error).toMatchObject({ details: [{ loc: ['body', 'legs', 0, 'contracts'], msg: 'Input should be at most 1000' }] });
-  });
-
-  it('still reports a 422 whose body is not in the usual shape', async () => {
+      [{ loc: ['body', 'legs', 0, 'contracts'], msg: 'Input should be at most 1000' }],
+    ],
+    ['still reported when its body is not in the usual shape', 'nope', [{ loc: [], msg: expect.any(String) }]],
+  ])('reads a 422 on describe as the setup being invalid, %s', async (_name, body, details) => {
     const pending = service.describe({});
-    http.expectOne(`${BASE}/setups/describe`).flush('nope', { status: 422, statusText: 'Unprocessable Entity' });
+    http.expectOne(`${BASE}/setups/describe`).flush(body, { status: 422, statusText: 'Unprocessable Entity' });
 
     const error = await pending.catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(SetupInvalidError);
-    expect(error).toMatchObject({ details: [{ loc: [], msg: expect.any(String) }] });
+    expect(error).toMatchObject({ details });
   });
 
   it('lists the saved setups', async () => {

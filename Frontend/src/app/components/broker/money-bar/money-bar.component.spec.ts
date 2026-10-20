@@ -27,12 +27,31 @@ function slices(container: Element): HTMLElement[] {
 }
 
 describe('MoneyBarComponent', () => {
-  it('names every slice with its Python-authored amount in the legend', async () => {
-    await renderBar();
+  it('draws each slice at the backend’s basis points and names it with its Python-authored amount in the legend', async () => {
+    const { container } = await renderBar();
+
+    const drawn = slices(container);
+    expect.soft(drawn.map((slice) => slice.style.flexGrow), 'draws each slice at the backend’s basis points')
+      .toEqual(['100', '67', '1', '9832']);
+    expect.soft(drawn.map((slice) => slice.className), 'draws each slice with its kind’s treatment').toEqual([
+      'money-bar__slice money-bar__slice--bot',
+      'money-bar__slice money-bar__slice--stopped',
+      'money-bar__slice money-bar__slice--charges',
+      'money-bar__slice money-bar__slice--free',
+    ]);
+    const parts = Array.from(drawn[0].querySelectorAll<HTMLElement>('.money-bar__part'));
+    expect.soft(
+      parts.map((part) => [part.className, part.style.flexGrow]),
+      'draws the bot slice’s parts at the backend’s basis points, with no arithmetic of its own',
+    ).toEqual([
+      ['money-bar__part money-bar__part--shares', '7647'],
+      ['money-bar__part money-bar__part--pending', '0'],
+      ['money-bar__part money-bar__part--free', '2353'],
+    ]);
 
     const legend = screen.getByRole('list', { name: 'Where this account’s money is' });
     const entries = within(legend).getAllByRole('listitem').map((item) => item.textContent?.replace(/\s+/g, ' ').trim());
-    expect(entries).toEqual([
+    expect.soft(entries, 'names every slice with its Python-authored amount in the legend').toEqual([
       'spy-ema-20260929-0931 $999.99 in shares $764.71 · in entry orders $0.00 · free $235.28',
       'held by stopped bot spy-ema-20260925-1402 $670.43 released $0.00 · still claimed $0.00',
       'account charges $0.01',
@@ -148,25 +167,6 @@ describe('MoneyBarComponent', () => {
     expect(screen.getByText(/Claims exceed the account by \$50\.00/)).toBeTruthy();
     expect(screen.getByText(why)).toBeTruthy();
     expect(screen.queryByText(/Open P&L \$/)).toBeNull();
-  });
-
-  it('draws each slice at the backend’s basis points, with no arithmetic of its own', async () => {
-    const { container } = await renderBar();
-
-    const drawn = slices(container);
-    expect(drawn.map((slice) => slice.style.flexGrow)).toEqual(['100', '67', '1', '9832']);
-    expect(drawn.map((slice) => slice.className)).toEqual([
-      'money-bar__slice money-bar__slice--bot',
-      'money-bar__slice money-bar__slice--stopped',
-      'money-bar__slice money-bar__slice--charges',
-      'money-bar__slice money-bar__slice--free',
-    ]);
-    const parts = Array.from(drawn[0].querySelectorAll<HTMLElement>('.money-bar__part'));
-    expect(parts.map((part) => [part.className, part.style.flexGrow])).toEqual([
-      ['money-bar__part money-bar__part--shares', '7647'],
-      ['money-bar__part money-bar__part--pending', '0'],
-      ['money-bar__part money-bar__part--free', '2353'],
-    ]);
   });
 
   it('draws a NEW slice with its own treatment, carved from free to deploy', async () => {

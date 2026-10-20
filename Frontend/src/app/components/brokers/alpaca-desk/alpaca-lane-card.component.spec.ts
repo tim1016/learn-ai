@@ -99,10 +99,22 @@ describe('AlpacaLaneCardComponent', () => {
     }
   });
 
-  it('frames the card in its lane colour beside the worded mode', async () => {
+  it('is one click target into the account workspace, framed in its lane colour and named by the account and its mode', async () => {
     await renderCard();
 
-    expect(screen.getByRole('link').getAttribute('data-lane')).toBe('paper');
+    const links = screen.getAllByRole('link');
+    expect.soft(links, 'is one click target into the account workspace, not a menu of links').toHaveLength(1);
+    expect.soft(links[0].getAttribute('href'), 'is one click target into the account workspace').toBe(WORKSPACE_URL);
+    expect.soft(screen.getByRole('link').getAttribute('data-lane'), 'frames the card in its lane colour beside the worded mode').toBe('paper');
+
+    await screen.findByText(/Free to deploy/);
+
+    // The name is what a screen reader announces for the choice; the hidden
+    // money-bar legend and the counts belong in the description, not the name.
+    const link = screen.getByRole('link', { name: 'Paper PAPER · practice money' });
+    const description = document.getElementById(link.getAttribute('aria-describedby') ?? '');
+    expect.soft(description?.textContent, 'describes its link by the money it shows').toContain('Free to deploy');
+    expect.soft(description?.textContent, 'describes its link by the counts it shows').toContain('2 running');
   });
 
   it('reads every count from one backend field and adds nothing up', async () => {
@@ -144,11 +156,18 @@ describe('AlpacaLaneCardComponent', () => {
     expect(shortfall.textContent?.replace(/\s+/g, ' ').trim()).toBe('Claims exceed the account by $50.00');
   });
 
-  it('states no shortfall for an account that is not overdrawn', async () => {
+  it('states neither a shortfall nor any lane mechanics for an ordinary account', async () => {
     await renderCard();
 
+    for (const mechanic of ['Endpoint mode', 'Authority', 'Binding generation', 'Account']) {
+      expect.soft(screen.queryByText(mechanic), `shows no lane mechanic (${mechanic}) — those belong to the workspace`).toBeNull();
+    }
+    // The raw confirmed account id was the card's own `<dd>` before #2187.
+    expect.soft(screen.queryByText(TEST_ACCOUNT_ID), 'shows no raw confirmed account id (#2187)').toBeNull();
+    expect.soft(screen.queryByText('Real Paper'), 'shows no lane authority').toBeNull();
+
     await screen.findByText(/Free to deploy/);
-    expect(screen.queryByText(/Claims exceed the account/)).toBeNull();
+    expect.soft(screen.queryByText(/Claims exceed the account/), 'states no shortfall for an account that is not overdrawn').toBeNull();
   });
 
   it('says an attention count the directory omitted is unknown, never zero', async () => {
@@ -249,25 +268,6 @@ describe('AlpacaLaneCardComponent', () => {
     }
   });
 
-  it('is one click target into the account workspace, not a menu of links', async () => {
-    await renderCard();
-
-    const links = screen.getAllByRole('link');
-    expect(links).toHaveLength(1);
-    expect(links[0].getAttribute('href')).toBe(WORKSPACE_URL);
-  });
-
-  it('shows no lane mechanics — those belong to the workspace, not to choosing', async () => {
-    await renderCard();
-
-    for (const mechanic of ['Endpoint mode', 'Authority', 'Binding generation', 'Account']) {
-      expect(screen.queryByText(mechanic)).toBeNull();
-    }
-    // The raw confirmed account id was the card's own `<dd>` before #2187.
-    expect(screen.queryByText(TEST_ACCOUNT_ID)).toBeNull();
-    expect(screen.queryByText('Real Paper')).toBeNull();
-  });
-
   it('opens a lane with no confirmed account on Settings, with the readiness line the server authored', async () => {
     await renderCard(UNBOUND_LANE);
 
@@ -281,34 +281,28 @@ describe('AlpacaLaneCardComponent', () => {
     expect(screen.queryByText(/\$/)).toBeNull();
   });
 
-  it('opens a down lane at its own account, where the shell badge opens it too', async () => {
-    await renderCard(OFFLINE_LANE);
+  it('opens a down lane at its own account and states its lifecycle, reading nothing from it', async () => {
+    const { getAccountMoney, readDeskState } = await renderCard(OFFLINE_LANE);
 
+    expect.soft(getAccountMoney, 'reads nothing from a lane it cannot show an account for').not.toHaveBeenCalled();
     // An account whose lane has gone unreachable is still that account, and
     // its workspace explains the outage in place (FR-096). Sending the card
     // to Settings instead would make one account two different places
     // depending on whether it was opened from the list or from the top bar.
-    expect(screen.getByRole('link').getAttribute('href')).toBe(OFFLINE_WORKSPACE_URL);
-  });
+    expect.soft(
+      screen.getByRole('link').getAttribute('href'),
+      'opens a down lane at its own account, where the shell badge opens it too',
+    ).toBe(OFFLINE_WORKSPACE_URL);
 
-  it('states a down lane’s lifecycle rather than asking a clerk that cannot answer', async () => {
-    const { readDeskState } = await renderCard(OFFLINE_LANE);
-
-    expect(await screen.findByText('This lane is Unreachable.')).toBeTruthy();
+    expect.soft(await screen.findByText('This lane is Unreachable.'), 'states a down lane’s lifecycle').toBeTruthy();
     // The directory already carries this fact. Reading a clerk that is by
     // definition not answering and reporting the refusal would fabricate an
     // outage over a known one — the same reason an undeclared capability is
     // never read (FR-097).
-    expect(readDeskState).not.toHaveBeenCalled();
-    expect(screen.queryByText('Readiness unavailable')).toBeNull();
-    expect(screen.queryByText(/running/)).toBeNull();
-    expect(screen.queryByText(/\$/)).toBeNull();
-  });
-
-  it('reads nothing from a lane it cannot show an account for', async () => {
-    const { getAccountMoney } = await renderCard(OFFLINE_LANE);
-
-    expect(getAccountMoney).not.toHaveBeenCalled();
+    expect.soft(readDeskState, 'never asks a down lane’s clerk, which cannot answer').not.toHaveBeenCalled();
+    expect.soft(screen.queryByText('Readiness unavailable'), 'reports no readiness failure over the known outage').toBeNull();
+    expect.soft(screen.queryByText(/running/), 'shows no bot counts for a down lane').toBeNull();
+    expect.soft(screen.queryByText(/\$/), 'shows no money for a down lane').toBeNull();
   });
 
   it('reads its money under the binding generation and routing epoch it rendered', async () => {
@@ -372,17 +366,5 @@ describe('AlpacaLaneCardComponent', () => {
     // the disambiguator with it, because it is named from its own content.
     expect(screen.getByText('(Paper)')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Strategy lab (Paper) PAPER · practice money' })).toBeTruthy();
-  });
-
-  it('names its link by the account and its mode, and describes it by the rest', async () => {
-    await renderCard();
-    await screen.findByText(/Free to deploy/);
-
-    // The name is what a screen reader announces for the choice; the hidden
-    // money-bar legend and the counts belong in the description, not the name.
-    const link = screen.getByRole('link', { name: 'Paper PAPER · practice money' });
-    const description = document.getElementById(link.getAttribute('aria-describedby') ?? '');
-    expect(description?.textContent).toContain('Free to deploy');
-    expect(description?.textContent).toContain('2 running');
   });
 });

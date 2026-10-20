@@ -1219,7 +1219,10 @@ describe('BotPanelShellComponent', () => {
       expect(toast.detail).toContain('Reconciliation requested.');
     });
 
-    it('keeps a late command off the panel when the account changes', async () => {
+    it.each([
+      ['account', { accountId: 'DUM284969' }],
+      ['lane', { clerkId: 'clrk_other' }],
+    ])('keeps a late command off the panel when the %s changes', async (_name, rebind) => {
       const pending = deferred<PanelActionResult>();
       const runBotAction = vi.fn().mockReturnValueOnce(pending.promise);
       const { fixture } = await renderShell({ runBotAction });
@@ -1228,22 +1231,7 @@ describe('BotPanelShellComponent', () => {
       await fixture.whenStable();
       fixture.detectChanges();
 
-      await rebindAndResolve(fixture, pending, { accountId: 'DUM284969' });
-
-      expect(screen.queryByText('Reconciliation requested.')).toBeNull();
-      expect(runBotAction).toHaveBeenCalledTimes(1);
-    });
-
-    it('keeps a late command off the panel when the lane changes', async () => {
-      const pending = deferred<PanelActionResult>();
-      const runBotAction = vi.fn().mockReturnValueOnce(pending.promise);
-      const { fixture } = await renderShell({ runBotAction });
-
-      fireEvent.click(screen.getByRole('button', { name: 'Check against Alpaca' }));
-      await fixture.whenStable();
-      fixture.detectChanges();
-
-      await rebindAndResolve(fixture, pending, { clerkId: 'clrk_other' });
+      await rebindAndResolve(fixture, pending, rebind);
 
       expect(screen.queryByText('Reconciliation requested.')).toBeNull();
       expect(runBotAction).toHaveBeenCalledTimes(1);
@@ -1740,7 +1728,7 @@ describe('BotPanelShellComponent', () => {
     });
   });
 
-  it('renders one view: the banner, the toolbar and the six-panel board, with no Trader/Operator switch', async () => {
+  it('renders the loaded log-only panel as one view: the banner, the toolbar, the six-panel board and the log-only explanation', async () => {
     const { fixture, container } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
@@ -1753,16 +1741,22 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    expect(container.querySelectorAll('app-bot-page-header')).toHaveLength(1);
-    expect(screen.getByRole('toolbar', { name: 'Actions for this bot' })).toBeTruthy();
+    expect.soft(container.querySelectorAll('app-bot-page-header'), 'one view: a single banner, with no Trader/Operator switch')
+      .toHaveLength(1);
     // The chart on the left; on the right, money, orders and setup, then decisions and health.
     const panels = (selector: string): string[] =>
       [...container.querySelectorAll(selector)].map((panel) => panel.classList[1]);
-    expect(panels('.bot-board > .bot-board__panel')).toEqual(['bot-board__chart']);
-    expect(panels('.bot-board__column:first-child > .bot-board__panel'))
+    expect.soft(panels('.bot-board > .bot-board__panel'), 'six-panel board: the chart on the left')
+      .toEqual(['bot-board__chart']);
+    expect.soft(panels('.bot-board__column:first-child > .bot-board__panel'), 'six-panel board: money, orders and setup')
       .toEqual(['bot-board__money', 'bot-board__orders', 'bot-board__setup']);
-    expect(panels('.bot-board__column:last-child > .bot-board__panel'))
+    expect.soft(panels('.bot-board__column:last-child > .bot-board__panel'), 'six-panel board: decisions and health')
       .toEqual(['bot-board__decisions', 'bot-board__health']);
+    expect.soft(screen.getByRole('toolbar', { name: 'Actions for this bot' }), 'one view: the toolbar').toBeTruthy();
+    expect.soft(
+      screen.getByText('This bot records decisions but does not place broker orders.'),
+      'explains log-only mode after data loads',
+    ).toBeTruthy();
   });
 
   it('runs an action from the controls it drew in the workspace header', async () => {
@@ -2004,21 +1998,6 @@ describe('BotPanelShellComponent', () => {
     await runPoll.elapse();
     expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
     fixture.destroy();
-  });
-
-  it('explains log-only mode after data loads', async () => {
-    const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
-      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }, { provide: BrokersService, useValue: brokersMock },
-        { provide: MessageService, useValue: messageService }],
-    });
-
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    expect(
-      screen.getByText('This bot records decisions but does not place broker orders.'),
-    ).toBeTruthy();
   });
 
   it('shows an error message when panel load fails', async () => {

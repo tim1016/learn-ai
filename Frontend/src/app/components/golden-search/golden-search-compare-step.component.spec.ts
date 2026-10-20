@@ -66,16 +66,27 @@ function evidenceTab(name: string): HTMLElement {
 }
 
 describe('GoldenSearchCompareStepComponent', () => {
-  it('leads with the server recommendation, then a card for every candidate on the same development scope, the incumbent last', async () => {
+  it('opens on the default comparison: the recommendation and a card per candidate, the all-period fit selected, and the frozen rules beside it', async () => {
     await renderStep();
 
-    expect(screen.getAllByRole('note')[0].textContent).toContain('The recent fit earns more in this replay, but nearby settings lose money.');
-    expect(region('Candidate cards').textContent).toContain('Development replay · same dates, $100,000 starting capital');
+    expect.soft(screen.getAllByRole('note')[0].textContent, 'leads with the server recommendation').toContain('The recent fit earns more in this replay, but nearby settings lose money.');
+    expect.soft(region('Candidate cards').textContent, 'cards share the same development scope').toContain('Development replay · same dates, $100,000 starting capital');
     const [allPeriod, recent, incumbent] = cards();
-    expect(cards().map((card) => card.querySelector('strong')?.textContent)).toEqual(['All-period fit', 'Recent fit', 'Current settings']);
-    expect(allPeriod.textContent).toMatch(/All-period search[\s\S]*Passes the rules[\s\S]*Net return\s*\+8\.7%\s*Sharpe\s*1\.18\s*Worst fall\s*6\.4%\s*Trades\s*146\s*minimum 30/);
-    expect(recent.textContent).toMatch(/Fails a rule[\s\S]*14\.8%\s*Above 12% limit/);
-    expect(incumbent.textContent).toContain('Frozen incumbent');
+    expect.soft(cards().map((card) => card.querySelector('strong')?.textContent), 'a card for every candidate, the incumbent last').toEqual(['All-period fit', 'Recent fit', 'Current settings']);
+    expect.soft(allPeriod.textContent, 'the all-period card reads its rule result and figures').toMatch(/All-period search[\s\S]*Passes the rules[\s\S]*Net return\s*\+8\.7%\s*Sharpe\s*1\.18\s*Worst fall\s*6\.4%\s*Trades\s*146\s*minimum 30/);
+    expect.soft(recent.textContent, 'the recent card reads its failed rule beside the number').toMatch(/Fails a rule[\s\S]*14\.8%\s*Above 12% limit/);
+    expect.soft(incumbent.textContent, 'the incumbent card is the frozen incumbent').toContain('Frozen incumbent');
+
+    expect.soft(screen.getByRole('button', { name: /all-period fit/i }).getAttribute('aria-pressed'), 'opens on the all-period fit').toBe('true');
+    expect.soft(screen.getByText('Selected: All-period fit.').parentElement?.textContent, 'says exactly which settings are selected').toContain(
+      'Selected: All-period fit. Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars. Normalized gap fixed at 0 bps.',
+    );
+
+    const aside = screen.getByRole('complementary');
+    expect.soft(aside.textContent, 'shows the loss ceiling beside the frozen rules').toMatch(/Your loss ceiling\s*20%/);
+    expect.soft(aside.textContent, 'shows the sample floor beside the frozen rules').toMatch(/Sample floor\s*30 trades/);
+    expect.soft(aside.textContent, 'shows the final test still locked').toMatch(/Final test\s*Still locked/);
+    expect.soft(aside.textContent, 'shows the luck adjustment as not estimable').toMatch(/Luck adjustment\s*Not estimable/);
   });
 
   it('candidate evidence cut short by the budget says some results read as untested; complete evidence says nothing', async () => {
@@ -88,15 +99,6 @@ describe('GoldenSearchCompareStepComponent', () => {
     view.fixture.componentRef.setInput('study', base);
     await view.fixture.whenStable();
     expect(screen.queryByText(note)).toBeNull();
-  });
-
-  it('opens on the all-period fit and says exactly which settings are selected', async () => {
-    await renderStep();
-
-    expect(screen.getByRole('button', { name: /all-period fit/i }).getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByText('Selected: All-period fit.').parentElement?.textContent).toContain(
-      'Selected: All-period fit. Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars. Normalized gap fixed at 0 bps.',
-    );
   });
 
   it("shows the selected candidate's decision summary, each status in words, and follows its links to the evidence", async () => {
@@ -209,16 +211,6 @@ describe('GoldenSearchCompareStepComponent', () => {
     const aside = screen.getByRole('complementary');
     expect(aside.textContent).toMatch(/Development activity floor\s*101 trades/);
     expect(aside.textContent).not.toContain('Sample floor');
-  });
-
-  it('shows what choosing the candidate implies beside the frozen rules', async () => {
-    await renderStep();
-
-    const aside = screen.getByRole('complementary');
-    expect(aside.textContent).toMatch(/Your loss ceiling\s*20%/);
-    expect(aside.textContent).toMatch(/Sample floor\s*30 trades/);
-    expect(aside.textContent).toMatch(/Final test\s*Still locked/);
-    expect(aside.textContent).toMatch(/Luck adjustment\s*Not estimable/);
   });
 
   it('reads every candidate’s detail run once and draws their equity and fall from peak, with a table alternative', async () => {

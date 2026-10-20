@@ -20,10 +20,20 @@ describe('the server field errors', () => {
     expect([...problemsFromDetails([at(loc)], ['call']).fields.keys()]).toEqual([key]);
   });
 
-  it('land on the leg at that position, by its id', () => {
+  it('land on the leg at that position by its id, go to the legs card for a position that names no leg, are kept when they name no field the page has, and are joined when a field has more than one', () => {
     const { fields } = problemsFromDetails([at(['body', 'legs', 1, 'contracts'], 'too many')], ['call', 'put']);
 
-    expect(fields.get(legKey('put', 'contracts'))).toBe('too many');
+    expect.soft(fields.get(legKey('put', 'contracts')), 'land on the leg at that position, by its id').toBe('too many');
+    expect.soft([...problemsFromDetails([at(['body', 'legs', 5, 'contracts'])], ['call']).fields.keys()], 'go to the legs card when the position names no leg of the body that was sent').toEqual([FIELD.legs]);
+
+    const { fields: kept, other } = problemsFromDetails([at(['body'], 'Value error, every leg needs its own id'), at(['body', 'price_step_usd'], 'too small')], []);
+
+    expect.soft(kept.size, 'are kept, not dropped, when they name no field the page has: none lands on a field').toBe(0);
+    expect.soft(other, 'are kept, not dropped, when they name no field the page has: they are listed').toEqual(['every leg needs its own id', 'price_step_usd: too small']);
+
+    const { fields: joined } = problemsFromDetails([at(['body', 'underlying'], 'first'), at(['body', 'underlying'], 'second')], []);
+
+    expect.soft(joined.get(FIELD.underlying), 'are joined when a field has more than one').toBe('first second');
   });
 
   it.each([
@@ -41,33 +51,13 @@ describe('the server field errors', () => {
 
     expect([...fields.keys()]).toEqual([legKey('call', field)]);
   });
-
-  it('go to the legs card when the position names no leg of the body that was sent', () => {
-    expect([...problemsFromDetails([at(['body', 'legs', 5, 'contracts'])], ['call']).fields.keys()]).toEqual([FIELD.legs]);
-  });
-
-  it('are kept, not dropped, when they name no field the page has', () => {
-    const { fields, other } = problemsFromDetails([at(['body'], 'Value error, every leg needs its own id'), at(['body', 'price_step_usd'], 'too small')], []);
-
-    expect(fields.size).toBe(0);
-    expect(other).toEqual(['every leg needs its own id', 'price_step_usd: too small']);
-  });
-
-  it('are joined when a field has more than one', () => {
-    const { fields } = problemsFromDetails([at(['body', 'underlying'], 'first'), at(['body', 'underlying'], 'second')], []);
-
-    expect(fields.get(FIELD.underlying)).toBe('first second');
-  });
 });
 
 describe('messages', () => {
-  it('lose the framework prefix of a rule the schema states', () => {
-    expect(cleanMessage("Value error, leg 'call' re-enters on momentum")).toBe("leg 'call' re-enters on momentum");
-    expect(cleanMessage('Input should be a valid integer')).toBe('Input should be a valid integer');
-  });
-
-  it('are listed with where they are, minus the body', () => {
-    expect(describeDetail(at(['body', 'legs', 0, 'contracts'], 'too many'))).toBe('legs.0.contracts: too many');
-    expect(describeDetail(at([], 'nope'))).toBe('nope');
+  it('lose the framework prefix of a rule the schema states, and are listed with where they are, minus the body', () => {
+    expect.soft(cleanMessage("Value error, leg 'call' re-enters on momentum"), 'lose the framework prefix of a rule the schema states').toBe("leg 'call' re-enters on momentum");
+    expect.soft(cleanMessage('Input should be a valid integer'), 'keep a message that has no framework prefix').toBe('Input should be a valid integer');
+    expect.soft(describeDetail(at(['body', 'legs', 0, 'contracts'], 'too many')), 'are listed with where they are, minus the body').toBe('legs.0.contracts: too many');
+    expect.soft(describeDetail(at([], 'nope')), 'are listed with no place when they have none').toBe('nope');
   });
 });

@@ -66,26 +66,16 @@ describe('RunDockComponent', () => {
     localStorage.clear();
   });
 
-  it('defaults to collapsed on first mount when localStorage is empty', () => {
-    const { fixture } = configure(null);
+  // Collapsed mode renders the strip button (no <header>); expanded mode the header (no strip).
+  it.each<[string, string | null, string, string]>([
+    ['defaults to collapsed on first mount when localStorage is empty', null, '.run-dock__strip', '.run-dock__header'],
+    ['honours a persisted "true" in localStorage by mounting expanded', 'true', '.run-dock__header', '.run-dock__strip'],
+    ['honours a persisted "false" in localStorage by mounting collapsed', 'false', '.run-dock__strip', '.run-dock__header'],
+  ])('%s', (_name, stored, rendered, absent) => {
+    const { fixture } = configure(stored);
     const host = fixture.nativeElement as HTMLElement;
-    // Collapsed mode renders the strip button (no <header>).
-    expect(host.querySelector('.run-dock__strip')).not.toBeNull();
-    expect(host.querySelector('.run-dock__header')).toBeNull();
-  });
-
-  it('honours a persisted "true" in localStorage by mounting expanded', () => {
-    const { fixture } = configure('true');
-    const host = fixture.nativeElement as HTMLElement;
-    expect(host.querySelector('.run-dock__header')).not.toBeNull();
-    expect(host.querySelector('.run-dock__strip')).toBeNull();
-  });
-
-  it('honours a persisted "false" in localStorage by mounting collapsed', () => {
-    const { fixture } = configure('false');
-    const host = fixture.nativeElement as HTMLElement;
-    expect(host.querySelector('.run-dock__strip')).not.toBeNull();
-    expect(host.querySelector('.run-dock__header')).toBeNull();
+    expect(host.querySelector(rendered)).not.toBeNull();
+    expect(host.querySelector(absent)).toBeNull();
   });
 
   it('persists the expand action to localStorage and re-renders expanded', () => {

@@ -196,32 +196,20 @@ describe('WalkForwardSectionComponent', () => {
   });
 
   describe('splitSummary', () => {
-    it('formats chronological with the train_pct', () => {
-      expect(
-        component.splitSummary({ kind: 'chronological', train_pct: 0.7 }),
-      ).toContain('70%');
-    });
-
-    it('formats rolling with train/test/step', () => {
-      expect(
-        component.splitSummary({
-          kind: 'rolling',
-          train_days: 60,
-          test_days: 30,
-          step_days: 30,
-        }),
-      ).toContain('60d train');
-    });
-
-    it('formats anchored', () => {
-      expect(
-        component.splitSummary({
-          kind: 'anchored',
-          initial_train_days: 90,
-          test_days: 30,
-          step_days: 30,
-        }),
-      ).toContain('90d initial');
+    it.each<[string, WalkForwardConfig['split_policy'], string]>([
+      ['chronological with the train_pct', { kind: 'chronological', train_pct: 0.7 }, '70%'],
+      [
+        'rolling with train/test/step',
+        { kind: 'rolling', train_days: 60, test_days: 30, step_days: 30 },
+        '60d train',
+      ],
+      [
+        'anchored',
+        { kind: 'anchored', initial_train_days: 90, test_days: 30, step_days: 30 },
+        '90d initial',
+      ],
+    ])('formats %s', (_name, policy, expected) => {
+      expect(component.splitSummary(policy)).toContain(expected);
     });
   });
 });

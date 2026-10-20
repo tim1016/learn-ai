@@ -259,24 +259,38 @@ function sids(container: HTMLElement): string[] {
 }
 
 describe('AlpacaHomeComponent', () => {
-  it('draws where the money is with every slice named and its amount verbatim', async () => {
+  it('draws where the money is with every slice named and its amount verbatim, and never puts a Dry Run in the bar', async () => {
     await renderHome();
 
     const money = screen.getByRole('region', { name: 'Where the money is' });
-    expect(within(money).getByText('$100,000.00')).toBeTruthy();
-    expect(within(money).getByText('Cash plus shares at the price paid.')).toBeTruthy();
+    // Deploy would admit a new bot here, so nothing refuses beside the bar.
+    expect.soft(within(money).queryByRole('note'), 'nothing refuses Deploy beside the bar').toBeNull();
+    expect.soft(within(money).getByText('$100,000.00'), 'the bar total, verbatim').toBeTruthy();
+    expect.soft(within(money).getByText('Cash plus shares at the price paid.'), 'the bar says what it totals').toBeTruthy();
     const legend = within(money).getByRole('list', { name: 'Where the money is' });
     const entries = within(legend).getAllByRole('listitem').map((item) => item.textContent?.replace(/\s+/g, ' ').trim());
-    expect(entries).toEqual([
+    expect.soft(entries, 'every slice named with its amount verbatim').toEqual([
       'spy-ema-20260929-0931 $999.99 in shares $764.71 · in entry orders $0.00 · free $235.28',
       'held by stopped bot spy-ema-20260925-1402 $670.43 released $0.00 · still claimed $0.00',
       'account charges $0.01',
       'free to deploy $98,329.57',
     ]);
     // Open P&L is the bar's note beside it, never a slice of it.
-    expect(within(money).getByText('Open P&L $12.40')).toBeTruthy();
-    // Deploy would admit a new bot here, so nothing refuses beside the bar.
-    expect(within(money).queryByRole('note')).toBeNull();
+    expect.soft(within(money).getByText('Open P&L $12.40'), 'open P&L beside the bar').toBeTruthy();
+
+    expect.soft(screen.getByRole('list', { name: 'Where the money is' }).textContent, 'never puts a Dry Run in the bar')
+      .not.toContain('dry-spy');
+    const dryRun = screen.getByRole('region', { name: 'Dry Run' });
+    expect.soft(
+      within(dryRun).getByText('simulated cash · never uses this account\'s money'),
+      'the Dry Run group says it never uses this account’s money',
+    ).toBeTruthy();
+    expect.soft(within(dryRun).getByText('DRY RUN · simulated cash'), 'the Dry Run group wears its world').toBeTruthy();
+    expect.soft(
+      within(dryRun).getByText(/simulated starting cash \$2,000\.00/),
+      'the Dry Run group shows its simulated starting cash',
+    ).toBeTruthy();
+    expect.soft(within(dryRun).getByText('today, simulated'), 'the Dry Run group marks today as simulated').toBeTruthy();
   });
 
   it('shows a broker-flat book difference with working review and refresh actions', async () => {
@@ -413,18 +427,6 @@ describe('AlpacaHomeComponent', () => {
     expect(within(ordinary).queryByRole('group', { name: /Listens to/ })).toBeNull();
   });
 
-  it('never puts a Dry Run in the bar: it has its own group, in simulated cash', async () => {
-    await renderHome();
-
-    const legend = screen.getByRole('list', { name: 'Where the money is' });
-    expect(legend.textContent).not.toContain('dry-spy');
-    const dryRun = screen.getByRole('region', { name: 'Dry Run' });
-    expect(within(dryRun).getByText('simulated cash · never uses this account\'s money')).toBeTruthy();
-    expect(within(dryRun).getByText('DRY RUN · simulated cash')).toBeTruthy();
-    expect(within(dryRun).getByText(/simulated starting cash \$2,000\.00/)).toBeTruthy();
-    expect(within(dryRun).getByText('today, simulated')).toBeTruthy();
-  });
-
   it('marks a holding bot’s release as an estimate when its Stop recorded none (#2555)', async () => {
     const money = fakeAccountMoney({ account_id: TEST_ACCOUNT_ID });
     const segments = (money.segments ?? []).map((segment) =>
@@ -436,25 +438,54 @@ describe('AlpacaHomeComponent', () => {
     expect(within(holding).getByText(/held \$670\.43 · released \$0\.00 \(estimate\)/)).toBeTruthy();
   });
 
-  it('lists running bots, then stopped bots still holding, each with its own money', async () => {
+  it('lists running bots, then stopped bots still holding, each with its own money, and folds Finished away newest first', async () => {
     await renderHome();
 
     const bots = screen.getByRole('list', { name: 'Bots' });
-    expect(sids(bots)).toEqual(['spy-ema-20260929-0931', 'spy-ema-20260925-1402']);
+    expect.soft(sids(bots), 'running bots first, then stopped bots still holding')
+      .toEqual(['spy-ema-20260929-0931', 'spy-ema-20260925-1402']);
     const [running, holding] = Array.from(bots.querySelectorAll<HTMLElement>(':scope > li'));
-    expect(within(running).getByText(/balance \$999\.99 · free \$235\.28/)).toBeTruthy();
-    expect(within(running).getByText('+$12.50')).toBeTruthy();
-    expect(within(running).getByRole('button', { name: 'Stop spy-ema-20260929-0931' })).toBeTruthy();
-    expect(within(holding).getByText('Stopped · still holds 1 SPY · no bot is managing it')).toBeTruthy();
-    expect(within(holding).getByText(/held \$670\.43 · released \$0\.00/)).toBeTruthy();
-    expect(within(holding).queryByText(/estimate/)).toBeNull();
-    expect(within(holding).getByRole('link', { name: 'Flatten spy-ema-20260925-1402…' }).getAttribute('href')).toBe(
-      `${ACCOUNT_URL}/bots/spy-ema-20260925-1402`,
-    );
+    expect.soft(within(holding).queryByText(/estimate/), 'a recorded release is not an estimate').toBeNull();
+    expect.soft(within(running).getByText(/balance \$999\.99 · free \$235\.28/), 'the running bot’s own money').toBeTruthy();
+    expect.soft(within(running).getByText('+$12.50'), 'the running bot’s day P&L').toBeTruthy();
+    expect.soft(
+      within(running).getByRole('button', { name: 'Stop spy-ema-20260929-0931' }),
+      'the running bot offers Stop',
+    ).toBeTruthy();
+    expect.soft(
+      within(holding).getByText('Stopped · still holds 1 SPY · no bot is managing it'),
+      'the holding bot says it is stopped and still holds',
+    ).toBeTruthy();
+    expect.soft(within(holding).getByText(/held \$670\.43 · released \$0\.00/), 'the holding bot’s own money').toBeTruthy();
+    expect.soft(
+      within(holding).getByRole('link', { name: 'Flatten spy-ema-20260925-1402…' }).getAttribute('href'),
+      'the holding bot links Flatten to its page',
+    ).toBe(`${ACCOUNT_URL}/bots/spy-ema-20260925-1402`);
     // A row opens the bot's own page.
-    expect(within(running).getByRole('link', { name: 'spy-ema-20260929-0931' }).getAttribute('href')).toBe(
-      `${ACCOUNT_URL}/bots/spy-ema-20260929-0931`,
-    );
+    expect.soft(
+      within(running).getByRole('link', { name: 'spy-ema-20260929-0931' }).getAttribute('href'),
+      'a row opens the bot’s own page',
+    ).toBe(`${ACCOUNT_URL}/bots/spy-ema-20260929-0931`);
+
+    const fold = screen.getByText('Finished', { selector: 'strong' }).closest('details');
+    if (fold === null) throw new Error('Finished is not a fold.');
+    expect.soft(fold.open, 'Finished is folded away').toBe(false);
+    const rows = within(fold).getAllByRole('row').slice(1);
+    expect.soft(rows.map((row) => within(row).getAllByRole('cell')[1].textContent?.trim()), 'Finished lists newest first')
+      .toEqual(['old-bot', 'older-bot']);
+    expect.soft(within(rows[0]).getByText('$9.98'), 'a finished result as Python wrote it').toBeTruthy();
+    expect.soft(within(rows[0]).getByText('4'), 'a finished bot’s trade count').toBeTruthy();
+    // A result the fee evidence cannot vouch for is unknown, never $0.
+    expect.soft(within(rows[1]).getAllByText('unknown'), 'an unvouched finished result is unknown, never $0').toHaveLength(2);
+    expect.soft(
+      within(rows[0]).getByRole('link', { name: 'Deploy again from old-bot' }).getAttribute('href'),
+      'a finished bot offers Deploy again',
+    ).toBe(`${ACCOUNT_URL}/deploy?from=old-bot`);
+    // A cleared bot is looked up in History, filtered to the cleared ones (#2574).
+    expect.soft(
+      within(fold).getByRole('link', { name: 'see cleared bots in History' }).getAttribute('href'),
+      'cleared bots are looked up in History (#2574)',
+    ).toBe(`/brokers/alpaca/clerks/${TEST_CLERK_ID}/history?status=cleared`);
   });
 
   it('re-reads where the money is when it opens, so a bot deployed on another page shows its own slice at once', async () => {
@@ -489,27 +520,6 @@ describe('AlpacaHomeComponent', () => {
     if (row === null) throw new Error('The deployed bot has no row.');
     await vi.waitFor(() => expect(within(row).getByText(/balance \$1,000\.00 · free \$1,000\.00/)).toBeTruthy());
     expect(within(row).queryByText(/Money not shown/)).toBeNull();
-  });
-
-  it('folds Finished away, newest first, with each result as Python wrote it and Deploy again', async () => {
-    await renderHome();
-
-    const fold = screen.getByText('Finished', { selector: 'strong' }).closest('details');
-    if (fold === null) throw new Error('Finished is not a fold.');
-    expect(fold.open).toBe(false);
-    const rows = within(fold).getAllByRole('row').slice(1);
-    expect(rows.map((row) => within(row).getAllByRole('cell')[1].textContent?.trim())).toEqual(['old-bot', 'older-bot']);
-    expect(within(rows[0]).getByText('$9.98')).toBeTruthy();
-    expect(within(rows[0]).getByText('4')).toBeTruthy();
-    // A result the fee evidence cannot vouch for is unknown, never $0.
-    expect(within(rows[1]).getAllByText('unknown')).toHaveLength(2);
-    expect(within(rows[0]).getByRole('link', { name: 'Deploy again from old-bot' }).getAttribute('href')).toBe(
-      `${ACCOUNT_URL}/deploy?from=old-bot`,
-    );
-    // A cleared bot is looked up in History, filtered to the cleared ones (#2574).
-    expect(within(fold).getByRole('link', { name: 'see cleared bots in History' }).getAttribute('href')).toBe(
-      `/brokers/alpaca/clerks/${TEST_CLERK_ID}/history?status=cleared`,
-    );
   });
 
   it('re-deploys a finished Options bot through its approved setup', async () => {

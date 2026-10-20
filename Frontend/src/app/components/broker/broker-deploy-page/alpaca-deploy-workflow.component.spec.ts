@@ -445,28 +445,38 @@ function roomyViewport(): void {
 }
 
 describe('AlpacaDeployWorkflowComponent — four steps (PRD #2560 D8)', () => {
-  it('lays out What → How → Money → Confirm and folds complete steps to one line with Edit', async () => {
+  it('lays out What → How → Money → Confirm, folds complete steps to one line with Edit, and opens every passing check in a popover', async () => {
     await renderWorkflow();
 
     const steps = screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent);
-    expect(steps).toEqual(['What', 'How', 'Money', 'Confirm']);
+    expect.soft(steps, 'lays out What → How → Money → Confirm').toEqual(['What', 'How', 'Money', 'Confirm']);
     for (const name of ['What', 'How', 'Money', 'Confirm']) {
-      expect(screen.getByRole('region', { name })).toBe(stepRegion(name));
+      expect.soft(screen.getByRole('region', { name }), `stepRegion finds the ${name} step a role query finds`).toBe(stepRegion(name));
     }
-    expect(screen.getByRole('button', { name: /^Deploy/ })).toBe(deployButton());
+    expect.soft(screen.getByRole('button', { name: /^Deploy/ }), 'deployButton finds the Deploy a role query finds').toBe(deployButton());
 
     const what = stepRegion('What');
-    expect(within(what).getByText('Deployment Validation on SPY · Allowed on this Paper account')).toBeTruthy();
-    expect(within(what).getByRole('button', { name: 'Edit step 1, What' }).getAttribute('aria-expanded')).toBe('false');
+    expect.soft(within(what).getByText('Deployment Validation on SPY · Allowed on this Paper account'), 'folds complete What to one line')
+      .toBeTruthy();
+    expect.soft(within(what).getByRole('button', { name: 'Edit step 1, What' }).getAttribute('aria-expanded'), 'folds What with Edit')
+      .toBe('false');
     const how = stepRegion('How');
-    expect(within(how).getByText(
+    expect.soft(within(how).getByText(
       `Paper · 1 share · Exit allowance 20 bps, band 2×, spread cap 50 bps · fixed for this bot’s life · ${DEFAULT_END.headline}`,
-    )).toBeTruthy();
+    ), 'folds complete How to one line').toBeTruthy();
 
     // The readiness rail and its heading are gone (H8); the name is the backend's.
-    expect(screen.queryByText(/Live admission/i)).toBeNull();
-    expect(screen.queryByLabelText('Bot name')).toBeNull();
-    expect(screen.queryByRole('link', { name: 'Open account recovery' })).toBeNull();
+    expect.soft(screen.queryByText(/Live admission/i), 'shows no readiness rail (H8)').toBeNull();
+    expect.soft(screen.queryByLabelText('Bot name'), 'asks for no bot name').toBeNull();
+    expect.soft(screen.queryByRole('link', { name: 'Open account recovery' }), 'links no account recovery').toBeNull();
+
+    expect.soft(screen.queryByText(/Can’t deploy yet/), 'shows no “Can’t deploy yet” while every check passes').toBeNull();
+    const open = screen.getByRole('button', { name: 'Every check and the last Start check' });
+    const checks = document.getElementById(open.getAttribute('popovertarget') ?? '');
+    expect.soft(checks?.hasAttribute('popover'), 'opens every check in a popover').toBe(true);
+    expect.soft(within(checks as HTMLElement).getByRole('heading', { name: 'Every check and the last Start check' }), 'heads the checks popover')
+      .toBeTruthy();
+    expect.soft(within(checks as HTMLElement).getByText('Strategy validation'), 'lists every check in the popover').toBeTruthy();
   });
 
   it('stands the steps side by side where the page has room: every step open, none folding, each headed by its state', async () => {
@@ -547,17 +557,6 @@ describe('AlpacaDeployWorkflowComponent — four steps (PRD #2560 D8)', () => {
     expect(within(after).getByText('$1,000.00')).toBeTruthy();
   });
 
-  it('asks for no typed phrase on Paper, and names the world and the amount on the button', async () => {
-    await renderWorkflow();
-
-    expect(deployButton().disabled).toBe(true);
-    await chooseMoney();
-
-    expect(screen.queryByLabelText(/type/i)).toBeNull();
-    expect(deployButton().textContent?.trim()).toBe('Deploy paper bot · set aside $1,000.00');
-    expect(deployButton().disabled).toBe(false);
-  });
-
   it('gates Live on the exact typed phrase, and asks for it again when the amount changes', async () => {
     const service = mockService(LIVE_DEPLOY_VIEW);
     const { fixture } = await renderWorkflow(service);
@@ -620,17 +619,6 @@ describe('AlpacaDeployWorkflowComponent — four steps (PRD #2560 D8)', () => {
     fireEvent.click(within(stepRegion('How')).getByRole('radio', { name: /Dry Run/ }));
     await fixture.whenStable();
     expect(done.disabled).toBe(false);
-  });
-
-  it('shows no “Can’t deploy yet” while every check passes, and opens every check in a popover', async () => {
-    await renderWorkflow();
-
-    expect(screen.queryByText(/Can’t deploy yet/)).toBeNull();
-    const open = screen.getByRole('button', { name: 'Every check and the last Start check' });
-    const checks = document.getElementById(open.getAttribute('popovertarget') ?? '');
-    expect(checks?.hasAttribute('popover')).toBe(true);
-    expect(within(checks as HTMLElement).getByRole('heading', { name: 'Every check and the last Start check' })).toBeTruthy();
-    expect(within(checks as HTMLElement).getByText('Strategy validation')).toBeTruthy();
   });
 
   it('lists each failing check with its fix', async () => {
@@ -757,20 +745,29 @@ describe('AlpacaDeployWorkflowComponent — four steps (PRD #2560 D8)', () => {
     expect(within(blockers).queryByText('Fix: Enter exit allowance, band multiple and spread cap.')).toBeNull();
   });
 
-  it('reviews the name the backend will author, the trade, the account, the exits, the budget and the loss limit', async () => {
+  it('reviews a Paper Deploy: no typed phrase, the world and amount on the button, the authored name, trade, account, exits, budget and loss limit, and no same-symbol warning', async () => {
     await renderWorkflow();
+    expect.soft(deployButton().disabled, 'asks for money before the Paper Deploy opens').toBe(true);
     // Before a preview the name is only promised, in the owner's words.
-    expect(within(screen.getByLabelText('Deploy review')).getByText('Bot').nextElementSibling?.textContent)
-      .toBe('Named when you deploy.');
+    expect.soft(
+      within(screen.getByLabelText('Deploy review')).getByText('Bot').nextElementSibling?.textContent,
+      'promises the name the backend will author before a preview',
+    ).toBe('Named when you deploy.');
     await chooseMoney();
 
+    expect.soft(screen.queryByLabelText(/type/i), 'asks for no typed phrase on Paper').toBeNull();
+    expect.soft(deployButton().textContent?.trim(), 'names the world and the amount on the button')
+      .toBe('Deploy paper bot · set aside $1,000.00');
+    expect.soft(deployButton().disabled, 'opens the Paper Deploy once the money is reviewed').toBe(false);
     const text = screen.getByLabelText('Deploy review').textContent ?? '';
-    expect(text).toContain(BOT_NAME_NOTE);
-    expect(text).toContain('Deployment Validation · SPY · 1 share');
-    expect(text).toContain('PA9 · PAPER · practice money');
-    expect(text).toContain('Exit allowance 20 bps');
-    expect(text).toContain('$1,000.00');
-    expect(text).toContain('Daily loss limit: the smaller of 2% of prior-close equity and $500.00.');
+    expect.soft(text, 'reviews the name the backend will author').toContain(BOT_NAME_NOTE);
+    expect.soft(text, 'reviews the trade').toContain('Deployment Validation · SPY · 1 share');
+    expect.soft(text, 'reviews the account').toContain('PA9 · PAPER · practice money');
+    expect.soft(text, 'reviews the exits').toContain('Exit allowance 20 bps');
+    expect.soft(text, 'reviews the budget').toContain('$1,000.00');
+    expect.soft(text, 'reviews the loss limit').toContain('Daily loss limit: the smaller of 2% of prior-close equity and $500.00.');
+    expect.soft(screen.getByLabelText('Deploy review').textContent, 'shows no same-symbol warning when no other bot trades the symbol')
+      .not.toContain('Also traded here');
   });
 
   it('warns beside the trade, in the backend’s words, when another bot in this account already trades the symbol (#2622)', async () => {
@@ -789,13 +786,6 @@ describe('AlpacaDeployWorkflowComponent — four steps (PRD #2560 D8)', () => {
     expect(deployButton().disabled).toBe(false);
     const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
     expect(results.violations).toEqual([]);
-  });
-
-  it('shows no same-symbol warning when no other bot trades the symbol', async () => {
-    await renderWorkflow();
-    await chooseMoney();
-
-    expect(screen.getByLabelText('Deploy review').textContent).not.toContain('Also traded here');
   });
 });
 
@@ -931,6 +921,23 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
         submission_settled: false,
       },
     },
+    {
+      kind: 'the already-being-sent 409',
+      status: 409,
+      detail: {
+        outcome: 'conflict', message: 'This Deploy is already being sent.', why: 'A second copy of it was not started.',
+        next_action: 'Check its status in a moment; checking never starts a second bot.', reason_code: 'deploy_submission_in_flight',
+      },
+    },
+    {
+      kind: 'the sent-with-other-settings 409',
+      status: 409,
+      detail: {
+        outcome: 'conflict', message: 'This Deploy was already sent with other settings.',
+        why: 'This Deploy was already sent with different settings as spy-dv-20260929-0931. Nothing new was set aside or started.',
+        next_action: 'Check its status; checking never starts a second bot.', reason_code: 'deploy_submission_settings_conflict',
+      },
+    },
   ])('keeps the submission key after $kind, even when the amount changes', async ({ status, detail }) => {
     const service = mockService(DEPLOY_VIEW, new HttpErrorResponse({ status, error: { detail } }));
     await lostThenEdited(service);
@@ -988,36 +995,6 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
     expect(submittedBody(service, 1).submission_key).toBe(submittedBody(service, 0).submission_key);
     expect(submittedBody(service, 1).budget?.amount_usd).toBe('1200.00');
     expect(service.getDeploySubmission).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    {
-      answer: 'This Deploy is already being sent.',
-      detail: {
-        outcome: 'conflict', message: 'This Deploy is already being sent.', why: 'A second copy of it was not started.',
-        next_action: 'Check its status in a moment; checking never starts a second bot.', reason_code: 'deploy_submission_in_flight',
-      },
-    },
-    {
-      answer: 'This Deploy was already sent with other settings.',
-      detail: {
-        outcome: 'conflict', message: 'This Deploy was already sent with other settings.',
-        why: 'This Deploy was already sent with different settings as spy-dv-20260929-0931. Nothing new was set aside or started.',
-        next_action: 'Check its status; checking never starts a second bot.', reason_code: 'deploy_submission_settings_conflict',
-      },
-    },
-  ])('keeps the submission key when Deploy answers “$answer”', async ({ detail }) => {
-    const service = mockService(DEPLOY_VIEW, new HttpErrorResponse({ status: 409, error: { detail } }));
-    await lostThenEdited(service);
-
-    const refusal = screen.getByRole('alert', { name: 'Outcome unknown' });
-    expect(within(refusal).getByText(detail.message)).toBeTruthy();
-    expect(within(refusal).getByText(detail.why)).toBeTruthy();
-    expect(within(refusal).getByText(`Next: ${detail.next_action}`)).toBeTruthy();
-    expect(within(refusal).getByRole('button', { name: 'Check deployment status' })).toBeTruthy();
-    fireEvent.click(deployButton());
-    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledTimes(2));
-    expect(submittedBody(service, 1).submission_key).toBe(submittedBody(service, 0).submission_key);
   });
 
   it('shows the receipt when the status read finds the lost Deploy committed, and sends nothing again', async () => {
@@ -1090,18 +1067,6 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
     expect(submittedBody(service, 1).submission_key === submittedBody(service, 0).submission_key).toBe(keepsKey);
   });
 
-  it('reads nothing back after its own Deploy succeeds', async () => {
-    const service = mockService();
-    const { fixture } = await renderWorkflow(service);
-    await chooseMoney();
-
-    fireEvent.click(deployButton());
-    await screen.findByRole('status', { name: RECEIPT.message });
-    await fixture.whenStable();
-
-    expect(service.getDeploySubmission).not.toHaveBeenCalled();
-  });
-
   it('checks its own pending Deploy without sending it again', async () => {
     const pending: BudgetDeployReceipt = {
       ...RECEIPT, status: 'pending', outcome: 'pending',
@@ -1122,7 +1087,7 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
     expect(service.deployBudgetBot).toHaveBeenCalledOnce();
   });
 
-  it('moves focus to the receipt, which names the bot, the money, the world and the bot’s page', async () => {
+  it('moves focus to its own Deploy’s receipt, which names the bot, the money, the world and the bot’s page, and reads nothing back', async () => {
     const service = mockService();
     const { fixture } = await renderWorkflow(service);
     await chooseMoney();
@@ -1131,13 +1096,14 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
     const receipt = await screen.findByRole('status', { name: RECEIPT.message });
     await fixture.whenStable();
 
-    await vi.waitFor(() => expect(document.activeElement).toBe(receipt));
-    expect(within(receipt).getByText('spy-dv-20260929-0931')).toBeTruthy();
-    expect(within(receipt).getByText('$1,000.00')).toBeTruthy();
-    expect(within(receipt).getByText('PAPER · practice money')).toBeTruthy();
-    expect(within(receipt).getByRole('link', { name: 'Open spy-dv-20260929-0931' }).getAttribute('href'))
+    expect.soft(service.getDeploySubmission, 'reads nothing back after its own Deploy succeeds').not.toHaveBeenCalled();
+    expect.soft(within(receipt).getByText('spy-dv-20260929-0931'), 'the receipt names the bot').toBeTruthy();
+    expect.soft(within(receipt).getByText('$1,000.00'), 'the receipt names the money').toBeTruthy();
+    expect.soft(within(receipt).getByText('PAPER · practice money'), 'the receipt names the world').toBeTruthy();
+    expect.soft(within(receipt).getByRole('link', { name: 'Open spy-dv-20260929-0931' }).getAttribute('href'), 'the receipt links the bot’s page')
       .toBe('/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/spy-dv-20260929-0931');
-    expect(within(receipt).queryByText(/returned unchanged/)).toBeNull();
+    expect.soft(within(receipt).queryByText(/returned unchanged/), 'the receipt claims nothing returned unchanged').toBeNull();
+    await vi.waitFor(() => expect(document.activeElement, 'moves focus to the receipt').toBe(receipt));
   });
 
   it('asks its host to re-read the account money once, when its Deploy’s receipt arrives', async () => {

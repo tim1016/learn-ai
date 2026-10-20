@@ -44,26 +44,10 @@ describe('MarkdownViewerComponent', () => {
     scrollIntoView.mockRestore();
   });
 
-  it('scrolls to a same-page heading instead of leaving the page', () => {
-    const root = renderMarkdown('[Jump](#target-heading)\n\n## Target heading\n');
-
-    const event = click(find(root, 'a[href="#target-heading"]'));
-
-    expect(event.defaultPrevented).toBe(true);
-    expect(scrollIntoView.mock.contexts[0]).toBe(root.querySelector('h2#target-heading'));
-  });
-
-  it('leaves links to other pages to the browser', () => {
-    const root = renderMarkdown('[Elsewhere](https://example.com/page)\n');
-
-    const event = click(find(root, 'a'));
-
-    expect(event.defaultPrevented).toBe(false);
-    expect(scrollIntoView).not.toHaveBeenCalled();
-  });
-
-  it('keeps inline SVG diagrams, and their links jump within the page', () => {
-    const root = renderMarkdown(
+  it.each([
+    ['a link to a same-page heading', '[Jump](#target-heading)\n\n## Target heading\n', 'a[href="#target-heading"]', 'h2#target-heading'],
+    [
+      'a link inside an inline SVG diagram, which the page keeps',
       [
         '<figure class="md-diagram">',
         '<svg viewBox="0 0 10 10" role="img" aria-label="Diagram">',
@@ -74,12 +58,25 @@ describe('MarkdownViewerComponent', () => {
         '## The lanes',
         '',
       ].join('\n'),
-    );
+      'svg rect.dg-box',
+      'h2#the-lanes',
+    ],
+  ])('scrolls to the heading instead of leaving the page for %s', (_name, markdown, clicked, heading) => {
+    const root = renderMarkdown(markdown);
 
-    const event = click(find(root, 'svg rect.dg-box'));
+    const event = click(find(root, clicked));
 
     expect(event.defaultPrevented).toBe(true);
-    expect(scrollIntoView.mock.contexts[0]).toBe(root.querySelector('h2#the-lanes'));
+    expect(scrollIntoView.mock.contexts[0]).toBe(root.querySelector(heading));
+  });
+
+  it('leaves links to other pages to the browser', () => {
+    const root = renderMarkdown('[Elsewhere](https://example.com/page)\n');
+
+    const event = click(find(root, 'a'));
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(scrollIntoView).not.toHaveBeenCalled();
   });
 
   it('still removes scripts, event handlers, page-wide CSS and form controls', () => {

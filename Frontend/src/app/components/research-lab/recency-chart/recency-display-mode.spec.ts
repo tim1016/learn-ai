@@ -4,16 +4,12 @@ import { computeDisplayMode, computeDisplayWindow } from "./recency-display-mode
 const ONE_DAY_MS = 24 * 60 * 60_000;
 
 describe("computeDisplayMode", () => {
-  it("is single-symbol when exactly one symbol is visible", () => {
-    expect(computeDisplayMode(["SPY"])).toBe("single-symbol");
-  });
-
-  it("is all-symbols when more than one symbol is visible", () => {
-    expect(computeDisplayMode(["SPY", "AAPL"])).toBe("all-symbols");
-  });
-
-  it("is all-symbols when zero symbols are visible", () => {
-    expect(computeDisplayMode([])).toBe("all-symbols");
+  it.each([
+    { want: "single-symbol", visible: "exactly one symbol is visible", symbols: ["SPY"] },
+    { want: "all-symbols", visible: "more than one symbol is visible", symbols: ["SPY", "AAPL"] },
+    { want: "all-symbols", visible: "zero symbols are visible", symbols: [] },
+  ])("is $want when $visible", ({ want, symbols }) => {
+    expect(computeDisplayMode(symbols)).toBe(want);
   });
 });
 

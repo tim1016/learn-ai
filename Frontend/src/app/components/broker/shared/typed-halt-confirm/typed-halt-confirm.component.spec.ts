@@ -129,44 +129,30 @@ describe('TypedHaltConfirmComponent', () => {
       return press;
     }
 
-    it('cancels once when pressed in the typed-confirm input', async () => {
-      const h = render({});
+    it.each<[string, { requiredToken?: string }, string]>([
+      ['in the typed-confirm input', {}, 'typed-halt-confirm-input'],
+      ['on a dialog button, even the confirm button', { requiredToken: '' }, 'typed-halt-confirm-submit'],
+    ])('cancels once, and never confirms, when pressed %s', async (_where, opts, testId) => {
+      const h = render(opts);
 
-      const press = await pressEscapeOn(h, 'typed-halt-confirm-input');
+      const press = await pressEscapeOn(h, testId);
 
-      expect(press.origin).toBe('typed-halt-confirm-input');
+      expect(press.origin).toBe(testId);
       expect(h.cancelled).toBe(1);
       expect(h.confirmed).toBe(0);
     });
 
-    it('cancels when pressed on a dialog button, even the confirm button', async () => {
-      const h = render({ requiredToken: '' });
-
-      const press = await pressEscapeOn(h, 'typed-halt-confirm-submit');
-
-      expect(press.origin).toBe('typed-halt-confirm-submit');
-      expect(h.cancelled).toBe(1);
-      expect(h.confirmed).toBe(0);
-    });
-
-    it('stays inside the dialog, so an enclosing menu that closes on Escape does not also act', async () => {
-      const h = render({});
-
-      const press = await pressEscapeOn(h, 'typed-halt-confirm-input');
-
-      expect(press.origin).toBe('typed-halt-confirm-input');
-      expect(h.cancelled).toBe(1);
-      expect(press.ancestorSaw).toEqual([]);
-    });
-
-    it('cancels once from the backdrop, and an enclosing menu does not also act', async () => {
+    it.each([
+      ['the typed-confirm input, staying inside the dialog', 'typed-halt-confirm-input'],
       // Shift+Tab from the token input lands on the backdrop button, which
       // sits outside the dialog element.
+      ['the backdrop', 'typed-halt-confirm-backdrop'],
+    ])('cancels once from %s, so an enclosing menu that closes on Escape does not also act', async (_where, testId) => {
       const h = render({});
 
-      const press = await pressEscapeOn(h, 'typed-halt-confirm-backdrop');
+      const press = await pressEscapeOn(h, testId);
 
-      expect(press.origin).toBe('typed-halt-confirm-backdrop');
+      expect(press.origin).toBe(testId);
       expect(h.cancelled).toBe(1);
       expect(press.ancestorSaw).toEqual([]);
     });

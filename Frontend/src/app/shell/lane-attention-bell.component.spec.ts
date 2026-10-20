@@ -92,13 +92,11 @@ describe('LaneAttentionBellComponent', () => {
     );
   });
 
-  it('renders nothing while the lane is quiet', async () => {
-    await renderBell(QUIET_LANE_ATTENTION_STATE);
-    expect(screen.queryByRole('button')).toBeNull();
-  });
-
-  it('renders nothing before the first poll lands', async () => {
-    await renderBell(UNPOLLED_LANE_ATTENTION_STATE);
+  it.each([
+    ['while the lane is quiet', QUIET_LANE_ATTENTION_STATE],
+    ['before the first poll lands', UNPOLLED_LANE_ATTENTION_STATE],
+  ])('renders nothing %s', async (_name, state) => {
+    await renderBell(state);
     expect(screen.queryByRole('button')).toBeNull();
   });
 

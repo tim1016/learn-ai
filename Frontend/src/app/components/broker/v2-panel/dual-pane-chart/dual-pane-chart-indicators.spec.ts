@@ -22,14 +22,12 @@ const BARS: readonly ChartBar[] = [
 ];
 
 describe('dual-pane chart indicators', () => {
-  it('sends exact bar-close millisecond anchors to Python', () => {
-    expect(toChartIndicatorRequestBars(BARS)).toEqual([
+  it('anchors indicator bars at the bar close for Python and maps the answer back onto the floored candle anchor', () => {
+    expect.soft(toChartIndicatorRequestBars(BARS), 'sends exact bar-close millisecond anchors to Python').toEqual([
       { t: 1_700_000_060_000, o: 99, h: 101, l: 98, c: 100, v: 10 },
     ]);
-  });
 
-  it('maps returned bar-close values onto the matching candle render anchor', () => {
-    expect(toIndicatorSeriesPlans([
+    expect.soft(toIndicatorSeriesPlans([
       {
         id: 'sma_2',
         panel: 'main',
@@ -38,21 +36,19 @@ describe('dual-pane chart indicators', () => {
         data: [{ t: 1_700_000_060_000, value: 100 }],
         refs: [],
       },
-    ], BARS)).toEqual([
+    ], BARS), 'maps returned bar-close values onto the matching candle render anchor').toEqual([
       expect.objectContaining({
         id: 'sma_2',
         points: [{ time: 1_700_000_000, value: 100 }],
       }),
     ]);
-  });
 
-  it('uses the canonical floored candle anchor for subsecond chart bars', () => {
     const subsecondBar = [{ ...BARS[0], start_ms: 1_700_000_000_999 }];
 
-    expect(toIndicatorSeriesPlans([{
+    expect.soft(toIndicatorSeriesPlans([{
       id: 'sma_2', panel: 'main', type: 'line', color: '#FF9800',
       data: [{ t: subsecondBar[0].end_ms, value: 100 }], refs: [],
-    }], subsecondBar)[0].points).toEqual([{ time: 1_700_000_000, value: 100 }]);
+    }], subsecondBar)[0].points, 'uses the canonical floored candle anchor for subsecond chart bars').toEqual([{ time: 1_700_000_000, value: 100 }]);
   });
 
   it('deduplicates the same indicator recipe', () => {

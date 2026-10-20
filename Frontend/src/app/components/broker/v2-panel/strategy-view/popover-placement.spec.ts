@@ -6,16 +6,12 @@ const VIEWPORT = { width: 1000, height: 700 };
 const SIZE = { width: 400, height: 300 };
 
 describe('popoverPosition', () => {
-  it('opens below its anchor', () => {
-    expect(popoverPosition({ left: 100, top: 50, bottom: 80 }, SIZE, VIEWPORT)).toEqual({ left: 100, top: 88 });
-  });
-
-  it('flips above an anchor near the bottom and stays inside the right edge', () => {
-    expect(popoverPosition({ left: 900, top: 600, bottom: 620 }, SIZE, VIEWPORT)).toEqual({ left: 592, top: 292 });
-  });
-
-  it('never leaves the top-left corner of the viewport', () => {
-    expect(popoverPosition({ left: -40, top: 100, bottom: 500 }, SIZE, VIEWPORT)).toEqual({ left: 8, top: 8 });
+  it.each([
+    ['opens below its anchor', { left: 100, top: 50, bottom: 80 }, { left: 100, top: 88 }],
+    ['flips above an anchor near the bottom and stays inside the right edge', { left: 900, top: 600, bottom: 620 }, { left: 592, top: 292 }],
+    ['never leaves the top-left corner of the viewport', { left: -40, top: 100, bottom: 500 }, { left: 8, top: 8 }],
+  ])('%s', (_name, anchor, want) => {
+    expect(popoverPosition(anchor, SIZE, VIEWPORT)).toEqual(want);
   });
 });
 
@@ -30,20 +26,15 @@ describe('keepInsideViewport', () => {
     return element;
   }
 
-  it('slides a dropdown that runs off the right edge back inside it', () => {
-    const summary = dropdownAt(194, 358);
-
-    keepInsideViewport(summary);
-
-    expect(summary.style.translate).toBe('-170px 0');
-  });
-
-  it('slides one that starts off the left edge back inside it', () => {
-    const menu = dropdownAt(-32, 240);
+  it.each([
+    ['slides a dropdown that runs off the right edge back inside it', 194, 358, '-170px 0'],
+    ['slides one that starts off the left edge back inside it', -32, 240, '40px 0'],
+  ])('%s', (_name, left, width, want) => {
+    const menu = dropdownAt(left, width);
 
     keepInsideViewport(menu);
 
-    expect(menu.style.translate).toBe('40px 0');
+    expect(menu.style.translate).toBe(want);
   });
 
   it('leaves one that fits where it is', () => {

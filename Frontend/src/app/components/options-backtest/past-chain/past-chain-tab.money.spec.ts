@@ -17,10 +17,13 @@ const call = (thousandths: number, price: string, strike?: string) => ({ ...cont
 const put = (thousandths: number, price: string) => contract({ right: 'put', thousandths, state: 'traded', price });
 
 describe('the money on the Past chain tab is the string the server sent', () => {
-  it('keeps a price a float cannot hold, to the cent', async () => {
-    await openWith(chainExpiry({ calls: side('call', [call(602_000, BEYOND_A_FLOAT)]), puts: side('put', []) }));
+  it.each([
+    ['keeps a price a float cannot hold, to the cent', BEYOND_A_FLOAT, '$9,007,199,254,740,993.01 in the minute ending 15:59 ET'],
+    ['pads a whole-cent price to cents and groups thousands without parsing it', '1234.5', '$1,234.50 in the minute ending'],
+  ])('%s', async (_name, price, shown) => {
+    await openWith(chainExpiry({ calls: side('call', [call(602_000, price)]), puts: side('put', []) }));
 
-    expect(reads(chainTable().querySelector('app-options-backtest-chain-contract'))).toContain('$9,007,199,254,740,993.01 in the minute ending 15:59 ET');
+    expect(reads(chainTable().querySelector('app-options-backtest-chain-contract'))).toContain(shown);
   });
 
   it('keeps the underlying price a float cannot hold, to the cent', async () => {
@@ -38,12 +41,6 @@ describe('the money on the Past chain tab is the string the server sent', () => 
     expect(cells[0]).not.toContain('$0.43');
     expect(cells[0]).not.toContain('0.43');
     expect(cells[1]).toContain('$1.20 in the minute ending 15:59 ET');
-  });
-
-  it('pads a whole-cent price to cents and groups thousands without parsing it', async () => {
-    await openWith(chainExpiry({ calls: side('call', [call(602_000, '1234.5')]), puts: side('put', []) }));
-
-    expect(reads(chainTable().querySelector('app-options-backtest-chain-contract'))).toContain('$1,234.50 in the minute ending');
   });
 
   it('shows a strike as the server wrote it: whole cents with a dollar sign, anything finer untouched', async () => {

@@ -46,10 +46,13 @@ function lastData(series: FakeSeries): Record<string, unknown>[] {
 describe('StrategyChartComponent (#2639)', () => {
   beforeEach(() => markers.setMarkers.mockClear());
 
-  it('fills each candle from the active gate’s recorded result, never from its own arithmetic', async () => {
-    const { candles } = await renderChart();
+  it('draws a view’s candles by the active gate, its declared values on their panes, and its entry and exit markers', async () => {
+    const { candles, series } = await renderChart();
 
-    expect(lastData(candles).map(({ time, color, borderColor }) => ({ time, color, borderColor }))).toEqual([
+    expect.soft(
+      lastData(candles).map(({ time, color, borderColor }) => ({ time, color, borderColor })),
+      'fills each candle from the active gate’s recorded result, never from its own arithmetic',
+    ).toEqual([
       // up + holds
       { time: barCloseMs(0) / 1000, color: GATE_CANDLE_COLORS.upBright, borderColor: GATE_CANDLE_COLORS.upBright },
       // down + fails
@@ -58,6 +61,25 @@ describe('StrategyChartComponent (#2639)', () => {
       { time: barCloseMs(2) / 1000, color: GATE_CANDLE_COLORS.upDark, borderColor: GATE_CANDLE_COLORS.upDarkEdge },
       // down + holds
       { time: barCloseMs(3) / 1000, color: GATE_CANDLE_COLORS.downBright, borderColor: GATE_CANDLE_COLORS.downBright },
+    ]);
+
+    const lines = series.filter((each) => each.type === 'LineSeries');
+    // "Foo 7" overlays the candles, "Bar 3" gets its own pane, "Baz 1" (no pane) is not drawn.
+    expect.soft(lines.map((line) => line.pane), 'draws every declared value with a pane, on the panes the backend names')
+      .toEqual([0, 1]);
+    const [foo, bar] = lines;
+    // The bar whose value was not ready is skipped, never drawn as zero.
+    expect.soft(lastData(foo), 'draws a value line from the bot’s values, skipping a bar whose value was not ready').toEqual([
+      { time: barCloseMs(1) / 1000, value: 101 },
+      { time: barCloseMs(2) / 1000, value: 102 },
+      { time: barCloseMs(3) / 1000, value: 103 },
+    ]);
+    expect.soft(bar.createPriceLine.mock.calls.map(([line]) => line.price), 'draws a banded value’s band as price lines')
+      .toEqual([20, 80]);
+    expect.soft(bar.createPriceLine.mock.calls[0][0], 'draws the band’s price lines dashed').toMatchObject({ lineStyle: 2 });
+
+    expect.soft(markers.setMarkers, 'marks entry and exit decisions only').toHaveBeenLastCalledWith([
+      expect.objectContaining({ time: barCloseMs(3) / 1000, shape: 'arrowUp', text: 'Enter' }),
     ]);
   });
 
@@ -103,23 +125,6 @@ describe('StrategyChartComponent (#2639)', () => {
       ...decided, candles: decided.candles.filter((candle) => candle.phase === 'decision'),
     });
     expect((decidedCandles.attachPrimitive.mock.calls[0][0] as StrategyChartOverlay).current().shadeBeforeMs).toBeNull();
-  });
-
-  it('draws every declared value with a pane from the bot’s values, on the panes the backend names', async () => {
-    const { series } = await renderChart();
-    const lines = series.filter((each) => each.type === 'LineSeries');
-
-    // "Foo 7" overlays the candles, "Bar 3" gets its own pane, "Baz 1" (no pane) is not drawn.
-    expect(lines.map((line) => line.pane)).toEqual([0, 1]);
-    const [foo, bar] = lines;
-    // The bar whose value was not ready is skipped, never drawn as zero.
-    expect(lastData(foo)).toEqual([
-      { time: barCloseMs(1) / 1000, value: 101 },
-      { time: barCloseMs(2) / 1000, value: 102 },
-      { time: barCloseMs(3) / 1000, value: 103 },
-    ]);
-    expect(bar.createPriceLine.mock.calls.map(([line]) => line.price)).toEqual([20, 80]);
-    expect(bar.createPriceLine.mock.calls[0][0]).toMatchObject({ lineStyle: 2 });
   });
 
   it('re-reads the lines’ points on a refresh with the same declaration, never rebuilding the panes', async () => {
@@ -204,14 +209,6 @@ describe('StrategyChartComponent (#2639)', () => {
     await fixture.whenStable();
 
     expect(timeScale.setVisibleLogicalRange).toHaveBeenCalledExactlyOnceWith({ from: 2.5, to: 3.5 });
-  });
-
-  it('marks entry and exit decisions only', async () => {
-    await renderChart();
-
-    expect(markers.setMarkers).toHaveBeenLastCalledWith([
-      expect.objectContaining({ time: barCloseMs(3) / 1000, shape: 'arrowUp', text: 'Enter' }),
-    ]);
   });
 
   it('lets the keyboard step through the candles and open one’s checks', async () => {

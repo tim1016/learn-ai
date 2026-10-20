@@ -25,20 +25,14 @@ async function renderList() {
 const resultCell = () => (screen.getByRole('button', { name: 'Open run 30' }).closest('tr') as HTMLElement).querySelectorAll('td')[4] as HTMLElement;
 
 describe('the dollars of a run in the list are shown exactly as the server wrote them', () => {
-  it.each([
-    ['net profit', 'Net profit'],
-    ['ending cash', 'Ending cash'],
-  ])('%s', async (_place, label) => {
+  it('shows net profit and ending cash as written, and has a check for every dollar on the row', async () => {
     await renderList();
 
-    const figure = [...resultCell().querySelectorAll('div')].find((item) => item.querySelector('dt')?.textContent === label);
-    expect(reads(figure ?? null)).toBe(`${label} ${SHOWN}`);
-  });
-
-  it('has a row above for every dollar on the row: nothing else carries one', async () => {
-    await renderList();
-
+    const figureOf = (label: string) => [...resultCell().querySelectorAll('div')].find((item) => item.querySelector('dt')?.textContent === label);
     const amounts = reads(screen.getByRole('button', { name: 'Open run 30' }).closest('tr')).match(/-?\$[\d,]+(\.\d+)?/g);
-    expect(amounts).toEqual([SHOWN, SHOWN]);
+
+    expect.soft(reads(figureOf('Net profit') ?? null), 'net profit').toBe(`Net profit ${SHOWN}`);
+    expect.soft(reads(figureOf('Ending cash') ?? null), 'ending cash').toBe(`Ending cash ${SHOWN}`);
+    expect.soft(amounts, 'has a check above for every dollar on the row: nothing else carries one').toEqual([SHOWN, SHOWN]);
   });
 });
