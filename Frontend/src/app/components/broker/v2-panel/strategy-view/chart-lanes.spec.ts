@@ -166,8 +166,11 @@ describe('placeLanes (#2808)', () => {
     placeLanes([{ key: 'market', title: 'Market data', marks }], bars, timeScale, width, beyondBars)[0].marks
       .map(({ left, width: span }) => ({ left, width: span }));
 
-  it('places an instant inside a bar between that candle’s edges', () => {
-    expect(placed([mark(T0 + 90_000)], 'off')).toEqual([{ left: 110, width: null }]);
+  it.each([
+    ['inside a bar between that candle’s edges', T0 + 90_000, 110],
+    ['within a bar of the window’s end, such as the next decision', T0 + 3 * 60_000 + 30_000, 130],
+  ])('places an instant %s', (_name, atMs, left) => {
+    expect(placed([mark(atMs)], 'off')).toEqual([{ left, width: null }]);
   });
 
   it('keeps an instant hours before the bars beside the first one, or off a chart whose bars are a window', () => {
@@ -176,10 +179,6 @@ describe('placeLanes (#2808)', () => {
     // One bar out at most: bar 0's left edge is 95, a bar before it 85.
     expect(placed([hoursEarlier], 'beside')).toEqual([{ left: 85, width: null }]);
     expect(placed([hoursEarlier], 'off')).toEqual([{ left: null, width: null }]);
-  });
-
-  it('still places an instant within a bar of the window’s end, such as the next decision', () => {
-    expect(placed([mark(T0 + 3 * 60_000 + 30_000)], 'off')).toEqual([{ left: 130, width: null }]);
   });
 
   it('clips a span that overlaps the window to it, and drops one that misses it', () => {

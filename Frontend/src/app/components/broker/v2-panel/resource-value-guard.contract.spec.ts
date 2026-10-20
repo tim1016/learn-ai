@@ -237,13 +237,15 @@ describe('Broker V2 never reads an unguarded resource value', () => {
       });`)).toEqual([]);
   });
 
-  it('a trailing comment naming a guarded read does not trip the class scan', () => {
-    // Reproduces a real false positive: a trailing `//` comment on the
-    // rxResource(...) declaration line itself, naming the identifier's
-    // already-guarded .value() read below. Before stripComments handled
-    // trailing comments, this line's raw text (comment included) matched
-    // the "unguarded read" regex and flagged a file doing everything right.
-    const source = `
+  it.each([
+    [
+      'a trailing comment naming a guarded read does not trip the class scan',
+      // Reproduces a real false positive: a trailing `//` comment on the
+      // rxResource(...) declaration line itself, naming the identifier's
+      // already-guarded .value() read below. Before stripComments handled
+      // trailing comments, this line's raw text (comment included) matched
+      // the "unguarded read" regex and flagged a file doing everything right.
+      `
       private readonly supportedIndicatorResource = rxResource({ // seeds supportedIndicatorResource.value() below
         params: () => 'chart-indicator-catalog',
         stream: () => this.indicatorService.supportedIndicators(),
@@ -254,28 +256,28 @@ describe('Broker V2 never reads an unguarded resource value', () => {
             ? this.supportedIndicatorResource.value()?.names ?? []
             : [],
         );
-      });`;
-    expect(unguardedClassReads(source)).toEqual([]);
-  });
-
-  it('a `//` inside a string literal is not mistaken for a comment — the silent-pass direction', () => {
-    // The dangerous direction: over-stripping. If a naive strip started a
-    // comment at the first "//" on a line, the "https://" URL below would
-    // swallow the real, unguarded histChart.value() read that follows it on
-    // the same line, and the guard would pass having checked nothing.
-    const source = `
+      });`,
+      [],
+    ],
+    [
+      'a `//` inside a string literal is not mistaken for a comment — the silent-pass direction',
+      // The dangerous direction: over-stripping. If a naive strip started a
+      // comment at the first "//" on a line, the "https://" URL below would
+      // swallow the real, unguarded histChart.value() read that follows it on
+      // the same line, and the guard would pass having checked nothing.
+      `
       private readonly histChart = resource({
         params: () => 'https://example.test',
         loader: () => this.service.fetch(),
       });
       protected readonly label = computed(() => {
         const url = 'https://example.test'; return this.histChart.value();
-      });`;
-    expect(unguardedClassReads(source)).toEqual(['histChart']);
-  });
-
-  it('a block comment spanning lines naming x.value() does not trip the class scan', () => {
-    const source = `
+      });`,
+      ['histChart'],
+    ],
+    [
+      'a block comment spanning lines naming x.value() does not trip the class scan',
+      `
       private readonly tape = resource({
         params: () => this.symbol(),
         loader: () => this.service.fetch(),
@@ -286,8 +288,11 @@ describe('Broker V2 never reads an unguarded resource value', () => {
        */
       protected readonly summary = computed(() => (
         this.tape.hasValue() ? this.tape.value() : null
-      ));`;
-    expect(unguardedClassReads(source)).toEqual([]);
+      ));`,
+      [],
+    ],
+  ])('%s', (_name, source, offenders) => {
+    expect(unguardedClassReads(source)).toEqual(offenders);
   });
 
   it('a prose comment naming resource() does not trip declaration discovery', () => {

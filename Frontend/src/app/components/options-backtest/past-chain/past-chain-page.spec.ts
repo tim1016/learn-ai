@@ -16,29 +16,21 @@ const openChainTab = () => fireEvent.click(tab('Past chain'));
 const showBacktest = () => fireEvent.click(tab('Backtest'));
 
 describe('the Past chain as a tab of the page', () => {
-  it('is the third tab, and nothing of it is made, or read, until it is opened', async () => {
+  it('is the third tab, nothing of it is made, or read, until it is opened, and it has no bar of setup actions over it: Save, Check data and Start belong to the Backtest tab', async () => {
     const chain = fakeChainService(vi);
     await renderPageWithChain(vi, chain);
 
-    expect(screen.getAllByRole('tab').map((each) => each.textContent?.trim())).toEqual(['Backtest', 'History', 'Past chain']);
-    expect(document.querySelector('app-options-backtest-past-chain')).toBeNull();
+    expect.soft(screen.getAllByRole('tab').map((each) => each.textContent?.trim()), 'is the third tab').toEqual(['Backtest', 'History', 'Past chain']);
+    expect.soft(document.querySelector('app-options-backtest-past-chain'), 'is not made until it is opened').toBeNull();
     openChainTab();
     await screen.findByRole('heading', { name: 'Past chain' });
 
-    expect(document.querySelectorAll('app-options-backtest-past-chain')).toHaveLength(1);
-    expect(chain.day).not.toHaveBeenCalled();
-    expect(tab('Past chain').getAttribute('aria-selected')).toBe('true');
-  });
-
-  it('has no bar of setup actions over it: Save, Check data and Start belong to the Backtest tab', async () => {
-    await renderPageWithChain(vi, fakeChainService(vi));
-
-    openChainTab();
-    await screen.findByRole('heading', { name: 'Past chain' });
-
+    expect.soft(document.querySelectorAll('app-options-backtest-past-chain'), 'is made once when it is opened').toHaveLength(1);
+    expect.soft(chain.day, 'is not read when the tab is opened, before a date is picked').not.toHaveBeenCalled();
+    expect.soft(tab('Past chain').getAttribute('aria-selected'), 'is the selected tab once opened').toBe('true');
     // Not in the page at all: a bar that were only hidden would be fixed to the window and still be there for the keyboard.
-    expect(screen.queryByRole('button', { name: 'Start backtest', hidden: true })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Check data', hidden: true })).toBeNull();
+    expect.soft(screen.queryByRole('button', { name: 'Start backtest', hidden: true }), 'has no Start button of a bar of setup actions over it').toBeNull();
+    expect.soft(screen.queryByRole('button', { name: 'Check data', hidden: true }), 'has no Check data button of a bar of setup actions over it').toBeNull();
   });
 
   it('does not start a backtest from the Shift+Enter shortcut while it is shown, and does not take the key', async () => {

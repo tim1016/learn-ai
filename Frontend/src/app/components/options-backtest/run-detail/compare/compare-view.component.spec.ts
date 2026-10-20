@@ -59,21 +59,16 @@ describe('comparing two runs, reading them', () => {
 });
 
 describe('comparing two runs, what differs comes first', () => {
-  it('comes before the shared sessions and before any figure on the page', async () => {
+  it('puts what differs before the shared sessions and before any figure, and lists every setting that differs as the server worded it', async () => {
     const { container } = await renderCompare(serving());
     await screen.findByRole('region', { name: 'Sessions both runs tested' });
 
     const differs = container.querySelector('app-options-backtest-compare-settings');
     const shared = container.querySelector('app-options-backtest-compare-sessions');
-    expect(differs?.compareDocumentPosition(shared as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    expect(reads(differs).includes('$')).toBe(false);
-  });
+    expect.soft(differs?.compareDocumentPosition(shared as Node), 'comes before the shared sessions and before any figure on the page (1 of 2)').toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect.soft(reads(differs).includes('$'), 'comes before the shared sessions and before any figure on the page (2 of 2)').toBe(false);
 
-  it('lists every setting that differs as the server worded it: the setting, then the value in run A and in run B', async () => {
-    await renderCompare(serving());
-    await screen.findByRole('region', { name: 'Settings that differ (scrolls sideways)' });
-
-    expect(settingsRows()).toEqual([
+    expect.soft(settingsRows(), 'lists every setting that differs as the server worded it: the setting, then the value in run A and in run B').toEqual([
       ['leg call: re-entry on stop', 'not set', 'at once, up to 1 time'],
       ['slippage', '0.3%', '0.45%'],
       ['fees', 'Fees are not charged.', 'Fees were set by the owner at 0.65 a contract.'],
@@ -125,13 +120,26 @@ describe('comparing two runs, what differs comes first', () => {
 });
 
 describe('comparing two runs, the sessions they share', () => {
-  it('counts the shared sessions and each run’s own, from the served numbers', async () => {
-    await renderCompare(serving());
+  it('counts the shared sessions, and shows the totals and each shared session as the server worked them out', async () => {
+    const { container } = await renderCompare(serving());
     await screen.findByRole('region', { name: 'Sessions both runs tested' });
 
-    expect(reads(screen.getByRole('region', { name: 'Sessions both runs tested' }).querySelector('p'))).toBe(
+    expect.soft(reads(screen.getByRole('region', { name: 'Sessions both runs tested' }).querySelector('p')), 'counts the shared sessions and each run’s own, from the served numbers').toBe(
       'Sessions in both runs: 3. Sessions only in run A: 1. Sessions only in run B: 0. The figures below are for the shared sessions only.',
     );
+
+    expect.soft(totalsRows(), 'shows each run’s net profit, trades and winning sessions over the shared sessions as the server worked them out').toEqual([
+      ['Net profit', '$120.50', '-$70.25'],
+      ['Trades', '6', '7'],
+      ['Winning sessions', '2', '1'],
+    ]);
+
+    expect.soft(sessionRows(), 'shows the pair of profits of each shared session, with each run’s status, in New York dates (1 of 2)').toEqual([
+      ['2026-09-14', 'Traded', '$150.25', 'Traded', '$10.00'],
+      ['2026-09-15', 'Traded', '-$62.40', 'Traded', '-$80.25'],
+      ['2026-09-16', 'Traded', '$32.65', 'Skipped', '$0.00'],
+    ]);
+    expect.soft(container.querySelectorAll('tbody app-timestamp-display[data-timestamp-mode="date-et"]').length, 'shows the pair of profits of each shared session, with each run’s status, in New York dates (2 of 2)').toBe(3);
   });
 
   it('says one shared session with a label and a number, which needs no plural', async () => {
@@ -140,29 +148,6 @@ describe('comparing two runs, the sessions they share', () => {
     await screen.findByRole('region', { name: 'Sessions both runs tested' });
 
     expect(reads(screen.getByRole('region', { name: 'Sessions both runs tested' }).querySelector('p'))).toContain('Sessions in both runs: 1.');
-  });
-
-  it('shows each run’s net profit, trades and winning sessions over the shared sessions as the server worked them out', async () => {
-    await renderCompare(serving());
-    await screen.findByRole('region', { name: 'Totals over the shared sessions (scrolls sideways)' });
-
-    expect(totalsRows()).toEqual([
-      ['Net profit', '$120.50', '-$70.25'],
-      ['Trades', '6', '7'],
-      ['Winning sessions', '2', '1'],
-    ]);
-  });
-
-  it('shows the pair of profits of each shared session, with each run’s status, in New York dates', async () => {
-    const { container } = await renderCompare(serving());
-    await screen.findByRole('region', { name: 'Each shared session (scrolls sideways)' });
-
-    expect(sessionRows()).toEqual([
-      ['2026-09-14', 'Traded', '$150.25', 'Traded', '$10.00'],
-      ['2026-09-15', 'Traded', '-$62.40', 'Traded', '-$80.25'],
-      ['2026-09-16', 'Traded', '$32.65', 'Skipped', '$0.00'],
-    ]);
-    expect(container.querySelectorAll('tbody app-timestamp-display[data-timestamp-mode="date-et"]').length).toBe(3);
   });
 
   it('subtracts nothing: no column or row of differences is made, and the totals are the server’s even when they disagree with the rows', async () => {

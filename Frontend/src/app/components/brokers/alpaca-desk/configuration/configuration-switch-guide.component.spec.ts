@@ -33,30 +33,12 @@ describe('ConfigurationSwitchGuideComponent', () => {
     expect(screen.queryByText(/podman compose restart/)).toBeNull();
   });
 
-  it('has no detectable accessibility violations with a command', async () => {
-    await render(ConfigurationSwitchGuideComponent, {
-      inputs: { restartCommand: 'podman compose restart alpaca-paper-clerk' },
-    });
-
-    const results = await axe.run(document.body, {
-      rules: { 'color-contrast': { enabled: false } },
-    });
-
-    expect(results.violations).toEqual([]);
-  });
-
-  it('has no detectable accessibility violations without a command', async () => {
-    await render(ConfigurationSwitchGuideComponent, { inputs: { restartCommand: null } });
-
-    const results = await axe.run(document.body, {
-      rules: { 'color-contrast': { enabled: false } },
-    });
-
-    expect(results.violations).toEqual([]);
-  });
-
-  it('has no detectable accessibility violations while the command is unknown', async () => {
-    await render(ConfigurationSwitchGuideComponent, { inputs: { restartCommand: undefined } });
+  it.each([
+    ['with a command', 'podman compose restart alpaca-paper-clerk'],
+    ['without a command', null],
+    ['while the command is unknown', undefined],
+  ])('has no detectable accessibility violations %s', async (_case, restartCommand) => {
+    await render(ConfigurationSwitchGuideComponent, { inputs: { restartCommand } });
 
     const results = await axe.run(document.body, {
       rules: { 'color-contrast': { enabled: false } },

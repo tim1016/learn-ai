@@ -491,8 +491,14 @@ describe('AlpacaLiveBannerComponent', () => {
   });
 
   describe('as the way to its account (ADR 0064 Decision 3)', () => {
-    it("opens the account's Home from anywhere outside a workspace", async () => {
-      await renderAt('/data-lab', PAPER_LANE);
+    it.each([
+      ['opens it from anywhere outside a workspace', '/data-lab'],
+      // The chosen account need not run that bot, so the bot's page is never
+      // carried across — the same rule the in-workspace switcher follows.
+      ["lands on the chosen account's Home from a bot's own page", `${LIVE_WORKSPACE}/bots/sid-1`],
+      ['never carries the retired lens across (PRD #2560 D2)', `${LIVE_WORKSPACE}?lens=operator`],
+    ])("links to the account's Home: %s", async (_case, url) => {
+      await renderAt(url, PAPER_LANE);
 
       expect(screen.getByRole('link').getAttribute('href')).toBe(
         `/brokers/alpaca/clerks/clrk_paper/accounts/${TEST_ACCOUNT_ID}`,
@@ -510,24 +516,6 @@ describe('AlpacaLiveBannerComponent', () => {
 
       expect(screen.getByRole('link').getAttribute('href')).toBe(
         `/brokers/alpaca/clerks/clrk_paper/accounts/${TEST_ACCOUNT_ID}${expected}`,
-      );
-    });
-
-    it("lands on the chosen account's Home from a bot's own page", async () => {
-      // The chosen account need not run that bot, so the bot's page is never
-      // carried across — the same rule the in-workspace switcher follows.
-      await renderAt(`${LIVE_WORKSPACE}/bots/sid-1`, PAPER_LANE);
-
-      expect(screen.getByRole('link').getAttribute('href')).toBe(
-        `/brokers/alpaca/clerks/clrk_paper/accounts/${TEST_ACCOUNT_ID}`,
-      );
-    });
-
-    it('never carries the retired lens across (PRD #2560 D2)', async () => {
-      await renderAt(`${LIVE_WORKSPACE}?lens=operator`, PAPER_LANE);
-
-      expect(screen.getByRole('link').getAttribute('href')).toBe(
-        `/brokers/alpaca/clerks/clrk_paper/accounts/${TEST_ACCOUNT_ID}`,
       );
     });
 

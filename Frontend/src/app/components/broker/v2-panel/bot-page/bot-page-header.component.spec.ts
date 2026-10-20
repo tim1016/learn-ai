@@ -32,19 +32,11 @@ async function feedLine(panel: BotPanelView): Promise<string> {
 }
 
 describe('BotPageHeaderComponent feed line (#3164)', () => {
-  it('says live, with the time of the feed\'s last bar, while the feed is live', async () => {
-    const line = await feedLine(fakeBotPanelView({
-      updated_at_ms: PANEL_ASSEMBLED_AT_MS,
-      market_pulse: pulse({ feed_state: 'LIVE' }),
-    }));
-
-    expect(line).toBe(`IBKR market data live · updated ${clock(LAST_BAR_AT_MS)}`);
-  });
-
   it.each([
+    ['LIVE', 'live'],
     ['STALE', 'stale'],
     ['IDLE', 'idle'],
-  ] as const)('reads a %s feed as "%s", never live, and dates it by its last bar', async (feedState, word) => {
+  ] as const)('reads a %s feed as "%s" (only a LIVE feed says live), and dates it by its last bar', async (feedState, word) => {
     const line = await feedLine(fakeBotPanelView({
       updated_at_ms: PANEL_ASSEMBLED_AT_MS,
       market_pulse: pulse({ feed_state: feedState }),

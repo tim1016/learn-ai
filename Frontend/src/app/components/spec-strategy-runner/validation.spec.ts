@@ -29,100 +29,179 @@ describe('validateStrategy', () => {
     expect(errs).toContain('No indicators defined.');
   });
 
-  it('flags duplicate indicator ids as errors', () => {
-    const issues = validateStrategy({
-      ...VALID_SPEC,
-      indicators: [
-        { id: 'ema', kind: 'EMA', period: 5 },
-        { id: 'ema', kind: 'EMA', period: 10 },
-      ],
-    });
-    expect(issues.some((i) => i.text.includes('share the id'))).toBe(true);
-  });
-
-  it('flags dangling indicator refs in entry conditions', () => {
-    const issues = validateStrategy({
-      ...VALID_SPEC,
-      entry: {
-        ...VALID_SPEC.entry,
-        conditions: [{ kind: 'FreshCross', left: 'ema5', right: 'nonexistent', direction: 'up' }],
+  it.each<[string, string, StrategySpec, string]>([
+    [
+      'dangling indicator refs in entry conditions',
+      'error',
+      {
+        ...VALID_SPEC,
+        entry: {
+          ...VALID_SPEC.entry,
+          conditions: [{ kind: 'FreshCross', left: 'ema5', right: 'nonexistent', direction: 'up' }],
+        },
       },
-    });
-    expect(
-      issues.some((i) => i.sev === 'error' && i.text.includes('"nonexistent"')),
-    ).toBe(true);
-  });
-
-  it('flags unknown references nested inside DifferenceBps operands', () => {
-    const issues = validateStrategy({
-      ...VALID_SPEC,
-      entry: {
-        ...VALID_SPEC.entry,
-        conditions: [
-          {
-            kind: 'IndicatorComparison',
-            left: {
-              kind: 'DifferenceBps',
-              left: { kind: 'IndicatorRef', indicator: 'ema5' },
-              right: { kind: 'IndicatorRef', indicator: 'ghost' },
+      '"nonexistent"',
+    ],
+    [
+      'unknown references nested inside DifferenceBps operands',
+      'error',
+      {
+        ...VALID_SPEC,
+        entry: {
+          ...VALID_SPEC.entry,
+          conditions: [
+            {
+              kind: 'IndicatorComparison',
+              left: {
+                kind: 'DifferenceBps',
+                left: { kind: 'IndicatorRef', indicator: 'ema5' },
+                right: { kind: 'IndicatorRef', indicator: 'ghost' },
+              },
+              op: '>=',
+              right: { kind: 'Const', value: 4 },
             },
-            op: '>=',
-            right: { kind: 'Const', value: 4 },
-          },
-        ],
+          ],
+        },
       },
-    });
-
-    expect(
-      issues.some((issue) => issue.sev === 'error' && issue.text.includes('"ghost"')),
-    ).toBe(true);
-  });
-
-  it('rejects identical DifferenceBps operands', () => {
-    const issues = validateStrategy({
-      ...VALID_SPEC,
-      entry: {
-        ...VALID_SPEC.entry,
-        conditions: [
-          {
-            kind: 'IndicatorComparison',
-            left: {
-              kind: 'DifferenceBps',
-              left: { kind: 'IndicatorRef', indicator: 'ema5' },
-              right: { kind: 'IndicatorRef', indicator: 'ema5' },
+      '"ghost"',
+    ],
+    [
+      'identical DifferenceBps operands',
+      'error',
+      {
+        ...VALID_SPEC,
+        entry: {
+          ...VALID_SPEC.entry,
+          conditions: [
+            {
+              kind: 'IndicatorComparison',
+              left: {
+                kind: 'DifferenceBps',
+                left: { kind: 'IndicatorRef', indicator: 'ema5' },
+                right: { kind: 'IndicatorRef', indicator: 'ema5' },
+              },
+              op: '>=',
+              right: { kind: 'Const', value: 4 },
             },
-            op: '>=',
-            right: { kind: 'Const', value: 4 },
-          },
+          ],
+        },
+      },
+      'same expression',
+    ],
+    [
+      'unknown indicators inside nested LogicNode groups',
+      'error',
+      {
+        ...VALID_SPEC,
+        entry: {
+          ...VALID_SPEC.entry,
+          conditions: [
+            {
+              logic: 'OR',
+              conditions: [
+                { kind: 'FreshCross', left: 'ema5', right: 'ghost', direction: 'up' },
+              ],
+            },
+          ],
+        },
+      },
+      '"ghost"',
+    ],
+    [
+      'unused indicators',
+      'info',
+      {
+        ...VALID_SPEC,
+        indicators: [
+          ...VALID_SPEC.indicators,
+          { id: 'rsi_unused', kind: 'RSI', period: 14 },
         ],
       },
-    });
-
+      'rsi_unused',
+    ],
+    [
+      'an exit and a manage block that are both empty',
+      'warn',
+      {
+        ...VALID_SPEC,
+        exit: { logic: 'OR', conditions: [] },
+        survival: [],
+      },
+      'never sells until the run window ends',
+    ],
+  ])('flags %s with severity %s', (_name, sev, spec, text) => {
+    const issues = validateStrategy(spec);
     expect(
-      issues.some((issue) => issue.sev === 'error' && issue.text.includes('same expression')),
+      issues.some((i) => i.sev === sev && i.text.includes(text)),
     ).toBe(true);
   });
 
-  it('flags reversed lo/hi in IndicatorBetween', () => {
-    const issues = validateStrategy({
-      ...VALID_SPEC,
-      indicators: [{ id: 'rsi', kind: 'RSI', period: 14 }],
-      entry: {
-        ...VALID_SPEC.entry,
-        conditions: [
-          { kind: 'IndicatorBetween', indicator: 'rsi', lo: 70, hi: 30, inclusive: true },
+  it.each<[string, StrategySpec, { start: string; end: string } | null, string]>([
+    [
+      'duplicate indicator ids',
+      {
+        ...VALID_SPEC,
+        indicators: [
+          { id: 'ema', kind: 'EMA', period: 5 },
+          { id: 'ema', kind: 'EMA', period: 10 },
         ],
       },
-    });
-    expect(issues.some((i) => i.text.includes('range is reversed'))).toBe(true);
-  });
-
-  it('flags an empty entry block as an error', () => {
-    const issues = validateStrategy({
-      ...VALID_SPEC,
-      entry: { ...VALID_SPEC.entry, conditions: [] },
-    });
-    expect(issues.some((i) => i.text.includes('Entry block has no conditions'))).toBe(true);
+      null,
+      'share the id',
+    ],
+    [
+      'a reversed lo/hi in IndicatorBetween',
+      {
+        ...VALID_SPEC,
+        indicators: [{ id: 'rsi', kind: 'RSI', period: 14 }],
+        entry: {
+          ...VALID_SPEC.entry,
+          conditions: [
+            { kind: 'IndicatorBetween', indicator: 'rsi', lo: 70, hi: 30, inclusive: true },
+          ],
+        },
+      },
+      null,
+      'range is reversed',
+    ],
+    [
+      'an empty entry block',
+      {
+        ...VALID_SPEC,
+        entry: { ...VALID_SPEC.entry, conditions: [] },
+      },
+      null,
+      'Entry block has no conditions',
+    ],
+    [
+      'reversed run-config dates',
+      VALID_SPEC,
+      { start: '2024-12-01', end: '2024-01-01' },
+      'End date is before start date',
+    ],
+    [
+      'a reversed range inside nested LogicNode groups',
+      {
+        ...VALID_SPEC,
+        indicators: [{ id: 'rsi', kind: 'RSI', period: 14 }],
+        entry: {
+          ...VALID_SPEC.entry,
+          conditions: [
+            {
+              logic: 'AND',
+              conditions: [
+                { kind: 'IndicatorBetween', indicator: 'rsi', lo: 70, hi: 30, inclusive: true },
+              ],
+            },
+          ],
+        },
+      },
+      null,
+      'range is reversed',
+    ],
+  ])('flags %s', (_name, spec, runCfg, text) => {
+    const issues = validateStrategy(spec, runCfg);
+    expect(issues.some((i) => i.text.includes(text))).toBe(true);
   });
 
   it('warns on EMA fast/slow ordering when fast is not actually faster', () => {
@@ -138,81 +217,10 @@ describe('validateStrategy', () => {
     expect(warns.some((t) => t.includes("fast") && t.includes("isn't faster"))).toBe(true);
   });
 
-  it('warns when both exit and manage are empty', () => {
-    const issues = validateStrategy({
-      ...VALID_SPEC,
-      exit: { logic: 'OR', conditions: [] },
-      survival: [],
-    });
-    expect(
-      issues.some(
-        (i) => i.sev === 'warn' && i.text.includes('never sells until the run window ends'),
-      ),
-    ).toBe(true);
-  });
-
-  it('flags unused indicators as info', () => {
-    const issues = validateStrategy({
-      ...VALID_SPEC,
-      indicators: [
-        ...VALID_SPEC.indicators,
-        { id: 'rsi_unused', kind: 'RSI', period: 14 },
-      ],
-    });
-    expect(issues.some((i) => i.sev === 'info' && i.text.includes('rsi_unused'))).toBe(true);
-  });
-
-  it('flags reversed run-config dates as errors', () => {
-    const issues = validateStrategy(VALID_SPEC, {
-      start: '2024-12-01',
-      end: '2024-01-01',
-    });
-    expect(issues.some((i) => i.text.includes('End date is before start date'))).toBe(true);
-  });
-
   it('returns zero errors / warnings for the SPY EMA fixture', () => {
     const issues = validateStrategy(VALID_SPEC);
     const errs = issues.filter((i) => i.sev === 'error');
     expect(errs).toHaveLength(0);
-  });
-
-  it('descends into nested LogicNode groups for unknown-indicator checks', () => {
-    const issues = validateStrategy({
-      ...VALID_SPEC,
-      entry: {
-        ...VALID_SPEC.entry,
-        conditions: [
-          {
-            logic: 'OR',
-            conditions: [
-              { kind: 'FreshCross', left: 'ema5', right: 'ghost', direction: 'up' },
-            ],
-          },
-        ],
-      },
-    });
-    expect(
-      issues.some((i) => i.sev === 'error' && i.text.includes('"ghost"')),
-    ).toBe(true);
-  });
-
-  it('descends into nested LogicNode groups for reversed-range checks', () => {
-    const issues = validateStrategy({
-      ...VALID_SPEC,
-      indicators: [{ id: 'rsi', kind: 'RSI', period: 14 }],
-      entry: {
-        ...VALID_SPEC.entry,
-        conditions: [
-          {
-            logic: 'AND',
-            conditions: [
-              { kind: 'IndicatorBetween', indicator: 'rsi', lo: 70, hi: 30, inclusive: true },
-            ],
-          },
-        ],
-      },
-    });
-    expect(issues.some((i) => i.text.includes('range is reversed'))).toBe(true);
   });
 
   it('warns on out-of-range RSI bounds inside manage rules', () => {
@@ -241,88 +249,101 @@ describe('validateStrategy', () => {
 });
 
 describe('collectIndicatorReferences', () => {
-  it('finds refs in IndicatorComparison Subtract operands', () => {
-    const refs = collectIndicatorReferences({
-      ...VALID_SPEC,
-      entry: {
-        ...VALID_SPEC.entry,
-        conditions: [
-          {
-            kind: 'IndicatorComparison',
-            left: {
-              kind: 'Subtract',
-              left: { kind: 'IndicatorRef', indicator: 'ema5' },
-              right: { kind: 'IndicatorRef', indicator: 'ema10' },
+  it.each<[string, StrategySpec, string, string]>([
+    [
+      'IndicatorComparison Subtract operands',
+      {
+        ...VALID_SPEC,
+        entry: {
+          ...VALID_SPEC.entry,
+          conditions: [
+            {
+              kind: 'IndicatorComparison',
+              left: {
+                kind: 'Subtract',
+                left: { kind: 'IndicatorRef', indicator: 'ema5' },
+                right: { kind: 'IndicatorRef', indicator: 'ema10' },
+              },
+              op: '>=',
+              right: { kind: 'Const', value: 0.2 },
             },
-            op: '>=',
-            right: { kind: 'Const', value: 0.2 },
-          },
-        ],
-      },
-    });
-    expect(refs.has('ema5')).toBe(true);
-    expect(refs.has('ema10')).toBe(true);
-  });
-
-  it('finds refs in IndicatorComparison DifferenceBps operands', () => {
-    const refs = collectIndicatorReferences({
-      ...VALID_SPEC,
-      entry: {
-        ...VALID_SPEC.entry,
-        conditions: [
-          {
-            kind: 'IndicatorComparison',
-            left: {
-              kind: 'DifferenceBps',
-              left: { kind: 'IndicatorRef', indicator: 'ema5' },
-              right: { kind: 'IndicatorRef', indicator: 'ema10' },
-            },
-            op: '>=',
-            right: { kind: 'Const', value: 4 },
-          },
-        ],
-      },
-    });
-    expect(refs.has('ema5')).toBe(true);
-    expect(refs.has('ema10')).toBe(true);
-  });
-
-  it('finds refs in survival rules', () => {
-    const refs = collectIndicatorReferences({
-      ...VALID_SPEC,
-      survival: [
-        {
-          name: 'rsi cap',
-          when: {
-            logic: 'AND',
-            conditions: [{ kind: 'IndicatorBetween', indicator: 'rsi_x', lo: 0, hi: 100 }],
-          },
-          action: { kind: 'CLOSE_ALL' },
+          ],
         },
-      ],
-    });
-    expect(refs.has('rsi_x')).toBe(true);
+      },
+      'ema5',
+      'ema10',
+    ],
+    [
+      'IndicatorComparison DifferenceBps operands',
+      {
+        ...VALID_SPEC,
+        entry: {
+          ...VALID_SPEC.entry,
+          conditions: [
+            {
+              kind: 'IndicatorComparison',
+              left: {
+                kind: 'DifferenceBps',
+                left: { kind: 'IndicatorRef', indicator: 'ema5' },
+                right: { kind: 'IndicatorRef', indicator: 'ema10' },
+              },
+              op: '>=',
+              right: { kind: 'Const', value: 4 },
+            },
+          ],
+        },
+      },
+      'ema5',
+      'ema10',
+    ],
+  ])('finds refs in %s', (_name, spec, first, second) => {
+    const refs = collectIndicatorReferences(spec);
+    expect(refs.has(first)).toBe(true);
+    expect(refs.has(second)).toBe(true);
   });
 
-  it('descends into nested LogicNode groups when collecting refs', () => {
-    const refs = collectIndicatorReferences({
-      ...VALID_SPEC,
-      indicators: [
-        ...VALID_SPEC.indicators,
-        { id: 'rsi_inner', kind: 'RSI', period: 14 },
-      ],
-      entry: {
-        ...VALID_SPEC.entry,
-        conditions: [
+  it.each<[string, StrategySpec, string]>([
+    [
+      'survival rules',
+      {
+        ...VALID_SPEC,
+        survival: [
           {
-            logic: 'OR',
-            conditions: [
-              { kind: 'IndicatorBetween', indicator: 'rsi_inner', lo: 30, hi: 70 },
-            ],
+            name: 'rsi cap',
+            when: {
+              logic: 'AND',
+              conditions: [{ kind: 'IndicatorBetween', indicator: 'rsi_x', lo: 0, hi: 100 }],
+            },
+            action: { kind: 'CLOSE_ALL' },
           },
         ],
       },
-    });
-    expect(refs.has('rsi_inner')).toBe(true);
+      'rsi_x',
+    ],
+    [
+      'nested LogicNode groups',
+      {
+        ...VALID_SPEC,
+        indicators: [
+          ...VALID_SPEC.indicators,
+          { id: 'rsi_inner', kind: 'RSI', period: 14 },
+        ],
+        entry: {
+          ...VALID_SPEC.entry,
+          conditions: [
+            {
+              logic: 'OR',
+              conditions: [
+                { kind: 'IndicatorBetween', indicator: 'rsi_inner', lo: 30, hi: 70 },
+              ],
+            },
+          ],
+        },
+      },
+      'rsi_inner',
+    ],
+  ])('finds refs in %s', (_name, spec, ref) => {
+    const refs = collectIndicatorReferences(spec);
+    expect(refs.has(ref)).toBe(true);
   });
 });

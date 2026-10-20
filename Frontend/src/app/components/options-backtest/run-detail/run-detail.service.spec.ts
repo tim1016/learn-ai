@@ -44,22 +44,16 @@ describe('RunDetailService, the trades route', () => {
     expect(request.request.params.get('offset')).toBe('200');
   });
 
-  it('asks for the first page with an offset of 0, which is a filter that is set', async () => {
-    const pending = service.trades(7, { offset: 0 });
+  it.each([
+    ['asks for the first page with an offset of 0, which is a filter that is set', { offset: 0 }, 'offset'],
+    ['sends a session whose open is 0, which is a session that is set and not a filter that is off', { sessionOpenMs: 0 }, 'session_open_ms'],
+  ])('%s', async (_name, filters, param) => {
+    const pending = service.trades(7, filters);
     const request = http.expectOne((req) => req.url === `${BASE}/runs/7/trades`);
     request.flush(tradesPage());
     await pending;
 
-    expect(request.request.params.get('offset')).toBe('0');
-  });
-
-  it('sends a session whose open is 0, which is a session that is set and not a filter that is off', async () => {
-    const pending = service.trades(7, { sessionOpenMs: 0 });
-    const request = http.expectOne((req) => req.url === `${BASE}/runs/7/trades`);
-    request.flush(tradesPage());
-    await pending;
-
-    expect(request.request.params.get('session_open_ms')).toBe('0');
+    expect(request.request.params.get(param)).toBe('0');
   });
 
   it('does not send a leg that is empty or a session that is null', async () => {
@@ -97,18 +91,12 @@ describe('RunDetailService, the trades route', () => {
     expect(error).toMatchObject({ message: `leg_id: ${message}`, status: 422 });
   });
 
-  it('lets a 422 that is not in the shape of a parameter’s refusal pass through as it came', async () => {
-    const pending = service.trades(7, { legId: 'Call' });
-    http.expectOne((req) => req.url === `${BASE}/runs/7/trades`).flush({ detail: 'nope' }, { status: 422, statusText: 'Unprocessable Entity' });
-
-    const error = await pending.catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(HttpErrorResponse);
-    expect(error).not.toBeInstanceOf(RunDetailRefusedError);
-  });
-
-  it('lets a failure that is not a refusal pass through as it came', async () => {
-    const pending = service.trades(7);
-    http.expectOne((req) => req.url === `${BASE}/runs/7/trades`).flush('down', { status: 503, statusText: 'Service Unavailable' });
+  it.each([
+    ['lets a 422 that is not in the shape of a parameter’s refusal pass through as it came', { legId: 'Call' }, { detail: 'nope' }, { status: 422, statusText: 'Unprocessable Entity' }],
+    ['lets a failure that is not a refusal pass through as it came', undefined, 'down', { status: 503, statusText: 'Service Unavailable' }],
+  ])('%s', async (_name, filters, body, init) => {
+    const pending = service.trades(7, filters);
+    http.expectOne((req) => req.url === `${BASE}/runs/7/trades`).flush(body, init);
 
     const error = await pending.catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(HttpErrorResponse);

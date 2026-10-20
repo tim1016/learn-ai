@@ -58,19 +58,42 @@ async function renderHeatmap(board: CoverageBoard = EVERY_STATE) {
 }
 
 describe('CoverageHeatmapComponent', () => {
-  it.each([
-    ['2026-05-18', 'Complete'],
-    ['2026-05-19', 'Fetching'],
-    ['2026-05-20', 'Stale'],
-    ['2026-05-21', 'Failed'],
-    ['2026-05-22', 'Missing'],
-    ['2026-05-26', 'Needs Rebuild'],
-  ])('names %s as %s, by its ET trading date', async (date, status) => {
+  it('names every state by its ET trading date, gives each its own glyph, and passes AXE', async () => {
     // The 09:30 ET open is 13:30 UTC; the label is the contract that the
     // date is resolved in ET, never the viewer's own zone.
-    await renderHeatmap();
+    const { container } = await renderHeatmap();
 
-    expect(screen.getByRole('button', { name: `SPY, ${date}, ${status}` })).toBeTruthy();
+    expect
+      .soft(screen.queryByRole('button', { name: 'SPY, 2026-05-18, Complete' }), 'names 2026-05-18 as Complete, by its ET trading date')
+      .toBeTruthy();
+    expect
+      .soft(screen.queryByRole('button', { name: 'SPY, 2026-05-19, Fetching' }), 'names 2026-05-19 as Fetching, by its ET trading date')
+      .toBeTruthy();
+    expect
+      .soft(screen.queryByRole('button', { name: 'SPY, 2026-05-20, Stale' }), 'names 2026-05-20 as Stale, by its ET trading date')
+      .toBeTruthy();
+    expect
+      .soft(screen.queryByRole('button', { name: 'SPY, 2026-05-21, Failed' }), 'names 2026-05-21 as Failed, by its ET trading date')
+      .toBeTruthy();
+    expect
+      .soft(screen.queryByRole('button', { name: 'SPY, 2026-05-22, Missing' }), 'names 2026-05-22 as Missing, by its ET trading date')
+      .toBeTruthy();
+    expect
+      .soft(screen.queryByRole('button', { name: 'SPY, 2026-05-26, Needs Rebuild' }), 'names 2026-05-26 as Needs Rebuild, by its ET trading date')
+      .toBeTruthy();
+
+    const cells = Array.from(container.querySelectorAll('.cell'));
+    const glyphs = cells.map((cell) => cell.textContent?.trim());
+    expect.soft(new Set(glyphs).size, 'gives each state a glyph so it reads without colour').toBe(cells.length);
+
+    // `region` is a harness artifact: the grid renders as a fragment without
+    // the route shell that supplies its landmark. Contrast is fixed by the
+    // token palette and checked visually, as elsewhere in this suite.
+    const results = await axe.run(document.body, {
+      rules: { 'color-contrast': { enabled: false }, region: { enabled: false } },
+    });
+
+    expect.soft(results.violations, 'passes AXE').toEqual([]);
   });
 
   it('draws one cell per calendar session and no gap for the weekend between', async () => {
@@ -89,51 +112,29 @@ describe('CoverageHeatmapComponent', () => {
     expect(screen.getByText('2 sessions')).toBeTruthy();
   });
 
-  it('gives each state a glyph so it reads without colour', async () => {
-    const { container } = await renderHeatmap();
-    const cells = Array.from(container.querySelectorAll('.cell'));
-
-    const glyphs = cells.map((cell) => cell.textContent?.trim());
-    expect(new Set(glyphs).size).toBe(cells.length);
-  });
-
-  it('emits the clicked cell, with why a run refuses it', async () => {
+  it.each<[string, string, object]>([
+    [
+      'a session a run refuses, with why',
+      'SPY, 2026-05-26, Needs Rebuild',
+      {
+        symbol: 'SPY',
+        cell: { artifactId: 15, status: 'needs_rebuild', rebuildReason: 'adjustment_record_missing' },
+      },
+    ],
+    [
+      'a session with nothing on disk: that is an answer too',
+      'SPY, 2026-05-22, Missing',
+      { symbol: 'SPY', cell: { artifactId: null, status: 'missing' } },
+    ],
+  ])('emits the clicked cell for %s', async (_name, button, selection) => {
     const view = await renderHeatmap();
     let emitted: CoverageCellSelection | null = null;
-    view.fixture.componentInstance.cellSelected.subscribe((selection) => {
-      emitted = selection;
+    view.fixture.componentInstance.cellSelected.subscribe((selected) => {
+      emitted = selected;
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'SPY, 2026-05-26, Needs Rebuild' }));
+    fireEvent.click(screen.getByRole('button', { name: button }));
 
-    expect(emitted).toMatchObject({
-      symbol: 'SPY',
-      cell: { artifactId: 15, status: 'needs_rebuild', rebuildReason: 'adjustment_record_missing' },
-    });
-  });
-
-  it('lets a session with nothing on disk be picked: that is an answer too', async () => {
-    const view = await renderHeatmap();
-    let emitted: CoverageCellSelection | null = null;
-    view.fixture.componentInstance.cellSelected.subscribe((selection) => {
-      emitted = selection;
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: 'SPY, 2026-05-22, Missing' }));
-
-    expect(emitted).toMatchObject({ symbol: 'SPY', cell: { artifactId: null, status: 'missing' } });
-  });
-
-  it('passes AXE', async () => {
-    // `region` is a harness artifact: the grid renders as a fragment without
-    // the route shell that supplies its landmark. Contrast is fixed by the
-    // token palette and checked visually, as elsewhere in this suite.
-    await renderHeatmap();
-
-    const results = await axe.run(document.body, {
-      rules: { 'color-contrast': { enabled: false }, region: { enabled: false } },
-    });
-
-    expect(results.violations).toEqual([]);
+    expect(emitted).toMatchObject(selection);
   });
 });

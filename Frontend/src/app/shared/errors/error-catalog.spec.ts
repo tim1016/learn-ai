@@ -3,62 +3,47 @@ import { describeError, lookupErrorEntry, resolveErrorCode } from './error-catal
 import { GraphqlError } from '../graphql/graphql-error';
 
 describe('lookupErrorEntry', () => {
-  it('returns the catalog entry for a known code', () => {
+  it('returns the catalog entry for a known code and the fallback for an unknown one', () => {
     const entry = lookupErrorEntry('BROKER_DISCONNECTED');
-    expect(entry.what).toContain('IB Gateway');
-    expect(entry.tryCopy).toContain('Retry');
-  });
+    expect.soft(entry.what, 'returns the catalog entry for a known code: what happened').toContain('IB Gateway');
+    expect.soft(entry.tryCopy, 'returns the catalog entry for a known code: what to try').toContain('Retry');
 
-  it('returns the fallback entry for an unknown code', () => {
-    const entry = lookupErrorEntry('DEFINITELY_NOT_A_CODE');
-    expect(entry.what).toBe('Something went wrong.');
-  });
+    const unknown = lookupErrorEntry('DEFINITELY_NOT_A_CODE');
+    expect.soft(unknown.what, 'returns the fallback entry for an unknown code').toBe('Something went wrong.');
 
-  it('treats null / undefined as unknown', () => {
-    expect(lookupErrorEntry(undefined).what).toBe('Something went wrong.');
-    expect(lookupErrorEntry(null).what).toBe('Something went wrong.');
+    expect.soft(lookupErrorEntry(undefined).what, 'treats undefined as unknown').toBe('Something went wrong.');
+    expect.soft(lookupErrorEntry(null).what, 'treats null as unknown').toBe('Something went wrong.');
   });
 });
 
 describe('resolveErrorCode', () => {
-  it('reads extensions.code from a GraphqlError payload', () => {
+  it('reads extensions.code from a GraphqlError payload and is undefined for anything else', () => {
     const err = new GraphqlError([
       { message: 'no gateway', extensions: { code: 'BROKER_DISCONNECTED' } },
     ]);
-    expect(resolveErrorCode(err)).toBe('BROKER_DISCONNECTED');
-  });
+    expect.soft(resolveErrorCode(err), 'reads extensions.code from a GraphqlError payload').toBe('BROKER_DISCONNECTED');
 
-  it('returns undefined when extensions.code is absent', () => {
-    const err = new GraphqlError([{ message: 'mystery' }]);
-    expect(resolveErrorCode(err)).toBeUndefined();
-  });
+    const mystery = new GraphqlError([{ message: 'mystery' }]);
+    expect.soft(resolveErrorCode(mystery), 'returns undefined when extensions.code is absent').toBeUndefined();
 
-  it('returns undefined for non-GraphqlError values', () => {
-    expect(resolveErrorCode(new Error('boom'))).toBeUndefined();
-    expect(resolveErrorCode('boom')).toBeUndefined();
-    expect(resolveErrorCode(null)).toBeUndefined();
+    expect.soft(resolveErrorCode(new Error('boom')), 'returns undefined for non-GraphqlError values: an Error').toBeUndefined();
+    expect.soft(resolveErrorCode('boom'), 'returns undefined for non-GraphqlError values: a string').toBeUndefined();
+    expect.soft(resolveErrorCode(null), 'returns undefined for non-GraphqlError values: null').toBeUndefined();
   });
 });
 
 describe('describeError', () => {
-  it('uses catalog copy when the code is mapped', () => {
-    const err = new GraphqlError([
-      { message: 'no gateway', extensions: { code: 'BROKER_DISCONNECTED' } },
-    ]);
-    const display = describeError(err);
-    expect(display.what).toContain('IB Gateway');
-    expect(display.tryCopy).toContain('Retry');
-  });
+  it('describes an error by catalog copy, else by its message, with an explicit contextWhat first', () => {
+    const mapped = describeError(
+      new GraphqlError([{ message: 'no gateway', extensions: { code: 'BROKER_DISCONNECTED' } }]),
+    );
+    expect.soft(mapped.what, 'uses catalog copy when the code is mapped: what happened').toContain('IB Gateway');
+    expect.soft(mapped.tryCopy, 'uses catalog copy when the code is mapped: what to try').toContain('Retry');
 
-  it('falls back to the error message when no code is present', () => {
-    const err = new Error('Network broken');
-    const display = describeError(err);
-    expect(display.what).toBe('Network broken');
-  });
+    const unmapped = describeError(new Error('Network broken'));
+    expect.soft(unmapped.what, 'falls back to the error message when no code is present').toBe('Network broken');
 
-  it('prefers an explicit contextWhat over the raw message', () => {
-    const err = new Error('ECONNREFUSED');
-    const display = describeError(err, 'We could not reach the broker.');
-    expect(display.what).toBe('We could not reach the broker.');
+    const withContext = describeError(new Error('ECONNREFUSED'), 'We could not reach the broker.');
+    expect.soft(withContext.what, 'prefers an explicit contextWhat over the raw message').toBe('We could not reach the broker.');
   });
 });

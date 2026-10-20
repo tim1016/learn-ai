@@ -86,20 +86,15 @@ describe('the capital block', () => {
     expect(capital().querySelector('.sentence')?.textContent).toBe('Not funded continuously through even the first of 10 sessions.');
   });
 
-  it('marks the cash this path needed incomplete, and says why, when an entry was refused for cash on the way', async () => {
+  it('marks the cash this path needed incomplete and says why, and states the requirement rule used with the day its page was read', async () => {
     await renderResult({ capital_evidence: capitalEvidence({ cash_needed_is_incomplete: true }) });
 
     const needed = tile('Cash this path needed');
-    expect(needed.querySelector('.tag')?.textContent).toBe('incomplete');
-    expect(reads(needed)).toContain('a larger starting cash would have traded a different path');
-    expect(reads(needed)).toContain('not a minimum and not a safe amount');
-  });
-
-  it('states the requirement rule used, the day its page was read in New York, and that it is no evidence of a past requirement', async () => {
-    await renderResult();
-
+    expect.soft(needed.querySelector('.tag')?.textContent, 'marks the cash this path needed incomplete when an entry was refused for cash on the way').toBe('incomplete');
+    expect.soft(reads(needed), 'says why: a larger starting cash would have traded a different path').toContain('a larger starting cash would have traded a different path');
+    expect.soft(reads(needed), 'says it is not a minimum and not a safe amount').toContain('not a minimum and not a safe amount');
     const stamp = paragraph(/^Replay rules version 1/, capital());
-    expect(reads(stamp)).toBe(
+    expect.soft(reads(stamp), 'states the requirement rule used, the day its page was read in New York, and that it is no evidence of a past requirement').toBe(
       'Replay rules version 1. Requirement rule: Alpaca’s published rule for covered positions, as its page read on 2026-10-12 . It is today’s rule and is no evidence of what a broker required on a session’s date.',
     );
     expectTradingDatesInNewYork(stamp);

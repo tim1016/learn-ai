@@ -41,19 +41,14 @@ describe('PageHeaderComponent slots', () => {
     expect(projected.textContent).toBe('How this page works');
   });
 
-  it('still hides the guide region when nothing is projected', () => {
-    const fixture = TestBed.createComponent(NoGuideHost);
-    fixture.detectChanges();
-    const guide = find(fixture.nativeElement as HTMLElement, '.page-header-guide');
-    expect(guide.children.length).toBe(0);
-  });
-
-  it('renders title and actions slot without a subtitle', () => {
+  it('renders a header with no guide projected: guide region empty, title and actions slot shown, no subtitle', () => {
     const fixture = TestBed.createComponent(NoGuideHost);
     fixture.detectChanges();
     const el = fixture.nativeElement as HTMLElement;
-    expect(find(el, '.page-title').textContent?.trim()).toBe('Plain Page');
-    expect(el.querySelector('.page-subtitle')).toBeNull();
-    expect(find(el, '[slot=actions]').textContent).toBe('Save');
+    const guide = find(el, '.page-header-guide');
+    expect.soft(guide.children.length, 'still hides the guide region when nothing is projected').toBe(0);
+    expect.soft(find(el, '.page-title').textContent?.trim(), 'renders the title').toBe('Plain Page');
+    expect.soft(el.querySelector('.page-subtitle'), 'renders no subtitle').toBeNull();
+    expect.soft(find(el, '[slot=actions]').textContent, 'renders the actions slot').toBe('Save');
   });
 });

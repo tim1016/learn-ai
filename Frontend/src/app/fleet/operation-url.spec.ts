@@ -6,20 +6,27 @@ import { operationUrl, type OperationId } from './operation-url';
 const TARGET = { broker: 'alpaca', clerkId: 'clrk_1', accountId: 'PA9' };
 
 describe('operationUrl', () => {
-  it('builds the declared path for a lane-scoped read', () => {
-    expect(operationUrl('account_read', TARGET)).toBe('/api/brokers/alpaca/clerks/clrk_1/account');
-  });
-
-  it('builds a clerk-scoped IBKR market-data URL for the selected symbol', () => {
-    expect(operationUrl('ibkr_option_chain_stream', { ...TARGET, symbol: 'SPY' })).toBe(
-      '/api/brokers/alpaca/clerks/clrk_1/market-data/ibkr/option-chain/SPY',
-    );
-  });
-
-  it('builds the declared path for an account-scoped read', () => {
-    expect(operationUrl('bots_catalog_read', TARGET)).toBe(
-      '/api/brokers/alpaca/clerks/clrk_1/accounts/PA9/bots/catalog',
-    );
+  it.each([
+    ['builds the declared path for a lane-scoped read', 'account_read', TARGET,
+      '/api/brokers/alpaca/clerks/clrk_1/account'],
+    ['builds a clerk-scoped IBKR market-data URL for the selected symbol', 'ibkr_option_chain_stream',
+      { ...TARGET, symbol: 'SPY' }, '/api/brokers/alpaca/clerks/clrk_1/market-data/ibkr/option-chain/SPY'],
+    ['builds the declared path for an account-scoped read', 'bots_catalog_read', TARGET,
+      '/api/brokers/alpaca/clerks/clrk_1/accounts/PA9/bots/catalog'],
+    // manual_order_cancel declares {order_ref:path}; encoding its slashes would
+    // under-match the route the coordinator mounts.
+    ['does not percent-encode a :path parameter', 'manual_order_cancel', { ...TARGET, orderRef: 'alpaca/abc-123' },
+      '/api/brokers/alpaca/clerks/clrk_1/accounts/PA9/manual-orders/alpaca/abc-123/cancel'],
+    // The negative case for the row above: a non-`:path` parameter's
+    // slash must still be escaped, or this test cannot tell "operationUrl
+    // leaves slashes alone" apart from "operationUrl leaves slashes alone
+    // only for order_ref specifically".
+    ['percent-encodes an ordinary path parameter that is not a :path segment', 'manual_order_ticket_read',
+      { ...TARGET, ticketId: 'a/b' }, '/api/brokers/alpaca/clerks/clrk_1/accounts/PA9/manual-order-tickets/a%2Fb'],
+    ['builds a path needing both an account and a second parameter', 'bot_panel_read', { ...TARGET, sid: 'sid-7' },
+      '/api/brokers/alpaca/clerks/clrk_1/accounts/PA9/bots/sid-7/panel'],
+  ] as const)('resolves the exact catalog URL: %s', (_name, operationId, target, expected) => {
+    expect(operationUrl(operationId, target)).toBe(expected);
   });
 
   it('refuses an operation the catalog does not declare', () => {
@@ -39,30 +46,6 @@ describe('operationUrl', () => {
     expect(() =>
       operationUrl('bots_catalog_read', { broker: 'alpaca', clerkId: 'clrk_1', accountId: '   ' }),
     ).toThrow(/account/i);
-  });
-
-  it('does not percent-encode a :path parameter', () => {
-    // manual_order_cancel declares {order_ref:path}; encoding its slashes would
-    // under-match the route the coordinator mounts.
-    expect(operationUrl('manual_order_cancel', { ...TARGET, orderRef: 'alpaca/abc-123' })).toBe(
-      '/api/brokers/alpaca/clerks/clrk_1/accounts/PA9/manual-orders/alpaca/abc-123/cancel',
-    );
-  });
-
-  it('percent-encodes an ordinary path parameter that is not a :path segment', () => {
-    // The negative case for the assertion above: a non-`:path` parameter's
-    // slash must still be escaped, or this test cannot tell "operationUrl
-    // leaves slashes alone" apart from "operationUrl leaves slashes alone
-    // only for order_ref specifically".
-    expect(
-      operationUrl('manual_order_ticket_read', { ...TARGET, ticketId: 'a/b' }),
-    ).toBe('/api/brokers/alpaca/clerks/clrk_1/accounts/PA9/manual-order-tickets/a%2Fb');
-  });
-
-  it('builds a path needing both an account and a second parameter', () => {
-    expect(operationUrl('bot_panel_read', { ...TARGET, sid: 'sid-7' })).toBe(
-      '/api/brokers/alpaca/clerks/clrk_1/accounts/PA9/bots/sid-7/panel',
-    );
   });
 
   it('declares a comfortably non-empty set of operations', () => {

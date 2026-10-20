@@ -96,36 +96,28 @@ describe('MonteCarloDetailPageComponent', () => {
     vi.clearAllMocks();
   });
 
-  it('reads mc_id from the route and fetches the MC', () => {
-    expect(service.getMonteCarlo).toHaveBeenCalledWith('b'.repeat(32));
-    expect(component.mcId()).toBe('b'.repeat(32));
-    expect(component.monteCarlo()?.config.method).toBe('reshuffle');
-  });
+  it('loads the MC named by the route and shows its quantile cards, breach-probability table and parent-run link', () => {
+    expect.soft(service.getMonteCarlo, 'fetches the MC named by the route').toHaveBeenCalledWith('b'.repeat(32));
+    expect.soft(component.mcId(), 'reads mc_id from the route').toBe('b'.repeat(32));
+    expect.soft(component.monteCarlo()?.config.method, 'holds the fetched MC').toBe('reshuffle');
 
-  it('renders quantile cards from the server payload', () => {
     const text: string = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('Max drawdown');
-    expect(text).toContain('Terminal P&L');
-    expect(text).toContain('Max losing streak');
+    expect.soft(text, 'quantile cards show the max drawdown card').toContain('Max drawdown');
+    expect.soft(text, 'quantile cards show the terminal P&L card').toContain('Terminal P&L');
+    expect.soft(text, 'quantile cards show the max losing streak card').toContain('Max losing streak');
     // 0.0567 → '5.67%'
-    expect(text).toContain('5.67%');
+    expect.soft(text, 'quantile cards show the drawdown median').toContain('5.67%');
     // 1500 (terminal P50) → '$1,500'
-    expect(text).toContain('$1,500');
-  });
+    expect.soft(text, 'quantile cards show the terminal P&L median').toContain('$1,500');
+    expect.soft(text, 'parent-run link is labelled').toContain('Parent run');
+    expect.soft(text, 'parent-run link shows the parent run id').toContain('aaaaaaaaaaaaaaaa');
 
-  it('renders the breach-probability table', () => {
     const rows = fixture.nativeElement.querySelectorAll('.mcd-breach-table tbody tr');
-    expect(rows.length).toBe(2);
+    expect(rows.length, 'breach-probability table has a row per threshold').toBe(2);
     const first = (rows[0].textContent ?? '').trim();
     // 0.05 threshold → '5%' and 0.78 probability → '78.0%' (PercentPipe '1.1-1')
-    expect(first).toContain('5%');
-    expect(first).toContain('78.0%');
-  });
-
-  it('renders the parent-run link', () => {
-    const text: string = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('Parent run');
-    expect(text).toContain('aaaaaaaaaaaaaaaa');
+    expect.soft(first, 'breach-probability row shows the threshold').toContain('5%');
+    expect.soft(first, 'breach-probability row shows the probability').toContain('78.0%');
   });
 
   it('surfaces service errors', async () => {

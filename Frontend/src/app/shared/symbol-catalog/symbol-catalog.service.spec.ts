@@ -42,74 +42,62 @@ const SPY: TickerOption = {
 };
 
 describe('joinCatalog', () => {
-  it('keeps the lake ranking and appends vendor-only actives alphabetically', () => {
-    const joined = joinCatalog(
+  it('joins the lake with the vendor catalog: lake ranking kept, vendor-only actives appended, delisted holdings badged, unbackfillable and unheld-delisted rows left out', () => {
+    const ranked = joinCatalog(
       [SPY, { symbol: 'QQQ', name: 'Invesco QQQ', lastHeld: '2025-04-30' }],
       [vendor({ symbol: 'ZZZ' }), vendor({ symbol: 'AAPL' })],
     );
 
-    expect(joined.map((row) => row.symbol)).toEqual(['SPY', 'QQQ', 'AAPL', 'ZZZ']);
+    expect.soft(ranked.map((row) => row.symbol), 'keeps the lake ranking and appends vendor-only actives alphabetically').toEqual(['SPY', 'QQQ', 'AAPL', 'ZZZ']);
     // Vendor-only rows carry no coverage: the lake has never held them.
-    expect(joined[2]).toMatchObject({
+    expect.soft(ranked[2], 'keeps the lake ranking and appends vendor-only actives alphabetically: a vendor-only row carries no coverage').toMatchObject({
       symbol: 'AAPL',
       firstHeld: null,
       lastHeld: null,
       delisted: false,
     });
-  });
 
-  it('badges a held symbol the vendor has delisted instead of dropping it', () => {
-    const joined = joinCatalog(
+    const delistedHeld = joinCatalog(
       [{ symbol: 'OLD', name: 'Old Corp', lastHeld: '2020-01-31' }],
       [vendor({ symbol: 'OLD', status: 'inactive' })],
     );
 
-    expect(joined[0]).toMatchObject({
+    expect.soft(delistedHeld[0], 'badges a held symbol the vendor has delisted instead of dropping it').toMatchObject({
       symbol: 'OLD',
       lastHeld: '2020-01-31',
       delisted: true,
     });
-  });
 
-  it('drops a lake row the vendor classifies outside the backfillable universe', () => {
     // A legacy import the lake holds but the vendor marks as a crypto pair
     // can never be covered by the gate — bars or no bars, it is not
     // offerable. The wire's `asset_class` Literal makes such a row
     // unreachable from today's catalog; this pins the client-side boundary
     // for the day the walk widens.
-    const joined = joinCatalog(
+    const heldCrypto = joinCatalog(
       [{ symbol: 'BTCUSD', name: 'Bitcoin', lastHeld: '2026-01-31' }, SPY],
       [vendor({ symbol: 'BTCUSD', asset_class: 'crypto', exchange: null })],
     );
 
-    expect(joined.map((row) => row.symbol)).toEqual(['SPY']);
-  });
+    expect.soft(heldCrypto.map((row) => row.symbol), 'drops a lake row the vendor classifies outside the backfillable universe').toEqual(['SPY']);
 
-  it('never offers a delisted vendor row the lake does not hold', () => {
-    const joined = joinCatalog([SPY], [vendor({ symbol: 'OLD', status: 'inactive' })]);
+    const unheldDelisted = joinCatalog([SPY], [vendor({ symbol: 'OLD', status: 'inactive' })]);
 
-    expect(joined.map((row) => row.symbol)).toEqual(['SPY']);
-  });
+    expect.soft(unheldDelisted.map((row) => row.symbol), 'never offers a delisted vendor row the lake does not hold').toEqual(['SPY']);
 
-  it('offers no vendor class the lake could never backfill', () => {
-    const joined = joinCatalog(
+    const vendorCrypto = joinCatalog(
       [],
       [vendor({ symbol: 'BTCUSD', asset_class: 'crypto', exchange: null })],
     );
 
-    expect(joined).toEqual([]);
-  });
+    expect.soft(vendorCrypto, 'offers no vendor class the lake could never backfill').toEqual([]);
 
-  it('with no vendor answer at all, the lake answer stands alone', () => {
-    const joined = joinCatalog([SPY], null);
+    const noVendorAnswer = joinCatalog([SPY], null);
 
-    expect(joined).toEqual([{ ...SPY, delisted: false }]);
-  });
+    expect.soft(noVendorAnswer, 'with no vendor answer at all, the lake answer stands alone').toEqual([{ ...SPY, delisted: false }]);
 
-  it('falls back to the ticker when the vendor names nothing', () => {
-    const joined = joinCatalog([], [vendor({ symbol: 'ZZZ', name: null })]);
+    const unnamed = joinCatalog([], [vendor({ symbol: 'ZZZ', name: null })]);
 
-    expect(joined[0].name).toBe('ZZZ');
+    expect.soft(unnamed[0].name, 'falls back to the ticker when the vendor names nothing').toBe('ZZZ');
   });
 });
 
@@ -148,25 +136,32 @@ describe('SymbolCatalogService', () => {
     });
   });
 
-  it('is unavailable only when the lake itself failed', () => {
-    catalog.view.unavailable.set('The data lake is unreachable.');
-    alpaca.unavailable.set('catalog down');
+  it.each<[string, () => void, Record<string, unknown>]>([
+    [
+      'is unavailable only when the lake itself failed',
+      () => {
+        catalog.view.unavailable.set('The data lake is unreachable.');
+        alpaca.unavailable.set('catalog down');
+      },
+      {
+        kind: 'unavailable',
+        message: 'The data lake is unreachable.',
+      },
+    ],
+    [
+      'waits for the lake before claiming a vendor-dark view is degraded',
+      () => {
+        catalog.view.loading.set(true);
+        alpaca.entries.set(null);
+        alpaca.unavailable.set('catalog down');
+      },
+      { kind: 'loading' },
+    ],
+  ])('%s', (_name, arrange, status) => {
+    arrange();
     const service = TestBed.inject(SymbolCatalogService);
-    const view = service.viewFor('polygon_split_adjusted');
 
-    expect(view.status()).toEqual({
-      kind: 'unavailable',
-      message: 'The data lake is unreachable.',
-    });
-  });
-
-  it('waits for the lake before claiming a vendor-dark view is degraded', () => {
-    catalog.view.loading.set(true);
-    alpaca.entries.set(null);
-    alpaca.unavailable.set('catalog down');
-    const service = TestBed.inject(SymbolCatalogService);
-
-    expect(service.viewFor('polygon_split_adjusted').status()).toEqual({ kind: 'loading' });
+    expect(service.viewFor('polygon_split_adjusted').status()).toEqual(status);
   });
 
   it('reloads only the lake on an ordinary refresh; the vendor retries separately', () => {

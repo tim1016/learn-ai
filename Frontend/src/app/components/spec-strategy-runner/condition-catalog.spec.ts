@@ -20,41 +20,37 @@ describe('condition-catalog', () => {
     }
   });
 
-  it('hides trade-only kinds from the entry-context picker', () => {
+  it('offers conditions by context: trade-only kinds hidden from entry, every kind in exit and manage', () => {
     const entry = conditionsForContext('entry');
     const tradeOnly = ['BarsSinceEntry', 'PnLPercent', 'PnLPoints', 'DrawdownFromPeak'];
     for (const k of tradeOnly) {
-      expect(entry).not.toContain(k);
+      expect.soft(entry, `hides trade-only kind ${k} from the entry-context picker`).not.toContain(k);
     }
     // FreshCross etc. should still be there.
-    expect(entry).toContain('FreshCross');
-    expect(entry).toContain('IndicatorComparison');
+    expect.soft(entry, 'keeps FreshCross in the entry-context picker').toContain('FreshCross');
+    expect.soft(entry, 'keeps IndicatorComparison in the entry-context picker').toContain('IndicatorComparison');
+
+    expect.soft(conditionsForContext('exit'), 'exposes PnLPercent in the exit context').toContain('PnLPercent');
+    expect.soft(conditionsForContext('manage'), 'exposes DrawdownFromPeak in the manage context').toContain('DrawdownFromPeak');
   });
 
-  it('exposes all kinds in exit and manage contexts', () => {
-    expect(conditionsForContext('exit')).toContain('PnLPercent');
-    expect(conditionsForContext('manage')).toContain('DrawdownFromPeak');
-  });
-
-  it('groups conditions by category for the picker UI', () => {
+  it('groups conditions by category for the picker UI, in CONDITION_GROUPS order', () => {
     const entry = groupedConditionsForContext('entry');
     const groupKeys = entry.map((g) => g.group);
     // Entry tab should show signals/filters/timing/shape but NOT risk
     // (because all risk kinds are trade-only).
-    expect(groupKeys).toContain('signal');
-    expect(groupKeys).toContain('filter');
-    expect(groupKeys).toContain('timing');
-    expect(groupKeys).not.toContain('risk');
+    expect.soft(groupKeys, 'entry shows the signal group').toContain('signal');
+    expect.soft(groupKeys, 'entry shows the filter group').toContain('filter');
+    expect.soft(groupKeys, 'entry shows the timing group').toContain('timing');
+    expect.soft(groupKeys, 'entry hides the risk group').not.toContain('risk');
 
     // Manage shows everything.
     const manage = groupedConditionsForContext('manage');
-    expect(manage.map((g) => g.group)).toContain('risk');
-  });
+    expect.soft(manage.map((g) => g.group), 'manage shows the risk group').toContain('risk');
 
-  it('orders groups consistently per CONDITION_GROUPS order', () => {
     const order = Object.keys(CONDITION_GROUPS);
-    const manage = groupedConditionsForContext('manage').map((g) => g.group);
+    const manageGroups = manage.map((g) => g.group);
     // manage should preserve the order of CONDITION_GROUPS — i.e. signals first.
-    expect(manage[0]).toBe(order[0]);
+    expect.soft(manageGroups[0], 'orders groups consistently per CONDITION_GROUPS order').toBe(order[0]);
   });
 });

@@ -142,6 +142,8 @@ function configureService(options: { defaults?: DataLakeRead<BackfillDefaults> }
   };
 }
 
+type GateWorld = ReturnType<typeof configureService>;
+
 async function flush(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
@@ -257,171 +259,206 @@ describe('EnsureCoverageService', () => {
     await session.done;
   });
 
-  it('fails loudly when the job says failed, without selecting', async () => {
-    const { service, jobs } = configureService();
-
-    const session = service.ensure('NVDA', 'polygon_split_adjusted');
-    await flush();
-    jobs.emit('job-1', {
-      type: 'job.failed',
-      code: 'provider_422',
-      message: 'The vendor refused the range.',
-    });
-    const ready = await session.done;
-
-    expect(ready).toBe(false);
-    // The failure stays on the session's strip until retry or dismissal.
-    expect(session.state()).toMatchObject({
-      symbol: 'NVDA',
-      mode: 'polygon_split_adjusted',
-      phase: 'failed',
-      reason: 'provider_422',
-      message: 'The vendor refused the range.',
-    });
-  });
-
-  it('does not accept a completed job whose bars never landed', async () => {
-    const { service, jobs } = configureService();
-
-    const session = service.ensure('NVDA', 'polygon_split_adjusted');
-    await flush();
-    jobs.emit('job-1', { type: 'job.completed' });
-    const ready = await session.done;
-
-    expect(ready).toBe(false);
-    expect(session.state()).toMatchObject({
-      symbol: 'NVDA',
-      phase: 'failed',
-      reason: 'backfill_empty',
-    });
-  });
-
-  // The job framework reports a run the provider refused as `job.completed`
-  // — the job ran; the backfill did not — so a gate watching only the
-  // lifecycle could say nothing beyond "empty", and an operator could not
-  // tell a plan limit from a symbol with no bars.
-  it('reports the run’s own reason when a refused run wrote nothing', async () => {
-    const { service, jobs } = configureService();
-
-    const session = service.ensure('NVDA', 'polygon_split_adjusted');
-    await flush();
-    jobs.emit('job-1', {
-      type: 'data_lake.backfill_day',
-      trading_date_ms: 1632398400000,
-      day_index: 1,
-      total_days: 1255,
-      days_remaining: 1254,
-      fetched_count: 0,
-      reused_count: 3,
-      failures: [
-        {
-          artifact_kind: 'time_series_bars',
-          symbol: 'NVDA',
-          data_type: 'trade',
-          reason: 'provider_entitlement_error',
-          detail: "Polygon 403 for NVDA: your plan doesn't include this data timeframe.",
-          provider_status_code: null,
-          attempt_count: 1,
+  it.each<[string, (world: GateWorld) => void, Record<string, unknown>]>([
+    [
+      'fails loudly when the job says failed, without selecting',
+      ({ jobs }) => {
+        jobs.emit('job-1', {
+          type: 'job.failed',
+          code: 'provider_422',
+          message: 'The vendor refused the range.',
+        });
+      },
+      // The failure stays on the session's strip until retry or dismissal.
+      {
+        symbol: 'NVDA',
+        mode: 'polygon_split_adjusted',
+        phase: 'failed',
+        reason: 'provider_422',
+        message: 'The vendor refused the range.',
+      },
+    ],
+    [
+      'does not accept a completed job whose bars never landed',
+      ({ jobs }) => {
+        jobs.emit('job-1', { type: 'job.completed' });
+      },
+      {
+        symbol: 'NVDA',
+        phase: 'failed',
+        reason: 'backfill_empty',
+      },
+    ],
+    // The job framework reports a run the provider refused as `job.completed`
+    // — the job ran; the backfill did not — so a gate watching only the
+    // lifecycle could say nothing beyond "empty", and an operator could not
+    // tell a plan limit from a symbol with no bars.
+    [
+      'reports the run’s own reason when a refused run wrote nothing',
+      ({ jobs }) => {
+        jobs.emit('job-1', {
+          type: 'data_lake.backfill_day',
           trading_date_ms: 1632398400000,
-        },
-        {
-          artifact_kind: 'time_series_bars',
-          symbol: null,
-          data_type: null,
-          reason: 'run_aborted',
-          detail: 'stopped after a globally-fatal provider_entitlement_error',
-          provider_status_code: null,
-          attempt_count: 0,
-          trading_date_ms: null,
-        },
-      ],
-    });
-    jobs.emit('job-1', { type: 'job.completed' });
+          day_index: 1,
+          total_days: 1255,
+          days_remaining: 1254,
+          fetched_count: 0,
+          reused_count: 3,
+          failures: [
+            {
+              artifact_kind: 'time_series_bars',
+              symbol: 'NVDA',
+              data_type: 'trade',
+              reason: 'provider_entitlement_error',
+              detail: "Polygon 403 for NVDA: your plan doesn't include this data timeframe.",
+              provider_status_code: null,
+              attempt_count: 1,
+              trading_date_ms: 1632398400000,
+            },
+            {
+              artifact_kind: 'time_series_bars',
+              symbol: null,
+              data_type: null,
+              reason: 'run_aborted',
+              detail: 'stopped after a globally-fatal provider_entitlement_error',
+              provider_status_code: null,
+              attempt_count: 0,
+              trading_date_ms: null,
+            },
+          ],
+        });
+        jobs.emit('job-1', { type: 'job.completed' });
+      },
+      {
+        symbol: 'NVDA',
+        phase: 'failed',
+        reason: 'provider_entitlement_error',
+        message: "Polygon 403 for NVDA: your plan doesn't include this data timeframe.",
+      },
+    ],
+    // The worker walks oldest session first and breaks right after the frame
+    // whose failure was fatal, so the *last* failing frame is the cause. An
+    // earlier day can fail benignly — a session before the symbol listed —
+    // and reporting that one hands the operator the wrong reason entirely.
+    [
+      'reports the failure that ended the run, not the first one seen',
+      ({ jobs }) => {
+        jobs.emit('job-1', dayFrame(1, [failure({ reason: 'provider_no_data', detail: 'No bars for this session.' })]));
+        jobs.emit('job-1', dayFrame(2, [failure({ reason: 'provider_no_data', detail: 'No bars for this session.' })]));
+        jobs.emit(
+          'job-1',
+          dayFrame(3, [
+            failure({ reason: 'provider_rate_limited', detail: 'Polygon 429 for NVDA.' }),
+            failure({ reason: 'run_aborted', artifact_kind: 'time_series_bars', detail: 'stopped early' }),
+          ]),
+        );
+        jobs.emit('job-1', { type: 'job.completed' });
+      },
+      {
+        reason: 'provider_rate_limited',
+        message: 'Polygon 429 for NVDA.',
+      },
+    ],
+    // A Phase 0 metadata failure is day-independent and does not stop Pass 1,
+    // so it says nothing about whether the day's bars landed — the data plane
+    // draws exactly this distinction in `_is_bar_affecting_failure` (#1900).
+    // It is also appended *before* the bar failure, so position alone loses.
+    [
+      'prefers the bar failure over a day-independent metadata failure',
+      ({ jobs }) => {
+        jobs.emit(
+          'job-1',
+          dayFrame(1, [
+            failure({
+              reason: 'launcher_unreachable',
+              artifact_kind: 'metadata',
+              symbol: null,
+              detail: 'The LEAN launcher did not answer.',
+            }),
+            failure({ reason: 'provider_entitlement_error', detail: 'Polygon 403 for NVDA.' }),
+          ]),
+        );
+        jobs.emit('job-1', { type: 'job.completed' });
+      },
+      {
+        reason: 'provider_entitlement_error',
+        message: 'Polygon 403 for NVDA.',
+      },
+    ],
+    // The reviewer's masked regression: judging membership against the cached
+    // pool (which a test can edit) hides the fact that `reload()` is async —
+    // the verdict must come from the fresh read, never the pool.
+    [
+      'judges coverage by a fresh read, not the catalog pool',
+      ({ jobs, catalog }) => {
+        // The pool was hand-updated, but the fresh read says otherwise.
+        catalog.view.pool.set([
+          ...catalog.view.pool(),
+          { symbol: 'NVDA', name: 'NVIDIA', lastHeld: '2026-09-04' },
+        ]);
+        jobs.emit('job-1', { type: 'job.completed' });
+      },
+      {
+        phase: 'failed',
+        reason: 'backfill_empty',
+      },
+    ],
+    [
+      'reports coverage_unknown when the fresh read fails',
+      ({ jobs, freshCoverage }) => {
+        // The lake goes dark between submission and completion; even the pool
+        // being updated cannot make the verdict when no read answers.
+        markCovered(freshCoverage);
+        storageFailure = 'The data plane did not respond.';
+        jobs.emit('job-1', { type: 'job.completed' });
+      },
+      {
+        phase: 'failed',
+        reason: 'coverage_unknown',
+        message: 'The data plane did not respond.',
+      },
+    ],
+  ])('ends failed with the reason named: %s', async (_name, endRun, failed) => {
+    const world = configureService();
+
+    const session = world.service.ensure('NVDA', 'polygon_split_adjusted');
+    await flush();
+    endRun(world);
     const ready = await session.done;
 
     expect(ready).toBe(false);
-    expect(session.state()).toMatchObject({
-      symbol: 'NVDA',
-      phase: 'failed',
-      reason: 'provider_entitlement_error',
-      message: "Polygon 403 for NVDA: your plan doesn't include this data timeframe.",
-    });
+    expect(session.state()).toMatchObject(failed);
   });
 
-  // The worker walks oldest session first and breaks right after the frame
-  // whose failure was fatal, so the *last* failing frame is the cause. An
-  // earlier day can fail benignly — a session before the symbol listed —
-  // and reporting that one hands the operator the wrong reason entirely.
-  it('reports the failure that ended the run, not the first one seen', async () => {
-    const { service, jobs } = configureService();
-
-    const session = service.ensure('NVDA', 'polygon_split_adjusted');
-    await flush();
-    jobs.emit('job-1', dayFrame(1, [failure({ reason: 'provider_no_data', detail: 'No bars for this session.' })]));
-    jobs.emit('job-1', dayFrame(2, [failure({ reason: 'provider_no_data', detail: 'No bars for this session.' })]));
-    jobs.emit(
-      'job-1',
-      dayFrame(3, [
-        failure({ reason: 'provider_rate_limited', detail: 'Polygon 429 for NVDA.' }),
-        failure({ reason: 'run_aborted', artifact_kind: 'time_series_bars', detail: 'stopped early' }),
-      ]),
-    );
-    jobs.emit('job-1', { type: 'job.completed' });
-
-    expect(await session.done).toBe(false);
-    expect(session.state()).toMatchObject({
-      reason: 'provider_rate_limited',
-      message: 'Polygon 429 for NVDA.',
-    });
-  });
-
-  // A Phase 0 metadata failure is day-independent and does not stop Pass 1,
-  // so it says nothing about whether the day's bars landed — the data plane
-  // draws exactly this distinction in `_is_bar_affecting_failure` (#1900).
-  // It is also appended *before* the bar failure, so position alone loses.
-  it('prefers the bar failure over a day-independent metadata failure', async () => {
-    const { service, jobs } = configureService();
-
-    const session = service.ensure('NVDA', 'polygon_split_adjusted');
-    await flush();
-    jobs.emit(
-      'job-1',
-      dayFrame(1, [
-        failure({
-          reason: 'launcher_unreachable',
-          artifact_kind: 'metadata',
-          symbol: null,
-          detail: 'The LEAN launcher did not answer.',
-        }),
-        failure({ reason: 'provider_entitlement_error', detail: 'Polygon 403 for NVDA.' }),
-      ]),
-    );
-    jobs.emit('job-1', { type: 'job.completed' });
-
-    expect(await session.done).toBe(false);
-    expect(session.state()).toMatchObject({
-      reason: 'provider_entitlement_error',
-      message: 'Polygon 403 for NVDA.',
-    });
-  });
-
-  // A data plane too old to publish the floor must refuse loudly. Composing
-  // against a missing field threw a RangeError out of the run, which nothing
-  // caught — leaving the strip spinning on a gate that could never settle.
-  it('refuses loudly when the data plane reports no provider history floor', async () => {
-    const { service, jobs } = configureService({
-      defaults: {
+  it.each<[string, DataLakeRead<BackfillDefaults>, string]>([
+    // A data plane too old to publish the floor must refuse loudly. Composing
+    // against a missing field threw a RangeError out of the run, which nothing
+    // caught — leaving the strip spinning on a gate that could never settle.
+    [
+      'refuses loudly when the data plane reports no provider history floor',
+      {
         kind: 'ok',
         value: { ...DEFAULTS, provider_history_start_ms: undefined as unknown as number },
       },
-    });
+      'backfill_history_floor_missing',
+    ],
+    [
+      'fails when backfill defaults are unreadable',
+      {
+        kind: 'unavailable',
+        message: 'The data plane did not answer.',
+      },
+      'backfill_defaults_unavailable',
+    ],
+  ])('%s, without starting a job', async (_name, defaults, reason) => {
+    const { service, jobs } = configureService({ defaults });
 
     const session = service.ensure('NVDA', 'polygon_split_adjusted');
 
-    expect(await session.done).toBe(false);
+    await expect(session.done).resolves.toBe(false);
     expect(session.state()).toMatchObject({
       phase: 'failed',
-      reason: 'backfill_history_floor_missing',
+      reason,
     });
     expect(jobs.started).toEqual([]);
   });
@@ -459,24 +496,6 @@ describe('EnsureCoverageService', () => {
 
     expect(await session.done).toBe(true);
     expect(session.state()).toBeNull();
-  });
-
-  it('fails when backfill defaults are unreadable, without starting a job', async () => {
-    const { service, jobs } = configureService({
-      defaults: {
-        kind: 'unavailable',
-        message: 'The data plane did not answer.',
-      },
-    });
-
-    const session = service.ensure('NVDA', 'polygon_split_adjusted');
-
-    await expect(session.done).resolves.toBe(false);
-    expect(jobs.started).toEqual([]);
-    expect(session.state()).toMatchObject({
-      phase: 'failed',
-      reason: 'backfill_defaults_unavailable',
-    });
   });
 
   it('cancels the job, disarms the stream, and clears the strip', async () => {
@@ -570,49 +589,6 @@ describe('EnsureCoverageService', () => {
 
     expect(await first.done).toBe(false);
     expect(await second.done).toBe(true);
-  });
-
-  // The reviewer's masked regression: judging membership against the cached
-  // pool (which a test can edit) hides the fact that `reload()` is async —
-  // the verdict must come from the fresh read, never the pool.
-  it('judges coverage by a fresh read, not the catalog pool', async () => {
-    const { service, jobs, catalog } = configureService();
-
-    const session = service.ensure('NVDA', 'polygon_split_adjusted');
-    await flush();
-    // The pool was hand-updated, but the fresh read says otherwise.
-    catalog.view.pool.set([
-      ...catalog.view.pool(),
-      { symbol: 'NVDA', name: 'NVIDIA', lastHeld: '2026-09-04' },
-    ]);
-    jobs.emit('job-1', { type: 'job.completed' });
-    const ready = await session.done;
-
-    expect(ready).toBe(false);
-    expect(session.state()).toMatchObject({
-      phase: 'failed',
-      reason: 'backfill_empty',
-    });
-  });
-
-  it('reports coverage_unknown when the fresh read fails', async () => {
-    const { service, jobs, freshCoverage } = configureService();
-
-    const session = service.ensure('NVDA', 'polygon_split_adjusted');
-    await flush();
-    // The lake goes dark between submission and completion; even the pool
-    // being updated cannot make the verdict when no read answers.
-    markCovered(freshCoverage);
-    storageFailure = 'The data plane did not respond.';
-    jobs.emit('job-1', { type: 'job.completed' });
-    const ready = await session.done;
-
-    expect(ready).toBe(false);
-    expect(session.state()).toMatchObject({
-      phase: 'failed',
-      reason: 'coverage_unknown',
-      message: 'The data plane did not respond.',
-    });
   });
 
   it('keys the in-flight gate by symbol and tree, not symbol alone', async () => {
@@ -723,55 +699,49 @@ describe('fitBackfillWindow', () => {
     return anniversary.toISOString().slice(0, 10);
   };
 
-  it.each(DAYS)('fits an inclusive window under the cap from %s', (todayIso) => {
+  it.each(DAYS)('fits a window the cap and the provider accept, ending on a trading day, from %s', (todayIso) => {
+    const floor = floorFor(todayIso);
+
     const { start, end } = fitBackfillWindow(
       todayIso,
       DEFAULTS.max_trading_range_days,
-      floorFor(todayIso),
+      floor,
     );
+    const weekday = new Date(`${end}T00:00:00Z`).getUTCDay();
 
-    expect(tradingRangeSpanDays(start, end)).toBeLessThanOrEqual(DEFAULTS.max_trading_range_days);
-    expect(tradingRangeRejection(start, end, DEFAULTS.max_trading_range_days)).toBeNull();
+    expect.soft(tradingRangeSpanDays(start, end), 'fits an inclusive window under the cap: span within the cap').toBeLessThanOrEqual(DEFAULTS.max_trading_range_days);
+    expect.soft(tradingRangeRejection(start, end, DEFAULTS.max_trading_range_days), 'fits an inclusive window under the cap: not rejected by the cap').toBeNull();
+    // The regression: clearing the cap is not clearing the provider. `cap - 4`
+    // is exactly five years, and five years to the day is the one day a
+    // five-year plan refuses — so every unheld pick's oldest day drew a 403 and
+    // the globally-fatal abort killed the run before a bar was written.
+    expect.soft(start >= floor, 'never starts before the provider history floor').toBe(true);
+    expect.soft(weekday, 'ends at a trading day, never a weekend: not before Monday').toBeGreaterThanOrEqual(1);
+    expect.soft(weekday, 'ends at a trading day, never a weekend: not after Friday').toBeLessThanOrEqual(5);
   });
 
-  // The regression: clearing the cap is not clearing the provider. `cap - 4`
-  // is exactly five years, and five years to the day is the one day a
-  // five-year plan refuses — so every unheld pick's oldest day drew a 403
-  // and the globally-fatal abort killed the run before a bar was written.
-  it.each(DAYS)('never starts before the provider history floor from %s', (todayIso) => {
-    const floor = floorFor(todayIso);
+  it('places the start by the floor and the cap: clear of the refused day, on a trading day, cap-derived when the floor is older', () => {
+    // The field report, to the day: on 2026-09-21 the cap-derived start was
+    // 2021-09-21, which Polygon answered 403 NOT_AUTHORIZED while serving the
+    // day after it.
+    const refused = fitBackfillWindow('2026-09-21', 1830, '2021-09-23');
 
-    const { start } = fitBackfillWindow(todayIso, DEFAULTS.max_trading_range_days, floor);
+    expect.soft(refused.start, 'clears the day the provider refused in the reported failure: starts on the floor').toBe('2021-09-23');
+    expect.soft(refused.start > '2021-09-21', 'clears the day the provider refused in the reported failure: after the refused day').toBe(true);
 
-    expect(start >= floor).toBe(true);
-  });
-
-  // The field report, to the day: on 2026-09-21 the cap-derived start was
-  // 2021-09-21, which Polygon answered 403 NOT_AUTHORIZED while serving the
-  // day after it.
-  it('clears the day the provider refused in the reported failure', () => {
-    const { start } = fitBackfillWindow('2026-09-21', 1830, '2021-09-23');
-
-    expect(start).toBe('2021-09-23');
-    expect(start > '2021-09-21').toBe(true);
-  });
-
-  it('starts on a trading day even when the floor lands on a weekend', () => {
     // 2021-09-25 is a Saturday: walking it back to Friday would step
     // straight back outside the floor it exists to respect.
-    const { start } = fitBackfillWindow(
+    const weekendFloor = fitBackfillWindow(
       '2026-09-21',
       DEFAULTS.max_trading_range_days,
       '2021-09-25',
     );
 
-    expect(start).toBe('2021-09-27');
-  });
+    expect.soft(weekendFloor.start, 'starts on a trading day even when the floor lands on a weekend').toBe('2021-09-27');
 
-  it('keeps the cap-derived start when the floor is older than the cap allows', () => {
     // A floor this wide cannot bind, so the cap decides — and the resulting
     // window must be the widest the cap permits, not merely "not rejected".
-    const { start, end } = fitBackfillWindow(
+    const wideFloor = fitBackfillWindow(
       '2026-09-21',
       DEFAULTS.max_trading_range_days,
       '2000-01-03',
@@ -781,9 +751,9 @@ describe('fitBackfillWindow', () => {
     // with no walk-back: the widest start the cap permits, 1827 inclusive
     // days. This is also the exact day Polygon refuses — which is why a
     // real floor must always win over it.
-    expect(start).toBe('2021-09-21');
-    expect(tradingRangeSpanDays(start, end)).toBe(1827);
-    expect(tradingRangeRejection(start, end, DEFAULTS.max_trading_range_days)).toBeNull();
+    expect.soft(wideFloor.start, 'keeps the cap-derived start when the floor is older than the cap allows: the start').toBe('2021-09-21');
+    expect.soft(tradingRangeSpanDays(wideFloor.start, wideFloor.end), 'keeps the cap-derived start when the floor is older than the cap allows: the widest span the cap permits').toBe(1827);
+    expect.soft(tradingRangeRejection(wideFloor.start, wideFloor.end, DEFAULTS.max_trading_range_days), 'keeps the cap-derived start when the floor is older than the cap allows: not rejected by the cap').toBeNull();
   });
 
   // The start is placed four days inside the cap precisely so no corrective
@@ -797,19 +767,6 @@ describe('fitBackfillWindow', () => {
         const { start, end } = fitBackfillWindow(todayIso, cap, '2000-01-03');
         expect(tradingRangeSpanDays(start, end)).toBeLessThan(cap);
       }
-    }
-  });
-
-  it('ends at a trading day, never a weekend', () => {
-    for (const todayIso of DAYS) {
-      const { end } = fitBackfillWindow(
-        todayIso,
-        DEFAULTS.max_trading_range_days,
-        floorFor(todayIso),
-      );
-      const weekday = new Date(`${end}T00:00:00Z`).getUTCDay();
-      expect(weekday).toBeGreaterThanOrEqual(1);
-      expect(weekday).toBeLessThanOrEqual(5);
     }
   });
 });

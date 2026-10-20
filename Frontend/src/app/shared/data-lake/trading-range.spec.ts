@@ -35,19 +35,14 @@ describe('tradingRangeSpanDays', () => {
     ['2026-05-01', '2026-05-31', 31],
     ['2026-01-01', '2026-12-31', 365],
     ['2024-01-01', '2024-12-31', 366],
+    // Across a DST boundary: 2026-03-08 is the US spring-forward. A local-midnight
+    // subtraction would come out at 23 hours and round to the wrong day count.
+    ['2026-03-07', '2026-03-09', 3],
+    ['2026-10-31', '2026-11-02', 3],
+    // An inverted window is a non-positive span.
+    ['2026-05-21', '2026-05-20', 0],
   ])('spans %s → %s as %i days', (start, end, expected) => {
     expect(tradingRangeSpanDays(start, end)).toBe(expected);
-  });
-
-  it('counts calendar days across a DST boundary without losing an hour', () => {
-    // 2026-03-08 is the US spring-forward. A local-midnight subtraction
-    // would come out at 23 hours and round to the wrong day count.
-    expect(tradingRangeSpanDays('2026-03-07', '2026-03-09')).toBe(3);
-    expect(tradingRangeSpanDays('2026-10-31', '2026-11-02')).toBe(3);
-  });
-
-  it('reports an inverted window as a non-positive span', () => {
-    expect(tradingRangeSpanDays('2026-05-21', '2026-05-20')).toBe(0);
   });
 
   it.each(['', '2026-5-20', '20260520', 'yesterday'])(
@@ -80,18 +75,14 @@ describe('tradingRangeRejection', () => {
     );
   });
 
-  it('names an inverted window before it names the cap', () => {
-    expect(tradingRangeRejection('2026-05-21', '2026-05-20', 1830)).toBe(
-      'The start date is after the end date.',
-    );
-  });
-
   it.each([
-    ['', '2026-05-20'],
-    ['2026-05-20', ''],
-    ['not-a-date', '2026-05-20'],
-  ])('asks for a date range when given (%s, %s)', (start, end) => {
-    expect(tradingRangeRejection(start, end, 1830)).toBe('Pick a date range.');
+    // An inverted window is named before the cap is.
+    ['2026-05-21', '2026-05-20', 'The start date is after the end date.'],
+    ['', '2026-05-20', 'Pick a date range.'],
+    ['2026-05-20', '', 'Pick a date range.'],
+    ['not-a-date', '2026-05-20', 'Pick a date range.'],
+  ])('refuses (%s, %s) with: %s', (start, end, expected) => {
+    expect(tradingRangeRejection(start, end, 1830)).toBe(expected);
   });
 
   it('honours a cap the data plane lowered', () => {
@@ -119,16 +110,14 @@ describe('tradingDateToMs', () => {
     }
   });
 
-  it('does not use UTC midnight, which would shift the date back a day', () => {
+  it('does not use UTC midnight, and returns null for anything that is not a YYYY-MM-DD date', () => {
     // The bug this anchor exists to avoid: midnight UTC on 2026-01-15 is
     // 19:00 ET on 2026-01-14, so every window would silently start a day early.
     const ms = tradingDateToMs('2026-01-15') as number;
-    expect(ms).toBeGreaterThan(Date.UTC(2026, 0, 15));
-  });
+    expect.soft(ms, 'does not use UTC midnight, which would shift the date back a day').toBeGreaterThan(Date.UTC(2026, 0, 15));
 
-  it('returns null for anything that is not a YYYY-MM-DD date', () => {
-    expect(tradingDateToMs('')).toBeNull();
-    expect(tradingDateToMs('not-a-date')).toBeNull();
-    expect(tradingDateToMs('2026-5-1')).toBeNull();
+    expect.soft(tradingDateToMs(''), 'returns null for anything that is not a YYYY-MM-DD date: empty').toBeNull();
+    expect.soft(tradingDateToMs('not-a-date'), 'returns null for anything that is not a YYYY-MM-DD date: text').toBeNull();
+    expect.soft(tradingDateToMs('2026-5-1'), 'returns null for anything that is not a YYYY-MM-DD date: unpadded').toBeNull();
   });
 });

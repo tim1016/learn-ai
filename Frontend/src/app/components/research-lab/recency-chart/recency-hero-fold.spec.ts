@@ -8,16 +8,12 @@ function trade(symbol: string, strategyKey: string, paramsHash: string) {
 }
 
 describe("isHeroTrade", () => {
-  it("is true for a trade matching the hero's symbol, strategy, and paramsHash", () => {
-    expect(isHeroTrade(trade("SPY", "ema_crossover_2_bps", "hero-hash"), heroes)).toBe(true);
-  });
-
-  it("is false for a different combo of the same strategy and symbol", () => {
-    expect(isHeroTrade(trade("SPY", "ema_crossover_2_bps", "other-hash"), heroes)).toBe(false);
-  });
-
-  it("is false for a different symbol entirely", () => {
-    expect(isHeroTrade(trade("AAPL", "ema_crossover_2_bps", "hero-hash"), heroes)).toBe(false);
+  it.each([
+    [true, "a trade matching the hero's symbol, strategy, and paramsHash", "SPY", "hero-hash"],
+    [false, "a different combo of the same strategy and symbol", "SPY", "other-hash"],
+    [false, "a different symbol entirely", "AAPL", "hero-hash"],
+  ])("is %s for %s", (want, _kind, symbol, paramsHash) => {
+    expect(isHeroTrade(trade(symbol, "ema_crossover_2_bps", paramsHash), heroes)).toBe(want);
   });
 });
 
@@ -29,25 +25,16 @@ describe("groupKey", () => {
 });
 
 describe("filterToHeroAndExpanded", () => {
-  it("keeps hero trades by default even when nothing is expanded", () => {
-    const trades = [trade("SPY", "ema_crossover_2_bps", "hero-hash")];
-    expect(filterToHeroAndExpanded(trades, heroes, new Set())).toEqual(trades);
-  });
+  const heroTrades = [trade("SPY", "ema_crossover_2_bps", "hero-hash")];
+  const otherSpyTrades = [trade("SPY", "ema_crossover_2_bps", "other-hash")];
+  const otherAaplTrades = [trade("AAPL", "ema_crossover_2_bps", "other-hash")];
 
-  it("hides a non-hero combo when its group is not expanded", () => {
-    const trades = [trade("SPY", "ema_crossover_2_bps", "other-hash")];
-    expect(filterToHeroAndExpanded(trades, heroes, new Set())).toEqual([]);
-  });
-
-  it("shows a non-hero combo once its (symbol, strategy) group is expanded", () => {
-    const trades = [trade("SPY", "ema_crossover_2_bps", "other-hash")];
-    const expanded = new Set([groupKey("SPY", "ema_crossover_2_bps")]);
-    expect(filterToHeroAndExpanded(trades, heroes, expanded)).toEqual(trades);
-  });
-
-  it("expanding one group does not reveal a different group's non-hero combos", () => {
-    const trades = [trade("AAPL", "ema_crossover_2_bps", "other-hash")];
-    const expanded = new Set([groupKey("SPY", "ema_crossover_2_bps")]);
-    expect(filterToHeroAndExpanded(trades, heroes, expanded)).toEqual([]);
+  it.each([
+    ["keeps hero trades by default even when nothing is expanded", heroTrades, new Set<string>(), heroTrades],
+    ["hides a non-hero combo when its group is not expanded", otherSpyTrades, new Set<string>(), []],
+    ["shows a non-hero combo once its (symbol, strategy) group is expanded", otherSpyTrades, new Set([groupKey("SPY", "ema_crossover_2_bps")]), otherSpyTrades],
+    ["expanding one group does not reveal a different group's non-hero combos", otherAaplTrades, new Set([groupKey("SPY", "ema_crossover_2_bps")]), []],
+  ])("%s", (_name, trades, expanded, want) => {
+    expect(filterToHeroAndExpanded(trades, heroes, expanded)).toEqual(want);
   });
 });

@@ -293,12 +293,12 @@ async function expectAxeClean(): Promise<void> {
 }
 
 describe("This bot's money", () => {
-  it('shows a running bot’s statement verbatim, in order, with Balance as its total', async () => {
+  it('shows a running bot’s statement verbatim and its slice as Python wrote it, and no exit estimate without an option position', async () => {
     const { container } = await renderCard(vi.fn().mockResolvedValue(RUNNING));
 
     await screen.findByText('Holding its position');
-    expect(screen.getByText('Its next entry waits until this position is sold.')).toBeTruthy();
-    expect(statementRows()).toEqual([
+    expect.soft(screen.getByText('Its next entry waits until this position is sold.'), 'running statement: shows the detail').toBeTruthy();
+    expect.soft(statementRows(), 'shows a running bot’s statement verbatim, in order, with Balance as its total').toEqual([
       ['Budget set aside at deploy', '$1,000.00', false],
       ['Realized gains and losses', '$12.40', false],
       ['Fees', '-$0.03', false],
@@ -308,36 +308,33 @@ describe("This bot's money", () => {
       ['Free to trade', '$247.66', false],
       ['Short of its next entry', '$0.00', false],
     ]);
-    expect(screen.getByText('The budget limits new entries. Market fills and losses can go past it.')).toBeTruthy();
-    expect(container.querySelector('app-timestamp-display')).not.toBeNull();
-    expect(screen.queryByText(/Budget (and|or) account risk/)).toBeNull();
-    expect(screen.queryByText(/Stopped does not mean flat/)).toBeNull();
-    expect(screen.queryByText('Paper')).toBeNull();
-  });
-
-  it('draws the running bot’s slice exactly as Python wrote it — Home’s slice, shaded by its parts', async () => {
-    const { container } = await renderCard(vi.fn().mockResolvedValue(RUNNING));
-    await screen.findByText('Holding its position');
+    expect.soft(screen.getByText('The budget limits new entries. Market fills and losses can go past it.'), 'running statement: shows the note').toBeTruthy();
+    expect.soft(container.querySelector('app-timestamp-display'), 'running statement: shows when it was read').not.toBeNull();
+    expect.soft(screen.queryByText(/Budget (and|or) account risk/), 'running statement: no budget-or-account-risk line').toBeNull();
+    expect.soft(screen.queryByText(/Stopped does not mean flat/), 'running statement: no stopped-is-not-flat line').toBeNull();
+    expect.soft(screen.queryByText('Paper'), 'running statement: no Paper word').toBeNull();
 
     const drawn = slices(container);
-    expect(drawn.map((slice) => [slice.className, slice.style.flexGrow])).toEqual([
+    expect.soft(drawn.map((slice) => [slice.className, slice.style.flexGrow]), 'draws the running bot’s slice exactly as Python wrote it: Home’s slice').toEqual([
       ['money-bar__slice money-bar__slice--bot', '10000'],
     ]);
-    expect(parts(container)).toEqual([
+    expect.soft(parts(container), 'draws the running bot’s slice shaded by its parts').toEqual([
       ['money-bar__part money-bar__part--shares', '7554'],
       ['money-bar__part money-bar__part--pending', '0'],
       ['money-bar__part money-bar__part--free', '2446'],
     ]);
     const legend = screen.getByRole('list', { name: "This bot's slice" });
-    expect(within(legend).getByRole('listitem').textContent?.replace(/\s+/g, ' ').trim())
+    expect.soft(within(legend).getByRole('listitem').textContent?.replace(/\s+/g, ' ').trim(), 'running bot’s slice legend as Python wrote it')
       .toBe('spy-ema-a $1,012.37 in shares $764.71 · in entry orders $0.00 · free $247.66');
+
+    expect.soft(container.querySelector('app-exit-estimate'), 'shows no exit estimate for a bot that holds no option position').toBeNull();
   });
 
-  it('shows a stopped bot’s released and still-held money adding up to its balance, with Home’s striped slice', async () => {
+  it('shows a stopped bot’s released and still-held money adding up to its balance, with Home’s striped slice and no funding block', async () => {
     const { container } = await renderCard(vi.fn().mockResolvedValue(STOPPED));
 
     await screen.findByText('Stopped · still holds shares');
-    expect(statementRows()).toEqual([
+    expect.soft(statementRows(), 'stopped statement: released and still-held money add up to its balance').toEqual([
       ['Budget set aside at deploy', '$1,000.00', false],
       ['Realized gains and losses', '-$10.00', false],
       ['Fees', '-$0.03', false],
@@ -346,13 +343,15 @@ describe("This bot's money", () => {
       ['Still in shares, at cost', '$670.43', false],
       ['Still in entry orders', '$0.00', false],
     ]);
-    expect(slices(container).map((slice) => [slice.className, slice.style.flexGrow])).toEqual([
+    expect.soft(slices(container).map((slice) => [slice.className, slice.style.flexGrow]), 'stopped bot: Home’s striped slice').toEqual([
       ['money-bar__slice money-bar__slice--stopped', '10000'],
     ]);
-    expect(parts(container)).toEqual([]);
+    expect.soft(parts(container), 'stopped bot: a slice with no parts').toEqual([]);
     const legend = screen.getByRole('list', { name: "This bot's slice" });
-    expect(within(legend).getByRole('listitem').textContent?.replace(/\s+/g, ' ').trim())
+    expect.soft(within(legend).getByRole('listitem').textContent?.replace(/\s+/g, ' ').trim(), 'stopped bot: slice legend')
       .toBe('held by stopped bot spy-ema-b $670.43 released $319.54 · still claimed $0.00');
+
+    expect.soft(container.querySelector('app-funding-answer'), 'shows no funding block for a bot whose view carries none').toBeNull();
   });
 
   it('names what a stopped bot spent beyond its balance, only when Python says it did', async () => {
@@ -450,13 +449,6 @@ describe("This bot's money", () => {
     expect(screen.queryByText(/Short of this entry/)).toBeNull();
   });
 
-  it('shows no funding block for a bot whose view carries none', async () => {
-    const { container } = await renderCard(vi.fn().mockResolvedValue(STOPPED));
-
-    await screen.findByText('Stopped · still holds shares');
-    expect(container.querySelector('app-funding-answer')).toBeNull();
-  });
-
   it('shows what getting out costs while the bot holds an option position, after its funding', async () => {
     const view: DeploymentBudgetView = { ...RUNNING, funding: FUNDING_UNPRICED, exit_estimate: EXIT_ESTIMATE };
     const { container } = await renderCard(vi.fn().mockResolvedValue(view));
@@ -467,13 +459,6 @@ describe("This bot's money", () => {
     expect(card?.textContent).toContain('-$408.00');
     expect(card?.textContent).toContain("Alpaca's own expiry-day cutoff has not been verified.");
     expect(container.querySelector('app-funding-answer + app-exit-estimate')).not.toBeNull();
-  });
-
-  it('shows no exit estimate for a bot that holds no option position', async () => {
-    const { container } = await renderCard(vi.fn().mockResolvedValue(RUNNING));
-
-    await screen.findByText('Holding its position');
-    expect(container.querySelector('app-exit-estimate')).toBeNull();
   });
 
   it('draws no slice for a finished bot, which holds no money', async () => {

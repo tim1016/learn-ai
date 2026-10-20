@@ -18,13 +18,20 @@ async function renderPanel(chance: FinalChance, candidate: CandidateRef = CANDID
 }
 
 describe('GoldenSearchChanceFinalPanelComponent', () => {
-  it('shows the stored comparison sentence, both objective bands, the independent profit band and the carry-over with its curve', async () => {
+  it('renders a measured final chance: the stored comparison, bands and carry-over, the resampled window with its caveats, and the All-period fit’s own direction', async () => {
     await renderPanel(finalChance());
-    expect(screen.getByText(/at least as good as the current settings’ in 96\.2% of paths/i)).toBeTruthy();
-    expect(screen.getByRole('img', { name: /final objective uncertainty/i })).toBeTruthy();
-    expect(screen.getByRole('img', { name: /final profit uncertainty/i })).toBeTruthy();
-    expect(screen.getByRole('img', { name: /result among its rehearsals/i })).toBeTruthy();
-    expect(screen.getByText(/positive in 97\.4% of 10,000 resampled final paths/i)).toBeTruthy();
+    expect.soft(screen.getByText(/at least as good as the current settings’ in 96\.2% of paths/i), 'shows the stored comparison sentence').toBeTruthy();
+    expect.soft(screen.getByRole('img', { name: /final objective uncertainty/i }), 'shows the objective band').toBeTruthy();
+    expect.soft(screen.getByRole('img', { name: /final profit uncertainty/i }), 'shows the independent profit band').toBeTruthy();
+    expect.soft(screen.getByRole('img', { name: /result among its rehearsals/i }), 'shows the carry-over with its curve').toBeTruthy();
+    expect.soft(screen.getByText(/positive in 97\.4% of 10,000 resampled final paths/i), 'shows the money-support sentence').toBeTruthy();
+    expect.soft(screen.getByText(/paired resamples of these final sessions/i), 'names the window it resampled').toBeTruthy();
+    expect.soft(screen.getByText(/frozen "meets the rules" verdict above is\s+separate from this model support/i), 'keeps the frozen-verdict separation').toBeTruthy();
+    expect.soft(screen.getAllByText(/chosen after the final test/i).length, 'carries the two-selection caveat').toBeGreaterThan(0);
+    expect.soft(screen.queryByText(/selected on these same development sessions/i), 'never the development note').toBeNull();
+    expect.soft(screen.getByText(/All-period fit was at least as good as Recent fit in 68\.4% of paths/i), 'shows the All-period fit its own direction of the shared draw (#3029)').toBeTruthy();
+    expect.soft(screen.getByText(/not adjusted for that choice/i), 'says the direction is unadjusted for that choice (#3029)').toBeTruthy();
+    expect.soft(screen.queryByText(/Recent fit was at least as good as/i), 'never the other fit’s direction (#3029)').toBeNull();
   });
 
   it('shows measured profit when the incumbent comparison is unavailable, on its own (#3026)', async () => {
@@ -72,14 +79,6 @@ describe('GoldenSearchChanceFinalPanelComponent', () => {
     expect(screen.queryByRole('img', { name: /final profit uncertainty/i })).toBeNull();
   });
 
-  it('names the window it resampled, keeps the frozen-verdict separation and carries the two-selection caveat, never the development note', async () => {
-    await renderPanel(finalChance());
-    expect(screen.getByText(/paired resamples of these final sessions/i)).toBeTruthy();
-    expect(screen.getByText(/frozen "meets the rules" verdict above is\s+separate from this model support/i)).toBeTruthy();
-    expect(screen.getAllByText(/chosen after the final test/i).length).toBeGreaterThan(0);
-    expect(screen.queryByText(/selected on these same development sessions/i)).toBeNull();
-  });
-
   it('announces a failed fit-to-fit as an alert instead of rendering nothing', async () => {
     await renderPanel(
       finalChance({
@@ -92,13 +91,6 @@ describe('GoldenSearchChanceFinalPanelComponent', () => {
     );
     const alert = screen.getByRole('alert');
     expect(alert.textContent).toContain('could not be computed');
-  });
-
-  it('shows the All-period fit its own direction of the shared draw, never the other fit’s, unadjusted for that choice (#3029)', async () => {
-    await renderPanel(finalChance(), CANDIDATE);
-    expect(screen.getByText(/All-period fit was at least as good as Recent fit in 68\.4% of paths/i)).toBeTruthy();
-    expect(screen.getByText(/not adjusted for that choice/i)).toBeTruthy();
-    expect(screen.queryByText(/Recent fit was at least as good as/i)).toBeNull();
   });
 
   it('shows the Recent fit its own direction when it is the fit the page is about (#3029)', async () => {

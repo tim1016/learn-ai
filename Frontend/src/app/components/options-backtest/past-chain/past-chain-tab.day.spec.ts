@@ -41,40 +41,28 @@ describe('the Past chain tab, started on a date', () => {
 });
 
 describe('the listing of a picked date', () => {
-  it('is read for the underlying and the New York midnight of the date', async () => {
+  it('is read for the underlying and the New York midnight of the date, and lists every expiry in the order served, each with its tag and Expires today only where the expiry is the trading date', async () => {
     const service = fakeChainService(vi);
     await renderChainTab(service);
 
     pickDate(TRADING_DATE);
 
     await screen.findByRole('table', { name: /Every expiry the listing held/ });
-    expect(service.day).toHaveBeenCalledTimes(1);
-    expect(service.day.mock.calls[0]?.[0]).toMatchObject({ underlying: 'SPY', tradingDateMs: TRADING_DATE_MS });
-  });
-
-  it('lists every expiry in the order served, each date as the New York date', async () => {
-    await renderChainTab(fakeChainService(vi));
-
-    pickDate(TRADING_DATE);
-
-    await screen.findByRole('table', { name: /Every expiry the listing held/ });
+    expect.soft(service.day, 'is read once for the picked date').toHaveBeenCalledTimes(1);
+    expect.soft(service.day.mock.calls[0]?.[0], 'is read for the underlying and the New York midnight of the date').toMatchObject({ underlying: 'SPY', tradingDateMs: TRADING_DATE_MS });
     const dates = within(expiriesTable())
       .getAllByRole('rowheader')
       .map((header) => reads(header));
-    expect(dates).toEqual(['2026-10-09', '2026-10-16', '2026-10-30']);
+    expect.soft(dates, 'lists every expiry in the order served, each date as the New York date').toEqual(['2026-10-09', '2026-10-16', '2026-10-30']);
     for (const stamp of expiriesTable().querySelectorAll('app-timestamp-display')) {
-      expect(stamp.getAttribute('data-timestamp-mode')).toBe('date-et');
+      expect.soft(stamp.getAttribute('data-timestamp-mode'), 'draws each expiry date in date-et mode').toBe('date-et');
     }
-  });
-
-  it('puts the tag of each expiry in a pill that carries its word', async () => {
-    await renderChainTab(fakeChainService(vi));
-    pickDate(TRADING_DATE);
-    await screen.findByRole('table', { name: /Every expiry the listing held/ });
-
-    expect(reads(expiryRow('2026-10-16'))).toContain('Monthly');
-    expect(reads(expiryRow('2026-10-30'))).toContain('Weekly');
-    expect(reads(expiryRow('2026-10-09'))).toContain('Daily');
+    expect.soft(reads(expiryRow('2026-10-16')), 'puts the tag of the 2026-10-16 expiry in a pill that carries its word').toContain('Monthly');
+    expect.soft(reads(expiryRow('2026-10-30')), 'puts the tag of the 2026-10-30 expiry in a pill that carries its word').toContain('Weekly');
+    expect.soft(reads(expiryRow('2026-10-09')), 'puts the tag of the 2026-10-09 expiry in a pill that carries its word').toContain('Daily');
+    expect.soft(reads(expiryRow('2026-10-09')), 'shows Expires today on the expiry that is the trading date').toContain('Expires today');
+    expect.soft(reads(expiryRow('2026-10-16')), 'shows no Expires today on the 2026-10-16 expiry').not.toContain('Expires today');
+    expect.soft(reads(expiryRow('2026-10-30')), 'shows no Expires today on the 2026-10-30 expiry').not.toContain('Expires today');
   });
 
   it('says Quarterly and Unknown in words too, and shows the evidence for the tag as served', async () => {
@@ -96,16 +84,6 @@ describe('the listing of a picked date', () => {
     expect(reads(expiryRow('2026-12-18'))).toContain('the last session of its quarter');
     expect(reads(expiryRow('2026-10-30'))).toContain('Unknown');
     expect(reads(expiryRow('2026-10-30'))).toContain('the trading date is before 2025-01-01, from when expiries are tagged');
-  });
-
-  it('shows Expires today apart from the series: only the expiry that is the trading date has it', async () => {
-    await renderChainTab(fakeChainService(vi));
-    pickDate(TRADING_DATE);
-    await screen.findByRole('table', { name: /Every expiry the listing held/ });
-
-    expect(reads(expiryRow('2026-10-09'))).toContain('Expires today');
-    expect(reads(expiryRow('2026-10-16'))).not.toContain('Expires today');
-    expect(reads(expiryRow('2026-10-30'))).not.toContain('Expires today');
   });
 
   it('keeps a Monthly on its last day a Monthly that expires today, and not a Daily', async () => {

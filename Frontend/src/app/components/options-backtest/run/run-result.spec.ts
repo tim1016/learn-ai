@@ -53,13 +53,16 @@ describe('the banner', () => {
 });
 
 describe('the headline figures', () => {
-  it('shows net profit, ending cash, fees and slippage paid exactly as the server wrote them', async () => {
+  it('shows net profit, ending cash, fees and slippage paid exactly as the server wrote them, the trade count, and what each win rate counts', async () => {
     await renderResult();
 
-    expect(reads(tile('Net profit'))).toBe('Net profit $1,234.56 After modeled costs');
-    expect(reads(tile('Ending cash'))).toBe('Ending cash $11,234.56');
-    expect(reads(tile('Total fees'))).toBe('Total fees $46.80');
-    expect(reads(tile('Slippage paid'))).toBe('Slippage paid $88.12');
+    expect.soft(reads(tile('Net profit')), 'shows net profit exactly as the server wrote it').toBe('Net profit $1,234.56 After modeled costs');
+    expect.soft(reads(tile('Ending cash')), 'shows ending cash exactly as the server wrote it').toBe('Ending cash $11,234.56');
+    expect.soft(reads(tile('Total fees')), 'shows fees exactly as the server wrote them').toBe('Total fees $46.80');
+    expect.soft(reads(tile('Slippage paid')), 'shows slippage paid exactly as the server wrote it').toBe('Slippage paid $88.12');
+    expect.soft(reads(tile('Trades')), 'shows the trade count with its won, lost and break-even trades').toBe('Trades 12 won 7 · lost 4 · break-even 1');
+    expect.soft(reads(tile(/^Trade win rate/)), 'names what the trade win rate counts, shows the server’s rounded figure marked as rounded, and the two whole numbers beside it').toBe('Trade win rate 58.3% · 0.583333 rounded to 6 places · 7 of 12');
+    expect.soft(reads(tile(/^Daily win rate/)), 'names what the daily win rate counts, shows the server’s rounded figure marked as rounded, and the two whole numbers beside it').toBe('Daily win rate 62.5% · 0.625000 rounded to 6 places · 5 of 8');
   });
 
   it('passes a dollar string through without turning it into a number: the digits a float cannot hold survive', async () => {
@@ -76,19 +79,6 @@ describe('the headline figures', () => {
     await renderResult({}, { net_profit_usd: '123.4567' });
 
     expect(reads(tile('Net profit'))).toBe('Net profit 123.4567 After modeled costs');
-  });
-
-  it('shows the trade count with its won, lost and break-even trades', async () => {
-    await renderResult();
-
-    expect(reads(tile('Trades'))).toBe('Trades 12 won 7 · lost 4 · break-even 1');
-  });
-
-  it('names what each win rate counts, shows the server’s rounded figure marked as rounded, and the two whole numbers beside it', async () => {
-    await renderResult();
-
-    expect(reads(tile(/^Trade win rate/))).toBe('Trade win rate 58.3% · 0.583333 rounded to 6 places · 7 of 12');
-    expect(reads(tile(/^Daily win rate/))).toBe('Daily win rate 62.5% · 0.625000 rounded to 6 places · 5 of 8');
   });
 
   it('shows the rounded rate the server gave, and works out none: an inconsistent figure is shown as it came', async () => {
@@ -121,20 +111,15 @@ describe('the largest falls', () => {
     await renderResult();
 
     const section = screen.getByRole('region', { name: 'Maximum drawdown' });
-    expect(within(section).getByText('Both are measured at the end of each session, not minute by minute.')).toBeTruthy();
+    expect.soft(within(section).getByText('Both are measured at the end of each session, not minute by minute.'), 'says they are measured at session ends').toBeTruthy();
     const [dollars, fraction] = [...section.querySelectorAll('.fall')];
-    expect(reads(dollars)).toBe(
+    expect.soft(reads(dollars), 'shows the largest fall in dollars with its peak and trough and their dates').toBe(
       'Largest fall in dollars $412.30 As a fraction of the peak: 0.037826 (rounded to 6 places) Peak equity: $10,900.00 at the end of 2026-09-15 Trough equity: $10,487.70 at the end of 2026-09-17',
     );
-    expect(reads(fraction)).toBe(
+    expect.soft(reads(fraction), 'shows the largest fall as a fraction with its peak and trough and their dates').toBe(
       'Largest fall as a fraction of the peak $400.00 As a fraction of the peak: 0.040000 (rounded to 6 places) Peak equity: $10,000.00 before the first session Trough equity: $9,600.00 at the end of 2026-09-14',
     );
-  });
-
-  it('draws the peak and trough dates in New York dates', async () => {
-    await renderResult();
-
-    expectTradingDatesInNewYork(screen.getByRole('region', { name: 'Maximum drawdown' }));
+    expectTradingDatesInNewYork(section);
   });
 
   it('says equity never fell when the server has no fall to report', async () => {
@@ -145,27 +130,24 @@ describe('the largest falls', () => {
 });
 
 describe('the sessions and what did not trade', () => {
-  it('counts the sessions as the server does, and the skipped ones by reason, zeros included', async () => {
+  it('counts the sessions as the server does, and the skipped ones by reason, zeros included, and counts what did not trade and the picks refused by reason', async () => {
     await renderResult();
 
     const section = screen.getByRole('region', { name: 'Sessions' });
     const count = (label: string) => (within(section).getByText(label, { selector: 'dt' }).nextElementSibling as HTMLElement).textContent;
-    expect(['Tested', 'Traded', 'No trade', 'Skipped', 'Incomplete', 'Profitable', 'Losing', 'Break-even'].map(count)).toEqual(['10', '8', '1', '1', '1', '5', '2', '1']);
-    expect(within(section).getByText('Window Does Not Fit: 1')).toBeTruthy();
-    expect(within(section).getByText('Underlying Did Not Trade: 0')).toBeTruthy();
-  });
+    expect.soft(['Tested', 'Traded', 'No trade', 'Skipped', 'Incomplete', 'Profitable', 'Losing', 'Break-even'].map(count), 'counts the sessions as the server does').toEqual(['10', '8', '1', '1', '1', '5', '2', '1']);
+    expect.soft(within(section).getByText('Window Does Not Fit: 1'), 'counts the skipped sessions by reason: window does not fit').toBeTruthy();
+    expect.soft(within(section).getByText('Underlying Did Not Trade: 0'), 'counts the skipped sessions by reason, zeros included: underlying did not trade').toBeTruthy();
 
-  it('counts what did not trade, each named for what it counts, and the picks refused by reason', async () => {
-    await renderResult();
-
-    const section = screen.getByRole('region', { name: 'What did not trade' });
-    const count = (label: string) => (within(section).getByText(label, { selector: 'dt' }).nextElementSibling as HTMLElement).textContent;
-    expect(
-      ['Sessions without momentum', 'Entries refused for cash', 'Re-entries blocked by the cutoff', 'Entries dropped', 'Legs without a starting price', 'Re-entries lost'].map(count),
+    const notTraded = screen.getByRole('region', { name: 'What did not trade' });
+    const notTradedCount = (label: string) => (within(notTraded).getByText(label, { selector: 'dt' }).nextElementSibling as HTMLElement).textContent;
+    expect.soft(
+      ['Sessions without momentum', 'Entries refused for cash', 'Re-entries blocked by the cutoff', 'Entries dropped', 'Legs without a starting price', 'Re-entries lost'].map(notTradedCount),
+      'counts what did not trade, each named for what it counts',
     ).toEqual(['3', '2', '1', '4', '5', '6']);
-    expect(within(section).getByText('Chain Incomplete: 1')).toBeTruthy();
-    expect(within(section).getByText('Strike Not Listed: 2')).toBeTruthy();
-    expect(within(section).getByText('Also counted under the causes above; not to be added to them.')).toBeTruthy();
+    expect.soft(within(notTraded).getByText('Chain Incomplete: 1'), 'counts the picks refused by reason: chain incomplete').toBeTruthy();
+    expect.soft(within(notTraded).getByText('Strike Not Listed: 2'), 'counts the picks refused by reason: strike not listed').toBeTruthy();
+    expect.soft(within(notTraded).getByText('Also counted under the causes above; not to be added to them.'), 'says the picks are also counted under the causes above').toBeTruthy();
   });
 
   const refusals = (section: HTMLElement) =>
@@ -243,10 +225,14 @@ describe('the three statements of a result that sells (#3109)', () => {
 describe('the slippage tolerance', () => {
   const sentence = () => screen.getByRole('region', { name: 'Slippage tolerance' }).querySelector('.sentence')?.textContent;
 
-  it('says how far the result survives and where it first loses', async () => {
+  it('says how far the result survives and where it first loses, and shows the ladder with the setup’s own row marked', async () => {
     await renderResult();
 
-    expect(sentence()).toBe('The result survives up to 0.3% slippage. It is first unprofitable at 0.6%.');
+    expect.soft(sentence(), 'says how far the result survives and where it first loses').toBe('The result survives up to 0.3% slippage. It is first unprofitable at 0.6%.');
+    const rows = [...screen.getByRole('table', { name: 'The run replayed at each slippage' }).querySelectorAll('tbody tr')].map((row) => reads(row));
+    expect.soft(rows, 'shows the ladder, each figure as the server wrote it').toEqual(['0.0 $1,500.00 12 8 6', '0.3 this setup $1,234.56 12 8 5', '0.6 -$12.34 11 8 3']);
+    const own = screen.getByText('this setup').closest('tr');
+    expect.soft(own?.classList.contains('own'), 'marks the setup’s own row').toBe(true);
   });
 
   it('says it survives the whole ladder', async () => {
@@ -259,15 +245,6 @@ describe('the slippage tolerance', () => {
     await renderResult({ slippage_tolerance: { highest_profitable_percent: null, first_unprofitable_percent: null, nothing_traded: true } });
 
     expect(sentence()).toBe('Nothing traded, so there is no slippage tolerance to read.');
-  });
-
-  it('shows the ladder with the setup’s own row marked, each figure as the server wrote it', async () => {
-    await renderResult();
-
-    const rows = [...screen.getByRole('table', { name: 'The run replayed at each slippage' }).querySelectorAll('tbody tr')].map((row) => reads(row));
-    expect(rows).toEqual(['0.0 $1,500.00 12 8 6', '0.3 this setup $1,234.56 12 8 5', '0.6 -$12.34 11 8 3']);
-    const own = screen.getByText('this setup').closest('tr');
-    expect(own?.classList.contains('own')).toBe(true);
   });
 });
 

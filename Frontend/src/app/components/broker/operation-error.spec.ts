@@ -19,31 +19,32 @@ describe('extractServerMessage', () => {
   // `refusalBody` requires a real `HttpErrorResponse` (it checks `instanceof`),
   // unlike the plain object literals above, so these use one — matching what
   // Angular's `HttpClient` actually throws in production.
-  it('reads the fleet clerk fleet\'s flat {reason, message, next_step} body', () => {
-    const fleetRefusal = new HttpErrorResponse({
-      status: 503,
-      error: {
+  it.each<[string, number, unknown, string]>([
+    [
+      'reads the fleet clerk fleet\'s flat {reason, message, next_step} body',
+      503,
+      {
         reason: 'clerk_unreachable',
         message: 'The clerk did not answer.',
         next_step: 'Retry once the lane recovers.',
       },
-    });
+      'The clerk did not answer.',
+    ],
+    [
+      'still prefers the nested FastAPI envelope over a flat top-level message',
+      409,
+      { detail: { message: 'Nested wins.' }, message: 'flat, should be ignored' },
+      'Nested wins.',
+    ],
+    [
+      'still reads a plain string detail',
+      404,
+      { detail: 'Account evidence expired.' },
+      'Account evidence expired.',
+    ],
+  ])('on a real HttpErrorResponse, %s', (_name, status, error, message) => {
+    const refusal = new HttpErrorResponse({ status, error });
 
-    expect(extractServerMessage(fleetRefusal, 'Fallback.')).toBe('The clerk did not answer.');
-  });
-
-  it('still prefers the nested FastAPI envelope over a flat top-level message', () => {
-    const nested = new HttpErrorResponse({
-      status: 409,
-      error: { detail: { message: 'Nested wins.' }, message: 'flat, should be ignored' },
-    });
-
-    expect(extractServerMessage(nested, 'Fallback.')).toBe('Nested wins.');
-  });
-
-  it('still reads a plain string detail on a real HttpErrorResponse', () => {
-    const legacy = new HttpErrorResponse({ status: 404, error: { detail: 'Account evidence expired.' } });
-
-    expect(extractServerMessage(legacy, 'Fallback.')).toBe('Account evidence expired.');
+    expect(extractServerMessage(refusal, 'Fallback.')).toBe(message);
   });
 });

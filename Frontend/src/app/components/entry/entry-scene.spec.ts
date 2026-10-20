@@ -26,33 +26,28 @@ describe('entry scene', () => {
     expect([view.cx, view.cy]).toEqual([0.5, 0.5]);
   });
 
-  it('puts the click target on the carved panel', () => {
+  it('puts the click target on the carved panel and keeps it on the carving as the scene shifts', () => {
     const frame = { width: 1440, height: 860 };
+    const view = sceneView(frame, HOME_CAMERA);
 
-    const panel = carvedPanelPlacement(frame, sceneView(frame, HOME_CAMERA), NO_SHIFT);
+    const still = carvedPanelPlacement(frame, view, NO_SHIFT);
 
     // The painting fills the 1440 px width, so it is 1440 / aspect tall and
     // centred, leaving equal bars above and below.
     const paintingHeight = 1440 / PAINTING_ASPECT;
     const bar = (860 - paintingHeight) / 2;
-    expect(panel.x).toBeCloseTo(CARVED_PANEL.x * 1440, 6);
-    expect(panel.y).toBeCloseTo(bar + CARVED_PANEL.y * paintingHeight, 6);
-    expect(panel.width).toBeCloseTo(CARVED_PANEL.width * 1440, 6);
-  });
-
-  it('keeps the click target on the carving as the scene shifts', () => {
-    const frame = { width: 1440, height: 860 };
-    const view = sceneView(frame, HOME_CAMERA);
-    const still = carvedPanelPlacement(frame, view, NO_SHIFT);
+    expect.soft(still.x, 'puts the click target on the carved panel: x').toBeCloseTo(CARVED_PANEL.x * 1440, 6);
+    expect.soft(still.y, 'puts the click target on the carved panel: y').toBeCloseTo(bar + CARVED_PANEL.y * paintingHeight, 6);
+    expect.soft(still.width, 'puts the click target on the carved panel: width').toBeCloseTo(CARVED_PANEL.width * 1440, 6);
 
     const shifted = carvedPanelPlacement(frame, view, parallaxOffset({ x: 1, y: 1 }, 1));
 
     // The tablet is nearer than the depth that stays put, so it slides against
     // the pointer — by a pixel or two, never off the carving.
-    expect(shifted.x).toBeLessThan(still.x);
-    expect(shifted.y).toBeLessThan(still.y);
-    expect(still.x - shifted.x).toBeLessThan(still.width / 10);
-    expect(still.y - shifted.y).toBeLessThan(still.width / 10);
+    expect.soft(shifted.x, 'keeps the click target on the carving as the scene shifts: slides left of rest').toBeLessThan(still.x);
+    expect.soft(shifted.y, 'keeps the click target on the carving as the scene shifts: slides above rest').toBeLessThan(still.y);
+    expect.soft(still.x - shifted.x, 'keeps the click target on the carving as the scene shifts: x slide stays small').toBeLessThan(still.width / 10);
+    expect.soft(still.y - shifted.y, 'keeps the click target on the carving as the scene shifts: y slide stays small').toBeLessThan(still.width / 10);
   });
 
   it('keeps a pushed-in view inside the painting', () => {

@@ -11,22 +11,18 @@ async function renderLegend(plan = buildTimelinePlan(sessionDetail())) {
 }
 
 describe('the legend of the chart', () => {
-  it('names the underlying through the shared symbol renderer and each contract through the shared contract renderer', async () => {
+  it('names the underlying and each contract through the shared renderers, draws a swatch and a glyph for each line and mark, and says nothing of what is not drawn when everything is', async () => {
     const { container } = await renderLegend();
 
     const panes = [...container.querySelectorAll('.panes > li')];
-    expect(panes.length).toBe(3);
-    expect(panes[0].querySelector('app-asset-identity')).not.toBeNull();
-    expect(panes[0].querySelector('app-option-contract')).toBeNull();
-    expect(reads(panes[1].querySelector('app-option-contract'))).toContain("Call 585 Oct 16 '26");
-    expect(reads(panes[2].querySelector('app-option-contract'))).toContain("Put 585 Oct 16 '26");
-  });
-
-  it('draws a swatch of the line’s own style in the colour of its token, and a glyph in the mark’s colour', async () => {
-    const { container } = await renderLegend();
+    expect.soft(panes.length, 'names the underlying through the shared symbol renderer and each contract through the shared contract renderer: one pane each').toBe(3);
+    expect.soft(panes[0].querySelector('app-asset-identity'), 'names the underlying through the shared symbol renderer').not.toBeNull();
+    expect.soft(panes[0].querySelector('app-option-contract'), 'names no contract in the underlying’s pane').toBeNull();
+    expect.soft(reads(panes[1].querySelector('app-option-contract')), 'names the call through the shared contract renderer').toContain("Call 585 Oct 16 '26");
+    expect.soft(reads(panes[2].querySelector('app-option-contract')), 'names the put through the shared contract renderer').toContain("Put 585 Oct 16 '26");
 
     const swatches = [...container.querySelectorAll<HTMLElement>('.swatch')].map((each) => [each.getAttribute('data-line'), each.style.borderTopColor]);
-    expect(swatches).toEqual([
+    expect.soft(swatches, 'draws a swatch of the line’s own style in the colour of its token').toEqual([
       ['solid', 'var(--chart-series-blue)'],
       ['solid', 'var(--chart-series-sky)'],
       ['dotted', 'var(--chart-series-amber)'],
@@ -35,27 +31,18 @@ describe('the legend of the chart', () => {
       ['solid', 'var(--chart-series-sky)'],
     ]);
     const glyphs = [...container.querySelectorAll<HTMLElement>('.glyph')].map((each) => [reads(each), each.style.color]);
-    expect(glyphs).toEqual([
+    expect.soft(glyphs, 'draws a glyph in the mark’s colour').toEqual([
       ['▲', 'var(--chart-series-green)'],
       ['▼', 'var(--chart-series-orange)'],
       ['●', 'var(--chart-series-sky)'],
       ['▲', 'var(--chart-series-green)'],
       ['■', 'var(--chart-series-purple)'],
     ]);
-  });
-
-  it('hides every swatch and glyph from a screen reader: the words beside each carry the meaning', async () => {
-    const { container } = await renderLegend();
 
     const decorations = [...container.querySelectorAll('.swatch, .glyph')];
-    expect(decorations.length).toBe(11);
-    expect(decorations.every((each) => each.getAttribute('aria-hidden') === 'true')).toBe(true);
-  });
-
-  it('says nothing about what is not drawn when everything is', async () => {
-    await renderLegend();
-
-    expect(screen.queryByRole('region', { name: 'Not drawn' })).toBeNull();
+    expect.soft(decorations.length, 'draws a swatch or a glyph beside each line and mark').toBe(11);
+    expect.soft(decorations.every((each) => each.getAttribute('aria-hidden') === 'true'), 'hides every swatch and glyph from a screen reader: the words beside each carry the meaning').toBe(true);
+    expect.soft(screen.queryByRole('region', { name: 'Not drawn' }), 'says nothing about what is not drawn when everything is').toBeNull();
   });
 });
 

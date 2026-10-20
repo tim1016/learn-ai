@@ -143,35 +143,21 @@ describe("EngineLabRunHistoryComponent", () => {
     fakeJobsSignal.set([]);
   });
 
-  it("lists every engine's runs by default (All filter) as one fixed page", async () => {
+  it("renders the default run history: every engine's runs as one fixed page, with each row's strategy, symbol, bars summary, open-at-end note and Mark golden", async () => {
     const runs = makeRunsService();
-    await setup(runs);
-    expect(runs.list).toHaveBeenCalledWith(null, HISTORY_PAGE_SIZE);
-  });
+    const fixture = await setup(runs);
+    const element = fixture.nativeElement as HTMLElement;
+    const html = element.textContent ?? "";
+    const buttons = Array.from(element.querySelectorAll("button")).map((button) => button.textContent?.trim());
 
-  it("renders strategy names from mapped rows", async () => {
-    const fixture = await setup();
-    const html = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(html).toContain("sma_crossover");
-    expect(html).toContain("rsi_mean_reversion");
-  });
-
-  it("renders the symbol stored on the run", async () => {
-    const fixture = await setup();
-    const html = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(html).toContain("AAPL");
-  });
-
-  it("renders the DataPolicy bars summary with explicit input and strategy cadences", async () => {
-    const fixture = await setup();
-    const html = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(html).toContain("Input M1 / Strategy M15");
-  });
-
-  it("renders 'Open at end' for rows with a synthetic exit", async () => {
-    const fixture = await setup();
-    const html = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(html).toContain("Open at end");
+    expect.soft(runs.list, "lists every engine's runs by default (All filter) as one fixed page").toHaveBeenCalledWith(null, HISTORY_PAGE_SIZE);
+    expect.soft(html, "renders strategy names from mapped rows (first row)").toContain("sma_crossover");
+    expect.soft(html, "renders strategy names from mapped rows (second row)").toContain("rsi_mean_reversion");
+    expect.soft(html, "renders the symbol stored on the run").toContain("AAPL");
+    expect.soft(html, "renders the DataPolicy bars summary with explicit input and strategy cadences").toContain("Input M1 / Strategy M15");
+    expect.soft(html, "renders 'Open at end' for rows with a synthetic exit").toContain("Open at end");
+    expect.soft(buttons, "offers Mark golden for a Python run when the catalog was read and does not list it").toContain("Mark golden");
+    expect.soft(html, "does not say the Golden catalog could not be read when it was read").not.toContain("Golden catalog could not be read");
   });
 
   it("badges a designated run and opens its Golden Validation workflow", async () => {
@@ -213,15 +199,6 @@ describe("EngineLabRunHistoryComponent", () => {
     expect(element.textContent).toContain("sma_crossover");
   });
 
-  it("offers Mark golden for a Python run when the catalog was read and does not list it", async () => {
-    const fixture = await setup();
-    const element = fixture.nativeElement as HTMLElement;
-    const buttons = Array.from(element.querySelectorAll("button")).map((button) => button.textContent?.trim());
-
-    expect(buttons).toContain("Mark golden");
-    expect(element.textContent).not.toContain("Golden catalog could not be read");
-  });
-
   it("says Golden badges stop at the newest 100 designated runs when the catalog is exactly that long", async () => {
     goldenValidationMock.list.mockReturnValue(
       of(Array.from({ length: 100 }, (_, index) => ({ source_run_id: 5000 + index, state: "candidate" }))),
@@ -239,34 +216,19 @@ describe("EngineLabRunHistoryComponent", () => {
 });
 
 describe("EngineLabRunHistoryComponent — filter dropdown", () => {
-  it("changing the engine filter to PYTHON re-reads with engine=PYTHON", async () => {
+  it.each(["PYTHON", "LEAN"] as const)("changing the engine filter to %s re-reads with that engine", async (engine) => {
     const runs = makeRunsService();
     const fixture = await setup(runs);
 
     const select = fixture.nativeElement.querySelector(
       '[data-testid="engine-filter"]',
     ) as HTMLSelectElement;
-    select.value = "PYTHON";
+    select.value = engine;
     select.dispatchEvent(new Event("change"));
     fixture.detectChanges();
     await fixture.whenStable();
 
-    expect(runs.list).toHaveBeenLastCalledWith("PYTHON", HISTORY_PAGE_SIZE);
-  });
-
-  it("changing the engine filter to LEAN re-reads with engine=LEAN", async () => {
-    const runs = makeRunsService();
-    const fixture = await setup(runs);
-
-    const select = fixture.nativeElement.querySelector(
-      '[data-testid="engine-filter"]',
-    ) as HTMLSelectElement;
-    select.value = "LEAN";
-    select.dispatchEvent(new Event("change"));
-    fixture.detectChanges();
-    await fixture.whenStable();
-
-    expect(runs.list).toHaveBeenLastCalledWith("LEAN", HISTORY_PAGE_SIZE);
+    expect(runs.list).toHaveBeenLastCalledWith(engine, HISTORY_PAGE_SIZE);
   });
 });
 
@@ -286,20 +248,15 @@ describe("EngineLabRunHistoryComponent — notes editing", () => {
 });
 
 describe("EngineLabRunHistoryComponent — CSV export", () => {
-  it("export button is disabled when there are no rows", async () => {
-    const fixture = await setup(makeRunsService([]));
+  it.each<[string, BacktestRunSummary[], boolean]>([
+    ["is disabled when there are no rows", [], true],
+    ["is enabled when rows exist", FAKE_RUNS, false],
+  ])("export button %s", async (_name, rows, isDisabled) => {
+    const fixture = await setup(makeRunsService(rows));
     const button = fixture.nativeElement.querySelector(
       '[data-testid="export-csv"]',
     ) as HTMLButtonElement;
-    expect(button.disabled).toBe(true);
-  });
-
-  it("export button is enabled when rows exist", async () => {
-    const fixture = await setup();
-    const button = fixture.nativeElement.querySelector(
-      '[data-testid="export-csv"]',
-    ) as HTMLButtonElement;
-    expect(button.disabled).toBe(false);
+    expect(button.disabled).toBe(isDisabled);
   });
 
   it("clicking Export downloads a CSV with the rendered rows", async () => {
@@ -366,41 +323,27 @@ describe("EngineLabRunHistoryComponent — auto-refresh on job.completed (#468)"
     expect(runs.list).toHaveBeenCalledTimes(1);
   });
 
-  it("re-reads when a lean_engine_run job transitions to completed", async () => {
+  it.each<[string, JobState[], number]>([
+    ["re-reads when a lean_engine_run job transitions to completed", [makeJob({ id: "lean-1", type: "lean_engine_run", status: "completed" })], 1],
+    ["does not re-read when a non-engine job (dataset-zip) completes", [makeJob({ id: "ds-1", type: "dataset-zip", status: "completed" })], 0],
+    [
+      "does not re-read for running/failed/cancelled engine jobs",
+      [
+        makeJob({ id: "r-1", type: "engine_backtest", status: "running" }),
+        makeJob({ id: "f-1", type: "engine_backtest", status: "failed" }),
+        makeJob({ id: "c-1", type: "engine_backtest", status: "cancelled" }),
+      ],
+      0,
+    ],
+  ])("%s", async (_name, jobs, reads) => {
     const runs = makeRunsService();
     const fixture = await setup(runs);
     runs.list.mockClear();
 
-    fakeJobsSignal.set([makeJob({ id: "lean-1", type: "lean_engine_run", status: "completed" })]);
+    fakeJobsSignal.set(jobs);
     await settle(fixture);
 
-    expect(runs.list).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not re-read when a non-engine job (dataset-zip) completes", async () => {
-    const runs = makeRunsService();
-    const fixture = await setup(runs);
-    runs.list.mockClear();
-
-    fakeJobsSignal.set([makeJob({ id: "ds-1", type: "dataset-zip", status: "completed" })]);
-    await settle(fixture);
-
-    expect(runs.list).not.toHaveBeenCalled();
-  });
-
-  it("does not re-read for running/failed/cancelled engine jobs", async () => {
-    const runs = makeRunsService();
-    const fixture = await setup(runs);
-    runs.list.mockClear();
-
-    fakeJobsSignal.set([
-      makeJob({ id: "r-1", type: "engine_backtest", status: "running" }),
-      makeJob({ id: "f-1", type: "engine_backtest", status: "failed" }),
-      makeJob({ id: "c-1", type: "engine_backtest", status: "cancelled" }),
-    ]);
-    await settle(fixture);
-
-    expect(runs.list).not.toHaveBeenCalled();
+    expect(runs.list).toHaveBeenCalledTimes(reads);
   });
 
   it("does not re-read on subsequent signal ticks for the same completed job", async () => {

@@ -108,27 +108,22 @@ describe("RecencyChartPageComponent", () => {
     expect(screen.getByTestId("lane-AAPL")).not.toBeNull();
   });
 
-  it("queries with a numeric fromMs strictly before toMs", async () => {
+  it("queries with a numeric fromMs strictly before toMs, over the full accumulation range rather than the ~6-month all-symbols display cap", async () => {
     await renderPage();
 
     const tradesQuery = tradesMock.mock.calls[0][0] as RecencyWindowQuery;
-    expect(tradesQuery.fromMs).toBeLessThan(tradesQuery.toMs);
+    expect.soft(tradesQuery.fromMs, "queries trades with a numeric fromMs strictly before toMs").toBeLessThan(tradesQuery.toMs);
 
     const heroQuery = heroesMock.mock.calls[0][0] as RecencyWindowQuery;
-    expect(heroQuery.fromMs).toBeLessThan(heroQuery.toMs);
-  });
+    expect.soft(heroQuery.fromMs, "queries heroes with a numeric fromMs strictly before toMs").toBeLessThan(heroQuery.toMs);
 
-  it("fetches the full accumulation range, not just the ~6-month all-symbols display cap", async () => {
     // Single-symbol mode is supposed to unlock the launch's full history
     // (up to the 24-month accumulation cap) — the fetch itself must not
     // be truncated to 6 months, or narrowing to one symbol would just
     // re-filter an already-too-small result set.
-    await renderPage();
-
-    const tradesQuery = tradesMock.mock.calls[0][0] as RecencyWindowQuery;
     const spanMs = tradesQuery.toMs - tradesQuery.fromMs;
     const thirteenMonthsMs = 1000 * 60 * 60 * 24 * 30 * 13;
-    expect(spanMs).toBeGreaterThan(thirteenMonthsMs);
+    expect.soft(spanMs, "fetches the full accumulation range, not just the ~6-month all-symbols display cap").toBeGreaterThan(thirteenMonthsMs);
   });
 
   it("shows an empty-state message when no trades are returned", async () => {

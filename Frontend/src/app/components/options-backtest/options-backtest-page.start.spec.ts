@@ -58,27 +58,22 @@ describe('when a backtest can be started', () => {
 });
 
 describe('starting a backtest', () => {
-  it('starts the job with the setup as the server read it, the two instants, and the name of the example that was opened', async () => {
+  it('starts the job with the setup as the server read it, the two instants, and the name of the example that was opened, with the dates in no part of the setup, asks for the run it made by its job id, and shows it going', async () => {
     const setup = await readyToStart();
 
     fireEvent.click(startButton());
 
     await waitFor(() => expect(setup.service.startRun).toHaveBeenCalledTimes(1));
+    expect.soft(setup.service.startRun, 'starts one job').toHaveBeenCalledTimes(1);
     const request = setup.service.startRun.mock.calls[0]?.[0];
     const answer = await setup.service.describe.mock.results.at(-1)?.value;
-    expect(request).toEqual({ setup: answer.setup, start_ms: etMidnightMs('2026-09-14'), end_ms: etDayEndMs('2026-09-18'), setup_name: EXAMPLE_ONE_REENTRY });
-  });
-
-  it('asks for the run it made by its job id, and shows it going', async () => {
-    const setup = await readyToStart();
-
-    fireEvent.click(startButton());
-
+    expect.soft(request, 'starts the job with the setup as the server read it, the two instants, and the name of the example that was opened').toEqual({ setup: answer.setup, start_ms: etMidnightMs('2026-09-14'), end_ms: etDayEndMs('2026-09-18'), setup_name: EXAMPLE_ONE_REENTRY });
+    expect.soft(JSON.stringify(setup.service.startRun.mock.calls[0]?.[0].setup), 'puts the dates in no part of the setup it sends').not.toMatch(/2026-09|start_ms|end_ms/);
     const panel = await screen.findByRole('region', { name: 'Backtest run' });
-    expect(setup.service.runs).toHaveBeenCalledWith({ jobId: 'job-1' });
-    expect(within(panel).getByText('Running')).toBeTruthy();
-    expect(within(panel).getByRole('button', { name: 'Cancel' })).toBeTruthy();
-    await waitFor(() => expect(document.activeElement).toBe(within(panel).getByRole('heading', { name: 'Backtest run' })));
+    expect.soft(setup.service.runs, 'asks for the run it made by its job id').toHaveBeenCalledWith({ jobId: 'job-1' });
+    expect.soft(within(panel).getByText('Running'), 'shows the run going').toBeTruthy();
+    expect.soft(within(panel).getByRole('button', { name: 'Cancel' }), 'offers Cancel on the run going').toBeTruthy();
+    await waitFor(() => expect(document.activeElement, 'moves the focus to the heading of the run').toBe(within(panel).getByRole('heading', { name: 'Backtest run' })));
   });
 
   it('sends the dates of a range across the clock change in March, each end on its own side of it', async () => {
@@ -89,15 +84,6 @@ describe('starting a backtest', () => {
     await waitFor(() => expect(setup.service.startRun).toHaveBeenCalledTimes(1));
     const request = setup.service.startRun.mock.calls[0]?.[0];
     expect([request?.start_ms, request?.end_ms]).toEqual([1_772_773_200_000, 1_773_115_200_000]);
-  });
-
-  it('puts the dates in no part of the setup it sends', async () => {
-    const setup = await readyToStart();
-
-    fireEvent.click(startButton());
-
-    await waitFor(() => expect(setup.service.startRun).toHaveBeenCalledTimes(1));
-    expect(JSON.stringify(setup.service.startRun.mock.calls[0]?.[0].setup)).not.toMatch(/2026-09|start_ms|end_ms/);
   });
 
   it('starts once, however many times it is pressed', async () => {

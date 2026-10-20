@@ -44,21 +44,34 @@ function saidOf(name: RegExp): string | null {
 }
 
 describe('DeployOptionOrderTermsComponent', () => {
-  it('shows each term under the catalogue’s label, with its unit and its starting value', async () => {
+  it('shows each term under the catalogue’s label, with its unit, its starting value and what it does', async () => {
     await renderTerms();
 
-    expect(screen.getByRole('group', { name: 'Option order terms · fixed for this bot’s life' })).toBeTruthy();
+    expect.soft(
+      screen.getByRole('group', { name: 'Option order terms · fixed for this bot’s life' }),
+      'shows each term under the catalogue’s label: the group',
+    ).toBeTruthy();
     const shown = boxes().map((input) => [
       input.closest('.term-fields__field')?.querySelector('label')?.textContent?.replace(/\s+/g, ' ').trim(),
       input.value,
       input.nextElementSibling?.textContent?.trim(),
     ]);
-    expect(shown).toEqual([
+    expect.soft(shown, 'shows each term under the catalogue’s label, with its unit and its starting value').toEqual([
       ['Widest bid-ask gap, each leg (% of mid)', '8', '% of mid'],
       ['Entry wait (seconds)', '20', 'seconds'],
       ['Whole-structure cost (% of cash set aside)', '10', '% of cash set aside'],
       ['Expiry-day close (min before close)', '45', 'min before close'],
     ]);
+
+    expect.soft(
+      screen.getByRole('button', { name: 'What each order term does' }),
+      'opens what each term does: the button',
+    ).toBeTruthy();
+    const help = document.getElementById('deploy-option-order-terms-help');
+    expect.soft(help?.textContent, 'opens what each term does: the entry wait’s help').toContain(DEFAULTS.entry_wait_seconds.help);
+    expect.soft(help?.textContent, 'opens the range each term takes, in the server’s words')
+      .toContain(DEFAULTS.entry_wait_seconds.bounds.sentence);
+    expect.soft(help?.textContent, 'opens what each term does: the widest gap’s help').toContain(DEFAULTS.gap_limit_percent.help);
   });
 
   it('keeps a percent as the owner typed it, and a count as a number', async () => {
@@ -137,16 +150,6 @@ describe('DeployOptionOrderTermsComponent', () => {
 
     const group = screen.getByRole('group', { name: /^Option order terms/ });
     for (const sentence of Object.values(OPTION_CATALOGUE.order_term_notes)) expect(group.textContent).toContain(sentence);
-  });
-
-  it('opens what each term does and the range it takes, in the server’s words', async () => {
-    await renderTerms();
-
-    expect(screen.getByRole('button', { name: 'What each order term does' })).toBeTruthy();
-    const help = document.getElementById('deploy-option-order-terms-help');
-    expect(help?.textContent).toContain(DEFAULTS.entry_wait_seconds.help);
-    expect(help?.textContent).toContain(DEFAULTS.entry_wait_seconds.bounds.sentence);
-    expect(help?.textContent).toContain(DEFAULTS.gap_limit_percent.help);
   });
 
   it('takes a cost limit of nothing, which the widest gap may not be', async () => {

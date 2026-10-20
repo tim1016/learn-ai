@@ -26,41 +26,35 @@ describe('GoldenSearchService', () => {
 
   afterEach(() => http.verify());
 
-  it('reads capabilities and defaults through the relative data-plane path the dev proxy guards', async () => {
+  it('reads capabilities and defaults through the relative data-plane path the dev proxy guards, and asks the server to lay the dates out for the chosen months and for a picked range', async () => {
     const capabilities = service.capabilities();
     http.expectOne(`${BASE}/capabilities`).flush([]);
-    await expect(capabilities).resolves.toEqual([]);
+    await expect.soft(capabilities, 'reads capabilities through the relative data-plane path the dev proxy guards').resolves.toEqual([]);
 
     const defaults = service.defaults('ema_crossover_signal', 'SPY');
     const req = http.expectOne((r) => r.url === `${BASE}/defaults`);
-    expect(req.request.params.get('strategy_key')).toBe('ema_crossover_signal');
-    expect(req.request.params.get('symbol')).toBe('SPY');
+    expect.soft(req.request.params.get('strategy_key'), 'reads the defaults of the strategy').toBe('ema_crossover_signal');
+    expect.soft(req.request.params.get('symbol'), 'reads the defaults of the symbol').toBe('SPY');
     req.flush({ ...protocol(), incumbent_label: 'Registry', exposure: preflight().exposure });
-    await expect(defaults).resolves.toMatchObject({ incumbent_label: 'Registry' });
-    expect(req.request.params.has('final_months')).toBe(false);
-  });
+    await expect.soft(defaults, 'resolves the defaults the server answered with').resolves.toMatchObject({ incumbent_label: 'Registry' });
+    expect.soft(req.request.params.has('final_months'), 'sends no month counts when none are chosen').toBe(false);
 
-  it('asks the server to lay the dates out for the chosen final-test and fold months', async () => {
-    const defaults = service.defaults('ema_crossover_signal', 'SPY', { final_months: 4, training_months: 9, test_months: 3 });
-    const req = http.expectOne((r) => r.url === `${BASE}/defaults`);
-    expect(req.request.params.get('final_months')).toBe('4');
-    expect(req.request.params.get('training_months')).toBe('9');
-    expect(req.request.params.get('test_months')).toBe('3');
-    expect(req.request.params.has('range_start_ms')).toBe(false);
-    req.flush({ ...protocol(), incumbent_label: 'Registry', exposure: preflight().exposure });
+    const byMonths = service.defaults('ema_crossover_signal', 'SPY', { final_months: 4, training_months: 9, test_months: 3 });
+    const monthsReq = http.expectOne((r) => r.url === `${BASE}/defaults`);
+    expect.soft(monthsReq.request.params.get('final_months'), 'asks the server to lay the dates out for the chosen final-test months').toBe('4');
+    expect.soft(monthsReq.request.params.get('training_months'), 'asks the server to lay the dates out for the chosen training months').toBe('9');
+    expect.soft(monthsReq.request.params.get('test_months'), 'asks the server to lay the dates out for the chosen test months').toBe('3');
+    expect.soft(monthsReq.request.params.has('range_start_ms'), 'sends no range when none is picked').toBe(false);
+    monthsReq.flush({ ...protocol(), incumbent_label: 'Registry', exposure: preflight().exposure });
+    await expect.soft(byMonths, 'resolves the defaults laid out for the chosen months').resolves.toMatchObject({ incumbent_label: 'Registry' });
 
-    await expect(defaults).resolves.toMatchObject({ incumbent_label: 'Registry' });
-  });
-
-  it('sends a picked range with the month counts, as its two ET midnights', async () => {
-    const defaults = service.defaults('ema_crossover_signal', 'SPY', { final_months: 3, training_months: 6, test_months: 2, range_start_ms: 1726718400000, range_end_ms: 1789790400000 });
-    const req = http.expectOne((r) => r.url === `${BASE}/defaults`);
-    expect(req.request.params.get('range_start_ms')).toBe('1726718400000');
-    expect(req.request.params.get('range_end_ms')).toBe('1789790400000');
-    expect(req.request.params.get('final_months')).toBe('3');
-    req.flush({ ...protocol(), incumbent_label: 'Registry', exposure: preflight().exposure });
-
-    await expect(defaults).resolves.toMatchObject({ incumbent_label: 'Registry' });
+    const byRange = service.defaults('ema_crossover_signal', 'SPY', { final_months: 3, training_months: 6, test_months: 2, range_start_ms: 1726718400000, range_end_ms: 1789790400000 });
+    const rangeReq = http.expectOne((r) => r.url === `${BASE}/defaults`);
+    expect.soft(rangeReq.request.params.get('range_start_ms'), "sends a picked range's first day as its ET midnight").toBe('1726718400000');
+    expect.soft(rangeReq.request.params.get('range_end_ms'), "sends a picked range's last day as its ET midnight").toBe('1789790400000');
+    expect.soft(rangeReq.request.params.get('final_months'), 'sends the month counts with a picked range').toBe('3');
+    rangeReq.flush({ ...protocol(), incumbent_label: 'Registry', exposure: preflight().exposure });
+    await expect.soft(byRange, 'resolves the defaults laid out inside the picked range').resolves.toMatchObject({ incumbent_label: 'Registry' });
   });
 
   it('returns protocol refusals from preflight as data, not as an error', async () => {
@@ -73,21 +67,19 @@ describe('GoldenSearchService', () => {
     await expect(pending).resolves.toMatchObject({ refusals: [{ code: 'WORKLOAD_LIMIT' }] });
   });
 
-  it('locks a plan with its idempotency key and starts no job when nothing was dispatched', async () => {
+  it('locks a plan with its idempotency key and starts no job when nothing was dispatched, and turns a refused lock into a GoldenSearchRefusedError', async () => {
     const pending = service.createStudy({ protocol: protocol(), idempotency_key: 'k-1' });
     const req = http.expectOne(`${BASE}/studies`);
-    expect(req.request.body).toEqual({ protocol: protocol(), idempotency_key: 'k-1' });
+    expect.soft(req.request.body, 'locks the plan with its idempotency key').toEqual({ protocol: protocol(), idempotency_key: 'k-1' });
     req.flush(studyDetail('locked'));
 
-    await expect(pending).resolves.toMatchObject({ study: { state: 'locked' }, jobId: null });
-    expect(startJob).not.toHaveBeenCalled();
-  });
+    await expect.soft(pending, 'resolves the locked study with no job').resolves.toMatchObject({ study: { state: 'locked' }, jobId: null });
+    expect.soft(startJob, 'starts no job when nothing was dispatched').not.toHaveBeenCalled();
 
-  it('turns a refused lock into a GoldenSearchRefusedError', async () => {
-    const pending = service.createStudy({ protocol: protocol(), idempotency_key: 'k-1' });
+    const refused = service.createStudy({ protocol: protocol(), idempotency_key: 'k-1' });
     http.expectOne(`${BASE}/studies`).flush({ detail: { code: 'DATA_MISSING', message: 'the lake is missing 2 sessions' } }, { status: 400, statusText: 'Bad Request' });
 
-    await expect(pending).rejects.toBeInstanceOf(GoldenSearchRefusedError);
+    await expect.soft(refused, 'turns a refused lock into a GoldenSearchRefusedError').rejects.toBeInstanceOf(GoldenSearchRefusedError);
   });
 
   it('sends a command envelope and starts the stage it authorized as a golden_search job carrying the stage token', async () => {
@@ -102,23 +94,21 @@ describe('GoldenSearchService', () => {
     expect(startJob).toHaveBeenCalledWith('golden_search', { study_id: 'study-1', stage_token: 'tok-7' });
   });
 
-  it('reports a stale revision as a conflict that carries the study as it is now', async () => {
-    const pending = service.command('study-1', { command: 'continue', expected_revision: 2, idempotency_key: 'k-3', payload: {} });
+  it('reports a stale revision as a conflict that carries the study as it is now, and an idempotency conflict without a study', async () => {
+    const stale = service.command('study-1', { command: 'continue', expected_revision: 2, idempotency_key: 'k-3', payload: {} });
     http
       .expectOne(`${BASE}/studies/study-1/commands`)
       .flush({ detail: { code: 'STALE_REVISION', message: 'the study moved on', study: studyDetail('awaiting_validation', { revision: 4 }) } }, { status: 409, statusText: 'Conflict' });
 
-    const error = await pending.catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(StudyConflictError);
-    expect((error as StudyConflictError).code).toBe('STALE_REVISION');
-    expect((error as StudyConflictError).current?.revision).toBe(4);
-  });
+    const error = await stale.catch((e: unknown) => e);
+    expect.soft(error, 'reports a stale revision as a StudyConflictError').toBeInstanceOf(StudyConflictError);
+    expect.soft((error as StudyConflictError).code, 'names the stale revision in the conflict').toBe('STALE_REVISION');
+    expect.soft((error as StudyConflictError).current?.revision, 'carries the study as it is now').toBe(4);
 
-  it('reports an idempotency conflict without a study', async () => {
-    const pending = service.command('study-1', { command: 'cancel', expected_revision: 2, idempotency_key: 'k-3', payload: {} });
+    const idempotency = service.command('study-1', { command: 'cancel', expected_revision: 2, idempotency_key: 'k-3', payload: {} });
     http.expectOne(`${BASE}/studies/study-1/commands`).flush({ detail: { code: 'IDEMPOTENCY_CONFLICT', message: 'that key was used for another request' } }, { status: 409, statusText: 'Conflict' });
 
-    await expect(pending).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT', current: null });
+    await expect.soft(idempotency, 'reports an idempotency conflict without a study').rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT', current: null });
   });
 
   it('keeps the committed study when its job could not be started', async () => {

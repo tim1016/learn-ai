@@ -20,12 +20,11 @@ describe('extractActionErrorDetail', () => {
     expect(extractActionErrorDetail(error)).toEqual({ outcome: 'failure', message: 'boom' });
   });
 
-  it('returns null for a non-HTTP error', () => {
-    expect(extractActionErrorDetail(new Error('network down'))).toBeNull();
-  });
-
-  it('returns null when the body has no detail object', () => {
-    expect(extractActionErrorDetail(new HttpErrorResponse({ error: { detail: 'plain string' } }))).toBeNull();
+  it.each([
+    ['for a non-HTTP error', new Error('network down')],
+    ['when the body has no detail object', new HttpErrorResponse({ error: { detail: 'plain string' } })],
+  ])('returns null %s', (_name, error) => {
+    expect(extractActionErrorDetail(error)).toBeNull();
   });
 });
 
@@ -83,15 +82,18 @@ describe('deriveActionRejection', () => {
     });
   });
 
-  it('falls back to a receiptLabel-formatted reason_code when why is absent', () => {
-    const error = rejection({
+  it.each([
+    ['a receiptLabel-formatted reason_code when why is absent', rejection({
       outcome: 'failure',
       message: 'Stop is no longer available for this bot.',
       why: null,
       reason_code: 'TERMINAL_EVIDENCE_UNREADABLE',
-    });
-
-    expect(deriveActionRejection(error, 'fallback').why).toBe('Terminal Evidence Unreadable');
+    }), 'Terminal Evidence Unreadable'],
+    // A distinct backend error shape (historical-recovery's `{reason, message}`)
+    // shares this parser and has no `why` or `reason_code` field at all.
+    ['the older receiptLabel-formatted reason field', rejection({ reason: 'stale_action_token', message: 'boom' }), 'Stale Action Token'],
+  ])('still falls back to %s', (_name, error, expected) => {
+    expect(deriveActionRejection(error, 'fallback').why).toBe(expected);
   });
 
   it('is null when neither why, reason, nor reason_code is present', () => {
@@ -100,29 +102,18 @@ describe('deriveActionRejection', () => {
     expect(deriveActionRejection(error, 'fallback').why).toBeNull();
   });
 
-  it('still falls back to the older receiptLabel-formatted reason field', () => {
-    // A distinct backend error shape (historical-recovery's `{reason, message}`)
-    // shares this parser and has no `why` or `reason_code` field at all.
-    const error = rejection({ reason: 'stale_action_token', message: 'boom' });
-
-    expect(deriveActionRejection(error, 'fallback').why).toBe('Stale Action Token');
-  });
-
-  it('exposes the raw, unformatted reason code so a caller can branch on the refusal kind', () => {
-    const error = rejection({
+  it.each([
+    ['exposes the raw, unformatted reason code so a caller can branch on the refusal kind', rejection({
       reason: 'clerk_binding_generation_conflict',
       message: 'Expected 3 is not 4.',
-    });
-
-    expect(deriveActionRejection(error, 'fallback').reasonCode).toBe(
-      'clerk_binding_generation_conflict',
-    );
-  });
-
-  it('falls back to the typed reason_code for the raw reasonCode when reason is absent', () => {
-    const error = rejection({ outcome: 'failure', message: 'boom', reason_code: 'CLERK_UNREACHABLE' });
-
-    expect(deriveActionRejection(error, 'fallback').reasonCode).toBe('CLERK_UNREACHABLE');
+    }), 'clerk_binding_generation_conflict'],
+    [
+      'falls back to the typed reason_code for the raw reasonCode when reason is absent',
+      rejection({ outcome: 'failure', message: 'boom', reason_code: 'CLERK_UNREACHABLE' }),
+      'CLERK_UNREACHABLE',
+    ],
+  ])('reads the raw reasonCode: %s', (_name, error, expected) => {
+    expect(deriveActionRejection(error, 'fallback').reasonCode).toBe(expected);
   });
 
   it('reasonCode is null when neither reason nor reason_code is present', () => {
@@ -166,39 +157,30 @@ describe('fleet refusals (flat body, no `detail` envelope)', () => {
     });
   });
 
-  it('renders the refusal message rather than the caller fallback', () => {
+  it('renders the refusal’s own message and next_step rather than the caller fallback or a formatted code', () => {
     const rejection = deriveActionRejection(fleetRefusal, 'Something went wrong.');
 
-    expect(rejection.message).toBe('The lane was re-bound after this command was prepared.');
-    expect(rejection.message).not.toBe('Something went wrong.');
-  });
-
-  it('uses `next_step` as remediation prose, not a formatted reason code', () => {
-    const rejection = deriveActionRejection(fleetRefusal, 'Something went wrong.');
-
+    expect.soft(rejection.message, 'renders the refusal message').toBe('The lane was re-bound after this command was prepared.');
+    expect.soft(rejection.message, 'rather than the caller fallback').not.toBe('Something went wrong.');
     // Backend-authored prose is rendered as-is; the raw code is only a
     // last resort when the backend sent no prose at all.
-    expect(rejection.why).toBe('Reload the lane and re-issue the command.');
+    expect.soft(rejection.why, 'uses `next_step` as remediation prose, not a formatted reason code')
+      .toBe('Reload the lane and re-issue the command.');
   });
 
-  it('falls back to the vocabulary next-step for a known code with no prose', () => {
-    const terse = new HttpErrorResponse({
-      status: 409,
-      error: { reason: 'clerk_unreachable', message: 'The clerk did not answer.' },
-    });
-
+  it.each([
     // `clerk_unreachable` is in the closed vocabulary (#2067), so this reads
     // real remediation prose, not a formatted reason code.
-    expect(deriveActionRejection(terse, 'fallback').why).toBe("Retry once the clerk's agent reconnects.");
-  });
-
-  it('still falls back to a formatted reason code for one outside the closed vocabulary', () => {
-    const terse = new HttpErrorResponse({
+    ['the vocabulary next-step for a known code with no prose (#2067)', new HttpErrorResponse({
+      status: 409,
+      error: { reason: 'clerk_unreachable', message: 'The clerk did not answer.' },
+    }), "Retry once the clerk's agent reconnects."],
+    ['a formatted reason code for one outside the closed vocabulary', new HttpErrorResponse({
       status: 409,
       error: { reason: 'made_up_reason_never_declared', message: 'boom' },
-    });
-
-    expect(deriveActionRejection(terse, 'fallback').why).toBe('Made Up Reason Never Declared');
+    }), 'Made Up Reason Never Declared'],
+  ])('falls back to %s', (_name, terse, expected) => {
+    expect(deriveActionRejection(terse, 'fallback').why).toBe(expected);
   });
 });
 
@@ -219,13 +201,17 @@ describe('fleet refusal vocabulary fallback (#2067, #2102)', () => {
     expect(rejection.why).toBe("Refresh the lane's current binding generation, then re-prepare the command.");
   });
 
-  it('derives failure for a known non-409 fleet reason with no outcome field', () => {
-    const error = new HttpErrorResponse({
+  it.each([
+    ['derives failure for a known non-409 fleet reason with no outcome field', new HttpErrorResponse({
       status: 503,
       error: { reason: 'fleet_registry_unavailable', message: 'The registry could not be opened.' },
-    });
-
-    expect(deriveActionRejection(error, 'fallback').outcome).toBe('failure');
+    }), 'failure'],
+    ['leaves outcome as unknown for a reason code outside the closed vocabulary', new HttpErrorResponse({
+      status: 409,
+      error: { reason: 'made_up_reason_never_declared', message: 'boom' },
+    }), 'unknown'],
+  ])('reads the outcome from the vocabulary: %s', (_name, error, expected) => {
+    expect(deriveActionRejection(error, 'fallback').outcome).toBe(expected);
   });
 
   it('labels a dispatched command whose outcome could not be settled as unknown', () => {
@@ -241,15 +227,6 @@ describe('fleet refusal vocabulary fallback (#2067, #2102)', () => {
     const rejection = deriveActionRejection(error, 'fallback');
     expect(rejection.outcome).toBe('unknown');
     expect(rejection.message).toBe('The command may have been applied.');
-  });
-
-  it('leaves outcome as unknown for a reason code outside the closed vocabulary', () => {
-    const error = new HttpErrorResponse({
-      status: 409,
-      error: { reason: 'made_up_reason_never_declared', message: 'boom' },
-    });
-
-    expect(deriveActionRejection(error, 'fallback').outcome).toBe('unknown');
   });
 
   it('never lets a known reason override an outcome the backend did supply', () => {

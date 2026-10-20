@@ -26,33 +26,32 @@ describe("StrategyLabRunStatsComponent", () => {
     expect(screen.getByText("Not charged")).toBeTruthy();
   });
 
-  it("prices a LEAN run's own per-fill fees although it records no flat fee", async () => {
+  it.each<[string, Parameters<typeof makeRun>[0], Partial<ReturnType<typeof makeResult>>, string]>([
+    [
+      "prices a LEAN run's own per-fill fees although it records no flat fee",
+      { source: "lean-sidecar", engine: "LEAN", commissionPerOrder: 0 },
+      {},
+      "$2.00",
+    ],
+    [
+      "prices a paired run saved before #2465 that recorded the rail's $0 but paid IBKR fees",
+      { requestedEngine: "both", commissionPerOrder: 0, totalFees: 2 },
+      {},
+      "$2.00",
+    ],
+    [
+      "never calls a paired run's fees not charged, even when it traded nothing",
+      { requestedEngine: "both", commissionPerOrder: 0, totalFees: 0, totalTrades: 0 },
+      { total_fees: 0, total_trades: 0 },
+      "$0.00",
+    ],
+  ])("%s", async (_case, runOverrides, resultOverrides, fees) => {
     await render(StrategyLabRunStatsComponent, {
-      inputs: { run: makeRun({ source: "lean-sidecar", engine: "LEAN", commissionPerOrder: 0 }), result: makeResult(), verdict: null, parity: null, tradesTruncated: false },
+      inputs: { run: makeRun(runOverrides), result: { ...makeResult(), ...resultOverrides }, verdict: null, parity: null, tradesTruncated: false },
       providers: [provideZonelessChangeDetection()],
     });
 
     expect(screen.queryByText("Not charged")).toBeNull();
-    expect(screen.getByText("$2.00")).toBeTruthy();
-  });
-
-  it("prices a paired run saved before #2465 that recorded the rail's $0 but paid IBKR fees", async () => {
-    await render(StrategyLabRunStatsComponent, {
-      inputs: { run: makeRun({ requestedEngine: "both", commissionPerOrder: 0, totalFees: 2 }), result: makeResult(), verdict: null, parity: null, tradesTruncated: false },
-      providers: [provideZonelessChangeDetection()],
-    });
-
-    expect(screen.queryByText("Not charged")).toBeNull();
-    expect(screen.getByText("$2.00")).toBeTruthy();
-  });
-
-  it("never calls a paired run's fees not charged, even when it traded nothing", async () => {
-    await render(StrategyLabRunStatsComponent, {
-      inputs: { run: makeRun({ requestedEngine: "both", commissionPerOrder: 0, totalFees: 0, totalTrades: 0 }), result: { ...makeResult(), total_fees: 0, total_trades: 0 }, verdict: null, parity: null, tradesTruncated: false },
-      providers: [provideZonelessChangeDetection()],
-    });
-
-    expect(screen.queryByText("Not charged")).toBeNull();
-    expect(screen.getByText("$0.00")).toBeTruthy();
+    expect(screen.getByText(fees)).toBeTruthy();
   });
 });

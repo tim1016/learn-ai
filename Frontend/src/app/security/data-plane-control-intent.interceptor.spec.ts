@@ -58,23 +58,14 @@ describe("dataPlaneControlIntentInterceptor", () => {
     });
   }
 
-  it("marks account transaction reads that the data plane always protects", () => {
-    const url = "/api/accounts/DU1234567/transactions";
-    http.get(url).subscribe();
-
-    const req = httpMock.expectOne(url);
-    expect(req.request.headers.get(DATA_PLANE_CONTROL_INTENT_HEADER)).toBe(
-      DATA_PLANE_CONTROL_INTENT_VALUE,
-    );
-    req.flush({});
-  });
-
-  it("marks fleet directory reads that the data plane always protects", () => {
+  it.each([
+    ["account transaction reads", "/api/accounts/DU1234567/transactions"],
     // /api/broker-clerks sits outside the /api/brokers prefix and carries
     // the always-on control-secret guard server-side; without a manifest
     // entry the proxy never attaches the secret and the lane directory
     // 403s in every secret-configured deployment.
-    const url = "/api/broker-clerks";
+    ["fleet directory reads", "/api/broker-clerks"],
+  ])("marks %s that the data plane always protects (%s)", (_name, url) => {
     http.get(url).subscribe();
 
     const req = httpMock.expectOne(url);
@@ -111,18 +102,13 @@ describe("dataPlaneControlIntentInterceptor", () => {
     req.flush(null);
   });
 
-  it("does not mark non-control mutations", () => {
-    http.post("/api/research/strategy-runs", {}).subscribe();
+  it.each([
+    ["non-control mutations", "/api/research/strategy-runs"],
+    ["similar non-control prefixes", "/api/brokerage/connect"],
+  ])("does not mark %s (POST %s)", (_name, url) => {
+    http.post(url, {}).subscribe();
 
-    const req = httpMock.expectOne("/api/research/strategy-runs");
-    expect(req.request.headers.has(DATA_PLANE_CONTROL_INTENT_HEADER)).toBe(false);
-    req.flush({});
-  });
-
-  it("does not mark similar non-control prefixes", () => {
-    http.post("/api/brokerage/connect", {}).subscribe();
-
-    const req = httpMock.expectOne("/api/brokerage/connect");
+    const req = httpMock.expectOne(url);
     expect(req.request.headers.has(DATA_PLANE_CONTROL_INTENT_HEADER)).toBe(false);
     req.flush({});
   });

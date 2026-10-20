@@ -67,12 +67,14 @@ async function renderPicker(calendar: FakeTradingCalendar = fakeTradingCalendar(
 }
 
 describe('DateRangePickerComponent', () => {
-  it("shows the host's dates and lights only the quick range they match exactly", async () => {
+  it("shows the host's dates, lights only the quick range they match exactly, and says when the held data stops short of the market", async () => {
     const { start, end, quick } = await renderPicker();
 
-    expect([start.value, end.value]).toEqual(['2026-08-19', '2026-09-18']);
-    expect(quick('1M').getAttribute('aria-pressed')).toBe('true');
-    expect(quick('3M').getAttribute('aria-pressed')).toBe('false');
+    expect.soft([start.value, end.value], "shows the host's dates").toEqual(['2026-08-19', '2026-09-18']);
+    expect.soft(quick('1M').getAttribute('aria-pressed'), 'lights the quick range the dates match exactly').toBe('true');
+    expect.soft(quick('3M').getAttribute('aria-pressed'), 'does not light a quick range the dates do not match').toBe('false');
+    // The market's last completed session is 2026-10-01; QQQ is held through 2026-09-18.
+    expect.soft(screen.getByText(/QQQ is held through 2026-09-18\./), 'says when the held data stops short of the market').not.toBeNull();
   });
 
   it('applies a typed date when the field is left, and counts the sessions in the range', async () => {
@@ -304,13 +306,6 @@ describe('DateRangePickerComponent', () => {
     await view.fixture.whenStable();
 
     expect(screen.getByText(/^22 sessions · .*Gaps could not be checked: The data plane did not respond\./)).not.toBeNull();
-  });
-
-  it('says when the held data stops short of the market', async () => {
-    await renderPicker();
-
-    // The market's last completed session is 2026-10-01; QQQ is held through 2026-09-18.
-    expect(screen.getByText(/QQQ is held through 2026-09-18\./)).not.toBeNull();
   });
 
   it('re-checks the dates when the bounds change, so a new instrument cannot keep dates it does not hold', async () => {

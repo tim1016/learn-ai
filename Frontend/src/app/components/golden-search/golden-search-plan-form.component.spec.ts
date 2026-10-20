@@ -174,16 +174,20 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(service.createStudy.mock.lastCall?.[0].protocol.expected_trades_per_year).toBe(100);
   });
 
-  it('offers only declared strategies and names why the others cannot be studied yet', async () => {
+  it('opens the unpicked form with only declared strategies, the reason the others cannot be studied yet, and where the plan sits in the research process', async () => {
     await renderForm(fakeService());
 
     const picker = screen.getByRole('combobox', { name: 'Strategy' }) as HTMLSelectElement;
     const options = Array.from(picker.options);
-    expect(options.filter((o) => !o.disabled).map((o) => o.value)).toEqual(['ema_crossover_signal']);
+    expect.soft(options.filter((o) => !o.disabled).map((o) => o.value), 'offers only declared strategies').toEqual(['ema_crossover_signal']);
     const unavailable = options.filter((o) => o.disabled).map((o) => o.textContent ?? '');
-    expect(unavailable).toHaveLength(1);
-    expect(unavailable[0]).toContain('SMA Crossover');
-    expect(unavailable[0]).toContain('No Golden Search declaration has shipped');
+    expect.soft(unavailable, 'lists one strategy that cannot be studied yet').toHaveLength(1);
+    expect.soft(unavailable[0], 'names the strategy that cannot be studied yet').toContain('SMA Crossover');
+    expect.soft(unavailable[0], 'names why it cannot be studied yet').toContain('No Golden Search declaration has shipped');
+
+    const process = screen.getByRole('list', { name: 'Research process' });
+    expect.soft(within(process).getAllByRole('listitem').map((item) => item.textContent?.trim()), 'shows the six steps of the research process in order').toEqual(['1 Plan', '2 Research', '3 Compare', '4 Final test', '5 Decision', '6 Deploy']);
+    expect.soft(process.querySelector('[aria-current="step"]')?.textContent, 'marks Plan as where the plan sits in the research process').toContain('Plan');
   });
 
   it('clears obsolete floor errors when a revised plan adopts expected trade frequency', async () => {
@@ -203,19 +207,37 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(service.preflight.mock.lastCall?.[0]).toMatchObject({ expected_trades_per_year: 50, policy: { min_trades: null }, exam_min_trades: null });
   });
 
-  it('loads the defaults for the strategy and instrument, then shows every knob, fixed control and constraint', async () => {
+  it("opens a picked SPY plan with its defaults laid out: every knob, fixed control and constraint, each knob's golden value and count, the first and last day, and the ranges a study can use (#2886)", async () => {
     const service = fakeService();
     const { view } = await renderForm(service);
 
     await pickSpy(service, view);
 
-    expect(service.defaults).toHaveBeenCalledWith('ema_crossover_signal', 'SPY');
+    expect.soft(service.defaults, 'loads the defaults for the strategy and instrument').toHaveBeenCalledWith('ema_crossover_signal', 'SPY');
     const table = screen.getByRole('table', { name: /knobs, in search order/i });
-    for (const label of ['Crossover gap', 'RSI lower gate', 'Fast EMA length', 'Hold time', 'Crossover gap (bps)']) expect(table.textContent).toContain(label);
-    expect(screen.getByRole('list', { name: 'Fixed controls' }).textContent).toContain('RSI length');
-    expect(screen.getByRole('list', { name: 'Constraints' }).textContent).toContain('Fast EMA length < Slow EMA length');
-    expect(screen.getByText(/registry validated settings/i)).not.toBeNull();
-    expect(screen.getByText('Gap $0.20 · RSI 50–70 · EMA 5/10 · hold 5 bars')).not.toBeNull();
+    for (const label of ['Crossover gap', 'RSI lower gate', 'Fast EMA length', 'Hold time', 'Crossover gap (bps)']) expect.soft(table.textContent, `shows the ${label} knob`).toContain(label);
+    expect.soft(screen.getByRole('list', { name: 'Fixed controls' }).textContent, 'shows the fixed controls').toContain('RSI length');
+    expect.soft(screen.getByRole('list', { name: 'Constraints' }).textContent, 'shows the constraints').toContain('Fast EMA length < Slow EMA length');
+    expect.soft(screen.getByText(/registry validated settings/i), 'names the registry validated settings').not.toBeNull();
+    expect.soft(screen.getByText('Gap $0.20 · RSI 50–70 · EMA 5/10 · hold 5 bars'), 'sums the registry settings up').not.toBeNull();
+
+    const columns = Array.from(table.querySelectorAll('thead th')).map((header) => header.textContent?.trim());
+    const cell = (knob: string, column: string): string => {
+      const row = screen.getByRole('rowheader', { name: new RegExp(knob) }).closest('tr');
+      return row?.children[columns.indexOf(column)]?.textContent?.trim() ?? '';
+    };
+
+    expect.soft(cell('Crossover gap price', 'Golden'), "shows each knob's golden value: Crossover gap price").toBe('0.2');
+    expect.soft(cell('Crossover gap price', 'Values'), "shows the server's count of the settings: Crossover gap price").toBe('13');
+    expect.soft(cell('Slow EMA length', 'Golden'), "shows each knob's golden value: Slow EMA length").toBe('10');
+    expect.soft(cell('Slow EMA length', 'Values'), "shows the server's count of the settings: Slow EMA length").toBe('23');
+
+    expect.soft((screen.getByRole('textbox', { name: 'Start date' }) as HTMLInputElement).value, 'shows the first day of the plan it opened with (#2886)').toBe('2024-01-01');
+    expect.soft((screen.getByRole('textbox', { name: 'End date' }) as HTMLInputElement).value, 'shows the last day of the plan it opened with (#2886)').toBe('2026-03-31');
+    expect.soft(within(screen.getByRole('group', { name: 'Quick ranges' })).getAllByRole('button').map((button) => button.textContent?.trim()), 'offers only the ranges a study can use (#2886)').toEqual(['6M', '1Y', '2Y', 'Max']);
+    expect.soft(planDates(view.container), 'lays the development and final test dates out under the bar (#2886)').toEqual(['Development 2024-01-01 to 2025-12-31', 'Final test 2026-01-01 to 2026-03-31']);
+    // No range has been picked, so the server was asked for its own layout.
+    expect.soft(service.defaults.mock.lastCall, 'asks the server for its own layout when no range is picked (#2886)').toEqual(['ema_crossover_signal', 'SPY']);
   });
 
   it('starts every knob at importance 5; a higher score moves the knob to the top, keeps focus, and locks with the plan', async () => {
@@ -299,14 +321,6 @@ describe('GoldenSearchPlanFormComponent', () => {
       ['study-0001-aaaa', 'revise'],
       ['study-0002-bbbb', 'run_research'],
     ]);
-  });
-
-  it('shows where the plan sits in the research process', async () => {
-    await renderForm(fakeService());
-
-    const process = screen.getByRole('list', { name: 'Research process' });
-    expect(within(process).getAllByRole('listitem').map((item) => item.textContent?.trim())).toEqual(['1 Plan', '2 Research', '3 Compare', '4 Final test', '5 Decision', '6 Deploy']);
-    expect(process.querySelector('[aria-current="step"]')?.textContent).toContain('Plan');
   });
 
   it('debounces a burst of edits into one preflight of the latest plan', async () => {
@@ -459,23 +473,6 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(screen.getByText('Same low and high: held at 5.')).not.toBeNull();
     expect(screen.queryByLabelText('Fast EMA length smallest step')).toBeNull();
     await waitFor(() => expect(lockButton().disabled).toBe(false));
-  });
-
-  it("shows each knob's golden value and the server's count of its settings", async () => {
-    const service = fakeService();
-    const { view } = await renderForm(service);
-    await pickSpy(service, view);
-    const table = screen.getByRole('table', { name: /knobs, in search order/i });
-    const columns = Array.from(table.querySelectorAll('thead th')).map((header) => header.textContent?.trim());
-    const cell = (knob: string, column: string): string => {
-      const row = screen.getByRole('rowheader', { name: new RegExp(knob) }).closest('tr');
-      return row?.children[columns.indexOf(column)]?.textContent?.trim() ?? '';
-    };
-
-    expect(cell('Crossover gap price', 'Golden')).toBe('0.2');
-    expect(cell('Crossover gap price', 'Values')).toBe('13');
-    expect(cell('Slow EMA length', 'Golden')).toBe('10');
-    expect(cell('Slow EMA length', 'Values')).toBe('23');
   });
 
   // A plan shows either its expected trade frequency or its two fixed floors, so the hidden fields are never refused.
@@ -699,19 +696,6 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(service.preflight.mock.lastCall?.[0].final_start_ms).toBe(etMidnightMs('2025-12-01'));
     expect(service.preflight.mock.lastCall?.[0].training_months).toBe(12);
     expect(service.preflight).toHaveBeenCalledTimes(2);
-  });
-
-  it('shows the first and last day of the plan it opened with, and offers only the ranges a study can use (#2886)', async () => {
-    const service = fakeService();
-    const { view } = await renderForm(service);
-    await pickSpy(service, view);
-
-    expect((screen.getByRole('textbox', { name: 'Start date' }) as HTMLInputElement).value).toBe('2024-01-01');
-    expect((screen.getByRole('textbox', { name: 'End date' }) as HTMLInputElement).value).toBe('2026-03-31');
-    expect(within(screen.getByRole('group', { name: 'Quick ranges' })).getAllByRole('button').map((button) => button.textContent?.trim())).toEqual(['6M', '1Y', '2Y', 'Max']);
-    expect(planDates(view.container)).toEqual(['Development 2024-01-01 to 2025-12-31', 'Final test 2026-01-01 to 2026-03-31']);
-    // No range has been picked, so the server was asked for its own layout.
-    expect(service.defaults.mock.lastCall).toEqual(['ema_crossover_signal', 'SPY']);
   });
 
   it('a picked range is laid out by the server inside it, and the page says what the plan left out (#2886)', async () => {

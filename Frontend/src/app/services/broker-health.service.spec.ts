@@ -45,54 +45,23 @@ describe('BrokerHealthService — bannerState', () => {
     expect(svc.bannerState()).toBeNull();
   });
 
-  it('returns disabled when health is disabled (takes priority)', () => {
+  it.each([
+    ['returns disabled when health is disabled (takes priority)', { disabled: true, connected: false }, 'disabled'],
+    ['remains disabled even when broker reports connected', { disabled: true, connected: true, is_paper: true }, 'disabled'],
+    ['returns disconnected when connected is false and not disabled', { connected: false, is_paper: null }, 'disconnected'],
+    ['returns degraded when reconnect recovery exhausts even if connected is false',
+      { connected: false, is_paper: null, connection_state: 'hard_down' }, 'degraded'],
+    ['returns paper when connected and is_paper is true', { connected: true, is_paper: true }, 'paper'],
+    ['returns live when connected and is_paper is false', { connected: true, is_paper: false }, 'live'],
+    ['returns degraded when the socket is connected but broker state is not ready', {
+      connected: true,
+      is_paper: true,
+      connection_state: 'subscriptions_stale',
+    }, 'degraded'],
+  ] as const)('derives the banner from loaded health: %s', (_name, overrides, expected) => {
     const { svc } = setup();
-    svc.health.set(makeHealth({ disabled: true, connected: false }));
-    expect(svc.bannerState()).toBe('disabled');
-  });
-
-  it('remains disabled even when broker reports connected', () => {
-    const { svc } = setup();
-    svc.health.set(makeHealth({ disabled: true, connected: true, is_paper: true }));
-    expect(svc.bannerState()).toBe('disabled');
-  });
-
-  it('returns disconnected when connected is false and not disabled', () => {
-    const { svc } = setup();
-    svc.health.set(makeHealth({ connected: false, is_paper: null }));
-    expect(svc.bannerState()).toBe('disconnected');
-  });
-
-  it('returns degraded when reconnect recovery exhausts even if connected is false', () => {
-    const { svc } = setup();
-    svc.health.set(
-      makeHealth({ connected: false, is_paper: null, connection_state: 'hard_down' }),
-    );
-    expect(svc.bannerState()).toBe('degraded');
-  });
-
-  it('returns paper when connected and is_paper is true', () => {
-    const { svc } = setup();
-    svc.health.set(makeHealth({ connected: true, is_paper: true }));
-    expect(svc.bannerState()).toBe('paper');
-  });
-
-  it('returns live when connected and is_paper is false', () => {
-    const { svc } = setup();
-    svc.health.set(makeHealth({ connected: true, is_paper: false }));
-    expect(svc.bannerState()).toBe('live');
-  });
-
-  it('returns degraded when the socket is connected but broker state is not ready', () => {
-    const { svc } = setup();
-    svc.health.set(
-      makeHealth({
-        connected: true,
-        is_paper: true,
-        connection_state: 'subscriptions_stale',
-      }),
-    );
-    expect(svc.bannerState()).toBe('degraded');
+    svc.health.set(makeHealth(overrides));
+    expect(svc.bannerState()).toBe(expected);
   });
 });
 

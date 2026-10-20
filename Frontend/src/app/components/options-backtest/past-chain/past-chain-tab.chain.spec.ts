@@ -19,20 +19,46 @@ function rowOf(strike: string): HTMLElement {
 const cellsOf = (row: HTMLElement) => [...row.querySelectorAll('td')].map((cell) => reads(cell));
 
 describe('the chain of one expiry', () => {
-  it('is read when an expiry is opened, with the expiry as the server gave it and neither an instant nor a number of strikes the owner did not choose', async () => {
+  it('is read once when an expiry is opened, with the expiry as the server gave it, and is drawn with calls on the left, the money strike marked, and every contract in words or by its priced trade', async () => {
     const service = fakeChainService(vi);
     await renderChainTab(service);
 
     await openStandardChain();
 
-    expect(service.expiry).toHaveBeenCalledTimes(1);
-    expect(service.expiry.mock.calls[0]?.[0]).toEqual({
+    expect.soft(service.expiry, 'is read when an expiry is opened').toHaveBeenCalledTimes(1);
+    expect.soft(service.expiry.mock.calls[0]?.[0], 'is read with the expiry as the server gave it and neither an instant nor a number of strikes the owner did not choose').toEqual({
       underlying: 'SPY',
       tradingDateMs: TRADING_DATE_MS,
       expiryMs: EXPIRY_MS['2026-10-16'],
       atMs: null,
       strikes: null,
     });
+    const headers = within(chainTable()).getAllByRole('columnheader').map((header) => reads(header));
+    const strikes = within(chainTable())
+      .getAllByRole('rowheader')
+      .map((header) => reads(header).split(' ')[0]);
+    expect.soft(headers, 'puts calls on the left, the strikes down the middle and puts on the right').toEqual(['Calls', 'Strike', 'Puts']);
+    expect.soft(strikes, 'puts the strikes in strike order').toEqual(['$601.00', '$602.00', '$603.00']);
+    expect.soft(rowOf('$601.00').querySelectorAll('td')[0]?.querySelector('[aria-label]')?.getAttribute('aria-label'), 'names the call contract of the first strike').toBe("SPY Oct 16 '26 601 Call");
+    expect.soft(rowOf('$601.00').querySelectorAll('td')[1]?.querySelector('[aria-label]')?.getAttribute('aria-label'), 'names the put contract of the first strike').toBe("SPY Oct 16 '26 601 Put");
+    expect.soft(reads(rowOf('$602.00').querySelector('th')), 'marks the money strike as the server served it').toContain('At the money');
+    expect.soft(reads(rowOf('$601.00').querySelector('th')), 'does not mark the strike below the money strike').not.toContain('At the money');
+    expect.soft(reads(rowOf('$603.00').querySelector('th')), 'does not mark the strike above the money strike').not.toContain('At the money');
+    // 19:59 UTC is 15:59 in New York in October; 19:58 UTC is 15:58.
+    expect.soft(cellsOf(rowOf('$602.00'))[0], 'says, for a contract that traded, the price and the time of that trade in New York time: the 602 call').toMatch(/\$2\.10 in the minute ending 15:59 ET/);
+    expect.soft(cellsOf(rowOf('$601.00'))[0], 'says, for a contract that traded, the price and the time of that trade in New York time: the 601 call').toMatch(/\$3\.25 in the minute ending 15:58 ET/);
+    expect.soft(cellsOf(rowOf('$603.00'))[1], 'says, for a contract that traded, the price and the time of that trade in New York time: the 603 put').toMatch(/\$1\.05 in the minute ending 15:45 ET/);
+    const prices = [...chainTable().querySelectorAll('app-options-backtest-chain-contract .price')];
+    expect.soft(prices.length, 'shows three prices in the table').toBe(3);
+    for (const price of prices) {
+      expect.soft(reads(price.closest('app-options-backtest-chain-contract')), 'never shows a price without a time: every price in the table has the time of its trade beside it').toMatch(/\$\d+\.\d{2} in the minute ending \d{2}:\d{2} ET/);
+    }
+    expect.soft(cellsOf(rowOf('$603.00'))[0], 'says in words that a contract did not trade').toContain('Did not trade by then');
+    expect.soft(cellsOf(rowOf('$601.00'))[1], 'says in words that a contract has no prices stored').toContain('Listed; prices not stored');
+    expect.soft(cellsOf(rowOf('$602.00'))[1], 'says in words that a contract cannot be read').toContain('Prices cannot be read');
+    expect.soft(cellsOf(rowOf('$602.00'))[1], 'says in words why a contract cannot be read').toContain('the stored file is damaged (OptionBarsFileError)');
+    for (const cell of chainTable().querySelectorAll('td')) expect.soft(reads(cell), 'never shows a blank cell').not.toBe('');
+    expect.soft(chainTable().textContent, 'never shows a zero for a missing price').not.toMatch(/\$0\.00/);
   });
 
   it('is not read before the expiry is picked, and the page asks for a pick', async () => {
@@ -44,30 +70,6 @@ describe('the chain of one expiry', () => {
 
     expect(service.expiry).not.toHaveBeenCalled();
     expect(screen.getByText('No expiry is open. Open one above to read its chain.')).toBeTruthy();
-  });
-
-  it('puts calls on the left, the strikes down the middle and puts on the right, in strike order', async () => {
-    await renderChainTab(fakeChainService(vi));
-    await openStandardChain();
-
-    const headers = within(chainTable()).getAllByRole('columnheader').map((header) => reads(header));
-    const strikes = within(chainTable())
-      .getAllByRole('rowheader')
-      .map((header) => reads(header).split(' ')[0]);
-
-    expect(headers).toEqual(['Calls', 'Strike', 'Puts']);
-    expect(strikes).toEqual(['$601.00', '$602.00', '$603.00']);
-    expect(rowOf('$601.00').querySelectorAll('td')[0]?.querySelector('[aria-label]')?.getAttribute('aria-label')).toBe("SPY Oct 16 '26 601 Call");
-    expect(rowOf('$601.00').querySelectorAll('td')[1]?.querySelector('[aria-label]')?.getAttribute('aria-label')).toBe("SPY Oct 16 '26 601 Put");
-  });
-
-  it('marks the money strike as the server served it', async () => {
-    await renderChainTab(fakeChainService(vi));
-    await openStandardChain();
-
-    expect(reads(rowOf('$602.00').querySelector('th'))).toContain('At the money');
-    expect(reads(rowOf('$601.00').querySelector('th'))).not.toContain('At the money');
-    expect(reads(rowOf('$603.00').querySelector('th'))).not.toContain('At the money');
   });
 
   it('marks calls and puts apart when their money strikes differ', async () => {
@@ -84,40 +86,6 @@ describe('the chain of one expiry', () => {
 
     expect(reads(rowOf('$602.00').querySelector('th'))).toContain('At the money for calls');
     expect(reads(rowOf('$603.00').querySelector('th'))).toContain('At the money for puts');
-  });
-
-  it('says, for a contract that traded, the price and the time of that trade in New York time', async () => {
-    await renderChainTab(fakeChainService(vi));
-    await openStandardChain();
-
-    // 19:59 UTC is 15:59 in New York in October; 19:58 UTC is 15:58.
-    expect(cellsOf(rowOf('$602.00'))[0]).toMatch(/\$2\.10 in the minute ending 15:59 ET/);
-    expect(cellsOf(rowOf('$601.00'))[0]).toMatch(/\$3\.25 in the minute ending 15:58 ET/);
-    expect(cellsOf(rowOf('$603.00'))[1]).toMatch(/\$1\.05 in the minute ending 15:45 ET/);
-  });
-
-  it('never shows a price without a time: every price in the table has the time of its trade beside it', async () => {
-    await renderChainTab(fakeChainService(vi));
-    await openStandardChain();
-
-    const prices = [...chainTable().querySelectorAll('app-options-backtest-chain-contract .price')];
-
-    expect(prices.length).toBe(3);
-    for (const price of prices) {
-      expect(reads(price.closest('app-options-backtest-chain-contract'))).toMatch(/\$\d+\.\d{2} in the minute ending \d{2}:\d{2} ET/);
-    }
-  });
-
-  it('says in words, never as a blank or a zero, that a contract did not trade, has no prices stored, or cannot be read', async () => {
-    await renderChainTab(fakeChainService(vi));
-    await openStandardChain();
-
-    expect(cellsOf(rowOf('$603.00'))[0]).toContain('Did not trade by then');
-    expect(cellsOf(rowOf('$601.00'))[1]).toContain('Listed; prices not stored');
-    expect(cellsOf(rowOf('$602.00'))[1]).toContain('Prices cannot be read');
-    expect(cellsOf(rowOf('$602.00'))[1]).toContain('the stored file is damaged (OptionBarsFileError)');
-    for (const cell of chainTable().querySelectorAll('td')) expect(reads(cell)).not.toBe('');
-    expect(chainTable().textContent).not.toMatch(/\$0\.00/);
   });
 
   it('shows no price at all for a trade the server sent without its time, and says so', async () => {
@@ -182,11 +150,8 @@ describe('the underlying at that time', () => {
     return reads(screen.getByRole('group', { name: 'The underlying at that time' }));
   }
 
-  it('is its price with the time of the bar it is the close of', async () => {
-    expect(await openWith({ price: '602.40', price_time_ms: MINUTE_1559_MS })).toBe('SPY $602.40 in the minute ending 15:59 ET');
-  });
-
   it.each([
+    [{ price: '602.40', price_time_ms: MINUTE_1559_MS }, '$602.40 in the minute ending 15:59 ET'],
     [{ state: 'no_bar_yet', price: null, price_time_ms: null }, 'No bar has closed by then'],
     [{ state: 'not_stored', price: null, price_time_ms: null }, 'Its bars are not stored'],
     [{ state: 'unreadable', price: null, price_time_ms: null, problem: 'the bars of SPY cannot be read (UnderlyingDayUnreadable)' }, 'Its bars cannot be read the bars of SPY cannot be read (UnderlyingDayUnreadable)'],

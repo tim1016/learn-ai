@@ -84,7 +84,7 @@ function run(): BacktestRunDetail {
 }
 
 describe("ResultsSidebarComponent", () => {
-  it("renders an ordered, producer-colored list without repeating headline KPIs", async () => {
+  it("renders an ordered, producer-colored metric list with each note behind its own disclosure", async () => {
     await TestBed.configureTestingModule({
       imports: [ResultsSidebarComponent],
       providers: [provideZonelessChangeDetection()],
@@ -94,41 +94,30 @@ describe("ResultsSidebarComponent", () => {
     fixture.detectChanges();
 
     const root = fixture.nativeElement as HTMLElement;
-    expect(root.querySelector("ol.results-sidebar__metrics")).not.toBeNull();
-    expect(root.textContent).toContain("CAGR");
-    expect(root.textContent).toContain("Calmar");
-    expect(root.textContent).not.toContain("Sharpe");
-    expect(root.textContent).not.toContain("Benchmark");
-    expect(root.querySelector("[data-band='positive']")?.textContent).toContain("CAGR");
-    expect(root.querySelector("[data-band='warning']")?.textContent).toContain("Calmar");
-    expect(root.textContent).toContain("Compatibility");
-    expect(root.textContent).toContain("Diverged");
-    expect(root.textContent).not.toContain("Counts differ");
-  });
+    expect.soft(root.querySelector("ol.results-sidebar__metrics"), "renders an ordered list without repeating headline KPIs: ordered list present").not.toBeNull();
+    expect.soft(root.textContent, "renders an ordered list without repeating headline KPIs: shows CAGR").toContain("CAGR");
+    expect.soft(root.textContent, "renders an ordered list without repeating headline KPIs: shows Calmar").toContain("Calmar");
+    expect.soft(root.textContent, "renders an ordered list without repeating headline KPIs: omits Sharpe").not.toContain("Sharpe");
+    expect.soft(root.textContent, "renders an ordered list without repeating headline KPIs: omits Benchmark").not.toContain("Benchmark");
+    expect.soft(root.querySelector("[data-band='positive']")?.textContent, "producer-colored list: CAGR is in the positive band").toContain("CAGR");
+    expect.soft(root.querySelector("[data-band='warning']")?.textContent, "producer-colored list: Calmar is in the warning band").toContain("Calmar");
+    expect.soft(root.textContent, "shows the Compatibility section").toContain("Compatibility");
+    expect.soft(root.textContent, "shows the Diverged status").toContain("Diverged");
+    expect.soft(root.textContent, "does not repeat the divergence message").not.toContain("Counts differ");
 
-  it("exposes each metric's note through a keyboard-operable disclosure, not a hover-only title (#2462)", async () => {
-    await TestBed.configureTestingModule({
-      imports: [ResultsSidebarComponent],
-      providers: [provideZonelessChangeDetection()],
-    }).compileComponents();
-    const fixture = TestBed.createComponent(ResultsSidebarComponent);
-    fixture.componentRef.setInput("run", run());
-    fixture.detectChanges();
-
-    const root = fixture.nativeElement as HTMLElement;
     const disclosures = Array.from(root.querySelectorAll("details.results-sidebar__note"));
-    expect(disclosures.length).toBeGreaterThan(1);
+    expect.soft(disclosures.length, "exposes each metric's note through a disclosure (#2462): more than one disclosure").toBeGreaterThan(1);
     // No metric row leans on a hover `title` for its explanation anymore.
-    expect(root.querySelector(".results-sidebar__metrics [title]")).toBeNull();
+    expect.soft(root.querySelector(".results-sidebar__metrics [title]"), "exposes each metric's note through a disclosure (#2462): no hover-only title").toBeNull();
 
     // Every disclosure's accessible name names its metric, so a screen
     // reader tabbing through the list can tell the controls apart.
     const summaries = disclosures.map((details) => details.querySelector("summary")?.textContent?.trim());
-    expect(summaries).toEqual(["Why this score: CAGR", "Why this score: Calmar"]);
-    expect(new Set(summaries).size).toBe(summaries.length);
+    expect.soft(summaries, "exposes each metric's note through a disclosure (#2462): summaries name their metric").toEqual(["Why this score: CAGR", "Why this score: Calmar"]);
+    expect.soft(new Set(summaries).size, "exposes each metric's note through a disclosure (#2462): summaries are distinct").toBe(summaries.length);
 
     const disclosure = disclosures[0] as HTMLDetailsElement;
-    expect(disclosure.textContent).toContain("Above target.");
+    expect.soft(disclosure.textContent, "exposes each metric's note through a disclosure (#2462): note text is in the first disclosure").toContain("Above target.");
   });
 
   it("opens and closes a note by keyboard alone (#2462)", async () => {

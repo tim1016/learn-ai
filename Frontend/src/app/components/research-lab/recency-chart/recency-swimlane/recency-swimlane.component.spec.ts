@@ -65,28 +65,23 @@ describe("RecencySwimlaneComponent", () => {
     expect(button).not.toBeNull();
   });
 
-  it("emits tradeSelected with the clicked trade", async () => {
-    const t = trade({ fingerprint: "clicked-one" });
+  it.each([
+    ["clicked", "clicked-one", (button: HTMLElement) => fireEvent.click(button)],
+    [
+      "activated with the Enter key",
+      "keyboard-one",
+      (button: HTMLElement) => fireEvent.keyDown(button, { key: "Enter" }),
+    ],
+  ])("emits tradeSelected with the trade when it is %s", async (_name, fingerprint, activate) => {
+    const t = trade({ fingerprint });
     const view = await render(RecencySwimlaneComponent, { inputs: { trades: [t] } });
     const onSelect = vi.fn();
     view.fixture.componentInstance.tradeSelected.subscribe(onSelect);
 
-    fireEvent.click(screen.getByRole("button"));
+    activate(screen.getByRole("button"));
     await view.fixture.whenStable();
 
-    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ fingerprint: "clicked-one" }));
-  });
-
-  it("emits tradeSelected on Enter key activation", async () => {
-    const t = trade({ fingerprint: "keyboard-one" });
-    const view = await render(RecencySwimlaneComponent, { inputs: { trades: [t] } });
-    const onSelect = vi.fn();
-    view.fixture.componentInstance.tradeSelected.subscribe(onSelect);
-
-    fireEvent.keyDown(screen.getByRole("button"), { key: "Enter" });
-    await view.fixture.whenStable();
-
-    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ fingerprint: "keyboard-one" }));
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ fingerprint }));
   });
 
   it("renders nothing and does not throw for an empty trade list", async () => {

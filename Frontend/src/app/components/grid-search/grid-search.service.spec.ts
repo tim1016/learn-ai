@@ -50,30 +50,26 @@ describe('GridSearchService', () => {
     await expect(pending).resolves.toMatchObject({ combinations: 2 });
   });
 
-  it('decodes a refusal the .NET jobs boundary forwarded as a ProblemDetails detail string', async () => {
+  it('turns a refusal into a GridSearchRefusedError: from a ProblemDetails detail string the .NET jobs boundary forwarded, and from a 400 with a code', async () => {
     startJob.mockRejectedValueOnce(
       new HttpErrorResponse({ status: 400, error: { detail: JSON.stringify({ detail: { code: 'WORKLOAD_LIMIT', message: '6000 backtests exceed the limit of 5000' } }) } }),
     );
 
-    await expect(service.launch(SPEC)).rejects.toMatchObject({ refusal: { code: 'WORKLOAD_LIMIT' } });
-  });
+    await expect.soft(service.launch(SPEC), 'decodes a refusal the .NET jobs boundary forwarded as a ProblemDetails detail string').rejects.toMatchObject({ refusal: { code: 'WORKLOAD_LIMIT' } });
 
-  it('turns a 400 with a code into a GridSearchRefusedError', async () => {
     const pending = service.preflight(SPEC);
     http.expectOne(`${BASE}/preflight`).flush({ detail: { code: 'DATA_MISSING', message: 'the lake is missing 2 sessions' } }, { status: 400, statusText: 'Bad Request' });
 
-    await expect(pending).rejects.toBeInstanceOf(GridSearchRefusedError);
-    await pending.catch((error: GridSearchRefusedError) => expect(error.refusal.code).toBe('DATA_MISSING'));
+    await expect.soft(pending, 'turns a 400 with a code into a GridSearchRefusedError').rejects.toBeInstanceOf(GridSearchRefusedError);
+    await pending.catch((error: GridSearchRefusedError) => expect.soft(error.refusal.code, 'keeps the code of a 400 refusal').toBe('DATA_MISSING'));
   });
 
-  it('launches through the jobs boundary as a grid_search job', async () => {
-    await expect(service.launch(SPEC)).resolves.toBe('job-1');
-    expect(startJob).toHaveBeenCalledWith('grid_search', SPEC);
-  });
+  it('starts a grid_search job through the jobs boundary: a launch, and a finish that resubmits the stored request with resume_search_id', async () => {
+    await expect.soft(service.launch(SPEC), 'launches through the jobs boundary as a grid_search job (resolves with the job id)').resolves.toBe('job-1');
+    expect.soft(startJob, 'launches through the jobs boundary as a grid_search job (starts that job type with the spec)').toHaveBeenCalledWith('grid_search', SPEC);
 
-  it('finishes an incomplete search by resubmitting its stored request with resume_search_id', async () => {
     await service.finish({ id: 'abc', request: SPEC } as never);
-    expect(startJob).toHaveBeenLastCalledWith('grid_search', { ...SPEC, resume_search_id: 'abc' });
+    expect.soft(startJob, 'finishes an incomplete search by resubmitting its stored request with resume_search_id').toHaveBeenLastCalledWith('grid_search', { ...SPEC, resume_search_id: 'abc' });
   });
 
   it('lists with only the filters that are set', async () => {

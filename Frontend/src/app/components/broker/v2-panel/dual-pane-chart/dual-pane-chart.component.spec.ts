@@ -309,7 +309,7 @@ describe('DualPaneChartComponent', () => {
       return rendered;
     }
 
-    it('places each mark on the delayed tape’s own 1-minute bars', async () => {
+    it('places each mark on the delayed tape’s own 1-minute bars, and keeps a mark off them for screen readers without placing it', async () => {
       await renderTape({
         liveBars: [],
         histBars: [minuteBar(0), minuteBar(1), minuteBar(2)],
@@ -320,7 +320,11 @@ describe('DualPaneChartComponent', () => {
       const decisions = within(screen.getByRole('group', { name: 'The run’s events on the chart’s clock' }))
         .getByRole('list', { name: 'Decisions' });
       // Bar 1's candle is centred at x 110; halfway through it is its centre.
-      expect(within(decisions).getByRole('listitem', { name: 'Enter (local)' }).style.left).toBe('110px');
+      expect.soft(within(decisions).getByRole('listitem', { name: 'Enter (local)' }).style.left, 'places each mark on the delayed tape’s own 1-minute bars').toBe('110px');
+
+      const early = screen.getByRole('listitem', { name: 'Before start' });
+      expect.soft(early.className, 'keeps a mark off the tape’s bars for screen readers').toContain('chart-lanes__mark--off');
+      expect.soft(early.style.left, 'keeps a mark off the tape’s bars without placing it').toBe('');
     });
 
     it('names the asset of a lane about another one through the shared symbol renderer (#2915)', async () => {
@@ -364,19 +368,6 @@ describe('DualPaneChartComponent', () => {
       // The first 5-second bar closes on its candle's right edge, halfway to the next candle's centre.
       const first = screen.getByRole('listitem', { name: 'Hold' });
       expect(Number.parseFloat(first.style.left)).toBeCloseTo(100 + (2_500 / 60_000) * 10, 6);
-    });
-
-    it('keeps a mark off the tape’s bars for screen readers, without placing it', async () => {
-      await renderTape({
-        liveBars: [],
-        histBars: [minuteBar(0), minuteBar(1), minuteBar(2)],
-        historyDataTimeframe: '1m',
-        initialPane: 'polygon',
-      });
-
-      const early = screen.getByRole('listitem', { name: 'Before start' });
-      expect(early.className).toContain('chart-lanes__mark--off');
-      expect(early.style.left).toBe('');
     });
 
     it('draws no lanes when the host passes none, as in the Strategy Lab', async () => {
@@ -833,32 +824,23 @@ describe('DualPaneChartComponent', () => {
     }
   });
 
-  it('formats exchange-time labels with America/New_York and the shared ET marker', () => {
+  it('formats crosshair labels on the shared display core: ET with its marker, local without, five-second candles apart', () => {
     const seconds = 1_741_524_000;
-    const expected = formatTimestampDisplay(seconds * 1_000, {
+    const expectedEt = formatTimestampDisplay(seconds * 1_000, {
       mode: 'et',
       granularity: 'chart',
     });
-
-    expect(formatChartCrosshairTime(seconds, 'et')).toBe(expected);
-    expect(formatChartCrosshairTime(seconds, 'et')).toMatch(/ ET$/);
-  });
-
-  it('formats local labels via the shared display core without an ET marker', () => {
-    const seconds = 1_741_524_000;
-    const expected = formatTimestampDisplay(seconds * 1_000, {
+    const expectedLocal = formatTimestampDisplay(seconds * 1_000, {
       mode: 'local',
       granularity: 'chart',
     });
-
-    expect(formatChartCrosshairTime(seconds, 'local')).toBe(expected);
-    expect(formatChartCrosshairTime(seconds, 'local')).not.toMatch(/ ET$/);
-  });
-
-  it('keeps consecutive five-second candles distinguishable in the time readout', () => {
     const fiveSecondsLater = 1_741_524_005;
 
-    expect(formatChartCrosshairTime(1_741_524_000, 'et')).not.toBe(
+    expect.soft(formatChartCrosshairTime(seconds, 'et'), 'formats exchange-time labels with America/New_York').toBe(expectedEt);
+    expect.soft(formatChartCrosshairTime(seconds, 'et'), 'formats exchange-time labels with the shared ET marker').toMatch(/ ET$/);
+    expect.soft(formatChartCrosshairTime(seconds, 'local'), 'formats local labels via the shared display core').toBe(expectedLocal);
+    expect.soft(formatChartCrosshairTime(seconds, 'local'), 'formats local labels without an ET marker').not.toMatch(/ ET$/);
+    expect.soft(formatChartCrosshairTime(1_741_524_000, 'et'), 'keeps consecutive five-second candles distinguishable in the time readout').not.toBe(
       formatChartCrosshairTime(fiveSecondsLater, 'et'),
     );
   });
@@ -1009,8 +991,11 @@ describe('DualPaneChartComponent', () => {
     expect(series.update).not.toHaveBeenCalled();
   });
 
-  it('projects live fills into candle-series markers', () => {
-    const markers = toSeriesMarkers(
+  const condensedStartMs = 1_700_000_000_000;
+
+  it.each<[string, ChartFillMarker[], ChartBar[], unknown[]]>([
+    [
+      'projects live fills into candle-series markers',
       [
         {
           filled_at_ms: 1_700_000_030_000,
@@ -1033,16 +1018,94 @@ describe('DualPaneChartComponent', () => {
           source: 'ibkr',
         },
       ],
-    );
+      [
+        expect.objectContaining({
+          time: 1_700_000_000,
+          position: 'belowBar',
+          shape: 'arrowUp',
+          text: 'BUY 2 @ 101',
+        }),
+      ],
+    ],
+    [
+      'condenses same-side fills that share a delayed candle into one readable marker',
+      [
+        {
+          filled_at_ms: condensedStartMs + 60_000,
+          side: 'sell',
+          quantity: 1,
+          price: 101,
+          order_ref: 'order-1',
+          event_key: 'exec-1',
+        },
+        {
+          filled_at_ms: condensedStartMs + 120_000,
+          side: 'sell',
+          quantity: 2,
+          price: 101.5,
+          order_ref: 'order-2',
+          event_key: 'exec-2',
+        },
+        {
+          filled_at_ms: condensedStartMs + 180_000,
+          side: 'sell',
+          quantity: 1,
+          price: 102,
+          order_ref: 'order-3',
+          event_key: 'exec-3',
+        },
+      ],
+      [
+        {
+          start_ms: condensedStartMs,
+          end_ms: condensedStartMs + 15 * 60_000,
+          open: '100',
+          high: '103',
+          low: '99',
+          close: '102',
+          volume: 1_000,
+          source: 'polygon',
+        },
+      ],
+      [
+        expect.objectContaining({
+          time: condensedStartMs / 1_000,
+          position: 'aboveBar',
+          shape: 'arrowDown',
+          text: 'SELL · 3 fills',
+        }),
+      ],
+    ],
+    [
+      'does not fabricate a position for a fill outside the available candles',
+      [
+        {
+          filled_at_ms: 1_699_999_000_000,
+          side: 'buy',
+          quantity: 1,
+          price: 99,
+          order_ref: 'before-buffer',
+          event_key: 'exec-before-buffer',
+        },
+      ],
+      [
+        {
+          start_ms: 1_700_000_000_000,
+          end_ms: 1_700_000_005_000,
+          open: '100',
+          high: '102',
+          low: '99',
+          close: '101',
+          volume: 100,
+          source: 'ibkr',
+        },
+      ],
+      [],
+    ],
+  ])('maps fills onto candle-series markers: %s', (_name, fills, bars, expected) => {
+    const markers = toSeriesMarkers(fills, bars);
 
-    expect(markers).toEqual([
-      expect.objectContaining({
-        time: 1_700_000_000,
-        position: 'belowBar',
-        shape: 'arrowUp',
-        text: 'BUY 2 @ 101',
-      }),
-    ]);
+    expect(markers).toEqual(expected);
   });
 
   it('counts grouped fills individually in the plotted tally', () => {
@@ -1092,59 +1155,6 @@ describe('DualPaneChartComponent', () => {
     expect(countPlottedFills(fills, bars)).toBe(2);
   });
 
-  it('condenses same-side fills that share a delayed candle into one readable marker', () => {
-    const startMs = 1_700_000_000_000;
-    const markers = toSeriesMarkers(
-      [
-        {
-          filled_at_ms: startMs + 60_000,
-          side: 'sell',
-          quantity: 1,
-          price: 101,
-          order_ref: 'order-1',
-          event_key: 'exec-1',
-        },
-        {
-          filled_at_ms: startMs + 120_000,
-          side: 'sell',
-          quantity: 2,
-          price: 101.5,
-          order_ref: 'order-2',
-          event_key: 'exec-2',
-        },
-        {
-          filled_at_ms: startMs + 180_000,
-          side: 'sell',
-          quantity: 1,
-          price: 102,
-          order_ref: 'order-3',
-          event_key: 'exec-3',
-        },
-      ],
-      [
-        {
-          start_ms: startMs,
-          end_ms: startMs + 15 * 60_000,
-          open: '100',
-          high: '103',
-          low: '99',
-          close: '102',
-          volume: 1_000,
-          source: 'polygon',
-        },
-      ],
-    );
-
-    expect(markers).toEqual([
-      expect.objectContaining({
-        time: startMs / 1_000,
-        position: 'aboveBar',
-        shape: 'arrowDown',
-        text: 'SELL · 3 fills',
-      }),
-    ]);
-  });
-
   it('anchors a fill to its exact five-second candle', () => {
     const base = 1_700_000_000_000;
     const bars = [0, 5_000, 10_000].map((offset) => ({
@@ -1171,34 +1181,5 @@ describe('DualPaneChartComponent', () => {
 
     expect(marker.time).toBe((base + 5_000) / 1_000);
     expect(marker.position).toBe('aboveBar');
-  });
-
-  it('does not fabricate a position for a fill outside the available candles', () => {
-    const markers = toSeriesMarkers(
-      [
-        {
-          filled_at_ms: 1_699_999_000_000,
-          side: 'buy',
-          quantity: 1,
-          price: 99,
-          order_ref: 'before-buffer',
-          event_key: 'exec-before-buffer',
-        },
-      ],
-      [
-        {
-          start_ms: 1_700_000_000_000,
-          end_ms: 1_700_000_005_000,
-          open: '100',
-          high: '102',
-          low: '99',
-          close: '101',
-          volume: 100,
-          source: 'ibkr',
-        },
-      ],
-    );
-
-    expect(markers).toEqual([]);
   });
 });

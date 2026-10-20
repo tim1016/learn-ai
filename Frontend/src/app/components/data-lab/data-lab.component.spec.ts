@@ -168,14 +168,19 @@ async function renderDirectShell(url: string) {
 }
 
 describe('DataLabComponent (shell)', () => {
-  it('renders the four route tabs and redirects /data-lab to explore', async () => {
-    const { router } = await renderRoutedShell();
-    expect(router.url).toBe('/explore');
-    expect(screen.getByRole('link', { name: 'Explore' })).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Build dataset' })).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Validate' })).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Returns study' })).toBeTruthy();
-    expect(screen.getByText('explore-stub')).toBeTruthy();
+  it('renders the shell on first load: four route tabs, the redirect to explore, the default recipe, the quick-range chips', async () => {
+    const { router, store } = await renderRoutedShell();
+    expect.soft(router.url, 'redirects /data-lab to explore').toBe('/explore');
+    expect.soft(screen.getByRole('link', { name: 'Explore' }), 'renders the Explore tab').toBeTruthy();
+    expect.soft(screen.getByRole('link', { name: 'Build dataset' }), 'renders the Build dataset tab').toBeTruthy();
+    expect.soft(screen.getByRole('link', { name: 'Validate' }), 'renders the Validate tab').toBeTruthy();
+    expect.soft(screen.getByRole('link', { name: 'Returns study' }), 'renders the Returns study tab').toBeTruthy();
+    expect.soft(screen.getByText('explore-stub'), 'redirects /data-lab to explore: renders the explore child').toBeTruthy();
+    expect.soft(store.indicators().length, 'seeds the thirteen-indicator default recipe into a fresh workspace').toBe(13);
+
+    const group = screen.getByRole('group', { name: 'Quick ranges' });
+    expect.soft(group.querySelector('button')?.textContent?.trim(), 'renders the quick-range chips Python resolved: first chip').toBe('1D');
+    expect.soft(screen.getByRole('button', { name: '6M' }), 'renders the quick-range chips Python resolved: 6M chip').toBeTruthy();
   });
 
   it('navigates between child routes via the tabs', async () => {
@@ -251,11 +256,6 @@ describe('DataLabComponent (shell)', () => {
     expect(screen.queryByText(/Dropped invalid mode/)).toBeNull();
   });
 
-  it('seeds the thirteen-indicator default recipe into a fresh workspace', async () => {
-    const { store } = await renderRoutedShell();
-    expect(store.indicators().length).toBe(13);
-  });
-
   it('hosts the shell-owned run dock and opens the saved-setups drawer', async () => {
     await renderRoutedShell();
     expect(document.querySelector('app-run-dock')).not.toBeNull();
@@ -265,13 +265,6 @@ describe('DataLabComponent (shell)', () => {
   });
 
   // ── Calendar-resolved quick ranges ──────────────────────────
-  it('renders the quick-range chips Python resolved', async () => {
-    await renderRoutedShell();
-    const group = screen.getByRole('group', { name: 'Quick ranges' });
-    expect(group.querySelector('button')?.textContent?.trim()).toBe('1D');
-    expect(screen.getByRole('button', { name: '6M' })).toBeTruthy();
-  });
-
   it("shows Python's five-year preset under 5Y and applies its window as resolved", async () => {
     const { store, fixture } = await renderRoutedShell();
     store.patchDraft({ ticker: 'SPY' });

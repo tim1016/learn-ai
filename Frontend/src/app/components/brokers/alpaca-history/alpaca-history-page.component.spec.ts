@@ -116,23 +116,27 @@ async function renderHistory(answer: FleetBotHistoryPage, inputs: Record<string,
 }
 
 describe('AlpacaHistoryPageComponent', () => {
-  it('lists every account with no filter pre-selected, one line per bot', async () => {
+  it('lists every account with no filter pre-selected, one line per bot, and words each account’s mode in the filter', async () => {
     const { read } = await renderHistory(page());
 
-    expect(read).toHaveBeenCalledWith(ANY);
-    expect((screen.getByLabelText('Account') as HTMLSelectElement).value).toBe('');
+    expect.soft(read, 'reads every account with no filter').toHaveBeenCalledWith(ANY);
+    expect.soft((screen.getByLabelText('Account') as HTMLSelectElement).value, 'no account pre-selected').toBe('');
+    const options = within(screen.getByLabelText('Account')).getAllByRole('option').map((option) => option.textContent?.trim());
+    expect.soft(options, 'names each account in the filter with its mode worded')
+      .toEqual(['All accounts', 'Paper · PAPER · practice money', 'Live · LIVE · real money']);
     const line = screen.getByRole('link', { name: 'spy-ema-20260928-0931' }).closest('tr') as HTMLElement;
     // The account is named with its mode worded, not by colour alone.
-    expect(within(line).getByText('Paper')).toBeTruthy();
-    expect(line.querySelector('app-alpaca-lane-mode-chip')?.textContent?.trim()).toBe('PAPER · practice money');
-    expect(within(line).getByText('Stopped by you', { exact: false })).toBeTruthy();
-    expect(within(line).getByText(formatReceiptLabel('STOPPED_FLAT'))).toBeTruthy();
-    expect(within(line).getByText('Finished')).toBeTruthy();
+    expect.soft(within(line).getByText('Paper'), 'the line names its account').toBeTruthy();
+    expect.soft(line.querySelector('app-alpaca-lane-mode-chip')?.textContent?.trim(), 'the line words the account’s mode')
+      .toBe('PAPER · practice money');
+    expect.soft(within(line).getByText('Stopped by you', { exact: false }), 'the line shows the outcome headline').toBeTruthy();
+    expect.soft(within(line).getByText(formatReceiptLabel('STOPPED_FLAT')), 'the line shows the outcome reason').toBeTruthy();
+    expect.soft(within(line).getByText('Finished'), 'the line shows the status').toBeTruthy();
     // Dollars are the backend's own strings, formatted, never recomputed.
-    expect(within(line).getByText('$1,500.00')).toBeTruthy();
-    expect(within(line).getByText('$12.34')).toBeTruthy();
-    expect(within(line).getByText('$0.07')).toBeTruthy();
-    expect(line.textContent).toContain('3 sent · 2 filled · 1 cancelled');
+    expect.soft(within(line).getByText('$1,500.00'), 'the line shows the budget').toBeTruthy();
+    expect.soft(within(line).getByText('$12.34'), 'the line shows the result').toBeTruthy();
+    expect.soft(within(line).getByText('$0.07'), 'the line shows the fees').toBeTruthy();
+    expect.soft(line.textContent, 'the line counts the orders').toContain('3 sent · 2 filled · 1 cancelled');
   });
 
   it('names what a bot listened to and what it traded when that was something else (#2912)', async () => {
@@ -185,13 +189,6 @@ describe('AlpacaHistoryPageComponent', () => {
     expect(screen.queryByRole('link', { name: 'sh-dv-spy-0916' })).toBeNull();
     const line = screen.getByText('sh-dv-spy-0916').closest('tr') as HTMLElement;
     expect(within(line).getByText(why)).toBeTruthy();
-  });
-
-  it('names each account in the filter with its mode worded', async () => {
-    await renderHistory(page());
-
-    const options = within(screen.getByLabelText('Account')).getAllByRole('option').map((option) => option.textContent?.trim());
-    expect(options).toEqual(['All accounts', 'Paper · PAPER · practice money', 'Live · LIVE · real money']);
   });
 
   it("opens a bot's own page on its own account's workspace, from its one link", async () => {

@@ -532,26 +532,22 @@ describe('StrategyBuilderComponent', () => {
       expect(matches.length).toBe(0);
     });
 
-    it('canAnalyze is false when no legs are enabled', () => {
+    it.each<[boolean, string, ReturnType<StrategyBuilderComponent['legs']>]>([
+      [false, 'no legs are enabled', []],
+      [
+        false,
+        'a leg has invalid inputs (negative premium)',
+        [{ strike: 100, optionType: 'call', position: 'long', premium: -1, iv: 0.3, quantity: 1, enabled: true }],
+      ],
+      [
+        true,
+        'an enabled leg has valid inputs and an expiration is set',
+        [{ strike: 100, optionType: 'call', position: 'long', premium: 5, iv: 0.3, quantity: 1, enabled: true }],
+      ],
+    ])('canAnalyze is %s when %s', (want, _case, legs) => {
       component.selectedExpiration.set(4_070_984_400_000);
-      component.legs.set([]);
-      expect(component.canAnalyze()).toBe(false);
-    });
-
-    it('canAnalyze is false when a leg has invalid inputs (negative premium)', () => {
-      component.selectedExpiration.set(4_070_984_400_000);
-      component.legs.set([
-        { strike: 100, optionType: 'call', position: 'long', premium: -1, iv: 0.3, quantity: 1, enabled: true },
-      ]);
-      expect(component.canAnalyze()).toBe(false);
-    });
-
-    it('canAnalyze is true when an enabled leg has valid inputs and an expiration is set', () => {
-      component.selectedExpiration.set(4_070_984_400_000);
-      component.legs.set([
-        { strike: 100, optionType: 'call', position: 'long', premium: 5, iv: 0.3, quantity: 1, enabled: true },
-      ]);
-      expect(component.canAnalyze()).toBe(true);
+      component.legs.set(legs);
+      expect(component.canAnalyze()).toBe(want);
     });
   });
 
@@ -934,13 +930,6 @@ describe('StrategyBuilderComponent', () => {
       expect(component.noForwardCurves()).toBe(true);
     });
 
-    it('is false when no legs are enabled (banner only fires once a leg exists)', () => {
-      const todayAnchor = optionExpiryAnchorMs(etIsoDate(Date.now()));
-      component.selectedExpiration.set(todayAnchor);
-      component.legs.set([]);
-      expect(component.noForwardCurves()).toBe(false);
-    });
-
     it('is false when timeToExpiry > 0 (future expiration with enabled legs)', () => {
       withEnabledLeg();
       const future = optionExpiryAnchorMs(etIsoDate(Date.now() + 30 * 86400000));
@@ -950,12 +939,16 @@ describe('StrategyBuilderComponent', () => {
       expect(component.noForwardCurves()).toBe(false);
     });
 
-    it('is false when leg is present but disabled', () => {
+    it.each<[string, ReturnType<StrategyBuilderComponent['legs']>]>([
+      ['no legs are enabled (banner only fires once a leg exists)', []],
+      [
+        'leg is present but disabled',
+        [{ strike: 100, optionType: 'call', position: 'long', premium: 5, iv: 0.3, quantity: 1, enabled: false }],
+      ],
+    ])('is false when %s', (_case, legs) => {
       const todayAnchor = optionExpiryAnchorMs(etIsoDate(Date.now()));
       component.selectedExpiration.set(todayAnchor);
-      component.legs.set([
-        { strike: 100, optionType: 'call', position: 'long', premium: 5, iv: 0.3, quantity: 1, enabled: false },
-      ]);
+      component.legs.set(legs);
       expect(component.noForwardCurves()).toBe(false);
     });
   });
