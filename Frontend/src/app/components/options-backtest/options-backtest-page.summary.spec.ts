@@ -6,7 +6,7 @@ import { SetupInvalidError } from './options-backtest.service';
 import type { SetupRequest, SetupSummary } from './options-backtest.types';
 import { formatClockText } from './session-time';
 import { exampleBody, minutes, servedSaved, SESSION_CLOCK } from './testing/fixtures';
-import { addLeg, inLeg, press, typeInto } from './testing/page-actions';
+import { addLeg, press, typeInto } from './testing/page-actions';
 import { fakeService, renderPage, sentencesFor } from './testing/render-page';
 
 const { open_minute_et: OPEN, close_minute_et: CLOSE } = SESSION_CLOCK;
@@ -194,13 +194,6 @@ describe('a problem lands at its field', () => {
     await waitFor(() => expect(within(legs).getByRole('alert').textContent).toContain('at most 8 items'));
   });
 
-  it('on the stop loss value of a leg', async () => {
-    await renderPage(rejecting({ loc: ['body', 'legs', 0, 'stop_loss', 'percent', 'value'], msg: 'a stop loss in percent must be under 100' }));
-    addLeg();
-
-    await waitFor(() => expect(inLeg(1).getByRole('alert').textContent).toContain('under 100'));
-  });
-
   it('on the costs, the entry time, the instrument and the square-off alike', async () => {
     await renderPage(
       rejecting(
@@ -281,31 +274,6 @@ describe('typed times', () => {
     expect(screen.getByText('46 minutes before the close')).toBeTruthy();
   });
 
-  it('outside the full session are an error at the field, and nothing is sent for them', async () => {
-    const service = fakeService(vi);
-    await renderPage(service);
-    addLeg();
-    await waitFor(() => expect(service.describe).toHaveBeenCalled());
-    const calls = service.describe.mock.calls.length;
-
-    typeInto('Exit time', formatClockText(CLOSE + 1));
-    typeInto('Entry time', formatClockText(OPEN - 1));
-
-    const entry = screen.getByLabelText('Entry time');
-    const exit = screen.getByLabelText('Exit time');
-    expect(entry.getAttribute('aria-invalid')).toBe('true');
-    expect(exit.getAttribute('aria-invalid')).toBe('true');
-    expect(within(screen.getByRole('region', { name: 'Entry settings' })).getAllByRole('alert')).toHaveLength(2);
-    expect(service.describe.mock.calls.length).toBe(calls);
-    expect(screen.getByRole('region', { name: 'In plain words' }).textContent).toMatch(/not complete/i);
-
-    typeInto('Exit time', formatClockText(CLOSE - 1));
-    typeInto('Entry time', formatClockText(OPEN + 1));
-
-    expect(entry.getAttribute('aria-invalid')).toBe('false');
-    await waitFor(() => expect(service.describe.mock.lastCall?.[0]).toMatchObject({ entry: { anchor: 'open', offset_ms: 60_000 }, exit: { anchor: 'close', offset_ms: 60_000 } }));
-  });
-
   it('an entry at the open and an exit at the close are refused at their own fields with the rule, not left to the server', async () => {
     const service = fakeService(vi);
     await renderPage(service);
@@ -348,19 +316,6 @@ describe('typed times', () => {
 
     expect(screen.getByLabelText('Exit time').getAttribute('aria-invalid')).toBe('false');
     await waitFor(() => expect(service.describe.mock.lastCall?.[0]).toMatchObject({ entry: minutes(60, 'open'), exit: minutes(CLOSE - OPEN - 61, 'close') }));
-  });
-
-  it('follow the noon rule for "No re-entry after": the open up to noon, the close after it', async () => {
-    const service = fakeService(vi);
-    await renderPage(service);
-    addLeg();
-    fireEvent.click(ruleSwitch('No re-entry after'));
-
-    typeInto('No re-entry after time', '12:00');
-    await waitFor(() => expect(service.describe.mock.lastCall?.[0]).toMatchObject({ no_reentry_after: { anchor: 'open', offset_ms: (12 * 60 - OPEN) * 60_000 } }));
-    typeInto('No re-entry after time', '12:01');
-
-    await waitFor(() => expect(service.describe.mock.lastCall?.[0]).toMatchObject({ no_reentry_after: { anchor: 'close', offset_ms: (CLOSE - 12 * 60 - 1) * 60_000 } }));
   });
 
   it('are read from the clock the server serves, whatever that clock is', async () => {

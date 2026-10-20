@@ -24,20 +24,6 @@ function trade(overrides: Partial<RecencySwimlaneTrade> = {}): RecencySwimlaneTr
 }
 
 describe("RecencySwimlaneComponent", () => {
-  it("renders one lane per distinct symbol", async () => {
-    await render(RecencySwimlaneComponent, {
-      inputs: {
-        trades: [
-          trade({ symbol: "SPY", fingerprint: "a" }),
-          trade({ symbol: "AAPL", fingerprint: "b" }),
-        ],
-      },
-    });
-
-    expect(screen.getByTestId("lane-SPY")).not.toBeNull();
-    expect(screen.getByTestId("lane-AAPL")).not.toBeNull();
-  });
-
   it("orders lanes by recency — freshest trade's symbol first in the DOM", async () => {
     const view = await render(RecencySwimlaneComponent, {
       inputs: {

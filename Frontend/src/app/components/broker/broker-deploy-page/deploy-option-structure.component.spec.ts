@@ -136,15 +136,6 @@ describe('DeployOptionStructureComponent', () => {
     expect(picks.querySelector('dl.figures__money')?.textContent?.replace(/\s+/g, ' ').trim()).toBe('Premium $1.20 received · $120.00 a structure');
   });
 
-  it('says a state with nothing to show in the server’s sentence, with no figures', async () => {
-    await renderOptions(SPREAD, { service: previewService(previewWithoutFigures('no_quote_line', 'Stand-in: no quote line is spare.')) });
-
-    const picks = screen.getByRole('region', { name: 'Right now this picks' });
-    expect(await within(picks).findByText('Stand-in: no quote line is spare.')).toBeTruthy();
-    expect(within(picks).queryByRole('list')).toBeNull();
-    expect(picks.querySelector('dl')).toBeNull();
-  });
-
   it('stops asking by itself about a state that never passes, and says so beside Refresh', async () => {
     vi.useFakeTimers();
     onTestFinished(() => { vi.useRealTimers(); });

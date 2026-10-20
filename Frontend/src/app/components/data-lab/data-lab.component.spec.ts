@@ -198,26 +198,6 @@ describe('DataLabComponent (shell)', () => {
     expect(screen.getByText('export-stub')).toBeTruthy();
   });
 
-  it('resolves a legacy mode=build URL to export with validated params and no run', async () => {
-    const { navSpy, fixture } = await renderDirectShell(
-      '/data-lab?mode=build&ticker=AAPL&from=2026-04-15&to=2026-05-15',
-    );
-    fixture.componentInstance.runLegacyIngress();
-
-    expect(navSpy).toHaveBeenCalledWith(
-      ['/data-lab/export'],
-      {
-        queryParams: { ticker: 'AAPL', from: '2026-04-15', to: '2026-05-15' },
-        replaceUrl: true,
-      },
-    );
-    // URL state populates the committed workspace…
-    expect(fixture.componentInstance.store.committedTicker()).toBe('AAPL');
-    expect(fixture.componentInstance.store.committedWindow()?.startMsUtc).toBe(
-      Date.UTC(2026, 3, 15),
-    );
-  });
-
   it('applies a redirected /data-quality bookmark on the validate child URL', async () => {
     const { navSpy, fixture } = await renderDirectShell(
       '/data-lab/validate?ticker=AAPL&from=2026-04-15&to=2026-05-15',

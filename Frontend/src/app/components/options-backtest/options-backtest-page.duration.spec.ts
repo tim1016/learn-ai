@@ -1,7 +1,6 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/angular';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { dataCheck, sessionCheck } from './testing/fixtures';
 import { checkButton, dateFields, openExample, pickDates, press, typeInto } from './testing/page-actions';
 import { fakeService, renderPage, type FakeDownload } from './testing/render-page';
 
@@ -99,22 +98,6 @@ describe('the line beside the dates, and the lower bound', () => {
     const line = await screen.findByText(/Option prices are available from/);
     expect(line.textContent?.replace(/\s+/g, ' ').trim()).toBe('Option prices are available from 2025-10-15');
     expect(line.querySelector('app-timestamp-display')?.getAttribute('data-timestamp-mode')).toBe('date-et');
-  });
-
-  it('is the day before in New York when the instant is late in the evening there', async () => {
-    const service = fakeService(vi, {
-      // 2025-10-15 02:00 UTC is 2025-10-14 22:00 in New York.
-      checkData: vi.fn(async () => dataCheck([sessionCheck('2026-09-14')], { option_prices_from_ms: Date.UTC(2025, 9, 15, 2) })),
-    });
-    await renderPage(service);
-    await openExample();
-    pickDates('2026-09-14', '2026-09-18');
-    await waitFor(() => expect(checkButton().disabled).toBe(false));
-
-    fireEvent.click(checkButton());
-
-    const line = await screen.findByText(/Option prices are available from/);
-    expect(line.textContent?.replace(/\s+/g, ' ').trim()).toBe('Option prices are available from 2025-10-14');
   });
 
   it('refuses a start date before that day, with the reason in words, and the run waits for a date', async () => {

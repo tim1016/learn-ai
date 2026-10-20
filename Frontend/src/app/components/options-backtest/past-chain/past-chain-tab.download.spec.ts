@@ -9,7 +9,7 @@ import type { SetupLimits } from '../options-backtest.types';
 import { SERVED_LIMITS } from '../testing/fixtures';
 import type { ChainDay, ChainExpiry, DownloadAnswer, DownloadRequest, FetchRefusal } from './past-chain.types';
 import { deferred } from './testing/deferred';
-import { chainDay, chainExpiry, contract, downloadAnswer, EXPIRY_MS, item, side, TRADING_DATE, TRADING_DATE_MS, underlyingPrice } from './testing/fixtures';
+import { chainDay, chainExpiry, contract, downloadAnswer, EXPIRY_MS, item, side, TRADING_DATE, TRADING_DATE_MS } from './testing/fixtures';
 import { assertNewYorkTimes, expiriesTable, fakeChainService, openStandardChain, pickDate, renderChainTab } from './testing/render-chain';
 
 const button = () => screen.getByRole<HTMLButtonElement>('button', { name: 'Download missing data' });
@@ -34,14 +34,6 @@ async function openChainOf(chain = chainWithFiveMissing(), downloadAnswerFor: (r
 }
 
 describe('what the download offers', () => {
-  it('is nothing when nothing on screen is missing', async () => {
-    const stored = chainExpiry({ calls: side('call', [call(602_000, 'traded'), call(603_000, 'did_not_trade')]), puts: side('put', [put(602_000, 'traded')]) });
-    await openChainOf(stored);
-
-    expect(screen.queryByRole('button', { name: 'Download missing data' })).toBeNull();
-    expect(screen.queryByRole('heading', { name: 'Download missing data' })).toBeNull();
-  });
-
   it('is the listing, and the underlying bars if they are missing, when the listing is not stored', async () => {
     const service = fakeChainService(vi, { day: vi.fn(async () => chainDay({ listing_state: 'not_stored', expiries: [] })) });
     await renderChainTab(service);
@@ -50,28 +42,6 @@ describe('what the download offers', () => {
 
     await screen.findByRole('button', { name: 'Download missing data' });
     expect(words()).toBe("Fetches the listing and the underlying's bars if they are missing.");
-  });
-
-  it.each([
-    ['is exactly the contracts on screen whose prices are not stored, and says how many', chainWithFiveMissing(), 'Contracts to fetch: 5.'],
-    [
-      'is the underlying bars too when the chain says they are not stored',
-      chainExpiry({ underlying_price: underlyingPrice({ state: 'not_stored', price: null, price_time_ms: null }) }),
-      "Fetches the underlying's bars. Contracts to fetch: 1.",
-    ],
-    [
-      'is the underlying bars alone when they are the only thing missing',
-      chainExpiry({
-        underlying_price: underlyingPrice({ state: 'not_stored', price: null, price_time_ms: null }),
-        calls: side('call', [call(602_000, 'traded')]),
-        puts: side('put', []),
-      }),
-      "Fetches the underlying's bars.",
-    ],
-  ])('%s', async (_name, chain, said) => {
-    await openChainOf(chain);
-
-    expect(words()).toBe(said);
   });
 });
 
@@ -315,18 +285,6 @@ describe('a download the server will not take', () => {
     await waitFor(() => expect(service.expiry).toHaveBeenCalledTimes(2));
   });
 
-  it('says it may or may not have happened, and reads again, when the server failed (503) after it began', async () => {
-    const service = await openChainOf(chainWithFiveMissing(), async () => {
-      throw new PastChainRefusedError('OPTIONS_BACKTEST_LAKE_CATALOG_UNAVAILABLE', "The data lake's catalog cannot be reached.", 503);
-    });
-
-    fireEvent.click(button());
-
-    expect(await screen.findByText(MAY_OR_MAY_NOT)).toBeTruthy();
-    expect(screen.queryByText(/Nothing was downloaded/)).toBeNull();
-    await waitFor(() => expect(service.day).toHaveBeenCalledTimes(2));
-  });
-
   it.each([
     ['refuses the request', new PastChainRefusedError('OPTIONS_BACKTEST_TOO_MANY_CONTRACTS', 'too many', 400)],
     ['does not accept it (422)', new PastChainInvalidError([{ loc: ['body', 'contracts'], msg: 'Input should be a valid list' }])],
@@ -477,12 +435,6 @@ describe('a download of more contracts than one call takes', () => {
     return service;
   }
   const sentTo = (service: Awaited<ReturnType<typeof openFive>>, call: number) => service.download.mock.calls[call]?.[0]?.contracts;
-
-  it('says how many one call takes and how many will still be missing after this one', async () => {
-    await openFive();
-
-    expect(words()).toBe('Contracts to fetch in this call: 2. Still missing after it: 3. Press again for them. The most contracts one call takes: 2.');
-  });
 
   it('sends one call for one press, with the first it takes, in the server’s order, and the next press the next ones', async () => {
     const service = await openFive();

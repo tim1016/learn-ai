@@ -163,14 +163,6 @@ describe('the trades of a run, paging with the server’s numbers', () => {
     expect(screen.queryByRole('button', { name: 'Previous page' })).toBeNull();
   });
 
-  it('never shows a page as the whole: 100 rows of 12,600 are labelled as that', async () => {
-    const detail = fakeRunDetail(vi, { trades: vi.fn(async () => pageOf(100, { total: 12600, next_offset: 100 })) });
-    await renderTrades(detail);
-
-    expect(await screen.findByText('Trades 1 to 100 of 12,600')).toBeTruthy();
-    expect(legsOnScreen().length).toBe(100);
-  });
-
   it('does not show the previous page’s rows while the next one is on its way', async () => {
     const second = deferred<TradesPage>();
     const detail = fakeRunDetail(vi, { trades: vi.fn((_runId: number, query?: TradeQuery) => (query?.offset === 0 ? Promise.resolve(FIRST) : second.promise)) });

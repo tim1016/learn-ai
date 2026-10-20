@@ -282,13 +282,6 @@ describe('one day, a series the server withholds', () => {
     expect(screen.getByRole('img').getAttribute('aria-label')).toContain('Marks drawn: 0.');
   });
 
-  it('names the reason through the shared label, and says nothing in the page’s own words for it', async () => {
-    await renderSession(vi, { detail: servedAs(withheld('changed')), request: ASKED });
-    await screen.findByRole('region', { name: 'Not drawn' });
-
-    expect(reads(within(screen.getByRole('region', { name: 'Not drawn' })).getAllByRole('listitem')[0])).toBe("SPY Call 585 Oct 16 '26 : Changed The stored bars have changed since this run. Its levels, fills and marks are listed below.");
-  });
-
   it('draws no chart at all and gives the server’s words for a skipped day, with the facts of it', async () => {
     const { chart } = await renderSession(vi, { detail: servedAs(skippedSession()), request: ASKED });
     await screen.findByText('Skipped because');

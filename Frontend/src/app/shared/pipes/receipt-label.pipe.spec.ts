@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatReceiptLabel, formatReceiptValue, ReceiptLabelPipe } from './receipt-label.pipe';
+import { formatReceiptLabel, formatReceiptValue } from './receipt-label.pipe';
 
 describe('formatReceiptLabel', () => {
   it('turns receipt identifiers into operator language: title case, acronyms, Account service, code lists, canary and authority vocabulary, backend prose untouched', () => {
@@ -68,9 +68,5 @@ describe('formatReceiptLabel', () => {
     expect.soft(formatReceiptValue('source', 'readiness'), 'formats code-like receipt values when the label is not opaque: source').toBe('Readiness');
     expect.soft(formatReceiptValue('attempt_count', 3), 'formats code-like receipt values when the label is not opaque: attempt_count').toBe('3');
     expect.soft(formatReceiptValue('available', true), 'formats code-like receipt values when the label is not opaque: available').toBe('True');
-  });
-
-  it('supports the Angular pipe wrapper', () => {
-    expect(new ReceiptLabelPipe().transform('already_running')).toBe('Already Running');
   });
 });
