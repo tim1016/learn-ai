@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 import respx
 
+from app.data_lake.option_bars import SessionMemberRef
 from app.data_lake.option_session import read_option_session
 from app.data_lake.option_session_repack import repack_option_session
 from app.data_lake.path_policy import OptionSessionPath
@@ -52,7 +53,7 @@ async def test_freeze_refuses_changed_session_sources_but_accepts_stable_partial
         assert (await repack_option_session("SPY", FRIDAY)).failure is None
     given = setup(legs=[leg(expiry={"kind": "same_day"}),
                         leg(leg_id="put", right="put", expiry={"kind": "same_day"})])
-    reads: list[dict[str, str] | None] = []
+    reads: list[SessionMemberRef | None] = []
     checkpoints = []
 
     class ChangingData(LakeRunData):
@@ -83,8 +84,8 @@ async def test_freeze_refuses_changed_session_sources_but_accepts_stable_partial
     assert checkpoints == []
     assert len(reads) >= 2
     if transition == "container_refresh":
-        assert reads[0]["listing_sha256"] == reads[1]["listing_sha256"]
-        assert reads[0]["container_sha256"] != reads[1]["container_sha256"]
+        assert reads[0].listing_sha256 == reads[1].listing_sha256
+        assert reads[0].container_sha256 != reads[1].container_sha256
     else:
         assert (reads[0] is None) != (reads[1] is None)
     # A fresh freeze under the resulting coherent layout remains usable.
@@ -96,4 +97,4 @@ async def test_freeze_refuses_changed_session_sources_but_accepts_stable_partial
     if current is None:
         assert all(ref is None for ref in references)
     else:
-        assert all(ref["container_sha256"] == current.sha256 for ref in references)
+        assert all(ref.container_sha256 == current.sha256 for ref in references)

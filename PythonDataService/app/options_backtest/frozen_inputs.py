@@ -18,6 +18,7 @@ from typing import Any, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.config import active_root_id
+from app.data_lake.option_bars import SessionMemberRef
 from app.engine.data.decoded_cache import DecodedArtifactCache
 from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.options.contract import OptionContract
@@ -79,7 +80,8 @@ def _bar_wire(bar: MinuteBar) -> list[int | str]:
 
 
 def _captured_wire(found: Captured[Any], value: Any) -> dict[str, Any]:
-    return {"sha256": found.sha256, "reference": getattr(found, "reference", None), "value": value}
+    reference = getattr(found, "reference", None)
+    return {"sha256": found.sha256, "reference": None if reference is None else reference.to_json(), "value": value}
 
 
 class _RecordingData:
@@ -135,7 +137,8 @@ def _verify_session_generation(data: RunData, day: date, rows: Mapping[str, Any]
             if row.get("reference") is not None and symbol != representative:
                 continue
             current = data.option_day(OptionContract.from_occ_symbol(symbol), day)
-            if current is None or current.sha256 != row["sha256"] or current.reference != row.get("reference"):
+            current_reference = None if current is None or current.reference is None else current.reference.to_json()
+            if current is None or current.sha256 != row["sha256"] or current_reference != row.get("reference"):
                 raise ValueError("option source generation changed during input freeze; retry with one generation")
     current = data.listing(day)
     if current is None or current.sha256 != original:
@@ -212,7 +215,7 @@ def _decode_bars(row: Mapping[str, Any]) -> Captured[tuple[MinuteBar, ...]]:
     bars = tuple(MinuteBar(int(values[0]), *(Decimal(value) for value in values[1:])) for values in row["value"])
     if row.get("reference") is None:
         return Captured(bars, str(row["sha256"]))
-    return Captured(bars, str(row["sha256"]), reference=row["reference"])
+    return Captured(bars, str(row["sha256"]), reference=SessionMemberRef.from_json(row["reference"]))
 
 
 def _decode(payload: bytes) -> dict[str, Any]:
