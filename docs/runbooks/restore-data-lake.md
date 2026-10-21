@@ -46,8 +46,11 @@ Moving a backup to an SSD remains a separate owner action.
 2. Select a generation containing a `COMPLETE` marker under the destination's
    `generations/`. Keep its sibling `objects/` folder: generations share objects.
    Do not copy a generation by itself or use a dot-prefixed staging directory.
-3. Use the release/migrations recorded in `manifest.json`. Provision an empty
-   target catalog table with that exact schema and fresh empty target roots.
+3. Use the release/migrations recorded in `manifest.json` (the versions in
+   the target's `schema_migrations` table, ADR 0081; a manifest written before
+   that change lists the retired EF migration ids and does not restore into it).
+   Provision an empty target catalog table with that exact schema and fresh
+   empty target roots.
    Supply the target database credential through `POSTGRES_URL`; never paste it
    into a command or a recovery report.
 4. From `PythonDataService/` in a checkout, run `python -m

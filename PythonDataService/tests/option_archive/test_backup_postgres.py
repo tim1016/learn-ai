@@ -40,7 +40,7 @@ async def isolated_catalog(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[asy
     try:
         ddl = Path(__file__).resolve().parents[1] / "fixtures/option_archive/catalog.sql"
         await connection.execute(ddl.read_text())
-        await connection.execute('INSERT INTO "__EFMigrationsHistory" VALUES (\'test-schema\', \'test\')')
+        await connection.execute("INSERT INTO schema_migrations VALUES ('test-schema', 'test', 0, false)")
         monkeypatch.setattr(settings, "POSTGRES_URL", target_url)
         await catalog_client.close_pool()
         await catalog_client.init_pool()

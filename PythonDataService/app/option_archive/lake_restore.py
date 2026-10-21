@@ -141,8 +141,8 @@ async def restore(generation: Path, roots: Mapping[str, Path], connection: Any, 
         raise RestoreRefusedError("unsafe restore catalog schema")
     expected = await catalog_schema_hash(connection, schema=schema)
     manifest = await run_files(lambda paused: verify(generation, expected_schema_hash=expected, checkpoint=paused))
-    migrations = await connection.fetch('SELECT "MigrationId" FROM public."__EFMigrationsHistory" ORDER BY "MigrationId"')
-    if [row["MigrationId"] for row in migrations] != manifest["migration_ids"]:
+    migrations = await connection.fetch("SELECT version FROM public.schema_migrations ORDER BY version")
+    if [row["version"] for row in migrations] != manifest["migration_ids"]:
         raise RestoreRefusedError("restore migration history differs from the generation")
     if set(roots) != set(manifest["root_ids"]):
         raise RestoreRefusedError("restore targets do not match the generation's root identities")

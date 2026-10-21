@@ -23,5 +23,6 @@
 - `python-service` now waits for `db` to be healthy, because it migrates at startup.
 - A database created fresh by the runner has no EF history, so it cannot be opened by an older C# release; rolling back past this change means restoring a backup taken before it. A database adopted from EF keeps its history and can.
 - CodeQL is GitHub's default setup, not a file in the repo; it stops analysing C# on its own.
+- The options-archive backup records, and its restore checks, the applied schema versions from `schema_migrations` instead of EF's history table (`app/option_archive/backup.py`, `lake_restore.py`). A backup manifest written before this change lists EF migration ids and is refused by a restore into a ledger-era database.
 - A future schema change is a new numbered file. If it changes a column or constraint of `DataLakeArtifacts`, `app/data_lake/catalog_schema.py` changes in the same pull request (the drift test fails otherwise).
 - Deferred: the research tables' own ledger could move to numbered SQL files; the unused market-data tables could be dropped; `/api/jobs` could require the data-plane control secret for its two protected types instead of attaching it on the caller's behalf.

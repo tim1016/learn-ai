@@ -159,7 +159,7 @@ def validate_destination(destination: Path, *, checkout: Path, roots: Mapping[st
 async def dump_catalog(path: Path) -> CatalogSnapshot:
     async with catalog_client.connection() as connection, connection.transaction(isolation="repeatable_read", readonly=True):
         schema = await lake_restore.catalog_schema_hash(connection)
-        migrations = await connection.fetch('SELECT "MigrationId" FROM "__EFMigrationsHistory" ORDER BY "MigrationId"')
+        migrations = await connection.fetch("SELECT version FROM public.schema_migrations ORDER BY version")
         rows = await connection.fetch('''SELECT "Id", "DataRootId", "PriceAdjustmentMode", "FilePath",
             "FileSha256", "FileSizeBytes", "ArtifactKind", "Symbol", "TradingDate", "Resolution", "DataType", "Market", "RowCount" FROM "DataLakeArtifacts"
             WHERE "Status"='complete' ORDER BY "Id"''')
@@ -168,7 +168,7 @@ async def dump_catalog(path: Path) -> CatalogSnapshot:
             await connection.copy_from_query('SELECT * FROM "DataLakeArtifacts" ORDER BY "Id"', output=output, format="binary")
             output.flush()
             os.fsync(output.fileno())
-    return CatalogSnapshot(schema_hash=schema, row_count=count, migration_ids=[row["MigrationId"] for row in migrations],
+    return CatalogSnapshot(schema_hash=schema, row_count=count, migration_ids=[row["version"] for row in migrations],
                            files=[{key: str(value) if isinstance(value, UUID) else session_open_ms_utc(value) if isinstance(value, date) else value for key, value in dict(row).items()} for row in rows])
 
 

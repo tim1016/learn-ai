@@ -108,7 +108,7 @@ class _EmptyTargetCatalog:
         self.imported: bytes | None = None
 
     async def fetch(self, query: str, *args: object) -> list[dict[str, object]]:
-        return COLUMNS if "information_schema" in query else [{"MigrationId": "v1"}]
+        return COLUMNS if "information_schema" in query else [{"version": "v1"}]
 
     async def fetchval(self, query: str, *args: object) -> object:
         return 0 if "COUNT" in query else None
