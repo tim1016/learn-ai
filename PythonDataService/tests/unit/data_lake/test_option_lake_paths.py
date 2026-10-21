@@ -14,7 +14,6 @@ from app.data_lake.path_policy import (
     OptionListingPath,
     OptionMinuteBarPath,
     OptionSessionPath,
-    option_session_staged_files,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -66,15 +65,6 @@ def test_option_paths_are_written_only_by_the_path_policy() -> None:
     assert offenders == []
 
 
-def test_session_path_and_original_publication_glob_share_one_namespace(tmp_path: Path) -> None:
+def test_a_session_container_lives_in_its_own_versioned_namespace() -> None:
     relative = OptionSessionPath("SPY", date(2025, 6, 13)).relative_path()
     assert relative == PurePosixPath("option/usa/session/v1/spy/20250613.zip")
-    published = tmp_path / "request" / "worker" / "attempt_1" / relative
-    staged = published.with_suffix(".zip.tmp")
-    staged.parent.mkdir(parents=True)
-    staged.write_bytes(b"uncommitted session")
-    # A stock temp in the same request is outside the option-session budget.
-    stock = tmp_path / "request/worker/attempt_1/equity/usa/minute/spy/day.zip.tmp"
-    stock.parent.mkdir(parents=True)
-    stock.write_bytes(b"independent stock writer")
-    assert list(option_session_staged_files(tmp_path)) == [staged]

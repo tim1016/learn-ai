@@ -17,10 +17,10 @@ from pathlib import Path
 
 from app.data_lake import catalog_client
 from app.data_lake.option_lake import OPTION_MARKET, OPTION_PROVIDER, option_read_root
-from app.data_lake.option_session import read_option_session
 from app.data_lake.option_session_repack import repack_option_session
 from app.data_lake.path_policy import OptionListingPath
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
+from app.options_backtest.option_session_capture import read_session_completeness
 from app.utils.atomic_file import atomic_write_bytes
 
 
@@ -38,11 +38,12 @@ async def repack(underlyings: list[str], *, rebind_listing: bool = False) -> lis
                 outcome = await repack_option_session(underlying, day, rebind_listing=rebind_listing)
                 if outcome.failure is not None:
                     raise RuntimeError(f"{underlying} session {session_open_ms_utc(day)}: {outcome.failure.reason}: {outcome.failure.detail}")
-                session = await asyncio.to_thread(read_option_session, underlying, day, check_underlying=True)
+                # Complete only with the underlying day admitted by the run reader, not contracts alone.
+                session, complete = await asyncio.to_thread(read_session_completeness, underlying, day)
                 if session is None or outcome.record is None:
                     raise RuntimeError("repack did not leave an admitted session")
                 results.append({"underlying": underlying, "session_open_ms": session_open_ms_utc(day),
-                    "complete": session.complete, "contracts_complete": session.contracts_complete,
+                    "complete": complete, "contracts_complete": session.contracts_complete,
                     "captured": len(session.captured),
                     "confirmed_empty": len(session.confirmed_empty), "unresolved": len(session.unresolved),
                     "source_bytes": sum(len(raw) for raw in session.original_bytes.values()),

@@ -19,7 +19,6 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.config import settings
-from app.data_lake.path_policy import option_session_staged_files
 from app.engine.live.identity import confine_path_to_root
 from app.utils.advisory_lock import advisory_file_lock, try_advisory_file_lock
 from app.utils.atomic_file import atomic_write_bytes
@@ -34,11 +33,10 @@ _METADATA_BYTES = 2 * _MAX_LEDGER_BYTES + 1024
 _MAX_RESERVATIONS = 128
 _LEASE_NAME = re.compile(r"\.([a-f0-9]{32})\.lock")
 _LEDGER_TEMP_NAME = re.compile(r"\.option_session_budget\.json\.[a-f0-9]{16}\.tmp")
-CAPACITY_PREFIX = "Archive staging capacity"
 
 
 class StagingCapacityError(ValueError):
-    """A preservation pause, never a failed provider attempt."""
+    """A preservation pause, never a failed provider attempt; a capture answers it as ``staging_capacity``."""
 
 
 class OptionSessionStaging:
@@ -50,7 +48,6 @@ class OptionSessionStaging:
         self.publication_root = self._path(staging_root / "option_session_publications")
         self.ledger = self._path(staging_root / "option_session_budget.json")
         self.locks = self._path(staging_root / "option_session_budget_leases")
-        self.pause_reason: str | None = None
         self._ready = False
 
     def _path(self, path: Path) -> Path:
@@ -89,7 +86,7 @@ class OptionSessionStaging:
     def _save(self, state: dict) -> None:
         raw = json.dumps(state, sort_keys=True, separators=(",", ":")).encode()
         if len(raw) > _MAX_LEDGER_BYTES:
-            raise StagingCapacityError(f"{CAPACITY_PREFIX}: reservation metadata is full; retry after collectors drain.")
+            raise StagingCapacityError("Archive staging capacity: reservation metadata is full; retry after collectors drain.")
         atomic_write_bytes(self._path(self.ledger), raw)
 
     def _lease_target(self, token: str) -> Path:
@@ -110,10 +107,8 @@ class OptionSessionStaging:
                 for name in chain(directories, files):
                     yield Path(folder) / name
 
-        # Session publications made before the dedicated namespace also count;
-        # stock/legacy option writers keep their existing independent policy.
-        paths = chain(walk(self.root), walk(self.publication_root),
-                      option_session_staged_files(self.base))
+        # Stock and per-contract option writers keep their existing independent policy.
+        paths = chain(walk(self.root), walk(self.publication_root))
         used = _METADATA_BYTES
         for path in paths:
             self._path(path)
@@ -164,29 +159,27 @@ class OptionSessionStaging:
     def _require_space(self, state: dict, additional: int) -> None:
         if state["used_bytes"] + sum(state["leases"].values()) + additional > self.max_bytes:
             raise StagingCapacityError(
-                f"{CAPACITY_PREFIX}: retained files and live reservations need more than {self.max_bytes} bytes. "
+                f"Archive staging capacity: retained files and live reservations need more than {self.max_bytes} bytes. "
                 "Verified progress is retained. Review free disk space, then raise OPTION_ARCHIVE_STAGING_MAX_BYTES "
                 "and retry; do not delete uncommitted outcomes to make room.")
 
     @contextmanager
     def collector(self, target: Path) -> Iterator[bool]:
-        """Account the stable collector lock before creating it, including at capacity."""
+        """Account the stable collector lock before creating it; ``False`` when another collector holds it.
+
+        A budget that cannot hold the lock raises :class:`StagingCapacityError` before anything is yielded.
+        """
         target = confine_path_to_root(target, self.root, label="option capture collector")
         lock = self._path(target.with_name(f".{target.name}.lock"))
         with ExitStack() as stack:
-            try:
-                with self._locked():
-                    state = self._load()
-                    self._reconcile(state)
-                    new = not lock.exists()
-                    self._require_space(state, int(new))
-                    owned = stack.enter_context(try_advisory_file_lock(target))
-                    state["used_bytes"] += int(new)
-                    self._save(state)
-            except StagingCapacityError as exc:
-                self.pause_reason = str(exc)
-                yield False
-                return
+            with self._locked():
+                state = self._load()
+                self._reconcile(state)
+                new = not lock.exists()
+                self._require_space(state, int(new))
+                owned = stack.enter_context(try_advisory_file_lock(target))
+                state["used_bytes"] += int(new)
+                self._save(state)
             yield owned
 
     def reserve(self, size: int) -> StagingReservation:
@@ -200,9 +193,11 @@ class OptionSessionStaging:
                 state = self._load()
                 self._require_space(state, size)
                 if len(state["leases"]) >= _MAX_RESERVATIONS:
-                    raise StagingCapacityError(f"{CAPACITY_PREFIX}: too many active collectors; retry after they drain.")
+                    raise StagingCapacityError("Archive staging capacity: too many active collectors; retry after they drain.")
                 token = uuid4().hex
-                assert stack.enter_context(try_advisory_file_lock(self._lease_target(token)))
+                # An unlocked lease reads as dead to the next reconciliation, which would free live bytes.
+                if not stack.enter_context(try_advisory_file_lock(self._lease_target(token))):
+                    raise RuntimeError("a new staging reservation could not lock its own lease")
                 state["leases"][token] = size
                 self._save(state)
             return StagingReservation(self, token, stack)
@@ -236,7 +231,7 @@ class StagingReservation:
                 peak = max(peak, used + len(raw))
                 used += len(raw) - (path.stat().st_size if path.exists() else 0)
             if peak - state["used_bytes"] > state["leases"][self.token]:
-                raise StagingCapacityError(f"{CAPACITY_PREFIX}: this outcome exceeds its reserved byte bound.")
+                raise StagingCapacityError("Archive staging capacity: this outcome exceeds its reserved byte bound.")
             try:
                 for path, raw in checked.items():
                     atomic_write_bytes(path, raw)

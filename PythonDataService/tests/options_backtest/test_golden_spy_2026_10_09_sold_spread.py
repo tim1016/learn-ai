@@ -233,8 +233,8 @@ async def test_each_contract_day_is_stored_with_exactly_the_bars_the_vendor_sent
     assert len(option_requests) == 3
     assert all(request.headers["authorization"] == f"Bearer {THE_KEY}" for request in option_requests)
     assert not any(THE_KEY in str(request.url) for request in option_requests)
-    sold = await off_the_loop(read_option_day_bars, SOLD_CALL, TRADING_DATE)
-    bought = await off_the_loop(read_option_day_bars, BOUGHT_CALL, TRADING_DATE)
+    sold = await off_the_loop(read_option_day_bars, SOLD_CALL, TRADING_DATE, listed_under="SPY")
+    bought = await off_the_loop(read_option_day_bars, BOUGHT_CALL, TRADING_DATE, listed_under="SPY")
     assert sold is not None and bought is not None
     # 400 and 400: the number of ``"t":`` stamps in each recorded file, which is also the ``resultsCount`` it states.
     assert (len(sold.bars), len(bought.bars)) == (400, 400)

@@ -9,13 +9,13 @@ import pytest
 import respx
 
 from app.data_lake.ensure_data import _minute_trade_dch
-from app.data_lake.option_session import read_option_session
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.option_archive.planner import wall_clock_ms
 from app.option_archive.service import OptionArchiveService
 from app.option_archive.settings import ArchiveSettings
 from app.option_archive.state import ArchiveState
 from app.options.contract import OptionContract
+from app.options_backtest.option_session_capture import read_session_completeness
 from tests._helpers.option_vendor import no_trades, traded
 from tests.options_backtest._lake import fake_catalog as fake_catalog
 from tests.options_backtest._lake import stock_bar, store_listing, store_underlying_day, vendor_listing_row
@@ -60,8 +60,8 @@ async def test_full_pass_captures_all_three_roots_traded_and_empty_and_keeps_fai
     assert qqq.pending_sessions == iwm.pending_sessions == 0
     assert qqq.last_archived_session_ms == iwm.last_archived_session_ms == session_open_ms_utc(DAY)
     for symbol in ("QQQ", "IWM"):
-        session = await asyncio.to_thread(read_option_session, symbol, DAY, check_underlying=True)
-        assert session.complete and len(session.captured) == len(session.confirmed_empty) == 1
+        session, complete = await asyncio.to_thread(read_session_completeness, symbol, DAY)
+        assert complete and len(session.captured) == len(session.confirmed_empty) == 1
     requested_spy = [call for call in respx.calls if "/ticker/O:SPY" in str(call.request.url)]
     assert len(requested_spy) == 1
 
@@ -117,7 +117,7 @@ async def test_transient_failure_retries_within_the_same_night_and_manual_recove
 async def test_unadmitted_container_fails_only_its_underlying_and_is_visible(fake_catalog, tmp_lake: Path) -> None:
     from app.data_lake.path_policy import OptionSessionPath
     await mount_run(fake_catalog, tmp_lake, spy_status=200)
-    from app.data_lake.option_session_capture import capture_option_session
+    from app.options_backtest.option_session_capture import capture_option_session
     assert (await capture_option_session("SPY", DAY, now_ms=NOW)).failure is None
     path = tmp_lake / "lake/raw" / str(OptionSessionPath("SPY", DAY).relative_path())
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -164,7 +164,7 @@ async def test_full_staging_budget_pauses_the_pass_and_remains_actionable(
     detail = "Archive staging capacity reached; review disk space and raise OPTION_ARCHIVE_STAGING_MAX_BYTES."
     async def capture(symbol, day, **kwargs):
         calls.append((symbol, day, kwargs["max_staging_bytes"]))
-        return OptionCaptureResult.failed(OptionDataFailure("lease_timeout", detail, symbol, day))
+        return OptionCaptureResult.failed(OptionDataFailure("staging_capacity", detail, symbol, day))
     service = service_for(tmp_lake / "state.json", lambda: NOW)
     service.config = ArchiveSettings(ENABLED=True, STAGING_MAX_BYTES=budget)
     service.capture = capture
@@ -194,10 +194,10 @@ async def test_provider_block_survives_other_retries_and_new_nights_until_correc
 ) -> None:
     from types import SimpleNamespace
 
-    from app.data_lake import option_session
     from app.data_lake.option_lake import OptionCaptureResult, OptionDataFailure
-    monkeypatch.setattr(option_session, "read_option_session", lambda *args, **kwargs: SimpleNamespace(
-        complete=True, listed_count=1, answered_count=1, confirmed_empty=(), captured=("one",)))
+    from app.options_backtest import option_session_capture
+    monkeypatch.setattr(option_session_capture, "read_session_completeness", lambda *args, **kwargs: (SimpleNamespace(
+        listed_count=1, answered_count=1, confirmed_empty=(), captured=("one",)), True))
     first = date(2026, 10, 8)
     calls = []
     spy_failure = blocked_reason

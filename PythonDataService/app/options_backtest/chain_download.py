@@ -173,7 +173,7 @@ async def _capture_listing(
     return item, stored
 
 
-async def _capture_underlying(underlying: str, trading_date: date, now_ms: int | None, *, allow_before_floor: bool = False) -> DownloadItem:
+async def capture_underlying(underlying: str, trading_date: date, now_ms: int | None, *, allow_before_floor: bool = False) -> DownloadItem:
     """The underlying's raw minute bars: left alone when held, refused when the session is not over, else fetched.
 
     A fetch is the stock engine's own function. It has no completed-session gate, so the lake's rule for the options of
@@ -211,12 +211,9 @@ async def _capture_underlying(underlying: str, trading_date: date, now_ms: int |
         from app.options_backtest.lake_check import _stock_day_identity
 
         state = await catalog_client.select_minute_bar_claim_state(_stock_day_identity(underlying, trading_date))
-        terminal: dict[str, DownloadReason] = {
-            "provider_auth_error": "provider_auth_error", "provider_entitlement_error": "provider_entitlement_error",
-            "outside_data_plan": "outside_data_plan",
-        }
-        if state is not None and state.last_error in terminal:
-            return DownloadItem(ItemKind.UNDERLYING, underlying, Outcome.FAILED, terminal[state.last_error], str(exc))
+        terminal = option_lake.terminal_provider_reason(None if state is None else state.last_error)
+        if terminal is not None:
+            return DownloadItem(ItemKind.UNDERLYING, underlying, Outcome.FAILED, terminal, str(exc))
         return DownloadItem(ItemKind.UNDERLYING, underlying, Outcome.FAILED, "underlying_not_fetched", str(exc))
     # Read back through the reader a run uses, as a run's download does: a file the stock pipeline stored with no bar
     # inside the regular session is not held by the lake's coverage rule, so the chain would read it as not stored.
@@ -375,7 +372,7 @@ async def _capture(
     # Every capture finishes before an error is raised: none is cancelled halfway through a claim.
     first = await asyncio.gather(
         _capture_listing(underlying, trading_date, now_ms),
-        _capture_underlying(underlying, trading_date, now_ms),
+        capture_underlying(underlying, trading_date, now_ms),
         return_exceptions=True,
     )
     _raise_the_first_error(first)

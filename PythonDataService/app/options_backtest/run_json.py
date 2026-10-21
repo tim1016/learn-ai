@@ -26,6 +26,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 
+from app.data_lake.option_bars import SessionMemberRef
 from app.options.contract import OptionContract
 from app.options_backtest.capital_evidence import CapitalEvidence, CapitalInvalidEvent, CapitalInvalidKind
 from app.options_backtest.cash_ladder import CashLevel
@@ -447,7 +448,7 @@ def events_from_json(data: Sequence[Json]) -> tuple[Event, ...]:
 
 def option_days_to_json(pins: SessionPins) -> list[Json]:
     return [{"contract": day.contract.occ_symbol, "sha256": day.sha256,
-             **({"reference": day.reference} if day.reference is not None else {})} for day in pins.option_days]
+             **({"reference": day.reference.to_json()} if day.reference is not None else {})} for day in pins.option_days]
 
 
 def pins_from_json(
@@ -457,7 +458,8 @@ def pins_from_json(
         underlying_sha256=underlying_sha256,
         listing_sha256=listing_sha256,
         option_days=tuple(
-            PinnedDay(contract=OptionContract.from_occ_symbol(day["contract"]), sha256=day["sha256"], reference=day.get("reference"))
+            PinnedDay(contract=OptionContract.from_occ_symbol(day["contract"]), sha256=day["sha256"],
+                      reference=None if day.get("reference") is None else SessionMemberRef.from_json(day["reference"]))
             for day in option_days
         ),
     )

@@ -47,12 +47,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 import zipfile
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from app.config import settings
@@ -84,6 +86,7 @@ from app.data_lake.option_lake import (
     current_ms,
     fail_row,
     option_read_root,
+    option_session_publication_lock,
     plan_window_refusal,
     publish_option_artifact,
     refusal_before_claim,
@@ -104,6 +107,10 @@ logger = logging.getLogger(__name__)
 
 _ET = ZoneInfo("America/New_York")
 _MS_PER_MINUTE = 60_000
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+_MEMBER_STATES = ("captured", "confirmed_empty")
+_REFERENCE_KEYS = frozenset({"version", "layout", "container_sha256", "member_sha256", "listing_sha256", "recipe",
+                             "data_root_id", "state"})
 
 
 def option_minute_trade_dch() -> str:
@@ -143,14 +150,52 @@ class OptionBar:
 
 
 @dataclass(frozen=True)
+class SessionMemberRef:
+    """The one member of one admitted session container (``option_session``) a contract's day was read from.
+
+    Saved runs store its JSON beside the member's sha256; ``to_json`` writes exactly the
+    object they hold and ``from_json`` refuses any other shape.
+    """
+
+    container_sha256: str
+    member_sha256: str
+    listing_sha256: str
+    recipe: str
+    data_root_id: str
+    state: Literal["captured", "confirmed_empty"]
+
+    def __post_init__(self) -> None:
+        if (not all(type(value) is str and _SHA256.fullmatch(value)
+                    for value in (self.container_sha256, self.member_sha256, self.listing_sha256, self.recipe))
+                or type(self.data_root_id) is not str or not self.data_root_id or self.state not in _MEMBER_STATES):
+            raise ValueError("a session member reference holds a malformed identity")
+
+    def to_json(self) -> dict[str, str]:
+        return {"version": "1", "layout": "option_session", "container_sha256": self.container_sha256,
+                "member_sha256": self.member_sha256, "listing_sha256": self.listing_sha256, "recipe": self.recipe,
+                "data_root_id": self.data_root_id, "state": self.state}
+
+    @classmethod
+    def from_json(cls, value: object) -> SessionMemberRef:
+        if (not isinstance(value, Mapping) or set(value) != _REFERENCE_KEYS
+                or value["version"] != "1" or value["layout"] != "option_session"):
+            raise ValueError("a stored session member reference is not a version 1 option_session reference")
+        return cls(value["container_sha256"], value["member_sha256"], value["listing_sha256"], value["recipe"],
+                   value["data_root_id"], value["state"])
+
+
+@dataclass(frozen=True)
 class OptionDayBars:
-    """A captured session of one contract: its bars (none, if it never traded) and the file's sha256 to pin."""
+    """A captured session of one contract: its bars (none, if it never traded) and the file's sha256 to pin.
+
+    ``reference`` names the session-container member the day was read from; ``None`` for a per-contract file.
+    """
 
     contract_symbol: str
     trading_date: date
     bars: tuple[OptionBar, ...]
     sha256: str
-    reference: dict[str, str] | None = None
+    reference: SessionMemberRef | None = None
 
 
 class OptionBarsFileError(ValueError):
@@ -220,16 +265,20 @@ def read_option_day_bars(
     contract: OptionContract,
     trading_date: date,
     *,
+    listed_under: str,
     admission: Callable[[Path], bytes] = read_committed_bytes,
     lake_root: Path | None = None,
-    listed_under: str | None = None,
-    legacy_only: bool = False,
 ) -> OptionDayBars | None:
     """One contract's captured session, or ``None`` when that day has no file.
 
     A captured day with no trades is an :class:`OptionDayBars` with no bars, which
     is not the same as ``None``. Prices are exact ``Decimal`` and a bar's start is
     epoch ms UTC; every bar the vendor sent for the date is here, whatever the hour.
+
+    ``listed_under`` is the underlying whose session container is read first (a contract's
+    OCC root is not always its underlying's ticker). A member there answers; a listed contract
+    the container leaves unresolved falls back to its own file; one the container does not
+    list is ``None``.
 
     What a caller must have. The bytes are read only through ``admission``, which by
     default asks the catalog for the committed receipt of exactly these bytes. So:
@@ -254,17 +303,16 @@ def read_option_day_bars(
     mount of the lake) instead of the configured one; any other path is a ``ValueError``.
     Synchronous, like ``LeanMinuteDataReader.read_day``.
     """
-    symbol = contract.occ_symbol
-    if not legacy_only:
-        from app.data_lake.option_session import read_option_session
+    from app.data_lake.option_session import read_option_session
 
-        session = read_option_session(listed_under or contract.root, trading_date, admission=admission, lake_root=lake_root)
-        if session is not None:
-            stored = session.option_day(symbol)
-            if stored is not None:
-                return OptionDayBars(symbol, trading_date, stored.bars, stored.sha256, session.reference(symbol))
-            if symbol not in session.unresolved:
-                return None
+    symbol = contract.occ_symbol
+    session = read_option_session(listed_under, trading_date, admission=admission, lake_root=lake_root)
+    if session is not None:
+        stored = session.option_day(symbol)
+        if stored is not None:
+            return OptionDayBars(symbol, trading_date, stored.bars, stored.sha256, session.reference(symbol))
+        if symbol not in session.unresolved:
+            return None
     path = option_read_root(lake_root) / Path(*_bars_path(contract, trading_date).parts)
     if not path.is_file():
         return None
@@ -433,6 +481,35 @@ def _require_prices_above_zero_on_the_grid(bars: Sequence[PolygonOptionBar]) -> 
                 )
 
 
+def encode_option_day(bars: Sequence[PolygonOptionBar], *, symbol: str, trading_date: date) -> bytes:
+    """The stored file of one contract's session, from the vendor's bars; the one chain every writer of a day runs.
+
+    A session container keeps each member byte for byte as this file, so the per-contract capture and the
+    session collection both encode here. The vendor's answer is judged first: its exact price relations on the
+    decimals, the publication gate, whole-minute starts (each a :class:`CorruptVendorBarsError`). Then what the
+    file cannot hold: a price it would store as 0 (``ValueError``), or a value past its integers
+    (``ArithmeticError`` or ``ValueError``).
+    """
+    _require_exact_price_relations(bars, symbol=symbol, trading_date=trading_date)
+    assert_publishable_minute_bars(_publication_gate_view(bars), symbol=symbol, trading_date=trading_date)
+    _require_whole_minute_starts([bar.t_ms for bar in bars], symbol=symbol, trading_date=trading_date)
+    _require_prices_above_zero_on_the_grid(bars)
+    return build_minute_trade_zip_bytes(
+        symbol=symbol,
+        trading_date_yyyymmdd=trading_date.strftime("%Y%m%d"),
+        bars=[_minute_trade_bar(b) for b in bars],
+    )
+
+
+async def _complete_record(catalog_symbol: str, trading_date: date, sha256: str) -> ArtifactRecord | None:
+    """This provider's complete minute-bar row of ``catalog_symbol`` on the date whose file is ``sha256``."""
+    records = await catalog_client.select_coverage_minute_bars(
+        market=OPTION_MARKET, symbol=catalog_symbol, data_type="trade", start_trading_date=trading_date,
+        end_trading_date=trading_date, price_adjustment_mode=OPTION_PRICE_ADJUSTMENT_MODE,
+    )
+    return next((r for r in records if r.file_sha256 == sha256 and r.provider == OPTION_PROVIDER), None)
+
+
 async def ensure_option_day_bars(
     contract: OptionContract,
     trading_date: date,
@@ -445,11 +522,14 @@ async def ensure_option_day_bars(
 
     ``listed_under`` is the underlying whose listing holds the contract (a contract's
     OCC root is not always its underlying's ticker: ``BRK.B`` options are ``BRKB...``).
-    Before any claim and any vendor call it refuses, as a typed failure and with no row
+    Before any claim and any vendor call it answers, as a typed failure and with no row
     (each reason is explained in ``option_lake``'s docstring), in this order:
-    ``symbol_too_long``, ``not_a_session``, ``session_not_over``, ``outside_data_plan``,
-    ``listing_not_captured``, ``not_listed``. Only then does it claim, reuse-or-refresh on
-    a lost claim, reclaim, fetch, validate, encode and publish under the lease. Every
+    ``symbol_too_long``, ``not_a_session``, ``session_not_over``; then the day reused from
+    ``listed_under``'s session container, or ``validation_failed`` for a container that does
+    not read; then, for a session older than the plan reaches, the contract's own stored day
+    reused, or else ``outside_data_plan``; then ``listing_not_captured``, ``not_listed``.
+    Only then does it claim, reuse-or-refresh on a lost claim, reclaim, fetch, validate,
+    encode (:func:`encode_option_day`) and publish under the lease. Every
     vendor outcome, a malformed answer included, is a typed failure on the row and none
     raises; so is a file that cannot be written (``io_error``). ``now_ms`` fixes the clock
     for the session and plan rules; it defaults to the wall clock.
@@ -483,28 +563,20 @@ async def ensure_option_day_bars(
         except (LakeAdmissionError, OptionSessionFileError) as exc:
             return OptionCaptureResult.failed(OptionDataFailure("validation_failed", str(exc), symbol, trading_date))
         if session is not None and session.option_day(symbol) is not None:
-            records = await catalog_client.select_coverage_minute_bars(
-                market=OPTION_MARKET, symbol=listed_under, data_type="trade", start_trading_date=trading_date,
-                end_trading_date=trading_date, price_adjustment_mode=OPTION_PRICE_ADJUSTMENT_MODE,
-            )
-            record = next((r for r in records if r.file_sha256 == session.sha256 and r.provider == OPTION_PROVIDER), None)
+            record = await _complete_record(listed_under, trading_date, session.sha256)
             if record is None:
                 raise LakeAdmissionError("session receipt changed after admission")
             return OptionCaptureResult(record=record, failure=None, reused=True)
-        if plan_window_refusal(symbol, trading_date, now_ms=now) is not None:
+        refusal = plan_window_refusal(symbol, trading_date, now_ms=now)
+        if refusal is not None:
+            # Past the plan's window a contract's own stored day is the only source left: reuse it when it reads.
             try:
                 stored = await asyncio.to_thread(read_option_day_bars, contract, trading_date, listed_under=listed_under)
             except (LakeAdmissionError, OptionBarsFileError) as exc:
                 return OptionCaptureResult.failed(OptionDataFailure("validation_failed", str(exc), symbol, trading_date))
-            if stored is not None:
-                records = await catalog_client.select_coverage_minute_bars(
-                    market=OPTION_MARKET, symbol=symbol, data_type="trade", start_trading_date=trading_date,
-                    end_trading_date=trading_date, price_adjustment_mode=OPTION_PRICE_ADJUSTMENT_MODE,
-                )
-                record = next((r for r in records if r.file_sha256 == stored.sha256 and r.provider == OPTION_PROVIDER), None)
-                if record is not None:
-                    return OptionCaptureResult(record=record, failure=None, reused=True)
-            refusal = plan_window_refusal(symbol, trading_date, now_ms=now)
+            record = None if stored is None else await _complete_record(symbol, trading_date, stored.sha256)
+            if record is not None:
+                return OptionCaptureResult(record=record, failure=None, reused=True)
     if refusal is None:
         refusal = await _listing_refusal(listed_under, symbol, trading_date, listing)
     if refusal is not None:
@@ -581,19 +653,9 @@ async def ensure_option_day_bars(
     # contract the stored listing of this date holds, so it was listed and did not trade.
     # That is pinned as a complete artifact with no rows (the stock path fails it).
     try:
-        _require_exact_price_relations(bars, symbol=symbol, trading_date=trading_date)
-        assert_publishable_minute_bars(_publication_gate_view(bars), symbol=symbol, trading_date=trading_date)
-        _require_whole_minute_starts([bar.t_ms for bar in bars], symbol=symbol, trading_date=trading_date)
+        payload = encode_option_day(bars, symbol=symbol, trading_date=trading_date)
     except CorruptVendorBarsError as e:
         return await fail("validation_failed", str(e))
-
-    try:
-        _require_prices_above_zero_on_the_grid(bars)
-        payload = build_minute_trade_zip_bytes(
-            symbol=symbol,
-            trading_date_yyyymmdd=trading_date.strftime("%Y%m%d"),
-            bars=[_minute_trade_bar(b) for b in bars],
-        )
     except (ArithmeticError, ValueError) as e:
         # A price or volume the file cannot hold (the gate passes any finite positive number).
         return await fail("validation_failed", f"the bars of {symbol} {trading_date.isoformat()} cannot be written: {e}")
@@ -601,7 +663,6 @@ async def ensure_option_day_bars(
     # A session with no bars records 0 and 0, as the metadata rows do; the row count says there are none.
     first_bar_ms = bars[0].t_ms if bars else 0
     last_bar_ms = bars[-1].t_ms if bars else 0
-    from app.data_lake.option_session import option_session_publication_lock
 
     with option_session_publication_lock(listed_under, trading_date) as owns:
         if not owns:

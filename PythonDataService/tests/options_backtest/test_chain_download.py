@@ -982,7 +982,7 @@ async def test_the_underlyings_fetch_does_not_wait_for_a_place_among_the_option_
     await _on_the_background_loop(_take_every_place_at_the_gate())
     try:
         item = await asyncio.wait_for(
-            _on_the_background_loop(chain_download._capture_underlying("SPY", FRIDAY, None)), 5
+            _on_the_background_loop(chain_download.capture_underlying("SPY", FRIDAY, None)), 5
         )
     finally:
         await _on_the_background_loop(_give_back_places_at_the_gate(MAX_VENDOR_REQUESTS_IN_FLIGHT))

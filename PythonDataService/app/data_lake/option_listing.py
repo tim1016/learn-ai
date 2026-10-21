@@ -68,6 +68,7 @@ from app.data_lake.option_lake import (
     current_ms,
     fail_row,
     option_read_root,
+    option_session_publication_lock,
     publish_option_artifact,
     refusal_before_claim,
     stored_file_still_reads,
@@ -426,8 +427,9 @@ async def ensure_option_listing(
     that cannot be written (``io_error``). The paging is
     given :data:`LISTING_FETCH_BUDGET_MS`, inside the lease, and a fetch that runs past it
     ends as a failed row before another page is asked. A listing found complete and reused is
-    returned only after the same cleanup of other formats' rows a publish does, because the publish
-    that made it may have ended before doing it. The refusals
+    returned after the same cleanup of other formats' rows a publish does, because the publish
+    that made it may have ended before doing it; while a session publication holds the date's
+    lock the reuse is returned at once and a later reuse cleans up. The refusals
     that cost no claim come first (``symbol_too_long``, ``not_a_session``,
     ``session_not_over``, which holds until the session's New York date has passed;
     ``option_lake``'s docstring says what each means).
@@ -475,12 +477,10 @@ async def ensure_option_listing(
         if held.reused and held.record is not None:
             # The publish that made this row complete may have ended before it staled the old format's row (an
             # outage, a process that stopped), and nothing else would try again once the row reads as complete.
-            from app.data_lake.option_session import option_session_publication_lock
-
+            # The cleanup is idempotent: while a session publication holds the lock, a later reuse does it.
             with option_session_publication_lock(underlying, as_of) as owns:
-                if not owns:
-                    return OptionCaptureResult.failed(OptionDataFailure("lease_timeout", "session publication is busy; retry listing cleanup", underlying, as_of))
-                await _stale_other_formats(identity, rel_path, keep_artifact_id=held.record.id)
+                if owns:
+                    await _stale_other_formats(identity, rel_path, keep_artifact_id=held.record.id)
         return held
 
     async def fail(reason: OptionFailureReason, detail: str) -> OptionCaptureResult:
@@ -508,8 +508,6 @@ async def ensure_option_listing(
         payload = build_option_listing_zip_bytes(underlying, as_of, contracts)
     except OptionListingFileError as e:
         return await fail("validation_failed", str(e))
-
-    from app.data_lake.option_session import option_session_publication_lock
 
     with option_session_publication_lock(underlying, as_of) as owns:
         if not owns:

@@ -17,8 +17,7 @@ import re
 import zipfile
 import zlib
 from collections.abc import Callable, Mapping
-from contextlib import AbstractContextManager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -27,14 +26,12 @@ from uuid import UUID
 from app.data_lake.admission import read_committed_bytes
 from app.data_lake.data_contract import data_contract_hash
 from app.data_lake.lean_writer import _DETERMINISTIC_ZIP_DATE_TIME
-from app.data_lake.option_bars import OptionBarsFileError, OptionDayBars, parse_option_day_zip
+from app.data_lake.option_bars import OptionBarsFileError, OptionDayBars, SessionMemberRef, parse_option_day_zip
 from app.data_lake.option_lake import OPTION_PROVIDER, option_read_root
 from app.data_lake.option_listing import OptionListing, parse_option_listing_zip, read_option_listing
 from app.data_lake.path_policy import OptionSessionPath
 from app.data_lake.root_identity import active_root_id, read_marker
-from app.engine.live.identity import confine_path_to_root
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
-from app.utils.advisory_lock import try_advisory_file_lock
 from app.utils.session_anchors import et_date_at_ms
 
 OPTION_SESSION_FORMAT = 1
@@ -46,23 +43,6 @@ MAX_LISTING_DECODED_BYTES = 32 * 1024 * 1024
 _SYMBOL = re.compile(r"[A-Z][A-Z0-9.]*")
 _MANIFEST = "manifest.json"
 _LISTING = "listing.zip"
-
-
-def option_session_publication_lock(underlying: str, trading_date: date) -> AbstractContextManager[bool]:
-    """Fence source refresh and session compaction together, without DB changes.
-
-    Collection uses a different lock and yields before requesting publication.
-    No provider operation or transaction waits while this lock is held.
-    """
-    OptionSessionPath(underlying, trading_date)  # validate the path segment before using it
-    base_root = option_read_root().parent.parent
-    lock_root = confine_path_to_root(base_root / ".option-session-publication", base_root,
-                                    label="option publication lock root")
-    target = confine_path_to_root(lock_root / underlying.lower() / str(session_open_ms_utc(trading_date)),
-                                 lock_root, label="option publication lock")
-    confine_path_to_root(target.with_name(f".{target.name}.lock"), lock_root,
-                        label="option publication lock file")
-    return try_advisory_file_lock(target)
 
 
 class OptionSessionFileError(OptionBarsFileError):
@@ -117,16 +97,11 @@ class OptionSession:
     days: Mapping[str, OptionDayBars]
     original_bytes: Mapping[str, bytes]
     unresolved: frozenset[str]
-    underlying_sha256: str | None = None
 
     @property
     def contracts_complete(self) -> bool:
+        """Every listed contract is answered; whole-session readiness also needs the underlying day."""
         return not self.unresolved
-
-    @property
-    def complete(self) -> bool:
-        """Full-session readiness, including an explicitly admitted underlying day."""
-        return self.contracts_complete and self.underlying_sha256 is not None
 
     @property
     def captured(self) -> frozenset[str]:
@@ -151,11 +126,10 @@ class OptionSession:
     def option_day(self, symbol: str) -> OptionDayBars | None:
         return self.days.get(symbol)
 
-    def reference(self, symbol: str) -> dict[str, str]:
+    def reference(self, symbol: str) -> SessionMemberRef:
         day = self.days[symbol]
-        return {"version": "1", "layout": "option_session", "container_sha256": self.sha256,
-                "member_sha256": day.sha256, "listing_sha256": self.listing_sha256,
-                "recipe": option_session_dch(), "data_root_id": self.root_id, "state": "captured" if day.bars else "confirmed_empty"}
+        return SessionMemberRef(self.sha256, day.sha256, self.listing_sha256, option_session_dch(), self.root_id,
+                                "captured" if day.bars else "confirmed_empty")
 
 
 def build_option_session_bytes(listing: OptionListing, captured: Mapping[str, bytes], *, root_id: UUID | str | None = None) -> bytes:
@@ -163,7 +137,7 @@ def build_option_session_bytes(listing: OptionListing, captured: Mapping[str, by
     listed = _symbols(listing)
     if listing.source_bytes is None or hashlib.sha256(listing.source_bytes).hexdigest() != listing.sha256:
         raise OptionSessionFileError("the exact pinned listing bytes must be retained")
-    listing_decoded = _check_inner_size(listing.source_bytes, max_decoded_bytes=MAX_LISTING_DECODED_BYTES)
+    listing_decoded = check_member_size(listing.source_bytes, max_decoded_bytes=MAX_LISTING_DECODED_BYTES)
     if parse_option_listing_zip(listing.source_bytes, listing.underlying, listing.as_of) != listing.rows:
         raise OptionSessionFileError("listing bytes and parsed identity disagree")
     if not set(captured) <= listed:
@@ -172,9 +146,7 @@ def build_option_session_bytes(listing: OptionListing, captured: Mapping[str, by
     states: dict[str, dict[str, Any]] = {}
     decoded = listing_decoded
     for symbol, payload in sorted(captured.items()):
-        _check_inner_size(payload)
-        with zipfile.ZipFile(io.BytesIO(payload)) as inner:
-            decoded += inner.infolist()[0].file_size
+        decoded += check_member_size(payload)
         if decoded > MAX_SESSION_DECODED_BYTES:
             raise OptionSessionFileError("session exceeds decoded-bar bound")
         bars = parse_option_day_zip(payload, symbol, listing.as_of)
@@ -202,7 +174,8 @@ def build_option_session_bytes(listing: OptionListing, captured: Mapping[str, by
     return payload
 
 
-def _check_inner_size(payload: bytes, *, max_decoded_bytes: int | None = None) -> int:
+def check_member_size(payload: bytes, *, max_decoded_bytes: int | None = None) -> int:
+    """The decoded size of a member zip's one entry; any other shape, or one past the bound, is refused."""
     try:
         with zipfile.ZipFile(io.BytesIO(payload)) as archive:
             bound = MAX_TICKER_DECODED_BYTES if max_decoded_bytes is None else max_decoded_bytes
@@ -227,7 +200,7 @@ def parse_option_session(payload: bytes, listing: OptionListing, *, root_id: UUI
                 raise OptionSessionFileError("invalid or oversized session members")
             manifest = _json(archive.read(_MANIFEST))
             listing_raw = archive.read(_LISTING)
-            listing_decoded = _check_inner_size(listing_raw, max_decoded_bytes=MAX_LISTING_DECODED_BYTES)
+            listing_decoded = check_member_size(listing_raw, max_decoded_bytes=MAX_LISTING_DECODED_BYTES)
             if (hashlib.sha256(listing_raw).hexdigest() != listing.sha256
                     or parse_option_listing_zip(listing_raw, listing.underlying, listing.as_of) != listing.rows):
                 raise OptionSessionFileError("embedded listing does not match its pinned identity")
@@ -254,9 +227,7 @@ def parse_option_session(payload: bytes, listing: OptionListing, *, root_id: UUI
                 if not isinstance(entry, dict) or entry.get("member") != _member(symbol):
                     raise OptionSessionFileError("invalid contract member identity")
                 raw = archive.read(_member(symbol))
-                _check_inner_size(raw)
-                with zipfile.ZipFile(io.BytesIO(raw)) as inner:
-                    decoded += inner.infolist()[0].file_size
+                decoded += check_member_size(raw)
                 if decoded > MAX_SESSION_DECODED_BYTES:
                     raise OptionSessionFileError("session exceeds decoded-bar bound")
                 digest = hashlib.sha256(raw).hexdigest()
@@ -276,34 +247,34 @@ def parse_option_session(payload: bytes, listing: OptionListing, *, root_id: UUI
                          hashlib.sha256(payload).hexdigest(), days, originals, frozenset(pending))
 
 
-def read_option_session(underlying: str, trading_date: date, *, admission: Callable[[Path], bytes] = read_committed_bytes,
-                        lake_root: Path | None = None, listing: OptionListing | None = None,
-                        check_underlying: bool = False) -> OptionSession | None:
-    """Read contract coverage; optionally establish full-session completeness.
-
-    Option bytes remain independently readable when underlying bars are missing.
-    Status callers request the canonical run reader's underlying admission too;
-    a corrupt or unadmitted underlying day then refuses instead of appearing complete.
-    """
+def _admitted_session_bytes(underlying: str, trading_date: date, admission: Callable[[Path], bytes],
+                            lake_root: Path | None) -> bytes | None:
+    """The published container's admitted bytes, ``None`` when there is none, refused past the compressed bound."""
     path = option_read_root(lake_root) / OptionSessionPath(underlying, trading_date).relative_path()
     if not path.is_file():
         return None
     if path.stat().st_size > MAX_SESSION_COMPRESSED_BYTES:
         raise OptionSessionFileError("session exceeds compressed-byte bound")
-    payload = admission(path)
-    listing = listing or read_option_listing(underlying, trading_date, admission=admission, lake_root=lake_root)
-    if listing is None:
-        raise OptionSessionFileError("published session has no admitted listing")
+    return admission(path)
+
+
+def _root_id(lake_root: Path | None) -> UUID:
     marker = read_marker(option_read_root(lake_root).parent.parent)
     if marker is None:
         raise OptionSessionFileError("session root has no identity marker")
-    session = parse_option_session(payload, listing, root_id=marker.data_root_id)
-    if check_underlying:
-        from app.options_backtest.lake_data import LakeRunData
+    return marker.data_root_id
 
-        underlying_day = LakeRunData(underlying, lake_root=lake_root).underlying_day(trading_date)
-        session = replace(session, underlying_sha256=None if underlying_day is None else underlying_day.sha256)
-    return session
+
+def read_option_session(underlying: str, trading_date: date, *, admission: Callable[[Path], bytes] = read_committed_bytes,
+                        lake_root: Path | None = None, listing: OptionListing | None = None) -> OptionSession | None:
+    """Read contract coverage. Option bytes remain readable when underlying bars are missing."""
+    payload = _admitted_session_bytes(underlying, trading_date, admission, lake_root)
+    if payload is None:
+        return None
+    listing = listing or read_option_listing(underlying, trading_date, admission=admission, lake_root=lake_root)
+    if listing is None:
+        raise OptionSessionFileError("published session has no admitted listing")
+    return parse_option_session(payload, listing, root_id=_root_id(lake_root))
 
 
 def parse_retained_option_session(payload: bytes, listing: OptionListing) -> OptionSession:
@@ -329,13 +300,9 @@ def read_option_session_for_listing_rebind(underlying: str, trading_date: date) 
     permits a deliberate repack after a listing refresh while preserving old
     resolved member bytes; corruption is still a whole-container refusal.
     """
-    root = option_read_root()
-    path = root / OptionSessionPath(underlying, trading_date).relative_path()
-    if not path.is_file():
+    payload = _admitted_session_bytes(underlying, trading_date, read_committed_bytes, None)
+    if payload is None:
         return None
-    if path.stat().st_size > MAX_SESSION_COMPRESSED_BYTES:
-        raise OptionSessionFileError("session exceeds compressed-byte bound")
-    payload = read_committed_bytes(path)
     try:
         with zipfile.ZipFile(io.BytesIO(payload)) as archive:
             infos = archive.infolist()
@@ -344,10 +311,7 @@ def read_option_session_for_listing_rebind(underlying: str, trading_date: date) 
             raw = archive.read(_LISTING)
     except (KeyError, zipfile.BadZipFile, ValueError, zlib.error, OSError) as exc:
         raise OptionSessionFileError("original listing cannot be recovered from the session") from exc
-    _check_inner_size(raw, max_decoded_bytes=MAX_LISTING_DECODED_BYTES)
+    check_member_size(raw, max_decoded_bytes=MAX_LISTING_DECODED_BYTES)
     listing = OptionListing(underlying, trading_date, parse_option_listing_zip(raw, underlying, trading_date),
                             hashlib.sha256(raw).hexdigest(), raw)
-    marker = read_marker(root.parent.parent)
-    if marker is None:
-        raise OptionSessionFileError("session root has no identity marker")
-    return parse_option_session(payload, listing, root_id=marker.data_root_id)
+    return parse_option_session(payload, listing, root_id=_root_id(None))

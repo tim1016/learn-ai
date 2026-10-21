@@ -10,8 +10,8 @@ import pytest
 import respx
 
 from app.data_lake.option_session import read_option_session
-from app.data_lake.option_session_capture import capture_option_session
 from app.options.contract import OptionContract
+from app.options_backtest.option_session_capture import capture_option_session, read_session_completeness
 from tests._helpers.option_vendor import no_trades, traded
 from tests.options_backtest._lake import (
     FRIDAY,
@@ -55,7 +55,7 @@ async def test_staging_budget_refuses_before_http_without_deleting_old_generatio
         stream.truncate(1024**3)
     request = respx.get(url(CALL)).mock(return_value=no_trades(CALL.occ_symbol))
     result = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS)
-    assert result.failure is not None and result.failure.reason == "lease_timeout"
+    assert result.failure is not None and result.failure.reason == "staging_capacity"
     assert "staging capacity" in result.failure.detail.lower()
     assert request.call_count == 0
     assert abandoned.stat().st_size == 1024**3
@@ -78,15 +78,15 @@ async def test_capacity_pause_keeps_successful_bytes_and_retries_without_spendin
     put = respx.get(url(PUT)).mock(return_value=no_trades(PUT.occ_symbol))
     for _ in range(5):
         result = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS, max_staging_bytes=cap)
-        assert result.failure.reason == "lease_timeout" and "staging capacity" in result.failure.detail.lower()
+        assert result.failure.reason == "staging_capacity" and "staging capacity" in result.failure.detail.lower()
     [original] = list(budget.root.rglob(f"{CALL.occ_symbol}.zip"))
     exact_bytes = original.read_bytes()
     assert call.call_count == 1 and put.call_count == 0
     assert not list(budget.root.rglob("*.attempts"))
     recovered = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS, max_staging_bytes=cap + 65_536)
     assert recovered.failure is None and call.call_count == put.call_count == 1
-    session = await asyncio.to_thread(read_option_session, "SPY", FRIDAY, check_underlying=True)
-    assert session.complete and session.legacy_bytes(CALL.occ_symbol) == exact_bytes
+    session, complete = await asyncio.to_thread(read_session_completeness, "SPY", FRIDAY)
+    assert complete and session.legacy_bytes(CALL.occ_symbol) == exact_bytes
     assert json.loads(budget.ledger.read_bytes())["leases"] == {}
 
 
@@ -130,14 +130,14 @@ async def test_complete_capture_and_pause_resume_never_refetches_staged_ticker(f
     call = respx.get(url(CALL)).mock(side_effect=first)
     put = respx.get(url(PUT)).mock(return_value=no_trades(PUT.occ_symbol))
     result = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS, should_pause=lambda: paused)
-    assert result.failure.reason == "lease_timeout"
+    assert result.failure.reason == "paused"
     assert call.call_count == 1 and put.call_count == 0
     assert await asyncio.to_thread(read_option_session, "SPY", FRIDAY) is None
     completed = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS)
     assert completed.failure is None
     assert call.call_count == 1 and put.call_count == 1
-    session = await asyncio.to_thread(read_option_session, "SPY", FRIDAY, check_underlying=True)
-    assert session.complete and session.captured == {CALL.occ_symbol} and session.confirmed_empty == {PUT.occ_symbol}
+    session, complete = await asyncio.to_thread(read_session_completeness, "SPY", FRIDAY)
+    assert complete and session.captured == {CALL.occ_symbol} and session.confirmed_empty == {PUT.occ_symbol}
     again = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS)
     assert again.reused and call.call_count == 1 and put.call_count == 1
 
@@ -184,7 +184,7 @@ async def test_explicit_transient_retry_budget_and_planned_pause(fake_catalog, t
     route = respx.get(url(CALL)).mock(return_value=httpx.Response(429))
     for _ in range(5):
         paused = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS, should_pause=lambda: True)
-        assert paused.failure.reason == "lease_timeout"
+        assert paused.failure.reason == "paused"
     assert route.call_count == 0
     for _ in range(3):
         await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS)
@@ -208,7 +208,7 @@ async def test_outside_plan_does_not_consume_transient_budget_and_upgrade_recove
     request.mock(return_value=no_trades(CALL.occ_symbol))
     result = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS)
     assert result.failure is None and request.call_count == 6
-    assert (await asyncio.to_thread(read_option_session, "SPY", FRIDAY, check_underlying=True)).complete
+    assert (await asyncio.to_thread(read_session_completeness, "SPY", FRIDAY))[1]
 
 
 @pytest.mark.parametrize("reason", ["provider_auth_error", "provider_entitlement_error", "outside_data_plan"])
@@ -249,7 +249,7 @@ async def test_aged_out_answer_preserves_successful_progress_as_explicit_partial
     result = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS)
     assert result.failure.reason == "outside_data_plan"
     session = await asyncio.to_thread(read_option_session, "SPY", FRIDAY)
-    assert not session.complete and session.captured == {CALL.occ_symbol}
+    assert not session.contracts_complete and session.captured == {CALL.occ_symbol}
     assert session.unresolved == {PUT.occ_symbol} and not session.confirmed_empty
 
 
@@ -263,8 +263,8 @@ async def test_adjusted_listed_ticker_is_preserved_without_becoming_orderable(fa
     other_request = respx.get(url(PUT)).mock(return_value=no_trades(PUT.occ_symbol))
     result = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS)
     assert result.failure is None and archive_request.call_count == other_request.call_count == 1
-    session = await asyncio.to_thread(read_option_session, "SPY", FRIDAY, check_underlying=True)
-    assert session.complete and adjusted in session.captured and PUT.occ_symbol in session.confirmed_empty
+    session, complete = await asyncio.to_thread(read_session_completeness, "SPY", FRIDAY)
+    assert complete and adjusted in session.captured and PUT.occ_symbol in session.confirmed_empty
     with pytest.raises(ValueError):
         OptionContract.from_occ_symbol(adjusted)
 
@@ -314,11 +314,11 @@ async def test_cancelled_collection_after_five_minutes_resumes_without_refetch(f
         outcome = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS + elapsed_ms, max_staging_bytes=cap)
         if outcome.failure is None:
             break
-        assert outcome.failure.reason == "lease_timeout"
+        assert outcome.failure.reason in ("lease_timeout", "staging_capacity")
         await asyncio.sleep(0.001)
     assert outcome.failure is None and call.call_count == 1 and second_attempts == 2
     assert put.call_count == 1, "only the successful response is recorded; cancellation preserves prior progress"
-    assert (await asyncio.to_thread(read_option_session, "SPY", FRIDAY, check_underlying=True)).complete
+    assert (await asyncio.to_thread(read_session_completeness, "SPY", FRIDAY))[1]
     assert json.loads(budget.ledger.read_bytes())["leases"] == {}
 
 
@@ -410,8 +410,9 @@ async def test_capture_rechecks_confinement_after_a_provider_await(
 
 @respx.mock
 async def test_capture_cleanup_refuses_a_parent_symlink_before_deleting_outside_bytes(fake_catalog, tmp_lake: Path, tmp_path: Path) -> None:
-    from app.data_lake.option_session_capture import _clear_committed_staging
+    from app.data_lake.option_session_staging import OptionSessionStaging
     from app.data_lake.path_policy import resolve_staging_root
+    from app.options_backtest.option_session_capture import _clear_committed_staging
 
     captured = await store_listing([vendor_listing_row(CALL)])
     staging_root = resolve_staging_root("raw")
@@ -424,5 +425,6 @@ async def test_capture_cleanup_refuses_a_parent_symlink_before_deleting_outside_
     sentinel.write_bytes(b"keep")
     (capture_root / "SPY").symlink_to(outside, target_is_directory=True)
     with pytest.raises(ValueError, match="escapes root"):
-        await _clear_committed_staging(capture_root / "SPY" / "generation", captured, staging_root=staging_root)
+        await _clear_committed_staging(capture_root / "SPY" / "generation", captured, staging_root=staging_root,
+                                       budget=OptionSessionStaging(staging_root))
     assert sentinel.read_bytes() == b"keep"
