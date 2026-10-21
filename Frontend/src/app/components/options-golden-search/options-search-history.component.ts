@@ -31,7 +31,7 @@ export class OptionsSearchHistoryComponent {
   });
   protected readonly maximum = computed<DateRange | null>(() => {
     const answer = this.answer();
-    return answer?.start_ms == null || answer.end_ms === null ? null : { from: etIsoDate(answer.start_ms), to: etIsoDate(answer.end_ms - 1) };
+    return answer === null || answer.start_ms === null || answer.end_ms === null ? null : { from: etIsoDate(answer.start_ms), to: etIsoDate(answer.end_ms - 1) };
   });
   protected readonly offers = computed<readonly QuickRangeOffer[]>(() => [{ key: 'Max', range: this.maximum(), unavailable: this.maximum() === null ? this.answer()?.explanation ?? 'Reading the available study dates.' : null, note: 'Longest retained interval that fits the training, forward and final windows.' }]);
   protected readonly isMaximum = computed(() => this.maximum()?.from === this.range().from && this.maximum()?.to === this.range().to);
