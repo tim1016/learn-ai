@@ -18,7 +18,7 @@ import zipfile
 import zlib
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -117,10 +117,16 @@ class OptionSession:
     days: Mapping[str, OptionDayBars]
     original_bytes: Mapping[str, bytes]
     unresolved: frozenset[str]
+    underlying_sha256: str | None = None
+
+    @property
+    def contracts_complete(self) -> bool:
+        return not self.unresolved
 
     @property
     def complete(self) -> bool:
-        return not self.unresolved
+        """Full-session readiness, including an explicitly admitted underlying day."""
+        return self.contracts_complete and self.underlying_sha256 is not None
 
     @property
     def captured(self) -> frozenset[str]:
@@ -271,7 +277,14 @@ def parse_option_session(payload: bytes, listing: OptionListing, *, root_id: UUI
 
 
 def read_option_session(underlying: str, trading_date: date, *, admission: Callable[[Path], bytes] = read_committed_bytes,
-                        lake_root: Path | None = None, listing: OptionListing | None = None) -> OptionSession | None:
+                        lake_root: Path | None = None, listing: OptionListing | None = None,
+                        check_underlying: bool = False) -> OptionSession | None:
+    """Read contract coverage; optionally establish full-session completeness.
+
+    Option bytes remain independently readable when underlying bars are missing.
+    Status callers request the canonical run reader's underlying admission too;
+    a corrupt or unadmitted underlying day then refuses instead of appearing complete.
+    """
     path = option_read_root(lake_root) / OptionSessionPath(underlying, trading_date).relative_path()
     if not path.is_file():
         return None
@@ -284,7 +297,13 @@ def read_option_session(underlying: str, trading_date: date, *, admission: Calla
     marker = read_marker(option_read_root(lake_root).parent.parent)
     if marker is None:
         raise OptionSessionFileError("session root has no identity marker")
-    return parse_option_session(payload, listing, root_id=marker.data_root_id)
+    session = parse_option_session(payload, listing, root_id=marker.data_root_id)
+    if check_underlying:
+        from app.options_backtest.lake_data import LakeRunData
+
+        underlying_day = LakeRunData(underlying, lake_root=lake_root).underlying_day(trading_date)
+        session = replace(session, underlying_sha256=None if underlying_day is None else underlying_day.sha256)
+    return session
 
 
 def parse_retained_option_session(payload: bytes, listing: OptionListing) -> OptionSession:

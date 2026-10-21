@@ -59,8 +59,10 @@ class SnapshotRunData(ArchivedRunData):
 
     def option_day(self, contract: OptionContract, trading_date: date) -> Captured[Sequence[MinuteBar]] | None:
         relative = str(OptionMinuteBarPath(contract.root, contract.occ_symbol, trading_date).relative_path())
-        self.actual_reads.add(relative)
-        return None if relative in self.absent else super().option_day(contract, trading_date)
+        if relative in self.absent:
+            self.actual_reads.add(relative)
+            return None
+        return super().option_day(contract, trading_date)
 
 
 def capture_snapshot(protocol: OptionsSearchProtocol, blobs: BlobStore, *, lake_root: Path | None = None) -> Snapshot:

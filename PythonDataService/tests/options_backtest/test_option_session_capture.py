@@ -60,7 +60,7 @@ async def test_complete_capture_and_pause_resume_never_refetches_staged_ticker(f
     completed = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS)
     assert completed.failure is None
     assert call.call_count == 1 and put.call_count == 1
-    session = await asyncio.to_thread(read_option_session, "SPY", FRIDAY)
+    session = await asyncio.to_thread(read_option_session, "SPY", FRIDAY, check_underlying=True)
     assert session.complete and session.captured == {CALL.occ_symbol} and session.confirmed_empty == {PUT.occ_symbol}
     again = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS)
     assert again.reused and call.call_count == 1 and put.call_count == 1
@@ -120,6 +120,50 @@ async def test_explicit_transient_retry_budget_and_planned_pause(fake_catalog, t
 
 
 @respx.mock
+async def test_outside_plan_does_not_consume_transient_budget_and_upgrade_recovers(fake_catalog, tmp_lake):
+    from tests._helpers.option_vendor import outside_plan
+
+    await prepare(fake_catalog, tmp_lake, CALL)
+    request = respx.get(url(CALL)).mock(return_value=outside_plan())
+    for _ in range(5):
+        result = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS)
+        assert result.failure.reason == "outside_data_plan"
+    assert request.call_count == 5
+    request.mock(return_value=no_trades(CALL.occ_symbol))
+    result = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS)
+    assert result.failure is None and request.call_count == 6
+    assert (await asyncio.to_thread(read_option_session, "SPY", FRIDAY, check_underlying=True)).complete
+
+
+@pytest.mark.parametrize("reason", ["provider_auth_error", "provider_entitlement_error", "outside_data_plan"])
+@pytest.mark.parametrize("repacked", [False, True])
+@respx.mock
+async def test_underlying_terminal_reason_survives_initial_and_reused_contract_coverage(
+    fake_catalog, tmp_lake, monkeypatch, reason, repacked,
+):
+    from app.data_lake.option_session_repack import repack_option_session
+    from app.data_lake.run_materialization import LakeMaterializationError
+    from app.options_backtest.lake_check import _stock_day_identity
+    from tests.options_backtest._lake import store_option_day
+
+    await store_listing([vendor_listing_row(CALL)])
+    if repacked:
+        await store_option_day(CALL, [])
+        assert (await repack_option_session("SPY", FRIDAY)).failure is None
+    request = respx.get(url(CALL)).mock(return_value=no_trades(CALL.occ_symbol))
+    identity = _stock_day_identity("SPY", FRIDAY)
+    artifact_id = await fake_catalog.claim_minute_bar(identity, "test-worker", 60_000, "test-recipe", "unused")
+    fake_catalog.rows[artifact_id].update(status="failed", last_error=reason)
+    def fail_stock(**_):
+        raise LakeMaterializationError("stock provider refused this request")
+    monkeypatch.setattr("app.options_backtest.chain_download.materialize_engine_run", fail_stock)
+    result = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS)
+    assert result.failure.reason == reason
+    assert result.failure.detail == "stock provider refused this request"
+    assert request.call_count == (0 if repacked else 1)
+
+
+@respx.mock
 async def test_aged_out_answer_preserves_successful_progress_as_explicit_partial_coverage(fake_catalog, tmp_lake):
     from tests._helpers.option_vendor import outside_plan
 
@@ -143,7 +187,7 @@ async def test_adjusted_listed_ticker_is_preserved_without_becoming_orderable(fa
     other_request = respx.get(url(PUT)).mock(return_value=no_trades(PUT.occ_symbol))
     result = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS)
     assert result.failure is None and archive_request.call_count == other_request.call_count == 1
-    session = await asyncio.to_thread(read_option_session, "SPY", FRIDAY)
+    session = await asyncio.to_thread(read_option_session, "SPY", FRIDAY, check_underlying=True)
     assert session.complete and adjusted in session.captured and PUT.occ_symbol in session.confirmed_empty
     with pytest.raises(ValueError):
         OptionContract.from_occ_symbol(adjusted)
@@ -191,7 +235,7 @@ async def test_cancelled_collection_after_five_minutes_resumes_without_refetch(f
         await asyncio.sleep(0.001)
     assert outcome.failure is None and call.call_count == 1 and second_attempts == 2
     assert put.call_count == 1, "only the successful response is recorded; cancellation preserves prior progress"
-    assert (await asyncio.to_thread(read_option_session, "SPY", FRIDAY)).complete
+    assert (await asyncio.to_thread(read_option_session, "SPY", FRIDAY, check_underlying=True)).complete
 
 
 @pytest.mark.parametrize("escape", ["SPY/../../escape", "../escape", "root_symlink", "session_symlink", "lock_symlink"])

@@ -74,7 +74,7 @@ async def test_concurrent_contract_publication_cannot_be_lost_by_partial_repack(
     complete = await repack_option_session("SPY", FRIDAY)
     assert complete.failure is None
     session = await asyncio.to_thread(read_option_session, "SPY", FRIDAY)
-    assert session.complete and session.confirmed_empty == {CALL.occ_symbol, PUT.occ_symbol}
+    assert session.contracts_complete and session.confirmed_empty == {CALL.occ_symbol, PUT.occ_symbol}
 
 
 @respx.mock
@@ -113,7 +113,7 @@ async def test_repack_recovers_after_rename_without_catalog_commit(storage_catal
     second = await repack_option_session("SPY", FRIDAY)
     assert second.failure is None and second.record.file_sha256 == first.record.file_sha256
     session = await asyncio.to_thread(read_option_session, "SPY", FRIDAY)
-    assert session.complete
+    assert session.contracts_complete
 
 
 @respx.mock
@@ -231,7 +231,7 @@ asyncio.run(main())
             return_value=no_trades(PUT.occ_symbol))
         outcome = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS)
         assert outcome.failure is None
-        assert (await asyncio.to_thread(read_option_session, "SPY", FRIDAY)).complete
+        assert (await asyncio.to_thread(read_option_session, "SPY", FRIDAY)).contracts_complete
     finally:
         if process.returncode is None:
             process.kill()

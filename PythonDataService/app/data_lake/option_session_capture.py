@@ -124,7 +124,7 @@ async def capture_option_session(
             if await _complete(underlying, trading_date) is not None:
                 raise
             existing = None
-        if existing is not None and existing.complete:
+        if existing is not None and existing.contracts_complete:
             underlying_result = await _capture_underlying(underlying, trading_date, now, allow_before_floor=history_floor is not None)
             if underlying_result.outcome is Outcome.FAILED:
                 reason: OptionFailureReason = {
@@ -182,9 +182,10 @@ async def capture_option_session(
                                                        bars=[_minute_trade_bar(bar) for bar in bars])
                 parse_option_day_zip(payload, symbol, trading_date)
             except PolygonFetchError as exc:
-                attempts_path = confine_path_to_root(attempts_path, staging_root, label="option capture attempts")
-                atomic_write_bytes(attempts_path, str(attempts + 1).encode())
                 reason = vendor_reason(exc)
+                if reason != "outside_data_plan":
+                    attempts_path = confine_path_to_root(attempts_path, staging_root, label="option capture attempts")
+                    atomic_write_bytes(attempts_path, str(attempts + 1).encode())
                 if captured and reason in {"outside_data_plan", "provider_auth_error", "provider_entitlement_error"}:
                     partial = await publish_option_session(listing, captured)
                     if partial.failure is not None:
@@ -204,6 +205,11 @@ async def capture_option_session(
             return failed("lease_timeout", "capture paused before underlying collection; outcomes retained")
         underlying_result = await _capture_underlying(underlying, trading_date, now, allow_before_floor=history_floor is not None)
         if underlying_result.outcome is Outcome.FAILED:
-            return failed("provider_api_error", underlying_result.detail or "underlying bars could not be captured")
+            reason = {
+                "provider_auth_error": "provider_auth_error",
+                "provider_entitlement_error": "provider_entitlement_error",
+                "outside_data_plan": "outside_data_plan",
+            }.get(underlying_result.reason, "provider_api_error")
+            return failed(reason, underlying_result.detail or "underlying bars could not be captured")
         return await _clear_committed_staging(generation, await publish_option_session(listing, captured),
                                               staging_root=staging_root)

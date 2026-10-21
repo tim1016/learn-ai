@@ -38,11 +38,12 @@ async def repack(underlyings: list[str], *, rebind_listing: bool = False) -> lis
                 outcome = await repack_option_session(underlying, day, rebind_listing=rebind_listing)
                 if outcome.failure is not None:
                     raise RuntimeError(f"{underlying} session {session_open_ms_utc(day)}: {outcome.failure.reason}: {outcome.failure.detail}")
-                session = await asyncio.to_thread(read_option_session, underlying, day)
+                session = await asyncio.to_thread(read_option_session, underlying, day, check_underlying=True)
                 if session is None or outcome.record is None:
                     raise RuntimeError("repack did not leave an admitted session")
                 results.append({"underlying": underlying, "session_open_ms": session_open_ms_utc(day),
-                    "complete": session.complete, "captured": len(session.captured),
+                    "complete": session.complete, "contracts_complete": session.contracts_complete,
+                    "captured": len(session.captured),
                     "confirmed_empty": len(session.confirmed_empty), "unresolved": len(session.unresolved),
                     "source_bytes": sum(len(raw) for raw in session.original_bytes.values()),
                     "container_bytes": (option_read_root() / outcome.record.file_path).stat().st_size,

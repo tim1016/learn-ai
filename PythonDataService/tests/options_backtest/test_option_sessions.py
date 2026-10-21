@@ -29,8 +29,10 @@ from tests.options_backtest._lake import (
     option_day_zip,
     raw_root,
     replace_the_stored_file,
+    stock_bar,
     store_listing,
     store_option_day,
+    store_underlying_day,
     vendor_listing_row,
 )
 from tests.options_backtest._lake import fake_catalog as fake_catalog
@@ -76,6 +78,28 @@ async def test_coverage_determinism_empty_and_exact_original_bytes(fake_catalog,
     assert session.option_day(PUT.occ_symbol).bars == ()
     assert session.option_day(OTHER.occ_symbol) is None
     assert session.reference(CALL.occ_symbol)["member_sha256"] == hashlib.sha256(payloads[CALL.occ_symbol]).hexdigest()
+
+
+@respx.mock
+async def test_full_session_and_repack_report_require_admitted_underlying(fake_catalog, tmp_lake):
+    from scripts.repack_option_sessions import repack
+
+    listing = await listing_of(CALL)
+    await store_option_day(CALL, [])
+    parsed = parse_option_session(build_option_session_bytes(listing, {CALL.occ_symbol: option_day_zip(CALL, [])}), listing)
+    assert not parsed.complete
+    assert parsed.contracts_complete
+    [missing] = await repack(["SPY"])
+    assert missing["contracts_complete"] and not missing["complete"]
+    path = await store_underlying_day(fake_catalog, tmp_lake, [stock_bar(FRIDAY_OPEN_MS, "500", "500", "500", "500")])
+    [held] = await repack(["SPY"])
+    assert held["contracts_complete"] and held["complete"]
+    path.write_bytes(b"unadmitted replacement")
+    with pytest.raises(LakeAdmissionError):
+        await repack(["SPY"])
+    # Contract data stays readable independently of full-session readiness.
+    assert (await asyncio.to_thread(read_option_session, "SPY", FRIDAY)).contracts_complete
+    assert await asyncio.to_thread(read_option_day_bars, CALL, FRIDAY) is not None
 
 
 @pytest.mark.parametrize("damage", ["listing", "recipe", "unknown", "unsafe", "missing", "count", "overlap", "corrupt_unrequested"])
@@ -202,7 +226,7 @@ async def test_late_snapshot_cannot_replace_newer_resolved_container_member(fake
         return_value=no_trades(PUT.occ_symbol))
     native = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS)
     assert native.failure is None
-    after_capture = await asyncio.to_thread(read_option_session, "SPY", FRIDAY)
+    after_capture = await asyncio.to_thread(read_option_session, "SPY", FRIDAY, check_underlying=True)
     assert after_capture.complete and after_capture.legacy_bytes(CALL.occ_symbol) == refreshed
 
 
