@@ -44,6 +44,9 @@ Moving a backup to an SSD remains a separate owner action.
    before raising this setting in Compose's environment and recreating the data service; repeat the capture
    trigger afterward. Keep verified progress intact. This pause does not spend a
    provider retry, stop independent backup, or authorize legacy-file retirement.
+   The budget counts file-content bytes plus bounded bookkeeping headroom;
+   filesystem allocation and directory overhead require additional free space.
+   Ordinary stock and listing publications retain their existing staging policy.
 6. Evening observations are reference data. Their JSON retains capture start/end,
    page receipts, field gaps, and only vendor timestamps on the corresponding
    nested metric. Compare a week's observations under
