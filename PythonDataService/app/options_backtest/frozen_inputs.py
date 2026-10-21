@@ -102,6 +102,37 @@ class _RecordingData:
         return found
 
 
+def _verify_session_generation(data: RunData, day: date, rows: Mapping[str, Any]) -> None:
+    if "listing" not in rows:
+        return
+    original = rows["listing"]["sha256"]
+    options = rows.get("options", {})
+    container_keys = ("version", "layout", "data_root_id", "recipe", "listing_sha256", "container_sha256")
+    generations = set()
+    representative = None
+    for symbol, row in options.items():
+        reference = row.get("reference")
+        if reference is not None:
+            if reference.get("listing_sha256") != original:
+                raise ValueError("a day-file listing generation changed during input freeze")
+            generations.add(tuple(reference.get(key) for key in container_keys))
+            representative = symbol
+    if len(generations) > 1:
+        raise ValueError("option container generation changed during input freeze; retry with one generation")
+    if representative is not None:
+        # One container re-admission verifies its whole generation. A stable
+        # partial container may still use unchanged legacy fallback members.
+        for symbol, row in options.items():
+            if row.get("reference") is not None and symbol != representative:
+                continue
+            current = data.option_day(OptionContract.from_occ_symbol(symbol), day)
+            if current is None or current.sha256 != row["sha256"] or current.reference != row.get("reference"):
+                raise ValueError("option source generation changed during input freeze; retry with one generation")
+    current = data.listing(day)
+    if current is None or current.sha256 != original:
+        raise ValueError("listing changed during input freeze; retry with one generation")
+
+
 def freeze_run_inputs(
     setup: OptionsBacktestSetup,
     sessions: Sequence[date],
@@ -151,15 +182,7 @@ def freeze_run_inputs(
             continue
         recording = _RecordingData(data, day)
         load_session_market(setup, day, recording)
-        if "listing" in recording.rows:
-            original = recording.rows["listing"]["sha256"]
-            for row in recording.rows.get("options", {}).values():
-                reference = row.get("reference") or {}
-                if reference.get("listing_sha256", original) != original:
-                    raise ValueError("a day-file listing generation changed during input freeze")
-            current = data.listing(day)
-            if current is None or current.sha256 != original:
-                raise ValueError("listing changed during input freeze; retry with one generation")
+        _verify_session_generation(data, day, recording.rows)
         raw = json.dumps(recording.rows, sort_keys=True, separators=(",", ":")).encode()
         if len(raw) > MAX_SESSION_BYTES:
             raise ValueError("one frozen session exceeds the decoded input bound")

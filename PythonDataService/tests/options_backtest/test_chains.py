@@ -132,9 +132,13 @@ async def test_both_real_goldens_are_exact_on_shared_pool_cold_and_warm(
     fake_catalog, tmp_lake: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     width: int, recording: str,
 ) -> None:
+    from app.data_lake.option_session_repack import repack_option_session
+    from app.data_lake.path_policy import OptionMinuteBarPath
     from app.options_backtest.lake_data import LakeRunData
+    from app.options_bots.golden_proof import result_sha256
     from tests.options_backtest import test_golden_spy_2025_06_10 as bought
     from tests.options_backtest import test_golden_spy_2026_10_09_sold_spread as sold
+    from tests.options_backtest._lake import raw_root
 
     golden = bought if recording == "bought" else sold
     given = bought.a_setup() if recording == "bought" else sold.a_call_credit_spread(stop_percent="25")
@@ -142,19 +146,33 @@ async def test_both_real_goldens_are_exact_on_shared_pool_cold_and_warm(
         await golden.capture_the_recording()
     # All provider routes are now gone. No worker has a catalog or provider.
     sessions = (golden.TRADING_DATE,)
-    expected = await asyncio.to_thread(run_sessions, given, sessions, LakeRunData("SPY"))
-    frozen = await asyncio.to_thread(freeze_run_inputs, given, sessions, LakeRunData("SPY"), tmp_path / "frozen")
+    legacy = await asyncio.to_thread(run_sessions, given, sessions, LakeRunData("SPY"))
     monkeypatch.setattr(settings, "RESEARCH_WORKER_COUNT", width)
     monkeypatch.setattr(settings, "OPTIONS_SEARCH_WORKER_COUNT", width)
     pool = SharedWorkerPool(workers=width, submission_bound=2 * width, payload_bound_bytes=32 * 1024**2,
                             result_bound_bytes=32 * 1024**2)
     try:
-        for run in range(2):
-            context = WorkerDispatchContext(strategy_key="options_backtest", execution={}, manifest={},
-                identity={}, job_id=f"golden_{run}", generation=1)
-            actual = await asyncio.to_thread(replay_frozen_run, given, sessions, frozen, context=context,
-                                             workers=width, pool=pool)
-            assert actual == expected
+        # Reuse each real worker pool for both layouts instead of doubling its
+        # process startup cost across the recording/width matrix.
+        for layout in ("legacy", "container"):
+            if layout == "container":
+                assert (await repack_option_session("SPY", golden.TRADING_DATE)).failure is None
+                for pin in legacy.sessions[0].pins.option_days:
+                    path = raw_root(tmp_lake) / OptionMinuteBarPath(pin.contract.root, pin.contract.occ_symbol,
+                                                                  golden.TRADING_DATE).relative_path()
+                    path.unlink()
+            expected = await asyncio.to_thread(run_sessions, given, sessions, LakeRunData("SPY"))
+            assert result_sha256(expected) == result_sha256(legacy)
+            assert all((pin.reference is None) == (layout == "legacy") for pin in expected.sessions[0].pins.option_days)
+            frozen = await asyncio.to_thread(freeze_run_inputs, given, sessions, LakeRunData("SPY"), tmp_path / layout)
+            for run in range(2):
+                context = WorkerDispatchContext(strategy_key="options_backtest", execution={}, manifest={},
+                    identity={}, job_id=f"golden_{layout}_{run}", generation=1)
+                metadata = {}
+                actual = await asyncio.to_thread(replay_frozen_run, given, sessions, frozen, context=context,
+                    workers=width, pool=pool, cold_cache=run == 0, metadata=metadata)
+                assert actual == expected
+                assert metadata["cache_misses"] > 0 if run == 0 else metadata["cache_hits"] > 0
     finally:
         pool.close()
 
