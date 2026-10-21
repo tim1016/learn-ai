@@ -25,10 +25,9 @@ export class OptionsBotProofComponent {
     loader: ({ params }) => this.service.get(params),
   });
   protected readonly identityMatches = computed(() => {
-    if (!this.proof.hasValue()) return false;
-    const retained = this.proof.value();
+    const retained = this.proof.hasValue() ? this.proof.value() : null;
     const pinned = this.configuration();
-    return retained.id === pinned.golden_setup_id && retained.setup_sha256 === pinned.setup_sha256
+    return retained !== null && retained.id === pinned.golden_setup_id && retained.setup_sha256 === pinned.setup_sha256
       && retained.rules_digest === pinned.rules_digest;
   });
   protected readonly problem = computed(() => {
