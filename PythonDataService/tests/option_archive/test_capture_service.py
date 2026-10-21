@@ -60,7 +60,7 @@ async def test_full_pass_captures_all_three_roots_traded_and_empty_and_keeps_fai
     assert qqq.pending_sessions == iwm.pending_sessions == 0
     assert qqq.last_archived_session_ms == iwm.last_archived_session_ms == session_open_ms_utc(DAY)
     for symbol in ("QQQ", "IWM"):
-        session = await asyncio.to_thread(read_option_session, symbol, DAY)
+        session = await asyncio.to_thread(read_option_session, symbol, DAY, check_underlying=True)
         assert session.complete and len(session.captured) == len(session.confirmed_empty) == 1
     requested_spy = [call for call in respx.calls if "/ticker/O:SPY" in str(call.request.url)]
     assert len(requested_spy) == 1
@@ -161,7 +161,7 @@ async def test_provider_block_survives_other_retries_and_new_nights_until_correc
 
     from app.data_lake import option_session
     from app.data_lake.option_lake import OptionCaptureResult, OptionDataFailure
-    monkeypatch.setattr(option_session, "read_option_session", lambda *args: SimpleNamespace(
+    monkeypatch.setattr(option_session, "read_option_session", lambda *args, **kwargs: SimpleNamespace(
         complete=True, listed_count=1, answered_count=1, confirmed_empty=(), captured=("one",)))
     first = date(2026, 10, 8)
     calls = []

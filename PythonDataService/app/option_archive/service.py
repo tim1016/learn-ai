@@ -147,7 +147,7 @@ class OptionArchiveService:
                 result = await (self.capture or capture_option_session)(underlying, et_date_at_ms(session_ms), now_ms=self.clock(),
                     should_pause=self.should_pause, history_floor=archive_history_boundary(et_date_at_ms(self.clock())),
                     retry_exhausted=retry_exhausted)
-                stored = await asyncio.to_thread(read_option_session, underlying, et_date_at_ms(session_ms))
+                stored = await asyncio.to_thread(read_option_session, underlying, et_date_at_ms(session_ms), check_underlying=True)
                 if stored is not None:
                     counts = {"listed": stored.listed_count, "answered": stored.answered_count,
                               "empty": len(stored.confirmed_empty), "with_bars": len(stored.captured)}
