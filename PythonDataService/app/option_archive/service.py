@@ -221,7 +221,7 @@ class OptionArchiveService:
         except Exception as exc:
             await self._job_update("capture", ended_ms=self.clock(), phase="failed", failure=str(exc), retry_after_ms=self.clock()+300_000)
             raise
-        await self._job_update("capture", ended_ms=self.clock(), phase="rth_pause" if paused else "complete",
+        await self._job_update("capture", ended_ms=self.clock(), phase=("snapshot_pause" if self.snapshot_due(self.clock()) else "rth_pause") if paused else "complete",
             completed_day_ms=None if paused else et_midnight_ms(et_date_at_ms(started)), retry_after_ms=self.clock() + 300_000)
 
     async def snapshot_pass(self) -> None:
@@ -261,7 +261,8 @@ class OptionArchiveService:
         config = self.config
         try:
             await asyncio.to_thread(validate_destination, config.BACKUP_DESTINATION, mount=config.BACKUP_MOUNT,
-                checkout=Path(__file__).resolve().parents[3], roots=self._backup_roots())
+                checkout=Path(__file__).resolve().parents[3], roots=self._backup_roots(),
+                expected_host_destination=config.BACKUP_HOST_DESTINATION)
             checkout = Path(__file__).resolve().parents[3]
             manifest = await create_generation(destination=config.BACKUP_DESTINATION, roots=self._backup_roots(),
                 clock=self.clock, should_pause=lambda: regular_hours_pause(self.clock(), config.REQUEST_OPEN_MARGIN_MS),
@@ -317,7 +318,8 @@ class OptionArchiveService:
             if self.config.ENABLED:
                 try:
                     validate_destination(self.config.BACKUP_DESTINATION, mount=self.config.BACKUP_MOUNT,
-                        checkout=Path(__file__).resolve().parents[3], roots=self._backup_roots())
+                        checkout=Path(__file__).resolve().parents[3], roots=self._backup_roots(),
+                        expected_host_destination=self.config.BACKUP_HOST_DESTINATION)
                 except (OSError, ValueError, BackupRefusedError):
                     state.setdefault("jobs", {}).setdefault("backup", {})["failure"] = (
                         "The configured backup destination is unavailable; verify its mount and identity marker.")

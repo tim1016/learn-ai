@@ -9,8 +9,9 @@ Moving a backup to an SSD remains a separate owner action.
 1. Choose a host folder outside both the checkout and the lake. The default is
    `~/learn-ai-lake-backup`. Create it yourself; do not rely on Compose to create
    a missing removable mount. Inside it write `.backup-destination.json` with
-   `{"host_destination":"~/learn-ai-lake-backup"}`. This marker must live on
+   `{"host_destination":"/Users/YOUR_USER/learn-ai-lake-backup"}`. This marker must live on
    the actual destination, not an empty mountpoint underneath a removable disk.
+   Use the same absolute path in this marker and the setting in step 2.
 2. Set `OPTION_ARCHIVE_BACKUP_HOST_DESTINATION` to that absolute host path and
    `OPTION_ARCHIVE_ENABLED=true` in the data service's environment. Compose
    mounts it at `/lake-backup`. Both `OPTION_ARCHIVE_BACKUP_DESTINATION` and

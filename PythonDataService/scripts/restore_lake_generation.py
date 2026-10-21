@@ -43,6 +43,9 @@ def verify(generation: Path) -> tuple[dict[str, Any], Path]:
         if len(data) != file["size_bytes"] or digest(data) != file["sha256"]:
             raise ValueError("backup file checksum differs")
     for root_id, checksum in manifest["root_markers"].items():
+        if not any(file["root_id"] == root_id and file["relative_path"] == "lake/.data-root.json" and file["sha256"] == checksum
+                   for file in manifest["files"]):
+            raise ValueError("file inventory is missing its exact root marker")
         raw_marker = (objects / checksum).read_bytes()
         marker = json.loads(raw_marker)
         if digest(raw_marker) != checksum or marker.get("data_root_id") != root_id or marker.get("schema_version") != 1:

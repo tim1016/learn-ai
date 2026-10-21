@@ -18,6 +18,7 @@
           <dt>Missing reference fields</dt><dd>{{ item.snapshot_field_gaps }}</dd>
         </dl>
         @if (item.phase === 'rth_pause') { <p>Capture is paused for regular trading hours.</p> }
+        @if (item.phase === 'snapshot_pause') { <p>Capture is yielding to the evening observation.</p> }
         @for (gap of item.gaps.slice(0, 3); track gap.session_ms) {
           <p><app-timestamp-display [value]="gap.session_ms" mode="date-et" />: {{ gap.reason }}</p>
         }

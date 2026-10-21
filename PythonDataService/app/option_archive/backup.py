@@ -95,7 +95,8 @@ def _safe_relative(text: str) -> Path:
     return Path(*path.parts)
 
 
-def validate_destination(destination: Path, *, mount: Path, checkout: Path, roots: Mapping[str, Path]) -> None:
+def validate_destination(destination: Path, *, mount: Path, checkout: Path, roots: Mapping[str, Path],
+                         expected_host_destination: str | None = None) -> None:
     resolved = destination.resolve(strict=True)
     expected = mount.resolve(strict=True)
     if resolved != expected or destination.is_symlink() or not destination.is_dir():
@@ -104,8 +105,11 @@ def validate_destination(destination: Path, *, mount: Path, checkout: Path, root
         if resolved.is_relative_to(forbidden.resolve()):
             raise BackupRefusedError("backup destination must be outside the checkout and every lake root")
     marker = destination / ".backup-destination.json"
-    if not marker.is_file() or json.loads(marker.read_bytes()).get("host_destination") is None:
+    if not marker.is_file():
         raise BackupRefusedError("backup destination identity marker is missing; verify the host mount")
+    named_host = json.loads(marker.read_bytes()).get("host_destination")
+    if not named_host or (expected_host_destination is not None and named_host != expected_host_destination):
+        raise BackupRefusedError("backup destination marker does not name the configured host mount")
 
 
 async def catalog_schema_hash(connection: Any, *, schema: str = "public") -> str:
@@ -207,6 +211,12 @@ async def create_generation(*, destination: Path, roots: Mapping[str, Path], clo
                             should_pause: Callable[[], bool], snapshot: Callable[[Path], Any] = dump_catalog,
                             restore_files: Mapping[str, Path] | None = None, attempts: int = 3) -> BackupManifest:
     last_error: Exception | None = None
+    original_stat = destination.stat()
+    original_identity = (original_stat.st_dev, original_stat.st_ino)
+    def require_same_destination() -> None:
+        current = destination.stat()
+        if (current.st_dev, current.st_ino) != original_identity:
+            raise BackupRefusedError("backup destination was unmounted or replaced during this generation")
     for _attempt in range(attempts):
         if should_pause():
             raise BackupRefusedError("backup stopped before the canonical regular open")
@@ -226,12 +236,14 @@ async def create_generation(*, destination: Path, roots: Mapping[str, Path], clo
                 files, markers = await asyncio.to_thread(_copy_snapshot_files, destination, roots, inventory)
             if should_pause():
                 raise BackupRefusedError("backup stopped before the canonical regular open")
+            require_same_destination()
             helpers = {name: _put_object(destination, path.read_bytes()) for name, path in (restore_files or {}).items()}
             manifest = BackupManifest(generation_id=generation_id, started_ms=started, completed_ms=clock(),
                 schema_hash=inventory.schema_hash, catalog_sha256=_digest(dump.read_bytes()), catalog_rows=inventory.row_count,
                 root_ids=sorted(roots), files=files, root_markers=markers, migration_ids=inventory.migration_ids, restore_files=helpers)
             raw = _json(manifest.model_dump())
             _write_durable(staging / "manifest.json", raw)
+            require_same_destination()
             _write_durable(staging / "COMPLETE", _digest(raw).encode())
             verify_generation(staging)
             final = staging.with_name(generation_id)
@@ -269,6 +281,10 @@ def verify_generation(generation: Path, *, expected_schema_hash: str | None = No
         for root_id, digest in manifest.root_markers.items():
             raw_marker = (objects / digest).read_bytes()
             marker = json.loads(raw_marker)
+            inventory_marker = next((item for item in manifest.files
+                if item.root_id == root_id and item.relative_path == "lake/.data-root.json"), None)
+            if inventory_marker is None or inventory_marker.sha256 != digest:
+                raise BackupRefusedError("backup file inventory is missing its exact root marker")
             if _digest(raw_marker) != digest or marker.get("schema_version") != 1 or marker.get("data_root_id") != root_id:
                 raise BackupRefusedError("backup root marker has the wrong identity")
         if set(manifest.root_markers) != set(manifest.root_ids):
