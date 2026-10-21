@@ -37,6 +37,7 @@ async def test_approved_retirement_is_fenced_restartable_and_restorable(
     root_id = read_marker(tmp_lake).data_root_id
     sources = await legacy_sources(root_id)
     destination = tmp_path / "backup"
+    destination.mkdir()
     manifest = await create_generation(destination=destination, roots={str(root_id): tmp_lake},
                                        clock=lambda: 1000, should_pause=lambda: False)
     generation = destination / "generations" / manifest.generation_id

@@ -33,6 +33,7 @@ UNKNOWN = OptionContract.of(root="SPY", expiry_date=FRIDAY, right="put", strike=
 
 
 async def prepare(fake: FakeCatalog, lake: Path, output: Path) -> tuple[Path, Path, tuple[ArtifactRecord, ...]]:
+    output.mkdir()
     await store_listing([vendor_listing_row(CALL), vendor_listing_row(UNKNOWN)])
     captured = await store_option_day(CALL, [])
     assert (await repack_option_session("SPY", FRIDAY)).failure is None

@@ -58,6 +58,7 @@ async def resources() -> BenchmarkResourcesResponse:
             quota, period = int(pieces[0]), int(pieces[1])
     return BenchmarkResourcesResponse(
         observed_at_ms=now_ms_utc(), runtime_instance=f"{authority.instance_id}:{authority.boot_generation}",
+        worker_width=settings.OPTIONS_SEARCH_WORKER_COUNT,
         cgroup_memory_bytes=SharedWorkerPool._cgroup_bytes("memory.current"),
         cgroup_memory_limit_bytes=SharedWorkerPool._cgroup_bytes("memory.max"),
         cpu_quota_us=quota, cpu_period_us=period,

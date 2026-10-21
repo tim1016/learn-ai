@@ -114,3 +114,69 @@ manifest-bound result, and removes only those temporary targets. This check
 has its own freshness; a new backup does not make an old restore check green.
 No source file is retired until its separate approval and compatibility gate
 passes (#3432).
+
+
+## Review and retire superseded option files
+
+Retirement is a separate, owner-approved operation (#3432). Stop every process
+that reads or writes the selected lake before applying it. The root maintenance
+lock also refuses an active reader, publisher or backup; do not bypass it.
+
+1. Select a completed backup generation containing the exact original contract
+   ZIPs and catalog receipts. Complete a successful isolated restore test of
+   that generation within the preceding seven days. Keep its receipt file.
+2. From `PythonDataService/`, run `python scripts/retire_option_files.py
+   --raw-root /ABSOLUTE/BASE/lake/raw --generation /BACKUP/generations/GENERATION
+   --restore-receipt /ABSOLUTE/restore-receipt.json --plan /ABSOLUTE/retirement.json`.
+   Supply the catalog credential through `POSTGRES_URL`. This writes a dry-run
+   plan and its digest; it deletes nothing and refuses to overwrite a plan.
+3. Post that exact plan on #3432. Verify saved-run pins, retained study inputs,
+   approved Golden Options proofs and complete golden results through the normal
+   readers with provider HTTP blocked. Record the tested revision. Obtain the
+   owner's approval of this exact plan and execution moment in that issue.
+4. Write an approval JSON matching `RetirementApproval` in
+   `app/data_lake/option_retirement.py`: the plan digest, owner approval comment
+   URL, approval time in UTC milliseconds, compatibility revision, and the four
+   successful compatibility checks. Repeat the command with `--apply
+   --approval /ABSOLUTE/approval.json --journal /ABSOLUTE/retirement-journal.json`.
+   Keep both the approval and journal. Every source and replacement is rechecked
+   under root exclusion before unlinking and deleting its catalog row.
+5. The plan expires after seven days. Its restore generation is pinned through
+   that rollback deadline. Repeating an interrupted apply with the same plan,
+   approval and journal is idempotent. A changed source or replacement requires
+   a fresh plan and fresh approval. Roll back into an empty root/catalog pair
+   using the procedure above; never refetch irreplaceable history from the vendor.
+
+Clerk stores, money trails and retained proofs are outside the deletion scope.
+Partial sessions remain partial, and original per-contract byte pins continue
+reading the exact ZIP member retained in the session container.
+
+## Measure the frozen two-year benchmark
+
+The two cases selected in #3433 contain 480 canonical SPY sessions: a two-leg
+weekly ATM setup and an eight-leg covered setup with stops and re-entry. Export
+all parameters and case digests with `python scripts/benchmark_options_archive.py
+cases --output /ABSOLUTE/cases.json` from `PythonDataService/`.
+
+Run only after all 480 sessions are fully archived and the reviewed services
+are deployed on the unchanged 8-CPU / 16-GiB research profile. Keep Options width
+at one until #3340 qualifies another width. Supply `DATA_PLANE_CONTROL_SECRET`
+through the environment. Run `python scripts/benchmark_options_archive.py run
+--api-url http://API:PORT --runtime-url http://RUNTIME:PORT
+--operational-url http://API:PORT/health --output /ABSOLUTE/measurements.jsonl`.
+Use the actual private service URLs and an operational read route that is safe
+to sample. The harness refuses missing archive coverage, changed input inventory,
+another resource profile or an unqualified width before accepting measurements.
+
+It performs five cold and five warm decoded-cache runs per case. The OS page
+cache is uncontrolled; memory, staging, connection and service-latency peaks are
+observed samples at one-second intervals. For each separately qualified width,
+run against that deployed width and pass the same `--qualified-widths` set to
+measurement and reporting. Do not change resource caps to obtain a passing time.
+Generate the report with `python scripts/benchmark_options_archive.py report
+--observations /ABSOLUTE/measurements.jsonl --output /ABSOLUTE/report.json` and
+attach the report and receipts to #3433. A report needs the complete case/width/
+cache-mode matrix, exact results, phase timings and distinct saved runs. It
+reports a miss when the typical median exceeds 60 seconds. These measurements
+never qualify combined production capacity; #3340 owns the concurrent-load and
+operational-headroom decision.

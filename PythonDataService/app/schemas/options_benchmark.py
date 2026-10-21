@@ -15,6 +15,7 @@ Count = Annotated[int, Field(strict=True, ge=0)]
 class BenchmarkResourcesResponse(BaseModel):
     observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     runtime_instance: str
+    worker_width: Annotated[int, Field(strict=True, ge=1)]
     cgroup_memory_bytes: Count | None
     cgroup_memory_limit_bytes: Count | None
     cpu_quota_us: Count | None

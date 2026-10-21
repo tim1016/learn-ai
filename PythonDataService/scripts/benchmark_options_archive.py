@@ -70,6 +70,8 @@ async def _measure(
     initial.raise_for_status()
     samples = [BenchmarkResourcesResponse.model_validate(initial.json())]
     _require_profile(samples[0])
+    if samples[0].worker_width not in qualified_widths:
+        raise ValueError("runtime Options width has no qualification evidence; no job was started")
     job_id = "benchmark_" + uuid4().hex
     response = await client.post(api + _PREFIX, json={
         "job_id": job_id, "setup": case.setup.model_dump(mode="json"),
@@ -108,6 +110,9 @@ async def _measure(
     if await _preflight(client, api, case) != inventory:
         raise ValueError("archived input inventory changed during the measured run")
     metadata = saved.execution_metadata
+    required = {"worker_width", "frozen_input_digest", "execution_identity_digest", "cache_epoch", "cache_bytes_peak"}
+    if not required <= metadata.keys() or (mode == "cold" and not metadata["cache_epoch"]):
+        raise ValueError("saved result lacks the required execution/cache measurement identity")
     width = int(metadata["worker_width"])
     if width not in qualified_widths:
         raise ValueError("runtime used an Options width without qualification evidence")
@@ -136,6 +141,8 @@ async def _measure(
 
 
 async def _run(args: argparse.Namespace) -> None:
+    if args.timeout_seconds <= 0 or 1 not in args.qualified_widths or not set(args.qualified_widths) <= {1, 2, 4, 8}:
+        raise ValueError("provide a positive timeout and qualified widths including the width-1 baseline")
     secret = os.environ.get("DATA_PLANE_CONTROL_SECRET", "").strip()
     if not secret:
         raise ValueError("DATA_PLANE_CONTROL_SECRET is required for benchmark dispatch and protected observations")
