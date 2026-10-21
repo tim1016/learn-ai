@@ -172,3 +172,57 @@ def test_host_mount_alias_cannot_hide_a_backup_inside_the_checkout(source: tuple
     with pytest.raises(BackupRefusedError, match="host destination"):
         validate_destination(destination, mount=destination, checkout=tmp_path / "container-checkout", roots=roots,
             expected_host_destination=str(aliased_inside), host_checkout=host_checkout, host_lake_root=host_checkout / "lake")
+
+
+@pytest.mark.parametrize("boundary", ["verification", "deletion"])
+async def test_pruning_pauses_between_hashes_and_deletions(source: tuple, monkeypatch: pytest.MonkeyPatch, boundary: str) -> None:
+    import app.option_archive.backup as backup
+    first = await generation(source)
+    second = await generation(source, completed_ms=2000)
+    orphan = source[0] / "objects" / ("f" * 64)
+    orphan.write_bytes(b"unreferenced")
+    paused = False
+    verify, remove = backup.verify_generation, backup.shutil.rmtree
+    def checked(*args, **kwargs):
+        nonlocal paused
+        result = verify(*args, **kwargs)
+        if boundary == "verification":
+            paused = True
+        return result
+    def deleted(*args, **kwargs):
+        nonlocal paused
+        remove(*args, **kwargs)
+        paused = True
+    monkeypatch.setattr(backup, "verify_generation", checked)
+    monkeypatch.setattr(backup.shutil, "rmtree", deleted)
+    with pytest.raises(backup.BackupPausedError):
+        prune_generations(source[0], daily_keep=1, weekly_keep=0, should_pause=lambda: paused)
+    assert orphan.exists() and second.exists()
+    assert first.exists() == (boundary == "verification")
+    assert verify(second)
+
+
+async def test_cancelled_pruning_drains_current_hash_and_stops_before_deleting(source: tuple, monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+    import threading
+
+    import app.option_archive.backup as backup
+    first = await generation(source)
+    second = await generation(source, completed_ms=2000)
+    entered, release = threading.Event(), threading.Event()
+    verify = backup.verify_generation
+    def held(*args, **kwargs):
+        entered.set()
+        assert release.wait(2)
+        return verify(*args, **kwargs)
+    monkeypatch.setattr(backup, "verify_generation", held)
+    task = asyncio.create_task(backup.bounded_file_work(lambda paused: prune_generations(
+        source[0], daily_keep=1, weekly_keep=0, should_pause=paused), lambda: False))
+    assert await asyncio.to_thread(entered.wait, 2)
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert first.exists() and second.exists()

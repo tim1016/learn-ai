@@ -56,7 +56,8 @@ def project_health(state: dict[str, Any], *, now_ms: int, config: ArchiveSetting
                 days_left=None if permanent else max(0, (day - boundary).days),
                 reason=item.get("reason", "This session has not been fully archived."), recorded_ms=item.get("recorded_ms", now_ms)))
         failure = next((row.get("reason") for row in reversed(list(rows.values())) if row.get("failed")), None)
-        failure = failure or job.get("failure")
+        provider_block = state.get("provider_blocks", {}).get(symbol)
+        failure = (f'{provider_block["reason"]}: {provider_block["detail"]}' if provider_block else failure) or job.get("failure")
         at_risk = any(gap.permanent or (gap.days_left is not None and gap.days_left <= config.AT_RISK_DAYS) for gap in gaps)
         severity = "failed" if failure else "at_risk" if at_risk else "catching_up" if gaps else "healthy"
         reason = failure or ("Archive gaps need attention before their vendor deadline." if at_risk else

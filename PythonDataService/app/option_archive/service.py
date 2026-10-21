@@ -138,6 +138,7 @@ class OptionArchiveService:
     async def _capture_and_record(self, underlying: str, session_ms: int, *, retry_exhausted: bool) -> OptionCaptureResult:
         from app.data_lake.option_session import read_option_session
         from app.data_lake.option_session_capture import capture_option_session
+        recovery_block = self.state.read().get("provider_blocks", {}).get(underlying)
         await self._record_session(underlying, session_ms, started_ms=self.clock(), complete=False, recorded_ms=self.clock())
         token = archive_request.set(True)
         counts: dict[str, int] = {}
@@ -160,10 +161,21 @@ class OptionArchiveService:
             }
             paused = failure is not None and failure.reason == "lease_timeout" and self.should_pause()
             reason = f"{failure.reason}: {failure.detail}" if failure is not None else None
-            await self._record_session(underlying, session_ms, **counts, complete=failure is None,
+            changes = dict(**counts, complete=failure is None,
                 failed=failure is not None and not paused, lost=failure is not None and failure.reason == "outside_data_plan",
                 reason=reason, ended_ms=self.clock(), retryable=retryable,
                 blocked_day_ms=None if retryable or failure is None else et_midnight_ms(et_date_at_ms(self.clock())))
+            def record_provider_access(state: dict[str, Any]) -> None:
+                state.setdefault("sessions", {}).setdefault(underlying, {}).setdefault(str(session_ms), {}).update(changes)
+                blocks = state.setdefault("provider_blocks", {})
+                if failure is not None and failure.reason in ("provider_auth_error", "provider_entitlement_error"):
+                    blocks[underlying] = {"session_ms": session_ms, "reason": failure.reason,
+                        "detail": failure.detail, "recorded_ms": self.clock()}
+                elif (failure is None and retry_exhausted and recovery_block is not None
+                      and blocks.get(underlying) == recovery_block and recovery_block["session_ms"] == session_ms):
+                    del blocks[underlying]
+            await asyncio.to_thread(self.state.update, record_provider_access)
+            self._health = None
             if failure is not None:
                 logger.warning("Option archive could not complete a session", extra={"action": "option_archive_session_failed",
                     "underlying": underlying, "session_ms": session_ms, "reason": reason})
@@ -180,6 +192,11 @@ class OptionArchiveService:
         task = self._session_tasks.get(key)
         if task is not None and not task.done():
             return await asyncio.shield(task)
+        block = self.state.read().get("provider_blocks", {}).get(underlying)
+        if block is not None and not (retry_exhausted and block["session_ms"] == session_ms):
+            return OptionCaptureResult.failed(OptionDataFailure(block["reason"],
+                f'{block["detail"]}; explicitly recover blocked session {block["session_ms"]} after correcting provider access',
+                underlying, et_date_at_ms(session_ms)))
         task = asyncio.create_task(self._capture_and_record(underlying, session_ms, retry_exhausted=retry_exhausted))
         self._session_tasks[key] = task
         try:
@@ -218,7 +235,7 @@ class OptionArchiveService:
                     lost.add(item)
         plan = plan_archive(now_ms=started, baseline_ms=baseline, complete=frozenset(complete), lost=frozenset(lost),
                             start_minute_et=self.config.CAPTURE_START_MINUTE_ET, margin_ms=self.config.REQUEST_OPEN_MARGIN_MS)
-        blocked: set[str] = set()
+        blocked = set(state.get("provider_blocks", {}))
         paused = plan.phase in ("rth_pause", "waiting")
         try:
             for work in plan.work:
@@ -301,8 +318,8 @@ class OptionArchiveService:
                 restore_files={"restore_lake_generation.py": self.service_root / "scripts/restore_lake_generation.py",
                                "restore-data-lake.md": runbook})
             generation = config.BACKUP_DESTINATION / "generations" / manifest.generation_id
-            await asyncio.to_thread(prune_generations, config.BACKUP_DESTINATION,
-                daily_keep=config.BACKUP_DAILY_KEEP, weekly_keep=config.BACKUP_WEEKLY_KEEP)
+            await bounded_file_work(lambda paused: prune_generations(config.BACKUP_DESTINATION,
+                daily_keep=config.BACKUP_DAILY_KEEP, weekly_keep=config.BACKUP_WEEKLY_KEEP, should_pause=paused), self._maintenance_pause)
             free = shutil.disk_usage(config.BACKUP_DESTINATION).free
             await self._job_update("backup", last_success_ms=manifest.completed_ms, generation_id=manifest.generation_id,
                 captured_through_ms=manifest.started_ms, manifest_sha256=manifest_digest(generation), size_bytes=sum(file.size_bytes for file in manifest.files),

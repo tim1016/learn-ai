@@ -5,6 +5,7 @@ from datetime import date
 from pathlib import Path
 
 import httpx
+import pytest
 import respx
 
 from app.data_lake.ensure_data import _minute_trade_dch
@@ -150,3 +151,44 @@ async def test_owner_cancellation_and_shutdown_drain_the_session_collector(tmp_p
     await service.stop()
     await asyncio.gather(manual, return_exceptions=True)
     assert stopped.is_set() and not service._session_tasks
+
+
+@pytest.mark.parametrize("blocked_reason", ["provider_auth_error", "provider_entitlement_error"])
+async def test_provider_block_survives_other_retries_and_new_nights_until_correct_session_recovers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, blocked_reason: str,
+) -> None:
+    from types import SimpleNamespace
+
+    from app.data_lake import option_session
+    from app.data_lake.option_lake import OptionCaptureResult, OptionDataFailure
+    monkeypatch.setattr(option_session, "read_option_session", lambda *args: SimpleNamespace(
+        complete=True, listed_count=1, answered_count=1, confirmed_empty=(), captured=("one",)))
+    first = date(2026, 10, 8)
+    calls = []
+    spy_failure = blocked_reason
+    async def capture(symbol, day, **kwargs):
+        calls.append((symbol, day))
+        reason = spy_failure if symbol == "SPY" else "provider_rate_limited"
+        return OptionCaptureResult.failed(OptionDataFailure(reason, "provider response", symbol, day)) if reason else SimpleNamespace(failure=None)
+    current = NOW
+    service = service_for(tmp_path / "state.json", lambda: current)
+    service.state.update(lambda data: data.update(baseline_ms=session_open_ms_utc(first)))
+    service.capture = capture
+    await service.capture_pass()
+    assert [day for symbol, day in calls if symbol == "SPY"] == [first]
+    current += 300_001
+    assert service.capture_due(current)
+    await service.capture_pass()
+    current = wall_clock_ms(date(2026, 10, 13), 120)
+    await service.capture_pass()
+    assert [day for symbol, day in calls if symbol == "SPY"] == [first]
+    await service.capture_session("SPY", session_open_ms_utc(DAY), retry_exhausted=True)
+    assert [day for symbol, day in calls if symbol == "SPY"] == [first]
+    spy_failure = "provider_rate_limited"
+    await service.capture_session("SPY", session_open_ms_utc(first), retry_exhausted=True)
+    assert service.state.read()["provider_blocks"]["SPY"]["reason"] == blocked_reason
+    spy_failure = None
+    await service.capture_session("SPY", session_open_ms_utc(first), retry_exhausted=True)
+    assert "SPY" not in service.state.read()["provider_blocks"]
+    await service.capture_pass()
+    assert ("SPY", DAY) in calls

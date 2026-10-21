@@ -342,17 +342,20 @@ def manifest_digest(generation: Path) -> str:
     return _digest((generation / "manifest.json").read_bytes())
 
 
-def prune_generations(destination: Path, *, daily_keep: int = 7, weekly_keep: int = 4) -> None:
+def prune_generations(destination: Path, *, daily_keep: int = 7, weekly_keep: int = 4,
+                      should_pause: Callable[[], bool] = lambda: False) -> None:
     checked: list[tuple[Path, BackupManifest]] = []
     for directory in (destination / "generations").iterdir():
+        _require_work_window(should_pause)
         if directory.name.startswith("."):
             continue
-        checked.append((directory, verify_generation(directory)))
+        checked.append((directory, verify_generation(directory, should_pause=should_pause)))
     checked.sort(key=lambda item: item[1].completed_ms, reverse=True)
     retained = {path for path, _ in checked[:max(1, daily_keep)]}
     pins = destination / "retention-pins"
     now = time.time_ns() // 1_000_000
     for path, manifest in checked:
+        _require_work_window(should_pause)
         pin_path = pins / (manifest.generation_id + ".json")
         if not pin_path.exists():
             continue
@@ -365,12 +368,14 @@ def prune_generations(destination: Path, *, daily_keep: int = 7, weekly_keep: in
             retained.add(path)
     weeks: set[int] = set()
     for path, manifest in checked:
+        _require_work_window(should_pause)
         week = manifest.completed_ms // 604_800_000
         if week not in weeks and len(weeks) < weekly_keep:
             retained.add(path)
             weeks.add(week)
     referenced: set[str] = set()
     for path, manifest in checked:
+        _require_work_window(should_pause)
         if path in retained:
             referenced.update(item.sha256 for item in manifest.files)
             referenced.update(manifest.root_markers.values())
@@ -378,6 +383,7 @@ def prune_generations(destination: Path, *, daily_keep: int = 7, weekly_keep: in
         else:
             shutil.rmtree(path)
     for path in (destination / "objects").iterdir():
+        _require_work_window(should_pause)
         if path.name not in referenced and not path.name.startswith("."):
             path.unlink()
 

@@ -32,7 +32,10 @@ Moving a backup to an SSD remains a separate owner action.
 5. An exhausted transient capture can be retried explicitly with authenticated
    `POST /api/option-archive/capture-session` carrying `underlying`, the canonical
    `session_ms`, and `retry_exhausted:true`. This scopes recovery to one session.
-   Authentication or entitlement failures need operator correction first.
+   Authentication or entitlement failures block that underlying across passes
+   and nights. Correct provider access first, then explicitly recover the
+   blocked session with `retry_exhausted:true`; only its successful complete
+   capture clears the block. A transient recovery failure leaves it blocked.
 6. Evening observations are reference data. Their JSON retains capture start/end,
    page receipts, field gaps, and only vendor timestamps on the corresponding
    nested metric. Compare a week's observations under
