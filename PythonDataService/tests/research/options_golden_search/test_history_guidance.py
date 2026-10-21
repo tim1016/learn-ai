@@ -10,8 +10,8 @@ from app.research.options_golden_search.history_guidance import history_guidance
 from app.research.options_golden_search.planning import final_window_start, freeze_protocol
 from app.research.options_golden_search.protocol import Knob
 from app.research.walk_forward_study.folds import whole_months_between
-from app.schemas.options_golden_search import HistoryGuidanceRequest
-from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
+from app.schemas.options_golden_search import HistoryGuidance, HistoryGuidanceRequest
+from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms, et_midnight_ms
 from tests.research.options_golden_search.test_protocol_search import setup
 
 
@@ -55,6 +55,7 @@ def test_maximum_span_matches_shared_planner_and_frozen_options_protocol(first: 
 @pytest.mark.parametrize("bounds", [
     {"start_ms": None, "end_ms": None},
     {"start_ms": et_midnight_ms(date(2026, 9, 1)), "end_ms": et_midnight_ms(date(2026, 10, 1))},
+    {"start_ms": MAX_TIMESTAMP_MS, "end_ms": MAX_TIMESTAMP_MS},
 ])
 def test_unknown_or_short_history_never_fabricates_dates(bounds: dict[str, int | None]) -> None:
     answer = history_guidance(HistoryGuidanceRequest(bounds=bounds, train_months=6, test_months=2, final_months=6),
@@ -69,3 +70,17 @@ def test_retained_current_session_is_excluded_until_it_has_closed() -> None:
                                      train_months=6, test_months=2, final_months=6)
     before_open = history_guidance(request, now_ms=et_midnight_ms(date(2026, 10, 20)))
     assert et_date_at_ms(before_open.end_ms) <= date(2026, 10, 20)
+
+
+def test_end_bound_at_the_schema_ceiling_is_clamped_to_the_last_completed_session() -> None:
+    now_ms = et_midnight_ms(date(2026, 10, 21))
+    start_ms = et_midnight_ms(date(2024, 1, 2))
+
+    def ask(end_ms: int) -> HistoryGuidance:
+        request = HistoryGuidanceRequest(bounds={"start_ms": start_ms, "end_ms": end_ms}, train_months=6, test_months=2, final_months=6)
+        return history_guidance(request, now_ms=now_ms)
+
+    answer = ask(MAX_TIMESTAMP_MS)
+    assert answer == ask(et_midnight_ms(date(2027, 1, 1)))
+    assert answer.fold_count > 0
+    assert et_date_at_ms(answer.end_ms) <= date(2026, 10, 21)

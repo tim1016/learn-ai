@@ -30,7 +30,8 @@ def history_guidance(request: HistoryGuidanceRequest, *, now_ms: int | None = No
         return unavailable("Retained history dates are unknown. Choose custom dates and use Check plan to verify coverage.")
     completed = previous_completed_session_close_ms(now_ms if now_ms is not None else now_ms_utc())
     first = et_date_at_ms(bounds.start_ms)
-    until = min(et_date_at_ms(bounds.end_ms - 1) + timedelta(days=1), et_date_at_ms(completed) + timedelta(days=1))
+    # Clamp the dates before adding the day: a schema-valid end at MAX_TIMESTAMP_MS is 9999-12-31, which +1 day overflows (#3440).
+    until = min(et_date_at_ms(bounds.end_ms - 1), et_date_at_ms(completed)) + timedelta(days=1)
     best = None
     sessions = expected_sessions(first, until - timedelta(days=1)) if first < until else []
     session_days = set(sessions)
