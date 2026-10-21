@@ -59,8 +59,10 @@ async def candidate_page(study_id: StudyId, offset: Annotated[int, Query(ge=0)] 
                          limit: Annotated[int, Query(ge=1, le=50)] = 50, api=Depends(get_evidence_service)) -> OptionsCandidatePage:
     try:
         return await api.page(study_id, offset=offset, limit=limit)
-    except (ValueError, LookupError) as exc:
+    except LookupError as exc:
         raise refusal(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(503, {"code": "RETAINED_EVIDENCE_UNAVAILABLE", "message": "Retained candidate settings fail their integrity checks."}) from exc
 
 
 @router.get("/studies/{study_id}/candidate-evidence/{candidate_hash}", response_model=OptionsCandidateEvidence)
@@ -69,10 +71,10 @@ async def candidate_evidence(study_id: StudyId, candidate_hash: Annotated[str, P
     session_limit: Annotated[int, Query(ge=1, le=50)] = 50, api=Depends(get_evidence_service)) -> OptionsCandidateEvidence:
     try:
         return await api.read(study_id, candidate_hash, window, session_offset=session_offset, session_limit=session_limit)
-    except (ValueError, LookupError) as exc:
+    except LookupError as exc:
         raise refusal(exc) from exc
-    except (OSError, ProofMismatchError) as exc:
-        raise HTTPException(503, {"code": "RETAINED_EVIDENCE_UNAVAILABLE", "message": "The retained candidate artifact is missing or unreadable. Mutable lake data cannot replace it."}) from exc
+    except (ValueError, OSError, ProofMismatchError) as exc:
+        raise HTTPException(503, {"code": "RETAINED_EVIDENCE_UNAVAILABLE", "message": "The retained candidate artifact is missing, unreadable or fails its integrity checks. Mutable lake data cannot replace it."}) from exc
 
 
 @router.get("/workspace/{kind}/{subject_id}", response_model=OptionsEvidenceWorkspace)
@@ -240,7 +242,7 @@ async def session_evidence(study_id: StudyId,
     window: Literal["development","final"]="development",api=Depends(get_evidence_service)) -> SessionResult:
     try:
         return SessionResult.model_validate(await api.session(study_id,candidate_hash,window,session_open_ms))
-    except (ValueError,LookupError) as exc:
+    except LookupError as exc:
         raise refusal(exc) from exc
-    except (OSError, ProofMismatchError) as exc:
-        raise HTTPException(503, {"code": "RETAINED_EVIDENCE_UNAVAILABLE", "message": "The retained session artifact is missing or unreadable. Mutable lake data cannot replace it."}) from exc
+    except (ValueError, OSError, ProofMismatchError) as exc:
+        raise HTTPException(503, {"code": "RETAINED_EVIDENCE_UNAVAILABLE", "message": "The retained session artifact is missing, unreadable or fails its integrity checks. Mutable lake data cannot replace it."}) from exc

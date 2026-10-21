@@ -140,3 +140,22 @@ async def test_http_rejected_evidence_is_read_only_and_scope_fenced(retained: tu
     assert calls.count(repo.get_evaluation) == 1
     overview = StudyDetail.from_record(row)
     assert all(not c.equity and not c.sessions and not c.monthly for c in overview.candidates)
+
+
+async def test_retained_metric_integrity_failure_is_unavailable_not_a_client_error(retained: tuple, monkeypatch: pytest.MonkeyPatch) -> None:
+    row, record, blobs = retained
+    digest = reader.setup_sha256(OptionsSearchProtocol.model_validate(row["protocol"]).setup)
+    record["result"]["metrics_sha256"] = "f" * 64
+    async def read(fn: Any, *_args: Any) -> Any:
+        return row if fn is repo.get else record
+    monkeypatch.setattr(reader, "with_connection", read)
+    monkeypatch.setattr(stages, "default_blob_store", lambda: blobs)
+    app = FastAPI()
+    app.include_router(router)
+    paths = [f"/studies/{row['id']}/candidate-evidence/{digest}",
+        f"/studies/{row['id']}/candidates/{digest}/sessions/{row['protocol']['development']['session_ms'][0]}"]
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        for path in paths:
+            response = await client.get(path)
+            assert response.status_code == 503
+            assert response.json()["detail"]["code"] == "RETAINED_EVIDENCE_UNAVAILABLE"
