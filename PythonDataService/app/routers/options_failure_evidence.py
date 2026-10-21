@@ -31,6 +31,8 @@ async def failures(study_id: StudyId, candidate_hash: CandidateHash,
     limit: Annotated[int, Query(ge=1, le=50)] = 50, api=Depends(get_service)) -> OptionsFailureEvidence:
     try:
         return await api.read(study_id, candidate_hash, window, offset=offset, limit=limit)
+    except (KeyError, IndexError, TypeError) as exc:
+        raise unavailable(exc) from exc
     except LookupError as exc:
         raise refusal(exc) from exc
     except (ValueError, OSError, ProofMismatchError) as exc:
@@ -44,6 +46,8 @@ async def inspect_failure(study_id: StudyId, candidate_hash: CandidateHash,
     window: Literal["development", "final"] = "development", api=Depends(get_service)) -> OptionsFailureInspection:
     try:
         return await api.inspect(study_id, candidate_hash, window, session_open_ms, at_ms, leg_id)
+    except (KeyError, IndexError, TypeError) as exc:
+        raise unavailable(exc) from exc
     except LookupError as exc:
         raise refusal(exc) from exc
     except (ValueError, OSError, ProofMismatchError) as exc:

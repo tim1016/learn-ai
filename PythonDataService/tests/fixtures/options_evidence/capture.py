@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 from app.research import options_candidate_evidence as reader
+from app.research import options_robustness as robustness
 from app.research.options_failure_evidence import project as failure_projection
 from app.research.options_golden_search import repository
 from app.research.options_golden_search.projections import session_detail
@@ -24,7 +25,8 @@ def main() -> None:
     args = parser.parse_args()
     args.destination.mkdir(parents=True, exist_ok=False)
     routes = {"run76": "/api/research/options-backtest/runs/76", "run69": "/api/research/options-backtest/runs/69",
-        "golden76": "/api/research/golden-option-setups/ogs_dbe79f85399048f4a4decc3c86e1f3ff"}
+        "golden76": "/api/research/golden-option-setups/ogs_dbe79f85399048f4a4decc3c86e1f3ff",
+        "comparison76-69": "/api/research/options-backtest/runs/compare?a=76&b=69"}
     for name, route in routes.items():
         with urlopen(args.base_url + route, timeout=30) as response:
             value = json.load(response)
@@ -38,7 +40,13 @@ def main() -> None:
     record = asyncio.run(with_connection(repository.get_evaluation, value["id"], key))
     blobs = default_blob_store()
     retained = reader.load_record(value, record, digest, "development", blobs=blobs)
+    neighbors = asyncio.run(robustness.neighbors(value["id"], digest, "development"))
+    neighbor_keys = [reader.resolve(value, item.candidate_hash, "development")[3]
+        for item in neighbors.items if item.state == "retained"]
     projections = {"failure-development": failure_projection(retained, value).model_dump(mode="json"),
+        "robustness-development": robustness.project(retained, value).model_dump(mode="json"),
+        "neighbors-development": neighbors.model_dump(mode="json"),
+        "neighbor-summaries": asyncio.run(with_connection(repository.evaluation_summaries, value["id"], neighbor_keys)),
         "development-evidence": {"record": record, "payload": json.loads(blobs.get(record["result"]["evidence_blob"]))},
         "candidate-development": reader.project(retained).model_dump(mode="json"),
         "study-summary": StudyDetail.from_record(value).model_dump(mode="json"),

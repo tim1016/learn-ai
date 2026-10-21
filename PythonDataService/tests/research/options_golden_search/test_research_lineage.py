@@ -11,6 +11,7 @@ import pytest
 from fastapi import FastAPI
 
 from app.research import options_research_lineage as lineage
+from app.research.options_candidate_evidence import RetainedOptionsIntegrityError
 from app.research.options_golden_search import repository as repo
 from app.research.options_golden_search.protocol import OptionsSearchProtocol
 from app.routers.options_research_lineage import router
@@ -92,9 +93,9 @@ def test_legacy_absent_results_are_not_zero_or_inferred_final_success() -> None:
 def test_altered_frozen_protocol_cannot_author_lineage_or_trial_scope() -> None:
     row = fixture("study-record")
     row["protocol"]["knobs"][0]["priority"] = 2
-    with pytest.raises(ValueError, match="does not match its frozen identity"):
+    with pytest.raises(RetainedOptionsIntegrityError):
         lineage.project(row, fixture("lineage-receipts"))
-    with pytest.raises(ValueError, match="does not match its frozen identity"):
+    with pytest.raises(RetainedOptionsIntegrityError):
         lineage.admitted_windows(row)
 
 

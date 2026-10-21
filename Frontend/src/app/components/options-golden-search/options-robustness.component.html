@@ -1,0 +1,45 @@
+<section class="robustness"><h3>Recorded robustness</h3>
+  @if (read.isLoading()) { <p>Reading retained robustness…</p> }
+  @if (problem(); as why) { <p class="problem">{{ why }}</p><button type="button" (click)="read.reload()">Retry robustness</button> }
+  @if (read.hasValue()) { @let result = read.value(); @let metrics = result.metrics;
+    <p>{{ result.scope | receiptLabel }}: <app-timestamp-display [value]="result.start_ms" mode="date-et" /> to <app-timestamp-display [value]="result.end_ms" mode="date-et" /> (end exclusive). {{ result.observed_sessions }} / {{ result.scheduled_sessions }} scheduled sessions observed.</p>
+    @if (!result.complete) { <p class="warning">Partial diagnostic evidence. These observed-session values do not establish complete minute risk or qualification.</p> }
+    <dl class="tiles">
+      <div><dt>Net diagnostic profit</dt><dd>{{ metrics.net_profit_usd | authoredUsd }}</dd></div>
+      <div><dt>Winning / losing / breakeven traded sessions</dt><dd>{{ metrics.winning_sessions }} / {{ metrics.losing_sessions }} / {{ metrics.breakeven_sessions }}</dd></div>
+      <div><dt>No-trade / skipped sessions</dt><dd>{{ metrics.no_trade_sessions }} / {{ metrics.skipped_sessions }}</dd></div>
+      <div><dt>Average winning / losing session</dt><dd>{{ (metrics.average_winning_session_usd | authoredUsd) ?? 'Unavailable' }} / {{ (metrics.average_losing_session_usd | authoredUsd) ?? 'Unavailable' }}</dd></div>
+      <div><dt>Expectancy per traded session</dt><dd>{{ (metrics.expectancy_usd | authoredUsd) ?? 'Unavailable' }}</dd></div>
+      <div><dt>Largest winning / losing session</dt><dd>{{ (metrics.largest_winning_session_usd | authoredUsd) ?? 'Unavailable' }} / {{ (metrics.largest_losing_session_usd | authoredUsd) ?? 'Unavailable' }}</dd></div>
+      <div><dt>Profit factor / average win-loss ratio</dt><dd>{{ (metrics.profit_factor | number:'1.0-2') ?? 'Unavailable' }} / {{ (metrics.average_win_loss_ratio | number:'1.0-2') ?? 'Unavailable' }}</dd></div>
+      <div><dt>Longest winning / losing streak</dt><dd>{{ metrics.longest_winning_streak }} / {{ metrics.longest_losing_streak }}</dd></div>
+      <div><dt>Five best winning sessions / total net profit (ratio)</dt><dd>{{ (metrics.top_five_profit_contribution | number:'1.0-4') ?? 'Unavailable' }}</dd></div>
+      <div><dt>Profit without best session</dt><dd>{{ (metrics.profit_without_best_session_usd | authoredUsd) ?? 'Unavailable' }}</dd></div>
+    </dl>
+    <h4>Capital on this recorded path</h4>
+    @if (result.capital; as capital) {
+      <p>{{ capital.sessions_funded_continuously }} / {{ capital.sessions_tested }} observed sessions funded continuously. Cash this path needed: {{ capital.cash_needed_usd | authoredUsd }}. Least free cash: {{ capital.least_free_cash_usd | authoredUsd }}.</p>
+      <p>This describes the retained path; it is neither a minimum nor a safe funding amount. {{ metrics.refused_entries }} entries refused.</p>
+      @if (capital.cash_needed_is_incomplete) { <p class="warning">Funding amount incomplete: refused entries mean more cash could have changed the path.</p> }
+      @if (capital.ended_by; as ended) { <p class="warning">Capital evidence ended: {{ ended.kind | receiptLabel }}, session <app-timestamp-display [value]="ended.session_open_ms" mode="date-et" />.</p> }
+    } @else { <p>Capital evidence unavailable in this retained trace.</p> }
+    <h4>Frozen cost scenarios and exposed final evidence</h4>
+    @for (scenario of result.cost_scenarios; track scenario.key) { <p>{{ scenario.key | receiptLabel }}: {{ scenario.slippage_multiplier }}× saved slippage, {{ scenario.fee_multiplier }}× saved fees. @if (scenario.slippage_percent !== null) { Absolute slippage {{ scenario.slippage_percent }}%. } @if (scenario.fee_per_contract_usd !== null) { Absolute fee {{ scenario.fee_per_contract_usd | authoredUsd }} per contract. } {{ scenario.mandatory ? 'Required by the frozen final rules.' : 'Descriptive scenario.' }}</p> } @empty { <p>No cost-stress scenarios declared. This is not a measured stress pass.</p> }
+    <p>Final scope: <app-timestamp-display [value]="result.final_window.start_ms" mode="date-et" /> to <app-timestamp-display [value]="result.final_window.end_ms" mode="date-et" /> (end exclusive).</p>
+    @if (result.exposed_final_outcome; as final) {
+      <p>Recorded final verdict: {{ final.verdict | receiptLabel }}. The retained gates below include the frozen cost-stress requirements; declarations alone are not measured outcomes.</p>
+      @for (gate of final.gate_outcomes; track gate.gate_id) { <p>{{ gate.gate_id | receiptLabel }}: {{ gate.status | receiptLabel }}. {{ gate.reason }}</p> }
+      @for (item of final.evidence; track $index) { <p>{{ item.label | receiptLabel }}: {{ item.value }}</p> }
+    } @else { <p>No final outcome is exposed for this exact candidate. Opening this view does not open the final test or run stress evaluations.</p> }
+  }
+  <h4>Declared one-setting neighbors</h4><p>Each row changes one declared setting while holding this candidate's other choices. These are development summaries; final evidence stays separate. This is descriptive sensitivity, not a global optimum or a confidence score.</p>
+  @if (neighbors.isLoading()) { <p>Reading declared neighbors…</p> }
+  @if (neighborProblem(); as why) { <p class="problem">{{ why }}</p><button type="button" (click)="neighbors.reload()">Retry neighbors</button> }
+  @if (neighbors.hasValue()) { @let page = neighbors.value();
+    <p>Development: <app-timestamp-display [value]="page.start_ms" mode="date-et" /> to <app-timestamp-display [value]="page.end_ms" mode="date-et" />. Frozen objective: {{ page.objective | receiptLabel }}. Retained summaries are shown without loading every trace; inspect a candidate to verify its full artifact and rules.</p>
+    <div class="table-scroll"><table><thead><tr><th>Changed setting</th><th>Strategy</th><th>Evidence / eligibility</th><th>Net diagnostic profit (USD)</th><th>Inspect</th></tr></thead><tbody>
+      @for (item of page.items; track item.ordinal) { <tr><td>{{ item.dimension }}</td><td>{{ item.label }} @if (item.is_selected) { <strong>Selected strategy</strong> }</td><td>{{ item.state | receiptLabel }}@if (item.verdict) { · {{ item.verdict | receiptLabel }} }</td><td>{{ item.net_profit_usd ?? (item.state === 'invalid' ? 'Invalid combination' : 'Untested') }}</td><td>@if (canInspectNeighbors() && item.state === 'retained' && item.candidate_hash; as hash) { <button type="button" (click)="inspectNeighbor.emit(hash)">Inspect development evidence</button> }</td></tr> }
+    </tbody></table></div>
+    <div class="actions"><button type="button" [disabled]="offset() === 0" (click)="offset.set(offset() - 50)">Previous neighbors</button><span>{{ page.total }} declared rows</span><button type="button" [disabled]="offset() + 50 >= page.total" (click)="offset.set(offset() + 50)">Next neighbors</button></div>
+  }
+</section>

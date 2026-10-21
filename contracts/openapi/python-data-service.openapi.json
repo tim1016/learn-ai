@@ -45562,6 +45562,110 @@
         "title": "OptionsCandidatePage",
         "type": "object"
       },
+      "OptionsCandidateRobustness": {
+        "properties": {
+          "candidate_hash": {
+            "title": "Candidate Hash",
+            "type": "string"
+          },
+          "capital": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionsBacktestCapitalEvidenceResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "cost_scenarios": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsLineageStress"
+            },
+            "title": "Cost Scenarios",
+            "type": "array"
+          },
+          "end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "evidence_blob_sha256": {
+            "title": "Evidence Blob Sha256",
+            "type": "string"
+          },
+          "evidence_identity": {
+            "title": "Evidence Identity",
+            "type": "string"
+          },
+          "exposed_final_outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OptionsLineageFinalist"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "final_window": {
+            "$ref": "#/components/schemas/OptionsLineageWindow"
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/OptionsRobustnessMetrics"
+          },
+          "observed_sessions": {
+            "title": "Observed Sessions",
+            "type": "integer"
+          },
+          "scheduled_sessions": {
+            "title": "Scheduled Sessions",
+            "type": "integer"
+          },
+          "scope": {
+            "enum": [
+              "development",
+              "final"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Start Ms",
+            "type": "integer"
+          },
+          "study_id": {
+            "title": "Study Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "study_id",
+          "candidate_hash",
+          "evidence_identity",
+          "evidence_blob_sha256",
+          "scope",
+          "start_ms",
+          "end_ms",
+          "observed_sessions",
+          "scheduled_sessions",
+          "complete",
+          "metrics",
+          "capital",
+          "cost_scenarios",
+          "final_window",
+          "exposed_final_outcome"
+        ],
+        "title": "OptionsCandidateRobustness",
+        "type": "object"
+      },
       "OptionsCandidateSampling": {
         "properties": {
           "displayed_observations": {
@@ -47454,6 +47558,150 @@
         "title": "OptionsLineageWindow",
         "type": "object"
       },
+      "OptionsNeighbor": {
+        "properties": {
+          "candidate_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Hash"
+          },
+          "dimension": {
+            "title": "Dimension",
+            "type": "string"
+          },
+          "is_selected": {
+            "title": "Is Selected",
+            "type": "boolean"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "net_profit_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net Profit Usd"
+          },
+          "ordinal": {
+            "title": "Ordinal",
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "retained",
+              "untested",
+              "invalid"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdict"
+          }
+        },
+        "required": [
+          "ordinal",
+          "dimension",
+          "label",
+          "candidate_hash",
+          "is_selected",
+          "state",
+          "verdict",
+          "net_profit_usd"
+        ],
+        "title": "OptionsNeighbor",
+        "type": "object"
+      },
+      "OptionsNeighborPage": {
+        "properties": {
+          "end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsNeighbor"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "objective": {
+            "title": "Objective",
+            "type": "string"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "protocol_hash": {
+            "title": "Protocol Hash",
+            "type": "string"
+          },
+          "scope": {
+            "const": "development",
+            "default": "development",
+            "title": "Scope"
+          },
+          "selected_candidate_hash": {
+            "title": "Selected Candidate Hash",
+            "type": "string"
+          },
+          "start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Start Ms",
+            "type": "integer"
+          },
+          "study_id": {
+            "title": "Study Id",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "study_id",
+          "protocol_hash",
+          "selected_candidate_hash",
+          "start_ms",
+          "end_ms",
+          "objective",
+          "items",
+          "total",
+          "offset",
+          "limit"
+        ],
+        "title": "OptionsNeighborPage",
+        "type": "object"
+      },
       "OptionsResearchLineage": {
         "properties": {
           "counts": {
@@ -47672,6 +47920,177 @@
           "idempotency_key"
         ],
         "title": "OptionsResumeRequest",
+        "type": "object"
+      },
+      "OptionsRobustnessMetrics": {
+        "properties": {
+          "average_losing_session_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average Losing Session Usd"
+          },
+          "average_win_loss_ratio": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average Win Loss Ratio"
+          },
+          "average_winning_session_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average Winning Session Usd"
+          },
+          "breakeven_sessions": {
+            "title": "Breakeven Sessions",
+            "type": "integer"
+          },
+          "expectancy_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expectancy Usd"
+          },
+          "largest_losing_session_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Largest Losing Session Usd"
+          },
+          "largest_winning_session_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Largest Winning Session Usd"
+          },
+          "longest_losing_streak": {
+            "title": "Longest Losing Streak",
+            "type": "integer"
+          },
+          "longest_winning_streak": {
+            "title": "Longest Winning Streak",
+            "type": "integer"
+          },
+          "losing_sessions": {
+            "title": "Losing Sessions",
+            "type": "integer"
+          },
+          "net_profit_usd": {
+            "title": "Net Profit Usd",
+            "type": "string"
+          },
+          "no_trade_sessions": {
+            "title": "No Trade Sessions",
+            "type": "integer"
+          },
+          "peak_relative_drawdown_fraction": {
+            "title": "Peak Relative Drawdown Fraction",
+            "type": "string"
+          },
+          "profit_factor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profit Factor"
+          },
+          "profit_without_best_session_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profit Without Best Session Usd"
+          },
+          "refused_entries": {
+            "title": "Refused Entries",
+            "type": "integer"
+          },
+          "session_end_drawdown_usd": {
+            "title": "Session End Drawdown Usd",
+            "type": "string"
+          },
+          "skipped_sessions": {
+            "title": "Skipped Sessions",
+            "type": "integer"
+          },
+          "top_five_profit_contribution": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Top Five Profit Contribution"
+          },
+          "winning_sessions": {
+            "title": "Winning Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "net_profit_usd",
+          "winning_sessions",
+          "losing_sessions",
+          "breakeven_sessions",
+          "no_trade_sessions",
+          "skipped_sessions",
+          "refused_entries",
+          "average_winning_session_usd",
+          "average_losing_session_usd",
+          "expectancy_usd",
+          "largest_winning_session_usd",
+          "largest_losing_session_usd",
+          "profit_factor",
+          "average_win_loss_ratio",
+          "longest_winning_streak",
+          "longest_losing_streak",
+          "top_five_profit_contribution",
+          "profit_without_best_session_usd",
+          "peak_relative_drawdown_fraction",
+          "session_end_drawdown_usd"
+        ],
+        "title": "OptionsRobustnessMetrics",
         "type": "object"
       },
       "OptionsWatchedPremiumView": {
@@ -90491,6 +90910,163 @@
           }
         },
         "summary": "Inspect Failure",
+        "tags": [
+          "options-golden-search"
+        ]
+      }
+    },
+    "/api/research/options-golden-search/studies/{study_id}/candidate-evidence/{candidate_hash}/neighbors": {
+      "get": {
+        "operationId": "neighbors_api_research_options_golden_search_studies__study_id__candidate_evidence__candidate_hash__neighbors_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "study_id",
+            "required": true,
+            "schema": {
+              "pattern": "^os_[a-f0-9]{40}$",
+              "title": "Study Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "candidate_hash",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-f0-9]{64}$",
+              "title": "Candidate Hash",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window",
+            "required": false,
+            "schema": {
+              "default": "development",
+              "enum": [
+                "development",
+                "final"
+              ],
+              "title": "Window",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsNeighborPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Neighbors",
+        "tags": [
+          "options-golden-search"
+        ]
+      }
+    },
+    "/api/research/options-golden-search/studies/{study_id}/candidate-evidence/{candidate_hash}/robustness": {
+      "get": {
+        "operationId": "read_api_research_options_golden_search_studies__study_id__candidate_evidence__candidate_hash__robustness_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "study_id",
+            "required": true,
+            "schema": {
+              "pattern": "^os_[a-f0-9]{40}$",
+              "title": "Study Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "candidate_hash",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-f0-9]{64}$",
+              "title": "Candidate Hash",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window",
+            "required": false,
+            "schema": {
+              "default": "development",
+              "enum": [
+                "development",
+                "final"
+              ],
+              "title": "Window",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsCandidateRobustness"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read",
         "tags": [
           "options-golden-search"
         ]

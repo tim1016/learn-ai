@@ -6608,6 +6608,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/options-golden-search/studies/{study_id}/candidate-evidence/{candidate_hash}/neighbors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Neighbors */
+        get: operations["neighbors_api_research_options_golden_search_studies__study_id__candidate_evidence__candidate_hash__neighbors_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/options-golden-search/studies/{study_id}/candidate-evidence/{candidate_hash}/robustness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read */
+        get: operations["read_api_research_options_golden_search_studies__study_id__candidate_evidence__candidate_hash__robustness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/options-golden-search/studies/{study_id}/candidates/{candidate_hash}/sessions/{session_open_ms}": {
         parameters: {
             query?: never;
@@ -25132,6 +25166,38 @@ export interface components {
             /** Total */
             total: number;
         };
+        /** OptionsCandidateRobustness */
+        OptionsCandidateRobustness: {
+            /** Candidate Hash */
+            candidate_hash: string;
+            capital: components["schemas"]["OptionsBacktestCapitalEvidenceResponse"] | null;
+            /** Complete */
+            complete: boolean;
+            /** Cost Scenarios */
+            cost_scenarios: components["schemas"]["OptionsLineageStress"][];
+            /** End Ms */
+            end_ms: number;
+            /** Evidence Blob Sha256 */
+            evidence_blob_sha256: string;
+            /** Evidence Identity */
+            evidence_identity: string;
+            exposed_final_outcome: components["schemas"]["OptionsLineageFinalist"] | null;
+            final_window: components["schemas"]["OptionsLineageWindow"];
+            metrics: components["schemas"]["OptionsRobustnessMetrics"];
+            /** Observed Sessions */
+            observed_sessions: number;
+            /** Scheduled Sessions */
+            scheduled_sessions: number;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "development" | "final";
+            /** Start Ms */
+            start_ms: number;
+            /** Study Id */
+            study_id: string;
+        };
         /** OptionsCandidateSampling */
         OptionsCandidateSampling: {
             /** Displayed Observations */
@@ -25836,6 +25902,57 @@ export interface components {
             /** Start Ms */
             start_ms: number;
         };
+        /** OptionsNeighbor */
+        OptionsNeighbor: {
+            /** Candidate Hash */
+            candidate_hash: string | null;
+            /** Dimension */
+            dimension: string;
+            /** Is Selected */
+            is_selected: boolean;
+            /** Label */
+            label: string;
+            /** Net Profit Usd */
+            net_profit_usd: string | null;
+            /** Ordinal */
+            ordinal: number;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "retained" | "untested" | "invalid";
+            /** Verdict */
+            verdict: string | null;
+        };
+        /** OptionsNeighborPage */
+        OptionsNeighborPage: {
+            /** End Ms */
+            end_ms: number;
+            /** Items */
+            items: components["schemas"]["OptionsNeighbor"][];
+            /** Limit */
+            limit: number;
+            /** Objective */
+            objective: string;
+            /** Offset */
+            offset: number;
+            /** Protocol Hash */
+            protocol_hash: string;
+            /**
+             * Scope
+             * @default development
+             * @constant
+             */
+            scope?: "development";
+            /** Selected Candidate Hash */
+            selected_candidate_hash: string;
+            /** Start Ms */
+            start_ms: number;
+            /** Study Id */
+            study_id: string;
+            /** Total */
+            total: number;
+        };
         /** OptionsResearchLineage */
         OptionsResearchLineage: {
             counts: components["schemas"]["OptionsLineageCounts"];
@@ -25899,6 +26016,49 @@ export interface components {
             budget?: components["schemas"]["DeploymentBudgetInput"] | null;
             /** Idempotency Key */
             idempotency_key: string;
+        };
+        /** OptionsRobustnessMetrics */
+        OptionsRobustnessMetrics: {
+            /** Average Losing Session Usd */
+            average_losing_session_usd: string | null;
+            /** Average Win Loss Ratio */
+            average_win_loss_ratio: string | null;
+            /** Average Winning Session Usd */
+            average_winning_session_usd: string | null;
+            /** Breakeven Sessions */
+            breakeven_sessions: number;
+            /** Expectancy Usd */
+            expectancy_usd: string | null;
+            /** Largest Losing Session Usd */
+            largest_losing_session_usd: string | null;
+            /** Largest Winning Session Usd */
+            largest_winning_session_usd: string | null;
+            /** Longest Losing Streak */
+            longest_losing_streak: number;
+            /** Longest Winning Streak */
+            longest_winning_streak: number;
+            /** Losing Sessions */
+            losing_sessions: number;
+            /** Net Profit Usd */
+            net_profit_usd: string;
+            /** No Trade Sessions */
+            no_trade_sessions: number;
+            /** Peak Relative Drawdown Fraction */
+            peak_relative_drawdown_fraction: string;
+            /** Profit Factor */
+            profit_factor: string | null;
+            /** Profit Without Best Session Usd */
+            profit_without_best_session_usd: string | null;
+            /** Refused Entries */
+            refused_entries: number;
+            /** Session End Drawdown Usd */
+            session_end_drawdown_usd: string;
+            /** Skipped Sessions */
+            skipped_sessions: number;
+            /** Top Five Profit Contribution */
+            top_five_profit_contribution: string | null;
+            /** Winning Sessions */
+            winning_sessions: number;
         };
         /** OptionsWatchedPremiumView */
         OptionsWatchedPremiumView: {
@@ -45618,6 +45778,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OptionsFailureInspection"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    neighbors_api_research_options_golden_search_studies__study_id__candidate_evidence__candidate_hash__neighbors_get: {
+        parameters: {
+            query?: {
+                window?: "development" | "final";
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                study_id: string;
+                candidate_hash: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsNeighborPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_api_research_options_golden_search_studies__study_id__candidate_evidence__candidate_hash__robustness_get: {
+        parameters: {
+            query?: {
+                window?: "development" | "final";
+            };
+            header?: never;
+            path: {
+                study_id: string;
+                candidate_hash: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsCandidateRobustness"];
                 };
             };
             /** @description Validation Error */

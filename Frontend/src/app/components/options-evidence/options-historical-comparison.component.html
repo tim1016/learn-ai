@@ -1,0 +1,6 @@
+<section class="lineage"><h2>Historical comparator</h2>
+  <p>Choose a saved run to compare with source run {{ sourceRunId() }}. This selection records a comparison; it establishes no parent, seed, winner or research qualification.</p>
+  <label>Saved comparator run ID <input type="text" inputmode="numeric" [formField]="fields.runId" /></label>
+  @if (requestedId()) { <a [routerLink]="route()" [queryParams]="query()">Compare selected run</a> } @else { <p>Enter a different positive saved run ID.</p> }
+  @if (comparatorId(); as id) { <app-options-backtest-compare-view [a]="sourceRunId()" [b]="id" /> }
+</section>

@@ -12,6 +12,7 @@
     <nav class="tabs">
       <a [routerLink]="['/options-evidence', kind(), subjectId()]" [queryParams]="query()" [class.active]="activeView() === 'performance'">Performance</a>
       <a [routerLink]="['/options-evidence', kind(), subjectId()]" [queryParams]="lineageQuery()" [class.active]="activeView() === 'lineage'">Research lineage</a>
+      @if (item.source_run_id) { <a [routerLink]="['/options-evidence', kind(), subjectId()]" [queryParams]="comparisonQuery()" [class.active]="activeView() === 'comparison'">Historical comparison</a> }
       @if (item.study_id) { <a [routerLink]="['/options-golden-search', item.study_id]">Blocked-study detail and research</a> }
     </nav>
     @if (activeView() === 'lineage') {
@@ -32,6 +33,8 @@
         } @empty { <p>{{ item.approval.explanation }}</p> }
       </section>
       @if (item.study_id) { <app-options-research-lineage [studyId]="item.study_id" /> }
+    } @else if (activeView() === 'comparison') {
+      @if (item.source_run_id) { <app-options-historical-comparison [sourceRunId]="item.source_run_id" [comparator]="comparator_run_id()" [route]="['/options-evidence', kind(), subjectId()]" [context]="comparisonContext()" /> }
     } @else {
       @if (performance.isLoading()) { <p>Reading retained replay…</p> }
       @if (performanceProblem(); as why) { <p class="problem">{{ why }}</p><button type="button" (click)="performance.reload()">Retry replay</button> }
@@ -43,7 +46,7 @@
       @for (setting of item.frozen_search_settings; track setting.path) { <p><strong>{{ setting.path | receiptLabel }}</strong>: {{ setting.values.join(', ') }} ({{ setting.mode | receiptLabel }})</p> }
     </details>
     @for (relation of item.relations; track relation.kind + relation.subject_id) { <section class="relation"><h3>{{ relation.kind | receiptLabel }}</h3><p>{{ relation.explanation }}</p>
-      <a [routerLink]="['/options-evidence', relation.kind === 'inspected_search' ? 'study' : 'run', relation.subject_id]">Open compared evidence</a>
+      <a [routerLink]="['/options-evidence', relation.kind === 'inspected_search' ? 'study' : 'run', relation.subject_id]" [queryParams]="{ bot_return: botReturn() }">Open compared evidence</a>
     </section> }
     <details class="receipt"><summary>Evidence identity receipt</summary><p>Setup <code>{{ item.setup_sha256 }}</code></p><p><code>{{ item.evidence_identity }}</code></p>
       @for (version of item.approvals; track version.golden_id) { <p>Golden <code>{{ version.golden_id }}</code></p> }

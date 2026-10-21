@@ -59,10 +59,10 @@ async def candidate_page(study_id: StudyId, offset: Annotated[int, Query(ge=0)] 
                          limit: Annotated[int, Query(ge=1, le=50)] = 50, api=Depends(get_evidence_service)) -> OptionsCandidatePage:
     try:
         return await api.page(study_id, offset=offset, limit=limit)
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise HTTPException(503, {"code": "RETAINED_EVIDENCE_UNAVAILABLE", "message": "Retained candidate settings fail their integrity checks."}) from exc
     except LookupError as exc:
         raise refusal(exc) from exc
-    except ValueError as exc:
-        raise HTTPException(503, {"code": "RETAINED_EVIDENCE_UNAVAILABLE", "message": "Retained candidate settings fail their integrity checks."}) from exc
 
 
 @router.get("/studies/{study_id}/candidate-evidence/{candidate_hash}", response_model=OptionsCandidateEvidence)
@@ -71,6 +71,8 @@ async def candidate_evidence(study_id: StudyId, candidate_hash: Annotated[str, P
     session_limit: Annotated[int, Query(ge=1, le=50)] = 50, api=Depends(get_evidence_service)) -> OptionsCandidateEvidence:
     try:
         return await api.read(study_id, candidate_hash, window, session_offset=session_offset, session_limit=session_limit)
+    except (KeyError, IndexError, TypeError) as exc:
+        raise HTTPException(503, {"code": "RETAINED_EVIDENCE_UNAVAILABLE", "message": "The retained candidate artifact fails its shape checks."}) from exc
     except LookupError as exc:
         raise refusal(exc) from exc
     except (ValueError, OSError, ProofMismatchError) as exc:
@@ -86,11 +88,14 @@ async def workspace_evidence(
 ) -> OptionsEvidenceWorkspace:
     from app.options_bots.golden import GoldenSetupError
     from app.research import options_evidence as workspace
+    from app.research.options_candidate_evidence import RetainedOptionsIntegrityError
 
     try:
         return await workspace.read(kind, subject_id, inspected_study_id=inspected_study_id, comparator_run_id=comparator_run_id)
     except GoldenSetupError as exc:
         raise HTTPException(exc.http_status, {"code": exc.code, "message": exc.message}) from exc
+    except RetainedOptionsIntegrityError as exc:
+        raise HTTPException(503, {"code": "OPTIONS_EVIDENCE_UNAVAILABLE", "message": str(exc)}) from exc
     except (ValueError, LookupError) as exc:
         raise refusal(exc) from exc
     except OSError as exc:
@@ -242,6 +247,8 @@ async def session_evidence(study_id: StudyId,
     window: Literal["development","final"]="development",api=Depends(get_evidence_service)) -> SessionResult:
     try:
         return SessionResult.model_validate(await api.session(study_id,candidate_hash,window,session_open_ms))
+    except (KeyError, IndexError, TypeError) as exc:
+        raise HTTPException(503, {"code": "RETAINED_EVIDENCE_UNAVAILABLE", "message": "The retained session artifact fails its shape checks."}) from exc
     except LookupError as exc:
         raise refusal(exc) from exc
     except (ValueError, OSError, ProofMismatchError) as exc:

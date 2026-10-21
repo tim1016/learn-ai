@@ -41,6 +41,19 @@ are included. `capture_lineage.py` reproduces this bounded read into a new file.
 of this fixture and `study-record.json`, generated offline by
 `options_research_lineage.project` and `trial_page` for UI/browser checks.
 
+`comparison76-69.json` is the unchanged existing ordinary-run comparison GET
+for `a=76&b=69`: 499 shared sessions and no sessions unique to either run.
+`neighbor-summaries.json` contains only the three development scalar receipts
+returned by `repository.evaluation_summaries`, read 2026-10-20 in a read-only
+repeatable-read transaction in the configured data-service container. Its keys
+come from the frozen protocol and canonical `materialize`/`resolve` functions.
+`neighbors-development.json` is the bounded projection of those receipts and
+the retained study; all three declared points have partial diagnostic evidence.
+`robustness-development.json` copies canonical metrics and capital evidence
+verified from `development-evidence.json`. It exposes no final outcome.
+The new display projections are reproduced by `capture.py` in a configured
+application context, using existing read repositories and retained bytes.
+
 These fixtures test identity and display projections. Canonical numerical
 calculations remain covered by their existing engine fixtures/tests. No vendor
 capture, replay, approval or configuration command was issued to capture them.

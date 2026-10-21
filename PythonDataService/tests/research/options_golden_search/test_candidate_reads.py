@@ -178,6 +178,22 @@ async def test_changed_policy_cannot_reclassify_retained_evidence_under_an_old_p
     assert response.status_code == page.status_code == 503
 
 
+async def test_malformed_retained_receipt_is_unavailable_in_candidate_and_session_views(retained: tuple, monkeypatch: pytest.MonkeyPatch) -> None:
+    row, record, blobs = retained
+    digest = reader.setup_sha256(reader.retained_protocol(row).setup)
+    del record["result"]["metrics_sha256"]
+    async def read(fn: Any, *_args: Any) -> Any:
+        return row if fn is repo.get else record
+    monkeypatch.setattr(reader, "with_connection", read)
+    monkeypatch.setattr(stages, "default_blob_store", lambda: blobs)
+    app = FastAPI()
+    app.include_router(router)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        for path in [f"/studies/{row['id']}/candidate-evidence/{digest}",
+            f"/studies/{row['id']}/candidates/{digest}/sessions/{row['protocol']['development']['session_ms'][0]}"]:
+            assert (await client.get(path)).status_code == 503
+
+
 def test_legacy_omitted_defaults_validate_the_frozen_serialized_protocol_not_current_defaults() -> None:
     row = fixture("study-record")
     row["protocol"].pop("calendar_ineligible")
