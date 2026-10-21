@@ -610,7 +610,8 @@ async def test_a_wait_that_runs_out_fails_the_run_and_the_batch_is_told_to_stop_
 async def test_a_failure_in_a_batch_ends_the_phase_and_nothing_keeps_asking_the_vendor(
     fake_catalog: FakeCatalog, tmp_lake: Path, quick: None
 ) -> None:
-    vendor = Vendor({WED: ladder_day()}, option_latency_s=0.2, option_errors={"SPY261007C00496000": 429})
+    vendor = Vendor({WED: ladder_day()}, option_latency_s=0.2, option_errors={"SPY261007C00496000": 429}, answer_errors_first=True)
+    vendor.hold_the_first(4)
     vendor.mount()
 
     with pytest.raises(DownloadFailed) as caught:
