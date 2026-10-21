@@ -1,10 +1,9 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
 
+import run76 from '../../../PythonDataService/tests/fixtures/options_evidence/run76.json';
+import description76 from '../../../PythonDataService/tests/fixtures/options_evidence/description76.json';
+import studyDescription from '../../../PythonDataService/tests/fixtures/options_evidence/description-study.json';
 import { RUN_WORKSPACE, STUDY_WORKSPACE } from '../../src/app/components/options-evidence/testing';
-
-const fixture = (name: string) => JSON.parse(readFileSync(resolve(__dirname, `../../../PythonDataService/tests/fixtures/options_evidence/${name}.json`), 'utf8'));
 
 test('opens source-76 performance, exact Golden lineage and frozen PUT search without commands', async ({ page }) => {
   const commands: string[] = [];
@@ -16,8 +15,8 @@ test('opens source-76 performance, exact Golden lineage and frozen PUT search wi
     if (path.includes('/workspace/run/76')) await route.fulfill({ json: RUN_WORKSPACE });
     else if (path.includes('/workspace/golden/')) await route.fulfill({ json: { ...RUN_WORKSPACE, subject_kind: 'golden', subject_id: RUN_WORKSPACE.approvals[0].golden_id } });
     else if (path.includes('/workspace/study/')) await route.fulfill({ json: STUDY_WORKSPACE });
-    else if (path.endsWith('/runs/76')) await route.fulfill({ json: fixture('run76') });
-    else if (path.endsWith('/setups/describe')) await route.fulfill({ json: fixture(route.request().postDataJSON().legs.length === 1 ? 'description-study' : 'description76') });
+    else if (path.endsWith('/runs/76')) await route.fulfill({ json: run76 });
+    else if (path.endsWith('/setups/describe')) await route.fulfill({ json: route.request().postDataJSON().legs.length === 1 ? studyDescription : description76 });
     else if (path === '/api/jobs') await route.fulfill({ json: [] });
     else await route.fulfill({ status: 503, json: { detail: 'Outside this retained evidence fixture.' } });
   });
