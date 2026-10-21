@@ -114,7 +114,7 @@ def project_health(state: ArchiveStateDoc, *, now_ms: int, config: ArchiveSettin
         incomplete = sum(not row.complete for row in observations.values())
         last_observation = max(observations, default=None)
         field_gaps = sum(observations[last_observation].field_gaps.values()) if last_observation is not None else 0
-        if config.ENABLED and (missed or incomplete or field_gaps) and severity == "healthy":
+        if config.ENABLED and (missed or incomplete or field_gaps) and severity in ("healthy", "catching_up"):
             severity, reason = "at_risk", "An evening snapshot is missing or incomplete; inspect its observation receipt."
         result.append(UnderlyingArchiveHealth(underlying=symbol, severity=severity, reason=reason,
             earliest_required_session_ms=session_open_ms_utc(days[0]) if days else None,
