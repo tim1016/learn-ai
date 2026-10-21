@@ -47462,6 +47462,37 @@
           "development": {
             "$ref": "#/components/schemas/OptionsLineageWindow"
           },
+          "development_state": {
+            "enum": [
+              "not_recorded",
+              "no_eligible_point",
+              "selected"
+            ],
+            "title": "Development State",
+            "type": "string"
+          },
+          "development_winner_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Development Winner Hash"
+          },
+          "development_winner_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Development Winner Label"
+          },
           "exposure": {
             "$ref": "#/components/schemas/Exposure"
           },
@@ -47520,6 +47551,13 @@
             ],
             "title": "Parent Study Id"
           },
+          "procedure_details": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceItem"
+            },
+            "title": "Procedure Details",
+            "type": "array"
+          },
           "protocol_hash": {
             "title": "Protocol Hash",
             "type": "string"
@@ -47535,9 +47573,31 @@
             "title": "Rules",
             "type": "array"
           },
+          "selection_complete": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selection Complete"
+          },
           "selection_explanation": {
             "title": "Selection Explanation",
             "type": "string"
+          },
+          "selection_limitation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selection Limitation"
           },
           "settings": {
             "items": {
@@ -47566,6 +47626,12 @@
           "method",
           "objective",
           "selection_explanation",
+          "procedure_details",
+          "development_state",
+          "development_winner_hash",
+          "development_winner_label",
+          "selection_complete",
+          "selection_limitation",
           "development",
           "final",
           "settings",

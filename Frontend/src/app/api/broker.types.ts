@@ -25840,6 +25840,15 @@ export interface components {
         OptionsResearchLineage: {
             counts: components["schemas"]["OptionsLineageCounts"];
             development: components["schemas"]["OptionsLineageWindow"];
+            /**
+             * Development State
+             * @enum {string}
+             */
+            development_state: "not_recorded" | "no_eligible_point" | "selected";
+            /** Development Winner Hash */
+            development_winner_hash: string | null;
+            /** Development Winner Label */
+            development_winner_label: string | null;
             exposure: components["schemas"]["Exposure"];
             /** Exposure Ledger */
             exposure_ledger: components["schemas"]["OptionsLineageExposure"][];
@@ -25861,14 +25870,20 @@ export interface components {
             objective: string;
             /** Parent Study Id */
             parent_study_id: string | null;
+            /** Procedure Details */
+            procedure_details: components["schemas"]["EvidenceItem"][];
             /** Protocol Hash */
             protocol_hash: string;
             /** Revision */
             revision: number;
             /** Rules */
             rules: components["schemas"]["EvidenceItem"][];
+            /** Selection Complete */
+            selection_complete: boolean | null;
             /** Selection Explanation */
             selection_explanation: string;
+            /** Selection Limitation */
+            selection_limitation: string | null;
             /** Settings */
             settings: components["schemas"]["OptionsLineageSetting"][];
             /** Stress */
