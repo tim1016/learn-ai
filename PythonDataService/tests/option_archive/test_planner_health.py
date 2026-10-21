@@ -7,8 +7,11 @@ import pytest
 from app.data_lake.option_lake import option_history_floor
 from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc, session_window_for_date
 from app.option_archive.health import project_health
-from app.option_archive.planner import archive_history_boundary, plan_archive, regular_hours_pause, wall_clock_ms
+from app.option_archive.planner import SessionOutcome, archive_history_boundary, plan_archive, regular_hours_pause
 from app.option_archive.settings import ArchiveSettings
+from app.option_archive.state import ArchiveStateDoc, JobReceipt, SessionReceipt, SnapshotReceipt
+from app.services.session_authority import et_minute_of_day_ms as wall_clock_ms
+from app.utils.session_anchors import et_midnight_ms
 
 
 @pytest.mark.parametrize("today", [date(2026, 10, 12), date(2026, 10, 21), date(2024, 2, 29), date(2026, 3, 9), date(2026, 11, 2)])
@@ -53,7 +56,8 @@ def test_late_wake_catches_up_immediately_and_half_day_pause_follows_calendar() 
 def test_health_recent_success_never_hides_older_hole_and_lost_gap_survives_rollover() -> None:
     baseline = session_open_ms_utc(date(2024, 10, 18))
     recent = session_open_ms_utc(date(2026, 10, 16))
-    state = {"baseline_ms": baseline, "sessions": {"SPY": {str(recent): {"complete": True, "ended_ms": recent}}}}
+    state = ArchiveStateDoc(version=1, baseline_ms=baseline,
+                            sessions={"SPY": {recent: SessionReceipt(outcome=SessionOutcome.COMPLETE, ended_ms=recent)}})
     config = ArchiveSettings(ENABLED=True)
     health = project_health(state, now_ms=wall_clock_ms(date(2026, 10, 21), 60), config=config)
     spy = health.underlyings[0]
@@ -70,16 +74,40 @@ def test_health_recent_success_never_hides_older_hole_and_lost_gap_survives_roll
     ("restore", {"failure": "Hash verification failed"}, "failed"),
 ])
 def test_backup_restore_health_is_independent_and_actionable(job: str, receipt: dict, expected: str) -> None:
-    health = project_health({"jobs": {job: receipt}}, now_ms=wall_clock_ms(date(2026, 10, 21), 60), config=ArchiveSettings(ENABLED=True))
+    state = ArchiveStateDoc(version=1, jobs={job: JobReceipt(**receipt)})
+    health = project_health(state, now_ms=wall_clock_ms(date(2026, 10, 21), 60), config=ArchiveSettings(ENABLED=True))
     item = health.backup if job == "backup" else health.test_restore
     assert item.severity == expected and item.reason and health.attention
+
+
+def test_backup_health_names_unverified_generations_and_keeps_the_recorded_failure_beside_a_missing_destination() -> None:
+    now = wall_clock_ms(date(2026, 10, 21), 60)
+    kept = ArchiveStateDoc(version=1, jobs={"backup": JobReceipt(last_success_ms=now - 1000, unverified_generations=["damaged-a"])})
+    backup = project_health(kept, now_ms=now, config=ArchiveSettings(ENABLED=True)).backup
+    assert backup.severity == "at_risk" and "damaged-a" in backup.reason
+    failed = ArchiveStateDoc(version=1, jobs={"backup": JobReceipt(failure="Prune refused a retention pin")})
+    backup = project_health(failed, now_ms=now, config=ArchiveSettings(ENABLED=True), destination_problem="The destination is gone").backup
+    assert backup.reason == "The destination is gone" and backup.last_failure == "Prune refused a retention pin"
+
+
+def test_next_capture_follows_the_receipt_and_the_calendar() -> None:
+    day = date(2026, 10, 21)
+    def next_due(now: int, **receipt: int) -> int | None:
+        state = ArchiveStateDoc(version=1, jobs={"capture": JobReceipt(**receipt)})
+        return project_health(state, now_ms=now, config=ArchiveSettings(ENABLED=True)).underlyings[0].next_due_ms
+    assert next_due(wall_clock_ms(day, 30)) == wall_clock_ms(day, 60)
+    retrying = wall_clock_ms(day, 120)
+    assert next_due(retrying, retry_after_ms=retrying + 300_000) == retrying + 300_000
+    assert next_due(retrying, completed_day_ms=et_midnight_ms(day)) == wall_clock_ms(day + timedelta(days=1), 60)
+    window = session_window_for_date(day)
+    assert next_due(window.open_ms_utc) == window.close_ms_utc
 
 
 def test_snapshot_health_keeps_missed_evening_and_field_gaps() -> None:
     day = date(2026, 10, 19)
     session = session_open_ms_utc(day)
-    state = {"baseline_ms": session, "snapshot_activation_ms": session,
-             "snapshots": {"SPY": {str(session): {"complete": False, "field_gaps": {"iv:missing": 3}}}}}
+    state = ArchiveStateDoc(version=1, baseline_ms=session, snapshot_activation_ms=session, snapshots={"SPY": {session: SnapshotReceipt(
+        complete=False, field_gaps={"iv:missing": 3}, started_ms=session, ended_ms=session)}})
     health = project_health(state, now_ms=wall_clock_ms(date(2026, 10, 21), 60), config=ArchiveSettings(ENABLED=True))
     spy = health.underlyings[0]
     assert spy.snapshot_missed_evenings == 1 and spy.snapshot_incomplete == 1 and spy.snapshot_field_gaps == 3

@@ -70,6 +70,14 @@ def et_date_at_ms(ms: int) -> date:
     return datetime.fromtimestamp(ms / 1000, tz=UTC).astimezone(_NY).date()
 
 
+def shift_calendar_years(day: date, years: int) -> date:
+    """``day`` moved ``years`` calendar years (negative goes back); 29 February lands on the 28th in a common year."""
+    try:
+        return day.replace(year=day.year + years)
+    except ValueError:
+        return day.replace(year=day.year + years, day=28)
+
+
 #: The last date the NYSE calendar can schedule. ``pandas_market_calendars``
 #: builds sessions as nanosecond ``pd.Timestamp``s, which end on 2262-04-11,
 #: so a window past it is one the service cannot serve.

@@ -109,7 +109,7 @@ from app.engine.live.identity import confine_path_to_root
 from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open_ms_utc
 from app.utils.advisory_lock import try_advisory_file_lock
 from app.utils.background_loop import background_loop
-from app.utils.session_anchors import et_date_at_ms, et_day_end_ms
+from app.utils.session_anchors import et_date_at_ms, et_day_end_ms, shift_calendar_years
 
 logger = logging.getLogger(__name__)
 
@@ -239,12 +239,7 @@ def option_history_floor(today: date) -> date:
     than this is refused before any claim (:func:`plan_window_refusal`); a day at
     the edge is left to the vendor, whose 403 says whether the plan reaches it.
     """
-    try:
-        anniversary = today.replace(year=today.year - OPTION_HISTORY_YEARS)
-    except ValueError:
-        # 29 February with a non-leap anniversary year.
-        anniversary = today.replace(year=today.year - OPTION_HISTORY_YEARS, day=28)
-    return anniversary + timedelta(days=_HISTORY_FLOOR_MARGIN_DAYS)
+    return shift_calendar_years(today, -OPTION_HISTORY_YEARS) + timedelta(days=_HISTORY_FLOOR_MARGIN_DAYS)
 
 
 def symbol_refusal(symbol: str, trading_date: date) -> OptionDataFailure | None:
