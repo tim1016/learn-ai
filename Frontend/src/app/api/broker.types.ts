@@ -6574,6 +6574,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/options-golden-search/workspace/{kind}/{subject_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Workspace Evidence */
+        get: operations["workspace_evidence_api_research_options_golden_search_workspace__kind___subject_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/recency/hero": {
         parameters: {
             query?: never;
@@ -25181,6 +25198,125 @@ export interface components {
             golden: components["schemas"]["GoldenOptionSetupView"];
             /** Rules Summary */
             rules_summary: string[];
+        };
+        /** OptionsEvidenceApproval */
+        OptionsEvidenceApproval: {
+            exposure: components["schemas"]["Exposure"] | null;
+            /** Failed Rules */
+            failed_rules: components["schemas"]["GateOutcome"][];
+            /** Golden Id */
+            golden_id: string;
+            /** Identity Matches */
+            identity_matches: boolean;
+            /** Note */
+            note: string;
+            /** Proof Explanation */
+            proof_explanation: string;
+            /**
+             * Proof Status
+             * @enum {string}
+             */
+            proof_status: "ready" | "stale" | "revoked";
+            /** Research Verdict */
+            research_verdict: ("meets_rules" | "owner_exception") | null;
+            /** Setup Sha256 */
+            setup_sha256: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "backtest" | "search" | "not_recorded";
+            /** Source Run Id */
+            source_run_id: number;
+            /** Study Id */
+            study_id: string | null;
+            /** Study Manifest Sha256 */
+            study_manifest_sha256: string | null;
+            /** Waived Gate Ids */
+            waived_gate_ids: string[];
+        };
+        /** OptionsEvidenceDimension */
+        OptionsEvidenceDimension: {
+            /** Explanation */
+            explanation: string;
+            /** Status */
+            status: string;
+        };
+        /** OptionsEvidencePeriod */
+        OptionsEvidencePeriod: {
+            /** First Session Open Ms */
+            first_session_open_ms: number;
+            /** Last Session Open Ms */
+            last_session_open_ms: number;
+            /** Observed Sessions */
+            observed_sessions: number | null;
+            /** Scheduled Sessions */
+            scheduled_sessions: number;
+        };
+        /** OptionsEvidenceRelation */
+        OptionsEvidenceRelation: {
+            /** Explanation */
+            explanation: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "inspected_search" | "historical_comparator";
+            /** Settings Match */
+            settings_match: boolean;
+            /** Setup Sha256 */
+            setup_sha256: string;
+            /** Subject Id */
+            subject_id: string;
+        };
+        /** OptionsEvidenceSearchSetting */
+        OptionsEvidenceSearchSetting: {
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "fixed" | "search";
+            /** Path */
+            path: string;
+            /** Values */
+            values: string[];
+        };
+        /** OptionsEvidenceWorkspace */
+        OptionsEvidenceWorkspace: {
+            approval: components["schemas"]["OptionsEvidenceDimension"];
+            /** Approvals */
+            approvals: components["schemas"]["OptionsEvidenceApproval"][];
+            coverage: components["schemas"]["OptionsEvidenceDimension"];
+            /** Evidence Identity */
+            evidence_identity: string;
+            final: components["schemas"]["OptionsEvidenceDimension"];
+            /** Frozen Search Settings */
+            frozen_search_settings?: components["schemas"]["OptionsEvidenceSearchSetting"][];
+            /** Headline */
+            headline: string;
+            /** Name */
+            name: string;
+            period: components["schemas"]["OptionsEvidencePeriod"];
+            /** Relations */
+            relations: components["schemas"]["OptionsEvidenceRelation"][];
+            replay: components["schemas"]["OptionsEvidenceDimension"];
+            research: components["schemas"]["OptionsEvidenceDimension"];
+            /** Settings Description */
+            settings_description: string[];
+            setup: components["schemas"]["OptionsBacktestSetup-Output"];
+            /** Setup Sha256 */
+            setup_sha256: string;
+            /** Source Run Id */
+            source_run_id: number | null;
+            /** Study Id */
+            study_id: string | null;
+            /** Subject Id */
+            subject_id: string;
+            /**
+             * Subject Kind
+             * @enum {string}
+             */
+            subject_kind: "run" | "golden" | "study";
         };
         /**
          * OptionsExpirationsRequest
@@ -44882,6 +45018,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StudyDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    workspace_evidence_api_research_options_golden_search_workspace__kind___subject_id__get: {
+        parameters: {
+            query?: {
+                inspected_study_id?: string | null;
+                comparator_run_id?: number | null;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                kind: "run" | "golden" | "study";
+                subject_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsEvidenceWorkspace"];
                 };
             };
             /** @description Validation Error */

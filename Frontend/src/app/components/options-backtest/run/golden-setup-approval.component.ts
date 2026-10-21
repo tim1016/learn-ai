@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input, resource, signal } from '@angular/core';
 import { disabled, FormField, form, minLength, required } from '@angular/forms/signals';
+import { RouterLink } from '@angular/router';
 
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { extractServerMessage } from '../../broker/operation-error';
@@ -8,7 +9,7 @@ import { GoldenOptionSetupsService, type GoldenOptionSetup } from '../golden-opt
 
 @Component({
   selector: 'app-golden-option-setup-approval',
-  imports: [FormField, ReceiptLabelPipe, OptionsQualificationEvidenceComponent],
+  imports: [FormField, ReceiptLabelPipe, OptionsQualificationEvidenceComponent, RouterLink],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './golden-setup-approval.component.html',
   styleUrl: './golden-setup-approval.component.scss',

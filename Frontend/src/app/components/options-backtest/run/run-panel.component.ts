@@ -1,5 +1,6 @@
 import { afterNextRender, ChangeDetectionStrategy, Component, computed, DestroyRef, effect, ElementRef, inject, Injector, input, output, resource, signal, untracked, viewChild } from '@angular/core';
 import { ButtonModule } from 'primeng/button';
+import { RouterLink } from '@angular/router';
 
 import { JobsService } from '../../../services/jobs.service';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
@@ -31,6 +32,7 @@ import { RunResultComponent } from './run-result.component';
 @Component({
   selector: 'app-options-backtest-run-panel',
   imports: [
+    RouterLink,
     ButtonModule,
     AssetIdentityComponent,
     ReceiptLabelPipe,

@@ -15,6 +15,7 @@ from app.research.options_golden_search import service, stages
 from app.research.persistence.db import with_connection, writer_loop_call
 from app.routers import research_records
 from app.routers.research_store_unavailable import StoreUnreachableIsA503
+from app.schemas.options_evidence import OptionsEvidenceWorkspace
 from app.schemas.options_golden_search import (
     Command,
     Declarations,
@@ -44,6 +45,26 @@ class HistoryCaptureService(Protocol):
 
 async def get_service():
     return service
+
+
+@router.get("/workspace/{kind}/{subject_id}", response_model=OptionsEvidenceWorkspace)
+async def workspace_evidence(
+    kind: Literal["run", "golden", "study"],
+    subject_id: Annotated[str, Path(pattern=r"^(?:[1-9][0-9]{0,15}|ogs_[a-f0-9]{32}(?:[a-f0-9]{8})?|os_[a-f0-9]{40})$")],
+    inspected_study_id: Annotated[str | None, Query(pattern=r"^os_[a-f0-9]{40}$")] = None,
+    comparator_run_id: Annotated[int | None, Query(ge=1, le=2**53-1)] = None,
+) -> OptionsEvidenceWorkspace:
+    from app.options_bots.golden import GoldenSetupError
+    from app.research.options_golden_search import workspace
+
+    try:
+        return await workspace.read(kind, subject_id, inspected_study_id=inspected_study_id, comparator_run_id=comparator_run_id)
+    except GoldenSetupError as exc:
+        raise HTTPException(exc.http_status, {"code": exc.code, "message": exc.message}) from exc
+    except (ValueError, LookupError) as exc:
+        raise refusal(exc) from exc
+    except OSError as exc:
+        raise HTTPException(503, {"code": "OPTIONS_EVIDENCE_UNAVAILABLE", "message": "Retained evidence is unavailable. Retry when its store is readable."}) from exc
 
 
 def refusal(exc: Exception) -> HTTPException:

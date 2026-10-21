@@ -19,6 +19,7 @@
     }
     @case ('complete') {
       @if (detail(); as done) {
+        <a [routerLink]="['/options-evidence/run', done.id]">Open strategy evidence workspace</a>
         <app-options-backtest-run-result [run]="done" />
         @if (done.setup) {
           <button type="button" class="again" (click)="goldenReviewRun.set(done.id)">Review golden setup</button>
