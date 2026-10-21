@@ -24,7 +24,7 @@ from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.utils.atomic_file import atomic_write_bytes
 
 
-async def repack(underlyings: list[str]) -> list[dict[str, int | str | bool]]:
+async def repack(underlyings: list[str], *, rebind_listing: bool = False) -> list[dict[str, int | str | bool]]:
     results: list[dict[str, int | str | bool]] = []
     await catalog_client.init_pool()
     try:
@@ -35,7 +35,7 @@ async def repack(underlyings: list[str]) -> list[dict[str, int | str | bool]]:
                                 int(Path(row.file_path).name[6:8]))
                            for row in records if Path(row.file_path).parent.as_posix() == listing_folder.as_posix()})
             for day in days:
-                outcome = await repack_option_session(underlying, day)
+                outcome = await repack_option_session(underlying, day, rebind_listing=rebind_listing)
                 if outcome.failure is not None:
                     raise RuntimeError(f"{underlying} session {session_open_ms_utc(day)}: {outcome.failure.reason}: {outcome.failure.detail}")
                 session = await asyncio.to_thread(read_option_session, underlying, day)
@@ -55,9 +55,10 @@ async def repack(underlyings: list[str]) -> list[dict[str, int | str | bool]]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--underlying", action="append", choices=("SPY", "QQQ", "IWM"))
+    parser.add_argument("--rebind-listing", action="store_true", help="Explicitly rebind retained coverage after a listing refresh")
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
-    report = asyncio.run(repack(args.underlying or ["SPY", "QQQ", "IWM"]))
+    report = asyncio.run(repack(args.underlying or ["SPY", "QQQ", "IWM"], rebind_listing=args.rebind_listing))
     atomic_write_bytes(args.report, json.dumps({"sessions": report}, sort_keys=True, indent=2).encode())
 
 

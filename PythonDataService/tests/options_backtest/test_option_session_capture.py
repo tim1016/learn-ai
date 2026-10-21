@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
 
 import httpx
@@ -130,3 +131,64 @@ async def test_aged_out_answer_preserves_successful_progress_as_explicit_partial
     session = await asyncio.to_thread(read_option_session, "SPY", FRIDAY)
     assert not session.complete and session.captured == {CALL.occ_symbol}
     assert session.unresolved == {PUT.occ_symbol} and not session.confirmed_empty
+
+
+@respx.mock
+async def test_adjusted_listed_ticker_is_preserved_without_becoming_orderable(fake_catalog, tmp_lake):
+    adjusted = "SPY1" + CALL.occ_symbol[3:]
+    await store_listing([vendor_listing_row(CALL, ticker="O:" + adjusted), vendor_listing_row(PUT)])
+    await store_underlying_day(fake_catalog, tmp_lake, [stock_bar(FRIDAY_OPEN_MS, "500", "500", "500", "500")])
+    adjusted_url = f"https://api.polygon.io/v2/aggs/ticker/O:{adjusted}/range/1/minute/{FRIDAY}/{FRIDAY}"
+    archive_request = respx.get(adjusted_url).mock(return_value=traded(adjusted, [bar()]))
+    other_request = respx.get(url(PUT)).mock(return_value=no_trades(PUT.occ_symbol))
+    result = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS)
+    assert result.failure is None and archive_request.call_count == other_request.call_count == 1
+    session = await asyncio.to_thread(read_option_session, "SPY", FRIDAY)
+    assert session.complete and adjusted in session.captured and PUT.occ_symbol in session.confirmed_empty
+    with pytest.raises(ValueError):
+        OptionContract.from_occ_symbol(adjusted)
+
+
+@respx.mock
+async def test_cancelled_collection_after_five_minutes_resumes_without_refetch(fake_catalog, tmp_lake, monkeypatch):
+    from app.data_lake import option_lake
+
+    await prepare(fake_catalog, tmp_lake, CALL, PUT)
+    entered = threading.Event()
+    release = threading.Event()
+    elapsed_ms = 0
+    clock_start_ms = fake_catalog._now_ms()
+    monkeypatch.setattr(fake_catalog, "_now_ms", lambda: clock_start_ms + elapsed_ms)
+    second_attempts = 0
+    def first(request):
+        nonlocal elapsed_ms
+        elapsed_ms = 360_000  # a full collection outlives the 300-second publication lease
+        return traded(CALL.occ_symbol, [bar()])
+    async def second(request):
+        nonlocal second_attempts
+        second_attempts += 1
+        entered.set()
+        while not release.is_set():
+            await asyncio.sleep(0.001)
+        return no_trades(PUT.occ_symbol)
+    call = respx.get(url(CALL)).mock(side_effect=first)
+    put = respx.get(url(PUT)).mock(side_effect=second)
+    monkeypatch.setattr(option_lake, "current_ms", lambda: NOW_2026_10_12_MS + elapsed_ms)
+    task = asyncio.create_task(capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS))
+    assert await asyncio.to_thread(entered.wait, 5)
+    assert not any(row["symbol"] == "SPY" and row["artifact_kind"] == "time_series_bars"
+                   and row["market"] == "usa_options" for row in fake_catalog.rows.values())
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    release.set()
+    # Join the cancelled background task before retrying its collector lock.
+    for _ in range(100):
+        outcome = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS + elapsed_ms)
+        if outcome.failure is None:
+            break
+        assert outcome.failure.reason == "lease_timeout"
+        await asyncio.sleep(0.001)
+    assert outcome.failure is None and call.call_count == 1 and second_attempts == 2
+    assert put.call_count == 1, "only the successful response is recorded; cancellation preserves prior progress"
+    assert (await asyncio.to_thread(read_option_session, "SPY", FRIDAY)).complete

@@ -150,6 +150,8 @@ async def test_published_corrupt_session_never_falls_back_to_good_legacy(fake_ca
     replace_the_stored_file(fake_catalog, raw_root(tmp_lake), path, b"corrupt", admit=True)
     with pytest.raises(OptionSessionFileError):
         await asyncio.to_thread(read_option_day_bars, CALL, FRIDAY)
+    with pytest.raises(OptionSessionFileError):
+        await repack_option_session("SPY", FRIDAY, rebind_listing=True)
     replace_the_stored_file(fake_catalog, raw_root(tmp_lake), path, b"different", admit=False)
     with pytest.raises(LakeAdmissionError):
         await asyncio.to_thread(read_option_day_bars, CALL, FRIDAY)
@@ -168,3 +170,37 @@ async def test_ten_thousand_listing_repack_keeps_26_known_days_partial(fake_cata
     assert session.confirmed_empty == {contract.occ_symbol for contract in contracts[:26]}
     assert await asyncio.to_thread(read_option_day_bars, contracts[0], FRIDAY) is not None
     assert await asyncio.to_thread(read_option_day_bars, contracts[-1], FRIDAY) is None
+
+
+@respx.mock
+async def test_late_snapshot_cannot_replace_newer_resolved_container_member(fake_catalog, tmp_lake):
+    from app.data_lake.option_session_repack import admitted_legacy_members, publish_option_session
+
+    listing = await listing_of(CALL, PUT)
+    await store_option_day(CALL, [])
+    stale = await asyncio.to_thread(admitted_legacy_members, listing)
+    relative = str(OptionMinuteBarPath("SPY", CALL.occ_symbol, FRIDAY).relative_path())
+    refreshed = option_day_zip(CALL, [FRIDAY_OPEN_MS])
+    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), relative, refreshed, admit=True)
+    winner = await publish_option_session(listing, stale)
+    late = await publish_option_session(listing, stale)
+    session = await asyncio.to_thread(read_option_session, "SPY", FRIDAY)
+    assert late.reused and late.record.file_sha256 == winner.record.file_sha256
+    assert session.legacy_bytes(CALL.occ_symbol) == refreshed
+    # Retained legacy originals may be older than a container. Neither capture
+    # startup nor a subsequent offline repack may make them win again.
+    replace_the_stored_file(fake_catalog, raw_root(tmp_lake), relative, stale[CALL.occ_symbol], admit=True)
+    repeated = await repack_option_session("SPY", FRIDAY)
+    assert repeated.reused
+    assert (await asyncio.to_thread(read_option_session, "SPY", FRIDAY)).legacy_bytes(CALL.occ_symbol) == refreshed
+
+    from app.data_lake.option_session_capture import capture_option_session
+    from tests._helpers.option_vendor import no_trades
+    from tests.options_backtest._lake import NOW_2026_10_12_MS, stock_bar, store_underlying_day
+    await store_underlying_day(fake_catalog, tmp_lake, [stock_bar(FRIDAY_OPEN_MS, "500", "500", "500", "500")])
+    respx.get(f"https://api.polygon.io/v2/aggs/ticker/O:{PUT.occ_symbol}/range/1/minute/{FRIDAY}/{FRIDAY}").mock(
+        return_value=no_trades(PUT.occ_symbol))
+    native = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS)
+    assert native.failure is None
+    after_capture = await asyncio.to_thread(read_option_session, "SPY", FRIDAY)
+    assert after_capture.complete and after_capture.legacy_bytes(CALL.occ_symbol) == refreshed

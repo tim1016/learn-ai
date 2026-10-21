@@ -44,7 +44,7 @@ import logging
 import re
 import zipfile
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
@@ -165,6 +165,7 @@ class OptionListing:
     as_of: date
     rows: tuple[OptionListingRow, ...]
     sha256: str
+    source_bytes: bytes | None = field(default=None, repr=False, compare=False)
 
 
 class OptionListingFileError(ValueError):
@@ -397,6 +398,7 @@ def read_option_listing(
         as_of=as_of,
         rows=parse_option_listing_zip(payload, underlying, as_of),
         sha256=hashlib.sha256(payload).hexdigest(),
+        source_bytes=payload,
     )
 
 
@@ -473,7 +475,12 @@ async def ensure_option_listing(
         if held.reused and held.record is not None:
             # The publish that made this row complete may have ended before it staled the old format's row (an
             # outage, a process that stopped), and nothing else would try again once the row reads as complete.
-            await _stale_other_formats(identity, rel_path, keep_artifact_id=held.record.id)
+            from app.data_lake.option_session import option_session_publication_lock
+
+            with option_session_publication_lock(underlying, as_of) as owns:
+                if not owns:
+                    return OptionCaptureResult.failed(OptionDataFailure("lease_timeout", "session publication is busy; retry listing cleanup", underlying, as_of))
+                await _stale_other_formats(identity, rel_path, keep_artifact_id=held.record.id)
         return held
 
     async def fail(reason: OptionFailureReason, detail: str) -> OptionCaptureResult:
@@ -502,20 +509,25 @@ async def ensure_option_listing(
     except OptionListingFileError as e:
         return await fail("validation_failed", str(e))
 
-    published = await publish_option_artifact(
-        payload=payload,
-        rel_path=rel_path,
-        lease=held,
-        row_count=len(contracts),
-        first_bar_start_ms=0,
-        last_bar_start_ms=0,
-        data_contract_hash=dch,
-        symbol=underlying,
-        trading_date=as_of,
-    )
-    if isinstance(published, OptionDataFailure):
-        return OptionCaptureResult.failed(published)
-    await _stale_other_formats(identity, rel_path, keep_artifact_id=held.artifact_id)
+    from app.data_lake.option_session import option_session_publication_lock
+
+    with option_session_publication_lock(underlying, as_of) as owns:
+        if not owns:
+            return await fail("lease_timeout", "session compaction is publishing; retry this listing")
+        published = await publish_option_artifact(
+            payload=payload,
+            rel_path=rel_path,
+            lease=held,
+            row_count=len(contracts),
+            first_bar_start_ms=0,
+            last_bar_start_ms=0,
+            data_contract_hash=dch,
+            symbol=underlying,
+            trading_date=as_of,
+        )
+        if isinstance(published, OptionDataFailure):
+            return OptionCaptureResult.failed(published)
+        await _stale_other_formats(identity, rel_path, keep_artifact_id=held.artifact_id)
 
     logger.info(
         "data_lake.option_listing: listing captured",

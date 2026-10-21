@@ -45,7 +45,7 @@ from app.data_lake.option_session import option_session_dch, read_option_session
 from app.data_lake.option_session_repack import _complete, admitted_legacy_members, publish_option_session
 from app.data_lake.path_policy import resolve_staging_root
 from app.data_lake.polygon_fetcher import PolygonFetchError
-from app.data_lake.polygon_option_bars import fetch_option_minute_bars
+from app.data_lake.polygon_option_bars import fetch_listed_option_minute_bars, require_listed_option_symbol
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.options_backtest.chain_download import Outcome, _capture_underlying
 from app.utils.advisory_lock import try_advisory_file_lock
@@ -123,13 +123,14 @@ async def capture_option_session(
             return await _clear_committed_staging(generation, await publish_option_session(listing, dict(existing.original_bytes)))
         generation.mkdir(parents=True, exist_ok=True)
         captured = {} if existing is None else dict(existing.original_bytes)
-        captured.update(await asyncio.to_thread(admitted_legacy_members, listing))
+        for symbol, payload in (await asyncio.to_thread(admitted_legacy_members, listing)).items():
+            captured.setdefault(symbol, payload)
+        listed_symbols = frozenset(row.ticker.removeprefix("O:") for row in listing.rows)
         for row in listing.rows:
             symbol = row.ticker.removeprefix("O:")
             # The parser rejects unsafe or mismatched symbols before URL or path use.
-            from app.options.contract import OptionContract
             try:
-                OptionContract.from_occ_symbol(symbol)
+                require_listed_option_symbol(symbol, listed_symbols)
             except ValueError as exc:
                 return failed("validation_failed", f"listed ticker cannot be captured: {exc}")
             path = generation / f"{symbol}.zip"
@@ -140,7 +141,7 @@ async def capture_option_session(
                                "recipe": option_session_dch()}:
                     return failed("validation_failed", "staged ticker receipt does not match its exact bytes")
                 parse_option_day_zip(payload, symbol, trading_date)
-                captured[symbol] = payload
+                captured.setdefault(symbol, payload)
             if symbol in captured:
                 continue
             if paused():
@@ -155,7 +156,8 @@ async def capture_option_session(
                 async with vendor_request_gate():
                     if paused():
                         return failed("lease_timeout", "capture paused before a provider request; progress retained")
-                    bars = await fetch_option_minute_bars(symbol, trading_date, settings.POLYGON_API_KEY)
+                    bars = await fetch_listed_option_minute_bars(symbol, trading_date, settings.POLYGON_API_KEY,
+                                                               listed_tickers=listed_symbols)
                 _require_exact_price_relations(bars, symbol=symbol, trading_date=trading_date)
                 assert_publishable_minute_bars(_publication_gate_view(bars), symbol=symbol, trading_date=trading_date)
                 _require_whole_minute_starts([bar.t_ms for bar in bars], symbol=symbol, trading_date=trading_date)

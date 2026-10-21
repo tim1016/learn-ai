@@ -20,6 +20,8 @@ lake's typed Polygon errors, and nothing is returned. The key rides in a header
 
 from __future__ import annotations
 
+import re
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -33,6 +35,8 @@ from app.options.contract import OptionContract
 
 #: The vendor's largest page for aggregates. A session is about 1,400 minutes at most.
 _PAGE_LIMIT = 50_000
+
+_LISTED_SYMBOL = re.compile(r"(?P<root>[A-Z][A-Z0-9.]{0,15})(?P<expiry>[0-9]{6})[CP][0-9]{8}")
 
 _PRICE_FIELDS = ("o", "h", "l", "c")
 
@@ -63,6 +67,31 @@ async def fetch_option_minute_bars(contract_symbol: str, day: date, api_key: str
     errors of ``polygon_fetcher``; never returns part of an answer.
     """
     OptionContract.from_occ_symbol(contract_symbol)  # a ticker that is not an OCC symbol never reaches a URL
+    return await _fetch_minute_bars(contract_symbol, day, api_key)
+
+
+def require_listed_option_symbol(symbol: str, listed_tickers: Collection[str]) -> None:
+    """Validate an archive identity without imposing orderable-contract policy.
+
+    Membership comes from an admitted complete listing. Syntax constrains URL
+    and member paths, including adjusted roots carrying digits. Date parsing
+    rejects malformed expiry identities while no standardness filter is applied.
+    """
+    matched = _LISTED_SYMBOL.fullmatch(symbol)
+    if matched is None or symbol not in listed_tickers:
+        raise ValueError("archive ticker must be safe and present in the pinned listing")
+    expiry = matched["expiry"]
+    date(2000 + int(expiry[:2]), int(expiry[2:4]), int(expiry[4:]))
+
+
+async def fetch_listed_option_minute_bars(contract_symbol: str, day: date, api_key: str,
+                                         *, listed_tickers: Collection[str]) -> list[PolygonOptionBar]:
+    """Archive a listed ticker, including adjusted contracts excluded by pickers."""
+    require_listed_option_symbol(contract_symbol, listed_tickers)
+    return await _fetch_minute_bars(contract_symbol, day, api_key)
+
+
+async def _fetch_minute_bars(contract_symbol: str, day: date, api_key: str) -> list[PolygonOptionBar]:
     ticker = f"{OPTION_TICKER_PREFIX}{contract_symbol}"
     url = f"{_POLYGON_BASE}/v2/aggs/ticker/{ticker}/range/1/minute/{day:%Y-%m-%d}/{day:%Y-%m-%d}"
     params = {"adjusted": "false", "sort": "asc", "limit": _PAGE_LIMIT}

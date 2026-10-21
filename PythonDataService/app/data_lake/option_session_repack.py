@@ -29,18 +29,21 @@ from app.data_lake.option_session import (
     option_session_publication_lock,
     parse_option_session,
     read_option_session,
+    read_option_session_for_listing_rebind,
 )
 from app.data_lake.path_policy import OptionMinuteBarPath, OptionSessionPath
 from app.data_lake.types import ArtifactIdentity, ArtifactRecord
 from app.options.contract import OptionContract
 
 
-def admitted_legacy_members(listing: OptionListing) -> dict[str, bytes]:
+def admitted_legacy_members(listing: OptionListing, *, only_symbols: frozenset[str] | None = None) -> dict[str, bytes]:
     """Read only existing admitted sources; a missing ticker remains unresolved."""
     root = option_read_root()
     result: dict[str, bytes] = {}
     for row in listing.rows:
         symbol = row.ticker.removeprefix("O:")
+        if only_symbols is not None and symbol not in only_symbols:
+            continue
         try:
             contract = OptionContract.from_occ_symbol(symbol)
         except ValueError:
@@ -75,22 +78,31 @@ async def publish_option_session(listing: OptionListing, captured: dict[str, byt
         return await _publish_option_session(listing, captured)
 
 
-async def _publish_option_session(listing: OptionListing, captured: dict[str, bytes]) -> OptionCaptureResult:
+async def _publish_option_session(listing: OptionListing, captured: dict[str, bytes], *, rebind_listing: bool = False) -> OptionCaptureResult:
     underlying, day = listing.underlying, listing.as_of
     rel_path = OptionSessionPath(underlying, day).relative_path()
     identity = ArtifactIdentity(artifact_kind="time_series_bars", market=OPTION_MARKET, symbol=underlying,
                                 trading_date=day, resolution="minute", data_type="trade", provider=OPTION_PROVIDER,
                                 price_adjustment_mode="raw")
     try:
-        previous = await asyncio.to_thread(read_option_session, underlying, day, listing=listing)
+        previous = (await asyncio.to_thread(read_option_session_for_listing_rebind, underlying, day) if rebind_listing
+                    else await asyncio.to_thread(read_option_session, underlying, day, listing=listing))
     except LakeAdmissionError:
         if await _complete(underlying, day) is not None:
             raise
         # A crash after rename but before receipt commit left unreadable bytes.
         # Claim/reclaim below still decides whether this writer can replace them.
         previous = None
-    merged = {} if previous is None else dict(previous.original_bytes)
-    merged.update(captured)
+    listed = {row.ticker.removeprefix("O:") for row in listing.rows}
+    merged = {symbol: raw for symbol, raw in captured.items() if symbol in listed}
+    unresolved = frozenset(listed - (set() if previous is None else set(previous.days)))
+    # Resolve stale incoming snapshots against today's admitted legacy receipt
+    # while every normal source publisher is excluded by this same lock.
+    merged.update(await asyncio.to_thread(admitted_legacy_members, listing, only_symbols=unresolved))
+    if previous is not None:
+        # Admitted container outcomes are immutable. A late capture, old staging,
+        # or retained legacy file may only fill a still-unresolved ticker.
+        merged.update({symbol: raw for symbol, raw in previous.original_bytes.items() if symbol in listed})
     payload = await asyncio.to_thread(build_option_session_bytes, listing, merged)
     digest = hashlib.sha256(payload).hexdigest()
     recipe = option_session_dch()
@@ -133,7 +145,7 @@ async def _publish(lease: HeldLease, identity: ArtifactIdentity, listing: Option
     return OptionCaptureResult(record=record, failure=None)
 
 
-async def repack_option_session(underlying: str, trading_date: date) -> OptionCaptureResult:
+async def repack_option_session(underlying: str, trading_date: date, *, rebind_listing: bool = False) -> OptionCaptureResult:
     """No vendor access; source admission or parsing errors stop the repack."""
     with option_session_publication_lock(underlying, trading_date) as owns:
         if not owns:
@@ -148,4 +160,4 @@ async def repack_option_session(underlying: str, trading_date: date) -> OptionCa
         for symbol, raw in captured.items():
             if current.get(symbol) != raw:
                 return OptionCaptureResult.failed(OptionDataFailure("validation_failed", "source changed during repack", underlying, trading_date))
-        return await _publish_option_session(listing, current)
+        return await _publish_option_session(listing, current, rebind_listing=rebind_listing)
