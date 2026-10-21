@@ -219,7 +219,8 @@ def execute_run(
     its row stays ``running``, which reads as ``interrupted`` once the job is gone. Either way the job ends as the run
     did, with the run's own words and not the store's.
     """
-    timings = RunTimings(clock=clock)
+    timings = RunTimings()
+    timings.start()
     try:
         result = _work(setup, sessions, hooks, clock, timings=timings)
         _stop_if_asked(hooks)
@@ -227,7 +228,7 @@ def execute_run(
         with timings.measure("save"):
             _save(store, run_id, result, clock)
         if hasattr(store, "record_timings"):
-            store.record_timings(run_id, timings.wire(), {})
+            record_observations(store, run_id, timings, {})
         return result
     except (RunCancelled, RunStopped, DownloadStopped, CheckStopped):
         finished_at_ms = clock()
@@ -249,6 +250,16 @@ def _save(store: RunStore, run_id: int, result: RunResult, clock: Callable[[], i
         store.complete(run_id, result, finished_at_ms=clock())
     except CallerStoppedWaitingError as exc:
         raise SaveTimedOut(run_id) from exc
+
+
+def record_observations(store: RunStore, run_id: int, timings: RunTimings, metadata: dict[str, Any]) -> None:
+    """An observation outage cannot undo a successfully committed financial run."""
+    try:
+        metadata["wall_duration_ms"] = timings.seal()
+        store.record_timings(run_id, timings.wire(), metadata)
+    except Exception:
+        logger.error("run committed but its execution observations could not be stored",
+            extra={"action": "options_backtest_observations_missing", "run_id": run_id}, exc_info=True)
 
 
 def _record_the_end(record: Callable[[], None], *, run_id: int, ended: str) -> None:
@@ -276,7 +287,7 @@ def _work(
     setup: OptionsBacktestSetup, sessions: Sequence[date], hooks: RunHooks, clock: Callable[[], int],
     *, timings: RunTimings | None = None,
 ) -> RunResult:
-    ledger = timings or RunTimings(clock=clock)
+    ledger = timings or RunTimings()
     prepare_run_data(setup, sessions, hooks, clock, timings=ledger)
     with ledger.measure("replay"):
         return _replay(setup, sessions, hooks)

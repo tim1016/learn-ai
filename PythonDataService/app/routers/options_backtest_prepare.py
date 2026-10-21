@@ -15,6 +15,7 @@ from app.config import settings
 from app.jobs.progress import CancellationCheck
 from app.options_backtest import service
 from app.options_backtest.frozen_inputs import freeze_run_inputs
+from app.options_backtest.input_staging import InputStaging, cleanup_job_inputs
 from app.options_backtest.lake_data import LakeRunData
 from app.options_backtest.timings import RunTimings
 from app.schemas.options_backtest_runs import OptionsBacktestJobRequest
@@ -49,18 +50,22 @@ async def prepare(req: OptionsBacktestJobRequest) -> StreamingResponse:
 
     def collect() -> None:
         ledger = RunTimings()
+        owned_staging = False
         hooks = service.RunHooks(on_phase=lambda phase: send({"kind": "phase", "phase": phase}),
             on_progress=lambda done, total: send({"kind": "progress", "done": done, "total": total}),
             on_log=lambda message: send({"kind": "log", "message": message}), should_stop=stop)
         try:
             service.prepare_run_data(req.setup, sessions, hooks, now_ms_utc, timings=ledger)
             hooks.on_phase("freezing_inputs")
-            with ledger.measure("input_freeze"):
+            with ledger.measure("input_freeze"), InputStaging(settings.OPTIONS_BACKTEST_INPUT_ROOT, req.job_id) as stage:
+                owned_staging = True
                 frozen = freeze_run_inputs(req.setup, sessions, LakeRunData(req.setup.underlying),
-                    settings.OPTIONS_BACKTEST_INPUT_ROOT, should_stop=stop,
+                    stage.root, should_stop=stop, reserve_bytes=stage.reserve,
                     on_session=lambda done, total, day: hooks.on_progress(done, total))
             send({"kind": "frozen", "inputs": frozen.model_dump(mode="json"), "timings": ledger.wire()})
         except Exception as exc:
+            if owned_staging:
+                cleanup_job_inputs(settings.OPTIONS_BACKTEST_INPUT_ROOT, req.job_id)
             if not disconnected.is_set():
                 failure = service.failure_of(exc)
                 send({"kind": "failure", "code": failure.code, "reason": failure.reason})

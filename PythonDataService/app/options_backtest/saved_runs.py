@@ -57,7 +57,7 @@ from app.options_backtest.statistics import RunSummary
 from app.options_backtest.timings import PhaseTiming
 from app.research.persistence import lifecycle
 from app.research.persistence.db import with_connection, writer_loop_call
-from app.utils.background_loop import run_on_background_loop
+from app.utils.background_loop import CallerStoppedWaitingError, run_on_background_loop
 
 StoredStatus = Literal["running", "complete", "failed", "cancelled"]
 PresentedStatus = Literal["running", "complete", "failed", "cancelled", "interrupted"]
@@ -428,36 +428,44 @@ def _require_fills_of_this_trade(trade: LegTrade) -> None:
             )
 
 
-async def fail_run(conn: asyncpg.Connection, run_id: int, failure: RunFailure, *, finished_at_ms: int) -> bool:
+async def fail_run(conn: asyncpg.Connection, run_id: int, failure: RunFailure, *, finished_at_ms: int,
+                   generation: int | None = None) -> bool:
     """Mark a ``running`` run failed. ``False`` when it was not running."""
     detail = [
         {"session_open_ms": item.session_open_ms, "code": item.code, "message": item.message} for item in failure.items
     ]
-    status = await conn.execute(
-        """
-        UPDATE research_options_backtest_runs
-           SET status = 'failed', finished_at_ms = $2, failure_code = $3, failure_reason = $4,
-               failure_detail_json = $5::jsonb
-         WHERE id = $1 AND status = 'running'
-        """,
-        run_id,
-        finished_at_ms,
-        failure.code,
-        failure.reason,
-        json.dumps(detail),
-    )
-    return status == "UPDATE 1"
+    async with conn.transaction():
+        if generation is not None:
+            await _lock_runtime_generation(conn, run_id, generation)
+        status = await conn.execute(
+            """
+            UPDATE research_options_backtest_runs
+               SET status = 'failed', finished_at_ms = $2, failure_code = $3, failure_reason = $4,
+                   failure_detail_json = $5::jsonb
+             WHERE id = $1 AND status = 'running'
+            """,
+            run_id,
+            finished_at_ms,
+            failure.code,
+            failure.reason,
+            json.dumps(detail),
+        )
+        return status == "UPDATE 1"
 
 
-async def cancel_run(conn: asyncpg.Connection, run_id: int, *, finished_at_ms: int) -> bool:
+async def cancel_run(conn: asyncpg.Connection, run_id: int, *, finished_at_ms: int,
+                     generation: int | None = None) -> bool:
     """Mark a ``running`` run cancelled. ``False`` when it was not running."""
-    status = await conn.execute(
-        "UPDATE research_options_backtest_runs SET status = 'cancelled', finished_at_ms = $2 "
-        "WHERE id = $1 AND status = 'running'",
-        run_id,
-        finished_at_ms,
-    )
-    return status == "UPDATE 1"
+    async with conn.transaction():
+        if generation is not None:
+            await _lock_runtime_generation(conn, run_id, generation)
+        status = await conn.execute(
+            "UPDATE research_options_backtest_runs SET status = 'cancelled', finished_at_ms = $2 "
+            "WHERE id = $1 AND status = 'running'",
+            run_id,
+            finished_at_ms,
+        )
+        return status == "UPDATE 1"
 
 
 # ── Reads ────────────────────────────────────────────────────────────────
@@ -948,34 +956,50 @@ class DbRunStore:
         return await writer_loop_call(with_connection(create_run, new))
 
     def complete(self, run_id: int, result: RunResult, *, finished_at_ms: int) -> None:
-        run_on_background_loop(
-            with_connection(complete_run, run_id, result, finished_at_ms=finished_at_ms, generation=self.generation), timeout=SAVE_TIMEOUT_SECONDS
-        )
+        try:
+            run_on_background_loop(
+                with_connection(complete_run, run_id, result, finished_at_ms=finished_at_ms, generation=self.generation),
+                timeout=SAVE_TIMEOUT_SECONDS,
+            )
+        except CallerStoppedWaitingError:
+            # The original coroutine continues. Row locking waits behind its
+            # transaction, then exact comparison joins a committed success.
+            if run_on_background_loop(with_connection(completion_matches, run_id, result), timeout=SAVE_TIMEOUT_SECONDS):
+                return
+            raise
 
     def record_timings(self, run_id: int, timings: list[dict[str, Any]], metadata: dict[str, Any]) -> None:
-        run_on_background_loop(with_connection(record_timings, run_id, timings, metadata), timeout=SAVE_TIMEOUT_SECONDS)
+        run_on_background_loop(with_connection(record_timings, run_id, timings, metadata, generation=self.generation), timeout=SAVE_TIMEOUT_SECONDS)
 
     def fail(self, run_id: int, failure: RunFailure, *, finished_at_ms: int) -> None:
         run_on_background_loop(
-            with_connection(fail_run, run_id, failure, finished_at_ms=finished_at_ms), timeout=SAVE_TIMEOUT_SECONDS
+            with_connection(fail_run, run_id, failure, finished_at_ms=finished_at_ms, generation=self.generation), timeout=SAVE_TIMEOUT_SECONDS
         )
 
     def cancel(self, run_id: int, *, finished_at_ms: int) -> None:
         run_on_background_loop(
-            with_connection(cancel_run, run_id, finished_at_ms=finished_at_ms), timeout=SAVE_TIMEOUT_SECONDS
+            with_connection(cancel_run, run_id, finished_at_ms=finished_at_ms, generation=self.generation), timeout=SAVE_TIMEOUT_SECONDS
         )
 
 
-async def record_timings(conn: asyncpg.Connection, run_id: int, timings: list[dict[str, Any]], metadata: dict[str, Any]) -> None:
+async def record_timings(conn: asyncpg.Connection, run_id: int, timings: list[dict[str, Any]], metadata: dict[str, Any],
+                         *, generation: int | None = None) -> None:
     """Execution observations remain separate from immutable financial results."""
-    await conn.execute(
-        "UPDATE research_options_backtest_runs SET phase_timings_json=$2::jsonb, execution_metadata_json=$3::jsonb WHERE id=$1",
-        run_id, json.dumps(timings), json.dumps(metadata),
-    )
+    async with conn.transaction():
+        if generation is not None:
+            await _lock_runtime_generation(conn, run_id, generation)
+        await conn.execute(
+            "UPDATE research_options_backtest_runs SET phase_timings_json=$2::jsonb, execution_metadata_json=$3::jsonb WHERE id=$1",
+            run_id, json.dumps(timings), json.dumps(metadata),
+        )
 
 
 async def _lock_runtime_generation(conn: asyncpg.Connection, run_id: int, generation: int) -> None:
-    from app.research.persistence.ownership import GenerationFencedError
+    from app.research.persistence.ownership import (
+        COORDINATOR_LOCK_CLASSID,
+        COORDINATOR_LOCK_OBJID,
+        GenerationFencedError,
+    )
 
     # The successor must update this same singleton row to advance generation.
     # Holding its share lock through the result transaction makes save and
@@ -984,7 +1008,17 @@ async def _lock_runtime_generation(conn: asyncpg.Connection, run_id: int, genera
         "SELECT runtime.boot_generation FROM research_runtime_owners runtime "
         "JOIN research_job_owners owner ON owner.boot_generation=runtime.boot_generation "
         "JOIN research_options_backtest_runs run ON run.job_id=owner.job_id "
-        "WHERE run.id=$1 AND owner.kind='options_backtest' FOR SHARE OF runtime, owner", run_id,
+        "WHERE run.id=$1 AND owner.kind='options_backtest' "
+        "AND EXISTS (SELECT 1 FROM pg_locks WHERE locktype='advisory' AND classid=$2 AND objid=$3 AND granted "
+        "AND database=(SELECT oid FROM pg_database WHERE datname=current_database())) "
+        "FOR SHARE OF runtime, owner", run_id, COORDINATOR_LOCK_CLASSID, COORDINATOR_LOCK_OBJID,
     )
     if current != generation:
         raise GenerationFencedError("a stale research generation cannot save this Options Backtest")
+
+
+async def completion_matches(conn: asyncpg.Connection, run_id: int, result: RunResult) -> bool:
+    """Read-only uncertain-write reconciliation; no second result publication."""
+    async with conn.transaction():
+        status = await conn.fetchval("SELECT status FROM research_options_backtest_runs WHERE id=$1 FOR UPDATE", run_id)
+        return status == "complete" and await read_result(conn, run_id) == result

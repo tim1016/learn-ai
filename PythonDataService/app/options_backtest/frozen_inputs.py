@@ -14,14 +14,15 @@ from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.config import active_root_id
 from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.options.contract import OptionContract
 from app.options_backtest.data import Captured, RunData
+from app.options_backtest.limits import MAX_RANGE_SESSIONS
 from app.options_backtest.market import MinuteBar
 from app.options_backtest.picking import ListedContract, Listing
 from app.options_backtest.run import RunStopped, load_session_market, validate_run_sessions
@@ -46,6 +47,18 @@ class FrozenRunInputs(BaseModel):
     recipe: str = "admitted-options-run/v1"
     sessions: dict[int, str]
     retained_bytes: int = Field(ge=0, le=MAX_FROZEN_BYTES)
+
+    @model_validator(mode="after")
+    def _known_decoder_and_bounded_inventory(self) -> Self:
+        if self.version != DECODER_VERSION or self.recipe != "admitted-options-run/v1":
+            raise ValueError("unsupported frozen input recipe or decoder")
+        if len(self.sessions) > MAX_RANGE_SESSIONS:
+            raise ValueError("frozen session inventory exceeds the range bound")
+        if list(self.sessions) != sorted(self.sessions):
+            raise ValueError("frozen sessions must be ordered")
+        if any(type(anchor) is not int or not 0 <= anchor <= MAX_TIMESTAMP_MS for anchor in self.sessions):
+            raise ValueError("frozen session anchors must be bounded int64 UTC milliseconds")
+        return self
 
     @property
     def digest(self) -> str:
@@ -97,6 +110,7 @@ def freeze_run_inputs(
     *,
     should_stop: Callable[[], bool] = lambda: False,
     on_session: Callable[[int, int, date], None] = lambda done, total, day: None,
+    reserve_bytes: Callable[[int], None] = lambda retained: None,
 ) -> FrozenRunInputs:
     """Admit, validate and retain each required answer once before dispatch.
 
@@ -128,6 +142,7 @@ def freeze_run_inputs(
         retained += len(payload)
         if retained > MAX_FROZEN_BYTES:
             raise ValueError("frozen run exceeds its retained input byte bound")
+        reserve_bytes(retained)
         inventory[session_window_for_date(day).open_ms_utc] = blobs.put(payload)
         on_session(done + 1, len(sessions), day)
     return FrozenRunInputs(root=str(root.resolve()), underlying=setup.underlying,
@@ -189,6 +204,7 @@ class DecodedOptionCache:
             raise ValueError("cache byte limit must be nonnegative")
         self.max_bytes = max_bytes
         self.bytes = 0
+        self.peak_bytes = 0
         self.hits = 0
         self.misses = 0
         self._entries: OrderedDict[tuple[str, ...], tuple[dict[str, Any], int]] = OrderedDict()
@@ -196,6 +212,9 @@ class DecodedOptionCache:
     def clear(self) -> None:
         self._entries.clear()
         self.bytes = 0
+
+    def reset_peak(self) -> None:
+        self.peak_bytes = self.bytes
 
     def read(self, frozen: FrozenRunInputs, digest: str) -> dict[str, Any]:
         # Even a warm read verifies the immutable admission identity. Corrupt
@@ -205,7 +224,8 @@ class DecodedOptionCache:
         if path.stat().st_size > MAX_SESSION_BYTES:
             raise ValueError("frozen session exceeds the compressed input bound")
         payload = blobs.get(digest)
-        key = (str(blobs.root.resolve()), frozen.version, frozen.underlying, digest, DECODER_VERSION)
+        key = (frozen.source_root_id, frozen.recipe,
+               frozen.version, frozen.underlying, digest, DECODER_VERSION)
         if key in self._entries:
             self.hits += 1
             self._entries.move_to_end(key)
@@ -219,6 +239,7 @@ class DecodedOptionCache:
                 self.bytes -= removed
             self._entries[key] = (decoded, cost)
             self.bytes += cost
+            self.peak_bytes = max(self.peak_bytes, self.bytes)
         return decoded
 
 

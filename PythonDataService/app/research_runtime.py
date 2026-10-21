@@ -119,13 +119,20 @@ async def _close_abandoned_generations(authority: ownership.RuntimeAuthority) ->
     conn = await asyncpg.connect(dsn)
     try:
         job_ids = await ownership.abandoned_job_ids(conn, up_to_generation=authority.boot_generation)
+        options_jobs = await conn.fetch(
+            "SELECT job_id FROM research_job_owners WHERE kind='options_backtest' AND boot_generation < $1",
+            authority.boot_generation,
+        )
     finally:
         await conn.close()
-    if not job_ids:
-        return
     from app.jobs.progress import close_orphaned_job_records
 
-    await asyncio.to_thread(close_orphaned_job_records, job_ids)
+    if job_ids:
+        await asyncio.to_thread(close_orphaned_job_records, job_ids)
+    from app.options_backtest.input_staging import release_job_inputs
+
+    for row in options_jobs:
+        await asyncio.to_thread(release_job_inputs, settings.OPTIONS_BACKTEST_INPUT_ROOT, row["job_id"])
 
 
 async def enforce_connection_envelope() -> dict[str, Any]:

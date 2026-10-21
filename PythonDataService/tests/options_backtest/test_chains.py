@@ -70,6 +70,40 @@ def test_frozen_data_is_equal_warm_cold_and_after_eviction_and_refuses_changed_b
         run_sessions(given, sessions, FrozenRunData(frozen, cache))
 
 
+def test_same_inventory_reuses_decode_across_job_directories_but_new_root_identity_misses(tmp_path: Path) -> None:
+    given = setup(legs=[leg(expiry={"kind": "same_day"})])
+    first = freeze_run_inputs(given, (WED,), scene(), tmp_path / "first")
+    second = freeze_run_inputs(given, (WED,), scene(), tmp_path / "second")
+    assert first.digest == second.digest
+    cache = DecodedOptionCache(64 * 1024**2)
+    digest = next(iter(first.sessions.values()))
+    assert cache.read(first, digest) == cache.read(second, digest)
+    assert (cache.hits, cache.misses) == (1, 1)
+    changed = second.model_copy(update={"source_root_id": "another-source-root"})
+    cache.read(changed, digest)
+    assert cache.misses == 2
+
+
+def test_cache_retained_byte_bound_holds_over_480_distinct_session_payloads(tmp_path: Path) -> None:
+    import json
+    import zlib
+
+    from app.options_backtest.frozen_inputs import FrozenRunInputs
+    from app.research.golden_search.proof import BlobStore
+
+    blobs = BlobStore(tmp_path)
+    frozen = FrozenRunInputs(root=str(tmp_path), underlying="SPY", setup_digest="a" * 64,
+                             source_root_id="fixture-root", sessions={}, retained_bytes=0)
+    cache = DecodedOptionCache(4096)
+    for index in range(480):
+        # Session metadata makes each admitted payload distinct. No decoded
+        # bars are required to prove the worker's total-retention invariant.
+        digest = blobs.put(zlib.compress(json.dumps({"options": {}, "session_index": index}).encode()))
+        assert cache.read(frozen, digest) == {"options": {}}
+        assert cache.bytes <= cache.max_bytes
+    assert cache.misses == 480
+
+
 def test_worker_pool_preserves_exact_result_and_reuses_admitted_decode(tmp_path: Path) -> None:
     given = setup(legs=[leg(expiry={"kind": "same_day"})])
     frozen = freeze_run_inputs(given, (WED, THU), scene(), tmp_path)
@@ -135,6 +169,59 @@ def test_utc_phase_anchors_and_monotonic_elapsed_have_a_bounded_rounding_error()
         pass
     assert abs(sum(row.duration_ms for row in ledger.rows) - 20) <= len(ledger.rows)
     assert [(row.started_at_ms, row.finished_at_ms) for row in ledger.rows] == [(1000, 1010), (1010, 1020)]
+
+
+def test_exclusive_phase_sum_includes_coordination_and_excludes_parallel_chain_spans() -> None:
+    from app.options_backtest.timings import PhaseTiming
+
+    clock = iter([1000, 1050])
+    monotonic = iter([1.0, 1.05])
+    ledger = RunTimings(clock=lambda: next(clock), monotonic=lambda: next(monotonic))
+    ledger.start()
+    ledger.rows.extend([
+        PhaseTiming(phase="replay", started_at_ms=1000, finished_at_ms=1040, duration_ms=40),
+        PhaseTiming(phase="replay", started_at_ms=1000, finished_at_ms=1040, duration_ms=40, scope="chain", chain_key="a"),
+        PhaseTiming(phase="replay", started_at_ms=1000, finished_at_ms=1040, duration_ms=40, scope="chain", chain_key="b"),
+    ])
+    assert ledger.seal() == 50
+    assert sum(row.duration_ms for row in ledger.rows if row.scope == "run") == 50
+
+
+def test_backtest_identity_refuses_decoder_changes_without_changing_approval_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.options_backtest import execution_identity as identity
+
+    before = identity.backtest_execution_identity()
+    assert "backtest_execution" in before
+    (tmp_path / "frozen_inputs.py").write_text("changed decoder")
+    monkeypatch.setattr(identity, "_ROOT", tmp_path)
+    with pytest.raises(ValueError, match="code changed"):
+        identity.backtest_execution_identity()
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("width", [1, 2, 4])
+async def test_generated_busy_scenario_stops_momentum_reentry_marks_half_day_are_exact_in_pool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, width: int,
+) -> None:
+    from tests.options_backtest._a_run import the_busy_data, the_busy_setup, what_the_busy_run_reaches
+
+    given = the_busy_setup()
+    sessions, data = the_busy_data()
+    expected = run_sessions(given, sessions, data)
+    assert all(what_the_busy_run_reaches(expected).values())
+    frozen = freeze_run_inputs(given, sessions, the_busy_data()[1], tmp_path / "inputs")
+    monkeypatch.setattr(settings, "RESEARCH_WORKER_COUNT", width)
+    monkeypatch.setattr(settings, "OPTIONS_SEARCH_WORKER_COUNT", width)
+    pool = SharedWorkerPool(workers=width, submission_bound=2 * width,
+                           payload_bound_bytes=32 * 1024**2, result_bound_bytes=32 * 1024**2)
+    try:
+        context = WorkerDispatchContext("options_backtest", {}, {}, {}, "busy", 1)
+        actual = await asyncio.to_thread(replay_frozen_run, given, sessions, frozen, context=context, workers=width, pool=pool)
+        assert actual == expected
+    finally:
+        pool.close()
 
 
 def test_profiler_uses_frozen_temporary_inputs_and_reports_cumulative_functions(tmp_path: Path) -> None:

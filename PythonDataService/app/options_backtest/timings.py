@@ -33,6 +33,24 @@ class RunTimings:
                  monotonic: Callable[[], float] = time.perf_counter) -> None:
         self.clock, self.monotonic = clock, monotonic
         self.rows: list[PhaseTiming] = []
+        self._start: tuple[int, float] | None = None
+
+    def start(self) -> None:
+        self._start = (self.clock(), self.monotonic())
+
+    def seal(self) -> int:
+        """Account for coordination between phases; detailed chain spans overlap."""
+        if self._start is None:
+            raise ValueError("run timing must start before it is sealed")
+        started, tick = self._start
+        finished = self.clock()
+        wall_ms = max(0, int((self.monotonic() - tick) * 1000))
+        covered = sum(row.duration_ms for row in self.rows if row.scope == "run")
+        if covered > wall_ms:
+            raise ValueError("top-level phase intervals overlap the run wall time")
+        self.rows.append(PhaseTiming(phase="coordination", started_at_ms=started,
+            finished_at_ms=finished, duration_ms=wall_ms - covered))
+        return wall_ms
 
     @contextmanager
     def measure(self, phase: str, *, chain_key: str | None = None) -> Iterator[None]:
