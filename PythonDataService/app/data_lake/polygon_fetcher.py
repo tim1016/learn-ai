@@ -10,13 +10,14 @@ longer contend for one tree. Paginated via Polygon's next_url header.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 
 import httpx
+
+from app.data_lake.work_progress import completed_provider_response
 
 logger = logging.getLogger(__name__)
 
@@ -188,9 +189,7 @@ async def fetch_aggregate_bars(
             # exact digits; prices and vwap are converted back to float below.
             payload = resp.json(parse_float=Decimal)
             _raise_for_payload_status(payload, symbol, resp.status_code)
-            from app.data_lake.work_progress import completed_work
-
-            completed_work("provider_response", symbol + ":" + hashlib.sha256(resp.content).hexdigest())
+            completed_provider_response(symbol, resp.content)
             for r in payload.get("results") or []:
                 out.append(
                     PolygonBar(

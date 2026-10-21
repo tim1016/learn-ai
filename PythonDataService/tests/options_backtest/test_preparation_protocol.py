@@ -2,92 +2,22 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import time
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
 
 import pytest
 
 from app.config import settings
-from app.jobs import progress
-from app.jobs.checkpoints import GatedLease
 from app.jobs.progress import JobCancelled, ProgressEmitter
 from app.options_backtest import preparation_stream
 from app.options_backtest.frozen_inputs import freeze_run_inputs
 from app.options_backtest.preparation import preparation_identity
 from app.options_backtest.timings import RunTimings
 from app.research.persistence.ownership import GenerationFencedError
-from app.schemas.options_backtest_runs import OptionsBacktestJobRequest
-from app.utils.session_anchors import et_midnight_ms
 from app.utils.timestamps import now_ms_utc
-from tests.jobs.conftest import _FakeRedis
-from tests.options_backtest.setup_fixtures import setup
-from tests.options_backtest.test_chains import THU, WED, scene
-
-
-@asynccontextmanager
-async def socket_peer(handler: Callable[..., Any], monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[None]:
-    handlers: set[asyncio.Task] = set()
-
-    async def serve(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        task = asyncio.current_task()
-        handlers.add(task)
-        try:
-            header = await reader.readuntil(b"\r\n\r\n")
-            length = next(int(row.split(b":", 1)[1]) for row in header.split(b"\r\n")
-                          if row.lower().startswith(b"content-length:"))
-            await reader.readexactly(length)
-            writer.write(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Type: application/x-ndjson\r\n\r\n")
-            await writer.drain()
-            await handler(writer)
-        finally:
-            writer.close()
-            await writer.wait_closed()
-            handlers.discard(task)
-
-    server = await asyncio.start_server(serve, "127.0.0.1", 0)
-    monkeypatch.setattr(settings, "OPTIONS_BACKTEST_DATA_SERVICE_URL", f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}")
-    try:
-        yield
-    finally:
-        server.close()
-        running = list(handlers)
-        for task in running:
-            task.cancel()
-        await asyncio.gather(*running, return_exceptions=True)
-        await server.wait_closed()
-
-
-async def send(writer: asyncio.StreamWriter, state: dict[str, Any]) -> None:
-    payload = json.dumps({"kind": "preparation", "state": state}).encode() + b"\n"
-    writer.write(f"{len(payload):x}\r\n".encode() + payload + b"\r\n")
-    await writer.drain()
-
-
-@pytest.fixture
-def owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    from app.config import LEGACY_ROOT_ID
-    from app.data_lake.root_identity import init_empty_root
-
-    source = tmp_path / "source"
-    init_empty_root(source, LEGACY_ROOT_ID)
-    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(source))
-    monkeypatch.setattr(settings, "DATA_LAKE_ROOT_ID", "")
-    fake = _FakeRedis()
-    monkeypatch.setattr(progress, "get_redis", lambda: fake)
-    monkeypatch.setattr(settings, "OPTIONS_BACKTEST_INPUT_ROOT", tmp_path)
-    req = OptionsBacktestJobRequest(job_id="quiet-io", setup=setup(),
-        start_ms=et_midnight_ms(WED), end_ms=et_midnight_ms(THU))
-    fake.lease(req.job_id)
-    authority = SimpleNamespace(boot_generation=1, connected=True)
-    lease = GatedLease(req.job_id, task_id="prep", authority=authority)
-    state = {"identity": preparation_identity(req), "status": "collecting", "sequence": 1,
-             "work_cursor": 0, "phase": "downloading", "done": 0, "total": 2, "wait": None, "timings": []}
-    return req, fake, authority, lease, state
+from tests.options_backtest._preparation_peer import owner as owner
+from tests.options_backtest._preparation_peer import send, socket_peer
+from tests.options_backtest._run_data import THU, WED, chain_scene
 
 
 @pytest.mark.slow
@@ -95,7 +25,7 @@ async def test_quiet_socket_past_ten_seconds_waits_for_verified_completion_witho
     owner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     req, fake, _, lease, state = owner
-    frozen = freeze_run_inputs(req.setup, (WED, THU), scene(), tmp_path / req.job_id)
+    frozen = freeze_run_inputs(req.setup, (WED, THU), chain_scene(), tmp_path / req.job_id)
     state["wait"] = {"id": 1, "deadline_ms": now_ms_utc() + 20_000}
     idle_renewals = []
 
@@ -143,7 +73,7 @@ async def test_lost_socket_rejoins_same_preparation_and_repeated_receipt_renews_
     owner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     req, fake, _, lease, state = owner
-    frozen = freeze_run_inputs(req.setup, (WED, THU), scene(), tmp_path / req.job_id)
+    frozen = freeze_run_inputs(req.setup, (WED, THU), chain_scene(), tmp_path / req.job_id)
     calls = 0
     first = []
 
@@ -201,7 +131,7 @@ async def test_runtime_without_api_env_file_uses_shared_nonlegacy_root_identity(
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(source))
     monkeypatch.setattr(settings, "DATA_LAKE_ROOT_ID", str(root_id))
     state["identity"] = preparation_identity(req)
-    frozen = freeze_run_inputs(req.setup, (WED, THU), scene(), tmp_path / req.job_id)
+    frozen = freeze_run_inputs(req.setup, (WED, THU), chain_scene(), tmp_path / req.job_id)
     # API reads the UUID from its env_file; the runtime receives no provider
     # env file and resolves the same identity from their shared lake mount.
     monkeypatch.setattr(settings, "DATA_LAKE_ROOT_ID", "")

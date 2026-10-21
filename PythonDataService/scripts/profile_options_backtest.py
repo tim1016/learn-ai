@@ -17,8 +17,9 @@ from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
 
+from app.engine.data.decoded_cache import DecodedArtifactCache
 from app.options_backtest.data import RunData
-from app.options_backtest.frozen_inputs import DecodedOptionCache, FrozenRunData, freeze_run_inputs
+from app.options_backtest.frozen_inputs import FrozenRunData, freeze_run_inputs
 from app.options_backtest.lake_data import LakeRunData
 from app.options_backtest.run import RunResult, run_sessions
 from app.options_backtest.service import sessions_of_range
@@ -29,7 +30,7 @@ def profile_run(setup: OptionsBacktestSetup, sessions: Sequence[date], data: Run
                 input_root: Path, output: Path) -> RunResult:
     frozen = freeze_run_inputs(setup, sessions, data, input_root)
     profile = cProfile.Profile()
-    result = profile.runcall(run_sessions, setup, sessions, FrozenRunData(frozen, DecodedOptionCache(64 * 1024**2)))
+    result = profile.runcall(run_sessions, setup, sessions, FrozenRunData(frozen, DecodedArtifactCache(max_bytes=64 * 1024**2)))
     text = io.StringIO()
     text.write(f"Frozen input inventory: {frozen.digest}\nSessions: {len(sessions)}\n")
     pstats.Stats(profile, stream=text).sort_stats("cumulative").print_stats(50)

@@ -27,6 +27,10 @@ reports the entries it filled and had refused for cash, its net profit and its c
 The run's own capital evidence is the evidence of that level: it is worked at run time from the money steps of each
 replay, never read off a stored run, whose sessions carry none.
 
+Each value of either ladder is one ``ReplayChain``, and ``plan_run`` lists them. A run replays every chain here, a
+session at a time; ``chains.py`` replays the same chains one apiece and merges them (#3428). Both build the result with
+``assemble_run_result``, so the points, the levels and the tolerance have one implementation.
+
 Cash and a leg marked. A bought leg marked, not sold, has paid out and not been paid back; the next session starts
 with its mark in cash, and the session's profit counts it at its mark. A sold leg marked, not bought back, has been
 paid and owes its mark: the next session starts with that mark out of its cash. The outcome signs the mark that way
@@ -40,6 +44,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal, localcontext
 from itertools import pairwise
+from typing import Literal
 
 from app.lean_sidecar.trading_calendar import expected_sessions, session_window_for_date
 from app.options.contract import OptionContract
@@ -223,39 +228,97 @@ def validate_run_sessions(setup: OptionsBacktestSetup, sessions: Sequence[date])
                 raise FeeRateNotPublished(day, missing)
 
 
-def _ladder(setup: OptionsBacktestSetup, requested: Sequence[Decimal]) -> dict[Decimal, _Carried]:
-    """The run at each slippage value, lowest first, the setup's own value among them, each starting with the cash."""
-    own = setup.slippage_percent
-    return {
-        value: _Carried(
-            setup
-            if value == own
-            else OptionsBacktestSetup.model_validate({**setup.model_dump(mode="python"), "slippage_percent": value}),
-            setup.starting_cash_usd,
+@dataclass(frozen=True)
+class ReplayChain:
+    """The whole run replayed along one path of carried cash: at one slippage, from one starting cash (#3428).
+
+    A slippage chain starts from the setup's own cash; a cash chain runs at the setup's own slippage, and ``multiple``
+    is its level as ``ladder_levels`` names it.
+    """
+
+    kind: Literal["slippage", "cash"]
+    slippage_percent: Decimal
+    starting_cash_usd: Decimal
+    multiple: Decimal = Decimal(1)
+
+    @property
+    def key(self) -> str:
+        return f"{self.kind}:{self.slippage_percent if self.kind == 'slippage' else self.starting_cash_usd}"
+
+    def repeats_the_own_chain(self, setup: OptionsBacktestSetup) -> bool:
+        """The cash level at the setup's own cash is the own slippage chain, and is not replayed again."""
+        return self.kind == "cash" and self.starting_cash_usd == setup.starting_cash_usd
+
+    def setup_for(self, setup: OptionsBacktestSetup) -> OptionsBacktestSetup:
+        """``setup`` at this chain's slippage and starting cash, validated as any setup is."""
+        if (self.slippage_percent, self.starting_cash_usd) == (setup.slippage_percent, setup.starting_cash_usd):
+            return setup
+        return OptionsBacktestSetup.model_validate(
+            {
+                **setup.model_dump(mode="python"),
+                "slippage_percent": self.slippage_percent,
+                "starting_cash_usd": self.starting_cash_usd,
+            }
         )
-        for value in sorted({*requested, own})
-    }
+
+
+def plan_run(
+    setup: OptionsBacktestSetup,
+    *,
+    slippage_ladder: Sequence[Decimal] = DEFAULT_SLIPPAGE_LADDER,
+    cash_ladder: Sequence[Decimal] = DEFAULT_CASH_LADDER,
+) -> tuple[ReplayChain, ...]:
+    """Every chain of a run: each slippage, lowest first, then each cash level, lowest first; the setup's own value is
+    among each. ``ValueError`` for a cash multiple ``ladder_levels`` refuses."""
+    return tuple(
+        ReplayChain("slippage", value, setup.starting_cash_usd)
+        for value in sorted({*slippage_ladder, setup.slippage_percent})
+    ) + tuple(
+        ReplayChain("cash", setup.slippage_percent, cash, multiple)
+        for cash, multiple in ladder_levels(setup.starting_cash_usd, cash_ladder).items()
+    )
+
+
+def assemble_run_result(
+    setup: OptionsBacktestSetup,
+    sessions: Sequence[SessionResult],
+    points: Sequence[SlippagePoint],
+    levels: Sequence[CashLevel],
+) -> RunResult:
+    """A run's result: its own sessions, one point per slippage chain and one level per cash chain, in plan order."""
+    own_level = next(level for level in levels if level.is_setups_own)
+    summary = replace(
+        summarize_run(sessions, starting_cash_usd=setup.starting_cash_usd),
+        capital_evidence=own_level.capital_evidence,
+        cash_ladder=tuple(levels),
+        stamps=current_stamps(),
+    )
+    return RunResult(setup, tuple(sessions), summary, tuple(points), slippage_tolerance(points))
 
 
 class _Run:
-    """One run's state: what it reads from, how it prices fees, and each ladder value's run so far."""
+    """One run's state: what it reads from, how it prices fees, and each chain's run so far."""
 
-    def __init__(
-        self,
-        setup: OptionsBacktestSetup,
-        data: RunData,
-        requested: Sequence[Decimal],
-        cash_multiples: Sequence[Decimal],
-    ) -> None:
+    def __init__(self, setup: OptionsBacktestSetup, data: RunData, plan: Sequence[ReplayChain]) -> None:
         self.setup = setup
         self.data = data
         self.fee_for = fee_for_policy(setup.fees)
-        self.ladder = _ladder(setup, requested)
+        self.ladder = {
+            chain.slippage_percent: _Carried(chain.setup_for(setup), chain.starting_cash_usd)
+            for chain in plan
+            if chain.kind == "slippage"
+        }
         self.own = self.ladder[setup.slippage_percent]
         # The cash ladder, each level's cash once, lowest first, at the setup's own slippage.
         self.cash_levels = {
-            cash: _CashLevel(multiple, cash, cash == setup.starting_cash_usd, _Carried(setup, cash))
-            for cash, multiple in ladder_levels(setup.starting_cash_usd, cash_multiples).items()
+            chain.starting_cash_usd: _CashLevel(
+                chain.multiple,
+                chain.starting_cash_usd,
+                chain.repeats_the_own_chain(setup),
+                _Carried(setup, chain.starting_cash_usd),
+            )
+            for chain in plan
+            if chain.kind == "cash"
         }
 
     def replay(self, day: date) -> SessionResult:
@@ -382,7 +445,7 @@ def run_sessions(
     estimated and some session is on a date the fee model has no rate for.
     """
     validate_run_sessions(setup, sessions)
-    run = _Run(setup, data, slippage_ladder, cash_ladder)
+    run = _Run(setup, data, plan_run(setup, slippage_ladder=slippage_ladder, cash_ladder=cash_ladder))
     kept: list[SessionResult] = []
     for done, day in enumerate(sessions):
         if should_stop():
@@ -400,12 +463,4 @@ def run_sessions(
         )
         for value, carried in run.ladder.items()
     )
-    levels = run.levels()
-    own_level = next(level for level in levels if level.is_setups_own)
-    summary = replace(
-        summarize_run(kept, starting_cash_usd=setup.starting_cash_usd),
-        capital_evidence=own_level.capital_evidence,
-        cash_ladder=levels,
-        stamps=current_stamps(),
-    )
-    return RunResult(setup, tuple(kept), summary, points, slippage_tolerance(points))
+    return assemble_run_result(setup, kept, points, run.levels())

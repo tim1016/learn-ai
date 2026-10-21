@@ -201,7 +201,7 @@ def _child_main() -> int:
     # The parent sizes it — the pool divides the shared budget across its
     # lanes (#3066 review); a lone child keeps the serial parity ceiling.
     decoded_cache = DecodedArtifactCache(
-        max_bytes=int(os.environ.get("RESEARCH_WORKER_DECODED_CACHE_BYTES") or WORKER_DECODED_CACHE_BYTES) // 2
+        max_bytes=int(os.environ.get("RESEARCH_WORKER_DECODED_CACHE_BYTES") or WORKER_DECODED_CACHE_BYTES)
     )
     state = {"identity": identity, "admission_sequence": 0, "decoded_cache": decoded_cache}
 
@@ -309,8 +309,8 @@ def _residency_fields(state: dict[str, Any]) -> dict[str, Any]:
     # The warm-affinity hint the shared pool's scheduler folds into its
     # lanes (#3048): what this child newly decoded, and what an eviction
     # removed — on the result and every failure. The cache's own
-    # counters stay in the child; nothing downstream reads them off the
-    # wire.
+    # counters stay in the child unless a task kind reports them itself
+    # (an Options chain's warm-cache evidence, #3433).
     added, evicted = state["decoded_cache"].take_residency_delta()
     return {
         "decoded": [key.__dict__ | {"estimated_bytes": estimated} for key, estimated in added],

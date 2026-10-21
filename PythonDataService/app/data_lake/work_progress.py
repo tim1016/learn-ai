@@ -25,6 +25,12 @@ def completed_work(kind: str, identity: str) -> None:
         sink({"kind": "work", "work_kind": kind, "identity": hashlib.sha256(identity.encode()).hexdigest()})
 
 
+def completed_provider_response(label: str, body: bytes) -> None:
+    """One vendor answer arrived; its body is hashed only while someone observes."""
+    if _SINK.get() is not None:
+        completed_work("provider_response", label + ":" + hashlib.sha256(body).hexdigest())
+
+
 @contextmanager
 def bounded_wait(timeout_s: float) -> Iterator[None]:
     sink = _SINK.get()

@@ -33,6 +33,7 @@ from app.data_lake import catalog_client
 from app.data_lake.maintenance import LakeMaintenanceBusyError, lake_activity
 from app.data_lake.path_policy import lake_root_for
 from app.data_lake.root_identity import LakeRootIdentityError, read_marker
+from app.data_lake.work_progress import completed_work
 from app.utils.background_loop import CallerStoppedWaitingError, run_on_background_loop
 
 logger = logging.getLogger(__name__)
@@ -61,8 +62,6 @@ def read_committed_bytes(path: Path) -> bytes:
             verify_committed_digest(path, root, digest, len(payload))
     except LakeMaintenanceBusyError as exc:
         raise LakeAdmissionError(f"{path}: lake retirement is in progress; retry later") from exc
-    from app.data_lake.work_progress import completed_work
-
     completed_work("admitted_artifact", str(path) + ":" + digest)
     return payload
 

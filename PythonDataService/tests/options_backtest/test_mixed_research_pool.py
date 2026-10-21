@@ -18,6 +18,7 @@ from app.data_lake.admission import read_committed_bytes, stop_admission_batcher
 from app.options_backtest.dispatch import replay_frozen_run
 from app.options_backtest.frozen_inputs import freeze_run_inputs
 from app.options_backtest.lake_data import LakeRunData
+from app.options_backtest.timings import RunTimings
 from app.options_bots.golden_proof import input_manifest
 from app.research.golden_search.pool import PooledWorkerDispatch
 from app.research.golden_search.proof import BlobStore
@@ -114,7 +115,7 @@ async def test_real_mixed_owners_advance_and_options_backtests_and_studies_share
     def backtest():
         context = WorkerDispatchContext("options_backtest", {}, {}, {}, "backtest", 1, on_checkpoint=checkpoint("backtest"))
         start.wait(timeout=10)
-        result = replay_frozen_run(source.setup, (FRIDAY,), frozen, context=context, pool=pool)
+        result = replay_frozen_run(source.setup, (FRIDAY,), frozen, context=context, pool=pool, timings=RunTimings())
         events.append("backtest:finished")
         return result
 

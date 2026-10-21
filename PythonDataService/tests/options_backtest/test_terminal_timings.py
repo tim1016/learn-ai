@@ -6,7 +6,6 @@ import threading
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -25,10 +24,10 @@ from tests._helpers.fake_lake_catalog import FakeCatalog
 from tests.options_backtest._a_run import a_busy_run
 from tests.options_backtest._lake import fake_catalog as fake_catalog
 from tests.options_backtest._lake import tmp_lake as tmp_lake
+from tests.options_backtest._preparation_peer import owner as owner
+from tests.options_backtest._preparation_peer import send, socket_peer
+from tests.options_backtest._run_data import THU, WED, chain_scene
 from tests.options_backtest._run_lake import Vendor
-from tests.options_backtest.test_chains import THU, WED, scene
-from tests.options_backtest.test_preparation_protocol import owner as owner
-from tests.options_backtest.test_preparation_protocol import send, socket_peer
 from tests.options_backtest.test_service import FakeStore, Job, _execute, the_scene
 
 
@@ -79,12 +78,29 @@ def test_observation_retry_reuses_sealed_history_after_storage_failure() -> None
     ledger = RunTimings()
     ledger.start()
     store = ObservationStore(unavailable=True)
-    service.record_observations(store, 7, ledger, {})
+    service.record_observations(store, 7, ledger)
     original = ledger.wire()
     store.unavailable = False
-    service.record_observations(store, 7, ledger, {})
+    service.record_observations(store, 7, ledger)
     assert ledger.wire() == original == store.observations[0][1]
     assert [row["phase"] for row in original] == ["coordination"]
+
+
+def test_stored_metadata_stays_flat_and_reads_back_into_the_typed_record() -> None:
+    """A data-service run stores its wall time alone; a pooled replay stores every key the benchmark requires."""
+    from app.options_backtest.timings import ReplayObservations, RunObservations
+
+    rows = (PhaseTiming(phase="coordination", started_at_ms=1, finished_at_ms=2, duration_ms=1),)
+    local = RunObservations(phase_timings=rows, wall_duration_ms=1)
+    replayed = local.model_copy(update={"replay": ReplayObservations(
+        frozen_input_digest="a" * 64, execution_identity_digest="b" * 64, runtime_boot_generation=3,
+        worker_width=2, cache_epoch=None, cache_hits=5, cache_misses=1, cache_bytes_peak=900)})
+    assert local.stored_metadata() == {"wall_duration_ms": 1}
+    assert set(replayed.stored_metadata()) == {
+        "wall_duration_ms", "frozen_input_digest", "execution_identity_digest", "runtime_boot_generation",
+        "worker_width", "cache_epoch", "cache_hits", "cache_misses", "cache_bytes_peak"}
+    for observed in (local, replayed):
+        assert RunObservations.from_stored(rows, observed.stored_metadata()) == observed
 
 
 @pytest.mark.parametrize("fenced", [False, True])
@@ -119,7 +135,7 @@ def test_interrupted_shared_pool_retains_elapsed_queue_and_replay(
     from tests.options_backtest.setup_fixtures import leg, setup
 
     given = setup(legs=[leg(expiry={"kind": "same_day"})])
-    frozen = freeze_run_inputs(given, (WED, THU), scene(), tmp_path)
+    frozen = freeze_run_inputs(given, (WED, THU), chain_scene(), tmp_path)
     if stop_at == "failed_replay":
         digest = next(iter(frozen.sessions.values()))
         (tmp_path / digest[:2] / digest).write_bytes(b"corrupt admitted input")
@@ -138,30 +154,25 @@ def test_interrupted_shared_pool_retains_elapsed_queue_and_replay(
             replay_frozen_run(given, (WED, THU), frozen, context=context, pool=pool, timings=ledger)
         phases = [row.phase for row in ledger.rows if row.scope == "run"]
         assert phases == (["queue"] if stop_at == "queue" else ["queue", "replay"])
-        wall_ms = ledger.seal()
-        assert sum(row.duration_ms for row in ledger.rows if row.scope == "run") == wall_ms
+        sealed = ledger.seal()
+        assert sum(row.duration_ms for row in sealed.phase_timings if row.scope == "run") == sealed.wall_duration_ms
     finally:
         pool.close()
 
 
 @pytest.mark.slow
-def test_queue_to_replay_uses_one_boundary_without_dropping_observations(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app.options_backtest import dispatch
+def test_queue_to_replay_uses_one_boundary_without_dropping_observations(tmp_path: Path) -> None:
     from tests.options_backtest.setup_fixtures import leg, setup
 
     given = setup(legs=[leg(expiry={"kind": "same_day"})])
-    frozen = freeze_run_inputs(given, (WED,), scene(), tmp_path)
-    # Delay between adjacent callback samples exposes double-counted time.
-    # Only the coordinator module's clocks are replaced; the actual pool runs normally.
-    ticks = iter([0.0, 0.25, 0.5, 1.0])
-    anchors = iter([1000, 1250, 1500, 2000])
-    monkeypatch.setattr(dispatch, "time", SimpleNamespace(perf_counter=lambda: next(ticks)))
-    monkeypatch.setattr(dispatch, "now_ms_utc", lambda: next(anchors))
-    ledger_ticks = iter([0.0, 1.0, 1.0, 1.0])
-    ledger_anchors = iter([1000, 2000, 2000, 2000])
-    ledger = RunTimings(clock=lambda: next(ledger_anchors), monotonic=lambda: next(ledger_ticks))
+    frozen = freeze_run_inputs(given, (WED,), chain_scene(), tmp_path)
+    # Delay between adjacent samples exposes double-counted time. Only the
+    # ledger's clocks are replaced; the actual pool runs normally. Samples:
+    # start, queue opens, the first chain begins, replay closes, aggregation
+    # opens and closes, seal.
+    ticks = iter([0.0, 0.0, 0.25, 0.5, 0.5, 0.5, 1.0])
+    anchors = iter([1000, 1000, 1250, 1500, 1500, 1500, 2000])
+    ledger = RunTimings(clock=lambda: next(anchors), monotonic=lambda: next(ticks))
     ledger.start()
     store = ObservationStore()
     context = WorkerDispatchContext("options_backtest", {}, {}, {}, "boundary", 1)
@@ -169,7 +180,7 @@ def test_queue_to_replay_uses_one_boundary_without_dropping_observations(
         result_bound_bytes=32 * 1024**2)
     try:
         replay_frozen_run(given, (WED,), frozen, context=context, pool=pool, timings=ledger)
-        service.record_observations(store, 7, ledger, {})
+        service.record_observations(store, 7, ledger)
         assert len(store.observations) == 1, "callback overhead cannot make valid observations fail sealing"
         queue, replay = (next(row for row in ledger.rows if row.phase == phase and row.scope == "run")
                          for phase in ("queue", "replay"))
@@ -214,3 +225,30 @@ async def test_runtime_terminal_preparation_keeps_partial_timings_without_maskin
         assert run_id == 7
         assert [row["phase"] for row in rows] == ["check", "download", "coordination"]
         assert sum(row["duration_ms"] for row in rows if row["scope"] == "run") == metadata["wall_duration_ms"]
+
+
+def test_utc_phase_anchors_and_monotonic_elapsed_have_a_bounded_rounding_error() -> None:
+    clock = iter([1000, 1010, 1010, 1020])
+    monotonic = iter([1.0, 1.01, 1.01, 1.02])
+    ledger = RunTimings(clock=lambda: next(clock), monotonic=lambda: next(monotonic))
+    with ledger.measure("check"):
+        pass
+    with ledger.measure("download"):
+        pass
+    assert abs(sum(row.duration_ms for row in ledger.rows) - 20) <= len(ledger.rows)
+    assert [(row.started_at_ms, row.finished_at_ms) for row in ledger.rows] == [(1000, 1010), (1010, 1020)]
+
+
+def test_exclusive_phase_sum_includes_coordination_and_excludes_parallel_chain_spans() -> None:
+    clock = iter([1000, 1050])
+    monotonic = iter([1.0, 1.05])
+    ledger = RunTimings(clock=lambda: next(clock), monotonic=lambda: next(monotonic))
+    ledger.start()
+    ledger.adopt([
+        PhaseTiming(phase="replay", started_at_ms=1000, finished_at_ms=1040, duration_ms=40),
+        PhaseTiming(phase="replay", started_at_ms=1000, finished_at_ms=1040, duration_ms=40, scope="chain", chain_key="a"),
+        PhaseTiming(phase="replay", started_at_ms=1000, finished_at_ms=1040, duration_ms=40, scope="chain", chain_key="b"),
+    ])
+    sealed = ledger.seal()
+    assert sealed.wall_duration_ms == 50
+    assert sum(row.duration_ms for row in sealed.phase_timings if row.scope == "run") == 50

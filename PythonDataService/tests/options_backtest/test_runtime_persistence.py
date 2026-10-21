@@ -92,7 +92,7 @@ async def test_lost_ack_after_real_commit_joins_once_and_telemetry_failure_keeps
     monkeypatch.setattr(store, "record_timings", unavailable_metadata)
     ledger = RunTimings()
     ledger.start()
-    service.record_observations(store, run_id, ledger, {})
+    service.record_observations(store, run_id, ledger)
     assert "execution observations" in caplog.text
     assert await saved_runs.completion_matches(scratch_db, run_id, result)
 

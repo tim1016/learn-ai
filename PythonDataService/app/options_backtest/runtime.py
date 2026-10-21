@@ -33,7 +33,6 @@ def execute_runtime_run(*, run_id: int, req: OptionsBacktestJobRequest, sessions
     lease = GatedLease(req.job_id, task_id=f"options-backtest:{run_id}", authority=authority)
     timings = RunTimings()
     timings.start()
-    metadata: dict[str, Any] = {}
     try:
         lease.phase("preparation")
         frozen = asyncio.run(prepare_over_api(req, emit=emit, lease=lease, timings=timings))
@@ -43,18 +42,18 @@ def execute_runtime_run(*, run_id: int, req: OptionsBacktestJobRequest, sessions
             identity=backtest_execution_identity(), job_id=req.job_id, generation=authority.boot_generation,
             on_checkpoint=lease.child_checkpoint, cancel_check=lease.fenced_cancel)
         result = replay_frozen_run(req.setup, sessions, frozen, context=context,
-            workers=settings.OPTIONS_SEARCH_WORKER_COUNT, timings=timings, metadata=metadata,
+            workers=settings.OPTIONS_SEARCH_WORKER_COUNT, timings=timings,
             cold_cache=req.benchmark_cache_mode == "cold")
         lease.fenced_cancel()
         lease.phase("persistence")
         emit.phase("saving")
         with timings.measure("save"):
             store.complete(run_id, result, finished_at_ms=now_ms_utc())
-        service.record_observations(store, run_id, timings, metadata)
+        service.record_observations(store, run_id, timings)
         return result
     except (JobCancelled, service.RunCancelled):
         store.cancel(run_id, finished_at_ms=now_ms_utc())
-        service.record_observations(store, run_id, timings, metadata)
+        service.record_observations(store, run_id, timings)
         raise
     except ownership.GenerationFencedError:
         # A successor owns lifecycle recovery. A stale coordinator writes nothing.
@@ -67,7 +66,7 @@ def execute_runtime_run(*, run_id: int, req: OptionsBacktestJobRequest, sessions
     except Exception as exc:
         failure = exc.failure if isinstance(exc, service.RunFailedError) else service.failure_of(exc)
         store.fail(run_id, failure, finished_at_ms=now_ms_utc())
-        service.record_observations(store, run_id, timings, metadata)
+        service.record_observations(store, run_id, timings)
         raise service.RunFailedError(failure) from exc
     finally:
         release_job_inputs(settings.OPTIONS_BACKTEST_INPUT_ROOT, req.job_id)

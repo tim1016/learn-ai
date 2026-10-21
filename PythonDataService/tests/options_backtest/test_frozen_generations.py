@@ -12,8 +12,9 @@ import respx
 from app.data_lake.option_session import read_option_session
 from app.data_lake.option_session_repack import repack_option_session
 from app.data_lake.path_policy import OptionSessionPath
+from app.engine.data.decoded_cache import DecodedArtifactCache
 from app.options.contract import OptionContract
-from app.options_backtest.frozen_inputs import DecodedOptionCache, FrozenRunData, freeze_run_inputs
+from app.options_backtest.frozen_inputs import FrozenRunData, freeze_run_inputs
 from app.options_backtest.lake_data import LakeRunData
 from app.options_backtest.run import run_sessions
 from tests.options_backtest._lake import (
@@ -72,7 +73,7 @@ async def test_freeze_refuses_changed_session_sources_but_accepts_stable_partial
     if transition == "stable_partial":
         frozen = await asyncio.to_thread(freeze_run_inputs, given, (FRIDAY,), ChangingData("SPY"), tmp_path / "frozen")
         assert reads[0] is not None and reads[1] is None
-        actual = await asyncio.to_thread(run_sessions, given, (FRIDAY,), FrozenRunData(frozen, DecodedOptionCache(1024**2)))
+        actual = await asyncio.to_thread(run_sessions, given, (FRIDAY,), FrozenRunData(frozen, DecodedArtifactCache(max_bytes=1024**2)))
         assert actual == await asyncio.to_thread(run_sessions, given, (FRIDAY,), LakeRunData("SPY"))
         return
 
@@ -88,7 +89,7 @@ async def test_freeze_refuses_changed_session_sources_but_accepts_stable_partial
         assert (reads[0] is None) != (reads[1] is None)
     # A fresh freeze under the resulting coherent layout remains usable.
     frozen = await asyncio.to_thread(freeze_run_inputs, given, (FRIDAY,), LakeRunData("SPY"), tmp_path / "coherent")
-    actual = await asyncio.to_thread(run_sessions, given, (FRIDAY,), FrozenRunData(frozen, DecodedOptionCache(1024**2)))
+    actual = await asyncio.to_thread(run_sessions, given, (FRIDAY,), FrozenRunData(frozen, DecodedArtifactCache(max_bytes=1024**2)))
     assert actual == await asyncio.to_thread(run_sessions, given, (FRIDAY,), LakeRunData("SPY"))
     current = await asyncio.to_thread(read_option_session, "SPY", FRIDAY)
     references = [pin.reference for pin in actual.sessions[0].pins.option_days]
