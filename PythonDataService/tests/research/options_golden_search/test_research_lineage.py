@@ -108,3 +108,10 @@ async def test_http_is_bounded_scope_fenced_and_reads_no_blobs(monkeypatch: pyte
     assert second.json()["items"][0]["status"] == "cache_hit"
     assert too_many.status_code == too_large.status_code == 422
     assert repo.get_evaluation not in calls
+    async def unavailable(_fn: Any, *_args: Any) -> Any:
+        raise ValueError("Retained procedure is malformed")
+    monkeypatch.setattr(lineage, "with_connection", unavailable)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        broken = await client.get(base)
+    assert broken.status_code == 503
+    assert broken.json()["detail"]["code"] == "RETAINED_PROCEDURE_UNAVAILABLE"
