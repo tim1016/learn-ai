@@ -65,10 +65,12 @@ def test_cleanup_refuses_symlinked_job_directory(tmp_path: Path) -> None:
 
 
 def test_verified_freeze_checkpoint_resumes_without_rereading_or_double_reserving_completed_sessions(tmp_path: Path) -> None:
-    from app.options_backtest.frozen_inputs import DecodedOptionCache, FrozenRunData, freeze_run_inputs
+    from app.engine.data.decoded_cache import DecodedArtifactCache
+    from app.options_backtest.frozen_inputs import FrozenRunData, freeze_run_inputs
     from app.options_backtest.run import run_sessions
     from app.research.golden_search.proof import BlobStore, ProofMismatchError
-    from tests.options_backtest.test_chains import THU, WED, scene, setup
+    from tests.options_backtest._run_data import THU, WED, chain_scene
+    from tests.options_backtest.setup_fixtures import setup
 
     given = setup()
     checkpoints = []
@@ -82,13 +84,13 @@ def test_verified_freeze_checkpoint_resumes_without_rereading_or_double_reservin
 
     with InputStaging(tmp_path, "resume") as staging:
         with pytest.raises(InterruptedFreeze):
-            freeze_run_inputs(given, (WED, THU), scene(), staging.root,
+            freeze_run_inputs(given, (WED, THU), chain_scene(), staging.root,
                               reserve_bytes=staging.reserve, on_checkpoint=interrupt)
         checkpoint = checkpoints[0]
         orphan = BlobStore(staging.root).put(b"crash between blob publication and checkpoint")
         staging.reserve(checkpoint.retained_bytes + 100)
 
-    data = scene()
+    data = chain_scene()
 
     class RemainingData:
         def underlying_day(self, day):
@@ -109,7 +111,7 @@ def test_verified_freeze_checkpoint_resumes_without_rereading_or_double_reservin
         assert json.loads((tmp_path / ".reservations.json").read_text())["resume"] == checkpoint.retained_bytes
         frozen = freeze_run_inputs(given, (WED, THU), RemainingData(), staging.root,
                                    reserve_bytes=staging.reserve, resume=checkpoint)
-        assert run_sessions(given, (WED, THU), FrozenRunData(frozen, DecodedOptionCache(1_000_000))) == run_sessions(given, (WED, THU), scene())
+        assert run_sessions(given, (WED, THU), FrozenRunData(frozen, DecodedArtifactCache(max_bytes=1_000_000))) == run_sessions(given, (WED, THU), chain_scene())
         assert json.loads((tmp_path / ".reservations.json").read_text())["resume"] == frozen.retained_bytes
         digest = next(iter(checkpoint.sessions.values()))
         (staging.root / digest[:2] / digest).write_bytes(b"corrupt checkpoint input")

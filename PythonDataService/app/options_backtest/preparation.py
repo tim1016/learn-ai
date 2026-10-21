@@ -71,7 +71,7 @@ class _Journal:
             "identity": identity, "status": "collecting", "sequence": 0, "work_cursor": 0,
             "phase": "preparation", "done": 0, "total": 0, "wait": None,
         }
-        self.ledger.rows.extend(PhaseTiming.model_validate(row) for row in self.state.get("timings", []))
+        self.ledger.adopt(PhaseTiming.model_validate(row) for row in self.state.get("timings", []))
         self._lock = threading.RLock()
         self._seen: set[str] = set()
         self._published = 0.0

@@ -8,10 +8,9 @@ One bounded session is decoded at a time. All times on disk are ms UTC.
 from __future__ import annotations
 
 import json
-import sys
 import zlib
-from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any, Self
@@ -19,6 +18,7 @@ from typing import Any, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.config import active_root_id
+from app.engine.data.decoded_cache import DecodedArtifactCache
 from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.options.contract import OptionContract
 from app.options_backtest.data import Captured, RunData
@@ -29,12 +29,21 @@ from app.options_backtest.run import RunStopped, load_session_market, validate_r
 from app.options_backtest.setup import OptionsBacktestSetup
 from app.options_backtest.timings import RunTimings
 from app.research.golden_search.proof import BlobStore
+from app.research.options_golden_search.protocol import point_hash
 from app.research.runs.hashing import hash_payload
 from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms
 
 DECODER_VERSION = "options-run-data/v1"
 MAX_SESSION_BYTES = 128 * 1024**2
 MAX_FROZEN_BYTES = 2 * 1024**3
+
+# Fixed figures for a decoded session's retained footprint in the worker's
+# decoded cache, so its accounting stays deterministic. Measured on CPython: a
+# MinuteBar with its four Decimals holds 620-840 bytes, a ListedContract with
+# its OptionContract 510-950; each is rounded up.
+_MINUTE_BAR_ESTIMATED_BYTES = 850
+_LISTED_CONTRACT_ESTIMATED_BYTES = 1000
+_SESSION_OVERHEAD_BYTES = 64
 
 
 class FrozenRunInputs(BaseModel):
@@ -154,7 +163,7 @@ def freeze_run_inputs(
     blobs = BlobStore(root)
     inventory: dict[int, str] = {}
     retained = 0
-    setup_digest = hash_payload(setup.model_dump(mode="json"))
+    setup_digest = point_hash(setup)
     if resume is not None:
         anchors = [session_window_for_date(day).open_ms_utc for day in sessions]
         if (resume.root != str(root.resolve()) or resume.setup_digest != setup_digest
@@ -197,21 +206,6 @@ def freeze_run_inputs(
     return checkpoint()
 
 
-def _size(value: Any, seen: set[int] | None = None) -> int:
-    seen = set() if seen is None else seen
-    if id(value) in seen:
-        return 0
-    seen.add(id(value))
-    total = sys.getsizeof(value)
-    if isinstance(value, Mapping):
-        total += sum(_size(key, seen) + _size(item, seen) for key, item in value.items())
-    elif isinstance(value, (tuple, list)):
-        total += sum(_size(item, seen) for item in value)
-    elif hasattr(value, "__dict__"):
-        total += _size(vars(value), seen)
-    return total
-
-
 def _decode_bars(row: Mapping[str, Any]) -> Captured[tuple[MinuteBar, ...]]:
     from decimal import Decimal
 
@@ -242,59 +236,46 @@ def _decode(payload: bytes) -> dict[str, Any]:
     return result
 
 
-class DecodedOptionCache:
-    """Worker-local LRU; compressed bytes plus full decoded object size are charged."""
+def _estimated_bytes(session: Mapping[str, Any]) -> int:
+    bars = sum(len(found.value) for found in session["options"].values())
+    if "underlying" in session:
+        bars += len(session["underlying"].value)
+    contracts = len(session["listing"].value.contracts) if "listing" in session else 0
+    return _SESSION_OVERHEAD_BYTES + bars * _MINUTE_BAR_ESTIMATED_BYTES + contracts * _LISTED_CONTRACT_ESTIMATED_BYTES
 
-    def __init__(self, max_bytes: int) -> None:
-        if max_bytes < 0:
-            raise ValueError("cache byte limit must be nonnegative")
-        self.max_bytes = max_bytes
-        self.bytes = 0
-        self.peak_bytes = 0
-        self.hits = 0
-        self.misses = 0
-        self._entries: OrderedDict[tuple[str, ...], tuple[dict[str, Any], int]] = OrderedDict()
 
-    def clear(self) -> None:
-        self._entries.clear()
-        self.bytes = 0
+@dataclass(frozen=True)
+class FrozenSessionKey:
+    """One frozen session's decode in the worker's decoded cache.
 
-    def reset_peak(self) -> None:
-        self.peak_bytes = self.bytes
+    The job directory is deliberately absent: the same admitted inventory
+    frozen for two jobs is one decode. ``relative_path`` is the blob's path
+    under its frozen root, the name the pool's warm hint reads.
+    """
 
-    def read(self, frozen: FrozenRunInputs, digest: str) -> dict[str, Any]:
-        # Even a warm read verifies the immutable admission identity. Corrupt
-        # replacement bytes never inherit the previous entry's admission.
-        blobs = BlobStore(Path(frozen.root))
-        path = blobs.root / digest[:2] / digest
-        if path.stat().st_size > MAX_SESSION_BYTES:
-            raise ValueError("frozen session exceeds the compressed input bound")
-        payload = blobs.get(digest)
-        key = (frozen.source_root_id, frozen.recipe,
-               frozen.version, frozen.underlying, digest, DECODER_VERSION)
-        if key in self._entries:
-            self.hits += 1
-            self._entries.move_to_end(key)
-            return self._entries[key][0]
-        self.misses += 1
-        decoded = _decode(payload)
-        cost = len(payload) + _size(decoded)
-        if cost <= self.max_bytes:
-            while self._entries and self.bytes + cost > self.max_bytes:
-                _, (_, removed) = self._entries.popitem(last=False)
-                self.bytes -= removed
-            self._entries[key] = (decoded, cost)
-            self.bytes += cost
-            self.peak_bytes = max(self.peak_bytes, self.bytes)
-        return decoded
+    content_digest: str
+    source_root_id: str
+    underlying: str
+    relative_path: str
+    decoder_version: str = DECODER_VERSION
 
 
 class FrozenRunData:
-    def __init__(self, frozen: FrozenRunInputs, cache: DecodedOptionCache, *,
+    def __init__(self, frozen: FrozenRunInputs, cache: DecodedArtifactCache, *,
                  timings: RunTimings | None = None, chain_key: str | None = None) -> None:
         self.frozen, self.cache = frozen, cache
         self.timings, self.chain_key = timings, chain_key
         self._last: tuple[date, dict[str, Any]] | None = None
+
+    def _read(self, digest: str) -> dict[str, Any]:
+        # Even a warm read verifies the immutable admission identity. Corrupt
+        # replacement bytes never inherit the previous entry's admission.
+        blobs = BlobStore(Path(self.frozen.root))
+        if (blobs.root / digest[:2] / digest).stat().st_size > MAX_SESSION_BYTES:
+            raise ValueError("frozen session exceeds the compressed input bound")
+        payload = blobs.get(digest)
+        key = FrozenSessionKey(digest, self.frozen.source_root_id, self.frozen.underlying, f"{digest[:2]}/{digest}")
+        return self.cache.get_or_decode_value(key, lambda: _decode(payload), estimate=_estimated_bytes)
 
     def _day(self, day: date) -> dict[str, Any]:
         if self._last is None or self._last[0] != day:
@@ -302,10 +283,10 @@ class FrozenRunData:
             if anchor not in self.frozen.sessions:
                 raise ValueError("session is outside the frozen run input inventory")
             if self.timings is None:
-                self._last = (day, self.cache.read(self.frozen, self.frozen.sessions[anchor]))
+                self._last = (day, self._read(self.frozen.sessions[anchor]))
             else:
                 with self.timings.measure("admit_decode", chain_key=self.chain_key):
-                    self._last = (day, self.cache.read(self.frozen, self.frozen.sessions[anchor]))
+                    self._last = (day, self._read(self.frozen.sessions[anchor]))
         return self._last[1]
 
     def underlying_day(self, trading_date: date) -> Captured[Sequence[MinuteBar]] | None:

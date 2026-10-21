@@ -94,12 +94,22 @@ class _Observation:
 
 async def prepare_over_api(req: OptionsBacktestJobRequest, *, emit: ProgressEmitter,
                            lease: GatedLease, timings: RunTimings) -> FrozenRunInputs:
+    closed: list[PhaseTiming] = []
+    try:
+        return await _prepare(req, emit, lease, closed)
+    finally:
+        # Each journal frame carries the cumulative closed spans. Keep the
+        # latest once, on interruption too, never once per reconnect.
+        timings.adopt(closed)
+
+
+async def _prepare(req: OptionsBacktestJobRequest, emit: ProgressEmitter, lease: GatedLease,
+                   closed: list[PhaseTiming]) -> FrozenRunInputs:
     base = settings.OPTIONS_BACKTEST_DATA_SERVICE_URL.strip().rstrip("/")
     if not base:
         raise RuntimeError("OPTIONS_BACKTEST_DATA_SERVICE_URL is required; replay never acquires provider data")
     await asyncio.to_thread(enforce_private_http_target, base)
     observation = _Observation(await asyncio.to_thread(runtime_preparation_identity, req), emit, lease)
-    preparation_start = len(timings.rows)
     reconnect_deadline: float | None = None
     attempts = 0
     # Connect/write/pool stay bounded. The observer below owns read liveness,
@@ -118,9 +128,7 @@ async def prepare_over_api(req: OptionsBacktestJobRequest, *, emit: ProgressEmit
                         continue
                     state = observation.accept(pending.result())
                     if state is not None:
-                        # Each journal frame contains the cumulative closed spans.
-                        # Retain them on interruption without duplicating reconnects.
-                        timings.rows[preparation_start:] = [PhaseTiming.model_validate(row) for row in state["timings"]]
+                        closed[:] = [PhaseTiming.model_validate(row) for row in state["timings"]]
                         reconnect_deadline = None
                         attempts = 0
                         if state["status"] == "complete":

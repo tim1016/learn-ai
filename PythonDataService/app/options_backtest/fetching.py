@@ -534,9 +534,9 @@ class _Download:
         stopped waiting. If the thread leaves the wait by any other exception (a log hook or a stop poll that fails),
         the batch is told to stop first, so the captures begin no request after it.
         """
-        with bounded_wait(give_up_after + (STOP_GRACE_SECONDS if batch is not None else 0)):
+        grace = STOP_GRACE_SECONDS if batch is not None else 0.0
+        with bounded_wait(give_up_after + grace):
             deadline = self._pace.now() + give_up_after
-            grace = STOP_GRACE_SECONDS if batch is not None else 0.0
             told_at: float | None = None
             stopped = False
             said_waiting = False

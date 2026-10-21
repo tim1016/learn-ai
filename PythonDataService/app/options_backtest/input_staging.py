@@ -8,18 +8,17 @@ the existing generation authority has already declared abandoned.
 """
 from __future__ import annotations
 
-import fcntl
 import json
 import logging
 import re
 import shutil
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from typing import BinaryIO
 
 from app.engine.live.identity import confine_path_to_root
+from app.utils.advisory_lock import advisory_file_lock, try_advisory_file_lock
 from app.utils.atomic_file import atomic_write_bytes
 
 MAX_STAGED_BYTES = 8 * 1024**3
@@ -41,36 +40,25 @@ def job_root(base: Path, job_id: str) -> Path:
     return path
 
 
-def _collector_lock(base: Path, job_id: str) -> BinaryIO:
-    # This inode outlives the removable job directory and every cleanup.
+def _collector_target(base: Path, job_id: str) -> Path:
+    """The collector lock's target; its lock inode outlives the removable job directory and every cleanup."""
     job_root(base, job_id)
     locks = base.resolve() / ".collector-locks"
     if locks.is_symlink():
         raise ValueError("collector lock directory cannot be a symlink")
-    locks = confine_path_to_root(locks, base, label="collector lock directory")
-    locks.mkdir(parents=True, exist_ok=True)
-    path = locks / f"{job_id}.lock"
-    if path.is_symlink():
-        raise ValueError("collector lock cannot be a symlink")
-    path = confine_path_to_root(path, locks, label="collector lock")
-    return path.open("a+b")
+    return confine_path_to_root(locks, base, label="collector lock directory") / job_id
 
 
 @contextmanager
 def _ledger(base: Path) -> Iterator[dict[str, int]]:
-    base.mkdir(parents=True, exist_ok=True)
-    with (base / ".reservations.lock").open("a+b") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
-        try:
-            path = base / ".reservations.json"
-            entries = json.loads(path.read_text()) if path.exists() else {}
-            if not isinstance(entries, dict) or any(not _JOB.fullmatch(key) or type(size) is not int or size < 0
-                                                    for key, size in entries.items()):
-                raise ValueError("frozen input reservation ledger is invalid")
-            yield entries
-            atomic_write_bytes(path, json.dumps(entries, sort_keys=True, separators=(",", ":")).encode())
-        finally:
-            fcntl.flock(handle, fcntl.LOCK_UN)
+    path = base / ".reservations.json"
+    with advisory_file_lock(path):
+        entries = json.loads(path.read_text()) if path.exists() else {}
+        if not isinstance(entries, dict) or any(not _JOB.fullmatch(key) or type(size) is not int or size < 0
+                                                for key, size in entries.items()):
+            raise ValueError("frozen input reservation ledger is invalid")
+        yield entries
+        atomic_write_bytes(path, json.dumps(entries, sort_keys=True, separators=(",", ":")).encode())
 
 
 class InputStaging:
@@ -78,23 +66,17 @@ class InputStaging:
         self.base, self.job_id = base.resolve(), job_id
         self.root = job_root(base, job_id)
         self.max_bytes = max_bytes
-        self._lock: BinaryIO | None = None
+        self._lock: ExitStack | None = None
 
     def __enter__(self) -> InputStaging:
-        self._lock = _collector_lock(self.base, self.job_id)
-        try:
-            fcntl.flock(self._lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            self._lock.close()
-            raise CollectorBusy("that job already has a frozen input collector") from None
-        try:
+        with ExitStack() as held:
+            if not held.enter_context(try_advisory_file_lock(_collector_target(self.base, self.job_id))):
+                raise CollectorBusy("that job already has a frozen input collector")
             self.root = job_root(self.base, self.job_id)
             self.root.mkdir(parents=True, exist_ok=True)
             with _ledger(self.base) as entries:
                 entries.setdefault(self.job_id, 0)
-        except BaseException:
-            self.__exit__()
-            raise
+            self._lock = held.pop_all()
         return self
 
     def reserve(self, retained_bytes: int) -> None:
@@ -133,32 +115,27 @@ class InputStaging:
 
     def __exit__(self, *args: object) -> None:
         if self._lock is not None:
-            fcntl.flock(self._lock, fcntl.LOCK_UN)
             self._lock.close()
             self._lock = None
 
 
 def cleanup_job_inputs(base: Path, job_id: str, *, wait_seconds: float = 75.0) -> None:
-    with _collector_lock(base, job_id) as handle:
-        deadline = time.monotonic() + wait_seconds
-        while True:
-            try:
-                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if time.monotonic() >= deadline:
-                    raise TimeoutError("input collector did not drain; its reservation remains held") from None
-                time.sleep(0.1)
-        try:
-            root = job_root(base, job_id)
-            if root.exists():
-                # Delete bytes before releasing capacity. The stable lock
-                # excludes new collectors through the reservation release.
-                shutil.rmtree(root)
-            with _ledger(base.resolve()) as entries:
-                entries.pop(job_id, None)
-        finally:
-            fcntl.flock(handle, fcntl.LOCK_UN)
+    target = _collector_target(base, job_id)
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        with try_advisory_file_lock(target) as acquired:
+            if acquired:
+                root = job_root(base, job_id)
+                if root.exists():
+                    # Delete bytes before releasing capacity. The stable lock
+                    # excludes new collectors through the reservation release.
+                    shutil.rmtree(root)
+                with _ledger(base.resolve()) as entries:
+                    entries.pop(job_id, None)
+                return
+        if time.monotonic() >= deadline:
+            raise TimeoutError("input collector did not drain; its reservation remains held")
+        time.sleep(0.1)
 
 
 def release_job_inputs(base: Path, job_id: str) -> None:

@@ -16,7 +16,6 @@ JSON, a JSON value that is not an object.
 
 from __future__ import annotations
 
-import hashlib
 import re
 from collections.abc import Mapping
 from decimal import Decimal
@@ -31,6 +30,7 @@ from app.data_lake.polygon_fetcher import (
     PolygonUnknownSymbolError,
     _raise_for_status,
 )
+from app.data_lake.work_progress import completed_provider_response
 
 #: The vendor writes an option's ticker as its OCC symbol behind this prefix.
 OPTION_TICKER_PREFIX = "O:"
@@ -105,9 +105,7 @@ async def get_json_object(
         raise PolygonFetchError(f"Polygon answer for {label} is not JSON: {exc}", resp.status_code) from exc
     if not isinstance(payload, dict):
         raise PolygonFetchError(f"Polygon answer for {label} is not a JSON object", resp.status_code)
-    from app.data_lake.work_progress import completed_work
-
-    completed_work("provider_response", label + ":" + hashlib.sha256(resp.content).hexdigest())
+    completed_provider_response(label, resp.content)
     return payload
 
 

@@ -148,6 +148,8 @@ class RunStore(Protocol):
 
     def cancel(self, run_id: int, *, finished_at_ms: int) -> None: ...
 
+    def record_timings(self, run_id: int, timings: list[dict[str, Any]], metadata: dict[str, Any]) -> None: ...
+
 
 @dataclass(frozen=True)
 class RunHooks:
@@ -227,12 +229,10 @@ def execute_run(
         hooks.on_phase(PHASE_SAVING)
         with timings.measure("save"):
             _save(store, run_id, result, clock)
-        record_observations(store, run_id, timings, {})
         return result
     except (RunCancelled, RunStopped, DownloadStopped, CheckStopped):
         finished_at_ms = clock()
         _record_the_end(lambda: store.cancel(run_id, finished_at_ms=finished_at_ms), run_id=run_id, ended="cancelled")
-        record_observations(store, run_id, timings, {})
         raise RunCancelled(f"run {run_id} was cancelled") from None
     except Exception as exc:
         failure = failure_of(exc)
@@ -240,10 +240,11 @@ def execute_run(
         _record_the_end(
             lambda: store.fail(run_id, failure, finished_at_ms=finished_at_ms), run_id=run_id, ended="failed"
         )
-        record_observations(store, run_id, timings, {})
         # A failure whose words were composed here has said what it has to; the text of the exception behind it may
         # name a date or hold the vendor's JSON, and the job logs everything chained to what it is given.
         raise RunFailedError(failure) from (exc if failure.code == INTERNAL_ERROR else None)
+    finally:
+        record_observations(store, run_id, timings)
 
 
 def _save(store: RunStore, run_id: int, result: RunResult, clock: Callable[[], int]) -> None:
@@ -253,14 +254,12 @@ def _save(store: RunStore, run_id: int, result: RunResult, clock: Callable[[], i
         raise SaveTimedOut(run_id) from exc
 
 
-def record_observations(store: RunStore, run_id: int, timings: RunTimings, metadata: dict[str, Any]) -> None:
+def record_observations(store: RunStore, run_id: int, timings: RunTimings) -> None:
     """Observation storage cannot change a run's completed, failed or cancelled outcome."""
-    recorder = getattr(store, "record_timings", None)
-    if recorder is None:
-        return
     try:
-        metadata["wall_duration_ms"] = timings.seal()
-        recorder(run_id, timings.wire(), metadata)
+        observations = timings.seal()
+        store.record_timings(run_id, [row.model_dump(mode="json") for row in observations.phase_timings],
+                             observations.stored_metadata())
     except Exception:
         logger.error("run execution observations could not be stored",
             extra={"action": "options_backtest_observations_missing", "run_id": run_id}, exc_info=True)
@@ -289,11 +288,10 @@ def _record_the_end(record: Callable[[], None], *, run_id: int, ended: str) -> N
 
 def _work(
     setup: OptionsBacktestSetup, sessions: Sequence[date], hooks: RunHooks, clock: Callable[[], int],
-    *, timings: RunTimings | None = None,
+    *, timings: RunTimings,
 ) -> RunResult:
-    ledger = timings or RunTimings()
-    prepare_run_data(setup, sessions, hooks, clock, timings=ledger)
-    with ledger.measure("replay"):
+    prepare_run_data(setup, sessions, hooks, clock, timings=timings)
+    with timings.measure("replay"):
         return _replay(setup, sessions, hooks)
 
 
