@@ -25,7 +25,6 @@ from app.option_archive.backup import (
     RestoreReceipt,
     bounded_file_work,
     create_generation,
-    decode_restored_artifacts,
     manifest_digest,
     prune_generations,
     restore_generation,
@@ -41,6 +40,7 @@ from app.option_archive.planner import (
     regular_hours_pause,
     wall_clock_ms,
 )
+from app.option_archive.restored_reads import decode_restored_lake
 from app.option_archive.scheduler import ArchiveJob, ArchiveScheduler, PostgresJobOwnership
 from app.option_archive.settings import ArchiveSettings, archive_settings
 from app.option_archive.snapshot import ChainObservation, observe_chain, save_observation
@@ -334,11 +334,11 @@ class OptionArchiveService:
                 runbook = self.checkout / "docs/runbooks/restore-data-lake.md"
             manifest = await create_generation(destination=config.BACKUP_DESTINATION, roots=self._backup_roots(),
                 clock=self.clock, should_pause=lambda: regular_hours_pause(self.clock(), config.REQUEST_OPEN_MARGIN_MS),
-                restore_files={"restore_lake_generation.py": self.service_root / "scripts/restore_lake_generation.py",
+                restore_files={"restore_lake_generation.py": self.service_root / "app/option_archive/lake_restore.py",
                                "restore-data-lake.md": runbook})
             generation = config.BACKUP_DESTINATION / "generations" / manifest.generation_id
             await bounded_file_work(lambda paused: prune_generations(config.BACKUP_DESTINATION,
-                daily_keep=config.BACKUP_DAILY_KEEP, weekly_keep=config.BACKUP_WEEKLY_KEEP, should_pause=paused), self._maintenance_pause)
+                clock=self.clock, daily_keep=config.BACKUP_DAILY_KEEP, weekly_keep=config.BACKUP_WEEKLY_KEEP, should_pause=paused), self._maintenance_pause)
             free = shutil.disk_usage(config.BACKUP_DESTINATION).free
             await self._job_update("backup", last_success_ms=manifest.completed_ms, generation_id=manifest.generation_id,
                 captured_through_ms=manifest.started_ms, manifest_sha256=manifest_digest(generation), size_bytes=sum(file.size_bytes for file in manifest.files),
@@ -364,7 +364,7 @@ class OptionArchiveService:
                     with tempfile.TemporaryDirectory(prefix="lake-restore-") as folder:
                         roots = {root_id: Path(folder) / root_id for root_id in manifest.root_ids}
                         await restore_generation(generation=generation, roots=roots, connection=connection, schema=schema, should_pause=self._maintenance_pause)
-                        counts = await bounded_file_work(lambda paused: decode_restored_artifacts(manifest, roots, should_pause=paused),
+                        counts = await bounded_file_work(lambda paused: decode_restored_lake(manifest, roots, should_pause=paused),
                                                          self._maintenance_pause)
                         restored_count = await connection.fetchval(f'SELECT COUNT(*) FROM "{schema}"."DataLakeArtifacts"')
                         if restored_count != manifest.catalog_rows:

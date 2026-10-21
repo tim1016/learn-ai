@@ -11,64 +11,38 @@ Moving a backup to an SSD remains a separate owner action.
    a missing removable mount. Inside it write `.backup-destination.json` with
    `{"host_destination":"/Users/YOUR_USER/learn-ai-lake-backup"}`. This marker must live on
    the actual destination, not an empty mountpoint underneath a removable disk.
-   Use the same absolute path in this marker and the setting in step 2.
+   Use the same absolute path in this marker and the setting in step 2; a `~`
+   or relative path is refused, because the container cannot expand it.
 2. Set `OPTION_ARCHIVE_BACKUP_HOST_DESTINATION` to that absolute host path and
    `OPTION_ARCHIVE_ENABLED=true` in the data service's environment. Compose
    mounts it at `/lake-backup`. Compose also declares the absolute host
    checkout and lake paths for containment checks across bind-mount aliases. Both `OPTION_ARCHIVE_BACKUP_DESTINATION` and
    `OPTION_ARCHIVE_BACKUP_MOUNT` must name that same container path.
-3. The named defaults are capture at 01:00 ET, backup at 05:00 ET, and an evening
-   observation 30 minutes after the calendar close. Half days follow the calendar.
-   The first capture is the full still-accessible two-year backfill. Provider
-   requests pause before the next regular open and yield to foreground option
-   requests and the evening observation. The interactive history floor is unchanged.
-4. Read `GET /api/option-archive/status` or the Option archive card on Data Lab.
+3. Read `GET /api/option-archive/status` or the Option archive card on Data Lab.
    `POST /api/option-archive/trigger/capture`, `/snapshot`, `/backup`, and `/restore`
    require the normal data-plane control-secret header. They return acceptance;
    read the resulting receipt on the status route. Repeating a running trigger
-   joins that job. The first-night throughput is the difference in answered
-   contract counts divided by the pass's elapsed milliseconds, using durable
-   session receipts in `option-archive-state.json` beside the lake.
-5. An exhausted transient capture can be retried explicitly with authenticated
+   joins that job.
+4. An exhausted transient capture can be retried explicitly with authenticated
    `POST /api/option-archive/capture-session` carrying `underlying`, the canonical
    `session_ms`, and `retry_exhausted:true`. This scopes recovery to one session.
    Authentication or entitlement failures block that underlying across passes
    and nights. Correct provider access first, then explicitly recover the
    blocked session with `retry_exhausted:true`; only its successful complete
    capture clears the block. A transient recovery failure leaves it blocked.
-   Full-chain capture shares `OPTION_ARCHIVE_STAGING_MAX_BYTES` (default 1 GiB)
-   across foreground and scheduled collectors, including retained ticker progress,
-   abandoned listing generations and session-publication temporary bytes. A full
-   budget pauses the pass before another request and appears as `capacity_pause`
-   with its recovery reason. Inspect available disk space and retained staging
-   before raising this setting in Compose's environment and recreating the data service; repeat the capture
-   trigger afterward. Keep verified progress intact. This pause does not spend a
-   provider retry, stop independent backup, or authorize legacy-file retirement.
-   The budget counts file-content bytes plus bounded bookkeeping headroom;
-   filesystem allocation and directory overhead require additional free space.
-   Ordinary stock and listing publications retain their existing staging policy.
-6. Evening observations are reference data. Their JSON retains capture start/end,
-   page receipts, field gaps, and only vendor timestamps on the corresponding
-   nested metric. Compare a week's observations under
+   A full `OPTION_ARCHIVE_STAGING_MAX_BYTES` budget pauses the pass and appears
+   as `capacity_pause` with its recovery reason. Inspect available disk space and
+   retained staging before raising this setting in Compose's environment and
+   recreating the data service; repeat the capture trigger afterward.
+5. Evening observations are reference data. Compare a week's observations under
    `lake/raw/usa_options/<underlying>/observations/` to investigate rollover.
    Open interest is never asserted to be that session's settled figure.
-
-The archive cutoff includes the two-year New York-date anniversary when it
-is a trading session. A read-only probe observed at 1792557343508 served
-270 bars for SPY241025C00580000 on session 1729517400000 (2024-10-21) and
-refused earlier sessions. The observation was at 00:35:43.508 ET, close to
-the default 01:00 ET capture window; it does not establish the vendor's
-rollover clock at every wall-clock time. A vendor outside-data-plan response
-remains authoritative evidence of a lost fetch opportunity. Interactive
-composition keeps its existing margin and admitted history remains readable. Run
-`scripts/probe_option_archive_boundary.py` with a known historical OCC ticker
-and `--today-session-ms` to settle that day; it changes no lake or catalog bytes.
 
 ## Recover a lost lake
 
 1. Stop the data service, research runtime and every reader or writer of this
-   lake. Do not start them again until all checks below pass. Preserve any
-   surviving root/catalog pair unchanged for diagnosis.
+   lake. Do not start them again before step 6. Preserve any surviving
+   root/catalog pair unchanged for diagnosis.
 2. Select a generation containing a `COMPLETE` marker under the destination's
    `generations/`. Keep its sibling `objects/` folder: generations share objects.
    Do not copy a generation by itself or use a dot-prefixed staging directory.
@@ -76,45 +50,37 @@ and `--today-session-ms` to settle that day; it changes no lake or catalog bytes
    target catalog table with that exact schema and fresh empty target roots.
    Supply the target database credential through `POSTGRES_URL`; never paste it
    into a command or a recovery report.
-4. Run `PythonDataService/scripts/restore_lake_generation.py GENERATION --root
+4. From `PythonDataService/` in a checkout, run `python -m
+   scripts.restore_lake_generation GENERATION --root
    ROOT_UUID=/empty/target/base-root`. Add `--root` for each root in the manifest.
-   A copy of this self-contained script and this runbook is included in each
-   generation's `restore_files`, addressed by SHA-256 in `objects/`, so the
-   procedure survives losing the checkout. Python and asyncpg are in the data
-   service image. Extract the two named objects before using them.
-5. The entry point verifies the complete marker, dump, schema, files and root
-   markers before writing anything. It imports the binary catalog dump and
-   exact file bytes together, clears all leases, fences old generations and
-   converts unfinished fetches to failed. It starts no jobs, never scans to
-   reindex, rebases no hashes and makes no vendor call.
-6. With provider access blocked, run the weekly restore check against this pair
-   and inspect artifact counts and normal Options Backtest saved timelines and
-   retained Golden Search/Golden Options proofs. Only then point the stopped
-   stack at the recovered root/catalog and restart it. A failed restore leaves
-   an incomplete target: discard that target and repeat into another empty pair.
+   Without a checkout, use the copies each generation carries: `manifest.json`'s
+   `restore_files` names the `objects/` entries holding `restore_lake_generation.py`
+   and this runbook. Extract both, then run `python restore_lake_generation.py`
+   with the same arguments; it needs only Python and asyncpg, both in the data
+   service image.
+5. The tool verifies the complete marker, dump, schema, migrations, files and
+   root markers before writing anything, then imports the binary catalog dump
+   and the exact file bytes together. It clears all leases, fences old lease
+   generations and marks unfinished fetches failed. It starts no jobs, never
+   reindexes, rebases no hashes and makes no vendor call. A failed restore leaves
+   `.restore-incomplete.json` in each target root: discard that target and
+   repeat into another empty pair.
+6. No check decodes a recovered pair before it serves. The weekly restore check
+   decodes the newest backed-up generation into temporary targets through the
+   running data service, so it neither runs while the stack is stopped nor reads
+   this pair. Point the stack at the recovered root/catalog and start it with
+   provider access blocked and `OPTION_ARCHIVE_ENABLED=false`. Inspect artifact
+   counts, normal Options Backtest saved timelines and retained Golden
+   Search/Golden Options proofs. Restore provider access and re-enable the
+   archive only after they match.
 
-## Automatic verification and retention
+## A damaged backup generation
 
-Every backup takes one repeatable-read snapshot of the whole catalog table,
-including receipts and failed rows, and copies the whole stock/option lake,
-root markers and sidecar coverage evidence. It compares committed file hashes,
-fsyncs the dump and inventory, and publishes `COMPLETE` last. A changed source
-causes a bounded retry; a failed attempt never advances backup freshness.
-
-Backup runs independently of backfill. Defaults keep seven daily and four
-weekly verified generations and never remove the last good one. Objects are
-removed only when no retained generation uses them. Retirement pins in
-`retention-pins/<generation_id>.json` bind the manifest hash and a rollback
-`retain_until_ms`; a pinned generation and its objects survive normal pruning.
-
-Once a week, a separate scheduler job restores the latest checked generation
-into an empty temporary root and isolated PostgreSQL schema, admits and decodes
-every committed artifact using the restored receipt inventory, records a
-manifest-bound result, and removes only those temporary targets. This check
-has its own freshness; a new backup does not make an old restore check green.
-No source file is retired until its separate approval and compatibility gate
-passes (#3432).
-
+Pruning never removes a generation that fails verification and never counts it
+as a good one; it logs `backup_generation_unverified` with the generation id.
+Diagnose it, then delete that `generations/<id>` folder yourself. Until then, a
+damaged generation whose `manifest.json` cannot be read stops the removal of
+unreferenced objects.
 
 ## Review and retire superseded option files
 

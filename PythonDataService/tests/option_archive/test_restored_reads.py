@@ -13,7 +13,8 @@ from app.data_lake.derived_quote import build_minute_quote_zip_bytes
 from app.data_lake.lean_writer import MinuteTradeBar, build_minute_trade_zip_bytes
 from app.data_lake.option_session_repack import repack_option_session
 from app.data_lake.root_identity import active_root_id
-from app.option_archive.backup import BackupFile, BackupManifest, decode_restored_artifacts
+from app.option_archive.backup import BackupFile, BackupManifest
+from app.option_archive.restored_reads import decode_restored_lake
 from app.option_archive.snapshot import ChainObservation, snapshot_path
 from app.options.contract import OptionContract
 from app.utils.timestamps import ny_datetime
@@ -86,14 +87,14 @@ async def decoded_lake(fake_catalog, tmp_lake: Path) -> tuple[BackupManifest, di
         files.append(BackupFile(root_id=root_id, relative_path=relative, sha256=hashlib.sha256(payload).hexdigest(),
                                 size_bytes=len(payload), artifact_ids=[index] if fields else [], **fields))
     manifest = BackupManifest(generation_id="a" * 32, started_ms=1000, completed_ms=2000, schema_hash="test",
-        catalog_sha256="a" * 64, catalog_rows=len(files), root_ids=[root_id], files=files, root_markers={}, migration_ids=[], restore_files={})
+        catalog_sha256="a" * 64, catalog_rows=len(files), root_ids=[root_id], files=files, migration_ids=[], restore_files={})
     return manifest, {root_id: tmp_lake}
 
 
 async def test_all_kinds_partial_empty_and_traded_decode_without_provider_access(decoded_lake: tuple) -> None:
     manifest, roots = decoded_lake
     with respx.mock(assert_all_called=False):
-        counts = decode_restored_artifacts(manifest, roots)
+        counts = decode_restored_lake(manifest, roots)
     assert set(counts) == {"time_series_bars", "metadata", "factor_file", "map_file"}
     assert counts["time_series_bars"] == 6
 
@@ -116,7 +117,7 @@ async def test_hash_admitted_corruption_still_fails_canonical_decoder(decoded_la
     path.write_bytes(payload)
     item.sha256, item.size_bytes = hashlib.sha256(payload).hexdigest(), len(payload)
     with pytest.raises(ValueError):
-        decode_restored_artifacts(manifest, roots)
+        decode_restored_lake(manifest, roots)
 
 
 @pytest.mark.parametrize("kind", ["metadata", "session"])
@@ -129,4 +130,4 @@ async def test_reader_cannot_substitute_another_inventory_file_for_wrong_path(de
     item.relative_path = item.relative_path.replace(source.name, "wrong-" + source.name)
     (roots[item.root_id] / item.relative_path).write_bytes(source.read_bytes())
     with pytest.raises(BackupRefusedError):
-        decode_restored_artifacts(manifest, roots)
+        decode_restored_lake(manifest, roots)

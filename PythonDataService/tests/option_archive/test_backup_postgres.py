@@ -18,20 +18,20 @@ from app.option_archive.backup import (
     BackupRefusedError,
     CatalogSnapshot,
     create_generation,
-    decode_restored_artifacts,
     dump_catalog,
     restore_generation,
     verify_generation,
 )
+from app.option_archive.restored_reads import decode_restored_lake
 
 pytestmark = pytest.mark.slow
 
 
 @pytest.fixture
 async def isolated_catalog(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[asyncpg.Connection]:
-    url = os.environ.get("OPTION_ARCHIVE_TEST_POSTGRES_URL", "")
-    if not url or os.environ.get("POSTGRES_URL_IS_EPHEMERAL") != "1":
-        pytest.skip("explicit disposable PostgreSQL required; shared databases are never used")
+    url = settings.POSTGRES_URL or os.environ.get("POSTGRES_URL", "")
+    if not url or os.environ.get("POSTGRES_URL_IS_EPHEMERAL", "").lower() not in ("1", "true"):
+        pytest.skip("requires POSTGRES_URL attested disposable by POSTGRES_URL_IS_EPHEMERAL=1")
     database = "archive_preservation_" + uuid4().hex
     admin = await asyncpg.connect(url)
     await admin.execute(f'CREATE DATABASE "{database}"')
@@ -42,6 +42,7 @@ async def isolated_catalog(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[asy
         await connection.execute(ddl.read_text())
         await connection.execute('INSERT INTO "__EFMigrationsHistory" VALUES (\'test-schema\', \'test\')')
         monkeypatch.setattr(settings, "POSTGRES_URL", target_url)
+        await catalog_client.close_pool()
         await catalog_client.init_pool()
         yield connection
     finally:
@@ -98,7 +99,7 @@ async def test_repeatable_snapshot_matches_restore_during_concurrent_writes_and_
     assert await isolated_catalog.fetchval('SELECT COUNT(*) FROM restored."DataLakeArtifacts" WHERE "LeaseOwner" IS NOT NULL OR "LeaseExpiresAtMs" IS NOT NULL') == 0
     assert await isolated_catalog.fetchval('SELECT COUNT(*) FROM restored."DataLakeArtifacts" WHERE "Status"=\'fetching\'') == 0
     assert await isolated_catalog.fetchval('SELECT MIN("LeaseGeneration") FROM restored."DataLakeArtifacts"') == 8
-    assert decode_restored_artifacts(manifest, {root_id: target}) == {"metadata": 1}
+    assert decode_restored_lake(manifest, {root_id: target}) == {"metadata": 1}
     maximum = await isolated_catalog.fetchval('SELECT MAX("Id") FROM restored."DataLakeArtifacts"')
     next_id = await insert(isolated_catalog, root_id, "new.json", b"new", status="fetching", schema="restored")
     assert next_id > maximum
