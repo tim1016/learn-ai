@@ -9,10 +9,11 @@ import { SetupSentencesComponent } from '../options-backtest/cards/setup-sentenc
 import { OptionsBacktestService } from '../options-backtest/options-backtest.service';
 import { RunResultComponent } from '../options-backtest/run/run-result.component';
 import { OptionsEvidenceService } from './options-evidence.service';
+import { OptionsResearchLineageComponent } from './options-research-lineage.component';
 
 @Component({
   selector: 'app-options-evidence-page',
-  imports: [RouterLink, AssetIdentityComponent, ReceiptLabelPipe, TimestampDisplayComponent, RunResultComponent, SetupSentencesComponent],
+  imports: [RouterLink, AssetIdentityComponent, ReceiptLabelPipe, TimestampDisplayComponent, RunResultComponent, SetupSentencesComponent, OptionsResearchLineageComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './options-evidence-page.component.html',
   styleUrl: './options-evidence-page.component.scss',

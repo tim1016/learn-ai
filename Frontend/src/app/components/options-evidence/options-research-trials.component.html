@@ -1,0 +1,10 @@
+@if (page.isLoading()) { <p>Reading retained trial events…</p> }
+@if (problem(); as why) { <p class="problem">{{ why }}</p><button type="button" (click)="page.reload()">Retry trial ledger</button> }
+@if (page.hasValue()) { @let result = page.value();
+  <p>Logical search visits, including cache hits and invalid settings. A row is not a distinct strategy or a physical execution. At most {{ result.limit }} events are loaded per page, ordered by immutable receipt ID.</p>
+  <div class="table-scroll"><table><thead><tr><th>Receipt / recorded time</th><th>Selection window</th><th>Visit</th><th>Settings</th><th>State</th></tr></thead><tbody>
+    @for (trial of result.items; track trial.receipt_id) { <tr><td>{{ trial.receipt_id }}<br /><app-timestamp-display [value]="trial.created_at_ms" mode="et" /></td><td>{{ trial.window | receiptLabel }}</td><td>{{ trial.role | receiptLabel }} · {{ trial.ordinal }}</td><td>@for (setting of trial.settings; track setting.label) { <p>{{ setting.label | receiptLabel }}: {{ setting.value }}</p> }@if (trial.candidate_hash) { <details><summary>Exact candidate</summary><code>{{ trial.candidate_hash }}</code></details> }</td><td>{{ trial.status | receiptLabel }}@if (trial.reason) { <p>{{ trial.reason }}</p> }</td></tr> }
+    @empty { <tr><td colspan="5">No durable trial events are recorded on this page. This does not establish that no research occurred outside the retained ledger.</td></tr> }
+  </tbody></table></div>
+  <div class="actions"><button type="button" [disabled]="previous().length === 0" (click)="back()">Previous trials</button>@if (result.next_cursor; as nextCursor) { <button type="button" (click)="next(nextCursor)">Next trials</button> }<button type="button" (click)="page.reload()">Refresh trial ledger</button></div>
+}

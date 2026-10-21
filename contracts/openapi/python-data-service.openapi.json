@@ -46928,6 +46928,726 @@
         "title": "OptionsFailureInspection",
         "type": "object"
       },
+      "OptionsLineageCounts": {
+        "properties": {
+          "cache_hit_trial_events": {
+            "title": "Cache Hit Trial Events",
+            "type": "integer"
+          },
+          "completed_evaluations": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed Evaluations"
+          },
+          "distinct_development_candidates": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Distinct Development Candidates"
+          },
+          "eligible_development_candidates": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eligible Development Candidates"
+          },
+          "evaluated_trial_events": {
+            "title": "Evaluated Trial Events",
+            "type": "integer"
+          },
+          "evaluation_keys": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluation Keys"
+          },
+          "invalid_trial_events": {
+            "title": "Invalid Trial Events",
+            "type": "integer"
+          },
+          "physical_starts": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Physical Starts"
+          },
+          "receipt_state": {
+            "enum": [
+              "recorded",
+              "not_recorded"
+            ],
+            "title": "Receipt State",
+            "type": "string"
+          },
+          "rejected_development_candidates": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rejected Development Candidates"
+          },
+          "trial_events": {
+            "title": "Trial Events",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "receipt_state",
+          "distinct_development_candidates",
+          "eligible_development_candidates",
+          "rejected_development_candidates",
+          "evaluation_keys",
+          "completed_evaluations",
+          "physical_starts",
+          "trial_events",
+          "evaluated_trial_events",
+          "cache_hit_trial_events",
+          "invalid_trial_events"
+        ],
+        "title": "OptionsLineageCounts",
+        "type": "object"
+      },
+      "OptionsLineageExposure": {
+        "properties": {
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "receipt_id": {
+            "title": "Receipt Id",
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "development",
+              "final",
+              "other_recorded_interval"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "receipt_id",
+          "start_ms",
+          "end_ms",
+          "created_at_ms",
+          "scope"
+        ],
+        "title": "OptionsLineageExposure",
+        "type": "object"
+      },
+      "OptionsLineageFinalist": {
+        "properties": {
+          "candidate_hash": {
+            "title": "Candidate Hash",
+            "type": "string"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceItem"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "gate_outcomes": {
+            "items": {
+              "$ref": "#/components/schemas/GateOutcome"
+            },
+            "title": "Gate Outcomes",
+            "type": "array"
+          },
+          "state": {
+            "enum": [
+              "uncomputed",
+              "retained"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdict"
+          }
+        },
+        "required": [
+          "candidate_hash",
+          "state",
+          "verdict",
+          "gate_outcomes",
+          "evidence"
+        ],
+        "title": "OptionsLineageFinalist",
+        "type": "object"
+      },
+      "OptionsLineageFold": {
+        "properties": {
+          "forward": {
+            "$ref": "#/components/schemas/OptionsLineageWindow"
+          },
+          "forward_eligible": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Forward Eligible"
+          },
+          "forward_net_profit_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Forward Net Profit Usd"
+          },
+          "index": {
+            "title": "Index",
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "not_recorded",
+              "no_eligible_point",
+              "evaluated"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "training": {
+            "$ref": "#/components/schemas/OptionsLineageWindow"
+          },
+          "winner_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Winner Hash"
+          },
+          "winner_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Winner Label"
+          }
+        },
+        "required": [
+          "index",
+          "training",
+          "forward",
+          "state",
+          "winner_hash",
+          "winner_label",
+          "forward_net_profit_usd",
+          "forward_eligible"
+        ],
+        "title": "OptionsLineageFold",
+        "type": "object"
+      },
+      "OptionsLineageSetting": {
+        "properties": {
+          "mode": {
+            "enum": [
+              "search",
+              "fixed"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "priority": {
+            "title": "Priority",
+            "type": "integer"
+          },
+          "values": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "path",
+          "mode",
+          "values",
+          "priority"
+        ],
+        "title": "OptionsLineageSetting",
+        "type": "object"
+      },
+      "OptionsLineageStress": {
+        "properties": {
+          "fee_multiplier": {
+            "title": "Fee Multiplier",
+            "type": "string"
+          },
+          "fee_per_contract_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fee Per Contract Usd"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "mandatory": {
+            "title": "Mandatory",
+            "type": "boolean"
+          },
+          "slippage_multiplier": {
+            "title": "Slippage Multiplier",
+            "type": "string"
+          },
+          "slippage_percent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slippage Percent"
+          }
+        },
+        "required": [
+          "key",
+          "mandatory",
+          "slippage_multiplier",
+          "fee_multiplier",
+          "slippage_percent",
+          "fee_per_contract_usd"
+        ],
+        "title": "OptionsLineageStress",
+        "type": "object"
+      },
+      "OptionsLineageTrial": {
+        "properties": {
+          "candidate_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Hash"
+          },
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "ordinal": {
+            "title": "Ordinal",
+            "type": "integer"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "receipt_id": {
+            "title": "Receipt Id",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "settings": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceItem"
+            },
+            "title": "Settings",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "evaluated",
+              "cache_hit",
+              "invalid"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "window": {
+            "title": "Window",
+            "type": "string"
+          }
+        },
+        "required": [
+          "receipt_id",
+          "created_at_ms",
+          "window",
+          "ordinal",
+          "role",
+          "status",
+          "candidate_hash",
+          "settings",
+          "reason"
+        ],
+        "title": "OptionsLineageTrial",
+        "type": "object"
+      },
+      "OptionsLineageTrialPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsLineageTrial"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "protocol_hash": {
+            "title": "Protocol Hash",
+            "type": "string"
+          },
+          "study_id": {
+            "title": "Study Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "study_id",
+          "protocol_hash",
+          "items",
+          "next_cursor",
+          "limit"
+        ],
+        "title": "OptionsLineageTrialPage",
+        "type": "object"
+      },
+      "OptionsLineageWindow": {
+        "properties": {
+          "activity_floor": {
+            "title": "Activity Floor",
+            "type": "integer"
+          },
+          "end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "scheduled_sessions": {
+            "title": "Scheduled Sessions",
+            "type": "integer"
+          },
+          "start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key",
+          "start_ms",
+          "end_ms",
+          "scheduled_sessions",
+          "activity_floor"
+        ],
+        "title": "OptionsLineageWindow",
+        "type": "object"
+      },
+      "OptionsResearchLineage": {
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/OptionsLineageCounts"
+          },
+          "development": {
+            "$ref": "#/components/schemas/OptionsLineageWindow"
+          },
+          "development_state": {
+            "enum": [
+              "not_recorded",
+              "no_eligible_point",
+              "selected"
+            ],
+            "title": "Development State",
+            "type": "string"
+          },
+          "development_winner_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Development Winner Hash"
+          },
+          "development_winner_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Development Winner Label"
+          },
+          "exposure": {
+            "$ref": "#/components/schemas/Exposure"
+          },
+          "exposure_ledger": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsLineageExposure"
+            },
+            "title": "Exposure Ledger",
+            "type": "array"
+          },
+          "exposure_ledger_complete": {
+            "title": "Exposure Ledger Complete",
+            "type": "boolean"
+          },
+          "final": {
+            "$ref": "#/components/schemas/OptionsLineageWindow"
+          },
+          "final_state": {
+            "enum": [
+              "not_opened",
+              "opened"
+            ],
+            "title": "Final State",
+            "type": "string"
+          },
+          "finalists": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsLineageFinalist"
+            },
+            "title": "Finalists",
+            "type": "array"
+          },
+          "folds": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsLineageFold"
+            },
+            "title": "Folds",
+            "type": "array"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "objective": {
+            "title": "Objective",
+            "type": "string"
+          },
+          "parent_study_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Study Id"
+          },
+          "procedure_details": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceItem"
+            },
+            "title": "Procedure Details",
+            "type": "array"
+          },
+          "protocol_hash": {
+            "title": "Protocol Hash",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceItem"
+            },
+            "title": "Rules",
+            "type": "array"
+          },
+          "selection_complete": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selection Complete"
+          },
+          "selection_explanation": {
+            "title": "Selection Explanation",
+            "type": "string"
+          },
+          "selection_limitation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selection Limitation"
+          },
+          "settings": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsLineageSetting"
+            },
+            "title": "Settings",
+            "type": "array"
+          },
+          "stress": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsLineageStress"
+            },
+            "title": "Stress",
+            "type": "array"
+          },
+          "study_id": {
+            "title": "Study Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "study_id",
+          "protocol_hash",
+          "revision",
+          "parent_study_id",
+          "method",
+          "objective",
+          "selection_explanation",
+          "procedure_details",
+          "development_state",
+          "development_winner_hash",
+          "development_winner_label",
+          "selection_complete",
+          "selection_limitation",
+          "development",
+          "final",
+          "settings",
+          "rules",
+          "counts",
+          "folds",
+          "finalists",
+          "final_state",
+          "stress",
+          "exposure",
+          "exposure_ledger",
+          "exposure_ledger_complete"
+        ],
+        "title": "OptionsResearchLineage",
+        "type": "object"
+      },
       "OptionsResumeRequest": {
         "additionalProperties": false,
         "description": "An explicit recovery command; its key never authorizes a second active run.",
@@ -89936,6 +90656,115 @@
         "summary": "Command",
         "tags": [
           "research-options-golden-search"
+        ]
+      }
+    },
+    "/api/research/options-golden-search/studies/{study_id}/lineage": {
+      "get": {
+        "operationId": "read_lineage_api_research_options_golden_search_studies__study_id__lineage_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "study_id",
+            "required": true,
+            "schema": {
+              "pattern": "^os_[a-f0-9]{40}$",
+              "title": "Study Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsResearchLineage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Lineage",
+        "tags": [
+          "options-golden-search"
+        ]
+      }
+    },
+    "/api/research/options-golden-search/studies/{study_id}/lineage/trials": {
+      "get": {
+        "operationId": "read_trials_api_research_options_golden_search_studies__study_id__lineage_trials_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "study_id",
+            "required": true,
+            "schema": {
+              "pattern": "^os_[a-f0-9]{40}$",
+              "title": "Study Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": "0",
+              "pattern": "^(0|[1-9][0-9]{0,18})$",
+              "title": "After",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsLineageTrialPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Trials",
+        "tags": [
+          "options-golden-search"
         ]
       }
     },

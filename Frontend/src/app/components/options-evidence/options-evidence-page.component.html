@@ -31,6 +31,7 @@
           </article>
         } @empty { <p>{{ item.approval.explanation }}</p> }
       </section>
+      @if (item.study_id) { <app-options-research-lineage [studyId]="item.study_id" /> }
     } @else {
       @if (performance.isLoading()) { <p>Reading retained replay…</p> }
       @if (performanceProblem(); as why) { <p class="problem">{{ why }}</p><button type="button" (click)="performance.reload()">Retry replay</button> }

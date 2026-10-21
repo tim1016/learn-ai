@@ -6642,6 +6642,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/options-golden-search/studies/{study_id}/lineage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Lineage */
+        get: operations["read_lineage_api_research_options_golden_search_studies__study_id__lineage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/options-golden-search/studies/{study_id}/lineage/trials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Trials */
+        get: operations["read_trials_api_research_options_golden_search_studies__study_id__lineage_trials_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/options-golden-search/workspace/{kind}/{subject_id}": {
         parameters: {
             query?: never;
@@ -25640,6 +25674,220 @@ export interface components {
             retained_path: string;
             /** Snapshot Input Sha256 */
             snapshot_input_sha256: string | null;
+            /** Study Id */
+            study_id: string;
+        };
+        /** OptionsLineageCounts */
+        OptionsLineageCounts: {
+            /** Cache Hit Trial Events */
+            cache_hit_trial_events: number;
+            /** Completed Evaluations */
+            completed_evaluations: number | null;
+            /** Distinct Development Candidates */
+            distinct_development_candidates: number | null;
+            /** Eligible Development Candidates */
+            eligible_development_candidates: number | null;
+            /** Evaluated Trial Events */
+            evaluated_trial_events: number;
+            /** Evaluation Keys */
+            evaluation_keys: number | null;
+            /** Invalid Trial Events */
+            invalid_trial_events: number;
+            /** Physical Starts */
+            physical_starts: number | null;
+            /**
+             * Receipt State
+             * @enum {string}
+             */
+            receipt_state: "recorded" | "not_recorded";
+            /** Rejected Development Candidates */
+            rejected_development_candidates: number | null;
+            /** Trial Events */
+            trial_events: number;
+        };
+        /** OptionsLineageExposure */
+        OptionsLineageExposure: {
+            /** Created At Ms */
+            created_at_ms: number;
+            /** End Ms */
+            end_ms: number;
+            /** Receipt Id */
+            receipt_id: string;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "development" | "final" | "other_recorded_interval";
+            /** Start Ms */
+            start_ms: number;
+        };
+        /** OptionsLineageFinalist */
+        OptionsLineageFinalist: {
+            /** Candidate Hash */
+            candidate_hash: string;
+            /** Evidence */
+            evidence: components["schemas"]["EvidenceItem"][];
+            /** Gate Outcomes */
+            gate_outcomes: components["schemas"]["GateOutcome"][];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "uncomputed" | "retained";
+            /** Verdict */
+            verdict: string | null;
+        };
+        /** OptionsLineageFold */
+        OptionsLineageFold: {
+            forward: components["schemas"]["OptionsLineageWindow"];
+            /** Forward Eligible */
+            forward_eligible: boolean | null;
+            /** Forward Net Profit Usd */
+            forward_net_profit_usd: string | null;
+            /** Index */
+            index: number;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "not_recorded" | "no_eligible_point" | "evaluated";
+            training: components["schemas"]["OptionsLineageWindow"];
+            /** Winner Hash */
+            winner_hash: string | null;
+            /** Winner Label */
+            winner_label: string | null;
+        };
+        /** OptionsLineageSetting */
+        OptionsLineageSetting: {
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "search" | "fixed";
+            /** Path */
+            path: string;
+            /** Priority */
+            priority: number;
+            /** Values */
+            values: string[];
+        };
+        /** OptionsLineageStress */
+        OptionsLineageStress: {
+            /** Fee Multiplier */
+            fee_multiplier: string;
+            /** Fee Per Contract Usd */
+            fee_per_contract_usd: string | null;
+            /** Key */
+            key: string;
+            /** Mandatory */
+            mandatory: boolean;
+            /** Slippage Multiplier */
+            slippage_multiplier: string;
+            /** Slippage Percent */
+            slippage_percent: string | null;
+        };
+        /** OptionsLineageTrial */
+        OptionsLineageTrial: {
+            /** Candidate Hash */
+            candidate_hash: string | null;
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Ordinal */
+            ordinal: number;
+            /** Reason */
+            reason: string | null;
+            /** Receipt Id */
+            receipt_id: string;
+            /** Role */
+            role: string;
+            /** Settings */
+            settings: components["schemas"]["EvidenceItem"][];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "evaluated" | "cache_hit" | "invalid";
+            /** Window */
+            window: string;
+        };
+        /** OptionsLineageTrialPage */
+        OptionsLineageTrialPage: {
+            /** Items */
+            items: components["schemas"]["OptionsLineageTrial"][];
+            /** Limit */
+            limit: number;
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Protocol Hash */
+            protocol_hash: string;
+            /** Study Id */
+            study_id: string;
+        };
+        /** OptionsLineageWindow */
+        OptionsLineageWindow: {
+            /** Activity Floor */
+            activity_floor: number;
+            /** End Ms */
+            end_ms: number;
+            /** Key */
+            key: string;
+            /** Scheduled Sessions */
+            scheduled_sessions: number;
+            /** Start Ms */
+            start_ms: number;
+        };
+        /** OptionsResearchLineage */
+        OptionsResearchLineage: {
+            counts: components["schemas"]["OptionsLineageCounts"];
+            development: components["schemas"]["OptionsLineageWindow"];
+            /**
+             * Development State
+             * @enum {string}
+             */
+            development_state: "not_recorded" | "no_eligible_point" | "selected";
+            /** Development Winner Hash */
+            development_winner_hash: string | null;
+            /** Development Winner Label */
+            development_winner_label: string | null;
+            exposure: components["schemas"]["Exposure"];
+            /** Exposure Ledger */
+            exposure_ledger: components["schemas"]["OptionsLineageExposure"][];
+            /** Exposure Ledger Complete */
+            exposure_ledger_complete: boolean;
+            final: components["schemas"]["OptionsLineageWindow"];
+            /**
+             * Final State
+             * @enum {string}
+             */
+            final_state: "not_opened" | "opened";
+            /** Finalists */
+            finalists: components["schemas"]["OptionsLineageFinalist"][];
+            /** Folds */
+            folds: components["schemas"]["OptionsLineageFold"][];
+            /** Method */
+            method: string;
+            /** Objective */
+            objective: string;
+            /** Parent Study Id */
+            parent_study_id: string | null;
+            /** Procedure Details */
+            procedure_details: components["schemas"]["EvidenceItem"][];
+            /** Protocol Hash */
+            protocol_hash: string;
+            /** Revision */
+            revision: number;
+            /** Rules */
+            rules: components["schemas"]["EvidenceItem"][];
+            /** Selection Complete */
+            selection_complete: boolean | null;
+            /** Selection Explanation */
+            selection_explanation: string;
+            /** Selection Limitation */
+            selection_limitation: string | null;
+            /** Settings */
+            settings: components["schemas"]["OptionsLineageSetting"][];
+            /** Stress */
+            stress: components["schemas"]["OptionsLineageStress"][];
             /** Study Id */
             study_id: string;
         };
@@ -45444,6 +45692,71 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StudyDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_lineage_api_research_options_golden_search_studies__study_id__lineage_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                study_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsResearchLineage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_trials_api_research_options_golden_search_studies__study_id__lineage_trials_get: {
+        parameters: {
+            query?: {
+                after?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                study_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsLineageTrialPage"];
                 };
             };
             /** @description Validation Error */
