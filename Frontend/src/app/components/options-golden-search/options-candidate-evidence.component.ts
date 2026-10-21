@@ -1,10 +1,11 @@
-import { ChangeDetectionStrategy, Component, computed, input, linkedSignal, resource } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, input, linkedSignal, output, resource } from '@angular/core';
 
 import type { components } from '../../api/broker.types';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
 import { OptionsSearchCandidateComponent } from './options-search-candidate.component';
 import { OptionsFailureEvidenceComponent } from './options-failure-evidence.component';
+import { OptionsRobustnessComponent } from './options-robustness.component';
 import type { EvidenceWindow, SessionLoader } from './options-golden-search.types';
 import { optionsSearchErrorMessage } from './options-golden-search.service';
 
@@ -15,7 +16,7 @@ export type CandidatePageLoader = (study: string, offset: number) => Promise<Can
 
 @Component({
   selector: 'app-options-candidate-evidence',
-  imports: [OptionsSearchCandidateComponent, OptionsFailureEvidenceComponent, ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [OptionsSearchCandidateComponent, OptionsFailureEvidenceComponent, OptionsRobustnessComponent, ReceiptLabelPipe, TimestampDisplayComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './options-candidate-evidence.component.html',
   styleUrl: './options-golden-search.component.scss',
@@ -26,10 +27,16 @@ export class OptionsCandidateEvidenceComponent {
   readonly window = input<EvidenceWindow>('development');
   readonly loader = input.required<CandidateLoader>();
   readonly sessionLoader = input<SessionLoader | null>(null);
+  readonly canInspectNeighbors = input(false);
+  readonly inspectNeighbor = output<string>();
   private readonly identity = computed(() => `${this.studyId()}:${this.digest()}:${this.window()}`);
   protected readonly diagnosticsOpen = linkedSignal({ source: this.identity, computation: () => false });
+  protected readonly robustnessOpen = linkedSignal({ source: this.identity, computation: () => false });
   protected toggleDiagnostics(event: Event): void {
     if (event.target instanceof HTMLDetailsElement) this.diagnosticsOpen.set(event.target.open);
+  }
+  protected toggleRobustness(event: Event): void {
+    if (event.target instanceof HTMLDetailsElement) this.robustnessOpen.set(event.target.open);
   }
   protected readonly offset = linkedSignal({ source: this.identity, computation: () => 0 });
   protected readonly evidence = resource({ params: () => ({ identity: this.identity(), study: this.studyId(), digest: this.digest(), window: this.window(), offset: this.offset() }),

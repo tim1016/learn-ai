@@ -10,10 +10,11 @@ import { OptionsBacktestService } from '../options-backtest/options-backtest.ser
 import { RunResultComponent } from '../options-backtest/run/run-result.component';
 import { OptionsEvidenceService } from './options-evidence.service';
 import { OptionsResearchLineageComponent } from './options-research-lineage.component';
+import { OptionsHistoricalComparisonComponent } from './options-historical-comparison.component';
 
 @Component({
   selector: 'app-options-evidence-page',
-  imports: [RouterLink, AssetIdentityComponent, ReceiptLabelPipe, TimestampDisplayComponent, RunResultComponent, SetupSentencesComponent, OptionsResearchLineageComponent],
+  imports: [RouterLink, AssetIdentityComponent, ReceiptLabelPipe, TimestampDisplayComponent, RunResultComponent, SetupSentencesComponent, OptionsResearchLineageComponent, OptionsHistoricalComparisonComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './options-evidence-page.component.html',
   styleUrl: './options-evidence-page.component.scss',
@@ -33,8 +34,8 @@ export class OptionsEvidencePageComponent {
   private readonly service = inject(OptionsEvidenceService);
   private readonly backtest = inject(OptionsBacktestService);
   protected readonly workspace = resource({
-    params: () => ({ kind: this.kind(), id: this.subjectId(), study: this.inspected_study_id(), comparator: this.comparator_run_id() }),
-    loader: ({ params }) => this.service.read(params.kind, params.id, params.study, params.comparator),
+    params: () => ({ kind: this.kind(), id: this.subjectId(), study: this.inspected_study_id() }),
+    loader: ({ params }) => this.service.read(params.kind, params.id, params.study),
   });
   protected readonly evidence = computed(() => this.workspace.hasValue() ? this.workspace.value() : null);
   protected readonly performance = resource({
@@ -51,4 +52,6 @@ export class OptionsEvidencePageComponent {
     : extractServerMessage(this.performance.error(), 'The source replay could not be read. Its identity remains visible above.'));
   protected readonly query = computed(() => ({ inspected_study_id: this.inspected_study_id(), comparator_run_id: this.comparator_run_id(), bot_return: this.botReturn() }));
   protected readonly lineageQuery = computed(() => ({ ...this.query(), view: 'lineage' }));
+  protected readonly comparisonQuery = computed(() => ({ ...this.query(), view: 'comparison' }));
+  protected readonly comparisonContext = computed(() => ({ inspected_study_id: this.inspected_study_id(), bot_return: this.botReturn() }));
 }

@@ -10,4 +10,4 @@
     <div class="actions"><button type="button" [disabled]="offset() === 0" (click)="offset.set(offset() - 50)">Previous candidates</button><button type="button" [disabled]="offset() + 50 >= results.total" (click)="offset.set(offset() + 50)">Next candidates</button></div>
   }
 </section>
-@if (selected(); as digest) { <app-options-candidate-evidence [studyId]="studyId()" [digest]="digest" [loader]="candidateLoader()" [sessionLoader]="sessionLoader()" /> }
+@if (selected(); as digest) { <app-options-candidate-evidence [studyId]="studyId()" [digest]="digest" [loader]="candidateLoader()" [sessionLoader]="sessionLoader()" [canInspectNeighbors]="true" (inspectNeighbor)="selected.set($event)" /> }

@@ -11,8 +11,8 @@ from app.options_backtest.describe import leg_sentences
 from app.options_backtest.setup import OptionsBacktestSetup
 from app.options_bots.golden import GoldenOptionsSetups, GoldenSetupError
 from app.options_bots.golden_proof import setup_sha256
+from app.research.options_candidate_evidence import retained_protocol
 from app.research.options_golden_search import repository as repo
-from app.research.options_golden_search.protocol import OptionsSearchProtocol
 from app.research.persistence.db import with_connection
 from app.schemas.golden_option_setups import GoldenOptionSetupView
 from app.schemas.options_backtest_runs import OptionsBacktestRunDetailResponse
@@ -100,7 +100,7 @@ def run_workspace(stored: OptionsBacktestRunDetailResponse, versions: list[Golde
 
 
 def study_workspace(row: dict[str, Any]) -> OptionsEvidenceWorkspace:
-    protocol = OptionsSearchProtocol.model_validate(row["protocol"])
+    protocol = retained_protocol(row)
     detail = StudyDetail.from_record(row)
     baseline = next((c for c in detail.candidates if c.is_original), None)
     retained_baseline = next((c for c in row.get("candidates", []) if c["is_original"]), None)

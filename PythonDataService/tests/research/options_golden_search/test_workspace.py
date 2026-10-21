@@ -126,6 +126,20 @@ def test_actual_blocked_search_never_inherits_combined_replay() -> None:
     assert view.frozen_search_settings[0].values == ["20", "25", "30"]
 
 
+async def test_workspace_refuses_changed_frozen_protocol_as_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    row = fixture("study-record")
+    row["protocol"]["policy"]["min_sharpe"] = -999
+    async def read(_fn: Any, *_args: Any) -> Any:
+        return row
+    monkeypatch.setattr(workspace, "with_connection", read)
+    app = FastAPI()
+    app.include_router(options_golden_search.router)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/workspace/study/{row['id']}")
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "OPTIONS_EVIDENCE_UNAVAILABLE"
+
+
 def test_pending_and_successful_selection_do_not_inherit_a_baseline_failure() -> None:
     row = fixture("study-record")
     row["research"] = None

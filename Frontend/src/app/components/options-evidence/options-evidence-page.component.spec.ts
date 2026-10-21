@@ -3,12 +3,31 @@ import { provideRouter } from '@angular/router';
 import { describe, expect, it, vi } from 'vitest';
 
 import { OptionsBacktestService } from '../options-backtest/options-backtest.service';
+import { RunDetailService } from '../options-backtest/run-detail/run-detail.service';
 import { OptionsEvidencePageComponent } from './options-evidence-page.component';
 import { OptionsEvidenceService, type EvidenceWorkspace } from './options-evidence.service';
 import { RUN_WORKSPACE, STUDY_WORKSPACE } from './testing';
 import { OptionsResearchLineageService } from './options-research-lineage.service';
 
 describe('Options evidence workspace', () => {
+  it('keeps a valid source and comparator picker usable when the selected historical run is unavailable', async () => {
+    const read = vi.fn().mockResolvedValue(RUN_WORKSPACE);
+    const compare = vi.fn().mockRejectedValue(new Error('Missing comparator'));
+    const result = await render(OptionsEvidencePageComponent, {
+      inputs: { kind: 'run', subjectId: '76', view: 'comparison', comparator_run_id: '999999' },
+      providers: [provideRouter([]), { provide: OptionsEvidenceService, useValue: { read } },
+        { provide: RunDetailService, useValue: { compare } },
+        { provide: OptionsBacktestService, useValue: { describe: () => new Promise(() => undefined) } }],
+    });
+    expect(await screen.findByText('The comparison could not be read.')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: RUN_WORKSPACE.headline })).toBeTruthy();
+    expect(screen.getByRole('textbox', { name: 'Saved comparator run ID' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Performance' })).toBeTruthy();
+    expect(read).toHaveBeenCalledWith('run', '76', undefined);
+    await result.rerender({ inputs: { kind: 'run', subjectId: '76', view: 'comparison', comparator_run_id: '69' } });
+    await waitFor(() => expect(compare).toHaveBeenLastCalledWith(76, 69));
+    expect(read).toHaveBeenCalledTimes(1);
+  });
   it.each([
     ['/brokers/alpaca/clerks/paper/accounts/PA9/bots/options-1', true],
     ['https://outside.example/bots/options-1', false],

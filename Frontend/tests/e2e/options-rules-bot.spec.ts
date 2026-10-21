@@ -3,12 +3,15 @@ import { expect, test, type Page } from '@playwright/test';
 import retainedGolden76 from '../../../PythonDataService/tests/fixtures/options_evidence/golden76.json';
 import run76 from '../../../PythonDataService/tests/fixtures/options_evidence/run76.json';
 import description76 from '../../../PythonDataService/tests/fixtures/options_evidence/description76.json';
+import studyDescription from '../../../PythonDataService/tests/fixtures/options_evidence/description-study.json';
+import comparison from '../../../PythonDataService/tests/fixtures/options_evidence/comparison76-69.json';
+import lineage from '../../../PythonDataService/tests/fixtures/options_evidence/lineage-read.json';
 
 import type { components } from '../../src/app/api/broker.types';
 import { OPTION_CATALOGUE } from '../../src/app/components/broker/broker-deploy-page/option-structure/option-structure.fixtures';
 import { previewAnswer } from '../../src/app/components/options-backtest/position/testing';
 import { fakeBotPanelView, fakeChartFeed } from '../../src/app/testing/bot-panel-fixtures';
-import { RUN_WORKSPACE } from '../../src/app/components/options-evidence/testing';
+import { RUN_WORKSPACE, STUDY_WORKSPACE } from '../../src/app/components/options-evidence/testing';
 import { OwnerWalkWorld, PAPER_ACCOUNT, PAPER_API, PAPER_WORKSPACE, WALKED_BOT } from './support/owner-walk-world';
 
 type Schemas = components['schemas'];
@@ -164,7 +167,7 @@ test('resumes interrupted position management with no new entry consent', async 
   expect(state.world.unexpected()).toEqual([]);
 });
 
-test('follows the bot’s exact source-76 version to evidence and back without commands', async ({ page }) => {
+test('walks pinned source-76, historical69 and the separate blocked PUT study without commands', async ({ page }) => {
   const golden: Schemas['GoldenOptionSetupView'] = { ...retainedGolden76, status: 'ready', setup: RUN_WORKSPACE.setup };
   const state = await optionsWorld(page, false, golden);
   state.world.phase = 'running';
@@ -184,8 +187,15 @@ test('follows the bot’s exact source-76 version to evidence and back without c
     else if (path === `/api/research/options-golden-search/workspace/golden/${golden.id}`) await route.fulfill({ json: {
       ...RUN_WORKSPACE, subject_kind: 'golden', subject_id: golden.id,
     } });
+    else if (path.endsWith('/runs/compare')) {
+      const query = new URL(route.request().url()).searchParams;
+      expect([query.get('a'), query.get('b')]).toEqual(['76', '69']);
+      await route.fulfill({ json: comparison });
+    }
     else if (path.endsWith('/runs/76')) await route.fulfill({ json: run76 });
-    else if (path.endsWith('/setups/describe')) await route.fulfill({ json: description76 });
+    else if (path.endsWith(`/workspace/study/${STUDY_WORKSPACE.subject_id}`)) await route.fulfill({ json: STUDY_WORKSPACE });
+    else if (path.endsWith('/lineage')) await route.fulfill({ json: lineage });
+    else if (path.endsWith('/setups/describe')) await route.fulfill({ json: route.request().postDataJSON().legs.length === 1 ? studyDescription : description76 });
     else await route.fallback();
   });
   const botPath = `${PAPER_WORKSPACE}/bots/${WALKED_BOT}`;
@@ -211,6 +221,27 @@ test('follows the bot’s exact source-76 version to evidence and back without c
   await workspace.getByRole('link', { name: 'Performance', exact: true }).click();
   await expect(workspace.locator('app-options-backtest-run-daily-chart')).toBeVisible();
   expect(await workspace.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await workspace.getByRole('link', { name: 'Historical comparison', exact: true }).click();
+  await workspace.getByRole('textbox', { name: 'Saved comparator run ID' }).fill('69');
+  await workspace.getByRole('link', { name: 'Compare selected run', exact: true }).click();
+  await expect(workspace.getByRole('heading', { name: 'Run 76 compared with run 69' })).toBeVisible();
+  await expect(workspace.getByText(/Sessions in both runs: 499/)).toBeVisible();
+  const totals = workspace.locator('app-options-backtest-compare-sessions table').first();
+  await expect(totals.getByRole('cell', { name: '$17,109.10', exact: true })).toBeVisible();
+  await expect(totals.getByRole('cell', { name: '$4,676.70', exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await workspace.getByRole('heading', { name: 'Historical comparator', exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: 'test-results/options-historical-comparison-desktop.png' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await workspace.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await workspace.getByRole('heading', { name: 'Historical comparator', exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: 'test-results/options-historical-comparison-narrow.png' });
+  await page.goto(`/options-evidence/study/${STUDY_WORKSPACE.subject_id}?view=lineage&bot_return=${encodeURIComponent(botPath)}`);
+  await expect(workspace.getByRole('heading', { name: 'This search did not establish a result.' })).toBeVisible();
+  await expect(workspace.getByText(/4 observed \/ 373 scheduled sessions/)).toBeVisible();
+  await expect(workspace.getByText('No eligible training winner', { exact: true })).toHaveCount(6);
+  await expect(workspace.getByText('The final test was not opened. No final outcomes are exposed by this view.')).toBeVisible();
+  await page.screenshot({ path: 'test-results/options-owner-journey-put-narrow.png', fullPage: true });
   await workspace.getByRole('link', { name: 'Back to bot', exact: true }).click();
   await expect(page).toHaveURL(new RegExp(botPath + '$'));
   await page.getByRole('button', { name: 'Build proof', exact: true }).click();

@@ -6,7 +6,9 @@ cannot invalidate a frozen study's executable identity.
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from dataclasses import dataclass
+from threading import Lock
 from typing import Any, Literal
 
 from app.options_backtest.describe import describe_setup, leg_sentences
@@ -34,13 +36,24 @@ from app.schemas.options_golden_search import Candidate
 
 Scope = Literal["development", "final"]
 MAX_CURVE_POINTS = 2000
+_RESULT_CACHE_LIMIT = 4
+_RESULT_CACHE_BYTES = 8 * 1024 * 1024
+_result_cache: OrderedDict[tuple[str, ...], tuple[int, EvaluationResult]] = OrderedDict()
+_cache_lock = Lock()
+
+
+class RetainedOptionsIntegrityError(ValueError):
+    """Stored evidence failed its identity or shape contract."""
 
 
 def retained_protocol(row: dict[str, Any]) -> OptionsSearchProtocol:
     """Check frozen bytes before current defaults normalize a legacy protocol (#3400)."""
-    if hash_payload(row["protocol"]) != row["protocol_hash"]:
-        raise ValueError("The retained protocol does not match its frozen identity receipt.")
-    return OptionsSearchProtocol.model_validate(row["protocol"])
+    try:
+        if hash_payload(row["protocol"]) != row["protocol_hash"]:
+            raise ValueError("The retained protocol does not match its frozen identity receipt.")
+        return OptionsSearchProtocol.model_validate(row["protocol"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RetainedOptionsIntegrityError("The retained protocol fails its frozen identity or shape checks.") from exc
 
 
 @dataclass(frozen=True)
@@ -106,7 +119,23 @@ def load_record(row: dict[str, Any], recorded: dict[str, Any], digest: str, scop
     protocol, setup, window, key = resolve(row, digest, scope)
     if recorded["key"] != key or hash_payload(recorded["identity"]) != key or recorded.get("result") is None:
         raise LookupError("The exact retained evaluation is unavailable.")
-    result = StudyEvaluator(row, lambda: None, lambda _done, _total: None, blobs=blobs).load(recorded["result"], window)
+    evaluator = StudyEvaluator(row, lambda: None, lambda _done, _total: None, blobs=blobs)
+    stored = recorded["result"]
+    # Always verify retained bytes, even on a warm cache; deletion or corruption
+    # must remain visible. Only canonical parsed results are cached (#3395).
+    payload = evaluator.blobs.get(stored["evidence_blob"])
+    cache_key = (key, scope, stored["evidence_blob"], stored["metrics_sha256"], hash_payload(stored["metrics"]))
+    with _cache_lock:
+        cached = _result_cache.get(cache_key)
+        if cached is not None:
+            _result_cache.move_to_end(cache_key)
+    result = cached[1] if cached is not None else evaluator.load(stored, window)
+    if cached is None and len(payload) <= _RESULT_CACHE_BYTES:
+        with _cache_lock:
+            _result_cache[cache_key] = (len(payload), result)
+            _result_cache.move_to_end(cache_key)
+            while len(_result_cache) > _RESULT_CACHE_LIMIT or sum(size for size, _ in _result_cache.values()) > _RESULT_CACHE_BYTES:
+                _result_cache.popitem(last=False)
     final_outcome = Candidate.model_validate(next(c for c in row["final_results"] if c["candidate_hash"] == digest)) if scope == "final" else None
     return RetainedOptionsEvidence(row["id"], protocol, setup, window, scope, result, key, recorded["result"]["evidence_blob"], final_outcome)
 

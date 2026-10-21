@@ -1,0 +1,9 @@
+:host { display: block; min-width: 0; }
+.robustness { margin: 1rem 0; padding: 1rem; background: var(--bg-surface); border: 1px solid var(--border-light); border-radius: .5rem; }
+p { max-width: 85ch; line-height: 1.5; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 1rem; }
+dt { color: var(--text-secondary); font-size: .9rem; } dd { margin: .3rem 0; }
+.table-scroll { overflow-x: auto; } table { width: 100%; border-collapse: collapse; } th, td { padding: .7rem; text-align: left; border-bottom: 1px solid var(--border-light); vertical-align: top; } td:nth-child(2) { min-width: 240px; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; margin-top: 1rem; }
+button { padding: .5rem; color: inherit; background: var(--bg-surface); border: 1px solid var(--border-light); border-radius: .3rem; cursor: pointer; }
+.problem { color: var(--bear); } .warning { color: var(--warn); }

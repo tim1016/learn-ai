@@ -1,0 +1,50 @@
+import { expect, test } from '@playwright/test';
+
+import candidate from '../../../PythonDataService/tests/fixtures/options_evidence/candidate-development.json';
+import study from '../../../PythonDataService/tests/fixtures/options_evidence/study-summary.json';
+import robustness from '../../../PythonDataService/tests/fixtures/options_evidence/robustness-development.json';
+import neighbors from '../../../PythonDataService/tests/fixtures/options_evidence/neighbors-development.json';
+
+test('inspects actual partial robustness and declared neighbors without evaluating untested evidence', async ({ page }) => {
+  const commands: string[] = [];
+  const reads: string[] = [];
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.route('**/api/**', async route => {
+    const path = new URL(route.request().url()).pathname;
+    reads.push(path);
+    if (route.request().method() !== 'GET') commands.push(path);
+    if (path.endsWith(`/studies/${study.id}`)) await route.fulfill({ json: study });
+    else if (path.endsWith('/candidate-evidence')) await route.fulfill({ json: { items: [{ candidate_hash: candidate.candidate_hash, label: candidate.candidate.label, state: 'retained', verdict: candidate.candidate.verdict, net_profit_usd: candidate.candidate.net_profit_usd, is_original: true }], total: 1, offset: 0, limit: 50 } });
+    else if (path.endsWith(`/candidate-evidence/${candidate.candidate_hash}`)) await route.fulfill({ json: candidate });
+    else if (path.endsWith('/robustness')) await route.fulfill({ json: robustness });
+    else if (path.endsWith('/neighbors')) await route.fulfill({ json: neighbors });
+    else if (path === '/api/jobs') await route.fulfill({ json: [] });
+    else await route.fulfill({ status: 503, json: { detail: 'Outside this retained fixture.' } });
+  });
+  await page.goto(`/options-golden-search/${study.id}`);
+  const workbench = page.locator('app-options-golden-search-page');
+  await workbench.getByRole('button', { name: 'Compare and final test', exact: true }).click();
+  await workbench.getByRole('button', { name: 'Inspect evidence', exact: true }).click();
+  expect(reads.filter(path => path.endsWith('/robustness') || path.endsWith('/neighbors'))).toEqual([]);
+  await workbench.getByText('Inspect robustness and declared neighbors', { exact: true }).click();
+  const detail = workbench.locator('app-options-robustness');
+  await expect(detail.getByText(/4 \/ 373 scheduled sessions observed/)).toBeVisible();
+  await expect(detail.getByText(/Partial diagnostic evidence/)).toBeVisible();
+  await expect(detail.getByText(/No final outcome is exposed/)).toBeVisible();
+  await expect(detail.getByRole('cell', { name: '-346.90', exact: true })).toBeVisible();
+  await expect(detail.getByRole('cell', { name: '-339.60', exact: true })).toBeVisible();
+  await expect(detail.getByRole('cell', { name: '-361.60', exact: true })).toBeVisible();
+  await detail.screenshot({ path: 'test-results/options-robustness-desktop.png' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await workbench.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await detail.screenshot({ path: 'test-results/options-robustness-narrow.png' });
+  const next = neighbors.items.find(item => !item.is_selected);
+  expect(next).toBeDefined();
+  await detail.getByRole('button', { name: 'Inspect development evidence' }).first().click();
+  await expect(workbench.getByText('Outside this retained fixture.', { exact: true })).toBeVisible();
+  await expect(workbench.getByText(/4 \/ 373 scheduled sessions replayed/)).toHaveCount(0);
+  expect(reads.some(path => path.endsWith(`/candidate-evidence/${next?.candidate_hash}`))).toBe(true);
+  expect(commands).toEqual([]);
+  expect(errors).toEqual([]);
+});
