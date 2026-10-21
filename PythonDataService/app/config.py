@@ -406,6 +406,7 @@ class Settings(BaseSettings):
     # The writer creates lake/ and staging/ subdirectories under this path.
     # Must be on a single filesystem so POSIX atomic rename(2) is valid.
     LEAN_DATA_WRITE_ROOT: str = "/lean-data-writer"
+    OPTION_ARCHIVE_STAGING_MAX_BYTES: int = Field(default=1024**3, ge=1)
     # Root identity (#1876, PR A of #1861): the physical lake root this
     # deployment is configured to treat as active. Empty means "the legacy
     # single root" — active_root_id() below falls back to LEGACY_ROOT_ID,

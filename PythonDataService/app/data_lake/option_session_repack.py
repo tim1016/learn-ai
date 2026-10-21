@@ -31,7 +31,8 @@ from app.data_lake.option_session import (
     read_option_session,
     read_option_session_for_listing_rebind,
 )
-from app.data_lake.path_policy import OptionMinuteBarPath, OptionSessionPath
+from app.data_lake.option_session_staging import DEFAULT_STAGING_MAX_BYTES, OptionSessionStaging, StagingCapacityError
+from app.data_lake.path_policy import OptionMinuteBarPath, OptionSessionPath, resolve_staging_root
 from app.data_lake.types import ArtifactIdentity, ArtifactRecord
 from app.options.contract import OptionContract
 
@@ -63,7 +64,8 @@ async def _complete(underlying: str, trading_date: date) -> ArtifactRecord | Non
     return next((row for row in rows if row.provider == OPTION_PROVIDER and row.data_contract_hash == option_session_dch()), None)
 
 
-async def publish_option_session(listing: OptionListing, captured: dict[str, bytes]) -> OptionCaptureResult:
+async def publish_option_session(listing: OptionListing, captured: dict[str, bytes], *,
+                                 max_staging_bytes: int = DEFAULT_STAGING_MAX_BYTES) -> OptionCaptureResult:
     """Merge, fence and publish one container. Collection never holds this lease.
 
     Existing admitted members are unioned with new outcomes. An older repack can
@@ -75,10 +77,11 @@ async def publish_option_session(listing: OptionListing, captured: dict[str, byt
         if not owns:
             return OptionCaptureResult.failed(OptionDataFailure("lease_timeout", "session publication is busy; retry",
                                                                 listing.underlying, listing.as_of))
-        return await _publish_option_session(listing, captured)
+        return await _publish_option_session(listing, captured, max_staging_bytes=max_staging_bytes)
 
 
-async def _publish_option_session(listing: OptionListing, captured: dict[str, bytes], *, rebind_listing: bool = False) -> OptionCaptureResult:
+async def _publish_option_session(listing: OptionListing, captured: dict[str, bytes], *, rebind_listing: bool = False,
+                                  max_staging_bytes: int = DEFAULT_STAGING_MAX_BYTES) -> OptionCaptureResult:
     underlying, day = listing.underlying, listing.as_of
     rel_path = OptionSessionPath(underlying, day).relative_path()
     identity = ArtifactIdentity(artifact_kind="time_series_bars", market=OPTION_MARKET, symbol=underlying,
@@ -115,15 +118,24 @@ async def _publish_option_session(listing: OptionListing, captured: dict[str, by
         return record.file_sha256 == digest and await stored_file_still_reads(record, rel_path,
             lambda raw: parse_option_session(raw, listing))
 
-    held = await claim_or_take_over(claim=claim, select_complete=lambda: _complete(underlying, day),
-        read_claim_state=lambda: catalog_client.select_minute_bar_claim_state(identity), stored_file_reads=matches,
-        data_contract_hash=recipe, symbol=underlying, trading_date=day)
-    if isinstance(held, OptionCaptureResult):
-        return held
-    return await _publish(held, identity, listing, payload)
+    budget = OptionSessionStaging(resolve_staging_root("raw"), max_bytes=max_staging_bytes)
+    try:
+        reservation = budget.reserve(len(payload))
+    except StagingCapacityError as exc:
+        return OptionCaptureResult.failed(OptionDataFailure("lease_timeout", str(exc), underlying, day))
+    try:
+        held = await claim_or_take_over(claim=claim, select_complete=lambda: _complete(underlying, day),
+            read_claim_state=lambda: catalog_client.select_minute_bar_claim_state(identity), stored_file_reads=matches,
+            data_contract_hash=recipe, symbol=underlying, trading_date=day)
+        if isinstance(held, OptionCaptureResult):
+            return held
+        return await _publish(held, identity, listing, payload, staging_budget=budget)
+    finally:
+        reservation.close(reconcile=True)
 
 
-async def _publish(lease: HeldLease, identity: ArtifactIdentity, listing: OptionListing, payload: bytes) -> OptionCaptureResult:
+async def _publish(lease: HeldLease, identity: ArtifactIdentity, listing: OptionListing, payload: bytes, *,
+                   staging_budget: OptionSessionStaging | None = None) -> OptionCaptureResult:
     """Re-admit listing immediately before publication; do not publish stale identity."""
     current = await asyncio.to_thread(read_option_listing, listing.underlying, listing.as_of)
     if current is None or current.sha256 != listing.sha256:
@@ -133,7 +145,8 @@ async def _publish(lease: HeldLease, identity: ArtifactIdentity, listing: Option
     rel_path = OptionSessionPath(listing.underlying, listing.as_of).relative_path()
     digest = await publish_option_artifact(payload=payload, rel_path=rel_path, lease=lease,
         row_count=parsed.answered_count, first_bar_start_ms=0, last_bar_start_ms=0,
-        data_contract_hash=option_session_dch(), symbol=listing.underlying, trading_date=listing.as_of)
+        data_contract_hash=option_session_dch(), symbol=listing.underlying, trading_date=listing.as_of,
+        staging_root_override=None if staging_budget is None else staging_budget.publication_root)
     if isinstance(digest, OptionDataFailure):
         return OptionCaptureResult.failed(digest)
     record = ArtifactRecord(id=lease.artifact_id, **identity.model_dump(), data_contract_hash=option_session_dch(),
@@ -145,7 +158,8 @@ async def _publish(lease: HeldLease, identity: ArtifactIdentity, listing: Option
     return OptionCaptureResult(record=record, failure=None)
 
 
-async def repack_option_session(underlying: str, trading_date: date, *, rebind_listing: bool = False) -> OptionCaptureResult:
+async def repack_option_session(underlying: str, trading_date: date, *, rebind_listing: bool = False,
+                                max_staging_bytes: int = DEFAULT_STAGING_MAX_BYTES) -> OptionCaptureResult:
     """No vendor access; source admission or parsing errors stop the repack."""
     with option_session_publication_lock(underlying, trading_date) as owns:
         if not owns:
@@ -160,4 +174,4 @@ async def repack_option_session(underlying: str, trading_date: date, *, rebind_l
         for symbol, raw in captured.items():
             if current.get(symbol) != raw:
                 return OptionCaptureResult.failed(OptionDataFailure("validation_failed", "source changed during repack", underlying, trading_date))
-        return await _publish_option_session(listing, current, rebind_listing=rebind_listing)
+        return await _publish_option_session(listing, current, rebind_listing=rebind_listing, max_staging_bytes=max_staging_bytes)

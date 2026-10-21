@@ -102,6 +102,31 @@ async def test_full_session_and_repack_report_require_admitted_underlying(fake_c
     assert await asyncio.to_thread(read_option_day_bars, CALL, FRIDAY) is not None
 
 
+@respx.mock
+async def test_publication_temp_capacity_is_reserved_before_claim_and_old_temps_remain(fake_catalog, tmp_lake):
+    from app.data_lake.option_session import option_session_dch
+    from app.data_lake.option_session_staging import OptionSessionStaging
+    from app.data_lake.path_policy import resolve_staging_root
+
+    listing = await listing_of(CALL)
+    await store_option_day(CALL, [])
+    payload = build_option_session_bytes(listing, {CALL.occ_symbol: option_day_zip(CALL, [])})
+    budget = OptionSessionStaging(resolve_staging_root("raw"))
+    old_temp = budget.publication_root / "dead-process" / "original.zip.tmp"
+    old_temp.parent.mkdir(parents=True)
+    old_temp.write_bytes(b"preserve this interrupted publication")
+    budget.reconcile()
+    used = json.loads(budget.ledger.read_bytes())["used_bytes"]
+    paused = await repack_option_session("SPY", FRIDAY, max_staging_bytes=used + len(payload) - 1)
+    assert paused.failure.reason == "lease_timeout" and "staging capacity" in paused.failure.detail.lower()
+    assert not any(row["data_contract_hash"] == option_session_dch() for row in fake_catalog.rows.values())
+    assert old_temp.read_bytes() == b"preserve this interrupted publication"
+    recovered = await repack_option_session("SPY", FRIDAY, max_staging_bytes=used + len(payload))
+    assert recovered.failure is None
+    assert old_temp.read_bytes() == b"preserve this interrupted publication"
+    assert list(budget.publication_root.rglob("*.tmp")) == [old_temp]
+
+
 @pytest.mark.parametrize("damage", ["listing", "recipe", "unknown", "unsafe", "missing", "count", "overlap", "corrupt_unrequested"])
 @respx.mock
 async def test_entire_container_refuses_invalid_members_or_coverage(fake_catalog, tmp_lake, damage):

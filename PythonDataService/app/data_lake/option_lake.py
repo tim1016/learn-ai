@@ -517,6 +517,7 @@ async def publish_option_artifact(
     data_contract_hash: str,
     symbol: str,
     trading_date: date,
+    staging_root_override: Path | None = None,
 ) -> str | OptionDataFailure:
     """Publish one claimed artifact under its lease: bytes onto the lake and the receipt into the catalog.
 
@@ -535,6 +536,11 @@ async def publish_option_artifact(
     """
     try:
         lake_root, staging_root = writable_raw_roots()
+        if staging_root_override is not None:
+            from app.engine.live.identity import confine_path_to_root
+
+            staging_root = confine_path_to_root(staging_root_override, staging_root, label="option publication staging")
+            staging_root.mkdir(parents=True, exist_ok=True)
         file_sha = await publish_artifact(
             content=payload,
             lake_root=lake_root,

@@ -44,6 +44,82 @@ async def prepare(fake_catalog, tmp_lake, *contracts):
 
 
 @respx.mock
+async def test_staging_budget_refuses_before_http_without_deleting_old_generation(fake_catalog, tmp_lake):
+    from app.data_lake.path_policy import resolve_staging_root
+
+    await prepare(fake_catalog, tmp_lake, CALL)
+    abandoned = resolve_staging_root("raw") / "option_sessions" / "older-listing" / "retained.zip"
+    abandoned.parent.mkdir(parents=True)
+    with abandoned.open("wb") as stream:
+        stream.write(b"retained original")
+        stream.truncate(1024**3)
+    request = respx.get(url(CALL)).mock(return_value=no_trades(CALL.occ_symbol))
+    result = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS)
+    assert result.failure is not None and result.failure.reason == "lease_timeout"
+    assert "staging capacity" in result.failure.detail.lower()
+    assert request.call_count == 0
+    assert abandoned.stat().st_size == 1024**3
+    with abandoned.open("rb") as stream:
+        assert stream.read(17) == b"retained original"
+
+
+@respx.mock
+async def test_capacity_pause_keeps_successful_bytes_and_retries_without_spending_attempts(fake_catalog, tmp_lake):
+    import json
+
+    from app.data_lake.option_session_staging import TICKER_RESERVATION_BYTES, OptionSessionStaging
+    from app.data_lake.path_policy import resolve_staging_root
+
+    await prepare(fake_catalog, tmp_lake, CALL, PUT)
+    budget = OptionSessionStaging(resolve_staging_root("raw"))
+    budget.reconcile()
+    cap = json.loads(budget.ledger.read_bytes())["used_bytes"] + TICKER_RESERVATION_BYTES + 1
+    call = respx.get(url(CALL)).mock(return_value=no_trades(CALL.occ_symbol))
+    put = respx.get(url(PUT)).mock(return_value=no_trades(PUT.occ_symbol))
+    for _ in range(5):
+        result = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS, max_staging_bytes=cap)
+        assert result.failure.reason == "lease_timeout" and "staging capacity" in result.failure.detail.lower()
+    [original] = list(budget.root.rglob(f"{CALL.occ_symbol}.zip"))
+    exact_bytes = original.read_bytes()
+    assert call.call_count == 1 and put.call_count == 0
+    assert not list(budget.root.rglob("*.attempts"))
+    recovered = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS, max_staging_bytes=cap + 65_536)
+    assert recovered.failure is None and call.call_count == put.call_count == 1
+    session = await asyncio.to_thread(read_option_session, "SPY", FRIDAY, check_underlying=True)
+    assert session.complete and session.legacy_bytes(CALL.occ_symbol) == exact_bytes
+    assert json.loads(budget.ledger.read_bytes())["leases"] == {}
+
+
+@pytest.mark.parametrize("reason", ["provider_auth_error", "provider_entitlement_error", "outside_data_plan"])
+@respx.mock
+async def test_publication_capacity_does_not_hide_observed_terminal_provider_failure(fake_catalog, tmp_lake, reason):
+    import json
+
+    from app.data_lake.option_session_staging import TICKER_RESERVATION_BYTES, OptionSessionStaging
+    from app.data_lake.path_policy import resolve_staging_root
+    from tests._helpers.option_vendor import outside_plan
+
+    await prepare(fake_catalog, tmp_lake, CALL, PUT)
+    budget = OptionSessionStaging(resolve_staging_root("raw"))
+    budget.reconcile()
+    cap = json.loads(budget.ledger.read_bytes())["used_bytes"] + TICKER_RESERVATION_BYTES + 1024
+    call = respx.get(url(CALL)).mock(return_value=no_trades(CALL.occ_symbol))
+    refused = outside_plan() if reason == "outside_data_plan" else httpx.Response(
+        401 if reason == "provider_auth_error" else 403, json={"status": "ERROR", "message": "access refused"})
+    put = respx.get(url(PUT)).mock(return_value=refused)
+    result = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS, max_staging_bytes=cap)
+    assert result.failure.reason == reason
+    assert "partial publication paused: Archive staging capacity" in result.failure.detail
+    assert await asyncio.to_thread(read_option_session, "SPY", FRIDAY) is None
+    [original] = list(budget.root.rglob(f"{CALL.occ_symbol}.zip"))
+    exact_bytes = original.read_bytes()
+    put.mock(return_value=no_trades(PUT.occ_symbol))
+    recovered = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS, max_staging_bytes=cap + 65_536)
+    assert recovered.failure is None and call.call_count == 1 and put.call_count == 2
+    assert (await asyncio.to_thread(read_option_session, "SPY", FRIDAY)).legacy_bytes(CALL.occ_symbol) == exact_bytes
+
+
+@respx.mock
 async def test_complete_capture_and_pause_resume_never_refetches_staged_ticker(fake_catalog, tmp_lake: Path):
     await prepare(fake_catalog, tmp_lake, CALL, PUT)
     paused = False
@@ -195,9 +271,16 @@ async def test_adjusted_listed_ticker_is_preserved_without_becoming_orderable(fa
 
 @respx.mock
 async def test_cancelled_collection_after_five_minutes_resumes_without_refetch(fake_catalog, tmp_lake, monkeypatch):
+    import json
+
     from app.data_lake import option_lake
+    from app.data_lake.option_session_staging import TICKER_RESERVATION_BYTES, OptionSessionStaging
+    from app.data_lake.path_policy import resolve_staging_root
 
     await prepare(fake_catalog, tmp_lake, CALL, PUT)
+    budget = OptionSessionStaging(resolve_staging_root("raw"))
+    budget.reconcile()
+    cap = json.loads(budget.ledger.read_bytes())["used_bytes"] + TICKER_RESERVATION_BYTES + 65_536
     entered = threading.Event()
     release = threading.Event()
     elapsed_ms = 0
@@ -218,7 +301,7 @@ async def test_cancelled_collection_after_five_minutes_resumes_without_refetch(f
     call = respx.get(url(CALL)).mock(side_effect=first)
     put = respx.get(url(PUT)).mock(side_effect=second)
     monkeypatch.setattr(option_lake, "current_ms", lambda: NOW_2026_10_12_MS + elapsed_ms)
-    task = asyncio.create_task(capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS))
+    task = asyncio.create_task(capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS, max_staging_bytes=cap))
     assert await asyncio.to_thread(entered.wait, 5)
     assert not any(row["symbol"] == "SPY" and row["artifact_kind"] == "time_series_bars"
                    and row["market"] == "usa_options" for row in fake_catalog.rows.values())
@@ -228,7 +311,7 @@ async def test_cancelled_collection_after_five_minutes_resumes_without_refetch(f
     release.set()
     # Join the cancelled background task before retrying its collector lock.
     for _ in range(100):
-        outcome = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS + elapsed_ms)
+        outcome = await capture_option_session("SPY", FRIDAY, now_ms=NOW_2026_10_12_MS + elapsed_ms, max_staging_bytes=cap)
         if outcome.failure is None:
             break
         assert outcome.failure.reason == "lease_timeout"
@@ -236,6 +319,7 @@ async def test_cancelled_collection_after_five_minutes_resumes_without_refetch(f
     assert outcome.failure is None and call.call_count == 1 and second_attempts == 2
     assert put.call_count == 1, "only the successful response is recorded; cancellation preserves prior progress"
     assert (await asyncio.to_thread(read_option_session, "SPY", FRIDAY, check_underlying=True)).complete
+    assert json.loads(budget.ledger.read_bytes())["leases"] == {}
 
 
 @pytest.mark.parametrize("escape", ["SPY/../../escape", "../escape", "root_symlink", "session_symlink", "lock_symlink"])
