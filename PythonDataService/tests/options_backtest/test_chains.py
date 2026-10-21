@@ -224,6 +224,67 @@ async def test_generated_busy_scenario_stops_momentum_reentry_marks_half_day_are
         pool.close()
 
 
+@pytest.mark.slow
+@pytest.mark.parametrize("persistent", [False, True])
+def test_killed_chain_is_retried_with_same_identity_and_persistent_loss_returns_no_result(
+    tmp_path: Path, persistent: bool,
+) -> None:
+    from app.research.golden_search.evaluator import WorkerLost
+    from tests.options_backtest._a_run import the_busy_data, the_busy_setup
+
+    given = the_busy_setup()
+    sessions, data = the_busy_data()
+    expected = run_sessions(given, sessions, data)
+    frozen = freeze_run_inputs(given, sessions, the_busy_data()[1], tmp_path)
+    pool = SharedWorkerPool(workers=1, submission_bound=2, payload_bound_bytes=32 * 1024**2,
+                            result_bound_bytes=32 * 1024**2)
+    killed: list[tuple[str, int]] = []
+
+    def checkpoint(message) -> None:
+        lane = pool._lanes[0]
+        if message["phase"] == "preparation" and (
+            not killed or (persistent and lane.current.item.key == killed[0][0])
+        ):
+            killed.append((lane.current.item.key, lane.current.item.task_gen))
+            lane.worker._child.kill()
+
+    context = WorkerDispatchContext("options_backtest", {}, {}, {}, "kill-test", 1, on_checkpoint=checkpoint)
+    try:
+        if persistent:
+            with pytest.raises(WorkerLost, match="retry allowance"):
+                replay_frozen_run(given, sessions, frozen, context=context, pool=pool)
+            assert len(killed) >= 2
+            assert len({key for key, generation in killed}) == 1
+        else:
+            assert replay_frozen_run(given, sessions, frozen, context=context, pool=pool) == expected
+            assert killed == [("kill-test:slippage:0", 1)]
+        assert pool.facts()["submitted_unconsumed"] == 0
+    finally:
+        pool.close()
+
+
+@pytest.mark.slow
+def test_cancelling_one_backtest_releases_shared_capacity_for_the_next_owner(tmp_path: Path) -> None:
+    import threading
+
+    from app.jobs.progress import JobCancelled
+
+    given = setup(legs=[leg(expiry={"kind": "same_day"})])
+    frozen = freeze_run_inputs(given, (WED, THU), scene(), tmp_path)
+    stopped = threading.Event()
+    context = WorkerDispatchContext("options_backtest", {}, {}, {}, "cancel-one", 1,
+        on_checkpoint=lambda message: stopped.set(), cancel_check=stopped.is_set)
+    pool = SharedWorkerPool(workers=1, submission_bound=2, payload_bound_bytes=32 * 1024**2,
+                            result_bound_bytes=32 * 1024**2)
+    try:
+        with pytest.raises(JobCancelled):
+            replay_frozen_run(given, (WED, THU), frozen, context=context, pool=pool)
+        context = WorkerDispatchContext("options_backtest", {}, {}, {}, "healthy-next", 1)
+        assert replay_frozen_run(given, (WED, THU), frozen, context=context, pool=pool) == run_sessions(given, (WED, THU), scene())
+    finally:
+        pool.close()
+
+
 def test_profiler_uses_frozen_temporary_inputs_and_reports_cumulative_functions(tmp_path: Path) -> None:
     from scripts.profile_options_backtest import profile_run
 
