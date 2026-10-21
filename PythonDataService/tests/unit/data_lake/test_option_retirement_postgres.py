@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 from pathlib import Path
 
@@ -35,10 +36,10 @@ from tests.unit.data_lake.test_catalog_write_ops import pool as pool
 pytestmark = [pytest.mark.slow, pytest.mark.asyncio]
 
 
-@pytest.mark.parametrize("fault", ["none", "refresh", "unlink_before_rollback"])
+@pytest.mark.parametrize("fault", ["none", "refresh", "unlink_before_rollback", "longer_pin"])
 @respx.mock
 async def test_approved_retirement_is_fenced_restartable_and_restorable(
-    clean_artifacts, pool, tmp_lake: Path, tmp_path: Path, fault: str,
+    clean_artifacts, pool, tmp_lake: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str,
 ) -> None:
     await store_listing([vendor_listing_row(CALL), vendor_listing_row(UNKNOWN)])
     original = (await store_option_day(CALL, [])).record
@@ -66,6 +67,13 @@ async def test_approved_retirement_is_fenced_restartable_and_restorable(
         checked_at_ms=1100, passed=True, decoded_counts={"legacy": 1, "session": 1}).model_dump_json())
     plan = await asyncio.to_thread(plan_retirement, mode_root=root, sources=sources, generation=generation,
                                   restore_receipt=receipt, now_ms=1200)
+    if fault == "longer_pin":
+        await create_generation(destination=destination, roots={str(root_id): tmp_lake},
+                                clock=lambda: 2000, should_pause=lambda: False)
+        pin = destination / "retention-pins" / f"{manifest.generation_id}.json"
+        pin.parent.mkdir()
+        pin.write_text(json.dumps({"manifest_sha256": manifest_digest(generation),
+                                   "retain_until_ms": plan.rollback_until_ms + 10_000}))
     before = len(respx.calls)
     args = dict(plan=plan, approval=approval(plan.digest), mode_root=root, generation=generation,
                 restore_receipt=receipt, journal=tmp_path / "journal.json", now_ms=1300)
@@ -93,6 +101,13 @@ async def test_approved_retirement_is_fenced_restartable_and_restorable(
                 await connection.execute('DROP TRIGGER refuse_option_delete ON "DataLakeArtifacts"; DROP FUNCTION refuse_option_delete()')
     assert await apply_retirement(**args) == 1
     assert await apply_retirement(**args) == 1
+    if fault == "longer_pin":
+        assert json.loads(pin.read_bytes())["retain_until_ms"] == plan.rollback_until_ms + 10_000
+        import app.option_archive.backup as backup
+
+        monkeypatch.setattr(backup.time, "time_ns", lambda: (plan.rollback_until_ms + 1) * 1_000_000)
+        await asyncio.to_thread(prune_generations, destination, daily_keep=1, weekly_keep=0)
+        assert verify_generation(generation).generation_id == manifest.generation_id
     assert await legacy_sources(root_id) == ()
     assert not (root / original.file_path).exists()
     kept = await asyncio.to_thread(read_option_day_bars, CALL, FRIDAY, lake_root=root)

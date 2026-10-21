@@ -8,7 +8,7 @@ import pytest
 
 from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc
 from app.options_backtest.benchmark import (
-    BENCHMARK_END,
+    BENCHMARK_END_MS,
     RESEARCH_PROFILE_MEMORY_BYTES,
     BenchmarkObservation,
     benchmark_cases,
@@ -32,6 +32,7 @@ def observations() -> list[BenchmarkObservation]:
                     phase_duration_ms={"check": 100, "fetch": 0, "freeze": 200, "queue": 300,
                                        "admit_decode": 400, "replay": 500, "save": 100},
                     cache_bytes_peak=900, cgroup_memory_peak_bytes=1_000_000,
+                    cache_hits=0 if mode == "cold" else 480, cache_misses=480 if mode == "cold" else 0,
                     staging_bytes_peak=1000, database_connections_peak=8, operational_latency_ms=(10, 20),
                     profile_cpus=8, profile_memory_bytes=RESEARCH_PROFILE_MEMORY_BYTES,
                 ))
@@ -41,7 +42,8 @@ def observations() -> list[BenchmarkObservation]:
 def test_cases_cover_480_real_sessions_and_eight_leg_sold_cover_workload() -> None:
     typical, stress = benchmark_cases()
     first = et_date_at_ms(typical.session_open_ms[0])
-    assert typical.session_open_ms == tuple(session_open_ms_utc(day) for day in expected_sessions(first, BENCHMARK_END))
+    assert type(BENCHMARK_END_MS) is int and typical.session_open_ms[-1] == BENCHMARK_END_MS
+    assert typical.session_open_ms == tuple(session_open_ms_utc(day) for day in expected_sessions(first, et_date_at_ms(BENCHMARK_END_MS)))
     assert len(typical.session_open_ms) == len(stress.session_open_ms) == 480
     assert len(typical.setup.legs) == 2
     assert len(stress.setup.legs) == 8
@@ -51,6 +53,10 @@ def test_cases_cover_480_real_sessions_and_eight_leg_sold_cover_workload() -> No
         assert sum(leg.contracts for leg in stress.setup.legs if leg.right == right and leg.side == "sell") == 2
     assert typical.setup.fees.per_contract_usd == stress.setup.fees.per_contract_usd == Decimal("0.65")
     assert typical.digest != stress.digest
+    assert (typical.digest, stress.digest) == (
+        "2e393eacdd0ad7f5ee5a6b693c7a2d4158e20be7e86d4b65444f0d4959232eec",
+        "5b9fba1af60d3ed71d4003baa2874e387fe71ea686c176d409799744facdd4b7",
+    )
 
 
 def test_report_separates_modes_and_does_not_qualify_capacity() -> None:
@@ -95,3 +101,20 @@ def test_missing_resource_observations_remain_unknown() -> None:
     for report in summarize_measurements(samples):
         assert report["cache_bytes_peak"] is None
         assert report["instrumentation_complete"] is False
+
+
+def test_warm_report_refuses_a_working_set_with_no_decoded_reuse() -> None:
+    samples = [sample.model_copy(update={"cache_hits": 0, "cache_misses": 480})
+               if sample.cache_mode == "warm" else sample for sample in observations()]
+    with pytest.raises(ValueError, match=r"warm.*reuse"):
+        summarize_measurements(samples)
+
+
+def test_report_exposes_decoded_cache_counters() -> None:
+    for report in summarize_measurements(observations()):
+        if report["cache_mode"] == "warm":
+            assert report["cache_hits"] == [480] * 5
+            assert report["cache_misses"] == [0] * 5
+        else:
+            assert report["cache_hits"] == [0] * 5
+            assert report["cache_misses"] == [480] * 5

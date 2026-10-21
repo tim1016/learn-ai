@@ -136,3 +136,24 @@ async def test_apply_rechecks_rollback_deadline_after_backup_verification(
             generation=generation, restore_receipt=receipt, journal=tmp_path / "journal.json", now_ms=1300)
     assert (raw_root(tmp_lake) / rows[0].file_path).exists()
     assert not (tmp_path / "journal.json").exists()
+
+
+@pytest.mark.parametrize("pin_data", [[], {"manifest_sha256": "wrong", "retain_until_ms": 9999},
+                                     {"manifest_sha256": None, "retain_until_ms": True}])
+@respx.mock
+async def test_apply_refuses_existing_pin_with_unverifiable_identity_or_deadline(
+    fake_catalog: FakeCatalog, tmp_lake: Path, tmp_path: Path, pin_data: object,
+) -> None:
+    generation, receipt, rows = await prepare(fake_catalog, tmp_lake, tmp_path / "backup")
+    plan = await asyncio.to_thread(plan_retirement, mode_root=raw_root(tmp_lake), sources=rows,
+                                  generation=generation, restore_receipt=receipt, now_ms=1200)
+    pin = generation.parent.parent / "retention-pins" / f"{plan.generation_id}.json"
+    pin.parent.mkdir()
+    if isinstance(pin_data, dict) and pin_data["manifest_sha256"] is None:
+        pin_data = {**pin_data, "manifest_sha256": plan.manifest_sha256}
+    pin.write_text(json.dumps(pin_data))
+    with pytest.raises(RetirementRefusedError, match="rollback pin"):
+        await apply_retirement(plan=plan, approval=approval(plan.digest), mode_root=raw_root(tmp_lake),
+            generation=generation, restore_receipt=receipt, journal=tmp_path / "journal.json", now_ms=1300)
+    assert (raw_root(tmp_lake) / rows[0].file_path).exists()
+    assert not (tmp_path / "journal.json").exists()

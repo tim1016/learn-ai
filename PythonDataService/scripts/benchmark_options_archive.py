@@ -44,8 +44,9 @@ _PREFIX = "/api/jobs-internal/options-backtest"
 _PHASES = {"download": "fetch", "input_freeze": "freeze"}
 
 
-async def _preflight(client: httpx.AsyncClient, base: str, case: BenchmarkCase) -> str:
-    response = await client.post(base + _PREFIX + "/benchmark-preflight", json={"case": case.name})
+async def _preflight(client: httpx.AsyncClient, base: str, case: BenchmarkCase, *, timeout_seconds: int = 1800) -> str:
+    response = await client.post(base + _PREFIX + "/benchmark-preflight", json={"case": case.name},
+                                 timeout=httpx.Timeout(30, read=timeout_seconds))
     response.raise_for_status()
     body = response.json()
     if body["case_digest"] != case.digest:
@@ -65,7 +66,7 @@ async def _measure(
     client: httpx.AsyncClient, *, api: str, runtime: str, operational: str,
     case: BenchmarkCase, mode: str, qualified_widths: list[int], timeout_seconds: int,
 ) -> BenchmarkObservation:
-    inventory = await _preflight(client, api, case)
+    inventory = await _preflight(client, api, case, timeout_seconds=timeout_seconds)
     initial = await client.get(runtime + _PREFIX + "/benchmark-resources")
     initial.raise_for_status()
     samples = [BenchmarkResourcesResponse.model_validate(initial.json())]
@@ -107,10 +108,11 @@ async def _measure(
         await asyncio.sleep(1)
     if saved is None:
         raise TimeoutError(f"benchmark run {run_id} has no saved result with complete timing evidence")
-    if await _preflight(client, api, case) != inventory:
+    if await _preflight(client, api, case, timeout_seconds=timeout_seconds) != inventory:
         raise ValueError("archived input inventory changed during the measured run")
     metadata = saved.execution_metadata
-    required = {"worker_width", "frozen_input_digest", "execution_identity_digest", "cache_epoch", "cache_bytes_peak"}
+    required = {"worker_width", "frozen_input_digest", "execution_identity_digest", "cache_epoch", "cache_bytes_peak",
+                "cache_hits", "cache_misses"}
     if not required <= metadata.keys() or (mode == "cold" and not metadata["cache_epoch"]):
         raise ValueError("saved result lacks the required execution/cache measurement identity")
     width = int(metadata["worker_width"])
@@ -132,6 +134,7 @@ async def _measure(
         cache_generation=str(metadata["cache_epoch"]) if mode == "cold" else samples[0].runtime_instance,
         run_id=run_id, accepted_at_ms=saved.accepted_at_ms, saved_at_ms=saved.saved_at_ms,
         phase_duration_ms=phases, cache_bytes_peak=metadata["cache_bytes_peak"],
+        cache_hits=metadata["cache_hits"], cache_misses=metadata["cache_misses"],
         cgroup_memory_peak_bytes=max(memory) if all(value is not None for value in memory) else None,
         staging_bytes_peak=max(sample.frozen_input_bytes for sample in samples),
         database_connections_peak=max(sample.database_connections for sample in samples),

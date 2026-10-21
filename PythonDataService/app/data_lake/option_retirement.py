@@ -235,10 +235,21 @@ async def apply_retirement(
             with lake_activity(mode_root, exclusive=True):
                 if journal.exists() and json.loads(journal.read_bytes()) != evidence:
                     raise RetirementRefusedError("retirement journal belongs to another approved plan")
-                atomic_write_bytes(journal, canonical_json(evidence).encode())
                 pin = generation.parent.parent / "retention-pins" / f"{plan.generation_id}.json"
+                retain_until_ms = plan.rollback_until_ms
+                if pin.exists():
+                    try:
+                        retained = json.loads(pin.read_bytes())
+                    except (OSError, ValueError) as exc:
+                        raise RetirementRefusedError("existing rollback pin cannot be read") from exc
+                    if (not isinstance(retained, dict) or retained.get("manifest_sha256") != plan.manifest_sha256
+                            or type(retained.get("retain_until_ms")) is not int
+                            or not 0 <= retained["retain_until_ms"] <= MAX_TIMESTAMP_MS):
+                        raise RetirementRefusedError("existing rollback pin does not match this restore point")
+                    retain_until_ms = max(retain_until_ms, retained["retain_until_ms"])
+                atomic_write_bytes(journal, canonical_json(evidence).encode())
                 atomic_write_bytes(pin, canonical_json({
-                    "manifest_sha256": plan.manifest_sha256, "retain_until_ms": plan.rollback_until_ms,
+                    "manifest_sha256": plan.manifest_sha256, "retain_until_ms": retain_until_ms,
                 }).encode())
                 for source in plan.sources:
                     await _retire_source(plan, source, mode_root, require_rollback_window)

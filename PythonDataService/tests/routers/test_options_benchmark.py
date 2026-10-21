@@ -14,7 +14,7 @@ from app.options_backtest.benchmark import benchmark_cases
 from app.routers.options_backtest_benchmark import router
 from app.security.data_plane_control import CONTROL_SECRET_HEADER
 from app.utils.error_handlers import install_fleet_control_error_handler
-from scripts.benchmark_options_archive import _preflight, main
+from scripts.benchmark_options_archive import _measure, _preflight, main
 from tests._helpers.fake_lake_catalog import point_lake_writer_at_tmp
 
 
@@ -52,3 +52,46 @@ def test_cases_command_exports_exact_hash_bound_choices(tmp_path: Path) -> None:
     cases = json.loads(output.read_bytes())
     assert [row["case_digest"] for row in cases] == [case.digest for case in benchmark_cases()]
     assert all(len(row["case"]["session_open_ms"]) == 480 for row in cases)
+
+
+@pytest.mark.parametrize("cache", ["reused", "zero_hits", "missing_counters"])
+async def test_harness_requires_observed_warm_reuse_and_allows_long_archive_preflight(cache: str) -> None:
+    case = benchmark_cases()[0]
+    preflight_timeouts = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/benchmark-preflight"):
+            preflight_timeouts.append(request.extensions["timeout"]["read"])
+            return httpx.Response(200, json={"case_digest": case.digest, "inventory_digest": "d" * 64,
+                                           "sessions": 480, "incomplete_session_ms": []})
+        if path.endswith("/benchmark-resources"):
+            return httpx.Response(200, json={"observed_at_ms": 1_000_000, "runtime_instance": "runtime-1",
+                "worker_width": 1, "cgroup_memory_bytes": 1024, "cgroup_memory_limit_bytes": 16 * 1024**3,
+                "cpu_quota_us": 800_000, "cpu_period_us": 100_000, "frozen_input_bytes": 512,
+                "database_connections": 4, "database_connection_limit": 10})
+        if path.endswith("/benchmark-result/1"):
+            metadata = {"worker_width": 1, "frozen_input_digest": "a" * 64,
+                        "execution_identity_digest": "c" * 64, "cache_epoch": "",
+                        "cache_bytes_peak": 512}
+            if cache != "missing_counters":
+                metadata.update(cache_hits=480 if cache == "reused" else 0, cache_misses=480)
+            return httpx.Response(200, json={"run_id": 1, "accepted_at_ms": 1_000_000,
+                "saved_at_ms": 1_062_000, "result_digest": "b" * 64,
+                "phase_timings": [], "execution_metadata": metadata})
+        if request.method == "POST" and path.endswith("/options-backtest"):
+            return httpx.Response(200, json={"run_id": 1})
+        if path == "/healthz":
+            return httpx.Response(200, json={"status": "ok"})
+        raise AssertionError(f"unexpected benchmark request: {request.method} {path}")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond), timeout=120) as transport:
+        args = dict(api="http://api", runtime="http://runtime", operational="http://api/healthz",
+                    case=case, mode="warm", qualified_widths=[1], timeout_seconds=901)
+        if cache == "reused":
+            result = await _measure(transport, **args)
+            assert result.cache_hits == result.cache_misses == 480
+        else:
+            with pytest.raises(ValueError, match=r"warm.*reuse|required.*measurement"):
+                await _measure(transport, **args)
+    assert preflight_timeouts == [901, 901]

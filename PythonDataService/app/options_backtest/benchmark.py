@@ -26,12 +26,12 @@ from app.options_backtest.cash_ladder import DEFAULT_CASH_LADDER
 from app.options_backtest.run import DEFAULT_SLIPPAGE_LADDER
 from app.options_backtest.setup import MS_PER_MINUTE, OptionsBacktestSetup
 from app.research.runs.hashing import hash_payload
-from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_midnight_ms
+from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms, et_midnight_ms
 
 BENCHMARK_SESSIONS = 480
 BENCHMARK_REPETITIONS = 5
 BENCHMARK_TARGET_MS = 60_000
-BENCHMARK_END = date(2026, 10, 16)
+BENCHMARK_END_MS = 1_792_157_400_000
 RESEARCH_PROFILE_MEMORY_BYTES = 16 * 1024**3
 RESEARCH_PROFILE_CPUS = 8
 _Ms = Annotated[int, Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)]
@@ -57,7 +57,7 @@ class BenchmarkCase(BaseModel):
 
 def benchmark_cases() -> tuple[BenchmarkCase, BenchmarkCase]:
     """The delegated choices, frozen to 480 actual NYSE sessions ending 2026-10-16."""
-    sessions = expected_sessions(date(2024, 1, 1), BENCHMARK_END)[-BENCHMARK_SESSIONS:]
+    sessions = expected_sessions(date(2024, 1, 1), et_date_at_ms(BENCHMARK_END_MS))[-BENCHMARK_SESSIONS:]
     common = {
         "underlying": "SPY",
         "entry": {"anchor": "open", "offset_ms": 5 * MS_PER_MINUTE},
@@ -124,6 +124,8 @@ class BenchmarkObservation(BaseModel):
     accepted_at_ms: _Ms
     saved_at_ms: _Ms
     phase_duration_ms: dict[str, _Nonnegative]
+    cache_hits: _Nonnegative
+    cache_misses: _Nonnegative
     cache_bytes_peak: _Nonnegative | None = None
     cgroup_memory_peak_bytes: _Nonnegative | None = None
     staging_bytes_peak: _Nonnegative | None = None
@@ -138,6 +140,8 @@ class BenchmarkObservation(BaseModel):
             raise ValueError("a saved result cannot precede its acceptance")
         if not self.operational_latency_ms:
             raise ValueError("each repetition needs operational latency observations")
+        if self.cache_mode == "warm" and self.cache_hits == 0:
+            raise ValueError("warm repetitions must demonstrate decoded cache reuse")
         return self
 
 
@@ -181,6 +185,8 @@ def summarize_measurements(
             raise ValueError("warm repetitions must reuse one runtime/cache generation")
         if mode == "warm" and len({sample.runtime_instance for sample in group}) != 1:
             raise ValueError("the runtime restarted during warm measurements")
+        if mode == "warm" and any(sample.cache_hits == 0 for sample in group):
+            raise ValueError("warm repetitions must demonstrate decoded cache reuse")
         required_phases = {"check", "fetch", "freeze", "queue", "admit_decode", "replay", "save"}
         if any(not required_phases <= sample.phase_duration_ms.keys() for sample in group):
             raise ValueError("a repetition is missing required phase measurements")
@@ -200,6 +206,8 @@ def summarize_measurements(
             "median_phase_ms": {phase: statistics.median([s.phase_duration_ms[phase] for s in group])
                                 for phase in sorted(required_phases)},
             "cache_bytes_peak": _peak(group, "cache_bytes_peak"),
+            "cache_hits": [sample.cache_hits for sample in group],
+            "cache_misses": [sample.cache_misses for sample in group],
             "cgroup_memory_peak_bytes": _peak(group, "cgroup_memory_peak_bytes"),
             "staging_bytes_peak": _peak(group, "staging_bytes_peak"),
             "database_connections_peak": _peak(group, "database_connections_peak"),
