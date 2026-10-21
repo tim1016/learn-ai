@@ -40,6 +40,7 @@ APPLIED_VERSION_DIGESTS: dict[int, str] = {
     20: "c4a8170ac6c104c2",
     21: "e87dc94cde1d5e6d",
     22: "5725d963b73b267c",
+    23: "3b3c643d56c45191",
 }
 
 
@@ -394,3 +395,20 @@ async def test_version_20_arrives_on_top_of_version_19_and_leaves_a_saved_setup_
     assert await _option_run_tables(scratch_db) == _OPTION_RUN_TABLES
     assert await scratch_db.fetchval("SELECT saved_at_ms FROM research_options_backtest_setups WHERE name = 'kept'") == 5
     assert await scratch_db.fetchval("SELECT max(version) FROM research_schema_migrations") == SCHEMA_VERSION
+
+
+async def test_version_23_indexes_trial_pages_on_an_existing_ledger_without_rewriting_events(scratch_db: asyncpg.Connection) -> None:
+    await ensure_schema(scratch_db)
+    await scratch_db.execute("DROP INDEX idx_options_search_trials_study_id")
+    await scratch_db.execute("DELETE FROM research_schema_migrations WHERE version=23")
+    await scratch_db.execute("""INSERT INTO research_options_search_studies
+        (id,setup_name,underlying,phase,status,document,created_at_ms,updated_at_ms)
+        VALUES ('index-study','fixture','SPY','research','idle','{}',1,1)""")
+    await scratch_db.execute("""INSERT INTO research_options_search_trials(study_id,record,created_at_ms)
+        VALUES ('index-study','{}',1)""")
+    await ensure_schema(scratch_db)
+    await ensure_schema(scratch_db)
+    index = await scratch_db.fetchval("SELECT indexdef FROM pg_indexes WHERE indexname='idx_options_search_trials_study_id'")
+    assert "(study_id, id)" in index
+    assert await scratch_db.fetchval("SELECT count(*) FROM research_options_search_trials WHERE study_id='index-study'") == 1
+    assert await scratch_db.fetchval("SELECT count(*) FROM research_schema_migrations WHERE version=23") == 1

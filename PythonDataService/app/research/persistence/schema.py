@@ -54,7 +54,7 @@ from __future__ import annotations
 
 import asyncpg
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 # Arbitrary but fixed: serializes concurrent first-use across FastAPI's loop
 # and the worker loop so CREATE IF NOT EXISTS never races itself.
 _ADVISORY_LOCK_KEY = 0x1926_0001
@@ -1112,6 +1112,11 @@ DDL_V22: tuple[str, ...] = (
     ),
 )
 
+DDL_V23: tuple[str, ...] = (
+    """CREATE INDEX IF NOT EXISTS idx_options_search_trials_study_id
+        ON research_options_search_trials(study_id,id)""",
+)
+
 VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (1, DDL_V1),
     (2, DDL_V2),
@@ -1135,6 +1140,7 @@ VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (20, DDL_V20),
     (21, DDL_V21),
     (22, DDL_V22),
+    (23, DDL_V23),
 )
 
 

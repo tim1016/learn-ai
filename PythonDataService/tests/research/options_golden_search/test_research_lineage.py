@@ -89,6 +89,15 @@ def test_legacy_absent_results_are_not_zero_or_inferred_final_success() -> None:
     assert view.development_state == "not_recorded"
 
 
+def test_altered_frozen_protocol_cannot_author_lineage_or_trial_scope() -> None:
+    row = fixture("study-record")
+    row["protocol"]["knobs"][0]["priority"] = 2
+    with pytest.raises(ValueError, match="does not match its frozen identity"):
+        lineage.project(row, fixture("lineage-receipts"))
+    with pytest.raises(ValueError, match="does not match its frozen identity"):
+        lineage.admitted_windows(row)
+
+
 async def test_http_is_bounded_scope_fenced_and_reads_no_blobs(monkeypatch: pytest.MonkeyPatch) -> None:
     row = fixture("study-record")
     retained = fixture("lineage-receipts")

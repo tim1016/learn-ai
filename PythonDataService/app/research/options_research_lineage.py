@@ -11,9 +11,9 @@ from typing import Any
 import asyncpg
 
 from app.options_bots.golden_proof import setup_sha256
-from app.research.options_candidate_evidence import label
+from app.research.options_candidate_evidence import label, retained_protocol
 from app.research.options_golden_search import repository as repo
-from app.research.options_golden_search.protocol import OptionsSearchProtocol, Window, materialize
+from app.research.options_golden_search.protocol import Window, materialize
 from app.research.persistence.db import with_connection
 from app.schemas.options_research_lineage import (
     OptionsLineageCounts,
@@ -41,7 +41,7 @@ def window_view(window: Window) -> OptionsLineageWindow:
 
 
 def admitted_windows(row: dict[str, Any]) -> list[str]:
-    protocol = OptionsSearchProtocol.model_validate(row["protocol"])
+    protocol = retained_protocol(row)
     return [protocol.development.key, *(w.key for fold in protocol.folds for w in (fold.training, fold.forward)),
         *([protocol.final.key] if row.get("finalists") or row.get("final_opened_at_ms") is not None else [])]
 
@@ -62,7 +62,7 @@ async def receipts(conn: asyncpg.Connection, study_id: str, windows: list[str]) 
 
 
 def project(row: dict[str, Any], retained: dict[str, Any]) -> OptionsResearchLineage:
-    protocol = OptionsSearchProtocol.model_validate(row["protocol"])
+    protocol = retained_protocol(row)
     selection = (row.get("research") or {}).get("selection")
     counts = dict(retained["counts"])
     missing = counts["evaluation_keys"] == 0 and (row.get("progress") or {}).get("completed", 0) > 0

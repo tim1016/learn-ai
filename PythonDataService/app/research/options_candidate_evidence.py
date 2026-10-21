@@ -36,6 +36,13 @@ Scope = Literal["development", "final"]
 MAX_CURVE_POINTS = 2000
 
 
+def retained_protocol(row: dict[str, Any]) -> OptionsSearchProtocol:
+    """Check frozen bytes before current defaults normalize a legacy protocol (#3400)."""
+    if hash_payload(row["protocol"]) != row["protocol_hash"]:
+        raise ValueError("The retained protocol does not match its frozen identity receipt.")
+    return OptionsSearchProtocol.model_validate(row["protocol"])
+
+
 @dataclass(frozen=True)
 class RetainedOptionsEvidence:
     study_id: str
@@ -50,7 +57,7 @@ class RetainedOptionsEvidence:
 
 
 def resolve(row: dict[str, Any], digest: str, scope: Scope) -> tuple[OptionsSearchProtocol, OptionsBacktestSetup, Window, str]:
-    protocol = OptionsSearchProtocol.model_validate(row["protocol"])
+    protocol = retained_protocol(row)
     baseline = setup_sha256(protocol.setup)
     points = (row.get("research") or {}).get("selection", {}).get("points", {})
     admitted = {baseline, *points}
@@ -77,7 +84,7 @@ def label(setup: OptionsBacktestSetup, original: bool) -> str:
 
 async def page(study_id: str, *, offset: int = 0, limit: int = 50) -> OptionsCandidatePage:
     row = await with_connection(repo.get, study_id)
-    protocol = OptionsSearchProtocol.model_validate(row["protocol"])
+    protocol = retained_protocol(row)
     baseline = setup_sha256(protocol.setup)
     points = (row.get("research") or {}).get("selection", {}).get("points", {})
     hashes = [baseline, *sorted(set(points) - {baseline})]
