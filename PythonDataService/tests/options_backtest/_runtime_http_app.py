@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -45,19 +46,18 @@ if _RUNTIME:
     from app.research_runtime import app
 
     if (_FAULTS / "lose-launch-ack").exists():
-        actual_accept = saved_runs.DbRunStore.accept_runtime_run
+        actual_start = threading.Thread.start
         _launch_ack_lost = False
 
-        async def lose_launch_ack(self: Any, new: Any, work_for_run: Any) -> int:
+        def lose_launch_ack(thread: threading.Thread) -> None:
             global _launch_ack_lost
-            run_id = await actual_accept(self, new, work_for_run)
-            if not _launch_ack_lost:
+            actual_start(thread)
+            if not _launch_ack_lost and thread.name.startswith("options-backtest-"):
                 _launch_ack_lost = True
                 (_FAULTS / "launch-ack-lost").touch()
-                raise CallerStoppedWaitingError("test lost acknowledgement after actual worker launch")
-            return run_id
+                raise OSError("test lost acknowledgement after actual worker thread start")
 
-        saved_runs.DbRunStore.accept_runtime_run = lose_launch_ack
+        threading.Thread.start = lose_launch_ack
 
     if (_FAULTS / "bind-commit-fault").exists():
         from asyncpg.transaction import Transaction

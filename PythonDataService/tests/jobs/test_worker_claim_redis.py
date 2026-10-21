@@ -78,3 +78,39 @@ def test_a_binding_failure_releases_only_the_prepared_workers_lease(
     assert client.get(progress.lease_key(job_id)) is None
     with prepared_worker(job_id) as launch:
         launch.start(lambda emit, cancel: None).join(timeout=5)
+
+
+def test_a_lost_thread_start_ack_keeps_the_running_workers_lease_until_it_exits(
+    isolated_redis: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = redis.Redis.from_url(isolated_redis, decode_responses=True)
+    monkeypatch.setattr(progress, "get_redis", lambda: client)
+    job_id = uuid4().hex
+    entered, finish = threading.Event(), threading.Event()
+    launched: list[threading.Thread] = []
+    actual_start = threading.Thread.start
+
+    def start_then_lose_ack(thread: threading.Thread) -> None:
+        actual_start(thread)
+        if thread.name == "uncertain-launch-test":
+            launched.append(thread)
+            raise OSError("thread start acknowledgement lost")
+
+    def work(emit: progress.ProgressEmitter, cancel: progress.CancellationCheck) -> dict[str, bool]:
+        entered.set()
+        assert finish.wait(timeout=5)
+        return {"ok": True}
+
+    monkeypatch.setattr(threading.Thread, "start", start_then_lose_ack)
+    try:
+        with pytest.raises(OSError, match="acknowledgement lost"):
+            run_in_thread(job_id, work, thread_name="uncertain-launch-test")
+        assert entered.wait(timeout=5)
+        assert client.get(progress.lease_key(job_id))
+        assert client.hget(progress.state_key(job_id), "status") == "running"
+    finally:
+        finish.set()
+        for thread in launched:
+            thread.join(timeout=5)
+    assert client.get(progress.lease_key(job_id)) is None
+    assert client.hget(progress.state_key(job_id), "status") == "completed"
