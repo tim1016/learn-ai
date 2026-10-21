@@ -55,7 +55,7 @@ When adding a dep:
 - `field_validator('field_name')` for single-field.
 - `Field(...)` with constraints (`ge`, `le`, `pattern`, `max_length`).
 - Use `from_engine_result` (or similar) classmethods to construct response models from service output.
-- Response models use snake_case field names (the .NET consumer expects snake_case).
+- Response models use snake_case field names (the Angular client reads them through the generated OpenAPI types in `Frontend/src/app/api/broker.types.ts`, which keep snake_case).
 
 ## pandas
 

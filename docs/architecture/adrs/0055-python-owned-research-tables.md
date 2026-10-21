@@ -51,3 +51,18 @@ coordinator under this ADR's attempt fence; a worker loss re-offers its cell
 under an advanced task generation and never records a cell that never ran.
 The API's local mode (`RESEARCH_EXECUTION_MODE=local`) keeps the serial
 in-process runner above.
+
+## Amendment 2026-10-21 — the EF-owned tables are Python's too ([ADR 0081](0081-python-owns-the-api-and-the-database-schema.md))
+
+The decision stands: the research tables are declared and written by Python,
+with their own ledger (`research_schema_migrations`), which ADR 0081 does not
+move. What changed is what they were set against. The "EF Core migration in
+`Backend/Migrations`" and the "quoted PascalCase EF-owned" tables (decision 6
+and the Context) are now the tables of
+`PythonDataService/app/db_schema/migrations/0001_baseline.sql`, which Python
+also owns, applies at data-plane startup and records in `schema_migrations`.
+Two ledgers, one owner: the `research_*` tables still create themselves from
+`schema.py`, and the PascalCase tables come from the numbered SQL files. The
+casing convention of decision 6 still tells the two apart. "No .NET endpoint
+participates" is now true of everything: there is no .NET. The Consequences'
+"EF-managed tables" are the baseline's tables.

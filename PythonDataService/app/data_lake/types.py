@@ -43,7 +43,7 @@ from app.utils.timestamps import ny_datetime
 #: ensure_data can seed.
 SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.]*$")
 # Mirrors the DataLakeArtifacts.Symbol column: character varying(20)
-# (Backend/Migrations/20260521033222_AddDataLakeArtifactsAndRuns.cs). Shared
+# (app/db_schema/migrations/0001_baseline.sql). Shared
 # by DataRunSpec's write-path validator and the coverage endpoint's
 # query-param validator (app/routers/data_lake.py) so neither can accept a
 # symbol the catalog could never actually store.
@@ -56,7 +56,7 @@ _MAX_RANGE_YEARS = 5
 MAX_TRADING_RANGE_DAYS = _MAX_RANGE_YEARS * 366
 
 # Mirrors the shared DataLakeArtifacts.PriceAdjustmentMode CHECK constraint
-# (ck_price_adjustment_mode_enum, Backend/Migrations/20260521033222_...).
+# (ck_price_adjustment_mode_enum, app/db_schema/migrations/0001_baseline.sql).
 # DataRunSpec deliberately narrows to "raw" below — the only mode the v1
 # fetch pipeline can produce — rather than accepting the full vocabulary;
 # the coverage endpoint (a read over whatever the catalog actually holds)
@@ -70,8 +70,8 @@ PriceAdjustmentMode = Literal["raw", "polygon_split_adjusted", "lean_adjusted"]
 DataType = Literal["trade", "quote"]
 
 # Mirrors the shared DataLakeArtifacts.Status CHECK constraint
-# (ck_status_enum) — Python and the .NET side must not drift on what this
-# column can hold. ``"missing"`` is NOT a DB value: the coverage endpoint
+# (ck_status_enum) — the SQL migration and this Literal must not drift on what
+# this column can hold. ``"missing"`` is NOT a DB value: the coverage endpoint
 # synthesizes it for a calendar session with no matching catalog row.
 ArtifactStatus = Literal["fetching", "complete", "stale", "failed"]
 

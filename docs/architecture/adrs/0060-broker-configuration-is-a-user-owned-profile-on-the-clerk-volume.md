@@ -281,3 +281,21 @@ Run bound to a live account uses that envelope too. EXIT prices from the owning
 bot's immutable exit terms ([ADR 0045](0045-exposure-lifecycle-closure.md#immutable-exit-terms-deployment-and-arming-2026-09-25-prd-2504)).
 The one reader of the arming ledger left is the one-time exit-terms upgrade,
 which seals a legacy bot's terms from its own newest arming.
+
+## Amendment 2026-10-21 — Postgres reasons after the C# backend ([ADR 0081](0081-python-owns-the-api-and-the-database-schema.md))
+
+Postgres is still rejected for broker configuration; ADR 0001 and ADR 0035 §6
+still bar it. Two of Decision 2's three supporting reasons read differently now:
+
+- "`python-service` has no `depends_on: db`" is no longer true. `compose.yaml`
+  makes it wait for `db` to be healthy, because it applies the SQL migrations at
+  startup. That reason is withdrawn.
+- "one `public` schema and one superuser with EF Core, which already carries a
+  raw-SQL `DROP TABLE` migration" names a migrator that no longer exists. The
+  shared schema and superuser now belong to the data plane's own SQL migrations
+  (`app/db_schema/migrations`). The reason is otherwise unchanged: the
+  profiles would sit in a schema a migration runner manages.
+
+The expendable-volume reason, which depends on neither, is unaffected. The
+"Considered and rejected" bullet for Postgres repeats the two reasons and is
+amended the same way.

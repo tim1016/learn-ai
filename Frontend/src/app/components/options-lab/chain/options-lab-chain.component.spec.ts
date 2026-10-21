@@ -3,10 +3,17 @@ import { provideHttpClient } from '@angular/common/http';
 import {
   HttpTestingController,
   provideHttpClientTesting,
+  type TestRequest,
 } from '@angular/common/http/testing';
 import { OptionsLabChainComponent } from './options-lab-chain.component';
 import { fakePickerWorld } from '../../../shared/symbol-picker/testing/fake-picker-world';
-import { SnapshotContractResult } from '../../../graphql/types';
+import { SnapshotContractResult } from '../../../services/market-data.types';
+import type { components } from '../../../api/broker.types';
+import { environment } from '../../../../environments/environment';
+
+type Schema = components['schemas'];
+
+const API = `${environment.pythonServiceUrl}/api`;
 
 function makeContract(
   contractType: 'call' | 'put',
@@ -29,9 +36,26 @@ function makeContract(
   };
 }
 
+/** A contract in the wire shape, `makeContract`'s twin. */
+function wireContract(contractType: 'call' | 'put', strike: number): NonNullable<Schema['OptionsChainSnapshotResponse']['contracts']>[number] {
+  return {
+    ticker: `O:SPY${strike}${contractType[0].toUpperCase()}`,
+    contract_type: contractType,
+    strike_price: strike,
+    expiration_ms: 1_778_875_200_000,
+    break_even_price: null,
+    implied_volatility: 0.2,
+    open_interest: 100,
+    greeks: { delta: 0.5, gamma: 0.01, theta: -0.05, vega: 0.1 },
+    day: { open: 1, high: 1, low: 1, close: 1, volume: 1000, vwap: 1 },
+    last_trade: null,
+    last_quote: null,
+  };
+}
+
 function drainAll(httpMock: HttpTestingController): void {
   httpMock.match(() => true).forEach(req => {
-    if (!req.cancelled) req.flush({ data: {} });
+    if (!req.cancelled) req.flush({});
   });
 }
 
@@ -183,26 +207,18 @@ describe('OptionsLabChainComponent', () => {
 
     const fetchPromise = component.fetchChainSnapshot(true);
 
-    const req = httpMock.expectOne(r =>
-      r.url === 'http://localhost:5000/graphql' &&
-      typeof (r.body as { query?: string } | null)?.query === 'string' &&
-      (r.body as { query: string }).query.includes('getOptionsChainSnapshot'),
-    );
+    const req = httpMock.expectOne(`${API}/snapshot/options-chain`);
     req.flush({
-      data: {
-        getOptionsChainSnapshot: {
-          success: true,
-          underlying: { ticker: 'SPY', price: 723.77, change: 5.76, changePercent: 0.8 },
-          contracts: [],
-          count: 0,
-          riskFreeRate: null,
-          dividendYield: null,
-          rateSource: null,
-          dividendSource: null,
-          error: null,
-        },
-      },
-    });
+      success: true,
+      underlying: { ticker: 'SPY', price: 723.77, change: 5.76, change_percent: 0.8 },
+      contracts: [],
+      count: 0,
+      risk_free_rate: null,
+      dividend_yield: null,
+      rate_source: null,
+      dividend_source: null,
+      error: null,
+    } satisfies Schema['OptionsChainSnapshotResponse']);
 
     await fetchPromise;
     expect(component.error()).toBeNull();
@@ -213,44 +229,34 @@ describe('OptionsLabChainComponent', () => {
     const NEAR = 4_070_984_400_000;
     const FAR = 4_073_576_400_000;
 
-    function pending(needle: string, ticker?: string) {
+    /** The pending requests to a Python route (`options/expirations`, ...), for one ticker when given. */
+    function pending(route: string, ticker?: string): TestRequest[] {
       return httpMock.match(r => {
-        const b = r.body as { query?: string; variables?: { underlyingTicker?: string; ticker?: string } } | null;
-        return r.url === 'http://localhost:5000/graphql'
-          && b?.query?.includes(needle) === true
-          && (ticker === undefined || (b.variables?.underlyingTicker ?? b.variables?.ticker) === ticker);
+        const b = r.body as { underlying_ticker?: string; ticker?: string } | null;
+        return r.url === `${API}/${route}`
+          && (ticker === undefined || (b?.underlying_ticker ?? b?.ticker) === ticker);
       });
     }
 
-    function chainReply(strike: number, price: number) {
+    function chainReply(strike: number, price: number): Schema['OptionsChainSnapshotResponse'] {
       return {
-        data: {
-          getOptionsChainSnapshot: {
-            success: true,
-            underlying: { ticker: 'SPY', price, change: 0, changePercent: 0 },
-            contracts: [makeContract('call', strike), makeContract('put', strike)],
-            count: 2, riskFreeRate: null, dividendYield: null, rateSource: null, dividendSource: null, error: null,
-          },
-        },
+        success: true,
+        underlying: { ticker: 'SPY', price, change: 0, change_percent: 0 },
+        contracts: [wireContract('call', strike), wireContract('put', strike)],
+        count: 2, risk_free_rate: null, dividend_yield: null, rate_source: null, dividend_source: null, error: null,
       };
     }
 
-    function chainFailure(error: string) {
-      return {
-        data: {
-          getOptionsChainSnapshot: {
-            success: false, underlying: null, contracts: [], count: 0,
-            riskFreeRate: null, dividendYield: null, rateSource: null, dividendSource: null, error,
-          },
-        },
-      };
+    /** Python's answer to a call it could not serve: an HTTP error and a `detail`. */
+    function failWith(request: TestRequest, detail: string): void {
+      request.flush({ detail }, { status: 500, statusText: 'Internal Server Error' });
     }
 
-    function expirationsReply(expirations: number[]) {
-      return { data: { getOptionsExpirations: { success: true, expirations, count: expirations.length, error: null } } };
+    function expirationsReply(expirations: number[]): Schema['OptionsExpirationsResponse'] {
+      return { success: true, expirations, count: expirations.length, error: null };
     }
 
-    const noSnapshot = { data: { getStockSnapshot: { success: false, snapshot: null, error: null } } };
+    const noSnapshot: Schema['StockSnapshotResponse'] = { success: false, snapshot: null, error: null };
 
     async function settle(): Promise<void> {
       await new Promise(resolve => setTimeout(resolve, 0));
@@ -260,10 +266,10 @@ describe('OptionsLabChainComponent', () => {
     /** Render the page and let its first expirations + chain load finish. */
     async function openPage(): Promise<void> {
       fixture.detectChanges();
-      pending('getOptionsExpirations')[0].flush(expirationsReply([NEAR, FAR]));
-      pending('getStockSnapshot')[0].flush(noSnapshot);
+      pending('options/expirations')[0].flush(expirationsReply([NEAR, FAR]));
+      pending('snapshot/ticker')[0].flush(noSnapshot);
       await settle();
-      pending('getOptionsChainSnapshot')[0].flush(chainReply(720, 723.77));
+      pending('snapshot/options-chain')[0].flush(chainReply(720, 723.77));
       await settle();
     }
 
@@ -273,10 +279,8 @@ describe('OptionsLabChainComponent', () => {
 
     it('shows the reason when the expirations lookup fails, not just an empty chain', async () => {
       fixture.detectChanges();
-      pending('getOptionsExpirations')[0].flush({
-        data: { getOptionsExpirations: { success: false, expirations: [], count: 0, error: 'Polygon rate limited' } },
-      });
-      pending('getStockSnapshot')[0].flush(noSnapshot);
+      failWith(pending('options/expirations')[0], 'Failed to list options expirations: Polygon rate limited');
+      pending('snapshot/ticker')[0].flush(noSnapshot);
       await settle();
 
       expect(text('.banner.error')).toContain('Polygon rate limited');
@@ -288,7 +292,7 @@ describe('OptionsLabChainComponent', () => {
       expect(fixture.nativeElement.querySelector('.exp-asof.stale')).toBeNull();
 
       const refresh = component.fetchChainSnapshot(true);
-      pending('getOptionsChainSnapshot')[0].flush(chainFailure('Gateway timeout'));
+      failWith(pending('snapshot/options-chain')[0], 'Gateway timeout');
       await refresh;
       fixture.detectChanges();
 
@@ -297,7 +301,7 @@ describe('OptionsLabChainComponent', () => {
       expect(component.rows().length).toBe(1);
 
       const recovery = component.fetchChainSnapshot(true);
-      pending('getOptionsChainSnapshot')[0].flush(chainReply(720, 724));
+      pending('snapshot/options-chain')[0].flush(chainReply(720, 724));
       await recovery;
       fixture.detectChanges();
 
@@ -310,7 +314,7 @@ describe('OptionsLabChainComponent', () => {
       const first = component.fetchChainSnapshot(true);
       const second = component.fetchChainSnapshot(true);
 
-      const requests = pending('getOptionsChainSnapshot');
+      const requests = pending('snapshot/options-chain');
       expect(requests.length).toBe(1);
       requests[0].flush(chainReply(720, 725));
       await Promise.all([first, second]);
@@ -321,15 +325,15 @@ describe('OptionsLabChainComponent', () => {
       const poll = component.fetchChainSnapshot(true);
       component.onTickerPicked('QQQ');
 
-      pending('getOptionsChainSnapshot', 'SPY')[0].flush(chainReply(111, 999));
+      pending('snapshot/options-chain', 'SPY')[0].flush(chainReply(111, 999));
       await poll;
       expect(component.allContracts()).toEqual([]);
       expect(component.underlying()).toBeNull();
 
-      pending('getOptionsExpirations', 'QQQ')[0].flush(expirationsReply([NEAR]));
-      pending('getStockSnapshot', 'QQQ')[0].flush(noSnapshot);
+      pending('options/expirations', 'QQQ')[0].flush(expirationsReply([NEAR]));
+      pending('snapshot/ticker', 'QQQ')[0].flush(noSnapshot);
       await settle();
-      pending('getOptionsChainSnapshot', 'QQQ')[0].flush(chainReply(222, 480));
+      pending('snapshot/options-chain', 'QQQ')[0].flush(chainReply(222, 480));
       await settle();
 
       expect(component.allContracts().map(c => c.strikePrice)).toEqual([222, 222]);
@@ -341,7 +345,7 @@ describe('OptionsLabChainComponent', () => {
       const picking = component.onExpirationSelected(FAR);
       expect(component.allContracts()).toEqual([]);
 
-      pending('getOptionsChainSnapshot')[0].flush(chainFailure('Snapshot unavailable'));
+      failWith(pending('snapshot/options-chain')[0], 'Snapshot unavailable');
       await picking;
       fixture.detectChanges();
 

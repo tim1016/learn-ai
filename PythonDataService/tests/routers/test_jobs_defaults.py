@@ -45,13 +45,13 @@ class TestCrossSectionalDefaults:
 
 
 class TestCamelCaseWire:
-    """The .NET JobsApi forwards JSON raw, so jobs models must accept
+    """The jobs facade forwards JSON raw, so jobs models must accept
     camelCase field names on the wire (fromDate, toDate, jobId, etc.)
     in addition to canonical snake_case for in-process construction."""
 
     def test_camel_case_canonical_names(self) -> None:
         # Post-PR(iii) — Frontend sends canonical 'symbol' (not 'ticker')
-        # in camelCase wire format. Verifies the .NET-forwarded shape
+        # in camelCase wire format. Verifies the facade-forwarded shape
         # works after the AliasChoices for legacy snake_case names came
         # off in PR (iii).
         r = SignalEngineJobRequest.model_validate(

@@ -14,7 +14,7 @@ bot-control product.
 ### Python owns the broker adapter
 
 `PythonDataService/app/broker/ibkr/` remains the curated boundary around
-`ib_async`. Broker library types do not cross into Angular or .NET. This keeps
+`ib_async`. Broker library types do not cross into Angular. This keeps
 Gateway/API churn inside one Python module family and preserves Python ownership
 of any numerical normalization.
 

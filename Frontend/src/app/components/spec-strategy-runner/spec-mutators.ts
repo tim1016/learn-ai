@@ -19,7 +19,7 @@ import {
   StrategySpec,
   SurvivalAction,
   SurvivalRule,
-} from '../../graphql/spec-strategy.models';
+} from '../../services/spec-strategy.types';
 
 // ---------------------------------------------------------------------------
 // Indicators

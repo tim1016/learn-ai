@@ -1,9 +1,8 @@
 /**
  * Backtest runs as the Python service serves them (PRD #1929).
  *
- * Top-level field names are the ones the retired GraphQL `backtestRuns` /
- * `backtestRun` queries emitted — the run-history table and the run report
- * read exactly these. The heavy envelopes (equity curve, validation
+ * Top-level field names are the camelCase ones the run-history table and the
+ * run report read. The heavy envelopes (equity curve, validation
  * analytics, data policy, metric documentation) arrive in the producer's
  * own stored shape: the Python builders are their single source of truth,
  * so nothing re-types them on the way here. Every temporal value is

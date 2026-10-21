@@ -3,9 +3,9 @@
 Live-Postgres tests, in the style of ``test_catalog_write_ops.py``: they skip
 when ``POSTGRES_URL`` is unset, and the ``clean_artifacts`` fixture truncates
 ``DataLakeArtifacts`` (so ``POSTGRES_URL_IS_EPHEMERAL=1`` must attest the
-database is disposable). The table is created by a .NET migration the machine
-this was written on cannot run; it was loaded from a schema-only dump of the
-dev table into a throwaway ``postgres:16``.
+database is disposable). The table is created by the SQL migrations
+(``python -m app.db_schema``, ADR 0081), so run them against the throwaway
+``postgres:16``.
 
 They run the real capture and read functions with the vendor faked by
 ``respx`` (with the answers probed on the wire, ``tests/_helpers/option_vendor.py``),

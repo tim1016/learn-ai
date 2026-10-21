@@ -3,8 +3,9 @@
 Written 2026-09-12 while bringing the stack up on a fresh Windows 11 PC
 (Git Bash shell). Everything runs as containers under Podman Compose on the
 WSL2 backend; the host only needs Git, WSL2, Podman, and docker-compose.
-Last verified state: all five containers healthy, app at http://localhost:4200,
-live Polygon / FRED / Alpaca keys configured.
+Last verified state (2026-09-12, when the stack had five containers; the C# backend
+has since been removed, so a healthy stack is now four): all five containers
+healthy, app at http://localhost:4200, live Polygon / FRED / Alpaca keys configured.
 
 ## 1. First-time machine setup (one-time)
 
@@ -58,7 +59,7 @@ for working examples; required values:
 compose `env_file`; copy from its `.env.example`):
 - `POLYGON_API_KEY` — same key as root `.env` (must be in BOTH)
 - `DATA_PLANE_CONTROL_SECRET` — MUST equal the root `.env` value; a mismatch
-  breaks host-side tooling and the "same secret" contract with backend/proxy
+  breaks host-side tooling and the "same secret" contract with the frontend proxy
 - Alpaca credential slots (optional, for broker features):
   `ALPACA_API_KEY_ID`/`ALPACA_API_SECRET_KEY` (paper, "default" slot) and
   `ALPACA_CREDENTIAL_LIVE_KEY_ID`/`ALPACA_CREDENTIAL_LIVE_SECRET_KEY` ("live"
@@ -120,7 +121,6 @@ podman machine start
 
 - App: http://localhost:4200
 - Python data plane: http://localhost:8000/health
-- .NET backend: http://localhost:5000/health
 
 Shutdown: `podman compose down` (add `podman machine stop` to stop the VM).
 All ports are loopback-only (127.0.0.1).
@@ -142,5 +142,5 @@ All ports are loopback-only (127.0.0.1).
   file watching (already configured in compose) to tolerate sync latency.
 - Editing `PythonDataService/.env` requires recreating the service to take
   effect: `podman compose up -d python-service`.
-- Verify the whole stack: `podman ps` should show all five containers
-  `(healthy)`; then curl the three URLs in §6.
+- Verify the whole stack: `podman ps` should show all four containers
+  `(healthy)`; then curl the two URLs in §6.

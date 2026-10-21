@@ -6,7 +6,7 @@
 -- carries Alpaca execution credentials, so its database login is the
 -- blast radius of a lane compromise: this role is read-only over exactly
 -- the tables those reads touch, and can never write, never create, and
--- never see the account/order domain the .NET backend owns.
+-- never see the account/order ledger tables of the baseline schema.
 --
 -- Idempotent AND convergent; run as the database superuser (see
 -- docs/runbooks/fleet-dev-two-lane-posture.md):

@@ -1,4 +1,4 @@
-import { StrategySpec } from '../../graphql/spec-strategy.models';
+import { StrategySpec } from '../../services/spec-strategy.types';
 
 /**
  * Canonical Phase-1 spec fixtures shipped with the package.

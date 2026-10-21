@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 
 # Optional progress callbacks used by the Jobs/SSE wrapper. Default no-ops
-# keep synchronous callers (existing GraphQL endpoint, tests) unaffected.
+# keep synchronous callers (direct calls, tests) unaffected.
 PhaseCallback = Callable[[str], None]
 LogCallback = Callable[[str, str], None]
 ProgressCallback = Callable[[int, int, str, "str | None"], None]

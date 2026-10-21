@@ -7,7 +7,7 @@ import {
   IChartApi, ISeriesApi,
   LineSeries, LineData, UTCTimestamp
 } from 'lightweight-charts';
-import { StockAggregate } from '../../../graphql/types';
+import { StockAggregate } from '../../../services/market-data.types';
 import { createAppChart, formatTickMark } from '../chart-utils';
 
 @Component({

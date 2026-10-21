@@ -1,6 +1,9 @@
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
-import { describeError } from './error-catalog';
 import { formatErrorDetails } from './error-display';
+import { errorMessage } from './error-message';
+
+/** The next step under every error: the strip knows that something failed, not what to do about it. */
+const TRY_COPY = 'Try the action again. If it keeps failing, capture the technical details below and share them.';
 
 /**
  * Card-scoped error strip — used when one async section of a page
@@ -57,7 +60,7 @@ export class SectionErrorComponent {
   readonly display = computed(() => {
     const err = this.error();
     if (!err) return null;
-    return describeError(err, this.contextWhat());
+    return { what: this.contextWhat() ?? errorMessage(err), tryCopy: TRY_COPY };
   });
 
   readonly details = computed(() => {

@@ -36,12 +36,6 @@ reviews:
         Angular templates using modern control flow (@if, @for, @switch, @let).
         PrimeNG components + Tailwind CSS utilities.
         Keep templates under ~80 lines.
-    - path: "Backend/**/*.cs"
-      instructions: >
-        .NET 10 with Hot Chocolate v15 GraphQL. Use async/await with CancellationToken.
-        PascalCase for classes/methods, _camelCase for private fields.
-        Use [GraphQLName()] to control field naming (HC v15 strips "Get" prefix).
-        Return early / guard clause pattern. AsNoTracking() for read-only queries.
     - path: "PythonDataService/**/*.py"
       instructions: >
         FastAPI with async route handlers. Type hints on all signatures.

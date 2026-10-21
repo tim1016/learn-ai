@@ -1,10 +1,14 @@
-import { Component, signal } from '@angular/core';
+import { Component, signal, type Provider } from '@angular/core';
 import { Router, RouterOutlet, Routes, provideRouter } from '@angular/router';
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import { DataLabSessionService } from '../../services/data-lab-session.service';
+import {
+  DataLabSessionService,
+  type DataLabSession,
+  type DataLabSessionChartSnapshot,
+} from '../../services/data-lab-session.service';
 import {
   ChartRangePreset,
   DataLabRangePresetsService,
@@ -33,13 +37,35 @@ class ShellHostComponent {}
 const savedSession = {
   id: 'session-1',
   name: 'Apple review',
-  createdAt: '2026-05-15T12:00:00Z',
-  updatedAt: '2026-05-15T12:00:00Z',
+  createdAtMs: Date.UTC(2026, 4, 15, 12),
+  updatedAtMs: Date.UTC(2026, 4, 15, 12),
   ticker: 'AAPL',
   fromDate: '2026-04-15',
   toDate: '2026-05-15',
   indicatorCount: 2,
   hasChart: false,
+};
+
+/** What a list row stands for once opened: the whole setup, entries and chart snapshot included. */
+const wholeSession: DataLabSession = {
+  id: savedSession.id,
+  name: savedSession.name,
+  createdAtMs: savedSession.createdAtMs,
+  updatedAtMs: savedSession.updatedAtMs,
+  config: {
+    ticker: 'AAPL',
+    fromDate: '2026-04-15',
+    toDate: '2026-05-15',
+    session: 'extended',
+    forwardFill: false,
+    adjusted: true,
+    entries: [
+      { name: 'ema', params: { length: 20 } },
+      { name: 'rsi', params: { length: 14 } },
+    ],
+  },
+  // The screen-owned document, cut down to what the restore reads.
+  chartSnapshot: { timeframe: '5m', bars: [], visibleIndicatorIds: ['ema|length=20'] } as unknown as DataLabSessionChartSnapshot,
 };
 
 function idleRunSession() {
@@ -127,9 +153,9 @@ const preset5Y: ChartRangePreset = { ...preset6M, key: '5Y', label: 'Past 5 year
 const RANGE_PRESET_STUBS: readonly ChartRangePreset[] = [preset1D, preset5D, preset6M, preset5Y];
 
 /** Render the shell through a real router outlet (tabs, routing, dock). */
-async function renderRoutedShell(runSession = idleRunSession()) {
+async function renderRoutedShell(runSession = idleRunSession(), overrides: Provider[] = []) {
   const result = await render(ShellHostComponent, {
-    providers: [...baseProviders(runSession), provideRouter(shellRoutes())],
+    providers: [...baseProviders(runSession), ...overrides, provideRouter(shellRoutes())],
   });
   const router = result.fixture.componentRef.injector.get(Router);
   await waitFor(() => expect(router.url).toBe('/explore'));
@@ -242,6 +268,64 @@ describe('DataLabComponent (shell)', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Saved setups' }));
     expect(await screen.findByText('Apple review')).toBeTruthy();
+    expect(screen.getByText(/2026-04-15 → 2026-05-15 · 2 indicators/)).toBeTruthy();
+  });
+
+  it('opens a listed setup by loading the whole session, and restores its entries and chart', async () => {
+    const sessions = {
+      listSessions: vi.fn(async () => [savedSession]),
+      getSession: vi.fn(async () => wholeSession),
+      saveSession: vi.fn(),
+      updateSession: vi.fn(),
+      renameSession: vi.fn(),
+      deleteSession: vi.fn(),
+    };
+    const { store, fixture } = await renderRoutedShell(idleRunSession(), [
+      { provide: DataLabSessionService, useValue: sessions },
+    ]);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Saved setups' }));
+    await userEvent.click(await screen.findByText('Apple review'));
+    await fixture.whenStable();
+
+    expect(sessions.getSession).toHaveBeenCalledExactlyOnceWith('session-1');
+    expect(store.committedTicker()).toBe('AAPL');
+    expect(store.indicators().map((entry) => entry.id)).toEqual(['ema|length=20', 'rsi|length=14']);
+    expect(store.restoredChartSnapshot()).toEqual(wholeSession.chartSnapshot);
+    // The drawer closed on the open; reopened, it names the setup being updated.
+    await userEvent.click(screen.getByRole('button', { name: 'Saved setups' }));
+    expect(await screen.findByRole('button', { name: 'Update setup' })).toBeTruthy();
+    expect(screen.getByPlaceholderText<HTMLInputElement>('Setup name').value).toBe('Apple review');
+  });
+
+  it('says why a saved setup did not load, and that a vanished one is gone', async () => {
+    const sessions = {
+      listSessions: vi.fn(async () => [savedSession]),
+      getSession: vi.fn(async () => undefined),
+      saveSession: vi.fn(),
+      updateSession: vi.fn(),
+      renameSession: vi.fn(),
+      deleteSession: vi.fn(async () => {
+        throw new Error('Could not delete the setup: Session session-1 not found');
+      }),
+    };
+    const { fixture } = await render(DataLabComponent, {
+      providers: [
+        ...baseProviders(),
+        { provide: DataLabSessionService, useValue: sessions },
+        { provide: DataLabWorkspaceStore, useFactory: createDataLabWorkspaceStore },
+        provideRouter(shellRoutes()),
+      ],
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Saved setups' }));
+    await userEvent.click(await screen.findByText('Apple review'));
+    fixture.detectChanges();
+    expect(await screen.findByText('Session not found')).toBeTruthy();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Delete setup' }));
+    fixture.detectChanges();
+    expect(await screen.findByText('Could not delete the setup: Session session-1 not found')).toBeTruthy();
   });
 
   // ── Calendar-resolved quick ranges ──────────────────────────

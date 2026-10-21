@@ -498,3 +498,12 @@ current synchronous Clerk remains the behavior baseline: durable A0 evidence
 is measured before broker work but is not yet returned early. The transaction
 detail projection derives phase evidence from Clerk receipts without treating
 the journal sequence as time or creating another account authority.
+
+## Amendment 2026-10-21 — the transaction tables' shape is a SQL migration ([ADR 0081](0081-python-owns-the-api-and-the-database-schema.md))
+
+The transaction-history projection amendment (2026-07-25, #1219) says ".NET owns
+only the migration shape". The C# backend was removed: the shape of the
+`clerk_transaction_*` tables is now in
+`PythonDataService/app/db_schema/migrations/0001_baseline.sql`, applied by the
+data plane at startup. Python owns the shape as well as the meaning;
+Angular still renders supplied fields and opaque IDs.

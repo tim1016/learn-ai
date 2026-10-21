@@ -4,8 +4,8 @@
 engine's), ``GET /{id}`` the run report with its newest five hundred trades
 and parity verdicts, ``GET /{id}/strategy-view`` the run's own decision
 candles (#2639 D13), and ``PATCH /{id}/notes`` the researcher's notes.
-These replace the .NET ``backtestRuns`` /
-``backtestRun`` GraphQL queries, the ``updateBacktestRunNotes`` mutation and
+These replace the retired GraphQL ``backtestRuns`` /
+``backtestRun`` queries, the ``updateBacktestRunNotes`` mutation and
 the ``/api/studies`` REST surface; the Relay connection is not reproduced
 because the history table requests one fixed page and never pages.
 """

@@ -26,13 +26,13 @@ Changing this provider boundary requires an explicit owner decision.
 2. **Numerical claims require receipts.** Every ported indicator, strategy, or calculation ships with a golden fixture derived from the reference (with its attribution file) and a tolerance-pinned test.
 3. **Sovereignty over the math.** Reference code is studied, ported, and then the dependency is eliminated. Vendored references in `references/` exist for audit, not for runtime use.
 4. **Strict equivalence is the default.** Warmup bars, timestamp alignment, commission, and fill models must match the reference exactly. If they can't, that fact is documented in the port's module docstring.
-5. **Python owns the math.** Every number a user compares against another number has one canonical implementation, in `PythonDataService/`. A .NET or Angular copy is allowed only as a named exception — a stated reason (latency, layer-locality) and a parity test naming the Python file — listed in the canonical-math ADR ([ADR 0068](docs/architecture/adrs/0068-python-owns-the-canonical-math.md)). The provenance block in each file records where its concept lives; there is no separate registry.
+5. **Python owns the math.** Every number a user compares against another number has one canonical implementation, in `PythonDataService/`. An Angular copy is allowed only as a named exception — a stated reason (latency, layer-locality) and a parity test naming the Python file — listed in the canonical-math ADR ([ADR 0068](docs/architecture/adrs/0068-python-owns-the-canonical-math.md)). The provenance block in each file records where its concept lives; there is no separate registry.
 6. **Time is `int64 ms UTC`, and the calendar is the source of truth.** Every temporal value in flight, at rest, or on the wire is `int64 ms UTC`; ISO strings and `DateTime` are disallowed as wire/storage formats. Language-native datetime types (`pd.Timestamp`, `DateTime`, `Date`) are permitted only for local arithmetic inside a single function and must be converted back to `int64 ms UTC` before returning, persisting, or serializing. All scheduled session structure (trading days, session open/close, early closes, alignment) derives from a single canonical calendar module — no hardcoded session times. Real-time market liveness (halts) is a separate concern owned by the live feed. `.claude/rules/temporal-rigor.md` holds the rules (ADR 0022).
 
 ## Codex and Claude compatibility
 
 - This file is the single source of shared rules. `CLAUDE.md` imports it with `@AGENTS.md` and adds only Claude-only lines.
-- Claude loads `.claude/rules/*.md` itself: `angular.md`, `dotnet.md` and `python.md` only when it works in that folder; `testing.md`, `numerical-rigor.md` and `temporal-rigor.md` always. Codex reads the matching rule file before stack work, and a skill's `.claude/skills/<name>/SKILL.md` when the list below says it applies.
+- Claude loads `.claude/rules/*.md` itself: `angular.md` and `python.md` only when it works in that folder; `testing.md`, `numerical-rigor.md` and `temporal-rigor.md` always. Codex reads the matching rule file before stack work, and a skill's `.claude/skills/<name>/SKILL.md` when the list below says it applies.
 - The repo's skills are the real copies. A personal skill with the same name shadows the repo copy in Claude; delete the personal one.
 
 ## Authority by claim
@@ -121,7 +121,6 @@ Codex: read the skill's `SKILL.md` when its task applies.
 - **reconcile-backtest** — Diff two backtest runs trade-by-trade and classify divergence sources
 - **extract-math-from-paper** — Transcribe equations from a PDF paper into testable Python with paper-section citations
 - **add-fastapi-endpoint** — Add a new FastAPI endpoint exposing engine output to the frontend
-- **write-graphql-resolver** — Write or debug a Hot Chocolate v15 resolver
 - **build-angular-component** — Build or modify an Angular 22 component
 - **meta-propose-skill** — When the same task shape repeats, propose a new skill instead of just doing the task
 - **learn-ai-validation** — Add or touch math: the provenance block, the canonical-implementation search, parity tests

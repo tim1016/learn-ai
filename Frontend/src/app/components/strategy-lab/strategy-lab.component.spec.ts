@@ -142,8 +142,11 @@ function strategyCatalog() {
  * the chart's own computed signals instead.
  */
 const bypassAuxiliaryChartRequests: HttpInterceptorFn = (request, next) => {
-  if (request.url.endsWith("/api/dataset/available") || request.url.endsWith("/graphql")) {
+  if (request.url.endsWith("/api/dataset/available")) {
     return of(new HttpResponse({ status: 200, body: null }));
+  }
+  if (request.url.endsWith("/api/snapshot/ticker")) {
+    return of(new HttpResponse({ status: 200, body: { success: false, snapshot: null, error: null } }));
   }
   if (request.url.endsWith("/api/strategy-gates/catalogue")) {
     return of(new HttpResponse({ status: 200, body: { indicators: [] } }));

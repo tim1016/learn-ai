@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
-import httpx
 import pytest
-import respx
 
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
+from app.jobs.facade import JobStartOutcome
 from app.schemas.engine_backtest import EngineBacktestRequest
 from app.services import parity_companion
 from app.services.parity_companion import (
@@ -23,7 +23,6 @@ from app.services.parity_companion import (
     new_parity_group_id,
 )
 
-BACKEND = "http://localhost:5000"
 EMA_PARAMETERS = {"gap": 0.20, "gap_bps": 0.0, "rsi_min": 50.0, "rsi_max": 70.0}
 
 
@@ -38,6 +37,28 @@ def verdict_writes(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[dict]]:
         lambda parity_group_id, *, status, detail: calls["failed"].append({"parity_group_id": parity_group_id, "status": status, "detail": detail}),
     )
     return calls
+
+
+class _JobLauncher:
+    """Stands in for the jobs facade: records every job the companion starts, answers with ``outcome``."""
+
+    def __init__(self) -> None:
+        self.launched: list[tuple[str, dict[str, Any]]] = []
+        self.outcome = JobStartOutcome(job_id="job-1", accepted=True, status_code=202)
+        self.error: Exception | None = None
+
+    def __call__(self, job_type: str, body: dict[str, Any]) -> JobStartOutcome:
+        self.launched.append((job_type, body))
+        if self.error is not None:
+            raise self.error
+        return self.outcome
+
+
+@pytest.fixture
+def job_launcher(monkeypatch: pytest.MonkeyPatch) -> _JobLauncher:
+    launcher = _JobLauncher()
+    monkeypatch.setattr(parity_companion, "launch_job_from_worker_thread", launcher)
+    return launcher
 
 
 def _request(**overrides) -> EngineBacktestRequest:
@@ -153,16 +174,7 @@ def test_companion_ineligibility_reasons(strategy, overrides, expected):
     assert reason == expected
 
 
-@respx.mock
-def test_dispatch_eligible_creates_pending_row_and_launches_job(verdict_writes):
-    launched: dict = {}
-
-    def _capture_job(request: httpx.Request) -> httpx.Response:
-        launched.update(json.loads(request.content))
-        return httpx.Response(202, json={"id": "job-1"})
-
-    respx.post(f"{BACKEND}/api/jobs/lean_engine_run").mock(side_effect=_capture_job)
-
+def test_dispatch_eligible_creates_pending_row_and_launches_job(verdict_writes, job_launcher):
     dispatch_parity_companion(
         registration=_STRATEGY_REGISTRY["ema_crossover_signal"],
         request=_request(),
@@ -175,6 +187,8 @@ def test_dispatch_eligible_creates_pending_row_and_launches_job(verdict_writes):
     assert created["status"] == "pending"
     assert created["left_run_id"] == 42
     assert created["parity_group_id"] == "pg-testgroup"
+    [(job_type, launched)] = job_launcher.launched
+    assert job_type == "lean_engine_run"
     body = launched["request"]
     assert body["run_id"] == "companion-pg-testgroup"
     assert body["template"] == "ema_crossover_signal"
@@ -186,17 +200,8 @@ def test_dispatch_eligible_creates_pending_row_and_launches_job(verdict_writes):
     assert body["end_ms_utc"] == 1767796200000
 
 
-@respx.mock
-def test_dispatch_migrated_signal_launches_its_named_lean_template(verdict_writes):
+def test_dispatch_migrated_signal_launches_its_named_lean_template(verdict_writes, job_launcher):
     """The canonical signal strategy must not silently dispatch the legacy key."""
-    launched: dict = {}
-
-    def _capture_job(request: httpx.Request) -> httpx.Response:
-        launched.update(json.loads(request.content))
-        return httpx.Response(202, json={"id": "job-signal"})
-
-    respx.post(f"{BACKEND}/api/jobs/lean_engine_run").mock(side_effect=_capture_job)
-
     dispatch_parity_companion(
         registration=_STRATEGY_REGISTRY["ema_crossover_signal"],
         request=_request(strategy_name="ema_crossover_signal"),
@@ -205,18 +210,18 @@ def test_dispatch_migrated_signal_launches_its_named_lean_template(verdict_write
         validated_parameters=EMA_PARAMETERS,
     )
 
+    [(_, launched)] = job_launcher.launched
     assert launched["request"]["template"] == "ema_crossover_signal"
 
 
 @pytest.mark.parametrize(
-    ("strategy", "extra_parameters", "parity_group_id", "left_execution_id", "job_id"),
+    ("strategy", "extra_parameters", "parity_group_id", "left_execution_id"),
     [
         pytest.param(
             "ema_crossover_signal",
             (),
             "pg-parameters",
             44,
-            "job-parameters",
             id="non_default_ema_gates_reach_the_companion_request",
         ),
         pytest.param(
@@ -224,25 +229,13 @@ def test_dispatch_migrated_signal_launches_its_named_lean_template(verdict_write
             (("fast_period", 7), ("slow_period", 20), ("hold_bars", 6), ("cross_max_age_bars", 3)),
             "pg-previous-crossover",
             45,
-            "job-previous-crossover",
             id="every_ema_previous_crossover_setting_reaches_its_own_template",
         ),
     ],
 )
-@respx.mock
 def test_non_default_settings_reach_the_companion_request(
-    verdict_writes, strategy, extra_parameters, parity_group_id, left_execution_id, job_id
+    verdict_writes, job_launcher, strategy, extra_parameters, parity_group_id, left_execution_id
 ) -> None:
-    launched: dict = {}
-
-    def _capture_job(request: httpx.Request) -> httpx.Response:
-        launched.update(json.loads(request.content))
-        from app.routers.lean_sidecar import TrustedRunRequestModel
-
-        TrustedRunRequestModel.model_validate(launched["request"])
-        return httpx.Response(202, json={"id": job_id})
-
-    respx.post(f"{BACKEND}/api/jobs/lean_engine_run").mock(side_effect=_capture_job)
     parameters = {"gap": 0.35, "gap_bps": 2.5, "rsi_min": 42.0, "rsi_max": 68.0, **dict(extra_parameters)}
     dispatch_parity_companion(
         registration=_STRATEGY_REGISTRY[strategy],
@@ -252,17 +245,16 @@ def test_non_default_settings_reach_the_companion_request(
         validated_parameters=parameters,
     )
 
+    [(_, launched)] = job_launcher.launched
+    from app.routers.lean_sidecar import TrustedRunRequestModel
+
+    TrustedRunRequestModel.model_validate(launched["request"])
     assert launched["request"]["template"] == strategy, "the request names the strategy's own template"
     assert launched["request"]["strategy_parameters"] == parameters, "every setting reaches the request"
     assert not verdict_writes["failed"], "the dispatch is not marked failed"
 
 
-@respx.mock
-def test_dispatch_ineligible_records_unavailable_and_launches_nothing(verdict_writes):
-    job_route = respx.post(f"{BACKEND}/api/jobs/lean_engine_run").mock(
-        return_value=httpx.Response(202, json={})
-    )
-
+def test_dispatch_ineligible_records_unavailable_and_launches_nothing(verdict_writes, job_launcher):
     dispatch_parity_companion(
         registration=_STRATEGY_REGISTRY["sma_crossover"],
         request=_request(strategy_name="sma_crossover"),
@@ -273,12 +265,11 @@ def test_dispatch_ineligible_records_unavailable_and_launches_nothing(verdict_wr
     [created] = verdict_writes["created"]
     assert created["status"] == "unavailable"
     assert json.loads(created["verdict_json"])["reason"] == REASON_NO_TWIN
-    assert not job_route.called
+    assert job_launcher.launched == []
 
 
-@respx.mock
-def test_dispatch_marks_run_failed_when_job_submission_rejected(verdict_writes):
-    respx.post(f"{BACKEND}/api/jobs/lean_engine_run").mock(return_value=httpx.Response(503))
+def test_dispatch_marks_run_failed_when_job_submission_rejected(verdict_writes, job_launcher):
+    job_launcher.outcome = JobStartOutcome(job_id="job-2", accepted=False, status_code=503, detail="unavailable")
 
     dispatch_parity_companion(
         registration=_STRATEGY_REGISTRY["ema_crossover_signal"],
@@ -292,6 +283,24 @@ def test_dispatch_marks_run_failed_when_job_submission_rejected(verdict_writes):
     assert marked["parity_group_id"] == "pg-reject"
     assert marked["status"] == "run_failed"
     assert "503" in marked["detail"]
+
+
+def test_dispatch_marks_run_failed_instead_of_raising_when_the_job_cannot_be_started(verdict_writes, job_launcher):
+    """The companion is best-effort: a store outage must not fail the Python run that triggered it."""
+    job_launcher.error = RuntimeError("job store unreachable")
+
+    dispatch_parity_companion(
+        registration=_STRATEGY_REGISTRY["ema_crossover_signal"],
+        request=_request(),
+        parity_group_id="pg-unreachable",
+        left_execution_id=42,
+        validated_parameters=EMA_PARAMETERS,
+    )
+
+    [marked] = verdict_writes["failed"]
+    assert marked["parity_group_id"] == "pg-unreachable"
+    assert marked["status"] == "run_failed"
+    assert "job store unreachable" in marked["detail"]
 
 
 def test_mark_parity_failed_swallows_database_errors(monkeypatch: pytest.MonkeyPatch):

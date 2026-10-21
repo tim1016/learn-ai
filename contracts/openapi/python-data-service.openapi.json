@@ -3117,7 +3117,7 @@
       },
       "BackfillJobRequest": {
         "additionalProperties": false,
-        "description": "Body of POST /api/data-lake/backfill.\n\nWraps the existing DataRunSpec ensure contract as a job submission:\nthe same snake_case fields and validation as /ensure-data's body\n(this router isn't behind the .NET-forwards-camelCase-verbatim\nconvention app/routers/jobs.py uses \u2014 it's called the same direct way\n/ensure-data already is), plus a job_id the caller mints ahead of\ndispatch, per the established job pattern's convention of the caller\nminting the id before the worker starts writing progress against it.",
+        "description": "Body of POST /api/data-lake/backfill.\n\nWraps the existing DataRunSpec ensure contract as a job submission:\nthe same snake_case fields and validation as /ensure-data's body\n(this router isn't behind the camelCase-verbatim convention\napp/routers/jobs.py uses), plus a job_id the jobs facade mints ahead of\ndispatch, per the established job pattern's convention of the id\nexisting before the worker starts writing progress against it.",
         "properties": {
           "job_id": {
             "minLength": 1,
@@ -12067,7 +12067,7 @@
       },
       "CrossSectionalJobRequest": {
         "additionalProperties": false,
-        "description": "Body of POST /api/jobs-internal/cross-sectional.\n\nThe Frontend's research request, plus an injected ``job_id`` from the\n.NET JobsApi.",
+        "description": "Body of POST /api/jobs-internal/cross-sectional.\n\nThe Frontend's research request, plus an injected ``job_id`` from the\njobs facade.",
         "properties": {
           "featureName": {
             "minLength": 1,
@@ -12654,6 +12654,349 @@
           "duration_ms"
         ],
         "title": "DataAvailabilityResult",
+        "type": "object"
+      },
+      "DataLabSessionReceipt": {
+        "description": "What a save, replace or rename answers: which session, and the instants the server stamped.",
+        "properties": {
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Updated At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "title": "DataLabSessionReceipt",
+        "type": "object"
+      },
+      "DataLabSessionRefusal": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "DataLabSessionRefusal",
+        "type": "object"
+      },
+      "DataLabSessionRefusalBody": {
+        "description": "The 404 body: FastAPI wraps an ``HTTPException`` detail as ``{\"detail\": ...}``.",
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/DataLabSessionRefusal"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "DataLabSessionRefusalBody",
+        "type": "object"
+      },
+      "DataLabSessionRenameRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "DataLabSessionRenameRequest",
+        "type": "object"
+      },
+      "DataLabSessionRequest": {
+        "additionalProperties": false,
+        "description": "What the screen saves: the whole session, every time (``PUT`` replaces, ``POST`` creates).",
+        "properties": {
+          "adjusted": {
+            "default": true,
+            "title": "Adjusted",
+            "type": "boolean"
+          },
+          "chart_snapshot": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The chart the session was saved with; null when it was saved before any chart was fetched.",
+            "title": "Chart Snapshot"
+          },
+          "entries": {
+            "description": "The indicator entries, e.g. [{name: 'ema', params: {length: 20}}].",
+            "items": {
+              "type": "object"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "forward_fill": {
+            "default": true,
+            "title": "Forward Fill",
+            "type": "boolean"
+          },
+          "from_date": {
+            "description": "A calendar date written YYYY-MM-DD (the date picker's state).",
+            "maxLength": 10,
+            "minLength": 10,
+            "title": "From Date",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "session": {
+            "default": "rth",
+            "description": "'rth' or 'extended'.",
+            "maxLength": 10,
+            "minLength": 1,
+            "title": "Session",
+            "type": "string"
+          },
+          "ticker": {
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Ticker",
+            "type": "string"
+          },
+          "to_date": {
+            "description": "A calendar date written YYYY-MM-DD (the date picker's state).",
+            "maxLength": 10,
+            "minLength": 10,
+            "title": "To Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "ticker",
+          "from_date",
+          "to_date"
+        ],
+        "title": "DataLabSessionRequest",
+        "type": "object"
+      },
+      "DataLabSessionResponse": {
+        "description": "One saved session, whole.",
+        "properties": {
+          "adjusted": {
+            "title": "Adjusted",
+            "type": "boolean"
+          },
+          "chart_snapshot": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chart Snapshot"
+          },
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "entries": {
+            "items": {
+              "type": "object"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "forward_fill": {
+            "title": "Forward Fill",
+            "type": "boolean"
+          },
+          "from_date": {
+            "description": "YYYY-MM-DD, as the picker saved it.",
+            "maxLength": 10,
+            "title": "From Date",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 300,
+            "title": "Name",
+            "type": "string"
+          },
+          "session": {
+            "maxLength": 10,
+            "title": "Session",
+            "type": "string"
+          },
+          "ticker": {
+            "maxLength": 20,
+            "title": "Ticker",
+            "type": "string"
+          },
+          "to_date": {
+            "description": "YYYY-MM-DD, as the picker saved it.",
+            "maxLength": 10,
+            "title": "To Date",
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Updated At Ms",
+            "type": "integer"
+          },
+          "window_end_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "UTC midnight of to_date. Null only for a legacy row whose date is not written YYYY-MM-DD.",
+            "title": "Window End Ms"
+          },
+          "window_start_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "UTC midnight of from_date. Null only for a legacy row whose date is not written YYYY-MM-DD.",
+            "title": "Window Start Ms"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "ticker",
+          "from_date",
+          "to_date",
+          "created_at_ms",
+          "updated_at_ms",
+          "session",
+          "forward_fill",
+          "adjusted",
+          "entries",
+          "chart_snapshot",
+          "window_start_ms",
+          "window_end_ms"
+        ],
+        "title": "DataLabSessionResponse",
+        "type": "object"
+      },
+      "DataLabSessionSummary": {
+        "description": "One saved session as the list shows it: the facts of its row, never its documents.\n\nThe two documents can run to megabytes (a chart snapshot holds every bar), so the list neither reads nor sends\nthem; ``entry_count`` and ``has_chart`` are worked out in the database. ``GET /{id}`` answers the session whole.",
+        "properties": {
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "entry_count": {
+            "description": "How many indicator entries the session holds.",
+            "minimum": 0.0,
+            "title": "Entry Count",
+            "type": "integer"
+          },
+          "from_date": {
+            "description": "YYYY-MM-DD, as the picker saved it.",
+            "maxLength": 10,
+            "title": "From Date",
+            "type": "string"
+          },
+          "has_chart": {
+            "description": "Whether the session was saved with a chart snapshot.",
+            "title": "Has Chart",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 300,
+            "title": "Name",
+            "type": "string"
+          },
+          "ticker": {
+            "maxLength": 20,
+            "title": "Ticker",
+            "type": "string"
+          },
+          "to_date": {
+            "description": "YYYY-MM-DD, as the picker saved it.",
+            "maxLength": 10,
+            "title": "To Date",
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Updated At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "ticker",
+          "from_date",
+          "to_date",
+          "created_at_ms",
+          "updated_at_ms",
+          "entry_count",
+          "has_chart"
+        ],
+        "title": "DataLabSessionSummary",
         "type": "object"
       },
       "DataQualityRequest": {
@@ -15100,7 +15443,7 @@
         "type": "object"
       },
       "EngineBacktestJobRequest": {
-        "description": "Body of POST /api/jobs-internal/engine-backtest.\n\nMirrors the existing synchronous EngineBacktestRequest shape but\naccepts it as a ``backtest`` sub-object so the field validation\nremains the single source of truth. The .NET JobsApi forwards the\nEngine Lab POST body verbatim plus an injected ``job_id``.",
+        "description": "Body of POST /api/jobs-internal/engine-backtest.\n\nMirrors the existing synchronous EngineBacktestRequest shape but\naccepts it as a ``backtest`` sub-object so the field validation\nremains the single source of truth. The jobs facade forwards the\nEngine Lab POST body verbatim plus an injected ``job_id``.",
         "properties": {
           "backtest": {
             "title": "Backtest",
@@ -17284,7 +17627,7 @@
       },
       "FeatureResearchJobRequest": {
         "additionalProperties": false,
-        "description": "Body of POST /api/jobs-internal/feature-research.\n\nThe runner fetches bars from Polygon itself \u2014 the Frontend sends only\nthe symbol + date range + feature, no payload of OHLCV. This keeps\nthe .NET round-trip small and matches the cross-sectional pattern.\n\nInherits all defaults from the base (``multiplier=1``,\n``timespan=\"minute\"``, ``session=\"rth\"``) \u2014 those match the\npre-migration shape exactly.",
+        "description": "Body of POST /api/jobs-internal/feature-research.\n\nThe runner fetches bars from Polygon itself \u2014 the Frontend sends only\nthe symbol + date range + feature, no payload of OHLCV. This keeps\nthe request small and matches the cross-sectional pattern.\n\nInherits all defaults from the base (``multiplier=1``,\n``timespan=\"minute\"``, ``session=\"rth\"``) \u2014 those match the\npre-migration shape exactly.",
         "properties": {
           "featureName": {
             "minLength": 1,
@@ -33207,6 +33550,82 @@
         "title": "JobAccepted",
         "type": "object"
       },
+      "JobAcceptedResponse": {
+        "properties": {
+          "id": {
+            "description": "The minted job id; its progress is the SSE stream at /api/jobs/{id}/events.",
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "queued",
+            "default": "queued",
+            "title": "Status"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "JobAcceptedResponse",
+        "type": "object"
+      },
+      "JobCancelResponse": {
+        "properties": {
+          "cancel_requested": {
+            "description": "Always true: the flag is set and the worker finishes its own record.",
+            "title": "Cancel Requested",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "cancel_requested"
+        ],
+        "title": "JobCancelResponse",
+        "type": "object"
+      },
+      "JobErrorResponse": {
+        "properties": {
+          "error": {
+            "title": "Error",
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "JobErrorResponse",
+        "type": "object"
+      },
+      "JobRejectedProblem": {
+        "description": "A ProblemDetails-shaped refusal: the worker route's own status, its raw body as ``detail``.",
+        "properties": {
+          "detail": {
+            "description": "The worker route's response body text, or the transport error behind a 502.",
+            "title": "Detail",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "integer"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "status",
+          "detail"
+        ],
+        "title": "JobRejectedProblem",
+        "type": "object"
+      },
       "JobRequest": {
         "additionalProperties": false,
         "properties": {
@@ -34197,7 +34616,7 @@
         "type": "object"
       },
       "LeanEngineRunJobRequest": {
-        "description": "Body of POST /api/jobs-internal/lean-engine-run.\n\nWraps the existing synchronous ``TrustedRunRequestModel`` shape as a\n``request`` sub-object so the lean-sidecar router's Pydantic\nvalidation remains the single source of truth for the payload. The\n.NET JobsApi forwards the Engine Lab POST body verbatim plus an\ninjected ``job_id``.",
+        "description": "Body of POST /api/jobs-internal/lean-engine-run.\n\nWraps the existing synchronous ``TrustedRunRequestModel`` shape as a\n``request`` sub-object so the lean-sidecar router's Pydantic\nvalidation remains the single source of truth for the payload. The\njobs facade forwards the Engine Lab POST body verbatim plus an\ninjected ``job_id``.",
         "properties": {
           "jobId": {
             "minLength": 1,
@@ -54652,6 +55071,128 @@
         "title": "ReproveQualificationRequest",
         "type": "object"
       },
+      "ResearchExperimentRefusal": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ResearchExperimentRefusal",
+        "type": "object"
+      },
+      "ResearchExperimentRefusalBody": {
+        "description": "The 404 / 500 body: FastAPI wraps an ``HTTPException`` detail as ``{\"detail\": ...}``.",
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/ResearchExperimentRefusal"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "ResearchExperimentRefusalBody",
+        "type": "object"
+      },
+      "ResearchExperimentResponse": {
+        "description": "One stored feature-research (information-coefficient) experiment.",
+        "properties": {
+          "adf_p_value": {
+            "title": "Adf P Value",
+            "type": "number"
+          },
+          "bars_used": {
+            "title": "Bars Used",
+            "type": "integer"
+          },
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "end_date": {
+            "title": "End Date",
+            "type": "string"
+          },
+          "feature_name": {
+            "title": "Feature Name",
+            "type": "string"
+          },
+          "ic_p_value": {
+            "title": "Ic P Value",
+            "type": "number"
+          },
+          "ic_t_stat": {
+            "title": "Ic T Stat",
+            "type": "number"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "is_monotonic": {
+            "title": "Is Monotonic",
+            "type": "boolean"
+          },
+          "is_stationary": {
+            "title": "Is Stationary",
+            "type": "boolean"
+          },
+          "kpss_p_value": {
+            "title": "Kpss P Value",
+            "type": "number"
+          },
+          "mean_ic": {
+            "title": "Mean Ic",
+            "type": "number"
+          },
+          "monotonicity_ratio": {
+            "title": "Monotonicity Ratio",
+            "type": "number"
+          },
+          "passed_validation": {
+            "title": "Passed Validation",
+            "type": "boolean"
+          },
+          "start_date": {
+            "title": "Start Date",
+            "type": "string"
+          },
+          "ticker": {
+            "title": "Ticker",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "ticker",
+          "feature_name",
+          "start_date",
+          "end_date",
+          "bars_used",
+          "mean_ic",
+          "ic_t_stat",
+          "ic_p_value",
+          "adf_p_value",
+          "kpss_p_value",
+          "is_stationary",
+          "passed_validation",
+          "monotonicity_ratio",
+          "is_monotonic",
+          "created_at_ms"
+        ],
+        "title": "ResearchExperimentResponse",
+        "type": "object"
+      },
       "Resolution": {
         "additionalProperties": false,
         "properties": {
@@ -56826,7 +57367,7 @@
         "type": "object"
       },
       "SanitizedDataResponse": {
-        "description": "Typed response for the Python-to-.NET aggregate-bars boundary.",
+        "description": "Typed response for the aggregate-bars boundary.",
         "properties": {
           "data": {
             "items": {
@@ -58239,6 +58780,1442 @@
           "featureName"
         ],
         "title": "SignalEngineJobRequest",
+        "type": "object"
+      },
+      "SignalExperimentReport": {
+        "description": "The signal engine's full report for one stored experiment.",
+        "properties": {
+          "backtest_grid": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SignalReportBacktest"
+            },
+            "title": "Backtest Grid",
+            "type": "array"
+          },
+          "bars_used": {
+            "default": 0,
+            "title": "Bars Used",
+            "type": "integer"
+          },
+          "best_cost_bps": {
+            "default": 0.0,
+            "title": "Best Cost Bps",
+            "type": "number"
+          },
+          "best_threshold": {
+            "default": 0.0,
+            "title": "Best Threshold",
+            "type": "number"
+          },
+          "cost_bps_options": {
+            "default": [],
+            "items": {
+              "type": "number"
+            },
+            "title": "Cost Bps Options",
+            "type": "array"
+          },
+          "data_sufficiency": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignalReportDataSufficiency"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "deflated_sharpe": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignalReportDeflatedSharpe"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "effective_sample": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignalReportEffectiveSample"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "end_date": {
+            "default": "",
+            "title": "End Date",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "feature_name": {
+            "default": "",
+            "title": "Feature Name",
+            "type": "string"
+          },
+          "flip_sign": {
+            "default": true,
+            "title": "Flip Sign",
+            "type": "boolean"
+          },
+          "graduation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignalReportGraduation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "joint_regime_coverage": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SignalReportRegimeBucket"
+            },
+            "title": "Joint Regime Coverage",
+            "type": "array"
+          },
+          "methodology": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignalReportMethodology"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "oos_sharpe_ci": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignalReportSharpeCi"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "regime_coverage": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SignalReportRegimeCount"
+            },
+            "title": "Regime Coverage",
+            "type": "array"
+          },
+          "research_log": {
+            "default": "",
+            "title": "Research Log",
+            "type": "string"
+          },
+          "signal_behavior": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignalReportBehavior"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "signal_diagnostics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignalReportDiagnostics"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "start_date": {
+            "default": "",
+            "title": "Start Date",
+            "type": "string"
+          },
+          "success": {
+            "default": false,
+            "title": "Success",
+            "type": "boolean"
+          },
+          "thresholds_tested": {
+            "default": [],
+            "items": {
+              "type": "number"
+            },
+            "title": "Thresholds Tested",
+            "type": "array"
+          },
+          "ticker": {
+            "default": "",
+            "title": "Ticker",
+            "type": "string"
+          },
+          "walk_forward": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignalReportWalkForward"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "ticker",
+          "feature_name",
+          "start_date",
+          "end_date",
+          "bars_used",
+          "flip_sign",
+          "thresholds_tested",
+          "cost_bps_options",
+          "best_threshold",
+          "best_cost_bps",
+          "backtest_grid",
+          "walk_forward",
+          "graduation",
+          "signal_diagnostics",
+          "data_sufficiency",
+          "effective_sample",
+          "regime_coverage",
+          "joint_regime_coverage",
+          "signal_behavior",
+          "oos_sharpe_ci",
+          "deflated_sharpe",
+          "methodology",
+          "research_log",
+          "error"
+        ],
+        "title": "SignalExperimentReport",
+        "type": "object"
+      },
+      "SignalExperimentResponse": {
+        "description": "One stored signal-engine experiment: the headline of its report.",
+        "properties": {
+          "bars_used": {
+            "title": "Bars Used",
+            "type": "integer"
+          },
+          "best_cost_bps": {
+            "title": "Best Cost Bps",
+            "type": "number"
+          },
+          "best_threshold": {
+            "title": "Best Threshold",
+            "type": "number"
+          },
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "end_date": {
+            "title": "End Date",
+            "type": "string"
+          },
+          "feature_name": {
+            "title": "Feature Name",
+            "type": "string"
+          },
+          "flip_sign": {
+            "title": "Flip Sign",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "mean_oos_sharpe": {
+            "title": "Mean Oos Sharpe",
+            "type": "number"
+          },
+          "overall_grade": {
+            "title": "Overall Grade",
+            "type": "string"
+          },
+          "overall_passed": {
+            "title": "Overall Passed",
+            "type": "boolean"
+          },
+          "regime_gate_enabled": {
+            "title": "Regime Gate Enabled",
+            "type": "boolean"
+          },
+          "start_date": {
+            "title": "Start Date",
+            "type": "string"
+          },
+          "status_label": {
+            "title": "Status Label",
+            "type": "string"
+          },
+          "ticker": {
+            "title": "Ticker",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "ticker",
+          "feature_name",
+          "start_date",
+          "end_date",
+          "bars_used",
+          "overall_grade",
+          "status_label",
+          "overall_passed",
+          "mean_oos_sharpe",
+          "best_threshold",
+          "best_cost_bps",
+          "flip_sign",
+          "regime_gate_enabled",
+          "created_at_ms"
+        ],
+        "title": "SignalExperimentResponse",
+        "type": "object"
+      },
+      "SignalReportAlphaDecay": {
+        "properties": {
+          "intercept": {
+            "default": 0.0,
+            "title": "Intercept",
+            "type": "number"
+          },
+          "is_significant": {
+            "default": false,
+            "title": "Is Significant",
+            "type": "boolean"
+          },
+          "is_test_valid": {
+            "default": false,
+            "title": "Is Test Valid",
+            "type": "boolean"
+          },
+          "n_folds_used": {
+            "default": 0,
+            "title": "N Folds Used",
+            "type": "integer"
+          },
+          "p_value": {
+            "default": 1.0,
+            "title": "P Value",
+            "type": "number"
+          },
+          "r_squared": {
+            "default": 0.0,
+            "title": "R Squared",
+            "type": "number"
+          },
+          "slope": {
+            "default": 0.0,
+            "title": "Slope",
+            "type": "number"
+          },
+          "t_stat": {
+            "default": 0.0,
+            "title": "T Stat",
+            "type": "number"
+          }
+        },
+        "required": [
+          "slope",
+          "intercept",
+          "t_stat",
+          "p_value",
+          "r_squared",
+          "n_folds_used",
+          "is_test_valid",
+          "is_significant"
+        ],
+        "title": "SignalReportAlphaDecay",
+        "type": "object"
+      },
+      "SignalReportBacktest": {
+        "description": "One threshold-by-cost backtest of the grid.",
+        "properties": {
+          "annualized_turnover": {
+            "default": 0.0,
+            "title": "Annualized Turnover",
+            "type": "number"
+          },
+          "avg_holding_bars": {
+            "default": 0.0,
+            "title": "Avg Holding Bars",
+            "type": "number"
+          },
+          "avg_win_loss_ratio": {
+            "default": 0.0,
+            "title": "Avg Win Loss Ratio",
+            "type": "number"
+          },
+          "cost_bps": {
+            "title": "Cost Bps",
+            "type": "number"
+          },
+          "cumulative_returns": {
+            "default": [],
+            "items": {
+              "type": "number"
+            },
+            "title": "Cumulative Returns",
+            "type": "array"
+          },
+          "dates": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Dates",
+            "type": "array"
+          },
+          "gross_sharpe": {
+            "default": 0.0,
+            "title": "Gross Sharpe",
+            "type": "number"
+          },
+          "gross_total_return": {
+            "default": 0.0,
+            "title": "Gross Total Return",
+            "type": "number"
+          },
+          "max_drawdown": {
+            "default": 0.0,
+            "title": "Max Drawdown",
+            "type": "number"
+          },
+          "net_sharpe": {
+            "default": 0.0,
+            "title": "Net Sharpe",
+            "type": "number"
+          },
+          "net_total_return": {
+            "default": 0.0,
+            "title": "Net Total Return",
+            "type": "number"
+          },
+          "positions": {
+            "default": [],
+            "items": {
+              "type": "number"
+            },
+            "title": "Positions",
+            "type": "array"
+          },
+          "threshold": {
+            "title": "Threshold",
+            "type": "number"
+          },
+          "total_trades": {
+            "default": 0,
+            "title": "Total Trades",
+            "type": "integer"
+          },
+          "win_rate": {
+            "default": 0.0,
+            "title": "Win Rate",
+            "type": "number"
+          }
+        },
+        "required": [
+          "threshold",
+          "cost_bps",
+          "dates",
+          "cumulative_returns",
+          "positions",
+          "gross_sharpe",
+          "net_sharpe",
+          "max_drawdown",
+          "annualized_turnover",
+          "avg_holding_bars",
+          "win_rate",
+          "avg_win_loss_ratio",
+          "total_trades",
+          "net_total_return",
+          "gross_total_return"
+        ],
+        "title": "SignalReportBacktest",
+        "type": "object"
+      },
+      "SignalReportBehavior": {
+        "properties": {
+          "avg_forward_return_when_active": {
+            "default": 0.0,
+            "title": "Avg Forward Return When Active",
+            "type": "number"
+          },
+          "avg_loss_return": {
+            "default": 0.0,
+            "title": "Avg Loss Return",
+            "type": "number"
+          },
+          "avg_win_return": {
+            "default": 0.0,
+            "title": "Avg Win Return",
+            "type": "number"
+          },
+          "hit_rate": {
+            "default": 0.0,
+            "title": "Hit Rate",
+            "type": "number"
+          },
+          "skewness_active_returns": {
+            "default": 0.0,
+            "title": "Skewness Active Returns",
+            "type": "number"
+          }
+        },
+        "required": [
+          "avg_forward_return_when_active",
+          "skewness_active_returns",
+          "avg_win_return",
+          "avg_loss_return",
+          "hit_rate"
+        ],
+        "title": "SignalReportBehavior",
+        "type": "object"
+      },
+      "SignalReportDataSufficiency": {
+        "properties": {
+          "coverage_warnings": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Coverage Warnings",
+            "type": "array"
+          },
+          "effective_oos_bars": {
+            "default": 0,
+            "title": "Effective Oos Bars",
+            "type": "integer"
+          },
+          "regime_coverage": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SignalReportRegimeCount"
+            },
+            "title": "Regime Coverage",
+            "type": "array"
+          },
+          "regimes_covered": {
+            "default": 0,
+            "title": "Regimes Covered",
+            "type": "integer"
+          },
+          "test_bars": {
+            "default": 0,
+            "title": "Test Bars",
+            "type": "integer"
+          },
+          "total_bars": {
+            "default": 0,
+            "title": "Total Bars",
+            "type": "integer"
+          },
+          "train_bars": {
+            "default": 0,
+            "title": "Train Bars",
+            "type": "integer"
+          },
+          "walk_forward_folds": {
+            "default": 0,
+            "title": "Walk Forward Folds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total_bars",
+          "train_bars",
+          "test_bars",
+          "walk_forward_folds",
+          "effective_oos_bars",
+          "regimes_covered",
+          "regime_coverage",
+          "coverage_warnings"
+        ],
+        "title": "SignalReportDataSufficiency",
+        "type": "object"
+      },
+      "SignalReportDeflatedSharpe": {
+        "properties": {
+          "dsr_probability": {
+            "default": 0.0,
+            "title": "Dsr Probability",
+            "type": "number"
+          },
+          "expected_max_under_null": {
+            "default": 0.0,
+            "title": "Expected Max Under Null",
+            "type": "number"
+          },
+          "kurtosis": {
+            "default": 0.0,
+            "title": "Kurtosis",
+            "type": "number"
+          },
+          "n_trials": {
+            "default": 0,
+            "title": "N Trials",
+            "type": "integer"
+          },
+          "raw_sharpe": {
+            "default": 0.0,
+            "title": "Raw Sharpe",
+            "type": "number"
+          },
+          "skewness": {
+            "default": 0.0,
+            "title": "Skewness",
+            "type": "number"
+          },
+          "valid": {
+            "default": false,
+            "title": "Valid",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "raw_sharpe",
+          "expected_max_under_null",
+          "dsr_probability",
+          "n_trials",
+          "skewness",
+          "kurtosis",
+          "valid"
+        ],
+        "title": "SignalReportDeflatedSharpe",
+        "type": "object"
+      },
+      "SignalReportDiagnostics": {
+        "properties": {
+          "avg_abs_signal": {
+            "default": 0.0,
+            "title": "Avg Abs Signal",
+            "type": "number"
+          },
+          "pct_filtered_by_threshold": {
+            "default": 0.0,
+            "title": "Pct Filtered By Threshold",
+            "type": "number"
+          },
+          "pct_gated_by_regime": {
+            "default": 0.0,
+            "title": "Pct Gated By Regime",
+            "type": "number"
+          },
+          "pct_time_active": {
+            "default": 0.0,
+            "title": "Pct Time Active",
+            "type": "number"
+          },
+          "signal_mean": {
+            "default": 0.0,
+            "title": "Signal Mean",
+            "type": "number"
+          },
+          "signal_std": {
+            "default": 0.0,
+            "title": "Signal Std",
+            "type": "number"
+          }
+        },
+        "required": [
+          "signal_mean",
+          "signal_std",
+          "pct_time_active",
+          "avg_abs_signal",
+          "pct_filtered_by_threshold",
+          "pct_gated_by_regime"
+        ],
+        "title": "SignalReportDiagnostics",
+        "type": "object"
+      },
+      "SignalReportEffectiveSample": {
+        "properties": {
+          "autocorrelation_lag1": {
+            "default": 0.0,
+            "title": "Autocorrelation Lag1",
+            "type": "number"
+          },
+          "effective_n": {
+            "default": 0.0,
+            "title": "Effective N",
+            "type": "number"
+          },
+          "independent_bets": {
+            "default": 0,
+            "title": "Independent Bets",
+            "type": "integer"
+          },
+          "max_lag_used": {
+            "default": 0,
+            "title": "Max Lag Used",
+            "type": "integer"
+          },
+          "raw_n": {
+            "default": 0,
+            "title": "Raw N",
+            "type": "integer"
+          },
+          "rho_sum": {
+            "default": 0.0,
+            "title": "Rho Sum",
+            "type": "number"
+          }
+        },
+        "required": [
+          "raw_n",
+          "effective_n",
+          "autocorrelation_lag1",
+          "independent_bets",
+          "max_lag_used",
+          "rho_sum"
+        ],
+        "title": "SignalReportEffectiveSample",
+        "type": "object"
+      },
+      "SignalReportGraduation": {
+        "properties": {
+          "criteria": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SignalReportGraduationCriterion"
+            },
+            "title": "Criteria",
+            "type": "array"
+          },
+          "overall_grade": {
+            "default": "F",
+            "title": "Overall Grade",
+            "type": "string"
+          },
+          "overall_passed": {
+            "default": false,
+            "title": "Overall Passed",
+            "type": "boolean"
+          },
+          "parameter_stability": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignalReportParameterStability"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stage0_rejection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignalReportStage0Rejection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stage_info": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignalReportStageInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status_label": {
+            "default": "Exploratory",
+            "title": "Status Label",
+            "type": "string"
+          },
+          "summary": {
+            "default": "",
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "criteria",
+          "overall_passed",
+          "overall_grade",
+          "summary",
+          "status_label",
+          "parameter_stability",
+          "stage0_rejection",
+          "stage_info"
+        ],
+        "title": "SignalReportGraduation",
+        "type": "object"
+      },
+      "SignalReportGraduationCriterion": {
+        "properties": {
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "failure_reason": {
+            "default": "",
+            "title": "Failure Reason",
+            "type": "string"
+          },
+          "label": {
+            "default": "Fail",
+            "title": "Label",
+            "type": "string"
+          },
+          "name": {
+            "default": "",
+            "title": "Name",
+            "type": "string"
+          },
+          "passed": {
+            "default": false,
+            "title": "Passed",
+            "type": "boolean"
+          },
+          "threshold": {
+            "default": 0.0,
+            "title": "Threshold",
+            "type": "number"
+          },
+          "value": {
+            "default": 0.0,
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "passed",
+          "value",
+          "threshold",
+          "label",
+          "failure_reason"
+        ],
+        "title": "SignalReportGraduationCriterion",
+        "type": "object"
+      },
+      "SignalReportMethodology": {
+        "properties": {
+          "annualization_factor": {
+            "default": 0,
+            "title": "Annualization Factor",
+            "type": "integer"
+          },
+          "bars_per_day": {
+            "default": 0,
+            "title": "Bars Per Day",
+            "type": "integer"
+          },
+          "cost_bps_options": {
+            "default": [],
+            "items": {
+              "type": "number"
+            },
+            "title": "Cost Bps Options",
+            "type": "array"
+          },
+          "default_cost_bps": {
+            "default": 0.0,
+            "title": "Default Cost Bps",
+            "type": "number"
+          },
+          "flip_sign": {
+            "default": false,
+            "title": "Flip Sign",
+            "type": "boolean"
+          },
+          "horizon": {
+            "default": 0,
+            "title": "Horizon",
+            "type": "integer"
+          },
+          "min_bars_for_signal": {
+            "default": 0,
+            "title": "Min Bars For Signal",
+            "type": "integer"
+          },
+          "optimization_target": {
+            "default": "net_sharpe",
+            "title": "Optimization Target",
+            "type": "string"
+          },
+          "regime_gate_enabled": {
+            "default": false,
+            "title": "Regime Gate Enabled",
+            "type": "boolean"
+          },
+          "test_months": {
+            "default": 0,
+            "title": "Test Months",
+            "type": "integer"
+          },
+          "thresholds": {
+            "default": [],
+            "items": {
+              "type": "number"
+            },
+            "title": "Thresholds",
+            "type": "array"
+          },
+          "train_months": {
+            "default": 0,
+            "title": "Train Months",
+            "type": "integer"
+          },
+          "window_type": {
+            "default": "rolling",
+            "title": "Window Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "train_months",
+          "test_months",
+          "window_type",
+          "optimization_target",
+          "annualization_factor",
+          "bars_per_day",
+          "horizon",
+          "default_cost_bps",
+          "min_bars_for_signal",
+          "flip_sign",
+          "regime_gate_enabled",
+          "thresholds",
+          "cost_bps_options"
+        ],
+        "title": "SignalReportMethodology",
+        "type": "object"
+      },
+      "SignalReportParameterStability": {
+        "properties": {
+          "sharpe_values_by_threshold": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SignalReportThresholdSharpe"
+            },
+            "title": "Sharpe Values By Threshold",
+            "type": "array"
+          },
+          "stability_label": {
+            "default": "Fragile",
+            "title": "Stability Label",
+            "type": "string"
+          },
+          "stability_score": {
+            "default": 0.0,
+            "title": "Stability Score",
+            "type": "number"
+          }
+        },
+        "required": [
+          "sharpe_values_by_threshold",
+          "stability_score",
+          "stability_label"
+        ],
+        "title": "SignalReportParameterStability",
+        "type": "object"
+      },
+      "SignalReportRegimeBucket": {
+        "properties": {
+          "badge": {
+            "default": "Empty",
+            "title": "Badge",
+            "type": "string"
+          },
+          "days": {
+            "default": 0,
+            "title": "Days",
+            "type": "integer"
+          },
+          "effective_trades": {
+            "default": 0.0,
+            "title": "Effective Trades",
+            "type": "number"
+          },
+          "trend_label": {
+            "default": "",
+            "title": "Trend Label",
+            "type": "string"
+          },
+          "vol_label": {
+            "default": "",
+            "title": "Vol Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "vol_label",
+          "trend_label",
+          "days",
+          "effective_trades",
+          "badge"
+        ],
+        "title": "SignalReportRegimeBucket",
+        "type": "object"
+      },
+      "SignalReportRegimeCount": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "regime": {
+            "title": "Regime",
+            "type": "string"
+          }
+        },
+        "required": [
+          "regime",
+          "count"
+        ],
+        "title": "SignalReportRegimeCount",
+        "type": "object"
+      },
+      "SignalReportSharpeCi": {
+        "properties": {
+          "ci_lower": {
+            "default": 0.0,
+            "title": "Ci Lower",
+            "type": "number"
+          },
+          "ci_upper": {
+            "default": 0.0,
+            "title": "Ci Upper",
+            "type": "number"
+          },
+          "confidence_level": {
+            "default": 0.95,
+            "title": "Confidence Level",
+            "type": "number"
+          },
+          "n_eff_used": {
+            "default": 0.0,
+            "title": "N Eff Used",
+            "type": "number"
+          },
+          "point": {
+            "default": 0.0,
+            "title": "Point",
+            "type": "number"
+          },
+          "se": {
+            "default": 0.0,
+            "title": "Se",
+            "type": "number"
+          },
+          "valid": {
+            "default": false,
+            "title": "Valid",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "point",
+          "se",
+          "ci_lower",
+          "ci_upper",
+          "confidence_level",
+          "n_eff_used",
+          "valid"
+        ],
+        "title": "SignalReportSharpeCi",
+        "type": "object"
+      },
+      "SignalReportStage0Failure": {
+        "properties": {
+          "criterion_name": {
+            "default": "",
+            "title": "Criterion Name",
+            "type": "string"
+          },
+          "message": {
+            "default": "",
+            "title": "Message",
+            "type": "string"
+          },
+          "threshold_repr": {
+            "default": "",
+            "title": "Threshold Repr",
+            "type": "string"
+          },
+          "value": {
+            "default": 0.0,
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "criterion_name",
+          "value",
+          "threshold_repr",
+          "message"
+        ],
+        "title": "SignalReportStage0Failure",
+        "type": "object"
+      },
+      "SignalReportStage0Rejection": {
+        "properties": {
+          "failed_criteria": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SignalReportStage0Failure"
+            },
+            "title": "Failed Criteria",
+            "type": "array"
+          },
+          "rejected": {
+            "default": false,
+            "title": "Rejected",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "rejected",
+          "failed_criteria"
+        ],
+        "title": "SignalReportStage0Rejection",
+        "type": "object"
+      },
+      "SignalReportStageAdvanceCriterion": {
+        "properties": {
+          "current_value": {
+            "default": 0.0,
+            "title": "Current Value",
+            "type": "number"
+          },
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "met": {
+            "default": false,
+            "title": "Met",
+            "type": "boolean"
+          },
+          "name": {
+            "default": "",
+            "title": "Name",
+            "type": "string"
+          },
+          "required_repr": {
+            "default": "",
+            "title": "Required Repr",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "current_value",
+          "required_repr",
+          "met"
+        ],
+        "title": "SignalReportStageAdvanceCriterion",
+        "type": "object"
+      },
+      "SignalReportStageInfo": {
+        "properties": {
+          "advance_criteria": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SignalReportStageAdvanceCriterion"
+            },
+            "title": "Advance Criteria",
+            "type": "array"
+          },
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "label": {
+            "default": "Rejected",
+            "title": "Label",
+            "type": "string"
+          },
+          "next_stage_label": {
+            "default": "",
+            "title": "Next Stage Label",
+            "type": "string"
+          },
+          "stage": {
+            "default": 0,
+            "title": "Stage",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "stage",
+          "label",
+          "description",
+          "next_stage_label",
+          "advance_criteria"
+        ],
+        "title": "SignalReportStageInfo",
+        "type": "object"
+      },
+      "SignalReportThresholdSharpe": {
+        "properties": {
+          "sharpe": {
+            "title": "Sharpe",
+            "type": "number"
+          },
+          "threshold": {
+            "title": "Threshold",
+            "type": "number"
+          }
+        },
+        "required": [
+          "threshold",
+          "sharpe"
+        ],
+        "title": "SignalReportThresholdSharpe",
+        "type": "object"
+      },
+      "SignalReportWalkForward": {
+        "properties": {
+          "alpha_decay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SignalReportAlphaDecay"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "best_window_sharpe": {
+            "default": 0.0,
+            "title": "Best Window Sharpe",
+            "type": "number"
+          },
+          "combined_oos_cumulative_returns": {
+            "default": [],
+            "items": {
+              "type": "number"
+            },
+            "title": "Combined Oos Cumulative Returns",
+            "type": "array"
+          },
+          "combined_oos_dates": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Combined Oos Dates",
+            "type": "array"
+          },
+          "mean_oos_sharpe": {
+            "default": 0.0,
+            "title": "Mean Oos Sharpe",
+            "type": "number"
+          },
+          "median_oos_sharpe": {
+            "default": 0.0,
+            "title": "Median Oos Sharpe",
+            "type": "number"
+          },
+          "oos_sharpe_trend_slope": {
+            "default": 0.0,
+            "title": "Oos Sharpe Trend Slope",
+            "type": "number"
+          },
+          "pct_windows_positive_sharpe": {
+            "default": 0.0,
+            "title": "Pct Windows Positive Sharpe",
+            "type": "number"
+          },
+          "pct_windows_profitable": {
+            "default": 0.0,
+            "title": "Pct Windows Profitable",
+            "type": "number"
+          },
+          "std_oos_sharpe": {
+            "default": 0.0,
+            "title": "Std Oos Sharpe",
+            "type": "number"
+          },
+          "total_oos_bars": {
+            "default": 0,
+            "title": "Total Oos Bars",
+            "type": "integer"
+          },
+          "windows": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SignalReportWalkForwardWindow"
+            },
+            "title": "Windows",
+            "type": "array"
+          },
+          "worst_window_sharpe": {
+            "default": 0.0,
+            "title": "Worst Window Sharpe",
+            "type": "number"
+          }
+        },
+        "required": [
+          "windows",
+          "mean_oos_sharpe",
+          "std_oos_sharpe",
+          "median_oos_sharpe",
+          "pct_windows_profitable",
+          "pct_windows_positive_sharpe",
+          "worst_window_sharpe",
+          "best_window_sharpe",
+          "total_oos_bars",
+          "combined_oos_dates",
+          "combined_oos_cumulative_returns",
+          "oos_sharpe_trend_slope",
+          "alpha_decay"
+        ],
+        "title": "SignalReportWalkForward",
+        "type": "object"
+      },
+      "SignalReportWalkForwardWindow": {
+        "properties": {
+          "best_threshold": {
+            "default": 0.0,
+            "title": "Best Threshold",
+            "type": "number"
+          },
+          "fold_index": {
+            "default": 0,
+            "title": "Fold Index",
+            "type": "integer"
+          },
+          "mu": {
+            "default": 0.0,
+            "title": "Mu",
+            "type": "number"
+          },
+          "oos_cumulative_returns": {
+            "default": [],
+            "items": {
+              "type": "number"
+            },
+            "title": "Oos Cumulative Returns",
+            "type": "array"
+          },
+          "oos_dates": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Oos Dates",
+            "type": "array"
+          },
+          "oos_gross_sharpe": {
+            "default": 0.0,
+            "title": "Oos Gross Sharpe",
+            "type": "number"
+          },
+          "oos_max_drawdown": {
+            "default": 0.0,
+            "title": "Oos Max Drawdown",
+            "type": "number"
+          },
+          "oos_net_return": {
+            "default": 0.0,
+            "title": "Oos Net Return",
+            "type": "number"
+          },
+          "oos_net_sharpe": {
+            "default": 0.0,
+            "title": "Oos Net Sharpe",
+            "type": "number"
+          },
+          "oos_total_trades": {
+            "default": 0,
+            "title": "Oos Total Trades",
+            "type": "integer"
+          },
+          "oos_win_rate": {
+            "default": 0.0,
+            "title": "Oos Win Rate",
+            "type": "number"
+          },
+          "sigma": {
+            "default": 0.0,
+            "title": "Sigma",
+            "type": "number"
+          },
+          "test_bars": {
+            "default": 0,
+            "title": "Test Bars",
+            "type": "integer"
+          },
+          "test_end": {
+            "default": "",
+            "title": "Test End",
+            "type": "string"
+          },
+          "test_start": {
+            "default": "",
+            "title": "Test Start",
+            "type": "string"
+          },
+          "train_bars": {
+            "default": 0,
+            "title": "Train Bars",
+            "type": "integer"
+          },
+          "train_end": {
+            "default": "",
+            "title": "Train End",
+            "type": "string"
+          },
+          "train_start": {
+            "default": "",
+            "title": "Train Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fold_index",
+          "train_start",
+          "train_end",
+          "test_start",
+          "test_end",
+          "train_bars",
+          "test_bars",
+          "mu",
+          "sigma",
+          "best_threshold",
+          "oos_net_sharpe",
+          "oos_gross_sharpe",
+          "oos_max_drawdown",
+          "oos_net_return",
+          "oos_win_rate",
+          "oos_total_trades",
+          "oos_dates",
+          "oos_cumulative_returns"
+        ],
+        "title": "SignalReportWalkForwardWindow",
         "type": "object"
       },
       "SignalSeriesContract": {
@@ -64179,6 +66156,28 @@
           "choices"
         ],
         "title": "UnknownOrderSettlementResponse",
+        "type": "object"
+      },
+      "UnsupportedJobTypeResponse": {
+        "properties": {
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "supported": {
+            "description": "Every job type this surface starts.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Supported",
+            "type": "array"
+          }
+        },
+        "required": [
+          "error",
+          "supported"
+        ],
+        "title": "UnsupportedJobTypeResponse",
         "type": "object"
       },
       "UntestedTradedAssetAcknowledgement": {
@@ -84104,6 +86103,294 @@
         ]
       }
     },
+    "/api/data-lab/sessions": {
+      "get": {
+        "description": "Every saved session, most recently updated first, as a summary: no entries and no chart snapshot.\n\n``GET /{session_id}`` answers one session whole.",
+        "operationId": "list_data_lab_sessions_api_data_lab_sessions_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DataLabSessionSummary"
+                  },
+                  "title": "Response List Data Lab Sessions Api Data Lab Sessions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Data Lab Sessions",
+        "tags": [
+          "data-lab-sessions"
+        ]
+      },
+      "post": {
+        "description": "Save a new session. The server picks its id and stamps its instants.",
+        "operationId": "save_data_lab_session_api_data_lab_sessions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DataLabSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataLabSessionReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Data Lab Session",
+        "tags": [
+          "data-lab-sessions"
+        ]
+      }
+    },
+    "/api/data-lab/sessions/{session_id}": {
+      "delete": {
+        "operationId": "delete_data_lab_session_api_data_lab_sessions__session_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataLabSessionRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Data Lab Session",
+        "tags": [
+          "data-lab-sessions"
+        ]
+      },
+      "get": {
+        "operationId": "get_data_lab_session_api_data_lab_sessions__session_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataLabSessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataLabSessionRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Data Lab Session",
+        "tags": [
+          "data-lab-sessions"
+        ]
+      },
+      "put": {
+        "description": "Replace a session whole: name, configuration, entries and chart snapshot. Its creation instant is kept.",
+        "operationId": "replace_data_lab_session_api_data_lab_sessions__session_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DataLabSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataLabSessionReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataLabSessionRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Replace Data Lab Session",
+        "tags": [
+          "data-lab-sessions"
+        ]
+      }
+    },
+    "/api/data-lab/sessions/{session_id}/name": {
+      "patch": {
+        "operationId": "rename_data_lab_session_api_data_lab_sessions__session_id__name_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DataLabSessionRenameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataLabSessionReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataLabSessionRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rename Data Lab Session",
+        "tags": [
+          "data-lab-sessions"
+        ]
+      }
+    },
     "/api/data-lake/artifacts/{artifact_id}": {
       "get": {
         "description": "Return the full receipt for one catalog row: hashes, size, provider params.",
@@ -84937,7 +87224,7 @@
     },
     "/api/engine/backtest": {
       "post": {
-        "description": "Run a strategy through the LEAN-compatible backtest engine (synchronous).\n\nUsed by tests, curl, and any caller that doesn't need streamed\nprogress. The Engine Lab UI uses the Jobs system instead \u2014 see\n``POST /api/jobs/engine_backtest`` (defined in the .NET layer) which\nforwards to ``/api/jobs-internal/engine-backtest`` here.\n\nThe engine reads LEAN-format minute zips from the configured data\nroot and produces trades that reproduce LEAN's reference log\nbit-exactly when the same strategy is run against the same data.",
+        "description": "Run a strategy through the LEAN-compatible backtest engine (synchronous).\n\nUsed by tests, curl, and any caller that doesn't need streamed\nprogress. The Engine Lab UI uses the Jobs system instead \u2014 see\n``POST /api/jobs/engine_backtest`` (the jobs facade, ``app.jobs.facade``)\nwhich forwards to ``/api/jobs-internal/engine-backtest`` here.\n\nThe engine reads LEAN-format minute zips from the configured data\nroot and produces trades that reproduce LEAN's reference log\nbit-exactly when the same strategy is run against the same data.",
         "operationId": "run_engine_backtest_api_engine_backtest_post",
         "requestBody": {
           "content": {
@@ -85155,6 +87442,57 @@
         ]
       }
     },
+    "/api/jobs": {
+      "get": {
+        "description": "The state record of every queued or running job. There is no index of finished jobs, so ``active=false`` is empty.",
+        "operationId": "list_jobs_api_jobs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "active",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Active",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  "title": "Response List Jobs Api Jobs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Jobs",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
     "/api/jobs-internal/cross-sectional": {
       "post": {
         "description": "Kick off a cross-sectional study in a worker thread. Returns 202.\n\nThe runner processes tickers sequentially \u2014 ~30\u201390 seconds per ticker\non Polygon Starter \u2014 so we wire ``ProgressEmitter`` into the runner's\noptional ``on_phase`` / ``on_log`` / ``on_progress`` callbacks. The\nFrontend's run-dock subscribes to the SSE stream and renders each\nticker's status as it lands.\n\nA successful prior run with identical params is served from cache \u2014\nthe response carries ``status=cached`` and the worker thread is\nskipped. Pass ``force=true`` in the body to bypass the cache.",
@@ -85200,7 +87538,7 @@
     },
     "/api/jobs-internal/dataset-zip": {
       "post": {
-        "description": "Kick off a dataset fetch + bundle into a ZIP archive.\n\nMaps the existing dataset bundling pipeline (`_fetch_and_process` +\n`_build_zip_with_events`) onto the generic job framework. The pipeline\nalready supports ``on_event`` and ``cancel_check`` callables \u2014 we\nplug those into :class:`ProgressEmitter` and\n:class:`CancellationCheck` respectively, so the inner code is\nunchanged. The final ZIP bytes go through ``completed_blob`` which\nparks them at ``job:{id}:result-blob``; the .NET ``GET /api/jobs/\n{id}/download`` streams them with the right Content-Disposition.",
+        "description": "Kick off a dataset fetch + bundle into a ZIP archive.\n\nMaps the existing dataset bundling pipeline (`_fetch_and_process` +\n`_build_zip_with_events`) onto the generic job framework. The pipeline\nalready supports ``on_event`` and ``cancel_check`` callables \u2014 we\nplug those into :class:`ProgressEmitter` and\n:class:`CancellationCheck` respectively, so the inner code is\nunchanged. The final ZIP bytes go through ``completed_blob`` which\nparks them at ``job:{id}:result-blob``; the jobs facade's ``GET /api/jobs/\n{id}/download`` serves them with the right Content-Disposition.",
         "operationId": "start_dataset_zip_job_api_jobs_internal_dataset_zip_post",
         "requestBody": {
           "content": {
@@ -85243,7 +87581,7 @@
     },
     "/api/jobs-internal/engine-backtest": {
       "post": {
-        "description": "Kick off a LEAN-engine backtest in a worker thread. Returns 202.\n\nThe Engine Lab UI is the primary caller; the .NET JobsApi forwards\nthe request after minting the ``job_id`` and writing the initial\nstate record to Redis. The worker emits ``phase`` and ``log`` events\nto the same Redis stream, then ``completed`` with the\nEngineBacktestResponse-shaped result body.",
+        "description": "Kick off a LEAN-engine backtest in a worker thread. Returns 202.\n\nThe Engine Lab UI is the primary caller; the jobs facade forwards\nthe request after minting the ``job_id`` and writing the initial\nstate record to Redis. The worker emits ``phase`` and ``log`` events\nto the same Redis stream, then ``completed`` with the\nEngineBacktestResponse-shaped result body.",
         "operationId": "start_engine_backtest_job_api_jobs_internal_engine_backtest_post",
         "requestBody": {
           "content": {
@@ -86048,6 +88386,310 @@
         "summary": "Start Walk Forward Study Job",
         "tags": [
           "jobs-internal"
+        ]
+      }
+    },
+    "/api/jobs/{job_id}": {
+      "delete": {
+        "description": "Ask a job's worker to stop. Cooperative: the worker finishes its own record.",
+        "operationId": "cancel_job_api_jobs__job_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobCancelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Job",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/jobs/{job_id}/download": {
+      "get": {
+        "description": "The binary a completed job stored (a ZIP, a PDF), under the name and type it recorded.",
+        "operationId": "download_job_blob_api_jobs__job_id__download_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Download Job Blob",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/jobs/{job_id}/events": {
+      "get": {
+        "description": "Server-sent events for a job; ``Last-Event-ID`` (a Redis stream entry id) resumes after that entry.",
+        "operationId": "stream_job_events_api_jobs__job_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Last-Event-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last-Event-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "SSE job events."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stream Job Events",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/jobs/{job_id}/result": {
+      "get": {
+        "description": "The JSON a completed job stored, verbatim.",
+        "operationId": "get_job_result_api_jobs__job_id__result_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Job Result",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/api/jobs/{job_type}": {
+      "post": {
+        "description": "Start a job of ``job_type``: the body goes to its worker route as sent, plus the minted ``job_id``.",
+        "operationId": "start_job_api_jobs__job_type__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_type",
+            "required": true,
+            "schema": {
+              "title": "Job Type",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobAcceptedResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnsupportedJobTypeResponse"
+                }
+              }
+            },
+            "description": "Unknown job type, or a body that is not JSON."
+          },
+          "4XX": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobRejectedProblem"
+                }
+              }
+            },
+            "description": "The type's worker route refused the start."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobRejectedProblem"
+                }
+              }
+            },
+            "description": "The worker route could not be reached or crashed."
+          }
+        },
+        "summary": "Start Job",
+        "tags": [
+          "jobs"
         ]
       }
     },
@@ -86915,6 +89557,57 @@
         "summary": "Get Backtest Run Strategy View",
         "tags": [
           "research-backtest-runs"
+        ]
+      }
+    },
+    "/api/research/experiments": {
+      "get": {
+        "description": "A ticker's stored feature-research experiments, newest first.",
+        "operationId": "list_research_experiments_api_research_experiments_get",
+        "parameters": [
+          {
+            "description": "The ticker's symbol; case does not matter.",
+            "in": "query",
+            "name": "ticker",
+            "required": true,
+            "schema": {
+              "description": "The ticker's symbol; case does not matter.",
+              "maxLength": 50,
+              "minLength": 1,
+              "title": "Ticker",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ResearchExperimentResponse"
+                  },
+                  "title": "Response List Research Experiments Api Research Experiments Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Research Experiments",
+        "tags": [
+          "research-experiments"
         ]
       }
     },
@@ -93205,6 +95898,122 @@
         "summary": "Run Day Candles",
         "tags": [
           "research"
+        ]
+      }
+    },
+    "/api/research/signal-experiments": {
+      "get": {
+        "description": "A ticker's stored signal-engine experiments, newest first, each as its headline without the full report.",
+        "operationId": "list_signal_experiments_api_research_signal_experiments_get",
+        "parameters": [
+          {
+            "description": "The ticker's symbol; case does not matter.",
+            "in": "query",
+            "name": "ticker",
+            "required": true,
+            "schema": {
+              "description": "The ticker's symbol; case does not matter.",
+              "maxLength": 50,
+              "minLength": 1,
+              "title": "Ticker",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SignalExperimentResponse"
+                  },
+                  "title": "Response List Signal Experiments Api Research Signal Experiments Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Signal Experiments",
+        "tags": [
+          "research-experiments"
+        ]
+      }
+    },
+    "/api/research/signal-experiments/{experiment_id}/report": {
+      "get": {
+        "description": "One signal experiment's full report. A stored report that cannot be read is a 500 that says so, never a partial one.",
+        "operationId": "get_signal_experiment_report_api_research_signal_experiments__experiment_id__report_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "experiment_id",
+            "required": true,
+            "schema": {
+              "maximum": 2147483647,
+              "minimum": 1,
+              "title": "Experiment Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignalExperimentReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchExperimentRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchExperimentRefusalBody"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        },
+        "summary": "Get Signal Experiment Report",
+        "tags": [
+          "research-experiments"
         ]
       }
     },

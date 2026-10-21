@@ -6,7 +6,7 @@ import { MarketDataService } from '../../../services/market-data.service';
 import { OptionsLabChainComponent } from './options-lab-chain.component';
 import { fakePickerWorld } from '../../../shared/symbol-picker/testing/fake-picker-world';
 import { optionExpiryAnchorMs } from '../../../shared/option-contract/option-expiry-date';
-import type { StockTickerSnapshot } from '../../../graphql/types';
+import type { StockTickerSnapshot } from '../../../services/market-data.types';
 
 /**
  * Renders the page against a stubbed market-data service whose chain

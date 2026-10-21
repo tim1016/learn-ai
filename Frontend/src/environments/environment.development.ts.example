@@ -4,6 +4,5 @@
 
 export const environment = {
   primeUiLicense: 'YOUR_PRIMEUI_LICENSE_KEY_HERE',
-  backendUrl: 'http://localhost:5000/graphql',
   pythonServiceUrl: 'http://localhost:8000',
 };

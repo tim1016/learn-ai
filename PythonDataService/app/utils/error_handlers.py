@@ -124,18 +124,17 @@ async def clerk_sqlite_exception_handler(request: Request, exc: Exception) -> JS
 
 
 async def catalog_schema_not_ready_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """Answer a mid-deploy catalog-schema race with a retryable 503 instead
-    of the catch-all 500.
+    """Answer a catalog-schema mismatch with a retryable 503 instead of the
+    catch-all 500.
 
     ``CatalogSchemaNotReadyError`` (app.data_lake.catalog_client) means a
     ``claim_*`` call's ``ON CONFLICT`` target doesn't match the database's
-    current indexes -- almost always python-service having started serving
-    ``/ensure-data`` traffic before Backend's EF Core migration finished
-    applying (compose.yaml health-gates Backend on python-service, not the
-    reverse). That is a transient deploy-ordering state, not an unexpected
-    fault, so -- same reasoning as ``clerk_sqlite_exception_handler`` above
-    -- it must not fall through to the catch-all 500 as an opaque asyncpg
-    stack trace.
+    current indexes. The data plane migrates its own schema before it serves
+    (ADR 0081), so this is a database restored from a backup older than the
+    code, or one opened before the data plane migrated it. That is a
+    transient state, not an unexpected fault, so -- same reasoning as
+    ``clerk_sqlite_exception_handler`` above -- it must not fall through to
+    the catch-all 500 as an opaque asyncpg stack trace.
     """
     logger.warning(
         "Catalog schema not ready for this request",

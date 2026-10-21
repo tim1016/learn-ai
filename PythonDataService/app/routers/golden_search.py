@@ -4,8 +4,8 @@
 control guard (every unsafe method needs the control secret): capabilities,
 defaults, preflight, the study record and its one command endpoint, the
 runs with their curves and candidate detail. ``jobs_router`` —
-``POST /api/jobs-internal/golden-search``, dispatched by the .NET jobs
-boundary with a minted ``job_id``. It is unguarded like Grid Search's, but it
+``POST /api/jobs-internal/golden-search``, dispatched by the jobs
+facade with a minted ``job_id``. It is unguarded like Grid Search's, but it
 can only run a stage a guarded command already authorized: the request must
 echo that command's ``stage_token``, and the study binds one job to it.
 

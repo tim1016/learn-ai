@@ -391,9 +391,9 @@
           </p>
           <p>
             The <strong>Legacy BS</strong> model runs entirely in the browser (client-side JavaScript). All other
-            models are computed on the server via a single GraphQL query (<code>pricingModelComparison</code>) that
-            calls the Python data service endpoint <code>POST /api/quantlib/compare</code>. This endpoint returns
-            curves for Python BS and all 6 QuantLib engines in one response.
+            models are computed on the server by a single request to the Python data service endpoint
+            <code>POST /api/quantlib/compare</code>, which returns curves for Python BS and all 6 QuantLib
+            engines in one response.
           </p>
           <p>
             If any individual engine fails for a given contract (e.g., numerical instability), that engine is
@@ -529,13 +529,9 @@
           <h3>System Architecture</h3>
           <p>
             <strong>Frontend (Angular):</strong> Computes Legacy BS client-side using <code>black-scholes.ts</code>
-            (Abramowitz &amp; Stegun normCdf polynomial). Sends a single GraphQL query for all server-side models.
+            (Abramowitz &amp; Stegun normCdf polynomial). Sends a single <code>POST /api/quantlib/compare</code>
+            request for all server-side models.
             Charts rendered with <code>lightweight-charts</code> v5 (TradingView).
-          </p>
-          <p>
-            <strong>Backend (.NET / Hot Chocolate):</strong> GraphQL resolver <code>pricingModelComparison</code>
-            proxies the request to the Python data service via <code>POST /api/quantlib/compare</code>.
-            Uses <code>JsonNamingPolicy.SnakeCaseLower</code> for Python interop. Timeout: 300 seconds.
           </p>
           <p>
             <strong>Data Service (Python / FastAPI):</strong> Endpoint <code>/api/quantlib/compare</code> iterates

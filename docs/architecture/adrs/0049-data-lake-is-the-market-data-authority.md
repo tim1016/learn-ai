@@ -244,3 +244,22 @@ The chart-scoped `fetch_timeout_seconds` default is 120s (vs the engine's 600s) 
 - A chart request for a symbol/window the lake does not hold is now a fetch-into-the-lake request: the first load pays the provider cost once, and every later chart (and engine run, and export that adopts the lake) reads the bytes from the lake. Lake coverage grows with chart usage rather than only via explicit backfill.
 - The receipt extension is additive (`lake_ingest` inside `bar_sources`); the retained-but-unproduced `price_adjustment_unsupported` contract codes are untouched.
 - The six direct-Polygon consumers named in Decision 1c are unaffected; the chart was never among them.
+
+## Amendment 2026-10-21 — who owns the catalog schema ([ADR 0081](0081-python-owns-the-api-and-the-database-schema.md))
+
+The Context says `Backend/Migrations/20260521033222_AddDataLakeArtifactsAndRuns.cs`
+is the EF Core migration that owns the catalog schema, "per the design's
+service-role split (Backend owns Postgres migrations; Python owns the only
+writer)". That split is gone with the C# backend. The `DataLakeArtifacts` table
+is now created by `PythonDataService/app/db_schema/migrations/0001_baseline.sql`,
+which the data plane applies at startup. `catalog_schema.py` is still the Python
+mirror, still drift-tested against `pg_catalog`
+(`tests/integration/data_lake/test_schema_drift.py`); a change to a column or
+constraint is now a new numbered SQL file and a `catalog_schema.py` change in
+the same pull request.
+
+Nothing else in this ADR moves. Where Decision 3 and amendment A3 say "the .NET
+Backend" or "Backend", they name the retired C# service; the decision they
+record (in-process Python orchestration, no HTTP hop) is the only flow there is.
+The schema-only `DataLakeRuns` table that A3 says is being dropped is not in the
+baseline.

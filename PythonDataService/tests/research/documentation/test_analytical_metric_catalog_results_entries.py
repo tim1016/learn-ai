@@ -19,7 +19,7 @@ def test_platform_headline_fixture_receipt_is_only_claimed_for_covered_metrics()
     for metric_id, entry in entries.items():
         if metric_id in golden_covered:
             assert entry.fixture_or_receipt == "contracts/fixtures/strategy-metric-help-golden-v2.json", metric_id
-        elif entry.canonical_symbol.startswith(("Backend/", "PythonDataService/app/engine/results/equity_downsample.py")) or any(
+        elif entry.canonical_symbol.startswith("PythonDataService/app/engine/results/equity_downsample.py") or any(
             marker in entry.canonical_symbol for marker in ("engine_validation_analytics.py", "run_verdict_service.py")
         ):
             continue  # These branches have their own dedicated receipts, asserted elsewhere.

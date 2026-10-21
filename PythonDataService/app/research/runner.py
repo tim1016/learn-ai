@@ -6,8 +6,8 @@ Long-running for minute-bar studies, so the orchestrator accepts optional
 ``on_phase`` / ``on_log`` / ``on_progress`` / ``cancel_check`` callables.
 The Jobs/SSE wrapper in ``app/routers/jobs.py`` plugs ``ProgressEmitter``
 into these so the run-progress panel shows what stage we're in. The
-callables are no-ops by default — synchronous callers (the existing
-GraphQL endpoint, tests) get the same behaviour as before.
+callables are no-ops by default — synchronous callers (direct calls,
+tests) get the same behaviour as before.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 
 # Optional progress callbacks used by the Jobs/SSE wrapper. Default no-ops
-# keep synchronous callers (existing GraphQL endpoint, tests) unaffected.
+# keep synchronous callers (direct calls, tests) unaffected.
 PhaseCallback = Callable[[str], None]
 LogCallback = Callable[[str, str], None]
 """(message, level) — level is "info" / "warn" / "error"."""

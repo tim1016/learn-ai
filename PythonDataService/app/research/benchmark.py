@@ -112,10 +112,6 @@ def _corpus_data_policy(symbol: str) -> dict[str, Any]:
 # The deployed render of the fleet topology: the committed artifact that
 # names every deployed service and its VM containment.
 FLEET_TOPOLOGY_PATH = Path(__file__).resolve().parents[3] / "deploy" / "fleet" / "topology.snapshot.json"
-# The Backend's Npgsql pool when its deployed connection string sets no
-# "Max Pool Size" — Npgsql's documented default maximum.
-NPGSQL_DEFAULT_MAX_POOL_SIZE = 100
-
 WindowKind = Literal["full-development", "fold"]
 
 
@@ -968,10 +964,8 @@ def connection_inventory(*, research_cap: int = CONNECTION_INVENTORY_RESEARCH_CA
 
     The pools come from the deployment's own facts: the data plane's two
     loops and each fleet clerk lane's one share the catalog pool's ceiling
-    (``catalog_client.POOL_MAX_SIZE``), the Backend's Npgsql pool is capped
-    by its deployed connection string (Npgsql's documented default when the
-    string sets no maximum), and the fleet topology snapshot names the
-    deployed services and their VM containment. The PostgreSQL server
+    (``catalog_client.POOL_MAX_SIZE``), and the fleet topology snapshot names
+    the deployed services and their VM containment. The PostgreSQL server
     maximum is an operator input (``POSTGRES_SERVER_MAX_CONNECTIONS``):
     without it the verdict is *unverified* — ``meets_required_free`` is
     None with the reason, never a pass guessed against an assumed limit.
@@ -990,12 +984,6 @@ def connection_inventory(*, research_cap: int = CONNECTION_INVENTORY_RESEARCH_CA
             "max_connections": POOL_MAX_SIZE * coordinator_loops,
             "server": "postgres",
             "source": f"catalog_client.POOL_MAX_SIZE={POOL_MAX_SIZE} × {coordinator_loops} deployed loops",
-        },
-        {
-            "name": "backend: Npgsql pool",
-            "max_connections": NPGSQL_DEFAULT_MAX_POOL_SIZE,
-            "server": "postgres",
-            "source": "Npgsql default maximum; compose.yaml's ConnectionStrings__DefaultConnection sets no Max Pool Size",
         },
     ]
     for clerk in sorted(name for name in deployed if "clerk" in name):

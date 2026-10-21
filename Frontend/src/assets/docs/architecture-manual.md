@@ -1,12 +1,12 @@
 # How learn-ai is built
 
-*A plain-language architecture manual for the owner. Checked against the code on 2026-09-18 (commit `a69b77d5`).*
+*A plain-language architecture manual for the owner. Checked against the code on 2026-09-18 (commit `a69b77d5`). On 2026-10-21 the description of the back-office services was brought up to date with the removal of the C# backend ([ADR 0081](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/adrs/0081-python-owns-the-api-and-the-database-schema.md)); nothing else was re-checked.*
 
 This manual explains how learn-ai is put together: what its parts are, how they hand work to each other, where the one true answer to each kind of question lives, and where the design is weakest. It is written for someone who needs to understand the architecture well enough to make decisions and brief AI agents, without reading code.
 
 ## The whole system in six sentences
 
-1. learn-ai is a set of cooperating programs that all run on **one Mac**: a web app you look at, two back-office services that compute and store, and one **clerk** per brokerage account.
+1. learn-ai is a set of cooperating programs that all run on **one Mac**: a web app you look at, one back-office service that computes and stores, and one **clerk** per brokerage account.
 2. The **clerks** are the only parts allowed to touch money: each owns exactly one Alpaca account, its own disk, its own bots and its own tamper-evident ledger.
 3. The **coordinator** is a switchboard: it routes every account command to the right clerk and keeps receipts, but it never holds money and never trades.
 4. **Live prices come only from IBKR** (read-only) and **orders go only to Alpaca**. That split is a standing owner decision.
@@ -42,12 +42,12 @@ This manual explains how learn-ai is put together: what its parts are, how they 
 
 ## 1. The one-picture map
 
-*Checked against the code on 2026-09-18 (commit `a69b77d5`).*
+*Checked against the code on 2026-09-18 (commit `a69b77d5`).* Updated 2026-10-21 for ADR 0081: the .NET backend is gone.
 
 > **In one sentence:** every part of learn-ai runs on your Mac. The screens only show, the Python coordinator computes and routes, and one clerk per brokerage account is the only thing that touches money.
 
 <figure class="md-diagram">
-<svg viewBox="0 0 960 660" role="img" aria-label="Map of learn-ai. Outside companies at the top: Polygon, FRED and IBKR. Inside your Mac: the web app talks to the .NET backend and the Python coordinator; the .NET backend relays to the coordinator; the coordinator reads Polygon and FRED, writes the data lake, uses Postgres and Redis, and routes commands to a Live clerk and a Paper clerk. IB Gateway brings IBKR's live prices to both clerks. Both clerks send orders to Alpaca, the outside company at the bottom.">
+<svg viewBox="0 0 960 660" role="img" aria-label="Map of learn-ai. Outside companies at the top: Polygon, FRED and IBKR. Inside your Mac: the web app talks to the Python coordinator; the coordinator reads Polygon and FRED, writes the data lake, uses Postgres and Redis, and routes commands to a Live clerk and a Paper clerk. IB Gateway brings IBKR's live prices to both clerks. Both clerks send orders to Alpaca, the outside company at the bottom.">
 <defs><marker id="ah1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="dg-arrowhead" d="M0,0 L10,5 L0,10 z"/></marker></defs>
 <text class="dg-s" x="20" y="40">OUTSIDE COMPANIES</text>
 <rect class="dg-box dg-outside" x="290" y="12" width="150" height="48" rx="6"/><text class="dg-h" x="365" y="32" text-anchor="middle">Polygon</text><text class="dg-t" x="365" y="50" text-anchor="middle">price history</text>
@@ -58,14 +58,11 @@ This manual explains how learn-ai is put together: what its parts are, how they 
 <path class="dg-flow dg-data" d="M365,60 L365,188" marker-end="url(#ah1)"/>
 <path class="dg-flow dg-data" d="M520,60 L520,188" marker-end="url(#ah1)"/>
 <path class="dg-flow dg-data" d="M765,60 L765,104" marker-end="url(#ah1)"/>
-<path class="dg-flow dg-command" d="M130,182 L130,288" marker-end="url(#ah1)"/><text class="dg-label" x="138" y="240">GraphQL · jobs</text>
 <path class="dg-flow dg-command" d="M230,151 L255,151 L255,215 L278,215" marker-end="url(#ah1)"/><text class="dg-label" x="262" y="182">requests</text>
-<path class="dg-flow dg-command" d="M230,321 L255,321 L255,262 L278,262" marker-end="url(#ah1)"/><text class="dg-label" x="262" y="304">relays</text>
 <path class="dg-flow dg-command" d="M540,236 L604,236" marker-end="url(#ah1)"/><text class="dg-label" x="572" y="226" text-anchor="middle">commands</text>
 <path class="dg-flow dg-data" d="M720,152 L720,224" marker-end="url(#ah1)"/>
 <path class="dg-flow dg-data" d="M810,152 L810,224" marker-end="url(#ah1)"/>
 <text class="dg-label" x="765" y="186" text-anchor="middle">read-only prices</text>
-<path class="dg-flow" d="M115,352 L115,428" marker-end="url(#ah1)"/>
 <path class="dg-flow" d="M300,282 L300,400 L150,400 L150,428" marker-end="url(#ah1)"/>
 <path class="dg-flow" d="M340,282 L340,428" marker-end="url(#ah1)"/>
 <path class="dg-flow dg-data" d="M475,282 L475,428" marker-end="url(#ah1)"/><text class="dg-label" x="482" y="370">only writer</text>
@@ -73,7 +70,6 @@ This manual explains how learn-ai is put together: what its parts are, how they 
 <path class="dg-flow dg-money" d="M861,310 L861,586" marker-end="url(#ah1)"/>
 <text class="dg-label" x="778" y="470" text-anchor="middle">orders out · fills back</text>
 <a href="#6-who-decides-what"><rect class="dg-box" x="30" y="120" width="200" height="62" rx="6"/><text class="dg-h" x="130" y="146" text-anchor="middle">Web app</text><text class="dg-t" x="130" y="166" text-anchor="middle">screens · decides nothing</text></a>
-<a href="#4-the-seams"><rect class="dg-box" x="30" y="290" width="200" height="62" rx="6"/><text class="dg-h" x="130" y="316" text-anchor="middle">.NET backend</text><text class="dg-t" x="130" y="336" text-anchor="middle">older service · jobs</text></a>
 <a href="#3-account-lanes"><rect class="dg-box dg-coord" x="280" y="190" width="260" height="92" rx="6"/><text class="dg-h" x="410" y="216" text-anchor="middle">Python coordinator</text><text class="dg-t" x="410" y="238" text-anchor="middle">research · history · data lake</text><text class="dg-t" x="410" y="258" text-anchor="middle">switchboard for account commands</text></a>
 <a href="#36-where-live-prices-come-from"><rect class="dg-box" x="690" y="106" width="150" height="46" rx="6"/><text class="dg-h" x="765" y="126" text-anchor="middle">IB Gateway</text><text class="dg-t" x="765" y="144" text-anchor="middle">IBKR's program</text></a>
 <rect class="dg-zone" x="606" y="196" width="340" height="128" rx="8"/>
@@ -94,11 +90,10 @@ This manual explains how learn-ai is put together: what its parts are, how they 
 | Part | Its job, in plain words | What it keeps |
 |---|---|---|
 | **Web app** (Angular) | The screens. It shows what the back office tells it and sends your commands. It decides nothing about safety. | Nothing. |
-| **.NET backend** | The older back-office service. It answers some screens through GraphQL, hands long jobs to Python, and keeps several older record sets: Data Lab saved sessions, the practice portfolio, a market-data cache, older feature and signal research experiments, and the layout of the data lake's catalog. It never talks to a broker. The owner has said it is being phased out: no new feature adds a .NET table. | Its own tables in Postgres. |
-| **Python coordinator** (the "data plane") | The workhorse and the switchboard. It runs research and backtests, fetches price history, is the only writer of the data lake, and routes every account command to the right clerk. It never connects to Alpaca or IBKR. | The data lake, research results, and the fleet registry (which lanes exist). |
+| **Python coordinator** (the "data plane") | The workhorse and the switchboard. It answers every request the screens make (REST routes under `/api`), gives each long job its ID and tracks its progress, runs research and backtests, fetches price history, is the only writer of the data lake, owns the shape of the Postgres tables (it applies the database migrations when it starts), and routes every account command to the right clerk. It never connects to Alpaca or IBKR. | The data lake, research results, the older record sets (Data Lab saved sessions, older feature and signal research experiments, which are read-only history), and the fleet registry (which lanes exist). |
 | **Live clerk** and **Paper clerk** | One per brokerage account. Each owns that account's ledger, its bots, its Alpaca connection and its own read-only IBKR price feed. | Everything about its one account, on its own disk. |
-| **Postgres** | The shared database. Some tables belong to .NET, some to Python. It holds the data lake's catalog, which never holds prices. The older .NET market-data explorer does keep its own cached copy of price bars here; backtests never read it. | Records. |
-| **Redis** | A scratch pad for job progress, shared by .NET and Python. It forgets everything on restart, on purpose. | Nothing durable. |
+| **Postgres** | The shared database. Python owns all of its tables: the shared ones are created by numbered SQL files and the research ones by the research code. It holds the data lake's catalog, which never holds prices. A few older tables that nothing reads or writes any more (the practice-portfolio ledger, a market-data cache) were kept rather than dropped. | Records. |
+| **Redis** | A scratch pad for job progress. It forgets everything on restart, on purpose. | Nothing durable. |
 | **Data lake** | A folder of price-history files, each fingerprinted, that backtests and most history charts read. | Price history. |
 | **IB Gateway** | IBKR's own program, running directly on the Mac rather than in a container. It is the live price source. | Nothing of ours. |
 | **LEAN launcher** | A small helper on the Mac that starts a LEAN backtest container when Python asks for a second-opinion run. | Nothing. |
@@ -108,7 +103,7 @@ This manual explains how learn-ai is put together: what its parts are, how they 
 ### Three things the map shows that matter most
 
 - **Money has exactly one road.** Orders reach Alpaca only from a clerk. No other part holds broker credentials or a broker connection.
-- **History comes through one door.** Only the coordinator calls Polygon, and only it writes the data lake. Backtests and most history charts read the lake; a bot's chart history is fetched from Polygon by the coordinator; the older market-data explorer keeps its own copy in .NET's tables. Even a clerk that needs a chart asks the coordinator; clerks are given no Polygon key.
+- **History comes through one door.** Only the coordinator calls Polygon, and only it writes the data lake. Backtests and most history charts read the lake; a bot's chart history is fetched from Polygon by the coordinator; the market-data explorer asks the coordinator for Polygon's bars every time and keeps no copy. Even a clerk that needs a chart asks the coordinator; clerks are given no Polygon key.
 - **The account screens hold no judgment.** On the account and bot screens, whether a button is allowed, whether a bot is safe and what a warning says are all written by Python and only displayed by the web app. [Chapter 6](#6-who-decides-what) explains why.
 
 ### Two ways to run the same program
@@ -122,7 +117,7 @@ The Python coordinator and the clerks are **the same program**. One setting, its
 
 ## 2. The journey of a strategy
 
-*Checked against the code on 2026-09-18 (commit `a69b77d5`).*
+*Checked against the code on 2026-09-18 (commit `a69b77d5`).* Updated 2026-10-21 for ADR 0081: the .NET backend is gone.
 
 > **In one sentence:** a strategy moves from data to research to proof to deployment on one account, and at every gate that matters, either a machine check or a human decision must pass before it can move on.
 
@@ -154,7 +149,7 @@ A strategy can be deployed only after an engineer (in practice, you and an AI ag
 
 ### Stage 1: data
 
-- **Where history comes from.** Historical prices come from Polygon, and only the Python coordinator calls Polygon. (A .NET component happens to be called "PolygonService", but it actually calls Python.)
+- **Where history comes from.** Historical prices come from Polygon, and only the Python coordinator calls Polygon.
 - **Where history is kept.** The **data lake** is a folder of price-history files (minute bars one file per symbol and day, daily bars one file per symbol), kept in the same file format LEAN uses. Adjusted and raw prices sit in separate folders. Every file carries a fingerprint (a SHA-256 hash), so you can prove later exactly which bytes a backtest read.
 - **The index is not the data.** A catalog in Postgres records which files exist, their fingerprints, and who is currently fetching each one. It never holds prices. If the catalog is lost, the recovery is to wipe it and fetch again; there is no rebuild tool.
 - **One writer.** Only the coordinator's data-lake module may write lake files. Everyone else reads. If two jobs need the same day, it is downloaded once: the catalog gives one job a lease, and the file and its fingerprint are published together.
@@ -165,7 +160,7 @@ A strategy can be deployed only after an engineer (in practice, you and an AI ag
 ### Stage 2: research
 
 - **One official engine, one second opinion.** The Python backtest engine gives the official answer. **LEAN** (QuantConnect's engine, run in a sealed-off container) is a second opinion used to check it; it never overrides it. Who owns which engine is recorded in the [engine authority map](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/engine-authority-map.md).
-- **Strategy Lab** runs a backtest as a long job: .NET gives it an ID, tracks its progress in Redis and hands it to Python. Python saves every run to its research tables. For strategies with a LEAN twin, it launches the matching LEAN run automatically and records a **parity verdict** comparing the two.
+- **Strategy Lab** runs a backtest as a long job: Python gives it an ID, tracks its progress in Redis and runs it, and saves every run to its research tables. For strategies with a LEAN twin, it launches the matching LEAN run automatically and records a **parity verdict** comparing the two.
 - **Grid Search** tries many parameter settings over one time window and scores each one. Its results are "in-sample" by construction: they tell you what fit the past best, not what will work.
 - **Walk-Forward** is the honest version: it splits history into folds, picks the best setting on each training slice, tests it on the next unseen slice, and freezes a verdict computed by fixed code.
 - **Research Lab** holds exploratory studies. Its "graduation ladder" grades an *idea*; it has nothing to do with graduating a *Live account*, and none of it feeds a deploy gate.
@@ -468,17 +463,16 @@ Here is what happens when you confirm **Deploy** in the Live account's workspace
 
 ## 4. The seams
 
-*Checked against the code on 2026-09-18 (commit `a69b77d5`).*
+*Checked against the code on 2026-09-18 (commit `a69b77d5`).* Updated 2026-10-21 for ADR 0081: the .NET backend's seams are gone and the rest are renumbered.
 
 > **In one sentence:** a seam is any place where one part hands work to another, and the strongest seams are the ones whose contract is generated from code and checked by the build on every change.
 
 Seams are where bugs hide: each side can be correct on its own while the two disagree about what crosses between them. So for every seam this chapter asks three questions: **what crosses it, what contract governs it, and does a machine check that contract?**
 
 <figure class="md-diagram">
-<svg viewBox="0 0 960 540" role="img" aria-label="The seams, coloured by how strongly each contract is enforced. Green seams are generated and checked by the build: the web app to .NET GraphQL, the web app to the coordinator, and the coordinator to the clerks. Amber seams are hand-written but tested: .NET to the coordinator, the services to Postgres and Redis, the clerks to their ledgers and the clerks to Alpaca. Grey dashed seams are convention or a vendor's protocol: the web app to .NET jobs, IB Gateway to the clerks and Polygon to the coordinator.">
+<svg viewBox="0 0 960 540" role="img" aria-label="The seams, coloured by how strongly each contract is enforced. Green seams are generated and checked by the build: the web app to the coordinator and the coordinator to the clerks. Amber seams are hand-written but tested: the coordinator to Postgres and Redis, the clerks to their ledgers and the clerks to Alpaca. Grey dashed seams are convention or a vendor's protocol: the web app's live job-progress stream, IB Gateway to the clerks and Polygon to the coordinator.">
 <defs><marker id="ah10" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="dg-arrowhead" d="M0,0 L10,5 L0,10 z"/></marker></defs>
 <rect class="dg-box" x="20" y="20" width="180" height="56" rx="6"/><text class="dg-h" x="110" y="44" text-anchor="middle">Web app</text><text class="dg-t" x="110" y="64" text-anchor="middle">in your browser</text>
-<rect class="dg-box" x="20" y="230" width="180" height="56" rx="6"/><text class="dg-h" x="110" y="254" text-anchor="middle">.NET backend</text><text class="dg-t" x="110" y="274" text-anchor="middle">older service</text>
 <rect class="dg-box dg-coord" x="380" y="120" width="200" height="70" rx="6"/><text class="dg-h" x="480" y="150" text-anchor="middle">Coordinator</text><text class="dg-t" x="480" y="172" text-anchor="middle">Python</text>
 <rect class="dg-box dg-live" x="740" y="120" width="200" height="70" rx="6"/><text class="dg-h" x="840" y="150" text-anchor="middle">Clerks</text><text class="dg-t" x="840" y="172" text-anchor="middle">Live and Paper</text>
 <rect class="dg-box dg-outside" x="400" y="20" width="160" height="50" rx="6"/><text class="dg-h" x="480" y="50" text-anchor="middle">Polygon</text>
@@ -486,17 +480,14 @@ Seams are where bugs hide: each side can be correct on its own while the two dis
 <rect class="dg-box dg-store" x="740" y="300" width="150" height="56" rx="6"/><text class="dg-h" x="815" y="324" text-anchor="middle">Clerk ledgers</text><text class="dg-t" x="815" y="344" text-anchor="middle">on each lane's disk</text>
 <rect class="dg-box dg-outside" x="740" y="410" width="200" height="50" rx="6"/><text class="dg-h" x="840" y="440" text-anchor="middle">Alpaca</text>
 <rect class="dg-box dg-store" x="20" y="410" width="400" height="56" rx="6"/><text class="dg-h" x="220" y="434" text-anchor="middle">Postgres · Redis</text><text class="dg-t" x="220" y="454" text-anchor="middle">shared records · job-progress scratch pad</text>
-<path class="dg-flow dg-checked" d="M80,76 L80,228" marker-end="url(#ah10)"/><text class="dg-label" x="88" y="150">①</text>
-<path class="dg-flow dg-convention" d="M140,76 L140,228" marker-end="url(#ah10)"/><text class="dg-label" x="148" y="190">②</text>
-<path class="dg-flow dg-checked" d="M200,48 L290,48 L290,140 L378,140" marker-end="url(#ah10)"/><text class="dg-label" x="298" y="100">③</text>
-<path class="dg-flow dg-tested" d="M200,258 L290,258 L290,170 L378,170" marker-end="url(#ah10)"/><text class="dg-label" x="298" y="222">④</text>
-<path class="dg-flow dg-tested" d="M110,286 L110,408" marker-end="url(#ah10)"/><text class="dg-label" x="118" y="350">⑤</text>
-<path class="dg-flow dg-tested" d="M480,190 L480,438 L422,438" marker-end="url(#ah10)"/><text class="dg-label" x="488" y="320">⑤</text>
-<path class="dg-flow dg-checked" d="M580,155 L738,155" marker-end="url(#ah10)"/><text class="dg-label" x="659" y="147" text-anchor="middle">⑥</text>
-<path class="dg-flow dg-tested" d="M790,190 L790,298" marker-end="url(#ah10)"/><text class="dg-label" x="798" y="250">⑦</text>
-<path class="dg-flow dg-tested" d="M915,190 L915,408" marker-end="url(#ah10)"/><text class="dg-label" x="923" y="300">⑧</text>
-<path class="dg-flow dg-convention" d="M840,70 L840,118" marker-end="url(#ah10)"/><text class="dg-label" x="848" y="100">⑨</text>
-<path class="dg-flow dg-convention" d="M480,70 L480,118" marker-end="url(#ah10)"/><text class="dg-label" x="488" y="100">⑩</text>
+<path class="dg-flow dg-checked" d="M200,48 L290,48 L290,140 L378,140" marker-end="url(#ah10)"/><text class="dg-label" x="298" y="100">①</text>
+<path class="dg-flow dg-convention" d="M110,76 L110,170 L378,170" marker-end="url(#ah10)"/><text class="dg-label" x="118" y="130">②</text>
+<path class="dg-flow dg-tested" d="M480,190 L480,438 L422,438" marker-end="url(#ah10)"/><text class="dg-label" x="488" y="320">③</text>
+<path class="dg-flow dg-checked" d="M580,155 L738,155" marker-end="url(#ah10)"/><text class="dg-label" x="659" y="147" text-anchor="middle">④</text>
+<path class="dg-flow dg-tested" d="M790,190 L790,298" marker-end="url(#ah10)"/><text class="dg-label" x="798" y="250">⑤</text>
+<path class="dg-flow dg-tested" d="M915,190 L915,408" marker-end="url(#ah10)"/><text class="dg-label" x="923" y="300">⑥</text>
+<path class="dg-flow dg-convention" d="M840,70 L840,118" marker-end="url(#ah10)"/><text class="dg-label" x="848" y="100">⑦</text>
+<path class="dg-flow dg-convention" d="M480,70 L480,118" marker-end="url(#ah10)"/><text class="dg-label" x="488" y="100">⑧</text>
 <path class="dg-flow dg-checked" d="M20,508 L70,508"/><text class="dg-t" x="80" y="512">generated and checked by the build</text>
 <path class="dg-flow dg-tested" d="M330,508 L380,508"/><text class="dg-t" x="390" y="512">hand-written, covered by tests</text>
 <path class="dg-flow dg-convention" d="M620,508 L670,508"/><text class="dg-t" x="680" y="512">convention or a vendor's protocol</text>
@@ -506,26 +497,24 @@ Seams are where bugs hide: each side can be correct on its own while the two dis
 
 | # | Seam | What crosses it | The contract | Checked by a machine? |
 |---|---|---|---|---|
-| ① | Web app → .NET (GraphQL) | Market-data explorer (bars, snapshots, movers), options-strategy analysis, Data Lab sessions, the pricing lab, the practice portfolio, older research experiments | A GraphQL schema, exported from .NET's code to a committed file | **Yes.** The build fails if the schema changes without the file. The web app's queries are hand-written; a test checks only that every input type they name exists in the schema. |
-| ② | Web app → .NET (jobs) | "Start this long job", then a live progress stream | The job routes in .NET's code | No snapshot; convention only. |
-| ③ | Web app → coordinator (`/api`) | Everything else: research, the data lake, and all account and bot commands | An OpenAPI file generated from Python's code; the web app's types are regenerated from it | **Yes.** The build fails if the file or the regenerated types drift. The list of routes that need the shared secret lives in one file used by the forwarder, the web app and a Python test. |
-| ④ | .NET → coordinator | Relayed market-data and math requests, and long jobs handed over | Python's REST routes; .NET's copies of the shapes are hand-written | Partly: one shared sample payload is tested on both sides. |
-| ⑤ | Services → Postgres and Redis | Records; job status and progress | .NET's database migrations for its tables; Python's own versioned schema for its tables (mostly `research_*`); a key layout for Redis described in comments on both sides. One odd case: .NET's migrations define the lake catalog's layout while only Python writes to it, so a catalog change still needs a .NET migration. | Partly: the lake catalog's layout is checked against a real Postgres nightly. The Redis layout is convention only. |
-| ⑥ | Coordinator → clerks | Every account command, stream and chart request | The **operation catalog**, plus a private internal link with one secret token per direction | **Yes.** The catalog is exported to two snapshot files (Python and web app) that the build regenerates and compares; a test checks that every path it names is served by the clerk. The internal link is deliberately left out of the published API. |
-| ⑦ | Clerk → its ledgers | Every custody event; the settings profile | The ledger's schema and version | Yes, at run time: each ledger's schema version is checked when it opens. |
-| ⑧ | Clerk → Alpaca | Orders out; fills and account facts back | Alpaca's own API | We try to record each raw reply before reading it, then convert it into our own broker types ([ADR 0032](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/adrs/0032-broker-contract-v2-and-verbatim-capture.md)). For the order-update stream a failed recording stops the read; for ordinary requests it is logged and the reply is still used. |
-| ⑨ | IB Gateway → clerk | Live bars and halt status, read-only | IBKR's protocol | Vendor's contract. |
-| ⑩ | Polygon → coordinator | Price history and reference data | Polygon's API | Vendor's contract; history is fingerprinted as it lands in the lake. |
+| ① | Web app → coordinator (`/api`) | Everything the screens ask for: the market-data explorer, options-strategy analysis, Data Lab sessions, the pricing lab, research, the data lake, starting a long job and reading its result, and all account and bot commands | An OpenAPI file generated from Python's code; the web app's types are regenerated from it | **Yes.** The build fails if the file or the regenerated types drift. The list of routes that need the shared secret lives in one file used by the forwarder, the web app and a Python test. |
+| ② | Web app → coordinator (job progress) | A live stream of progress events for a started job | The event shapes, which OpenAPI cannot describe ([ADR 0031](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/adrs/0031-cross-stack-boundary-selection-and-contract-generation.md) keeps them as a named exception) | No snapshot; convention only. |
+| ③ | Coordinator → Postgres and Redis | Records; job status and progress | Numbered SQL files for the shared tables, applied when the coordinator starts; Python's own versioned schema for the research tables (mostly `research_*`); a key layout for Redis described in comments. The lake catalog's layout is one of the SQL files, and its Python copy must change in the same pull request. | Partly: the lake catalog's layout is checked against a real Postgres nightly, and so are the migration runner's own tests. The Redis layout is convention only. |
+| ④ | Coordinator → clerks | Every account command, stream and chart request | The **operation catalog**, plus a private internal link with one secret token per direction | **Yes.** The catalog is exported to two snapshot files (Python and web app) that the build regenerates and compares; a test checks that every path it names is served by the clerk. The internal link is deliberately left out of the published API. |
+| ⑤ | Clerk → its ledgers | Every custody event; the settings profile | The ledger's schema and version | Yes, at run time: each ledger's schema version is checked when it opens. |
+| ⑥ | Clerk → Alpaca | Orders out; fills and account facts back | Alpaca's own API | We try to record each raw reply before reading it, then convert it into our own broker types ([ADR 0032](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/adrs/0032-broker-contract-v2-and-verbatim-capture.md)). For the order-update stream a failed recording stops the read; for ordinary requests it is logged and the reply is still used. |
+| ⑦ | IB Gateway → clerk | Live bars and halt status, read-only | IBKR's protocol | Vendor's contract. |
+| ⑧ | Polygon → coordinator | Price history and reference data | Polygon's API | Vendor's contract; history is fingerprinted as it lands in the lake. |
 
-Three smaller seams complete the picture. Python calls back to .NET for exactly one thing, launching LEAN comparison runs. The coordinator asks the **LEAN launcher** on the Mac to start a LEAN container, which reads the data lake directly. And many screens call Python's port directly, skipping the forwarder: most research tools, the Data Lake Observatory and the bot chart's indicators. That limits them to routes that need no secret.
+Three smaller seams complete the picture. Python starts LEAN comparison runs through its own jobs door, inside the same process. The coordinator asks the **LEAN launcher** on the Mac to start a LEAN container, which reads the data lake directly. And many screens call Python's port directly, skipping the forwarder: most research tools, the Data Lake Observatory and the bot chart's indicators. That limits them to routes that need no secret.
 
-**What this means for you.** When an agent changes something that crosses seams ①, ③ or ⑥, the build will catch a mismatch. Seams ②, ④ and ⑤ depend on tests and discipline, so ask for a check that both sides were updated. The contract list and its history are in [ADR 0031](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/adrs/0031-cross-stack-boundary-selection-and-contract-generation.md). ADR 0031 still describes generating the web app's GraphQL code; that generator has since been removed, and the code is the authority.
+**What this means for you.** When an agent changes something that crosses seams ① or ④, the build will catch a mismatch. Seams ② and ③ depend on tests and discipline, so ask for a check that both sides were updated. The contract list and its history are in [ADR 0031](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/adrs/0031-cross-stack-boundary-selection-and-contract-generation.md). ADR 0031 also described a GraphQL path; it was retired with the .NET backend (see that ADR's 2026-10-21 amendment), and the code is the authority.
 
 ---
 
 ## 5. Single sources of truth
 
-*Checked against the code on 2026-09-18 (commit `a69b77d5`).*
+*Checked against the code on 2026-09-18 (commit `a69b77d5`).* Updated 2026-10-21 for ADR 0081: the .NET backend is gone.
 
 > **In one sentence:** every important question has exactly one place that answers it, and wherever possible a machine check (most on every change, a few nightly) stops a second copy from creeping in.
 
@@ -535,8 +524,8 @@ This is the repo's standing rule: **one canonical implementation per concept.** 
 
 | Question | The one place that answers it | What stops a second copy |
 |---|---|---|
-| What is the market's schedule (trading days, open, close, half-days)? | One calendar module, built on a pinned version of the NYSE calendar library | A build check catches the common ways Python code could build a second calendar, hard-code 9:30 or 16:00, or use an unsafe clock. It does not scan the screens or .NET for hard-coded hours ([ADR 0022](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/adrs/0022-temporal-authority-calendar-and-timestamp.md)). |
-| How is a moment in time written down? | Whole milliseconds since 1 January 1970, UTC, between services and in new storage | The same build check catches common slips; it does not prove the rule everywhere. Older .NET tables and the Data Lab still store date-times (explicitly allow-listed), and lake files keep LEAN's own layout. |
+| What is the market's schedule (trading days, open, close, half-days)? | One calendar module, built on a pinned version of the NYSE calendar library | A build check catches the common ways Python code could build a second calendar, hard-code 9:30 or 16:00, or use an unsafe clock. It does not scan the screens for hard-coded hours ([ADR 0022](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/adrs/0022-temporal-authority-calendar-and-timestamp.md)). |
+| How is a moment in time written down? | Whole milliseconds since 1 January 1970, UTC, between services and in new storage | The same build check catches common slips; it does not prove the rule everywhere. Some older Postgres columns and the Data Lab's date pickers still store dates or date-times (the Data Lab ones explicitly allow-listed), and lake files keep LEAN's own layout. |
 | Is the market trading *right now*? | Each clerk's live evidence: Alpaca's trading clock says whether the market is open now; IBKR's feed says whether a stock is halted | The calendar deliberately does not answer this; it cannot see halts |
 | What is the right formula for X? | One canonical implementation per concept, in Python; a copy anywhere else is a named exception in [ADR 0068](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/adrs/0068-python-owns-the-canonical-math.md) | Copies need a parity test; stored reference answers ("golden fixtures") are checked on every change. The provenance note on each formula names where it lives and is enforced by review, not by a machine. |
 | Which past prices did a backtest read? | The data lake's fingerprinted files; Postgres only indexes them | The old second store was removed, and a test forbids a new one. Known exception: a few research tools still read Polygon directly ([ADR 0049](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md)). |
@@ -545,9 +534,9 @@ This is the repo's standing rule: **one canonical implementation per concept.** 
 | What actually happened at the broker (fills, fees)? | Alpaca is the record, and the ledger is reconciled against it | A disagreement raises a hold (see the diagram below); neither side is silently overwritten |
 | Which lanes exist, and which account is where? | The fleet registry on the coordinator | Rules inside the database; one owner per account; assignments never expire |
 | What can the screen ask a clerk to do, and at which address? | The operation catalog | The router, the published API and the screen's address builder are all generated from it, and the build compares the two copies |
-| What exactly do the services send each other? | The committed contract files (OpenAPI for Python, the GraphQL schema for .NET) | The build regenerates them and fails on drift |
+| What exactly do the services send each other? | The committed OpenAPI file for Python's routes, and the web app's types generated from it | The build regenerates them and fails on drift |
 | Which settings is this lane using? | The settings profile on that lane's disk; secrets only from environment files | A test checks that Alpaca settings are loaded only by the start-up code |
-| Which engine owns a job, and who owns research results? | The [engine authority map](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/engine-authority-map.md); Python's `research_*` tables are written only by Python | The engine map is a document you must sign off on. Older .NET research experiments remain, and no automated test stops the retired study screens from returning. |
+| Which engine owns a job, and who owns research results? | The [engine authority map](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/engine-authority-map.md); Python's `research_*` tables are written only by Python | The engine map is a document you must sign off on. Older feature and signal research experiments remain readable through Python (read-only history), and no automated test stops the retired study screens from returning. |
 | Which status words and refusal reasons can the screen show? | Codes and their normal wording come from Python | Generated snapshot copies for the screen, compared by the build. The screen keeps a small, closed set of fallback sentences for when the server sends none. |
 | Which pages exist? | One menu list in the web app | The menu bar and the browser-tab titles are drawn from it |
 | What was decided, what do the words mean, and what is broken? | ADRs; [CONTEXT.md](https://github.com/tim1016/learn-ai/blob/master/CONTEXT.md); [known-gaps.md](https://github.com/tim1016/learn-ai/blob/master/docs/known-gaps.md). Everything else is answered by the code itself. | Review. A document stays only while it holds what code cannot: a decision, an operator procedure (a runbook) or an outside fact. |
@@ -596,19 +585,18 @@ Honesty matters here, because a rule nobody checks can quietly stop holding. Fou
 
 ## 6. Who decides what
 
-*Checked against the code on 2026-09-18 (commit `a69b77d5`).*
+*Checked against the code on 2026-09-18 (commit `a69b77d5`).* Updated 2026-10-21 for ADR 0081: the .NET backend is gone.
 
-> **In one sentence:** Python computes and decides, the account screens only show what they are told, .NET keeps older records and runs jobs, and you make the decisions that matter, some on screen and some only on the Mac.
+> **In one sentence:** Python computes and decides, the account screens only show what they are told, and you make the decisions that matter, some on screen and some only on the Mac.
 
 <figure class="md-diagram">
-<svg viewBox="0 0 960 400" role="img" aria-label="Who decides what. Three layers: the web app shows the verdicts, wording and allowed actions it is given and freezes its target; .NET stores older records and runs jobs with no broker and no custody; Python computes and decides, through the engines and lake, the coordinator which routes, fences and keeps receipts but never trades, and the clerks which decide admission, deduplicate, keep custody and send orders. Verdicts and wording flow up only. On the right, you decide: approve an account, validate a strategy, approve a pairing, deploy, start and stop, graduate Live; and from the Mac's command line: enrol a lane, activate a lane, arm a bot, retire and restore.">
+<svg viewBox="0 0 960 400" role="img" aria-label="Who decides what. Two layers: the web app shows the verdicts, wording and allowed actions it is given and freezes its target; Python computes and decides, through the engines and lake, the coordinator which routes, fences and keeps receipts but never trades, and the clerks which decide admission, deduplicate, keep custody and send orders. Verdicts and wording flow up only. On the right, you decide: approve an account, validate a strategy, approve a pairing, deploy, start and stop, graduate Live; and from the Mac's command line: enrol a lane, activate a lane, arm a bot, retire and restore.">
 <defs><marker id="ah13" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="dg-arrowhead" d="M0,0 L10,5 L0,10 z"/></marker></defs>
 <rect class="dg-box" x="20" y="20" width="720" height="70" rx="6"/><text class="dg-h" x="380" y="48" text-anchor="middle">Web app: shows</text><text class="dg-t" x="380" y="72" text-anchor="middle">renders the verdicts, wording and allowed actions it is given · freezes its target</text>
-<rect class="dg-box" x="20" y="110" width="720" height="70" rx="6"/><text class="dg-h" x="380" y="138" text-anchor="middle">.NET: keeps older records, runs jobs</text><text class="dg-t" x="380" y="162" text-anchor="middle">sessions, practice portfolio, market-data cache, older research · job hand-off · no broker</text>
-<rect class="dg-zone" x="20" y="200" width="720" height="180" rx="8"/><text class="dg-s" x="34" y="222">PYTHON: COMPUTES AND DECIDES</text>
-<rect class="dg-box" x="36" y="236" width="220" height="128" rx="6"/><text class="dg-h" x="146" y="262" text-anchor="middle">Engines and lake</text><text class="dg-t" x="146" y="288" text-anchor="middle">backtests, math,</text><text class="dg-t" x="146" y="308" text-anchor="middle">price history</text>
-<rect class="dg-box dg-coord" x="270" y="236" width="220" height="128" rx="6"/><text class="dg-h" x="380" y="262" text-anchor="middle">Coordinator</text><text class="dg-t" x="380" y="288" text-anchor="middle">routes, fences,</text><text class="dg-t" x="380" y="308" text-anchor="middle">keeps receipts,</text><text class="dg-t" x="380" y="328" text-anchor="middle">never trades</text>
-<rect class="dg-box dg-live" x="504" y="236" width="220" height="128" rx="6"/><text class="dg-h" x="614" y="262" text-anchor="middle">Clerks</text><text class="dg-t" x="614" y="288" text-anchor="middle">decide admission,</text><text class="dg-t" x="614" y="308" text-anchor="middle">deduplicate, keep</text><text class="dg-t" x="614" y="328" text-anchor="middle">custody, send orders</text>
+<rect class="dg-zone" x="20" y="110" width="720" height="270" rx="8"/><text class="dg-s" x="34" y="132">PYTHON: COMPUTES AND DECIDES</text>
+<rect class="dg-box" x="36" y="146" width="220" height="218" rx="6"/><text class="dg-h" x="146" y="224" text-anchor="middle">Engines and lake</text><text class="dg-t" x="146" y="250" text-anchor="middle">backtests, math,</text><text class="dg-t" x="146" y="270" text-anchor="middle">price history</text>
+<rect class="dg-box dg-coord" x="270" y="146" width="220" height="218" rx="6"/><text class="dg-h" x="380" y="214" text-anchor="middle">Coordinator</text><text class="dg-t" x="380" y="240" text-anchor="middle">routes, fences,</text><text class="dg-t" x="380" y="260" text-anchor="middle">keeps receipts,</text><text class="dg-t" x="380" y="280" text-anchor="middle">never trades</text>
+<rect class="dg-box dg-live" x="504" y="146" width="220" height="218" rx="6"/><text class="dg-h" x="614" y="214" text-anchor="middle">Clerks</text><text class="dg-t" x="614" y="240" text-anchor="middle">decide admission,</text><text class="dg-t" x="614" y="260" text-anchor="middle">deduplicate, keep</text><text class="dg-t" x="614" y="280" text-anchor="middle">custody, send orders</text>
 <path class="dg-flow dg-data" d="M770,370 L770,26" marker-end="url(#ah13)"/><text class="dg-label" x="760" y="200" text-anchor="middle" transform="rotate(-90 760 200)">verdicts and wording flow up only</text>
 <rect class="dg-box dg-good" x="800" y="20" width="140" height="360" rx="6"/><text class="dg-h" x="870" y="46" text-anchor="middle">You decide</text><text class="dg-s" x="870" y="70" text-anchor="middle">on screen:</text><text class="dg-t" x="870" y="92" text-anchor="middle">approve account</text><text class="dg-t" x="870" y="114" text-anchor="middle">validate strategy</text><text class="dg-t" x="870" y="136" text-anchor="middle">approve pairing</text><text class="dg-t" x="870" y="158" text-anchor="middle">deploy, start, stop</text><text class="dg-t" x="870" y="180" text-anchor="middle">graduate Live</text><text class="dg-s" x="870" y="222" text-anchor="middle">on the Mac only:</text><text class="dg-t" x="870" y="244" text-anchor="middle">enrol a lane</text><text class="dg-t" x="870" y="266" text-anchor="middle">activate a lane</text><text class="dg-t" x="870" y="288" text-anchor="middle">arm a bot</text><text class="dg-t" x="870" y="310" text-anchor="middle">retire, restore</text>
 </svg>
@@ -626,12 +614,11 @@ Honesty matters here, because a rule nobody checks can quietly stop holding. Fou
 - **The coordinator is the switchboard; each clerk is the accountant.** The coordinator decides *which lane* gets a request and refuses mismatches. The clerk decides admission, spots duplicates, keeps custody and records outcomes. The coordinator never computes profit or exposure across lanes, and there is no fleet-wide Start, Stop or Flatten button.
 - **Infrastructure recovery stays separate from routine trading.** Lane enrollment, Paper account setup, retirement and volume recovery retain their host procedures. Shadow activation, graduation, the Budget authority upgrade, risk-limit changes, guarded hold clearing, Deploy, Stop and reducing recovery are available through the account UI. There is no separate arming control.
 
-### The three layers
+### The layers
 
 | Layer | Its role | What it must never do |
 |---|---|---|
 | **Web app** (Angular) | Display; freeze the target of an action from the page you opened | Invent a verdict, compose safety wording, decide flatness, choose "the current account" at click time |
-| **.NET** | Older records (Data Lab sessions, the practice portfolio, a market-data cache, older research experiments), the long-job API, and the layout of the tables it owns | Touch a broker or custody; add new tables (the owner is phasing it out) |
 | **Python** | Math, engines, the data lake, the coordinator, the clerks, and every operator verdict and sentence | Break the one-answer rule in chapter 5 |
 
 ---

@@ -8,7 +8,7 @@ import {
   SpecBacktestRequest,
   SpecStrategyBacktestResult,
   StrategySpec,
-} from '../graphql/spec-strategy.models';
+} from './spec-strategy.types';
 
 /** Run configuration the runner supplies alongside the spec. */
 export interface SpecBacktestRunOptions {

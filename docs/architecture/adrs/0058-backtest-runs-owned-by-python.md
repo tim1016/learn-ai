@@ -83,3 +83,15 @@ So:
 Because every dispatch mark is now provisional, the ordering between a timed-out
 caller's mark and the writer loop's settle no longer matters: either order
 converges on the verdict the landed row justifies.
+
+## Amendment 2026-10-21 — the companion launch is Python's ([ADR 0081](0081-python-owns-the-api-and-the-database-schema.md))
+
+Decision 5 ends "The companion launch still goes through the .NET jobs surface".
+It goes through Python's `/api/jobs` facade now: the parity companion starts its
+LEAN run with `launch_job_from_worker_thread("lean_engine_run", ...)`
+(`app/services/parity_companion.py`, `app/jobs/facade.py`), which mints the job
+id and dispatches in-process. The rest of decision 5 is unchanged. Decision 9
+deleted the .NET study surface rather than proxying it; ADR 0081 deleted what
+was left, so there is nothing to proxy to. "Never an EF migration" reads as it
+did: a future change to these tables is a new numbered statement list in
+`schema.py`.

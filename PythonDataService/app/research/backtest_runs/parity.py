@@ -1,9 +1,9 @@
 """Freeze the cross-engine parity verdict when the LEAN companion lands (PRD #1929).
 
-A port of the retired .NET ``ParityVerdictService``: the verdict compares
+A port of the retired C# ``ParityVerdictService``: the verdict compares
 the Python engine run (left) with its LEAN companion (right) on five axes —
 trade reconciliation (``lean_sidecar_compare_service.reconcile_trade_lists``,
-the same classifier the .NET service reached over HTTP), the LEAN-native
+the same classifier the C# service reached over HTTP), the LEAN-native
 metric-reproduction receipt persisted with the companion, the two runs'
 production-readiness envelopes, and the compatibility inputs (data policy,
 cash, window, fill mode), and the stored normalized resolved strategy
@@ -20,8 +20,8 @@ disposition of a group that never dispatched a companion, are never
 overwritten (ADR 0058 as amended by #1977).
 
 Canonical implementation: this file.
-Validated against: tests/research/backtest_runs/test_parity.py (ported from
-Backend.Tests/Unit/Services/ParityVerdictServiceTests.cs).
+Validated against: tests/research/backtest_runs/test_parity.py (ported from the
+retired C# ``ParityVerdictServiceTests``).
 """
 
 from __future__ import annotations

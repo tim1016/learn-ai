@@ -3,7 +3,7 @@
 ``router`` — the research surface under ``/api/research/grid-search``:
 preflight, history listing, detail, server-paged cells, and delete.
 ``jobs_router`` — ``POST /api/jobs-internal/grid-search``, dispatched by
-the .NET jobs boundary with a minted ``job_id`` (a new search, or Finish of
+the jobs facade with a minted ``job_id`` (a new search, or Finish of
 an incomplete one via ``resume_search_id``). Every temporal value on the
 wire is ``int64 ms UTC``.
 """

@@ -15,10 +15,10 @@ Frontend tests are **independent** — no backend or database needed.
 
 ## Key Patterns
 
-- **Raw `HttpClient` POSTs** to the .NET GraphQL endpoint (no Apollo) — each service posts `{ query, variables }` itself; the canonical `GraphQLResponse<T>` / `GraphqlError` types are in `shared/graphql/graphql-error.ts`, response types in `graphql/types.ts`
+- **`HttpClient` against Python's REST API** — services call the FastAPI data plane under `/api`; wire types come from the generated OpenAPI types in `src/app/api/broker.types.ts` (regenerated from the Python OpenAPI schema with `npm run codegen:openapi`, never hand-edited)
 - **PrimeNG** for UI components + **Tailwind CSS** for utility styling
 - **TradingView lightweight-charts v5** for OHLCV candlestick charts (`chart.addSeries(CandlestickSeries, options)`)
-- API proxy: `/graphql` proxied via the canonical `proxy.conf.js`; it defaults to host loopback targets and Compose overrides those targets with service names.
+- API proxy: `/api` is proxied to the Python data plane via the canonical `proxy.conf.js`; it defaults to the host loopback target and Compose overrides that target with the service name.
 
 ## Testing
 
@@ -31,6 +31,6 @@ Frontend tests are **independent** — no backend or database needed.
 
 ## Gotchas
 
-- `proxy.conf.js` is the only approved dev proxy configuration. It routes host development to loopback ports by default; Compose sets `BACKEND_PROXY_TARGET` and `DATA_PLANE_PROXY_TARGET` to container service names. Do not replace it with a target-only JSON proxy: that bypasses the data-plane control-header hook. It attaches the Python data-plane control header from `DATA_PLANE_CONTROL_SECRET` only for Angular-marked unsafe control mutations and protected broker-session reads with positive same-origin local-dev browser provenance; metadata-absent local clients are intentionally not given the proxy secret.
+- `proxy.conf.js` is the only approved dev proxy configuration. It routes host development to the loopback data-plane port by default; Compose sets `DATA_PLANE_PROXY_TARGET` to the container service name. Do not replace it with a target-only JSON proxy: that bypasses the data-plane control-header hook. It attaches the Python data-plane control header from `DATA_PLANE_CONTROL_SECRET` only for Angular-marked unsafe control mutations and protected broker-session reads with positive same-origin local-dev browser provenance; metadata-absent local clients are intentionally not given the proxy secret.
 - PrimeNG 22 uses PrimeUI licensing. Set `primeUiLicense` in the gitignored environment override before production use; the checked-in examples show the required field.
 - `tsconfig.json` excludes spec files; `tsconfig.spec.json` includes them for test builds

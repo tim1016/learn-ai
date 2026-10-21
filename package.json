@@ -8,7 +8,6 @@
   },
   "lint-staged": {
     "Frontend/src/**/*.{ts,html}": "npx eslint --fix",
-    "PythonDataService/**/*.py": "ruff check --fix",
-    "Backend/**/*.cs": "dotnet format podman.sln --include"
+    "PythonDataService/**/*.py": "ruff check --fix"
   }
 }

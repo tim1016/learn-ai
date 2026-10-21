@@ -16,7 +16,7 @@ def _fixture(name: str) -> dict[str, object]:
     return json.loads((_FIXTURES / name).read_text())
 
 
-def test_aggregate_response_fixture_is_the_strict_python_to_dotnet_contract() -> None:
+def test_aggregate_response_fixture_is_the_strict_python_to_angular_contract() -> None:
     response = SanitizedDataResponse.model_validate(_fixture("aggregate-response-v1.json"))
 
     assert response.data[0].timestamp == 1_704_153_600_000

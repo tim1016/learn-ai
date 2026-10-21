@@ -7,7 +7,7 @@ the blast radius of a lane compromise. The provisioning SQL
 (``deploy/fleet/sql/provision-fleet-lake-catalog-role.sql``) is therefore
 pinned here: read-only, over exactly the enumerated tables a lane-served
 read touches, idempotent, with no write/DDL path and no reach into the
-account/order domain the .NET backend owns.
+account/order ledger tables of the baseline schema.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ LANE_TABLES = frozenset(
     }
 )
 
-# The account/order domain the .NET backend owns, plus the lake/research
+# The account/order ledger tables of the baseline schema, plus the lake/research
 # tables no lane-served read resolves (the artifact catalog, backtest
 # trades, and the Recency family — all coordinator-served surfaces). A lane
 # read never touches the former and must not reach the latter: their names

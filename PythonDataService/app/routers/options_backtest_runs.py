@@ -1,7 +1,7 @@
 """The Options Backtest page's runs (#3030).
 
 ``router`` is Check data (``POST /check-data``), the history (``GET /runs``), one run (``GET /runs/{id}``, without its
-trades) and ``DELETE /runs/{id}``. ``jobs_router`` carries ``POST /api/jobs-internal/options-backtest``, dispatched by the .NET jobs boundary with a
+trades) and ``DELETE /runs/{id}``. ``jobs_router`` carries ``POST /api/jobs-internal/options-backtest``, dispatched by the jobs facade with a
 minted ``job_id``: it validates the request (a client mistake is a 400 and never a job), makes the run, ``running``,
 and starts a worker thread that checks the data, fetches what is missing, replays and saves it
 (``app/options_backtest/service.py``). Cancelling is the jobs boundary's: a flag the worker polls.

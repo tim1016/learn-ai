@@ -62,7 +62,7 @@ def _request() -> EngineBacktestRequest:
 
 @pytest.fixture(autouse=True)
 def offline_persistence(monkeypatch):
-    """The .NET study save is best-effort and not what these tests are about."""
+    """The study save is best-effort and not what these tests are about."""
     monkeypatch.setattr(engine_service, "persist_engine_response_sync", lambda **kwargs: SAVE_FAILED)
 
 

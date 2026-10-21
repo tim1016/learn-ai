@@ -412,3 +412,10 @@ Why. The lake moves on: a file can change, be replaced or go. A saved run that f
 2. **The re-entry minute (PRD behaviour 8).** The PRD says a re-entry at once picks a fresh contract "at the minute after the stop's fill". The build picks in the minute the stop's sale fills: decided on that bar's close, bought one minute after. One minute later is a one-line change.
 3. **Whether a dropped entry uses up a re-entry (PRD behaviour 14).** As built, a re-entry count goes down only on a fill, so a dropped entry never uses one up. A re-entry bought at once ends the leg for the day when dropped, so the rule changes nothing there. A momentum leg whose entry is dropped goes back to waiting with its re-entry intact.
 4. **How many sold legs a leaving bought leg takes along (PRD behaviour 9, #3107).** The PRD's plan is the cover book's one answer, measured against what is pledged before the plan's buy-backs. With a bought 700 and 710 against a sold 675 and 680 (5,500.00 pledged), a stop on the 700 closes the 680 alone, and once it is bought back the 700's sale would raise the pledge from 2,500.00 to 3,500.00 and could not fill until the exit time, its stop already decided. The build asks the book again of what would then be held and also closes the 675, so the stop's sale fills with the buy-backs. Taking the book's first answer only is a short change in `_close_with_protection`, at the price of a stopped bought leg that stays held while it falls. The asking again could instead live in the cover book, as a plan that is stable under its own buy-backs, so that the replay asks once and the book and the closing group's predicate cannot disagree.
+
+## Amendment 2026-10-21 — no .NET transport ([ADR 0081](0081-python-owns-the-api-and-the-database-schema.md))
+
+The statistics bullet's ".NET transports and Angular renders (ADR 0068)" no
+longer names a layer: the C# backend was removed. The statistics are still
+computed once, in Python, in their own module; Python serves them and Angular
+renders them.

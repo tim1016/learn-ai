@@ -38,8 +38,7 @@ interface ToolbarGroup {
 }
 
 /** One action as the bar or More draws it, and whether its name shows. Named
- * `entry`, not the implicit slot, whose `$`-prefixed key reads as a GraphQL
- * variable to the contract scan of the Frontend's sources. */
+ * `entry`, not the implicit slot. */
 interface ActionControlContext {
   readonly entry: ToolbarActionView;
   readonly labelled: boolean;

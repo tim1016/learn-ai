@@ -32,7 +32,7 @@ import {
   GreekType,
   PricingCompareResult, PricingPoint,
   SnapshotContractResult,
-} from '../../graphql/types';
+} from '../../services/market-data.types';
 import { MarketDataService } from '../../services/market-data.service';
 import { etIsoDate } from '../../shared/date/et-midnight';
 import { optionExpiryAnchorMs } from '../../shared/option-contract/option-expiry-date';
@@ -544,7 +544,7 @@ export class PricingLabComponent implements OnDestroy {
       const message = err instanceof Error ? err.message : 'Network error';
       this.statusMessage.set({
         type: 'error',
-        text: `Request failed: ${message}. Check that the backend services are running.`,
+        text: `Request failed: ${message}. Check that the data service is running.`,
       });
       this.serverResult.set(null);
     } finally {

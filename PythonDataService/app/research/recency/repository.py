@@ -1,7 +1,7 @@
 """asyncpg repository for the Recency Chart's launches, runs, trades and memberships (PRD #1927).
 
 Python owns these four tables (ADR 0057). The semantics are the ones the
-.NET ``RecencyPersistenceService`` / ``RecencyQuery`` established, kept
+retired C# ``RecencyPersistenceService`` / ``RecencyQuery`` established, kept
 exactly: a snapshot for a tombstoned launch is a deliberate no-op; a trade
 is written once per fingerprint and every run that produces it records a
 membership, so deleting one run never hides evidence another live run still

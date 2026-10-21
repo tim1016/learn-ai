@@ -53,6 +53,7 @@ from app.routers import (
     brokers,
     chart,
     clerk_transactions,
+    data_lab_sessions,
     data_quality,
     dataset,
     edge,
@@ -66,6 +67,7 @@ from app.routers import (
     iv30,
     iv_recorder,
     jobs,
+    jobs_facade,
     lean_sidecar,
     monte_carlo,
     news,
@@ -76,6 +78,7 @@ from app.routers import (
     quantlib_options,
     recency,
     research_divergence,
+    research_experiments,
     research_runs,
     return_distribution,
     snapshot,
@@ -159,6 +162,21 @@ def _validate_data_root_identity() -> None:
     expected_root_id = active_root_id()
     logger.info("Validating data-lake root identity (expected data_root_id=%s)...", expected_root_id)
     resolve_root_context(expected_root_id)
+
+
+async def _apply_database_schema() -> None:
+    """Bring the Postgres schema to its newest migration before the listener opens (ADR 0081).
+
+    Not best-effort: a database this code cannot migrate (a refused adoption, an
+    edited migration file, an unreachable server) must stop the start rather than
+    serve routes over a schema they do not match. A deployment with no
+    ``POSTGRES_URL`` has no database to migrate.
+    """
+    if not settings.POSTGRES_URL:
+        return
+    from app.db_schema import migrate_database
+
+    await migrate_database(settings.POSTGRES_URL)
 
 
 async def _install_alpaca_binding(
@@ -394,6 +412,7 @@ async def _service_lifespan(
     # lake route and must not abort on the coordinator-owned root.
     if _ROLE_RUNS_DATA_PLANE_CORE:
         _validate_data_root_identity()
+        await _apply_database_schema()
 
     # Every job runs on a thread of this process, so whatever the active set
     # still calls queued or running belonged to the previous process and has
@@ -1303,7 +1322,7 @@ if _ROLE_RUNS_CLERK:
     )
 
 
-# CORS middleware for C# backend
+# CORS for the browser app's origin (the dev proxy keeps it same-origin; this admits a direct call)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.get_allowed_origins(),
@@ -1411,6 +1430,9 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     app.include_router(options_backtest_runs.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
     app.include_router(indicator_reliability.router, prefix="/api/research", tags=["research"])
     app.include_router(return_distribution.router, prefix="/api/research", tags=["research"])
+    # Legacy experiment history the Research Lab screens still read: literal ``/experiments`` and
+    # ``/signal-experiments`` segments, so nothing under ``/api/research`` can shadow them.
+    app.include_router(research_experiments.router, prefix="/api/research", tags=["research-experiments"])
     # Research-pipeline walk-forward (Phase C). Registered BEFORE
     # ``research_runs`` so the literal ``/walk-forward`` segment wins
     # against the ``GET /{run_id}`` route on the parent router.
@@ -1436,6 +1458,8 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     # Research-pipeline run ledger (Phase A of build-alpha-style features 1-8).
     app.include_router(research_runs.router, prefix="/api/research/strategy-runs", tags=["research-runs"])
     app.include_router(dataset.router, prefix="/api/dataset", tags=["dataset"])
+    # Saved Data Lab sessions (list, get, save, replace, rename, delete).
+    app.include_router(data_lab_sessions.router, prefix="/api/data-lab/sessions", tags=["data-lab-sessions"])
     app.include_router(data_quality.router, prefix="/api/data-quality", tags=["data-quality"])
     app.include_router(engine.router, prefix="/api/engine", tags=["engine"])
     # LEAN Sidecar Lab — data-plane API in front of the launcher service.
@@ -1448,8 +1472,11 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     # the endpoints silently 404'd until pricing-lab surfaced it.
     app.include_router(quantlib_options.router, prefix="/api/quantlib", tags=["quantlib"])
     # Internal job orchestration (Redis-backed). Mounted under /api/jobs-internal;
-    # the public surface is the .NET /api/jobs facade in Backend/Jobs/JobsApi.cs.
+    # the public surface is /api/jobs (app.routers.jobs_facade), which mints the
+    # job and dispatches into these routes in-process. A fleet coordinator
+    # serves both; a clerk agent serves neither.
     app.include_router(jobs.router, prefix="/api/jobs-internal", tags=["jobs-internal"])
+    app.include_router(jobs_facade.router)
     # The Recency Chart's dispatch moved to its own router when it joined the
     # isolated research runtime (#3051): both this mount and the runtime's
     # carry it, so the route forwards or executes from one definition.
@@ -1462,7 +1489,8 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     # Router carries its own /api/edge/iv30 prefix.
     app.include_router(iv30.router)
     # IV recorder (POST /api/iv-recorder/snapshot, GET .../series/{ticker}) —
-    # Step D of IV-ownership plan. Driven by .NET cron; not in-process.
+    # Step D of IV-ownership plan. Nothing schedules it today: the .NET cron that
+    # called it was retired (ADR 0081).
     app.include_router(iv_recorder.router)
     # /research/data-divergence/* — dashboard + matrix endpoints. The router
     # carries its own prefix so we mount it bare.

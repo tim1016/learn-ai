@@ -5,8 +5,8 @@ with hash-addressable identity, content-deterministic results, and a
 file-backed artifact layout under ``PythonDataService/artifacts/runs/``.
 
 Phase A scope: ledger + result Pydantic models, canonical-JSON hashing,
-in-memory + file-backed storage, FastAPI endpoint. No GraphQL passthrough
-in v1; that ships with Phase B's research workbench when the UI needs it.
+in-memory + file-backed storage, FastAPI endpoint. No UI wiring in v1;
+that ships with Phase B's research workbench when the UI needs it.
 
 See ADR 0072 for the run-identity and hashing-scheme rationale.
 """

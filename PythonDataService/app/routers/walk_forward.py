@@ -14,7 +14,7 @@ Mounted *before* ``research_runs`` in ``app/main.py`` so the literal
 ``/walk-forward`` segment wins against the parameterised
 ``GET /{run_id}`` route on the parent router.
 
-GraphQL passthrough deliberately deferred until a UI consumer needs it.
+No UI consumer yet; the Angular app would call these endpoints directly.
 """
 
 from __future__ import annotations

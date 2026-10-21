@@ -96,7 +96,7 @@ export class StrategyLabComponent {
         this.runs.clearRunError();
         // Switch to the workbench synchronously on the URL change, not after
         // the fetch resolves in `adoptRun` — a run picked from History that
-        // fails to load (deleted, transient GraphQL error) must still land
+        // fails to load (deleted, transient server error) must still land
         // the operator where the error notice renders, or the click is a
         // silent dead end.
         this.config.activeTab.set("configuration");

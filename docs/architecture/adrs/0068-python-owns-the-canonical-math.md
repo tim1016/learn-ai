@@ -45,3 +45,16 @@ Exception 1 covers the Strategy Builder only. Pricing Lab (`Frontend/src/app/com
 - **Any layer, with a parity test for every duplicate** (the old `CLAUDE.md` #5). Rejected. It invites a second brain for every concept, and the parity test becomes the only thing standing between two authorities. In practice the tests were missing: the .NET FIFO engine had none.
 - **Python only, with no exceptions.** Rejected for exception 1. A 1,200-point re-price per keystroke is the one place where the round trip costs more than the duplication.
 - **Keeping the registry.** Rejected. It duplicated what each provenance block already says, and it drifted.
+
+## Amendment 2026-10-21 — there is no .NET layer left ([ADR 0081](0081-python-owns-the-api-and-the-database-schema.md))
+
+The C# backend was removed. Decision 1's ".NET is transport and persistence" and
+the closing ".NET has no exception" paragraph describe a layer that no longer
+exists: Python serves the API and owns the Postgres schema, so the numbers
+Angular shows reach it from the module that computed them. The rule is
+unchanged and now has two layers to bind: every number shown in a number field
+or used in a strategy rule comes from Python, and Angular renders (downsample,
+format, map to geometry) without computing signals, P&L, statistics or
+verdicts. The exception table has no .NET row, and decision 3 (a copy outside
+Python must be a named exception with a parity test) now applies to Angular
+alone.

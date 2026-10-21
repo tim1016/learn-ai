@@ -1,5 +1,5 @@
 import { Injectable, signal } from '@angular/core';
-import { StrategySpec } from '../../graphql/spec-strategy.models';
+import { StrategySpec } from '../../services/spec-strategy.types';
 
 /**
  * One saved strategy entry.
@@ -29,7 +29,7 @@ const LOCAL_STORAGE_KEY = 'learn-ai.spec-strategy.saved.v1';
  * Strategy persistence abstraction.
  *
  * Phase 1: localStorage (this file). Phase 2: server-backed via a new
- * GraphQL mutation, behind the same interface so the component
+ * Python endpoint, behind the same interface so the component
  * doesn't change. The component depends on this service, never on
  * ``localStorage`` directly.
  *

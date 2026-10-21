@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { IndicatorBlock, StrategySpec } from '../../graphql/spec-strategy.models';
+import { IndicatorBlock, StrategySpec } from '../../services/spec-strategy.types';
 import {
   buildSummaryFragments,
   formatCondition,

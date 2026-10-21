@@ -2,11 +2,12 @@
 
 The drift integration test (tests/integration/data_lake/test_schema_drift.py)
 introspects the live database via pg_catalog and asserts equality against
-the expectations below. If the EF Core migration changes a column or
-constraint, this file must be updated in the same PR or CI will fail.
+the expectations below. If a migration file under app/db_schema/migrations
+changes a column or constraint, this file must be updated in the same PR or
+CI will fail.
 
-Authority for the schema itself:
-docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 3
+Authority for the schema itself: the SQL migration files (ADR 0081);
+the table's contract is docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md § 3
 """
 
 from __future__ import annotations

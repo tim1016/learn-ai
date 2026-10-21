@@ -16,9 +16,8 @@ runs as containers under Podman Compose, the frontend included.
 - A [Polygon.io](https://polygon.io/) API key. Optional: a
   [FRED](https://fred.stlouisfed.org/) key for risk-free rate curves.
 
-`setup-macos.sh` installs `podman`, `docker-compose`, and `node`. Backend
-tests also need the .NET 10 SDK on the host, which the script does not
-install.
+`setup-macos.sh` installs `podman`, `docker-compose`, and `node`. Python tests
+run from a host venv, which `./bootstrap-host-venv.sh` creates (section 6).
 
 ## 2. First run
 
@@ -46,8 +45,7 @@ On a fresh Mac it does everything a first run needs, in this order:
    start without these two (it exits 78 and 3).
    [`windows-onboarding.md`](windows-onboarding.md) §4a and §4b describe
    them. Both act only on a first install (below).
-6. Starts the stack and waits for the data plane, the backend, and the
-   frontend.
+6. Starts the stack and waits for the data plane and the frontend.
 
 Re-running is safe, but not free: it restarts the Podman VM to re-apply its
 resources, which restarts every container. The two ceremonies act only on a
@@ -94,13 +92,12 @@ risk limits are a broker profile saved in the browser (ADR 0060). See
 
 ## 3. Check it
 
-`podman compose ps` should show five containers, all `(healthy)`. Every port
+`podman compose ps` should show four containers, all `(healthy)`. Every port
 is bound to `127.0.0.1` only.
 
 | Service | Container | URL |
 |---|---|---|
 | Frontend (Angular dev server) | `my-frontend` | http://localhost:4200 |
-| Backend (GraphQL) | `my-backend` | http://localhost:5000/graphql |
 | Data plane (FastAPI) | `polygon-data-service` | http://localhost:8000/health |
 | PostgreSQL | `my-postgres` | `localhost:5432` |
 | Redis | `my-redis` | `localhost:6379` |
@@ -108,10 +105,10 @@ is bound to `127.0.0.1` only.
 To run the frontend on the host instead, stop its container first
 (`podman stop my-frontend`; it has `restart: always`, so the next `up` brings
 it back). The proxy config reads `DATA_PLANE_CONTROL_SECRET` from the
-repo-root `.env` (an exported shell value takes precedence). For a
-non-default service location set `BACKEND_PROXY_TARGET` or
-`DATA_PLANE_PROXY_TARGET`; do not replace `proxy.conf.js` with a target-only
-proxy config.
+repo-root `.env` (an exported shell value takes precedence). The dev server
+proxies `/api` to the data plane; for a non-default service location set
+`DATA_PLANE_PROXY_TARGET`, and do not replace `proxy.conf.js` with a
+target-only proxy config.
 
 ## 4. Two postures: combined and fleet
 
@@ -121,7 +118,7 @@ it.
 
 `./restart.sh` runs the **fleet** posture. It also loads
 `compose.fleet.dev.yaml`, which adds one clerk container per Alpaca account
-(`alpaca-live-clerk`, `alpaca-paper-clerk`), so seven containers. It needs the
+(`alpaca-live-clerk`, `alpaca-paper-clerk`), so six containers. It needs the
 gitignored lane files `deploy/fleet/env/live.env` and `paper.env`; until they
 exist it fails with `env file … not found`. Setting them up:
 [`fleet-dev-two-lane-posture.md`](fleet-dev-two-lane-posture.md) and
@@ -155,12 +152,14 @@ To rebuild one service after changing its code, recreate it rather than
 restarting it (a restart keeps the old image and environment):
 
 ```bash
-podman compose "${COMPOSE_ARGS[@]}" up -d --build --no-deps --force-recreate backend
+podman compose "${COMPOSE_ARGS[@]}" up -d --build --no-deps --force-recreate python-service
 ```
 
-The backend applies EF Core migrations on startup, so a new empty database is
-created and upgraded automatically. Reset the database only when you mean to
-discard local data:
+The data plane applies the database migrations at startup, before its listener
+opens, and refuses to start if it cannot (ADR 0081), so a new empty database is
+created and upgraded automatically. The same step runs on its own as
+`python -m app.db_schema`. Reset the database only when you mean to discard
+local data:
 
 ```bash
 podman compose "${COMPOSE_ARGS[@]}" down
@@ -173,10 +172,11 @@ deletes the Paper account's custody volume (`learn-ai-alpaca-paper-clerk-data`)
 and the fleet registry (`learn-ai_alpaca-fleet-control`) along with the
 database. To reset only Postgres, remove `learn-ai_pgdata` as above.
 
-Do not use a database reset as a schema-change workflow. To adopt a populated
-database that was created with `EnsureCreated()`, follow
-[`ef-migrations-adoption.md`](ef-migrations-adoption.md) after taking a
-restorable backup.
+Do not use a database reset as a schema-change workflow: a schema change is a
+new numbered file in `PythonDataService/app/db_schema/migrations`. A database
+the retired C# backend already migrated is adopted by the runner on its first
+start, and one left earlier in that history is refused with the remedy (ADR
+0081); take a restorable backup first.
 
 **Debugging:**
 
@@ -194,11 +194,10 @@ podman exec my-postgres pg_dump -U postgres postgres > backup.sql
 ```
 
 **Production images:** `compose.yaml` is the dev config (source mounted,
-hot reload). The Dockerfiles build lean runtime images; to check they still
-build:
+hot reload). The Python Dockerfile builds a lean runtime image; to check it
+still builds:
 
 ```bash
-podman build -t learn-ai-backend ./Backend
 podman build --target runtime -t learn-ai-python ./PythonDataService
 ```
 
@@ -206,17 +205,15 @@ podman build --target runtime -t learn-ai-python ./PythonDataService
 
 ```bash
 podman exec my-frontend npm test                                               # Frontend (Vitest)
-cd Backend.Tests && dotnet test --filter "Category!=PostgresIntegration"      # Backend (xUnit)
 cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/<path> -q  # Python
 ```
 
 The Python suite runs from a host venv; create it once with
 `./bootstrap-host-venv.sh`. Locally, run the tests your change touches. CI runs
 every quick test (Python in 16 shards, Frontend in 6), each job sized to finish
-in two minutes and warned about past that (time never fails a job), and holds
-backend tests to the same two minutes. Slow and
-PostgreSQL-backed Python tests, PostgreSQL-backed .NET integration tests, and
-browser end-to-end coverage run daily in GitHub Actions. See
+in two minutes and warned about past that (time never fails a job). Slow and
+PostgreSQL-backed Python tests (the migration runner's among them) and browser
+end-to-end coverage run daily in GitHub Actions. See
 [`.claude/rules/testing.md`](../../.claude/rules/testing.md).
 
 ## 7. Stopping

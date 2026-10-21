@@ -1,7 +1,7 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { SectionErrorComponent } from './section-error.component';
-import { GraphqlError } from '../graphql/graphql-error';
 
 function createFixture() {
   return TestBed.createComponent(SectionErrorComponent);
@@ -51,17 +51,62 @@ describe('SectionErrorComponent', () => {
     expect(btn.textContent?.trim()).toBe('Retrying…');
   });
 
-  it('renders the technical-details drawer with the underlying payload', () => {
+  it('echoes the error message as what failed, with the generic next step', () => {
     const fixture = createFixture();
-    fixture.componentRef.setInput(
-      'error',
-      new GraphqlError([{ message: 'boom', extensions: { code: 'BROKER_DISCONNECTED' } }]),
-    );
+    fixture.componentRef.setInput('error', new Error('Network broken'));
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('.section-error-what')?.textContent).toBe('Network broken');
+    expect(el.querySelector('.section-error-try')?.textContent).toContain('Try the action again.');
+  });
+
+  it('echoes a thrown string as what failed', () => {
+    const fixture = createFixture();
+    fixture.componentRef.setInput('error', 'stream closed');
+    fixture.detectChanges();
+    expect(
+      (fixture.nativeElement as HTMLElement).querySelector('.section-error-what')?.textContent,
+    ).toBe('stream closed');
+  });
+
+  it('echoes a failed HTTP call\'s transport message as what failed, not a blank headline', () => {
+    const failed = new HttpErrorResponse({ status: 503, statusText: 'Service Unavailable', url: '/api/news' });
+    const fixture = createFixture();
+    fixture.componentRef.setInput('error', failed);
+    fixture.detectChanges();
+    expect(
+      (fixture.nativeElement as HTMLElement).querySelector('.section-error-what')?.textContent,
+    ).toBe(failed.message);
+  });
+
+  it('prefers an explicit contextWhat over the raw message', () => {
+    const fixture = createFixture();
+    fixture.componentRef.setInput('error', new Error('ECONNREFUSED'));
+    fixture.componentRef.setInput('contextWhat', 'We could not reach the broker.');
+    fixture.detectChanges();
+    expect(
+      (fixture.nativeElement as HTMLElement).querySelector('.section-error-what')?.textContent,
+    ).toBe('We could not reach the broker.');
+  });
+
+  it('renders the technical-details drawer with the stack of a thrown Error', () => {
+    const fixture = createFixture();
+    fixture.componentRef.setInput('error', new Error('boom'));
     fixture.detectChanges();
     const pre = (fixture.nativeElement as HTMLElement).querySelector(
       '.section-error-details pre',
     ) as HTMLElement;
-    expect(pre.textContent).toContain('BROKER_DISCONNECTED');
+    expect(pre.textContent).toContain('boom');
+  });
+
+  it('renders the technical-details drawer with a thrown payload as JSON', () => {
+    const fixture = createFixture();
+    fixture.componentRef.setInput('error', { code: 'BROKER_DISCONNECTED', message: 'boom' });
+    fixture.detectChanges();
+    const pre = (fixture.nativeElement as HTMLElement).querySelector(
+      '.section-error-details pre',
+    ) as HTMLElement;
+    expect(pre.textContent).toContain('"code": "BROKER_DISCONNECTED"');
     expect(pre.textContent).toContain('"message": "boom"');
   });
 });

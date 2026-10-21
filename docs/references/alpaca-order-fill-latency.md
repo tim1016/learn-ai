@@ -3,8 +3,8 @@
 ## Canonical implementation
 
 `PythonDataService/app/broker/alpaca/adapter.py::fill_latency_seconds` is the
-only author of `BrokerOrder.fill_latency_seconds`. The .NET transport passes
-the scalar through and Angular renders it; neither recomputes broker timing.
+only author of `BrokerOrder.fill_latency_seconds`. The API serves
+the scalar as authored and Angular renders it without recomputing broker timing.
 
 ## Reference and formula
 

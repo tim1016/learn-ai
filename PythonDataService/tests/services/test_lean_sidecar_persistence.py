@@ -1104,10 +1104,10 @@ def test_build_persist_payload_forwards_brokerage_and_data_policy_from_manifest_
     tmp_path: Path,
 ) -> None:
     """The persist payload must carry the manifest's brokerage_policy +
-    data_policy_json so the .NET row is the truthful record.
+    data_policy_json so the persisted row is the truthful record.
 
-    Without a manifest the payload's brokerage_policy is None. The .NET service
-    preserves NULL on the row rather than fabricating ``algorithm_default``,
+    Without a manifest the payload's brokerage_policy is None. The record layer
+    leaves it unknown rather than fabricating ``algorithm_default``,
     which would corrupt compare-view gating for Interactive Brokers
     reconciliation runs.
 
@@ -1509,7 +1509,7 @@ def test_normalized_to_lean_statistics_response_dollar_with_commas() -> None:
 
 def test_normalized_to_lean_statistics_response_parses_engine_shape() -> None:
     """``LeanStatisticsResponse.model_validate`` round-trips the helper
-    output — the dict the .NET row receives must be parseable as the
+    output — the dict the persisted row receives must be parseable as the
     canonical shape, so the frontend's ``portfolio?.trade?.runtime``
     guard passes."""
     from app.services.lean_sidecar_persistence import _normalized_to_lean_statistics_response

@@ -9,7 +9,7 @@ and ``cancel_check`` callables. The Jobs/SSE wrapper in
 ``app/routers/jobs.py`` plugs ``ProgressEmitter`` into these so the
 data-lab-style run-dock can show per-ticker phase events as they happen.
 The callbacks are no-ops by default — direct synchronous callers (tests,
-GraphQL one-shot) get the same behaviour as before.
+one-shot runs) get the same behaviour as before.
 
 ``cancel_check`` follows the same contract as every other research runner
 (``app/research/recency/runner.py``, ``app/research/walk_forward/runner.py``):
@@ -102,7 +102,7 @@ STAGE3_AGGREGATE_IC_MIN = 0.05
 
 
 # Optional progress callbacks used by the Jobs/SSE wrapper. Default no-ops
-# keep synchronous callers (existing GraphQL endpoint, tests) unaffected.
+# keep synchronous callers (direct calls, tests) unaffected.
 PhaseCallback = Callable[[str], None]
 LogCallback = Callable[[str], None]
 ProgressCallback = Callable[[int, int, str], None]

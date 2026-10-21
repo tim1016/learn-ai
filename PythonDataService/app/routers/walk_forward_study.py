@@ -2,8 +2,8 @@
 
 ``router`` — ``/api/research/walk-forward-studies``: preflight, history,
 detail (folds and verdict), the folds' test-window curves, delete. ``jobs_router`` —
-``POST /api/jobs-internal/walk-forward-study``, dispatched by the .NET jobs
-boundary with a minted ``job_id`` (a new study, or Finish of an incomplete
+``POST /api/jobs-internal/walk-forward-study``, dispatched by the jobs
+facade with a minted ``job_id`` (a new study, or Finish of an incomplete
 one via ``resume_study_id``). Per-fold sweeps are read through the Grid
 Search surface by their search ids.
 """

@@ -98,7 +98,7 @@ def test_test_jobs_keep_a_hang_backstop_far_past_the_two_minute_target() -> None
     # a hung job holds its runner for GitHub's six-hour default.
     jobs = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))["jobs"]
 
-    for name in ("frontend-test-shard", "python-test-shard", "backend-test"):
+    for name in ("frontend-test-shard", "python-test-shard"):
         assert jobs[name]["timeout-minutes"] == 10, f"{name} keeps a ten-minute hang backstop"
 
 

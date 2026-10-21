@@ -30,7 +30,7 @@ function isRefusal(value: unknown): value is GridSearchRefusal {
 
 /**
  * Translates a 400 with a `{code, message}` detail into a typed refusal; anything else stays as it was.
- * A direct FastAPI call carries the object; the .NET jobs boundary forwards Python's JSON body as the
+ * A direct FastAPI call carries the object; the jobs facade forwards a worker route's JSON body as the
  * `detail` string of a ProblemDetails, so that shape is parsed too.
  */
 export function toRefusal(error: unknown): GridSearchRefusedError | null {

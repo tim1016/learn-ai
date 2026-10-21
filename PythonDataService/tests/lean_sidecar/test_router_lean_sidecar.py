@@ -25,7 +25,6 @@ from httpx import ASGITransport, AsyncClient
 if TYPE_CHECKING:
     pass
 
-from app.config import settings
 from app.lean_sidecar import config as sidecar_config
 from app.lean_sidecar.launcher.models import (
     LAUNCHER_CAPABILITY_READ_ONLY_WORKSPACE_DATA,
@@ -40,7 +39,6 @@ pytestmark = pytest.mark.asyncio
 
 
 PINNED_DIGEST_FOR_TESTS = "sha256:00000000000000000000000000000000000000000000000000000000cafebabe"
-_TEST_BACKEND_URL = "http://test-backend"
 
 
 @pytest.fixture(autouse=True)
@@ -55,14 +53,11 @@ def _isolated_launcher_url(monkeypatch: pytest.MonkeyPatch) -> None:
     ``AllMockedAssertionError``. Autouse so individual tests don't
     have to remember to opt in.
 
-    Also pins ``settings.BACKEND_URL`` to ``_TEST_BACKEND_URL`` so the
-    jobs-surface calls go to the same predictable host regardless of
-    which compose environment the container was started under, and
-    stands in for the run repository write so no test reaches a database.
+    Also stands in for the run repository write so no test reaches a
+    database.
     """
     monkeypatch.delenv("LEAN_LAUNCHER_URL", raising=False)
     monkeypatch.delenv("LEAN_LAUNCHER_TOKEN", raising=False)
-    monkeypatch.setattr(settings, "BACKEND_URL", _TEST_BACKEND_URL)
 
     async def _persisted(payload: dict) -> SaveOutcome:
         return SaveOutcome(status="saved", run_id=12345)

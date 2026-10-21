@@ -4,8 +4,9 @@ Every persisted Python engine run gets a parity disposition:
 
 - Eligible runs (registered ``lean_twin``, raw bars, minute resolution,
   explicit window) spawn an async LEAN run through the public jobs
-  surface, sharing a ``parity_group_id``. A ``pending`` parity verdict
-  row is written immediately; the companion's persist step settles it to
+  facade (``app.jobs.facade``, called in-process), sharing a
+  ``parity_group_id``. A ``pending`` parity verdict row is written
+  immediately; the companion's persist step settles it to
   ``agree``/``diverged``, or to ``run_failed`` when the LEAN row that lands
   carries no comparable result.
 - Ineligible runs get an honest ``unavailable`` verdict row carrying the
@@ -17,14 +18,14 @@ transitioning ``pending → run_failed | persist_failed``. Those marks are
 **provisional** — written from the dispatch side before any companion row
 exists, they claim only that none is coming. A companion row that does land
 supersedes them (ADR 0058 as amended by #1977); a verdict computed from two
-rows never is. This matters most for the dispatch below, whose 5 s read
-timeout marks ``run_failed`` for a LEAN job that had already started.
+rows never is. This matters most for the dispatch below: a launch that
+outlasts the wait marks ``run_failed`` for a LEAN job that had already started.
 
-The verdict rows are Python-owned direct writes (PRD #1929); the companion
-launch still goes through the .NET jobs surface over HTTP. Everything here
-is best-effort: parity bookkeeping must never fail or slow the Python run
-that triggered it. A lost ``pending`` row degrades to "no parity info" on
-the report.
+The verdict rows are Python-owned direct writes (PRD #1929), and so is the
+companion launch: it mints the job through the jobs facade like any browser
+start. Everything here is best-effort: parity bookkeeping must never fail or
+slow the Python run that triggered it. A lost ``pending`` row degrades to "no
+parity info" on the report.
 """
 
 from __future__ import annotations
@@ -36,9 +37,7 @@ from collections.abc import Mapping
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
-import httpx
-
-from app.config import settings
+from app.jobs.facade import launch_job_from_worker_thread
 from app.lean_sidecar.config import COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1
 from app.research.backtest_runs.service import mark_parity_failed_sync, record_parity_disposition_sync
 
@@ -49,7 +48,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 PARITY_VERDICT_SCHEMA_VERSION = 1
-_HTTP_TIMEOUT_S = 5.0
 # Reasons for the honest ``unavailable`` disposition.
 REASON_NO_TWIN = "no_lean_counterpart"
 REASON_ADJUSTMENT = "adjustment_unsupported"
@@ -233,11 +231,12 @@ def _launch_companion_job(
     parity_group_id: str,
     validated_parameters: Mapping[str, Any] | None,
 ) -> None:
-    """POST the companion run through the public jobs surface.
+    """Start the companion run through the public jobs facade.
 
-    Going through ``/api/jobs/lean_engine_run`` (not the internal route)
-    lets .NET mint the job id and record the Redis state, so the run
-    dock and history auto-refresh see the companion like any other run.
+    Starting a ``lean_engine_run`` job (not calling its internal route)
+    mints the job id and records the Redis state, so the run dock and history
+    auto-refresh see the companion like any other run. Runs on the calling
+    worker thread, which has no event loop of its own.
     """
     from app.lean_sidecar.trading_calendar import (
         NoSessionError,
@@ -293,20 +292,20 @@ def _launch_companion_job(
         companion_request["strategy_parameters"] = companion_parameters
     body = {"request": companion_request}
     try:
-        with httpx.Client(timeout=_HTTP_TIMEOUT_S) as client:
-            response = client.post(f"{settings.BACKEND_URL}/api/jobs/lean_engine_run", json=body)
-        if response.status_code >= 300:
-            logger.warning(
-                "[PARITY] companion dispatch rejected for %s: %s %s",
-                parity_group_id,
-                response.status_code,
-                response.text[:200],
-            )
-            mark_parity_failed(
-                parity_group_id,
-                status="run_failed",
-                detail=f"companion dispatch rejected: HTTP {response.status_code}",
-            )
-    except httpx.HTTPError as exc:
+        outcome = launch_job_from_worker_thread("lean_engine_run", body)
+    except Exception as exc:
         logger.exception("[PARITY] companion dispatch failed for %s", parity_group_id)
         mark_parity_failed(parity_group_id, status="run_failed", detail=f"companion dispatch failed: {exc}")
+        return
+    if not outcome.accepted:
+        logger.warning(
+            "[PARITY] companion dispatch rejected for %s: %s %s",
+            parity_group_id,
+            outcome.status_code,
+            (outcome.detail or "")[:200],
+        )
+        mark_parity_failed(
+            parity_group_id,
+            status="run_failed",
+            detail=f"companion dispatch rejected: HTTP {outcome.status_code}",
+        )

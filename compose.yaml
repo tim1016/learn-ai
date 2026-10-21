@@ -18,7 +18,7 @@ services:
       # Unclean shutdowns trigger WAL fsync recovery before postgres accepts
       # connections — observed up to 40s on this host. With no start_period
       # the healthcheck flips to unhealthy at 25s (5x5s), which strands the
-      # backend in Created (depends_on: db.service_healthy) even though
+      # python-service in Created (depends_on: db.service_healthy) even though
       # postgres recovers a few seconds later. 60s covers the worst case
       # we've seen with margin.
       start_period: 60s
@@ -169,13 +169,13 @@ services:
       # roles and each lane names itself instead (compose.fleet.yaml), with
       # this value fenced back off on the coordinator-only role.
       - FLEET_WORKER_SERVICE=python-service
-      - ALLOWED_ORIGINS=http://backend:8080,http://localhost:5000,http://localhost:4200
+      - ALLOWED_ORIGINS=http://localhost:4200
       - DATA_PLANE_CONTROL_SECRET=${DATA_PLANE_CONTROL_SECRET:?Set DATA_PLANE_CONTROL_SECRET in .env before starting the stack}
-      - BACKEND_URL=http://backend:8080
       - REDIS_URL=redis://:${REDIS_PASSWORD:-local-dev-redis-password}@redis:6379/0
       # Data lake writer root (Slice 1b). Container path of the host-bind mount above.
       - LEAN_DATA_WRITE_ROOT=/lean-data-writer
-      # Data lake catalog — asyncpg URL; same host/db/creds as the backend.
+      # Data lake catalog — asyncpg URL. The API also migrates this database at
+      # startup (ADR 0081); the same URL serves the research and recency stores.
       # Required: the lake is the only market-data store (ADR 0049, #1893), so
       # a deployment without this has no historical bars at all.
       - POSTGRES_URL=postgres://postgres:${POSTGRES_PASSWORD}@db:5432/postgres
@@ -249,6 +249,9 @@ services:
       - "host.containers.internal:host-gateway"
       - "host.docker.internal:host-gateway"
     depends_on:
+      # The API migrates this database at startup (ADR 0081), so it waits for it.
+      db:
+        condition: service_healthy
       redis:
         condition: service_healthy
     command:
@@ -273,7 +276,7 @@ services:
       retries: 3
       # Cold boot blocks ~12s on IBKR connect retries (3 attempts × ~4s each)
       # before uvicorn binds the port. 10s wasn't enough — compose flipped
-      # unhealthy and stalled backend/frontend startup. 45s gives the IBKR
+      # unhealthy and stalled frontend startup. 45s gives the IBKR
       # retry window headroom without slowing warm restarts.
       start_period: 45s
     deploy:
@@ -283,74 +286,6 @@ services:
           cpus: "2.0"
         reservations:
           memory: 512M
-    networks:
-      - app-network
-
-  backend:
-    image: mcr.microsoft.com/dotnet/sdk:10.0
-    container_name: my-backend
-    restart: always
-    working_dir: /src
-    ports:
-      # Default host exposure is loopback-only; widen deliberately for remote/shared envs.
-      - "127.0.0.1:5000:8080"
-    volumes:
-      - ./Backend:/src:z
-    environment:
-      - ConnectionStrings__DefaultConnection=Host=db;Database=postgres;Username=postgres;Password=${POSTGRES_PASSWORD}
-      - PolygonService__BaseUrl=http://python-service:8000
-      - DataPlane__ControlSecret=${DATA_PLANE_CONTROL_SECRET:?Set DATA_PLANE_CONTROL_SECRET in .env before starting the stack}
-      - REDIS_URL=redis:6379,password=${REDIS_PASSWORD:-local-dev-redis-password}
-      - DOTNET_USE_POLLING_FILE_WATCHER=true
-      - ASPNETCORE_ENVIRONMENT=Development
-      - ASPNETCORE_URLS=http://+:8080
-      # csc (Roslyn) SIGILLs with exit 132 on Apple Silicon under Podman
-      # applehv. cpuinfo advertises sve2/sme2/sme2p1, but the AppleHV-
-      # virtualized CPU can't actually execute every SVE/SME sequence the
-      # .NET 10 SDK's R2R-precompiled images contain. The single runtime
-      # intrinsic toggles (DOTNET_EnableHWIntrinsic, DOTNET_EnableArm64Sve,
-      # DOTNET_EnableArm64Sme) don't help individually — bisected with all
-      # 10.0.x SDK tags tested (10.0.100, 10.0.300; Ubuntu and AzureLinux
-      # base images). Minimum stable combo to bypass R2R-baked code:
-      #   - ReadyToRun=0 — forces JIT instead of R2R-baked native code
-      #   - TieredCompilation=0 — skips tier-0 quick-JIT (still hits SME)
-      # These two flags MUST be paired with the 3G memory limit below — at
-      # 1G csc still SIGILLs even with both flags set (an unlimited-memory
-      # one-shot `podman run` hides this and falsely "passes"). HotChocolate
-      # source generators + EF Core code-gen on a 134-file project push the
-      # build process past 1G, and the OOM-adjacent JIT path re-enters the
-      # SVE/SME failure mode the flags otherwise avoid.
-      # Cost: slower cold start (R2R) and no adaptive optimization (TC).
-      # Acceptable for dev container; production builds elsewhere unaffected.
-      - DOTNET_ReadyToRun=0
-      - DOTNET_TieredCompilation=0
-    command: ["dotnet", "watch", "run", "--non-interactive"]
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      # Cold `dotnet watch run` takes 30–60s to compile from scratch on
-      # the first --no-cache rebuild. 15s wasn't enough — compose marked
-      # the backend unhealthy and aborted frontend startup. 90s gives
-      # cold builds room without slowing warm restarts (start_period
-      # only delays the first check; retries handle steady-state).
-      start_period: 90s
-    deploy:
-      resources:
-        limits:
-          # See env comment above: 1G is not enough to clear the csc SIGILL
-          # window even with R2R=0 + TieredCompilation=0. HotChocolate's
-          # source generators on this project's 134 files push the build
-          # process past 1G and re-enter the SVE/SME-baked code path.
-          memory: 3G
-    depends_on:
-      db:
-        condition: service_healthy
-      python-service:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
     networks:
       - app-network
 
@@ -371,14 +306,13 @@ services:
     environment:
       # Angular 22's esbuild compiler runs worker threads; default Node heap
       # caps them at ~512MB which is not enough for this project's bundle
-      # (primeng + apollo + chart.js + lightweight-charts + katex). Raise the
+      # (primeng + chart.js + lightweight-charts + katex). Raise the
       # old-space limit so workers don't hit ERR_WORKER_OUT_OF_MEMORY.
       - NODE_OPTIONS=--max-old-space-size=3584
       # Keep Angular's dev proxy secret in lockstep with the Python data plane.
       - DATA_PLANE_CONTROL_SECRET=${DATA_PLANE_CONTROL_SECRET:?Set DATA_PLANE_CONTROL_SECRET in .env before starting the stack}
       # Container networking needs service names; host `ng serve` defaults to
-      # loopback ports in the same canonical proxy configuration.
-      - BACKEND_PROXY_TARGET=${BACKEND_PROXY_TARGET:-http://backend:8080}
+      # the loopback port in the same canonical proxy configuration.
       - DATA_PLANE_PROXY_TARGET=${DATA_PLANE_PROXY_TARGET:-http://python-service:8000}
     command: ["npx", "ng", "serve", "--host", "0.0.0.0", "--poll", "2000", "--proxy-config", "proxy.conf.js"]
     healthcheck:
@@ -394,7 +328,7 @@ services:
         limits:
           memory: 4G
     depends_on:
-      backend:
+      python-service:
         condition: service_healthy
     networks:
       - app-network

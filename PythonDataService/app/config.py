@@ -235,7 +235,7 @@ class Settings(BaseSettings):
     GIT_COMMIT_SHA: str = ""
 
     # CORS (comma-separated string)
-    ALLOWED_ORIGINS: str = "http://backend:8080,http://localhost:5000,http://localhost:4200"
+    ALLOWED_ORIGINS: str = "http://localhost:4200"
 
     def get_allowed_origins(self) -> list[str]:
         """Parse ALLOWED_ORIGINS into a list"""
@@ -313,16 +313,13 @@ class Settings(BaseSettings):
     # ever placing an abnormal order.
     ALPACA_FAULT_INJECTION_ENABLED: bool = False
     TRUSTED_HOSTS: str = (
-        "localhost,127.0.0.1,test,testserver,python-service,backend,"
+        "localhost,127.0.0.1,test,testserver,python-service,"
         "host.containers.internal,host.docker.internal"
     )
 
     def get_trusted_hosts(self) -> list[str]:
         """Parse TRUSTED_HOSTS into a list for TrustedHostMiddleware."""
         return [host.strip() for host in self.TRUSTED_HOSTS.split(",") if host.strip()]
-
-    # .NET backend URL for study persistence
-    BACKEND_URL: str = "http://localhost:5000"
 
     # Data lake. Default-ON since #1839: the lake is the market-data
     # authority for historical bars in both adjustment modes (ADR 0049),
@@ -440,7 +437,7 @@ settings = Settings(_env_file=None) if os.environ.get("RESEARCH_WORKER") == "1" 
 fleet_settings = FleetSettings(_env_file=None) if os.environ.get("RESEARCH_WORKER") == "1" else FleetSettings()
 
 # The deterministic root UUID every pre-#1876 catalog row was backfilled with
-# (Backend migration AddDataRootIdToDataLakeArtifactsAndRuns) and the value
+# (the DataRootId backfill of the baseline schema's DataLakeArtifacts) and the value
 # active_root_id() falls back to when DATA_LAKE_ROOT_ID is unset. Lives here,
 # not in app.data_lake.root_identity, so that module — which needs
 # app.data_lake.path_policy for its RootContext — has no reason to be

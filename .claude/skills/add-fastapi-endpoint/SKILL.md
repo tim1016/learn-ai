@@ -1,11 +1,11 @@
 ---
 name: add-fastapi-endpoint
-description: Add a new FastAPI endpoint in PythonDataService that exposes engine output (indicators, backtest results, market data) to the frontend or backend. Use when user says "add an endpoint", "expose this via FastAPI", "create a route for", "I need the frontend to get", or asks to wire up new Python logic to HTTP.
+description: Add a new FastAPI endpoint in PythonDataService that exposes engine output (indicators, backtest results, market data) to the Angular frontend. Use when user says "add an endpoint", "expose this via FastAPI", "create a route for", "I need the frontend to get", or asks to wire up new Python logic to HTTP.
 ---
 
 # Add FastAPI Endpoint
 
-Add a new FastAPI endpoint in `PythonDataService/` that exposes engine output to HTTP consumers (the .NET backend or, in some cases, the Angular frontend directly).
+Add a new FastAPI endpoint in `PythonDataService/` that exposes engine output to the Angular frontend, which calls it directly over REST.
 
 ## When to use
 
@@ -19,7 +19,7 @@ Before adding, verify:
 
 1. Does a similar endpoint already exist? Search `PythonDataService/app/routers/` first. Don't duplicate.
 2. Is the underlying engine logic implemented and tested? If not, build that first, then expose it.
-3. Does the response shape need to match a consumer's existing deserialization? The .NET backend uses `JsonNamingPolicy.SnakeCaseLower`, so Python responses must use `snake_case` keys.
+3. Does the response shape need to match a consumer's existing deserialization? The Angular client reads the generated OpenAPI types, so Python responses use `snake_case` keys and every change to a serialized model needs the contract regenerated (step 6).
 
 ## Execution
 
@@ -93,10 +93,7 @@ Two layers of test:
 
 ### 5. Wire to the consumer
 
-The endpoint usually isn't the final product — it has a consumer. Depending on who consumes it:
-
-- **.NET backend**: Add or update a typed client in `Backend/` that calls this endpoint. Use `JsonNamingPolicy.SnakeCaseLower` for deserialization. Handoff: tell the user the endpoint is live, and either delegate the .NET client work to a follow-up task or invoke the `write-graphql-resolver` skill if the endpoint output is being exposed via GraphQL.
-- **Angular frontend**: most data-plane features call `/api/` directly (routed by `Frontend/proxy.conf.js`) and use the generated types in `Frontend/src/app/api/broker.types.ts`. Go through .NET GraphQL only when a Backend resolver already owns the data.
+The endpoint usually isn't the final product — it has a consumer, and that consumer is the Angular frontend. Its services call `/api/` directly (routed by `Frontend/proxy.conf.js`) and use the generated types in `Frontend/src/app/api/broker.types.ts`. Handoff: tell the user the endpoint is live, and either build the Angular service now (the `build-angular-component` skill) or defer it to a follow-up task.
 
 ### 6. Regenerate the contract
 
@@ -110,7 +107,7 @@ Report:
 - Request/response schema summary
 - Files created or modified (router, schemas, service, tests)
 - Test coverage (which tests pass, what they cover)
-- Whether a downstream client (.NET, Angular) needs to be updated, and whether you're doing that now or deferring
+- Whether the Angular service needs to be added or updated, and whether you're doing that now or deferring
 
 ## Anti-patterns to avoid
 
@@ -119,5 +116,5 @@ Report:
 - Pydantic v1 patterns (`@validator`, `Config` inner class) — this project is v2
 - Naked `dict` responses instead of Pydantic models
 - Silent exception handlers that swallow engine errors into 200 responses
-- `camelCase` field names in responses (the .NET consumer expects `snake_case`)
+- `camelCase` field names in responses (the generated Angular types expect `snake_case`)
 - Duplicating schemas across routers instead of sharing them

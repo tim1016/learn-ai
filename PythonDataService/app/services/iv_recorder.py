@@ -5,14 +5,15 @@ price-normalization + provenance-aware VIX-style replication, and persists
 the result with full provenance so the historical IV pipeline can be built
 forward-only from the day this recorder ships.
 
-ADR 0071 decision 6 explains why the .NET host's Quartz scheduler
-(``AddIvRecorder`` / ``IvRecorderRegistration``) owns the cron, not an
-in-process Python scheduler, and decision 8 explains why this is a JSONL file
-store today (Postgres after burn-in).
+The cron that called this module was a Quartz job in the C# backend (ADR 0071
+decision 6); it was retired with that backend (ADR 0081) and nothing schedules
+the recorder today. ``references/csharp-jobs/README.md`` keeps the old job and
+says where a Python clock could plug in. ADR 0071 decision 8 explains why this
+is a JSONL file store today (Postgres after burn-in).
 
 This module exposes:
 
-- ``record_iv_snapshot(...)`` — the work function the cron calls.
+- ``record_iv_snapshot(...)`` — the work function a scheduler calls.
 - ``IvSnapshotStore`` — pluggable persistence interface.
 - ``JsonlIvSnapshotStore`` — production-pragmatic JSONL file store.
 - ``InMemoryIvSnapshotStore`` — for tests.
@@ -94,8 +95,8 @@ class RecordedIvSnapshot:
 class IvSnapshotStore(ABC):
     """Pluggable store for recorded IV snapshots.
 
-    Implementations must be thread-safe — the recorder is invoked from
-    the .NET cron, but tests run multiple writes concurrently.
+    Implementations must be thread-safe — the recorder runs on worker
+    threads and tests run multiple writes concurrently.
     """
 
     @abstractmethod

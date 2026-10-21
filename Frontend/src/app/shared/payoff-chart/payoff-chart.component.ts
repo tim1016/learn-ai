@@ -9,7 +9,7 @@ import {
 } from 'lightweight-charts';
 import {
   PayoffPoint, ChartCurveData, GreekCurvePoint, GreekType,
-} from '../../graphql/types';
+} from '../../services/market-data.types';
 import { createAppChart } from '../charts/chart-utils';
 
 @Component({

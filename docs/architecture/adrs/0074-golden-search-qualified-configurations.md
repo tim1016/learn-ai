@@ -225,3 +225,11 @@ Owner decisions, 2026-10-09, from the adversarial review of #2932's plan; built 
 - Treating a null exam metric, an unreadable qualification table, or a Golden Validation record by itself as coverage.
 - Moving `validated_settings` or `golden_trace_root` to make an approved tuple look covered.
 - Deleting or editing an exposure, a trial, a qualified version or a default-history row.
+
+## Amendment 2026-10-21 — which API creates jobs ([ADR 0081](0081-python-owns-the-api-and-the-database-schema.md))
+
+The 2026-10-02 "Run research" amendment says "Only the .NET jobs API creates
+jobs, so nothing restarts a stage unasked." The jobs API is now Python's
+`/api/jobs` facade (`app/jobs/facade.py`), which mints every job id; the
+internal routes behind it run the id it hands them. The guarantee is unchanged:
+a job starts only when a caller asks the facade to start one.

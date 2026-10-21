@@ -58,15 +58,6 @@ Every port of mathematical logic from a reference source ships with:
 - **Name**: `*.component.spec.ts`, `*.service.spec.ts`.
 - **User events**: `@testing-library/user-event` for clicks, typing, etc. More realistic than raw event dispatching.
 
-## .NET (xUnit)
-
-- **`[Fact]`** for single-case tests. **`[Theory, InlineData(...)]`** for parameterized.
-- **Arrange → Act → Assert** with blank-line separation. One logical assertion per test.
-- **Mock interfaces** with Moq. Never mock concrete classes.
-- **Async tests** return `Task`. Never `.Result`, `.Wait()`, or `.GetAwaiter().GetResult()`.
-- **Name**: `MethodName_Scenario_ExpectedResult` (e.g., `GetAggregates_EmptyResponse_ReturnsEmptyList`).
-- **GraphQL resolver tests**: use `IRequestExecutor` against the schema.
-
 ## Python (pytest)
 
 - **pytest-asyncio** for async tests. `asyncio_mode = auto` in `pytest.ini`.

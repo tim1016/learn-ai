@@ -265,7 +265,7 @@ fi
 
 # ---------------------------------------------------------------------------
 # 5. Host directories, image build, first-run ceremonies, stack up.
-#    First build is slow (~5-10 min): .NET SDK image + Python heavy deps.
+#    First build is slow (~5-10 min): Python heavy deps.
 # ---------------------------------------------------------------------------
 # Rootless Podman does not create a missing bind-mount source, so every host
 # path compose.yaml mounts must exist before `up` (windows-onboarding §2).
@@ -427,7 +427,6 @@ wait_for() {
 # conflict, migration failure, crashed service).
 health_failures=0
 wait_for "python-service" "http://localhost:8000/health" || health_failures=$((health_failures + 1))
-wait_for "backend (GraphQL)" "http://localhost:5000/graphql?sdl" || health_failures=$((health_failures + 1))
 wait_for "frontend" "http://localhost:4200" || health_failures=$((health_failures + 1))
 
 echo ""
@@ -450,7 +449,6 @@ echo " The stack is up. Open http://localhost:4200"
 echo ""
 echo " Services:"
 echo "   Frontend     http://localhost:4200  (my-frontend container, hot reload)"
-echo "   GraphQL      http://localhost:5000/graphql"
 echo "   Python API   http://localhost:8000/health"
 echo "   Postgres     localhost:5432"
 echo "   Redis        localhost:6379"

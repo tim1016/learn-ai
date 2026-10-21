@@ -19,55 +19,12 @@ permissions:
   contents: read
 
 jobs:
-  backend-full:
-    name: Backend Full Suite
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: postgres
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-    steps:
-      - uses: actions/checkout@v4
-        if: ${{ !cancelled() }}
-        with:
-          persist-credentials: false
-      - uses: actions/setup-dotnet@v4
-        if: ${{ !cancelled() }}
-        with:
-          dotnet-version: "10.0.x"
-      - if: ${{ !cancelled() }}
-        run: dotnet restore podman.sln
-      - name: Run the complete backend suite
-        if: ${{ !cancelled() }}
-        env:
-          BACKEND_TEST_POSTGRES_CONNECTION_STRING: Host=localhost;Port=5432;Database=postgres;Username=postgres;Password=postgres
-          DOTNET_NOLOGO: true
-        run: |
-          mkdir -p TestResults
-          dotnet test Backend.Tests/Backend.Tests.csproj --no-restore --configuration Release --logger "trx;LogFileName=backend-full.trx" --results-directory TestResults
-      - name: Upload backend test results
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: daily-backend-test-results
-          path: TestResults/backend-full.trx
-          if-no-files-found: ignore
-
   python-full:
     name: Python Full Suite
     runs-on: ubuntu-latest
     # The serial suite measured 35-61 min for the same tests across
     # 2026-10-06..08 (GitHub runner variance; the suite stays serial because
-    # slow tests share one PostgreSQL), plus ~5 min of migration and pip
+    # slow tests share one PostgreSQL), plus ~5 min of schema migration and pip
     # setup. A 60-minute cap cancelled the 2026-10-08 run at 92% with no
     # failed test recorded, so the budget must clear the slowest observed
     # day, not the median one. The suite has grown since: 77 min for the main
@@ -99,21 +56,6 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@v4
-        if: ${{ !cancelled() }}
-        with:
-          dotnet-version: "10.0.x"
-      - name: Migrate the data-lake schema
-        if: ${{ !cancelled() }}
-        working-directory: ${{ github.workspace }}
-        env:
-          DOTNET_NOLOGO: true
-          ConnectionStrings__DefaultConnection: Host=localhost;Port=5432;Database=postgres;Username=postgres;Password=postgres
-        run: |
-          dotnet tool install --global dotnet-ef --version 10.0.2
-          export PATH="$PATH:$HOME/.dotnet/tools"
-          dotnet build Backend/Backend.csproj
-          dotnet ef database update --project Backend/Backend.csproj
       - uses: actions/setup-python@v5
         if: ${{ !cancelled() }}
         with:
@@ -122,6 +64,9 @@ jobs:
           cache-dependency-path: PythonDataService/requirements*.txt
       - if: ${{ !cancelled() }}
         run: pip install -r requirements-heavy.txt -r requirements-light.txt -r requirements-dev.txt
+      - name: Migrate the database schema
+        if: ${{ !cancelled() }}
+        run: python -m app.db_schema
       # pytest.ini's testpaths name the roots, the same ones the PR shards
       # collect; here nothing is deselected.
       - name: Run the complete non-data-lake suite
@@ -267,7 +212,7 @@ jobs:
   report-red-run:
     name: Report a red run
     if: ${{ !cancelled() }}
-    needs: [backend-full, python-full, fleet-compose-qualification, cockpit-e2e]
+    needs: [python-full, fleet-compose-qualification, cockpit-e2e]
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -297,16 +242,15 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          # JUnit XML (pytest, Playwright) and TRX (dotnet) both name each
-          # failed test; list them under the jobs that did not succeed.
+          # JUnit XML (pytest, Playwright) names each failed test; list them
+          # under the jobs that did not succeed.
           python3 - <<'PY'
           import pathlib
           import xml.etree.ElementTree as ET
 
-          TRX = "{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}"
           failed, unreadable = [], []
           for path in sorted(pathlib.Path("results").rglob("*")):
-              if path.suffix not in (".xml", ".trx"):
+              if path.suffix != ".xml":
                   continue
               try:
                   root = ET.parse(path).getroot()
@@ -314,14 +258,9 @@ jobs:
                   # A truncated result file must not stop the report.
                   unreadable.append(f"- `{path}`: {error}")
                   continue
-              if path.suffix == ".xml":
-                  for case in root.iter("testcase"):
-                      if case.find("failure") is not None or case.find("error") is not None:
-                          failed.append(f"{case.get('classname')}::{case.get('name')}")
-              else:
-                  for result in root.iter(f"{TRX}UnitTestResult"):
-                      if result.get("outcome") == "Failed":
-                          failed.append(result.get("testName"))
+              for case in root.iter("testcase"):
+                  if case.find("failure") is not None or case.find("error") is not None:
+                      failed.append(f"{case.get('classname')}::{case.get('name')}")
           lines = [f"Failed tests ({len(failed)}):"]
           lines += [f"- `{name}`" for name in failed[:200]] or ["- none recorded; read the job logs"]
           if len(failed) > 200:

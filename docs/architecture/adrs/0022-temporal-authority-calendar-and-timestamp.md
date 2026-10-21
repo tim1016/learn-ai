@@ -102,3 +102,17 @@ Everything the 2026-10-06 amendment left under #2934 is moved; nothing there rem
 - The two pages that built 16:00 in the browser's zone now hold the anchor from the wire.
 
 **Left, with reasons.** The QuantLib wire's optional `evaluation_date` stays a `YYYY-MM-DD` string: it is a pricing date, not an expiry, no caller passes it, and QuantLib itself works in dates. The Data Lab past-chain page's analysis date stays a string: it is form state under (e)'s picker decision, and it feeds OCC symbol synthesis, whose `YYMMDD` is part of the vendor's ticker format, like `app/options/contract.py`'s own OCC builder. The engine backtest request's `from_date`/`to_date` (`app/schemas/engine_backtest.py`) stay ISO date strings: they name inclusive ET trading dates — a trading-date semantics, not instants — under the request contract every Strategy Lab, Jobs and research caller already speaks. Callers that hold windows as `int64 ms UTC` (the research evaluation identity, the benchmark corpus) convert inside one function (`_engine_request` in `app/research/benchmark.py`, `engine_request` in the golden-search evaluator), never persist the string form, and derive both dates from the canonical ET anchor arithmetic; moving the request itself to anchors is its own ticket.
+
+## Amendment 2026-10-21 — the Data Lab session deviation moved to Python ([ADR 0081](0081-python-owns-the-api-and-the-database-schema.md))
+
+Decision (f)'s deviation for Data Lab session windows names
+`DataLabSessionInput.FromDate` / `ToDate` in `Backend/GraphQL/DataLabMutation.cs`;
+that file went with the C# backend. The deviation itself stands, now on the
+Python route that serves the screen: `from_date` and `to_date` on
+`/api/data-lab/sessions` (`app/schemas/data_lab_sessions.py`) are the date
+picker's `YYYY-MM-DD` state. Every instant on that route is `int64 ms UTC`:
+the server derives `window_start_ms` and `window_end_ms` (UTC midnight of each
+date) and stamps `created_at_ms` and `updated_at_ms` from its own clock. The
+sentences elsewhere in this ADR that place the DateTime/string violations in
+the ".NET GraphQL surface" record the state at the time they were written; the
+GraphQL surface no longer exists.

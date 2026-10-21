@@ -16,7 +16,7 @@ import {
   Operand,
   StrategySpec,
   SurvivalRule,
-} from '../../graphql/spec-strategy.models';
+} from '../../services/spec-strategy.types';
 
 const OP_LABEL: Record<string, string> = {
   '<': '<',

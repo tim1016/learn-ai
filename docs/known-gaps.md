@@ -70,7 +70,8 @@ previously tracked items (issues #1655, #1671, #1672, #1674, #1677, #1664,
 - **Golden-fixture coverage gap** — most canonical math still lacks a registered
   golden fixture. *(was F-0026)*
 - **Temporal wire/storage contracts outside Alpaca V2 remain non-numeric
-  (medium).** The 2026-08-18 census confirmed 4 Pydantic, 29 C#, and 22 real
+  (medium).** The 2026-08-18 census confirmed 4 Pydantic, 29 C# (since removed
+  with the C# backend, ADR 0081), and 22 real
   TypeScript temporal field declarations using strings or native date types
   across golden fixtures, Data Lab, portfolio, market-data, validation, and
   research surfaces. The fourth Pydantic field,
@@ -427,15 +428,17 @@ additive `DataLabSession` ms-UTC columns (dual-read).
   (medium).** Token IDs are stored and validated, but `data-lab-chart` still
   consumes literal colors when rendering; token→`var(--chart-series-*)`
   resolution at the chart boundary is the remaining §10 step.
-- **Saved-session numeric-window semantics are interim (low).** Backend derives
-  `WindowStartMsUtc`/`WindowEndMsUtc` from date-only UTC midnight until the
+- **Saved-session numeric-window semantics are interim (low).** The Data Lab
+  sessions route (`app/schemas/data_lab_sessions.py`) derives
+  `window_start_ms`/`window_end_ms` from date-only UTC midnight until the
   canonical exchange-calendar resolution (PRD §13 step 6 backfill) lands.
 - **§13 steps 3–5 are not complete: legacy `DateTime` columns remain dual-written
-  (low).** Save/update still set `CreatedAt`/`UpdatedAt` (and legacy date
-  columns) alongside the numeric ms-UTC columns, and the GraphQL projection
-  still sources legacy fields for `createdAt`/`fromDate`/`toDate`. The
-  numeric-only write flip and the legacy-projection-derived-from-numeric step
-  land with the §13 step 5/6 migration.
+  (low).** Save/update (`app/services/data_lab_session_service.py`) still set
+  `CreatedAt`/`UpdatedAt` alongside the numeric ms-UTC columns, and
+  `FromDate`/`ToDate` stay the stored date-picker strings (ADR 0022 (f)). The
+  GraphQL projection this entry used to name is gone (ADR 0081); the REST
+  response reads `created_at_ms`/`updated_at_ms`. The numeric-only write flip
+  lands with the §13 step 5/6 migration, now a numbered SQL file.
 - **Legacy indicator recipe/param query keys are dropped by the ingress, not
   decoded (low).** PRD §14 routes legacy recipe URLs through a bounded
   recipe-schema validator; until that validator exists the ingress keeps

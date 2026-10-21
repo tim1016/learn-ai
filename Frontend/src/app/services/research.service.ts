@@ -1,9 +1,12 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable, map, tap } from 'rxjs';
+import { Observable, catchError, map, of, throwError } from 'rxjs';
+import type { components } from '../api/broker.types';
 import { environment } from '../../environments/environment';
+import { toResearchExperiment, toSignalEngineResult, toSignalExperiment } from './research-experiments.mappers';
+import { failureAsError, isPythonRefusal } from './python-http-failure';
 
-const GRAPHQL_URL = environment.backendUrl;
+type Schema = components['schemas'];
 
 // ─── Interfaces ────────────────────────────────────────────
 
@@ -108,9 +111,7 @@ export interface TargetMetadata {
   validCount: number;
   totalCount: number;
   validRatio: number;
-  /** Drop-reason breakdown. Hot Chocolate exposes the underlying
-   *  Dictionary<string, int> as a list of objects, so this is a list
-   *  rather than a map. */
+  /** Drop-reason breakdown, a list of entries rather than a map. */
   invalidReasonCounts: InvalidReasonCount[];
 }
 
@@ -617,187 +618,51 @@ export interface BatchResearchResult {
   error?: string;
 }
 
-// ─── GraphQL Queries ───────────────────────────────────────
-
-const GET_RESEARCH_EXPERIMENTS_QUERY = `
-  query GetResearchExperiments($ticker: String!) {
-    getResearchExperiments(ticker: $ticker) {
-      id ticker featureName startDate endDate barsUsed
-      meanIC icTStat icPValue adfPValue kpssPValue
-      isStationary passedValidation
-      monotonicityRatio isMonotonic createdAt
-    }
-  }
-`;
-
-const GET_SIGNAL_EXPERIMENTS_QUERY = `
-  query GetSignalExperiments($ticker: String!) {
-    getSignalExperiments(ticker: $ticker) {
-      id ticker featureName startDate endDate barsUsed
-      overallGrade statusLabel overallPassed
-      meanOosSharpe bestThreshold bestCostBps
-      flipSign regimeGateEnabled createdAt
-    }
-  }
-`;
-
-const GET_SIGNAL_EXPERIMENT_REPORT_QUERY = `
-  query GetSignalExperimentReport($id: Int!) {
-    getSignalExperimentReport(id: $id) {
-      success ticker featureName startDate endDate barsUsed
-      flipSign thresholdsTested costBpsOptions bestThreshold bestCostBps
-      backtestGrid {
-        threshold costBps dates cumulativeReturns positions
-        grossSharpe netSharpe maxDrawdown annualizedTurnover
-        avgHoldingBars winRate avgWinLossRatio totalTrades
-        netTotalReturn grossTotalReturn
-      }
-      walkForward {
-        windows {
-          foldIndex trainStart trainEnd testStart testEnd
-          trainBars testBars mu sigma bestThreshold
-          oosNetSharpe oosGrossSharpe oosMaxDrawdown
-          oosNetReturn oosWinRate oosTotalTrades
-          oosDates oosCumulativeReturns
-        }
-        meanOosSharpe stdOosSharpe medianOosSharpe
-        pctWindowsProfitable pctWindowsPositiveSharpe
-        worstWindowSharpe bestWindowSharpe totalOosBars
-        combinedOosDates combinedOosCumulativeReturns
-        oosSharpeTrendSlope
-        alphaDecay {
-          slope intercept tStat pValue rSquared
-          nFoldsUsed isTestValid isSignificant
-        }
-      }
-      graduation {
-        criteria {
-          name description passed value threshold label failureReason
-        }
-        overallPassed overallGrade summary statusLabel
-        parameterStability {
-          sharpeValuesByThreshold { threshold sharpe }
-          stabilityScore stabilityLabel
-        }
-        stage0Rejection {
-          rejected
-          failedCriteria { criterionName value thresholdRepr message }
-        }
-        stageInfo {
-          stage label description nextStageLabel
-          advanceCriteria { name description currentValue requiredRepr met }
-        }
-      }
-      signalDiagnostics {
-        signalMean signalStd pctTimeActive avgAbsSignal
-        pctFilteredByThreshold pctGatedByRegime
-      }
-      dataSufficiency {
-        totalBars trainBars testBars walkForwardFolds
-        effectiveOosBars regimesCovered
-        regimeCoverage { regime count }
-        coverageWarnings
-      }
-      effectiveSample {
-        rawN effectiveN autocorrelationLag1 independentBets
-        maxLagUsed rhoSum
-      }
-      regimeCoverage { regime count }
-      jointRegimeCoverage {
-        volLabel trendLabel days effectiveTrades badge
-      }
-      signalBehavior {
-        avgForwardReturnWhenActive skewnessActiveReturns
-        avgWinReturn avgLossReturn hitRate
-      }
-      oosSharpeCi {
-        point se ciLower ciUpper confidenceLevel nEffUsed valid
-      }
-      deflatedSharpe {
-        rawSharpe expectedMaxUnderNull dsrProbability
-        nTrials skewness kurtosis valid
-      }
-      methodology {
-        trainMonths testMonths windowType optimizationTarget
-        annualizationFactor barsPerDay horizon defaultCostBps
-        minBarsForSignal flipSign regimeGateEnabled
-        thresholds costBpsOptions
-      }
-      researchLog error
-    }
-  }
-`;
-
-// ─── Response Types ────────────────────────────────────────
-
-interface GetExperimentsResponse {
-  data: { getResearchExperiments: ResearchExperiment[] };
-  errors?: { message: string }[];
-}
-
-interface GetSignalExperimentsResponse {
-  data: { getSignalExperiments: SignalExperiment[] };
-  errors?: { message: string }[];
-}
-
-interface GetSignalExperimentReportResponse {
-  data: { getSignalExperimentReport: SignalEngineResult | null };
-  errors?: { message: string }[];
-}
-
 // ─── Service ───────────────────────────────────────────────
 
+/** The `code` Python gives a 404 that names a missing signal experiment (and not a missing route). */
+const SIGNAL_EXPERIMENT_NOT_FOUND = 'SIGNAL_EXPERIMENT_NOT_FOUND';
+
+/**
+ * The Research Lab's stored experiment history, read from Python's
+ * `/api/research/*`. A failed read rejects with an `Error` carrying Python's
+ * sentence; the one resolved miss is a signal report nobody holds (`null`).
+ */
 @Injectable({
   providedIn: 'root'
 })
 export class ResearchService {
-  private http = inject(HttpClient);
+  private readonly http = inject(HttpClient);
+  private readonly base = `${environment.pythonServiceUrl}/api/research`;
 
+  /** `GET /api/research/experiments?ticker=` — a ticker's feature experiments, newest first. */
   getExperiments(ticker: string): Observable<ResearchExperiment[]> {
     return this.http
-      .post<GetExperimentsResponse>(GRAPHQL_URL, {
-        query: GET_RESEARCH_EXPERIMENTS_QUERY,
-        variables: { ticker }
-      })
+      .get<Schema['ResearchExperimentResponse'][]>(`${this.base}/experiments`, { params: { ticker } })
       .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.getResearchExperiments)
+        failureAsError('Could not load the experiment history'),
+        map(rows => rows.map(toResearchExperiment)),
       );
   }
 
+  /** `GET /api/research/signal-experiments?ticker=` — a ticker's signal experiments, newest first. */
   getSignalExperiments(ticker: string): Observable<SignalExperiment[]> {
     return this.http
-      .post<GetSignalExperimentsResponse>(GRAPHQL_URL, {
-        query: GET_SIGNAL_EXPERIMENTS_QUERY,
-        variables: { ticker }
-      })
+      .get<Schema['SignalExperimentResponse'][]>(`${this.base}/signal-experiments`, { params: { ticker } })
       .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.getSignalExperiments)
+        failureAsError('Could not load the signal history'),
+        map(rows => rows.map(toSignalExperiment)),
       );
   }
 
+  /** `GET /api/research/signal-experiments/{id}/report` — `null` when no such experiment is held. */
   getSignalExperimentReport(id: number): Observable<SignalEngineResult | null> {
     return this.http
-      .post<GetSignalExperimentReportResponse>(GRAPHQL_URL, {
-        query: GET_SIGNAL_EXPERIMENT_REPORT_QUERY,
-        variables: { id }
-      })
+      .get<Schema['SignalExperimentReport']>(`${this.base}/signal-experiments/${id}/report`)
       .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.getSignalExperimentReport)
+        map((report): SignalEngineResult | null => toSignalEngineResult(report)),
+        catchError(err => (isPythonRefusal(err, 404, SIGNAL_EXPERIMENT_NOT_FOUND) ? of(null) : throwError(() => err))),
+        failureAsError('Could not load the signal report'),
       );
   }
 }

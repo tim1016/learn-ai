@@ -141,7 +141,7 @@ async def _persist_completed_run(
         end_date_ms=_date_to_ms_utc(request.end_date),
         # PR B P1 fix — forward the manifest so the persist payload carries
         # the true ``brokerage_policy`` + ``data_policy``. Without this, the
-        # .NET row would either be NULL ("unknown") or, pre-fix, would have
+        # persisted row would either be unknown or, pre-fix, would have
         # been silently labeled ``algorithm_default`` even for IBKR
         # reconciliation runs.
         manifest=manifest,
@@ -327,7 +327,7 @@ class TrustedRunResult:
     # the inspection endpoint can 404 deterministically.
     normalized_path: Path | None
     normalized: NormalizedResult | None
-    # Task 1.10 — the StrategyExecution.Id assigned by the .NET backend
+    # Task 1.10 — the backtest-run id the Python persist assigned
     # after persisting this run. ``None`` when persistence failed or was
     # skipped (e.g., launcher rejected before a result was produced).
     strategy_execution_id: int | None = None

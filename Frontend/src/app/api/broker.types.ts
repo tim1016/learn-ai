@@ -4299,6 +4299,71 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/data-lab/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Data Lab Sessions
+         * @description Every saved session, most recently updated first, as a summary: no entries and no chart snapshot.
+         *
+         *     ``GET /{session_id}`` answers one session whole.
+         */
+        get: operations["list_data_lab_sessions_api_data_lab_sessions_get"];
+        put?: never;
+        /**
+         * Save Data Lab Session
+         * @description Save a new session. The server picks its id and stamps its instants.
+         */
+        post: operations["save_data_lab_session_api_data_lab_sessions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/data-lab/sessions/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Data Lab Session */
+        get: operations["get_data_lab_session_api_data_lab_sessions__session_id__get"];
+        /**
+         * Replace Data Lab Session
+         * @description Replace a session whole: name, configuration, entries and chart snapshot. Its creation instant is kept.
+         */
+        put: operations["replace_data_lab_session_api_data_lab_sessions__session_id__put"];
+        post?: never;
+        /** Delete Data Lab Session */
+        delete: operations["delete_data_lab_session_api_data_lab_sessions__session_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/data-lab/sessions/{session_id}/name": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Rename Data Lab Session */
+        patch: operations["rename_data_lab_session_api_data_lab_sessions__session_id__name_patch"];
+        trace?: never;
+    };
     "/api/data-lake/artifacts/{artifact_id}": {
         parameters: {
             query?: never;
@@ -4695,8 +4760,8 @@ export interface paths {
          *
          *     Used by tests, curl, and any caller that doesn't need streamed
          *     progress. The Engine Lab UI uses the Jobs system instead — see
-         *     ``POST /api/jobs/engine_backtest`` (defined in the .NET layer) which
-         *     forwards to ``/api/jobs-internal/engine-backtest`` here.
+         *     ``POST /api/jobs/engine_backtest`` (the jobs facade, ``app.jobs.facade``)
+         *     which forwards to ``/api/jobs-internal/engine-backtest`` here.
          *
          *     The engine reads LEAN-format minute zips from the configured data
          *     root and produces trades that reproduce LEAN's reference log
@@ -4818,6 +4883,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Jobs
+         * @description The state record of every queued or running job. There is no index of finished jobs, so ``active=false`` is empty.
+         */
+        get: operations["list_jobs_api_jobs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs-internal/cross-sectional": {
         parameters: {
             query?: never;
@@ -4867,8 +4952,8 @@ export interface paths {
          *     plug those into :class:`ProgressEmitter` and
          *     :class:`CancellationCheck` respectively, so the inner code is
          *     unchanged. The final ZIP bytes go through ``completed_blob`` which
-         *     parks them at ``job:{id}:result-blob``; the .NET ``GET /api/jobs/
-         *     {id}/download`` streams them with the right Content-Disposition.
+         *     parks them at ``job:{id}:result-blob``; the jobs facade's ``GET /api/jobs/
+         *     {id}/download`` serves them with the right Content-Disposition.
          */
         post: operations["start_dataset_zip_job_api_jobs_internal_dataset_zip_post"];
         delete?: never;
@@ -4890,7 +4975,7 @@ export interface paths {
          * Start Engine Backtest Job
          * @description Kick off a LEAN-engine backtest in a worker thread. Returns 202.
          *
-         *     The Engine Lab UI is the primary caller; the .NET JobsApi forwards
+         *     The Engine Lab UI is the primary caller; the jobs facade forwards
          *     the request after minting the ``job_id`` and writing the initial
          *     state record to Redis. The worker emits ``phase`` and ``log`` events
          *     to the same Redis stream, then ``completed`` with the
@@ -5252,6 +5337,106 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Cancel Job
+         * @description Ask a job's worker to stop. Cooperative: the worker finishes its own record.
+         */
+        delete: operations["cancel_job_api_jobs__job_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Job Blob
+         * @description The binary a completed job stored (a ZIP, a PDF), under the name and type it recorded.
+         */
+        get: operations["download_job_blob_api_jobs__job_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Job Events
+         * @description Server-sent events for a job; ``Last-Event-ID`` (a Redis stream entry id) resumes after that entry.
+         */
+        get: operations["stream_job_events_api_jobs__job_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/result": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Job Result
+         * @description The JSON a completed job stored, verbatim.
+         */
+        get: operations["get_job_result_api_jobs__job_id__result_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_type}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Job
+         * @description Start a job of ``job_type``: the body goes to its worker route as sent, plus the minted ``job_id``.
+         */
+        post: operations["start_job_api_jobs__job_type__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/lean-sidecar/calendar/next-trading-day-open": {
         parameters: {
             query?: never;
@@ -5553,6 +5738,26 @@ export interface paths {
          * @description The run's strategy view, replayed from its own record; 409 says why when it cannot be replayed exactly.
          */
         get: operations["get_backtest_run_strategy_view_api_research_backtest_runs__run_id__strategy_view_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/experiments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Research Experiments
+         * @description A ticker's stored feature-research experiments, newest first.
+         */
+        get: operations["list_research_experiments_api_research_experiments_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -6974,6 +7179,46 @@ export interface paths {
          * @description One captured trading day's raw minute candles.
          */
         post: operations["run_day_candles_api_research_return_distribution_day_candles_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/signal-experiments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Signal Experiments
+         * @description A ticker's stored signal-engine experiments, newest first, each as its headline without the full report.
+         */
+        get: operations["list_signal_experiments_api_research_signal_experiments_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/signal-experiments/{experiment_id}/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Signal Experiment Report
+         * @description One signal experiment's full report. A stored report that cannot be read is a 500 that says so, never a partial one.
+         */
+        get: operations["get_signal_experiment_report_api_research_signal_experiments__experiment_id__report_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -8809,11 +9054,10 @@ export interface components {
          *
          *     Wraps the existing DataRunSpec ensure contract as a job submission:
          *     the same snake_case fields and validation as /ensure-data's body
-         *     (this router isn't behind the .NET-forwards-camelCase-verbatim
-         *     convention app/routers/jobs.py uses — it's called the same direct way
-         *     /ensure-data already is), plus a job_id the caller mints ahead of
-         *     dispatch, per the established job pattern's convention of the caller
-         *     minting the id before the worker starts writing progress against it.
+         *     (this router isn't behind the camelCase-verbatim convention
+         *     app/routers/jobs.py uses), plus a job_id the jobs facade mints ahead of
+         *     dispatch, per the established job pattern's convention of the id
+         *     existing before the worker starts writing progress against it.
          */
         BackfillJobRequest: {
             /** Job Id */
@@ -12165,7 +12409,7 @@ export interface components {
          * @description Body of POST /api/jobs-internal/cross-sectional.
          *
          *     The Frontend's research request, plus an injected ``job_id`` from the
-         *     .NET JobsApi.
+         *     jobs facade.
          */
         CrossSectionalJobRequest: {
             /** Featurename */
@@ -12453,6 +12697,177 @@ export interface components {
              * @default []
              */
             skipped_non_sessions?: components["schemas"]["NonSessionRecord"][];
+        };
+        /**
+         * DataLabSessionReceipt
+         * @description What a save, replace or rename answers: which session, and the instants the server stamped.
+         */
+        DataLabSessionReceipt: {
+            /** Created At Ms */
+            created_at_ms: number;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Updated At Ms */
+            updated_at_ms: number;
+        };
+        /** DataLabSessionRefusal */
+        DataLabSessionRefusal: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+        };
+        /**
+         * DataLabSessionRefusalBody
+         * @description The 404 body: FastAPI wraps an ``HTTPException`` detail as ``{"detail": ...}``.
+         */
+        DataLabSessionRefusalBody: {
+            detail: components["schemas"]["DataLabSessionRefusal"];
+        };
+        /** DataLabSessionRenameRequest */
+        DataLabSessionRenameRequest: {
+            /** Name */
+            name: string;
+        };
+        /**
+         * DataLabSessionRequest
+         * @description What the screen saves: the whole session, every time (``PUT`` replaces, ``POST`` creates).
+         */
+        DataLabSessionRequest: {
+            /**
+             * Adjusted
+             * @default true
+             */
+            adjusted?: boolean;
+            /**
+             * Chart Snapshot
+             * @description The chart the session was saved with; null when it was saved before any chart was fetched.
+             */
+            chart_snapshot?: Record<string, never> | null;
+            /**
+             * Entries
+             * @description The indicator entries, e.g. [{name: 'ema', params: {length: 20}}].
+             */
+            entries?: Record<string, never>[];
+            /**
+             * Forward Fill
+             * @default true
+             */
+            forward_fill?: boolean;
+            /**
+             * From Date
+             * @description A calendar date written YYYY-MM-DD (the date picker's state).
+             */
+            from_date: string;
+            /** Name */
+            name: string;
+            /**
+             * Session
+             * @description 'rth' or 'extended'.
+             * @default rth
+             */
+            session?: string;
+            /** Ticker */
+            ticker: string;
+            /**
+             * To Date
+             * @description A calendar date written YYYY-MM-DD (the date picker's state).
+             */
+            to_date: string;
+        };
+        /**
+         * DataLabSessionResponse
+         * @description One saved session, whole.
+         */
+        DataLabSessionResponse: {
+            /** Adjusted */
+            adjusted: boolean;
+            /** Chart Snapshot */
+            chart_snapshot: Record<string, never> | null;
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Entries */
+            entries: Record<string, never>[];
+            /** Forward Fill */
+            forward_fill: boolean;
+            /**
+             * From Date
+             * @description YYYY-MM-DD, as the picker saved it.
+             */
+            from_date: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Session */
+            session: string;
+            /** Ticker */
+            ticker: string;
+            /**
+             * To Date
+             * @description YYYY-MM-DD, as the picker saved it.
+             */
+            to_date: string;
+            /** Updated At Ms */
+            updated_at_ms: number;
+            /**
+             * Window End Ms
+             * @description UTC midnight of to_date. Null only for a legacy row whose date is not written YYYY-MM-DD.
+             */
+            window_end_ms: number | null;
+            /**
+             * Window Start Ms
+             * @description UTC midnight of from_date. Null only for a legacy row whose date is not written YYYY-MM-DD.
+             */
+            window_start_ms: number | null;
+        };
+        /**
+         * DataLabSessionSummary
+         * @description One saved session as the list shows it: the facts of its row, never its documents.
+         *
+         *     The two documents can run to megabytes (a chart snapshot holds every bar), so the list neither reads nor sends
+         *     them; ``entry_count`` and ``has_chart`` are worked out in the database. ``GET /{id}`` answers the session whole.
+         */
+        DataLabSessionSummary: {
+            /** Created At Ms */
+            created_at_ms: number;
+            /**
+             * Entry Count
+             * @description How many indicator entries the session holds.
+             */
+            entry_count: number;
+            /**
+             * From Date
+             * @description YYYY-MM-DD, as the picker saved it.
+             */
+            from_date: string;
+            /**
+             * Has Chart
+             * @description Whether the session was saved with a chart snapshot.
+             */
+            has_chart: boolean;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Ticker */
+            ticker: string;
+            /**
+             * To Date
+             * @description YYYY-MM-DD, as the picker saved it.
+             */
+            to_date: string;
+            /** Updated At Ms */
+            updated_at_ms: number;
         };
         /**
          * DataQualityRequest
@@ -13610,7 +14025,7 @@ export interface components {
          *
          *     Mirrors the existing synchronous EngineBacktestRequest shape but
          *     accepts it as a ``backtest`` sub-object so the field validation
-         *     remains the single source of truth. The .NET JobsApi forwards the
+         *     remains the single source of truth. The jobs facade forwards the
          *     Engine Lab POST body verbatim plus an injected ``job_id``.
          */
         EngineBacktestJobRequest: {
@@ -14481,7 +14896,7 @@ export interface components {
          *
          *     The runner fetches bars from Polygon itself — the Frontend sends only
          *     the symbol + date range + feature, no payload of OHLCV. This keeps
-         *     the .NET round-trip small and matches the cross-sectional pattern.
+         *     the request small and matches the cross-sectional pattern.
          *
          *     Inherits all defaults from the base (``multiplier=1``,
          *     ``timespan="minute"``, ``session="rth"``) — those match the
@@ -20612,6 +21027,50 @@ export interface components {
             /** Study Id */
             study_id: string;
         };
+        /** JobAcceptedResponse */
+        JobAcceptedResponse: {
+            /**
+             * Id
+             * @description The minted job id; its progress is the SSE stream at /api/jobs/{id}/events.
+             */
+            id: string;
+            /**
+             * Status
+             * @default queued
+             * @constant
+             */
+            status?: "queued";
+        };
+        /** JobCancelResponse */
+        JobCancelResponse: {
+            /**
+             * Cancel Requested
+             * @description Always true: the flag is set and the worker finishes its own record.
+             */
+            cancel_requested: boolean;
+            /** Id */
+            id: string;
+        };
+        /** JobErrorResponse */
+        JobErrorResponse: {
+            /** Error */
+            error: string;
+        };
+        /**
+         * JobRejectedProblem
+         * @description A ProblemDetails-shaped refusal: the worker route's own status, its raw body as ``detail``.
+         */
+        JobRejectedProblem: {
+            /**
+             * Detail
+             * @description The worker route's response body text, or the transport error behind a 502.
+             */
+            detail: string;
+            /** Status */
+            status: number;
+            /** Title */
+            title: string;
+        };
         /** JobRequest */
         JobRequest: {
             /** Job Id */
@@ -21001,7 +21460,7 @@ export interface components {
          *     Wraps the existing synchronous ``TrustedRunRequestModel`` shape as a
          *     ``request`` sub-object so the lean-sidecar router's Pydantic
          *     validation remains the single source of truth for the payload. The
-         *     .NET JobsApi forwards the Engine Lab POST body verbatim plus an
+         *     jobs facade forwards the Engine Lab POST body verbatim plus an
          *     injected ``job_id``.
          */
         LeanEngineRunJobRequest: {
@@ -28646,6 +29105,58 @@ export interface components {
             /** Idempotencykey */
             idempotencyKey: string;
         };
+        /** ResearchExperimentRefusal */
+        ResearchExperimentRefusal: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+        };
+        /**
+         * ResearchExperimentRefusalBody
+         * @description The 404 / 500 body: FastAPI wraps an ``HTTPException`` detail as ``{"detail": ...}``.
+         */
+        ResearchExperimentRefusalBody: {
+            detail: components["schemas"]["ResearchExperimentRefusal"];
+        };
+        /**
+         * ResearchExperimentResponse
+         * @description One stored feature-research (information-coefficient) experiment.
+         */
+        ResearchExperimentResponse: {
+            /** Adf P Value */
+            adf_p_value: number;
+            /** Bars Used */
+            bars_used: number;
+            /** Created At Ms */
+            created_at_ms: number;
+            /** End Date */
+            end_date: string;
+            /** Feature Name */
+            feature_name: string;
+            /** Ic P Value */
+            ic_p_value: number;
+            /** Ic T Stat */
+            ic_t_stat: number;
+            /** Id */
+            id: number;
+            /** Is Monotonic */
+            is_monotonic: boolean;
+            /** Is Stationary */
+            is_stationary: boolean;
+            /** Kpss P Value */
+            kpss_p_value: number;
+            /** Mean Ic */
+            mean_ic: number;
+            /** Monotonicity Ratio */
+            monotonicity_ratio: number;
+            /** Passed Validation */
+            passed_validation: boolean;
+            /** Start Date */
+            start_date: string;
+            /** Ticker */
+            ticker: string;
+        };
         /** Resolution */
         Resolution: {
             /** Period Minutes */
@@ -29492,7 +30003,7 @@ export interface components {
         };
         /**
          * SanitizedDataResponse
-         * @description Typed response for the Python-to-.NET aggregate-bars boundary.
+         * @description Typed response for the aggregate-bars boundary.
          */
         SanitizedDataResponse: {
             /** Data */
@@ -30134,6 +30645,911 @@ export interface components {
             timespan?: "minute" | "hour" | "day";
             /** To Date */
             to_date: string;
+        };
+        /**
+         * SignalExperimentReport
+         * @description The signal engine's full report for one stored experiment.
+         */
+        SignalExperimentReport: {
+            /**
+             * Backtest Grid
+             * @default []
+             */
+            backtest_grid: components["schemas"]["SignalReportBacktest"][];
+            /**
+             * Bars Used
+             * @default 0
+             */
+            bars_used: number;
+            /**
+             * Best Cost Bps
+             * @default 0
+             */
+            best_cost_bps: number;
+            /**
+             * Best Threshold
+             * @default 0
+             */
+            best_threshold: number;
+            /**
+             * Cost Bps Options
+             * @default []
+             */
+            cost_bps_options: number[];
+            data_sufficiency: components["schemas"]["SignalReportDataSufficiency"] | null;
+            deflated_sharpe: components["schemas"]["SignalReportDeflatedSharpe"] | null;
+            effective_sample: components["schemas"]["SignalReportEffectiveSample"] | null;
+            /**
+             * End Date
+             * @default
+             */
+            end_date: string;
+            /** Error */
+            error: string | null;
+            /**
+             * Feature Name
+             * @default
+             */
+            feature_name: string;
+            /**
+             * Flip Sign
+             * @default true
+             */
+            flip_sign: boolean;
+            graduation: components["schemas"]["SignalReportGraduation"] | null;
+            /**
+             * Joint Regime Coverage
+             * @default []
+             */
+            joint_regime_coverage: components["schemas"]["SignalReportRegimeBucket"][];
+            methodology: components["schemas"]["SignalReportMethodology"] | null;
+            oos_sharpe_ci: components["schemas"]["SignalReportSharpeCi"] | null;
+            /**
+             * Regime Coverage
+             * @default []
+             */
+            regime_coverage: components["schemas"]["SignalReportRegimeCount"][];
+            /**
+             * Research Log
+             * @default
+             */
+            research_log: string;
+            signal_behavior: components["schemas"]["SignalReportBehavior"] | null;
+            signal_diagnostics: components["schemas"]["SignalReportDiagnostics"] | null;
+            /**
+             * Start Date
+             * @default
+             */
+            start_date: string;
+            /**
+             * Success
+             * @default false
+             */
+            success: boolean;
+            /**
+             * Thresholds Tested
+             * @default []
+             */
+            thresholds_tested: number[];
+            /**
+             * Ticker
+             * @default
+             */
+            ticker: string;
+            walk_forward: components["schemas"]["SignalReportWalkForward"] | null;
+        };
+        /**
+         * SignalExperimentResponse
+         * @description One stored signal-engine experiment: the headline of its report.
+         */
+        SignalExperimentResponse: {
+            /** Bars Used */
+            bars_used: number;
+            /** Best Cost Bps */
+            best_cost_bps: number;
+            /** Best Threshold */
+            best_threshold: number;
+            /** Created At Ms */
+            created_at_ms: number;
+            /** End Date */
+            end_date: string;
+            /** Feature Name */
+            feature_name: string;
+            /** Flip Sign */
+            flip_sign: boolean;
+            /** Id */
+            id: number;
+            /** Mean Oos Sharpe */
+            mean_oos_sharpe: number;
+            /** Overall Grade */
+            overall_grade: string;
+            /** Overall Passed */
+            overall_passed: boolean;
+            /** Regime Gate Enabled */
+            regime_gate_enabled: boolean;
+            /** Start Date */
+            start_date: string;
+            /** Status Label */
+            status_label: string;
+            /** Ticker */
+            ticker: string;
+        };
+        /** SignalReportAlphaDecay */
+        SignalReportAlphaDecay: {
+            /**
+             * Intercept
+             * @default 0
+             */
+            intercept: number;
+            /**
+             * Is Significant
+             * @default false
+             */
+            is_significant: boolean;
+            /**
+             * Is Test Valid
+             * @default false
+             */
+            is_test_valid: boolean;
+            /**
+             * N Folds Used
+             * @default 0
+             */
+            n_folds_used: number;
+            /**
+             * P Value
+             * @default 1
+             */
+            p_value: number;
+            /**
+             * R Squared
+             * @default 0
+             */
+            r_squared: number;
+            /**
+             * Slope
+             * @default 0
+             */
+            slope: number;
+            /**
+             * T Stat
+             * @default 0
+             */
+            t_stat: number;
+        };
+        /**
+         * SignalReportBacktest
+         * @description One threshold-by-cost backtest of the grid.
+         */
+        SignalReportBacktest: {
+            /**
+             * Annualized Turnover
+             * @default 0
+             */
+            annualized_turnover: number;
+            /**
+             * Avg Holding Bars
+             * @default 0
+             */
+            avg_holding_bars: number;
+            /**
+             * Avg Win Loss Ratio
+             * @default 0
+             */
+            avg_win_loss_ratio: number;
+            /** Cost Bps */
+            cost_bps: number;
+            /**
+             * Cumulative Returns
+             * @default []
+             */
+            cumulative_returns: number[];
+            /**
+             * Dates
+             * @default []
+             */
+            dates: string[];
+            /**
+             * Gross Sharpe
+             * @default 0
+             */
+            gross_sharpe: number;
+            /**
+             * Gross Total Return
+             * @default 0
+             */
+            gross_total_return: number;
+            /**
+             * Max Drawdown
+             * @default 0
+             */
+            max_drawdown: number;
+            /**
+             * Net Sharpe
+             * @default 0
+             */
+            net_sharpe: number;
+            /**
+             * Net Total Return
+             * @default 0
+             */
+            net_total_return: number;
+            /**
+             * Positions
+             * @default []
+             */
+            positions: number[];
+            /** Threshold */
+            threshold: number;
+            /**
+             * Total Trades
+             * @default 0
+             */
+            total_trades: number;
+            /**
+             * Win Rate
+             * @default 0
+             */
+            win_rate: number;
+        };
+        /** SignalReportBehavior */
+        SignalReportBehavior: {
+            /**
+             * Avg Forward Return When Active
+             * @default 0
+             */
+            avg_forward_return_when_active: number;
+            /**
+             * Avg Loss Return
+             * @default 0
+             */
+            avg_loss_return: number;
+            /**
+             * Avg Win Return
+             * @default 0
+             */
+            avg_win_return: number;
+            /**
+             * Hit Rate
+             * @default 0
+             */
+            hit_rate: number;
+            /**
+             * Skewness Active Returns
+             * @default 0
+             */
+            skewness_active_returns: number;
+        };
+        /** SignalReportDataSufficiency */
+        SignalReportDataSufficiency: {
+            /**
+             * Coverage Warnings
+             * @default []
+             */
+            coverage_warnings: string[];
+            /**
+             * Effective Oos Bars
+             * @default 0
+             */
+            effective_oos_bars: number;
+            /**
+             * Regime Coverage
+             * @default []
+             */
+            regime_coverage: components["schemas"]["SignalReportRegimeCount"][];
+            /**
+             * Regimes Covered
+             * @default 0
+             */
+            regimes_covered: number;
+            /**
+             * Test Bars
+             * @default 0
+             */
+            test_bars: number;
+            /**
+             * Total Bars
+             * @default 0
+             */
+            total_bars: number;
+            /**
+             * Train Bars
+             * @default 0
+             */
+            train_bars: number;
+            /**
+             * Walk Forward Folds
+             * @default 0
+             */
+            walk_forward_folds: number;
+        };
+        /** SignalReportDeflatedSharpe */
+        SignalReportDeflatedSharpe: {
+            /**
+             * Dsr Probability
+             * @default 0
+             */
+            dsr_probability: number;
+            /**
+             * Expected Max Under Null
+             * @default 0
+             */
+            expected_max_under_null: number;
+            /**
+             * Kurtosis
+             * @default 0
+             */
+            kurtosis: number;
+            /**
+             * N Trials
+             * @default 0
+             */
+            n_trials: number;
+            /**
+             * Raw Sharpe
+             * @default 0
+             */
+            raw_sharpe: number;
+            /**
+             * Skewness
+             * @default 0
+             */
+            skewness: number;
+            /**
+             * Valid
+             * @default false
+             */
+            valid: boolean;
+        };
+        /** SignalReportDiagnostics */
+        SignalReportDiagnostics: {
+            /**
+             * Avg Abs Signal
+             * @default 0
+             */
+            avg_abs_signal: number;
+            /**
+             * Pct Filtered By Threshold
+             * @default 0
+             */
+            pct_filtered_by_threshold: number;
+            /**
+             * Pct Gated By Regime
+             * @default 0
+             */
+            pct_gated_by_regime: number;
+            /**
+             * Pct Time Active
+             * @default 0
+             */
+            pct_time_active: number;
+            /**
+             * Signal Mean
+             * @default 0
+             */
+            signal_mean: number;
+            /**
+             * Signal Std
+             * @default 0
+             */
+            signal_std: number;
+        };
+        /** SignalReportEffectiveSample */
+        SignalReportEffectiveSample: {
+            /**
+             * Autocorrelation Lag1
+             * @default 0
+             */
+            autocorrelation_lag1: number;
+            /**
+             * Effective N
+             * @default 0
+             */
+            effective_n: number;
+            /**
+             * Independent Bets
+             * @default 0
+             */
+            independent_bets: number;
+            /**
+             * Max Lag Used
+             * @default 0
+             */
+            max_lag_used: number;
+            /**
+             * Raw N
+             * @default 0
+             */
+            raw_n: number;
+            /**
+             * Rho Sum
+             * @default 0
+             */
+            rho_sum: number;
+        };
+        /** SignalReportGraduation */
+        SignalReportGraduation: {
+            /**
+             * Criteria
+             * @default []
+             */
+            criteria: components["schemas"]["SignalReportGraduationCriterion"][];
+            /**
+             * Overall Grade
+             * @default F
+             */
+            overall_grade: string;
+            /**
+             * Overall Passed
+             * @default false
+             */
+            overall_passed: boolean;
+            parameter_stability: components["schemas"]["SignalReportParameterStability"] | null;
+            stage0_rejection: components["schemas"]["SignalReportStage0Rejection"] | null;
+            stage_info: components["schemas"]["SignalReportStageInfo"] | null;
+            /**
+             * Status Label
+             * @default Exploratory
+             */
+            status_label: string;
+            /**
+             * Summary
+             * @default
+             */
+            summary: string;
+        };
+        /** SignalReportGraduationCriterion */
+        SignalReportGraduationCriterion: {
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Failure Reason
+             * @default
+             */
+            failure_reason: string;
+            /**
+             * Label
+             * @default Fail
+             */
+            label: string;
+            /**
+             * Name
+             * @default
+             */
+            name: string;
+            /**
+             * Passed
+             * @default false
+             */
+            passed: boolean;
+            /**
+             * Threshold
+             * @default 0
+             */
+            threshold: number;
+            /**
+             * Value
+             * @default 0
+             */
+            value: number;
+        };
+        /** SignalReportMethodology */
+        SignalReportMethodology: {
+            /**
+             * Annualization Factor
+             * @default 0
+             */
+            annualization_factor: number;
+            /**
+             * Bars Per Day
+             * @default 0
+             */
+            bars_per_day: number;
+            /**
+             * Cost Bps Options
+             * @default []
+             */
+            cost_bps_options: number[];
+            /**
+             * Default Cost Bps
+             * @default 0
+             */
+            default_cost_bps: number;
+            /**
+             * Flip Sign
+             * @default false
+             */
+            flip_sign: boolean;
+            /**
+             * Horizon
+             * @default 0
+             */
+            horizon: number;
+            /**
+             * Min Bars For Signal
+             * @default 0
+             */
+            min_bars_for_signal: number;
+            /**
+             * Optimization Target
+             * @default net_sharpe
+             */
+            optimization_target: string;
+            /**
+             * Regime Gate Enabled
+             * @default false
+             */
+            regime_gate_enabled: boolean;
+            /**
+             * Test Months
+             * @default 0
+             */
+            test_months: number;
+            /**
+             * Thresholds
+             * @default []
+             */
+            thresholds: number[];
+            /**
+             * Train Months
+             * @default 0
+             */
+            train_months: number;
+            /**
+             * Window Type
+             * @default rolling
+             */
+            window_type: string;
+        };
+        /** SignalReportParameterStability */
+        SignalReportParameterStability: {
+            /**
+             * Sharpe Values By Threshold
+             * @default []
+             */
+            sharpe_values_by_threshold: components["schemas"]["SignalReportThresholdSharpe"][];
+            /**
+             * Stability Label
+             * @default Fragile
+             */
+            stability_label: string;
+            /**
+             * Stability Score
+             * @default 0
+             */
+            stability_score: number;
+        };
+        /** SignalReportRegimeBucket */
+        SignalReportRegimeBucket: {
+            /**
+             * Badge
+             * @default Empty
+             */
+            badge: string;
+            /**
+             * Days
+             * @default 0
+             */
+            days: number;
+            /**
+             * Effective Trades
+             * @default 0
+             */
+            effective_trades: number;
+            /**
+             * Trend Label
+             * @default
+             */
+            trend_label: string;
+            /**
+             * Vol Label
+             * @default
+             */
+            vol_label: string;
+        };
+        /** SignalReportRegimeCount */
+        SignalReportRegimeCount: {
+            /** Count */
+            count: number;
+            /** Regime */
+            regime: string;
+        };
+        /** SignalReportSharpeCi */
+        SignalReportSharpeCi: {
+            /**
+             * Ci Lower
+             * @default 0
+             */
+            ci_lower: number;
+            /**
+             * Ci Upper
+             * @default 0
+             */
+            ci_upper: number;
+            /**
+             * Confidence Level
+             * @default 0.95
+             */
+            confidence_level: number;
+            /**
+             * N Eff Used
+             * @default 0
+             */
+            n_eff_used: number;
+            /**
+             * Point
+             * @default 0
+             */
+            point: number;
+            /**
+             * Se
+             * @default 0
+             */
+            se: number;
+            /**
+             * Valid
+             * @default false
+             */
+            valid: boolean;
+        };
+        /** SignalReportStage0Failure */
+        SignalReportStage0Failure: {
+            /**
+             * Criterion Name
+             * @default
+             */
+            criterion_name: string;
+            /**
+             * Message
+             * @default
+             */
+            message: string;
+            /**
+             * Threshold Repr
+             * @default
+             */
+            threshold_repr: string;
+            /**
+             * Value
+             * @default 0
+             */
+            value: number;
+        };
+        /** SignalReportStage0Rejection */
+        SignalReportStage0Rejection: {
+            /**
+             * Failed Criteria
+             * @default []
+             */
+            failed_criteria: components["schemas"]["SignalReportStage0Failure"][];
+            /**
+             * Rejected
+             * @default false
+             */
+            rejected: boolean;
+        };
+        /** SignalReportStageAdvanceCriterion */
+        SignalReportStageAdvanceCriterion: {
+            /**
+             * Current Value
+             * @default 0
+             */
+            current_value: number;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Met
+             * @default false
+             */
+            met: boolean;
+            /**
+             * Name
+             * @default
+             */
+            name: string;
+            /**
+             * Required Repr
+             * @default
+             */
+            required_repr: string;
+        };
+        /** SignalReportStageInfo */
+        SignalReportStageInfo: {
+            /**
+             * Advance Criteria
+             * @default []
+             */
+            advance_criteria: components["schemas"]["SignalReportStageAdvanceCriterion"][];
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Label
+             * @default Rejected
+             */
+            label: string;
+            /**
+             * Next Stage Label
+             * @default
+             */
+            next_stage_label: string;
+            /**
+             * Stage
+             * @default 0
+             */
+            stage: number;
+        };
+        /** SignalReportThresholdSharpe */
+        SignalReportThresholdSharpe: {
+            /** Sharpe */
+            sharpe: number;
+            /** Threshold */
+            threshold: number;
+        };
+        /** SignalReportWalkForward */
+        SignalReportWalkForward: {
+            alpha_decay: components["schemas"]["SignalReportAlphaDecay"] | null;
+            /**
+             * Best Window Sharpe
+             * @default 0
+             */
+            best_window_sharpe: number;
+            /**
+             * Combined Oos Cumulative Returns
+             * @default []
+             */
+            combined_oos_cumulative_returns: number[];
+            /**
+             * Combined Oos Dates
+             * @default []
+             */
+            combined_oos_dates: string[];
+            /**
+             * Mean Oos Sharpe
+             * @default 0
+             */
+            mean_oos_sharpe: number;
+            /**
+             * Median Oos Sharpe
+             * @default 0
+             */
+            median_oos_sharpe: number;
+            /**
+             * Oos Sharpe Trend Slope
+             * @default 0
+             */
+            oos_sharpe_trend_slope: number;
+            /**
+             * Pct Windows Positive Sharpe
+             * @default 0
+             */
+            pct_windows_positive_sharpe: number;
+            /**
+             * Pct Windows Profitable
+             * @default 0
+             */
+            pct_windows_profitable: number;
+            /**
+             * Std Oos Sharpe
+             * @default 0
+             */
+            std_oos_sharpe: number;
+            /**
+             * Total Oos Bars
+             * @default 0
+             */
+            total_oos_bars: number;
+            /**
+             * Windows
+             * @default []
+             */
+            windows: components["schemas"]["SignalReportWalkForwardWindow"][];
+            /**
+             * Worst Window Sharpe
+             * @default 0
+             */
+            worst_window_sharpe: number;
+        };
+        /** SignalReportWalkForwardWindow */
+        SignalReportWalkForwardWindow: {
+            /**
+             * Best Threshold
+             * @default 0
+             */
+            best_threshold: number;
+            /**
+             * Fold Index
+             * @default 0
+             */
+            fold_index: number;
+            /**
+             * Mu
+             * @default 0
+             */
+            mu: number;
+            /**
+             * Oos Cumulative Returns
+             * @default []
+             */
+            oos_cumulative_returns: number[];
+            /**
+             * Oos Dates
+             * @default []
+             */
+            oos_dates: string[];
+            /**
+             * Oos Gross Sharpe
+             * @default 0
+             */
+            oos_gross_sharpe: number;
+            /**
+             * Oos Max Drawdown
+             * @default 0
+             */
+            oos_max_drawdown: number;
+            /**
+             * Oos Net Return
+             * @default 0
+             */
+            oos_net_return: number;
+            /**
+             * Oos Net Sharpe
+             * @default 0
+             */
+            oos_net_sharpe: number;
+            /**
+             * Oos Total Trades
+             * @default 0
+             */
+            oos_total_trades: number;
+            /**
+             * Oos Win Rate
+             * @default 0
+             */
+            oos_win_rate: number;
+            /**
+             * Sigma
+             * @default 0
+             */
+            sigma: number;
+            /**
+             * Test Bars
+             * @default 0
+             */
+            test_bars: number;
+            /**
+             * Test End
+             * @default
+             */
+            test_end: string;
+            /**
+             * Test Start
+             * @default
+             */
+            test_start: string;
+            /**
+             * Train Bars
+             * @default 0
+             */
+            train_bars: number;
+            /**
+             * Train End
+             * @default
+             */
+            train_end: string;
+            /**
+             * Train Start
+             * @default
+             */
+            train_start: string;
         };
         /**
          * SignalSeriesContract
@@ -32424,6 +33840,16 @@ export interface components {
             symbol: string;
             /** Ticket */
             ticket: string;
+        };
+        /** UnsupportedJobTypeResponse */
+        UnsupportedJobTypeResponse: {
+            /** Error */
+            error: string;
+            /**
+             * Supported
+             * @description Every job type this surface starts.
+             */
+            supported: string[];
         };
         /**
          * UntestedTradedAssetAcknowledgement
@@ -41635,6 +43061,225 @@ export interface operations {
             };
         };
     };
+    list_data_lab_sessions_api_data_lab_sessions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataLabSessionSummary"][];
+                };
+            };
+        };
+    };
+    save_data_lab_session_api_data_lab_sessions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DataLabSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataLabSessionReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_data_lab_session_api_data_lab_sessions__session_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataLabSessionResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataLabSessionRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    replace_data_lab_session_api_data_lab_sessions__session_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DataLabSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataLabSessionReceipt"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataLabSessionRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_data_lab_session_api_data_lab_sessions__session_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataLabSessionRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rename_data_lab_session_api_data_lab_sessions__session_id__name_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DataLabSessionRenameRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataLabSessionReceipt"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DataLabSessionRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_artifact_detail_api_data_lake_artifacts__artifact_id__get: {
         parameters: {
             query?: never;
@@ -42294,6 +43939,39 @@ export interface operations {
             };
         };
     };
+    list_jobs_api_jobs_get: {
+        parameters: {
+            query?: {
+                active?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     start_cross_sectional_job_api_jobs_internal_cross_sectional_post: {
         parameters: {
             query?: never;
@@ -42935,6 +44613,224 @@ export interface operations {
             };
         };
     };
+    cancel_job_api_jobs__job_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobCancelResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_job_blob_api_jobs__job_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_job_events_api_jobs__job_id__events_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Last-Event-ID"?: string | null;
+            };
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description SSE job events. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_job_result_api_jobs__job_id__result_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_job_api_jobs__job_type__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_type: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobAcceptedResponse"];
+                };
+            };
+            /** @description Unknown job type, or a body that is not JSON. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnsupportedJobTypeResponse"];
+                };
+            };
+            /** @description The worker route could not be reached or crashed. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRejectedProblem"];
+                };
+            };
+            /** @description The type's worker route refused the start. */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRejectedProblem"];
+                };
+            };
+        };
+    };
     get_calendar_next_trading_day_open_api_lean_sidecar_calendar_next_trading_day_open_get: {
         parameters: {
             query: {
@@ -43388,6 +45284,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BacktestRunViewRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_research_experiments_api_research_experiments_get: {
+        parameters: {
+            query: {
+                /** @description The ticker's symbol; case does not matter. */
+                ticker: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchExperimentResponse"][];
                 };
             };
             /** @description Validation Error */
@@ -46945,6 +48873,87 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_signal_experiments_api_research_signal_experiments_get: {
+        parameters: {
+            query: {
+                /** @description The ticker's symbol; case does not matter. */
+                ticker: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignalExperimentResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_signal_experiment_report_api_research_signal_experiments__experiment_id__report_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                experiment_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignalExperimentReport"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchExperimentRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResearchExperimentRefusalBody"];
                 };
             };
         };

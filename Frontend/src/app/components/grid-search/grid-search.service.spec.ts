@@ -50,12 +50,12 @@ describe('GridSearchService', () => {
     await expect(pending).resolves.toMatchObject({ combinations: 2 });
   });
 
-  it('turns a refusal into a GridSearchRefusedError: from a ProblemDetails detail string the .NET jobs boundary forwarded, and from a 400 with a code', async () => {
+  it('turns a refusal into a GridSearchRefusedError: from a ProblemDetails detail string the jobs facade forwarded, and from a 400 with a code', async () => {
     startJob.mockRejectedValueOnce(
       new HttpErrorResponse({ status: 400, error: { detail: JSON.stringify({ detail: { code: 'WORKLOAD_LIMIT', message: '6000 backtests exceed the limit of 5000' } }) } }),
     );
 
-    await expect.soft(service.launch(SPEC), 'decodes a refusal the .NET jobs boundary forwarded as a ProblemDetails detail string').rejects.toMatchObject({ refusal: { code: 'WORKLOAD_LIMIT' } });
+    await expect.soft(service.launch(SPEC), 'decodes a refusal the jobs facade forwarded as a ProblemDetails detail string').rejects.toMatchObject({ refusal: { code: 'WORKLOAD_LIMIT' } });
 
     const pending = service.preflight(SPEC);
     http.expectOne(`${BASE}/preflight`).flush({ detail: { code: 'DATA_MISSING', message: 'the lake is missing 2 sessions' } }, { status: 400, statusText: 'Bad Request' });

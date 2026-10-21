@@ -247,6 +247,17 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
       const url = new URL(request.url());
       const path = url.pathname;
 
+      // The strategy chart's quote read is a POST that changes nothing: answered
+      // with no snapshot, so the chart falls back to its last candle. Answered
+      // before the read-only guard below, whatever the method.
+      if (path === '/api/snapshot/ticker') {
+        await route.fulfill({
+          headers: { 'Access-Control-Allow-Origin': '*' },
+          json: { success: false, snapshot: null, error: null },
+        });
+        return;
+      }
+
       // Read-only means GET: every other method on the API is unexpected,
       // except a lifecycle action, which is ledgered on its own below.
       if (path.startsWith('/api/')
@@ -489,13 +500,6 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
             disabled: true,
             connection_state: 'disabled',
           },
-        });
-        return;
-      }
-      if (url.hostname === 'localhost' && url.port === '5000' && path === '/graphql') {
-        await route.fulfill({
-          headers: { 'Access-Control-Allow-Origin': '*' },
-          json: { data: { getStockSnapshot: { success: false, snapshot: null } } },
         });
         return;
       }

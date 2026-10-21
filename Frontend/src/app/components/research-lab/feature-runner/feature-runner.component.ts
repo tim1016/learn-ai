@@ -58,7 +58,7 @@ import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-ide
 import { tickerRangeToWire } from '../../../utils/ticker-wire';
 
 /** Shape of the ``target`` payload emitted by ``_serialize_target`` in
- *  ``PythonDataService/app/routers/jobs.py``. Mirrors the GraphQL
+ *  ``PythonDataService/app/routers/jobs.py``. Mirrors the view model's
  *  ``TargetMetadata`` so the mapper below can rename keys 1:1. */
 interface FeatureResearchTargetRaw {
   target_name: string;

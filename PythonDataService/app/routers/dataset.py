@@ -5,8 +5,8 @@ Streaming bundle pipeline
 The async fetch+bundle flow used to live here as
 ``POST /generate-zip/stream`` with a custom ``RunSession`` registry. It
 was migrated to the unified job framework: the public surface is now
-``POST /api/jobs/dataset-zip`` (.NET layer), which dispatches to
-``POST /api/jobs-internal/dataset-zip`` (this service) — see
+``POST /api/jobs/dataset-zip`` (the jobs facade, ``app.jobs.facade``), which
+dispatches to ``POST /api/jobs-internal/dataset-zip`` (this service) — see
 ``app/routers/jobs.py``.
 """
 

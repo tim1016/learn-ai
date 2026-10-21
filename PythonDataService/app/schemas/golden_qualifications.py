@@ -23,7 +23,7 @@ IDEMPOTENCY_KEY_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$"
 
 
 class _CamelTolerantModel(BaseModel):
-    """Accepts camelCase (the .NET passthrough) and snake_case (direct FastAPI calls)."""
+    """Accepts camelCase (the jobs facade's verbatim passthrough) and snake_case (direct FastAPI calls)."""
 
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
 

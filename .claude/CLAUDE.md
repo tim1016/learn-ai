@@ -12,8 +12,6 @@
 | Service  | URL                          | Container            | Logs                                |
 |----------|------------------------------|----------------------|-------------------------------------|
 | Frontend | http://localhost:4200        | my-frontend          | `podman logs -f my-frontend`        |
-| Backend  | http://localhost:5000        | my-backend           | `podman logs -f my-backend`         |
-| GraphQL  | http://localhost:5000/graphql| my-backend           |                                     |
 | Python   | http://localhost:8000        | polygon-data-service | `podman logs -f polygon-data-service`|
 | Postgres | localhost:5432               | my-postgres          | `podman logs -f my-postgres`        |
 
@@ -24,7 +22,6 @@ Run the test that proves your change; CI runs the rest.
 ```bash
 cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/<path>::<test>   # Python, host venv
 cd Frontend && npx ng test --include='src/app/<path>/<name>.spec.ts'                                   # Frontend, host, one exact spec file
-# .NET: no dotnet on the owner's Mac — CI runs Backend.Tests and `dotnet format`
 ```
 
 ## Linting

@@ -70,6 +70,16 @@ export class EmaChartComponent {
 
 Template uses `@let`, `@if`, `@for` with `track`. Avoid embedding complex expressions; if type safety fights you in the template, extract a getter or a `computed()` in the TS file.
 
+## Data services
+
+A component never builds a request. It injects a service that calls Python's REST API
+(`${environment.pythonServiceUrl}/api/...`) with `HttpClient`; `services/market-data.service.ts` is the model.
+
+- **Wire types come from the generated OpenAPI types**: `import type { components } from '../api/broker.types'` and use `components['schemas']['SomeResponse']`. That file is regenerated with `npm run codegen:openapi`, never hand-edited. The Python field names are snake_case and stay on the wire.
+- **One typed mapper per shape** (`*.mappers.ts`) turns a wire shape into the view model the screen reads. Write the mapped fields out one by one so a rename on either side fails the type check; no generic camelizer, no `any`.
+- **Failures**: Python answers with a real HTTP error and a `detail`. Pipe the call through `failureAsError(context)` (rejects with an `Error` carrying Python's sentence) or `failureAsResult(...)` (resolves `{ success: false, error }` for a screen that reads `success`) from `services/python-http-failure.ts`. To turn one named refusal into a resolved miss, test it with `isPythonRefusal(err, status, code)` first.
+- **Time is `int64 ms UTC`** on the wire and in the view model; a screen shows it through the shared timestamp pipe (`timestampDisplay`), never `new Date(string)` or `DatePipe`.
+
 ## Forms
 
 - **Signal Forms** for new forms. These are signal-based, reactive, and simpler than `ReactiveFormsModule` for most cases.

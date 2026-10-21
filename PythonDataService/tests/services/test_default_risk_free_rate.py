@@ -1,7 +1,7 @@
 """Every request model and endpoint prices an omitted risk-free rate at the one default (#2764).
 
-The .NET Backend and the Angular pages no longer send a rate of their own;
-they omit it and let Python fill it. Each test prices the same input three
+The Angular pages no longer send a rate of their own; they omit it and let
+Python fill it. Each test prices the same input three
 times: with the rate omitted, with ``DEFAULT_RISK_FREE_RATE`` passed
 explicitly, and with a different rate. The first two must agree exactly. The
 third must differ, which proves the output depends on the rate, so the

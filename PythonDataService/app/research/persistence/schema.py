@@ -1,11 +1,12 @@
 """Python-owned Postgres schema for research sweeps and studies.
 
-These tables are owned and written by the Python service directly — the
-first tables in this repository whose schema is declared here rather than
-by an EF Core migration (ADR 0055). The DDL is idempotent and applied on
-first use under a transaction-scoped advisory lock, and each applied
-version is recorded in ``research_schema_migrations`` so a later change
-ships as a new numbered statement list rather than an edit to an old one.
+These tables are owned and written by the Python service directly, and
+their schema is declared here rather than in ``app/db_schema/migrations``
+(ADR 0055; ADR 0081 for the rest of the database). The DDL is idempotent
+and applied on first use under a transaction-scoped advisory lock, and each
+applied version is recorded in ``research_schema_migrations`` so a later
+change ships as a new numbered statement list rather than an edit to an
+old one.
 
 Cell identity is ``(search_id, params_hash)``: unique and idempotent, so a
 retried or resumed search overwrites its own cells rather than appending.
@@ -14,9 +15,9 @@ A walk-forward study's per-fold sweeps are rows here too, owned through
 Grid Search's history excludes them by ownership rather than by a flag a
 caller could forget (PRD #1925 "Sweep invocation and ownership").
 
-Version 3 adopts the Recency Chart's tables from EF Core (PRD #1927, ADR
-0057): their names stay as EF created them, because the rows are migrated
-in place, not regenerated.
+Version 3 adopts the Recency Chart's tables from the retired EF Core schema
+(PRD #1927, ADR 0057): their names stay as EF created them, because the rows
+are migrated in place, not regenerated.
 
 Version 4 repairs databases that applied an early, since-edited draft of
 version 1 and so never received ``leader_params_json``; the digest test in
@@ -25,7 +26,7 @@ version is edited again.
 
 Version 5 declares the backtest-run tables (PRD #1929, ADR 0058): every
 engine and LEAN sidecar run, its trades, and the parity verdict comparing a
-Python run against its LEAN companion. These replace the EF-owned
+Python run against its LEAN companion. These replace the retired .NET
 ``StrategyExecutions`` / ``BacktestTrades`` / ``ParityVerdicts`` tables,
 whose rows are not migrated. The run's start and end are date-anchored
 values stored as ``int64 ms UTC`` at ET midnight of the date (the same anchor
@@ -169,8 +170,8 @@ DDL_V2: tuple[str, ...] = (
     """,
 )
 
-# Version 3 adopts the Recency Chart's four tables from EF Core (ADR 0057). The
-# statements reproduce the tables EF created — names, types, identity columns,
+# Version 3 adopts the Recency Chart's four tables from the retired EF Core
+# schema (ADR 0057). The statements reproduce the tables EF created — names, types, identity columns,
 # indexes, constraints — so an upgraded database is untouched (every statement
 # is IF NOT EXISTS) and a fresh Python-only database gets the same shape.
 DDL_V3: tuple[str, ...] = (

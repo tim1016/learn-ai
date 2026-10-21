@@ -9,7 +9,7 @@ aborting the batch or being silently dropped (no silent
 catches). Mirrors the walk-forward runner's injected-dependency shape
 (``app/research/walk_forward/runner.py``) — ``execute_backtest_fn`` and
 ``persist_fn`` are supplied by the caller so this module has no direct
-dependency on the engine HTTP layer or the .NET persistence transport,
+dependency on the engine HTTP layer or the persistence transport,
 which keeps it testable with an in-memory double.
 Reference: PRD https://github.com/tim1016/learn-ai/issues/1577.
 Canonical implementation: this file.

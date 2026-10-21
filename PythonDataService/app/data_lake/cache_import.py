@@ -63,16 +63,14 @@ as they were; overwriting them would silently discard whichever version is
 later correct.
 
 Schema note: the v1 ``ck_raw_only_for_canonical_data_root`` CHECK constraint
-(``Backend/Migrations/20260521033222_AddDataLakeArtifactsAndRuns.cs``)
 originally allowed only ``PriceAdjustmentMode = 'raw'`` for every non-metadata
-row -- a temporary widening
-(``Backend/Migrations/20260827120000_AllowImportedNonRawAdjustmentModes.cs``)
-later admitted ``'polygon_split_adjusted'`` too. PR B
-(``Backend/Migrations/20260830120000_ActivateDataRootScopedCatalogIdentity.cs``)
-drops the constraint outright, exactly as its own comment anticipated
+row -- a temporary widening later admitted ``'polygon_split_adjusted'`` too.
+PR B dropped the constraint outright, exactly as its own comment anticipated
 ("Relaxed in v2 by adding data_root_id and dropping this constraint"):
 adjustment mode is a physical path segment under a root-scoped identity now,
-so the single-canonical-root restriction no longer represents reality.
+so the single-canonical-root restriction no longer represents reality. The
+baseline migration (``app/db_schema/migrations/0001_baseline.sql``, ADR 0081)
+holds that end state.
 
 One lake root per adjustment mode — structurally, since #1839. The mode is a
 path segment above the LEAN tree

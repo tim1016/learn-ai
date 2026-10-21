@@ -158,15 +158,15 @@ async def test_failed_activation_releases_only_its_own_initial_lease(
 
     def no_thread(*args: Any, **kwargs: Any) -> None:
         if replace_lease:
-            client.set(progress._lease_key(new.job_id), "replacement", ex=30)
+            client.set(progress.lease_key(new.job_id), "replacement", ex=30)
         raise OSError("thread did not start")
 
     monkeypatch.setattr(runner, "run_in_thread", no_thread)
     try:
         with pytest.raises(OSError, match="thread did not start"):
             await saved_runs._start_runtime_worker(run_id, new.job_id, 2, lambda *args: None)
-        assert client.get(progress._lease_key(new.job_id)) == ("replacement" if replace_lease else None)
+        assert client.get(progress.lease_key(new.job_id)) == ("replacement" if replace_lease else None)
         assert await scratch_db.fetchval("SELECT status FROM research_options_backtest_runs WHERE id=$1", run_id) == "failed"
         assert not await saved_runs._start_runtime_worker(run_id, new.job_id, 2, lambda *args: None)
     finally:
-        client.delete(progress._lease_key(new.job_id), progress._state_key(new.job_id))
+        client.delete(progress.lease_key(new.job_id), progress.state_key(new.job_id))

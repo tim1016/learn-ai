@@ -7,12 +7,10 @@
 // the checked-in `environment.ts` so a fresh checkout and CI both build
 // cleanly without any local-only file. The `production-local` configuration
 // swaps in this file via angular.json's `fileReplacements`, giving each
-// developer a place to record per-machine settings — e.g. a backend host
-// port remapped to dodge macOS AirPlay on :5000 — that should never land
-// in git.
+// developer a place to record per-machine settings — e.g. a PrimeUI license
+// key — that should never land in git.
 
 export const environment = {
   primeUiLicense: 'YOUR_PRIMEUI_LICENSE_KEY_HERE',
-  backendUrl: 'http://localhost:5000/graphql',
   pythonServiceUrl: 'http://localhost:8000',
 };

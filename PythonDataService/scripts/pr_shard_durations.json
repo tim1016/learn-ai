@@ -420,7 +420,6 @@
 "tests/contracts/test_fleet_lake_catalog_role_grants.py": 0.013,
 "tests/contracts/test_fleet_topology_snapshot.py": 0.133,
 "tests/contracts/test_fleet_worker_service_declaration.py": 0.738,
-"tests/contracts/test_frontend_graphql_input_types.py": 0.229,
 "tests/contracts/test_golden_instants_declare_the_domain_ceiling.py": 1.758,
 "tests/contracts/test_handoff_script_worker_service.py": 0.257,
 "tests/contracts/test_openapi_numeric_bounds_are_exact.py": 0.101,

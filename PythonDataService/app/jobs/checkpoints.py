@@ -43,7 +43,7 @@ from typing import TYPE_CHECKING, Literal
 import redis
 
 from app.jobs import progress
-from app.jobs.progress import JOB_LEASE_TTL_SECONDS, _lease_key
+from app.jobs.progress import JOB_LEASE_TTL_SECONDS, lease_key
 
 if TYPE_CHECKING:
     # The runtime's coordinator authority, annotation-only: the jobs layer
@@ -165,7 +165,7 @@ class CheckpointGate:
         # fails no work path — the same tolerance the cancellation check
         # applies (log, carry on).
         try:
-            progress.get_redis().expire(_lease_key(self.job_id), self._lease_ttl_s if lease_ttl_s is None else lease_ttl_s)
+            progress.get_redis().expire(lease_key(self.job_id), self._lease_ttl_s if lease_ttl_s is None else lease_ttl_s)
         except redis.RedisError as exc:
             logger.warning("checkpoint lease renewal failed for job %s: %s", self.job_id, exc)
             return False
@@ -322,7 +322,7 @@ class GatedLease:
             if not 0 < remaining_ms <= 1_860_000:
                 raise ValueError("external acquisition wait exceeds its declared bound")
             ttl = max(JOB_LEASE_TTL_SECONDS, (remaining_ms + 999) // 1000 + 5)
-            if not progress.get_redis().expire(_lease_key(self._gate.job_id), ttl):
+            if not progress.get_redis().expire(lease_key(self._gate.job_id), ttl):
                 raise progress.JobCancelled("the acquisition owner lease expired before bounded I/O started")
             self._external_wait_ids.add(wait_id)
             self._external_deadline_ms = deadline_ms
