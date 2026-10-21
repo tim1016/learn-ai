@@ -113,6 +113,28 @@ def test_snapshot_health_keeps_missed_evening_and_field_gaps() -> None:
     assert spy.snapshot_missed_evenings == 1 and spy.snapshot_incomplete == 1 and spy.snapshot_field_gaps == 3
 
 
+@pytest.mark.parametrize("gap", ["missed", "incomplete", "fields"])
+def test_snapshot_gap_needs_attention_while_capture_is_catching_up(gap: str) -> None:
+    sessions = [session_open_ms_utc(date(2026, 10, day)) for day in (19, 20)]
+    now = wall_clock_ms(date(2026, 10, 21), 60)
+    state = ArchiveStateDoc(version=1, baseline_ms=sessions[0], snapshot_activation_ms=sessions[0],
+        jobs={name: JobReceipt(last_success_ms=now) for name in ("backup", "restore")},
+        snapshots={symbol: {session: SnapshotReceipt(complete=True, started_ms=session, ended_ms=session)
+                            for session in sessions} for symbol in ("SPY", "QQQ", "IWM")})
+    observations = state.snapshots["SPY"]
+    if gap == "missed":
+        del observations[sessions[0]]
+    elif gap == "incomplete":
+        observations[sessions[0]].complete = False
+    else:
+        observations[sessions[-1]].field_gaps = {"iv:missing": 1}
+    health = project_health(state, now_ms=now, config=ArchiveSettings(ENABLED=True))
+    spy, qqq, iwm = health.underlyings
+    assert qqq.severity == iwm.severity == "catching_up"
+    assert health.backup.severity == health.test_restore.severity == "healthy"
+    assert spy.severity == "at_risk" and spy.reason and health.attention
+
+
 def test_account_probe_pins_inclusive_weekday_anniversary() -> None:
     # #3418: read-only observed_at_ms=1792557343508; 270 bars served for
     # SPY241025C00580000 on session1729517400000, earlier Oct17/18 refused.

@@ -59,10 +59,10 @@ async def capture_archive_session(body: ArchiveSessionCaptureRequest,
         raise HTTPException(status_code=409, detail="Option archive is disabled.")
     # Completion remains on the normal receipt/status path. Explicit retry
     # resets only this session's exhausted transient outcomes.
-    future = asyncio.run_coroutine_threadsafe(service.capture_session(body.underlying, body.session_ms,
+    future = asyncio.run_coroutine_threadsafe(service.recover_session(body.underlying, body.session_ms,
                                     retry_exhausted=body.retry_exhausted), background_loop())
 
-    def report(done: Future[SessionOutcome]) -> None:
+    def report(done: Future[SessionOutcome | None]) -> None:
         try:
             done.result()
         except Exception:

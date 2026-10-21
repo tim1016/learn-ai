@@ -107,7 +107,8 @@ async def _close_abandoned_generations(authority: ownership.RuntimeAuthority) ->
     jobs and anything stamped under the new generation are not this
     process's to touch. Whether a lost runtime's results committed before
     it died is #3045's uncertain-write question; this closes records,
-    never accounting.
+    never accounting. The staged inputs of an options run the dead
+    generation never finished are released with its record.
     """
     import asyncpg
 
@@ -119,8 +120,13 @@ async def _close_abandoned_generations(authority: ownership.RuntimeAuthority) ->
     conn = await asyncpg.connect(dsn)
     try:
         job_ids = await ownership.abandoned_job_ids(conn, up_to_generation=authority.boot_generation)
+        # Only a run the dead generation never finished still holds staged inputs: a finished run released its
+        # own in its ``finally``. Its durable row, not the Redis job record, says so: the API's startup sweep
+        # or the 24 h TTL may have closed the record first (#3440).
         options_jobs = await conn.fetch(
-            "SELECT job_id FROM research_job_owners WHERE kind='options_backtest' AND boot_generation < $1",
+            "SELECT owner.job_id FROM research_job_owners owner "
+            "JOIN research_options_backtest_runs run ON run.job_id = owner.job_id "
+            "WHERE owner.kind='options_backtest' AND owner.boot_generation < $1 AND run.status = 'running'",
             authority.boot_generation,
         )
     finally:

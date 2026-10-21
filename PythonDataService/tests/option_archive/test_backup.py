@@ -25,6 +25,7 @@ from app.option_archive.backup import (
     manifest_digest,
     prune_generations,
     read_pin,
+    restore_generation,
     validate_destination,
     verify_generation,
 )
@@ -46,8 +47,7 @@ def source(tmp_path: Path) -> tuple[Path, dict[str, Path], Path, CatalogSnapshot
     destination.mkdir()
     (destination / ".backup-destination.json").write_text(json.dumps({"host_destination": str(tmp_path / "host-backup")}))
     row = {"Id": 5, "DataRootId": str(root_id), "PriceAdjustmentMode": "raw", "FilePath": "equity/usa/spy.csv",
-           "FileSha256": hashlib.sha256(path.read_bytes()).hexdigest(), "FileSizeBytes": len(path.read_bytes()),
-           "ArtifactKind": "metadata", "Symbol": "SPY", "TradingDate": None, "Resolution": None, "DataType": None, "Market": "usa"}
+           "FileSha256": hashlib.sha256(path.read_bytes()).hexdigest(), "FileSizeBytes": len(path.read_bytes())}
     snapshot = CatalogSnapshot(schema_hash=SCHEMA_HASH, row_count=1, migration_ids=["v1"], files=[row])
     return destination, {str(root_id): root}, path, snapshot
 
@@ -125,6 +125,29 @@ class _EmptyTargetCatalog:
 
     async def close(self) -> None:
         return None
+
+
+async def test_legacy_manifest_still_verifies_and_restores_without_catalog_mirrors(
+    source: tuple, tmp_path: Path,
+) -> None:
+    path = await generation(source)
+    legacy_fields = dict(artifact_kind="metadata", symbol="SPY", session_ms=1749821400000,
+                         resolution=None, data_type=None, market="usa_options", row_count=None)
+    manifest = json.loads((path / "manifest.json").read_bytes())
+    for item in manifest["files"]:
+        item.update(legacy_fields)
+    payload = lake_restore.canonical(manifest)
+    (path / "manifest.json").write_bytes(payload)
+    (path / "COMPLETE").write_text(lake_restore.digest(payload))
+
+    checked = verify_generation(path)
+    assert all(not (legacy_fields.keys() & item.model_dump().keys()) for item in checked.files)
+    root_id, = source[1]
+    target = tmp_path / "legacy-restored"
+    catalog = _EmptyTargetCatalog()
+    await restore_generation(generation=path, roots={root_id: target}, connection=catalog)
+    assert (target / "lake/raw/equity/usa/spy.csv").read_bytes() == source[2].read_bytes()
+    assert catalog.imported == (path / "catalog.copy").read_bytes()
 
 
 @pytest.mark.parametrize("damaged", [False, True])

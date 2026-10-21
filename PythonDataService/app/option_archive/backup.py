@@ -13,21 +13,20 @@ import logging
 import os
 import shutil
 import threading
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
-from datetime import date
+from functools import partial
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.data_lake import catalog_client
 from app.data_lake.maintenance import lake_activity
 from app.data_lake.path_policy import lake_container_within, lake_root_within, lake_subpath
 from app.data_lake.root_identity import LakeRootIdentityError, resolve_root_context
 from app.engine.live.identity import confine_path_to_root
-from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.option_archive import lake_restore
 from app.option_archive.settings import STATE_FILE_NAME
 from app.research.runs.hashing import canonical_json
@@ -65,14 +64,16 @@ class BackupFile(BaseModel):
     relative_path: str
     sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     size_bytes: int = Field(ge=0)
-    artifact_kind: str | None = None
     artifact_ids: list[int] = []
-    symbol: str | None = None
-    session_ms: int | None = None
-    resolution: str | None = None
-    data_type: str | None = None
-    market: str | None = None
-    row_count: int | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def read_legacy_catalog_mirrors(cls, value: Any) -> Any:
+        """Version 1 copied catalog fields; restored rows now supply that authority (#3440)."""
+        if isinstance(value, dict):
+            legacy = {"artifact_kind", "symbol", "session_ms", "resolution", "data_type", "market", "row_count"}
+            return {key: item for key, item in value.items() if key not in legacy}
+        return value
 
 
 class BackupManifest(BaseModel):
@@ -156,20 +157,27 @@ def validate_destination(destination: Path, *, checkout: Path, roots: Mapping[st
         raise BackupRefusedError("backup destination marker does not name the configured host mount")
 
 
-async def dump_catalog(path: Path) -> CatalogSnapshot:
+async def dump_catalog(path: Path, root_ids: Sequence[str]) -> CatalogSnapshot:
+    """The catalog rows of ``root_ids`` only: the roots whose files this generation copies.
+
+    A shared catalog may hold other roots' rows. Their bytes are not in this
+    generation, so dumping them would restore catalog entries with no file
+    behind them, not the checked lake/catalog pair ADR 0049 (A1) requires.
+    """
     async with catalog_client.connection() as connection, connection.transaction(isolation="repeatable_read", readonly=True):
         schema = await lake_restore.catalog_schema_hash(connection)
         migrations = await connection.fetch("SELECT version FROM public.schema_migrations ORDER BY version")
         rows = await connection.fetch('''SELECT "Id", "DataRootId", "PriceAdjustmentMode", "FilePath",
-            "FileSha256", "FileSizeBytes", "ArtifactKind", "Symbol", "TradingDate", "Resolution", "DataType", "Market", "RowCount" FROM "DataLakeArtifacts"
-            WHERE "Status"='complete' ORDER BY "Id"''')
-        count = await connection.fetchval('SELECT COUNT(*) FROM "DataLakeArtifacts"')
+            "FileSha256", "FileSizeBytes" FROM "DataLakeArtifacts"
+            WHERE "Status"='complete' AND "DataRootId" = ANY($1::uuid[]) ORDER BY "Id"''', list(root_ids))
+        count = await connection.fetchval('SELECT COUNT(*) FROM "DataLakeArtifacts" WHERE "DataRootId" = ANY($1::uuid[])', list(root_ids))
         with path.open("xb") as output:
-            await connection.copy_from_query('SELECT * FROM "DataLakeArtifacts" ORDER BY "Id"', output=output, format="binary")
+            await connection.copy_from_query('SELECT * FROM "DataLakeArtifacts" WHERE "DataRootId" = ANY($1::uuid[]) ORDER BY "Id"',
+                                             list(root_ids), output=output, format="binary")
             output.flush()
             os.fsync(output.fileno())
     return CatalogSnapshot(schema_hash=schema, row_count=count, migration_ids=[row["version"] for row in migrations],
-                           files=[{key: str(value) if isinstance(value, UUID) else session_open_ms_utc(value) if isinstance(value, date) else value for key, value in dict(row).items()} for row in rows])
+                           files=[{key: str(value) if isinstance(value, UUID) else value for key, value in dict(row).items()} for row in rows])
 
 
 def _put_object(destination: Path, payload: bytes, expected: str | None = None) -> str:
@@ -215,9 +223,7 @@ def _copy_snapshot_files(destination: Path, roots: Mapping[str, Path], snapshot:
             previous.artifact_ids.append(row["Id"])
         else:
             indexed[key] = BackupFile(root_id=root_id, relative_path=relative.as_posix(), sha256=digest,
-                size_bytes=len(payload), artifact_kind=row["ArtifactKind"], artifact_ids=[row["Id"]],
-                symbol=row["Symbol"], session_ms=row["TradingDate"], resolution=row["Resolution"],
-                data_type=row["DataType"], market=row["Market"], row_count=row.get("RowCount"))
+                size_bytes=len(payload), artifact_ids=[row["Id"]])
     for root_id, root in roots.items():
         try:
             resolve_root_context(UUID(root_id), base_root=root)
@@ -249,8 +255,9 @@ def _copy_snapshot_files(destination: Path, roots: Mapping[str, Path], snapshot:
 
 
 async def create_generation(*, destination: Path, roots: Mapping[str, Path], clock: Callable[[], int],
-                            should_pause: Callable[[], bool], snapshot: Callable[[Path], Any] = dump_catalog,
+                            should_pause: Callable[[], bool], snapshot: Callable[[Path], Any] | None = None,
                             restore_files: Mapping[str, Path] | None = None, attempts: int = 3) -> BackupManifest:
+    take_snapshot = snapshot or partial(dump_catalog, root_ids=sorted(roots))
     last_error: Exception | None = None
     original_stat = destination.stat()
     original_identity = (original_stat.st_dev, original_stat.st_ino)
@@ -272,7 +279,7 @@ async def create_generation(*, destination: Path, roots: Mapping[str, Path], clo
                 with ExitStack() as locks:
                     for root in roots.values():
                         locks.enter_context(lake_activity(lake_root_within(root, "raw")))
-                    inventory = await snapshot(dump)
+                    inventory = await take_snapshot(dump)
                     files = await bounded_file_work(lambda paused, current=inventory: _copy_snapshot_files(destination, roots, current, paused), should_pause)
                 require_work_window(should_pause)
                 require_same_destination()

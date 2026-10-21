@@ -99,6 +99,10 @@ def run_in_thread(
             release_lease(job_id)
 
     name = thread_name or f"job-{job_id[:8]}"
-    thread = threading.Thread(target=_runner, name=name, daemon=True)
-    thread.start()
+    try:
+        thread = threading.Thread(target=_runner, name=name, daemon=True)
+        thread.start()
+    except Exception:
+        release_lease(job_id)
+        raise
     return thread
