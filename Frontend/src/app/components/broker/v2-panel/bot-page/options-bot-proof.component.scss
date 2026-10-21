@@ -1,0 +1,7 @@
+:host { display: block; }
+p { line-height: 1.5; overflow-wrap: anywhere; }
+code { overflow-wrap: anywhere; }
+h5 { font-size: .9rem; margin: 1.5rem 0 .5rem; }
+.problem { border-left: 3px solid var(--red-500, #ef4444); padding-left: .75rem; }
+button { margin-top: .75rem; padding: .55rem .75rem; color: var(--text-color); background: var(--surface-card); border: 1px solid var(--surface-border); border-radius: .4rem; cursor: pointer; }
+button:disabled { opacity: .5; cursor: default; }

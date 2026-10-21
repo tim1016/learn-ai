@@ -24,6 +24,11 @@ export class OptionsEvidencePageComponent {
   protected readonly activeView = computed(() => this.view() ?? 'performance');
   readonly inspected_study_id = input<string>();
   readonly comparator_run_id = input<string>();
+  readonly bot_return = input<string>();
+  protected readonly botReturn = computed(() => {
+    const path = this.bot_return();
+    return path && /^\/brokers\/alpaca\/clerks\/[^/?#]+\/accounts\/[^/?#]+\/bots\/[^/?#]+$/.test(path) ? path : null;
+  });
   private readonly service = inject(OptionsEvidenceService);
   private readonly backtest = inject(OptionsBacktestService);
   protected readonly workspace = resource({
@@ -43,6 +48,6 @@ export class OptionsEvidencePageComponent {
     : extractServerMessage(this.workspace.error(), 'This retained evidence could not be read. Retry when its store is available.'));
   protected readonly performanceProblem = computed(() => this.performance.error() === undefined ? null
     : extractServerMessage(this.performance.error(), 'The source replay could not be read. Its identity remains visible above.'));
-  protected readonly query = computed(() => ({ inspected_study_id: this.inspected_study_id(), comparator_run_id: this.comparator_run_id() }));
+  protected readonly query = computed(() => ({ inspected_study_id: this.inspected_study_id(), comparator_run_id: this.comparator_run_id(), bot_return: this.botReturn() }));
   protected readonly lineageQuery = computed(() => ({ ...this.query(), view: 'lineage' }));
 }
