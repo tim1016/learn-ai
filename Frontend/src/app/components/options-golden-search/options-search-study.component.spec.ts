@@ -4,7 +4,7 @@ import { provideRouter } from '@angular/router';
 import { describe, expect, it, vi } from 'vitest';
 
 import { OptionsSearchStudyComponent } from './options-search-study.component';
-import { candidate, study } from './testing';
+import { candidate, retainedCandidate, study } from './testing';
 
 function original() { return candidate({ candidate_hash: 'e'.repeat(64), label: 'Original setup', is_original: true }); }
 
@@ -79,14 +79,17 @@ describe('Options search evidence and approval', () => {
 
 it('keeps failing candidates inspectable without offering them for final selection', async () => {
   const failed = candidate({ candidate_hash: 'f'.repeat(64), label: 'Failed timing candidate', verdict: 'does_not_meet_rules', gate_outcomes: [{ gate_id: 'development:drawdown', status: 'does_not_meet_rules', actual: '25', required: '20', reason: 'Drawdown exceeds the frozen limit.' }] });
-  await render(OptionsSearchStudyComponent, { inputs: { study: study({ candidates: [candidate(), failed], allowed_commands: ['open_final'] }), step: 4 }, providers: [provideRouter([])] });
+  const candidateLoader = vi.fn(async () => retainedCandidate(failed));
+  const candidatePageLoader = async () => ({ items: [{ candidate_hash: failed.candidate_hash, label: failed.label, is_original: false, state: 'retained' as const, verdict: failed.verdict, net_profit_usd: failed.net_profit_usd }], total: 1, offset: 0, limit: 50 });
+  await render(OptionsSearchStudyComponent, { inputs: { study: study({ candidates: [candidate(), failed], allowed_commands: ['open_final'] }), step: 4, candidateLoader, candidatePageLoader }, providers: [provideRouter([])] });
   expect(screen.queryByRole('checkbox', { name: 'Include Failed timing candidate in final test' })).toBeNull();
   const user = userEvent.setup();
-  await user.click(screen.getByText('1 candidates did not pass — inspect limits'));
-  const rejected = screen.getByText('1 candidates did not pass — inspect limits').closest('details');
-  if (rejected === null) throw new Error('Rejected evidence panel is missing.');
-  expect(await within(rejected).findByText('Failed timing candidate')).toBeTruthy();
-  await user.click(within(rejected).getByRole('button', { name: 'Inspect evidence' }));
-  expect(within(rejected).getByRole('heading', { name: 'Failed timing candidate' })).toBeTruthy();
-  expect(screen.getByText('Drawdown exceeds the frozen limit. (25 / 20)')).toBeTruthy();
+  const label = await screen.findByText('Failed timing candidate', { exact: true });
+  const row = label.closest('tr');
+  if (!row) throw new Error('Candidate outcome row is missing.');
+  expect(candidateLoader).not.toHaveBeenCalled();
+  await user.click(within(row).getByRole('button', { name: 'Inspect evidence' }));
+  expect(await screen.findByRole('heading', { name: 'Failed timing candidate' })).toBeTruthy();
+  expect(candidateLoader).toHaveBeenCalledWith('study-1', failed.candidate_hash, 'development', 0);
+  expect(screen.getByText('Drawdown exceeds the frozen limit.')).toBeTruthy();
 });

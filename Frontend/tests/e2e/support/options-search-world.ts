@@ -1,6 +1,7 @@
 import type { Page } from '@playwright/test';
 
 import type { SavedSetup, ServedSetup } from '../../../src/app/components/options-backtest/options-backtest.types';
+import { retainedCandidate } from '../../../src/app/components/options-golden-search/testing';
 import type { OptionsStudy, PlanRequest, Preflight, SearchCandidate, SearchDeclarations, SessionResult, StudyCommand } from '../../../src/app/components/options-golden-search/options-golden-search.types';
 
 export const OPTIONS_SEARCH_API = '/api/research/options-golden-search';
@@ -52,6 +53,11 @@ export async function installOptionsSearchWorld(page: Page, initial: OptionsStud
   const sessionReads: string[] = [];
   const jobStages: string[] = [];
   const unexpected: string[] = [];
+  const candidateReads: string[] = [];
+  const publicStudy = () => current === null ? null : ({ ...current,
+    candidates: current.candidates.map(value => ({ ...value, equity: [], monthly: [], sessions: [] })),
+    final_results: current.final_results.map(value => ({ ...value, equity: [], monthly: [], sessions: [] })),
+  });
   await page.route('**/api/**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -64,10 +70,10 @@ export async function installOptionsSearchWorld(page: Page, initial: OptionsStud
     } else if (path === `${OPTIONS_SEARCH_API}/declarations`) await fulfill(DECLARATIONS);
     else if (path === `${OPTIONS_SEARCH_API}/preflight`) { preflights.push(request.postDataJSON()); await fulfill(PREFLIGHT); }
     else if (path === `${OPTIONS_SEARCH_API}/studies` && request.method() === 'POST') {
-      locks.push(request.postDataJSON()); current = lockedOptionsStudy(); await fulfill(current);
+      locks.push(request.postDataJSON()); current = lockedOptionsStudy(); await fulfill(publicStudy());
     } else if (path === `${OPTIONS_SEARCH_API}/studies`) {
       await fulfill(current === null ? [] : [{ id: current.id, setup_name: current.setup_name, underlying: current.underlying, phase: current.phase, status: current.status, updated_at_ms: 1791294000000 }]);
-    } else if (path === `${OPTIONS_SEARCH_API}/studies/${OPTIONS_SEARCH_ID}` && current !== null) await fulfill(current);
+    } else if (path === `${OPTIONS_SEARCH_API}/studies/${OPTIONS_SEARCH_ID}` && current !== null) await fulfill(publicStudy());
     else if (path === `${OPTIONS_SEARCH_API}/studies/${OPTIONS_SEARCH_ID}/commands` && current !== null) {
       const body: StudyCommand = request.postDataJSON();
       if (body.command === 'approve_exception') {
@@ -80,7 +86,7 @@ export async function installOptionsSearchWorld(page: Page, initial: OptionsStud
       if (body.command === 'run_research') current = { ...current, revision: 2, phase: 'research', status: 'running', allowed_commands: ['cancel'], dispatch: { study_id: current.id, stage_token: 'research-stage' }, progress: { ...current.progress, stage: 'research', running: 1 } };
       else if (body.command === 'open_final') current = { ...current, revision: 4, phase: 'final', status: 'running', allowed_commands: ['cancel'], dispatch: { study_id: current.id, stage_token: 'final-stage' }, progress: { ...current.progress, stage: 'final', running: 1 } };
       else if (body.command === 'approve' || body.command === 'approve_exception') current = { ...current, revision: current.revision + 1, phase: 'approved', status: 'ready', allowed_commands: [], dispatch: null, qualification_id: 'ogs_browser_approved', qualification_status: 'ready' };
-      await fulfill(current);
+      await fulfill(publicStudy());
     } else if (path === '/api/jobs/options_golden_search' && current !== null) {
       const token: string = request.postDataJSON().stage_token;
       jobStages.push(token);
@@ -88,6 +94,16 @@ export async function installOptionsSearchWorld(page: Page, initial: OptionsStud
       await fulfill({ id: `browser-${token}`, status: 'queued' });
     } else if (path.startsWith('/api/jobs/') && path.endsWith('/events')) await route.fulfill({ contentType: 'text/event-stream', body: 'event: job.completed\ndata: {"type":"job.completed"}\n\n' });
     else if (path === '/api/jobs') await fulfill([]);
+    else if (path === `${OPTIONS_SEARCH_API}/studies/${OPTIONS_SEARCH_ID}/candidate-evidence` && current !== null) {
+      const offset = Number(url.searchParams.get('offset') ?? '0');
+      await fulfill({ items: current.candidates.slice(offset, offset + 50).map(value => ({ candidate_hash: value.candidate_hash, label: value.label, is_original: value.is_original, state: 'retained', verdict: value.verdict, net_profit_usd: value.net_profit_usd })), total: current.candidates.length, offset, limit: 50 });
+    } else if (path.startsWith(`${OPTIONS_SEARCH_API}/studies/${OPTIONS_SEARCH_ID}/candidate-evidence/`) && current !== null) {
+      candidateReads.push(`${path}?${url.searchParams}`);
+      const scope = url.searchParams.get('window') === 'final' ? 'final' : 'development';
+      const value = (scope === 'final' ? current.final_results : current.candidates).find(item => item.candidate_hash === path.split('/').at(-1));
+      if (!value) await fulfill({ detail: 'This exact scope is not exposed.' }, 404);
+      else await fulfill({ ...retainedCandidate(value), scope, study_id: current.id, setup: OPTION_SETUP });
+    }
     else if (path.includes(`/studies/${OPTIONS_SEARCH_ID}/candidates/`) && path.includes('/sessions/')) {
       sessionReads.push(`${path}?${url.searchParams}`); await fulfill(OPTION_SESSION);
     } else {
@@ -95,5 +111,5 @@ export async function installOptionsSearchWorld(page: Page, initial: OptionsStud
       await fulfill({ detail: 'Outside this isolated browser fixture.' }, 503);
     }
   });
-  return { preflights, locks, commands, sessionReads, jobStages, unexpected };
+  return { preflights, locks, commands, sessionReads, candidateReads, jobStages, unexpected };
 }

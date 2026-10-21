@@ -6,6 +6,7 @@ import { isRecord } from '../../api/operator-blocker.types';
 import { extractServerMessage } from '../broker/operation-error';
 import { readDetail } from '../options-backtest/options-backtest.service';
 import { JobsService, type JobState, type JobStreamEvent } from '../../services/jobs.service';
+import type { components } from '../../api/broker.types';
 import type { EvidenceWindow, OptionsStudy, PlanRequest, Preflight, SearchDeclarations, SessionResult, StudyCommand, StudySummary } from './options-golden-search.types';
 
 /** The durable command committed; its exact dispatch remains available for retry. */
@@ -61,6 +62,14 @@ export class OptionsGoldenSearchService {
 
   get(id: string): Promise<OptionsStudy> {
     return firstValueFrom(this.http.get<OptionsStudy>(`${this.base}/studies/${encodeURIComponent(id)}`));
+  }
+
+  candidatePage(studyId: string, offset = 0): Promise<components['schemas']['OptionsCandidatePage']> {
+    return firstValueFrom(this.http.get<components['schemas']['OptionsCandidatePage']>(`${this.base}/studies/${encodeURIComponent(studyId)}/candidate-evidence`, { params: { offset, limit: 50 } }));
+  }
+
+  candidateEvidence(studyId: string, digest: string, window: EvidenceWindow, sessionOffset = 0): Promise<components['schemas']['OptionsCandidateEvidence']> {
+    return firstValueFrom(this.http.get<components['schemas']['OptionsCandidateEvidence']>(`${this.base}/studies/${encodeURIComponent(studyId)}/candidate-evidence/${encodeURIComponent(digest)}`, { params: { window, session_offset: sessionOffset, session_limit: 50 } }));
   }
 
   session(studyId: string, candidateHash: string, window: EvidenceWindow, sessionOpenMs: number): Promise<SessionResult> {

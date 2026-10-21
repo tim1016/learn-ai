@@ -10,11 +10,13 @@ from pydantic import ValidationError
 
 from app.jobs.progress import CancellationCheck, ProgressEmitter
 from app.jobs.runner import run_in_thread
+from app.research.golden_search.proof import ProofMismatchError
 from app.research.options_golden_search import repository as repo
 from app.research.options_golden_search import service, stages
 from app.research.persistence.db import with_connection, writer_loop_call
 from app.routers import research_records
 from app.routers.research_store_unavailable import StoreUnreachableIsA503
+from app.schemas.options_candidate_evidence import OptionsCandidateEvidence, OptionsCandidatePage
 from app.schemas.options_evidence import OptionsEvidenceWorkspace
 from app.schemas.options_golden_search import (
     Command,
@@ -45,6 +47,32 @@ class HistoryCaptureService(Protocol):
 
 async def get_service():
     return service
+
+
+async def get_evidence_service():
+    from app.research import options_candidate_evidence
+    return options_candidate_evidence
+
+
+@router.get("/studies/{study_id}/candidate-evidence", response_model=OptionsCandidatePage)
+async def candidate_page(study_id: StudyId, offset: Annotated[int, Query(ge=0)] = 0,
+                         limit: Annotated[int, Query(ge=1, le=50)] = 50, api=Depends(get_evidence_service)) -> OptionsCandidatePage:
+    try:
+        return await api.page(study_id, offset=offset, limit=limit)
+    except (ValueError, LookupError) as exc:
+        raise refusal(exc) from exc
+
+
+@router.get("/studies/{study_id}/candidate-evidence/{candidate_hash}", response_model=OptionsCandidateEvidence)
+async def candidate_evidence(study_id: StudyId, candidate_hash: Annotated[str, Path(pattern=r"^[a-f0-9]{64}$")],
+    window: Literal["development", "final"] = "development", session_offset: Annotated[int, Query(ge=0)] = 0,
+    session_limit: Annotated[int, Query(ge=1, le=50)] = 50, api=Depends(get_evidence_service)) -> OptionsCandidateEvidence:
+    try:
+        return await api.read(study_id, candidate_hash, window, session_offset=session_offset, session_limit=session_limit)
+    except (ValueError, LookupError) as exc:
+        raise refusal(exc) from exc
+    except (OSError, ProofMismatchError) as exc:
+        raise HTTPException(503, {"code": "RETAINED_EVIDENCE_UNAVAILABLE", "message": "The retained candidate artifact is missing or unreadable. Mutable lake data cannot replace it."}) from exc
 
 
 @router.get("/workspace/{kind}/{subject_id}", response_model=OptionsEvidenceWorkspace)
@@ -209,8 +237,10 @@ async def capture_history(body: HistoryCaptureJobRequest, api: HistoryCaptureSer
 async def session_evidence(study_id: StudyId,
     candidate_hash: Annotated[str,Path(pattern=r"^[a-f0-9]{64}$")],
     session_open_ms: Annotated[int,Path(ge=0,le=253402300799999)],
-    window: Literal["development","final"]="development",api=Depends(get_service)) -> SessionResult:
+    window: Literal["development","final"]="development",api=Depends(get_evidence_service)) -> SessionResult:
     try:
-        return SessionResult.model_validate(await api.read_session(study_id,candidate_hash,window,session_open_ms))
+        return SessionResult.model_validate(await api.session(study_id,candidate_hash,window,session_open_ms))
     except (ValueError,LookupError) as exc:
         raise refusal(exc) from exc
+    except (OSError, ProofMismatchError) as exc:
+        raise HTTPException(503, {"code": "RETAINED_EVIDENCE_UNAVAILABLE", "message": "The retained session artifact is missing or unreadable. Mutable lake data cannot replace it."}) from exc

@@ -1,3 +1,4 @@
+import type { CandidateLoader, CandidatePageLoader } from './options-candidate-evidence.component';
 import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, inject, input, resource, signal, untracked } from '@angular/core';
 import { form, FormField } from '@angular/forms/signals';
 import { Router, RouterLink } from '@angular/router';
@@ -35,6 +36,8 @@ export class OptionsGoldenSearchPageComponent {
   readonly setup_name = input<string | undefined>(undefined);
   readonly parent_study_id = input<string | undefined>(undefined);
   protected readonly steps = STEPS;
+  protected readonly candidatePageLoader: CandidatePageLoader = (studyId, offset) => this.service.candidatePage(studyId, offset);
+  protected readonly candidateLoader: CandidateLoader = (studyId, digest, window, offset) => this.service.candidateEvidence(studyId, digest, window, offset);
   protected readonly sessionLoader: SessionLoader = (studyId, candidateHash, window, sessionOpenMs) => this.service.session(studyId, candidateHash, window, sessionOpenMs);
   protected readonly step = signal(0);
   protected readonly selection = signal({ name: '' });

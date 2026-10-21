@@ -15743,12 +15743,26 @@
         "additionalProperties": false,
         "properties": {
           "drawdown_usd": {
-            "title": "Drawdown Usd",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Drawdown Usd"
           },
           "equity_usd": {
-            "title": "Equity Usd",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Equity Usd"
           },
           "timestamp_ms": {
             "title": "Timestamp Ms",
@@ -45325,6 +45339,252 @@
           "events"
         ],
         "title": "OptionsBotSessionView",
+        "type": "object"
+      },
+      "OptionsCandidateCoverage": {
+        "properties": {
+          "complete": {
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "missing_held_marks": {
+            "title": "Missing Held Marks",
+            "type": "integer"
+          },
+          "replayed_sessions": {
+            "title": "Replayed Sessions",
+            "type": "integer"
+          },
+          "required_held_marks": {
+            "title": "Required Held Marks",
+            "type": "integer"
+          },
+          "scheduled_sessions": {
+            "title": "Scheduled Sessions",
+            "type": "integer"
+          },
+          "traded_sessions": {
+            "title": "Traded Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scheduled_sessions",
+          "replayed_sessions",
+          "traded_sessions",
+          "required_held_marks",
+          "missing_held_marks",
+          "complete"
+        ],
+        "title": "OptionsCandidateCoverage",
+        "type": "object"
+      },
+      "OptionsCandidateEvidence": {
+        "properties": {
+          "candidate": {
+            "$ref": "#/components/schemas/Candidate"
+          },
+          "candidate_hash": {
+            "title": "Candidate Hash",
+            "type": "string"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/OptionsCandidateCoverage"
+          },
+          "end_ms": {
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "evidence_blob_sha256": {
+            "title": "Evidence Blob Sha256",
+            "type": "string"
+          },
+          "evidence_identity": {
+            "title": "Evidence Identity",
+            "type": "string"
+          },
+          "sampling": {
+            "$ref": "#/components/schemas/OptionsCandidateSampling"
+          },
+          "scope": {
+            "enum": [
+              "development",
+              "final"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "session_limit": {
+            "title": "Session Limit",
+            "type": "integer"
+          },
+          "session_offset": {
+            "title": "Session Offset",
+            "type": "integer"
+          },
+          "session_total": {
+            "title": "Session Total",
+            "type": "integer"
+          },
+          "setup": {
+            "$ref": "#/components/schemas/OptionsBacktestSetup-Output"
+          },
+          "start_ms": {
+            "title": "Start Ms",
+            "type": "integer"
+          },
+          "study_id": {
+            "title": "Study Id",
+            "type": "string"
+          },
+          "unobserved_sessions": {
+            "minimum": 0.0,
+            "title": "Unobserved Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "study_id",
+          "candidate_hash",
+          "evidence_identity",
+          "evidence_blob_sha256",
+          "scope",
+          "start_ms",
+          "end_ms",
+          "setup",
+          "candidate",
+          "coverage",
+          "sampling",
+          "session_offset",
+          "session_limit",
+          "session_total",
+          "unobserved_sessions"
+        ],
+        "title": "OptionsCandidateEvidence",
+        "type": "object"
+      },
+      "OptionsCandidateListItem": {
+        "properties": {
+          "candidate_hash": {
+            "title": "Candidate Hash",
+            "type": "string"
+          },
+          "is_original": {
+            "title": "Is Original",
+            "type": "boolean"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "net_profit_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net Profit Usd"
+          },
+          "state": {
+            "enum": [
+              "retained",
+              "uncomputed"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdict"
+          }
+        },
+        "required": [
+          "candidate_hash",
+          "label",
+          "is_original",
+          "state",
+          "verdict",
+          "net_profit_usd"
+        ],
+        "title": "OptionsCandidateListItem",
+        "type": "object"
+      },
+      "OptionsCandidatePage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OptionsCandidateListItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "offset",
+          "limit"
+        ],
+        "title": "OptionsCandidatePage",
+        "type": "object"
+      },
+      "OptionsCandidateSampling": {
+        "properties": {
+          "displayed_observations": {
+            "title": "Displayed Observations",
+            "type": "integer"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "maximum_observations": {
+            "default": 2000,
+            "title": "Maximum Observations",
+            "type": "integer"
+          },
+          "raw_observations": {
+            "title": "Raw Observations",
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "available",
+              "unavailable"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "raw_observations",
+          "displayed_observations",
+          "explanation"
+        ],
+        "title": "OptionsCandidateSampling",
         "type": "object"
       },
       "OptionsChainSnapshotRequest": {
@@ -88803,6 +89063,194 @@
           }
         },
         "summary": "Detail",
+        "tags": [
+          "research-options-golden-search"
+        ]
+      }
+    },
+    "/api/research/options-golden-search/studies/{study_id}/candidate-evidence": {
+      "get": {
+        "operationId": "candidate_page_api_research_options_golden_search_studies__study_id__candidate_evidence_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "study_id",
+            "required": true,
+            "schema": {
+              "pattern": "^os_[a-f0-9]{40}$",
+              "title": "Study Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsCandidatePage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Candidate Page",
+        "tags": [
+          "research-options-golden-search"
+        ]
+      }
+    },
+    "/api/research/options-golden-search/studies/{study_id}/candidate-evidence/{candidate_hash}": {
+      "get": {
+        "operationId": "candidate_evidence_api_research_options_golden_search_studies__study_id__candidate_evidence__candidate_hash__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "study_id",
+            "required": true,
+            "schema": {
+              "pattern": "^os_[a-f0-9]{40}$",
+              "title": "Study Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "candidate_hash",
+            "required": true,
+            "schema": {
+              "pattern": "^[a-f0-9]{64}$",
+              "title": "Candidate Hash",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window",
+            "required": false,
+            "schema": {
+              "default": "development",
+              "enum": [
+                "development",
+                "final"
+              ],
+              "title": "Window",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "session_offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Session Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "session_limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Session Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionsCandidateEvidence"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Candidate Evidence",
         "tags": [
           "research-options-golden-search"
         ]

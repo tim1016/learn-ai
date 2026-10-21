@@ -122,7 +122,7 @@ export interface SearchCandidate {
   readonly gate_outcomes: readonly GateOutcome[];
   readonly evidence: readonly { readonly label: string; readonly value: string }[];
   readonly monthly: readonly { readonly month_ms: number; readonly net_profit_usd: string; readonly completed_sessions: number }[];
-  readonly equity: readonly { readonly timestamp_ms: number; readonly equity_usd: string; readonly drawdown_usd: string }[];
+  readonly equity: readonly { readonly timestamp_ms: number; readonly equity_usd: string | null; readonly drawdown_usd: string | null }[];
   readonly sessions: readonly SessionResult[];
 }
 export type SearchCommand = 'run_research' | 'cancel' | 'resume' | 'open_final' | 'approve' | 'approve_exception' | 'keep_original';

@@ -1,5 +1,6 @@
 import { exampleBody } from '../options-backtest/testing/fixtures';
 import type { OptionsStudy, Preflight, SearchCandidate, SearchDeclarations } from './options-golden-search.types';
+import type { CandidateEvidence } from './options-candidate-evidence.component';
 
 export function declarations(): SearchDeclarations {
   return {
@@ -17,4 +18,15 @@ export function candidate(changes: Partial<SearchCandidate> = {}): SearchCandida
 }
 export function study(changes: Partial<OptionsStudy> = {}): OptionsStudy {
   return { id: 'study-1', revision: 4, phase: 'locked', status: 'ready', protocol_hash: 'd'.repeat(64), approval_reviews: {}, protocol_summary: [{ label: 'Starting capital', value: '10000 USD' }], setup_name: 'Saved two-leg setup', underlying: 'SPY', progress: { stage: 'locked', completed: 0, queued: 0, running: 0, cache_hits: 0, execution_attempts: 0, spent: 0, reserved: 20, capacity_message: 'Width one' }, candidates: [], final_results: [], gate_outcomes: [], exposure: { classification: 'history_unknown', explanation: 'Outside research cannot be observed.' }, allowed_commands: ['run_research'], dispatch: null, failure_reason: null, qualification_id: null, qualification_status: null, ...changes };
+}
+
+export function retainedCandidate(value: SearchCandidate = candidate()): CandidateEvidence {
+  return {
+    study_id: 'study-1', candidate_hash: value.candidate_hash, evidence_identity: 'd'.repeat(64), evidence_blob_sha256: 'e'.repeat(64),
+    scope: 'development', start_ms: 1791293400000, end_ms: 1791379800000, setup: declarations().setup,
+    candidate: { ...value, gate_outcomes: [...value.gate_outcomes], evidence: [...value.evidence], monthly: [...value.monthly], equity: [...value.equity], sessions: value.sessions.map(s => ({ ...s, attempts: [...s.attempts] })) },
+    coverage: { scheduled_sessions: 1, replayed_sessions: 1, traded_sessions: 1, required_held_marks: 10, missing_held_marks: 0, complete: true },
+    sampling: { state: 'available', raw_observations: 2, displayed_observations: 2, maximum_observations: 2000, explanation: 'Synthetic retained trace for UI behavior.' },
+    session_offset: 0, session_limit: 50, session_total: 1, unobserved_sessions: 0,
+  };
 }

@@ -176,8 +176,8 @@ class MonthResult(Model):
 
 class EquityPoint(Model):
     timestamp_ms: int
-    equity_usd: str
-    drawdown_usd: str
+    equity_usd: str | None
+    drawdown_usd: str | None
 
 
 class LegAttempt(Model):
@@ -287,4 +287,7 @@ class StudyDetail(Model):
 
         fields = {name: record.get(name, [] if name == "protocol_summary" else 0 if name == "rejected_candidate_count" else None) for name in cls.model_fields if name != "approval_reviews"}
         fields["approval_reviews"] = approval_reviews(record)
+        # Summary polling carries outcomes, not every candidate's display trace.
+        for collection in ("candidates", "final_results"):
+            fields[collection] = [{**item, "equity": [], "sessions": [], "monthly": []} for item in record.get(collection, [])]
         return cls.model_validate(fields)

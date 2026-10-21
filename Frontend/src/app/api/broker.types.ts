@@ -6540,6 +6540,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/options-golden-search/studies/{study_id}/candidate-evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Candidate Page */
+        get: operations["candidate_page_api_research_options_golden_search_studies__study_id__candidate_evidence_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/options-golden-search/studies/{study_id}/candidate-evidence/{candidate_hash}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Candidate Evidence */
+        get: operations["candidate_evidence_api_research_options_golden_search_studies__study_id__candidate_evidence__candidate_hash__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/options-golden-search/studies/{study_id}/candidates/{candidate_hash}/sessions/{session_open_ms}": {
         parameters: {
             query?: never;
@@ -13632,9 +13666,9 @@ export interface components {
         /** EquityPoint */
         EquityPoint: {
             /** Drawdown Usd */
-            drawdown_usd: string;
+            drawdown_usd: string | null;
             /** Equity Usd */
-            equity_usd: string;
+            equity_usd: string | null;
             /** Timestamp Ms */
             timestamp_ms: number;
         };
@@ -24951,6 +24985,101 @@ export interface components {
             session_open_ms?: number | null;
             /** Strategy Instance Id */
             strategy_instance_id: string;
+        };
+        /** OptionsCandidateCoverage */
+        OptionsCandidateCoverage: {
+            /** Complete */
+            complete: boolean;
+            /** Missing Held Marks */
+            missing_held_marks: number;
+            /** Replayed Sessions */
+            replayed_sessions: number;
+            /** Required Held Marks */
+            required_held_marks: number;
+            /** Scheduled Sessions */
+            scheduled_sessions: number;
+            /** Traded Sessions */
+            traded_sessions: number;
+        };
+        /** OptionsCandidateEvidence */
+        OptionsCandidateEvidence: {
+            candidate: components["schemas"]["Candidate"];
+            /** Candidate Hash */
+            candidate_hash: string;
+            coverage: components["schemas"]["OptionsCandidateCoverage"];
+            /** End Ms */
+            end_ms: number;
+            /** Evidence Blob Sha256 */
+            evidence_blob_sha256: string;
+            /** Evidence Identity */
+            evidence_identity: string;
+            sampling: components["schemas"]["OptionsCandidateSampling"];
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "development" | "final";
+            /** Session Limit */
+            session_limit: number;
+            /** Session Offset */
+            session_offset: number;
+            /** Session Total */
+            session_total: number;
+            setup: components["schemas"]["OptionsBacktestSetup-Output"];
+            /** Start Ms */
+            start_ms: number;
+            /** Study Id */
+            study_id: string;
+            /** Unobserved Sessions */
+            unobserved_sessions: number;
+        };
+        /** OptionsCandidateListItem */
+        OptionsCandidateListItem: {
+            /** Candidate Hash */
+            candidate_hash: string;
+            /** Is Original */
+            is_original: boolean;
+            /** Label */
+            label: string;
+            /** Net Profit Usd */
+            net_profit_usd: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "retained" | "uncomputed";
+            /** Verdict */
+            verdict: string | null;
+        };
+        /** OptionsCandidatePage */
+        OptionsCandidatePage: {
+            /** Items */
+            items: components["schemas"]["OptionsCandidateListItem"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        };
+        /** OptionsCandidateSampling */
+        OptionsCandidateSampling: {
+            /** Displayed Observations */
+            displayed_observations: number;
+            /** Explanation */
+            explanation: string;
+            /**
+             * Maximum Observations
+             * @default 2000
+             */
+            maximum_observations?: number;
+            /** Raw Observations */
+            raw_observations: number;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "available" | "unavailable";
         };
         /**
          * OptionsChainSnapshotRequest
@@ -44949,6 +45078,80 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StudyDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    candidate_page_api_research_options_golden_search_studies__study_id__candidate_evidence_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                study_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsCandidatePage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    candidate_evidence_api_research_options_golden_search_studies__study_id__candidate_evidence__candidate_hash__get: {
+        parameters: {
+            query?: {
+                window?: "development" | "final";
+                session_offset?: number;
+                session_limit?: number;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                study_id: string;
+                candidate_hash: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OptionsCandidateEvidence"];
                 };
             };
             /** @description Validation Error */

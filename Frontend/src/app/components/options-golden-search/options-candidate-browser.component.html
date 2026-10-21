@@ -1,0 +1,12 @@
+<section class="card"><h3>All candidate outcomes</h3><p>Selection loads one retained evaluation. Profitable rejected candidates remain diagnostics; eligibility comes from the frozen rules.</p>
+  @if (page.isLoading()) { <p>Reading candidate outcomes…</p> }
+  @if (problem(); as why) { <p class="problem">{{ why }}</p><button type="button" (click)="page.reload()">Retry candidates</button> }
+  @if (page.hasValue()) { @let results = page.value();
+    <p>{{ results.total }} distinct admitted strategies. Page ordered by original first, then immutable hash.</p>
+    <div class="table-scroll"><table><thead><tr><th>Settings</th><th>Evidence</th><th>Verdict</th><th>Net diagnostic profit (USD)</th><th>Inspect</th></tr></thead><tbody>
+      @for (item of results.items; track item.candidate_hash) { <tr><td>{{ item.label }}</td><td>{{ item.state | receiptLabel }}</td><td>{{ item.verdict ? (item.verdict | receiptLabel) : 'Uncomputed' }}</td><td>{{ item.net_profit_usd ?? 'Uncomputed' }}</td><td><button type="button" [disabled]="item.state !== 'retained'" (click)="selected.set(item.candidate_hash)">Inspect evidence</button></td></tr> }
+    </tbody></table></div>
+    <div class="actions"><button type="button" [disabled]="offset() === 0" (click)="offset.set(offset() - 50)">Previous candidates</button><button type="button" [disabled]="offset() + 50 >= results.total" (click)="offset.set(offset() + 50)">Next candidates</button></div>
+  }
+</section>
+@if (selected(); as digest) { <app-options-candidate-evidence [studyId]="studyId()" [digest]="digest" [loader]="candidateLoader()" [sessionLoader]="sessionLoader()" /> }
