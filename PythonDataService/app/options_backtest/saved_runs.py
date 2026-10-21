@@ -802,6 +802,15 @@ class SessionLine:
     trades: int
 
 
+def request_matches_header(header: RunHeader | None, setup: OptionsBacktestSetup, *,
+    first_session_open_ms: int, last_session_open_ms: int, sessions_requested: int,
+) -> bool:
+    return header is not None and header.setup == setup and (
+        header.record.first_session_open_ms == first_session_open_ms
+        and header.record.last_session_open_ms == last_session_open_ms
+        and header.record.sessions_requested == sessions_requested)
+
+
 async def get_run_header(conn: asyncpg.Connection, run_id: int) -> RunHeader | None:
     """A run's record and setup; ``None`` when there is none. Cheaper than ``get_run`` where no figure is wanted.
 

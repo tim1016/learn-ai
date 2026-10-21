@@ -285,13 +285,20 @@ def test_cancelling_one_backtest_releases_shared_capacity_for_the_next_owner(tmp
         pool.close()
 
 
-def test_profiler_uses_frozen_temporary_inputs_and_reports_cumulative_functions(tmp_path: Path) -> None:
+async def test_profiler_uses_captured_temporary_lake_and_reports_cumulative_functions(
+    fake_catalog, tmp_lake: Path, tmp_path: Path,
+) -> None:
+    from app.options_backtest.lake_data import LakeRunData
     from scripts.profile_options_backtest import profile_run
+    from tests.options_backtest import test_golden_spy_2025_06_10 as golden
 
-    given = setup(legs=[leg(expiry={"kind": "same_day"})])
+    given = golden.a_setup()
+    with recorded_vendor(golden.RECORDING, golden.RECORDED_FILES, golden.STOCK_PATH):
+        await golden.capture_the_recording()
+    data = LakeRunData("SPY")
     output = tmp_path / "profile.txt"
-    actual = profile_run(given, (WED, THU), scene(), tmp_path / "inputs", output)
-    assert actual == run_sessions(given, (WED, THU), scene())
+    actual = await asyncio.to_thread(profile_run, given, (golden.TRADING_DATE,), data, tmp_path / "inputs", output)
+    assert actual == await asyncio.to_thread(run_sessions, given, (golden.TRADING_DATE,), data)
     assert "cumulative" in output.read_text()
 
 

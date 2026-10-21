@@ -230,6 +230,7 @@ services:
       RESEARCH_RUNTIME: "1"
       OPTIONS_BACKTEST_DATA_SERVICE_URL: http://python-service:8000
       OPTIONS_BACKTEST_INPUT_ROOT: /app/artifacts/options_backtest/inputs
+      DATA_LAKE_ROOT_ID: ${DATA_LAKE_ROOT_ID:-}
       # The pooled dispatch's bounds (#3046): width comes from the fleet's
       # .env — the default is the serial one-worker runtime.
       RESEARCH_WORKER_COUNT: ${RESEARCH_WORKER_COUNT:-1}

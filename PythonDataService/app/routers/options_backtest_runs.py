@@ -248,11 +248,10 @@ async def start_options_backtest_job(req: OptionsBacktestJobRequest) -> OptionsB
             from app.routers import research_records
             run_id = await with_connection(saved_runs.run_for_job, req.job_id)
             existing = await with_connection(saved_runs.get_run_header, run_id)
-            if existing is None or existing.setup != req.setup or (
-                existing.record.first_session_open_ms != session_window_for_date(sessions[0]).open_ms_utc
-                or existing.record.last_session_open_ms != session_window_for_date(sessions[-1]).open_ms_utc
-                or existing.record.sessions_requested != len(sessions)
-            ):
+            if not saved_runs.request_matches_header(existing, req.setup,
+                first_session_open_ms=session_window_for_date(sessions[0]).open_ms_utc,
+                last_session_open_ms=session_window_for_date(sessions[-1]).open_ms_utc,
+                sessions_requested=len(sessions)):
                 raise HTTPException(409, "That job id is bound to another Options Backtest request.")
             await asyncio.to_thread(research_records.require_live_redelivery, req.job_id, noun="Options Backtest")
             return OptionsBacktestJobAcceptedResponse(job_id=req.job_id, run_id=run_id, status="queued")

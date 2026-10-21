@@ -111,6 +111,8 @@ def freeze_run_inputs(
     should_stop: Callable[[], bool] = lambda: False,
     on_session: Callable[[int, int, date], None] = lambda done, total, day: None,
     reserve_bytes: Callable[[int], None] = lambda retained: None,
+    resume: FrozenRunInputs | None = None,
+    on_checkpoint: Callable[[FrozenRunInputs], None] = lambda frozen: None,
 ) -> FrozenRunInputs:
     """Admit, validate and retain each required answer once before dispatch.
 
@@ -121,9 +123,32 @@ def freeze_run_inputs(
     blobs = BlobStore(root)
     inventory: dict[int, str] = {}
     retained = 0
+    setup_digest = hash_payload(setup.model_dump(mode="json"))
+    if resume is not None:
+        anchors = [session_window_for_date(day).open_ms_utc for day in sessions]
+        if (resume.root != str(root.resolve()) or resume.setup_digest != setup_digest
+                or resume.source_root_id != str(active_root_id()) or resume.underlying != setup.underlying
+                or list(resume.sessions) != anchors[:len(resume.sessions)]):
+            raise ValueError("frozen preparation checkpoint belongs to another input identity")
+        for anchor, digest in resume.sessions.items():
+            payload = blobs.get(digest)
+            _decode(payload)
+            retained += len(payload)
+            inventory[anchor] = digest
+        if retained != resume.retained_bytes:
+            raise ValueError("frozen preparation checkpoint byte count differs")
+
+    def checkpoint() -> FrozenRunInputs:
+        return FrozenRunInputs(root=str(root.resolve()), underlying=setup.underlying,
+            source_root_id=str(active_root_id()), setup_digest=setup_digest,
+            sessions=dict(inventory), retained_bytes=retained)
+
     for done, day in enumerate(sessions):
         if should_stop():
             raise RunStopped(done)
+        if session_window_for_date(day).open_ms_utc in inventory:
+            on_session(done + 1, len(sessions), day)
+            continue
         recording = _RecordingData(data, day)
         load_session_market(setup, day, recording)
         if "listing" in recording.rows:
@@ -144,11 +169,9 @@ def freeze_run_inputs(
             raise ValueError("frozen run exceeds its retained input byte bound")
         reserve_bytes(retained)
         inventory[session_window_for_date(day).open_ms_utc] = blobs.put(payload)
+        on_checkpoint(checkpoint())
         on_session(done + 1, len(sessions), day)
-    return FrozenRunInputs(root=str(root.resolve()), underlying=setup.underlying,
-                           source_root_id=str(active_root_id()),
-                           setup_digest=hash_payload(setup.model_dump(mode="json")),
-                           sessions=inventory, retained_bytes=retained)
+    return checkpoint()
 
 
 def _size(value: Any, seen: set[int] | None = None) -> int:

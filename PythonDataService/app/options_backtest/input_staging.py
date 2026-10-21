@@ -13,6 +13,7 @@ import json
 import logging
 import re
 import shutil
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -23,6 +24,10 @@ from app.utils.atomic_file import atomic_write_bytes
 MAX_STAGED_BYTES = 8 * 1024**3
 _JOB = re.compile(r"[A-Za-z0-9_-]{1,128}")
 logger = logging.getLogger(__name__)
+
+
+class CollectorBusy(ValueError):
+    """Another live collector already owns this exact preparation."""
 
 
 def job_root(base: Path, job_id: str) -> Path:
@@ -66,7 +71,7 @@ class InputStaging:
             fcntl.flock(self._lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             self._lock.close()
-            raise ValueError("that job already has a frozen input collector") from None
+            raise CollectorBusy("that job already has a frozen input collector") from None
         try:
             with _ledger(self.base) as entries:
                 entries.setdefault(self.job_id, 0)
@@ -86,6 +91,29 @@ class InputStaging:
                 raise ValueError("global frozen input staging byte bound exceeded")
             entries[self.job_id] = retained_bytes
 
+    def retain_verified(self, inventory: dict[int, str]) -> None:
+        """Before replay is dispatched, remove only this interrupted freeze's orphan blobs."""
+        from app.research.golden_search.proof import BlobStore
+
+        if self._lock is None:
+            raise ValueError("checkpoint reconciliation requires the collection lock")
+        blobs = BlobStore(self.root)
+        kept = set(inventory.values())
+        size = sum(len(blobs.get(digest)) for digest in kept)
+        for directory in self.root.iterdir():
+            if directory.is_dir() and re.fullmatch(r"[a-f0-9]{2}", directory.name):
+                if directory.is_symlink():
+                    raise ValueError("staging blob directories cannot be symlinks")
+                for path in directory.iterdir():
+                    if path.is_symlink():
+                        raise ValueError("staging blobs cannot be symlinks")
+                    if re.fullmatch(r"[a-f0-9]{64}", path.name) and path.name not in kept:
+                        path.unlink()
+        with _ledger(self.base) as entries:
+            if sum(value for key, value in entries.items() if key != self.job_id) + size > self.max_bytes:
+                raise ValueError("global frozen input staging byte bound exceeded")
+            entries[self.job_id] = size
+
     def __exit__(self, *args: object) -> None:
         if self._lock is not None:
             fcntl.flock(self._lock, fcntl.LOCK_UN)
@@ -93,11 +121,19 @@ class InputStaging:
             self._lock = None
 
 
-def cleanup_job_inputs(base: Path, job_id: str) -> None:
+def cleanup_job_inputs(base: Path, job_id: str, *, wait_seconds: float = 75.0) -> None:
     root = job_root(base, job_id)
     if root.exists():
         with (root / ".collector.lock").open("a+b") as handle:
-            fcntl.flock(handle, fcntl.LOCK_EX)
+            deadline = time.monotonic() + wait_seconds
+            while True:
+                try:
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("input collector did not drain; its reservation remains held") from None
+                    time.sleep(0.1)
             try:
                 # Delete bytes before releasing capacity. A crash can leak
                 # a reservation, never allow the cap to be overspent.
@@ -114,6 +150,9 @@ def cleanup_job_inputs(base: Path, job_id: str) -> None:
 def release_job_inputs(base: Path, job_id: str) -> None:
     """Cleanup failures stay visible without reversing a committed run."""
     try:
+        root = job_root(base, job_id)
+        if root.exists():
+            (root / "stop-requested").touch()
         cleanup_job_inputs(base, job_id)
     except (OSError, ValueError):
         logger.error("frozen input cleanup failed; its byte reservation remains held",

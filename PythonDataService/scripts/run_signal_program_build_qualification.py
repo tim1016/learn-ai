@@ -183,6 +183,7 @@ _DIVIDEND_READER_CHAIN_EXCLUSIONS: dict[str, str] = {
         "app/data_lake/polygon_corp_actions.py",
         "app/data_lake/root_identity.py",
         "app/data_lake/types.py",
+        "app/data_lake/work_progress.py",
         "app/lean_sidecar/workspace.py",
         "app/utils/advisory_lock.py",
         "app/utils/background_loop.py",

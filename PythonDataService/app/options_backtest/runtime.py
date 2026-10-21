@@ -2,67 +2,26 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import Callable
 from datetime import date
 from typing import Any
 
-from app.broker.fleet.internal_http import build_internal_client, enforce_private_http_target
 from app.config import settings
 from app.jobs.checkpoints import GatedLease
 from app.jobs.progress import CancellationCheck, JobCancelled, ProgressEmitter
 from app.options_backtest import service
 from app.options_backtest.dispatch import replay_frozen_run
 from app.options_backtest.execution_identity import backtest_execution_identity
-from app.options_backtest.frozen_inputs import FrozenRunInputs
-from app.options_backtest.input_staging import job_root, release_job_inputs
+from app.options_backtest.input_staging import release_job_inputs
+from app.options_backtest.preparation_stream import prepare_over_api
 from app.options_backtest.run import RunResult
 from app.options_backtest.saved_runs import RunFailure
-from app.options_backtest.timings import PhaseTiming, RunTimings
+from app.options_backtest.timings import RunTimings
 from app.research.golden_search.worker import WorkerDispatchContext
 from app.research.persistence import ownership
 from app.schemas.options_backtest_runs import OptionsBacktestJobRequest
-from app.security.data_plane_control import CONTROL_SECRET_HEADER
 from app.utils.background_loop import CallerStoppedWaitingError
 from app.utils.timestamps import now_ms_utc
-
-
-async def prepare_over_api(req: OptionsBacktestJobRequest, *, emit: ProgressEmitter,
-                           lease: GatedLease, timings: RunTimings) -> FrozenRunInputs:
-    """Consume only real preparation progress; idle polling cannot renew a lease."""
-    base = settings.OPTIONS_BACKTEST_DATA_SERVICE_URL.strip().rstrip("/")
-    if not base:
-        raise RuntimeError("OPTIONS_BACKTEST_DATA_SERVICE_URL is required; replay never acquires provider data")
-    await asyncio.to_thread(enforce_private_http_target, base)
-    async with build_internal_client(timeout_s=90) as client, client.stream("POST", f"{base}/api/jobs-internal/options-backtest/prepare",
-            json=req.model_dump(mode="json"), headers={CONTROL_SECRET_HEADER: settings.DATA_PLANE_CONTROL_SECRET}) as response:
-        response.raise_for_status()
-        frozen = None
-        async for line in response.aiter_lines():
-            lease.fenced_cancel()
-            if len(line) > 2 * 1024**2:
-                raise ValueError("preparation response exceeds its frame bound")
-            event = json.loads(line)
-            if event["kind"] == "phase":
-                emit.phase(event["phase"])
-                lease.phase(event["phase"])
-            elif event["kind"] == "progress":
-                emit.progress(event["done"], event["total"], unit="sessions")
-                lease.completion(event["done"], event["total"])
-            elif event["kind"] == "log":
-                emit.log(event["message"])
-            elif event["kind"] == "failure":
-                raise service.RunFailedError(RunFailure(event["code"], event["reason"]))
-            elif event["kind"] == "frozen":
-                if frozen is not None:
-                    raise ValueError("preparation returned duplicate frozen inputs")
-                frozen = FrozenRunInputs.model_validate(event["inputs"])
-                timings.rows.extend(PhaseTiming.model_validate(row) for row in event["timings"])
-            else:
-                raise ValueError("unknown preparation event")
-        if frozen is None:
-            raise RuntimeError("preparation stream ended without a frozen input inventory")
-        return frozen
 
 
 def execute_runtime_run(*, run_id: int, req: OptionsBacktestJobRequest, sessions: tuple[date, ...],
@@ -78,8 +37,6 @@ def execute_runtime_run(*, run_id: int, req: OptionsBacktestJobRequest, sessions
     try:
         lease.phase("preparation")
         frozen = asyncio.run(prepare_over_api(req, emit=emit, lease=lease, timings=timings))
-        if frozen.root != str(job_root(settings.OPTIONS_BACKTEST_INPUT_ROOT, req.job_id)):
-            raise ValueError("prepared input root differs from the runtime's configured shared root")
         lease.fenced_cancel()
         emit.phase("waiting_for_engine")
         context = WorkerDispatchContext(strategy_key="options_backtest", execution={}, manifest={},

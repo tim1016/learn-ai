@@ -74,6 +74,7 @@ import time
 from collections.abc import Callable, Coroutine, Sequence
 from concurrent.futures import Future
 from concurrent.futures import wait as wait_for_futures
+from contextvars import copy_context
 from dataclasses import dataclass
 from datetime import date
 from functools import partial
@@ -84,6 +85,7 @@ from app.data_lake.option_bars import ensure_option_day_bars
 from app.data_lake.option_lake import LEASE_TTL_MS, OptionCaptureResult, session_refusal, vendor_request_gate
 from app.data_lake.option_listing import OptionListing, ensure_option_listing
 from app.data_lake.run_materialization import LakeMaterializationError, materialize_engine_run
+from app.data_lake.work_progress import bounded_wait
 from app.lean_sidecar.trading_calendar import expected_sessions, session_window_for_date
 from app.options.contract import OptionContract
 from app.options_backtest.data_check import STORED_FILE_ERRORS, DataKind, DataThing
@@ -532,43 +534,44 @@ class _Download:
         stopped waiting. If the thread leaves the wait by any other exception (a log hook or a stop poll that fails),
         the batch is told to stop first, so the captures begin no request after it.
         """
-        deadline = self._pace.now() + give_up_after
-        grace = STOP_GRACE_SECONDS if batch is not None else 0.0
-        told_at: float | None = None
-        stopped = False
-        said_waiting = False
-        try:
-            while True:
-                self._pace.wait_for(future, STOP_POLL_SECONDS)
-                if batch is not None:
-                    said_waiting = self._say_if_waiting_changed(batch, said_waiting)
-                if future.done():
-                    break
-                now = self._pace.now()
-                if told_at is None:
-                    stopped = self._should_stop()
-                    if not stopped and now < deadline:
-                        continue
-                    told_at = now
+        with bounded_wait(give_up_after + (STOP_GRACE_SECONDS if batch is not None else 0)):
+            deadline = self._pace.now() + give_up_after
+            grace = STOP_GRACE_SECONDS if batch is not None else 0.0
+            told_at: float | None = None
+            stopped = False
+            said_waiting = False
+            try:
+                while True:
+                    self._pace.wait_for(future, STOP_POLL_SECONDS)
                     if batch is not None:
-                        batch.stop.set()
-                if now - told_at >= grace:
-                    break
-            if told_at is None:
-                return future.result()
-            if not future.done():
-                future.cancel()
-            if stopped:
-                raise DownloadStopped(self._done)
-            raise DownloadFailed(
-                session=session, what=what, reason=TOOK_TOO_LONG, detail=f"not finished after {give_up_after} seconds"
-            )
-        except BaseException:
-            # Nothing waits for this batch any more, so nothing of it may start a request: the stop is a flag the
-            # coroutines read, and setting it again after the paths above set it is harmless.
-            if batch is not None:
-                batch.stop.set()
-            raise
+                        said_waiting = self._say_if_waiting_changed(batch, said_waiting)
+                    if future.done():
+                        break
+                    now = self._pace.now()
+                    if told_at is None:
+                        stopped = self._should_stop()
+                        if not stopped and now < deadline:
+                            continue
+                        told_at = now
+                        if batch is not None:
+                            batch.stop.set()
+                    if now - told_at >= grace:
+                        break
+                if told_at is None:
+                    return future.result()
+                if not future.done():
+                    future.cancel()
+                if stopped:
+                    raise DownloadStopped(self._done)
+                raise DownloadFailed(
+                    session=session, what=what, reason=TOOK_TOO_LONG, detail=f"not finished after {give_up_after} seconds"
+                )
+            except BaseException:
+                # Nothing waits for this batch any more, so nothing of it may start a request: the stop is a flag the
+                # coroutines read, and setting it again after the paths above set it is harmless.
+                if batch is not None:
+                    batch.stop.set()
+                raise
 
 
 def _stretches(needed: Sequence[date]) -> list[list[date]]:
@@ -605,7 +608,8 @@ def _in_a_thread[T](work: Callable[[], T], *, name: str) -> Future[T]:
         except BaseException as exc:  # carried to the thread waiting on the future
             future.set_exception(exc)
 
-    threading.Thread(target=run, name=name, daemon=True).start()
+    context = copy_context()
+    threading.Thread(target=lambda: context.run(run), name=name, daemon=True).start()
     return future
 
 

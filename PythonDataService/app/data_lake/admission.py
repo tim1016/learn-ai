@@ -58,9 +58,12 @@ def read_committed_bytes(path: Path) -> bytes:
         with lake_activity(root):
             payload = path.read_bytes()
             verify_committed_digest(path, root, hashlib.sha256(payload).hexdigest(), len(payload))
-            return payload
     except LakeMaintenanceBusyError as exc:
         raise LakeAdmissionError(f"{path}: lake retirement is in progress; retry later") from exc
+    from app.data_lake.work_progress import completed_work
+
+    completed_work("admitted_artifact", str(path) + ":" + hashlib.sha256(payload).hexdigest())
+    return payload
 
 
 @dataclass(frozen=True)
