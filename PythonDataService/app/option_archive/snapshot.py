@@ -116,7 +116,7 @@ async def observe_chain(
     next_url: str | None = url
     seen: set[str] = set()
     contracts: dict[str, ContractObservation] = {}
-    receipts: list[str] = []
+    page_receipts: list[str] = []
     reason: str | None = None
     try:
         async with httpx.AsyncClient(timeout=30) as client:
@@ -141,7 +141,7 @@ async def observe_chain(
                 rows = body.get("results")
                 if not isinstance(rows, list):
                     raise ValueError("snapshot page has no results list")
-                receipts.append(hashlib.sha256(json.dumps(body, default=str, sort_keys=True).encode()).hexdigest())
+                page_receipts.append(hashlib.sha256(json.dumps(body, default=str, sort_keys=True).encode()).hexdigest())
                 for row in rows:
                     if not isinstance(row, dict):
                         raise ValueError("snapshot contains a malformed contract")
@@ -160,7 +160,7 @@ async def observe_chain(
     return ChainObservation(
         underlying=underlying, session_ms=session_open_ms_utc(session), observation_id=uuid4().hex,
         started_ms=started, ended_ms=clock(), complete=reason is None, reason=reason,
-        page_receipts=receipts, contracts=sorted(contracts.values(), key=lambda item: item.ticker), field_gaps=dict(gaps),
+        page_receipts=page_receipts, contracts=sorted(contracts.values(), key=lambda item: item.ticker), field_gaps=dict(gaps),
     )
 
 
