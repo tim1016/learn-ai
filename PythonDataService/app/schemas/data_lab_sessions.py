@@ -110,14 +110,32 @@ class DataLabSessionRenameRequest(BaseModel):
     name: str = Field(min_length=1, max_length=SESSION_NAME_MAX_LENGTH)
 
 
-class DataLabSessionResponse(BaseModel):
-    """One saved session, whole."""
+class DataLabSessionHeader(BaseModel):
+    """What every read of a saved session says first: which one, over what, and when it was saved and last changed."""
 
     id: UUID
     name: str = Field(max_length=SESSION_NAME_MAX_LENGTH)
     ticker: str = Field(max_length=TICKER_MAX_LENGTH)
     from_date: str = Field(max_length=10, description="YYYY-MM-DD, as the picker saved it.")
     to_date: str = Field(max_length=10, description="YYYY-MM-DD, as the picker saved it.")
+    created_at_ms: InstantMs
+    updated_at_ms: InstantMs
+
+
+class DataLabSessionSummary(DataLabSessionHeader):
+    """One saved session as the list shows it: the facts of its row, never its documents.
+
+    The two documents can run to megabytes (a chart snapshot holds every bar), so the list neither reads nor sends
+    them; ``entry_count`` and ``has_chart`` are worked out in the database. ``GET /{id}`` answers the session whole.
+    """
+
+    entry_count: int = Field(ge=0, description="How many indicator entries the session holds.")
+    has_chart: bool = Field(description="Whether the session was saved with a chart snapshot.")
+
+
+class DataLabSessionResponse(DataLabSessionHeader):
+    """One saved session, whole."""
+
     session: str = Field(max_length=SESSION_KIND_MAX_LENGTH)
     forward_fill: bool
     adjusted: bool
@@ -129,8 +147,6 @@ class DataLabSessionResponse(BaseModel):
     window_end_ms: InstantMs | None = Field(
         description="UTC midnight of to_date. Null only for a legacy row whose date is not written YYYY-MM-DD."
     )
-    created_at_ms: InstantMs
-    updated_at_ms: InstantMs
 
 
 class DataLabSessionReceipt(BaseModel):

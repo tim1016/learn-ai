@@ -7,6 +7,7 @@ moves, so the order and the stamps are exact rather than racing real time.
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from collections.abc import AsyncIterator, Iterator
@@ -108,6 +109,22 @@ async def _mine(client: httpx.AsyncClient, tag: str) -> list[dict[str, Any]]:
     return [row for row in listed.json() if row["name"].endswith(tag)]
 
 
+def _listed(session_id: str, name: str, **changes: Any) -> dict[str, Any]:
+    """The list's row for a session saved by ``_body`` (two entries, a chart) unless ``changes`` say otherwise."""
+    return {
+        "id": session_id,
+        "name": name,
+        "ticker": "SPY",
+        "from_date": "2026-10-19",
+        "to_date": "2026-10-21",
+        "entry_count": 2,
+        "has_chart": True,
+        "created_at_ms": T0,
+        "updated_at_ms": T0,
+        **changes,
+    }
+
+
 async def test_a_session_lives_its_whole_life_against_the_real_table(
     client: httpx.AsyncClient, db: asyncpg.Connection, clock: _Clock, tag: str
 ) -> None:
@@ -156,8 +173,12 @@ async def test_a_session_lives_its_whole_life_against_the_real_table(
     }
     assert (await client.get(f"{BASE}/{id_b}")).json()["chart_snapshot"] is None
 
-    # Newest edit first: b was saved a second after a.
-    assert [row["id"] for row in await _mine(client, tag)] == [id_b, id_a]
+    # Newest edit first: b was saved a second after a. The list says how many entries a session holds and whether it
+    # has a chart, and carries neither document.
+    assert await _mine(client, tag) == [
+        _listed(id_b, f"b {tag}", has_chart=False, created_at_ms=T0 + 1_000, updated_at_ms=T0 + 1_000),
+        _listed(id_a, f"a {tag}"),
+    ]
 
     # A rename touches the name and the update instant only; it makes a the newest edit.
     clock.now += 1_000
@@ -166,7 +187,10 @@ async def test_a_session_lives_its_whole_life_against_the_real_table(
     assert renamed.json() == {"id": id_a, "created_at_ms": T0, "updated_at_ms": T0 + 2_000}
     after_rename = await client.get(f"{BASE}/{id_a}")
     assert after_rename.json() == {**fetched.json(), "name": f"renamed {tag}", "updated_at_ms": T0 + 2_000}
-    assert [row["id"] for row in await _mine(client, tag)] == [id_a, id_b]
+    assert [(row["id"], row["name"]) for row in await _mine(client, tag)] == [
+        (id_a, f"renamed {tag}"),
+        (id_b, f"b {tag}"),
+    ]
     renamed_stamps = await db.fetchrow(SESSION_STAMP_SQL, uuid.UUID(id_a))
     assert (renamed_stamps["updated_legacy_ms"], renamed_stamps["created_legacy_ms"]) == (T0 + 2_000, T0)
 
@@ -205,6 +229,17 @@ async def test_a_session_lives_its_whole_life_against_the_real_table(
         "updated_at_ms": T0 + 3_000,
     }
     assert (await db.fetchrow(SESSION_STAMP_SQL, uuid.UUID(id_a)))["no_chart"] is True
+    (replaced_row,) = [row for row in await _mine(client, tag) if row["id"] == id_a]
+    assert replaced_row == _listed(
+        id_a,
+        f"qqq {tag}",
+        ticker="QQQ",
+        from_date="2026-03-01",
+        to_date="2026-03-02",
+        entry_count=0,
+        has_chart=False,
+        updated_at_ms=T0 + 3_000,
+    )
 
     deleted = await client.delete(f"{BASE}/{id_a}")
     assert (deleted.status_code, deleted.content) == (204, b"")
@@ -223,6 +258,34 @@ async def test_a_session_at_every_column_limit_is_saved_and_read_back_whole(
     assert saved.status_code == 201, saved.text
     fetched = (await client.get(f"{BASE}/{saved.json()['id']}")).json()
     assert (fetched["name"], fetched["ticker"], fetched["session"]) == (name, "T" * 20, "s" * 10)
+
+
+async def test_the_list_answers_a_summary_of_a_session_with_a_huge_chart_and_a_get_still_returns_the_chart(
+    client: httpx.AsyncClient, tag: str
+) -> None:
+    bars = [
+        {
+            "t": 1_790_000_000_000 + 60_000 * i,
+            "o": 100.25 + i,
+            "h": 101.5 + i,
+            "l": 99.75 + i,
+            "c": 100.5 + i,
+            "v": 1_000_003 + i,
+        }
+        for i in range(15_000)
+    ]
+    huge = {"timeframe": "1m", "bars": bars, "warmupNote": None}
+    saved = await client.post(BASE, json=_body(tag, chart_snapshot=huge))
+    assert saved.status_code == 201, saved.text
+    session_id = saved.json()["id"]
+
+    (row,) = await _mine(client, tag)
+    fetched = await client.get(f"{BASE}/{session_id}")
+
+    assert row == _listed(session_id, f"session {tag}")
+    assert len(json.dumps(row)) < 1_000
+    assert len(fetched.content) > 1_000_000
+    assert fetched.json()["chart_snapshot"] == huge
 
 
 @pytest.mark.parametrize(
@@ -276,7 +339,20 @@ async def test_a_legacy_row_with_no_ms_columns_is_served_with_the_instants_of_it
     # The window is the one its dates give; a date the column holds that is not a date has none.
     assert (legacy["window_start_ms"], legacy["window_end_ms"]) == (1_772_323_200_000, None)
     assert (legacy["entries"], legacy["chart_snapshot"]) == ([], None)
-    assert [row["id"] for row in await _mine(client, tag)] == [str(legacy_id)]
+    # The list reads the same instants by the same rule, and counts no entries and no chart.
+    assert await _mine(client, tag) == [
+        _listed(
+            str(legacy_id),
+            f"legacy {tag}",
+            ticker="IWM",
+            from_date="2026-03-01",
+            to_date="bad-date",
+            entry_count=0,
+            has_chart=False,
+            created_at_ms=LEGACY_CREATED_MS,
+            updated_at_ms=LEGACY_UPDATED_MS,
+        )
+    ]
 
 
 async def test_a_legacy_row_sorts_among_the_new_ones_by_its_update_time(

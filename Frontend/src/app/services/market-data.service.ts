@@ -4,7 +4,7 @@ import { Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
 import type { components } from '../api/broker.types';
 import {
-  StockAggregatesResult,
+  StockAggregate,
   OptionsChainSnapshotResult, StockSnapshotResult,
   StrategyAnalyzeResult, StrategyAnalyzeOptions, StrategyLegInput,
   PricingCompareParams, PricingCompareResult,
@@ -36,17 +36,13 @@ export class MarketDataService {
   private readonly http = inject(HttpClient);
   private readonly base = `${environment.pythonServiceUrl}/api`;
 
-  /** `POST /api/aggregates/fetch` — always a live Polygon read; nothing is cached. */
-  getStockAggregates(
-    ticker: string,
-    fromDate: string,
-    toDate: string,
-    timespan = 'day',
-    multiplier = 1,
-    adjusted = true
-  ): Observable<StockAggregatesResult> {
+  /**
+   * `POST /api/aggregates/fetch` for daily bars — always a live Polygon read; nothing is
+   * cached, and the route answers the whole range in one call, so a caller asks for days.
+   */
+  getDailyAggregates(ticker: string, fromDate: string, toDate: string): Observable<StockAggregate[]> {
     const body: Schema['AggregateRequest'] = {
-      ticker, from_date: fromDate, to_date: toDate, timespan, multiplier, adjusted,
+      ticker, from_date: fromDate, to_date: toDate, timespan: 'day', multiplier: 1, adjusted: true,
     };
     return this.http
       .post<Schema['SanitizedDataResponse']>(`${this.base}/aggregates/fetch`, body)
@@ -56,7 +52,7 @@ export class MarketDataService {
           if (!response.success) {
             throw new Error(`Aggregates unavailable: ${response.error ?? 'no reason given'}`);
           }
-          return { ticker: response.ticker.toUpperCase(), aggregates: response.data };
+          return response.data;
         }),
       );
   }

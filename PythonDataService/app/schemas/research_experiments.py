@@ -27,7 +27,6 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 TICKER_MAX_LENGTH = 50
-FEATURE_NAME_MAX_LENGTH = 100
 # ``"Id"`` is a 32-bit identity column; a larger id names no row, and asking the driver for it would be an error.
 MAX_EXPERIMENT_ID = 2_147_483_647
 

@@ -12918,17 +12918,85 @@
           "ticker",
           "from_date",
           "to_date",
+          "created_at_ms",
+          "updated_at_ms",
           "session",
           "forward_fill",
           "adjusted",
           "entries",
           "chart_snapshot",
           "window_start_ms",
-          "window_end_ms",
-          "created_at_ms",
-          "updated_at_ms"
+          "window_end_ms"
         ],
         "title": "DataLabSessionResponse",
+        "type": "object"
+      },
+      "DataLabSessionSummary": {
+        "description": "One saved session as the list shows it: the facts of its row, never its documents.\n\nThe two documents can run to megabytes (a chart snapshot holds every bar), so the list neither reads nor sends\nthem; ``entry_count`` and ``has_chart`` are worked out in the database. ``GET /{id}`` answers the session whole.",
+        "properties": {
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "entry_count": {
+            "description": "How many indicator entries the session holds.",
+            "minimum": 0.0,
+            "title": "Entry Count",
+            "type": "integer"
+          },
+          "from_date": {
+            "description": "YYYY-MM-DD, as the picker saved it.",
+            "maxLength": 10,
+            "title": "From Date",
+            "type": "string"
+          },
+          "has_chart": {
+            "description": "Whether the session was saved with a chart snapshot.",
+            "title": "Has Chart",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 300,
+            "title": "Name",
+            "type": "string"
+          },
+          "ticker": {
+            "maxLength": 20,
+            "title": "Ticker",
+            "type": "string"
+          },
+          "to_date": {
+            "description": "YYYY-MM-DD, as the picker saved it.",
+            "maxLength": 10,
+            "title": "To Date",
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Updated At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "ticker",
+          "from_date",
+          "to_date",
+          "created_at_ms",
+          "updated_at_ms",
+          "entry_count",
+          "has_chart"
+        ],
+        "title": "DataLabSessionSummary",
         "type": "object"
       },
       "DataQualityRequest": {
@@ -86037,7 +86105,7 @@
     },
     "/api/data-lab/sessions": {
       "get": {
-        "description": "Every saved session, most recently updated first, each whole (chart snapshot included).",
+        "description": "Every saved session, most recently updated first, as a summary: no entries and no chart snapshot.\n\n``GET /{session_id}`` answers one session whole.",
         "operationId": "list_data_lab_sessions_api_data_lab_sessions_get",
         "responses": {
           "200": {
@@ -86045,7 +86113,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/DataLabSessionResponse"
+                    "$ref": "#/components/schemas/DataLabSessionSummary"
                   },
                   "title": "Response List Data Lab Sessions Api Data Lab Sessions Get",
                   "type": "array"
@@ -89508,26 +89576,6 @@
               "minLength": 1,
               "title": "Ticker",
               "type": "string"
-            }
-          },
-          {
-            "description": "Only this feature's experiments; exact match.",
-            "in": "query",
-            "name": "feature_name",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 100,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Only this feature's experiments; exact match.",
-              "title": "Feature Name"
             }
           }
         ],

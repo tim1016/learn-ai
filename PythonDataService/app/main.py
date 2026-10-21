@@ -1490,7 +1490,7 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     app.include_router(iv30.router)
     # IV recorder (POST /api/iv-recorder/snapshot, GET .../series/{ticker}) —
     # Step D of IV-ownership plan. Nothing schedules it today: the .NET cron that
-    # called it was retired (ADR 0081; references/csharp-jobs/README.md).
+    # called it was retired (ADR 0081).
     app.include_router(iv_recorder.router)
     # /research/data-divergence/* — dashboard + matrix endpoints. The router
     # carries its own prefix so we mount it bare.

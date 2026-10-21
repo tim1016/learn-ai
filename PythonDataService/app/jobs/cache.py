@@ -107,7 +107,7 @@ def serve_cached_result(job_id: str, job_type: str, cached: dict) -> None:
     marker on the completion event so the frontend can render the report
     without showing the live-progress panel.
     """
-    from app.jobs.progress import _active_set_key, _result_key, _state_key  # local to avoid cycles
+    from app.jobs.progress import active_set_key, result_key, state_key  # local to avoid cycles
 
     r = get_redis()
     result = cached.get("result")
@@ -115,9 +115,9 @@ def serve_cached_result(job_id: str, job_type: str, cached: dict) -> None:
     now_ms = str(int(time.time() * 1000))
 
     pipe = r.pipeline()
-    pipe.set(_result_key(job_id), json.dumps(result, default=str), ex=JOB_TTL_SECONDS)
+    pipe.set(result_key(job_id), json.dumps(result, default=str), ex=JOB_TTL_SECONDS)
     pipe.hset(
-        _state_key(job_id),
+        state_key(job_id),
         mapping={
             "status": "completed",
             "started_at": now_ms,
@@ -127,7 +127,7 @@ def serve_cached_result(job_id: str, job_type: str, cached: dict) -> None:
             "cached": "1",
         },
     )
-    pipe.expire(_state_key(job_id), JOB_TTL_SECONDS)
+    pipe.expire(state_key(job_id), JOB_TTL_SECONDS)
     pipe.execute()
 
     # Emit the events on the new job_id stream so any subscriber sees a
@@ -144,4 +144,4 @@ def serve_cached_result(job_id: str, job_type: str, cached: dict) -> None:
             "cached_at": cached_at,
         },
     )
-    r.srem(_active_set_key(), job_id)
+    r.srem(active_set_key(), job_id)

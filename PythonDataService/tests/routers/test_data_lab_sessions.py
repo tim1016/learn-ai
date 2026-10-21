@@ -2,7 +2,8 @@
 
 These run on every PR: what a malformed request is told, what an unknown id is told, what each route answers on
 success, the 503 of a service with no database configured, and the row-to-session mapping (legacy rows included).
-The SQL itself is proved against a real database in ``test_data_lab_sessions_postgres.py``.
+The SQL itself, the list's summaries included, is proved against a real database in
+``test_data_lab_sessions_postgres.py``.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from app.schemas.data_lab_sessions import (
     DataLabSessionReceipt,
     DataLabSessionRequest,
     DataLabSessionResponse,
+    DataLabSessionSummary,
     session_date_window_ms,
 )
 from app.services.data_lab_session_service import session_from_row
@@ -74,8 +76,21 @@ class _Sessions:
             updated_at_ms=UPDATED_MS,
         )
 
-    async def list_sessions(self) -> list[DataLabSessionResponse]:
-        return list(self.saved.values())
+    async def list_sessions(self) -> list[DataLabSessionSummary]:
+        return [
+            DataLabSessionSummary(
+                id=session.id,
+                name=session.name,
+                ticker=session.ticker,
+                from_date=session.from_date,
+                to_date=session.to_date,
+                entry_count=len(session.entries),
+                has_chart=session.chart_snapshot is not None,
+                created_at_ms=session.created_at_ms,
+                updated_at_ms=session.updated_at_ms,
+            )
+            for session in self.saved.values()
+        ]
 
     async def get_session(self, session_id: uuid.UUID) -> DataLabSessionResponse | None:
         return self.saved.get(session_id)
@@ -348,14 +363,39 @@ async def test_a_delete_is_a_204_with_no_body_and_the_session_is_gone_after(
     assert (again.status_code, fetched.status_code) == (404, 404)
 
 
-async def test_the_list_answers_every_session_the_store_holds(client: httpx.AsyncClient, sessions: _Sessions) -> None:
+async def test_the_list_answers_a_summary_of_every_session_the_store_holds_without_its_documents(
+    client: httpx.AsyncClient, sessions: _Sessions
+) -> None:
     first = (await client.post(BASE, json=_body(name="one"))).json()["id"]
-    second = (await client.post(BASE, json=_body(name="two", chart_snapshot=None))).json()["id"]
+    second = (await client.post(BASE, json=_body(name="two", entries=[], chart_snapshot=None))).json()["id"]
 
     response = await client.get(BASE)
 
     assert response.status_code == 200
-    assert [(row["id"], row["name"]) for row in response.json()] == [(first, "one"), (second, "two")]
+    assert response.json() == [
+        {
+            "id": first,
+            "name": "one",
+            "ticker": "SPY",
+            "from_date": "2026-10-19",
+            "to_date": "2026-10-21",
+            "entry_count": 2,
+            "has_chart": True,
+            "created_at_ms": CREATED_MS,
+            "updated_at_ms": UPDATED_MS,
+        },
+        {
+            "id": second,
+            "name": "two",
+            "ticker": "SPY",
+            "from_date": "2026-10-19",
+            "to_date": "2026-10-21",
+            "entry_count": 0,
+            "has_chart": False,
+            "created_at_ms": CREATED_MS,
+            "updated_at_ms": UPDATED_MS,
+        },
+    ]
 
 
 # ── A service with no database ─────────────────────────────────────

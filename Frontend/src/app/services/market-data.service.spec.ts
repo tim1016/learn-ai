@@ -23,11 +23,11 @@ describe('MarketDataService', () => {
 
   afterEach(() => httpMock.verify());
 
-  describe('getStockAggregates', () => {
-    it('posts the bars request and returns the bars under the upper-cased ticker', async () => {
+  describe('getDailyAggregates', () => {
+    it('posts one daily-bars request for the range and returns the bars', async () => {
       const aggregate = createMockAggregate();
 
-      const promise = firstValueFrom(service.getStockAggregates('msft', '2026-01-01', '2026-06-30', 'hour', 4));
+      const promise = firstValueFrom(service.getDailyAggregates('msft', '2026-01-01', '2026-06-30'));
 
       const req = httpMock.expectOne(`${API}/aggregates/fetch`);
       expect(req.request.method).toBe('POST');
@@ -35,8 +35,8 @@ describe('MarketDataService', () => {
         ticker: 'msft',
         from_date: '2026-01-01',
         to_date: '2026-06-30',
-        timespan: 'hour',
-        multiplier: 4,
+        timespan: 'day',
+        multiplier: 1,
         adjusted: true,
       });
       req.flush({
@@ -47,11 +47,11 @@ describe('MarketDataService', () => {
         data_type: 'aggregates',
       });
 
-      expect(await promise).toEqual({ ticker: 'MSFT', aggregates: [aggregate] });
+      expect(await promise).toEqual([aggregate]);
     });
 
     it('rejects with the service\'s reason when the fetch fails', async () => {
-      const promise = firstValueFrom(service.getStockAggregates('BAD', '2026-01-01', '2026-01-31'));
+      const promise = firstValueFrom(service.getDailyAggregates('BAD', '2026-01-01', '2026-01-31'));
 
       httpMock.expectOne(`${API}/aggregates/fetch`).flush(
         { detail: 'Failed to fetch aggregates: Ticker not found' },

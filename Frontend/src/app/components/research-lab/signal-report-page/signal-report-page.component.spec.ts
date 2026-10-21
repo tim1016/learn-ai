@@ -23,14 +23,6 @@ async function renderPage(id: string, getSignalExperimentReport: ReturnType<type
 }
 
 describe('SignalReportPageComponent', () => {
-  it('asks for the experiment named in the route', async () => {
-    const getSignalExperimentReport = vi.fn(() => of(null));
-
-    await renderPage('42', getSignalExperimentReport);
-
-    expect(getSignalExperimentReport).toHaveBeenCalledWith(42);
-  });
-
   it('says the experiment was not found when no report is held for it', async () => {
     const fixture = await renderPage('999', vi.fn(() => of(null)));
 

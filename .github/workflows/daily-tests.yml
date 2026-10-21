@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     # The serial suite measured 35-61 min for the same tests across
     # 2026-10-06..08 (GitHub runner variance; the suite stays serial because
-    # slow tests share one PostgreSQL), plus ~5 min of migration and pip
+    # slow tests share one PostgreSQL), plus ~5 min of schema migration and pip
     # setup. A 60-minute cap cancelled the 2026-10-08 run at 92% with no
     # failed test recorded, so the budget must clear the slowest observed
     # day, not the median one. The suite has grown since: 77 min for the main

@@ -6,7 +6,9 @@ one ``int64 ms`` reading of the clock, so the legacy columns can never disagree 
 ms columns and, for a legacy row where one is NULL, the epoch ms of the legacy column beside it.
 
 ``EntriesJson`` / ``ChartSnapshotJson`` are ``jsonb`` columns holding documents the screen owns; asyncpg moves them as
-JSON text, so this module serializes on the way in and parses on the way out.
+JSON text, so this module serializes on the way in and parses on the way out. Only a read of one session parses them:
+the list answers summaries whose entry count and has-chart flag the database works out, so no document leaves Postgres
+for it.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from app.schemas.data_lab_sessions import (
     DataLabSessionReceipt,
     DataLabSessionRequest,
     DataLabSessionResponse,
+    DataLabSessionSummary,
     session_date_window_ms,
 )
 from app.services.postgres_connection import pooled_connection
@@ -35,15 +38,27 @@ def _instant(ms_parameter: str) -> str:
     return f"('epoch'::timestamptz + ({ms_parameter}::bigint * interval '1 millisecond'))"
 
 
-_COLUMNS = f"""
-    "Id", "Name", "Ticker", "FromDate", "ToDate", "Session", "ForwardFill", "Adjusted",
-    "EntriesJson", "ChartSnapshotJson",
-    "WindowStartMsUtc" AS window_start_ms, "WindowEndMsUtc" AS window_end_ms,
+# The columns every read answers (``DataLabSessionHeader``), instants included.
+_HEADER_COLUMNS = f"""
+    "Id", "Name", "Ticker", "FromDate", "ToDate",
     {_CREATED_AT_MS} AS created_at_ms, {_UPDATED_AT_MS} AS updated_at_ms
+"""
+_COLUMNS = f"""
+    {_HEADER_COLUMNS},
+    "Session", "ForwardFill", "Adjusted", "EntriesJson", "ChartSnapshotJson",
+    "WindowStartMsUtc" AS window_start_ms, "WindowEndMsUtc" AS window_end_ms
+"""
+# The list never reads a document: the database counts the entries and says whether a chart is held, so a chart
+# snapshot of megabytes stays in Postgres. A row whose entries are not a JSON array fails the query, as it fails a GET.
+_SUMMARY_COLUMNS = f"""
+    {_HEADER_COLUMNS},
+    jsonb_array_length("EntriesJson") AS entry_count, "ChartSnapshotJson" IS NOT NULL AS has_chart
 """
 _SELECT_ONE = f'SELECT {_COLUMNS} FROM public."DataLabSessions" WHERE "Id" = $1'
 # Newest edit first; ties fall back to the newer creation, then the id, so the order is the same on every call.
-_SELECT_ALL = f'SELECT {_COLUMNS} FROM public."DataLabSessions" ORDER BY "UpdatedAt" DESC, "CreatedAt" DESC, "Id"'
+_SELECT_ALL = (
+    f'SELECT {_SUMMARY_COLUMNS} FROM public."DataLabSessions" ORDER BY "UpdatedAt" DESC, "CreatedAt" DESC, "Id"'
+)
 _INSERT = f"""
     INSERT INTO public."DataLabSessions" (
         "Id", "Name", "Ticker", "FromDate", "ToDate", "Session", "ForwardFill", "Adjusted",
@@ -109,6 +124,21 @@ def session_from_row(row: Mapping[str, Any]) -> DataLabSessionResponse:
     )
 
 
+def summary_from_row(row: Mapping[str, Any]) -> DataLabSessionSummary:
+    """One list entry from a ``_SUMMARY_COLUMNS`` row."""
+    return DataLabSessionSummary(
+        id=row["Id"],
+        name=row["Name"],
+        ticker=row["Ticker"],
+        from_date=row["FromDate"],
+        to_date=row["ToDate"],
+        entry_count=row["entry_count"],
+        has_chart=row["has_chart"],
+        created_at_ms=row["created_at_ms"],
+        updated_at_ms=row["updated_at_ms"],
+    )
+
+
 def _receipt(row: Mapping[str, Any]) -> DataLabSessionReceipt:
     return DataLabSessionReceipt(id=row["Id"], created_at_ms=row["created_at_ms"], updated_at_ms=row["updated_at_ms"])
 
@@ -116,7 +146,7 @@ def _receipt(row: Mapping[str, Any]) -> DataLabSessionReceipt:
 class DataLabSessionStore(Protocol):
     """What the routes need from the saved-session store; the routes inject it so tests can stand in for Postgres."""
 
-    async def list_sessions(self) -> list[DataLabSessionResponse]: ...
+    async def list_sessions(self) -> list[DataLabSessionSummary]: ...
 
     async def get_session(self, session_id: UUID) -> DataLabSessionResponse | None: ...
 
@@ -137,10 +167,10 @@ class PostgresDataLabSessionStore:
     def __init__(self, clock: Clock = now_ms_utc) -> None:
         self._clock = clock
 
-    async def list_sessions(self) -> list[DataLabSessionResponse]:
+    async def list_sessions(self) -> list[DataLabSessionSummary]:
         async with pooled_connection() as conn:
             rows = await conn.fetch(_SELECT_ALL)
-        return [session_from_row(row) for row in rows]
+        return [summary_from_row(row) for row in rows]
 
     async def get_session(self, session_id: UUID) -> DataLabSessionResponse | None:
         async with pooled_connection() as conn:

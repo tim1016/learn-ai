@@ -17,7 +17,7 @@ from typing import Any, Protocol
 import redis
 
 from app.engine.data.policy_store import resolve_data_roots
-from app.jobs.progress import _lease_key, _state_key, get_redis
+from app.jobs.progress import get_redis, lease_key, state_key
 from app.research.sweep.identity import (
     LEGACY_DIGEST_SCHEME,
     CodeIdentity,
@@ -57,8 +57,8 @@ def job_is_live(job_id: str | None) -> bool | None:
         return False
     try:
         pipe = get_redis().pipeline()
-        pipe.hget(_state_key(job_id), "status")
-        pipe.exists(_lease_key(job_id))
+        pipe.hget(state_key(job_id), "status")
+        pipe.exists(lease_key(job_id))
         status, lease = pipe.execute()
     except redis.RedisError:
         return None
@@ -67,7 +67,7 @@ def job_is_live(job_id: str | None) -> bool | None:
 
 def request_cancel(job_id: str) -> None:
     """Set the same flag DELETE /api/jobs/{id} (the jobs facade) sets; the worker acknowledges by finishing the record."""
-    get_redis().hset(_state_key(job_id), "cancel_requested", "1")
+    get_redis().hset(state_key(job_id), "cancel_requested", "1")
 
 
 def presented_status_for(status: str, *, live: bool | None) -> str:

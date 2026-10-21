@@ -21,11 +21,12 @@ import asyncio
 import hashlib
 import logging
 import re
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import asyncpg
+
+from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +191,6 @@ async def _record(conn: asyncpg.Connection, migration: Migration, *, adopted: bo
         f"INSERT INTO {LEDGER_TABLE} (version, checksum, applied_at_ms, adopted) VALUES ($1, $2, $3, $4)",
         migration.version,
         migration.checksum,
-        time.time_ns() // 1_000_000,
+        now_ms_utc(),
         adopted,
     )

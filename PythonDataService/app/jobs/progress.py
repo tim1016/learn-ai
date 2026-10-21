@@ -96,41 +96,32 @@ def get_redis() -> redis.Redis:
     return redis.Redis(connection_pool=_pool)
 
 
-def _state_key(job_id: str) -> str:
+def state_key(job_id: str) -> str:
     return f"job:{job_id}:state"
 
 
-def _lease_key(job_id: str) -> str:
+def lease_key(job_id: str) -> str:
     return f"job:{job_id}:lease"
 
 
-def _events_key(job_id: str) -> str:
+def events_key(job_id: str) -> str:
     return f"job:{job_id}:events"
 
 
-def _result_key(job_id: str) -> str:
+def result_key(job_id: str) -> str:
     return f"job:{job_id}:result"
 
 
-def _result_blob_key(job_id: str) -> str:
+def result_blob_key(job_id: str) -> str:
     return f"job:{job_id}:result-blob"
 
 
-def _result_meta_key(job_id: str) -> str:
+def result_meta_key(job_id: str) -> str:
     return f"job:{job_id}:result-meta"
 
 
-def _active_set_key() -> str:
+def active_set_key() -> str:
     return "jobs:active"
-
-
-# The key names above, for readers of this contract outside the module (the
-# public jobs facade, ``app.jobs.facade``).
-state_key = _state_key
-events_key = _events_key
-result_key = _result_key
-result_meta_key = _result_meta_key
-active_set_key = _active_set_key
 
 
 def _bytes_redis(timeout_s: float | None = None) -> redis.Redis:
@@ -155,7 +146,7 @@ def read_result_blob(job_id: str) -> bytes | None:
     """The binary result a job parked with :meth:`ProgressEmitter.completed_blob`, or None when absent or expired."""
     bytes_client = _bytes_redis(JOB_STORE_TIMEOUT_SECONDS)
     try:
-        return bytes_client.get(_result_blob_key(job_id))
+        return bytes_client.get(result_blob_key(job_id))
     finally:
         bytes_client.close()
 
@@ -178,7 +169,7 @@ def acquire_lease(job_id: str) -> None:
     or the 24 h TTL, but the lease expires ``JOB_LEASE_TTL_SECONDS`` after
     the worker last proved progress.
     """
-    get_redis().set(_lease_key(job_id), "1", ex=JOB_LEASE_TTL_SECONDS)
+    get_redis().set(lease_key(job_id), "1", ex=JOB_LEASE_TTL_SECONDS)
 
 
 def release_lease(job_id: str) -> None:
@@ -186,7 +177,7 @@ def release_lease(job_id: str) -> None:
     Best-effort: the status is terminal by then, so liveness is already
     false; this only spares Redis an expired-key wait."""
     try:
-        get_redis().delete(_lease_key(job_id))
+        get_redis().delete(lease_key(job_id))
     except redis.RedisError as exc:
         logger.warning("lease release failed for job %s: %s", job_id, exc)
 
@@ -228,13 +219,13 @@ class CancellationCheck:
         try:
             r = get_redis()
             pipe = r.pipeline()
-            pipe.hget(_state_key(self.job_id), "cancel_requested")
+            pipe.hget(state_key(self.job_id), "cancel_requested")
             # Same gated round trip doubles as the liveness heartbeat (#1938):
             # a loop that consults cancellation is making progress. The pooled
             # research mode opts out: its lease renews on execution
             # checkpoints, never on a poll (#3034, ADR 0065 D1 as amended).
             if self.renews_lease:
-                pipe.expire(_lease_key(self.job_id), JOB_LEASE_TTL_SECONDS)
+                pipe.expire(lease_key(self.job_id), JOB_LEASE_TTL_SECONDS)
             val = pipe.execute()[0]
             self._cached = val == "1"
         except redis.RedisError as exc:
@@ -281,7 +272,7 @@ class ProgressEmitter:
     def _emit(self, event_type: str, payload: dict[str, Any]) -> str:
         body = json.dumps({"type": event_type, **payload}, default=str)
         entry_id = self._r.xadd(
-            _events_key(self.job_id),
+            events_key(self.job_id),
             {"event": body},
             maxlen=MAX_STREAM_LENGTH,
             approximate=True,
@@ -294,9 +285,9 @@ class ProgressEmitter:
         # opts out — its lease renews on execution checkpoints, never on a
         # public event (#3034, ADR 0065 D1 as amended).
         pipe = self._r.pipeline()
-        pipe.expire(_events_key(self.job_id), JOB_TTL_SECONDS)
+        pipe.expire(events_key(self.job_id), JOB_TTL_SECONDS)
         if self.renews_lease:
-            pipe.expire(_lease_key(self.job_id), JOB_LEASE_TTL_SECONDS)
+            pipe.expire(lease_key(self.job_id), JOB_LEASE_TTL_SECONDS)
         pipe.execute()
         return entry_id
 
@@ -319,8 +310,8 @@ class ProgressEmitter:
         # patch after expiry would recreate a partial record with no TTL
         # at all (#1938).
         pipe = self._r.pipeline()
-        pipe.hset(_state_key(self.job_id), mapping=fields)
-        pipe.expire(_state_key(self.job_id), JOB_TTL_SECONDS)
+        pipe.hset(state_key(self.job_id), mapping=fields)
+        pipe.expire(state_key(self.job_id), JOB_TTL_SECONDS)
         pipe.execute()
 
     # ----- public verbs -----
@@ -406,7 +397,7 @@ class ProgressEmitter:
 
     def completed(self, result: Any) -> None:
         self._flush_progress()
-        self._r.set(_result_key(self.job_id), json.dumps(result, default=str), ex=JOB_TTL_SECONDS)
+        self._r.set(result_key(self.job_id), json.dumps(result, default=str), ex=JOB_TTL_SECONDS)
         self._patch_state(
             status="completed",
             completed_at=str(int(time.time() * 1000)),
@@ -417,7 +408,7 @@ class ProgressEmitter:
         self._emit("job.completed", {"result_url": f"/api/jobs/{self.job_id}/result"})
         # Drop from active set — the events stream remains for late
         # subscribers, but the active list shouldn't carry this anymore.
-        self._r.srem(_active_set_key(), self.job_id)
+        self._r.srem(active_set_key(), self.job_id)
 
     def completed_blob(self, *, filename: str, content_type: str, body: bytes) -> None:
         self._flush_progress()
@@ -433,18 +424,18 @@ class ProgressEmitter:
         """
         bytes_client = _bytes_redis()
         try:
-            bytes_client.set(_result_blob_key(self.job_id), body, ex=JOB_TTL_SECONDS)
+            bytes_client.set(result_blob_key(self.job_id), body, ex=JOB_TTL_SECONDS)
         finally:
             bytes_client.close()
         self._r.hset(
-            _result_meta_key(self.job_id),
+            result_meta_key(self.job_id),
             mapping={
                 "filename": filename,
                 "content_type": content_type,
                 "size_bytes": str(len(body)),
             },
         )
-        self._r.expire(_result_meta_key(self.job_id), JOB_TTL_SECONDS)
+        self._r.expire(result_meta_key(self.job_id), JOB_TTL_SECONDS)
         self._patch_state(
             status="completed",
             completed_at=str(int(time.time() * 1000)),
@@ -458,7 +449,7 @@ class ProgressEmitter:
                 "size_bytes": len(body),
             },
         )
-        self._r.srem(_active_set_key(), self.job_id)
+        self._r.srem(active_set_key(), self.job_id)
 
     def failed(self, code: str, message: str) -> None:
         self._flush_progress()
@@ -469,7 +460,7 @@ class ProgressEmitter:
             completed_at=str(int(time.time() * 1000)),
         )
         self._emit("job.failed", {"code": code, "message": message})
-        self._r.srem(_active_set_key(), self.job_id)
+        self._r.srem(active_set_key(), self.job_id)
 
     def cancelled(self, reason: str = "user requested") -> None:
         self._flush_progress()
@@ -478,7 +469,7 @@ class ProgressEmitter:
             completed_at=str(int(time.time() * 1000)),
         )
         self._emit("job.cancelled", {"reason": reason})
-        self._r.srem(_active_set_key(), self.job_id)
+        self._r.srem(active_set_key(), self.job_id)
 
 
 ORPHANED_JOB_CODE = "DATA_SERVICE_RESTARTED"
@@ -522,18 +513,18 @@ def fail_jobs_without_a_worker(protected: Callable[[], AbstractSet[str]] | None 
     r = get_redis()
     failed: list[str] = []
     try:
-        for job_id in sorted(r.smembers(_active_set_key())):
+        for job_id in sorted(r.smembers(active_set_key())):
             if job_id in protected_ids:
                 continue
-            if r.hget(_state_key(job_id), "status") in ("queued", "running"):
+            if r.hget(state_key(job_id), "status") in ("queued", "running"):
                 ProgressEmitter(job_id).failed(code=ORPHANED_JOB_CODE, message=ORPHANED_JOB_MESSAGE)
                 failed.append(job_id)
             else:
-                r.srem(_active_set_key(), job_id)
+                r.srem(active_set_key(), job_id)
             # The worker is gone either way: its lease must not outlive the
             # sweep, or the closed record would still look live until the
             # lease TTL (#1938).
-            r.delete(_lease_key(job_id))
+            r.delete(lease_key(job_id))
     except redis.RedisError as exc:
         logger.warning("could not close the jobs left by the previous process: %s", exc, exc_info=True)
     if failed:
@@ -555,15 +546,15 @@ def close_orphaned_job_records(job_ids: AbstractSet[str] | Sequence[str]) -> lis
     failed: list[str] = []
     try:
         for job_id in sorted(set(job_ids)):
-            if r.hget(_state_key(job_id), "status") in ("queued", "running"):
+            if r.hget(state_key(job_id), "status") in ("queued", "running"):
                 ProgressEmitter(job_id).failed(code=ORPHANED_JOB_CODE, message=ORPHANED_JOB_MESSAGE)
                 failed.append(job_id)
             else:
-                r.srem(_active_set_key(), job_id)
+                r.srem(active_set_key(), job_id)
             # The worker is gone either way: its lease must not outlive the
             # record, or the closed job would still look live until the
             # lease TTL (#1938).
-            r.delete(_lease_key(job_id))
+            r.delete(lease_key(job_id))
     except redis.RedisError as exc:
         logger.warning("could not close the named orphaned jobs: %s", exc, exc_info=True)
     if failed:

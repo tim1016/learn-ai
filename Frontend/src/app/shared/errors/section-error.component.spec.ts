@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { SectionErrorComponent } from './section-error.component';
@@ -66,6 +67,16 @@ describe('SectionErrorComponent', () => {
     expect(
       (fixture.nativeElement as HTMLElement).querySelector('.section-error-what')?.textContent,
     ).toBe('stream closed');
+  });
+
+  it('echoes a failed HTTP call\'s transport message as what failed, not a blank headline', () => {
+    const failed = new HttpErrorResponse({ status: 503, statusText: 'Service Unavailable', url: '/api/news' });
+    const fixture = createFixture();
+    fixture.componentRef.setInput('error', failed);
+    fixture.detectChanges();
+    expect(
+      (fixture.nativeElement as HTMLElement).querySelector('.section-error-what')?.textContent,
+    ).toBe(failed.message);
   });
 
   it('prefers an explicit contextWhat over the raw message', () => {

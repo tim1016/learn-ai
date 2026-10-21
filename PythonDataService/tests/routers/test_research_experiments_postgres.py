@@ -184,20 +184,6 @@ async def test_a_tickers_research_experiments_come_newest_first_and_only_its_own
     assert rows[1]["created_at_ms"] == NEWEST_MS
 
 
-async def test_the_feature_name_filter_keeps_only_that_features_experiments(
-    client: httpx.AsyncClient, db: asyncpg.Connection, tickers: Tickers
-) -> None:
-    older = await _research_row(db, tickers.id, "rsi_14", OLDEST)
-    await _research_row(db, tickers.id, "macd", MIDDLE)
-    newer = await _research_row(db, tickers.id, "rsi_14", NEWEST)
-
-    filtered = await client.get(f"{BASE}/experiments", params={"ticker": tickers.symbol, "feature_name": "rsi_14"})
-    unmatched = await client.get(f"{BASE}/experiments", params={"ticker": tickers.symbol, "feature_name": "RSI_14"})
-
-    assert [row["id"] for row in filtered.json()] == [newer, older]
-    assert unmatched.json() == []
-
-
 async def test_a_ticker_with_no_experiments_has_an_empty_list(client: httpx.AsyncClient, tickers: Tickers) -> None:
     for path in ("experiments", "signal-experiments"):
         response = await client.get(f"{BASE}/{path}", params={"ticker": tickers.symbol})

@@ -105,10 +105,11 @@ export class DataLabSessionService {
   private readonly http = inject(HttpClient);
   private readonly base = `${environment.pythonServiceUrl}/api/data-lab/sessions`;
 
-  /** List all sessions (most recently updated first), returning lightweight summaries. */
+  /** List all sessions (most recently updated first), returning lightweight summaries:
+   *  Python's list carries no entries and no chart snapshot, only `getSession` does. */
   listSessions(): Promise<DataLabSessionSummary[]> {
     return firstValueFrom(
-      this.http.get<SessionRow[]>(this.base).pipe(
+      this.http.get<Schema['DataLabSessionSummary'][]>(this.base).pipe(
         failureAsError('Could not load the saved setups'),
         map(rows => rows.map(toSummary)),
       ),
@@ -195,7 +196,7 @@ function toBody(
   };
 }
 
-function toSummary(row: SessionRow): DataLabSessionSummary {
+function toSummary(row: Schema['DataLabSessionSummary']): DataLabSessionSummary {
   return {
     id: row.id,
     name: row.name,
@@ -204,8 +205,8 @@ function toSummary(row: SessionRow): DataLabSessionSummary {
     ticker: row.ticker,
     fromDate: row.from_date,
     toDate: row.to_date,
-    indicatorCount: row.entries.length,
-    hasChart: row.chart_snapshot !== null,
+    indicatorCount: row.entry_count,
+    hasChart: row.has_chart,
   };
 }
 

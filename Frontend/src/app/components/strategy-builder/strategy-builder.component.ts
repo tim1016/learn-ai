@@ -250,15 +250,13 @@ export class StrategyBuilderComponent implements OnDestroy {
     try {
       const fromDate = getMinAllowedDate();
       const toDate = new Date().toISOString().slice(0, 10);
-      const result = await firstValueFrom(
-        this.marketDataService.getStockAggregates(
-          contract.ticker, fromDate, toDate, 'day', 1,
-        ),
+      const aggregates = await firstValueFrom(
+        this.marketDataService.getDailyAggregates(contract.ticker, fromDate, toDate),
       );
       // Stale-response guard: another openContractHistory or
       // closeHistoryDrawer ran while this request was in flight.
       if (requestToken !== this.historyFetchToken) return;
-      this.historyAggregates.set(result.aggregates ?? []);
+      this.historyAggregates.set(aggregates);
     } catch (err) {
       if (requestToken !== this.historyFetchToken) return;
       this.historyError.set(err instanceof Error ? err.message : String(err));

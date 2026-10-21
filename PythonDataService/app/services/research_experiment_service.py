@@ -33,7 +33,7 @@ _RESEARCH_EXPERIMENTS = f"""
            {_CREATED_AT_MS} AS created_at_ms
     FROM public."ResearchExperiments" e
     JOIN public."Tickers" t ON t."Id" = e."TickerId"
-    WHERE t."Symbol" = $1 AND ($2::text IS NULL OR e."FeatureName" = $2)
+    WHERE t."Symbol" = $1
     ORDER BY e."CreatedAt" DESC, e."Id" DESC
 """
 _SIGNAL_EXPERIMENTS = f"""
@@ -120,7 +120,7 @@ def parse_signal_report(stored: str) -> SignalExperimentReport:
 class ResearchExperimentStore(Protocol):
     """What the routes need from the experiment history; the routes inject it so tests can stand in for Postgres."""
 
-    async def research_experiments(self, ticker: str, feature_name: str | None) -> list[ResearchExperimentResponse]: ...
+    async def research_experiments(self, ticker: str) -> list[ResearchExperimentResponse]: ...
 
     async def signal_experiments(self, ticker: str) -> list[SignalExperimentResponse]: ...
 
@@ -130,9 +130,9 @@ class ResearchExperimentStore(Protocol):
 class PostgresResearchExperimentStore:
     """The history over the shared Postgres. Lists are newest first; a ``None`` report means no experiment has that id."""
 
-    async def research_experiments(self, ticker: str, feature_name: str | None) -> list[ResearchExperimentResponse]:
+    async def research_experiments(self, ticker: str) -> list[ResearchExperimentResponse]:
         async with pooled_connection() as conn:
-            rows = await conn.fetch(_RESEARCH_EXPERIMENTS, ticker.upper(), feature_name)
+            rows = await conn.fetch(_RESEARCH_EXPERIMENTS, ticker.upper())
         return [research_experiment_from_row(row) for row in rows]
 
     async def signal_experiments(self, ticker: str) -> list[SignalExperimentResponse]:

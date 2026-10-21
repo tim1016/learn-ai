@@ -4308,7 +4308,9 @@ export interface paths {
         };
         /**
          * List Data Lab Sessions
-         * @description Every saved session, most recently updated first, each whole (chart snapshot included).
+         * @description Every saved session, most recently updated first, as a summary: no entries and no chart snapshot.
+         *
+         *     ``GET /{session_id}`` answers one session whole.
          */
         get: operations["list_data_lab_sessions_api_data_lab_sessions_get"];
         put?: never;
@@ -12824,6 +12826,48 @@ export interface components {
              * @description UTC midnight of from_date. Null only for a legacy row whose date is not written YYYY-MM-DD.
              */
             window_start_ms: number | null;
+        };
+        /**
+         * DataLabSessionSummary
+         * @description One saved session as the list shows it: the facts of its row, never its documents.
+         *
+         *     The two documents can run to megabytes (a chart snapshot holds every bar), so the list neither reads nor sends
+         *     them; ``entry_count`` and ``has_chart`` are worked out in the database. ``GET /{id}`` answers the session whole.
+         */
+        DataLabSessionSummary: {
+            /** Created At Ms */
+            created_at_ms: number;
+            /**
+             * Entry Count
+             * @description How many indicator entries the session holds.
+             */
+            entry_count: number;
+            /**
+             * From Date
+             * @description YYYY-MM-DD, as the picker saved it.
+             */
+            from_date: string;
+            /**
+             * Has Chart
+             * @description Whether the session was saved with a chart snapshot.
+             */
+            has_chart: boolean;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Ticker */
+            ticker: string;
+            /**
+             * To Date
+             * @description YYYY-MM-DD, as the picker saved it.
+             */
+            to_date: string;
+            /** Updated At Ms */
+            updated_at_ms: number;
         };
         /**
          * DataQualityRequest
@@ -43032,7 +43076,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DataLabSessionResponse"][];
+                    "application/json": components["schemas"]["DataLabSessionSummary"][];
                 };
             };
         };
@@ -45258,8 +45302,6 @@ export interface operations {
             query: {
                 /** @description The ticker's symbol; case does not matter. */
                 ticker: string;
-                /** @description Only this feature's experiments; exact match. */
-                feature_name?: string | null;
             };
             header?: never;
             path?: never;

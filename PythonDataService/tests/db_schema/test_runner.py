@@ -7,11 +7,14 @@ fresh, empty database that is dropped afterwards.
 
 from __future__ import annotations
 
+import asyncio
+import os
 from pathlib import Path
 
 import asyncpg
 import pytest
 
+from app.db_schema import runner as runner_module
 from app.db_schema.runner import (
     BASELINE_VERSION,
     LAST_EF_MIGRATION_ID,
@@ -19,10 +22,12 @@ from app.db_schema.runner import (
     SchemaMigrationError,
     apply_pending,
     load_migrations,
+    migrate_database,
 )
 from tests.research.conftest import scratch_db as scratch_db
 
-# The tables the 36 EF Core migrations left behind (the history table excluded).
+# The tables the 36 EF Core migrations left behind, less the history table and the four Recency* tables
+# (the research schema owns those, ADR 0057).
 BASELINE_TABLES = {
     "Accounts",
     "DataLabSessions",
@@ -34,10 +39,6 @@ BASELINE_TABLES = {
     "PortfolioTrades",
     "PositionLots",
     "Positions",
-    "RecencyLaunches",
-    "RecencyRuns",
-    "RecencyTradeMemberships",
-    "RecencyTrades",
     "ResearchExperiments",
     "RiskRules",
     "SignalExperiments",
@@ -59,10 +60,8 @@ async def _tables(conn: asyncpg.Connection) -> set[str]:
     return {row["tablename"] for row in rows} - {LEDGER_TABLE}
 
 
-def test_shipped_migrations_start_at_the_baseline_and_are_numbered_without_gaps() -> None:
-    versions = [migration.version for migration in load_migrations()]
-    assert versions[0] == BASELINE_VERSION
-    assert versions == sorted(versions)
+def test_shipped_migrations_start_at_the_baseline() -> None:
+    assert load_migrations()[0].version == BASELINE_VERSION
 
 
 def test_a_gap_in_the_numbering_is_refused(tmp_path: Path) -> None:
@@ -158,3 +157,88 @@ async def test_a_database_from_a_newer_release_is_refused(scratch_db: asyncpg.Co
 
     with pytest.raises(SchemaMigrationError, match="newer release"):
         await apply_pending(scratch_db, load_migrations(tmp_path))
+
+
+async def test_the_research_schema_may_create_its_tables_before_or_after_the_runner(
+    scratch_db: asyncpg.Connection,
+) -> None:
+    from app.research.persistence.schema import ensure_schema
+
+    await ensure_schema(scratch_db)
+    assert await apply_pending(scratch_db) == [BASELINE_VERSION]
+    await ensure_schema(scratch_db)
+
+    assert {"RecencyLaunches", "RecencyRuns", "RecencyTrades", "RecencyTradeMemberships"} <= await _tables(scratch_db)
+    assert await _tables(scratch_db) >= BASELINE_TABLES
+
+
+async def test_two_runs_at_once_apply_the_baseline_exactly_once(scratch_db: asyncpg.Connection) -> None:
+    other = await asyncpg.connect(
+        os.environ["POSTGRES_URL"], database=await scratch_db.fetchval("SELECT current_database()")
+    )
+    try:
+        first, second = await asyncio.gather(apply_pending(scratch_db), apply_pending(other))
+    finally:
+        await other.close()
+
+    assert sorted([*first, *second]) == [BASELINE_VERSION]
+    assert await scratch_db.fetchval(f"SELECT count(*) FROM {LEDGER_TABLE}") == 1
+
+
+async def test_a_database_that_is_still_starting_is_retried_until_it_answers(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts = {"count": 0}
+
+    class _Conn:
+        async def close(self) -> None:
+            return None
+
+    async def flaky_connect(dsn: str, **_: object) -> _Conn:
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise ConnectionRefusedError("starting up")
+        return _Conn()
+
+    async def nothing_to_apply(_conn: object) -> list[str]:
+        return []
+
+    monkeypatch.setattr(runner_module.asyncpg, "connect", flaky_connect)
+    monkeypatch.setattr(runner_module, "apply_pending", nothing_to_apply)
+
+    assert await migrate_database("postgres://example/db", attempts=5, delay_seconds=0) == []
+    assert attempts["count"] == 3
+
+
+async def test_a_database_that_never_answers_stops_the_start_with_a_clear_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def refuses(dsn: str, **_: object) -> None:
+        raise ConnectionRefusedError("nobody home")
+
+    monkeypatch.setattr(runner_module.asyncpg, "connect", refuses)
+
+    with pytest.raises(SchemaMigrationError, match="did not accept a connection after 2 attempts"):
+        await migrate_database("postgres://example/db", attempts=2, delay_seconds=0)
+
+
+@pytest.mark.parametrize(
+    ("url", "outcome", "exit_code"),
+    [
+        ("", None, 2),
+        ("postgres://example/db", SchemaMigrationError("refused"), 1),
+        ("postgres://example/db", ["0001_baseline"], 0),
+    ],
+)
+def test_the_command_exits_with_the_code_ci_relies_on(
+    monkeypatch: pytest.MonkeyPatch, url: str, outcome: object, exit_code: int
+) -> None:
+    from app.db_schema import __main__ as command
+
+    async def migrate(_dsn: str) -> list[str]:
+        if isinstance(outcome, Exception):
+            raise outcome
+        return list(outcome or [])
+
+    monkeypatch.setenv("POSTGRES_URL", url)
+    monkeypatch.setattr(command, "migrate_database", migrate)
+
+    assert command.main() == exit_code

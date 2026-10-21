@@ -13,7 +13,6 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
 from app.routers.research_store_unavailable import StoreUnreachableIsA503
 from app.schemas.research_experiments import (
-    FEATURE_NAME_MAX_LENGTH,
     MAX_EXPERIMENT_ID,
     TICKER_MAX_LENGTH,
     ResearchExperimentRefusalBody,
@@ -52,20 +51,9 @@ ExperimentId = Annotated[int, Path(ge=1, le=MAX_EXPERIMENT_ID)]
 
 
 @router.get("/experiments", response_model=list[ResearchExperimentResponse])
-async def list_research_experiments(
-    ticker: TickerQuery,
-    store: ExperimentStore,
-    feature_name: Annotated[
-        str | None,
-        Query(
-            min_length=1,
-            max_length=FEATURE_NAME_MAX_LENGTH,
-            description="Only this feature's experiments; exact match.",
-        ),
-    ] = None,
-) -> list[ResearchExperimentResponse]:
+async def list_research_experiments(ticker: TickerQuery, store: ExperimentStore) -> list[ResearchExperimentResponse]:
     """A ticker's stored feature-research experiments, newest first."""
-    return await store.research_experiments(ticker, feature_name)
+    return await store.research_experiments(ticker)
 
 
 @router.get("/signal-experiments", response_model=list[SignalExperimentResponse])

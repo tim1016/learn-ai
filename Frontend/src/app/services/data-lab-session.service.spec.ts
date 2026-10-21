@@ -45,6 +45,22 @@ function row(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** One row of Python's list: the facts of a saved setup, never its entries or its chart snapshot. */
+function summaryRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: ID,
+    name: 'bug hunt',
+    ticker: 'SPY',
+    from_date: '2026-08-06',
+    to_date: '2026-09-05',
+    entry_count: 1,
+    has_chart: false,
+    created_at_ms: 1_790_000_000_000,
+    updated_at_ms: 1_790_000_500_000,
+    ...overrides,
+  };
+}
+
 const notFound = { detail: { code: 'DATA_LAB_SESSION_NOT_FOUND', message: `Session ${ID} not found` } };
 
 describe('DataLabSessionService', () => {
@@ -66,7 +82,10 @@ describe('DataLabSessionService', () => {
 
     const req = httpMock.expectOne(BASE);
     expect(req.request.method).toBe('GET');
-    req.flush([row(), row({ id: 'other', entries: [], chart_snapshot: { timeframe: '1D' }, updated_at_ms: 1_790_000_900_000 })]);
+    req.flush([
+      summaryRow(),
+      summaryRow({ id: 'other', entry_count: 0, has_chart: true, updated_at_ms: 1_790_000_900_000 }),
+    ]);
 
     await expect(pending).resolves.toEqual([
       {

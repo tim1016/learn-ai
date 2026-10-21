@@ -92,9 +92,9 @@ class _Experiments:
         self.reports: dict[int, str] = {}
         self.asked: list[tuple[Any, ...]] = []
 
-    async def research_experiments(self, ticker: str, feature_name: str | None) -> list[ResearchExperimentResponse]:
-        self.asked.append(("research", ticker, feature_name))
-        return [e for e in self.research if feature_name is None or e.feature_name == feature_name]
+    async def research_experiments(self, ticker: str) -> list[ResearchExperimentResponse]:
+        self.asked.append(("research", ticker))
+        return self.research
 
     async def signal_experiments(self, ticker: str) -> list[SignalExperimentResponse]:
         self.asked.append(("signal", ticker))
@@ -149,18 +149,7 @@ async def test_the_research_list_answers_each_experiment_in_snake_case_with_its_
             "created_at_ms": CREATED_MS,
         }
     ]
-    assert history.asked == [("research", "spy", None)]
-
-
-async def test_the_feature_name_filter_reaches_the_store_and_narrows_the_list(
-    client: httpx.AsyncClient, history: _Experiments
-) -> None:
-    history.research = [_research(id=1, feature_name="rsi_14"), _research(id=2, feature_name="macd")]
-
-    response = await client.get(f"{BASE}/experiments", params={"ticker": "SPY", "feature_name": "macd"})
-
-    assert [row["id"] for row in response.json()] == [2]
-    assert history.asked == [("research", "SPY", "macd")]
+    assert history.asked == [("research", "spy")]
 
 
 async def test_the_signal_list_answers_each_headline_in_snake_case(
@@ -199,15 +188,6 @@ async def test_a_list_without_a_usable_ticker_is_refused_with_a_422(
 
     assert response.status_code == 422, response.text
     assert history.asked == []
-
-
-@pytest.mark.parametrize("feature_name", ["", "f" * 101])
-async def test_a_feature_filter_that_names_no_feature_is_refused(
-    client: httpx.AsyncClient, history: _Experiments, feature_name: str
-) -> None:
-    response = await client.get(f"{BASE}/experiments", params={"ticker": "SPY", "feature_name": feature_name})
-
-    assert response.status_code == 422
 
 
 # ── The report ─────────────────────────────────────────────────────

@@ -19,6 +19,7 @@ as disposable with ``POSTGRES_URL_IS_EPHEMERAL=1``. Never points at my-postgres.
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator
 from datetime import date
 from urllib.parse import urlsplit, urlunsplit
@@ -31,7 +32,6 @@ from app.data_lake import catalog_client
 from app.data_lake.catalog_client import CatalogSchemaNotReadyError
 from app.data_lake.types import ArtifactIdentity
 from app.db_schema import apply_pending
-from tests.research.conftest import _ephemeral_url
 from tests.research.conftest import scratch_db as scratch_db
 
 pytestmark = pytest.mark.asyncio
@@ -43,7 +43,7 @@ async def schema_behind_dsn(scratch_db: asyncpg.Connection) -> AsyncIterator[str
     await apply_pending(scratch_db)
     await scratch_db.execute('ALTER TABLE "DataLakeArtifacts" DROP COLUMN "LeaseGeneration"')
     name = await scratch_db.fetchval("SELECT current_database()")
-    parts = urlsplit(_ephemeral_url())
+    parts = urlsplit(os.environ["POSTGRES_URL"])
     yield urlunsplit(parts._replace(path=f"/{name}"))
 
 

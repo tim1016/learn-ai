@@ -19,12 +19,6 @@ type Schema = components['schemas'];
 /** One OHLCV bar, the wire shape as-is: `timestamp` is the bar's `int64 ms UTC`. */
 export type StockAggregate = Schema['AggregateBar'];
 
-export interface StockAggregatesResult {
-  /** The ticker as asked, upper-cased. */
-  ticker: string;
-  aggregates: StockAggregate[];
-}
-
 // ------------------------------------------------------------------
 // Stock snapshot (single ticker)
 // ------------------------------------------------------------------

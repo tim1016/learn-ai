@@ -1,25 +1,40 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { Observable, OperatorFunction, catchError, of, throwError } from 'rxjs';
+import { isRecord } from '../api/operator-blocker.types';
+import { extractServerMessage } from '../components/broker/operation-error';
+import { errorMessage } from '../shared/errors/error-message';
+import { refusalBody } from '../shared/errors/refusal-body';
 
 /**
- * The sentence a failed Python call shows. FastAPI answers with `{ "detail": "..." }`
- * (a string for a route's own failure, a `{ code, message }` object for a route that
- * names its refusals, a list of `{ msg }` for a request it refused to validate);
- * anything else falls back to Angular's transport message.
+ * What this file adds to the shared readers of FastAPI's `detail` (a second reader of that
+ * body is the shape of bug #2081, so it delegates):
+ *
+ * - `extractServerMessage` (`components/broker/operation-error`) reads the sentence: a string
+ *   `detail`, a `detail.message` object, the fleet's flat `{reason, message}` body.
+ * - `refusalBody` (`shared/errors/refusal-body`) reads the `{ code, message }` object a route
+ *   puts in `detail` when it names its refusals.
+ * - `errorMessage` (`shared/errors/error-message`) is the fallback for a failure with no body.
+ *
+ * What none of them provides, and so stays here: the 422 `detail` list of `{ msg }` that
+ * FastAPI answers when it refuses to validate a request (joined with "; "), and the two
+ * operators below that turn a failure into a result or an `Error`.
+ */
+
+/**
+ * The sentence a failed Python call shows: the body's own message, else the 422 reasons,
+ * else Angular's transport message.
  */
 export function pythonFailureMessage(failure: HttpErrorResponse): string {
+  const sentence = extractServerMessage(failure, '');
+  if (sentence !== '') return sentence;
   const body: unknown = failure.error;
   const detail = isRecord(body) ? body['detail'] : undefined;
-  if (typeof detail === 'string' && detail !== '') return detail;
-  if (isRecord(detail) && typeof detail['message'] === 'string' && detail['message'] !== '') {
-    return detail['message'];
-  }
   if (Array.isArray(detail)) {
     const reasons = detail.flatMap((entry: unknown) =>
       isRecord(entry) && typeof entry['msg'] === 'string' ? [entry['msg']] : []);
     if (reasons.length > 0) return reasons.join('; ');
   }
-  return failure.message;
+  return errorMessage(failure);
 }
 
 /**
@@ -29,10 +44,8 @@ export function pythonFailureMessage(failure: HttpErrorResponse): string {
  * resolved miss checks the code, and every other failure still rejects.
  */
 export function isPythonRefusal(failure: unknown, status: number, code: string): boolean {
-  if (!(failure instanceof HttpErrorResponse) || failure.status !== status) return false;
-  const body: unknown = failure.error;
-  const detail = isRecord(body) ? body['detail'] : undefined;
-  return isRecord(detail) && detail['code'] === code;
+  return failure instanceof HttpErrorResponse && failure.status === status
+    && refusalBody(failure)?.['code'] === code;
 }
 
 /**
@@ -63,8 +76,4 @@ export function failureAsError<T>(context?: string): OperatorFunction<T, T> {
         return throwError(() => new Error(context === undefined ? sentence : `${context}: ${sentence}`));
       }),
     );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

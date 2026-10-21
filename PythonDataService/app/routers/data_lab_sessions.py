@@ -19,6 +19,7 @@ from app.schemas.data_lab_sessions import (
     DataLabSessionRenameRequest,
     DataLabSessionRequest,
     DataLabSessionResponse,
+    DataLabSessionSummary,
 )
 from app.services.data_lab_session_service import DataLabSessionStore, PostgresDataLabSessionStore
 
@@ -49,9 +50,12 @@ def _not_found(session_id: UUID) -> HTTPException:
     )
 
 
-@router.get("", response_model=list[DataLabSessionResponse])
-async def list_data_lab_sessions(store: SessionStore) -> list[DataLabSessionResponse]:
-    """Every saved session, most recently updated first, each whole (chart snapshot included)."""
+@router.get("", response_model=list[DataLabSessionSummary])
+async def list_data_lab_sessions(store: SessionStore) -> list[DataLabSessionSummary]:
+    """Every saved session, most recently updated first, as a summary: no entries and no chart snapshot.
+
+    ``GET /{session_id}`` answers one session whole.
+    """
     return await store.list_sessions()
 
 
