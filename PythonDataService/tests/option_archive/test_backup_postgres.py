@@ -175,6 +175,7 @@ OFF_HOURS_MS = et_minute_of_day_ms(date(2026, 10, 12), 120)
     ("intact", None),
     ("unreceipted_at_source", "complete without a digest"),
     ("altered_by_the_restore", "differ from their committed receipt"),
+    ("uncompleted_by_the_restore", "1 manifest artifact ids missing"),
 ])
 async def test_weekly_restore_check_passes_only_what_the_restored_catalog_admits(
     isolated_catalog: asyncpg.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, damage: str, refusal: str | None,
@@ -197,12 +198,13 @@ async def test_weekly_restore_check_passes_only_what_the_restored_catalog_admits
     destination = tmp_path / "backup"
     destination.mkdir()
     manifest = await create_generation(destination=destination, roots={root_id: root}, clock=lambda: 2000, should_pause=lambda: False)
-    if damage == "altered_by_the_restore":
+    alterations = {"altered_by_the_restore": '"FileSha256"=repeat(\'0\', 64)', "uncompleted_by_the_restore": '"Status"=\'failed\''}
+    if damage in alterations:
         restore = service_module.restore_generation
 
         async def restore_then_alter(*, connection: asyncpg.Connection, schema: str, **options: object):
             result = await restore(connection=connection, schema=schema, **options)
-            await connection.execute(f'UPDATE "{schema}"."DataLakeArtifacts" SET "FileSha256"=repeat(\'0\', 64)')
+            await connection.execute(f'UPDATE "{schema}"."DataLakeArtifacts" SET {alterations[damage]}')
             return result
         monkeypatch.setattr(service_module, "restore_generation", restore_then_alter)
     service = OptionArchiveService(config=ArchiveSettings(ENABLED=True, BACKUP_DESTINATION=destination),

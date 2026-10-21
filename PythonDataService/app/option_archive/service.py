@@ -397,6 +397,13 @@ class OptionArchiveService:
                     roots = {root_id: Path(folder) / root_id for root_id in manifest.root_ids}
                     await restore_generation(generation=generation, roots=roots, connection=connection, schema=schema, should_pause=self._maintenance_pause)
                     artifacts = await read_restored_catalog(connection, schema)
+                    # Retirement trusts the manifest's artifact ids as backed-up receipts.
+                    backed_up = {artifact_id for file in manifest.files for artifact_id in file.artifact_ids}
+                    restored = {artifact.id for artifact in artifacts}
+                    if restored != backed_up:
+                        raise BackupRefusedError(f"restored complete rows differ from the generation's manifest ({len(backed_up - restored)} manifest "
+                            f"artifact ids missing, {len(restored - backed_up)} complete rows not in the manifest); the generation does not "
+                            "restore the catalog it recorded, so take a new backup and repeat the restore check")
                     counts = await bounded_file_work(lambda paused: decode_restored_lake(artifacts, roots, should_pause=paused),
                                                      self._maintenance_pause)
                     restored_count = await connection.fetchval(f'SELECT COUNT(*) FROM "{schema}"."DataLakeArtifacts"')
