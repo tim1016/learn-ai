@@ -354,6 +354,22 @@ def parse_option_listing_zip(payload: bytes, underlying: str, as_of: date) -> tu
     return tuple(rows)
 
 
+def read_admitted_listing_bytes(
+    underlying: str,
+    as_of: date,
+    *,
+    admission: Callable[[Path], bytes] = read_committed_bytes,
+    lake_root: Path | None = None,
+) -> bytes | None:
+    """The listing file's bytes as ``admission`` admits them, or ``None`` when that date has no file (``ValueError`` for a non-ticker)."""
+    _require_ticker(underlying)
+    relative = OptionListingPath(underlying=underlying, as_of=as_of).relative_path()
+    path = option_read_root(lake_root) / Path(*relative.parts)
+    if not path.is_file():
+        return None
+    return admission(path)
+
+
 def read_option_listing(
     underlying: str,
     as_of: date,
@@ -388,12 +404,9 @@ def read_option_listing(
     mount of the lake) instead of the configured one; any other path is a ``ValueError``.
     Synchronous, like ``LeanMinuteDataReader.read_day``.
     """
-    _require_ticker(underlying)
-    relative = OptionListingPath(underlying=underlying, as_of=as_of).relative_path()
-    path = option_read_root(lake_root) / Path(*relative.parts)
-    if not path.is_file():
+    payload = read_admitted_listing_bytes(underlying, as_of, admission=admission, lake_root=lake_root)
+    if payload is None:
         return None
-    payload = admission(path)
     return OptionListing(
         underlying=underlying,
         as_of=as_of,

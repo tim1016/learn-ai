@@ -254,8 +254,10 @@ def build_proof(
 
     The manual path archives and verifies the selected lake bytes as before.
     The retained-study path requires those exact blobs already to exist and
-    never consults the lake. Both independently decode a second replay from
-    the source run's pins, and compare complete outcomes and input identities.
+    never consults the lake. Both replay a second time from the source run's
+    pins, reading and digest-checking the archived bytes on every ask, and
+    compare complete outcomes and input identities. A session container whose
+    admitted bytes equal the lake's shares the first replay's decode (#3435).
     """
     _require_not_stopped(should_stop)
     rules_digest = current_rules_digest()
