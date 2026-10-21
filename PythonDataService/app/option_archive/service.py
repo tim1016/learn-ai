@@ -233,6 +233,20 @@ class OptionArchiveService:
         finally:
             self._session_tasks.pop(key, None)
 
+    async def recover_session(self, underlying: str, session_ms: int, *, retry_exhausted: bool = False) -> SessionOutcome | None:
+        """An operator's explicit retry of one session, under the capture job's ownership.
+
+        The nightly pass spends the same provider budget, so a recovery beside it
+        would double the requests. While another holder owns the archive nothing
+        runs and ``None`` returns; the operator retries once that pass ends.
+        """
+        async with self.scheduler.ownership.hold("capture") as owned:
+            if not owned:
+                logger.warning("Option archive manual recovery yielded to the capture job that owns the archive", extra={
+                    "action": "option_archive_recovery_refused", "underlying": underlying, "session_ms": session_ms})
+                return None
+            return await self.capture_session(underlying, session_ms, retry_exhausted=retry_exhausted)
+
     async def capture_pass(self) -> None:
         started = self.clock()
         today = et_date_at_ms(started)
