@@ -113,11 +113,11 @@ class DurationBalancedSequencer extends BaseSequencer {
 // limit is replaced; without the limit the whole suite in one run reached
 // 8 GB and lost a worker, and with it stays under 4 GB (#2882).
 const testConfig = {
-  // Match the hosted runner's four CPUs: two workers repeatedly exceeded the
-  // job limit despite balanced shards. Each VM keeps the existing memory bound.
+  // Match the hosted runner's four CPUs: two workers repeatedly ran past the
+  // time target despite balanced shards. Each VM keeps the existing memory bound.
   maxWorkers: 4,
   // Concurrent component renders can exceed Vitest's five-second default;
-  // the wrapper still enforces the unchanged 180-second whole-job limit.
+  // the job's ten-minute timeout still stops a run that hangs.
   testTimeout: 15_000,
   pool: "vmThreads",
   vmMemoryLimit: "1GB",

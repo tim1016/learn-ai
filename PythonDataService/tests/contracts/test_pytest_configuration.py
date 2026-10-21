@@ -60,13 +60,12 @@ def test_root_conftest_finishes_anyios_asyncio_backend_import_before_any_thread(
     assert result.returncode == 0, result.stderr
 
 
-def test_python_pr_suite_targets_two_minutes_and_fails_past_three() -> None:
-    from scripts.run_fast_tests import TEST_BUDGET_SECONDS, TEST_TARGET_SECONDS, pytest_command
+def test_python_pr_suite_targets_two_minutes() -> None:
+    from scripts.run_fast_tests import TEST_TARGET_SECONDS, pytest_command
 
     command = pytest_command(shard_index=1, shard_count=4)
 
     assert TEST_TARGET_SECONDS == 120
-    assert TEST_BUDGET_SECONDS == 180
     assert command[0:3] == [sys.executable, "-m", "pytest"]
     marker_index = len(command) - 1 - command[::-1].index("-m")
     assert command[marker_index + 1] == "not slow"
@@ -74,14 +73,11 @@ def test_python_pr_suite_targets_two_minutes_and_fails_past_three() -> None:
     assert "python -m scripts.run_fast_tests" in CI_WORKFLOW.read_text(encoding="utf-8")
 
 
-def test_frontend_shard_job_records_its_start_and_stops_a_setup_step_that_hangs() -> None:
-    # The frontend shard's target and limit bind the whole job (#2873). The
-    # test script counts from CI_JOB_STARTED_AT_MS and, without it, times the
-    # test step alone and says nothing, so the step must exist, stay first and
-    # keep the name the script reads. The script enforces the three-minute
-    # limit only once it runs; the job's own timeout bounds the steps before
-    # it, and sits past the script's limit so the script's message is the one
-    # a slow run shows.
+def test_frontend_shard_job_records_its_start_so_its_target_binds_the_whole_job() -> None:
+    # The frontend shard's target binds the whole job (#2873). The test script
+    # counts from CI_JOB_STARTED_AT_MS and, without it, times the test step
+    # alone, so the step must exist, stay first and keep the name the script
+    # reads.
     workflow = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
     first_step = workflow["jobs"]["frontend-test-shard"]["steps"][0]
     script = REPOSITORY_ROOT / "Frontend/scripts/run-test-budget.cjs"
@@ -93,10 +89,17 @@ def test_frontend_shard_job_records_its_start_and_stops_a_setup_step_that_hangs(
     assert 'const JOB_STARTED_AT_ENV = "CI_JOB_STARTED_AT_MS";' in script_text, (
         "#2873: the test script reads the job start from the name the first step writes"
     )
-    assert "const TEST_LIMIT_MS = 180_000;" in script_text, "#2873: the test script enforces the three-minute limit"
-    assert workflow["jobs"]["frontend-test-shard"]["timeout-minutes"] == 4, (
-        "#2873: the job's own timeout sits past the script's limit and stops a setup step that hangs"
-    )
+
+
+def test_test_jobs_keep_a_hang_backstop_far_past_the_two_minute_target() -> None:
+    # Time never fails a run (owner decision, 2026-10-20), so a slow shard
+    # passes and only warns. What stops a job that hangs is its own timeout,
+    # set so far past the target that a slow run never meets it: without one
+    # a hung job holds its runner for GitHub's six-hour default.
+    jobs = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+
+    for name in ("frontend-test-shard", "python-test-shard", "backend-test"):
+        assert jobs[name]["timeout-minutes"] == 10, f"{name} keeps a ten-minute hang backstop"
 
 
 def test_python_pr_shards_balance_by_measured_duration() -> None:
@@ -314,6 +317,7 @@ def test_run_fast_tests_returns_the_child_exit_code_and_reports_its_time(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     import logging
 
@@ -321,6 +325,7 @@ def test_run_fast_tests_returns_the_child_exit_code_and_reports_its_time(
 
     summary = tmp_path / "step-summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setattr(
         runner, "pytest_command", lambda *_a, **_k: _child_command("raise SystemExit(3)")
     )
@@ -331,41 +336,20 @@ def test_run_fast_tests_returns_the_child_exit_code_and_reports_its_time(
     assert returncode == 3
     line = summary.read_text(encoding="utf-8")
     assert re.fullmatch(
-        r"Python PR tests \(shard 5/16\) took \d+\.\ds of the 120-second target "
-        r"\(180-second limit\)\n",
+        r"Python PR tests \(shard 5/16\) took \d+\.\ds of the 120-second target\n",
         line,
     )
     assert line.strip() in caplog.text
+    assert capsys.readouterr().out == "", "a run inside its target raises no annotation"
 
 
-def test_run_fast_tests_kills_an_overrun_and_reports_the_exceeded_budget(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from scripts import run_fast_tests as runner
-
-    summary = tmp_path / "step-summary.md"
-    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
-    monkeypatch.setattr(runner, "TEST_TARGET_SECONDS", 0)
-    monkeypatch.setattr(runner, "TEST_BUDGET_SECONDS", 1)
-    monkeypatch.setattr(
-        runner,
-        "pytest_command",
-        lambda *_a, **_k: _child_command("import time; time.sleep(60)"),
-    )
-
-    assert runner.run_fast_tests() == 124
-    assert re.fullmatch(
-        r"Python PR tests \(unsharded\) took \d+\.\ds of the 0-second target "
-        r"\(1-second limit\) \(limit exceeded\)\n",
-        summary.read_text(encoding="utf-8"),
-    )
-
-
-def test_run_fast_tests_passes_a_run_over_target_and_says_so(
+@pytest.mark.parametrize("exit_code", [0, 3])
+def test_run_fast_tests_lets_a_run_over_target_finish_and_warns_on_the_run(
+    exit_code: int,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     import logging
 
@@ -373,19 +357,44 @@ def test_run_fast_tests_passes_a_run_over_target_and_says_so(
 
     summary = tmp_path / "step-summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setattr(runner, "TEST_TARGET_SECONDS", 0)
+    monkeypatch.setattr(
+        runner,
+        "pytest_command",
+        lambda *_a, **_k: _child_command(f"raise SystemExit({exit_code})"),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="scripts.run_fast_tests"):
+        # Time is not a verdict: the tests' own exit code comes back either way.
+        assert runner.run_fast_tests(shard_index=2, shard_count=16) == exit_code
+    assert re.fullmatch(
+        r"Python PR tests \(shard 2/16\) took \d+\.\ds of the 0-second target \(over target\)\n",
+        summary.read_text(encoding="utf-8"),
+    )
+    assert "(over target)" in caplog.text
+    assert re.fullmatch(
+        r"::warning title=Python PR tests \(shard 2/16\) are over their 0-second target::"
+        r"Took \d+\.\ds\. This does not fail the run\. .*\n",
+        capsys.readouterr().out,
+    )
+
+
+def test_run_fast_tests_writes_no_workflow_command_off_github_actions(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from scripts import run_fast_tests as runner
+
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     monkeypatch.setattr(runner, "TEST_TARGET_SECONDS", 0)
     monkeypatch.setattr(
         runner, "pytest_command", lambda *_a, **_k: _child_command("raise SystemExit(0)")
     )
 
-    with caplog.at_level(logging.WARNING, logger="scripts.run_fast_tests"):
-        assert runner.run_fast_tests() == 0
-    assert re.fullmatch(
-        r"Python PR tests \(unsharded\) took \d+\.\ds of the 0-second target "
-        r"\(180-second limit\) \(over target\)\n",
-        summary.read_text(encoding="utf-8"),
-    )
-    assert "(over target)" in caplog.text
+    assert runner.run_fast_tests() == 0
+    assert "::warning" not in capsys.readouterr().out
 
 
 def test_run_fast_tests_keeps_the_exit_code_when_the_step_summary_is_unwritable(

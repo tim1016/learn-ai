@@ -20,19 +20,18 @@ const fs = require("node:fs");
 // of it, so CI runs them once, in its Frontend Lint job, and not six times
 // over (#2882). The unsharded `npm test` still runs them first.
 //
-// A CI job is sized to finish inside the target and fails only past the
-// limit (#2873). Past the target the run keeps its own exit code and says so;
-// past the limit it is killed and exits 124.
+// A CI job is sized to finish inside the target (#2873). Time never fails a
+// run (owner, 2026-10-20): past the target the run keeps its own exit code and
+// warns, on stderr, in the step summary and as a GitHub annotation. That
+// shard is the next one to trim.
 const TEST_TARGET_MS = 120_000;
-const TEST_LIMIT_MS = 180_000;
 const DEFAULT_MAX_WORKERS = "2";
 const CI_RUNNER_CONFIG_ARG = "--runner-config=vitest.ci.config.ts";
 const GUARDS_THEN_SPECS_SCRIPT = "test:unbounded";
 const SPECS_ONLY_SCRIPT = "test:specs";
 
 // The frontend-test-shard job records its own start here as its first step,
-// so checkout, Node setup and `npm ci` spend the same target and limit the
-// tests do. Without it (a local run) both are measured from this run's start.
+// so checkout, Node setup and `npm ci` spend the same target the tests do. Without it (a local run) both are measured from this run's start.
 // GitHub ends a hosted job at six hours, so an older value is not this job's.
 const JOB_STARTED_AT_ENV = "CI_JOB_STARTED_AT_MS";
 const MAX_JOB_AGE_MS = 6 * 60 * 60 * 1000;
@@ -64,28 +63,38 @@ function readJobStartedAtMs(nowMs) {
 
 // Each shard prints its own time (#2632 item 3), to stderr for local runs
 // and to the CI step summary when GitHub Actions sets the path, so a shard
-// that drifts past its target is visible before it reaches the limit. The
-// line says what was measured: the job when its start is known, with the
+// that drifts past its target is visible. A shard past it also raises a
+// GitHub warning annotation, which shows on the run without opening the log.
+// The line says what was measured: the job when its start is known, with the
 // tests' own share beside it, and the tests alone otherwise.
-function reportElapsed(run, exceededLimit) {
-  const { startedAtMs, jobStartedAtMs, subject, shardLabel, targetMs, limitMs } = run;
+function reportElapsed(run) {
+  const { startedAtMs, jobStartedAtMs, subject, shardLabel, targetMs } = run;
   const nowMs = Date.now();
   const seconds = (ms) => (ms / 1000).toFixed(1);
   const measuredMs = nowMs - (jobStartedAtMs ?? startedAtMs);
-  const overTarget = !exceededLimit && measuredMs > targetMs;
+  const overTarget = measuredMs > targetMs;
   if (overTarget) {
     process.stderr.write(
       `${subject} took longer than the ${targetMs / 1000}-second target. ` +
-        `That alone does not fail the run; only the ${limitMs / 1000}-second limit does. ` +
-        "Rebalance the shards or move expensive coverage to the daily suite.\n",
+        "That does not fail the run. Trim this shard: move expensive coverage to the daily suite " +
+        "or rebalance the shards.\n",
     );
+    if (process.env.GITHUB_ACTIONS === "true") {
+      // A workflow command is read from stdout; the lines above go to stderr.
+      process.stdout.write(
+        `::warning title=Frontend tests${shardLabel} are over their ${targetMs / 1000}-second target::` +
+          `${jobStartedAtMs === null ? "The run" : "The job"} took ${seconds(measuredMs)}s. ` +
+          "This does not fail the run. To trim it, move expensive coverage to the daily suite " +
+          "or rebalance the shards.\n",
+      );
+    }
   }
-  const verdict = exceededLimit ? " (limit exceeded)" : overTarget ? " (over target)" : "";
-  const ofTheLimits = `of the ${targetMs / 1000}s target (${limitMs / 1000}s limit)`;
+  const verdict = overTarget ? " (over target)" : "";
+  const ofTheTarget = `of the ${targetMs / 1000}s target`;
   const measured =
     jobStartedAtMs === null
-      ? `${seconds(measuredMs)}s ${ofTheLimits}`
-      : `job ${seconds(measuredMs)}s ${ofTheLimits}, tests ${seconds(nowMs - startedAtMs)}s`;
+      ? `${seconds(measuredMs)}s ${ofTheTarget}`
+      : `job ${seconds(measuredMs)}s ${ofTheTarget}, tests ${seconds(nowMs - startedAtMs)}s`;
   const message = `Frontend tests${shardLabel}: ${measured}${verdict}`;
   process.stderr.write(`${message}\n`);
   if (process.env.GITHUB_STEP_SUMMARY) {
@@ -100,13 +109,12 @@ function reportElapsed(run, exceededLimit) {
   }
 }
 
-// The limits are parameters only so the guard
-// (verify-run-test-budget-shard-guard.cjs) can cross them in milliseconds;
-// `npm test` always runs with the two constants above.
+// The target is a parameter only so the guard
+// (verify-run-test-budget-shard-guard.cjs) can cross it in milliseconds;
+// `npm test` always runs with the constant above.
 function runTestBudget({
   forwardedArgs = process.argv.slice(2),
   targetMs = TEST_TARGET_MS,
-  limitMs = TEST_LIMIT_MS,
 } = {}) {
   const startedAtMs = Date.now();
   const shardIndexSet = Boolean(process.env.TEST_SHARD_INDEX);
@@ -131,11 +139,7 @@ function runTestBudget({
         : `The CI job for frontend tests${shardLabel}`,
     shardLabel,
     targetMs,
-    limitMs,
   };
-  const exceededTheLimit =
-    `${run.subject} exceeded the hard ${limitMs / 1000}-second limit ` +
-    `(the target is ${targetMs / 1000} seconds)`;
 
   const hasRunnerConfigArg = forwardedArgs.some((arg) =>
     arg.startsWith("--runner-config="),
@@ -161,22 +165,9 @@ function runTestBudget({
     }
   }
 
-  // The selected-spec scan shares the job's hard limit with checkout, build and tests.
-  const allowanceMs = limitMs - (Date.now() - (jobStartedAtMs ?? startedAtMs));
-  if (allowanceMs <= 0) {
-    process.stderr.write(
-      `${exceededTheLimit} before the tests started, so they were not run. ` +
-        "The job's earlier steps took too long.\n",
-    );
-    reportElapsed(run, true);
-    process.exitCode = 124;
-    return;
-  }
-
   const npm = process.platform === "win32" ? "npm.cmd" : "npm";
   const script = isShardRequested ? SPECS_ONLY_SCRIPT : GUARDS_THEN_SPECS_SCRIPT;
   const child = spawn(npm, ["run", script, "--", ...testArgs], {
-    detached: process.platform !== "win32",
     stdio: "inherit",
     env: {
       ...process.env,
@@ -185,36 +176,13 @@ function runTestBudget({
     },
   });
 
-  let exceededLimit = false;
-  const timer = setTimeout(() => {
-    exceededLimit = true;
-    process.stderr.write(
-      `${exceededTheLimit}. Move expensive coverage to the daily suite or make it faster.\n`,
-    );
-    if (process.platform === "win32") {
-      child.kill("SIGKILL");
-    } else {
-      try {
-        process.kill(-child.pid, "SIGKILL");
-      } catch (error) {
-        if (error.code !== "ESRCH") throw error;
-      }
-    }
-  }, allowanceMs);
-
   child.on("error", (error) => {
-    clearTimeout(timer);
     process.stderr.write(`Unable to start the frontend tests: ${error.message}\n`);
     process.exitCode = 1;
   });
 
   child.on("exit", (code, signal) => {
-    clearTimeout(timer);
-    reportElapsed(run, exceededLimit);
-    if (exceededLimit) {
-      process.exitCode = 124;
-      return;
-    }
+    reportElapsed(run);
     if (signal !== null) {
       process.stderr.write(`Frontend tests ended from signal ${signal}.\n`);
       process.exitCode = 1;

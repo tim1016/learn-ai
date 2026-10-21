@@ -139,10 +139,10 @@ jobs:
   frontend-test-shard:
     name: Frontend Test Shard ${{ matrix.shard }}/6
     runs-on: ${{ github.event.pull_request.number == 3300 && fromJSON('["self-hosted", "Linux", "ARM64", "learn-ai-vm"]') || 'ubuntu-latest' }}
-    # The test step fails the job at three minutes and says why (#2873). This
-    # stops a job whose checkout, Node setup or `npm ci` hangs before that step
-    # runs. It is a minute later so the test step's own message is the one seen.
-    timeout-minutes: 4
+    # Time never fails a shard (owner, 2026-10-20): past its two-minute target
+    # it passes with a warning. This is the backstop for a job that hangs, so
+    # far past the target that a slow run never meets it.
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -155,11 +155,11 @@ jobs:
       TEST_SHARD_COUNT: "6"
       TEST_SHARD_INDEX: ${{ matrix.shard }}
     steps:
-      # The two-minute target and the three-minute limit bind the whole job,
-      # not only its test step (#2873). This must stay the first step: the
-      # test step counts from it, so checkout, Node setup and `npm ci` spend
-      # the same allowance the tests do. Frontend/ does not exist before
-      # checkout, so the step runs from the workspace root.
+      # The two-minute target binds the whole job, not only its test step
+      # (#2873). This must stay the first step: the test step counts from it,
+      # so checkout, Node setup and `npm ci` spend the same allowance the
+      # tests do. Frontend/ does not exist before checkout, so the step runs
+      # from the workspace root.
       - name: Record when the job started
         working-directory: ${{ github.workspace }}
         run: echo "CI_JOB_STARTED_AT_MS=$(date +%s%3N)" >> "$GITHUB_ENV"
@@ -210,6 +210,8 @@ jobs:
   backend-test:
     name: Backend Tests
     runs-on: ${{ github.event.pull_request.number == 3300 && fromJSON('["self-hosted", "Linux", "ARM64", "learn-ai-vm"]') || 'ubuntu-latest' }}
+    # A hang backstop, not a time budget: see the Frontend shard job.
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -224,7 +226,16 @@ jobs:
         env:
           DOTNET_NOLOGO: true
         run: |
-          timeout --signal=KILL 180s dotnet test Backend.Tests/Backend.Tests.csproj --no-restore --configuration Release --filter "Category!=PostgresIntegration" --logger "trx;LogFileName=backend-tests.trx" --results-directory TestResults
+          # Past two minutes the run passes or fails on its tests alone and
+          # warns, like the Python and Frontend shards.
+          started=$SECONDS
+          status=0
+          dotnet test Backend.Tests/Backend.Tests.csproj --no-restore --configuration Release --filter "Category!=PostgresIntegration" --logger "trx;LogFileName=backend-tests.trx" --results-directory TestResults || status=$?
+          elapsed=$((SECONDS - started))
+          if [ "$elapsed" -gt 120 ]; then
+            echo "::warning title=Backend tests are over their 120-second target::Took ${elapsed}s. This does not fail the run. To trim it, move its slowest tests to the daily suite."
+          fi
+          exit "$status"
       - name: Upload backend test results
         if: failure()
         uses: actions/upload-artifact@v4
@@ -250,6 +261,8 @@ jobs:
   python-test-shard:
     name: Python Test Shard ${{ matrix.shard }}/16
     runs-on: ${{ github.event.pull_request.number == 3300 && fromJSON('["self-hosted", "Linux", "ARM64", "learn-ai-vm"]') || 'ubuntu-latest' }}
+    # A hang backstop, not a time budget: see the Frontend shard job.
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -280,8 +293,8 @@ jobs:
 
       # The checked-in runner owns the test roots (pytest.ini testpaths, the
       # same roots the daily run collects), the `not slow` marker filter, the
-      # xdist settings, a 120-second target each shard is balanced to, and a
-      # hard 180-second wall-clock limit that fails the job. Slow,
+      # xdist settings, and a 120-second target each shard is balanced to. A
+      # shard past it warns and never fails for its time. Slow,
       # PostgreSQL-backed and browser coverage runs daily instead.
       - name: Run quick tests
         run: python -m scripts.run_fast_tests --shard "${{ matrix.shard }}/16" --junitxml "TestResults/python-shard-${{ matrix.shard }}.xml"
