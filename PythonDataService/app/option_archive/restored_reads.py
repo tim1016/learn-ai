@@ -220,9 +220,11 @@ def decode_restored_lake(artifacts: Sequence[RestoredArtifact], roots: Mapping[s
             raise BackupRefusedError("restored catalog names a root the generation does not hold")
         return lake_root_within(root, artifact.mode)
 
+    mode_roots: dict[int, Path] = {}
     files: dict[Path, tuple[RestoredArtifact, ...]] = {}
     for artifact in artifacts:
-        path = confine_path_to_root(mode_root(artifact) / artifact.file_path, mode_root(artifact), label="restored file")
+        root = mode_roots[artifact.id] = mode_root(artifact)
+        path = confine_path_to_root(root / artifact.file_path, root, label="restored file")
         files[path] = (*files.get(path, ()), artifact)
 
     def admission(path: Path) -> bytes:
@@ -244,6 +246,6 @@ def decode_restored_lake(artifacts: Sequence[RestoredArtifact], roots: Mapping[s
             decoder = _DECODERS.get((item.artifact_kind, item.resolution, layout))
             if decoder is None or (market is not None and item.market != market):
                 raise BackupRefusedError("artifact kind has no canonical restore decoder")
-            decoder(_Restored(item, artifact, mode_root(item), admission(path), admission))
+            decoder(_Restored(item, artifact, mode_roots[item.id], admission(path), admission))
             counts[item.artifact_kind] += 1
     return dict(counts)
