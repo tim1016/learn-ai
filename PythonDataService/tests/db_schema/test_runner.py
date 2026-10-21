@@ -1,6 +1,6 @@
 """The SQL schema runner (ADR 0081): file rules, a fresh database, adopting an EF-migrated one, refusals.
 
-The file rules run on every PR. The rest need a database attested as disposable
+The file rules, the connect retry and the command's exit codes run on every PR. The rest need a database attested as disposable
 (``POSTGRES_URL_IS_EPHEMERAL=1``) and skip without one; ``scratch_db`` gives each test a
 fresh, empty database that is dropped afterwards.
 """
@@ -159,12 +159,14 @@ async def test_a_database_from_a_newer_release_is_refused(scratch_db: asyncpg.Co
         await apply_pending(scratch_db, load_migrations(tmp_path))
 
 
-async def test_the_research_schema_may_create_its_tables_before_or_after_the_runner(
-    scratch_db: asyncpg.Connection,
+@pytest.mark.parametrize("research_first", [True, False])
+async def test_the_research_schema_and_the_runner_work_in_either_order(
+    scratch_db: asyncpg.Connection, research_first: bool
 ) -> None:
     from app.research.persistence.schema import ensure_schema
 
-    await ensure_schema(scratch_db)
+    if research_first:
+        await ensure_schema(scratch_db)
     assert await apply_pending(scratch_db) == [BASELINE_VERSION]
     await ensure_schema(scratch_db)
 

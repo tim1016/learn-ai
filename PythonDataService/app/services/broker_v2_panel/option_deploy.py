@@ -167,7 +167,7 @@ LIVE_SWITCHED_OFF_FIX: Final = (
 # ---- the request as the preview takes it --------------------------------------------------------------
 
 
-def lease_key(account_id: str, choice: TradesOptions) -> str:
+def _lease_key(account_id: str, choice: TradesOptions) -> str:
     """The name Deploy's own ask for quotes goes under: one for a structure on an account, so every
     review of it renews one hold on quote lines and none is left behind by a changed budget."""
     said = json.dumps(
@@ -182,7 +182,7 @@ def preview_request_for(account_id: str, request: AlpacaPaperDeployRequest) -> O
     choice = _choice(request)
     terms = choice.order_terms
     return OptionStructurePreviewRequest(
-        preview_key=lease_key(account_id, choice),
+        preview_key=_lease_key(account_id, choice),
         underlying=choice.underlying,
         # Only the warning about leaning against the signal reads it. A symbol the preview's own request
         # would refuse is left unsaid, never a malformed request of this module's making.

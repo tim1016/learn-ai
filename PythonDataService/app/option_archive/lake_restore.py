@@ -6,6 +6,7 @@ recovery survives losing the checkout: it needs only Python 3.12 and asyncpg,
 never ``app``. It starts no service. The target catalog credential is read
 only from the named environment variable, never from a command argument.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -71,8 +72,9 @@ def safe_relative(text: str) -> Path:
     return Path(*path.parts)
 
 
-def verify(generation: Path, *, expected_schema_hash: str | None = None,
-           checkpoint: Callable[[], None] = _continue) -> dict[str, Any]:
+def verify(
+    generation: Path, *, expected_schema_hash: str | None = None, checkpoint: Callable[[], None] = _continue
+) -> dict[str, Any]:
     """Check COMPLETE, the catalog dump, every object and each root's marker; return the manifest."""
     raw = (generation / "manifest.json").read_bytes()
     if (generation / "COMPLETE").read_text() != digest(raw):
@@ -85,8 +87,9 @@ def verify(generation: Path, *, expected_schema_hash: str | None = None,
     return manifest
 
 
-def _verify_manifest(generation: Path, manifest: dict[str, Any], expected_schema_hash: str | None,
-                     checkpoint: Callable[[], None]) -> None:
+def _verify_manifest(
+    generation: Path, manifest: dict[str, Any], expected_schema_hash: str | None, checkpoint: Callable[[], None]
+) -> None:
     if manifest["version"] != 1 or generation.name.lstrip(".") != manifest["generation_id"]:
         raise RestoreRefusedError("generation identity or version is invalid")
     if expected_schema_hash is not None and manifest["schema_hash"] != expected_schema_hash:
@@ -110,8 +113,11 @@ def _verify_manifest(generation: Path, manifest: dict[str, Any], expected_schema
             markers[item["root_id"]] = payload
     for root_id in manifest["root_ids"]:
         marker = json.loads(markers[root_id]) if root_id in markers else None
-        if (not isinstance(marker, dict) or marker.get("schema_version") != MARKER_SCHEMA_VERSION
-                or marker.get("data_root_id") != root_id):
+        if (
+            not isinstance(marker, dict)
+            or marker.get("schema_version") != MARKER_SCHEMA_VERSION
+            or marker.get("data_root_id") != root_id
+        ):
             raise RestoreRefusedError("backup root marker is missing or has the wrong identity")
     for object_digest in manifest["restore_files"].values():
         if digest((objects / object_digest).read_bytes()) != object_digest:
@@ -119,17 +125,26 @@ def _verify_manifest(generation: Path, manifest: dict[str, Any], expected_schema
 
 
 async def catalog_schema_hash(connection: Any, *, schema: str = "public") -> str:
-    columns = await connection.fetch('''SELECT column_name, data_type, udt_name, is_nullable, ordinal_position
+    columns = await connection.fetch(
+        """SELECT column_name, data_type, udt_name, is_nullable, ordinal_position
         FROM information_schema.columns WHERE table_schema=$1 AND table_name='DataLakeArtifacts'
-        ORDER BY ordinal_position''', schema)
+        ORDER BY ordinal_position""",
+        schema,
+    )
     if not columns:
         raise RestoreRefusedError("catalog table is missing")
     return digest(canonical([dict(row) for row in columns]))
 
 
-async def restore(generation: Path, roots: Mapping[str, Path], connection: Any, *, schema: str = "public",
-                  checkpoint: Callable[[], None] = _continue,
-                  run_files: Callable[[Callable[[Callable[[], None]], Any]], Awaitable[Any]] = _inline) -> dict[str, Any]:
+async def restore(
+    generation: Path,
+    roots: Mapping[str, Path],
+    connection: Any,
+    *,
+    schema: str = "public",
+    checkpoint: Callable[[], None] = _continue,
+    run_files: Callable[[Callable[[Callable[[], None]], Any]], Awaitable[Any]] = _inline,
+) -> dict[str, Any]:
     """Restore exact file bytes and the binary catalog dump together; return the manifest.
 
     ``run_files`` runs each blocking file pass, handing it the checkpoint to
@@ -143,7 +158,10 @@ async def restore(generation: Path, roots: Mapping[str, Path], connection: Any, 
     manifest = await run_files(lambda paused: verify(generation, expected_schema_hash=expected, checkpoint=paused))
     migrations = await connection.fetch("SELECT version FROM public.schema_migrations ORDER BY version")
     if [row["version"] for row in migrations] != manifest["migration_ids"]:
-        raise RestoreRefusedError("restore migration history differs from the generation")
+        raise RestoreRefusedError(
+            "restore migration history differs from the generation (a backup written before the schema ledger, ADR 0081, "
+            "lists retired EF migration ids and cannot be restored into this database)"
+        )
     if set(roots) != set(manifest["root_ids"]):
         raise RestoreRefusedError("restore targets do not match the generation's root identities")
     for target in roots.values():
@@ -161,22 +179,32 @@ async def restore(generation: Path, roots: Mapping[str, Path], connection: Any, 
             write_durable(target / INCOMPLETE_MARKER, canonical({"generation_id": manifest["generation_id"]}))
         for item in manifest["files"]:
             paused()
-            write_durable(roots[item["root_id"]] / safe_relative(item["relative_path"]),
-                          (objects / item["sha256"]).read_bytes())
+            write_durable(
+                roots[item["root_id"]] / safe_relative(item["relative_path"]), (objects / item["sha256"]).read_bytes()
+            )
+
     await run_files(write_files)
     checkpoint()
     async with connection.transaction():
-        await connection.copy_to_table("DataLakeArtifacts", schema_name=schema,
-            source=io.BytesIO((generation / "catalog.copy").read_bytes()), format="binary")
+        await connection.copy_to_table(
+            "DataLakeArtifacts",
+            schema_name=schema,
+            source=io.BytesIO((generation / "catalog.copy").read_bytes()),
+            format="binary",
+        )
         await connection.execute(f'''UPDATE "{schema}"."DataLakeArtifacts" SET "LeaseOwner"=NULL,
             "LeaseExpiresAtMs"=NULL, "LeaseGeneration"="LeaseGeneration"+1,
             "Status"=CASE WHEN "Status"='fetching' THEN 'failed' ELSE "Status" END,
             "LastError"=CASE WHEN "Status"='fetching' THEN 'internal_error' ELSE "LastError" END,
             "ErrorMessage"=CASE WHEN "Status"='fetching' THEN 'Interrupted at backup; restore starts no jobs' ELSE "ErrorMessage" END''')
-        sequence = await connection.fetchval("SELECT pg_get_serial_sequence($1, 'Id')", f'"{schema}"."DataLakeArtifacts"')
+        sequence = await connection.fetchval(
+            "SELECT pg_get_serial_sequence($1, 'Id')", f'"{schema}"."DataLakeArtifacts"'
+        )
         if sequence is not None:
             maximum = await connection.fetchval(f'SELECT MAX("Id") FROM "{schema}"."DataLakeArtifacts"')
-            await connection.fetchval("SELECT setval($1::regclass, $2, $3)", sequence, maximum or 1, maximum is not None)
+            await connection.fetchval(
+                "SELECT setval($1::regclass, $2, $3)", sequence, maximum or 1, maximum is not None
+            )
         checkpoint()
     for target in roots.values():
         (target / INCOMPLETE_MARKER).unlink()
@@ -199,8 +227,10 @@ async def main(argv: Sequence[str] | None = None) -> None:
         manifest = await restore(args.generation, roots, connection, schema=args.schema)
     finally:
         await connection.close()
-    logger.info("Lake generation restored; services remain stopped",
-                extra={"action": "lake_generation_restored", "generation_id": manifest["generation_id"]})
+    logger.info(
+        "Lake generation restored; services remain stopped",
+        extra={"action": "lake_generation_restored", "generation_id": manifest["generation_id"]},
+    )
 
 
 if __name__ == "__main__":

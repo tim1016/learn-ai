@@ -49,7 +49,8 @@ restoring a backup taken before it; an adopted database keeps its EF history
 (ADR 0081, Consequences). What stands: Python owns the four tables, and a
 future schema change to them is a new numbered statement list in
 `research/persistence/schema.py`. The baseline
-SQL (`app/db_schema/migrations/0001_baseline.sql`) also creates the four tables
-(`RecencyLaunches`, `RecencyRuns`, `RecencyTradeMemberships`,
-`RecencyTrades`), so a database the runner builds has them from the start;
-`schema.py` still declares them `IF NOT EXISTS` and carries every later change.
+SQL (`app/db_schema/migrations/0001_baseline.sql`) does not create the four
+tables (`RecencyLaunches`, `RecencyRuns`, `RecencyTradeMemberships`,
+`RecencyTrades`): `schema.py` creates them (`IF NOT EXISTS`) on a database that
+lacks them and carries every later change, and a database EF migrated has them
+already. One owner, so the runner and the research schema may run in either order.
